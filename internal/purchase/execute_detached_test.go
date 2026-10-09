@@ -18,13 +18,15 @@ import (
 
 // detachFixture wires a direct single-account AWS purchase (issue #706).
 type detachFixture struct {
-	manager       *Manager
-	exec          *config.PurchaseExecution
-	svc           *MockServiceClient
-	saved         []string
-	history       int
-	saveCtx       context.Context
-	saveRemaining time.Duration
+	manager          *Manager
+	exec             *config.PurchaseExecution
+	svc              *MockServiceClient
+	saved            []string
+	history          int
+	saveCtx          context.Context
+	saveRemaining    time.Duration
+	histCtx          context.Context
+	historyRemaining time.Duration
 }
 
 func newDetachFixture(t *testing.T) *detachFixture {
@@ -51,7 +53,13 @@ func newDetachFixture(t *testing.T) *detachFixture {
 		f.saved = append(f.saved, e.Status)
 		return nil
 	}
-	store.On("SavePurchaseHistory", mock.Anything, mock.Anything).Run(func(mock.Arguments) { f.history++ }).Return(nil)
+	store.On("SavePurchaseHistory", mock.Anything, mock.Anything).Run(func(a mock.Arguments) {
+		f.history++
+		f.histCtx = a.Get(0).(context.Context)
+		if deadline, ok := f.histCtx.Deadline(); ok {
+			f.historyRemaining = time.Until(deadline)
+		}
+	}).Return(nil)
 	email := new(MockEmailSender)
 	email.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
 	stsMock.On("GetCallerIdentity", mock.Anything, mock.Anything).Return(&stsOut, nil)
@@ -136,9 +144,17 @@ func TestExecuteAndFinalize_ExpiredCallerDeadline_UsesOwnBudgets(t *testing.T) {
 
 	// per-rec cap (30s) still bounds the provider call inside the 4m run budget.
 	assert.WithinDuration(t, time.Now(), provDeadline, 30*time.Second)
-	d, ok := f.saveCtx.Deadline()
+	_, ok := f.saveCtx.Deadline()
 	require.True(t, ok, "terminal save needs a deadline")
-	assert.LessOrEqual(t, time.Until(d), terminalSaveTimeout)
+	// Literal durations on purpose: comparing against the constants would
+	// pass whatever their values are.
+	assert.LessOrEqual(t, f.saveRemaining, 30*time.Second)
+	assert.Greater(t, f.saveRemaining, 29*time.Second)
+	// SavePurchaseHistory runs inside executePurchase, so it sees the run ctx.
+	_, ok = f.histCtx.Deadline()
+	require.True(t, ok, "run ctx needs a deadline")
+	assert.LessOrEqual(t, f.historyRemaining, 4*time.Minute)
+	assert.Greater(t, f.historyRemaining, 3*time.Minute+59*time.Second)
 	assert.Equal(t, []string{"completed"}, f.saved)
 }
 
