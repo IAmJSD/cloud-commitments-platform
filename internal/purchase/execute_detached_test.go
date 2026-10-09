@@ -99,7 +99,6 @@ func TestExecuteAndFinalize_SlowRunGetsFreshTerminalSaveBudget(t *testing.T) {
 
 var stsOut = sts.GetCallerIdentityOutput{Account: aws.String("123456789012")}
 
-// Test A: the client disconnects while the provider call is in flight. The
 // A committed purchase must remain auditable after request cancellation.
 func TestExecuteAndFinalize_ClientDisconnectMidPurchase_StillRecorded(t *testing.T) {
 	f := newDetachFixture(t)
@@ -144,7 +143,7 @@ func TestExecuteAndFinalize_ExpiredCallerDeadline_UsesOwnBudgets(t *testing.T) {
 }
 
 // Test C: a failed purchase with a canceled caller still persists "failed".
-func TestExecuteAndFinalize_ProviderErrorWithCancelledCaller_PersistsFailed(t *testing.T) {
+func TestExecuteAndFinalize_ProviderErrorWithCanceledCaller_PersistsFailed(t *testing.T) {
 	f := newDetachFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	f.svc.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.Anything).
