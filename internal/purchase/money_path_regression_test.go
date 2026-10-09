@@ -315,7 +315,8 @@ func TestSQSRedeliveryDoesNotDoubleExecute(t *testing.T) {
 	// pre-fix nothing CASes it to running before the cloud call, so a redelivery
 	// re-reads a still-claimable row). Each GetExecutionByID returns a FRESH
 	// pending copy, faithfully modeling the real double-delivery scenario.
-	mockStore.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil).Once()
+	mockStore.On("GetGlobalConfig", mock.Anything).Return(autoPurchaseOnCfg(), nil).Maybe()
 	mockStore.On("GetExecutionByID", ctx, "exec-dup").Return(newPending(), nil).Once()
 	mockStore.On("GetExecutionByID", ctx, "exec-dup").Return(newPending(), nil).Once()
 
@@ -332,9 +333,9 @@ func TestSQSRedeliveryDoesNotDoubleExecute(t *testing.T) {
 		Return(nil, fmt.Errorf("%w: row already running", config.ErrExecutionNotInExpectedStatus)).Once()
 
 	mockStore.SavePurchaseExecutionFn = func(_ context.Context, _ *config.PurchaseExecution) error { return nil }
-	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
-	mockStore.On("GetPurchasePlan", ctx, mock.Anything).Return(&config.PurchasePlan{Name: "p", AutoPurchase: true, MaxStepCommitment: capOf(1e9)}, nil).Maybe()
+	mockStore.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockStore.On("GetPurchasePlan", mock.Anything, mock.Anything).Return(&config.PurchasePlan{Name: "p", AutoPurchase: true, MaxStepCommitment: capOf(1e9)}, nil).Maybe()
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil)
@@ -393,13 +394,14 @@ func TestMultiAccountPartialSuccessIsAcked(t *testing.T) {
 	}
 	plan := &config.PurchasePlan{ID: "plan-x", Name: "Plan X", AutoPurchase: true, MaxStepCommitment: capOf(1e9)}
 
-	mockStore.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil).Once()
+	mockStore.On("GetGlobalConfig", mock.Anything).Return(autoPurchaseOnCfg(), nil).Maybe()
 	mockStore.On("GetExecutionByID", ctx, "root-partial").Return(exec, nil)
 	running := *exec
 	running.Status = "running"
 	mockStore.On("TransitionExecutionStatus", ctx, "root-partial",
 		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&running, nil)
-	mockStore.On("GetPurchasePlan", ctx, "plan-x").Return(plan, nil).Maybe()
+	mockStore.On("GetPurchasePlan", mock.Anything, "plan-x").Return(plan, nil).Maybe()
 	// GetPlanAccounts is served by the Fn hook, not a testify expectation.
 	mockStore.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {
 		return accounts, nil
@@ -417,8 +419,8 @@ func TestMultiAccountPartialSuccessIsAcked(t *testing.T) {
 		}
 		return nil
 	}
-	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockStore.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil)
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil)
@@ -494,13 +496,14 @@ func TestExecuteForAccount_CommittedButUnsavedIsAcked(t *testing.T) {
 	}
 	plan := &config.PurchasePlan{ID: "plan-y", Name: "Plan Y", AutoPurchase: true, MaxStepCommitment: capOf(1e9)}
 
-	mockStore.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil).Once()
+	mockStore.On("GetGlobalConfig", mock.Anything).Return(autoPurchaseOnCfg(), nil).Maybe()
 	mockStore.On("GetExecutionByID", ctx, "root-unsaved").Return(exec, nil)
 	running := *exec
 	running.Status = "running"
 	mockStore.On("TransitionExecutionStatus", ctx, "root-unsaved",
 		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&running, nil)
-	mockStore.On("GetPurchasePlan", ctx, "plan-y").Return(plan, nil).Maybe()
+	mockStore.On("GetPurchasePlan", mock.Anything, "plan-y").Return(plan, nil).Maybe()
 	mockStore.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {
 		return accounts, nil
 	}
@@ -521,7 +524,7 @@ func TestExecuteForAccount_CommittedButUnsavedIsAcked(t *testing.T) {
 		}
 		return nil
 	}
-	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
+	mockStore.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)

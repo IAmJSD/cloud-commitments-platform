@@ -546,7 +546,7 @@ func TestManager_ApproveAndExecute_FourEyesOn_AllowsDifferentApprover(t *testing
 		Recommendations: approvalTestRecs(),
 	}
 
-	store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOnForManager(), nil)
+	store.On("GetGlobalConfig", mock.Anything).Return(fourEyesCfgOnForManager(), nil)
 	store.On("GetExecutionByID", ctx, "exec-direct-diff").Return(execution, nil)
 	store.On("TransitionExecutionStatus", ctx, "exec-direct-diff", approveFromStatuses, "running", &approverUUID).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-fourEyes")
@@ -714,7 +714,7 @@ func TestManager_ApproveExecution_FourEyesOn_DifferentActor_Allowed(t *testing.T
 	}
 
 	store.On("GetExecutionByID", ctx, "exec-sqs-diff").Return(execution, nil)
-	store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOnForManager(), nil)
+	store.On("GetGlobalConfig", mock.Anything).Return(fourEyesCfgOnForManager(), nil)
 	store.On("GetUserEmailByID", ctx, creatorID).Return("creator@example.com", nil)
 	store.On("TransitionExecutionStatus", ctx, "exec-sqs-diff", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-fourEyes")

@@ -93,7 +93,7 @@ func scheduledBarePlanStepFails(t *testing.T, notificationDaysBefore int) {
 	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{exec}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil)
-	mockStore.On("GetPurchasePlan", ctx, bareStepPlanID).Return(plan, nil)
+	mockStore.On("GetPurchasePlan", mock.Anything, bareStepPlanID).Return(plan, nil)
 	mockStore.On("TransitionExecutionStatus", ctx, bareStepExecID,
 		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&claimed, nil)
 	// A two-account plan: the failure must be recorded once on the root row,

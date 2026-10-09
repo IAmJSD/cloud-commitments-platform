@@ -195,23 +195,23 @@ func TestFireScheduledDelayedPurchases_EndToEnd(t *testing.T) {
 	store.On("TransitionExecutionStatus", ctx, "exec-scheduled-fire", []string{"scheduled"}, "running", (*string)(nil)).
 		Return(&approved, nil)
 
-	store.On("GetPurchasePlan", ctx, "plan-1").Return(plan, nil)
+	store.On("GetPurchasePlan", mock.Anything, "plan-1").Return(plan, nil)
 	store.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {
 		return nil, nil // no plan-level accounts -> single-account path
 	}
-	store.On("GetCloudAccount", ctx, acctID).Return(account, nil)
-	store.On("CompletePlanStep", ctx, "plan-1", 1).Return(nil)
+	store.On("GetCloudAccount", mock.Anything, acctID).Return(account, nil)
+	store.On("CompletePlanStep", mock.Anything, "plan-1", 1).Return(nil)
 
 	var savedFinal *config.PurchaseExecution
 	// The audit stamp and the terminal save are both guarded on running; an
 	// unguarded SavePurchaseExecution would be an unexpected call here.
-	store.On("SaveExecutionIfStatus", ctx, mock.Anything, []string{"running"}).
+	store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{"running"}).
 		Run(func(args mock.Arguments) {
 			c := *args.Get(1).(*config.PurchaseExecution)
 			savedFinal = &c
 		}).Return(nil)
-	store.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	store.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil)
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil)
@@ -275,12 +275,12 @@ func TestFireScheduledDelayedPurchases_AuditGapAfterCASStillFires(t *testing.T) 
 	store.On("TransitionExecutionStatus", ctx, "exec-auditgap-fire", []string{"scheduled"}, "running", (*string)(nil)).
 		Return(&approved, nil)
 
-	store.On("GetPurchasePlan", ctx, "plan-1").Return(plan, nil)
+	store.On("GetPurchasePlan", mock.Anything, "plan-1").Return(plan, nil)
 	store.GetPlanAccountsFn = func(_ context.Context, _ string) ([]config.CloudAccount, error) {
 		return nil, nil
 	}
-	store.On("GetCloudAccount", ctx, acctID).Return(account, nil)
-	store.On("CompletePlanStep", ctx, "plan-1", 1).Return(nil)
+	store.On("GetCloudAccount", mock.Anything, acctID).Return(account, nil)
+	store.On("CompletePlanStep", mock.Anything, "plan-1", 1).Return(nil)
 
 	// The approved_by audit-stamp save (the FIRST SavePurchaseExecution call,
 	// right after the CAS) fails; the terminal save after executeAndFinalize
@@ -293,8 +293,8 @@ func TestFireScheduledDelayedPurchases_AuditGapAfterCASStillFires(t *testing.T) 
 		}
 		return nil
 	}
-	store.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	store.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
+	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil)
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil)
