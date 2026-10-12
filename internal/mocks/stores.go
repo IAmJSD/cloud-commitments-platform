@@ -343,6 +343,48 @@ func (m *MockConfigStore) SavePurchaseExecution(ctx context.Context, exec *confi
 	return args.Error(0)
 }
 
+// SaveExecutionIfStatus mocks the guarded save. With no expectation registered
+// it delegates to SavePurchaseExecution so existing tests keep their behavior.
+func (m *MockConfigStore) SaveExecutionIfStatus(ctx context.Context, exec *config.PurchaseExecution, expected []string) error {
+	m.record("SaveExecutionIfStatus", ctx, exec, expected)
+	if !isExpected(&m.Mock, "SaveExecutionIfStatus") {
+		return m.SavePurchaseExecution(ctx, exec)
+	}
+	args := m.Called(ctx, exec, expected)
+	return args.Error(0)
+}
+
+// SaveExecutionIfStatusTx mocks the tx variant; same delegation as above.
+func (m *MockConfigStore) SaveExecutionIfStatusTx(ctx context.Context, tx pgx.Tx, exec *config.PurchaseExecution, expected []string) error {
+	m.record("SaveExecutionIfStatusTx", ctx, tx, exec, expected)
+	if !isExpected(&m.Mock, "SaveExecutionIfStatusTx") {
+		return m.SaveExecutionIfStatus(ctx, exec, expected)
+	}
+	args := m.Called(ctx, tx, exec, expected)
+	return args.Error(0)
+}
+
+// RecoverReapedExecution mocks the reaped-row recovery. With no expectation it
+// delegates to SavePurchaseExecution.
+func (m *MockConfigStore) RecoverReapedExecution(ctx context.Context, exec *config.PurchaseExecution) error {
+	m.record("RecoverReapedExecution", ctx, exec)
+	if !isExpected(&m.Mock, "RecoverReapedExecution") {
+		return m.SavePurchaseExecution(ctx, exec)
+	}
+	args := m.Called(ctx, exec)
+	return args.Error(0)
+}
+
+// RecoverReapedExecutionTx mocks the tx variant; same delegation as above.
+func (m *MockConfigStore) RecoverReapedExecutionTx(ctx context.Context, tx pgx.Tx, exec *config.PurchaseExecution) error {
+	m.record("RecoverReapedExecutionTx", ctx, tx, exec)
+	if !isExpected(&m.Mock, "RecoverReapedExecutionTx") {
+		return m.RecoverReapedExecution(ctx, exec)
+	}
+	args := m.Called(ctx, tx, exec)
+	return args.Error(0)
+}
+
 // TransitionExecutionStatus mocks the TransitionExecutionStatus operation.
 func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*config.PurchaseExecution, error) {
 	m.record("TransitionExecutionStatus", ctx, executionID, fromStatuses, toStatus, actor)
