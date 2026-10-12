@@ -88,6 +88,7 @@ func newPauseClaimFixture(t *testing.T) *pauseClaimFixture {
 	plan, err := f.store.GetPurchasePlan(ctx, f.planID)
 	require.NoError(t, err)
 	plan.AutoPurchase = true
+	plan.NotificationDaysBefore = 3
 	plan.MaxStepCommitment = &pauseClaimCap
 	require.NoError(t, f.store.UpdatePurchasePlan(ctx, plan))
 	globalCfg, err := f.store.GetGlobalConfig(ctx)

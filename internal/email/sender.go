@@ -578,6 +578,14 @@ type NotificationData struct {
 	DaysUntilPurchase        int
 	TotalUpfrontCost         float64
 	TotalSavings             float64
+	// TotalCommitment, TotalRecurring, TotalUnits and StepCap describe what a
+	// scheduled plan step will buy. TotalCommitment is upfront plus the
+	// recurring charges over each term; StepCap is the plan's per-step cap, 0
+	// when none is shown. A zero TotalCommitment omits the block.
+	TotalCommitment float64
+	TotalRecurring  float64
+	TotalUnits      int
+	StepCap         float64
 	// RevocationToken is the one-time token embedded in the revocation link
 	// of a post-execution notification email. When non-empty, the template
 	// renders a "Revoke this purchase" CTA that hits
@@ -607,6 +615,15 @@ type RecommendationSummary struct {
 	MonthlySavings float64
 	Term           int
 	UpfrontCost    float64
+	// MonthlyCost, Commitment, AvailabilityZone, Platform and Tenancy are the
+	// per-row detail of a scheduled plan step. Commitment is upfront plus
+	// monthly over the term, so a no-upfront (Azure monthly) row does not read
+	// as $0.
+	MonthlyCost      float64
+	Commitment       float64
+	AvailabilityZone string
+	Platform         string
+	Tenancy          string
 }
 
 // RIExchangeNotificationData holds data for RI exchange email templates.

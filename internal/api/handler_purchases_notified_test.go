@@ -54,6 +54,7 @@ func TestResumePlannedPurchase_PastScheduledDate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			handler, store, req := notifiedAdminHandler(ctx)
 			row := &config.PurchaseExecution{ExecutionID: notifiedExecID, PlanID: "plan-1", Status: "pending", Recommendations: tc.recs, ScheduledDate: tc.date}
+			store.On("GetExecutionByID", ctx, notifiedExecID).Return(row, nil).Maybe()
 			store.On("TransitionExecutionStatus", ctx, notifiedExecID, []string{"paused"}, "pending", mock.Anything).Return(row, nil)
 			store.On("GetPurchasePlan", ctx, "plan-1").Return(&config.PurchasePlan{ID: "plan-1", NotificationDaysBefore: 3}, nil).Maybe()
 			var movedTo *time.Time
@@ -86,4 +87,40 @@ func TestCancelOrRecoverExecution_ReleasesSuppressionsOfNotifiedRow(t *testing.T
 	_, err := handler.cancelOrRecoverExecution(ctx, notifiedExecID, nil)
 	require.NoError(t, err)
 	store.AssertCalled(t, "DeleteSuppressionsByExecution", ctx, notifiedExecID)
+}
+
+// S13 on the resume path: a plan without a veto window must not have a due
+// recommendation-bearing row moved to "now"; nothing is changed.
+func TestResumePlannedPurchase_RefusesWithoutVetoWindow(t *testing.T) {
+	ctx := context.Background()
+	recs := []config.RecommendationRecord{{ID: "rec-1", Count: 1}}
+	for _, tc := range []struct {
+		name    string
+		recs    []config.RecommendationRecord
+		date    time.Time
+		refused bool
+	}{
+		{"rec-bearing past date, 0 days", recs, time.Now().Add(-time.Hour), true},
+		{"rec-bearing future date, 0 days", recs, time.Now().Add(time.Hour), false},
+		{"empty row past date, 0 days", nil, time.Now().Add(-time.Hour), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler, store, req := notifiedAdminHandler(ctx)
+			row := &config.PurchaseExecution{ExecutionID: notifiedExecID, PlanID: "plan-1", Status: "paused", Recommendations: tc.recs, ScheduledDate: tc.date}
+			store.On("GetExecutionByID", ctx, notifiedExecID).Return(row, nil)
+			store.On("GetPurchasePlan", ctx, "plan-1").Return(&config.PurchasePlan{ID: "plan-1", NotificationDaysBefore: 0}, nil).Maybe()
+			store.On("TransitionExecutionStatus", ctx, notifiedExecID, []string{"paused"}, "pending", mock.Anything).Return(row, nil).Maybe()
+			store.On("RescheduleAwaitingExecution", ctx, notifiedExecID, mock.Anything).Return(true, nil).Maybe()
+
+			_, err := handler.resumePlannedPurchase(ctx, req, notifiedExecID)
+			if !tc.refused {
+				require.NoError(t, err)
+				return
+			}
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "got %v", err)
+			assert.Equal(t, 409, ce.code)
+			store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		})
+	}
 }

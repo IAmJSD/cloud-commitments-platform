@@ -228,6 +228,13 @@ func (h *Handler) resumePlannedPurchase(ctx context.Context, req *events.LambdaF
 		return nil, err
 	}
 
+	// A recommendation-bearing row that is past its date is moved to
+	// now + NotificationDaysBefore on resume; a plan without a veto window
+	// would move it to "now", so refuse before changing anything.
+	if checkErr := h.requireResumeVetoWindow(ctx, executionID, time.Now()); checkErr != nil {
+		return nil, checkErr
+	}
+
 	// Atomically transition from paused back to pending
 	resumed, transitionErr := h.config.TransitionExecutionStatus(ctx, executionID, []string{"paused"}, "pending", resolveCreatorUserID(session))
 	if transitionErr != nil {
@@ -238,6 +245,26 @@ func (h *Handler) resumePlannedPurchase(ctx context.Context, req *events.LambdaF
 	}
 
 	return &StatusResponse{Status: "resumed"}, nil
+}
+
+// requireResumeVetoWindow refuses to resume a recommendation-bearing row whose
+// scheduled_date has passed when its plan has no veto window (S13).
+func (h *Handler) requireResumeVetoWindow(ctx context.Context, executionID string, now time.Time) error {
+	row, err := h.config.GetExecutionByID(ctx, executionID)
+	if err != nil {
+		return fmt.Errorf("failed to read execution %s before resume: %w", executionID, err)
+	}
+	if len(row.Recommendations) == 0 || !row.ScheduledDate.Before(now) {
+		return nil
+	}
+	plan, err := h.config.GetPurchasePlan(ctx, row.PlanID)
+	if err != nil {
+		return fmt.Errorf("failed to read plan %s before resuming execution %s: %w", row.PlanID, executionID, err)
+	}
+	if vetoErr := plan.RequireVetoWindow(); vetoErr != nil {
+		return NewClientError(409, fmt.Sprintf("execution %s cannot be resumed: %v", executionID, vetoErr))
+	}
+	return nil
 }
 
 // pushPastScheduledDate moves a resumed recommendation-bearing row whose
@@ -254,6 +281,9 @@ func (h *Handler) pushPastScheduledDate(ctx context.Context, row *config.Purchas
 	plan, err := h.config.GetPurchasePlan(ctx, row.PlanID)
 	if err != nil {
 		return fmt.Errorf("failed to read plan %s to reschedule resumed execution %s: %w", row.PlanID, row.ExecutionID, err)
+	}
+	if vetoErr := plan.RequireVetoWindow(); vetoErr != nil {
+		return NewClientError(409, fmt.Sprintf("execution %s was resumed but cannot be rescheduled: %v", row.ExecutionID, vetoErr))
 	}
 	// Conditional single-column update, not a full-row save: a cancel or
 	// approve landing after the resume must not be overwritten. A lost

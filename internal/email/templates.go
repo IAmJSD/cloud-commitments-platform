@@ -37,10 +37,13 @@ const scheduledPurchaseTemplate = `CUDly - Scheduled Purchase in {{.DaysUntilPur
 =========================================
 
 Based on your Purchase Plan "{{.PlanName}}", the following commitments will be purchased on {{.PurchaseDate}}:
-
+{{if gt .TotalCommitment 0.0}}
+Will buy {{len .Recommendations}} recommendation(s) ({{.TotalUnits}} units) for ${{printf "%.2f" .TotalCommitment}} total commitment (upfront ${{printf "%.2f" .TotalUpfrontCost}} + ${{printf "%.2f" .TotalRecurring}} recurring over the terms){{if gt .StepCap 0.0}}, cap ${{printf "%.2f" .StepCap}}{{end}}, on {{.PurchaseDate}} unless canceled.
+{{end}}
 {{range .Recommendations}}
-- {{.Count}}x {{.ResourceType}}{{if .Engine}} ({{.Engine}}){{end}} in {{.Region}}
-  Service: {{.Service}} | Est. Savings: ${{printf "%.2f" .MonthlySavings}}/month
+- {{.Count}}x {{.ResourceType}}{{if .Engine}} ({{.Engine}}){{end}} in {{.Region}}{{if .AvailabilityZone}} ({{.AvailabilityZone}}){{end}}{{if .Platform}} | {{.Platform}}{{end}}{{if .Tenancy}} | {{.Tenancy}}{{end}}
+  Service: {{.Service}} | Est. Savings: ${{printf "%.2f" .MonthlySavings}}/month{{if gt .Commitment 0.0}}
+  Term: {{.Term}} yr {{.Payment}} | Upfront ${{printf "%.2f" .UpfrontCost}} + ${{printf "%.2f" .MonthlyCost}}/month | Commitment ${{printf "%.2f" .Commitment}}{{end}}
 {{end}}
 
 Summary:
