@@ -272,11 +272,11 @@ func (app *Application) processOneLadderConfig(
 // LadderCapability (fake) and a mock store without touching AWS or PostgreSQL.
 //
 // L5 netting: before calling Allocate, the handler fetches the config's in-flight
-// commitment (the sum of its status=scheduled, not-yet-fired ladder tranches
-// ONLY). The Allocate engine subtracts this from the raw gap so each daily run
-// plans only what is still needed, preventing pile-up when prior scheduled
-// tranches have not yet fired. Fired/completed tranches are deliberately NOT
-// counted here: they are executed purchases already reflected in the engine's
+// commitment (scheduled tranches still fireable, plus fired tranches not yet
+// resolved). The Allocate engine subtracts this from the raw gap so each daily
+// run plans only what is still needed, preventing pile-up when prior tranches
+// have not yet been bought. Completed tranches are deliberately NOT counted
+// here: they are executed purchases already reflected in the engine's
 // ExistingUSDPerHour, so counting them again would double-subtract.
 //
 // Persistence is APPEND-ONLY (see persistLadderRun): every run inserts its new
@@ -314,11 +314,11 @@ func (app *Application) executeLadderRun(
 	}
 
 	// L5: Fetch in-flight commitment BEFORE Allocate so the engine can subtract
-	// it from the gap. In-flight = the config's status=scheduled ladder tranches
-	// whose scheduled_date is still after now ONLY (an elapsed one never fired).
-	// Fired/completed tranches are excluded because they are executed purchases
-	// already counted in ExistingUSDPerHour; netting them
-	// again would double-subtract. Including prior-run scheduled tranches lets
+	// it from the gap. In-flight = the config's scheduled tranches still within
+	// config.LadderFireGrace plus its fired (unresolved) tranches. Completed
+	// tranches are excluded because they are executed purchases already counted
+	// in ExistingUSDPerHour; netting them again would double-subtract.
+	// Including prior-run scheduled tranches lets
 	// the engine account for en-route commitment and produce a ~zero gap (Hold)
 	// when the scheduled ramp already covers the target.
 	inFlight, err := app.Config.GetInFlightLadderCommitUSDHr(ctx, dbCfg.ID, now)
