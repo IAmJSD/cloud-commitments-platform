@@ -5156,6 +5156,22 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
       expect(groups.size).toBe(2);
     });
 
+    test('EC2 recs differing only by platform or tenancy are separate cells; same pair shares one (issue #806)', () => {
+      const d = { platform: 'Linux/UNIX', tenancy: 'default' };
+      const base = mkRec({ details: d });
+      expect(groupRecsByCell([base, mkRec({ details: { ...d, platform: 'Windows' } })]).size).toBe(2);
+      expect(groupRecsByCell([base, mkRec({ details: { ...d, tenancy: 'dedicated' } })]).size).toBe(2);
+      expect(groupRecsByCell([base, mkRec({ details: { ...d }, term: 3 })]).size).toBe(1);
+      const zonal = mkRec({ availability_zone: 'us-east-1a', details: d });
+      expect(Array.from(groupRecsByCell([zonal]).keys())[0]).toBe('aws||ec2|us-east-1|m5.large||us-east-1a|Linux/UNIX|default');
+    });
+
+    test('non-EC2 recs and EC2 recs without platform/tenancy keep their cell key (issue #806)', () => {
+      const rds = mkRec({ service: 'rds', details: { platform: 'x', tenancy: 'y' } });
+      expect(Array.from(groupRecsByCell([rds]).keys())[0]).toBe('aws||rds|us-east-1|m5.large|');
+      expect(Array.from(groupRecsByCell([mkRec({ details: { instance_type: 'm5.large' } }), mkRec({})]).keys())).toEqual(['aws||ec2|us-east-1|m5.large|']);
+    });
+
     test('zonal EC2 recs differing only by AZ are separate cells; regional recs are unchanged (issue #792)', () => {
       const a = mkRec({ availability_zone: 'us-east-1a' });
       const b = mkRec({ availability_zone: 'us-east-1b' });

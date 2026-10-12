@@ -991,7 +991,24 @@ function cellKey(rec: LocalRecommendation): string {
   const key = `${rec.provider}|${rec.cloud_account_id ?? ''}|${rec.service}|${rec.region}|${rec.resource_type}|${rec.engine ?? ''}`;
   // Zonal EC2 recs in different AZs are distinct purchasable cells (issue #792);
   // the suffix is added only for them so every other cell key is unchanged.
-  return rec.availability_zone ? `${key}|${rec.availability_zone}` : key;
+  const zonal = rec.availability_zone ? `${key}|${rec.availability_zone}` : key;
+  // EC2 recs differing only by platform or tenancy are distinct purchasable cells
+  // (issue #806). Verbatim values from details, same source as
+  // samePurchaseVariantIdentity; the pair is added only when either is set.
+  const { platform, tenancy } = computeIdentity(rec);
+  return platform || tenancy ? `${zonal}|${platform}|${tenancy}` : zonal;
+}
+
+function computeIdentity(rec: LocalRecommendation): { platform: string; tenancy: string } {
+  const details = rec.details;
+  if ((rec.service !== 'ec2' && rec.service !== 'compute') || typeof details !== 'object' || details === null || Array.isArray(details)) {
+    return { platform: '', tenancy: '' };
+  }
+  const { platform, tenancy } = details as Record<string, unknown>;
+  return {
+    platform: typeof platform === 'string' ? platform : '',
+    tenancy: typeof tenancy === 'string' ? tenancy : '',
+  };
 }
 
 // issues #225 + #226: cell-grouping helpers.
