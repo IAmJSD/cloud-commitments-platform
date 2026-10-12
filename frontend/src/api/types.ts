@@ -485,7 +485,7 @@ export interface PlannedPurchase {
   // upfront_cost and estimated_savings are then placeholders, not data
   // (platform#609).
   has_recommendations: boolean;
-  status: 'pending' | 'paused' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'notified' | 'paused' | 'running' | 'completed' | 'failed';
   step_number: number;
   total_steps: number;
   // created_by_user_id is the UUID of the user who scheduled the purchase.

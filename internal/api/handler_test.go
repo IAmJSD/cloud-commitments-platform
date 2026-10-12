@@ -1214,7 +1214,7 @@ func TestHandler_HandleRequest_PausePlannedPurchase(t *testing.T) {
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	paused := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "paused"}
-	mockStore.On("TransitionExecutionStatus", mock.Anything, "11111111-1111-1111-1111-111111111111", []string{"pending"}, "paused", mock.Anything).Return(paused, nil)
+	mockStore.On("TransitionExecutionStatus", mock.Anything, "11111111-1111-1111-1111-111111111111", []string{"pending", "notified"}, "paused", mock.Anything).Return(paused, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 
@@ -1330,7 +1330,7 @@ func TestHandler_HandleRequest_DeletePlannedPurchase(t *testing.T) {
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
 	canceled := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "canceled"}
-	mockStore.On("TransitionExecutionStatus", mock.Anything, "11111111-1111-1111-1111-111111111111", []string{"pending", "paused"}, "canceled", mock.Anything).Return(canceled, nil)
+	mockStore.On("TransitionExecutionStatus", mock.Anything, "11111111-1111-1111-1111-111111111111", []string{"pending", "notified", "paused"}, "canceled", mock.Anything).Return(canceled, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 

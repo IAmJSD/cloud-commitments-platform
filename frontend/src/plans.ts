@@ -685,7 +685,7 @@ function canManageScheduledPurchase(purchase: PlannedPurchase): boolean {
 function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   const statusClass = getPlannedPurchaseStatusClass(purchase.status);
   const isPaused = purchase.status === 'paused';
-  const isPending = purchase.status === 'pending';
+  const isPending = purchase.status === 'pending' || purchase.status === 'notified';
   const canRun = isPending || isPaused;
   const termCell = purchase.term > 0
     ? `${purchase.term}yr ${escapeHtml((purchase.payment ?? '').replace('-', ' '))}`
@@ -767,7 +767,8 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
  */
 function getPlannedPurchaseStatusClass(status: string): string {
   switch (status) {
-    case 'pending': return 'status-pending';
+    case 'pending':
+    case 'notified': return 'status-pending';
     case 'paused': return 'status-paused';
     case 'running': return 'status-running';
     case 'completed': return 'status-completed';
