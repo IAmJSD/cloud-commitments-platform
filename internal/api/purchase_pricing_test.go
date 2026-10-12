@@ -1202,3 +1202,13 @@ func TestStaleAzurePricingErrorMapping(t *testing.T) {
 	assert.Equal(t, 500, ce.code)
 	assert.ErrorIs(t, tokenActionError(audit), config.ErrAuditLoss)
 }
+
+// Fixture-based: the go EC2 client's AZ-less zonal refusal reaches the user as
+// a 502 whose message keeps the "re-fetch" instruction.
+func TestExecuteFailureError_ZonalRefusalIs502WithRefetchMessage(t *testing.T) {
+	refusal := fmt.Errorf("EC2 recommendation for m5.large has zonal scope but no AvailabilityZone: refusing to buy a zonal RI in an arbitrary AZ; re-fetch the recommendation")
+	ce, ok := IsClientError(executeFailureError("id", "approved", &config.PurchaseExecution{Status: "failed"}, refusal))
+	require.True(t, ok)
+	assert.Equal(t, 502, ce.code)
+	assert.Contains(t, ce.message, "re-fetch")
+}

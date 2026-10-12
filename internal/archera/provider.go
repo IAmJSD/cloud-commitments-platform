@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -135,7 +136,7 @@ func (p *Provider) Client(ctx context.Context) (insurance.QuoteClient, error) {
 		logging.Warnf("archera: resolving %s failed: %v", EnvKeySecret, err)
 		return nil, ErrKeyUnavailable
 	}
-	c, err := insurance.NewClient(insurance.Config{APIKey: key, OrgID: p.settings.OrgID}, p.hc)
+	c, err := insurance.NewClient(insurance.Config{APIKey: insurance.NewSecret(strings.TrimSpace(key)), OrgID: p.settings.OrgID}, p.hc)
 	if err != nil {
 		logging.Warnf("archera: building client failed: %v", err)
 		return nil, ErrKeyUnavailable
