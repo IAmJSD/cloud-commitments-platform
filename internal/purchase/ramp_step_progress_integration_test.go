@@ -86,9 +86,10 @@ func newRampStepFixture(ctx context.Context, t *testing.T) *rampStepFixture {
 	store, _ := rampStepStore(ctx, t)
 
 	plan := &config.PurchasePlan{
-		Name:         "Ramp Step Plan",
-		AutoPurchase: true,
-		Services:     map[string]config.ServiceConfig{},
+		Name:              "Ramp Step Plan",
+		AutoPurchase:      true,
+		MaxStepCommitment: capOf(1e9),
+		Services:          map[string]config.ServiceConfig{},
 		RampSchedule: config.RampSchedule{
 			Type:             "weekly",
 			PercentPerStep:   25,
@@ -99,6 +100,12 @@ func newRampStepFixture(ctx context.Context, t *testing.T) *rampStepFixture {
 		},
 	}
 	require.NoError(t, store.CreatePurchasePlan(ctx, plan))
+
+	// The auto-execute gate needs the global kill switch on.
+	globalCfg, err := store.GetGlobalConfig(ctx)
+	require.NoError(t, err)
+	globalCfg.AutoPurchaseEnabled = true
+	require.NoError(t, store.SaveGlobalConfig(ctx, globalCfg))
 
 	authModes := []string{"access_keys", "role_arn", "role_arn"}
 	accountIDs := make([]string, 0, len(authModes))
@@ -220,7 +227,7 @@ func (f *rampStepFixture) saveRootExecution(ctx context.Context, t *testing.T, s
 		ExecutionID:     uuid.New().String(),
 		IdempotencyKey:  fmt.Sprintf("lineage-step-%d", stepNumber),
 		PlanID:          f.plan.ID,
-		Status:          "pending",
+		Status:          "notified",
 		StepNumber:      stepNumber,
 		ScheduledDate:   time.Now(),
 		Recommendations: f.rampStepRecommendationsPerAccount(),

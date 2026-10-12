@@ -2586,11 +2586,7 @@ func purchaseConstraintSets(recs []config.RecommendationRecord) []auth.Permissio
 // execute path the two cost fields are the store-derived values written by
 // priceRecommendationsFromStore.
 func recTotalCommitment(rec *config.RecommendationRecord) float64 {
-	total := rec.UpfrontCost
-	if rec.Term > 0 && rec.MonthlyCost != nil {
-		total += *rec.MonthlyCost * float64(rec.Term*12)
-	}
-	return total
+	return rec.TotalCommitment()
 }
 
 // requireNonZeroCommitment guards against a purchase batch whose computed

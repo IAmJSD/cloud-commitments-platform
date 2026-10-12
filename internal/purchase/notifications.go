@@ -23,10 +23,17 @@ func (m *Manager) SendUpcomingPurchaseNotifications(ctx context.Context) (*Notif
 		return nil, fmt.Errorf("failed to list purchase plans: %w", err)
 	}
 
+	// Kill switch, read once per tick. A read error fails the tick rather than
+	// defaulting to enabled (fail closed on the money path).
+	autoPurchaseEnabled, err := m.autoPurchaseEnabled(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	notified := 0
 	for _rvc := range plans {
 		plan := plans[_rvc]
-		if m.shouldNotifyPlan(plan) {
+		if m.shouldNotifyPlan(plan, autoPurchaseEnabled) {
 			if m.sendPlanNotification(ctx, &plan) {
 				notified++
 			}
@@ -39,8 +46,9 @@ func (m *Manager) SendUpcomingPurchaseNotifications(ctx context.Context) (*Notif
 }
 
 // shouldNotifyPlan checks if a plan should trigger a notification.
-func (m *Manager) shouldNotifyPlan(plan config.PurchasePlan) bool {
-	if !plan.Enabled || !plan.AutoPurchase {
+// autoPurchaseEnabled is the global scheduling.auto_purchase kill switch.
+func (m *Manager) shouldNotifyPlan(plan config.PurchasePlan, autoPurchaseEnabled bool) bool {
+	if !autoPurchaseEnabled || !plan.Enabled || !plan.AutoPurchase {
 		return false
 	}
 

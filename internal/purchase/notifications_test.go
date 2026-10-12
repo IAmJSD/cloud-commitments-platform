@@ -497,7 +497,7 @@ func TestManager_SendUpcomingPurchaseNotifications_WithNotification(t *testing.T
 	}
 
 	notifyEmailStr := "notify@example.com"
-	globalCfg := &config.GlobalConfig{NotificationEmail: &notifyEmailStr}
+	globalCfg := &config.GlobalConfig{NotificationEmail: &notifyEmailStr, AutoPurchaseEnabled: true}
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 	// An existing pending row that carries recommendations is the only kind
 	// the reminder still emails (#609); it is rotated, not created.
@@ -653,7 +653,7 @@ func TestManager_SendUpcomingPurchaseNotifications_EmailFails(t *testing.T) {
 	}
 
 	notifyEmailStr := "notify@example.com"
-	globalCfg := &config.GlobalConfig{NotificationEmail: &notifyEmailStr}
+	globalCfg := &config.GlobalConfig{NotificationEmail: &notifyEmailStr, AutoPurchaseEnabled: true}
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
 	pendingExec := &config.PurchaseExecution{
 		ExecutionID:     "pending-exec-id",

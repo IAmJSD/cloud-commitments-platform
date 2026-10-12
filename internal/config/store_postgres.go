@@ -92,7 +92,8 @@ func getGlobalConfigFrom(ctx context.Context, q globalConfigExecutor) (*GlobalCo
 		       COALESCE(laddering_enabled, false),
 		       COALESCE(ladder_execution_enabled, false),
 		       offering_class,
-		       require_different_approver
+		       require_different_approver,
+		       auto_purchase_enabled
 		FROM global_config
 		WHERE id = 1
 	`
@@ -126,6 +127,7 @@ func getGlobalConfigFrom(ctx context.Context, q globalConfigExecutor) (*GlobalCo
 		&config.LadderExecutionEnabled,
 		&config.OfferingClass,
 		&config.RequireDifferentApprover,
+		&config.AutoPurchaseEnabled,
 	)
 
 	if err != nil {
@@ -259,8 +261,8 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 			grace_period_days,
 			recommendations_cache_stale_hours, recommendations_lookback_days,
 			purchase_delay_hours, laddering_enabled, ladder_execution_enabled, offering_class,
-			require_different_approver
-		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+			require_different_approver, auto_purchase_enabled
+		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
 		ON CONFLICT (id) DO UPDATE SET
 			enabled_providers = $1,
 			notification_email = $2,
@@ -286,6 +288,7 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 			ladder_execution_enabled = $22,
 			offering_class = $23,
 			require_different_approver = $24,
+			auto_purchase_enabled = $25,
 			updated_at = NOW()
 	`
 
@@ -354,6 +357,7 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 		config.LadderExecutionEnabled,
 		offeringClass,
 		config.RequireDifferentApprover,
+		config.AutoPurchaseEnabled,
 	)
 
 	if err != nil {
@@ -556,8 +560,9 @@ func (s *PostgresStore) CreatePurchasePlan(ctx context.Context, plan *PurchasePl
 		INSERT INTO purchase_plans (
 			id, name, enabled, auto_purchase, notification_days_before,
 			services, ramp_schedule, created_at, updated_at,
-			next_execution_date, last_execution_date, last_notification_sent
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+			next_execution_date, last_execution_date, last_notification_sent,
+			max_step_commitment
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING updated_at
 	`
 
@@ -575,6 +580,7 @@ func (s *PostgresStore) CreatePurchasePlan(ctx context.Context, plan *PurchasePl
 		plan.NextExecutionDate,
 		plan.LastExecutionDate,
 		plan.LastNotificationSent,
+		plan.MaxStepCommitment,
 	).Scan(&updatedAt)
 
 	if err != nil {
@@ -588,7 +594,8 @@ func (s *PostgresStore) CreatePurchasePlan(ctx context.Context, plan *PurchasePl
 const purchasePlanSelectCols = `
 	SELECT id, name, enabled, auto_purchase, notification_days_before,
 	       services, ramp_schedule, created_at, updated_at,
-	       next_execution_date, last_execution_date, last_notification_sent
+	       next_execution_date, last_execution_date, last_notification_sent,
+	       max_step_commitment
 	FROM purchase_plans`
 
 // scanPurchasePlanRow deserialises one purchase_plans row returned by QueryRow
@@ -612,6 +619,7 @@ func scanPurchasePlanRow(row pgx.Row) (*PurchasePlan, error) {
 		&nextExecDate,
 		&lastExecDate,
 		&lastNotifSent,
+		&plan.MaxStepCommitment,
 	)
 	if err != nil {
 		return nil, err
@@ -799,7 +807,8 @@ func (s *PostgresStore) UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, pla
 			ramp_schedule = $7,
 			next_execution_date = $9,
 			last_execution_date = $10,
-			last_notification_sent = $11
+			last_notification_sent = $11,
+			max_step_commitment = $12
 		WHERE id = $1 AND updated_at = $8
 		RETURNING updated_at
 	`
@@ -817,6 +826,7 @@ func (s *PostgresStore) UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, pla
 		plan.NextExecutionDate,
 		plan.LastExecutionDate,
 		plan.LastNotificationSent,
+		plan.MaxStepCommitment,
 	).Scan(&updatedAt)
 
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -888,6 +898,7 @@ func buildListPlansQuery(accountIDs []string, includeUnassigned bool) (query str
 			SELECT id, name, enabled, auto_purchase, notification_days_before,
 			       services, ramp_schedule, created_at, updated_at,
 			       next_execution_date, last_execution_date, last_notification_sent,
+			       max_step_commitment,
 			       false AS unassigned
 			FROM purchase_plans
 			ORDER BY created_at DESC
@@ -907,6 +918,7 @@ func buildListPlansQuery(accountIDs []string, includeUnassigned bool) (query str
 		SELECT DISTINCT pp.id, pp.name, pp.enabled, pp.auto_purchase, pp.notification_days_before,
 		       pp.services, pp.ramp_schedule, pp.created_at, pp.updated_at,
 		       pp.next_execution_date, pp.last_execution_date, pp.last_notification_sent,
+		       pp.max_step_commitment,
 		       (NOT EXISTS (SELECT 1 FROM plan_accounts WHERE plan_id = pp.id)) AS unassigned
 		FROM purchase_plans pp
 		LEFT JOIN plan_accounts pa ON pa.plan_id = pp.id
@@ -948,6 +960,7 @@ func (s *PostgresStore) ListPurchasePlans(ctx context.Context, filter PurchasePl
 			&nextExecDate,
 			&lastExecDate,
 			&lastNotifSent,
+			&plan.MaxStepCommitment,
 			&plan.Unassigned,
 		)
 		if err != nil {

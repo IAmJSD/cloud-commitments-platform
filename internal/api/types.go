@@ -800,8 +800,12 @@ type PlanRequest struct {
 	NotificationDaysBefore int      `json:"notification_days_before"`
 	CustomStepPercent      int      `json:"custom_step_percent,omitempty"`
 	CustomIntervalDays     int      `json:"custom_interval_days,omitempty"`
-	AutoPurchase           bool     `json:"auto_purchase"`
-	Enabled                bool     `json:"enabled"`
+	// MaxStepCommitment caps the total commitment one ramp step may
+	// auto-purchase. Omitted on create = no cap (auto-purchase of steps with
+	// recommendations stays refused); omitted on update = keep the current cap.
+	MaxStepCommitment *float64 `json:"max_step_commitment,omitempty"`
+	AutoPurchase      bool     `json:"auto_purchase"`
+	Enabled           bool     `json:"enabled"`
 }
 
 // toPurchasePlan converts a PlanRequest to a config.PurchasePlan.
@@ -812,6 +816,7 @@ func (r *PlanRequest) toPurchasePlan() *config.PurchasePlan {
 		Enabled:                r.Enabled,
 		AutoPurchase:           r.AutoPurchase,
 		NotificationDaysBefore: r.NotificationDaysBefore,
+		MaxStepCommitment:      r.MaxStepCommitment,
 		CreatedAt:              now,
 		UpdatedAt:              now,
 	}

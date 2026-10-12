@@ -303,9 +303,10 @@ func TestHandleExecutePurchase_SaveError(t *testing.T) {
 	mockSTS := new(MockSTSClient)
 
 	plan := &config.PurchasePlan{
-		ID:           "plan-save-err",
-		Name:         "Plan",
-		AutoPurchase: true,
+		ID:                "plan-save-err",
+		Name:              "Plan",
+		AutoPurchase:      true,
+		MaxStepCommitment: capOf(1e9),
 	}
 
 	rec := config.RecommendationRecord{
@@ -314,16 +315,18 @@ func TestHandleExecutePurchase_SaveError(t *testing.T) {
 		ResourceType: "m5.large",
 		Region:       "us-east-1",
 		Count:        1,
+		UpfrontCost:  100,
 		Selected:     true,
 	}
 
 	exec := &config.PurchaseExecution{
 		ExecutionID:     "exec-save-err",
 		PlanID:          "plan-save-err",
-		Status:          "pending",
+		Status:          "notified",
 		Recommendations: []config.RecommendationRecord{rec},
 	}
 
+	mockStore.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil)
 	mockStore.On("GetExecutionByID", ctx, "exec-save-err").Return(exec, nil)
 	// claimAndExecute CASes the row to "running" before executing (issue #1013).
 	runningExec := *exec

@@ -521,6 +521,19 @@ func (c *ServiceConfig) validateConfigCoverage() error {
 	return nil
 }
 
+// validateNotificationAndCap checks the notification window and requires a set
+// cap to be a positive finite amount. A nil cap means no cap, which refuses
+// auto-purchase of steps with recommendations.
+func (p *PurchasePlan) validateNotificationAndCap() error {
+	if p.NotificationDaysBefore < 0 || p.NotificationDaysBefore > MaxNotificationDaysBefore {
+		return fmt.Errorf("notification days must be between 0 and %d, got: %d", MaxNotificationDaysBefore, p.NotificationDaysBefore)
+	}
+	if p.MaxStepCommitment != nil && (!(*p.MaxStepCommitment > 0) || math.IsInf(*p.MaxStepCommitment, 0)) {
+		return fmt.Errorf("max_step_commitment must be a positive finite number, got: %v", *p.MaxStepCommitment)
+	}
+	return nil
+}
+
 // Validate validates the PurchasePlan.
 func (p *PurchasePlan) Validate() error {
 	// Name is required
@@ -531,9 +544,8 @@ func (p *PurchasePlan) Validate() error {
 		return fmt.Errorf("plan name is too long (max %d characters)", MaxPlanNameLength)
 	}
 
-	// Validate notification days
-	if p.NotificationDaysBefore < 0 || p.NotificationDaysBefore > MaxNotificationDaysBefore {
-		return fmt.Errorf("notification days must be between 0 and %d, got: %d", MaxNotificationDaysBefore, p.NotificationDaysBefore)
+	if err := p.validateNotificationAndCap(); err != nil {
+		return err
 	}
 
 	// Validate ramp schedule

@@ -56,6 +56,7 @@ var purchasePlanRowCols = []string{
 	"id", "name", "enabled", "auto_purchase", "notification_days_before",
 	"services", "ramp_schedule", "created_at", "updated_at",
 	"next_execution_date", "last_execution_date", "last_notification_sent",
+	"max_step_commitment",
 }
 
 // rampStepArg is a pgxmock.Argument that unmarshals the ramp_schedule JSONB
@@ -87,7 +88,7 @@ func (a nullTimeArg) Match(v interface{}) bool {
 	return (tp == nil) == a.wantNil
 }
 
-const purchasePlanUpdateArgs = 11
+const purchasePlanUpdateArgs = 12
 
 // completeStepUpdateArgs pins the completed step, expected read version, and next-date presence.
 func completeStepUpdateArgs(wantStep int, staleUpdatedAt time.Time, wantNextNil bool) []interface{} {
@@ -134,7 +135,7 @@ func rampPlanRows(t *testing.T, planID string, ramp RampSchedule, now, stale tim
 	return pgxmock.NewRows(purchasePlanRowCols).AddRow(
 		planID, "Ramp Plan", true, true, 3,
 		svcJSON, rampJSON, now, stale,
-		nextExec, sql.NullTime{Valid: false}, sql.NullTime{Valid: false},
+		nextExec, sql.NullTime{Valid: false}, sql.NullTime{Valid: false}, (*float64)(nil),
 	)
 }
 

@@ -79,6 +79,12 @@ type GlobalConfig struct {
 	// a typed ErrLadderExecutionDisabled when this is false.
 	LadderExecutionEnabled bool `json:"ladder_execution_enabled" db:"ladder_execution_enabled"`
 
+	// AutoPurchaseEnabled is the global kill switch for AutoPurchase plans
+	// (migration 000112; the scheduling.auto_purchase default). Default false:
+	// no AutoPurchase plan notifies or executes until an operator opts in.
+	// Manual purchases (Opportunities, token approval) are unaffected.
+	AutoPurchaseEnabled bool `json:"auto_purchase_enabled" db:"auto_purchase_enabled"`
+
 	// OfferingClass controls the EC2 Reserved Instance offering class used
 	// during purchase. Accepted values: "convertible" (default) and
 	// "standard". Convertible RIs can be exchanged for a different
@@ -211,6 +217,10 @@ type PurchasePlan struct {
 	NextExecutionDate      *time.Time               `json:"next_execution_date,omitempty" dynamodbav:"next_execution_date,omitempty"`
 	LastExecutionDate      *time.Time               `json:"last_execution_date,omitempty" dynamodbav:"last_execution_date,omitempty"`
 	LastNotificationSent   *time.Time               `json:"last_notification_sent,omitempty" dynamodbav:"last_notification_sent,omitempty"`
+	// MaxStepCommitment caps the TOTAL commitment (RecommendationRecord.TotalCommitment)
+	// one ramp step may auto-purchase. nil means no cap is set, and auto-purchase of
+	// recommendation-bearing steps is refused (fail closed). Always > 0 when set.
+	MaxStepCommitment *float64 `json:"max_step_commitment,omitempty" dynamodbav:"max_step_commitment,omitempty"`
 	// Unassigned is true when the plan has zero rows in plan_accounts.
 	// This can happen for legacy plans created before target_accounts was
 	// required (issue #743). Such plans are invisible when an account filter
