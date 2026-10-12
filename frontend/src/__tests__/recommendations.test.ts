@@ -5155,6 +5155,17 @@ describe('Issues #225 + #226: cell grouping with savings range and collapse/expa
       const groups = groupRecsByCell([rec1, rec2]);
       expect(groups.size).toBe(2);
     });
+
+    test('zonal EC2 recs differing only by AZ are separate cells; regional recs are unchanged (issue #792)', () => {
+      const a = mkRec({ availability_zone: 'us-east-1a' });
+      const b = mkRec({ availability_zone: 'us-east-1b' });
+      const a2 = mkRec({ availability_zone: 'us-east-1a', term: 3 });
+      const regional1 = mkRec({});
+      const regional2 = mkRec({ term: 3 });
+      const groups = groupRecsByCell([a, b, a2, regional1, regional2]);
+      expect(groups.size).toBe(3);
+      expect(Array.from(groups.keys())).toContain('aws||ec2|us-east-1|m5.large|');
+    });
   });
 
   describe('cellSummary (pure helper)', () => {

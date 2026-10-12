@@ -128,6 +128,8 @@ export interface Recommendation {
   region: string;
   resource_type: string;
   engine?: string;
+  // Zonal EC2 reservation AZ name; absent for regional recs (issue #792).
+  availability_zone?: string;
   // Opaque ServiceDetails payload from the backend (json.RawMessage).
   // The frontend treats this as a pass-through blob: it is stashed when
   // the GET /api/recommendations response is parsed and forwarded unchanged

@@ -988,7 +988,10 @@ const SORTABLE_STRING_COLUMNS: Record<string, (r: LocalRecommendation) => string
 // Used by issue #224's radio enforcement: at most one variant per cell
 // can be selected at any time.
 function cellKey(rec: LocalRecommendation): string {
-  return `${rec.provider}|${rec.cloud_account_id ?? ''}|${rec.service}|${rec.region}|${rec.resource_type}|${rec.engine ?? ''}`;
+  const key = `${rec.provider}|${rec.cloud_account_id ?? ''}|${rec.service}|${rec.region}|${rec.resource_type}|${rec.engine ?? ''}`;
+  // Zonal EC2 recs in different AZs are distinct purchasable cells (issue #792);
+  // the suffix is added only for them so every other cell key is unchanged.
+  return rec.availability_zone ? `${key}|${rec.availability_zone}` : key;
 }
 
 // issues #225 + #226: cell-grouping helpers.
@@ -1020,7 +1023,7 @@ function samePurchaseVariantIdentity(a: LocalRecommendation, b: LocalRecommendat
   switch (a.service) {
     case 'ec2':
     case 'compute':
-      fields = ['platform', 'tenancy', 'scope'];
+      fields = ['platform', 'tenancy', 'scope', 'availability_zone'];
       break;
     case 'rds':
     case 'relational-db':
