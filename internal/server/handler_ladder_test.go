@@ -516,10 +516,8 @@ func TestExecuteLadderRun_HealthyRun(t *testing.T) {
 	ctx := testutil.TestContext(t)
 	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	dbCfg := validTestDBConfig("cfg-healthy")
-	// Two-step ramp with a DELAYED step: an AfterDays==0 step becomes a BuyNow
-	// action, only AfterDays>0 steps become persisted tranches. This ensures
-	// SaveLadderTranches receives a non-empty batch so the assertion below
-	// exercises real tranche persistence.
+	// Two-step ramp: the AfterDays==0 step is persisted as a tranche too
+	// (scheduled_date = run start), alongside the delayed one.
 	dbCfg.RampSchedule, _ = json.Marshal(pkgladder.RampSchedule{
 		Steps: []pkgladder.RampStep{
 			{AfterDays: 0, Fraction: 0.5},
@@ -586,6 +584,40 @@ func TestExecuteLadderRun_HealthyRun(t *testing.T) {
 		assert.Greater(t, tr.AmountUSDHr, 0.0, "each tranche must carry a positive amount")
 	}
 	// No panic means PurchaseLayer and ReshapeBuffer were not called.
+}
+
+// TestExecuteLadderRun_ImmediateStepIsTrancheAndPlanShowsOnlyIt is a MOCK-store
+// test (no database): the AfterDays==0 step is persisted as a tranche with
+// scheduled_date = run start, the plan's purchase action carries only that
+// step's amount, and total_hourly_commit is the sum of the persisted rows.
+func TestExecuteLadderRun_ImmediateStepIsTrancheAndPlanShowsOnlyIt(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	dbCfg := validTestDBConfig("cfg-immediate")
+	dbCfg.RampSchedule, _ = json.Marshal(pkgladder.RampSchedule{Steps: []pkgladder.RampStep{
+		{AfterDays: 0, Fraction: 0.25}, {AfterDays: 30, Fraction: 0.75},
+	}})
+	store := &ladderTestStore{}
+	app := &Application{Config: store}
+	cap := &fakeLadderCapability{t: t, baseline: testBaselineLowWater(12.5)} // target 10, one base allocation
+
+	require.NoError(t, app.executeLadderRun(ctx, &dbCfg, cap, "123456789012", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now))
+
+	require.Len(t, store.savedTranches, 2)
+	assert.True(t, store.savedTranches[0].ScheduledDate.Equal(now), "immediate tranche scheduled_date must be the run start")
+	assert.InDelta(t, 2.5, store.savedTranches[0].AmountUSDHr, 1e-9)
+	assert.InDelta(t, 7.5, store.savedTranches[1].AmountUSDHr, 1e-9)
+	assert.InDelta(t, 10.0, store.savedRun.TotalHourlyCommit, 1e-9, "total must be the sum of persisted tranches")
+
+	var planDTO ladderPlanJSONDTO
+	require.NoError(t, json.Unmarshal(store.savedRun.Plan, &planDTO))
+	var amounts []float64
+	for _, a := range planDTO.Actions {
+		if a.Action == string(pkgladder.ActionPurchase) {
+			amounts = append(amounts, *a.AmountUSDHr)
+		}
+	}
+	assert.Equal(t, []float64{2.5}, amounts, "the plan shows only the immediate step, not the full gap")
 }
 
 // ============================================================
@@ -724,9 +756,8 @@ func TestExecuteLadderRun_MaxActionsExceeded_TruncatesAndPersists(t *testing.T) 
 	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	dbCfg := validTestDBConfig("cfg-maxactions")
 	dbCfg.MaxActionsPerRun = 1 // base+flex split yields 2 allocations > 1
-	// A future-only ramp step so the kept allocation lands as a scheduled
-	// tranche row (an AfterDays==0 step becomes a BuyNow action instead,
-	// which produces no ladder_tranches rows).
+	// A future-only ramp step: the kept allocation lands as one scheduled
+	// tranche row and the plan has no immediate purchase action.
 	rampJSON, err := json.Marshal(pkgladder.RampSchedule{
 		Steps: []pkgladder.RampStep{{AfterDays: 30, Fraction: 1.0}},
 	})
@@ -760,9 +791,10 @@ func TestExecuteLadderRun_MaxActionsExceeded_TruncatesAndPersists(t *testing.T) 
 	var planDTO ladderPlanJSONDTO
 	require.NoError(t, json.Unmarshal(run.Plan, &planDTO))
 
-	// Exactly ONE purchase survives: the larger-gap flex allocation ($70/hr on
+	// Exactly ONE allocation survives: the larger-gap flex allocation ($70/hr on
 	// EC2InstanceSP, the fake's RoleFlex layer); the $10/hr base allocation is
-	// dropped. At least one hold must record the truncation for audit.
+	// dropped. At least one hold must record the truncation for audit. The
+	// ramp has no immediate step, so the display-only plan lists no purchase.
 	var purchases []ladderPlanJSONAction
 	var truncHolds []ladderPlanJSONAction
 	for _, a := range planDTO.Actions {
@@ -775,11 +807,7 @@ func TestExecuteLadderRun_MaxActionsExceeded_TruncatesAndPersists(t *testing.T) 
 			}
 		}
 	}
-	require.Len(t, purchases, 1, "exactly MaxActionsPerRun purchase actions must survive")
-	assert.Equal(t, string(pkgladder.LayerEC2InstanceSP), purchases[0].Layer,
-		"the largest-gap (flex, $70/hr) allocation must be the survivor")
-	require.NotNil(t, purchases[0].AmountUSDHr)
-	assert.InDelta(t, 70.0, *purchases[0].AmountUSDHr, 1e-9)
+	assert.Empty(t, purchases, "a future-only ramp has no immediate purchase to display")
 	require.NotEmpty(t, truncHolds, "each dropped allocation must leave a max_actions_per_run hold")
 	assert.Contains(t, truncHolds[0].Rationale, "deferred to a later run")
 
@@ -789,7 +817,10 @@ func TestExecuteLadderRun_MaxActionsExceeded_TruncatesAndPersists(t *testing.T) 
 		"total_hourly_commit must reflect the truncated plan only")
 
 	// Tranches exist for the kept allocation.
-	assert.NotEmpty(t, store.savedTranches, "the kept allocation must produce tranches")
+	require.Len(t, store.savedTranches, 1, "the kept allocation must produce one tranche")
+	assert.Equal(t, pkgladder.LayerEC2InstanceSP, store.savedTranches[0].LayerType,
+		"the largest-gap (flex, $70/hr) allocation must be the survivor")
+	assert.InDelta(t, 70.0, store.savedTranches[0].AmountUSDHr, 1e-9)
 }
 
 // ============================================================
