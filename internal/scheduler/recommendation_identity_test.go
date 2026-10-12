@@ -115,3 +115,19 @@ func TestRecommendationIdentity_NaturalKeyDimensions(t *testing.T) {
 		})
 	}
 }
+
+// A zonal EC2 rec keeps its AZ in the persisted details blob, so the purchase
+// path can buy in that AZ (go#305).
+func TestConvertRecommendations_ZonalEC2KeepsAvailabilityZoneInDetails(t *testing.T) {
+	s := &Scheduler{}
+	rec := common.Recommendation{
+		Provider: common.ProviderAWS, Service: common.ServiceEC2, Region: "us-east-1", ResourceType: "m5.large", Count: 1, Term: "1yr", PaymentOption: "all-upfront",
+		Details: &common.ComputeDetails{
+			InstanceType: "m5.large", Platform: "Linux/UNIX", Tenancy: "default",
+			Scope: "availability-zone", AvailabilityZone: "us-east-1b",
+		},
+	}
+	records := s.convertRecommendations([]common.Recommendation{rec}, "aws")
+	require.Len(t, records, 1)
+	assert.Contains(t, string(records[0].Details), `"availability_zone":"us-east-1b"`)
+}
