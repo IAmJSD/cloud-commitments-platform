@@ -4,6 +4,7 @@ package purchase
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -39,7 +40,18 @@ func TestApproveAzurePricingRequiresMigrationAndRecollection(t *testing.T) {
 	rec.ID, rec.UpfrontCost = "azure-old-units", 70
 	rec.Payment = "upfront"
 	collects := []config.SuccessfulCollect{{Provider: "azure"}}
-	require.NoError(t, pricing.UpsertRecommendations(ctx, time.Now(), []config.RecommendationRecord{rec}, collects))
+	// Insert the pre-106 row directly: the store's upsert targets the availability_zone
+	// column added by migration 000109, which does not exist at version 105.
+	payload, err := json.Marshal(rec)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO recommendations
+		    (collected_at, cloud_account_id, provider, service, region, resource_type, engine, payload,
+		     upfront_cost, monthly_savings, term, payment_option)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		time.Now(), rec.CloudAccountID, rec.Provider, rec.Service, rec.Region, rec.ResourceType, rec.Engine, payload,
+		rec.UpfrontCost, rec.Savings, rec.Term, rec.Payment)
+	require.NoError(t, err)
 
 	approve := func(t *testing.T, expected error, purchases int) {
 		t.Helper()
@@ -90,6 +102,8 @@ func TestApproveAzurePricingRequiresMigrationAndRecollection(t *testing.T) {
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, rampMigrationsPath(), 106))
 	t.Run("106 invalidated old prices", func(t *testing.T) { approve(t, ErrStaleAzurePricing, 0) })
 	rec.UpfrontCost = 700
+	// The store's upsert needs the availability_zone column from migration 000109.
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, rampMigrationsPath(), 109))
 	require.NoError(t, pricing.UpsertRecommendations(ctx, time.Now().Add(time.Minute), []config.RecommendationRecord{rec}, collects))
 	t.Run("recollected prices purchase once", func(t *testing.T) { approve(t, nil, 1) })
 }
