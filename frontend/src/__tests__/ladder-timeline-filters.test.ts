@@ -1,5 +1,5 @@
 import type { LadderEvent } from '../api/ladder';
-import { emptyLadderFilters, filterLadderEvents, ladderFilterOptions, ladderTotal, ladderEditReason, ladderLabel, formatLadderAmount, formatLadderDateTime } from '../ladder-timeline-filters';
+import { emptyLadderFilters, filterLadderEvents, ladderFilterOptions, ladderTotal, ladderEditReason, ladderLabel, formatLadderAmount, formatLadderDateTime, ladderCumulative } from '../ladder-timeline-filters';
 
 const event: LadderEvent = {
   id: 'one', config_id: 'config', run_id: 'run', layer_type: 'compute-sp', term: '1yr',
@@ -28,7 +28,7 @@ test('six decimal totals and UTC date boundaries stay exact', () => {
 
 test('eligibility covers status, execution, deadline, and unavailable revision API', () => {
   expect(ladderEditReason(event)).toBeUndefined();
-  expect(ladderEditReason({ ...event, run_status: 'awaiting_approval' })).toContain('awaiting_approval');
+  expect(ladderEditReason({ ...event, run_status: 'awaiting_approval' })).toContain('awaiting approval');
   expect(ladderEditReason({ ...event, status: 'completed' })).toContain('completed');
   expect(ladderEditReason({ ...event, execution_id: 'execution' })).toContain('execution');
   expect(ladderEditReason(event, Date.parse(event.scheduled_date))).toContain('passed');
@@ -60,4 +60,23 @@ test('dates render the UTC calendar day and time regardless of browser zone', ()
   expect(formatLadderDateTime('2030-01-02T23:30:00Z')).toBe('Jan 2, 2030, 23:30 UTC');
   expect(formatLadderDateTime('2030-01-02T23:30:00-05:00')).toBe('Jan 3, 2030, 04:30 UTC');
   expect(formatLadderDateTime('garbage')).toBe('garbage');
+});
+
+test('sub-0.0001 amounts are not shown as $0.0000 and edit reasons use readable run status (follow-ups to #697)', () => {
+  expect(formatLadderAmount('0.000040')).toBe('<$0.0001/hr');
+  expect(formatLadderAmount('0.000100')).toBe('$0.0001/hr');
+  expect(ladderEditReason({ ...event, run_status: 'awaiting_approval' })).toBe('Run is awaiting approval.');
+  expect(ladderEditReason({ ...event, status: 'cancelled' })).toBe('Tranche is cancelled.');
+});
+
+// FIXTURE: hand-written tranches.
+test('ladderCumulative carries each layer forward on shared times and keeps zero-amount tranches', () => {
+  const a = { ...event, id: 'a', amount_usd_hr: '0.500000', scheduled_date: '2030-01-01T00:00:00Z' };
+  const b = { ...event, id: 'b', layer_type: 'ec2-instance-sp', amount_usd_hr: '1.000000', scheduled_date: '2030-02-01T00:00:00Z' };
+  const c = { ...event, id: 'c', layer_type: 'ec2-instance-sp', amount_usd_hr: '0.000000', scheduled_date: '2030-02-01T00:00:00Z' };
+  const result = ladderCumulative([a, b, c], 2000000n);
+  expect(result.times).toEqual([Date.parse(a.scheduled_date), Date.parse(b.scheduled_date)]);
+  expect(result.layers).toEqual([{ layer: 'compute-sp', units: [500000n, 500000n] }, { layer: 'ec2-instance-sp', units: [0n, 1000000n] }]);
+  expect(result.totals).toEqual([2500000n, 3500000n]);
+  expect([...result.rowTotals]).toEqual([['a', 2500000n], ['b', 3500000n], ['c', 3500000n]]);
 });

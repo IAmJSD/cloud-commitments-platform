@@ -1,4 +1,4 @@
-jest.mock('chart.js', () => ({ Chart: Object.assign(jest.fn().mockImplementation(() => ({ destroy: jest.fn() })), { register: jest.fn() }), registerables: [] }));
+jest.mock('chart.js', () => ({ Chart: Object.assign(jest.fn().mockImplementation((_canvas: unknown, config: { data: unknown; options: unknown }) => ({ destroy: jest.fn(), update: jest.fn(), data: config.data, options: config.options })), { register: jest.fn() }), registerables: [] }));
 jest.mock('../api/accounts', () => ({ listAccountsMinimal: jest.fn() }));
 jest.mock('../api/ladder', () => ({ getLadderEvents: jest.fn(), getLadderRuns: jest.fn(), amendLadderEvent: jest.fn() }));
 jest.mock('../permissions', () => ({ canAccess: jest.fn(() => true) }));
@@ -12,8 +12,12 @@ import { Chart } from 'chart.js';
 const event: LadderEvent = { id: 'one', config_id: 'config', run_id: 'run', layer_type: 'compute-sp', term: '1yr', payment_option: 'no-upfront', status: 'scheduled', run_status: 'planned', revision: 0, amount_usd_hr: '1.000000', scheduled_date: '2030-01-01T00:00:00Z', created_at: '2026-01-01T00:00:00Z' };
 const run: LadderRun = { id: 'run', config_id: 'config', status: 'planned', started_at: '2026-01-01T00:00:00Z', created_at: '2026-01-01T00:00:00Z', baseline_usd_hr: null, existing_usd_hr: null, target_usd_hr: null, gap_usd_hr: null, total_hourly_commit: '1.000000', actions: [] };
 
+// FIXTURE: stand-ins for the design tokens in styles/base.css (jsdom loads no CSS).
+const tokenColors: Record<string, string> = { '--cudly-primary': '#111111', '--cudly-success': '#222222', '--cudly-warn-fg': '#333333', '--cudly-error': '#444444', '--cudly-info': '#555555', '--cudly-text': '#666666', '--cudly-text-muted': '#777777', '--cudly-text-subtle': '#888888' };
+
 beforeEach(() => {
   jest.clearAllMocks();
+  Object.entries(tokenColors).forEach(([name, value]) => document.documentElement.style.setProperty(name, value));
   jest.mocked(canAccess).mockReturnValue(true);
   document.body.innerHTML = '<section id="timeline"></section>';
   jest.mocked(listAccountsMinimal).mockResolvedValue([{ id: 'account', name: 'Account', external_id: '123', provider: 'aws' }]);
@@ -123,12 +127,14 @@ test('graph legend filters share visible counts and stable layer colors', async 
   await initLadderTimeline(document.getElementById('timeline')!, [], false);
   const chartConfig = jest.mocked(Chart).mock.calls[0]?.[1];
   const legendClick = chartConfig?.options?.plugins?.legend?.onClick as (...args: unknown[]) => void;
-  const color = chartConfig?.data.datasets[1]?.backgroundColor;
-  expect(color).toBe('#0891b2');
+  expect(chartConfig?.data.datasets.map(d => d.backgroundColor)).toEqual(['#111111', '#222222']);
   legendClick({}, { datasetIndex: 1 });
   expect(document.querySelector('[data-summary]')!.textContent).toContain('1 of 2');
   expect(document.querySelector<HTMLSelectElement>('[data-filter="layer_type"]')!.value).toBe('ec2-instance-sp');
-  expect(jest.mocked(Chart).mock.calls[1]?.[1].data.datasets[0]?.backgroundColor).toBe(color);
+  expect(Chart).toHaveBeenCalledTimes(1);
+  const instance = jest.mocked(Chart).mock.results[0]!.value as { update: jest.Mock; data: { datasets: { backgroundColor: string }[] } };
+  expect(instance.update).toHaveBeenCalledTimes(1);
+  expect(instance.data.datasets.map(d => d.backgroundColor)).toEqual(['#222222']);
 });
 
 test('save errors retain draft and invalid dates do not reach the API', async () => {
@@ -217,7 +223,7 @@ test('table, filters, summary, snapshot and tooltip show formatted values, not r
   expect(snapshot).toContain('baseline $0.00/hr, existing unavailable, target $12.50/hr');
   const chartCalls = jest.mocked(Chart).mock.calls;
   const tooltip = chartCalls[chartCalls.length - 1]?.[1].options?.plugins?.tooltip?.callbacks?.label as (c: { datasetIndex: number; dataIndex: number }) => string;
-  expect(tooltip({ datasetIndex: 0, dataIndex: 0 })).toBe('Jan 2, 2030, 23:30 UTC: $0.1235/hr (Convertible RI, Scheduled)');
+  expect(tooltip({ datasetIndex: 0, dataIndex: 0 })).toBe('Convertible RI: $0.1235/hr cumulative');
 });
 
 // FIXTURE: hand-written editor input.
@@ -232,4 +238,57 @@ test('editor header and run ceiling are formatted while the amount input keeps t
   expect(text).toContain('Original run ceiling: $2.50/hr');
   expect(text).toContain('Current run total after this change: $0.1235/hr');
   expect((document.getElementById('ladder-event-amount') as HTMLInputElement).value).toBe('0.123456');
+});
+
+// FIXTURE: hand-written tranches: two layers, one run with existing 2.0 and target 5.0 on-demand-equivalent $/hr.
+const cumulativeEvents = [
+  { ...event, id: 'a', amount_usd_hr: '0.500000', scheduled_date: '2030-01-01T00:00:00Z' },
+  { ...event, id: 'b', layer_type: 'ec2-instance-sp', amount_usd_hr: '1.000000', scheduled_date: '2030-02-01T00:00:00Z' },
+];
+
+test('chart is a stepped stacked line of cumulative commitment with a dashed target, in on-demand-equivalent units (#698)', async () => {
+  jest.mocked(getLadderEvents).mockResolvedValue(cumulativeEvents);
+  jest.mocked(getLadderRuns).mockResolvedValue([{ ...run, existing_usd_hr: '2.000000', target_usd_hr: '5.000000' }]);
+  await initLadderTimeline(document.getElementById('timeline')!, [], false);
+  const runFilter = document.querySelector<HTMLSelectElement>('[data-filter="run_id"]')!;
+  runFilter.value = 'run'; runFilter.dispatchEvent(new Event('change'));
+  const instance = jest.mocked(Chart).mock.results[0]!.value as { data: { datasets: Record<string, unknown>[] } };
+  expect(instance.data.datasets.map(d => [d['label'], (d['data'] as { y: number }[]).map(p => p.y)])).toEqual([
+    ['Existing commitment', [2, 2]], ['Compute Savings Plan', [0.5, 0.5]], ['EC2 Instance Savings Plan', [0, 1]], ['Target', [5, 5]],
+  ]);
+  expect(instance.data.datasets.every(d => d['stepped'] === 'before')).toBe(true);
+  expect(instance.data.datasets[3]).toMatchObject({ borderDash: [6, 4], fill: false, stack: 'target' });
+  const config = jest.mocked(Chart).mock.calls[0]![1] as { type: string };
+  expect(config.type).toBe('line');
+  const rows = Array.from(document.querySelectorAll('#timeline tbody tr')).map(row => row.textContent ?? '');
+  expect(rows[0]).toContain('$2.50/hr');
+  expect(rows[1]).toContain('$3.50/hr');
+  expect(document.querySelector('#timeline thead')!.textContent).toContain('Cumulative (on-demand-equivalent $/hr)');
+  const label = document.querySelector('canvas')!.getAttribute('aria-label')!;
+  expect(label).toContain('including the existing commitment snapshot');
+  expect(label).toContain('$2.50/hr on Jan 1, 2030 rising to $3.50/hr on Feb 1, 2030');
+  expect(label).toContain('Target $5.00/hr');
+});
+
+test('without a selected run the baseline is zero, labelled planned additions only, and no target line is drawn (#698)', async () => {
+  jest.mocked(getLadderEvents).mockResolvedValue(cumulativeEvents);
+  await initLadderTimeline(document.getElementById('timeline')!, [], false);
+  const instance = jest.mocked(Chart).mock.results[0]!.value as { data: { datasets: { label: string }[] } };
+  expect(instance.data.datasets.map(d => d.label)).toEqual(['Compute Savings Plan', 'EC2 Instance Savings Plan']);
+  expect(document.querySelector('canvas')!.getAttribute('aria-label')).toContain('planned additions only');
+  expect(document.querySelector('#timeline tbody tr')!.textContent).toContain('$0.5000/hr');
+});
+
+test('an empty selection never constructs the chart, and a later non-empty one does (#698)', async () => {
+  jest.mocked(getLadderEvents).mockResolvedValue([]);
+  await initLadderTimeline(document.getElementById('timeline')!, [], false);
+  expect(Chart).not.toHaveBeenCalled();
+  expect(document.querySelector('.ladder-timeline-chart')!.hasAttribute('hidden')).toBe(true);
+});
+
+test('a missing design token fails loudly instead of painting a default color (#698)', async () => {
+  document.documentElement.style.removeProperty('--cudly-primary');
+  jest.mocked(getLadderEvents).mockResolvedValue(cumulativeEvents);
+  await initLadderTimeline(document.getElementById('timeline')!, [], false);
+  expect(document.querySelector('[data-state]')!.textContent).toContain('Missing CSS token --cudly-primary');
 });

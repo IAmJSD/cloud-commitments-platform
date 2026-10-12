@@ -36,6 +36,8 @@ for (const width of [1280, 390]) {
     await expect(timeline.locator('[data-summary]')).toContainText('3 of 3');
     await timeline.getByRole('combobox', { name: 'Commitment term', exact: true }).selectOption('3yr');
     await expect(timeline.locator('[data-summary]')).toContainText('1 of 3');
+    await expect(timeline.locator('canvas')).toHaveAttribute('aria-label', /planned additions only.*\$1\.00\/hr on Jan 3, 2030 rising to \$1\.00\/hr on Jan 3, 2030/);
+    await expect(timeline.locator('[data-table] th', { hasText: 'Cumulative (on-demand-equivalent $/hr)' })).toBeVisible();
     await timeline.getByRole('combobox', { name: 'Payment option', exact: true }).selectOption('all-upfront');
     await expect(timeline.locator('[data-summary]')).toContainText('$1.00/hr in this selection');
     await timeline.getByRole('button', { name: 'Clear filters' }).click();
