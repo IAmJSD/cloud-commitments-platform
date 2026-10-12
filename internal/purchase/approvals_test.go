@@ -360,7 +360,7 @@ func TestManager_RunPlannedPurchaseNow_ExecutesFromPaused(t *testing.T) {
 		StepNumber:      1,
 		Recommendations: approvalTestRecs(),
 	}
-	store.On("TransitionExecutionStatus", ctx, "exec-run-now", []string{"pending", "paused"}, "approved", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-run-now", []string{"pending", "notified", "paused"}, "approved", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-run-now")
 
 	final, revocationToken, err := manager.RunPlannedPurchaseNow(ctx, "exec-run-now", "operator@example.com", nil)
@@ -387,7 +387,7 @@ func TestManager_RunPlannedPurchaseNow_LostCASReturnsError(t *testing.T) {
 	ctx := context.Background()
 	manager, store, _ := newApproveManager(t)
 
-	store.On("TransitionExecutionStatus", ctx, "exec-race", []string{"pending", "paused"}, "approved", (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-race", []string{"pending", "notified", "paused"}, "approved", (*string)(nil)).
 		Return(nil, config.ErrExecutionNotInExpectedStatus)
 
 	final, _, err := manager.RunPlannedPurchaseNow(ctx, "exec-race", "operator@example.com", nil)

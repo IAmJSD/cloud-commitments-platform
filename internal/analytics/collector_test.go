@@ -307,6 +307,10 @@ func (m *mockConfigStore) TransitionExecutionStatusPinned(ctx context.Context, e
 	return nil, nil
 }
 
+func (m *mockConfigStore) RescheduleAwaitingExecution(_ context.Context, _ string, _ time.Time) (bool, error) {
+	return false, nil
+}
+
 func (m *mockConfigStore) SetCancelledBy(_ context.Context, _ string, _ string) error {
 	return nil
 }

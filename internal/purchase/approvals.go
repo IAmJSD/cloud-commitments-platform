@@ -352,7 +352,7 @@ func (m *Manager) DirectExecute(ctx context.Context, executionID, actor string, 
 // The returned row carries the run-now audit stamp and its final status, also
 // on an execution error; it is nil when the run never started.
 func (m *Manager) RunPlannedPurchaseNow(ctx context.Context, executionID, actor string, transitionedBy *string) (*config.PurchaseExecution, string, error) {
-	return m.transitionApproveAndExecute(ctx, executionID, actor, transitionedBy, []string{"pending", "paused"}, runNowSkipReason)
+	return m.transitionApproveAndExecute(ctx, executionID, actor, transitionedBy, []string{"pending", "notified", "paused"}, runNowSkipReason)
 }
 
 // transitionApproveAndExecute is the shared body behind ApproveAndExecute

@@ -205,7 +205,7 @@ func (h *Handler) pausePlannedPurchase(ctx context.Context, req *events.LambdaFu
 	}
 
 	// Atomically transition to paused
-	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending"}, "paused", resolveCreatorUserID(session)); err != nil {
+	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "notified"}, "paused", resolveCreatorUserID(session)); err != nil {
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be paused: %v", executionID, err))
 	}
 
@@ -229,11 +229,39 @@ func (h *Handler) resumePlannedPurchase(ctx context.Context, req *events.LambdaF
 	}
 
 	// Atomically transition from paused back to pending
-	if _, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"paused"}, "pending", resolveCreatorUserID(session)); err != nil {
-		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be resumed: %v", executionID, err))
+	resumed, transitionErr := h.config.TransitionExecutionStatus(ctx, executionID, []string{"paused"}, "pending", resolveCreatorUserID(session))
+	if transitionErr != nil {
+		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be resumed: %v", executionID, transitionErr))
+	}
+	if pushErr := h.pushPastScheduledDate(ctx, resumed, time.Now()); pushErr != nil {
+		return nil, pushErr
 	}
 
 	return &StatusResponse{Status: "resumed"}, nil
+}
+
+// pushPastScheduledDate moves a resumed recommendation-bearing row whose
+// scheduled_date has already passed to now + the plan's NotificationDaysBefore
+// days, so that once it is re-notified the scheduler cannot buy it before the
+// veto window has run. The row is pending, which the scheduler does not
+// execute while it carries recommendations, so the gap between the resume
+// and this write cannot buy. Rows without recommendations keep their date
+// (the scheduler fails them).
+func (h *Handler) pushPastScheduledDate(ctx context.Context, row *config.PurchaseExecution, now time.Time) error {
+	if len(row.Recommendations) == 0 || !row.ScheduledDate.Before(now) {
+		return nil
+	}
+	plan, err := h.config.GetPurchasePlan(ctx, row.PlanID)
+	if err != nil {
+		return fmt.Errorf("failed to read plan %s to reschedule resumed execution %s: %w", row.PlanID, row.ExecutionID, err)
+	}
+	// Conditional single-column update, not a full-row save: a cancel or
+	// approve landing after the resume must not be overwritten. A lost
+	// condition is a benign no-op (the row is no longer awaiting approval).
+	if _, err := h.config.RescheduleAwaitingExecution(ctx, row.ExecutionID, now.AddDate(0, 0, plan.NotificationDaysBefore)); err != nil {
+		return fmt.Errorf("failed to reschedule resumed execution %s: %w", row.ExecutionID, err)
+	}
+	return nil
 }
 
 // runPlannedPurchase forces a pending or paused scheduled purchase to
@@ -454,14 +482,21 @@ func (h *Handler) disablePlanIfInScope(ctx context.Context, session *Session, pl
 }
 
 // cancelOrRecoverExecution transitions the execution to "canceled" if it is
-// still in {pending, paused}. If a prior attempt already canceled it
+// still in {pending, notified, paused}. If a prior attempt already canceled it
 // (ErrExecutionNotInExpectedStatus), it fetches the row instead so the caller
 // can still drive the plan-disable side-effect, keeping the operation
 // idempotent across retries.
 // actor is the UUID of the user initiating the cancel (nil for system-initiated paths).
 func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID string, actor *string) (*config.PurchaseExecution, error) {
-	canceled, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "paused"}, "canceled", actor)
+	canceled, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "notified", "paused"}, "canceled", actor)
 	if err == nil {
+		// A recommendation-bearing row owns suppressions (written with its
+		// recommendations); release them like the other cancel paths. The
+		// delete is idempotent and also runs on the recovery path below, so a
+		// retry heals a failure here.
+		if delErr := h.config.DeleteSuppressionsByExecution(ctx, executionID); delErr != nil {
+			return nil, fmt.Errorf("cancel execution %s: failed to release suppressions: %w", executionID, delErr)
+		}
 		return canceled, nil
 	}
 	if !errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
@@ -499,6 +534,9 @@ func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID stri
 	// legacy row.
 	if existing.Status == config.LegacyStatusCanceled {
 		existing.Status = config.StatusCanceled
+	}
+	if delErr := h.config.DeleteSuppressionsByExecution(ctx, executionID); delErr != nil {
+		return nil, fmt.Errorf("cancel execution %s: failed to release suppressions: %w", executionID, delErr)
 	}
 	return existing, nil
 }

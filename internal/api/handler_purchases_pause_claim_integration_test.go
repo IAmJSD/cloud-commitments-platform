@@ -254,7 +254,7 @@ func TestPauseClaim_PausedQueueResumesExactlyOnce(t *testing.T) {
 
 func TestPauseClaim_RejectsNonPendingStates(t *testing.T) {
 	f := newPauseClaimFixture(t)
-	for _, status := range []string{"running", "completed", "canceled", "failed", "approved", "notified", "scheduled", "paused"} {
+	for _, status := range []string{"running", "completed", "canceled", "failed", "approved", "scheduled", "paused"} {
 		t.Run(status, func(t *testing.T) {
 			f.execution.Status = status
 			require.NoError(t, f.store.SavePurchaseExecution(f.ctx, f.execution))
