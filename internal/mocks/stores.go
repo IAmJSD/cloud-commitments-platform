@@ -246,6 +246,17 @@ func (m *MockConfigStore) LockPurchasePlanTx(ctx context.Context, tx pgx.Tx, pla
 	return v, args.Error(1)
 }
 
+// LockPlanProvidersTx mocks the per-provider advisory lock. A mock cannot hold
+// a lock, so it succeeds unless an expectation says otherwise; the real
+// contract is measured against Postgres in the purchase integration tests.
+func (m *MockConfigStore) LockPlanProvidersTx(ctx context.Context, tx pgx.Tx, providers []string) error {
+	m.record("LockPlanProvidersTx", ctx, tx, providers)
+	if !isExpected(&m.Mock, "LockPlanProvidersTx") {
+		return nil
+	}
+	return m.Called(ctx, tx, providers).Error(0)
+}
+
 // OccupiedRampStepsInRangeTx mocks the already-covered ramp-step probe.
 // Unregistered by default so the many create-purchases tests that predate the
 // probe keep exercising the create path: no occupied steps in range is the
