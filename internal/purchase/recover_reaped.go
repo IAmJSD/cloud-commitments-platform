@@ -38,6 +38,11 @@ func (m *Manager) saveOrRecoverTerminal(ctx context.Context, exec *config.Purcha
 	}
 }
 
+// purchasedOutcome reports whether the finalized row records real purchases.
+// finalizeExecution yields completed only from a nil execErr and
+// partially_completed only from a partial sentinel, so either status with
+// recommendations means something was bought. It cannot test Purchased on the
+// recs: a multi-account root never has them set, only its per-account copies do.
 func purchasedOutcome(exec *config.PurchaseExecution) bool {
-	return (exec.Status == "completed" || exec.Status == "partially_completed") && anyRecPurchased(exec.Recommendations)
+	return (exec.Status == "completed" || exec.Status == "partially_completed") && len(exec.Recommendations) > 0
 }

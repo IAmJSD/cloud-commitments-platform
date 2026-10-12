@@ -133,34 +133,57 @@ func (r *reapingStore) SaveExecutionIfStatus(ctx context.Context, e *config.Purc
 // The reaper fails the row mid-run, the provider call still succeeds: the
 // executor recovers the row to completed with its own note, advances the ramp,
 // and the reaper's late annotation neither overwrites it nor counts as Errored.
+// The fan-out case is the realistic one: the root row carries no purchased recs
+// of its own, only its per-account copies do.
 func TestSingleClaim_ReaperInterleavingRecoversPurchasedRow(t *testing.T) {
-	ctx := context.Background()
-	f := newRampStepFixture(ctx, t)
-	row := claimRaceRow(ctx, t, f, "notified")
-	stepBefore := f.currentStep(ctx, t)
-	rs := &reapingStore{PostgresStore: f.store, release: make(chan struct{})}
-	f.manager.config = rs
+	for _, tc := range []struct {
+		name      string
+		purchases int
+		newRow    func(ctx context.Context, t *testing.T, f *rampStepFixture) *config.PurchaseExecution
+	}{
+		{"single account", 1, func(ctx context.Context, t *testing.T, f *rampStepFixture) *config.PurchaseExecution {
+			return claimRaceRow(ctx, t, f, "notified")
+		}},
+		{"multi-account root", 3, func(ctx context.Context, t *testing.T, f *rampStepFixture) *config.PurchaseExecution {
+			f.repairAccounts(ctx, t)
+			return f.saveRootExecution(ctx, t, 3)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			f := newRampStepFixture(ctx, t)
+			row := tc.newRow(ctx, t, f)
+			stepBefore := f.currentStep(ctx, t)
+			rs := &reapingStore{PostgresStore: f.store, release: make(chan struct{})}
+			f.manager.config = rs
 
-	result := &ReapResult{}
-	reaped := make(chan struct{})
-	f.onPurchase = func() { // fires inside the provider call
-		stuck := rowStatusCopy(row)
-		stuck.Status = "running"
-		go func() { defer close(reaped); f.manager.reapOne(ctx, stuck, 10*time.Minute, time.Now(), result) }()
-		require.Eventually(t, func() bool { return rowStatus(ctx, t, f, row.ExecutionID).Status == "failed" }, 5*time.Second, 10*time.Millisecond)
+			result := &ReapResult{}
+			reaped := make(chan struct{})
+			var fired atomic.Bool
+			f.onPurchase = func() { // fires inside the first provider call
+				if fired.Swap(true) {
+					return
+				}
+				stuck := rowStatusCopy(row)
+				stuck.Status = "running"
+				go func() { defer close(reaped); f.manager.reapOne(ctx, stuck, 10*time.Minute, time.Now(), result) }()
+				require.Eventually(t, func() bool { return rowStatus(ctx, t, f, row.ExecutionID).Status == "failed" }, 5*time.Second, 10*time.Millisecond)
+			}
+
+			_, _, err := f.manager.ApproveAndExecute(ctx, row.ExecutionID, "a@example.invalid", nil)
+			require.NoError(t, err)
+			close(rs.release)
+			<-reaped
+
+			got := rowStatus(ctx, t, f, row.ExecutionID)
+			assert.Equal(t, "completed", got.Status)
+			assert.Contains(t, got.Error, recoveredAfterReapNote)
+			assert.Equal(t, tc.purchases, f.purchaseCount())
+			assert.Equal(t, 1, result.Reaped)
+			assert.Zero(t, result.Errored)
+			assert.Equal(t, stepBefore+1, f.currentStep(ctx, t), "recovery must still advance the ramp")
+		})
 	}
-
-	_, _, err := f.manager.ApproveAndExecute(ctx, row.ExecutionID, "a@example.invalid", nil)
-	require.NoError(t, err)
-	close(rs.release)
-	<-reaped
-
-	got := rowStatus(ctx, t, f, row.ExecutionID)
-	assert.Equal(t, "completed", got.Status)
-	assert.Contains(t, got.Error, recoveredAfterReapNote)
-	assert.Equal(t, 1, result.Reaped)
-	assert.Zero(t, result.Errored)
-	assert.Equal(t, stepBefore+1, f.currentStep(ctx, t), "recovery must still advance the ramp")
 }
 
 // Deterministic replay of the #829 race: while the approve path is inside its

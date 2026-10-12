@@ -203,11 +203,13 @@ func TestFireScheduledDelayedPurchases_EndToEnd(t *testing.T) {
 	store.On("CompletePlanStep", ctx, "plan-1", 1).Return(nil)
 
 	var savedFinal *config.PurchaseExecution
-	store.SavePurchaseExecutionFn = func(_ context.Context, e *config.PurchaseExecution) error {
-		c := *e
-		savedFinal = &c
-		return nil
-	}
+	// The audit stamp and the terminal save are both guarded on running; an
+	// unguarded SavePurchaseExecution would be an unexpected call here.
+	store.On("SaveExecutionIfStatus", ctx, mock.Anything, []string{"running"}).
+		Run(func(args mock.Arguments) {
+			c := *args.Get(1).(*config.PurchaseExecution)
+			savedFinal = &c
+		}).Return(nil)
 	store.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 

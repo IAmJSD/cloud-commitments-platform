@@ -105,7 +105,7 @@ func TestClaimPin_PostClaimCapRecheckFailsBeforeSubmission(t *testing.T) {
 			claimed.Status = "running"
 			store.On("TransitionExecutionStatusPinned", ctx, "exec-gate", mock.Anything, "running", (*string)(nil), false).Return(&claimed, nil)
 			var saved *config.PurchaseExecution
-			store.On("SavePurchaseExecutionTx", ctx, mock.Anything, mock.Anything).
+			store.On("SaveExecutionIfStatusTx", ctx, mock.Anything, mock.Anything, []string{"running"}).
 				Run(func(args mock.Arguments) { saved = args.Get(2).(*config.PurchaseExecution) }).Return(nil)
 			store.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-gate").Return(nil)
 

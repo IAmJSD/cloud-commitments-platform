@@ -104,11 +104,14 @@ func TestApprove_ClaimsRunningAndStampsGuarded(t *testing.T) {
 	updated := &config.PurchaseExecution{ExecutionID: "exec-g", PlanID: "plan-g", Status: "running", StepNumber: 1, Recommendations: approvalTestRecs()}
 	store.On("GetExecutionByID", mock.Anything, "exec-g").Return(&config.PurchaseExecution{ExecutionID: "exec-g", PlanID: "plan-g", Status: "pending"}, nil).Maybe()
 	store.On("TransitionExecutionStatus", ctx, "exec-g", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
-	store.On("SaveExecutionIfStatus", ctx, updated, []string{"running"}).Return(nil)
 	stubExecuteChain(t, store, sender, "plan-g")
-	store.On("SaveExecutionIfStatus", ctx, mock.Anything, []string{"running"}).Return(nil).Maybe()
+	store.On("SaveExecutionIfStatus", ctx, mock.Anything, []string{"running"}).Return(nil)
 
-	_, _, _ = manager.ApproveAndExecute(ctx, "exec-g", "approver@example.invalid", nil)
+	_, _, err := manager.ApproveAndExecute(ctx, "exec-g", "approver@example.invalid", nil)
+	require.NoError(t, err)
 	store.AssertCalled(t, "TransitionExecutionStatus", ctx, "exec-g", approveFromStatuses, "running", (*string)(nil))
-	store.AssertCalled(t, "SaveExecutionIfStatus", ctx, mock.Anything, []string{"running"})
+	// Two guarded writes (audit stamp, terminal save); the only unguarded one is
+	// the post-execution revocation-token rotation.
+	store.AssertNumberOfCalls(t, "SaveExecutionIfStatus", 2)
+	store.AssertNumberOfCalls(t, "SavePurchaseExecution", 1)
 }
