@@ -648,7 +648,26 @@ func (s *Scheduler) collectAWSAmbient(ctx context.Context, globalCfg *config.Glo
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to create AWS provider: %w", err)
 	}
-	return s.fetchAndConvert(ctx, prov, "aws", nil, globalCfg)
+	return s.fetchAndConvert(ctx, prov, "aws", nil, s.hostAWSAccountID(ctx), globalCfg)
+}
+
+// hostAWSAccountID returns the Lambda's own AWS account ID via STS
+// GetCallerIdentity, or "" when STS is unavailable or fails (logged at warn).
+func (s *Scheduler) hostAWSAccountID(ctx context.Context) string {
+	if s.stsClient == nil {
+		return ""
+	}
+	stsCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	out, err := s.stsClient.GetCallerIdentity(stsCtx, &sts.GetCallerIdentityInput{})
+	if err != nil {
+		logging.Warnf("ambient host-account lookup: STS GetCallerIdentity failed: %v", err)
+		return ""
+	}
+	if out == nil || out.Account == nil {
+		return ""
+	}
+	return *out.Account
 }
 
 // resolveAmbientHostAccountID looks up the Lambda's own AWS account ID
@@ -662,20 +681,10 @@ func (s *Scheduler) collectAWSAmbient(ctx context.Context, globalCfg *config.Glo
 // is a best-effort UX improvement on the ambient path and must not
 // break the collection.
 func (s *Scheduler) resolveAmbientHostAccountID(ctx context.Context) string {
-	if s.stsClient == nil {
+	hostAcctID := s.hostAWSAccountID(ctx)
+	if hostAcctID == "" {
 		return ""
 	}
-	stsCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	out, err := s.stsClient.GetCallerIdentity(stsCtx, &sts.GetCallerIdentityInput{})
-	if err != nil {
-		logging.Warnf("ambient host-account lookup: STS GetCallerIdentity failed: %v", err)
-		return ""
-	}
-	if out == nil || out.Account == nil || *out.Account == "" {
-		return ""
-	}
-	hostAcctID := *out.Account
 
 	acct, err := s.config.GetCloudAccountByExternalID(ctx, "aws", hostAcctID)
 	if err != nil {
@@ -778,7 +787,7 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 		if err != nil {
 			return nil, false, fmt.Errorf("create ambient provider: %w", err)
 		}
-		return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, globalCfg)
+		return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, acct.ExternalID, globalCfg)
 	}
 	awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, &acct, s.credStore, s.assumeRoleSTS)
 	if err != nil {
@@ -789,7 +798,7 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 	if err != nil {
 		return nil, false, fmt.Errorf("create provider: %w", err)
 	}
-	return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, globalCfg)
+	return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, acct.ExternalID, globalCfg)
 }
 
 // collectAzureRecommendations fans out across all enabled Azure accounts,
@@ -1024,7 +1033,7 @@ func tolerateIncompleteSweep(providerName string, err error) (complete bool, _ e
 // The bool reports whether the sweep covered everything it was asked to; see
 // tolerateIncompleteSweep for why an incomplete one must not authorize
 // stale-row eviction.
-func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider, providerName string, accountID *string, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, bool, error) {
+func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider, providerName string, accountID *string, expectedAccount string, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, bool, error) {
 	recClient, err := prov.GetRecommendationsClient(ctx)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to get %s recommendations client: %w", providerName, err)
@@ -1034,6 +1043,7 @@ func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider,
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to get %s recommendations: %w", providerName, err)
 	}
+	recs = dropForeignZonalEC2(recs, expectedAccount)
 	if len(recs) == 0 && globalCfg != nil {
 		lookbackDays := globalCfg.RecommendationsLookbackDays
 		if lookbackDays == 0 {
@@ -1052,7 +1062,7 @@ func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider,
 				return nil, false, fmt.Errorf("failed to get %s recommendations with default term/payment fallback (service=%s, term=%s, payment=%s, lookback=%s): %w",
 					providerName, params.Service, params.Term, params.PaymentOption, params.LookbackPeriod, recErr)
 			}
-			recs = append(recs, fallbackRecs...)
+			recs = append(recs, dropForeignZonalEC2(fallbackRecs, expectedAccount)...)
 			complete = complete && fallbackComplete
 		}
 	}
@@ -1078,9 +1088,15 @@ func recommendationID(rec config.RecommendationRecord) string {
 	if rec.CloudAccountID != nil {
 		accountID = *rec.CloudAccountID
 	}
-	return fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%s",
+	id := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%s",
 		rec.Provider, accountID, rec.Service, rec.Region,
 		rec.ResourceType, rec.Engine, rec.Term, rec.Payment)
+	if rec.AvailabilityZone != "" {
+		// Appended only for zonal EC2 recs so every other rec keeps its
+		// existing ID (issue #792).
+		id += "|" + rec.AvailabilityZone
+	}
+	return id
 }
 
 // ListRecommendations reads cached recommendations from the store, applying
@@ -1587,6 +1603,7 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 			ResourceType:      rec.ResourceType,
 			Engine:            engine,
 			Details:           detailsBlob, // full ServiceDetails payload (issue #453)
+			AvailabilityZone:  zonalAvailabilityZone(rec.Details),
 			Count:             rec.Count,
 			Term:              term,
 			Payment:           rec.PaymentOption,

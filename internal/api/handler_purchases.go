@@ -2770,7 +2770,15 @@ func matchDuplicateInList(pending []config.PurchaseExecution, creatorID, idempot
 		if ex.CreatedByUserID != nil {
 			exCreator = *ex.CreatedByUserID
 		}
-		if exCreator == creatorID && purchaseIdempotencyKey(exCreator, ex.Recommendations, ex.CapacityPercent) == idempotencyKey {
+		if exCreator != creatorID {
+			continue
+		}
+		exKey, err := purchaseIdempotencyKey(exCreator, ex.Recommendations, ex.CapacityPercent)
+		if err != nil {
+			logging.Errorf("purchase idempotency: skipping pending execution %s, cannot derive its key: %v", ex.ExecutionID, err)
+			continue
+		}
+		if exKey == idempotencyKey {
 			return ex
 		}
 	}
@@ -2836,7 +2844,7 @@ const purchaseIdempotencyWindow = 2 * time.Minute
 // ordering can't change the hash. Account scope is implicit: each rec carries
 // its CloudAccountID, so the same recs targeting a different account hash
 // differently. Closes issue #644.
-func purchaseIdempotencyKey(creatorID string, recs []config.RecommendationRecord, capacityPercent int) string {
+func purchaseIdempotencyKey(creatorID string, recs []config.RecommendationRecord, capacityPercent int) (string, error) {
 	tuples := make([]string, 0, len(recs))
 	for _rvc := range recs {
 		r := recs[_rvc]
@@ -2844,15 +2852,38 @@ func purchaseIdempotencyKey(creatorID string, recs []config.RecommendationRecord
 		if r.CloudAccountID != nil {
 			acct = *r.CloudAccountID
 		}
-		tuples = append(tuples, fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%d|%s",
+		az, err := recDetailsAvailabilityZone(&r)
+		if err != nil {
+			return "", err
+		}
+		tuples = append(tuples, fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%d|%s|%s",
 			strings.ToLower(strings.TrimSpace(r.Provider)),
 			r.Service, r.Region, r.ResourceType, r.Engine, acct,
-			r.Count, r.Term, strings.ToLower(strings.TrimSpace(r.Payment))))
+			r.Count, r.Term, strings.ToLower(strings.TrimSpace(r.Payment)), az))
 	}
 	sort.Strings(tuples)
 	h := sha256.New()
 	fmt.Fprintf(h, "%s\x1f%d\x1f%s", creatorID, capacityPercent, strings.Join(tuples, "\x1e"))
-	return hex.EncodeToString(h.Sum(nil))
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// recDetailsAvailabilityZone returns the zonal EC2 AZ carried in the rec's
+// Details blob, "" for non-compute recs and for absent or legacy Details.
+// The AZ is read from Details, not RecommendationRecord.AvailabilityZone,
+// because pending executions written before issue #792 carry it only there
+// and the idempotency key is recomputed from them (issue #792).
+func recDetailsAvailabilityZone(r *config.RecommendationRecord) (string, error) {
+	if r.Service != string(common.ServiceEC2) && r.Service != string(common.ServiceCompute) {
+		return "", nil
+	}
+	details, err := common.DecodeServiceDetailsFor(r.Service, r.Details)
+	if err != nil {
+		return "", fmt.Errorf("decode %s details of %s/%s: %w", r.Service, r.Region, r.ResourceType, err)
+	}
+	if cd, ok := details.(*common.ComputeDetails); ok && cd != nil {
+		return strings.TrimSpace(cd.AvailabilityZone), nil
+	}
+	return "", nil
 }
 
 // findDuplicatePendingExecution returns an existing pending/notified execution
@@ -2884,7 +2915,12 @@ func (h *Handler) findDuplicatePendingExecution(ctx context.Context, creatorID, 
 		if exCreator != creatorID {
 			continue
 		}
-		if purchaseIdempotencyKey(exCreator, ex.Recommendations, ex.CapacityPercent) == key {
+		exKey, err := purchaseIdempotencyKey(exCreator, ex.Recommendations, ex.CapacityPercent)
+		if err != nil {
+			logging.Errorf("purchase idempotency: skipping pending execution %s, cannot derive its key: %v", ex.ExecutionID, err)
+			continue
+		}
+		if exKey == key {
 			return ex, nil
 		}
 	}
@@ -2962,7 +2998,10 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	// which closes the TOCTOU race that a pre-tx read alone cannot prevent.
 	creator := resolveCreatorUserID(session)
 	creatorID := derefStringOrEmpty(creator)
-	idempotencyKey := purchaseIdempotencyKey(creatorID, execReq.Recommendations, execReq.CapacityPercent)
+	idempotencyKey, err := purchaseIdempotencyKey(creatorID, execReq.Recommendations, execReq.CapacityPercent)
+	if err != nil {
+		return nil, fmt.Errorf("derive purchase idempotency key: %w", err)
+	}
 
 	execution, rawApprovalToken, err := newPendingExecution(&execReq, totalUpfront, totalSavings)
 	if err != nil {

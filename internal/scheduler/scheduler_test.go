@@ -755,7 +755,7 @@ func TestScheduler_FetchAndConvert_KeepsPartialSweepData(t *testing.T) {
 
 	// globalCfg nil so the zero-results fallback branch stays out of the way;
 	// collected is non-empty anyway.
-	recs, complete, err := s.fetchAndConvert(ctx, prov, "azure", nil, nil)
+	recs, complete, err := s.fetchAndConvert(ctx, prov, "azure", nil, "", nil)
 
 	require.NoError(t, err,
 		"a partial multi-subscription sweep must not fail the whole collection")
@@ -781,7 +781,7 @@ func TestScheduler_FetchAndConvert_RealErrorStillFailsLoud(t *testing.T) {
 
 	s := &Scheduler{config: new(MockConfigStore)}
 
-	recs, complete, err := s.fetchAndConvert(ctx, prov, "azure", nil, nil)
+	recs, complete, err := s.fetchAndConvert(ctx, prov, "azure", nil, "", nil)
 
 	require.Error(t, err, "a genuine error must still fail the collection")
 	assert.Contains(t, err.Error(), "credentials expired")

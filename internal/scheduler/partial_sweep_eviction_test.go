@@ -73,7 +73,7 @@ func TestAWSIncompleteFallbackCannotAuthorizeEviction(t *testing.T) {
 			prov := new(MockProvider)
 			prov.On("GetRecommendationsClient", mock.Anything).Return(client, nil).Once()
 			s := &Scheduler{}
-			recs, complete, err := s.fetchAndConvert(context.Background(), prov, "aws", nil,
+			recs, complete, err := s.fetchAndConvert(context.Background(), prov, "aws", nil, "",
 				&config.GlobalConfig{DefaultTerm: 1, DefaultPayment: "no-upfront", RecommendationsLookbackDays: 30})
 			require.NoError(t, err)
 			require.Len(t, recs, 1)

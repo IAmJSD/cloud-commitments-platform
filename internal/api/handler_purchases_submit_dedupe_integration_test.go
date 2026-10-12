@@ -49,7 +49,7 @@ func submitFixture(t *testing.T) ([]config.RecommendationRecord, string) {
 		Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large",
 		Count: 2, Term: 1, Payment: "no-upfront",
 	}}
-	return recs, purchaseIdempotencyKey("", recs, 100)
+	return recs, mustPurchaseIdempotencyKey("", recs, 100)
 }
 
 func newSubmitExecution(t *testing.T, recs []config.RecommendationRecord) *config.PurchaseExecution {
@@ -171,7 +171,7 @@ func TestPersistExecution_DedupeIsPerCreator(t *testing.T) {
 	submit := func(creator string) *config.PurchaseExecution {
 		exec := newSubmitExecution(t, recs)
 		exec.CreatedByUserID = &creator
-		dup, err := h.persistExecutionAndSuppressions(ctx, exec, nil, creator, purchaseIdempotencyKey(creator, recs, 100))
+		dup, err := h.persistExecutionAndSuppressions(ctx, exec, nil, creator, mustPurchaseIdempotencyKey(creator, recs, 100))
 		require.NoError(t, err)
 		return dup
 	}

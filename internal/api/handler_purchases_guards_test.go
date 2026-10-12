@@ -464,27 +464,27 @@ func TestPurchaseIdempotencyKey_StableAndDiscriminating(t *testing.T) {
 	reordered := []config.RecommendationRecord{r2, validRec()}
 
 	assert.Equal(t,
-		purchaseIdempotencyKey("user-1", recsA, 100),
-		purchaseIdempotencyKey("user-1", recsA, 100),
+		mustPurchaseIdempotencyKey("user-1", recsA, 100),
+		mustPurchaseIdempotencyKey("user-1", recsA, 100),
 		"identical input must hash identically")
 	assert.Equal(t,
-		purchaseIdempotencyKey("user-1", ordered, 100),
-		purchaseIdempotencyKey("user-1", reordered, 100),
+		mustPurchaseIdempotencyKey("user-1", ordered, 100),
+		mustPurchaseIdempotencyKey("user-1", reordered, 100),
 		"slice order must not change the key")
 
 	// Discriminating dimensions.
-	assert.NotEqual(t, purchaseIdempotencyKey("user-1", recsA, 100), purchaseIdempotencyKey("user-2", recsA, 100), "creator")
-	assert.NotEqual(t, purchaseIdempotencyKey("user-1", recsA, 100), purchaseIdempotencyKey("user-1", recsA, 50), "capacity")
+	assert.NotEqual(t, mustPurchaseIdempotencyKey("user-1", recsA, 100), mustPurchaseIdempotencyKey("user-2", recsA, 100), "creator")
+	assert.NotEqual(t, mustPurchaseIdempotencyKey("user-1", recsA, 100), mustPurchaseIdempotencyKey("user-1", recsA, 50), "capacity")
 
 	scaled := []config.RecommendationRecord{validRec()}
 	scaled[0].Count = 1
-	assert.NotEqual(t, purchaseIdempotencyKey("user-1", recsA, 100), purchaseIdempotencyKey("user-1", scaled, 100), "count")
+	assert.NotEqual(t, mustPurchaseIdempotencyKey("user-1", recsA, 100), mustPurchaseIdempotencyKey("user-1", scaled, 100), "count")
 
 	acctA := []config.RecommendationRecord{validRec()}
 	acctA[0].CloudAccountID = strptr("acct-A")
 	acctB := []config.RecommendationRecord{validRec()}
 	acctB[0].CloudAccountID = strptr("acct-B")
-	assert.NotEqual(t, purchaseIdempotencyKey("user-1", acctA, 100), purchaseIdempotencyKey("user-1", acctB, 100), "account")
+	assert.NotEqual(t, mustPurchaseIdempotencyKey("user-1", acctA, 100), mustPurchaseIdempotencyKey("user-1", acctB, 100), "account")
 }
 
 func TestFindDuplicatePendingExecution(t *testing.T) {
@@ -492,7 +492,7 @@ func TestFindDuplicatePendingExecution(t *testing.T) {
 	now := time.Now()
 	creator := "11111111-1111-1111-1111-111111111111"
 	recs := []config.RecommendationRecord{validRec()}
-	key := purchaseIdempotencyKey(creator, recs, 100)
+	key := mustPurchaseIdempotencyKey(creator, recs, 100)
 
 	makeExec := func(id string, age time.Duration, src string, c *string, capacity int) config.PurchaseExecution {
 		// Copy recs so a subtest that mutates exec.Recommendations does not
@@ -645,4 +645,12 @@ func TestValidateCapacityConsistency(t *testing.T) {
 			}
 		})
 	}
+}
+
+func mustPurchaseIdempotencyKey(creatorID string, recs []config.RecommendationRecord, capacityPercent int) string {
+	key, err := purchaseIdempotencyKey(creatorID, recs, capacityPercent)
+	if err != nil {
+		panic(err)
+	}
+	return key
 }
