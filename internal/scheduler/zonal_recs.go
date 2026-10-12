@@ -32,12 +32,11 @@ func dropForeignZonalEC2(recs []common.Recommendation, expectedAccount string) [
 }
 
 // partitionForeignZonalEC2 returns the recs to keep and the number dropped.
-func partitionForeignZonalEC2(recs []common.Recommendation, expectedAccount string) ([]common.Recommendation, int) {
+func partitionForeignZonalEC2(recs []common.Recommendation, expectedAccount string) (kept []common.Recommendation, dropped int) {
 	if expectedAccount == "" {
 		return recs, 0
 	}
-	kept := recs[:0:0]
-	dropped := 0
+	kept = recs[:0:0]
 	for i := range recs {
 		r := recs[i]
 		if r.Account != "" && r.Account != expectedAccount && zonalAvailabilityZone(r.Details) != "" {
