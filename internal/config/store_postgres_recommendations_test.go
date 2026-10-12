@@ -542,8 +542,8 @@ func zonalAWSRec(az string, savings float64) config.RecommendationRecord {
 // generated availability_zone column. Same-AZ re-upserts update in place, a
 // regional row (AZ ”) behaves as before, and a row written by pre-PR2b code
 // (no top-level availability_zone in the payload) is found and updated.
-// Multi-AZ rows on one 8-tuple stay rejected until the 8-column index is
-// dropped (PR2c), so they are not asserted here.
+// Multi-AZ rows on one 8-tuple are covered by
+// TestPostgresStore_UpsertRecommendations_MultiAZBatch (PR2c).
 func TestPostgresStore_UpsertRecommendations_AZArbiter(t *testing.T) {
 	ctx := context.Background()
 	container, err := testhelpers.SetupPostgresContainer(ctx, t)
@@ -597,5 +597,62 @@ func TestPostgresStore_UpsertRecommendations_AZArbiter(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, got, 1)
 		assert.InDelta(t, 40.0, got[0].Savings, 0.001)
+	})
+}
+
+// Issue #792, PR2c: once migration 000110 drops the 8-column index, two zonal
+// EC2 recommendations that differ only by availability zone upsert in ONE batch
+// (the shape persistCollection writes) without "ON CONFLICT DO UPDATE command
+// cannot affect row a second time", and both rows persist.
+func TestPostgresStore_UpsertRecommendations_MultiAZBatch(t *testing.T) {
+	ctx := context.Background()
+	container, err := testhelpers.SetupPostgresContainer(ctx, t)
+	require.NoError(t, err)
+	defer container.Cleanup(ctx)
+	pool := container.DB.Pool()
+	require.NoError(t, migrations.RunMigrations(ctx, pool, getMigrationsPath(), "", ""))
+	store := config.NewPostgresStore(container.DB)
+	t0 := time.Now().UTC().Truncate(time.Second)
+	collect := []config.SuccessfulCollect{{Provider: "aws"}}
+
+	var oldIdx bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'recommendations_natural_key_idx')`).Scan(&oldIdx))
+	require.False(t, oldIdx, "8-column index must be gone after the full migration chain")
+
+	savingsByAZ := func(t *testing.T) map[string]float64 {
+		t.Helper()
+		got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
+		require.NoError(t, err)
+		out := map[string]float64{}
+		for _, r := range got {
+			out[r.AvailabilityZone] = r.Savings
+		}
+		require.Len(t, out, len(got), "no two stored rows may share an AZ here")
+		return out
+	}
+
+	t.Run("two zonal rows in one batch both persist", func(t *testing.T) {
+		batch := []config.RecommendationRecord{zonalAWSRec("us-east-1a", 10), zonalAWSRec("us-east-1b", 20)}
+		require.NoError(t, store.UpsertRecommendations(ctx, t0, batch, collect))
+		assert.Equal(t, map[string]float64{"us-east-1a": 10, "us-east-1b": 20}, savingsByAZ(t))
+	})
+
+	t.Run("same-AZ re-upsert updates in place and leaves the sibling alone", func(t *testing.T) {
+		require.NoError(t, store.UpsertRecommendations(ctx, t0.Add(time.Hour),
+			[]config.RecommendationRecord{zonalAWSRec("us-east-1a", 11), zonalAWSRec("us-east-1b", 20)}, collect))
+		assert.Equal(t, map[string]float64{"us-east-1a": 11, "us-east-1b": 20}, savingsByAZ(t))
+	})
+
+	t.Run("regional row alongside zonal rows is unaffected", func(t *testing.T) {
+		regional := awsRec("r1", "ec2", "us-east-1", "m5.large", 30)
+		batch := []config.RecommendationRecord{zonalAWSRec("us-east-1a", 12), zonalAWSRec("us-east-1b", 21), regional}
+		require.NoError(t, store.UpsertRecommendations(ctx, t0.Add(2*time.Hour), batch, collect))
+		assert.Equal(t, map[string]float64{"us-east-1a": 12, "us-east-1b": 21, "": 30}, savingsByAZ(t))
+	})
+
+	t.Run("ReplaceRecommendations stores the same AZ pair", func(t *testing.T) {
+		batch := []config.RecommendationRecord{zonalAWSRec("us-east-1a", 1), zonalAWSRec("us-east-1b", 2)}
+		require.NoError(t, store.ReplaceRecommendations(ctx, t0.Add(3*time.Hour), batch))
+		assert.Equal(t, map[string]float64{"us-east-1a": 1, "us-east-1b": 2}, savingsByAZ(t))
 	})
 }

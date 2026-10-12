@@ -1,0 +1,17 @@
+-- Migration 000110: drop the 8-column recommendations_natural_key_idx
+-- (#792, PR2c of the zonal EC2 AZ work).
+--
+-- Migration 000109 added the generated availability_zone column and the
+-- 9-column recommendations_natural_key_az_idx, and kept the 8-column index so
+-- the pre-PR2b upsert (ON CONFLICT on the 8 columns) kept working. The store now
+-- upserts on the 9-column index (PR2b), so the 8-column index only does harm:
+-- it rejects two zonal EC2 rows that differ only by availability zone, which
+-- aborts the whole collection write. Dropping it lets those rows coexist.
+--
+-- DEPLOY ORDER: apply this only after the code that upserts on the 9-column
+-- index (PR2b) is live. Applying it while the old code still runs breaks every
+-- collection, because ON CONFLICT on the 8 columns needs that index.
+--
+-- The 9-column index is strictly finer than the 8-column one, so no existing
+-- row can violate it and nothing needs backfilling.
+DROP INDEX IF EXISTS recommendations_natural_key_idx;

@@ -4,6 +4,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -99,4 +100,50 @@ func TestGlobalFiltersPersistedAmbientAndRegistered(t *testing.T) {
 		}
 		assert.ElementsMatch(t, []string{"0-other", "1-other", "1-1", "1-10", "1-11", "1-sibling"}, ids)
 	})
+}
+
+// Issue #792, PR2c: persistCollection writes every provider's recommendations
+// in one transaction, so two zonal EC2 recs on the same 8-tuple (differing only
+// by AZ) used to fail the whole collection write. With the 8-column index gone
+// the whole 500-row batch lands, siblings included.
+func TestPersistCollectionMultiAZInOneBatch(t *testing.T) {
+	ctx := t.Context()
+	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
+	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	store := config.NewPostgresStore(pg.DB)
+
+	zonal := func(az string) config.RecommendationRecord {
+		return config.RecommendationRecord{
+			ID: "ec2-" + az, Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large",
+			AvailabilityZone: az, Count: 1, Term: 1, Payment: "all-upfront", Savings: 10,
+			Details: json.RawMessage(`{"instance_type":"m5.large","scope":"Availability Zone","availability_zone":"` + az + `"}`),
+		}
+	}
+	const total = 500
+	recs := []config.RecommendationRecord{zonal("us-east-1a"), zonal("us-east-1b")}
+	for i := len(recs); i < total; i++ {
+		recs = append(recs, config.RecommendationRecord{
+			ID: fmt.Sprintf("filler-%d", i), Provider: "aws", Service: "ec2", Region: "us-west-2",
+			ResourceType: fmt.Sprintf("c5.type%d", i), Count: 1, Term: 1, Payment: "all-upfront", Savings: 1,
+		})
+	}
+
+	s := &Scheduler{config: store}
+	s.persistCollection(ctx, recs, []config.SuccessfulCollect{{Provider: "aws"}}, nil)
+
+	rows, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
+	require.NoError(t, err)
+	require.Len(t, rows, total, "the whole collection must persist, not fail on the AZ pair")
+	azs := map[string]bool{}
+	for _, r := range rows {
+		if r.ResourceType == "m5.large" {
+			azs[r.AvailabilityZone] = true
+		}
+	}
+	assert.Equal(t, map[string]bool{"us-east-1a": true, "us-east-1b": true}, azs)
+	state, err := store.GetRecommendationsFreshness(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, state.LastCollectionError, "persistCollection must not record a write error")
 }
