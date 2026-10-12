@@ -3,7 +3,7 @@ import { listAccountsMinimal, type AccountSummary } from './api/accounts';
 import { getLadderEvents, getLadderRuns, type LadderConfig, type LadderEvent, type LadderRun } from './api/ladder';
 import { canAccess } from './permissions';
 import { escapeHtml } from './utils';
-import { emptyLadderFilters, filterLadderEvents, ladderDimensions, ladderFilterOptions, ladderEditReason, ladderTotal, type LadderFilters } from './ladder-timeline-filters';
+import { emptyLadderFilters, filterLadderEvents, ladderDimensions, ladderFilterOptions, ladderEditReason, ladderTotal, ladderLabel, formatLadderAmount, formatLadderDateTime, type LadderFilters } from './ladder-timeline-filters';
 import { openLadderEventEditor } from './ladder-timeline-editor';
 
 Chart.register(...registerables);
@@ -62,13 +62,13 @@ export async function initLadderTimeline(root: HTMLElement, configs: readonly La
       const key = select.dataset['filter'] as typeof ladderDimensions[number];
       const options = ladderFilterOptions(events, filters, key);
       if (filters[key] && !options.includes(filters[key])) options.unshift(filters[key]);
-      select.innerHTML = `<option value="">All</option>${options.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(key === 'run_id' ? `${runs.find(run => run.id === value)?.started_at ?? value}` : value)}</option>`).join('')}`;
+      select.innerHTML = `<option value="">All</option>${options.map(value => `<option value="${escapeHtml(value)}">${escapeHtml(key === 'run_id' ? formatLadderDateTime(runs.find(run => run.id === value)?.started_at ?? value) : ladderLabel(key, value))}</option>`).join('')}`;
       select.value = filters[key];
     });
-    summary.textContent = `${visible.length} of ${events.length} retained tranches; ${ladderTotal(visible)} USD/hour in this selection.`;
+    summary.textContent = `${visible.length} of ${events.length} retained tranches; ${formatLadderAmount(ladderTotal(visible))} in this selection.`;
     const snapshot = root.querySelector<HTMLElement>('[data-snapshot]')!;
     const run = runs.find(item => item.id === filters.run_id);
-    snapshot.textContent = run ? `Original run ${run.started_at}: baseline ${run.baseline_usd_hr ?? 'unavailable'}, existing ${run.existing_usd_hr ?? 'unavailable'}, target ${run.target_usd_hr ?? 'unavailable'} USD/hour. These snapshots are not a coverage forecast. ${run.actions.map(action => `${action.rationale}${action.data_sources?.length ? ` Sources: ${action.data_sources.join(', ')}.` : ''}`).join(' ')}` : 'Select a run to inspect its original baseline, existing commitment and target snapshots.';
+    snapshot.textContent = run ? `Original run ${formatLadderDateTime(run.started_at)}: baseline ${formatLadderAmount(run.baseline_usd_hr)}, existing ${formatLadderAmount(run.existing_usd_hr)}, target ${formatLadderAmount(run.target_usd_hr)}. These snapshots are not a coverage forecast. ${run.actions.map(action => `${action.rationale}${action.data_sources?.length ? ` Sources: ${action.data_sources.join(', ')}.` : ''}`).join(' ')}` : 'Select a run to inspect its original baseline, existing commitment and target snapshots.';
     chart?.destroy();
     const groups = Array.from(new Set(visible.map(event => event.layer_type))).map(layer => ({ layer, events: visible.filter(event => event.layer_type === layer) }));
     const colors: Record<string, string> = { 'compute-sp': '#2563eb', 'ec2-instance-sp': '#0891b2', 'convertible-ri': '#7c3aed' };
@@ -82,7 +82,7 @@ export async function initLadderTimeline(root: HTMLElement, configs: readonly La
           y: { beginAtZero: true, title: { display: true, text: 'Additional planning budget (USD/hour)' } } },
         plugins: { legend: { onClick: (_event, item) => { const group = groups[item.datasetIndex ?? -1]; if (group) { filters.layer_type = filters.layer_type === group.layer ? '' : group.layer; render(); } } }, tooltip: { callbacks: { label: context => {
           const event = groups[context.datasetIndex]?.events[context.dataIndex];
-          return event ? `${event.scheduled_date}: ${event.amount_usd_hr} USD/hour (${event.layer_type}, ${event.status})` : '';
+          return event ? `${formatLadderDateTime(event.scheduled_date)}: ${formatLadderAmount(event.amount_usd_hr)} (${ladderLabel('layer_type', event.layer_type)}, ${ladderLabel('status', event.status)})` : '';
         } } } }, onClick: (_event, points) => { const point = points[0]; const item = point && groups[point.datasetIndex]?.events[point.index]; if (item) selectEvent(item); },
       },
     });
@@ -91,9 +91,9 @@ export async function initLadderTimeline(root: HTMLElement, configs: readonly La
       table.textContent = events.length ? 'No purchases match these filters. Clear filters to see the retained plan.' : `No planned purchase tranches. ${rationale}`;
       return;
     }
-    table.innerHTML = `<table class="data-table" aria-label="Planned purchase tranches"><thead><tr><th>Scheduled (UTC)</th><th>Type</th><th>Term</th><th>Payment</th><th>Budget (USD/hour)</th><th>Status</th><th>Select or edit</th></tr></thead><tbody>${visible.map(event => {
+    table.innerHTML = `<table class="data-table" aria-label="Planned purchase tranches"><thead><tr><th>Scheduled (UTC)</th><th>Type</th><th>Term</th><th>Payment</th><th>Budget</th><th>Status</th><th>Select or edit</th></tr></thead><tbody>${visible.map(event => {
       const reason = ladderEditReason(event);
-      return `<tr class="${event.id === selectedID ? 'ladder-selected' : ''}"><td>${escapeHtml(event.scheduled_date)}</td><td>${escapeHtml(event.layer_type)}</td><td>${escapeHtml(event.term)}</td><td>${escapeHtml(event.payment_option)}</td><td>${escapeHtml(event.amount_usd_hr)}</td><td>${escapeHtml(event.status)}</td><td><button type="button" data-event="${escapeHtml(event.id)}" ${event.id === selectedID ? 'aria-current="true"' : ''}>${!reason && canAccess('update', 'config') ? 'Edit' : 'Select'}</button>${reason ? `<span>${escapeHtml(reason)}</span>` : ''}</td></tr>`;
+      return `<tr class="${event.id === selectedID ? 'ladder-selected' : ''}"><td>${escapeHtml(formatLadderDateTime(event.scheduled_date))}</td><td>${escapeHtml(ladderLabel('layer_type', event.layer_type))}</td><td>${escapeHtml(ladderLabel('term', event.term))}</td><td>${escapeHtml(ladderLabel('payment_option', event.payment_option))}</td><td>${escapeHtml(formatLadderAmount(event.amount_usd_hr))}</td><td>${escapeHtml(ladderLabel('status', event.status))}</td><td><button type="button" data-event="${escapeHtml(event.id)}" ${event.id === selectedID ? 'aria-current="true"' : ''}>${!reason && canAccess('update', 'config') ? 'Edit' : 'Select'}</button>${reason ? `<span>${escapeHtml(reason)}</span>` : ''}</td></tr>`;
     }).join('')}</tbody></table>`;
     table.querySelectorAll<HTMLButtonElement>('[data-event]').forEach(button => button.addEventListener('click', () => {
       const event = visible.find(item => item.id === button.dataset['event']);

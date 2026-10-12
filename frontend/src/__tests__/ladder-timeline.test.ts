@@ -26,7 +26,7 @@ test('real selection opens editor, UTC draft resets and cancel preserves authori
   document.querySelector<HTMLButtonElement>('[data-event]')!.click();
   const amount = document.getElementById('ladder-event-amount') as HTMLInputElement;
   amount.value = '0.5'; amount.dispatchEvent(new Event('input'));
-  expect(document.getElementById('ladder-event-preview')!.textContent).toContain('0.500000');
+  expect(document.getElementById('ladder-event-preview')!.textContent).toContain('$0.5000/hr');
   document.querySelector<HTMLButtonElement>('.ladder-event-editor [data-reset]')!.click();
   expect(amount.value).toBe('1.000000');
   document.querySelector<HTMLButtonElement>('.ladder-event-editor [data-cancel]')!.click();
@@ -186,4 +186,50 @@ test('focus returns to the edited purchase after a successful save and the canva
   await flush();
   expect(document.querySelector('.ladder-event-editor')).toBeNull();
   expect(document.activeElement).toBe(document.querySelector('[data-event="one"]'));
+});
+
+// FIXTURE: hand-written wire shape of GET /api/ladder/tranches and /runs (not captured from a live backend).
+test('table, filters, summary, snapshot and tooltip show formatted values, not raw wire values (#697)', async () => {
+  const raw = { ...event, term: '3yr', payment_option: 'all-upfront', layer_type: 'convertible-ri', amount_usd_hr: '0.123456', scheduled_date: '2030-01-02T23:30:00Z' };
+  const unknown = { ...event, id: 'two', layer_type: 'future-layer', amount_usd_hr: '0.000000', scheduled_date: '2030-01-03T00:00:00Z' };
+  jest.mocked(getLadderEvents).mockResolvedValue([raw, unknown]);
+  jest.mocked(getLadderRuns).mockResolvedValue([{ ...run, baseline_usd_hr: '0.000000', existing_usd_hr: null, target_usd_hr: '12.500000' }]);
+  await initLadderTimeline(document.getElementById('timeline')!, [], false);
+  const rows = Array.from(document.querySelectorAll('#timeline tbody tr')).map(row => row.textContent ?? '');
+  expect(rows[0]).toContain('Jan 2, 2030, 23:30 UTC');
+  expect(rows[0]).toContain('Convertible RI');
+  expect(rows[0]).toContain('3 Years');
+  expect(rows[0]).toContain('All Upfront');
+  expect(rows[0]).toContain('$0.1235/hr');
+  expect(rows[0]).toContain('Scheduled');
+  expect(rows[0]).not.toMatch(/0\.123456|2030-01-02T|convertible-ri|3yr|all-upfront/);
+  expect(rows[1]).toContain('future-layer');
+  expect(rows[1]).toContain('$0.00/hr');
+  const summary = document.querySelector('[data-summary]')!.textContent!;
+  expect(summary).toContain('$0.1235/hr in this selection');
+  expect(summary).not.toContain('USD/hour');
+  const layer = document.querySelector<HTMLSelectElement>('[data-filter="layer_type"]')!;
+  expect(Array.from(layer.options).map(o => [o.value, o.textContent])).toEqual([['', 'All'], ['convertible-ri', 'Convertible RI'], ['future-layer', 'future-layer']]);
+  const runFilter = document.querySelector<HTMLSelectElement>('[data-filter="run_id"]')!;
+  runFilter.value = 'run'; runFilter.dispatchEvent(new Event('change'));
+  expect(runFilter.options[1]?.textContent).toBe('Jan 1, 2026, 00:00 UTC');
+  const snapshot = document.querySelector('[data-snapshot]')!.textContent!;
+  expect(snapshot).toContain('baseline $0.00/hr, existing unavailable, target $12.50/hr');
+  const chartCalls = jest.mocked(Chart).mock.calls;
+  const tooltip = chartCalls[chartCalls.length - 1]?.[1].options?.plugins?.tooltip?.callbacks?.label as (c: { datasetIndex: number; dataIndex: number }) => string;
+  expect(tooltip({ datasetIndex: 0, dataIndex: 0 })).toBe('Jan 2, 2030, 23:30 UTC: $0.1235/hr (Convertible RI, Scheduled)');
+});
+
+// FIXTURE: hand-written editor input.
+test('editor header and run ceiling are formatted while the amount input keeps the exact wire value (#697)', async () => {
+  jest.mocked(getLadderEvents).mockResolvedValue([{ ...event, term: '3yr', payment_option: 'partial-upfront', amount_usd_hr: '0.123456' }]);
+  jest.mocked(getLadderRuns).mockResolvedValue([{ ...run, total_hourly_commit: '2.500000' }]);
+  await initLadderTimeline(document.getElementById('timeline')!, [], false);
+  document.querySelector<HTMLButtonElement>('[data-event]')!.click();
+  const text = document.querySelector('.ladder-event-editor')!.textContent!;
+  expect(text).toContain('Compute Savings Plan / 3 Years / Partial Upfront');
+  expect(text).toContain('Original plan: Jan 1, 2026, 00:00 UTC');
+  expect(text).toContain('Original run ceiling: $2.50/hr');
+  expect(text).toContain('Current run total after this change: $0.1235/hr');
+  expect((document.getElementById('ladder-event-amount') as HTMLInputElement).value).toBe('0.123456');
 });
