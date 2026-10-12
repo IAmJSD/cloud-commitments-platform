@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
@@ -146,4 +147,57 @@ func TestPersistCollectionMultiAZInOneBatch(t *testing.T) {
 	state, err := store.GetRecommendationsFreshness(ctx)
 	require.NoError(t, err)
 	assert.Nil(t, state.LastCollectionError, "persistCollection must not record a write error")
+}
+
+// Issue #806, PR-E: persistCollection writes every provider's recommendations
+// in one transaction, so two EC2 recs on the same 9-column key (differing only
+// by platform or tenancy) used to fail the whole collection write. The records
+// come from the real convertRecommendations, so the Details blob that feeds the
+// generated platform and tenancy columns is the one production writes.
+func TestPersistCollectionPlatformTenancyInOneBatch(t *testing.T) {
+	ctx := t.Context()
+	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
+	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	store := config.NewPostgresStore(pg.DB)
+	s := &Scheduler{config: store}
+
+	ec2 := func(platform, tenancy string) common.Recommendation {
+		return common.Recommendation{
+			Provider: common.ProviderAWS, Service: common.ServiceEC2, Region: "us-east-1", ResourceType: "m5.large",
+			Count: 1, Term: "1yr", PaymentOption: "all-upfront", EstimatedSavings: 10,
+			Details: &common.ComputeDetails{InstanceType: "m5.large", Platform: platform, Tenancy: tenancy, Scope: "regional"},
+		}
+	}
+	persist := func(recs ...common.Recommendation) {
+		s.persistCollection(ctx, s.convertRecommendations(recs, "aws"), []config.SuccessfulCollect{{Provider: "aws"}}, nil)
+	}
+	keys := func() map[string]bool {
+		rows, err := pg.DB.Pool().Query(ctx, `SELECT platform || '|' || tenancy FROM recommendations`)
+		require.NoError(t, err)
+		defer rows.Close()
+		out := map[string]bool{}
+		for rows.Next() {
+			var k string
+			require.NoError(t, rows.Scan(&k))
+			out[k] = true
+		}
+		require.NoError(t, rows.Err())
+		return out
+	}
+	assertNoWriteError := func() {
+		state, err := store.GetRecommendationsFreshness(ctx)
+		require.NoError(t, err)
+		assert.Nil(t, state.LastCollectionError, "persistCollection must not record a write error")
+	}
+
+	persist(ec2("Linux/UNIX", "default"), ec2("Windows", "default"), ec2("Linux/UNIX", "dedicated"))
+	assert.Equal(t, map[string]bool{"Linux/UNIX|default": true, "Windows|default": true, "Linux/UNIX|dedicated": true}, keys())
+	assertNoWriteError()
+
+	// A later collection re-sends the same keys: updated in place, no growth.
+	persist(ec2("Linux/UNIX", "default"), ec2("Windows", "default"), ec2("Linux/UNIX", "dedicated"))
+	assert.Len(t, keys(), 3)
+	assertNoWriteError()
 }

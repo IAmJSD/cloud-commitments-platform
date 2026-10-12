@@ -1,0 +1,19 @@
+-- Migration 000112: drop the 9-column recommendations_natural_key_az_idx
+-- (#806, PR-E of the platform/tenancy identity work).
+--
+-- Migration 000111 added the generated platform and tenancy columns and the
+-- 11-column recommendations_natural_key_az_tp_idx, and kept the 9-column index
+-- so the pre-PR-C upsert (ON CONFLICT on the 9 columns) kept working. The store
+-- now upserts on the 11-column index (PR-C), so the 9-column index only does
+-- harm: it rejects two EC2 rows that differ only by platform or tenancy, which
+-- aborts the whole collection write. Dropping it lets those rows coexist.
+--
+-- DEPLOY ORDER: apply this only after the code that upserts on the 11-column
+-- index (PR-C) is live everywhere. Applying it while older code still runs
+-- breaks every collection, because ON CONFLICT on the 9 columns needs that
+-- index. database-migration.yml applies ALL pending migrations when `steps` is
+-- 0 or empty, so never dispatch it with the default before PR-C is released.
+--
+-- The 11-column index is strictly finer than the 9-column one, so no existing
+-- row can violate it and nothing needs backfilling.
+DROP INDEX IF EXISTS recommendations_natural_key_az_idx;
