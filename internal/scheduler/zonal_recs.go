@@ -24,8 +24,17 @@ func zonalAvailabilityZone(details common.ServiceDetails) string {
 // expectedAccount (identity unknown, or a non-AWS provider) disables the
 // check. The drop is logged and does not mark the collection incomplete.
 func dropForeignZonalEC2(recs []common.Recommendation, expectedAccount string) []common.Recommendation {
+	kept, dropped := partitionForeignZonalEC2(recs, expectedAccount)
+	if dropped > 0 {
+		logging.Warnf("dropped %d zonal EC2 recommendation(s) computed for a member account other than %s: AZ names are per account and cannot be mapped safely", dropped, expectedAccount)
+	}
+	return kept
+}
+
+// partitionForeignZonalEC2 returns the recs to keep and the number dropped.
+func partitionForeignZonalEC2(recs []common.Recommendation, expectedAccount string) ([]common.Recommendation, int) {
 	if expectedAccount == "" {
-		return recs
+		return recs, 0
 	}
 	kept := recs[:0:0]
 	dropped := 0
@@ -37,8 +46,5 @@ func dropForeignZonalEC2(recs []common.Recommendation, expectedAccount string) [
 		}
 		kept = append(kept, r)
 	}
-	if dropped > 0 {
-		logging.Warnf("dropped %d zonal EC2 recommendation(s) computed for a member account other than %s: AZ names are per account and cannot be mapped safely", dropped, expectedAccount)
-	}
-	return kept
+	return kept, dropped
 }

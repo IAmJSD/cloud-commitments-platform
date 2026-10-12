@@ -14,7 +14,7 @@ import (
 
 // Real zonal EC2 Details shape as persisted by the scheduler (issue #792).
 func zonalEC2Details(az string) json.RawMessage {
-	return json.RawMessage(`{"instance_type":"m5.large","platform":"Linux/UNIX","tenancy":"default","scope":"availability-zone","availability_zone":"` + az + `"}`)
+	return json.RawMessage(`{"instance_type":"m5.large","platform":"Linux/UNIX","tenancy":"default","scope":"Availability Zone","availability_zone":"` + az + `"}`)
 }
 
 func zonalEC2Rec(az string, upfront float64) config.RecommendationRecord {
@@ -79,7 +79,7 @@ func TestCheckPurchaseDetailIdentity_AvailabilityZoneMismatchRefused(t *testing.
 			match := zonalEC2Rec("us-east-1b", 100)
 			match.ID = "other"
 			if matchAZ == "" {
-				match.Details = json.RawMessage(`{"instance_type":"m5.large","platform":"Linux/UNIX","tenancy":"default","scope":"availability-zone"}`)
+				match.Details = json.RawMessage(`{"instance_type":"m5.large","platform":"Linux/UNIX","tenancy":"default","scope":"Availability Zone"}`)
 			}
 			req := config.RecommendationRecord{ID: origin.ID, Service: "ec2", Term: 1, Count: 1}
 			err := checkPurchaseDetailIdentity(&origin, &match, &req, 0)
@@ -94,7 +94,7 @@ func TestCheckPurchaseDetailIdentity_AvailabilityZoneMismatchRefused(t *testing.
 
 func TestCheckPurchaseDetailIdentity_LegacyOriginWithoutAZAllowed(t *testing.T) {
 	origin := zonalEC2Rec("us-east-1a", 100)
-	origin.Details = json.RawMessage(`{"instance_type":"m5.large","platform":"Linux/UNIX","tenancy":"default","scope":"availability-zone"}`)
+	origin.Details = json.RawMessage(`{"instance_type":"m5.large","platform":"Linux/UNIX","tenancy":"default","scope":"Availability Zone"}`)
 	match := zonalEC2Rec("us-east-1b", 100)
 	match.ID = "other"
 	req := config.RecommendationRecord{ID: origin.ID, Service: "ec2", Term: 1, Count: 1}
