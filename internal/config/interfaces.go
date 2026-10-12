@@ -103,6 +103,14 @@ type StoreInterface interface {
 
 	// Purchase executions
 	SavePurchaseExecution(ctx context.Context, execution *PurchaseExecution) error
+	// SaveExecutionIfStatus saves only while the stored status is one of
+	// expected (ErrExecutionNotInExpectedStatus otherwise), so a stale
+	// in-memory copy cannot rewrite a status another writer moved on.
+	SaveExecutionIfStatus(ctx context.Context, execution *PurchaseExecution, expected []string) error
+	// RecoverReapedExecution persists a late completed/partially_completed
+	// outcome over a reaper-failed row that has no retry successor linked
+	// (ErrExecutionRetryLinked when one is).
+	RecoverReapedExecution(ctx context.Context, execution *PurchaseExecution) error
 	GetPendingExecutions(ctx context.Context) ([]PurchaseExecution, error)
 	// GetExecutionsByStatuses returns executions in any of the given states,
 	// newest first, capped at `limit`. Used by the History handler to render
@@ -522,6 +530,11 @@ type StoreInterface interface {
 	// SavePurchaseExecution. Used from executePurchase's WithTx block
 	// so the execution insert + suppression writes commit atomically.
 	SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, execution *PurchaseExecution) error
+
+	// SaveExecutionIfStatusTx and RecoverReapedExecutionTx are the
+	// tx-accepting variants of SaveExecutionIfStatus and RecoverReapedExecution.
+	SaveExecutionIfStatusTx(ctx context.Context, tx pgx.Tx, execution *PurchaseExecution, expected []string) error
+	RecoverReapedExecutionTx(ctx context.Context, tx pgx.Tx, execution *PurchaseExecution) error
 
 	// GetPendingExecutionsTx is the tx-accepting variant of
 	// GetPendingExecutions. It row-locks the pending rows it returns; it does
