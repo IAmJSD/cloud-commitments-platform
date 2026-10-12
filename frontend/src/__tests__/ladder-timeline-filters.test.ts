@@ -1,5 +1,5 @@
 import type { LadderEvent } from '../api/ladder';
-import { emptyLadderFilters, filterLadderEvents, ladderFilterOptions, ladderTotal, ladderEditReason, ladderLabel, formatLadderAmount, formatLadderDateTime, ladderCumulative } from '../ladder-timeline-filters';
+import { emptyLadderFilters, filterLadderEvents, ladderFilterOptions, ladderTotal, ladderEditReason, ladderLabel, formatLadderAmount, formatLadderDateTime, ladderCumulative, ladderNotCountedNote } from '../ladder-timeline-filters';
 
 const event: LadderEvent = {
   id: 'one', config_id: 'config', run_id: 'run', layer_type: 'compute-sp', term: '1yr',
@@ -79,4 +79,15 @@ test('ladderCumulative carries each layer forward on shared times and keeps zero
   expect(result.layers).toEqual([{ layer: 'compute-sp', units: [500000n, 500000n] }, { layer: 'ec2-instance-sp', units: [0n, 1000000n] }]);
   expect(result.totals).toEqual([2500000n, 3500000n]);
   expect([...result.rowTotals]).toEqual([['a', 2500000n], ['b', 3500000n], ['c', 3500000n]]);
+});
+
+// FIXTURE: hand-written statuses; the gate repro was scheduled 1.0 + cancelled 5.0 + failed 7.0 showing $13.00/hr instead of $1.00/hr.
+test('ladderCumulative counts only scheduled, fired and completed tranches (#698 gate)', () => {
+  const at = (id: string, status: string, amount: string, day: number) => ({ ...event, id, status, amount_usd_hr: amount, scheduled_date: `2030-01-0${day}T00:00:00Z` });
+  const rows = [at('s', 'scheduled', '1.000000', 1), at('c', 'cancelled', '5.000000', 2), at('f', 'failed', '7.000000', 3), at('x', 'weird', '9.000000', 4), at('fi', 'fired', '2.000000', 5), at('d', 'completed', '3.000000', 6)];
+  const result = ladderCumulative(rows, 0n);
+  expect(result.totals).toEqual([1000000n, 3000000n, 6000000n]);
+  expect([...result.rowTotals]).toEqual([['s', 1000000n], ['c', null], ['f', null], ['x', null], ['fi', 3000000n], ['d', 6000000n]]);
+  expect(rows.map(ladderNotCountedNote)).toEqual([undefined, 'Not counted', 'Not counted', 'Not counted (unknown status)', undefined, undefined]);
+  expect(ladderCumulative([at('c', 'cancelled', '5.000000', 1)], 0n).times).toEqual([]);
 });

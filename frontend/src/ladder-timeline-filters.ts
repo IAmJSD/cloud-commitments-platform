@@ -92,22 +92,34 @@ export function formatLadderDateTime(iso: string): string {
   return `${formatDate(utc.slice(0, 10))}, ${utc.slice(11, 16)} UTC`;
 }
 
+/** Statuses that count toward cumulative commitment; cancelled and failed tranches were never bought. */
+export const ladderCountedStatuses: readonly string[] = ['scheduled', 'fired', 'completed'];
+export const LADDER_COUNTED_NOTE = 'Counts scheduled, fired and completed tranches; cancelled, failed and unrecognised statuses are excluded.';
+
+/** Note for a row that is excluded from the cumulative, or undefined when it is counted. */
+export function ladderNotCountedNote(event: LadderEvent): string | undefined {
+  if (ladderCountedStatuses.includes(event.status)) return undefined;
+  return event.status in statusLabels ? 'Not counted' : 'Not counted (unknown status)';
+}
+
 export interface LadderCumulative {
   times: number[];
   layers: { layer: string; units: bigint[] }[];
   /** Base plus every layer, per entry of `times`. */
   totals: bigint[];
-  /** Running total (base plus tranches up to and including this row), keyed by event id. */
-  rowTotals: Map<string, bigint>;
+  /** Running total (base plus counted tranches up to and including this row), keyed by event id; null for rows that are not counted. */
+  rowTotals: Map<string, bigint | null>;
 }
 
-/** Cumulative planned commitment per layer over `times`; `sorted` must be ordered by scheduled_date. */
+/** Cumulative planned commitment per layer over `times`; `sorted` must be ordered by scheduled_date. Uncounted statuses are skipped. */
 export function ladderCumulative(sorted: readonly LadderEvent[], base: bigint): LadderCumulative {
-  const times = Array.from(new Set(sorted.map(event => Date.parse(event.scheduled_date))));
-  const layers = Array.from(new Set(sorted.map(event => event.layer_type))).map(layer => ({ layer, units: times.map(() => 0n) }));
-  const rowTotals = new Map<string, bigint>();
+  const counted = sorted.filter(event => ladderNotCountedNote(event) === undefined);
+  const times = Array.from(new Set(counted.map(event => Date.parse(event.scheduled_date))));
+  const layers = Array.from(new Set(counted.map(event => event.layer_type))).map(layer => ({ layer, units: times.map(() => 0n) }));
+  const rowTotals = new Map<string, bigint | null>();
   let running = base;
   for (const event of sorted) {
+    if (ladderNotCountedNote(event) !== undefined) { rowTotals.set(event.id, null); continue; }
     const amount = ladderAmountUnits(event.amount_usd_hr);
     running += amount;
     rowTotals.set(event.id, running);

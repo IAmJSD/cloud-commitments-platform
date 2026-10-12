@@ -223,7 +223,7 @@ test('table, filters, summary, snapshot and tooltip show formatted values, not r
   expect(snapshot).toContain('baseline $0.00/hr, existing unavailable, target $12.50/hr');
   const chartCalls = jest.mocked(Chart).mock.calls;
   const tooltip = chartCalls[chartCalls.length - 1]?.[1].options?.plugins?.tooltip?.callbacks?.label as (c: { datasetIndex: number; dataIndex: number }) => string;
-  expect(tooltip({ datasetIndex: 0, dataIndex: 0 })).toBe('Convertible RI: $0.1235/hr cumulative');
+  expect(tooltip({ datasetIndex: 0, dataIndex: 0 })).toBe('Convertible RI: $0.1235/hr cumulative, on-demand-equivalent $/hr');
 });
 
 // FIXTURE: hand-written editor input.
@@ -291,4 +291,38 @@ test('a missing design token fails loudly instead of painting a default color (#
   jest.mocked(getLadderEvents).mockResolvedValue(cumulativeEvents);
   await initLadderTimeline(document.getElementById('timeline')!, [], false);
   expect(document.querySelector('[data-state]')!.textContent).toContain('Missing CSS token --cudly-primary');
+});
+
+// FIXTURE: hand-written tranches reproducing the gate finding (status filter cleared so all statuses are visible).
+test('cancelled, failed and unknown tranches stay visible but are not counted in chart, summary or table (#698 gate)', async () => {
+  const row = (id: string, status: string, amount: string, day: number) => ({ ...event, id, status, amount_usd_hr: amount, scheduled_date: `2030-01-0${day}T00:00:00Z` });
+  jest.mocked(getLadderEvents).mockResolvedValue([row('s', 'scheduled', '1.000000', 1), row('c', 'cancelled', '5.000000', 2), row('f', 'failed', '7.000000', 3), row('x', 'weird', '9.000000', 4)]);
+  await initLadderTimeline(document.getElementById('timeline')!, [], false);
+  const status = document.querySelector<HTMLSelectElement>('[data-filter="status"]')!;
+  status.value = ''; status.dispatchEvent(new Event('change'));
+  const instance = jest.mocked(Chart).mock.results[0]!.value as { data: { datasets: { data: { y: number }[] }[] } };
+  expect(instance.data.datasets.map(d => d.data.map(p => p.y))).toEqual([[1]]);
+  const cells = Array.from(document.querySelectorAll('#timeline tbody tr')).map(r => r.querySelectorAll('td')[5]!.textContent);
+  expect(cells).toEqual(['$1.00/hr', 'Not counted', 'Not counted', 'Not counted (unknown status)']);
+  const label = document.querySelector('canvas')!.getAttribute('aria-label')!;
+  expect(label).toContain('rising to $1.00/hr');
+  expect(label).toContain('Counts scheduled, fired and completed tranches');
+  expect(document.querySelector('#timeline caption')!.textContent).toContain('Counts scheduled, fired and completed tranches');
+  const chartConfig = jest.mocked(Chart).mock.calls[0]![1] as unknown as { data: { datasets: { pointStyle: string }[] }; options: { plugins: { tooltip: { callbacks: { label: (c: { datasetIndex: number; dataIndex: number }) => string } } } } };
+  expect(chartConfig.options.plugins.tooltip.callbacks.label({ datasetIndex: 0, dataIndex: 0 })).toBe('Compute Savings Plan: $1.00/hr cumulative, on-demand-equivalent $/hr');
+});
+
+test('layers are told apart by point shape as well as color, and a selection with no counted tranche draws no chart (#698 gate)', async () => {
+  jest.mocked(getLadderEvents).mockResolvedValue([{ ...event, id: 'a', amount_usd_hr: '1.000000', scheduled_date: '2030-01-01T00:00:00Z' }, { ...event, id: 'b', layer_type: 'ec2-instance-sp', scheduled_date: '2030-01-02T00:00:00Z' }]);
+  await initLadderTimeline(document.getElementById('timeline')!, [], false);
+  const config = jest.mocked(Chart).mock.calls[0]![1] as { data: { datasets: { pointStyle: string }[] } };
+  expect(new Set(config.data.datasets.map(d => d.pointStyle)).size).toBe(2);
+  jest.mocked(getLadderEvents).mockResolvedValue([{ ...event, status: 'cancelled' }]);
+  document.body.innerHTML = '<section id="timeline"></section>';
+  jest.mocked(Chart).mockClear();
+  await initLadderTimeline(document.getElementById('timeline')!, [], false);
+  const status = document.querySelector<HTMLSelectElement>('[data-filter="status"]')!;
+  status.value = ''; status.dispatchEvent(new Event('change'));
+  expect(Chart).not.toHaveBeenCalled();
+  expect(document.querySelector('.ladder-timeline-chart')!.hasAttribute('hidden')).toBe(true);
 });
