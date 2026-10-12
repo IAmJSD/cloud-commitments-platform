@@ -50,7 +50,7 @@ func TestMigration_RecommendationsAvailabilityZone(t *testing.T) {
 		"no-details": `{"service":"ec2"}`,
 	}
 	for resourceType, payload := range legacy {
-		_, err := pool.Exec(ctx, insertRecForMigration109, resourceType, payload)
+		_, err = pool.Exec(ctx, insertRecForMigration109, resourceType, payload)
 		require.NoError(t, err)
 	}
 
