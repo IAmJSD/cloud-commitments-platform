@@ -111,7 +111,11 @@ func TestRecommendationIdentity_NaturalKeyDimensions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			other := base
 			change(&other)
-			assert.NotEqual(t, recommendationID(base), recommendationID(other))
+			baseID, err := recommendationID(base)
+			require.NoError(t, err)
+			otherID, err := recommendationID(other)
+			require.NoError(t, err)
+			assert.NotEqual(t, baseID, otherID)
 		})
 	}
 }
@@ -130,4 +134,57 @@ func TestConvertRecommendations_ZonalEC2KeepsAvailabilityZoneInDetails(t *testin
 	records := s.convertRecommendations([]common.Recommendation{rec}, "aws")
 	require.Len(t, records, 1)
 	assert.Contains(t, string(records[0].Details), `"availability_zone":"us-east-1b"`)
+}
+
+func ec2Rec(platform, tenancy string) common.Recommendation {
+	return common.Recommendation{
+		Provider: common.ProviderAWS, Service: common.ServiceEC2, Region: "us-east-1", ResourceType: "m5.large", Count: 1, Term: "1yr", PaymentOption: "all-upfront",
+		Details: &common.ComputeDetails{InstanceType: "m5.large", Platform: platform, Tenancy: tenancy, Scope: "regional"},
+	}
+}
+
+// Two EC2 recs for the same type and term that differ only by platform or
+// tenancy must get distinct IDs (issue #806). The ID carries the verbatim AWS
+// platform string and always the platform/tenancy pair.
+func TestConvertRecommendations_EC2PlatformAndTenancyInID(t *testing.T) {
+	s := &Scheduler{}
+	records := s.convertRecommendations([]common.Recommendation{
+		ec2Rec("Linux/UNIX", "default"), ec2Rec("Windows", "default"),
+		ec2Rec("Linux/UNIX", "dedicated"), ec2Rec("Red Hat Enterprise Linux", "default"),
+	}, "aws")
+	require.Len(t, records, 4)
+	ids := map[string]bool{}
+	for _, r := range records {
+		ids[r.ID] = true
+	}
+	assert.Len(t, ids, 4)
+	assert.Equal(t, "aws||ec2|us-east-1|m5.large||1|all-upfront|Linux/UNIX|default", records[0].ID)
+	assert.Equal(t, "aws||ec2|us-east-1|m5.large||1|all-upfront|Red Hat Enterprise Linux|default", records[3].ID)
+}
+
+// The ID survives tagAccount's recompute with the pair intact.
+func TestTagAccount_KeepsPlatformTenancyPair(t *testing.T) {
+	s := &Scheduler{}
+	recs := s.convertRecommendations([]common.Recommendation{ec2Rec("Windows", "dedicated")}, "aws")
+	tagged := s.tagAccount(recs, "acct")
+	require.Len(t, tagged, 1)
+	assert.Equal(t, "aws|acct|ec2|us-east-1|m5.large||1|all-upfront|Windows|dedicated", tagged[0].ID)
+}
+
+// A rec with no platform/tenancy (non-compute, legacy) keeps its pre-#806 ID.
+func TestRecommendationID_NoComputeIdentityIsUnchanged(t *testing.T) {
+	rec := config.RecommendationRecord{Provider: "aws", Service: "rds", Region: "us-east-1", ResourceType: "db.m5.large", Engine: "postgres", Term: 1, Payment: "all-upfront"}
+	id, err := recommendationID(rec)
+	require.NoError(t, err)
+	assert.Equal(t, "aws||rds|us-east-1|db.m5.large|postgres|1|all-upfront", id)
+}
+
+// A rec whose Details cannot be read is dropped loudly, never emitted with an
+// ID missing its pair.
+func TestRecommendationID_MalformedDetailsErrorsAndTagAccountDrops(t *testing.T) {
+	bad := config.RecommendationRecord{Provider: "aws", Service: "ec2", Details: []byte(`{"platform":5}`)}
+	_, err := recommendationID(bad)
+	require.Error(t, err)
+	s := &Scheduler{}
+	assert.Empty(t, s.tagAccount([]config.RecommendationRecord{bad}, "acct"))
 }

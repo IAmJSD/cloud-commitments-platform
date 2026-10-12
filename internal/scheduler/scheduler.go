@@ -1074,16 +1074,30 @@ func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider,
 }
 
 // tagAccount assigns the stored account identity and updates its recommendation ID.
+// A rec whose ID cannot be computed is dropped loudly rather than emitted
+// without its platform/tenancy pair (issue #806).
 func (s *Scheduler) tagAccount(recs []config.RecommendationRecord, accountID string) []config.RecommendationRecord {
+	kept := recs[:0]
 	for i := range recs {
 		recs[i].CloudAccountID = &accountID
-		recs[i].ID = recommendationID(recs[i])
+		id, err := recommendationID(recs[i])
+		if err != nil {
+			logging.Errorf("tagAccount: dropping rec (account=%s service=%s sku=%s region=%s): %v",
+				accountID, recs[i].Service, recs[i].ResourceType, recs[i].Region, err)
+			continue
+		}
+		recs[i].ID = id
+		kept = append(kept, recs[i])
 	}
-	return recs
+	return kept
 }
 
 // recommendationID uses the same identity dimensions as the stored natural key.
-func recommendationID(rec config.RecommendationRecord) string {
+func recommendationID(rec config.RecommendationRecord) (string, error) {
+	ci, err := rec.ComputeIdentity()
+	if err != nil {
+		return "", err
+	}
 	accountID := ""
 	if rec.CloudAccountID != nil {
 		accountID = *rec.CloudAccountID
@@ -1096,7 +1110,14 @@ func recommendationID(rec config.RecommendationRecord) string {
 		// existing ID (issue #792).
 		id += "|" + rec.AvailabilityZone
 	}
-	return id
+	if !ci.IsZero() {
+		// The platform/tenancy pair is appended together, only for recs whose
+		// Details carry them, so every other rec keeps its ID (issue #806).
+		// AWS platform is the raw CE string, so the ID can contain "/" and
+		// spaces.
+		id += "|" + ci.Platform + "|" + ci.Tenancy
+	}
+	return id, nil
 }
 
 // ListRecommendations reads cached recommendations from the store, applying
@@ -1616,7 +1637,13 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 			Selected:          true,                              // Default to selected
 			Purchased:         false,
 		}
-		record.ID = recommendationID(record)
+		id, err := recommendationID(record)
+		if err != nil {
+			logging.Errorf("convertRecommendations: dropping %s rec (account=%s service=%s sku=%s region=%s): %v",
+				providerName, rec.Account, rec.Service, rec.ResourceType, rec.Region, err)
+			continue
+		}
+		record.ID = id
 		records = append(records, record)
 	}
 
