@@ -216,9 +216,8 @@ func TestResolveSavingsPlanRoundsDownAndKeepsRawKeys(t *testing.T) {
 	stored := spRec(`{"hourly_commitment":1.234,"platform":"Linux/UNIX","tenancy":"default","plan_type":"Compute","extra":{"a":[1,2]}}`)
 	before, err := stored.ComputeIdentity()
 	require.NoError(t, err)
-	stored.Count = 3
+	stored.Count = 1
 	shown := stored
-	shown.Count = 2 // partially suppressed placeholder count
 	got, err := Resolve(t.Context(), fakeSource{shown: []config.RecommendationRecord{shown}}, fakeStore{rows: []config.RecommendationRecord{stored}}, spPlan(80, 25), accts)
 	require.NoError(t, err)
 	require.Len(t, got, 1)

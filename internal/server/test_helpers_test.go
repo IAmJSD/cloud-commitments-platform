@@ -154,6 +154,10 @@ func (m *mockConfigStoreForHealth) TransitionExecutionStatus(ctx context.Context
 	return nil, nil
 }
 
+func (m *mockConfigStoreForHealth) TransitionExecutionStatusPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStoreForHealth) SetCancelledBy(_ context.Context, _ string, _ string) error {
 	return nil
 }

@@ -46,6 +46,9 @@ type Store interface {
 // excluded. Every failure is returned; there is no unsized or over-show
 // fallback. An empty result is ErrNoMatch.
 func Resolve(ctx context.Context, src Source, store Store, plan *config.PurchasePlan, accountIDs []string) ([]config.RecommendationRecord, error) {
+	if err := Precheck(plan); err != nil {
+		return nil, err
+	}
 	if len(accountIDs) == 0 {
 		return nil, fmt.Errorf("plan %s has no target accounts", plan.ID)
 	}
@@ -212,6 +215,9 @@ func sizeFromStored(shown *config.RecommendationRecord, stored map[string]*confi
 func size(shown, stored *config.RecommendationRecord, product float64) (config.RecommendationRecord, bool, error) {
 	if stored.Count <= 0 {
 		return config.RecommendationRecord{}, false, fmt.Errorf("stored count %d cannot price a share", stored.Count)
+	}
+	if err := checkStoredSPCount(stored); err != nil {
+		return config.RecommendationRecord{}, false, err
 	}
 	out := *shown
 	out.SuppressedCount, out.SuppressionExpiresAt, out.PrimarySuppressionExecutionID = 0, nil, nil
