@@ -174,15 +174,29 @@ func (m *Manager) finalizeExecution(exec *config.PurchaseExecution, execErr erro
 // the caller should ack/skip without re-running the purchase. A real DB error
 // during the claim returns (false, err).
 //
+// The claim is pinned to the recommendations snapshot the caller gated on: a row
+// that was empty when gated must still be empty, and a row with recommendations
+// must still have them. A recommendation attach landing between the gate and the
+// claim therefore loses the pin, which is a benign skip (the next tick gates the
+// row again), instead of running recommendations nobody checked against the cap
+// or the notified rule.
+//
+// For a pending/notified row (the ones the AutoPurchase gate applies to) the
+// step cap is re-checked against the claimed row and the current plan; a refusal
+// fails the row with the beforeSubmission class, so its suppressions release.
+//
 // On a won claim it runs executeAndFinalize and returns (true, execErr).
 func (m *Manager) claimAndExecute(ctx context.Context, exec *config.PurchaseExecution) (claimed bool, err error) {
+	gated := exec.Status == "pending" || exec.Status == "notified"
+	gateSawEmpty := len(exec.Recommendations) == 0
 	// System-initiated: SQS/cron executor passes nil so transitioned_by = NULL.
-	updated, claimErr := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"approved", "pending", "notified"}, "running", nil)
+	updated, claimErr := m.config.TransitionExecutionStatusPinned(ctx, exec.ExecutionID, []string{"approved", "pending", "notified"}, "running", nil, gateSawEmpty)
 	if claimErr != nil {
 		if errors.Is(claimErr, config.ErrNotFound) || errors.Is(claimErr, config.ErrExecutionNotInExpectedStatus) {
 			// Benign CAS race-loss: another worker/redelivery already owns this
-			// row (or it was deleted). Ack/skip without executing.
-			logging.Warnf("Skipping execution %s (CAS claim lost to concurrent worker): %v", exec.ExecutionID, claimErr)
+			// row (or it was deleted), or its recommendations changed since the
+			// gate. Ack/skip without executing.
+			logging.Warnf("Skipping execution %s (CAS claim lost to concurrent worker or changed recommendations): %v", exec.ExecutionID, claimErr)
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to claim execution %s for execution: %w", exec.ExecutionID, claimErr)
@@ -191,6 +205,11 @@ func (m *Manager) claimAndExecute(ctx context.Context, exec *config.PurchaseExec
 	// the RETURNING clause) onto the caller's struct so the rest of the run
 	// starts from the claimed row rather than the pre-claim snapshot.
 	*exec = *updated
+	if gated && len(exec.Recommendations) > 0 {
+		if capErr := m.recheckStepCap(ctx, exec); capErr != nil {
+			return true, m.failClaimedBeforeSubmission(ctx, exec, capErr)
+		}
+	}
 	return true, m.executeAndFinalize(ctx, exec)
 }
 

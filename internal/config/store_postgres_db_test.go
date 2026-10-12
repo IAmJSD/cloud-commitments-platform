@@ -1661,7 +1661,8 @@ func TestPostgresStoreDB_LinkRetryExecutionAtomic(t *testing.T) {
 
 // TestPostgresStoreDB_RotatePendingApprovalToken (issue #103): the
 // notification path's token rotation writes approval_token_hash and its
-// expiry only while the row is pending/notified, and touches nothing else
+// expiry, and promotes the row to notified, only while it is pending/notified,
+// and touches nothing else
 // (a full-row upsert of a stale copy could revert a concurrent approve).
 // The hash round-trips through the approval_token_hash column.
 func TestPostgresStoreDB_RotatePendingApprovalToken(t *testing.T) {
@@ -1707,7 +1708,7 @@ func TestPostgresStoreDB_RotatePendingApprovalToken(t *testing.T) {
 			assert.Equal(t, HashApprovalToken("fresh-token"), reread.ApprovalToken)
 			require.NotNil(t, reread.ApprovalTokenExpiresAt)
 			assert.True(t, expiresAt.Equal(reread.ApprovalTokenExpiresAt.UTC().Truncate(time.Second)))
-			assert.Equal(t, status, reread.Status, "rotation must not touch status")
+			assert.Equal(t, "notified", reread.Status, "the token rotation is also the pending->notified CAS")
 		})
 	}
 
@@ -1720,6 +1721,65 @@ func TestPostgresStoreDB_RotatePendingApprovalToken(t *testing.T) {
 		reread, err := store.GetExecutionByID(ctx, exec.ExecutionID)
 		require.NoError(t, err)
 		assert.Equal(t, HashApprovalToken("original-token"), reread.ApprovalToken)
+		assert.Equal(t, "completed", reread.Status, "a row that left pending must not be revived to notified")
+	})
+}
+
+// TestPostgresStoreDB_TransitionExecutionStatusPinned: the claim only wins
+// while the row's recommendations are still as the caller saw them, so a
+// recommendation attach between a gate check and the claim loses the pin and
+// leaves the row untouched.
+func TestPostgresStoreDB_TransitionExecutionStatusPinned(t *testing.T) {
+	conn := setupTestContainerDB(t)
+	if conn == nil {
+		return
+	}
+	store := NewPostgresStore(conn)
+	ctx := context.Background()
+	plan := &PurchasePlan{Name: "pinned claim", Enabled: true, Services: map[string]ServiceConfig{}, RampSchedule: PresetRampSchedules["immediate"]}
+	require.NoError(t, store.CreatePurchasePlan(ctx, plan))
+	rec := []RecommendationRecord{{ID: "r1", Provider: "aws", Service: "ec2", Count: 1}}
+	newRow := func(t *testing.T, recs []RecommendationRecord) *PurchaseExecution {
+		t.Helper()
+		exec := &PurchaseExecution{PlanID: plan.ID, Status: "notified", StepNumber: 1, ScheduledDate: time.Now(), Recommendations: recs}
+		require.NoError(t, store.SavePurchaseExecution(ctx, exec))
+		return exec
+	}
+	from := []string{"approved", "pending", "notified"}
+
+	for _, empty := range []([]RecommendationRecord){nil, {}} {
+		exec := newRow(t, empty)
+		_, err := store.TransitionExecutionStatusPinned(ctx, exec.ExecutionID, from, "running", nil, false)
+		require.ErrorIs(t, err, ErrExecutionNotInExpectedStatus, "gate saw recommendations but the row is empty")
+		reread, err := store.GetExecutionByID(ctx, exec.ExecutionID)
+		require.NoError(t, err)
+		assert.Equal(t, "notified", reread.Status)
+		got, err := store.TransitionExecutionStatusPinned(ctx, exec.ExecutionID, from, "running", nil, true)
+		require.NoError(t, err)
+		assert.Equal(t, "running", got.Status)
+	}
+
+	t.Run("attach after the gate saw an empty row loses the claim", func(t *testing.T) {
+		exec := newRow(t, nil)
+		require.NoError(t, store.WithTx(ctx, func(tx pgx.Tx) error {
+			ok, err := store.SetExecutionRecommendationsIfEmptyTx(ctx, tx, exec.ExecutionID, rec, 1, 1)
+			require.True(t, ok)
+			return err
+		}))
+		_, err := store.TransitionExecutionStatusPinned(ctx, exec.ExecutionID, from, "running", nil, true)
+		require.ErrorIs(t, err, ErrExecutionNotInExpectedStatus)
+		reread, err := store.GetExecutionByID(ctx, exec.ExecutionID)
+		require.NoError(t, err)
+		assert.Equal(t, "notified", reread.Status)
+		got, err := store.TransitionExecutionStatusPinned(ctx, exec.ExecutionID, from, "running", nil, false)
+		require.NoError(t, err)
+		assert.Equal(t, "running", got.Status, "the next tick gates the attached row and claims it")
+	})
+
+	t.Run("unpinned transition is unchanged", func(t *testing.T) {
+		got, err := store.TransitionExecutionStatus(ctx, newRow(t, rec).ExecutionID, from, "running", nil)
+		require.NoError(t, err)
+		assert.Equal(t, "running", got.Status)
 	})
 }
 

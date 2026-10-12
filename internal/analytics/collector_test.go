@@ -303,6 +303,10 @@ func (m *mockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 	return nil, nil
 }
 
+func (m *mockConfigStore) TransitionExecutionStatusPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) SetCancelledBy(_ context.Context, _ string, _ string) error {
 	return nil
 }

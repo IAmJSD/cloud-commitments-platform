@@ -357,6 +357,26 @@ func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 	return v, args.Error(1)
 }
 
+// TransitionExecutionStatusPinned mocks the pinned claim. With no expectation
+// registered it delegates to TransitionExecutionStatus, so tests that mock the
+// plain transition keep working; a test exercising a lost pin registers an
+// expectation returning config.ErrExecutionNotInExpectedStatus.
+func (m *MockConfigStore) TransitionExecutionStatusPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*config.PurchaseExecution, error) {
+	if !isExpected(&m.Mock, "TransitionExecutionStatusPinned") {
+		return m.TransitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor)
+	}
+	m.record("TransitionExecutionStatusPinned", ctx, executionID, fromStatuses, toStatus, actor, sawEmptyRecommendations)
+	args := m.Called(ctx, executionID, fromStatuses, toStatus, actor, sawEmptyRecommendations)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.PurchaseExecution)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.PurchaseExecution, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 // SetCancelledBy mocks the SetCancelledBy targeted-update operation.
 func (m *MockConfigStore) SetCancelledBy(ctx context.Context, executionID, cancelledBy string) error {
 	m.record("SetCancelledBy", ctx, executionID, cancelledBy)

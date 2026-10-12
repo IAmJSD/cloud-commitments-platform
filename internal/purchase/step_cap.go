@@ -1,10 +1,12 @@
 package purchase
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 )
 
@@ -42,4 +44,28 @@ func CheckStepCommitmentCap(plan *config.PurchasePlan, recs []config.Recommendat
 		return fmt.Errorf("%w: step total commitment %.2f exceeds max_step_commitment %.2f", ErrStepCommitmentCap, total, *plan.MaxStepCommitment)
 	}
 	return nil
+}
+
+// recheckStepCap re-reads the plan and re-applies CheckStepCommitmentCap to a
+// row this worker has just claimed. A plan that cannot be read refuses too.
+func (m *Manager) recheckStepCap(ctx context.Context, exec *config.PurchaseExecution) error {
+	plan, err := m.config.GetPurchasePlan(ctx, exec.PlanID)
+	if err != nil {
+		return fmt.Errorf("failed to re-read plan %s for the post-claim cap check: %w", exec.PlanID, err)
+	}
+	return CheckStepCommitmentCap(plan, exec.Recommendations)
+}
+
+// failClaimedBeforeSubmission fails a claimed (running) row that was refused
+// before any provider call, with the beforeSubmission class so its suppressions
+// release. It returns the refusal, joined with ErrAuditLoss when the terminal
+// save fails (the row would then be stranded in "running" for the reaper).
+func (m *Manager) failClaimedBeforeSubmission(ctx context.Context, exec *config.PurchaseExecution, cause error) error {
+	execErr := beforeSubmission(cause)
+	m.finalizeExecution(exec, execErr)
+	logging.Errorf("Refused claimed purchase %s before submission: %v", exec.ExecutionID, cause)
+	if err := m.saveTerminalExecution(ctx, exec, execErr); err != nil {
+		return fmt.Errorf("%w: terminal save failed (%w); original refusal: %w", config.ErrAuditLoss, err, execErr)
+	}
+	return execErr
 }

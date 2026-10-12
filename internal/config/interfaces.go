@@ -177,6 +177,12 @@ type StoreInterface interface {
 	// When non-nil the actor is stamped onto transitioned_by + transitioned_at; when nil,
 	// transitioned_by is set to NULL and transitioned_at is still set to NOW() for ordering.
 	TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*PurchaseExecution, error)
+	// TransitionExecutionStatusPinned is TransitionExecutionStatus that also
+	// requires the row's recommendations to be empty (sawEmptyRecommendations)
+	// or non-empty exactly as the caller saw them, so a claim cannot land on a
+	// row whose recommendations were attached after the caller's gate check. A
+	// lost pin returns ErrExecutionNotInExpectedStatus like any lost CAS.
+	TransitionExecutionStatusPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*PurchaseExecution, error)
 	// SetCancelledBy stamps canceled_by and the legacy cancelled_by column on
 	// an execution without overwriting any other columns. Used after
 	// TransitionExecutionStatus to fold the actor attribution into the same
