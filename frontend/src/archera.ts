@@ -23,6 +23,8 @@
  * No backend, routing, or IaC changes (frontend-only).
  */
 
+import { renderComparisonSection } from './archera-comparison';
+
 /** Canonical Archera signup URL with CUDly attribution. */
 export const ARCHERA_SIGNUP_URL = 'https://www.archera.ai/cudly';
 
@@ -354,6 +356,11 @@ function buildArcheraPage(root: HTMLElement): void {
   appendArcheraEducationBody(root);
 
   root.appendChild(buildSignupBlock());
+
+  const comparison = document.createElement('div');
+  comparison.className = 'archera-comparison';
+  root.appendChild(comparison);
+  void renderComparisonSection(comparison);
 }
 
 /**
