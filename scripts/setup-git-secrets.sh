@@ -106,7 +106,9 @@ add_pattern() {
 
 # AWS patterns
 add_pattern 'AKIA[0-9A-Z]{16}'                                    # AWS Access Key ID
-add_pattern '[^A-Za-z0-9/+=]{40}[^A-Za-z0-9/+=]'                 # AWS Secret Access Key
+# (No bare 40-character "secret access key" pattern: the former negated-class form
+# matched any run of 41 non-alphanumeric characters, i.e. box-drawing and dash
+# banner lines, never a key. --register-aws above already covers AWS secret keys.)
 add_pattern 'aws(.{0,20})?['\''"][0-9a-zA-Z/+]{40}['\''"]'       # AWS Credentials
 
 # GCP patterns

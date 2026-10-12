@@ -116,6 +116,7 @@ run_staged_case() {
 # Fixtures, assembled from adjacent literals so this file scans clean.
 KEY="AKIA""0123456789ABCDEF"
 PEM="-----BEGIN ""PRIVATE KEY-----"
+PW="pass""word = \"hunter2hunter2\""
 AIZA="AIza$(head -c 35 /dev/zero | tr '\0' X)"
 
 # Must be caught (exit 1): the #1972 hole and the coverage this PR adds.
@@ -134,7 +135,7 @@ run_case "untruncated PKCS8 body" 1 e.json \
 run_case "corrected GCP API key range" 1 f.txt \
     "$AIZA"
 run_case "password with real spaces around the separator" 1 n.txt \
-    'password = "hunter2hunter2"'
+    "$PW"
 run_case "secret before an otherwise-allowed truncated PEM, same line" 1 l.go \
     'k := "'"$KEY"'"; PrivateKey: "'"$PEM"'\n...",'
 run_case "secret after an otherwise-allowed truncated PEM, same line" 1 m.go \
@@ -181,6 +182,35 @@ run_case "PEM word fragments are not a real header" 0 k.txt \
 algo EC here
 -----BEGIN CERTIFICATE-----'
 run_staged_case ".gitallowed self-scan" 0 .gitallowed
+
+# Structural check (#804): every active .gitallowed entry must be anchored
+# on the scanner's "path:line:content" output with ^ and $, so no entry can
+# whitelist a whole line by containing a bare token.
+unanchored=$(grep -vE '^[[:space:]]*(#|$)' "$REPO_ROOT/.gitallowed" | grep -vE '^\^.*\$$' || true)
+if [ -n "$unanchored" ]; then
+    fail=$((fail + 1))
+    echo "FAIL: unanchored .gitallowed entries:" >&2
+    echo "$unanchored" >&2
+else
+    pass=$((pass + 1))
+fi
+
+# Placeholder-shaped account IDs next to a real-shaped key must be caught.
+ACCT="1234""56789012"
+run_case "account-id placeholder with a key on the same line" 1 o.go \
+    'accountId := "'"$ACCT"'"; k := "'"$KEY"'"'
+run_case "UUID placeholder with a password on the same line" 1 p.go \
+    'id := "11111111-1111-1111-1111-111111111111"; '"$PW"
+
+# CI-equivalent check: the pre-commit framework hands git-secrets explicit
+# file names (plain grep), unlike a no-argument scan (git grep), which
+# differ on regex features such as \s. Scan every tracked file of the real
+# repo that way, under the same registered patterns.
+git -C "$REPO_ROOT" ls-files -z | tar -C "$REPO_ROOT" --null -T - -cf - | tar -C "$tmp/repo" -xf -
+file_scan=0
+git ls-files -z --others --cached | xargs -0 git secrets --scan >"$tmp/file-scan.log" 2>&1 || file_scan=$?
+[ "$file_scan" -eq 0 ] || grep -E "^[^ ]+:[0-9]+:" "$tmp/file-scan.log" | cut -c1-200 >&2
+check_result "file-argument scan of all tracked files" 0 "$file_scan"
 
 echo "$pass PASS, $fail FAIL"
 [ "$fail" -eq 0 ]

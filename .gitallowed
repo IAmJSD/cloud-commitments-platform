@@ -1,54 +1,16 @@
-# git-secrets allowlist: regexes that should NOT trigger the AWS-secret scanner.
+# git-secrets allowlist: regexes that should NOT trigger the secret scanner.
 #
-# The scanner's `--register-aws` adds a 12-digit account-ID pattern that
-# matches our test fixtures. The values below are obvious test placeholders
-# (sequential 123456789012, all-same-digit blocks like 111111111111, and
-# countdown patterns like 999888777666) — chosen specifically because they
-# cannot be real customer accounts. Adding these is safer than disabling the
-# AWS-account check entirely.
+# Every entry is matched against the scanner's WHOLE "path:line:content"
+# output line, and a match exempts that entire line from EVERY detector. So an
+# entry must be anchored on the path, the line number and the whole line
+# (^path:[0-9]+:...$). A bare token (a placeholder account ID, a keyword) would
+# exempt any line that merely contains it, including a real secret next to it
+# (#804, #1972). scripts/test-git-secrets-allowlist.sh enforces ^...$ on every
+# entry and checks that a secret plus a placeholder on one line is still caught.
 #
-# DO NOT add a real account ID here. If a real account ID lands in the repo,
-# rotate it and treat the leak seriously instead of silencing the scanner.
-#
-# Format: one regex per line, matched against the scanner's whole
-# "path:line:content" output line (not just the file content), so an entry
-# may anchor on the path with "^path:[0-9]+:". Every entry must still be a
-# synthetic literal or one known benign line, never a bare keyword: a
-# keyword whitelists every line that happens to contain it (#1972).
-
-# Sequential test placeholders (ascending and descending).
-123456789012
-210987654321
-
-# All-same-digit blocks of 12 — used as table-row distinctions in fixtures.
-# Listed explicitly rather than via a regex back-reference because not every
-# git-secrets build supports back-refs in its allowlist regexes.
-000000000000
-111111111111
-222222222222
-333333333333
-444444444444
-555555555555
-666666666666
-777777777777
-888888888888
-999999999999
-
-# Group-block placeholders used in cmd/helpers_test.go variants and
-# cmd/multi_service_helpers_test.go.
-111222333444
-555666777888
-999888777666
-# Descending-step fixture added in #956 tests (store_postgres_pgxmock_test.go,
-# handler_analytics_test.go, handler_history_test.go, handler_dashboard_test.go).
-999988887777
-# Repeating-pair-block fixture used in handler_analytics_test.go,
-# handler_inventory_test.go, store_postgres_pgxmock_test.go.
-111122223333
-
-# UUID-shaped account ID used in handler_accounts_test.go (synthetic, not a
-# real subscription/account).
-11111111-1111-1111-1111-111111111111
+# DO NOT add a real account ID or secret here. If one lands in the repo, rotate
+# it instead of silencing the scanner. Test fixtures should use synthetic
+# placeholders; add an entry only for a line a real scan flags.
 
 # scripts/setup-git-secrets.sh registers its detectors as literal regex text
 # and three of them (Azure connection string, PostgreSQL and MySQL DSN
@@ -101,3 +63,79 @@
 # One letter of "PRIVATE" is bracketed for the same self-scan reason the
 # block above explains -- do not tidy it back to a bare word.
 ^[^:]+:[0-9]+:[[:space:]]*("private_key"|PrivateKey):[[:space:]]*"-----BEGIN PRIVAT[E] KEY-----\\n(MIIEvQIBADANBg)?\.\.\.(\\n)?",?$
+
+# Synthetic 12-digit account IDs in test fixtures. The AWS account-ID detector
+# flags them. Each entry pins the file kind, the line number pattern and the
+# WHOLE line, so a line holding one of these placeholders plus anything else
+# (a key, a password) does not match and is still scanned. The last digit of
+# each placeholder is bracketed so this file does not match its own entries.
+# A single account field per line, quoted placeholder only:
+^[^:]+(_test\.go|\.test\.ts):[0-9]+:[[:space:]]*(AccountID|accountID|account_id|Account):[[:space:]]*["'](12345678901[2]|11111111111[1]|11112222333[3]|22222222222[2]|33333333333[3]|44444444444[4]|55555555555[5]|66666666666[6]|77777777777[7]|99988877766[6]|99998888777[7]|99999999999[9])["'],?$
+# Test-fixture credential fields: one field, one short quoted value, nothing
+# else on the line, in a test file only.
+^[^:]+(_test\.go|\.test\.ts):[0-9]+:[[:space:]]*(password|api_key):[[:space:]]*["'][^"']{0,40}["'],?$
+
+# One-off fixture lines a real scan flags (a synthetic placeholder account ID,
+# a throwaway test password, a credential-less test DSN). Each entry pins the
+# file, any line number, and the WHOLE line with a trailing $, so appending a
+# secret to the line makes it stop matching. One letter or digit of each
+# trigger substring is bracketed so this file does not match its own entries.
+# Regenerate by scanning with no allowlist and re-deriving the entry from the
+# flagged line; if a fixture line changes, its entry stops matching and the
+# scan fails loudly.
+^docs/audits/codebase-audit-202[6]-09-02\.md:[0-9]+:-[[:space:]]+failure[[:space:]]+scenario:[[:space:]]+A[[:space:]]+session[[:space:]]+whose[[:space:]]+group[[:space:]]+allowed_accounts[[:space:]]+is[[:space:]]+\["Production"\][[:space:]]+calls[[:space:]]+`GET[[:space:]]+/api/dashboard/summary\?account_id=123[4]567[8]901[2]`[[:space:]]+where[[:space:]]+123[4]567[8]901[2][[:space:]]+is[[:space:]]+the[[:space:]]+AWS[[:space:]]+account[[:space:]]+number[[:space:]]+of[[:space:]]+the[[:space:]]+out-of-scope[[:space:]]+"Finance"[[:space:]]+account[[:space:]]+\(or[[:space:]]+`account_ids=<Finance[[:space:]]+UUID>`\)\.[[:space:]]+`resolveSingleAccountFilterIDs`[[:space:]]+\(scoping\.go:277-279\)[[:space:]]+maps[[:space:]]+the[[:space:]]+unknown[[:space:]]+value[[:space:]]+to[[:space:]]+an[[:space:]]+external-id[[:space:]]+filter[[:space:]]+under[[:space:]]+the[[:space:]]+""[[:space:]]+provider[[:space:]]+key,[[:space:]]+the[[:space:]]+non-empty[[:space:]]+result[[:space:]]+skips[[:space:]]+the[[:space:]]+`resolveAllowedAccountScope`[[:space:]]+fallback,[[:space:]]+and[[:space:]]+`calculateCommitmentMetrics`[[:space:]]+->[[:space:]]+`fetchCommitmentPurchases`[[:space:]]+->[[:space:]]+`GetActivePurchaseHistory`[[:space:]]+\(store_postgre[s]\.go:211[2]-211[4],[[:space:]]+`account_id[[:space:]]+=[[:space:]]+ANY\(\.\.\.\)`\)[[:space:]]+aggregates[[:space:]]+Finance's[[:space:]]+rows\.[[:space:]]+The[[:space:]]+response[[:space:]]+returns[[:space:]]+Finance's[[:space:]]+`active_commitments`,[[:space:]]+`committed_monthly`,[[:space:]]+`ytd_savings`[[:space:]]+and[[:space:]]+per-service[[:space:]]+`current_savings`\.[[:space:]]+Only[[:space:]]+the[[:space:]]+recommendations[[:space:]]+half[[:space:]]+is[[:space:]]+scope-filtered[[:space:]]+\(`filterDashboardRecommendations`\);[[:space:]]+the[[:space:]]+purchase-history[[:space:]]+half[[:space:]]+has[[:space:]]+no[[:space:]]+equivalent,[[:space:]]+unlike[[:space:]]+`/api/inventory/\*`[[:space:]]+which[[:space:]]+runs[[:space:]]+`filterPurchaseHistoryByAllowedAccounts`[[:space:]]+after[[:space:]]+the[[:space:]]+same[[:space:]]+fetch[[:space:]]+\(handler_inventory\.go:47,[[:space:]]+197\)[[:space:]]+and[[:space:]]+`/api/history/analytics`[[:space:]]+which[[:space:]]+validates[[:space:]]+the[[:space:]]+requested[[:space:]]+account[[:space:]]+against[[:space:]]+the[[:space:]]+scope[[:space:]]+first[[:space:]]+\(handler_analytics\.go:233-249\)\.[[:space:]]*$
+^docs/audits/codebase-audit-202[6]-09-02\.md:[0-9]+:-[[:space:]]+severity-adjusted:[[:space:]]+medium[[:space:]]+—[[:space:]]+`git[[:space:]]+secrets[[:space:]]+--register-aws`[[:space:]]+\(scripts/setup-git-secrets\.sh:43\)[[:space:]]+plus[[:space:]]+the[[:space:]]+pattern[[:space:]]+on[[:space:]]+line[[:space:]]+53[[:space:]]+still[[:space:]]+block[[:space:]]+an[[:space:]]+assignment-shaped[[:space:]]+key[[:space:]]+\(verified:[[:space:]]+`secret_ke[y][[:space:]]+=[[:space:]]+"<40[[:space:]]+chars>"`[[:space:]]+exits[[:space:]]+1\),[[:space:]]+so[[:space:]]+only[[:space:]]+a[[:space:]]+bare[[:space:]]+unassigned[[:space:]]+key[[:space:]]+slips[[:space:]]+through\.[[:space:]]*$
+^frontend/src/__tests__/api-apikeys\.test\.ts:[0-9]+:[[:space:]]*const[[:space:]]+request[[:space:]]+=[[:space:]]+\{[[:space:]]+name:[[:space:]]+'New[[:space:]]+Key',[[:space:]]+passwor[d]:[[:space:]]+'cGFzc3dvcmQ=',[[:space:]]+expires_at:[[:space:]]+'202[5]-12-31T00:00:00Z'[[:space:]]+\};[[:space:]]*$
+^internal/analytics/collector_test\.go:[0-9]+:[[:space:]]*AccountID:[[:space:]]+"123[4]567[8]901[2]",[[:space:]]+Timestamp:[[:space:]]+time\.Now\(\)\.AddDate\(-3,[[:space:]]+0,[[:space:]]+0\),[[:space:]]*$
+^internal/api/exchange_helpers_test\.go:[0-9]+:[[:space:]]*"account_id":[[:space:]]+"111[1]111[1]-111[1]-111[1]-111[1]-111[1]111[1]111[1]",[[:space:]]*$
+^internal/api/handler_accounts_test\.go:[0-9]+:[[:space:]]*AccountID:[[:space:]]+"111[1]111[1]-111[1]-111[1]-111[1]-111[1]111[1]111[1]",[[:space:]]*$
+^internal/api/handler_accounts_test\.go:[0-9]+:[[:space:]]*_,[[:space:]]+err[[:space:]]+:=[[:space:]]+handler\.discoverOrgAccounts\(ctx,[[:space:]]+adminRequest\(`\{"account_id":"111[1]111[1]-111[1]-111[1]-111[1]-111[1]111[1]111[1]"\}`\)\)[[:space:]]*$
+^internal/api/handler_dashboard_test\.go:[0-9]+:[[:space:]]*\{AccountID:[[:space:]]+"999[9]888[8]777[7]",[[:space:]]+Timestamp:[[:space:]]+purchaseTime,[[:space:]]+Term:[[:space:]]+1,[[:space:]]+EstimatedSavings:[[:space:]]+175\.0\},[[:space:]]*$
+^internal/api/handler_dashboard_test\.go:[0-9]+://[[:space:]]+account_id=111[1]222[2]333[3][[:space:]]+\(the[[:space:]]+external[[:space:]]+number,[[:space:]]+not[[:space:]]+the[[:space:]]+UUID\)\.[[:space:]]+The[[:space:]]+fix[[:space:]]+must[[:space:]]*$
+^internal/api/handler_federation_test\.go:[0-9]+:[[:space:]]*return[[:space:]]+&sourceIdentity\{Provider:[[:space:]]+"aws",[[:space:]]+AccountID:[[:space:]]+"123[4]567[8]901[2]"\}[[:space:]]*$
+^internal/api/handler_history_test\.go:[0-9]+:[[:space:]]*\{AccountID:[[:space:]]+"123[4]567[8]901[2]",[[:space:]]+PurchaseID:[[:space:]]+"purchase-1",[[:space:]]+UpfrontCost:[[:space:]]+new\(float64\(100\.0\)\),[[:space:]]+EstimatedSavings:[[:space:]]+10\.0\},[[:space:]]*$
+^internal/api/handler_history_test\.go:[0-9]+:[[:space:]]*"account_id":[[:space:]]+"123[4]567[8]901[2]",[[:space:]]*$
+^internal/api/handler_history_test\.go:[0-9]+:[[:space:]]*\{AccountID:[[:space:]]+"111[1]111[1]111[1]",[[:space:]]+PurchaseID:[[:space:]]+"purchase-1",[[:space:]]+UpfrontCost:[[:space:]]+new\(float64\(100\.0\)\),[[:space:]]+EstimatedSavings:[[:space:]]+10\.0\},[[:space:]]*$
+^internal/api/handler_history_test\.go:[0-9]+:[[:space:]]*\{AccountID:[[:space:]]+"222[2]222[2]222[2]",[[:space:]]+PurchaseID:[[:space:]]+"purchase-2",[[:space:]]+UpfrontCost:[[:space:]]+new\(float64\(200\.0\)\),[[:space:]]+EstimatedSavings:[[:space:]]+20\.0\},[[:space:]]*$
+^internal/api/handler_history_test\.go:[0-9]+:[[:space:]]*_,[[:space:]]+err[[:space:]]+:=[[:space:]]+handler\.getHistory\(ctx,[[:space:]]+req,[[:space:]]+map\[string\]string\{"provider":[[:space:]]+"aws",[[:space:]]+"account_id":[[:space:]]+"123[4]567[8]901[2]"\}\)[[:space:]]*$
+^internal/api/handler_history_test\.go:[0-9]+:[[:space:]]*Return\(\[\]config\.PurchaseHistoryRecord\{\{AccountID:[[:space:]]+"123[4]567[8]901[2]",[[:space:]]+PurchaseID:[[:space:]]+"p-legacy"\}\},[[:space:]]+nil\)\.Once\(\)[[:space:]]*$
+^internal/api/handler_history_test\.go:[0-9]+:[[:space:]]*_,[[:space:]]+err[[:space:]]+:=[[:space:]]+handler\.getHistory\(ctx,[[:space:]]+req,[[:space:]]+map\[string\]string\{"account_id":[[:space:]]+"123[4]567[8]901[2]"\}\)[[:space:]]*$
+^internal/api/handler_purchases_revoke_constraints_test\.go:[0-9]+:[[:space:]]*rec\.AccountID[[:space:]]+=[[:space:]]+"123[4]567[8]901[2]"[[:space:]]*$
+^internal/api/handler_ri_exchange_test\.go:[0-9]+:[[:space:]]*QueryStringParameters:[[:space:]]+map\[string\]string\{"account_id":[[:space:]]+"123[4]567[8]901[2]"\},[[:space:]]*$
+^internal/auth/carveout_wildcard_test\.go:[0-9]+:[[:space:]]*const[[:space:]]+passwor[d][[:space:]]+=[[:space:]]+"CorrectHorse@123"[[:space:]]*$
+^internal/auth/service_lockout_test\.go:[0-9]+:[[:space:]]*\{name:[[:space:]]+"locked",[[:space:]]+attempts:[[:space:]]+5,[[:space:]]+lockOffset:[[:space:]]+time\.Minute,[[:space:]]+passwor[d]:[[:space:]]+"CorrectPassword123"\},[[:space:]]*$
+^internal/auth/service_lockout_test\.go:[0-9]+:[[:space:]]*\{name:[[:space:]]+"expired[[:space:]]+success",[[:space:]]+attempts:[[:space:]]+5,[[:space:]]+lockOffset:[[:space:]]+-time\.Minute,[[:space:]]+passwor[d]:[[:space:]]+"CorrectPassword123",[[:space:]]+method:[[:space:]]+"RecordSuccessfulLogin"\},[[:space:]]*$
+^internal/auth/service_lockout_test\.go:[0-9]+:[[:space:]]*\{name:[[:space:]]+"reset[[:space:]]+on[[:space:]]+success",[[:space:]]+attempts:[[:space:]]+3,[[:space:]]+passwor[d]:[[:space:]]+"CorrectPassword123",[[:space:]]+method:[[:space:]]+"RecordSuccessfulLogin"\},[[:space:]]*$
+^internal/auth/service_lockout_test\.go:[0-9]+:[[:space:]]*\{name:[[:space:]]+"MFA[[:space:]]+failure",[[:space:]]+attempts:[[:space:]]+4,[[:space:]]+passwor[d]:[[:space:]]+"CorrectPassword123",[[:space:]]+mfa:[[:space:]]+true,[[:space:]]+method:[[:space:]]+"RecordFailedLogin"\},[[:space:]]*$
+^internal/auth/service_lockout_test\.go:[0-9]+:[[:space:]]*\{name:[[:space:]]+"success[[:space:]]+write",[[:space:]]+passwor[d]:[[:space:]]+"CorrectPassword123",[[:space:]]+method:[[:space:]]+"RecordSuccessfulLogin"\},[[:space:]]*$
+^internal/auth/service_lockout_test\.go:[0-9]+:[[:space:]]*\{name:[[:space:]]+"session[[:space:]]+creation",[[:space:]]+passwor[d]:[[:space:]]+"CorrectPassword123",[[:space:]]+sessionError:[[:space:]]+true\},[[:space:]]*$
+^internal/auth/service_login_db_test\.go:[0-9]+:[[:space:]]*passwor[d][[:space:]]+=[[:space:]]+"OriginalPassword123!"[[:space:]]*$
+^internal/auth/service_password_test\.go:[0-9]+:[[:space:]]*passwor[d]:[[:space:]]+"VeryLongS3cur3!"[[:space:]]+\+[[:space:]]+string\(make\(\[\]byte,[[:space:]]+120\)\),[[:space:]]*$
+^internal/config/store_postgres_history_validate_test\.go:[0-9]+:[[:space:]]*err[[:space:]]+:=[[:space:]]+store\.SavePurchaseHistory\(context\.Background\(\),[[:space:]]+&PurchaseHistoryRecord\{AccountID:[[:space:]]+"123[4]567[8]901[2]",[[:space:]]+PurchaseID:[[:space:]]+id,[[:space:]]+Provider:[[:space:]]+"aws"\}\)[[:space:]]*$
+^internal/config/store_postgres_pgxmock_test\.go:[0-9]+:[[:space:]]*//[[:space:]]+The[[:space:]]+matched[[:space:]]+row[[:space:]]+has[[:space:]]+account_id="999[9]888[8]777[7]"[[:space:]]+and[[:space:]]+cloud_account_id[[:space:]]+NULL[[:space:]]*$
+^internal/config/store_postgres_ri_exchange_reservation_integration_test\.go:[0-9]+:[[:space:]]*boundaryRow[[:space:]]+:=[[:space:]]+&RIExchangeRecord\{AccountID:[[:space:]]+"444[4]444[4]444[4]",[[:space:]]+Region:[[:space:]]+"us-east-1",[[:space:]]+SourceRIIDs:[[:space:]]+\[\]string\{"ri-boundary"\},[[:space:]]*$
+^internal/config/store_postgres_ri_exchange_reservation_integration_test\.go:[0-9]+:[[:space:]]*third[[:space:]]+:=[[:space:]]+&RIExchangeRecord\{AccountID:[[:space:]]+"333[3]333[3]333[3]",[[:space:]]+Region:[[:space:]]+"ap-south-1",[[:space:]]+SourceRIIDs:[[:space:]]+\[\]string\{"ri-C"\},[[:space:]]*$
+^internal/config/store_postgres_ri_exchange_reservation_integration_test\.go:[0-9]+:[[:space:]]*probe[[:space:]]+:=[[:space:]]+&RIExchangeRecord\{AccountID:[[:space:]]+"777[7]777[7]777[7]",[[:space:]]+Region:[[:space:]]+"us-west-2",[[:space:]]+SourceRIIDs:[[:space:]]+\[\]string\{"ri-lock-probe"\},[[:space:]]*$
+^internal/credentials/resolver_test\.go:[0-9]+:[[:space:]]*AWSResolveOptions\{AmbientProvider:[[:space:]]+testAmbientCreds,[[:space:]]+AmbientSTS:[[:space:]]+&callerIdentitySTS\{account:[[:space:]]+"111[1]111[1]111[1]"\}\},[[:space:]]*$
+^internal/credentials/resolver_test\.go:[0-9]+:[[:space:]]*"different[[:space:]]+host[[:space:]]+account":[[:space:]]+\{"222[2]222[2]222[2]",[[:space:]]+&callerIdentitySTS\{account:[[:space:]]+"111[1]111[1]111[1]"\}\},[[:space:]]*$
+^internal/credentials/resolver_test\.go:[0-9]+:[[:space:]]*"empty[[:space:]]+external_id":[[:space:]]+\{"",[[:space:]]+&callerIdentitySTS\{account:[[:space:]]+"111[1]111[1]111[1]"\}\},[[:space:]]*$
+^internal/database/config_test\.go:[0-9]+:[[:space:]]*assert\.Contains\(t,[[:space:]]+cfg\.DSN\(`back\\slash`\),[[:space:]]+`[[:space:]]+passwor[d]='back\\\\slash'[[:space:]]+`\)[[:space:]]*$
+^internal/database/postgres/migrations/000[0]78_monthly_summary_nested_rollup_test\.go:[0-9]+:[[:space:]]*const[[:space:]]+account[[:space:]]+=[[:space:]]+"123[4]567[8]901[2]"[[:space:]]*$
+^internal/database/postgres/migrations/migrate_cancel_integration_test\.go:[0-9]+:[[:space:]]*adminDSN[[:space:]]+=[[:space:]]+fmt\.Sprintf\("postgre[s]://cudly_test:test_passwor[d]@%s:%d/cudly_test\?sslmode=disable",[[:space:]]+c\.Config\.Host,[[:space:]]+c\.Config\.Port\)[[:space:]]*$
+^internal/database/postgres/migrations/migrate_cancel_test\.go:[0-9]+:[[:space:]]*cfg,[[:space:]]+err[[:space:]]+:=[[:space:]]+pgxpool\.ParseConfig\("postgre[s]://u:p@"[[:space:]]+\+[[:space:]]+ln\.Addr\(\)\.String\(\)[[:space:]]+\+[[:space:]]+"/db\?sslmode=disable"\)[[:space:]]*$
+^internal/email/coverage_test\.go:[0-9]+:[[:space:]]*passwor[d]:[[:space:]]+"onlypass",[[:space:]]+//[[:space:]]+Only[[:space:]]+passwor[d][[:space:]]+-[[:space:]]+auth[[:space:]]+should[[:space:]]+not[[:space:]]+be[[:space:]]+created[[:space:]]*$
+^internal/scheduler/recommendation_completeness_integration_test\.go:[0-9]+:[[:space:]]*s[[:space:]]+:=[[:space:]]+&Scheduler\{config:[[:space:]]+store,[[:space:]]+providerFactory:[[:space:]]+factory,[[:space:]]+stsClient:[[:space:]]+&fakeSTSClient\{accountID:[[:space:]]+"111[1]111[1]111[1]"\}\}[[:space:]]*$
+^internal/scheduler/scheduler_test\.go:[0-9]+:[[:space:]]*stsClient:[[:space:]]+&fakeSTSClient\{accountID:[[:space:]]+"111[1]111[1]111[1]"\},[[:space:]]*$
+^internal/scheduler/scheduler_test\.go:[0-9]+:[[:space:]]*"different[[:space:]]+host[[:space:]]+account":[[:space:]]+&fakeSTSClient\{accountID:[[:space:]]+"999[9]999[9]999[9]"\},[[:space:]]*$
+^internal/scheduler/scheduler_test\.go:[0-9]+:[[:space:]]*stsClient:[[:space:]]+&fakeSTSClient\{accountID:[[:space:]]+"123[4]567[8]901[2]"\},[[:space:]]*$
+^internal/scheduler/scheduler_test\.go:[0-9]+:[[:space:]]*stsClient:[[:space:]]+&fakeSTSClient\{accountID:[[:space:]]+"999[8]887[7]766[6]"\},[[:space:]]*$
+^internal/scheduler/zonal_recs_test\.go:[0-9]+:[[:space:]]*s[[:space:]]+:=[[:space:]]+&Scheduler\{providerFactory:[[:space:]]+factory,[[:space:]]+stsClient:[[:space:]]+&fakeSTSClient\{accountID:[[:space:]]+"111[1]111[1]111[1]"\}\}[[:space:]]*$
+^internal/scheduler/zonal_recs_test\.go:[0-9]+:[[:space:]]*s[[:space:]]+:=[[:space:]]+&Scheduler\{config:[[:space:]]+new\(MockConfigStore\),[[:space:]]+providerFactory:[[:space:]]+factory,[[:space:]]+stsClient:[[:space:]]+&fakeSTSClient\{accountID:[[:space:]]+"111[1]111[1]111[1]"\}\}[[:space:]]*$
+^internal/server/adapter_test\.go:[0-9]+:[[:space:]]*const[[:space:]]+passwor[d][[:space:]]+=[[:space:]]+"CorrectHorse@123"[[:space:]]*$
+^internal/server/commitment_probe_config_test\.go:[0-9]+:[[:space:]]*build[[:space:]]+:=[[:space:]]+newCommitmentProbeConfigBuilder\(nil,[[:space:]]+aws\.AnonymousCredentials\{\},[[:space:]]+hostIdentitySTS\{account:[[:space:]]+"111[1]111[1]111[1]"\}\)[[:space:]]*$
+^internal/server/handler_ladder_test\.go:[0-9]+:[[:space:]]*Scope:[[:space:]]+pkgladder\.Scope\{Provider:[[:space:]]+pkgcommon\.ProviderAWS,[[:space:]]+AccountID:[[:space:]]+"123[4]567[8]901[2]"\},[[:space:]]*$
+^internal/server/handler_ri_exchange_reservation_integration_test\.go:[0-9]+:[[:space:]]*accountID:[[:space:]]+"555[5]555[5]555[5]",[[:space:]]+region:[[:space:]]+"us-east-1",[[:space:]]*$
+^internal/server/handler_ri_exchange_reservation_integration_test\.go:[0-9]+:[[:space:]]*AccountID:[[:space:]]+"666[6]666[6]666[6]",[[:space:]]+Region:[[:space:]]+"eu-west-1",[[:space:]]+LadderRunID:[[:space:]]+&ladderRunID,[[:space:]]*$
+^internal/server/ladder_write_test\.go:[0-9]+:[[:space:]]*accountID[[:space:]]+=[[:space:]]+"123[4]567[8]901[2]"[[:space:]]*$
+^internal/server/migrations_bounded_real_runner_test\.go:[0-9]+:[[:space:]]*cfg,[[:space:]]+err[[:space:]]+:=[[:space:]]+pgxpool\.ParseConfig\("postgre[s]://u:p@"[[:space:]]+\+[[:space:]]+ln\.Addr\(\)\.String\(\)[[:space:]]+\+[[:space:]]+"/db\?sslmode=disable"\)[[:space:]]*$
+^scripts/generate-federation-iac_test\.go:[0-9]+:[[:space:]]*`aws_account_id[[:space:]]+=[[:space:]]+"111[1]222[2]333[3]"`,[[:space:]]*$
