@@ -1172,12 +1172,15 @@ func (s *PostgresStore) LinkRetryExecutionAtomic(ctx context.Context, tx pgx.Tx,
 	return tag.RowsAffected() == 1, nil
 }
 
-// RotatePendingApprovalToken implements StoreInterface.
+// RotatePendingApprovalToken implements StoreInterface. The same statement
+// that stores the emailed token promotes the row to 'notified' (a no-op for a
+// row already there), so the status never claims a notice that was not sent.
 func (s *PostgresStore) RotatePendingApprovalToken(ctx context.Context, executionID, tokenHash string, expiresAt time.Time) (bool, error) {
 	q := `
 		UPDATE purchase_executions
 		   SET approval_token_hash = $2,
 		       approval_token_expires_at = $3,
+		       status = 'notified',
 		       updated_at = NOW()
 		 WHERE execution_id = $1
 		   AND status IN ('pending', 'notified')
@@ -1198,6 +1201,19 @@ func (s *PostgresStore) RotatePendingApprovalToken(ctx context.Context, executio
 // and the legacy cancelled_by (issue #119), matching what the other cancel paths
 // record and what History reads.
 func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*PurchaseExecution, error) {
+	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, nil)
+}
+
+// TransitionExecutionStatusPinned is TransitionExecutionStatus that also
+// requires the row's recommendations to still be empty (or not empty), as the
+// caller saw them. A recommendation attach landing between a gate check and the
+// claim makes the pin fail with ErrExecutionNotInExpectedStatus, so a row is
+// never run on a snapshot different from the one that was gated.
+func (s *PostgresStore) TransitionExecutionStatusPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*PurchaseExecution, error) {
+	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, &sawEmptyRecommendations)
+}
+
+func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmpty *bool) (*PurchaseExecution, error) {
 	var cancelActor *string
 	if toStatus == StatusCanceled {
 		cancelActor = actor
@@ -1209,6 +1225,7 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 		    canceled_by = COALESCE((SELECT email FROM users WHERE id = $5), canceled_by),
 		    cancelled_by = COALESCE((SELECT email FROM users WHERE id = $5), cancelled_by)
 		WHERE execution_id = $1 AND status = ANY($3)
+		  AND ($6::boolean IS NULL OR (recommendations IN ('[]'::jsonb, 'null'::jsonb)) = $6)
 		RETURNING plan_id, execution_id, status, step_number, scheduled_date,
 		          notification_sent, approval_token_hash, recommendations,
 		          total_upfront_cost, estimated_savings, completed_at, error, expires_at,
@@ -1219,7 +1236,7 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 		          idempotency_key, scheduled_execution_at, no_submission
 	`
 
-	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses, actor, cancelActor)
+	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses, actor, cancelActor, sawEmpty)
 	if err != nil {
 		return nil, err
 	}
