@@ -5,6 +5,7 @@ package config_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -528,4 +529,73 @@ func TestPostgresStore_UpsertRecommendations_ReplacesAzureWrongUnits(t *testing.
 	assert.Equal(t, "corrected", got[0].ID)
 	assert.Equal(t, 3600.0, got[0].UpfrontCost)
 	assert.Nil(t, got[0].MonthlyCost)
+}
+
+func zonalAWSRec(az string, savings float64) config.RecommendationRecord {
+	rec := awsRec("z-"+az, "ec2", "us-east-1", "m5.large", savings)
+	rec.AvailabilityZone = az
+	rec.Details = json.RawMessage(`{"instance_type":"m5.large","platform":"Linux/UNIX","tenancy":"default","scope":"Availability Zone","availability_zone":"` + az + `"}`)
+	return rec
+}
+
+// Issue #792, PR2b: the upsert arbiter is the 9-column index that includes the
+// generated availability_zone column. Same-AZ re-upserts update in place, a
+// regional row (AZ ”) behaves as before, and a row written by pre-PR2b code
+// (no top-level availability_zone in the payload) is found and updated.
+// Multi-AZ rows on one 8-tuple stay rejected until the 8-column index is
+// dropped (PR2c), so they are not asserted here.
+func TestPostgresStore_UpsertRecommendations_AZArbiter(t *testing.T) {
+	ctx := context.Background()
+	container, err := testhelpers.SetupPostgresContainer(ctx, t)
+	require.NoError(t, err)
+	defer container.Cleanup(ctx)
+	pool := container.DB.Pool()
+	require.NoError(t, migrations.RunMigrations(ctx, pool, getMigrationsPath(), "", ""))
+	store := config.NewPostgresStore(container.DB)
+	t0 := time.Now().UTC().Truncate(time.Second)
+	collect := []config.SuccessfulCollect{{Provider: "aws"}}
+
+	t.Run("same-AZ re-upsert updates in place", func(t *testing.T) {
+		require.NoError(t, store.UpsertRecommendations(ctx, t0, []config.RecommendationRecord{zonalAWSRec("us-east-1a", 10)}, collect))
+		require.NoError(t, store.UpsertRecommendations(ctx, t0.Add(time.Hour), []config.RecommendationRecord{zonalAWSRec("us-east-1a", 25)}, collect))
+		got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.InDelta(t, 25.0, got[0].Savings, 0.001)
+		assert.Equal(t, "us-east-1a", got[0].AvailabilityZone)
+		var az string
+		require.NoError(t, pool.QueryRow(ctx, `SELECT availability_zone FROM recommendations`).Scan(&az))
+		assert.Equal(t, "us-east-1a", az, "the generated column is derived from the payload")
+	})
+
+	t.Run("regional row unchanged", func(t *testing.T) {
+		require.NoError(t, store.ReplaceRecommendations(ctx, t0, nil))
+		require.NoError(t, store.UpsertRecommendations(ctx, t0, []config.RecommendationRecord{awsRec("r1", "ec2", "us-east-1", "c5.large", 10)}, collect))
+		require.NoError(t, store.UpsertRecommendations(ctx, t0.Add(time.Hour), []config.RecommendationRecord{awsRec("r1", "ec2", "us-east-1", "c5.large", 30)}, collect))
+		got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.InDelta(t, 30.0, got[0].Savings, 0.001)
+		assert.Empty(t, got[0].AvailabilityZone)
+	})
+
+	t.Run("row written by pre-PR2b code is found and updated", func(t *testing.T) {
+		require.NoError(t, store.ReplaceRecommendations(ctx, t0, nil))
+		// What the old code stored: AZ only inside details, 8-column semantics.
+		_, err := pool.Exec(ctx, `
+			INSERT INTO recommendations
+			    (collected_at, provider, service, region, resource_type, engine, payload,
+			     upfront_cost, monthly_savings, term, payment_option)
+			VALUES ($1, 'aws', 'ec2', 'us-east-1', 'm5.large', '',
+			        '{"details":{"availability_zone":"us-east-1a"}}'::jsonb, 100, 5, 12, 'no-upfront')`, t0)
+		require.NoError(t, err)
+		require.NoError(t, store.UpsertRecommendations(ctx, t0.Add(time.Hour), []config.RecommendationRecord{zonalAWSRec("us-east-1a", 40)}, collect))
+		var n int
+		require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM recommendations`).Scan(&n))
+		assert.Equal(t, 1, n, "the legacy row must be the conflict target, not duplicated")
+		got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.InDelta(t, 40.0, got[0].Savings, 0.001)
+	})
 }
