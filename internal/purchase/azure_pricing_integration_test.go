@@ -60,7 +60,7 @@ func TestApproveAzurePricingRequiresMigrationAndRecollection(t *testing.T) {
 		exec.Recommendations = []config.RecommendationRecord{rec}
 		mgr, store, recorder := armedHarness(t, common.ServiceCompute)
 		mgr.config = &azurePricingPostgresStore{MockConfigStore: store, pricing: pricing}
-		expectClaim(store, exec, []string{"pending", "notified"}, "approved")
+		expectClaim(store, exec, []string{"pending", "notified"}, "running")
 		var saved *config.PurchaseExecution
 		store.SavePurchaseExecutionFn = func(_ context.Context, e *config.PurchaseExecution) error {
 			copy := *e
