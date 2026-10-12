@@ -395,9 +395,10 @@ func seedLadderConfigWithExtID(ctx context.Context, t *testing.T, store *Postgre
 // TestPostgresStore_GetInFlightLadderCommitUSDHr tests the in-flight sum
 // query (L5 netting). It verifies:
 //   - zero is returned (not nil) when no scheduled tranches exist.
-//   - SCHEDULED tranches ONLY are summed; all non-scheduled statuses are
-//     excluded (fired/completed are already in ExistingUSDPerHour).
-//   - scheduled tranches due at or before asOf are excluded (issue #118).
+//   - scheduled tranches still within LadderFireGrace and fired tranches are
+//     summed; completed (already in ExistingUSDPerHour), failed and canceled
+//     are excluded.
+//   - scheduled tranches past the grace window are excluded (issue #118).
 //   - tranches from a different config are not included.
 func TestPostgresStore_GetInFlightLadderCommitUSDHr(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -440,27 +441,29 @@ func TestPostgresStore_GetInFlightLadderCommitUSDHr(t *testing.T) {
 
 	// Insert tranches with various statuses for the main config.
 	insertTranche(t, &cfgID, 3.0, ladder.TrancheStatusScheduled) // included
-	insertTranche(t, &cfgID, 2.0, ladder.TrancheStatusFired)     // excluded (already in E)
+	insertTranche(t, &cfgID, 2.0, ladder.TrancheStatusFired)     // included (unresolved purchase)
 	insertTranche(t, &cfgID, 5.0, ladder.TrancheStatusCompleted) // excluded (already in E)
 	insertTranche(t, &cfgID, 1.0, ladder.TrancheStatusCancelled) // excluded (terminal)
 	insertTranche(t, &cfgID, 4.0, ladder.TrancheStatusFailed)    // excluded (terminal)
-	// Still 'scheduled' but due at or before asOf: never fired, so never bought
+	// Still 'scheduled' but past the grace window: never fired, so never bought
 	// (issue #118). Excluded, or past plans would net out of every later gap.
 	insertTrancheAt(t, &cfgID, 7.0, ladder.TrancheStatusScheduled, asOf.Add(-7*24*time.Hour))
+	insertTrancheAt(t, &cfgID, 8.0, ladder.TrancheStatusScheduled, asOf.Add(-LadderFireGrace))
+	// Due but within the grace window: the executor can still buy it, so it nets.
 	insertTrancheAt(t, &cfgID, 6.0, ladder.TrancheStatusScheduled, asOf)
 
 	// A tranche belonging to a different config must not be summed in.
 	otherID := otherConfigID
 	insertTranche(t, &otherID, 99.0, ladder.TrancheStatusScheduled)
 
-	t.Run("sums scheduled only", func(t *testing.T) {
+	t.Run("sums fireable scheduled and fired", func(t *testing.T) {
 		result, err := store.GetInFlightLadderCommitUSDHr(ctx, configID, asOf)
 		require.NoError(t, err)
 		require.NotNil(t, result)
-		// Only the 3.0 scheduled tranche must be returned. Fired/completed are
-		// executed purchases already counted in ExistingUSDPerHour, so netting
-		// them again would double-subtract.
-		assert.InDelta(t, 3.0, *result, 1e-6, "in-flight sum must include not-yet-due scheduled tranches ONLY")
+		// 3.0 future + 6.0 due-within-grace scheduled + 2.0 fired. Completed is
+		// already counted in ExistingUSDPerHour (netting it would double-subtract);
+		// failed, canceled and past-grace scheduled rows were never bought.
+		assert.InDelta(t, 11.0, *result, 1e-6, "in-flight = fireable scheduled + fired")
 	})
 
 	t.Run("other config is not contaminated", func(t *testing.T) {
@@ -589,18 +592,19 @@ func TestPostgresStore_SaveLadderRunWithTranches_CancelsOverdue(t *testing.T) {
 	var dueLive int
 	require.NoError(t, store.db.QueryRow(ctx,
 		`SELECT count(*) FROM ladder_tranches WHERE config_id = $1 AND status = 'scheduled' AND scheduled_date <= $2 AND execution_id IS NULL AND run_id <> $3`,
-		cfgID, start, finalRun).Scan(&dueLive))
-	assert.Equal(t, 0, dueLive, "no scheduled tranche from an earlier run may be overdue")
-	assert.Equal(t, 1, func() int {
+		cfgID, start.Add(-LadderFireGrace), finalRun).Scan(&dueLive))
+	assert.Equal(t, 0, dueLive, "no scheduled tranche from an earlier run may be past the grace window")
+	assert.Equal(t, 2, func() int {
 		var n int
 		require.NoError(t, store.db.QueryRow(ctx,
 			`SELECT count(*) FROM ladder_tranches WHERE config_id = $1 AND status = 'scheduled' AND execution_id IS NULL AND scheduled_date <= $2`,
 			cfgID, start).Scan(&n))
 		return n
-	}(), "only the current run's own due tranche may remain due")
-	// 12 day-0 tranches + 11 two-week tranches that are already due; the 12th
-	// two-week tranche is in the future and stays scheduled.
-	assert.Equal(t, 23, countStatus(t, cfgID, ladder.TrancheStatusCancelled), "overdue scheduled rows must be marked canceled, not deleted")
+	}(), "only the current run's own due tranche and the one due exactly at start (within grace) may remain due")
+	// 12 day-0 tranches + 10 two-week tranches past the grace window; the
+	// 11th is due exactly at start (within grace, still netted/fireable) and
+	// the 12th is in the future.
+	assert.Equal(t, 22, countStatus(t, cfgID, ladder.TrancheStatusCancelled), "overdue scheduled rows must be marked canceled, not deleted")
 	assert.Equal(t, 1, countStatus(t, cfgID, ladder.TrancheStatusFired), "an overdue fired row must be left alone")
 	assert.Equal(t, 1, countStatus(t, cfgID, ladder.TrancheStatusCompleted), "an overdue completed row must be left alone")
 	var linkedStatus string

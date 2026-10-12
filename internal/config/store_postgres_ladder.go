@@ -318,11 +318,12 @@ func insertLadderTranchesTx(ctx context.Context, tx pgx.Tx, tranches []LadderTra
 	return nil
 }
 
-// cancelOverdueLadderTranchesTx marks the config's scheduled tranches whose
-// scheduled_date is at or before asOf as canceled. No executor transitions
-// tranches yet (issue #118), so without this the overdue amount grows with
-// every run and a future due-row sweep would buy all of it at once (#544).
-// Rows already linked to an execution are left alone.
+// cancelOverdueLadderTranchesTx marks the config's scheduled tranches that have
+// outlived LadderFireGrace as cancelled: scheduled_date <= ladderGraceCutoff(asOf),
+// the exact complement of the netting bound in GetInFlightLadderCommitUSDHr.
+// No executor transitions tranches yet (issue #118), so without this the
+// overdue amount grows with every run and a future due-row sweep would buy all
+// of it at once (#544). Rows already linked to an execution are left alone.
 // It runs before the new run's tranches are inserted, so those are never
 // touched. A nil configID has nothing to scope to and is a no-op.
 func cancelOverdueLadderTranchesTx(ctx context.Context, tx pgx.Tx, configID *string, asOf time.Time) error {
@@ -336,7 +337,7 @@ func cancelOverdueLadderTranchesTx(ctx context.Context, tx pgx.Tx, configID *str
 		  AND status = $3
 		  AND execution_id IS NULL
 		  AND scheduled_date <= $4
-	`, string(ladder.TrancheStatusCancelled), *configID, string(ladder.TrancheStatusScheduled), asOf)
+	`, string(ladder.TrancheStatusCancelled), *configID, string(ladder.TrancheStatusScheduled), ladderGraceCutoff(asOf))
 	if err != nil {
 		return fmt.Errorf("failed to cancel overdue ladder_tranches config_id=%s: %w", *configID, err)
 	}
@@ -362,8 +363,8 @@ func (s *PostgresStore) SaveLadderTranches(ctx context.Context, tranches []Ladde
 // its tranches. This prevents a status=planned run with zero tranches, which
 // the cadence self-gate (keyed on any run's started_at) would otherwise use to
 // suppress the retry for the full cadence window. Scheduled tranches of the
-// same config that are already due at run.StartedAt are canceled in the same
-// transaction, so overdue rows are swept at each persisted run. If run.ID is empty a fresh
+// same config that are past LadderFireGrace at run.StartedAt are canceled in
+// the same transaction, so expired rows are swept at each persisted run. If run.ID is empty a fresh
 // UUID is generated. Returns the persisted run row.
 func (s *PostgresStore) SaveLadderRunWithTranches(ctx context.Context, run *LadderRunDB, tranches []LadderTrancheDB) (*LadderRunDB, error) {
 	if run.ID == "" {
@@ -393,22 +394,20 @@ func (s *PostgresStore) SaveLadderRunWithTranches(ctx context.Context, run *Ladd
 
 // GetInFlightLadderCommitUSDHr returns the total hourly USD commitment already
 // in flight for the given config: the SUM of amount_usd_hr for ladder_tranches
-// rows where config_id=$1, status = 'scheduled' and scheduled_date > asOf.
+// rows where config_id=$1 and either
+//   - status = 'scheduled' and scheduled_date > ladderGraceCutoff(asOf): not yet
+//     bought and still fireable (future, or due but within LadderFireGrace), or
+//   - status = 'fired': claimed for purchase but not yet resolved (approval
+//     pending, in progress, or outcome unknown). Fired nets regardless of age;
+//     only a transition to completed or failed releases it.
 //
-// SCHEDULED ONLY: fired/completed tranches are executed purchases already
-// counted in the engine's ExistingUSDPerHour (the provider adapters fold
-// payment-pending and active commitments into E). Summing them here as well
-// would double-subtract them from the gap and cause under-purchasing. Only
-// not-yet-fired (scheduled) tranches are genuinely "in flight" and absent
-// from E, so they alone must be netted out of the gap.
+// Excluded: completed (counted in the engine's ExistingUSDPerHour; summing it
+// too would double-subtract), failed and cancelled (never bought; counting
+// them would silently under-buy), and scheduled rows past the grace window
+// (cancelled by cancelOverdueLadderTranchesTx with the complementary bound).
 //
-// NOT YET DUE ONLY: nothing transitions a tranche out of 'scheduled' yet (the
-// executor does not exist, issue #118), so a tranche whose scheduled_date has
-// passed was never bought. Counting it would net every past plan out of the
-// gap forever and stop the ladder planning after its first run.
-//
-// Returns a non-nil *float64 (zero when no scheduled tranches exist); never
-// returns nil without a non-nil error, so callers can pass it directly to
+// Returns a non-nil *float64 (zero when nothing is in flight); never returns
+// nil without a non-nil error, so callers can pass it directly to
 // AllocationInput.InFlightUSDPerHour without an extra nil-guard.
 func (s *PostgresStore) GetInFlightLadderCommitUSDHr(ctx context.Context, configID string, asOf time.Time) (*float64, error) {
 	var total float64
@@ -416,9 +415,8 @@ func (s *PostgresStore) GetInFlightLadderCommitUSDHr(ctx context.Context, config
 		SELECT COALESCE(SUM(amount_usd_hr), 0)
 		FROM ladder_tranches
 		WHERE config_id = $1
-		  AND status = $2
-		  AND scheduled_date > $3
-	`, configID, string(ladder.TrancheStatusScheduled), asOf).Scan(&total)
+		  AND (status = $2 OR (status = $3 AND scheduled_date > $4))
+	`, configID, string(ladder.TrancheStatusFired), string(ladder.TrancheStatusScheduled), ladderGraceCutoff(asOf)).Scan(&total)
 	if err != nil {
 		return nil, fmt.Errorf("GetInFlightLadderCommitUSDHr config_id=%s: %w", configID, err)
 	}
