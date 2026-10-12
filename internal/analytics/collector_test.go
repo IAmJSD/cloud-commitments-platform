@@ -821,6 +821,18 @@ func (m *mockConfigStore) ListActiveSuppressions(_ context.Context) ([]config.Pu
 func (m *mockConfigStore) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
 	return m.SavePurchaseExecution(ctx, e)
 }
+func (m *mockConfigStore) SaveExecutionIfStatus(ctx context.Context, e *config.PurchaseExecution, _ []string) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStore) SaveExecutionIfStatusTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution, _ []string) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStore) RecoverReapedExecution(ctx context.Context, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStore) RecoverReapedExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
 func (m *mockConfigStore) ListRecentSubmitsTx(ctx context.Context, _ pgx.Tx, _ string, _ time.Time) ([]config.PurchaseExecution, error) {
 	return m.GetPendingExecutions(ctx)
 }

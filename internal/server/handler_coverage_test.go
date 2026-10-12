@@ -309,6 +309,18 @@ func (m *mockConfigStoreForExchangeComplete) ListActiveSuppressions(_ context.Co
 func (m *mockConfigStoreForExchangeComplete) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
 	return m.SavePurchaseExecution(ctx, e)
 }
+func (m *mockConfigStoreForExchangeComplete) SaveExecutionIfStatus(ctx context.Context, e *config.PurchaseExecution, _ []string) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchangeComplete) SaveExecutionIfStatusTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution, _ []string) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchangeComplete) RecoverReapedExecution(ctx context.Context, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchangeComplete) RecoverReapedExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
 func (m *mockConfigStoreForExchangeComplete) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
 	return fn(nil)
 }
@@ -332,6 +344,18 @@ func (m *mockConfigStoreForExchangeFail) ListActiveSuppressions(_ context.Contex
 func (m *mockConfigStoreForExchangeFail) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
 	return m.SavePurchaseExecution(ctx, e)
 }
+func (m *mockConfigStoreForExchangeFail) SaveExecutionIfStatus(ctx context.Context, e *config.PurchaseExecution, _ []string) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchangeFail) SaveExecutionIfStatusTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution, _ []string) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchangeFail) RecoverReapedExecution(ctx context.Context, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchangeFail) RecoverReapedExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
 func (m *mockConfigStoreForExchangeFail) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
 	return fn(nil)
 }
@@ -353,6 +377,18 @@ func (m *mockConfigStoreForExchangeStale) ListActiveSuppressions(_ context.Conte
 	return nil, nil
 }
 func (m *mockConfigStoreForExchangeStale) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchangeStale) SaveExecutionIfStatus(ctx context.Context, e *config.PurchaseExecution, _ []string) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchangeStale) SaveExecutionIfStatusTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution, _ []string) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchangeStale) RecoverReapedExecution(ctx context.Context, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchangeStale) RecoverReapedExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
 	return m.SavePurchaseExecution(ctx, e)
 }
 func (m *mockConfigStoreForExchangeStale) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {

@@ -1033,6 +1033,18 @@ func (m *mockConfigStoreForExchange) ListActiveSuppressions(_ context.Context) (
 func (m *mockConfigStoreForExchange) SavePurchaseExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
 	return m.SavePurchaseExecution(ctx, e)
 }
+func (m *mockConfigStoreForExchange) SaveExecutionIfStatus(ctx context.Context, e *config.PurchaseExecution, _ []string) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchange) SaveExecutionIfStatusTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution, _ []string) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchange) RecoverReapedExecution(ctx context.Context, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
+func (m *mockConfigStoreForExchange) RecoverReapedExecutionTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution) error {
+	return m.SavePurchaseExecution(ctx, e)
+}
 func (m *mockConfigStoreForExchange) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
 	return fn(nil)
 }
