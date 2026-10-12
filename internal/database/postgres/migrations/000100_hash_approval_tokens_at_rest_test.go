@@ -201,6 +201,9 @@ func TestMigration_HashApprovalTokensAtRest_StoreReadsTokenlessRows(t *testing.T
 		seedPurchaseExecutionWithToken(ctx, t, pool, config.StatusCanceled, nil):        "",
 	}
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 100))
+	// The current store selects columns added after 000100 (e.g. 000113
+	// no_submission), so it can only run against a fully migrated schema.
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, migrationVersionsDesc(t)[0]))
 
 	store := config.NewPostgresStore(container.DB)
 	for id, hash := range want {

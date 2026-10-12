@@ -394,6 +394,14 @@ type PurchaseExecution struct {
 	// scheduler fires the actual SDK call when this timestamp is in the past.
 	// NULL on every immediate-execute row. Migration 000065.
 	ScheduledExecutionAt *time.Time `json:"scheduled_execution_at,omitempty" dynamodbav:"scheduled_execution_at,omitempty"`
+	// NoSubmission is the persisted proof that this execution failed before
+	// any cloud purchase call was made (migration 000113). Only the
+	// pre-submission failure paths set it; the reaper and every
+	// outcome-unknown failure leave it false. It is monotone: the upsert can
+	// set it but never clear it, so a stale in-memory copy cannot erase it.
+	// The ladder reconciler treats a failed execution as "nothing was bought"
+	// only when this is true.
+	NoSubmission bool `json:"no_submission,omitempty" dynamodbav:"no_submission,omitempty"`
 }
 
 // StatusCanceled is the canonical US-spelling status value new code writes.

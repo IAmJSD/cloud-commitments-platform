@@ -280,7 +280,14 @@ func beforeSubmission(err error) error { return &beforeSubmissionError{err: err}
 // cancel or revoke (platform#631).
 func (m *Manager) saveTerminalExecution(ctx context.Context, exec *config.PurchaseExecution, execErr error) error {
 	var notSubmitted *beforeSubmissionError
-	if exec.PlanID == "" || exec.Status != "failed" || anyRecPurchased(exec.Recommendations) || !errors.As(execErr, &notSubmitted) {
+	provenNotSubmitted := exec.Status == "failed" && !anyRecPurchased(exec.Recommendations) && errors.As(execErr, &notSubmitted)
+	if provenNotSubmitted {
+		// Persist the proof for every row, plan or direct, so a later reader
+		// (the ladder reconciler) can tell this failure from a reaped or
+		// outcome-unknown one.
+		exec.NoSubmission = true
+	}
+	if exec.PlanID == "" || !provenNotSubmitted {
 		return m.config.SavePurchaseExecution(ctx, exec)
 	}
 	return m.config.WithTx(ctx, func(tx pgx.Tx) error {

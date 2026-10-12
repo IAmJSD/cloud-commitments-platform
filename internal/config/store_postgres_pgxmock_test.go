@@ -658,6 +658,7 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
 		"scheduled_execution_at",
+		"no_submission",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-1", "pending", 1, now,
@@ -669,6 +670,7 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		nil, sql.NullTime{}, nil,
 		nil,            // idempotency_key (NULL: legacy-row scan path, migration 000066)
 		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
+		false,          // no_submission
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -708,6 +710,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
 		"scheduled_execution_at",
+		"no_submission",
 	}
 	successorID := "exec-3"
 	rows := pgxmock.NewRows(cols).AddRow(
@@ -723,6 +726,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		nil, sql.NullTime{}, nil,
 		"idem-key-exec-2", // idempotency_key non-NULL: exercises the scan path
 		sql.NullTime{},    // scheduled_execution_at (NULL: not on the pre-fire delay path)
+		false,             // no_submission
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -774,6 +778,7 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key", "scheduled_execution_at",
+		"no_submission",
 	}
 	schedAt := now.Add(2 * time.Hour)
 	rows := pgxmock.NewRows(cols).AddRow(
@@ -786,6 +791,7 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		nil, sql.NullTime{}, nil,
 		"idem-key-planned",
 		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
+		false,          // no_submission
 	).AddRow(
 		"plan-1", "exec-2", "pending", 1, now,
 		sql.NullTime{}, "tok-456", recsJSON,
@@ -796,6 +802,7 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		nil, sql.NullTime{}, nil,
 		"idem-key-delayed",
 		sql.NullTime{Time: schedAt, Valid: true}, // scheduled_execution_at populated (pre-fire delay path)
+		false,                                    // no_submission
 	)
 	// Regexp matcher: only matches if the issued SELECT projects both
 	// idempotency_key and scheduled_execution_at. The alternation forces both
@@ -854,6 +861,7 @@ func TestPGXMock_GetExecutionByID_ProjectsCoalescedCancelledBy(t *testing.T) {
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
 		"scheduled_execution_at",
+		"no_submission",
 	}
 	// Simulates the exact row shape the atomic-cancel paths produce: the
 	// actor lives only in canceled_by (legacy cancelled_by is NULL). What
@@ -870,6 +878,7 @@ func TestPGXMock_GetExecutionByID_ProjectsCoalescedCancelledBy(t *testing.T) {
 		nil, sql.NullTime{}, nil,
 		nil,
 		sql.NullTime{},
+		false,
 	)
 	mock.ExpectQuery(`COALESCE\(canceled_by,\s*cancelled_by\)`).
 		WithArgs(pgxmock.AnyArg()).
@@ -2562,6 +2571,7 @@ func stuckExecRow(execID, status string, scheduled time.Time) []any {
 		nil, sql.NullTime{}, nil,
 		nil,            // idempotency_key (NULL: legacy-row scan path, migration 000066)
 		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
+		false,          // no_submission
 	}
 }
 
@@ -2576,6 +2586,7 @@ func stuckExecCols() []string {
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
 		"scheduled_execution_at",
+		"no_submission",
 	}
 }
 
@@ -2769,6 +2780,7 @@ func TestPGXMock_TransitionExecutionStatus_ProbeHardErrorNotMappedToNotFound(t *
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key", "scheduled_execution_at",
+		"no_submission",
 	}
 
 	// CAS UPDATE matches zero rows (status already transitioned or row gone).
@@ -2816,6 +2828,7 @@ func TestPGXMock_GetExecutionByPlanAndDate_NotFoundWrapsErrNotFound(t *testing.T
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key", "scheduled_execution_at",
+		"no_submission",
 	}
 	emptyRows := pgxmock.NewRows(cols)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(emptyRows)

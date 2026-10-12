@@ -207,6 +207,11 @@ func TestSaveTerminalExecution_ReleasesSuppressionsOnlyBeforeSubmission(t *testi
 
 			require.NoError(t, (&Manager{config: store}).saveTerminalExecution(context.Background(), &exec, c.err))
 
+			// The persisted no_submission proof follows the same condition as
+			// the release, except it is also written for a direct execute.
+			wantProof := c.release || c.name == "direct execute"
+			assert.Equal(t, wantProof, exec.NoSubmission, "no_submission proof")
+
 			if c.release {
 				store.AssertCalled(t, "DeleteSuppressionsByExecutionTx", mock.Anything, mock.Anything, "e")
 			} else {
