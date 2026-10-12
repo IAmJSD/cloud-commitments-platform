@@ -67,6 +67,19 @@ type pauseClaimFixture struct {
 	workers   sync.WaitGroup
 }
 
+// pauseClaimCap is a plan cap far above the fixture recommendations.
+var pauseClaimCap = 1e9
+
+// markNotified moves the row to "notified", the only state in which the
+// scheduler and SQS paths will auto-execute a recommendation-bearing plan row
+// (the notification email is the veto window). pause only applies to "pending",
+// so tests call this after pausing and resuming and before the worker runs.
+func (f *pauseClaimFixture) markNotified(t *testing.T) {
+	t.Helper()
+	_, err := f.pool.Exec(f.ctx, `UPDATE purchase_executions SET status = 'notified' WHERE execution_id = $1`, f.execution.ExecutionID)
+	require.NoError(t, err)
+}
+
 func newPauseClaimFixture(t *testing.T) *pauseClaimFixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -75,7 +88,12 @@ func newPauseClaimFixture(t *testing.T) *pauseClaimFixture {
 	plan, err := f.store.GetPurchasePlan(ctx, f.planID)
 	require.NoError(t, err)
 	plan.AutoPurchase = true
+	plan.MaxStepCommitment = &pauseClaimCap
 	require.NoError(t, f.store.UpdatePurchasePlan(ctx, plan))
+	globalCfg, err := f.store.GetGlobalConfig(ctx)
+	require.NoError(t, err)
+	globalCfg.AutoPurchaseEnabled = true
+	require.NoError(t, f.store.SaveGlobalConfig(ctx, globalCfg))
 	accounts, err := f.store.GetPlanAccounts(ctx, plan.ID)
 	require.NoError(t, err)
 	require.Len(t, accounts, 1)
@@ -187,6 +205,7 @@ func assertPauseConflict(t *testing.T, err error) {
 
 func TestPauseClaim_RunningWorkerCannotBeReclaimed(t *testing.T) {
 	f := newPauseClaimFixture(t)
+	f.markNotified(t)
 	first := f.startWorker()
 	select {
 	case <-f.service.entered:
@@ -222,6 +241,11 @@ func TestPauseClaim_PausedQueueResumesExactlyOnce(t *testing.T) {
 	require.Equal(t, paused, f.state(t))
 	require.NoError(t, f.resume())
 	require.Equal(t, "pending", f.state(t).Status)
+	// A resumed row is pending again, so auto-execution still refuses it until
+	// a notification has gone out.
+	require.Error(t, f.manager.ProcessMessage(f.ctx, f.body))
+	require.Zero(t, f.service.calls.Load())
+	f.markNotified(t)
 	f.service.unblock()
 	require.NoError(t, f.manager.ProcessMessage(f.ctx, f.body))
 	require.NoError(t, f.manager.ProcessMessage(f.ctx, f.body))
@@ -253,22 +277,20 @@ func TestPauseClaim_ConcurrentPauseAndWorker(t *testing.T) {
 	close(start)
 	select {
 	case err := <-paused:
-		if err == nil {
-			f.waitWorker(t, worker)
-			require.Zero(t, f.service.calls.Load())
-			require.Equal(t, "paused", f.state(t).Status)
-			require.NoError(t, f.resume())
-			f.service.unblock()
-			require.NoError(t, f.manager.ProcessMessage(f.ctx, f.body))
-		} else {
-			assertPauseConflict(t, err)
-			require.Equal(t, "running", f.state(t).Status)
-			require.NoError(t, f.manager.ProcessMessage(f.ctx, f.body))
-			f.service.unblock()
-			f.waitWorker(t, worker)
-		}
+		require.NoError(t, err, "a pending row is pausable: the worker can never claim it")
 	case <-f.ctx.Done():
 		t.Fatal("pause did not finish")
 	}
+	select {
+	case <-worker: // refused (row still pending) or lost the claim (row paused): both buy nothing
+	case <-f.ctx.Done():
+		t.Fatal("purchase worker did not finish")
+	}
+	require.Zero(t, f.service.calls.Load())
+	require.Equal(t, "paused", f.state(t).Status)
+	require.NoError(t, f.resume())
+	f.markNotified(t)
+	f.service.unblock()
+	require.NoError(t, f.manager.ProcessMessage(f.ctx, f.body))
 	f.assertCompleted(t)
 }

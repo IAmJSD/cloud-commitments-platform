@@ -3170,6 +3170,14 @@ components:
           type: boolean
         notification_days_before:
           type: integer
+        max_step_commitment:
+          type: number
+          exclusiveMinimum: 0
+          description: >-
+            Ceiling on the total commitment (upfront + monthly * term) one ramp
+            step may auto-purchase. Omit on create for no cap (auto-purchase of
+            steps with recommendations is then refused); omit on update to keep
+            the current cap.
         provider:
           type: string
         service:
@@ -3212,6 +3220,10 @@ components:
           type: boolean
         notification_days_before:
           type: integer
+        max_step_commitment:
+          type: number
+          nullable: true
+          description: Cap on the total commitment one ramp step may auto-purchase; null means auto-purchase of steps with recommendations is refused.
         services:
           type: object
           additionalProperties:

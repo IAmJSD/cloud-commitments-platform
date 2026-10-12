@@ -2,6 +2,7 @@ package purchase
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -64,6 +65,16 @@ func (r *saveRecorder) save(_ context.Context, exec *config.PurchaseExecution) e
 }
 
 func TestScheduledBarePlanStepFailsOnceAndDoesNotAdvanceRamp(t *testing.T) {
+	// 0 is the immediate-run setting: nothing is notified ahead of time, so
+	// the rec-less row reaches the sweep as "pending" with no notice sent.
+	for _, days := range []int{0, 7} {
+		t.Run(fmt.Sprintf("NotificationDaysBefore=%d", days), func(t *testing.T) {
+			scheduledBarePlanStepFails(t, days)
+		})
+	}
+}
+
+func scheduledBarePlanStepFails(t *testing.T, notificationDaysBefore int) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
@@ -73,12 +84,14 @@ func TestScheduledBarePlanStepFailsOnceAndDoesNotAdvanceRamp(t *testing.T) {
 	})
 
 	plan := bareStepPlan()
+	plan.NotificationDaysBefore = notificationDaysBefore
 	exec := bareStepExecution()
 	claimed := exec
 	claimed.Status = "running"
 
 	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{exec}, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil)
 	mockStore.On("GetPurchasePlan", ctx, bareStepPlanID).Return(plan, nil)
 	mockStore.On("TransitionExecutionStatus", ctx, bareStepExecID,
 		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&claimed, nil)
@@ -124,7 +137,7 @@ func TestNotificationTickOnBarePlanStepCreatesOneFailedRowAndSendsNoEmail(t *tes
 	notifyTo := "notify@example.com"
 
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{plan}, nil)
-	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &notifyTo}, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &notifyTo, AutoPurchaseEnabled: true}, nil)
 
 	// Tick 1 finds no row for the date; tick 2 finds whatever tick 1 saved.
 	var stored config.PurchaseExecution

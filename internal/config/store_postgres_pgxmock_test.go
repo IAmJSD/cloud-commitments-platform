@@ -64,6 +64,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		"ladder_execution_enabled",
 		"offering_class",
 		"require_different_approver",
+		"auto_purchase_enabled",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		[]string{"aws"}, strPtr("ops@example.com"), true,
@@ -77,6 +78,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		false,
 		false,
 		"convertible",
+		false,
 		false,
 	)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
@@ -124,6 +126,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 		"ladder_execution_enabled",
 		"offering_class",
 		"require_different_approver",
+		"auto_purchase_enabled",
 	}
 	baseRow := func(graceJSON string) []any {
 		return []any{
@@ -138,6 +141,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 			false,
 			false,
 			"convertible",
+			false,
 			false,
 		}
 	}
@@ -199,6 +203,7 @@ var globalConfigCols = []string{
 	"ladder_execution_enabled",
 	"offering_class",
 	"require_different_approver",
+	"auto_purchase_enabled",
 }
 
 // TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite proves the F2
@@ -230,6 +235,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite(t *testing.T) {
 		false,         // ladder_execution_enabled = false
 		"convertible", // offering_class
 		false,         // require_different_approver
+		false,         // auto_purchase_enabled
 	)
 
 	// Strict order: the SELECT and the UPSERT must sit between the same
@@ -238,7 +244,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite(t *testing.T) {
 	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectQuery("FROM global_config").WillReturnRows(seeded)
-	mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(24)...).
+	mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(25)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -287,6 +293,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_ApplyErrorRollsBack(t *testing.T) {
 		false,
 		"convertible",
 		false,
+		false,
 	)
 
 	mock.ExpectBegin()
@@ -323,6 +330,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_PropagatesOnlyChangedDefaults(t *testi
 			false,
 			"convertible",
 			false,
+			false,
 		)
 	}
 	setCoverage := func(existing *GlobalConfig) error {
@@ -337,7 +345,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_PropagatesOnlyChangedDefaults(t *testi
 		mock.ExpectExec("pg_advisory_xact_lock").WithArgs(pgxmock.AnyArg()).
 			WillReturnResult(pgxmock.NewResult("SELECT", 1))
 		mock.ExpectQuery("FROM global_config").WillReturnRows(seeded())
-		mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(24)...).
+		mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(25)...).
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
 		mock.ExpectExec("UPDATE service_configs").
 			WithArgs(false, 1, false, "no-upfront", true, 70.0, false, RampImmediate).
@@ -356,7 +364,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_PropagatesOnlyChangedDefaults(t *testi
 		mock.ExpectExec("pg_advisory_xact_lock").WithArgs(pgxmock.AnyArg()).
 			WillReturnResult(pgxmock.NewResult("SELECT", 1))
 		mock.ExpectQuery("FROM global_config").WillReturnRows(seeded())
-		mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(24)...).
+		mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(25)...).
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
 		dbErr := errors.New("service_configs update failed")
 		mock.ExpectExec("UPDATE service_configs").WithArgs(anyArgsCfg(8)...).WillReturnError(dbErr)
@@ -447,11 +455,12 @@ func TestPGXMock_GetPurchasePlan_Success(t *testing.T) {
 		"id", "name", "enabled", "auto_purchase", "notification_days_before",
 		"services", "ramp_schedule", "created_at", "updated_at",
 		"next_execution_date", "last_execution_date", "last_notification_sent",
+		"max_step_commitment",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-id", "My Plan", true, false, 3,
 		svcJSON, rampJSON, now, now,
-		sql.NullTime{Valid: false}, sql.NullTime{Valid: false}, sql.NullTime{Valid: false},
+		sql.NullTime{Valid: false}, sql.NullTime{Valid: false}, sql.NullTime{Valid: false}, (*float64)(nil),
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -474,6 +483,7 @@ func TestPGXMock_GetPurchasePlan_WithAllTimestamps(t *testing.T) {
 		"id", "name", "enabled", "auto_purchase", "notification_days_before",
 		"services", "ramp_schedule", "created_at", "updated_at",
 		"next_execution_date", "last_execution_date", "last_notification_sent",
+		"max_step_commitment",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-id", "My Plan", true, false, 3,
@@ -481,6 +491,7 @@ func TestPGXMock_GetPurchasePlan_WithAllTimestamps(t *testing.T) {
 		sql.NullTime{Valid: true, Time: now},
 		sql.NullTime{Valid: true, Time: now},
 		sql.NullTime{Valid: true, Time: now},
+		(*float64)(nil),
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -506,13 +517,14 @@ func TestPGXMock_ListPurchasePlans_Success(t *testing.T) {
 		"id", "name", "enabled", "auto_purchase", "notification_days_before",
 		"services", "ramp_schedule", "created_at", "updated_at",
 		"next_execution_date", "last_execution_date", "last_notification_sent",
+		"max_step_commitment",
 		"unassigned",
 	}
 	rows := pgxmock.NewRows(cols).
 		AddRow("p1", "Plan 1", true, false, 3, svcJSON, rampJSON, now, now,
-			sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, false).
+			sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, (*float64)(nil), false).
 		AddRow("p2", "Plan 2", false, true, 7, svcJSON, rampJSON, now, now,
-			sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, false)
+			sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, (*float64)(nil), false)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
 
 	plans, err := store.ListPurchasePlans(ctx, PurchasePlanFilter{})
@@ -552,15 +564,16 @@ func TestPGXMock_ListPurchasePlans_UnassignedIncluded(t *testing.T) {
 		"id", "name", "enabled", "auto_purchase", "notification_days_before",
 		"services", "ramp_schedule", "created_at", "updated_at",
 		"next_execution_date", "last_execution_date", "last_notification_sent",
+		"max_step_commitment",
 		"unassigned",
 	}
 	// The query returns two rows: one assigned (unassigned=false) and one
 	// legacy zero-account plan (unassigned=true).
 	rows := pgxmock.NewRows(cols).
 		AddRow("assigned-id", "Assigned Plan", true, false, 3, svcJSON, rampJSON, now, now,
-			sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, false).
+			sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, (*float64)(nil), false).
 		AddRow("legacy-id", "Legacy Plan", true, false, 3, svcJSON, rampJSON, now, now,
-			sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, true)
+			sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, (*float64)(nil), true)
 	mock.ExpectQuery("SELECT").WithArgs("acc-uuid").WillReturnRows(rows)
 
 	plans, err := store.ListPurchasePlans(ctx, PurchasePlanFilter{AccountIDs: []string{"acc-uuid"}, IncludeUnassigned: true})
@@ -587,7 +600,7 @@ func TestPGXMock_UpdatePurchasePlan_NotFound(t *testing.T) {
 
 	plan := &PurchasePlan{ID: "missing-id", Services: map[string]ServiceConfig{}, RampSchedule: RampSchedule{}}
 	mock.ExpectBegin()
-	mock.ExpectQuery("UPDATE").WithArgs(anyArgsCfg(11)...).
+	mock.ExpectQuery("UPDATE").WithArgs(anyArgsCfg(12)...).
 		WillReturnRows(pgxmock.NewRows([]string{"updated_at"}))
 	mock.ExpectQuery("SELECT EXISTS").WithArgs("missing-id").
 		WillReturnRows(pgxmock.NewRows([]string{"exists"}).AddRow(false))

@@ -339,6 +339,10 @@ func mergeUpdatedPlan(existingPlan *config.PurchasePlan, req *PlanRequest, planI
 		return nil, err
 	}
 
+	if req.MaxStepCommitment == nil {
+		plan.MaxStepCommitment = existingPlan.MaxStepCommitment
+	}
+
 	// If no services were created from request, preserve existing services
 	if len(plan.Services) == 0 && len(existingPlan.Services) > 0 {
 		plan.Services = existingPlan.Services

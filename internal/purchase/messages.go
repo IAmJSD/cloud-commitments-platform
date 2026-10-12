@@ -95,7 +95,7 @@ func (m *Manager) checkAutoExecuteGate(ctx context.Context, execution *config.Pu
 		return fmt.Errorf("AutoPurchase gate check failed for execution %s: %w", execution.ExecutionID, err)
 	}
 	if !eligible {
-		return fmt.Errorf("execution %s (status=%s source=%q) is not eligible for auto-execution: AutoPurchase=false or source=web — approve via the approval link",
+		return fmt.Errorf("execution %s (status=%s source=%q) is not eligible for auto-execution: AutoPurchase=false, kill switch off, source=web, or recommendation-bearing row not yet notified - approve via the approval link",
 			execution.ExecutionID, execution.Status, execution.Source)
 	}
 	return nil

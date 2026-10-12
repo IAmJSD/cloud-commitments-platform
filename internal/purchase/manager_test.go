@@ -180,7 +180,7 @@ func TestManager_ProcessScheduledPurchases_DuePurchase(t *testing.T) {
 		{
 			ExecutionID:   "exec-123",
 			PlanID:        "plan-456",
-			Status:        "pending",
+			Status:        "notified",
 			StepNumber:    1,
 			ScheduledDate: pastDate,
 			Recommendations: []config.RecommendationRecord{
@@ -198,9 +198,10 @@ func TestManager_ProcessScheduledPurchases_DuePurchase(t *testing.T) {
 	}
 
 	plan := &config.PurchasePlan{
-		ID:           "plan-456",
-		Name:         "Test Plan",
-		AutoPurchase: true, // required by executableByScheduler gate (F1 fix)
+		ID:                "plan-456",
+		Name:              "Test Plan",
+		AutoPurchase:      true, // required by executableByScheduler gate (F1 fix)
+		MaxStepCommitment: capOf(1e9),
 		RampSchedule: config.RampSchedule{
 			CurrentStep: 0,
 			TotalSteps:  4,
@@ -212,6 +213,7 @@ func TestManager_ProcessScheduledPurchases_DuePurchase(t *testing.T) {
 	claimedExec.Status = "running"
 	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil)
 	// executableByScheduler calls GetPurchasePlan first (AutoPurchase gate), then
 	// executePurchase calls it again to build purchase options — two calls total.
 	mockStore.On("GetPurchasePlan", ctx, "plan-456").Return(plan, nil)
@@ -314,6 +316,7 @@ func TestManager_ProcessScheduledPurchases_ExecutionFails(t *testing.T) {
 	claimedExec.Status = "running"
 	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return(executions, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil)
 	// First call: executableByScheduler gate check (AutoPurchase=true -> proceed).
 	// Second call: executePurchase fetches the plan config and returns error to
 	// simulate a purchase failure — this is what drives the row to "failed".

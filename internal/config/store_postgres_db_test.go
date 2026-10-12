@@ -1722,3 +1722,50 @@ func TestPostgresStoreDB_RotatePendingApprovalToken(t *testing.T) {
 		assert.Equal(t, HashApprovalToken("original-token"), reread.ApprovalToken)
 	})
 }
+
+// TestPostgresStoreDB_StepCapAndKillSwitchRoundTrip proves, against a real
+// PostgreSQL, that max_step_commitment round-trips through every plan read and
+// write path (NULL stays NULL) and that auto_purchase_enabled round-trips
+// through the global config.
+func TestPostgresStoreDB_StepCapAndKillSwitchRoundTrip(t *testing.T) {
+	conn := setupTestContainerDB(t)
+	cleanupTestData(t, conn)
+	store := NewPostgresStore(conn)
+	ctx := context.Background()
+
+	plan := &PurchasePlan{
+		Name:         "capped",
+		Enabled:      true,
+		Services:     map[string]ServiceConfig{},
+		RampSchedule: RampSchedule{Type: "immediate", PercentPerStep: 100, TotalSteps: 1},
+	}
+	require.NoError(t, store.CreatePurchasePlan(ctx, plan))
+
+	got, err := store.GetPurchasePlan(ctx, plan.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.MaxStepCommitment, "a plan created without a cap has NULL")
+
+	capValue := 2500.5
+	got.MaxStepCommitment = &capValue
+	require.NoError(t, store.UpdatePurchasePlan(ctx, got))
+
+	got, err = store.GetPurchasePlan(ctx, plan.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got.MaxStepCommitment)
+	assert.InDelta(t, 2500.5, *got.MaxStepCommitment, 1e-9)
+
+	listed, err := store.ListPurchasePlans(ctx, PurchasePlanFilter{})
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	require.NotNil(t, listed[0].MaxStepCommitment)
+	assert.InDelta(t, 2500.5, *listed[0].MaxStepCommitment, 1e-9)
+
+	cfg, err := store.GetGlobalConfig(ctx)
+	require.NoError(t, err)
+	assert.False(t, cfg.AutoPurchaseEnabled, "the kill switch defaults to off")
+	cfg.AutoPurchaseEnabled = true
+	require.NoError(t, store.SaveGlobalConfig(ctx, cfg))
+	cfg, err = store.GetGlobalConfig(ctx)
+	require.NoError(t, err)
+	assert.True(t, cfg.AutoPurchaseEnabled)
+}
