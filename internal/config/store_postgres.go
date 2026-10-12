@@ -1213,6 +1213,18 @@ func (s *PostgresStore) TransitionExecutionStatusPinned(ctx context.Context, exe
 	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, &sawEmptyRecommendations)
 }
 
+// RescheduleAwaitingExecution is a conditional single-column update: the
+// status predicate makes a lost race a benign no-op instead of an overwrite.
+func (s *PostgresStore) RescheduleAwaitingExecution(ctx context.Context, executionID string, scheduledDate time.Time) (bool, error) {
+	tag, err := s.db.Exec(ctx, `
+		UPDATE purchase_executions SET scheduled_date = $2, updated_at = NOW()
+		WHERE execution_id = $1 AND status IN ('pending', 'notified')`, executionID, scheduledDate)
+	if err != nil {
+		return false, fmt.Errorf("reschedule execution %s: %w", executionID, err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmpty *bool) (*PurchaseExecution, error) {
 	var cancelActor *string
 	if toStatus == StatusCanceled {

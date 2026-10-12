@@ -377,6 +377,12 @@ func (m *MockConfigStore) TransitionExecutionStatusPinned(ctx context.Context, e
 	return v, args.Error(1)
 }
 
+// RescheduleAwaitingExecution mocks the conditional scheduled_date update.
+func (m *MockConfigStore) RescheduleAwaitingExecution(ctx context.Context, executionID string, scheduledDate time.Time) (bool, error) {
+	args := m.Called(ctx, executionID, scheduledDate)
+	return args.Bool(0), args.Error(1)
+}
+
 // SetCancelledBy mocks the SetCancelledBy targeted-update operation.
 func (m *MockConfigStore) SetCancelledBy(ctx context.Context, executionID, cancelledBy string) error {
 	m.record("SetCancelledBy", ctx, executionID, cancelledBy)

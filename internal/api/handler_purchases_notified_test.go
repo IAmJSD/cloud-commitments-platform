@@ -56,23 +56,34 @@ func TestResumePlannedPurchase_PastScheduledDate(t *testing.T) {
 			row := &config.PurchaseExecution{ExecutionID: notifiedExecID, PlanID: "plan-1", Status: "pending", Recommendations: tc.recs, ScheduledDate: tc.date}
 			store.On("TransitionExecutionStatus", ctx, notifiedExecID, []string{"paused"}, "pending", mock.Anything).Return(row, nil)
 			store.On("GetPurchasePlan", ctx, "plan-1").Return(&config.PurchasePlan{ID: "plan-1", NotificationDaysBefore: 3}, nil).Maybe()
-			var saved *config.PurchaseExecution
-			store.On("SavePurchaseExecution", ctx, mock.Anything).Run(func(a mock.Arguments) {
-				c := *a.Get(1).(*config.PurchaseExecution)
-				saved = &c
-			}).Return(nil).Maybe()
+			var movedTo *time.Time
+			store.On("RescheduleAwaitingExecution", ctx, notifiedExecID, mock.Anything).Run(func(a mock.Arguments) {
+				d := a.Get(2).(time.Time)
+				movedTo = &d
+			}).Return(true, nil).Maybe()
 
 			before := time.Now()
 			_, err := handler.resumePlannedPurchase(ctx, req, notifiedExecID)
 			require.NoError(t, err)
 			if !tc.wantMoved {
-				assert.Nil(t, saved)
-				assert.Equal(t, tc.date, row.ScheduledDate)
+				assert.Nil(t, movedTo)
 				return
 			}
-			require.NotNil(t, saved)
-			assert.Equal(t, "pending", saved.Status)
-			assert.WithinDuration(t, before.AddDate(0, 0, 3), saved.ScheduledDate, time.Minute)
+			require.NotNil(t, movedTo)
+			assert.WithinDuration(t, before.AddDate(0, 0, 3), *movedTo, time.Minute)
+			store.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 		})
 	}
+}
+
+func TestCancelOrRecoverExecution_ReleasesSuppressionsOfNotifiedRow(t *testing.T) {
+	ctx := context.Background()
+	handler, store, _ := notifiedAdminHandler(ctx)
+	store.On("TransitionExecutionStatus", ctx, notifiedExecID, []string{"pending", "notified", "paused"}, "canceled", mock.Anything).
+		Return(&config.PurchaseExecution{ExecutionID: notifiedExecID, Status: "canceled"}, nil)
+	store.On("DeleteSuppressionsByExecution", ctx, notifiedExecID).Return(nil)
+
+	_, err := handler.cancelOrRecoverExecution(ctx, notifiedExecID, nil)
+	require.NoError(t, err)
+	store.AssertCalled(t, "DeleteSuppressionsByExecution", ctx, notifiedExecID)
 }

@@ -48,7 +48,7 @@ func TestRunNow_NotifiedRowReachesStaleAzurePricingRefusal(t *testing.T) {
 	_, _, err := mgr.RunPlannedPurchaseNow(context.Background(), exec.ExecutionID, "operator@example.com", nil)
 
 	assert.Zero(t, rec.count())
-	require.Error(t, err)
+	require.ErrorIs(t, err, ErrStaleAzurePricing)
 }
 
 // The scheduler honors scheduled_date: a notified row whose date was pushed

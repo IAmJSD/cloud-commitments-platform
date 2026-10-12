@@ -183,6 +183,11 @@ type StoreInterface interface {
 	// row whose recommendations were attached after the caller's gate check. A
 	// lost pin returns ErrExecutionNotInExpectedStatus like any lost CAS.
 	TransitionExecutionStatusPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*PurchaseExecution, error)
+	// RescheduleAwaitingExecution sets scheduled_date on an execution that is
+	// still pending or notified and touches no other column. It returns false
+	// (and writes nothing) when the row has left those statuses, so a cancel or
+	// approve that lands first is never overwritten.
+	RescheduleAwaitingExecution(ctx context.Context, executionID string, scheduledDate time.Time) (bool, error)
 	// SetCancelledBy stamps canceled_by and the legacy cancelled_by column on
 	// an execution without overwriting any other columns. Used after
 	// TransitionExecutionStatus to fold the actor attribution into the same

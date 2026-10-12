@@ -255,8 +255,10 @@ func (h *Handler) pushPastScheduledDate(ctx context.Context, row *config.Purchas
 	if err != nil {
 		return fmt.Errorf("failed to read plan %s to reschedule resumed execution %s: %w", row.PlanID, row.ExecutionID, err)
 	}
-	row.ScheduledDate = now.AddDate(0, 0, plan.NotificationDaysBefore)
-	if err := h.config.SavePurchaseExecution(ctx, row); err != nil {
+	// Conditional single-column update, not a full-row save: a cancel or
+	// approve landing after the resume must not be overwritten. A lost
+	// condition is a benign no-op (the row is no longer awaiting approval).
+	if _, err := h.config.RescheduleAwaitingExecution(ctx, row.ExecutionID, now.AddDate(0, 0, plan.NotificationDaysBefore)); err != nil {
 		return fmt.Errorf("failed to reschedule resumed execution %s: %w", row.ExecutionID, err)
 	}
 	return nil
@@ -488,6 +490,13 @@ func (h *Handler) disablePlanIfInScope(ctx context.Context, session *Session, pl
 func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID string, actor *string) (*config.PurchaseExecution, error) {
 	canceled, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "notified", "paused"}, "canceled", actor)
 	if err == nil {
+		// A recommendation-bearing row owns suppressions (written with its
+		// recommendations); release them like the other cancel paths. The
+		// delete is idempotent and also runs on the recovery path below, so a
+		// retry heals a failure here.
+		if delErr := h.config.DeleteSuppressionsByExecution(ctx, executionID); delErr != nil {
+			return nil, fmt.Errorf("cancel execution %s: failed to release suppressions: %w", executionID, delErr)
+		}
 		return canceled, nil
 	}
 	if !errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
@@ -525,6 +534,9 @@ func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID stri
 	// legacy row.
 	if existing.Status == config.LegacyStatusCanceled {
 		existing.Status = config.StatusCanceled
+	}
+	if delErr := h.config.DeleteSuppressionsByExecution(ctx, executionID); delErr != nil {
+		return nil, fmt.Errorf("cancel execution %s: failed to release suppressions: %w", executionID, delErr)
 	}
 	return existing, nil
 }
