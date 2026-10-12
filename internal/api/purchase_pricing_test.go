@@ -238,10 +238,10 @@ func TestHandler_executePurchase_UnknownRecommendationRefused(t *testing.T) {
 
 // TestHandler_executePurchase_CrossAccountMismatchRefused is a handler-level
 // companion to TestRecIdentityKey_TupleSemantics' "a different account
-// yields a different key" subtest: that pure unit test proves recIdentityKey
+// yields a different key" subtest: that pure unit test proves config.RecIdentityKey
 // includes the account, but not that the scope check and the key agree end
 // to end, through the real handler, on what "account" means (a mutation
-// that dropped CloudAccountID from recIdentityKey would still pass an
+// that dropped CloudAccountID from config.RecIdentityKey would still pass an
 // unrestricted admin session's scope check). Stored recommendations exist
 // only under account A; the request claims the identical resource under
 // account B. The mismatch must be refused with 409 before anything is
@@ -539,7 +539,7 @@ func TestPriceFromStored_ScalesByCountAndKeepsStoredIdentity(t *testing.T) {
 
 // TestLoadStoredRecommendationIndex_CaseFoldCollisionRefused: the store's
 // unique index on the identity tuple (migration 000043) is case-sensitive on
-// provider and payment, while recIdentityKey folds their case. Two stored
+// provider and payment, while config.RecIdentityKey folds their case. Two stored
 // rows differing only in case therefore collide under the fold even though
 // the index allowed both rows to exist; the index build must refuse rather
 // than silently keep whichever row inserted last (unreachable today because
@@ -619,10 +619,10 @@ func TestRecIdentityKey_TupleSemantics(t *testing.T) {
 }
 
 // TestCheckPurchaseDetailIdentity_TenancyMismatchRefused is the issue #334
-// regression guard. recIdentityKey's tuple (provider/account/service/region/
+// regression guard. config.RecIdentityKey's tuple (provider/account/service/region/
 // resource_type/engine/term/payment) does not include EC2 tenancy, which
 // lives inside the opaque Details blob. A term change can therefore resolve
-// the request's id (origin) and its recIdentityKey match to two DIFFERENT
+// the request's id (origin) and its config.RecIdentityKey match to two DIFFERENT
 // stored rows whose tenancy differs while the visible tuple stays the same.
 // Pre-fix, priceFromStored's `out := *stored` would silently copy the
 // matched row's dedicated tenancy into the response even though the
@@ -649,7 +649,7 @@ func TestCheckPurchaseDetailIdentity_TenancyMismatchRefused(t *testing.T) {
 }
 
 // TestCheckPurchaseDetailIdentity_RDSAZConfigMismatchRefused covers the RDS
-// half of the issue's reproduction: a term change whose recIdentityKey match
+// half of the issue's reproduction: a term change whose config.RecIdentityKey match
 // carries a different Multi-AZ configuration than the request's origin row.
 func TestCheckPurchaseDetailIdentity_RDSAZConfigMismatchRefused(t *testing.T) {
 	origin := config.RecommendationRecord{
@@ -688,7 +688,7 @@ func TestCheckPurchaseDetailIdentity_MatchingTenancyAllowed(t *testing.T) {
 }
 
 // TestCheckPurchaseDetailIdentity_SameOriginAndMatchSkipsCheck: when the
-// request's id still names the row recIdentityKey resolved to (no term/
+// request's id still names the row config.RecIdentityKey resolved to (no term/
 // payment change occurred), there is nothing to compare -- a no-op,
 // regardless of what Details say.
 func TestCheckPurchaseDetailIdentity_SameOriginAndMatchSkipsCheck(t *testing.T) {
@@ -906,7 +906,7 @@ func TestHandler_executePurchase_MatchingTenancyTermChangeSucceeds(t *testing.T)
 // names an origin recommendation id that used to be real but has since been
 // wiped from the current stored set (e.g. a collection refresh --
 // ReplaceRecommendations -- ran between page load and purchase), while the
-// NEWLY requested term still resolves to a current row via recIdentityKey.
+// NEWLY requested term still resolves to a current row via config.RecIdentityKey.
 // Pre-fix, an unresolvable id was silently SKIPPED (treated the same as an
 // honest caller who never made an origin claim at all), so the purchase
 // proceeded with whatever configuration the current row happened to carry

@@ -36,7 +36,7 @@ func TestRecIdentityKey_DiffersByPlatformAndTenancy(t *testing.T) {
 func TestRecIdentityKey_MalformedDetailsErrors(t *testing.T) {
 	bad := ec2PlatformRec("Linux/UNIX", "default", 1)
 	bad.Details = json.RawMessage(`{"platform":5}`)
-	_, err := recIdentityKey(&bad)
+	_, err := config.RecIdentityKey(&bad)
 	require.Error(t, err)
 }
 

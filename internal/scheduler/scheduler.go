@@ -1185,6 +1185,28 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 	return recs, nil
 }
 
+// ListRecommendationsStrict is ListRecommendations for the money path: the
+// same stored rows, suppressions and account overrides, but a suppression or
+// override read failure is returned instead of logged. Over-showing is fine
+// for a page; on a purchase it would re-buy what a prior step already bought.
+// It has no cold-start or background-refresh side effects: an empty cache
+// reads as empty and the caller retries on a later tick.
+func (s *Scheduler) ListRecommendationsStrict(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
+	recs, err := s.config.ListStoredRecommendations(ctx, filter)
+	if err != nil {
+		return nil, fmt.Errorf("list stored recommendations: %w", err)
+	}
+	recs, err = s.applySuppressions(ctx, recs)
+	if err != nil {
+		return nil, fmt.Errorf("apply suppressions: %w", err)
+	}
+	recs, err = s.applyAccountOverrides(ctx, recs)
+	if err != nil {
+		return nil, fmt.Errorf("apply account overrides: %w", err)
+	}
+	return recs, nil
+}
+
 // GetRecommendationByID fetches a single recommendation by its application-
 // level ID (the id field in the stored payload), bypassing the account-override
 // filter so deep-linked URLs to override-hidden recs still resolve.

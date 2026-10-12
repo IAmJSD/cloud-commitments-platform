@@ -177,20 +177,7 @@ func (h *Handler) filterRecommendationsByEnabledProviders(ctx context.Context, r
 	if err != nil {
 		return nil, fmt.Errorf("failed to read global config for enabled-providers filter: %w", err)
 	}
-	if len(globalCfg.EnabledProviders) == 0 {
-		return recs, nil // permissive default: no filter configured
-	}
-	enabledSet := make(map[string]struct{}, len(globalCfg.EnabledProviders))
-	for _, p := range globalCfg.EnabledProviders {
-		enabledSet[p] = struct{}{}
-	}
-	filtered := make([]config.RecommendationRecord, 0, len(recs))
-	for i := range recs {
-		if _, ok := enabledSet[recs[i].Provider]; ok {
-			filtered = append(filtered, recs[i])
-		}
-	}
-	return filtered, nil
+	return config.FilterRecommendationsByEnabledProviders(recs, globalCfg.EnabledProviders), nil
 }
 
 // buildRecommendationsResponse calculates summary statistics and collects
