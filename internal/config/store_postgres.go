@@ -1074,7 +1074,9 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 			executed_at = $24,
 			pre_approval_skip_reason = $25,
 			scheduled_execution_at = $27,
-			no_submission = purchase_executions.no_submission OR $28,
+			no_submission = CASE WHEN $3 = 'failed'
+				THEN purchase_executions.no_submission OR $28
+				ELSE false END,
 			updated_at = NOW()
 	`
 
