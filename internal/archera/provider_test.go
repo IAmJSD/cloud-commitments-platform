@@ -175,3 +175,18 @@ func TestComposition_EnvToDecodedComparison_AndRedaction(t *testing.T) {
 	assertNoKey("after a successful comparison (client now built)")
 	assert.NotContains(t, fmt.Sprintf("%+v %v %#v", c, c, c), testKey)
 }
+
+// A secret stored with a trailing newline (common with files and CLI-created
+// secrets) must still build a client: the library rejects non-printable key
+// bytes, which would otherwise turn every comparison into ErrKeyUnavailable.
+func TestClient_KeyWithTrailingNewlineIsTrimmed(t *testing.T) {
+	t.Setenv(testSecret, testKey+"\n")
+	rt := &hostAssertingTransport{t: t, body: comparison}
+	p := NewProvider(fullSettings(), secrets.NewEnvResolver(), &http.Client{Transport: rt})
+
+	c, err := p.Client(context.Background())
+	require.NoError(t, err)
+	_, err = c.Comparison(context.Background(), insurance.ComparisonRequest{PlanID: p.PlanID()})
+	require.NoError(t, err)
+	assert.Equal(t, 1, int(rt.calls.Load()))
+}
