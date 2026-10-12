@@ -116,8 +116,9 @@ func (h *Handler) loadStoredRecommendationIndex(ctx context.Context, recs []conf
 	return byKey, byID, nil
 }
 
-// recIdentityKey is the tuple a price is a function of: the same eight
-// components the scheduler encodes into RecommendationRecord.ID, with a nil
+// recIdentityKey is the tuple a price is a function of: the same nine
+// components (the ninth is the zonal EC2 availability zone, "" for every
+// other rec; issue #792) behind RecommendationRecord.ID, with a nil
 // and an empty CloudAccountID collapsed together (as purchaseConstraintSets
 // and the store's account_key both do). Provider and payment are lowercased
 // because validatePurchaseRecommendation canonicalises the request side.
@@ -129,6 +130,7 @@ func recIdentityKey(rec *config.RecommendationRecord) string {
 	return strings.Join([]string{
 		strings.ToLower(rec.Provider), account, rec.Service, rec.Region, rec.ResourceType,
 		rec.Engine, strconv.Itoa(rec.Term), strings.ToLower(rec.Payment),
+		rec.AvailabilityZone,
 	}, "\x1f")
 }
 
@@ -322,6 +324,9 @@ func computeDetailMismatch(o, m *common.ComputeDetails) string {
 		mismatchField("tenancy", o.Tenancy, m.Tenancy),
 		mismatchField("platform", o.Platform, m.Platform),
 		mismatchField("scope", o.Scope, m.Scope),
+		// Zonal EC2 reservations are bought in one AZ; a match in another
+		// AZ (or with an unknown one) is a different commitment (issue #792).
+		mismatchField("availability_zone", o.AvailabilityZone, m.AvailabilityZone),
 		// GCP custom machine types (Compute Engine CUDs) read MemoryGB at
 		// purchase time to build the machine spec, so a memory mismatch is
 		// as purchase-critical as tenancy for that provider.
@@ -361,6 +366,10 @@ func formatOptionalCost(v *float64) string {
 }
 
 func describeRec(rec *config.RecommendationRecord) string {
-	return fmt.Sprintf("%s/%s %s %s engine=%q term=%d payment=%s account=%s",
+	desc := fmt.Sprintf("%s/%s %s %s engine=%q term=%d payment=%s account=%s",
 		rec.Provider, rec.Service, rec.Region, rec.ResourceType, rec.Engine, rec.Term, rec.Payment, derefStringOrEmpty(rec.CloudAccountID))
+	if rec.AvailabilityZone != "" {
+		desc += " az=" + rec.AvailabilityZone
+	}
+	return desc
 }

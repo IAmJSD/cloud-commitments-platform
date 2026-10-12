@@ -529,7 +529,15 @@ type RecommendationRecord struct {
 	// carry the full Details, so non-default platforms (Windows EC2,
 	// Postgres RDS, etc.) round-trip correctly.
 	Details json.RawMessage `json:"details,omitempty" dynamodbav:"-"`
-	Count   int             `json:"count" dynamodbav:"count"`
+	// AvailabilityZone is the zonal EC2 reservation's AZ name (e.g.
+	// "us-east-1a"), empty for regional and non-EC2 recs. It mirrors
+	// ComputeDetails.AvailabilityZone inside Details (config must not import
+	// pkg/common) so the identity tuple, the rec ID and the recommendations
+	// natural key can distinguish two zonal recs that differ only by AZ
+	// (issue #792). The scheduler stamps it at collection time; request recs
+	// echo it from the listed rec.
+	AvailabilityZone string `json:"availability_zone,omitempty" dynamodbav:"availability_zone,omitempty"`
+	Count            int    `json:"count" dynamodbav:"count"`
 	// RecommendedCount is the pre-scaling count the collector originally
 	// recommended, before the bulk-purchase Capacity % slider scaled it down.
 	// The web execute path stamps it so the backend can verify the
