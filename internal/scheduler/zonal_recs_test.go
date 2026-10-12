@@ -35,14 +35,15 @@ func TestConvertRecommendations_ZonalRecsKeepAZAndGetDistinctIDs(t *testing.T) {
 	assert.Equal(t, "us-east-1b", d.AvailabilityZone)
 }
 
-func TestConvertRecommendations_RegionalRecIDUnchanged(t *testing.T) {
+// A regional EC2 rec has no AZ suffix; it carries only the platform/tenancy pair (issue #806).
+func TestConvertRecommendations_RegionalRecIDHasNoAZSuffix(t *testing.T) {
 	s := &Scheduler{}
 	r := zonalRec("", "")
 	r.Details.(*common.ComputeDetails).Scope = "region"
 	out := s.convertRecommendations([]common.Recommendation{r}, "aws")
 	require.Len(t, out, 1)
 	assert.Empty(t, out[0].AvailabilityZone)
-	assert.Equal(t, "aws||ec2|us-east-1|m5.large||1|all-upfront", out[0].ID)
+	assert.Equal(t, "aws||ec2|us-east-1|m5.large||1|all-upfront|Linux/UNIX|default", out[0].ID)
 }
 
 func TestDropForeignZonalEC2(t *testing.T) {

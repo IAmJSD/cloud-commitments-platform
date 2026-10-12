@@ -25,6 +25,13 @@ func zonalEC2Rec(az string, upfront float64) config.RecommendationRecord {
 	}
 }
 
+func mustRecIdentityKey(t *testing.T, rec *config.RecommendationRecord) string {
+	t.Helper()
+	key, err := recIdentityKey(rec)
+	require.NoError(t, err)
+	return key
+}
+
 func TestPurchaseIdempotencyKey_DiffersByAvailabilityZone(t *testing.T) {
 	t.Parallel()
 	a := []config.RecommendationRecord{zonalEC2Rec("us-east-1a", 100)}
@@ -103,7 +110,7 @@ func TestCheckPurchaseDetailIdentity_LegacyOriginWithoutAZAllowed(t *testing.T) 
 
 func TestRecIdentityKey_DiffersByAvailabilityZone(t *testing.T) {
 	a, b := zonalEC2Rec("us-east-1a", 1), zonalEC2Rec("us-east-1b", 1)
-	assert.NotEqual(t, recIdentityKey(&a), recIdentityKey(&b))
+	assert.NotEqual(t, mustRecIdentityKey(t, &a), mustRecIdentityKey(t, &b))
 }
 
 // Two zonal rows that differ only by AZ must both load (no "more than one row"
@@ -118,6 +125,7 @@ func TestPriceRecommendationsFromStore_PricesFromRequestedAZ(t *testing.T) {
 	req := []config.RecommendationRecord{{
 		Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large",
 		Term: 1, Payment: "all-upfront", Count: 1, AvailabilityZone: "us-east-1b",
+		Details: zonalEC2Details("us-east-1b"),
 	}}
 	require.NoError(t, h.priceRecommendationsFromStore(ctx, req))
 	assert.Equal(t, 900.0, req[0].UpfrontCost)

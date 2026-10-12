@@ -38,7 +38,11 @@ func (h *Handler) priceRecommendationsFromStore(ctx context.Context, recs []conf
 		return err
 	}
 	for i := range recs {
-		match, ok := byKey[recIdentityKey(&recs[i])]
+		key, keyErr := recIdentityKey(&recs[i])
+		if keyErr != nil {
+			return NewClientError(400, fmt.Sprintf("recommendation %d (%s): details are malformed: %v", i, describeRec(&recs[i]), keyErr))
+		}
+		match, ok := byKey[key]
 		if !ok {
 			return NewClientError(409, fmt.Sprintf(
 				"recommendation %d (%s) is not in the current recommendation set; refresh the recommendations and try again",
@@ -105,7 +109,10 @@ func (h *Handler) loadStoredRecommendationIndex(ctx context.Context, recs []conf
 			return nil, nil, fmt.Errorf("load stored recommendations for %s: %w", provider, err)
 		}
 		for j := range rows {
-			key := recIdentityKey(&rows[j])
+			key, err := recIdentityKey(&rows[j])
+			if err != nil {
+				return nil, nil, fmt.Errorf("stored recommendation %s: %w", rows[j].ID, err)
+			}
 			if _, dup := byKey[key]; dup {
 				return nil, nil, fmt.Errorf("stored recommendations for %s contain more than one row for identity key %q", provider, key)
 			}
@@ -116,13 +123,19 @@ func (h *Handler) loadStoredRecommendationIndex(ctx context.Context, recs []conf
 	return byKey, byID, nil
 }
 
-// recIdentityKey is the tuple a price is a function of: the same nine
+// recIdentityKey is the tuple a price is a function of: the same eleven
 // components (the ninth is the zonal EC2 availability zone, "" for every
-// other rec; issue #792) behind RecommendationRecord.ID, with a nil
+// other rec, issue #792; the tenth and eleventh are the EC2 platform and
+// tenancy read from Details, "" when absent, issue #806) behind
+// RecommendationRecord.ID, with a nil
 // and an empty CloudAccountID collapsed together (as purchaseConstraintSets
 // and the store's account_key both do). Provider and payment are lowercased
 // because validatePurchaseRecommendation canonicalises the request side.
-func recIdentityKey(rec *config.RecommendationRecord) string {
+func recIdentityKey(rec *config.RecommendationRecord) (string, error) {
+	ci, err := rec.ComputeIdentity()
+	if err != nil {
+		return "", err
+	}
 	account := ""
 	if rec.CloudAccountID != nil {
 		account = *rec.CloudAccountID
@@ -130,8 +143,8 @@ func recIdentityKey(rec *config.RecommendationRecord) string {
 	return strings.Join([]string{
 		strings.ToLower(rec.Provider), account, rec.Service, rec.Region, rec.ResourceType,
 		rec.Engine, strconv.Itoa(rec.Term), strings.ToLower(rec.Payment),
-		rec.AvailabilityZone,
-	}, "\x1f")
+		rec.AvailabilityZone, ci.Platform, ci.Tenancy,
+	}, "\x1f"), nil
 }
 
 // priceFromStored returns a copy of stored carrying the request's Count,
@@ -370,6 +383,11 @@ func describeRec(rec *config.RecommendationRecord) string {
 		rec.Provider, rec.Service, rec.Region, rec.ResourceType, rec.Engine, rec.Term, rec.Payment, derefStringOrEmpty(rec.CloudAccountID))
 	if rec.AvailabilityZone != "" {
 		desc += " az=" + rec.AvailabilityZone
+	}
+	// A malformed Details blob is reported by the caller's own decode; the
+	// description just omits what it cannot read.
+	if ci, err := rec.ComputeIdentity(); err == nil && !ci.IsZero() {
+		desc += fmt.Sprintf(" platform=%q tenancy=%q", ci.Platform, ci.Tenancy)
 	}
 	return desc
 }
