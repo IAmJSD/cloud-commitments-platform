@@ -948,3 +948,105 @@ export interface RequestOptions extends RequestInit {
    */
   timeoutMs?: number;
 }
+
+// ---------------------------------------------------------------------------
+// Archera comparison (GET /api/insurance/*). Mirrors internal/archera/dto.go
+// field for field; money is an exact decimal string or null (unknown, never 0).
+// ---------------------------------------------------------------------------
+
+export interface InsuranceStatus {
+  configured: boolean;
+  missing: string[];
+}
+
+export interface ArcheraProductSupport {
+  status: string;
+  source?: string;
+  evidence?: string;
+  underwriting_allowance: string;
+  customer_eligibility: string;
+}
+
+export interface ArcheraFinancials {
+  monthly_730h_commitment_cost_total: string | null;
+  monthly_730h_cloud_provider_cost: string | null;
+  monthly_730h_archera_premium: string | null;
+  monthly_730h_gross_savings: string | null;
+  monthly_730h_net_savings: string | null;
+  monthly_730h_covered_on_demand_cost: string | null;
+}
+
+export interface ArcheraTotals extends ArcheraFinancials {
+  upfront_one_time_cost: string | null;
+}
+
+export interface ArcheraOfferDelta {
+  monthly_730h_net_savings: string | null;
+  upfront_one_time_cost: string | null;
+  discount_rate: string | null;
+  breakeven_days: string | null;
+}
+
+export interface ArcheraHypotheticalDelta {
+  monthly_730h_net_savings: string | null;
+  monthly_730h_commitment_cost: string | null;
+  upfront_one_time_cost: string | null;
+}
+
+export interface ArcheraLineItem {
+  line_item_id: string;
+  reason: string;
+  actual_term: string | null;
+  actual_payment_option: string | null;
+  actual_commitment_type: string | null;
+}
+
+export interface ArcheraHypothetical {
+  contract_term: string | null;
+  payment_option: string;
+  totals: ArcheraTotals;
+  delta_vs_current: ArcheraHypotheticalDelta;
+  line_items: ArcheraLineItem[];
+}
+
+export interface ArcheraOffer {
+  offer_id: string;
+  is_current: boolean;
+  provider: string;
+  commitment_type: string;
+  region: string | null;
+  contract_term: string | null;
+  payment_option: string | null;
+  lease_attached: boolean;
+  lease_menu_item_id: string | null;
+  archera_offer_name?: string | null;
+  archera_offer_name_note?: string;
+  archera_product_support: ArcheraProductSupport;
+  discount_rate: string | null;
+  breakeven_days: string | null;
+  monthly: ArcheraFinancials;
+  upfront_one_time_cost: string | null;
+  delta_vs_current: ArcheraOfferDelta;
+}
+
+export interface ArcheraRow {
+  line_item_id: string;
+  current: ArcheraOffer;
+  candidates: ArcheraOffer[];
+}
+
+export interface ArcheraComparison {
+  title: string;
+  plan_id: string;
+  fetched_at: string;
+  currency: string | null;
+  currency_note: string;
+  premium_included: boolean;
+  basis_note: string;
+  delta_basis_note: string;
+  current: ArcheraTotals;
+  hypotheticals: ArcheraHypothetical[];
+  rows: ArcheraRow[];
+  non_gating_disclosure: string;
+  sponsorship_disclosure: string;
+}

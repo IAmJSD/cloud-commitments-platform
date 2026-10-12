@@ -253,3 +253,9 @@ export {
   setPlanAccounts,
   getFederationIaC
 } from './accounts';
+
+// Re-export Archera comparison functions
+export {
+  getInsuranceStatus,
+  getInsuranceComparison
+} from './insurance';
