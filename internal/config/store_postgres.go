@@ -1052,8 +1052,8 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 			created_by_user_id, retry_execution_id, retry_attempt_n,
 			approval_token_expires_at,
 			executed_by_user_id, executed_at, pre_approval_skip_reason,
-			idempotency_key, scheduled_execution_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+			idempotency_key, scheduled_execution_at, no_submission
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
 		ON CONFLICT (execution_id) DO UPDATE SET
 			status = $3,
 			notification_sent = $6,
@@ -1074,6 +1074,9 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 			executed_at = $24,
 			pre_approval_skip_reason = $25,
 			scheduled_execution_at = $27,
+			no_submission = CASE WHEN $3 = 'failed'
+				THEN purchase_executions.no_submission OR $28
+				ELSE false END,
 			updated_at = NOW()
 	`
 
@@ -1128,6 +1131,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 		execution.PreApprovalSkipReason,
 		execution.IdempotencyKey,
 		execution.ScheduledExecutionAt,
+		execution.NoSubmission,
 	)
 
 	if err != nil {
@@ -1229,7 +1233,7 @@ func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, execution
 		          created_by_user_id, retry_execution_id, retry_attempt_n,
 		          approval_token_expires_at,
 		          executed_by_user_id, executed_at, pre_approval_skip_reason,
-		          idempotency_key, scheduled_execution_at
+		          idempotency_key, scheduled_execution_at, no_submission
 	`
 
 	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses, actor, cancelActor, sawEmpty)
@@ -1421,7 +1425,7 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at
+		       idempotency_key, scheduled_execution_at, no_submission
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		  AND NOT (status = 'completed' AND COALESCE(error, '') = '')
@@ -1533,7 +1537,7 @@ func (s *PostgresStore) GetPlannedExecutions(ctx context.Context, statuses []str
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at
+		       idempotency_key, scheduled_execution_at, no_submission
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		ORDER BY scheduled_date ASC NULLS LAST, id ASC
@@ -1558,7 +1562,7 @@ func (s *PostgresStore) GetStaleApprovedExecutions(ctx context.Context, olderTha
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at
+		       idempotency_key, scheduled_execution_at, no_submission
 		FROM purchase_executions
 		WHERE status = 'approved' AND updated_at < NOW() - $1::interval
 	`
@@ -1600,7 +1604,7 @@ func (s *PostgresStore) ListStuckExecutions(ctx context.Context, statuses []stri
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at
+		       idempotency_key, scheduled_execution_at, no_submission
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		  AND updated_at < NOW() - $2::interval
@@ -1621,7 +1625,7 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at
+		       idempotency_key, scheduled_execution_at, no_submission
 		FROM purchase_executions
 		WHERE status IN ('pending', 'notified')
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -1645,7 +1649,7 @@ func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) (
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at
+		       idempotency_key, scheduled_execution_at, no_submission
 		FROM purchase_executions
 		WHERE status IN ('pending', 'notified')
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -1693,7 +1697,7 @@ func (s *PostgresStore) ListRecentSubmitsTx(ctx context.Context, tx pgx.Tx, crea
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at
+		       idempotency_key, scheduled_execution_at, no_submission
 		FROM purchase_executions
 		WHERE source = $3
 		  AND status IN (` + submitDedupeStatuses + `)
@@ -1723,7 +1727,7 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at
+		       idempotency_key, scheduled_execution_at, no_submission
 		FROM purchase_executions
 		WHERE execution_id = $1
 	`
@@ -1750,7 +1754,7 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at
+		       idempotency_key, scheduled_execution_at, no_submission
 		FROM purchase_executions
 		WHERE plan_id = $1 AND scheduled_date = $2
 	`
@@ -1918,6 +1922,7 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 			&exec.PreApprovalSkipReason,
 			&idempotencyKey,
 			&scheduledExecutionAt,
+			&exec.NoSubmission,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution: %w", err)
@@ -1958,7 +1963,7 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at
+		       idempotency_key, scheduled_execution_at, no_submission
 		FROM purchase_executions
 		WHERE status = 'scheduled'
 		  AND scheduled_execution_at IS NOT NULL

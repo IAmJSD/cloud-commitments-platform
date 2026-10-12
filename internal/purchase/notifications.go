@@ -285,6 +285,7 @@ func (m *Manager) recordFailedBarePlanStep(ctx context.Context, exec *config.Pur
 // and logs it once.
 func stampFailedBarePlanStep(exec *config.PurchaseExecution) {
 	exec.Status = "failed"
+	exec.NoSubmission = true // a pending/notified bare step never reaches the executor
 	exec.Error = ErrPlanStepNoRecommendations.Error()
 	logging.Errorf("purchase[%s]: plan %s step %d has no recommendations and was marked failed: %v",
 		exec.ExecutionID, exec.PlanID, exec.StepNumber, ErrPlanStepNoRecommendations)
