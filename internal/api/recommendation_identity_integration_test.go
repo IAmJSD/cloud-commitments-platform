@@ -173,7 +173,7 @@ func TestRecommendationIdentity_CollectionPostgresDetailAndPricing(t *testing.T)
 			}
 			for _, target := range []config.RecommendationRecord{base, variant} {
 				request := target
-				request.ID, request.UpfrontCost, request.Details = base.ID, 1, nil
+				request.ID, request.UpfrontCost = base.ID, 1 // Details stay: the modal echoes them and platform/tenancy are part of the identity key
 				priced := []config.RecommendationRecord{request}
 				if assert.NoError(t, h.priceRecommendationsFromStore(ctx, priced)) {
 					assert.Equal(t, account.ID, *priced[0].CloudAccountID)
@@ -185,7 +185,7 @@ func TestRecommendationIdentity_CollectionPostgresDetailAndPricing(t *testing.T)
 			mismatch := base
 			mismatch.Term = 3
 			err = h.priceRecommendationsFromStore(ctx, []config.RecommendationRecord{mismatch})
-			assert.ErrorContains(t, err, "tenancy")
+			assert.ErrorContains(t, err, "not in the current recommendation set")
 			stale := base
 			stale.ID = "stale-before-refresh"
 			err = h.priceRecommendationsFromStore(ctx, []config.RecommendationRecord{stale})
