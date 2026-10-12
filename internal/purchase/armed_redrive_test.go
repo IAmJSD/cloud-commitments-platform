@@ -142,7 +142,7 @@ func TestApproveAndExecuteRefusesArmedAzureSavingsPlanRetry(t *testing.T) {
 	exec := armedExecution("azure", "savingsplans", 1, "pending")
 	mgr, store, rec := armedHarness(t, common.ServiceSavingsPlansAll)
 	store.On("GetExecutionByID", mock.Anything, exec.ExecutionID).Return(exec, nil).Maybe()
-	expectClaim(store, exec, []string{"pending", "notified"}, "approved")
+	expectClaim(store, exec, []string{"pending", "notified"}, "running")
 
 	_, _, err := mgr.ApproveAndExecute(context.Background(), exec.ExecutionID, "operator@example.com", nil)
 
@@ -183,7 +183,7 @@ func TestFireScheduledDelayedPurchasesRefusesArmedAzureSavingsPlanRetry(t *testi
 	mgr, store, rec := armedHarness(t, common.ServiceSavingsPlansAll)
 	store.On("GetScheduledExecutionsDue", mock.Anything).
 		Return([]config.PurchaseExecution{*exec}, nil).Once()
-	expectClaim(store, exec, []string{"scheduled"}, "approved")
+	expectClaim(store, exec, []string{"scheduled"}, "running")
 
 	result, err := mgr.FireScheduledDelayedPurchases(context.Background())
 

@@ -6644,7 +6644,7 @@ func TestHandler_approvePurchaseViaSession_FourEyesOn_DifferentApproverSucceeds(
 	approved := &config.PurchaseExecution{ExecutionID: execID, Status: "approved"}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
-	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "approved", &approverID).Return(approved, nil)
+	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "running", &approverID).Return(approved, nil)
 	mockConfig.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
 	mockAuth := new(MockAuthService)

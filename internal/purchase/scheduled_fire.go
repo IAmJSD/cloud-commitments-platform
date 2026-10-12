@@ -74,11 +74,11 @@ func (m *Manager) FireScheduledDelayedPurchases(ctx context.Context) (*FireResul
 // (true, false) on success, (false, true) when the CAS was lost to a
 // concurrent revoke, or (false, false) on a real error.
 func (m *Manager) fireOneDue(ctx context.Context, exec *config.PurchaseExecution) (fired, raceLost bool) {
-	// CAS: scheduled -> approved. If this fails with ErrExecutionNotInExpectedStatus
+	// CAS: scheduled -> running (the executor claim). If this fails with ErrExecutionNotInExpectedStatus
 	// the revoke handler already transitioned the row to "canceled" — that is
 	// not an error, just a CAS race loss.
 	// Scheduler-initiated fire: no human session UUID, so transitioned_by = NULL.
-	updated, err := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"scheduled"}, "approved", nil)
+	updated, err := m.claimRunning(ctx, exec.ExecutionID, []string{"scheduled"}, nil)
 	if err != nil {
 		if errors.Is(err, config.ErrExecutionNotInExpectedStatus) || errors.Is(err, config.ErrNotFound) {
 			logging.Infof("fireOneDue[%s]: CAS lost (execution already transitioned by another actor)", exec.ExecutionID)
@@ -91,7 +91,7 @@ func (m *Manager) fireOneDue(ctx context.Context, exec *config.PurchaseExecution
 	// Stamp ApprovedBy for the audit trail before executing.
 	actor := "scheduler"
 	updated.ApprovedBy = &actor
-	if saveErr := m.config.SavePurchaseExecution(ctx, updated); saveErr != nil {
+	if saveErr := m.config.SaveExecutionIfStatus(ctx, updated, executorOwnedStatuses); saveErr != nil {
 		// Best-effort audit stamp: attribution failure must not block the
 		// purchase from firing. Log loudly so the audit gap is visible.
 		logging.Errorf("AUDIT GAP: fireOneDue[%s]: failed to stamp approved_by: %v", exec.ExecutionID, saveErr)

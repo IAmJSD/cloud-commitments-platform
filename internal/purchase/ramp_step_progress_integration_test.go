@@ -68,6 +68,9 @@ type rampStepFixture struct {
 
 	mu        sync.Mutex
 	purchased []string // one entry per commitment that reached the fake cloud
+
+	// onPurchase, when set, runs inside each fake provider call (issue #829 tests).
+	onPurchase func()
 }
 
 // newRampStepFixture builds the fixture. accountA is credential-resolvable from
@@ -154,6 +157,9 @@ func newRampStepFixture(ctx context.Context, t *testing.T) *rampStepFixture {
 			f.mu.Lock()
 			f.purchased = append(f.purchased, opts.IdempotencyToken)
 			f.mu.Unlock()
+			if f.onPurchase != nil {
+				f.onPurchase()
+			}
 		}).
 		Return(common.PurchaseResult{Success: true, CommitmentID: "ri-ok"}, nil).Maybe()
 

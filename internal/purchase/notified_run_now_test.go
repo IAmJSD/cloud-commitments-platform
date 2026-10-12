@@ -25,7 +25,7 @@ func TestRunNow_NotifiedRowReachesArmedRedriveGuard(t *testing.T) {
 	exec := armedExecution("azure", "savingsplans", 1, "notified")
 	mgr, store, rec := armedHarness(t, common.ServiceSavingsPlansAll)
 	store.On("GetExecutionByID", mock.Anything, exec.ExecutionID).Return(exec, nil).Maybe()
-	expectClaim(store, exec, runNowFrom, "approved")
+	expectClaim(store, exec, runNowFrom, "running")
 
 	_, _, err := mgr.RunPlannedPurchaseNow(context.Background(), exec.ExecutionID, "operator@example.com", nil)
 
@@ -43,7 +43,7 @@ func TestRunNow_NotifiedRowReachesStaleAzurePricingRefusal(t *testing.T) {
 	store.On("ListStoredRecommendations", mock.Anything, config.RecommendationFilter{Provider: "azure", RequireAzurePricingMigration: true}).
 		Return([]config.RecommendationRecord{repriced}, nil).Maybe()
 	store.On("GetExecutionByID", mock.Anything, exec.ExecutionID).Return(exec, nil).Maybe()
-	expectClaim(store, exec, runNowFrom, "approved")
+	expectClaim(store, exec, runNowFrom, "running")
 
 	_, _, err := mgr.RunPlannedPurchaseNow(context.Background(), exec.ExecutionID, "operator@example.com", nil)
 

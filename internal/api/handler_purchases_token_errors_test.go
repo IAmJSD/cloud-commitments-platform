@@ -103,7 +103,7 @@ func TestHandleRequest_ApproveViaToken_NonPendingExecutionIs409(t *testing.T) {
 	exec := &config.PurchaseExecution{Status: "completed", ApprovalToken: config.HashApprovalToken(tokenErrRawToken), ApprovalTokenExpiresAt: &future}
 	h := tokenErrHandler(t, exec, nil)
 	store := h.config.(*MockConfigStore)
-	store.On("TransitionExecutionStatus", mock.Anything, tokenErrExecID, mock.Anything, "approved", mock.Anything).
+	store.On("TransitionExecutionStatus", mock.Anything, tokenErrExecID, mock.Anything, "running", mock.Anything).
 		Return(nil, config.ErrExecutionNotInExpectedStatus)
 
 	resp, err := h.HandleRequest(context.Background(), tokenErrRequest("approve", tokenErrRawToken))

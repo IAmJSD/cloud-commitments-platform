@@ -358,7 +358,7 @@ func (m *MockConfigStore) SaveExecutionIfStatus(ctx context.Context, exec *confi
 func (m *MockConfigStore) SaveExecutionIfStatusTx(ctx context.Context, tx pgx.Tx, exec *config.PurchaseExecution, expected []string) error {
 	m.record("SaveExecutionIfStatusTx", ctx, tx, exec, expected)
 	if !isExpected(&m.Mock, "SaveExecutionIfStatusTx") {
-		return m.SaveExecutionIfStatus(ctx, exec, expected)
+		return m.SavePurchaseExecutionTx(ctx, tx, exec)
 	}
 	args := m.Called(ctx, tx, exec, expected)
 	return args.Error(0)

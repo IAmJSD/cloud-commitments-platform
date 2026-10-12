@@ -226,7 +226,15 @@ func (m *Manager) reapOne(ctx context.Context, exec *config.PurchaseExecution, r
 	}
 	transitioned.Error = fmt.Sprintf("reaped after %dm in %s state — executor did not complete%s",
 		ageMinutes, prevStatus, safeMsg)
-	if saveErr := m.config.SavePurchaseExecution(ctx, transitioned); saveErr != nil {
+	if saveErr := m.config.SaveExecutionIfStatus(ctx, transitioned, []string{failedStatus}); saveErr != nil {
+		if errors.Is(saveErr, config.ErrExecutionNotInExpectedStatus) {
+			// The executor finished late and recovered the row (completed), so
+			// the annotation must not overwrite it. The reap itself succeeded.
+			logging.Infof("purchase reaper: execution %s left failed before the reap annotation; leaving it as is: %v",
+				exec.ExecutionID, saveErr)
+			result.Reaped++
+			return
+		}
 		logging.Errorf("purchase reaper: failed to persist canonical error for execution %s (already flipped to failed): %v",
 			exec.ExecutionID, saveErr)
 		result.Errored++

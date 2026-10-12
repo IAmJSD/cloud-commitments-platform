@@ -357,7 +357,7 @@ func (m *Manager) RunPlannedPurchaseNow(ctx context.Context, executionID, actor 
 
 // transitionApproveAndExecute is the shared body behind ApproveAndExecute
 // and RunPlannedPurchaseNow: enforce the 4-eyes gate, atomically CAS the row
-// from one of fromStatuses to "approved", stamp ApprovedBy, then run the
+// from one of fromStatuses straight to "running" (the claim), stamp ApprovedBy, then run the
 // purchase synchronously. Parameterizing on fromStatuses lets both entry
 // points share one implementation of the gate and the CAS instead of the
 // gate being reimplemented (or skipped) at a second call site.
@@ -389,13 +389,17 @@ func (m *Manager) transitionApproveAndExecute(ctx context.Context, executionID, 
 	// approvals (stamped onto transitioned_by); it is nil for token/SQS/system
 	// flows so transitioned_by = NULL on those hops. The human-readable actor
 	// email is recorded separately onto approved_by (below).
-	updated, err := m.config.TransitionExecutionStatus(ctx, executionID, fromStatuses, "approved", transitionedBy)
+	// One CAS straight to "running": winning it is the claim, so no other
+	// executor (SQS, cron, re-drive, scheduler) can run this row, and there is
+	// no window where the row sits "approved" with a stale copy in flight
+	// (issue #829). A lost CAS surfaces ErrExecutionNotInExpectedStatus.
+	updated, err := m.claimRunning(ctx, executionID, fromStatuses, transitionedBy)
 	if err != nil {
 		logging.Errorf("purchase[%s]: transitionApproveAndExecute status transition failed after %s: %v",
 			executionID, time.Since(t0), err)
 		return nil, "", fmt.Errorf("approve: %w", err)
 	}
-	logging.Infof("purchase[%s]: status transitioned to approved in %s", executionID, time.Since(t0))
+	logging.Infof("purchase[%s]: approved and claimed running in %s", executionID, time.Since(t0))
 
 	if skipReason != "" {
 		now := time.Now()
@@ -409,7 +413,7 @@ func (m *Manager) transitionApproveAndExecute(ctx context.Context, executionID, 
 		updated.ApprovedBy = &a
 	}
 	if actor != "" || skipReason != "" {
-		if saveErr := m.config.SavePurchaseExecution(ctx, updated); saveErr != nil {
+		if saveErr := m.config.SaveExecutionIfStatus(ctx, updated, executorOwnedStatuses); saveErr != nil {
 			// Attribution is best-effort once the atomic flip has landed --
 			// dropping these audit fields must not stop the purchase from firing.
 			// Log loudly so the audit gap is visible.
