@@ -1,4 +1,6 @@
 import type { LadderEvent } from './api/ladder';
+import { formatCurrency, formatDate, formatTerm } from './utils';
+import { getPaymentLabel } from './commitmentOptions';
 
 export const ladderDimensions = ['run_id', 'layer_type', 'term', 'payment_option', 'status'] as const;
 export type LadderDimension = typeof ladderDimensions[number];
@@ -43,4 +45,43 @@ export function ladderEditReason(event: LadderEvent, now = Date.now()): string |
   if (Date.parse(event.scheduled_date) <= now) return 'The scheduled date has passed.';
   if (!Number.isSafeInteger(event.revision) || event.revision < 0) return 'Editing is unavailable until the timeline API is upgraded.';
   return undefined;
+}
+
+// Enum values from cloud-commitments-go pkg/ladder (types.go, store.go).
+const layerLabels: Record<string, string> = {
+  'ec2-instance-sp': 'EC2 Instance Savings Plan', 'compute-sp': 'Compute Savings Plan', 'convertible-ri': 'Convertible RI',
+  'azure-reservation': 'Azure Reservation', 'azure-savings-plan': 'Azure Savings Plan',
+};
+const statusLabels: Record<string, string> = {
+  scheduled: 'Scheduled', fired: 'Fired', completed: 'Completed', cancelled: 'Cancelled', failed: 'Failed',
+};
+
+/** Label for a ladder enum code. An unknown code is shown raw so it stays visible. */
+export function ladderLabel(dimension: LadderDimension, value: string): string {
+  switch (dimension) {
+    case 'layer_type': return layerLabels[value] ?? value;
+    case 'status': return statusLabels[value] ?? value;
+    case 'payment_option': return getPaymentLabel(value);
+    case 'term': {
+      const years = /^([1-9]\d?)yr$/.exec(value);
+      return years ? formatTerm(Number(years[1])) : value;
+    }
+    case 'run_id': return value;
+  }
+}
+
+/** USD/hour budget for display: 2 digits from $1, 4 below $1 so a small non-zero value never reads as $0.00. */
+export function formatLadderAmount(amount: string | null | undefined): string {
+  if (amount === null || amount === undefined) return 'unavailable';
+  ladderAmountUnits(amount);
+  const value = Number(amount);
+  return `${formatCurrency(value, '$', value > 0 && value < 1 ? 4 : 2)}/hr`;
+}
+
+/** Calendar date and UTC time ("Jan 2, 2030, 00:00 UTC"); never browser-local. Unparseable input is shown raw. */
+export function formatLadderDateTime(iso: string): string {
+  const stamp = Date.parse(iso);
+  if (!Number.isFinite(stamp)) return iso;
+  const utc = new Date(stamp).toISOString();
+  return `${formatDate(utc.slice(0, 10))}, ${utc.slice(11, 16)} UTC`;
 }
