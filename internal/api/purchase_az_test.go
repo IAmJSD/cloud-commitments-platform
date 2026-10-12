@@ -27,7 +27,7 @@ func zonalEC2Rec(az string, upfront float64) config.RecommendationRecord {
 
 func mustRecIdentityKey(t *testing.T, rec *config.RecommendationRecord) string {
 	t.Helper()
-	key, err := recIdentityKey(rec)
+	key, err := config.RecIdentityKey(rec)
 	require.NoError(t, err)
 	return key
 }

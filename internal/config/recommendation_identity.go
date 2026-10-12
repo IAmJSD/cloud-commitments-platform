@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 // ComputeIdentity is the EC2 platform and tenancy of a recommendation, the two
@@ -37,4 +39,28 @@ func (r *RecommendationRecord) ComputeIdentity() (ComputeIdentity, error) {
 		return ComputeIdentity{}, fmt.Errorf("decode platform/tenancy of %s/%s details: %w", r.Region, r.ResourceType, err)
 	}
 	return ComputeIdentity{Platform: d.Platform, Tenancy: d.Tenancy}, nil
+}
+
+// RecIdentityKey is the tuple a price is a function of: the same eleven
+// components (the ninth is the zonal EC2 availability zone, "" for every
+// other rec, issue #792; the tenth and eleventh are the EC2 platform and
+// tenancy read from Details, "" when absent, issue #806) behind
+// RecommendationRecord.ID, with a nil
+// and an empty CloudAccountID collapsed together (as purchaseConstraintSets
+// and the store's account_key both do). Provider and payment are lowercased
+// because validatePurchaseRecommendation canonicalises the request side.
+func RecIdentityKey(rec *RecommendationRecord) (string, error) {
+	ci, err := rec.ComputeIdentity()
+	if err != nil {
+		return "", err
+	}
+	account := ""
+	if rec.CloudAccountID != nil {
+		account = *rec.CloudAccountID
+	}
+	return strings.Join([]string{
+		strings.ToLower(rec.Provider), account, rec.Service, rec.Region, rec.ResourceType,
+		rec.Engine, strconv.Itoa(rec.Term), strings.ToLower(rec.Payment),
+		rec.AvailabilityZone, ci.Platform, ci.Tenancy,
+	}, "\x1f"), nil
 }
