@@ -37,7 +37,7 @@ for (const width of [1280, 390]) {
     await timeline.getByRole('combobox', { name: 'Commitment term', exact: true }).selectOption('3yr');
     await expect(timeline.locator('[data-summary]')).toContainText('1 of 3');
     await timeline.getByRole('combobox', { name: 'Payment option', exact: true }).selectOption('all-upfront');
-    await expect(timeline.locator('[data-summary]')).toContainText('1.000000 USD/hour');
+    await expect(timeline.locator('[data-summary]')).toContainText('$1.00/hr in this selection');
     await timeline.getByRole('button', { name: 'Clear filters' }).click();
     const canvas = timeline.locator('canvas');
     await canvas.scrollIntoViewIfNeeded();
@@ -53,7 +53,7 @@ for (const width of [1280, 390]) {
     await expect(modal).toBeVisible();
     await expect(modal.getByLabel('Planning budget (USD/hour)')).toHaveValue('0.500000');
     await modal.getByLabel('Planning budget (USD/hour)').fill('0.250000');
-    await expect(modal.locator('#ladder-event-preview')).toContainText('2.250000');
+    await expect(modal.locator('#ladder-event-preview')).toContainText('$2.25/hr');
     await modal.getByRole('button', { name: 'Undo draft changes' }).click();
     await expect(modal.getByLabel('Planning budget (USD/hour)')).toHaveValue('0.500000');
     await modal.getByLabel('Scheduled date and time (UTC)').fill('2020-01-01T00:00');
@@ -72,8 +72,8 @@ for (const width of [1280, 390]) {
     await expect(modal).toHaveCount(0);
     expect(saves).toHaveLength(1);
     await page.reload();
-    await expect(timeline.locator('[data-table]')).toContainText('0.250000');
-    await expect(timeline.locator('[data-table]')).toContainText('2030-01-04T00:00:00.000Z');
+    await expect(timeline.locator('[data-table]')).toContainText('$0.2500/hr');
+    await expect(timeline.locator('[data-table]')).toContainText('Jan 4, 2030, 00:00 UTC');
     await timeline.locator('[data-event="event-2"]').focus(); await page.keyboard.press('Enter');
     await expect(modal.getByLabel('Scheduled date and time (UTC)')).toBeFocused();
     rejectNextSave = true;

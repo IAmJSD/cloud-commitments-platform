@@ -1,5 +1,5 @@
 import type { LadderEvent } from '../api/ladder';
-import { emptyLadderFilters, filterLadderEvents, ladderFilterOptions, ladderTotal, ladderEditReason } from '../ladder-timeline-filters';
+import { emptyLadderFilters, filterLadderEvents, ladderFilterOptions, ladderTotal, ladderEditReason, ladderLabel, formatLadderAmount, formatLadderDateTime } from '../ladder-timeline-filters';
 
 const event: LadderEvent = {
   id: 'one', config_id: 'config', run_id: 'run', layer_type: 'compute-sp', term: '1yr',
@@ -33,4 +33,31 @@ test('eligibility covers status, execution, deadline, and unavailable revision A
   expect(ladderEditReason({ ...event, execution_id: 'execution' })).toContain('execution');
   expect(ladderEditReason(event, Date.parse(event.scheduled_date))).toContain('passed');
   expect(ladderEditReason({ ...event, revision: undefined as unknown as number })).toContain('upgraded');
+});
+
+// FIXTURE: enum codes from cloud-commitments-go pkg/ladder.
+test('ladder labels cover every known enum and show unknown codes raw', () => {
+  expect(['ec2-instance-sp', 'compute-sp', 'convertible-ri', 'azure-reservation', 'azure-savings-plan'].map(v => ladderLabel('layer_type', v)))
+    .toEqual(['EC2 Instance Savings Plan', 'Compute Savings Plan', 'Convertible RI', 'Azure Reservation', 'Azure Savings Plan']);
+  expect(['scheduled', 'fired', 'completed', 'cancelled', 'failed'].map(v => ladderLabel('status', v)))
+    .toEqual(['Scheduled', 'Fired', 'Completed', 'Cancelled', 'Failed']);
+  expect(['1yr', '3yr'].map(v => ladderLabel('term', v))).toEqual(['1 Year', '3 Years']);
+  expect(['no-upfront', 'partial-upfront', 'all-upfront'].map(v => ladderLabel('payment_option', v))).toEqual(['No Upfront', 'Partial Upfront', 'All Upfront']);
+  expect(ladderLabel('layer_type', 'new-thing')).toBe('new-thing');
+  expect(ladderLabel('term', '5yrs')).toBe('5yrs');
+  expect(ladderLabel('status', '')).toBe('');
+});
+
+test('amounts keep zero and absent distinct and never round a small value to $0.00', () => {
+  expect(formatLadderAmount('0.000000')).toBe('$0.00/hr');
+  expect(formatLadderAmount(null)).toBe('unavailable');
+  expect(formatLadderAmount('0.001200')).toBe('$0.0012/hr');
+  expect(formatLadderAmount('1234.500000')).toBe('$1,234.50/hr');
+  expect(() => formatLadderAmount('abc')).toThrow('Invalid planning budget.');
+});
+
+test('dates render the UTC calendar day and time regardless of browser zone', () => {
+  expect(formatLadderDateTime('2030-01-02T23:30:00Z')).toBe('Jan 2, 2030, 23:30 UTC');
+  expect(formatLadderDateTime('2030-01-02T23:30:00-05:00')).toBe('Jan 3, 2030, 04:30 UTC');
+  expect(formatLadderDateTime('garbage')).toBe('garbage');
 });

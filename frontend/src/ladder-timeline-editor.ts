@@ -2,7 +2,7 @@ import type { ApiError } from './api/types';
 import { amendLadderEvent, type LadderEvent, type LadderRun } from './api/ladder';
 import { openModal, closeModal } from './modal';
 import { escapeHtml } from './utils';
-import { formatLadderUnits, ladderAmountUnits, ladderTotal } from './ladder-timeline-filters';
+import { formatLadderAmount, formatLadderDateTime, formatLadderUnits, ladderAmountUnits, ladderLabel, ladderTotal } from './ladder-timeline-filters';
 
 export function openLadderEventEditor(event: LadderEvent, run: LadderRun, siblings: readonly LadderEvent[], onReload: () => void): void {
   const modal = document.createElement('div');
@@ -12,8 +12,8 @@ export function openLadderEventEditor(event: LadderEvent, run: LadderRun, siblin
   modal.setAttribute('aria-labelledby', 'ladder-event-title');
   modal.innerHTML = `<div class="modal-content"><div class="modal-header">
     <h3 id="ladder-event-title">Edit planned purchase</h3></div><form>
-    <p>${escapeHtml(event.layer_type)} / ${escapeHtml(event.term)} / ${escapeHtml(event.payment_option)}</p>
-    <p>Original plan: ${escapeHtml(run.started_at)}.
+    <p>${escapeHtml(ladderLabel('layer_type', event.layer_type))} / ${escapeHtml(ladderLabel('term', event.term))} / ${escapeHtml(ladderLabel('payment_option', event.payment_option))}</p>
+    <p>Original plan: ${escapeHtml(formatLadderDateTime(run.started_at))}.
       ${run.actions.filter(action => action.layer === event.layer_type).map(action => `${escapeHtml(action.rationale)}${action.data_sources?.length ? ` Sources: ${escapeHtml(action.data_sources.join(', '))}.` : ''}`).join(' ')}</p>
     <p>These are planning budgets. Purchases are not executed by this editor.</p>
     <div class="form-row"><label for="ladder-event-date">Scheduled date and time (UTC)</label>
@@ -21,7 +21,7 @@ export function openLadderEventEditor(event: LadderEvent, run: LadderRun, siblin
     <div class="form-row"><label for="ladder-event-amount">Planning budget (USD/hour)</label>
       <input id="ladder-event-amount" inputmode="decimal" required></div>
     <p id="ladder-event-preview" aria-live="polite"></p>
-    <p>Original run ceiling: ${escapeHtml(run.total_hourly_commit)} USD/hour.
+    <p>Original run ceiling: ${escapeHtml(formatLadderAmount(run.total_hourly_commit))}.
       The server also enforces the current per-run cap.</p>
     <p>Reducing a tranche can cause the next planning run to add it back.
       Change target coverage in account settings for a lasting target reduction.</p>
@@ -53,7 +53,7 @@ export function openLadderEventEditor(event: LadderEvent, run: LadderRun, siblin
     try {
       const units = ladderAmountUnits(amount.value);
       const total = originalTotal - ladderAmountUnits(event.amount_usd_hr) + units;
-      preview.textContent = `Current run total after this change: ${formatLadderUnits(total)} USD/hour.`;
+      preview.textContent = `Current run total after this change: ${formatLadderAmount(formatLadderUnits(total))}.`;
       save.disabled = pending || units <= 0n || total > ladderAmountUnits(run.total_hourly_commit);
     } catch {
       preview.textContent = 'Enter a positive decimal with up to six fractional digits.';
