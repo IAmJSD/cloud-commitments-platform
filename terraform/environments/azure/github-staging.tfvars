@@ -61,8 +61,9 @@ key_vault_default_network_acl_action = "Allow"
 # Scheduled Tasks
 # ==============================================
 
-enable_scheduled_tasks  = true
-recommendation_schedule = "0 2 * * *"
+enable_scheduled_tasks      = true
+recommendation_schedule     = "0 2 * * *"
+enable_ri_exchange_schedule = true
 
 # ==============================================
 # Logging
