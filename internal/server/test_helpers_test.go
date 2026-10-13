@@ -474,6 +474,18 @@ func (m *mockConfigStoreForHealth) ListExecutionsForPlanStepTx(_ context.Context
 	return nil, nil
 }
 
+func (m *mockConfigStoreForHealth) SetPlanRampBaselineTx(_ context.Context, _ pgx.Tx, _ string, _ config.PlanRampBaseline) (bool, error) {
+	return false, nil
+}
+
+func (m *mockConfigStoreForHealth) GetPlanRampBaselineTx(_ context.Context, _ pgx.Tx, _ string) (config.PlanRampBaseline, error) {
+	return nil, nil
+}
+
+func (m *mockConfigStoreForHealth) ListPlanCommittedTx(_ context.Context, _ pgx.Tx, _ string) (map[string]config.PlanRampQuantity, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStoreForHealth) SetExecutionRecommendationsIfEmptyTx(_ context.Context, _ pgx.Tx, _ string, _ []config.RecommendationRecord, _, _ float64) (bool, error) {
 	return false, nil
 }

@@ -278,6 +278,49 @@ func (m *MockConfigStore) ListExecutionsForPlanStepTx(ctx context.Context, tx pg
 	return v, args.Error(1)
 }
 
+// The ramp-ledger mocks default to an empty answer when unregistered so tests
+// that predate them keep exercising their own path.
+func (m *MockConfigStore) SetPlanRampBaselineTx(ctx context.Context, tx pgx.Tx, planID string, baseline config.PlanRampBaseline) (bool, error) {
+	m.record("SetPlanRampBaselineTx", ctx, tx, planID, baseline)
+	if !isExpected(&m.Mock, "SetPlanRampBaselineTx") {
+		return false, nil
+	}
+	args := m.Called(ctx, tx, planID, baseline)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockConfigStore) GetPlanRampBaselineTx(ctx context.Context, tx pgx.Tx, planID string) (config.PlanRampBaseline, error) {
+	m.record("GetPlanRampBaselineTx", ctx, tx, planID)
+	if !isExpected(&m.Mock, "GetPlanRampBaselineTx") {
+		return nil, nil
+	}
+	args := m.Called(ctx, tx, planID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(config.PlanRampBaseline)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected config.PlanRampBaseline, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
+func (m *MockConfigStore) ListPlanCommittedTx(ctx context.Context, tx pgx.Tx, planID string) (map[string]config.PlanRampQuantity, error) {
+	m.record("ListPlanCommittedTx", ctx, tx, planID)
+	if !isExpected(&m.Mock, "ListPlanCommittedTx") {
+		return nil, nil
+	}
+	args := m.Called(ctx, tx, planID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(map[string]config.PlanRampQuantity)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected map[string]config.PlanRampQuantity, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 func (m *MockConfigStore) SetExecutionRecommendationsIfEmptyTx(ctx context.Context, tx pgx.Tx, executionID string, recs []config.RecommendationRecord, upfront, savings float64) (bool, error) {
 	m.record("SetExecutionRecommendationsIfEmptyTx", ctx, tx, executionID, recs, upfront, savings)
 	args := m.Called(ctx, tx, executionID, recs, upfront, savings)

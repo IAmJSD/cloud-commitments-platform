@@ -97,6 +97,17 @@ type StoreInterface interface {
 	// get-or-create of a plan step reads it under LockPurchasePlanTx so any
 	// existing row, settled or not, blocks minting a second root (platform#631).
 	ListExecutionsForPlanStepTx(ctx context.Context, tx pgx.Tx, planID string, stepNumber int) ([]PurchaseExecution, error)
+	// SetPlanRampBaselineTx freezes the plan's ramp baseline if none is set and
+	// reports whether it wrote. Immutable once set; not part of
+	// UpdatePurchasePlanTx, so a stale plan save cannot touch it. The caller
+	// holds LockPurchasePlanTx.
+	SetPlanRampBaselineTx(ctx context.Context, tx pgx.Tx, planID string, baseline PlanRampBaseline) (bool, error)
+	// GetPlanRampBaselineTx returns the frozen baseline, nil when none is set.
+	GetPlanRampBaselineTx(ctx context.Context, tx pgx.Tx, planID string) (PlanRampBaseline, error)
+	// ListPlanCommittedTx returns what the plan's executions already hold per
+	// recommendation identity (see its implementation for the status rules).
+	// The caller holds LockPurchasePlanTx.
+	ListPlanCommittedTx(ctx context.Context, tx pgx.Tx, planID string) (map[string]PlanRampQuantity, error)
 	// SetExecutionRecommendationsIfEmptyTx attaches resolved recommendations
 	// and their totals to a pending/notified execution that has none yet.
 	// Returns false when another resolver already attached them (or the row
