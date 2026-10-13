@@ -14,6 +14,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
 )
 
@@ -203,7 +204,11 @@ func TestLadderAmendCeiling_LockTimeoutIsTyped(t *testing.T) {
 	old := ladderLockTimeout
 	ladderLockTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { ladderLockTimeout = old })
-	release := holdLadderLock(f.ctx, t, f.store, f.cfgID)
+	holder := holdLadderLock(f.ctx, t, f.store, f.cfgID)
+	var once sync.Once
+	var holderErr error
+	release := func() error { once.Do(func() { holderErr = holder() }); return holderErr }
+	t.Cleanup(func() { _ = release() }) // a failed assertion must not leave the holder blocked
 	err := f.amend(ids[0], 2)
 	require.ErrorIs(t, err, ErrLadderLockTimeout, fmt.Sprint(err))
 	require.NoError(t, release())
@@ -237,4 +242,38 @@ func TestLadderAmendCeiling_SettledSkewMargin(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLadderAmendCeiling_CancelsOverdueBeforeCounting(t *testing.T) {
+	f := newCeilingFixture(t)
+	_, ids := f.plan(fptr(10), fptr(0), fptr(100), 5, 5)
+	// X is past the 24h grace window: neither counted in flight nor claimable at "now".
+	_, err := f.store.db.Exec(f.ctx, "UPDATE ladder_tranches SET scheduled_date=now()-interval '25 hours' WHERE id=$1", ids[0])
+	require.NoError(t, err)
+	require.NoError(t, f.amend(ids[1], 10), "X is not in flight, so 10 fits the ceiling")
+	var status ladder.TrancheStatus
+	require.NoError(t, f.store.db.QueryRow(f.ctx, "SELECT status FROM ladder_tranches WHERE id=$1", ids[0]).Scan(&status))
+	require.Equal(t, ladder.TrancheStatusCancelled, status, "the overdue row must be canceled, not left for a claim with an older asOf")
+	claimed, err := f.store.ClaimDueLadderTranches(f.ctx, f.cfgID, time.Now().Add(-time.Minute), 10,
+		func(context.Context, pgx.Tx, LadderTrancheDB) (string, error) { return uuid.NewString(), nil })
+	require.NoError(t, err)
+	require.Empty(t, claimed)
+}
+
+func TestLadderAmendCeiling_CeilingTruncatesNotRounds(t *testing.T) {
+	f := newCeilingFixture(t)
+	// 1.000015 * 33.33% = 0.3333049995: truncated 0.333304, rounded 0.333305.
+	_, err := f.store.db.Exec(f.ctx, "UPDATE ladder_configs SET target_coverage=33.33 WHERE id=$1", f.cfgID)
+	require.NoError(t, err)
+	_, ids := f.plan(fptr(10), fptr(0), fptr(1.000015), 0.1)
+	require.ErrorIs(t, f.amend(ids[0], 0.333305), ErrLadderAmendInvalid)
+	require.NoError(t, f.amend(ids[0], 0.333304))
+}
+
+func TestLadderAmendCeiling_HugeAmountRefused(t *testing.T) {
+	f := newCeilingFixture(t)
+	_, ids := f.plan(fptr(1e13), fptr(0), fptr(9e13), 1)
+	_, err := f.store.db.Exec(f.ctx, "UPDATE ladder_runs SET total_hourly_commit=99999999999999 WHERE config_id=$1", f.cfgID)
+	require.NoError(t, err) // let the original-total term pass so only the guard can refuse
+	require.ErrorIs(t, f.amend(ids[0], 9999999999999), ErrLadderAmendInvalid)
 }

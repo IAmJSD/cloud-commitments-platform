@@ -12,6 +12,9 @@ import (
 
 const ladderMicros = 1e6
 
+// ladderMaxUSDHr keeps micro-dollar sums far below int64 overflow (about 9.2e12 USD/hr).
+const ladderMaxUSDHr = 1e12
+
 // toLadderMicros converts a USD/hr amount (at most six fractional digits) to
 // integer micro-dollars, so the ceiling comparison is exact.
 func toLadderMicros(v float64) int64 { return int64(math.Round(v * ladderMicros)) }
@@ -36,8 +39,47 @@ func checkLadderConfigCeiling(ctx context.Context, tx pgx.Tx, configID, oldAmoun
 	if !raise {
 		return nil
 	}
-	var anchor time.Time
-	var ceiling, oldF, newF float64
+	snap, err := loadLadderCeiling(ctx, tx, configID, oldAmount, newAmount)
+	if err != nil {
+		return err
+	}
+	// Same sweep as the planner: a scheduled row past the grace window is neither
+	// counted nor claimable, so cancel it here or a later claim with an older asOf
+	// could still fire it on top of the raise.
+	now := time.Now()
+	err = cancelOverdueLadderTranchesTx(ctx, tx, &configID, now)
+	if err != nil {
+		return err
+	}
+	inFlight, err := inFlightLadderCommit(ctx, tx, configID, now)
+	if err != nil {
+		return err
+	}
+	settled, err := settledLadderCommit(ctx, tx, configID, ladderSettleAnchor(snap.anchor))
+	if err != nil {
+		return err
+	}
+	for _, v := range []float64{inFlight, settled, snap.ceiling, snap.oldAmount, snap.newAmount} {
+		if v > ladderMaxUSDHr {
+			return fmt.Errorf("%w: amount beyond %.0f USD/hr", ErrLadderAmendInvalid, ladderMaxUSDHr)
+		}
+	}
+	committed := toLadderMicros(inFlight) - toLadderMicros(snap.oldAmount) + toLadderMicros(snap.newAmount) + toLadderMicros(settled)
+	if committed > toLadderMicros(snap.ceiling) {
+		return ErrLadderAmendInvalid
+	}
+	return nil
+}
+
+type ladderCeilingSnapshot struct {
+	anchor                        time.Time
+	ceiling, oldAmount, newAmount float64
+}
+
+// loadLadderCeiling reads the latest non-canceled run's snapshot joined with the
+// config's current coverage. It refuses a run without a full snapshot.
+func loadLadderCeiling(ctx context.Context, tx pgx.Tx, configID, oldAmount, newAmount string) (ladderCeilingSnapshot, error) {
+	var snap ladderCeilingSnapshot
 	var hasSnapshot bool
 	err := tx.QueryRow(ctx, `SELECT r.started_at,
  r.target_usd_hr IS NOT NULL AND r.existing_usd_hr IS NOT NULL AND r.baseline_usd_hr IS NOT NULL,
@@ -45,27 +87,15 @@ func checkLadderConfigCeiling(ctx context.Context, tx pgx.Tx, configID, oldAmoun
  $2::numeric::float8,$3::numeric::float8
  FROM ladder_runs r JOIN ladder_configs c ON c.id=r.config_id
  WHERE r.config_id=$1 AND r.status<>'cancelled' ORDER BY r.started_at DESC,r.created_at DESC,r.id DESC LIMIT 1`,
-		configID, oldAmount, newAmount).Scan(&anchor, &hasSnapshot, &ceiling, &oldF, &newF)
+		configID, oldAmount, newAmount).Scan(&snap.anchor, &hasSnapshot, &snap.ceiling, &snap.oldAmount, &snap.newAmount)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("%w: config has no non-canceled run", ErrLadderAmendInvalid)
+		return snap, fmt.Errorf("%w: config has no non-canceled run", ErrLadderAmendInvalid)
 	}
 	if err != nil {
-		return err
+		return snap, err
 	}
 	if !hasSnapshot {
-		return fmt.Errorf("%w: latest run has no target snapshot to bound a raise", ErrLadderAmendInvalid)
+		return snap, fmt.Errorf("%w: latest run has no target snapshot to bound a raise", ErrLadderAmendInvalid)
 	}
-	inFlight, err := inFlightLadderCommit(ctx, tx, configID, time.Now())
-	if err != nil {
-		return err
-	}
-	settled, err := settledLadderCommit(ctx, tx, configID, ladderSettleAnchor(anchor))
-	if err != nil {
-		return err
-	}
-	committed := toLadderMicros(inFlight) - toLadderMicros(oldF) + toLadderMicros(newF) + toLadderMicros(settled)
-	if committed > toLadderMicros(ceiling) {
-		return ErrLadderAmendInvalid
-	}
-	return nil
+	return snap, nil
 }
