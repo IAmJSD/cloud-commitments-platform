@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/planstep"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -134,6 +135,9 @@ func TestNotificationTickOnBarePlanStepCreatesOneFailedRowAndSendsNoEmail(t *tes
 	})
 
 	plan := *bareStepPlan()
+	pastDeadline := time.Now().Add(-180 * time.Hour) // inside the one-day retry window after the grace
+	plan.NextExecutionDate = &pastDeadline
+	plan.Services = map[string]config.ServiceConfig{"azure:compute": {Enabled: true, Provider: "azure", Service: "compute", Term: 1, Payment: "monthly"}}
 	notifyTo := "notify@example.com"
 
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{plan}, nil)
@@ -158,7 +162,7 @@ func TestNotificationTickOnBarePlanStepCreatesOneFailedRowAndSendsNoEmail(t *tes
 	mockEmail.On("SendScheduledPurchaseNotification", ctx, mock.Anything).Return(nil).Maybe()
 	mockStore.On("StampPlanNotificationSent", ctx, plan.ID, mock.Anything).Return(nil).Maybe()
 
-	manager := &Manager{config: mockStore, email: mockEmail, notifyDays: 7}
+	manager := &Manager{config: mockStore, email: mockEmail, notifyDays: 7, resolver: &fakeResolver{err: planstep.ErrNoMatch}}
 
 	for tick := 1; tick <= 2; tick++ {
 		result, err := manager.SendUpcomingPurchaseNotifications(ctx)
@@ -170,5 +174,5 @@ func TestNotificationTickOnBarePlanStepCreatesOneFailedRowAndSendsNoEmail(t *tes
 	require.Len(t, saves, 1, "two ticks must leave exactly one row")
 	assert.Equal(t, "failed", saves[0].Status)
 	assert.Equal(t, 1, saves[0].StepNumber)
-	assert.Contains(t, saves[0].Error, "no recommendations")
+	assert.Contains(t, saves[0].Error, "no current recommendation matched")
 }

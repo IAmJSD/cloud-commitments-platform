@@ -1,0 +1,257 @@
+package purchase
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/planstep"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+)
+
+// errNoRecommendationSource marks a Manager that was never given a
+// recommendation source; a step that needs recommendations fails loud.
+var errNoRecommendationSource = errors.New("purchase manager has no recommendation source")
+
+// errPlanStepSkipped is the quiet skip a tick returns when the plan changed
+// under it or no match exists yet; it sends nothing and writes nothing.
+var errPlanStepSkipped = fmt.Errorf("%w: step skipped", errExecutionNotNotifiable)
+
+// stepResolver resolves the recommendations a plan's next step would buy.
+type stepResolver interface {
+	Resolve(ctx context.Context, plan *config.PurchasePlan, accountIDs []string) ([]config.RecommendationRecord, error)
+}
+
+type planstepResolver struct {
+	src   planstep.Source
+	store planstep.Store
+}
+
+func (r planstepResolver) Resolve(ctx context.Context, plan *config.PurchasePlan, accountIDs []string) ([]config.RecommendationRecord, error) {
+	return planstep.Resolve(ctx, r.src, r.store, plan, accountIDs)
+}
+
+// SetRecommendationSource wires the strict recommendation read the plan-step
+// attach resolves through. Late-bound because the scheduler is built after the
+// manager and imports this package.
+func (m *Manager) SetRecommendationSource(src planstep.Source) {
+	m.resolver = planstepResolver{src: src, store: m.config}
+}
+
+// claimPlanStep runs inside the tick's transaction. Lock order is the
+// per-provider advisory lock, then the plan row lock; nothing else takes the
+// advisory lock, so it cannot deadlock. Under both locks it decides from the
+// LOCKED plan whether the step may attach, and either hands back the row to
+// notify, writes the one row the step gets (attached or failed), or returns a
+// quiet skip.
+func (m *Manager) claimPlanStep(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan) (stepClaim, error) {
+	providers := planProviders(plan)
+	if len(providers) > 0 {
+		if err := m.config.LockPlanProvidersTx(ctx, tx, providers); err != nil {
+			return stepClaim{}, err
+		}
+	}
+	locked, lockErr := m.config.LockPurchasePlanTx(ctx, tx, plan.ID)
+	if lockErr != nil {
+		return stepClaim{}, fmt.Errorf("failed to lock plan %s: %w", plan.ID, lockErr)
+	}
+	if locked == nil {
+		return stepClaim{}, fmt.Errorf("plan not found: %s", plan.ID)
+	}
+	if !planUnchanged(plan, locked, providers) {
+		return stepClaim{}, fmt.Errorf("%w: plan %s changed since it was listed", errPlanStepSkipped, plan.ID)
+	}
+	// step_number names the step this row will COMPLETE, not the count
+	// already completed, matching api.createPurchaseExecutionsTx
+	// (CurrentStep + 1). The ramp advance is keyed on it since #1669.
+	claim := stepClaim{number: locked.RampSchedule.CurrentStep + 1}
+	rows, listErr := m.config.ListExecutionsForPlanStepTx(ctx, tx, plan.ID, claim.number)
+	if listErr != nil {
+		return stepClaim{}, fmt.Errorf("failed to check for existing execution: %w", listErr)
+	}
+	return m.claimFromRows(ctx, tx, locked, claim, rows)
+}
+
+// claimFromRows decides, from the step's existing rows, whether to adopt one,
+// skip, or attach recommendations (to the empty root row or to a new row).
+func (m *Manager) claimFromRows(ctx context.Context, tx pgx.Tx, locked *config.PurchasePlan, claim stepClaim, rows []config.PurchaseExecution) (stepClaim, error) {
+	if len(rows) > 0 {
+		root, blocked := adoptableRootRow(rows)
+		if blocked != nil {
+			claim.blocked = blocked
+			return claim, nil
+		}
+		if len(root.Recommendations) > 0 {
+			if locked.NextExecutionDate.Before(time.Now()) {
+				return stepClaim{}, fmt.Errorf("%w: step %d of plan %s already has a row and the plan date has passed", errExecutionNotNotifiable, claim.number, locked.ID)
+			}
+			claim.existing = root
+			return claim, nil
+		}
+		if root.ScheduledDate.Before(time.Now()) {
+			// A due empty row is failed by the scheduler (S10); attaching to it
+			// would hand the scheduler a due, never-vetoed purchase.
+			return stepClaim{}, fmt.Errorf("%w: empty execution %s is already due", errPlanStepSkipped, root.ExecutionID)
+		}
+		return m.attachStep(ctx, tx, locked, claim, root)
+	}
+	return m.attachStep(ctx, tx, locked, claim, nil)
+}
+
+// planProviders returns the sorted distinct providers of the plan's enabled services.
+func planProviders(plan *config.PurchasePlan) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for k := range plan.Services {
+		provider, enabled := plan.Services[k].Provider, plan.Services[k].Enabled
+		if _, dup := seen[provider]; enabled && !dup {
+			seen[provider] = struct{}{}
+			out = append(out, provider)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// planUnchanged reports whether the locked plan still describes the step the
+// tick listed: enabled, auto-purchase, same next date, same lock set.
+func planUnchanged(listed, locked *config.PurchasePlan, providers []string) bool {
+	return locked.Enabled && locked.AutoPurchase && locked.NextExecutionDate != nil && listed.NextExecutionDate != nil &&
+		locked.NextExecutionDate.Equal(*listed.NextExecutionDate) &&
+		strings.Join(planProviders(locked), ",") == strings.Join(providers, ",")
+}
+
+// attachStep resolves the step's recommendations under the locks and writes
+// them. root is the pre-created empty root row, or nil when the step has none.
+func (m *Manager) attachStep(ctx context.Context, tx pgx.Tx, locked *config.PurchasePlan, claim stepClaim, root *config.PurchaseExecution) (stepClaim, error) {
+	if m.resolver == nil {
+		return stepClaim{}, errNoRecommendationSource
+	}
+	if err := locked.RequireVetoWindow(); err != nil {
+		return stepClaim{}, fmt.Errorf("plan %s step %d not attached: %w", locked.ID, claim.number, err)
+	}
+	accounts, err := m.config.GetPlanAccounts(ctx, locked.ID)
+	if err != nil {
+		return stepClaim{}, fmt.Errorf("failed to read accounts of plan %s: %w", locked.ID, err)
+	}
+	ids := make([]string, 0, len(accounts))
+	for i := range accounts {
+		ids = append(ids, accounts[i].ID)
+	}
+	recs, err := m.resolver.Resolve(ctx, locked, ids)
+	if errors.Is(err, planstep.ErrNoMatch) {
+		return m.noMatch(ctx, tx, locked, claim, root)
+	}
+	if err != nil {
+		return stepClaim{}, fmt.Errorf("plan %s step %d: %w", locked.ID, claim.number, err)
+	}
+	sort.Slice(recs, func(i, j int) bool { return recs[i].ID < recs[j].ID })
+	if capErr := CheckStepCommitmentCap(locked, recs); capErr != nil {
+		return m.failStep(ctx, tx, locked, claim, root, fmt.Sprintf("%v (recommendations: %s)", capErr, recIDs(recs)))
+	}
+	return m.writeAttached(ctx, tx, locked, claim, root, recs)
+}
+
+func recIDs(recs []config.RecommendationRecord) string {
+	ids := make([]string, len(recs))
+	for i := range recs {
+		ids[i] = recs[i].ID
+	}
+	return strings.Join(ids, ", ")
+}
+
+// noMatch handles ErrNoMatch: no row until the grace window after the plan's
+// date has passed (a cold or lagging recommendation cache is not a failure),
+// then one failed row.
+func (m *Manager) noMatch(ctx context.Context, tx pgx.Tx, locked *config.PurchasePlan, claim stepClaim, root *config.PurchaseExecution) (stepClaim, error) {
+	global, err := m.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return stepClaim{}, fmt.Errorf("failed to read grace period: %w", err)
+	}
+	grace := planGraceDays(locked, global)
+	deadline := locked.NextExecutionDate.AddDate(0, 0, grace)
+	if time.Now().Before(deadline) {
+		return stepClaim{}, fmt.Errorf("%w: no recommendation matches plan %s yet, retrying until %s", errPlanStepSkipped, locked.ID, deadline.Format(time.RFC3339))
+	}
+	return m.failStep(ctx, tx, locked, claim, root, fmt.Sprintf(
+		"no current recommendation matched plan %s step %d by %s (%d-day grace after the plan date)", locked.ID, claim.number, deadline.Format("2006-01-02"), grace))
+}
+
+// failStep gives the step its one failed row: a new row written in tx, or the
+// pre-created empty row handed back for a compare-and-set after commit.
+func (m *Manager) failStep(ctx context.Context, tx pgx.Tx, locked *config.PurchasePlan, claim stepClaim, root *config.PurchaseExecution, reason string) (stepClaim, error) {
+	claim.failureReason = reason
+	if root != nil {
+		claim.emptyRoot = root
+		return claim, nil
+	}
+	fresh := &config.PurchaseExecution{
+		PlanID: locked.ID, ExecutionID: uuid.New().String(), Status: "pending",
+		StepNumber: claim.number, ScheduledDate: *locked.NextExecutionDate,
+	}
+	stampFailedPlanStep(fresh, reason)
+	if err := m.config.SavePurchaseExecutionTx(ctx, tx, fresh); err != nil {
+		return stepClaim{}, fmt.Errorf("failed to record plan step %d of plan %s as failed: %w", claim.number, locked.ID, err)
+	}
+	claim.failedNew = true
+	return claim, nil
+}
+
+// writeAttached writes the resolved recommendations and their suppressions in
+// the tick's transaction: a new pending row with NO token (the token is minted
+// and rotated in only after the email goes out, so the row becomes notified
+// only then), or the recommendations onto the pre-created empty root row.
+func (m *Manager) writeAttached(ctx context.Context, tx pgx.Tx, locked *config.PurchasePlan, claim stepClaim, root *config.PurchaseExecution, recs []config.RecommendationRecord) (stepClaim, error) {
+	var upfront, savings float64
+	for i := range recs {
+		upfront += recs[i].UpfrontCost
+		savings += recs[i].Savings
+	}
+	global, err := m.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return stepClaim{}, fmt.Errorf("failed to read grace periods for suppressions: %w", err)
+	}
+	exec := root
+	if root == nil {
+		exec = &config.PurchaseExecution{
+			PlanID: locked.ID, ExecutionID: uuid.New().String(), Status: "pending", StepNumber: claim.number,
+			ScheduledDate: attachScheduledDate(locked, time.Now()), IdempotencyKey: uuid.New().String(),
+			Recommendations: recs, TotalUpfrontCost: upfront, EstimatedSavings: savings,
+		}
+		if err := m.config.SavePurchaseExecutionTx(ctx, tx, exec); err != nil {
+			return stepClaim{}, fmt.Errorf("failed to record plan step %d of plan %s: %w", claim.number, locked.ID, err)
+		}
+	} else {
+		ok, err := m.config.SetExecutionRecommendationsIfEmptyTx(ctx, tx, root.ExecutionID, recs, upfront, savings)
+		if err != nil {
+			return stepClaim{}, err
+		}
+		if !ok {
+			return stepClaim{}, fmt.Errorf("%w: execution %s changed before recommendations could attach", errPlanStepSkipped, root.ExecutionID)
+		}
+		exec.Recommendations, exec.TotalUpfrontCost, exec.EstimatedSavings = recs, upfront, savings
+	}
+	sups := config.BuildSuppressions(recs, exec.ExecutionID, global, time.Now())
+	for i := range sups {
+		if err := m.config.CreateSuppressionTx(ctx, tx, &sups[i]); err != nil {
+			return stepClaim{}, fmt.Errorf("failed to record suppressions for execution %s: %w", exec.ExecutionID, err)
+		}
+	}
+	claim.existing = exec
+	return claim, nil
+}
+
+// attachScheduledDate is the plan's next date, or NotificationDaysBefore days
+// from now when that date has already passed, so a late attach still gets its
+// veto window before the scheduler can buy.
+func attachScheduledDate(locked *config.PurchasePlan, now time.Time) time.Time {
+	if locked.NextExecutionDate.Before(now) {
+		return now.AddDate(0, 0, locked.NotificationDaysBefore)
+	}
+	return *locked.NextExecutionDate
+}
