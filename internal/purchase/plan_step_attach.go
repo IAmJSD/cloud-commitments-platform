@@ -33,7 +33,10 @@ type planstepResolver struct {
 }
 
 func (r planstepResolver) Resolve(ctx context.Context, plan *config.PurchasePlan, accountIDs []string) ([]config.RecommendationRecord, error) {
-	return planstep.Resolve(ctx, r.src, r.store, plan, accountIDs)
+	// Step 1 with no baseline or ledger sizes exactly like the pre-cumulative
+	// resolver; C3 (platform#631) replaces this with the real step and ledger.
+	res, err := planstep.Resolve(ctx, r.src, r.store, plan, accountIDs, 1, nil, nil)
+	return res.Recs, err
 }
 
 // SetRecommendationSource wires the strict recommendation read the plan-step

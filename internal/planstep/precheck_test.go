@@ -74,13 +74,13 @@ func TestResolveRefusesUnsupportedPlanBeforeReading(t *testing.T) {
 	svc.MinCount = 3
 	plan.Services["azure:compute"] = svc
 	// A nil Source/Store would panic if Resolve read anything.
-	_, err := Resolve(t.Context(), nil, nil, plan, accts)
+	_, err := resolveStep1(t, nil, nil, plan, accts)
 	require.ErrorIs(t, err, ErrUnsupportedPlan)
 }
 
 func TestResolveRefusesStoredSPWithCountNotOne(t *testing.T) {
 	stored := spRec(`{"hourly_commitment":1.234}`)
 	stored.Count = 3
-	_, err := Resolve(t.Context(), fakeSource{shown: []config.RecommendationRecord{stored}}, fakeStore{rows: []config.RecommendationRecord{stored}}, spPlan(80, 25), accts)
+	_, err := resolveStep1(t, fakeSource{shown: []config.RecommendationRecord{stored}}, fakeStore{rows: []config.RecommendationRecord{stored}}, spPlan(80, 25), accts)
 	require.ErrorIs(t, err, ErrUnsupportedPlan)
 }

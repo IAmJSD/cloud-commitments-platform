@@ -40,7 +40,8 @@ func TestResolvedAzureStepPassesStalePricingRefusal(t *testing.T) {
 	shown.Count = 10 // step 1 bought 10; totals still describe 20
 	plan := &config.PurchasePlan{ID: "p", Services: map[string]config.ServiceConfig{"azure:compute": {Provider: "azure", Service: "compute", Enabled: true, Term: 1, Payment: "no-upfront", Coverage: 100}}, RampSchedule: config.RampSchedule{PercentPerStep: 25}}
 
-	recs, err := planstep.Resolve(context.Background(), azureStepSource{[]config.RecommendationRecord{shown}}, azureStepStore{[]config.RecommendationRecord{stored}}, plan, []string{acct})
+	res, err := planstep.Resolve(context.Background(), azureStepSource{[]config.RecommendationRecord{shown}}, azureStepStore{[]config.RecommendationRecord{stored}}, plan, []string{acct}, 1, nil, nil)
+	recs := res.Recs
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	require.Equal(t, 2, recs[0].Count)

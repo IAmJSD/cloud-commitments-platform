@@ -57,7 +57,8 @@ func planStepExecution(t *testing.T) (*config.PurchaseExecution, float64) {
 		Services:     map[string]config.ServiceConfig{"azure:compute": {Provider: "azure", Service: "compute", Enabled: true, Term: 1, Payment: "no-upfront", Coverage: 80}},
 		RampSchedule: config.RampSchedule{PercentPerStep: 25},
 	}
-	recs, err := planstep.Resolve(context.Background(), stepSource{[]config.RecommendationRecord{stored}}, stepStore{[]config.RecommendationRecord{stored}}, plan, []string{stepAcct})
+	res, err := planstep.Resolve(context.Background(), stepSource{[]config.RecommendationRecord{stored}}, stepStore{[]config.RecommendationRecord{stored}}, plan, []string{stepAcct}, 1, nil, nil)
+	recs := res.Recs
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	total := recs[0].TotalCommitment()
