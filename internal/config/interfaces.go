@@ -613,30 +613,6 @@ type StoreInterface interface {
 	// current status), so callers can distinguish a race from a hard error.
 	// Statuses are typed ladder.RunStatus so callers cannot pass an arbitrary
 	// string that would never match a stored status.
-	// SaveLadderRunWithTranches inserts the run row and its tranches in ONE
-	// transaction: a tranche-insert failure rolls back the run row too, so a
-	// status=planned run never persists without its tranches (which would let
-	// the cadence gate suppress the retry for a full window).
-	//
-	// L5 append-only: every ladder run persists its new scheduled tranches via
-	// this method and leaves any existing scheduled tranches untouched. In-flight
-	// netting (GetInFlightLadderCommitUSDHr) already subtracts existing
-	// scheduled tranches from the gap, so each run appends exactly the delta
-	// needed to reach target-E. Appending (never superseding) keeps prior
-	// tranches' original fire dates, converges to target on drift-up (run N
-	// tops up the gap the netting leaves), and cannot oscillate.
-	//
-	// GetInFlightLadderCommitUSDHr returns the total hourly USD commitment in
-	// flight for the given config: the sum of amount_usd_hr for tranches with
-	// status = 'scheduled' and scheduled_date after asOf ONLY (an elapsed
-	// tranche was never bought while no executor fires it, issue #118).
-	// Fired/completed tranches are executed
-	// purchases already reflected in the engine's ExistingUSDPerHour (the
-	// provider adapters fold payment-pending and active commitments into E),
-	// so summing them here too would double-count and under-purchase. Returns
-	// a non-nil pointer (zero when no scheduled tranches exist) so callers can
-	// pass it directly to AllocationInput.InFlightUSDPerHour. Never returns
-	// nil without an error.
 	// PlanAndSaveLadderRun is the ladder planning persist: in ONE READ COMMITTED
 	// transaction under the config's advisory lock it reads the in-flight
 	// commitment (scheduled rows within LadderFireGrace plus fired rows), calls
@@ -644,12 +620,9 @@ type StoreInterface interface {
 	// the new ones (append-only, L5). Overlapping runs for one config serialize:
 	// the second nets the first's committed rows. build must be pure compute
 	// (no I/O); run.StartedAt must equal asOf. The lock is also taken first by
-	// ClaimDueLadderTranches. SaveLadderRunWithTranches below bypasses it and
-	// must not be used for planning.
+	// ClaimDueLadderTranches.
 	PlanAndSaveLadderRun(ctx context.Context, configID string, asOf time.Time, build LadderPlanBuilder) (*LadderRunDB, error)
 	SaveLadderRun(ctx context.Context, run *LadderRunDB) (*LadderRunDB, error)
-	SaveLadderRunWithTranches(ctx context.Context, run *LadderRunDB, tranches []LadderTrancheDB) (*LadderRunDB, error)
-	GetInFlightLadderCommitUSDHr(ctx context.Context, configID string, asOf time.Time) (*float64, error)
 	GetLadderRun(ctx context.Context, id string) (*LadderRunDB, error)
 	SaveLadderTranches(ctx context.Context, tranches []LadderTrancheDB) error
 	LatestLadderRunStartedAt(ctx context.Context, configID string) (*time.Time, error)

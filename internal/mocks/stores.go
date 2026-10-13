@@ -1967,25 +1967,6 @@ func (m *MockConfigStore) PlanAndSaveLadderRun(ctx context.Context, configID str
 	return v, args.Error(1)
 }
 
-// SaveLadderRunWithTranches mocks the SaveLadderRunWithTranches operation.
-// Returns the run unchanged (transaction succeeds) when no expectation is
-// registered, so tests that only care about other calls stay green.
-func (m *MockConfigStore) SaveLadderRunWithTranches(ctx context.Context, run *config.LadderRunDB, tranches []config.LadderTrancheDB) (*config.LadderRunDB, error) {
-	m.record("SaveLadderRunWithTranches", ctx, run, tranches)
-	if !isExpected(&m.Mock, "SaveLadderRunWithTranches") {
-		return run, nil
-	}
-	args := m.Called(ctx, run, tranches)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	v, ok := args.Get(0).(*config.LadderRunDB)
-	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.LadderRunDB, got %T", args.Get(0)))
-	}
-	return v, args.Error(1)
-}
-
 // GetLadderRun mocks the GetLadderRun operation.
 // Returns (nil, nil) when no expectation is registered.
 func (m *MockConfigStore) GetLadderRun(ctx context.Context, id string) (*config.LadderRunDB, error) {
@@ -2028,26 +2009,6 @@ func (m *MockConfigStore) LatestLadderRunStartedAt(ctx context.Context, configID
 	v, ok := args.Get(0).(*time.Time)
 	if !ok {
 		panic(fmt.Sprintf("mock: expected *time.Time, got %T", args.Get(0)))
-	}
-	return v, args.Error(1)
-}
-
-// GetInFlightLadderCommitUSDHr mocks the GetInFlightLadderCommitUSDHr
-// operation. Returns a pointer to zero (no in-flight commitment) when no
-// expectation is registered, matching the happy-path default.
-func (m *MockConfigStore) GetInFlightLadderCommitUSDHr(ctx context.Context, configID string, asOf time.Time) (*float64, error) {
-	m.record("GetInFlightLadderCommitUSDHr", ctx, configID, asOf)
-	if !isExpected(&m.Mock, "GetInFlightLadderCommitUSDHr") {
-		zero := 0.0
-		return &zero, nil
-	}
-	args := m.Called(ctx, configID, asOf)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	v, ok := args.Get(0).(*float64)
-	if !ok {
-		panic(fmt.Sprintf("mock: expected *float64, got %T", args.Get(0)))
 	}
 	return v, args.Error(1)
 }
