@@ -605,6 +605,7 @@ func (p *PurchasePlan) Validate() error {
 // ErrMultiStepSavingsPlans marks an armed multi-step plan with an enabled
 // Savings Plans service. Step 1 suppresses the whole SP recommendation for 7
 // days, so later steps find nothing and the ramp strands (platform#631, Q7).
+// Read-only query for already-armed hits: runbooks/armed-multi-step-savings-plans-plans.md.
 var ErrMultiStepSavingsPlans = errors.New("multi-step ramps do not support Savings Plans: use a single-step (immediate) ramp or remove the Savings Plans service")
 
 // CheckNoMultiStepSavingsPlans refuses an armed (enabled and auto-purchase)
