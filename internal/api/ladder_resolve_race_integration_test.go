@@ -89,36 +89,33 @@ func TestLadderResolve_RacesWithReconcileAndRetry(t *testing.T) {
 // head start, retries head start.
 func runRaceRound(round int, finishers, retries []func()) {
 	var wg sync.WaitGroup
-	start := make(chan struct{})
-	launch := func(fns []func()) {
+	// launch parks each function on its own gate channel (never reassigned, so
+	// no goroutine reads a variable another one writes) and returns the opener.
+	launch := func(fns []func()) func() {
+		gate := make(chan struct{})
 		for _, fn := range fns {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				<-start
+				<-gate
 				fn()
 			}()
 		}
+		return func() { close(gate) }
 	}
 	switch round % 3 {
 	case 0:
-		launch(finishers)
-		launch(retries)
-		close(start)
+		openFinishers, openRetries := launch(finishers), launch(retries)
+		openFinishers()
+		openRetries()
 	case 1:
-		launch(finishers)
-		close(start)
+		launch(finishers)()
 		time.Sleep(150 * time.Millisecond)
-		start = make(chan struct{})
-		launch(retries)
-		close(start)
+		launch(retries)()
 	default:
-		launch(retries)
-		close(start)
+		launch(retries)()
 		time.Sleep(150 * time.Millisecond)
-		start = make(chan struct{})
-		launch(finishers)
-		close(start)
+		launch(finishers)()
 	}
 	wg.Wait()
 }
