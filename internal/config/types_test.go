@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -90,6 +91,46 @@ func TestRampSchedule_GetCurrentCoverage(t *testing.T) {
 			result := tt.schedule.GetCurrentCoverage(tt.baseCoverage)
 			assert.Equal(t, tt.expected, result)
 		})
+	}
+}
+
+func TestRampSchedule_CumulativePercent(t *testing.T) {
+	weekly := RampSchedule{Type: "weekly", PercentPerStep: 25, TotalSteps: 4}
+	custom := RampSchedule{Type: "custom", PercentPerStep: 40, TotalSteps: 3}
+	tests := []struct {
+		name     string
+		schedule RampSchedule
+		step     int
+		expected float64
+	}{
+		{"immediate is always 100", RampSchedule{Type: "immediate"}, 0, 100},
+		{"weekly step 0", weekly, 0, 0},
+		{"weekly step 1", weekly, 1, 25},
+		{"weekly step 4", weekly, 4, 100},
+		{"custom 3x40 step 2", custom, 2, 80},
+		{"custom 3x40 step 3 clamps to 100", custom, 3, 100},
+		{"step beyond the ramp stays at 100", weekly, 9, 100},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, tt.schedule.CumulativePercent(tt.step))
+		})
+	}
+}
+
+// GetCurrentCoverage must stay the base scaled by CumulativePercent at the
+// schedule's own CurrentStep, so the two cannot drift.
+func TestRampSchedule_GetCurrentCoverageUsesCumulativePercent(t *testing.T) {
+	s := RampSchedule{Type: "custom", PercentPerStep: 40, TotalSteps: 3, CurrentStep: 2}
+	assert.Equal(t, 80*s.CumulativePercent(2)/100, s.GetCurrentCoverage(80))
+}
+
+// An immediate schedule returns the base untouched: base*100/100 would turn
+// 0.1694 into 0.16939999999999997 and math.MaxFloat64 into +Inf.
+func TestRampSchedule_GetCurrentCoverageImmediateIsExact(t *testing.T) {
+	s := RampSchedule{Type: "immediate"}
+	for _, base := range []float64{0.1694, 80, math.MaxFloat64} {
+		assert.Equal(t, base, s.GetCurrentCoverage(base))
 	}
 }
 

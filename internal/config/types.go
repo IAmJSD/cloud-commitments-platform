@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"time"
 
@@ -276,16 +277,22 @@ var PresetRampSchedules = map[string]RampSchedule{
 	},
 }
 
+// CumulativePercent is the share of the base (0..100) a ramp has bought once
+// step steps are complete: step*PercentPerStep capped at 100, and 100 for an
+// immediate schedule. It is the one definition of cumulative ramp progress.
+func (r *RampSchedule) CumulativePercent(step int) float64 {
+	if r.Type == "immediate" {
+		return 100
+	}
+	return math.Min(100, float64(step)*r.PercentPerStep)
+}
+
 // GetCurrentCoverage calculates the current effective coverage based on ramp progress.
 func (r *RampSchedule) GetCurrentCoverage(baseCoverage float64) float64 {
 	if r.Type == "immediate" {
-		return baseCoverage
+		return baseCoverage // base*100/100 is not exact in floating point
 	}
-	completedPercent := float64(r.CurrentStep) * r.PercentPerStep
-	if completedPercent > 100 {
-		completedPercent = 100
-	}
-	return baseCoverage * completedPercent / 100
+	return baseCoverage * r.CumulativePercent(r.CurrentStep) / 100
 }
 
 // GetNextPurchaseDate calculates when the next purchase step should occur.
