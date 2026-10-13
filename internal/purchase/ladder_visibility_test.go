@@ -2,18 +2,12 @@ package purchase
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
-	awsladder "github.com/LeanerCloud/cloud-commitments-go/providers/aws/ladder"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	sdksp "github.com/aws/aws-sdk-go-v2/service/savingsplans"
@@ -26,17 +20,18 @@ import (
 // visFake is both the reconcile store and the SP API. inTx lets the API assert
 // it is never reached while a reconcile transaction is open.
 type visFake struct {
-	mu          sync.Mutex
-	inTx        bool
-	callsInTx   int
-	calls       int
-	factoryHits int
-	apiErr      error
-	plans       []sptypes.SavingsPlan
-	fired       []config.LadderTrancheDB
-	execs       map[string]*config.PurchaseExecution
-	completed   []string
-	lastStates  []sptypes.SavingsPlanState
+	mu           sync.Mutex
+	inTx         bool
+	callsInTx    int
+	calls        int
+	factoryHits  int
+	factoryAccts []string
+	apiErr       error
+	plans        []sptypes.SavingsPlan
+	fired        []config.LadderTrancheDB
+	execs        map[string]*config.PurchaseExecution
+	completed    []string
+	lastStates   []sptypes.SavingsPlanState
 }
 
 func (f *visFake) ListFiredLadderTranches(context.Context, int) ([]config.LadderTrancheDB, error) {
@@ -77,8 +72,9 @@ func (f *visFake) DescribeSavingsPlans(_ context.Context, in *sdksp.DescribeSavi
 	}
 	return &sdksp.DescribeSavingsPlansOutput{SavingsPlans: f.plans}, nil
 }
-func (f *visFake) factory(context.Context, string, string) (SPDescriber, error) {
+func (f *visFake) factory(_ context.Context, acct, _ string) (SPDescriber, error) {
 	f.factoryHits++
+	f.factoryAccts = append(f.factoryAccts, acct)
 	return f, nil
 }
 
@@ -181,50 +177,51 @@ func TestRunLadderReconcile_StaleUnresolvedIsCounted(t *testing.T) {
 	assert.Equal(t, 1, res.Stale, "chain head is epoch, far older than LadderFiredStaleAfter")
 }
 
-// TestLadderVisibleStatesMatchGetLayerStates drives the pinned AWSLadder's real
-// GetLayerStates against a local endpoint and checks that the states it sends
-// to DescribeSavingsPlans are exactly ladderVisibleSPStates.
-func TestLadderVisibleStatesMatchGetLayerStates(t *testing.T) {
-	var mu sync.Mutex
-	var states []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		switch {
-		case r.URL.Path == "/DescribeSavingsPlans":
-			var in struct {
-				States []string `json:"states"`
-			}
-			require.NoError(t, json.Unmarshal(body, &in))
-			mu.Lock()
-			states = in.States
-			mu.Unlock()
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"savingsPlans":[]}`))
-		case r.Header.Get("X-Amz-Target") != "":
-			w.Header().Set("Content-Type", "application/x-amz-json-1.1")
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"__type":"ValidationException","message":"not under test"}`))
-		default:
-			w.Header().Set("Content-Type", "text/xml")
-			_, _ = w.Write([]byte(`<DescribeReservedInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/"><reservedInstancesSet/></DescribeReservedInstancesResponse>`))
-		}
-	}))
-	defer srv.Close()
-	t.Setenv("AWS_ENDPOINT_URL", srv.URL)
-	t.Setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
-	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
-
-	capab, err := awsladder.NewFromAWSConfig(context.Background(), "us-east-1", "ladder-acct")
-	require.NoError(t, err)
-	_, err = capab.GetLayerStates(context.Background(), ladder.Scope{Provider: common.ProviderAWS, AccountID: "ladder-acct"})
-	require.NoError(t, err)
-
-	want := make([]string, len(ladderVisibleSPStates))
-	for i, s := range ladderVisibleSPStates {
-		want[i] = string(s)
+// TestLadderVisiblePredicateMatchesUpstream pins the predicate to the pinned
+// module's, without any network access. The module exports no symbol for it,
+// so the table is copied from providers/aws/ladder at the go.mod pin:
+//   - states: adapters.go:39-42 spListerStates (active, payment-pending only;
+//     queued is excluded on purpose, adapters.go:30-37)
+//   - EC2Instance plans only in the ladder region, Compute global:
+//     adapters.go:123-133 appendRegionScopedSPs
+//   - plans are summed into the layer of their own plan type:
+//     layer_states.go:244-251 sumSPHourlyCost
+//
+// TODO: export the set from cloud-commitments-go and import it here.
+func TestLadderVisiblePredicateMatchesUpstream(t *testing.T) {
+	const region = "us-east-1"
+	cases := []struct {
+		name  string
+		state sptypes.SavingsPlanState
+		typ   sptypes.SavingsPlanType
+		plan  sptypes.SavingsPlanType
+		reg   string
+		want  bool
+	}{
+		{"compute active", sptypes.SavingsPlanStateActive, sptypes.SavingsPlanTypeCompute, sptypes.SavingsPlanTypeCompute, "", true},
+		{"compute payment-pending", sptypes.SavingsPlanStatePaymentPending, sptypes.SavingsPlanTypeCompute, sptypes.SavingsPlanTypeCompute, "", true},
+		{"compute queued", sptypes.SavingsPlanStateQueued, sptypes.SavingsPlanTypeCompute, sptypes.SavingsPlanTypeCompute, "", false},
+		{"compute pending-return", sptypes.SavingsPlanStatePendingReturn, sptypes.SavingsPlanTypeCompute, sptypes.SavingsPlanTypeCompute, "", false},
+		{"compute retired", sptypes.SavingsPlanStateRetired, sptypes.SavingsPlanTypeCompute, sptypes.SavingsPlanTypeCompute, "", false},
+		{"ec2 same region", sptypes.SavingsPlanStateActive, sptypes.SavingsPlanTypeEc2Instance, sptypes.SavingsPlanTypeEc2Instance, region, true},
+		{"ec2 other region", sptypes.SavingsPlanStateActive, sptypes.SavingsPlanTypeEc2Instance, sptypes.SavingsPlanTypeEc2Instance, "eu-west-1", false},
+		{"type differs from layer", sptypes.SavingsPlanStateActive, sptypes.SavingsPlanTypeCompute, sptypes.SavingsPlanTypeEc2Instance, region, false},
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	assert.ElementsMatch(t, want, states)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := spCountsAsExisting(sp("x", c.typ, c.state, c.reg), expectedPlan{id: "x", planType: string(c.plan), region: region})
+			assert.Equal(t, c.want, got)
+		})
+	}
+	assert.ElementsMatch(t, []sptypes.SavingsPlanState{sptypes.SavingsPlanStateActive, sptypes.SavingsPlanStatePaymentPending}, ladderVisibleSPStates)
+}
+
+func TestRunLadderReconcile_PartialVisibilityStaysFired(t *testing.T) {
+	f := &visFake{plans: []sptypes.SavingsPlan{sp("sp-1", sptypes.SavingsPlanTypeCompute, sptypes.SavingsPlanStateActive, "")}}
+	f.addTranche("t1", "acct-a", "sp-1", ladder.LayerComputeSP)
+	f.execs["exec-t1"].Recommendations = append(f.execs["exec-t1"].Recommendations,
+		config.RecommendationRecord{Selected: true, PurchaseID: "sp-2", Region: "us-east-1"})
+	f.run(t)
+	assert.Empty(t, f.completed)
+	assert.Equal(t, []string{"acct-a"}, f.factoryAccts)
 }
