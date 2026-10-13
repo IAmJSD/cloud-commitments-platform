@@ -102,6 +102,7 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		// closure so the comparison reads the same advisory-locked row the
 		// write lands on.
 		before := riExchangeArmStateOf(existing)
+		switchBefore := existing.AutoPurchaseEnabled
 
 		// grace_period_days is a map: json.Unmarshal into a non-nil map MERGES
 		// keys (an omitted key can never be deleted). When the caller sends the
@@ -116,7 +117,10 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		if vErr := existing.Validate(); vErr != nil {
 			return NewClientError(400, fmt.Sprintf("validation error: %s", vErr))
 		}
-		return h.requireRIExchangeAutoModeGrant(ctx, req, before, riExchangeArmStateOf(existing))
+		if gErr := h.requireRIExchangeAutoModeGrant(ctx, req, before, riExchangeArmStateOf(existing)); gErr != nil {
+			return gErr
+		}
+		return h.requireAutoPurchaseSwitchGrant(ctx, req, session, switchBefore, existing)
 	})
 	if err != nil {
 		return nil, err

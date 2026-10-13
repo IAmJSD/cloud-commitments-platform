@@ -178,8 +178,8 @@ func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunction
 	plan := req.toPurchasePlan()
 
 	// Validate the plan
-	if err := plan.Validate(); err != nil {
-		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
+	if err := h.validateAndGatePlan(ctx, httpReq, session, nil, plan); err != nil {
+		return nil, err
 	}
 
 	if err := h.config.CreatePurchasePlan(ctx, plan); err != nil {
@@ -308,6 +308,10 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 
 	plan, err := mergeUpdatedPlan(existingPlan, &req, planID)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := h.requirePlanArmGrant(ctx, httpReq, session, existingPlan, plan); err != nil {
 		return nil, err
 	}
 
@@ -708,12 +712,13 @@ func (h *Handler) patchPlan(ctx context.Context, httpReq *events.LambdaFunctionU
 		return nil, NewClientError(404, fmt.Sprintf("plan not found: %s", planID))
 	}
 
+	before := *plan
 	if err := applyPatchFields(plan, req); err != nil {
 		return nil, err
 	}
 
-	if err := plan.Validate(); err != nil {
-		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
+	if err := h.validateAndGatePlan(ctx, httpReq, session, &before, plan); err != nil {
+		return nil, err
 	}
 
 	if err := h.config.UpdatePurchasePlan(ctx, plan); err != nil {

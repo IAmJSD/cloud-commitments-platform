@@ -524,12 +524,20 @@ func (c *ServiceConfig) validateConfigCoverage() error {
 // validateNotificationAndCap checks the notification window and requires a set
 // cap to be a positive finite amount. A nil cap means no cap, which refuses
 // auto-purchase of steps with recommendations.
+// MinStepCommitment and MaxStepCommitmentLimit bound max_step_commitment to what
+// the NUMERIC(18,2) column stores: below one cent it rounds to 0 and violates
+// CHECK > 0 (a 500), and 1e308 overflows it. NaN fails both comparisons.
+const (
+	MinStepCommitment      = 0.01
+	MaxStepCommitmentLimit = 1e15
+)
+
 func (p *PurchasePlan) validateNotificationAndCap() error {
 	if p.NotificationDaysBefore < 0 || p.NotificationDaysBefore > MaxNotificationDaysBefore {
 		return fmt.Errorf("notification days must be between 0 and %d, got: %d", MaxNotificationDaysBefore, p.NotificationDaysBefore)
 	}
-	if p.MaxStepCommitment != nil && (!(*p.MaxStepCommitment > 0) || math.IsInf(*p.MaxStepCommitment, 0)) {
-		return fmt.Errorf("max_step_commitment must be a positive finite number, got: %v", *p.MaxStepCommitment)
+	if c := p.MaxStepCommitment; c != nil && (!(*c >= MinStepCommitment) || !(*c <= MaxStepCommitmentLimit)) {
+		return fmt.Errorf("max_step_commitment must be between %v and %v, got: %v", MinStepCommitment, MaxStepCommitmentLimit, *c)
 	}
 	return nil
 }
