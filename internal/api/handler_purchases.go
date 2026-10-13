@@ -2231,8 +2231,12 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 // persisting an approvable successor and reverting whatever the other
 // writer changed on the original row.
 func (h *Handler) persistRetrySuccessorTx(ctx context.Context, failedExec, newExecution *config.PurchaseExecution, suppressions []config.PurchaseSuppression) error {
-	var lostRace bool
+	var lostRace, settledTranche bool
 	err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := h.guardLadderTrancheForRetry(ctx, tx, failedExec.IdempotencyKey); err != nil {
+			settledTranche = errors.Is(err, errRetryLadderTrancheSettled)
+			return err
+		}
 		if err := h.config.SavePurchaseExecutionTx(ctx, tx, newExecution); err != nil {
 			return err
 		}
@@ -2254,6 +2258,11 @@ func (h *Handler) persistRetrySuccessorTx(ctx context.Context, failedExec, newEx
 	if err == nil {
 		return nil
 	}
+	if settledTranche {
+		return NewClientErrorWithDetails(409,
+			fmt.Sprintf("execution %s belongs to a ladder tranche that is already settled; retrying it could buy the same commitment twice", failedExec.ExecutionID),
+			map[string]any{})
+	}
 	if lostRace {
 		return NewClientErrorWithDetails(409,
 			fmt.Sprintf("execution %s was already retried; act on its descendant instead", failedExec.ExecutionID),
@@ -2269,6 +2278,26 @@ func (h *Handler) persistRetrySuccessorTx(ctx context.Context, failedExec, newEx
 // tx's UPDATE. Never returned to a caller directly; persistRetrySuccessorTx
 // translates it into a 409 ClientError.
 var errRetryLinkRaceLost = errors.New("retry link race lost")
+
+// guardLadderTrancheForRetry locks the ladder tranche named by the execution's
+// idempotency key (if any) before anything else in the retry tx, the same order
+// the reconciler uses (tranche, then execution rows), and refuses when the
+// tranche is settled. A failed tranche no longer nets, so an approvable
+// successor would buy the same slice a second time.
+func (h *Handler) guardLadderTrancheForRetry(ctx context.Context, tx pgx.Tx, idempotencyKey string) error {
+	status, isLadder, err := h.config.LockLadderTrancheForRetryTx(ctx, tx, idempotencyKey)
+	if err != nil {
+		return err
+	}
+	if isLadder && config.LadderTrancheSettled(status) {
+		return errRetryLadderTrancheSettled
+	}
+	return nil
+}
+
+// errRetryLadderTrancheSettled rolls back persistRetrySuccessorTx's tx when the
+// execution's ladder tranche is already completed, failed or canceled.
+var errRetryLadderTrancheSettled = errors.New("ladder tranche is settled")
 
 // authorizeSessionRetry is the retry-side mirror of
 // authorizeSessionCancel. Returns nil when the session is permitted to

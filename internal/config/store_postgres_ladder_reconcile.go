@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -112,4 +113,33 @@ func readChainNode(ctx context.Context, tx pgx.Tx, executionID string, forUpdate
 		return n, fmt.Errorf("read execution %s: %w", executionID, err)
 	}
 	return n, nil
+}
+
+// LockLadderTrancheForRetryTx locks the ladder tranche whose id equals a
+// purchase execution's idempotency key, so Retry can decide inside its own
+// transaction before it inserts a successor. The key is compared as text:
+// non-ladder keys (legacy execution ids, "<root>:<account>" multi-account
+// keys, content fingerprints) are not UUIDs and simply match nothing, which
+// is "not a ladder execution" (found=false), not an error. Lock order is
+// tranche first, then execution rows, the same as LockLadderTrancheChainTx.
+func (s *PostgresStore) LockLadderTrancheForRetryTx(ctx context.Context, tx pgx.Tx, idempotencyKey string) (status ladder.TrancheStatus, found bool, err error) {
+	if idempotencyKey == "" {
+		return "", false, nil
+	}
+	var raw string
+	err = tx.QueryRow(ctx, `SELECT status FROM ladder_tranches WHERE id::text = $1 FOR UPDATE`, idempotencyKey).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, fmt.Errorf("lock ladder_tranche for retry key %q: %w", idempotencyKey, err)
+	}
+	return ladder.TrancheStatus(raw), true, nil
+}
+
+// LadderTrancheSettled reports whether a tranche status can no longer lead to
+// a purchase through its existing execution: anything but scheduled or fired.
+// Unknown statuses count as settled, so Retry fails closed.
+func LadderTrancheSettled(status ladder.TrancheStatus) bool {
+	return status != ladder.TrancheStatusScheduled && status != ladder.TrancheStatusFired
 }
