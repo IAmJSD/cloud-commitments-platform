@@ -62,6 +62,10 @@ func (m *Manager) ladderFlagsRefusal(ctx context.Context) error {
 
 func ladderGateRefusal(gate *config.LadderExecutionGate) error {
 	switch {
+	case gate.TrancheStatus == nil:
+		return errors.New("refusing to execute ladder purchase: its tranche status is unknown")
+	case config.LadderTrancheSettled(ladder.TrancheStatus(*gate.TrancheStatus)):
+		return fmt.Errorf("refusing to execute ladder purchase: its tranche is %s", *gate.TrancheStatus)
 	case gate.ConfigEnabled == nil || gate.ConfigMode == nil:
 		return errors.New("refusing to execute ladder purchase: its ladder config no longer exists")
 	case !*gate.ConfigEnabled:

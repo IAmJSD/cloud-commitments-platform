@@ -39,6 +39,8 @@ func TestGetLadderExecutionGate(t *testing.T) {
 		assert.True(t, *g.ConfigEnabled)
 		assert.Equal(t, "email_approval", *g.ConfigMode)
 		assert.Equal(t, "executing", *g.RunStatus)
+		require.NotNil(t, g.TrancheStatus)
+		assert.Equal(t, "fired", *g.TrancheStatus)
 	})
 
 	t.Run("non-ladder keys are not an error", func(t *testing.T) {
