@@ -332,7 +332,7 @@ func cancelOverdueLadderTranchesTx(ctx context.Context, tx pgx.Tx, configID *str
 	}
 	_, err := tx.Exec(ctx, `
 		UPDATE ladder_tranches
-		SET status = $1
+		SET status = $1, status_reason = 'expired'
 		WHERE config_id = $2
 		  AND status = $3
 		  AND execution_id IS NULL

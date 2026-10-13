@@ -223,10 +223,10 @@ func TestTransitionLadderTranche_EveryLegalEdgeAndCompareAndSet(t *testing.T) {
 	require.NoError(t, store.SaveLadderTranches(ctx, []LadderTrancheDB{canceled, toCompleted, toFailed}))
 	require.Equal(t, 7.0, inFlight(ctx, t, store, cfgID, asOf))
 
-	ok, err := store.TransitionLadderTranche(ctx, canceled.ID, ladder.TrancheStatusScheduled, ladder.TrancheStatusCancelled)
+	ok, err := store.TransitionLadderTranche(ctx, canceled.ID, ladder.TrancheStatusScheduled, ladder.TrancheStatusCancelled, "test")
 	require.NoError(t, err)
 	assert.True(t, ok)
-	ok, err = store.TransitionLadderTranche(ctx, canceled.ID, ladder.TrancheStatusScheduled, ladder.TrancheStatusCancelled)
+	ok, err = store.TransitionLadderTranche(ctx, canceled.ID, ladder.TrancheStatusScheduled, ladder.TrancheStatusCancelled, "test")
 	require.NoError(t, err)
 	assert.False(t, ok, "second apply loses the compare-and-set")
 	assert.Equal(t, 6.0, inFlight(ctx, t, store, cfgID, asOf), "canceled releases netting")
@@ -235,14 +235,14 @@ func TestTransitionLadderTranche_EveryLegalEdgeAndCompareAndSet(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 6.0, inFlight(ctx, t, store, cfgID, asOf), "fired still nets")
 
-	ok, err = store.TransitionLadderTranche(ctx, toCompleted.ID, ladder.TrancheStatusScheduled, ladder.TrancheStatusCancelled)
+	ok, err = store.TransitionLadderTranche(ctx, toCompleted.ID, ladder.TrancheStatusScheduled, ladder.TrancheStatusCancelled, "test")
 	require.NoError(t, err)
 	assert.False(t, ok, "a claimed tranche can no longer be canceled from scheduled")
-	ok, err = store.TransitionLadderTranche(ctx, toCompleted.ID, ladder.TrancheStatusFired, ladder.TrancheStatusCompleted)
+	ok, err = store.TransitionLadderTranche(ctx, toCompleted.ID, ladder.TrancheStatusFired, ladder.TrancheStatusCompleted, "test")
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, 4.0, inFlight(ctx, t, store, cfgID, asOf), "completed releases netting (now counted in E)")
-	ok, err = store.TransitionLadderTranche(ctx, toFailed.ID, ladder.TrancheStatusFired, ladder.TrancheStatusFailed)
+	ok, err = store.TransitionLadderTranche(ctx, toFailed.ID, ladder.TrancheStatusFired, ladder.TrancheStatusFailed, "test")
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, 0.0, inFlight(ctx, t, store, cfgID, asOf), "failed releases netting")
@@ -250,13 +250,13 @@ func TestTransitionLadderTranche_EveryLegalEdgeAndCompareAndSet(t *testing.T) {
 	for _, id := range []string{canceled.ID, toCompleted.ID, toFailed.ID} {
 		for _, to := range allLadderTrancheStatuses {
 			st := trancheStatus(ctx, t, store, id)
-			ok, err = store.TransitionLadderTranche(ctx, id, st, to)
+			ok, err = store.TransitionLadderTranche(ctx, id, st, to, "test")
 			assert.Error(t, err, "terminal %s -> %s", st, to)
 			assert.False(t, ok)
 		}
 	}
 
-	ok, err = store.TransitionLadderTranche(ctx, uuid.New().String(), ladder.TrancheStatusFired, ladder.TrancheStatusFailed)
+	ok, err = store.TransitionLadderTranche(ctx, uuid.New().String(), ladder.TrancheStatusFired, ladder.TrancheStatusFailed, "test")
 	require.NoError(t, err)
 	assert.False(t, ok, "unknown id is a lost race, not an error")
 }
@@ -330,7 +330,7 @@ func TestClaimVsCancelAndOverdueSweep_ExactlyOneOutcome(t *testing.T) {
 		}()
 		go func() {
 			defer wg.Done()
-			cancelWon, cancelErr = store.TransitionLadderTranche(ctx, tr.ID, ladder.TrancheStatusScheduled, ladder.TrancheStatusCancelled)
+			cancelWon, cancelErr = store.TransitionLadderTranche(ctx, tr.ID, ladder.TrancheStatusScheduled, ladder.TrancheStatusCancelled, "test")
 		}()
 		go func() {
 			defer wg.Done()
@@ -355,4 +355,35 @@ func TestClaimVsCancelAndOverdueSweep_ExactlyOneOutcome(t *testing.T) {
 		_, err := store.db.Exec(ctx, `UPDATE ladder_tranches SET status = 'completed' WHERE id = $1`, tr.ID)
 		require.NoError(t, err)
 	}
+}
+
+// A transition stores its reason; the overdue sweep stamps 'expired'.
+func TestLadderTranche_StatusReasonIsStored(t *testing.T) {
+	ctx := context.Background()
+	store := setupLadderStore(ctx, t)
+	cfgID := seedLadderConfig(ctx, t, store)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	reasonOf := func(id string) *string {
+		var r *string
+		require.NoError(t, store.db.QueryRow(ctx, `SELECT status_reason FROM ladder_tranches WHERE id = $1`, id).Scan(&r))
+		return r
+	}
+
+	fired := lifecycleTranche(cfgID, 1, ladder.TrancheStatusFired, now)
+	overdue := lifecycleTranche(cfgID, 1, ladder.TrancheStatusScheduled, now.Add(-LadderFireGrace-time.Hour))
+	require.NoError(t, store.SaveLadderTranches(ctx, []LadderTrancheDB{fired, overdue}))
+
+	_, err := store.TransitionLadderTranche(ctx, fired.ID, ladder.TrancheStatusFired, ladder.TrancheStatusFailed, "")
+	require.Error(t, err, "a failed transition needs a reason")
+	ok, err := store.TransitionLadderTranche(ctx, fired.ID, ladder.TrancheStatusFired, ladder.TrancheStatusFailed, "no_submission")
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, reasonOf(fired.ID))
+	assert.Equal(t, "no_submission", *reasonOf(fired.ID))
+
+	require.NoError(t, store.WithTx(ctx, func(tx pgx.Tx) error {
+		return cancelOverdueLadderTranchesTx(ctx, tx, &cfgID, now)
+	}))
+	require.NotNil(t, reasonOf(overdue.ID))
+	assert.Equal(t, "expired", *reasonOf(overdue.ID))
 }
