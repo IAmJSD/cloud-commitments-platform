@@ -40,6 +40,13 @@ func (f fakeStore) GetGlobalConfig(context.Context) (*config.GlobalConfig, error
 	return &f.global, f.globalErr
 }
 
+// resolveStep1 is the pre-cumulative call shape: step 1, no baseline, no ledger.
+func resolveStep1(t *testing.T, src Source, store Store, plan *config.PurchasePlan, accountIDs []string) ([]config.RecommendationRecord, error) {
+	t.Helper()
+	res, err := Resolve(t.Context(), src, store, plan, accountIDs, 1, nil, nil)
+	return res.Recs, err
+}
+
 func ptr[T any](v T) *T { return &v }
 
 func azureRec(count int, upfront float64) config.RecommendationRecord {
@@ -68,7 +75,7 @@ func TestResolveSizesAndPricesFromUnsuppressedRow(t *testing.T) {
 	shown.SuppressedCount = 10
 	shown.UpfrontCost = 1 // the displayed row's totals must never be the price source
 	// Plan payment "no-upfront" must match the Azure token "monthly".
-	got, err := Resolve(t.Context(), fakeSource{shown: []config.RecommendationRecord{shown}}, fakeStore{rows: []config.RecommendationRecord{stored}}, azurePlan(80, 25), accts)
+	got, err := resolveStep1(t, fakeSource{shown: []config.RecommendationRecord{shown}}, fakeStore{rows: []config.RecommendationRecord{stored}}, azurePlan(80, 25), accts)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	n := 2 // floor(10*80*25/10000)
@@ -86,12 +93,12 @@ func TestResolveSizesAndPricesFromUnsuppressedRow(t *testing.T) {
 func TestResolveFloorsProductFirst(t *testing.T) {
 	stored := azureRec(100, 1000)
 	// 0.7*0.1 as a ratio is 0.06999999999999999, which floors 7 to 6.
-	got, err := Resolve(t.Context(), fakeSource{shown: []config.RecommendationRecord{stored}}, fakeStore{rows: []config.RecommendationRecord{stored}}, azurePlan(70, 10), accts)
+	got, err := resolveStep1(t, fakeSource{shown: []config.RecommendationRecord{stored}}, fakeStore{rows: []config.RecommendationRecord{stored}}, azurePlan(70, 10), accts)
 	require.NoError(t, err)
 	assert.Equal(t, 7, got[0].Count)
 
 	// 0.29 as a ratio is 0.28999999999999998, which floors 29 to 28.
-	got, err = Resolve(t.Context(), fakeSource{shown: []config.RecommendationRecord{stored}}, fakeStore{rows: []config.RecommendationRecord{stored}}, azurePlan(100, 29), accts)
+	got, err = resolveStep1(t, fakeSource{shown: []config.RecommendationRecord{stored}}, fakeStore{rows: []config.RecommendationRecord{stored}}, azurePlan(100, 29), accts)
 	require.NoError(t, err)
 	assert.Equal(t, 29, got[0].Count)
 }
@@ -110,17 +117,17 @@ func TestResolveFilters(t *testing.T) {
 	upfront.Payment = "upfront"
 	mixed := []config.RecommendationRecord{other, nilAcct, threeYear, upfront}
 	// The source ignores the filter, so the explicit re-check is what holds.
-	_, err := Resolve(t.Context(), fakeSource{shown: mixed}, fakeStore{rows: append(mixed, stored)}, azurePlan(100, 100), accts)
+	_, err := resolveStep1(t, fakeSource{shown: mixed}, fakeStore{rows: append(mixed, stored)}, azurePlan(100, 100), accts)
 	assert.ErrorIs(t, err, ErrNoMatch)
 
 	disabled := azurePlan(100, 100)
 	svc := disabled.Services["azure:compute"]
 	svc.Enabled = false
 	disabled.Services["azure:compute"] = svc
-	_, err = Resolve(t.Context(), fakeSource{shown: []config.RecommendationRecord{stored}}, fakeStore{rows: []config.RecommendationRecord{stored}}, disabled, accts)
+	_, err = resolveStep1(t, fakeSource{shown: []config.RecommendationRecord{stored}}, fakeStore{rows: []config.RecommendationRecord{stored}}, disabled, accts)
 	assert.ErrorIs(t, err, ErrNoMatch)
 
-	_, err = Resolve(t.Context(), fakeSource{shown: []config.RecommendationRecord{stored}}, fakeStore{rows: []config.RecommendationRecord{stored}, global: config.GlobalConfig{EnabledProviders: []string{"gcp"}}}, azurePlan(100, 100), accts)
+	_, err = resolveStep1(t, fakeSource{shown: []config.RecommendationRecord{stored}}, fakeStore{rows: []config.RecommendationRecord{stored}, global: config.GlobalConfig{EnabledProviders: []string{"gcp"}}}, azurePlan(100, 100), accts)
 	assert.ErrorIs(t, err, ErrNoMatch, "plan must apply the same enabled-providers filter as Opportunities")
 }
 
@@ -161,7 +168,7 @@ func TestResolveFailsClosed(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := Resolve(t.Context(), tc.src, tc.store, tc.plan, tc.accts)
+			got, err := resolveStep1(t, tc.src, tc.store, tc.plan, tc.accts)
 			require.Error(t, err)
 			assert.NotErrorIs(t, err, ErrNoMatch)
 			assert.Empty(t, got, "nothing may be returned to attach")
@@ -180,7 +187,7 @@ func TestResolveJoinsOnFullIdentity(t *testing.T) {
 	}
 	rows := []config.RecommendationRecord{mk("us-east-1a", "Linux/UNIX", 100), mk("us-east-1b", "Linux/UNIX", 200), mk("us-east-1a", "Windows", 300)}
 	plan := &config.PurchasePlan{ID: "p", Services: map[string]config.ServiceConfig{"aws:ec2": {Provider: "aws", Service: "ec2", Enabled: true, Term: 1, Payment: "no-upfront", Coverage: 100}}, RampSchedule: config.RampSchedule{PercentPerStep: 50}}
-	got, err := Resolve(t.Context(), fakeSource{shown: rows}, fakeStore{rows: rows}, plan, accts)
+	got, err := resolveStep1(t, fakeSource{shown: rows}, fakeStore{rows: rows}, plan, accts)
 	require.NoError(t, err)
 	require.Len(t, got, 3)
 	for i := range got {
@@ -194,7 +201,7 @@ func TestResolveRefusesOverlappingPlanServices(t *testing.T) {
 	stored := azureRec(20, 1000)
 	plan := azurePlan(100, 100)
 	plan.Services["azure:compute-again"] = plan.Services["azure:compute"]
-	_, err := Resolve(t.Context(), fakeSource{shown: []config.RecommendationRecord{stored}}, fakeStore{rows: []config.RecommendationRecord{stored}}, plan, accts)
+	_, err := resolveStep1(t, fakeSource{shown: []config.RecommendationRecord{stored}}, fakeStore{rows: []config.RecommendationRecord{stored}}, plan, accts)
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, ErrNoMatch)
 }
@@ -218,7 +225,7 @@ func TestResolveSavingsPlanRoundsDownAndKeepsRawKeys(t *testing.T) {
 	require.NoError(t, err)
 	stored.Count = 1
 	shown := stored
-	got, err := Resolve(t.Context(), fakeSource{shown: []config.RecommendationRecord{shown}}, fakeStore{rows: []config.RecommendationRecord{stored}}, spPlan(80, 25), accts)
+	got, err := resolveStep1(t, fakeSource{shown: []config.RecommendationRecord{shown}}, fakeStore{rows: []config.RecommendationRecord{stored}}, spPlan(80, 25), accts)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	// 1.234 * 80 * 25 / 10000 = 0.2468, rounded DOWN to cents.
@@ -239,12 +246,12 @@ func TestResolveSavingsPlanRoundsDownAndKeepsRawKeys(t *testing.T) {
 
 func TestResolveSavingsPlanBelowMinimumAndBadDetails(t *testing.T) {
 	small := spRec(`{"hourly_commitment":0.04}`)
-	_, err := Resolve(t.Context(), fakeSource{shown: []config.RecommendationRecord{small}}, fakeStore{rows: []config.RecommendationRecord{small}}, spPlan(80, 25), accts)
+	_, err := resolveStep1(t, fakeSource{shown: []config.RecommendationRecord{small}}, fakeStore{rows: []config.RecommendationRecord{small}}, spPlan(80, 25), accts)
 	assert.ErrorIs(t, err, ErrNoMatch, "0.008/hr is below one cent: dropped, never rounded up")
 	for name, details := range map[string]string{"missing key": `{"platform":"x"}`, "zero": `{"hourly_commitment":0}`, "not json": `nope`, "empty": ``} {
 		t.Run(name, func(t *testing.T) {
 			bad := spRec(details)
-			got, err := Resolve(t.Context(), fakeSource{shown: []config.RecommendationRecord{bad}}, fakeStore{rows: []config.RecommendationRecord{bad}}, spPlan(100, 100), accts)
+			got, err := resolveStep1(t, fakeSource{shown: []config.RecommendationRecord{bad}}, fakeStore{rows: []config.RecommendationRecord{bad}}, spPlan(100, 100), accts)
 			require.Error(t, err)
 			assert.NotErrorIs(t, err, ErrNoMatch)
 			assert.Empty(t, got)

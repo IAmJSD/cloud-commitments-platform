@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
@@ -19,6 +21,11 @@ import (
 // not a failure of the plan: the cache may be cold or mid-collect, so callers
 // retry on a later tick and fail only after the grace window.
 var ErrNoMatch = errors.New("no current recommendation matches the plan")
+
+// ErrTargetMet means every matched recommendation already has this plan's
+// cumulative target committed, so the step has nothing left to buy. It is
+// distinct from ErrNoMatch (nothing matched, retry later).
+var ErrTargetMet = errors.New("the plan's cumulative target is already met")
 
 // spHourlyStep is the precision AWS accepts for a Savings Plans hourly
 // commitment (the purchase client formats it with %.2f). Sizing rounds DOWN
@@ -38,48 +45,150 @@ type Store interface {
 	GetGlobalConfig(ctx context.Context) (*config.GlobalConfig, error)
 }
 
-// Resolve returns the recommendations the plan's next step would buy: for each
+// Result is what Resolve decided for one step.
+type Result struct {
+	// Recs are the recommendations the step would buy.
+	Recs []config.RecommendationRecord
+	// Baseline is set only when step is 1: every matched count-based identity
+	// mapped to its base (the existing baseline entry, else step-1 shown),
+	// including recs that sized to 0. The caller freezes it; nil at step > 1.
+	Baseline config.PlanRampBaseline
+	// Skipped lists identities with no baseline at step > 1 (new recs, newly
+	// added accounts). They are never frozen at first sight: under-buy.
+	Skipped []string
+}
+
+// ramp carries the cumulative-sizing inputs and accumulates its outputs.
+type ramp struct {
+	step      int
+	cum       float64
+	baseline  config.PlanRampBaseline
+	committed map[string]config.PlanRampQuantity
+	out       Result
+}
+
+// Resolve returns the recommendations the plan's step would buy: for each
 // enabled plan service, the recs Opportunities shows (strict read, enabled
 // providers) restricted to the plan's term, payment and target accounts, sized
-// to Coverage * PercentPerStep and priced from the unsuppressed stored row.
+// to the CUMULATIVE target and priced from the unsuppressed stored row. For a
+// count rec: target = floor(base * Coverage * CumulativePercent(step) / 10000)
+// and buy = clamp(target - committed, 0, shown). base is the frozen baseline
+// entry, or at step 1 the shown count (post-suppression, never above demand);
+// at step > 1 an identity without a baseline is skipped. baseline and
+// committed are caller-supplied (this function does no extra store reads).
 // accountIDs are the plan's target accounts; recs without an account are
 // excluded. Every failure is returned; there is no unsized or over-show
-// fallback. An empty result is ErrNoMatch.
-func Resolve(ctx context.Context, src Source, store Store, plan *config.PurchasePlan, accountIDs []string) ([]config.RecommendationRecord, error) {
+// fallback. An empty result is ErrTargetMet only when a non-empty baseline
+// exists and every baselined identity has its target committed (decided
+// without `shown`); anything else, including a hidden identity with a gap or an
+// empty step-1 read (no baseline returned), is ErrNoMatch.
+// Savings Plans keep their per-step sizing (platform#631 Q7).
+func Resolve(ctx context.Context, src Source, store Store, plan *config.PurchasePlan, accountIDs []string,
+	step int, baseline config.PlanRampBaseline, committed map[string]config.PlanRampQuantity) (Result, error) {
 	if err := Precheck(plan); err != nil {
-		return nil, err
+		return Result{}, err
+	}
+	if step < 1 {
+		return Result{}, fmt.Errorf("plan %s: step %d must be at least 1", plan.ID, step)
 	}
 	if len(accountIDs) == 0 {
-		return nil, fmt.Errorf("plan %s has no target accounts", plan.ID)
+		return Result{}, fmt.Errorf("plan %s has no target accounts", plan.ID)
 	}
 	global, err := store.GetGlobalConfig(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("read global config: %w", err)
+		return Result{}, fmt.Errorf("read global config: %w", err)
 	}
 	allowed := make(map[string]struct{}, len(accountIDs))
 	for _, id := range accountIDs {
 		allowed[id] = struct{}{}
 	}
-	var out []config.RecommendationRecord
+	r := &ramp{step: step, cum: plan.RampSchedule.CumulativePercent(step), baseline: baseline, committed: committed}
+	if step == 1 {
+		r.out.Baseline = config.PlanRampBaseline{}
+	}
+	if err := r.resolveServices(ctx, src, store, plan, accountIDs, allowed, global.EnabledProviders); err != nil {
+		return Result{}, err
+	}
+	return r.out, r.emptyErr(plan)
+}
+
+// emptyErr classifies an empty result; nil when there is something to buy.
+func (r *ramp) emptyErr(plan *config.PurchasePlan) error {
+	if len(r.out.Recs) > 0 {
+		return nil
+	}
+	if len(r.out.Baseline) == 0 {
+		r.out.Baseline = nil // an empty baseline is never frozen
+	}
+	if r.targetMet(plan) {
+		return ErrTargetMet
+	}
+	return ErrNoMatch
+}
+
+// resolveServices sizes every enabled plan service into r.out.Recs.
+func (r *ramp) resolveServices(ctx context.Context, src Source, store Store, plan *config.PurchasePlan,
+	accountIDs []string, allowed map[string]struct{}, enabledProviders []string) error {
 	seen := map[string]struct{}{}
 	for _, k := range sortedKeys(plan.Services) {
 		svc := plan.Services[k]
 		if !svc.Enabled {
 			continue
 		}
-		recs, err := resolveService(ctx, src, store, &svc, plan.RampSchedule.PercentPerStep, accountIDs, allowed, global.EnabledProviders)
+		recs, err := resolveService(ctx, src, store, &svc, plan.RampSchedule.PercentPerStep, r, accountIDs, allowed, enabledProviders)
 		if err == nil {
 			err = claimIdentities(seen, recs)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("plan service %q: %w", k, err)
+			return fmt.Errorf("plan service %q: %w", k, err)
 		}
-		out = append(out, recs...)
+		r.out.Recs = append(r.out.Recs, recs...)
 	}
-	if len(out) == 0 {
-		return nil, ErrNoMatch
+	return nil
+}
+
+// targetMet reports whether a non-empty frozen baseline exists and every
+// baselined identity of an enabled plan service has its cumulative target
+// committed. It reads no `shown`: an identity that is merely hidden (still has
+// a gap) is not met, so it ends as ErrNoMatch, never a silent no-op advance.
+func (r *ramp) targetMet(plan *config.PurchasePlan) bool {
+	if len(r.baseline) == 0 {
+		return false
 	}
-	return out, nil
+	judged := 0
+	for key, base := range r.baseline {
+		svc, ok := planServiceOf(plan, key)
+		if !ok {
+			continue
+		}
+		judged++
+		if r.target(base.Count, svc.Coverage) > r.committed[key].Count {
+			return false
+		}
+	}
+	return judged > 0
+}
+
+// planServiceOf finds the enabled plan service an identity key belongs to
+// (provider, service and term are fields 0, 2 and 6 of the key).
+func planServiceOf(plan *config.PurchasePlan, key string) (config.ServiceConfig, bool) {
+	f := strings.Split(key, "\x1f")
+	if len(f) < 7 {
+		return config.ServiceConfig{}, false
+	}
+	for _, k := range sortedKeys(plan.Services) {
+		svc := plan.Services[k]
+		if svc.Enabled && strings.EqualFold(svc.Provider, f[0]) && svc.Service == f[2] && strconv.Itoa(svc.Term) == f[6] {
+			return svc, true
+		}
+	}
+	return config.ServiceConfig{}, false
+}
+
+// target is floor(base * coverage * cum / 10000); coverage*cum is multiplied
+// before the base so 100*10 over 10000 stays exact.
+func (r *ramp) target(base int, coverage float64) int {
+	return int(math.Floor(float64(base) * (coverage * r.cum) / 10000))
 }
 
 func sortedKeys(m map[string]config.ServiceConfig) []string {
@@ -107,7 +216,7 @@ func claimIdentities(seen map[string]struct{}, recs []config.RecommendationRecor
 	return nil
 }
 
-func resolveService(ctx context.Context, src Source, store Store, svc *config.ServiceConfig, percentPerStep float64,
+func resolveService(ctx context.Context, src Source, store Store, svc *config.ServiceConfig, percentPerStep float64, r *ramp,
 	accountIDs []string, allowed map[string]struct{}, enabledProviders []string) ([]config.RecommendationRecord, error) {
 	wantPayment, err := validateInputs(svc, percentPerStep)
 	if err != nil {
@@ -133,7 +242,7 @@ func resolveService(ctx context.Context, src Source, store Store, svc *config.Se
 		if !match {
 			continue
 		}
-		sized, keep, err := sizeFromStored(&rec, stored, svc.Coverage*percentPerStep)
+		sized, keep, err := r.sizeFromStored(&rec, stored, svc.Coverage, percentPerStep)
 		if err != nil {
 			return nil, fmt.Errorf("recommendation %s: %w", rec.ID, err)
 		}
@@ -196,7 +305,7 @@ func storedByIdentity(ctx context.Context, store Store, filter config.Recommenda
 
 // sizeFromStored joins shown to its unsuppressed stored row on the full
 // identity key, then sizes and prices it.
-func sizeFromStored(shown *config.RecommendationRecord, stored map[string]*config.RecommendationRecord, product float64) (config.RecommendationRecord, bool, error) {
+func (r *ramp) sizeFromStored(shown *config.RecommendationRecord, stored map[string]*config.RecommendationRecord, coverage, percentPerStep float64) (config.RecommendationRecord, bool, error) {
 	key, err := config.RecIdentityKey(shown)
 	if err != nil {
 		return config.RecommendationRecord{}, false, err
@@ -205,14 +314,43 @@ func sizeFromStored(shown *config.RecommendationRecord, stored map[string]*confi
 	if base == nil {
 		return config.RecommendationRecord{}, false, errors.New("no stored row to price from (cache changed mid-read)")
 	}
-	return size(shown, base, product)
+	if common.IsSavingsPlan(common.ServiceType(base.Service)) {
+		return size(shown, base, coverage*percentPerStep, 0)
+	}
+	n, ok := r.countToBuy(key, shown.Count, coverage)
+	if !ok {
+		return config.RecommendationRecord{}, false, nil
+	}
+	return size(shown, base, 0, n)
 }
 
-// size returns shown sized to product/10000 of itself (product =
-// coverage*percentPerStep, multiplied before dividing so 100*10 over 10000
-// stays exact) and priced from the unsuppressed stored row. keep=false means
-// the rec sized to nothing.
-func size(shown, stored *config.RecommendationRecord, product float64) (config.RecommendationRecord, bool, error) {
+// countToBuy applies the cumulative formula to one count identity and records
+// the baseline entry (step 1, shown > 0). ok=false means skip: no baseline at
+// step > 1.
+func (r *ramp) countToBuy(key string, shown int, coverage float64) (int, bool) {
+	base, frozen := r.baseline[key]
+	switch {
+	case !frozen && r.step == 1:
+		base = config.PlanRampQuantity{Count: shown}
+	case !frozen:
+		r.out.Skipped = append(r.out.Skipped, key)
+		return 0, false
+	}
+	if r.step == 1 && base.Count > 0 {
+		r.out.Baseline[key] = base
+	}
+	gap := r.target(base.Count, coverage) - r.committed[key].Count
+	if gap <= 0 {
+		return 0, true
+	}
+	return min(gap, shown), true
+}
+
+// size returns shown sized to n units (count recs) or to product/10000 of its
+// hourly commitment (Savings Plans; product = coverage*percentPerStep,
+// multiplied before dividing) and priced from the unsuppressed stored row.
+// keep=false means the rec sized to nothing.
+func size(shown, stored *config.RecommendationRecord, product float64, n int) (config.RecommendationRecord, bool, error) {
 	if stored.Count <= 0 {
 		return config.RecommendationRecord{}, false, fmt.Errorf("stored count %d cannot price a share", stored.Count)
 	}
@@ -228,7 +366,7 @@ func size(shown, stored *config.RecommendationRecord, product float64) (config.R
 	if common.IsSavingsPlan(common.ServiceType(stored.Service)) {
 		ratio, err = sizeSP(&out, stored, product)
 	} else {
-		ratio = sizeCount(&out, stored, shown.Count, product)
+		ratio = sizeCount(&out, stored, n)
 	}
 	if err != nil || ratio == 0 {
 		return out, false, err
@@ -244,10 +382,9 @@ func size(shown, stored *config.RecommendationRecord, product float64) (config.R
 	return out, true, nil
 }
 
-// sizeCount sets out.Count to floor(shown*product/10000) and returns the
-// discrete ratio to stored.Count; 0 means it sized to nothing.
-func sizeCount(out, stored *config.RecommendationRecord, shown int, product float64) float64 {
-	n := int(math.Floor(float64(shown) * product / 10000))
+// sizeCount sets out.Count to n and returns the ratio to stored.Count; 0
+// means it sized to nothing.
+func sizeCount(out, stored *config.RecommendationRecord, n int) float64 {
 	if n <= 0 {
 		return 0
 	}
