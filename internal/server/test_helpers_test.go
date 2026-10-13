@@ -178,6 +178,10 @@ func (m *mockConfigStoreForHealth) LinkRetryExecutionAtomic(ctx context.Context,
 	return false, nil
 }
 
+func (m *mockConfigStoreForHealth) LockLadderTrancheForRetryTx(ctx context.Context, tx pgx.Tx, idempotencyKey string) (ladder.TrancheStatus, bool, error) {
+	return "", false, nil
+}
+
 func (m *mockConfigStoreForHealth) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
 	return false, "", nil
 }

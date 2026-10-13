@@ -468,6 +468,21 @@ func (m *MockConfigStore) LinkRetryExecutionAtomic(ctx context.Context, tx pgx.T
 	return args.Bool(0), args.Error(1)
 }
 
+// LockLadderTrancheForRetryTx mocks the operation. Defaults to (not a ladder
+// execution) when no expectation is registered.
+func (m *MockConfigStore) LockLadderTrancheForRetryTx(ctx context.Context, tx pgx.Tx, idempotencyKey string) (ladder.TrancheStatus, bool, error) {
+	m.record("LockLadderTrancheForRetryTx", ctx, tx, idempotencyKey)
+	if !isExpected(&m.Mock, "LockLadderTrancheForRetryTx") {
+		return "", false, nil
+	}
+	args := m.Called(ctx, tx, idempotencyKey)
+	status, ok := args.Get(0).(ladder.TrancheStatus)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected ladder.TrancheStatus, got %T", args.Get(0)))
+	}
+	return status, args.Bool(1), args.Error(2)
+}
+
 // CancelExecutionAtomic mocks the CancelExecutionAtomic operation.
 // Defaults to (true, "cancelled", nil) when no expectation is registered
 // so tests that only need the happy path don't require explicit mock setup.
