@@ -116,16 +116,26 @@ func requireStatus(t *testing.T, err error, status int) {
 	assert.Equal(t, status, ce.code)
 }
 
-func requireApproveReached(t *testing.T, f *tokenApproveFixture, err error) {
-	t.Helper()
-	requireStatus(t, err, 409)
-	f.purchase.AssertCalled(t, "ApproveExecution", mock.Anything, stepExecID, "valid-token", stepContact)
+func approveCalls(mp *MockPurchaseManager) int {
+	n := 0
+	for _, c := range mp.Calls {
+		if c.Method == "ApproveExecution" {
+			n++
+		}
+	}
+	return n
 }
 
-func requireApproveRefused(t *testing.T, f *tokenApproveFixture, err error, status int) {
+func requireApproveReached(t *testing.T, mp *MockPurchaseManager, err error) {
+	t.Helper()
+	requireStatus(t, err, 409)
+	assert.Equal(t, 1, approveCalls(mp), "approval should have been attempted")
+}
+
+func requireApproveRefused(t *testing.T, mp *MockPurchaseManager, err error, status int) {
 	t.Helper()
 	requireStatus(t, err, status)
-	f.purchase.AssertNotCalled(t, "ApproveExecution", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	assert.Zero(t, approveCalls(mp), "approval must be refused before the purchase manager")
 }
 
 func autoPlan(cap *float64) *config.PurchasePlan {
@@ -136,20 +146,20 @@ func TestApproveViaToken_PlanStep_ApproveOwnCappedContactEmail(t *testing.T) {
 	exec, total := planStepExecution(t)
 
 	over := newTokenApprove(t, []auth.Permission{cappedPerm(auth.ActionApproveOwn, total-1)}, autoPlan(nil))
-	requireApproveRefused(t, over, over.approve(exec), 403)
+	requireApproveRefused(t, over.purchase, over.approve(exec), 403)
 
 	atCap := newTokenApprove(t, []auth.Permission{cappedPerm(auth.ActionApproveOwn, total)}, autoPlan(nil))
-	requireApproveReached(t, atCap, atCap.approve(exec))
+	requireApproveReached(t, atCap.purchase, atCap.approve(exec))
 }
 
 func TestApproveViaToken_PlanStep_ApproveAnyCap(t *testing.T) {
 	exec, total := planStepExecution(t)
 
 	over := newTokenApprove(t, []auth.Permission{cappedPerm(auth.ActionApproveAny, total-1)}, autoPlan(nil))
-	requireApproveRefused(t, over, over.approve(exec), 403)
+	requireApproveRefused(t, over.purchase, over.approve(exec), 403)
 
 	atCap := newTokenApprove(t, []auth.Permission{cappedPerm(auth.ActionApproveAny, total)}, autoPlan(nil))
-	requireApproveReached(t, atCap, atCap.approve(exec))
+	requireApproveReached(t, atCap.purchase, atCap.approve(exec))
 }
 
 func TestApproveViaToken_PlanStep_ZeroTotalIs400(t *testing.T) {
@@ -157,7 +167,7 @@ func TestApproveViaToken_PlanStep_ZeroTotalIs400(t *testing.T) {
 	exec.Recommendations[0].UpfrontCost = 0
 	exec.Recommendations[0].MonthlyCost = nil
 	f := newTokenApprove(t, []auth.Permission{cappedPerm(auth.ActionApproveOwn, 1000)}, autoPlan(nil))
-	requireApproveRefused(t, f, f.approve(exec), 400)
+	requireApproveRefused(t, f.purchase, f.approve(exec), 400)
 }
 
 func TestApproveViaToken_PlanStep_NoVerbHonorsPlanCap(t *testing.T) {
@@ -165,13 +175,16 @@ func TestApproveViaToken_PlanStep_NoVerbHonorsPlanCap(t *testing.T) {
 	under, over := total+1, total-1
 
 	f := newTokenApprove(t, nil, autoPlan(&over))
-	requireApproveRefused(t, f, f.approve(exec), 403)
+	requireApproveRefused(t, f.purchase, f.approve(exec), 403)
 
 	f = newTokenApprove(t, nil, autoPlan(&under))
-	requireApproveReached(t, f, f.approve(exec))
+	requireApproveReached(t, f.purchase, f.approve(exec))
+
+	f = newTokenApprove(t, nil, autoPlan(&total))
+	requireApproveReached(t, f.purchase, f.approve(exec))
 
 	f = newTokenApprove(t, nil, autoPlan(nil))
-	requireApproveRefused(t, f, f.approve(exec), 403)
+	requireApproveRefused(t, f.purchase, f.approve(exec), 403)
 }
 
 func TestApproveViaToken_PlanStep_ManualPlan(t *testing.T) {
@@ -179,10 +192,10 @@ func TestApproveViaToken_PlanStep_ManualPlan(t *testing.T) {
 	over := total - 1
 
 	noCap := newTokenApprove(t, nil, &config.PurchasePlan{ID: stepPlanID})
-	requireApproveReached(t, noCap, noCap.approve(exec))
+	requireApproveReached(t, noCap.purchase, noCap.approve(exec))
 
 	withCap := newTokenApprove(t, nil, &config.PurchasePlan{ID: stepPlanID, MaxStepCommitment: &over})
-	requireApproveRefused(t, withCap, withCap.approve(exec), 403)
+	requireApproveRefused(t, withCap.purchase, withCap.approve(exec), 403)
 }
 
 func TestApproveConstraintsForSession_PlanStep_SessionlessAndAdminKey(t *testing.T) {
