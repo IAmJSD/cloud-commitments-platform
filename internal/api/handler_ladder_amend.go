@@ -32,6 +32,8 @@ func (h *Handler) amendLadderTranche(ctx context.Context, req *events.LambdaFunc
 		return nil, NewClientError(409, err.Error())
 	case errors.Is(err, config.ErrLadderAmendInvalid):
 		return nil, NewClientError(400, err.Error())
+	case errors.Is(err, config.ErrLadderLockTimeout):
+		return nil, NewClientErrorWithHeaders(503, "Ladder planning is busy; retry shortly", nil, map[string]string{"Retry-After": "5"})
 	default:
 		return result, err
 	}
