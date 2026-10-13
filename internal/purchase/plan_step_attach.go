@@ -120,10 +120,12 @@ func planProviders(plan *config.PurchasePlan) []string {
 }
 
 // planUnchanged reports whether the locked plan still describes the step the
-// tick listed: enabled, auto-purchase, same next date, same lock set.
+// tick listed: enabled, auto-purchase, same next date, same lock set. Dates are
+// compared at the microsecond precision PostgreSQL stores, so an in-memory plan
+// with nanoseconds (Linux clocks) is not mistaken for a changed one.
 func planUnchanged(listed, locked *config.PurchasePlan, providers []string) bool {
 	return locked.Enabled && locked.AutoPurchase && locked.NextExecutionDate != nil && listed.NextExecutionDate != nil &&
-		locked.NextExecutionDate.Equal(*listed.NextExecutionDate) &&
+		locked.NextExecutionDate.Truncate(time.Microsecond).Equal(listed.NextExecutionDate.Truncate(time.Microsecond)) &&
 		strings.Join(planProviders(locked), ",") == strings.Join(providers, ",")
 }
 

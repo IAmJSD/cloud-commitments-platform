@@ -33,6 +33,9 @@ func attachGlobal(ctx context.Context, t *testing.T, store *config.PostgresStore
 
 func attachPlanInDB(ctx context.Context, t *testing.T, store *config.PostgresStore, name string, next time.Time) *config.PurchasePlan {
 	t.Helper()
+	// PostgreSQL stores microseconds; a nanosecond date (Linux clocks) would never
+	// equal the plan the tick later reads back, so planUnchanged would skip it.
+	next = next.Truncate(time.Microsecond)
 	plan := &config.PurchasePlan{
 		Name: name, Enabled: true, AutoPurchase: true, NotificationDaysBefore: 30, MaxStepCommitment: f64(1000),
 		Services:          map[string]config.ServiceConfig{"ec2": {Provider: "aws", Service: "ec2", Enabled: true}},

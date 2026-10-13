@@ -225,3 +225,15 @@ func TestShouldRetryOverduePlan_Window(t *testing.T) {
 	assert.False(t, shouldRetryOverduePlan(at(time.Hour), true, global, now), "a future plan is the normal path")
 	assert.False(t, shouldRetryOverduePlan(at(-time.Hour), false, global, now), "kill switch off")
 }
+
+func TestPlanUnchanged_ComparesDatesAtMicrosecondPrecision(t *testing.T) {
+	base := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	withNanos := base.Add(789 * time.Nanosecond)
+	listed := attachPlan(withNanos, 1)
+	locked := attachPlan(base, 1)
+	providers := planProviders(locked)
+	assert.True(t, planUnchanged(listed, locked, providers), "sub-microsecond difference is not a change")
+	moved := base.Add(time.Microsecond)
+	locked.NextExecutionDate = &moved
+	assert.False(t, planUnchanged(listed, locked, providers), "a microsecond is a change")
+}
