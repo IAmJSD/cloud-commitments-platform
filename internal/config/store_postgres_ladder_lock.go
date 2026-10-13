@@ -86,6 +86,19 @@ func acquireLadderConfigLock(ctx context.Context, tx pgx.Tx, configID string) er
 	return nil
 }
 
+// ladderSettleSkewMargin widens the settled-tranche window backwards because
+// settled_at is stamped with the DB clock while asOf comes from the app clock.
+// A skew of up to this size cannot make a tranche that settled after the
+// caller's existing-commitment read fall outside the window; the cost is a
+// bounded double count (a safe under-buy) that heals on the next run. It must
+// stay far below the shortest cadence (cadenceDailyMin, 20h), so consecutive
+// runs' windows never overlap.
+const ladderSettleSkewMargin = time.Minute
+
+// ladderSettleAnchor is the anchor every caller passes to settledLadderCommit
+// for an existing-commitment read taken at or after asOf.
+func ladderSettleAnchor(asOf time.Time) time.Time { return asOf.Add(-ladderSettleSkewMargin) }
+
 // PlanAndSaveLadderRun reads the config's in-flight commitment, lets build turn
 // it into a run plus tranches, and persists both, all in ONE transaction under
 // the config's ladder lock. Two overlapping runs for one config therefore
@@ -93,10 +106,19 @@ func acquireLadderConfigLock(ctx context.Context, tx pgx.Tx, configID string) er
 // committed tranches as in-flight. build must be pure compute. The run's
 // ConfigID must equal configID and its StartedAt must equal asOf, which bounds
 // both the netting read and the overdue sweep.
+//
+// asOf MUST be captured before the caller reads the existing commitment (E,
+// GetLayerStates), which happens outside this transaction. Tranches that
+// completed after asOf are added to the in-flight figure, so one completing
+// between the E read and the locked read is netted (counted twice if E already
+// has it: a safe under-buy, never a miss). This relies on a tranche being
+// marked completed only after its commitment is visible through the same source
+// as E, and on visibility never reverting; it is safe only once the visibility
+// adapter (executor PR5a) provides that.
 func (s *PostgresStore) PlanAndSaveLadderRun(ctx context.Context, configID string, asOf time.Time, build LadderPlanBuilder) (*LadderRunDB, error) {
 	var result LadderRunDB
 	err := s.withLadderConfigLock(ctx, configID, func(tx pgx.Tx) error {
-		inFlight, err := inFlightLadderCommit(ctx, tx, configID, asOf)
+		inFlight, err := lockedLadderCommit(ctx, tx, configID, asOf)
 		if err != nil {
 			return err
 		}
@@ -129,6 +151,25 @@ func (s *PostgresStore) PlanAndSaveLadderRun(ctx context.Context, configID strin
 		return nil, err
 	}
 	return &result, nil
+}
+
+// lockedLadderCommit is the figure PlanAndSaveLadderRun hands to build:
+// in-flight plus tranches settled after the skew-widened anchor.
+//
+// Order is load-bearing: in-flight FIRST, settled SECOND. Each statement takes
+// a fresh READ COMMITTED snapshot, so a tranche fired at the first and
+// completed before the second is counted by both (safe); the reverse order
+// could miss one completing between the two.
+func lockedLadderCommit(ctx context.Context, q queryRower, configID string, asOf time.Time) (float64, error) {
+	inFlight, err := inFlightLadderCommit(ctx, q, configID, asOf)
+	if err != nil {
+		return 0, err
+	}
+	settled, err := settledLadderCommit(ctx, q, configID, ladderSettleAnchor(asOf))
+	if err != nil {
+		return 0, err
+	}
+	return inFlight + settled, nil
 }
 
 // queryRower is satisfied by pgx.Tx and the pool connection.
