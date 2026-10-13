@@ -21,7 +21,8 @@ func toLadderMicros(v float64) int64 { return int64(math.Round(v * ladderMicros)
 // Decreases, re-date-only edits and cancels always pass.
 //
 // Committed = in-flight (fired + scheduled, all runs, with the amended row at
-// its new amount) + tranches completed after that run started (their
+// its new amount) + tranches completed after that run started, less the
+// ladderSettleSkewMargin for clock skew (their
 // commitment may not be in the run's existing_usd_hr snapshot yet).
 // Ceiling C = min(target, baseline * current coverage%) - existing, from the
 // run's snapshot (existing is gross, so C errs low) and the config's current
@@ -58,7 +59,7 @@ func checkLadderConfigCeiling(ctx context.Context, tx pgx.Tx, configID, oldAmoun
 	if err != nil {
 		return err
 	}
-	settled, err := settledLadderCommit(ctx, tx, configID, anchor)
+	settled, err := settledLadderCommit(ctx, tx, configID, ladderSettleAnchor(anchor))
 	if err != nil {
 		return err
 	}

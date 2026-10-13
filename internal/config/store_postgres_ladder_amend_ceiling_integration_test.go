@@ -208,3 +208,33 @@ func TestLadderAmendCeiling_LockTimeoutIsTyped(t *testing.T) {
 	require.ErrorIs(t, err, ErrLadderLockTimeout, fmt.Sprint(err))
 	require.NoError(t, release())
 }
+
+// settled_at is the database clock and the run's started_at the app clock. The
+// offsets are literal on purpose: a margin of 0 misses the 30s case and a margin
+// of an hour counts the 2m case.
+func TestLadderAmendCeiling_SettledSkewMargin(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		settledAgo time.Duration
+		wantRaise  bool
+	}{
+		{"settled 30s before the run started still counts", 30 * time.Second, false},
+		{"settled 2m before the run started does not count", 2 * time.Minute, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newCeilingFixture(t)
+			runID, ids := f.plan(fptr(10), fptr(0), fptr(100), 5)
+			var started time.Time
+			require.NoError(t, f.store.db.QueryRow(f.ctx, "SELECT started_at FROM ladder_runs WHERE id=$1", runID).Scan(&started))
+			done := lifecycleTranche(f.cfgID, 4, ladder.TrancheStatusCompleted, started.Add(-c.settledAgo))
+			done.RunID = &runID
+			require.NoError(t, f.store.SaveLadderTranches(f.ctx, []LadderTrancheDB{done}))
+			err := f.amend(ids[0], 7)
+			if c.wantRaise {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, ErrLadderAmendInvalid)
+			}
+		})
+	}
+}
