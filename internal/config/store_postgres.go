@@ -1680,28 +1680,37 @@ func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) (
 // planStepProviderLockPrefix namespaces the per-provider plan-step advisory lock.
 const planStepProviderLockPrefix = "cudly:planstep:"
 
-// LockPlanProvidersTx implements StoreInterface.LockPlanProvidersTx. Sorted
-// acquisition keeps two callers with overlapping provider sets from
-// deadlocking on each other.
-func (s *PostgresStore) LockPlanProvidersTx(ctx context.Context, tx pgx.Tx, providers []string) error {
+// planStepLockKeys returns the advisory-lock keys for providers: validated,
+// de-duplicated and sorted. Sorted acquisition keeps two callers with
+// overlapping provider sets from deadlocking on each other.
+func planStepLockKeys(providers []string) ([]string, error) {
 	if len(providers) == 0 {
-		return errors.New("lock plan providers: no providers given")
+		return nil, errors.New("lock plan providers: no providers given")
 	}
-	sorted := make([]string, 0, len(providers))
+	keys := make([]string, 0, len(providers))
 	seen := make(map[string]struct{}, len(providers))
 	for _, p := range providers {
 		if p == "" {
-			return errors.New("lock plan providers: empty provider name")
+			return nil, errors.New("lock plan providers: empty provider name")
 		}
 		if _, dup := seen[p]; !dup {
 			seen[p] = struct{}{}
-			sorted = append(sorted, p)
+			keys = append(keys, planStepProviderLockPrefix+p)
 		}
 	}
-	sort.Strings(sorted)
-	for _, p := range sorted {
-		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", planStepProviderLockPrefix+p); err != nil {
-			return fmt.Errorf("lock plan provider %s: %w", p, err)
+	sort.Strings(keys)
+	return keys, nil
+}
+
+// LockPlanProvidersTx implements StoreInterface.LockPlanProvidersTx.
+func (s *PostgresStore) LockPlanProvidersTx(ctx context.Context, tx pgx.Tx, providers []string) error {
+	keys, err := planStepLockKeys(providers)
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", key); err != nil {
+			return fmt.Errorf("lock plan step key %s: %w", key, err)
 		}
 	}
 	return nil

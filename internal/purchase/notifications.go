@@ -316,16 +316,41 @@ func (m *Manager) buildNotificationData(plan config.PurchasePlan, exec *config.P
 		RecipientEmail:    notifyEmail,
 	}
 
+	if plan.MaxStepCommitment != nil {
+		data.StepCap = *plan.MaxStepCommitment
+	}
 	for _rvc := range exec.Recommendations {
 		rec := exec.Recommendations[_rvc]
-		data.Recommendations = append(data.Recommendations, email.RecommendationSummary{
-			Service:        rec.Service,
-			ResourceType:   rec.ResourceType,
-			Engine:         rec.Engine,
-			Region:         rec.Region,
-			Count:          rec.Count,
-			MonthlySavings: rec.Savings,
-		})
+		summary := email.RecommendationSummary{
+			Service:          rec.Service,
+			ResourceType:     rec.ResourceType,
+			Engine:           rec.Engine,
+			Region:           rec.Region,
+			Payment:          rec.Payment,
+			Term:             rec.Term,
+			Count:            rec.Count,
+			MonthlySavings:   rec.Savings,
+			UpfrontCost:      rec.UpfrontCost,
+			Commitment:       rec.TotalCommitment(),
+			AvailabilityZone: rec.AvailabilityZone,
+		}
+		var recurring float64
+		if rec.MonthlyCost != nil {
+			summary.MonthlyCost = *rec.MonthlyCost
+			recurring = *rec.MonthlyCost * float64(rec.Term*12)
+		}
+		// Platform and tenancy are display only; a Details blob that does not
+		// decode is logged and shown without them (the cap and purchase paths
+		// decode it themselves and fail loud).
+		if ci, err := rec.ComputeIdentity(); err != nil {
+			logging.Warnf("purchase[%s]: notification row without platform/tenancy: %v", exec.ExecutionID, err)
+		} else {
+			summary.Platform, summary.Tenancy = ci.Platform, ci.Tenancy
+		}
+		data.TotalCommitment += summary.Commitment
+		data.TotalRecurring += recurring
+		data.TotalUnits += rec.Count
+		data.Recommendations = append(data.Recommendations, summary)
 	}
 
 	return data

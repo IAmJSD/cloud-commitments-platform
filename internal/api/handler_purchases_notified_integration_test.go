@@ -85,3 +85,16 @@ func TestNotifiedRow_DeleteReleasesSuppressions(t *testing.T) {
 	assert.Equal(t, "canceled", f.state(t).Status)
 	assert.Zero(t, f.suppressionCount(t))
 }
+
+// S13 on resume: without a veto window a due recommendation-bearing row stays paused.
+func TestNotifiedRow_ResumeRefusedWithoutVetoWindow(t *testing.T) {
+	f := newPauseClaimFixture(t)
+	plan, err := f.store.GetPurchasePlan(f.ctx, f.execution.PlanID)
+	require.NoError(t, err)
+	plan.NotificationDaysBefore = 0
+	require.NoError(t, f.store.UpdatePurchasePlan(f.ctx, plan))
+	f.setRow(t, "paused", time.Now().Add(-48*time.Hour))
+
+	assertPauseConflict(t, f.resume())
+	assert.Equal(t, "paused", f.state(t).Status)
+}

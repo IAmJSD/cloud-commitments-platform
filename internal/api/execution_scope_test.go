@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
@@ -160,6 +161,7 @@ func scopeTestExecution(k scopeTestKind, status string) *config.PurchaseExecutio
 		CloudAccountID:  k.cloudAccountID,
 		Recommendations: k.recs,
 		CreatedByUserID: &creator,
+		ScheduledDate:   time.Now().Add(time.Hour), // not due, so resume needs no reschedule
 	}
 }
 

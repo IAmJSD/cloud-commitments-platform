@@ -1566,6 +1566,7 @@ func TestHandler_resumePlannedPurchase(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"paused"}, "pending", mock.Anything).Return(resumed, nil)
+	mockStore.On("GetExecutionByID", mock.Anything, mock.Anything).Return(resumed, nil).Maybe()
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -2172,6 +2173,7 @@ func TestHandler_resumePlannedPurchase_NilExecution(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"paused"}, "pending", mock.Anything).Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
+	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").Return(&config.PurchaseExecution{}, nil).Maybe()
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 

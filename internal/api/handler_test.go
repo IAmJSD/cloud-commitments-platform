@@ -1250,6 +1250,7 @@ func TestHandler_HandleRequest_ResumePlannedPurchase(t *testing.T) {
 
 	resumed := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "pending"}
 	mockStore.On("TransitionExecutionStatus", mock.Anything, "11111111-1111-1111-1111-111111111111", []string{"paused"}, "pending", mock.Anything).Return(resumed, nil)
+	mockStore.On("GetExecutionByID", mock.Anything, mock.Anything).Return(resumed, nil).Maybe()
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 
