@@ -87,7 +87,8 @@ func TestLadderRecheck_RefusesBeforeProviderCall(t *testing.T) {
 		{"run deleted", gateWith(func(g *config.LadderExecutionGate) { g.RunStatus = nil }), nil, ladderGlobal(true, true), nil, "run no longer exists"},
 		{"tranche failed by operator", gateWith(func(g *config.LadderExecutionGate) { g.TrancheStatus = ptr(string(ladder.TrancheStatusFailed)) }), nil, ladderGlobal(true, true), nil, "its tranche is failed"},
 		{"tranche completed", gateWith(func(g *config.LadderExecutionGate) { g.TrancheStatus = ptr(string(ladder.TrancheStatusCompleted)) }), nil, ladderGlobal(true, true), nil, "its tranche is completed"},
-		{"tranche cancelled", gateWith(func(g *config.LadderExecutionGate) { g.TrancheStatus = ptr(string(ladder.TrancheStatusCancelled)) }), nil, ladderGlobal(true, true), nil, "its tranche is cancelled"},
+		{"tranche cancelled", gateWith(func(g *config.LadderExecutionGate) { g.TrancheStatus = ptr(string(ladder.TrancheStatusCancelled)) }), nil, ladderGlobal(true, true), nil, "its tranche is cancelled"}, //nolint:misspell // "cancelled" is the stored ladder status value
+		{"tranche status not known to the code", gateWith(func(g *config.LadderExecutionGate) { g.TrancheStatus = ptr("bogus") }), nil, ladderGlobal(true, true), nil, "its tranche is bogus"},
 		{"tranche status unknown", gateWith(func(g *config.LadderExecutionGate) { g.TrancheStatus = nil }), nil, ladderGlobal(true, true), nil, "tranche status is unknown"},
 		{"tranche lookup DB error", nil, errors.New("connection reset"), ladderGlobal(true, true), nil, "tranche lookup failed"},
 		{"global config read error", openGate(), nil, nil, errors.New("connection reset"), "global config unreadable"},
