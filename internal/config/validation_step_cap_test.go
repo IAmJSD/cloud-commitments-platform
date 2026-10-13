@@ -16,7 +16,8 @@ func TestValidateNotificationAndCap_StepCapBounds(t *testing.T) {
 	}{
 		{0, false}, {-1, false}, {0.004, false}, {math.NaN(), false}, {math.Inf(1), false},
 		{1e308, false}, {MaxStepCommitmentLimit * 2, false},
-		{0.01, true}, {2500.5, true}, {MaxStepCommitmentLimit, true},
+		{1.005, false}, {0.015, false}, {1.0049, false}, {1e-3, false},
+		{0.01, true}, {100.10, true}, {2500.5, true}, {MaxStepCommitmentLimit, true},
 	} {
 		v := tc.v
 		p := &PurchasePlan{MaxStepCommitment: &v}

@@ -110,7 +110,8 @@ func TestAutoPurchaseGate_PlanWrites(t *testing.T) {
 		{"put raises cap: execute:purchases allowed", granted, "put", apgStoredPlan(true, apgCap(1000)), `{"name":"p","enabled":true,"auto_purchase":true,"max_step_commitment":2000}`, false},
 		{"put lowers cap: admin allowed", admin, "put", apgStoredPlan(true, apgCap(1000)), `{"name":"p","enabled":true,"auto_purchase":true,"max_step_commitment":500}`, false},
 		{"put same cap: admin allowed", admin, "put", apgStoredPlan(true, apgCap(1000)), `{"name":"p","enabled":true,"auto_purchase":true,"max_step_commitment":1000}`, false},
-		{"put sub-cent difference is not a raise: admin allowed", admin, "put", apgStoredPlan(true, apgCap(1000)), `{"name":"p","enabled":true,"auto_purchase":true,"max_step_commitment":1000.004}`, false},
+		{"put 1000.0 is the same cap: admin allowed", admin, "put", apgStoredPlan(true, apgCap(1000)), `{"name":"p","enabled":true,"auto_purchase":true,"max_step_commitment":1000.0}`, false},
+		{"put 100.10 (binary-float trap) over 100.10 is the same cap: admin allowed", admin, "put", apgStoredPlan(true, apgCap(100.10)), `{"name":"p","enabled":true,"auto_purchase":true,"max_step_commitment":100.10}`, false},
 		{"put one cent more is a raise: admin refused", admin, "put", apgStoredPlan(true, apgCap(1000)), `{"name":"p","enabled":true,"auto_purchase":true,"max_step_commitment":1000.01}`, true},
 		{"put omitting the cap keeps it: admin allowed", admin, "put", apgStoredPlan(true, apgCap(1000)), `{"name":"p","enabled":true,"auto_purchase":true}`, false},
 		{"put disarms with admin API key allowed", key, "put", apgStoredPlan(true, apgCap(1000)), `{"name":"p","enabled":true,"auto_purchase":false}`, false},
@@ -177,6 +178,10 @@ func TestAutoPurchaseGate_CapValidation(t *testing.T) {
 		{"below one cent", `{"name":"p","max_step_commitment":0.004}`},
 		{"1e308 overflows the column", `{"name":"p","max_step_commitment":1e308}`},
 		{"quoted number", `{"name":"p","max_step_commitment":"100"}`},
+		{"half cent 1.005", `{"name":"p","max_step_commitment":1.005}`},
+		{"0.015", `{"name":"p","max_step_commitment":0.015}`},
+		{"1.0049", `{"name":"p","max_step_commitment":1.0049}`},
+		{"1e-3", `{"name":"p","max_step_commitment":1e-3}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store := new(MockConfigStore)
@@ -235,7 +240,7 @@ func TestAutoPurchaseGate_KillSwitch(t *testing.T) {
 		require.NotNil(t, saved.AutoPurchaseChangedBy)
 		assert.Equal(t, apgUserID, *saved.AutoPurchaseChangedBy)
 		require.NotNil(t, saved.AutoPurchaseChangedVia)
-		assert.Equal(t, "user", *saved.AutoPurchaseChangedVia)
+		assert.Equal(t, string(PrincipalSession), *saved.AutoPurchaseChangedVia)
 		require.NotNil(t, saved.AutoPurchaseChangedAt)
 		assert.True(t, saved.AutoPurchaseChangedAt.After(before))
 	})

@@ -31,13 +31,19 @@ func planArmed(p *config.PurchasePlan) bool {
 	return p != nil && p.Enabled && p.AutoPurchase && p.MaxStepCommitment != nil
 }
 
-// capCents rounds a cap to the cent, as the NUMERIC(18,2) column will store it,
-// so a "raise" below the stored precision is not mistaken for one.
+// capCents returns the cap in exact cents. Plans reaching the gate have passed
+// Validate, which rejects caps that are not whole cents, so the error branch is
+// unreachable there; it still fails closed (treated as the maximum, so any write
+// is a raise and needs the grant).
 func capCents(v *float64) int64 {
 	if v == nil {
 		return 0
 	}
-	return int64(math.Round(*v * 100))
+	c, err := config.StepCapCents(*v)
+	if err != nil {
+		return math.MaxInt64
+	}
+	return c
 }
 
 // planArmEscalates reports whether the write takes the plan from not-armed to
@@ -60,7 +66,7 @@ func credentialKind(ctx context.Context, session *Session) string {
 	if session != nil && session.UserID == apiKeyAdminUserID {
 		return string(PrincipalAdminAPIKey)
 	}
-	return "user"
+	return string(PrincipalSession)
 }
 
 // requireAutoPurchaseGrant refuses the admin API key and otherwise requires
@@ -85,7 +91,7 @@ func (h *Handler) requirePlanArmGrant(ctx context.Context, req *events.LambdaFun
 	if before != nil {
 		oldCap = before.MaxStepCommitment
 	}
-	logging.Infof("auto-purchase plan armed or cap raised: plan=%s actor=%s via=%s armed %t -> true cap %s -> %s",
+	logging.Infof("auto-purchase plan arm or cap raise authorized (write follows): plan=%s actor=%s via=%s armed %t -> true cap %s -> %s",
 		after.ID, session.UserID, credentialKind(ctx, session), planArmed(before), formatCap(oldCap), formatCap(after.MaxStepCommitment))
 	return nil
 }
@@ -120,6 +126,13 @@ func (h *Handler) requireAutoPurchaseSwitchGrant(ctx context.Context, req *event
 	}
 	by, via, at := session.UserID, credentialKind(ctx, session), time.Now().UTC()
 	cfg.AutoPurchaseChangedBy, cfg.AutoPurchaseChangedVia, cfg.AutoPurchaseChangedAt = &by, &via, &at
-	logging.Infof("auto-purchase kill switch changed: actor=%s via=%s %t -> %t", by, via, before, cfg.AutoPurchaseEnabled)
 	return nil
+}
+
+// logAutoPurchaseSwitchChange records a committed change of the kill switch.
+func logAutoPurchaseSwitchChange(ctx context.Context, session *Session, before bool, after *config.GlobalConfig) {
+	if after == nil || after.AutoPurchaseEnabled == before {
+		return
+	}
+	logging.Infof("auto-purchase kill switch changed: actor=%s via=%s %t -> %t", session.UserID, credentialKind(ctx, session), before, after.AutoPurchaseEnabled)
 }
