@@ -857,6 +857,10 @@ func (m *mockConfigStore) UpsertLadderConfig(_ context.Context, cfg *config.Ladd
 func (m *mockConfigStore) SaveLadderRun(_ context.Context, run *config.LadderRunDB) (*config.LadderRunDB, error) {
 	return run, nil
 }
+func (m *mockConfigStore) PlanAndSaveLadderRun(_ context.Context, _ string, _ time.Time, build config.LadderPlanBuilder) (*config.LadderRunDB, error) {
+	run, _, err := build(0)
+	return run, err
+}
 func (m *mockConfigStore) SaveLadderRunWithTranches(_ context.Context, run *config.LadderRunDB, _ []config.LadderTrancheDB) (*config.LadderRunDB, error) {
 	return run, nil
 }
