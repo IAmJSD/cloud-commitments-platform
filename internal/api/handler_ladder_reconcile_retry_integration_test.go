@@ -43,6 +43,7 @@ func (s *pausedChainStore) LockLadderTrancheChainTx(ctx context.Context, tx pgx.
 
 type ladderRetryRig struct {
 	store      *config.PostgresStore
+	cfgID      string
 	trancheID  string
 	failedExec *config.PurchaseExecution
 }
@@ -59,21 +60,31 @@ func newLadderRetryRig(t *testing.T) *ladderRetryRig {
 		Mode: "email_approval", Cadence: "daily", TargetCoverage: 80, BufferFraction: 0.1, BaselinePercentile: 5, LookbackDays: 30,
 		BufferUtilizationThreshold: 50, MaxActionsPerRun: 5, RampSchedule: []byte(`{"steps":[{"after_days":0,"fraction":1.0}]}`)})
 	require.NoError(t, err)
-	tr := config.LadderTrancheDB{ID: uuid.New().String(), ConfigID: &cfg.ID, LayerType: ladder.LayerComputeSP,
+	r := &ladderRetryRig{store: store, cfgID: cfg.ID}
+	r.addFiredTranche(t)
+	return r
+}
+
+// addFiredTranche claims a fresh tranche with a failed, proven-unsent
+// execution and makes it the rig's current tranche. The execution carries the
+// tranche id as its idempotency key, the link Retry uses to find the tranche.
+func (r *ladderRetryRig) addFiredTranche(t *testing.T) {
+	ctx := context.Background()
+	tr := config.LadderTrancheDB{ID: uuid.New().String(), ConfigID: &r.cfgID, LayerType: ladder.LayerComputeSP,
 		Term: ladder.Term1Year, PaymentOption: ladder.PaymentNoUpfront, Status: ladder.TrancheStatusScheduled,
 		AmountUSDHr: 5, ScheduledDate: time.Now().Add(-time.Hour)}
-	require.NoError(t, store.SaveLadderTranches(ctx, []config.LadderTrancheDB{tr}))
+	require.NoError(t, r.store.SaveLadderTranches(ctx, []config.LadderTrancheDB{tr}))
 	var failedID string
-	_, err = store.ClaimDueLadderTranches(ctx, cfg.ID, time.Now(), 1,
+	_, err := r.store.ClaimDueLadderTranches(ctx, r.cfgID, time.Now(), 1,
 		func(ctx context.Context, tx pgx.Tx, _ config.LadderTrancheDB) (string, error) {
-			insErr := tx.QueryRow(ctx, `INSERT INTO purchase_executions (scheduled_date, status, no_submission, error)
-				VALUES (NOW(), 'failed', true, '') RETURNING execution_id`).Scan(&failedID)
+			insErr := tx.QueryRow(ctx, `INSERT INTO purchase_executions (scheduled_date, status, no_submission, error, idempotency_key)
+				VALUES (NOW(), 'failed', true, '', $1) RETURNING execution_id`, tr.ID).Scan(&failedID)
 			return failedID, insErr
 		})
 	require.NoError(t, err)
-	failed, err := store.GetExecutionByID(ctx, failedID)
+	failed, err := r.store.GetExecutionByID(ctx, failedID)
 	require.NoError(t, err)
-	return &ladderRetryRig{store: store, trancheID: tr.ID, failedExec: failed}
+	r.trancheID, r.failedExec = tr.ID, failed
 }
 
 func (r *ladderRetryRig) trancheStatus(t *testing.T) string {
@@ -101,9 +112,10 @@ func TestLadderReconcile_RetryLinkedFirstKeepsTrancheFired(t *testing.T) {
 	assert.Equal(t, "fired", r.trancheStatus(t))
 }
 
-// While the reconciler holds the tail row, the real Retry write cannot link a
-// successor to it: persistRetrySuccessorTx blocks until the reconciler's
-// transaction ends. Without the tail lock the retry would link mid-decision.
+// While the reconciler holds the tranche and tail rows, the real Retry write
+// cannot proceed: persistRetrySuccessorTx blocks until the reconciler's
+// transaction ends, then finds the tranche failed and is refused. Without the
+// locks the retry would link a successor mid-decision.
 func TestLadderReconcile_TailLockBlocksRealRetryLink(t *testing.T) {
 	r := newLadderRetryRig(t)
 	ctx := context.Background()
@@ -128,6 +140,8 @@ func TestLadderReconcile_TailLockBlocksRealRetryLink(t *testing.T) {
 
 	close(paused.release)
 	require.NoError(t, <-reconciled)
-	require.NoError(t, <-retried)
+	ce, ok := IsClientError(<-retried)
+	require.True(t, ok, "retry must be refused once the tranche is failed")
+	assert.Equal(t, 409, ce.code)
 	assert.Equal(t, "failed", r.trancheStatus(t), "decided on the chain it locked")
 }

@@ -221,6 +221,10 @@ type StoreInterface interface {
 	// DB error. Must be called inside the same tx that inserts the
 	// successor row, after that insert.
 	LinkRetryExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID, retryExecutionID string) (linked bool, err error)
+	// LockLadderTrancheForRetryTx row-locks the ladder tranche whose id equals
+	// idempotencyKey (matched as text; found=false for any non-ladder key) so
+	// Retry can refuse a settled tranche before inserting a successor.
+	LockLadderTrancheForRetryTx(ctx context.Context, tx pgx.Tx, idempotencyKey string) (status ladder.TrancheStatus, found bool, err error)
 	// RotatePendingApprovalToken sets approval_token_hash and its expiry only
 	// while the row is still pending/notified, touching no other column, so a
 	// re-notification can never clobber a concurrent approve/cancel the way a
