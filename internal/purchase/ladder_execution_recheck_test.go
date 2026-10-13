@@ -26,7 +26,7 @@ func ptr[T any](v T) *T { return &v }
 
 // openGate is a gate that allows execution; each case flips one field.
 func openGate() *config.LadderExecutionGate {
-	return &config.LadderExecutionGate{ConfigEnabled: ptr(true), ConfigMode: ptr("auto_approve"), RunStatus: ptr("executing")}
+	return &config.LadderExecutionGate{ConfigEnabled: ptr(true), ConfigMode: ptr("auto_approve"), RunStatus: ptr("executing"), TrancheStatus: ptr("fired")}
 }
 
 func ladderGlobal(planning, execution bool) *config.GlobalConfig {
@@ -85,6 +85,11 @@ func TestLadderRecheck_RefusesBeforeProviderCall(t *testing.T) {
 		{"run canceled", gateWith(func(g *config.LadderExecutionGate) { g.RunStatus = ptr(string(ladder.RunStatusCancelled)) }), nil, ladderGlobal(true, true), nil, "run was canceled"},
 		{"config deleted", gateWith(func(g *config.LadderExecutionGate) { g.ConfigEnabled, g.ConfigMode = nil, nil }), nil, ladderGlobal(true, true), nil, "config no longer exists"},
 		{"run deleted", gateWith(func(g *config.LadderExecutionGate) { g.RunStatus = nil }), nil, ladderGlobal(true, true), nil, "run no longer exists"},
+		{"tranche failed by operator", gateWith(func(g *config.LadderExecutionGate) { g.TrancheStatus = ptr(string(ladder.TrancheStatusFailed)) }), nil, ladderGlobal(true, true), nil, "its tranche is failed"},
+		{"tranche completed", gateWith(func(g *config.LadderExecutionGate) { g.TrancheStatus = ptr(string(ladder.TrancheStatusCompleted)) }), nil, ladderGlobal(true, true), nil, "its tranche is completed"},
+		{"tranche cancelled", gateWith(func(g *config.LadderExecutionGate) { g.TrancheStatus = ptr(string(ladder.TrancheStatusCancelled)) }), nil, ladderGlobal(true, true), nil, "its tranche is cancelled"}, //nolint:misspell // "cancelled" is the stored ladder status value
+		{"tranche status not known to the code", gateWith(func(g *config.LadderExecutionGate) { g.TrancheStatus = ptr("bogus") }), nil, ladderGlobal(true, true), nil, "its tranche is bogus"},
+		{"tranche status unknown", gateWith(func(g *config.LadderExecutionGate) { g.TrancheStatus = nil }), nil, ladderGlobal(true, true), nil, "tranche status is unknown"},
 		{"tranche lookup DB error", nil, errors.New("connection reset"), ladderGlobal(true, true), nil, "tranche lookup failed"},
 		{"global config read error", openGate(), nil, nil, errors.New("connection reset"), "global config unreadable"},
 		{"global config nil", openGate(), nil, nil, nil, "global config unavailable"},
@@ -110,9 +115,15 @@ func TestLadderRecheck_RefusesBeforeProviderCall(t *testing.T) {
 }
 
 func TestLadderRecheck_AllowsWhenEverythingIsOn(t *testing.T) {
-	mgr, store, rec, exec := ladderHarness(t, ladderTrancheKey, openGate(), nil, ladderGlobal(true, true), nil)
-	runViaSQS(t, mgr, store, exec)
-	assert.Equal(t, 1, rec.count(), "an armed ladder execution must still buy exactly once")
+	for _, status := range []ladder.TrancheStatus{ladder.TrancheStatusFired, ladder.TrancheStatusScheduled} {
+		t.Run(string(status), func(t *testing.T) {
+			gate := openGate()
+			gate.TrancheStatus = ptr(string(status))
+			mgr, store, rec, exec := ladderHarness(t, ladderTrancheKey, gate, nil, ladderGlobal(true, true), nil)
+			runViaSQS(t, mgr, store, exec)
+			assert.Equal(t, 1, rec.count(), "an armed ladder execution on a %s tranche must still buy exactly once", status)
+		})
+	}
 }
 
 // Non-ladder keys must be untouched: the lookup returns no tranche for them,

@@ -141,10 +141,13 @@ func (s *PostgresStore) LockLadderTrancheForRetryTx(ctx context.Context, tx pgx.
 // call, about the ladder tranche an execution belongs to. Each field is a
 // pointer because the foreign keys are ON DELETE SET NULL: a nil field means
 // the row is gone, which the caller must treat as "refuse", not as a default.
+// TrancheStatus is the tranche's own status: an operator may have settled the
+// tranche while an execution carrying its key is still waiting to run.
 type LadderExecutionGate struct {
 	ConfigEnabled *bool
 	ConfigMode    *string
 	RunStatus     *string
+	TrancheStatus *string
 }
 
 // GetLadderExecutionGate finds the ladder tranche whose id equals an
@@ -159,11 +162,11 @@ func (s *PostgresStore) GetLadderExecutionGate(ctx context.Context, idempotencyK
 	}
 	var g LadderExecutionGate
 	err := s.db.QueryRow(ctx, `
-		SELECT c.enabled, c.mode, r.status
+		SELECT c.enabled, c.mode, r.status, t.status
 		  FROM ladder_tranches t
 		  LEFT JOIN ladder_configs c ON c.id = t.config_id
 		  LEFT JOIN ladder_runs r ON r.id = t.run_id
-		 WHERE t.id::text = $1`, idempotencyKey).Scan(&g.ConfigEnabled, &g.ConfigMode, &g.RunStatus)
+		 WHERE t.id::text = $1`, idempotencyKey).Scan(&g.ConfigEnabled, &g.ConfigMode, &g.RunStatus, &g.TrancheStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
