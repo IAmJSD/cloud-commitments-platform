@@ -619,8 +619,13 @@ type StoreInterface interface {
 	// build with it, then inserts the run, sweeps overdue tranches and inserts
 	// the new ones (append-only, L5). Overlapping runs for one config serialize:
 	// the second nets the first's committed rows. build must be pure compute
-	// (no I/O); run.StartedAt must equal asOf. The lock is also taken first by
-	// ClaimDueLadderTranches.
+	// (no I/O); run.StartedAt must equal asOf. asOf MUST be captured before the
+	// caller reads the existing commitment (E): tranches completed after asOf
+	// are added to the in-flight figure, so one that completes between the E
+	// read and the locked read is netted, never missed (a double count is a
+	// safe under-buy). This holds only if a tranche is marked completed after
+	// its commitment is visible through E's source (executor PR5a). The lock is
+	// also taken first by ClaimDueLadderTranches.
 	PlanAndSaveLadderRun(ctx context.Context, configID string, asOf time.Time, build LadderPlanBuilder) (*LadderRunDB, error)
 	SaveLadderRun(ctx context.Context, run *LadderRunDB) (*LadderRunDB, error)
 	GetLadderRun(ctx context.Context, id string) (*LadderRunDB, error)

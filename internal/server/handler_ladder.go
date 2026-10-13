@@ -319,11 +319,13 @@ func (app *Application) executeLadderRun(
 
 	// L5 netting runs inside the persist transaction (PlanAndSaveLadderRun):
 	// the store reads the config's in-flight commitment (scheduled tranches
-	// still within config.LadderFireGrace plus fired, unresolved ones; completed
-	// ones are already in ExistingUSDPerHour, so netting them would
-	// double-subtract) under the per-config lock and hands it to the closure,
-	// so two overlapping runs cannot both plan the same gap. The provider reads
-	// above stay outside the transaction: no lock is held across network I/O.
+	// still within config.LadderFireGrace plus fired, unresolved ones) under
+	// the per-config lock, plus tranches completed after `now` (settled term).
+	// `now` was captured before the GetLayerStates read above, so a tranche that
+	// completed after that read is in neither E nor in-flight without the
+	// settled term; one already in E is counted twice (a safe under-buy). The
+	// provider reads above stay outside the transaction: no lock is held across
+	// network I/O.
 	in := &ladderRunPlanner{
 		dbCfg: dbCfg, engineCfg: engineCfg, baseline: baseline, layerStates: layerStates,
 		layers: capability.SupportedLayers(), term: term, paymentOpt: paymentOpt, now: now,
