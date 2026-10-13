@@ -483,6 +483,24 @@ func (m *MockConfigStore) LockLadderTrancheForRetryTx(ctx context.Context, tx pg
 	return status, args.Bool(1), args.Error(2)
 }
 
+// GetLadderExecutionGate mocks the operation. Defaults to (nil, nil), "not a
+// ladder execution", when no expectation is registered.
+func (m *MockConfigStore) GetLadderExecutionGate(ctx context.Context, idempotencyKey string) (*config.LadderExecutionGate, error) {
+	m.record("GetLadderExecutionGate", ctx, idempotencyKey)
+	if !isExpected(&m.Mock, "GetLadderExecutionGate") {
+		return nil, nil
+	}
+	args := m.Called(ctx, idempotencyKey)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	gate, ok := args.Get(0).(*config.LadderExecutionGate)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.LadderExecutionGate, got %T", args.Get(0)))
+	}
+	return gate, args.Error(1)
+}
+
 // CancelExecutionAtomic mocks the CancelExecutionAtomic operation.
 // Defaults to (true, "cancelled", nil) when no expectation is registered
 // so tests that only need the happy path don't require explicit mock setup.

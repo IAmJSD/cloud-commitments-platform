@@ -137,6 +137,42 @@ func (s *PostgresStore) LockLadderTrancheForRetryTx(ctx context.Context, tx pgx.
 	return ladder.TrancheStatus(raw), true, nil
 }
 
+// LadderExecutionGate is what the executor re-reads, right before a provider
+// call, about the ladder tranche an execution belongs to. Each field is a
+// pointer because the foreign keys are ON DELETE SET NULL: a nil field means
+// the row is gone, which the caller must treat as "refuse", not as a default.
+type LadderExecutionGate struct {
+	ConfigEnabled *bool
+	ConfigMode    *string
+	RunStatus     *string
+}
+
+// GetLadderExecutionGate finds the ladder tranche whose id equals an
+// execution's idempotency key and returns its config switches and run status.
+// The key is compared as text, so non-ladder keys (legacy execution ids,
+// "<root>:<account>" multi-account keys, fingerprints) match nothing and
+// return (nil, nil): "not a ladder execution". Only a real database error is
+// an error, and the caller must fail closed on it.
+func (s *PostgresStore) GetLadderExecutionGate(ctx context.Context, idempotencyKey string) (*LadderExecutionGate, error) {
+	if idempotencyKey == "" {
+		return nil, nil
+	}
+	var g LadderExecutionGate
+	err := s.db.QueryRow(ctx, `
+		SELECT c.enabled, c.mode, r.status
+		  FROM ladder_tranches t
+		  LEFT JOIN ladder_configs c ON c.id = t.config_id
+		  LEFT JOIN ladder_runs r ON r.id = t.run_id
+		 WHERE t.id::text = $1`, idempotencyKey).Scan(&g.ConfigEnabled, &g.ConfigMode, &g.RunStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read ladder execution gate for key %q: %w", idempotencyKey, err)
+	}
+	return &g, nil
+}
+
 // LadderTrancheSettled reports whether a tranche status can no longer lead to
 // a purchase through its existing execution: anything but scheduled or fired.
 // Unknown statuses count as settled, so Retry fails closed.

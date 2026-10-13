@@ -229,6 +229,11 @@ type StoreInterface interface {
 	// idempotencyKey (matched as text; found=false for any non-ladder key) so
 	// Retry can refuse a settled tranche before inserting a successor.
 	LockLadderTrancheForRetryTx(ctx context.Context, tx pgx.Tx, idempotencyKey string) (status ladder.TrancheStatus, found bool, err error)
+	// GetLadderExecutionGate returns the ladder config switches and run status
+	// behind the tranche whose id equals idempotencyKey (matched as text), or
+	// (nil, nil) for any non-ladder key. The executor rechecks it before a
+	// provider call and fails closed on error.
+	GetLadderExecutionGate(ctx context.Context, idempotencyKey string) (*LadderExecutionGate, error)
 	// RotatePendingApprovalToken sets approval_token_hash and its expiry only
 	// while the row is still pending/notified, touching no other column, so a
 	// re-notification can never clobber a concurrent approve/cancel the way a
