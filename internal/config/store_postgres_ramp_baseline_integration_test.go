@@ -107,11 +107,11 @@ func TestPlanRampBaseline_ImmutableAndOutOfFullRowWrites(t *testing.T) {
 	assert.Nil(t, f.baseline(ctx, t), "no baseline until step 1 writes one")
 
 	require.NoError(t, f.store.WithTx(ctx, func(tx pgx.Tx) error {
-		wrote, err := f.store.SetPlanRampBaselineTx(ctx, tx, f.planID, PlanRampBaseline{key: {Count: 100}})
-		require.NoError(t, err)
+		wrote, setErr := f.store.SetPlanRampBaselineTx(ctx, tx, f.planID, PlanRampBaseline{key: {Count: 100}})
+		require.NoError(t, setErr)
 		assert.True(t, wrote)
-		wrote, err = f.store.SetPlanRampBaselineTx(ctx, tx, f.planID, PlanRampBaseline{key: {Count: 999}})
-		require.NoError(t, err)
+		wrote, setErr = f.store.SetPlanRampBaselineTx(ctx, tx, f.planID, PlanRampBaseline{key: {Count: 999}})
+		require.NoError(t, setErr)
 		assert.False(t, wrote, "a second write is refused")
 		return nil
 	}))
