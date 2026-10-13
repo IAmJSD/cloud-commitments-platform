@@ -192,3 +192,31 @@ func TestRecoverReapedExecution_OnlyFailedRowsAndOnlySuccessStatuses(t *testing.
 	require.Error(t, store.RecoverReapedExecution(ctx, bad))
 	assert.Equal(t, "failed", storedStatus(ctx, t, store, bad.ExecutionID))
 }
+
+// The clear is only meaningful against a row that actually carries the proof:
+// a failed+true row recovered to completed, or guard-saved to a non-failed
+// status, must end with no_submission = false.
+func TestGuardedSaves_ClearAProofThatWasActuallySet(t *testing.T) {
+	ctx := context.Background()
+	store := setupLadderStore(ctx, t)
+	seed := func() *PurchaseExecution {
+		exec := newNoSubmissionExec(ctx, t, store, "running")
+		exec.Status = "failed"
+		exec.NoSubmission = true
+		require.NoError(t, store.SavePurchaseExecution(ctx, exec))
+		require.True(t, storedNoSubmission(ctx, t, store, exec.ExecutionID), "precondition: proof is set")
+		return exec
+	}
+
+	rec := seed()
+	rec.Status = "completed"
+	rec.NoSubmission = false
+	require.NoError(t, store.RecoverReapedExecution(ctx, rec))
+	assert.False(t, storedNoSubmission(ctx, t, store, rec.ExecutionID), "recovery to completed clears the proof")
+
+	g := seed()
+	g.Status = "approved"
+	g.NoSubmission = false
+	require.NoError(t, store.SaveExecutionIfStatus(ctx, g, []string{"failed"}))
+	assert.False(t, storedNoSubmission(ctx, t, store, g.ExecutionID), "a non-failed guarded save clears the proof")
+}
