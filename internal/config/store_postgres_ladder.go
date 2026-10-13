@@ -413,8 +413,11 @@ func insertLadderRunWithTranchesTx(ctx context.Context, tx pgx.Tx, run *LadderRu
 //     pending, in progress, or outcome unknown). Fired nets regardless of age;
 //     only a transition to completed or failed releases it.
 //
-// Excluded: completed (counted in the engine's ExistingUSDPerHour; summing it
-// too would double-subtract), failed and cancelled (never bought; counting
+// Excluded: completed (counted in the engine's ExistingUSDPerHour, but only if
+// that figure was read after the tranche became visible: a caller that read
+// ExistingUSDPerHour before this call must also add settledLadderCommit with
+// ladderSettleAnchor(asOf), as PlanAndSaveLadderRun does, or a tranche that
+// completes in between is netted nowhere), failed and cancelled (never bought; counting
 // them would silently under-buy), and scheduled rows past the grace window
 // (cancelled by cancelOverdueLadderTranchesTx with the complementary bound).
 //
