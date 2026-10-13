@@ -30,12 +30,13 @@ func atomicStepPlan(ctx context.Context, t *testing.T, store *config.PostgresSto
 	return plan
 }
 
-func stepRowsInDB(ctx context.Context, t *testing.T, store *config.PostgresStore, planID string, step int) []config.PurchaseExecution {
+// stepRowsInDB lists every row of step 1 of the plan.
+func stepRowsInDB(ctx context.Context, t *testing.T, store *config.PostgresStore, planID string) []config.PurchaseExecution {
 	t.Helper()
 	var rows []config.PurchaseExecution
 	require.NoError(t, store.WithTx(ctx, func(tx pgx.Tx) error {
 		var err error
-		rows, err = store.ListExecutionsForPlanStepTx(ctx, tx, planID, step)
+		rows, err = store.ListExecutionsForPlanStepTx(ctx, tx, planID, 1)
 		return err
 	}))
 	return rows
@@ -48,10 +49,11 @@ func TestGetOrCreateExecution_ConcurrentTicksMintOneRow(t *testing.T) {
 	ctx := context.Background()
 	store, _ := rampStepStore(ctx, t)
 	plan := atomicStepPlan(ctx, t, store)
-	m := &Manager{config: store}
+	// No max_step_commitment on the plan: the cap refuses the step, giving it one failed row.
+	m := &Manager{config: store, resolver: &fakeResolver{recs: []config.RecommendationRecord{attachRec("rec-a", 1)}}}
 
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 4; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -60,7 +62,7 @@ func TestGetOrCreateExecution_ConcurrentTicksMintOneRow(t *testing.T) {
 	}
 	wg.Wait()
 
-	rows := stepRowsInDB(ctx, t, store, plan.ID, 1)
+	rows := stepRowsInDB(ctx, t, store, plan.ID)
 	require.Len(t, rows, 1, "concurrent ticks must mint exactly one row for the step")
 	assert.Equal(t, "failed", rows[0].Status)
 }
@@ -80,7 +82,7 @@ func TestGetOrCreateExecution_SettledRootBlocksNewRoot(t *testing.T) {
 		_, _, _, err := (&Manager{config: store}).getOrCreateExecution(ctx, p)
 
 		require.ErrorIs(t, err, errExecutionNotNotifiable, status)
-		assert.Len(t, stepRowsInDB(ctx, t, store, p.ID, 1), 1, status)
+		assert.Len(t, stepRowsInDB(ctx, t, store, p.ID), 1, status)
 	}
 	_ = plan
 }

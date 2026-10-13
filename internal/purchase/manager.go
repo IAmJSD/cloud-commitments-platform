@@ -57,6 +57,7 @@ type Manager struct {
 	dashboardURL    string
 	oidcIssuerURL   string
 	notifyDays      int
+	resolver        stepResolver
 }
 
 // PurchaseDefaults holds default purchase settings.

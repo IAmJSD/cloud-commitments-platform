@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/planstep"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -172,8 +173,9 @@ func TestManager_GetOrCreateExecution(t *testing.T) {
 
 	nextExec := time.Now().Add(24 * time.Hour)
 	plan := &config.PurchasePlan{
-		ID:   "plan-123",
-		Name: "Test Plan",
+		ID:      "plan-123",
+		Name:    "Test Plan",
+		Enabled: true, AutoPurchase: true,
 		RampSchedule: config.RampSchedule{
 			CurrentStep: 1,
 		},
@@ -186,28 +188,15 @@ func TestManager_GetOrCreateExecution(t *testing.T) {
 		dashboardURL: "https://dashboard.example.com",
 	}
 
-	// No existing execution found
-	var saved *config.PurchaseExecution
+	// No existing execution and no recommendation source: fail loud, write nothing.
 	expectStepRows(mockStore, plan)
-	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
-		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).Return(nil)
 
+	manager.resolver = nil
 	execution, rawToken, _, err := manager.getOrCreateExecution(ctx, plan)
-	// A plan step carries no recommendations (#609): the row is recorded as
-	// failed and no emailable token is minted.
-	require.ErrorIs(t, err, errExecutionNotNotifiable)
+	require.ErrorIs(t, err, errNoRecommendationSource)
 	assert.Nil(t, execution)
 	assert.Empty(t, rawToken)
-	require.NotNil(t, saved)
-	assert.Equal(t, "plan-123", saved.PlanID)
-	assert.Equal(t, "failed", saved.Status)
-	assert.Contains(t, saved.Error, "no recommendations")
-	// step_number names the step this row will COMPLETE, so a plan with one
-	// step already done creates the row for step 2 (issue #1669).
-	assert.Equal(t, 2, saved.StepNumber)
-	assert.NotEmpty(t, saved.ExecutionID)
-	assert.Empty(t, saved.ApprovalToken)
-
+	mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 	mockStore.AssertExpectations(t)
 }
 
@@ -218,8 +207,9 @@ func TestManager_GetOrCreateExecution_ExistingExecution(t *testing.T) {
 
 	nextExec := time.Now().Add(24 * time.Hour)
 	plan := &config.PurchasePlan{
-		ID:   "plan-123",
-		Name: "Test Plan",
+		ID:      "plan-123",
+		Name:    "Test Plan",
+		Enabled: true, AutoPurchase: true,
 		RampSchedule: config.RampSchedule{
 			CurrentStep: 1,
 		},
@@ -274,8 +264,10 @@ func TestManager_GetOrCreateExecution_ExistingBareRowIsFailedNotRotated(t *testi
 	mockStore := new(MockConfigStore)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-	nextExec := time.Now().Add(24 * time.Hour)
-	plan := &config.PurchasePlan{ID: "plan-123", NextExecutionDate: &nextExec}
+	nextExec := time.Now().Add(10 * 24 * time.Hour) // beyond the 3-day veto window
+	pastDeadline := time.Now().Add(-10 * 24 * time.Hour)
+	plan := &config.PurchasePlan{ID: "plan-123", Enabled: true, AutoPurchase: true, NotificationDaysBefore: 3, NextExecutionDate: &pastDeadline}
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	bare := &config.PurchaseExecution{
 		ExecutionID:   "bare-exec-id",
 		PlanID:        "plan-123",
@@ -289,7 +281,7 @@ func TestManager_GetOrCreateExecution_ExistingBareRowIsFailedNotRotated(t *testi
 	mockStore.On("TransitionExecutionStatus", ctx, "bare-exec-id", []string{"pending", "notified"}, "failed", (*string)(nil)).Return(&failed, nil)
 	mockStore.On("SavePurchaseExecution", ctx, &failed).Return(nil)
 
-	manager := &Manager{config: mockStore}
+	manager := &Manager{config: mockStore, resolver: &fakeResolver{err: planstep.ErrNoMatch}}
 
 	execution, rawToken, rotationPending, err := manager.getOrCreateExecution(ctx, plan)
 	require.ErrorIs(t, err, errExecutionNotNotifiable)
@@ -297,7 +289,7 @@ func TestManager_GetOrCreateExecution_ExistingBareRowIsFailedNotRotated(t *testi
 	assert.Empty(t, rawToken)
 	assert.False(t, rotationPending)
 	assert.Equal(t, "failed", failed.Status)
-	assert.Contains(t, failed.Error, "no recommendations")
+	assert.Contains(t, failed.Error, "no current recommendation matched")
 }
 
 // A human approving the row between the tick's read and its fail loses nothing:
@@ -307,8 +299,10 @@ func TestManager_GetOrCreateExecution_ExistingBareRowApprovedMeanwhileIsNotOverw
 	mockStore := new(MockConfigStore)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-	nextExec := time.Now().Add(24 * time.Hour)
-	plan := &config.PurchasePlan{ID: "plan-123", NextExecutionDate: &nextExec}
+	nextExec := time.Now().Add(10 * 24 * time.Hour) // beyond the 3-day veto window
+	pastDeadline := time.Now().Add(-10 * 24 * time.Hour)
+	plan := &config.PurchasePlan{ID: "plan-123", Enabled: true, AutoPurchase: true, NotificationDaysBefore: 3, NextExecutionDate: &pastDeadline}
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	stale := &config.PurchaseExecution{
 		ExecutionID: "bare-exec-id", PlanID: "plan-123", Status: "pending", StepNumber: 1, ScheduledDate: nextExec,
 	}
@@ -317,7 +311,7 @@ func TestManager_GetOrCreateExecution_ExistingBareRowApprovedMeanwhileIsNotOverw
 		Return(nil, config.ErrExecutionNotInExpectedStatus)
 	// No SavePurchaseExecution expectation: an upsert here would clobber the approval.
 
-	manager := &Manager{config: mockStore}
+	manager := &Manager{config: mockStore, resolver: &fakeResolver{err: planstep.ErrNoMatch}}
 
 	execution, _, _, err := manager.getOrCreateExecution(ctx, plan)
 	require.ErrorIs(t, err, errExecutionNotNotifiable)
@@ -344,6 +338,8 @@ func TestManager_GetOrCreateExecution_ExistingCompletedNotRotated(t *testing.T) 
 	plan := &config.PurchasePlan{
 		ID:                "plan-123",
 		Name:              "Test Plan",
+		Enabled:           true,
+		AutoPurchase:      true,
 		NextExecutionDate: &nextExec,
 	}
 
@@ -384,18 +380,23 @@ func TestManager_GetOrCreateExecution_SaveError(t *testing.T) {
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 
-	nextExec := time.Now().Add(24 * time.Hour)
+	nextExec := time.Now().Add(-10 * 24 * time.Hour)
 	plan := &config.PurchasePlan{
-		ID:                "plan-123",
-		Name:              "Test Plan",
-		NextExecutionDate: &nextExec,
+		ID:                     "plan-123",
+		Name:                   "Test Plan",
+		Enabled:                true,
+		AutoPurchase:           true,
+		NotificationDaysBefore: 3,
+		NextExecutionDate:      &nextExec,
 	}
 
-	// No existing execution found
+	// No existing execution found; the failed row's save fails.
 	expectStepRows(mockStore, plan)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(errors.New("save failed"))
 
 	manager := &Manager{
+		resolver:     &fakeResolver{err: planstep.ErrNoMatch},
 		config:       mockStore,
 		email:        mockEmail,
 		dashboardURL: "https://dashboard.example.com",
@@ -418,6 +419,8 @@ func TestManager_GetOrCreateExecution_LookupError(t *testing.T) {
 	plan := &config.PurchasePlan{
 		ID:                "plan-123",
 		Name:              "Test Plan",
+		Enabled:           true,
+		AutoPurchase:      true,
 		NextExecutionDate: &nextExec,
 	}
 
@@ -448,12 +451,15 @@ func TestManager_GetOrCreateExecution_CreatesOnErrNotFound(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 
-	nextExec := time.Now().Add(24 * time.Hour)
+	nextExec := time.Now().Add(-10 * 24 * time.Hour)
 	plan := &config.PurchasePlan{
-		ID:                "plan-f2",
-		Name:              "F2 Plan",
-		NextExecutionDate: &nextExec,
-		RampSchedule:      config.RampSchedule{CurrentStep: 2},
+		ID:                     "plan-f2",
+		Name:                   "F2 Plan",
+		Enabled:                true,
+		AutoPurchase:           true,
+		NotificationDaysBefore: 3,
+		NextExecutionDate:      &nextExec,
+		RampSchedule:           config.RampSchedule{CurrentStep: 2},
 	}
 
 	// Store returns ErrNotFound (wrapped), matching the post-fix store behavior.
@@ -462,7 +468,8 @@ func TestManager_GetOrCreateExecution_CreatesOnErrNotFound(t *testing.T) {
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
 		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).Return(nil)
 
-	manager := &Manager{config: mockStore, dashboardURL: "https://example.com"}
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+	manager := &Manager{config: mockStore, dashboardURL: "https://example.com", resolver: &fakeResolver{err: planstep.ErrNoMatch}}
 
 	execution, _, _, err := manager.getOrCreateExecution(ctx, plan)
 	require.ErrorIs(t, err, errExecutionNotNotifiable, "ErrNotFound must trigger the create path, not a hard error (F2)")
@@ -688,7 +695,7 @@ func TestManager_SendUpcomingPurchaseNotifications_EmailFails(t *testing.T) {
 // previous notification emailed.
 func pendingExecForNotification(mockStore *MockConfigStore) (*config.PurchasePlan, *config.PurchaseExecution) {
 	nextExec := time.Now().Add(3 * 24 * time.Hour)
-	plan := &config.PurchasePlan{ID: "plan-rot", Name: "Rotation Plan", NextExecutionDate: &nextExec}
+	plan := &config.PurchasePlan{ID: "plan-rot", Name: "Rotation Plan", Enabled: true, AutoPurchase: true, NextExecutionDate: &nextExec}
 	existing := &config.PurchaseExecution{
 		ExecutionID:     "exec-rot",
 		PlanID:          "plan-rot",

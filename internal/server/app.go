@@ -488,6 +488,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		STSClient:       deps.STSClient,
 		IsLambda:        runtime.IsLambda(),
 	})
+	purchaseManager.SetRecommendationSource(sched)
 
 	// Auth store will be initialized lazily after DB connection
 	var authStore auth.StoreInterface
@@ -821,7 +822,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 	if err != nil {
 		return fmt.Errorf("failed to load AWS config for cross-account STS: %w", err)
 	}
-	app.Purchase = purchase.NewManager(purchase.ManagerConfig{
+	reinitPurchase := purchase.NewManager(purchase.ManagerConfig{
 		ConfigStore:            app.Config,
 		EmailSender:            app.Email,
 		STSClient:              sts.NewFromConfig(awsCfg),
@@ -837,10 +838,11 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		OIDCSigner:             app.signer,
 		OIDCIssuerURL:          resolveOIDCIssuerURL(app.appConfig),
 	})
+	app.Purchase = reinitPurchase
 	log.Println("Re-initialized purchase manager with credential store and cross-account STS")
 
 	// Re-initialize scheduler with per-account credential resolution.
-	app.Scheduler = scheduler.NewScheduler(scheduler.SchedulerConfig{
+	reinitScheduler := scheduler.NewScheduler(scheduler.SchedulerConfig{
 		ConfigStore:     app.Config,
 		PurchaseManager: app.Purchase,
 		EmailSender:     app.Email,
@@ -851,6 +853,8 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		STSClient:       sts.NewFromConfig(awsCfg),
 		IsLambda:        app.appConfig.IsLambda,
 	})
+	app.Scheduler = reinitScheduler
+	reinitPurchase.SetRecommendationSource(reinitScheduler)
 
 	// Build the commitment-options probe/cache service. It lazily probes
 	// AWS reserved-offerings APIs through the first enabled AWS account and

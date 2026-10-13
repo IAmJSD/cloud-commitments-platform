@@ -30,7 +30,9 @@ func TestNotificationStampPreservesCompletedRampAndNextExecution(t *testing.T) {
 	}
 	require.NoError(t, plan.Validate())
 	require.NoError(t, store.CreatePurchasePlan(ctx, plan))
-	manager := &Manager{config: store}
+	// A plan without max_step_commitment refuses any step with recommendations,
+	// which gives the step its one failed row.
+	manager := &Manager{config: store, resolver: &fakeResolver{recs: []config.RecommendationRecord{attachRec("rec-a", 1)}}}
 
 	// A step-2 execution completes (and advances the ramp) while a reminder for
 	// the same plan is in flight. Plan steps carry no recommendations (#609), so
@@ -57,8 +59,8 @@ func TestNotificationStampPreservesCompletedRampAndNextExecution(t *testing.T) {
 	require.Equal(t, completed.NextExecutionDate, after.NextExecutionDate)
 	require.Equal(t, completed.LastExecutionDate, after.LastExecutionDate)
 
-	// The reminder path no longer emails a bare step (#609): it records the
-	// row as failed. The step stamp and date it carries are still what matters.
+	// The step is refused by the cap (no max_step_commitment): the reminder path
+	// records the row as failed. The step stamp and date it carries are what matters.
 	_, _, _, err = manager.getOrCreateExecution(ctx, after)
 	require.ErrorIs(t, err, errExecutionNotNotifiable)
 	execution, err := store.GetExecutionByPlanAndDate(ctx, plan.ID, *completed.NextExecutionDate)
