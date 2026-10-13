@@ -958,35 +958,69 @@ func (h *Handler) authorizeSessionApprove(ctx context.Context, session *Session,
 
 // approveConstraintsForSession is approveViaToken's independent Constraints
 // check (issue #60 review follow-up): it mirrors authorizeSessionApprove's
-// approve-any/approve-own grant-then-constrain matrix, but returns nil
-// (rather than a 403) when the session holds neither verb, or holds only
-// approve-own for an execution it didn't create. Those are not denials here
-// -- a session with no applicable approve-* permission simply has no
-// Constraints to be bound by, and is being authorized entirely through the
-// token flow's separate contact_email mechanism. This function only ever
-// narrows what that mechanism would otherwise allow; it never widens it.
-//
-// session may be nil (a pure email-client click with no browser session at
-// all); that also returns nil, since there is no session-held permission to
-// evaluate. session.UserID == apiKeyAdminUserID or a nil h.auth are treated
-// the same way authorizeSessionApprove treats them.
+// approve-any/approve-own grant-then-constrain matrix. A session with no
+// applicable approve-* verb has no Constraints to be bound by on a
+// user-created row and returns nil (it is authorized through the token
+// flow's contact_email mechanism); this function only narrows, never widens.
+// Plan-step rows (PlanID set, no creator) are tighter (#631): approve-own
+// Constraints apply regardless of creator, and an approver with no verb or no
+// session is held to the plan's step cap (requirePlanStepCap). The admin API
+// key stays exempt.
 func (h *Handler) approveConstraintsForSession(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
-	if session == nil || session.UserID == apiKeyAdminUserID || h.auth == nil {
+	if session != nil && session.UserID == apiKeyAdminUserID {
 		return nil
 	}
+	if session != nil && h.auth != nil {
+		bound, err := h.enforceHeldApproveConstraints(ctx, session, execution)
+		if bound || err != nil {
+			return err
+		}
+	}
+	return h.requirePlanStepCap(ctx, execution)
+}
+
+// enforceHeldApproveConstraints applies the Constraints of the approve verb the
+// session holds (approve-any first, then approve-own). bound is false when no
+// verb applies to this row, so the caller falls back to the plan cap.
+func (h *Handler) enforceHeldApproveConstraints(ctx context.Context, session *Session, execution *config.PurchaseExecution) (bound bool, err error) {
 	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveAny, auth.ResourcePurchases)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return false, fmt.Errorf("permission check failed: %w", err)
 	}
 	if hasAny {
-		return h.enforcePurchaseConstraints(ctx, session, auth.ActionApproveAny, execution.Recommendations)
+		return true, h.enforcePurchaseConstraints(ctx, session, auth.ActionApproveAny, execution.Recommendations)
 	}
 	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveOwn, auth.ResourcePurchases)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return false, fmt.Errorf("permission check failed: %w", err)
 	}
-	if hasOwn && execution.CreatedByUserID != nil && *execution.CreatedByUserID == session.UserID {
-		return h.enforcePurchaseConstraints(ctx, session, auth.ActionApproveOwn, execution.Recommendations)
+	// A plan-step row has no creator (plan_step_attach.go), so its approve-own
+	// holder is bound by their Constraints regardless of it.
+	if hasOwn && (execution.PlanID != "" || (execution.CreatedByUserID != nil && *execution.CreatedByUserID == session.UserID)) {
+		return true, h.enforcePurchaseConstraints(ctx, session, auth.ActionApproveOwn, execution.Recommendations)
+	}
+	return false, nil
+}
+
+// requirePlanStepCap applies the plan's max_step_commitment to a plan-step row
+// approved through the email-link flow by someone who holds no approve verb
+// (or no session at all): without it that approver is bound by no cap. A
+// manual-approval plan with no cap keeps its human approval as the only
+// control and approves as before (CheckStepCommitmentCap would refuse it);
+// an auto-purchase plan, or a manual one that sets a cap, is checked.
+func (h *Handler) requirePlanStepCap(ctx context.Context, execution *config.PurchaseExecution) error {
+	if execution.PlanID == "" {
+		return nil
+	}
+	plan, err := h.config.GetPurchasePlan(ctx, execution.PlanID)
+	if err != nil {
+		return fmt.Errorf("failed to read plan %s for the approval cap check: %w", execution.PlanID, err)
+	}
+	if !plan.AutoPurchase && plan.MaxStepCommitment == nil {
+		return nil
+	}
+	if capErr := purchase.CheckStepCommitmentCap(plan, execution.Recommendations); capErr != nil {
+		return NewClientError(403, capErr.Error())
 	}
 	return nil
 }
