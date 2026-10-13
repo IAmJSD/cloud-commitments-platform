@@ -109,9 +109,10 @@ func TestCumulativeShownZero(t *testing.T) {
 	row := azureRec(100, 1000)
 	zero := row
 	zero.Count = 0
-	_, err := Resolve(t.Context(), fakeSource{shown: []config.RecommendationRecord{zero}}, fakeStore{rows: []config.RecommendationRecord{row}}, cumPlan(80, 25, "weekly", 4), accts, 1, nil, nil)
+	res, err := Resolve(t.Context(), fakeSource{shown: []config.RecommendationRecord{zero}}, fakeStore{rows: []config.RecommendationRecord{row}}, cumPlan(80, 25, "weekly", 4), accts, 1, nil, nil)
 	require.ErrorIs(t, err, ErrNoMatch)
 	assert.NotErrorIs(t, err, ErrTargetMet)
+	assert.Nil(t, res.Baseline)
 }
 
 func TestCumulativePercentOver100Clamps(t *testing.T) {
