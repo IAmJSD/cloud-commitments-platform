@@ -22,11 +22,16 @@ import (
 )
 
 func lifecycleTranche(cfgID string, amount float64, status ladder.TrancheStatus, at time.Time) LadderTrancheDB {
-	return LadderTrancheDB{
+	tr := LadderTrancheDB{
 		ID: uuid.New().String(), ConfigID: &cfgID, LayerType: ladder.LayerComputeSP,
 		Term: ladder.Term1Year, PaymentOption: ladder.PaymentNoUpfront,
 		Status: status, AmountUSDHr: amount, ScheduledDate: at,
 	}
+	if status == ladder.TrancheStatusCompleted {
+		settled := at
+		tr.SettledAt = &settled
+	}
+	return tr
 }
 
 func trancheStatus(ctx context.Context, t *testing.T, store *PostgresStore, id string) ladder.TrancheStatus {
@@ -352,7 +357,7 @@ func TestClaimVsCancelAndOverdueSweep_ExactlyOneOutcome(t *testing.T) {
 			t.Fatalf("iteration %d: unexpected final status %s", i, final)
 		}
 		// Retire the row so the next iteration's limit-1 claim sees only its own tranche.
-		_, err := store.db.Exec(ctx, `UPDATE ladder_tranches SET status = 'completed' WHERE id = $1`, tr.ID)
+		_, err := store.db.Exec(ctx, `UPDATE ladder_tranches SET status = 'completed', settled_at = now() WHERE id = $1`, tr.ID)
 		require.NoError(t, err)
 	}
 }

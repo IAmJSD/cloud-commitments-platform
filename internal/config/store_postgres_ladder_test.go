@@ -423,6 +423,10 @@ func TestPostgresStore_GetInFlightLadderCommitUSDHr(t *testing.T) {
 			AmountUSDHr:   amount,
 			ScheduledDate: scheduledDate,
 		}
+		if status == ladder.TrancheStatusCompleted {
+			settled := asOf
+			tr.SettledAt = &settled
+		}
 		require.NoError(t, store.SaveLadderTranches(ctx, []LadderTrancheDB{tr}))
 	}
 	insertTranche := func(t *testing.T, cID *string, amount float64, status ladder.TrancheStatus) {
@@ -582,6 +586,8 @@ func TestPostgresStore_SaveLadderRunWithTranches_CancelsOverdue(t *testing.T) {
 		`INSERT INTO purchase_executions (plan_id, scheduled_date) VALUES ($1, NOW()) RETURNING execution_id`, planID).Scan(&execID))
 	fired, completed, linked := newTranche(cfgID, "", start.Add(-24*time.Hour)), newTranche(cfgID, "", start.Add(-24*time.Hour)), newTranche(cfgID, "", start.Add(-24*time.Hour))
 	fired.RunID, completed.RunID, linked.RunID = nil, nil, nil
+	settledAt := start
+	completed.SettledAt = &settledAt
 	fired.Status, completed.Status, linked.ExecutionID = ladder.TrancheStatusFired, ladder.TrancheStatusCompleted, &execID
 	require.NoError(t, store.SaveLadderTranches(ctx, []LadderTrancheDB{fired, completed, linked}))
 
