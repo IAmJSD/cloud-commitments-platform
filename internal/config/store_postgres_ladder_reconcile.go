@@ -27,6 +27,7 @@ type LadderChainNode struct {
 	NoSubmission     bool
 	RetryExecutionID *string
 	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // ListFiredLadderTranches returns fired tranches that have an execution,
@@ -99,13 +100,13 @@ func (s *PostgresStore) LockLadderTrancheChainTx(ctx context.Context, tx pgx.Tx,
 }
 
 func readChainNode(ctx context.Context, tx pgx.Tx, executionID string, forUpdate bool) (LadderChainNode, error) {
-	q := `SELECT execution_id::text, status, no_submission, retry_execution_id::text, created_at
+	q := `SELECT execution_id::text, status, no_submission, retry_execution_id::text, created_at, updated_at
 	      FROM purchase_executions WHERE execution_id = $1`
 	if forUpdate {
 		q += ` FOR UPDATE`
 	}
 	var n LadderChainNode
-	err := tx.QueryRow(ctx, q, executionID).Scan(&n.ExecutionID, &n.Status, &n.NoSubmission, &n.RetryExecutionID, &n.CreatedAt)
+	err := tx.QueryRow(ctx, q, executionID).Scan(&n.ExecutionID, &n.Status, &n.NoSubmission, &n.RetryExecutionID, &n.CreatedAt, &n.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return n, fmt.Errorf("%w: execution %s", ErrNotFound, executionID)
 	}

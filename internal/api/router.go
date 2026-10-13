@@ -326,6 +326,7 @@ func (r *Router) registerRoutes() {
 		{ExactPath: "/api/ladder/configs", Method: "PUT", Handler: r.upsertLadderConfigHandler, Auth: AuthUser},
 		{ExactPath: "/api/ladder/runs", Method: "GET", Handler: r.getLadderTimelineRunsHandler, Auth: AuthUser},
 		{ExactPath: "/api/ladder/tranches", Method: "GET", Handler: r.getLadderTimelineHandler, Auth: AuthUser},
+		{PathPrefix: "/api/ladder/tranches/", PathSuffix: "/resolve", Method: "POST", Handler: r.resolveLadderTrancheHandler, Auth: AuthUser},
 		{PathPrefix: "/api/ladder/tranches/", Method: "PATCH", Handler: r.amendLadderTrancheHandler, Auth: AuthUser},
 
 		// Notification one-click unsubscribe (RFC 8058). AuthPublic: the signed
@@ -1022,6 +1023,10 @@ func (r *Router) getLadderTimelineRunsHandler(ctx context.Context, req *events.L
 
 func (r *Router) amendLadderTrancheHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.amendLadderTranche(ctx, req, params["id"])
+}
+
+func (r *Router) resolveLadderTrancheHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.resolveLadderTranche(ctx, req, params["id"])
 }
 
 func (r *Router) unsubscribeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
