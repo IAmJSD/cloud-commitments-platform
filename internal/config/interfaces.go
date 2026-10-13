@@ -76,7 +76,7 @@ type StoreInterface interface {
 	// named provider, in sorted order, so two plan steps that resolve the same
 	// provider's recommendations cannot both attach the same capacity. Lock
 	// order is advisory lock, then LockPurchasePlanTx. The ladder config lock
-	// (PlanAndSaveLadderRun, ClaimDueLadderTranches) is always taken BEFORE both:
+	// (PlanAndSaveLadderRun, ClaimDueLadderTranches, AmendLadderTranche) is always taken BEFORE both:
 	// ClaimDueLadderTranches's create callback may take these locks, so they
 	// come after the ladder lock; code holding an execution or tranche row
 	// (retry linker, reconciler) must never take the ladder lock. No cycle.

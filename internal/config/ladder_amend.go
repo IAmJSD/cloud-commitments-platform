@@ -11,7 +11,7 @@ import (
 var (
 	ErrLadderAmendNotFound = errors.New("ladder tranche not found")
 	ErrLadderAmendConflict = errors.New("ladder tranche changed or is no longer editable")
-	ErrLadderAmendInvalid  = errors.New("ladder amendment exceeds the original run total or current per-run cap")
+	ErrLadderAmendInvalid  = errors.New("ladder amendment exceeds the original run total, the current per-run cap or the config commitment ceiling")
 	ladderAmountPattern    = regexp.MustCompile(`^(0|[1-9]\d{0,13})(\.\d{1,6})?$`)
 )
 

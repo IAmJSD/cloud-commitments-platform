@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
@@ -69,6 +70,7 @@ func TestLadderAmendmentStatusErrors(t *testing.T) {
 		code int
 	}{
 		{config.ErrLadderAmendConflict, 409}, {config.ErrLadderAmendInvalid, 400},
+		{fmt.Errorf("amend ladder tranche: %w", config.ErrLadderLockTimeout), 503},
 	} {
 		h, original := ladderScopedHandler(t)
 		h.config = &amendmentTestStore{MockConfigStore: original, accountID: scopedInAccount, err: example.err}
@@ -76,5 +78,8 @@ func TestLadderAmendmentStatusErrors(t *testing.T) {
 		clientErr, ok := IsClientError(err)
 		require.True(t, ok)
 		require.Equal(t, example.code, clientErr.code)
+		if example.code == 503 {
+			require.Equal(t, "5", clientErr.headers["Retry-After"])
+		}
 	}
 }

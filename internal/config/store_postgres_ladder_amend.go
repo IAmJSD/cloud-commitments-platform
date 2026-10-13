@@ -29,9 +29,15 @@ func (s *PostgresStore) AmendLadderTranche(ctx context.Context, id, accountID, p
 	if actor == "" {
 		return nil, errors.New("ladder amendment actor is required")
 	}
+	configID, err := s.ladderTrancheConfigID(ctx, id, accountID, provider)
+	if err != nil {
+		return nil, fmt.Errorf("amend ladder tranche: %w", err)
+	}
 	result := &LadderAmendmentResult{ID: id}
-	err := s.WithTx(ctx, func(tx pgx.Tx) error {
-		return amendLadderTrancheTx(ctx, tx, id, accountID, provider, actor, amendment, result)
+	// The ladder lock is taken first, row locks after (see withLadderConfigLock),
+	// so the ceiling sum below is read against the planner's committed state.
+	err = s.withLadderConfigLock(ctx, configID, func(tx pgx.Tx) error {
+		return amendLadderTrancheTx(ctx, tx, configID, id, accountID, provider, actor, amendment, result)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("amend ladder tranche: %w", err)
@@ -59,10 +65,25 @@ func (t lockedLadderTranche) editable(runStatus ladder.RunStatus, expectedRevisi
 		t.executionID == nil && t.revision == expectedRevision && t.future
 }
 
-func amendLadderTrancheTx(ctx context.Context, tx pgx.Tx, id, accountID, provider, actor string, amendment LadderAmendment, result *LadderAmendmentResult) error {
+// ladderTrancheConfigID resolves the tranche's config without any row lock, so
+// the caller can take the config's ladder lock before locking rows.
+func (s *PostgresStore) ladderTrancheConfigID(ctx context.Context, id, accountID, provider string) (string, error) {
+	var configID string
+	err := s.db.QueryRow(ctx, `SELECT t.config_id FROM ladder_tranches t
+ JOIN ladder_configs c ON c.id=t.config_id WHERE t.id=$1 AND c.cloud_account_id=$2 AND c.provider=$3`, id, accountID, provider).Scan(&configID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrLadderAmendNotFound
+	}
+	return configID, err
+}
+
+func amendLadderTrancheTx(ctx context.Context, tx pgx.Tx, configID, id, accountID, provider, actor string, amendment LadderAmendment, result *LadderAmendmentResult) error {
 	run, err := lockLadderRun(ctx, tx, id, accountID, provider)
 	if err != nil {
 		return err
+	}
+	if run.configID != configID {
+		return ErrLadderAmendConflict
 	}
 	tranche, err := lockLadderTranche(ctx, tx, id, run, amendment.ScheduledDate)
 	if err != nil {
@@ -72,6 +93,10 @@ func amendLadderTrancheTx(ctx context.Context, tx pgx.Tx, id, accountID, provide
 		return ErrLadderAmendConflict
 	}
 	err = checkLadderRunTotal(ctx, tx, run, tranche.amount, amendment.AmountUSDHr, result)
+	if err != nil {
+		return err
+	}
+	err = checkLadderConfigCeiling(ctx, tx, run.configID, tranche.amount, amendment.AmountUSDHr)
 	if err != nil {
 		return err
 	}
@@ -96,7 +121,7 @@ func lockLadderRun(ctx context.Context, tx pgx.Tx, id, accountID, provider strin
 	err := tx.QueryRow(ctx, `SELECT c.id,c.max_hourly_commit_per_run::text
  FROM ladder_configs c JOIN cloud_accounts a ON a.id=c.cloud_account_id AND a.provider=c.provider
  WHERE c.cloud_account_id=$2 AND c.provider=$3
- AND c.id=(SELECT config_id FROM ladder_tranches WHERE id=$1) FOR UPDATE OF c`, id, accountID, provider).
+ AND c.id=(SELECT config_id FROM ladder_tranches WHERE id=$1) FOR NO KEY UPDATE OF c`, id, accountID, provider).
 		Scan(&run.configID, &run.cap)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return run, ErrLadderAmendNotFound
@@ -105,7 +130,7 @@ func lockLadderRun(ctx context.Context, tx pgx.Tx, id, accountID, provider strin
 		return run, err
 	}
 	err = tx.QueryRow(ctx, `SELECT id,status,total_hourly_commit::text FROM ladder_runs
- WHERE config_id=$2 AND id=(SELECT run_id FROM ladder_tranches WHERE id=$1) FOR UPDATE`, id, run.configID).
+ WHERE config_id=$2 AND id=(SELECT run_id FROM ladder_tranches WHERE id=$1) FOR NO KEY UPDATE`, id, run.configID).
 		Scan(&run.runID, &run.status, &run.originalTotal)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return run, ErrLadderAmendNotFound

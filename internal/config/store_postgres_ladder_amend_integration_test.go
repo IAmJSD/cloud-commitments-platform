@@ -20,7 +20,7 @@ func TestLadderAmendmentAuditAndSiblingConcurrency(t *testing.T) {
 	cfgID := seedLadderConfig(ctx, t, store)
 	var accountID string
 	require.NoError(t, store.db.QueryRow(ctx, "SELECT cloud_account_id FROM ladder_configs WHERE id=$1", cfgID).Scan(&accountID))
-	run, err := store.SaveLadderRun(ctx, &LadderRunDB{ConfigID: &cfgID, Status: ladder.RunStatusPlanned, StartedAt: time.Now(), TotalHourlyCommit: 10, Plan: []byte(`{"original":true}`)})
+	run, err := store.SaveLadderRun(ctx, &LadderRunDB{ConfigID: &cfgID, Status: ladder.RunStatusPlanned, StartedAt: time.Now(), TotalHourlyCommit: 10, TargetUSDHr: fptr(10), ExistingUSDHr: fptr(0), BaselineUSDHr: fptr(100), Plan: []byte(`{"original":true}`)})
 	require.NoError(t, err)
 	date := time.Now().UTC().Add(time.Hour)
 	ids := []string{uuid.NewString(), uuid.NewString()}

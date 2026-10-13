@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 )
@@ -27,6 +28,10 @@ var ladderLockTimeout = 30 * time.Second
 // in-flight commitment. It runs while the per-config lock is held inside the
 // persist transaction: it must be pure compute (no provider or network I/O).
 type LadderPlanBuilder func(inFlightUSDHr float64) (*LadderRunDB, []LadderTrancheDB, error)
+
+// ErrLadderLockTimeout means the per-config ladder lock was not acquired within
+// ladderLockTimeout (SQLSTATE 55P03). The operation did nothing; retry later.
+var ErrLadderLockTimeout = errors.New("ladder config lock timed out")
 
 func ladderConfigLockKey(configID string) string { return ladderConfigLockPrefix + configID }
 
@@ -77,6 +82,10 @@ func acquireLadderConfigLock(ctx context.Context, tx pgx.Tx, configID string) er
 		return fmt.Errorf("ladder config lock %s: set lock_timeout: %w", configID, err)
 	}
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", ladderConfigLockKey(configID)); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "55P03" {
+			return fmt.Errorf("ladder config lock %s: %w: %w", configID, ErrLadderLockTimeout, err)
+		}
 		return fmt.Errorf("ladder config lock %s: %w", configID, err)
 	}
 	// The timeout was for the advisory wait only; do not leak it into fn's statements.
