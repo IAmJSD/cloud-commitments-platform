@@ -797,8 +797,8 @@ func (c *LadderConfigDB) validateLadderCoverageBounds() error {
 // buffer utilization threshold.
 func (c *LadderConfigDB) validateLadderRunLimits() error {
 	if v := c.MaxHourlyCommitPerRun; v != nil {
-		if math.IsNaN(*v) || math.IsInf(*v, 0) || !(*v > 0) {
-			return fmt.Errorf("max_hourly_commit_per_run %g must be a positive finite number when set (omit for no cap)", *v)
+		if _, err := LadderCapMicros(*v); err != nil {
+			return err
 		}
 	}
 	if c.MaxActionsPerRun <= 0 {

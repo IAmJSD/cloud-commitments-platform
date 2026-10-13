@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1095,4 +1096,16 @@ func TestIsValidRampScheduleType(t *testing.T) {
 // Helper function for creating string pointers in tests.
 func stringPtr(s string) *string {
 	return &s
+}
+
+func TestLadderCapMicros(t *testing.T) {
+	for in, want := range map[float64]int64{0.000001: 1, 0.3: 300000, 1: 1000000, 123.456789: 123456789, 1e12: 1e18} {
+		got, err := LadderCapMicros(in)
+		assert.NoError(t, err, in)
+		assert.Equal(t, want, got, in)
+	}
+	for _, in := range []float64{0, -1, 0.0000004, 1.1234567, 1e13, 1e308, math.NaN(), math.Inf(1)} {
+		_, err := LadderCapMicros(in)
+		assert.Error(t, err, in)
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
@@ -4091,6 +4092,34 @@ func TestHandler_retryPurchase_ConcurrentRetryRace_SecondCASLoses(t *testing.T) 
 	// suppression writes ahead of the linkage CAS.
 	mockConfig.AssertNotCalled(t, "CreateSuppressionTx")
 	mockAuth.AssertExpectations(t)
+}
+
+// A failed execution whose ladder tranche is already settled must not get a
+// successor: the settled tranche no longer nets, so the successor would buy the
+// same slice again. Mock-store test; the real locking is in the integration test.
+func TestHandler_retryPurchase_RefusesSettledLadderTranche(t *testing.T) {
+	creator := retryCallerID
+	failed := &config.PurchaseExecution{
+		ExecutionID:     retryExecID,
+		Status:          "failed",
+		IdempotencyKey:  "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+		CreatedByUserID: &creator,
+		Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "rds", Term: 1, UpfrontCost: 100}},
+	}
+	handler, mockConfig, _ := buildSessionRetryHandler(failed, &Session{UserID: retryCallerID}, false, true)
+	mockConfig.On("LockLadderTrancheForRetryTx", mock.Anything, mock.Anything, failed.IdempotencyKey).
+		Return(ladder.TrancheStatusFailed, true, nil)
+
+	result, err := handler.retryPurchase(context.Background(), sessionRetryReq(), retryExecID)
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, err.Error(), "ladder tranche")
+	mockConfig.AssertNotCalled(t, "SavePurchaseExecution")
+	mockConfig.AssertNotCalled(t, "LinkRetryExecutionAtomic")
 }
 
 func TestHandler_retryPurchase_RejectsMissingSession(t *testing.T) {

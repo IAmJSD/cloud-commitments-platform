@@ -94,7 +94,8 @@ func getGlobalConfigFrom(ctx context.Context, q globalConfigExecutor) (*GlobalCo
 		       offering_class,
 		       require_different_approver,
 		       auto_purchase_enabled,
-		       auto_purchase_changed_by, auto_purchase_changed_at, auto_purchase_changed_via
+		       auto_purchase_changed_by, auto_purchase_changed_at, auto_purchase_changed_via,
+		       ladder_execution_changed_by, ladder_execution_changed_at, ladder_execution_changed_via
 		FROM global_config
 		WHERE id = 1
 	`
@@ -132,6 +133,9 @@ func getGlobalConfigFrom(ctx context.Context, q globalConfigExecutor) (*GlobalCo
 		&config.AutoPurchaseChangedBy,
 		&config.AutoPurchaseChangedAt,
 		&config.AutoPurchaseChangedVia,
+		&config.LadderExecutionChangedBy,
+		&config.LadderExecutionChangedAt,
+		&config.LadderExecutionChangedVia,
 	)
 
 	if err != nil {
@@ -266,8 +270,9 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 			recommendations_cache_stale_hours, recommendations_lookback_days,
 			purchase_delay_hours, laddering_enabled, ladder_execution_enabled, offering_class,
 			require_different_approver, auto_purchase_enabled,
-			auto_purchase_changed_by, auto_purchase_changed_at, auto_purchase_changed_via
-		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
+			auto_purchase_changed_by, auto_purchase_changed_at, auto_purchase_changed_via,
+			ladder_execution_changed_by, ladder_execution_changed_at, ladder_execution_changed_via
+		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)
 		ON CONFLICT (id) DO UPDATE SET
 			enabled_providers = $1,
 			notification_email = $2,
@@ -297,6 +302,9 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 			auto_purchase_changed_by = $26,
 			auto_purchase_changed_at = $27,
 			auto_purchase_changed_via = $28,
+			ladder_execution_changed_by = $29,
+			ladder_execution_changed_at = $30,
+			ladder_execution_changed_via = $31,
 			updated_at = NOW()
 	`
 
@@ -369,6 +377,9 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 		config.AutoPurchaseChangedBy,
 		config.AutoPurchaseChangedAt,
 		config.AutoPurchaseChangedVia,
+		config.LadderExecutionChangedBy,
+		config.LadderExecutionChangedAt,
+		config.LadderExecutionChangedVia,
 	)
 
 	if err != nil {
