@@ -123,8 +123,8 @@ type ladderTestStore struct {
 	cloudAcctByID    map[string]*config.CloudAccount
 	cloudAcctErrByID map[string]error
 
-	// L5: configurable in-flight hourly commitment returned by
-	// GetInFlightLadderCommitUSDHr. Defaults to zero (nil -> 0.0 pointer).
+	// L5: configurable in-flight hourly commitment handed to the plan builder
+	// by PlanAndSaveLadderRun. Defaults to zero.
 	inFlightUSDHr *float64
 	inFlightErr   error
 
@@ -187,10 +187,21 @@ func (s *ladderTestStore) SaveLadderTranches(_ context.Context, tranches []confi
 	return nil
 }
 
-// SaveLadderRunWithTranches models the L5 append-only persist: it captures the
-// run and its new tranches and leaves existing tranches untouched (there is no
-// supersede path anymore).
-func (s *ladderTestStore) SaveLadderRunWithTranches(_ context.Context, run *config.LadderRunDB, tranches []config.LadderTrancheDB) (*config.LadderRunDB, error) {
+// PlanAndSaveLadderRun models the L5 append-only persist: it hands build the
+// configurable in-flight value, then captures the run and its new tranches and
+// leaves existing tranches untouched (there is no supersede path anymore).
+func (s *ladderTestStore) PlanAndSaveLadderRun(_ context.Context, _ string, _ time.Time, build config.LadderPlanBuilder) (*config.LadderRunDB, error) {
+	if s.inFlightErr != nil {
+		return nil, s.inFlightErr
+	}
+	inFlight := 0.0
+	if s.inFlightUSDHr != nil {
+		inFlight = *s.inFlightUSDHr
+	}
+	run, tranches, err := build(inFlight)
+	if err != nil {
+		return nil, err
+	}
 	if s.saveLadderRunErr != nil {
 		return nil, s.saveLadderRunErr
 	}
@@ -201,19 +212,6 @@ func (s *ladderTestStore) SaveLadderRunWithTranches(_ context.Context, run *conf
 	s.savedRuns = append(s.savedRuns, run)
 	s.savedTranches = tranches
 	return run, nil
-}
-
-// GetInFlightLadderCommitUSDHr returns the configurable in-flight value.
-// When inFlightUSDHr is nil, returns a pointer to 0.0 (no in-flight default).
-func (s *ladderTestStore) GetInFlightLadderCommitUSDHr(_ context.Context, _ string, _ time.Time) (*float64, error) {
-	if s.inFlightErr != nil {
-		return nil, s.inFlightErr
-	}
-	if s.inFlightUSDHr != nil {
-		return s.inFlightUSDHr, nil
-	}
-	zero := 0.0
-	return &zero, nil
 }
 
 // ============================================================
@@ -1170,9 +1168,8 @@ func TestRatToFloat64Ptr_PositiveValue(t *testing.T) {
 // returns a FIXED in-flight value), it tracks each persisted tranche's live
 // status so the L5 netting + append-only interplay can be exercised end-to-end
 // across multiple sequential runs. It mirrors PostgresStore semantics exactly:
-//   - GetInFlightLadderCommitUSDHr sums SCHEDULED, not-yet-due tranches only,
-//     per config.
-//   - SaveLadderRunWithTranches APPENDS the run + its new tranches and NEVER
+//   - PlanAndSaveLadderRun nets SCHEDULED, not-yet-due tranches only, per
+//     config, then APPENDS the run + its new tranches and NEVER
 //     cancels existing scheduled tranches (there is no supersede path).
 //
 // The tests below drive the REAL executeLadderRun -> Allocate -> BuildTranches
@@ -1209,21 +1206,22 @@ func (s *ladderStatefulStore) scheduledTrancheIDs(configID string) map[string]bo
 	return ids
 }
 
-func (s *ladderStatefulStore) GetInFlightLadderCommitUSDHr(_ context.Context, configID string, asOf time.Time) (*float64, error) {
-	total := 0.0
+// PlanAndSaveLadderRun nets scheduled, not-yet-due tranches only, then is
+// APPEND-ONLY: it records the run and appends its new tranches without touching
+// any existing tranche's status. This mirrors the production store, whose
+// supersede/cancel path was removed.
+func (s *ladderStatefulStore) PlanAndSaveLadderRun(_ context.Context, configID string, asOf time.Time, build config.LadderPlanBuilder) (*config.LadderRunDB, error) {
+	inFlight := 0.0
 	for i := range s.tranches {
 		tr := &s.tranches[i]
 		if tr.ConfigID != nil && *tr.ConfigID == configID && tr.Status == pkgladder.TrancheStatusScheduled && tr.ScheduledDate.After(asOf) {
-			total += tr.AmountUSDHr
+			inFlight += tr.AmountUSDHr
 		}
 	}
-	return &total, nil
-}
-
-// SaveLadderRunWithTranches is APPEND-ONLY: it records the run and appends its
-// new tranches without touching any existing tranche's status. This mirrors the
-// production store, whose supersede/cancel path was removed.
-func (s *ladderStatefulStore) SaveLadderRunWithTranches(_ context.Context, run *config.LadderRunDB, tranches []config.LadderTrancheDB) (*config.LadderRunDB, error) {
+	run, tranches, err := build(inFlight)
+	if err != nil {
+		return nil, err
+	}
 	s.runs = append(s.runs, run)
 	s.tranches = append(s.tranches, tranches...)
 	return run, nil
