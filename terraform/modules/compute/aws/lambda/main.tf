@@ -575,7 +575,7 @@ resource "aws_cloudwatch_event_target" "lambda" {
   arn       = aws_lambda_function.main.arn
 
   input = jsonencode({
-    event = "scheduled_recommendations"
+    action = "collect_recommendations"
   })
 }
 

@@ -161,13 +161,13 @@ func TestHandleScheduledHTTP_TaskError(t *testing.T) {
 		Purchase:  &testutil.MockPurchaseManager{},
 	}
 
-	// Unknown task type causes error
+	// Unknown task type is a client error, rejected before the DB is touched.
 	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/scheduled/invalid_task_type", nil)
 	w := httptest.NewRecorder()
 
 	app.handleScheduledHTTP(w, req)
 
-	testutil.AssertEqual(t, 500, w.Code)
+	testutil.AssertEqual(t, 400, w.Code)
 }
 
 func TestHandleScheduledHTTP_ProcessPurchases(t *testing.T) {

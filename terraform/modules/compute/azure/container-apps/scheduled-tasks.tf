@@ -198,7 +198,7 @@ resource "azurerm_logic_app_action_custom" "call_recommendations" {
     type = "Http"
     inputs = {
       method = "POST"
-      uri    = "https://${azurerm_container_app.main.ingress[0].fqdn}/api/scheduled/recommendations"
+      uri    = "https://${azurerm_container_app.main.ingress[0].fqdn}/api/scheduled/collect_recommendations"
       headers = {
         "Content-Type"  = "application/json"
         "Authorization" = "Bearer @{body('get-secret')['value']}"
@@ -303,7 +303,7 @@ resource "azurerm_logic_app_action_custom" "call_ri_exchange" {
     type = "Http"
     inputs = {
       method = "POST"
-      uri    = "https://${azurerm_container_app.main.ingress[0].fqdn}/api/scheduled/ri-exchange"
+      uri    = "https://${azurerm_container_app.main.ingress[0].fqdn}/api/scheduled/ri_exchange_reshape"
       headers = {
         "Content-Type"  = "application/json"
         "Authorization" = "Bearer @{body('get-secret')['value']}"

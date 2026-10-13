@@ -121,7 +121,7 @@ func TestIntegration_FullHTTPRoundtrip(t *testing.T) {
 			callsBefore := handlerCalls
 
 			req, err := http.NewRequestWithContext(context.Background(),
-				http.MethodPost, srv.URL+"/api/scheduled/recommendations", nil)
+				http.MethodPost, srv.URL+"/api/scheduled/collect_recommendations", nil)
 			if err != nil {
 				t.Fatalf("NewRequest: %v", err)
 			}

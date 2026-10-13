@@ -66,8 +66,8 @@ locals {
   # that's unique-per-(service, endpoint) satisfies the OIDC
   # recipient-bound contract — the validator only does string-equality
   # against this same value (built once into the env var below).
-  scheduled_task_recommendations_audience = "${var.service_name}/api/scheduled/recommendations"
-  scheduled_task_ri_exchange_audience     = "${var.service_name}/api/scheduled/ri-exchange"
+  scheduled_task_recommendations_audience = "${var.service_name}/api/scheduled/collect_recommendations"
+  scheduled_task_ri_exchange_audience     = "${var.service_name}/api/scheduled/ri_exchange_reshape"
 
   scheduled_task_oidc_audiences = join(",", compact([
     var.enable_scheduled_tasks ? local.scheduled_task_recommendations_audience : "",
@@ -340,7 +340,7 @@ resource "google_cloud_scheduler_job" "recommendations" {
 
   http_target {
     http_method = "POST"
-    uri         = "${google_cloud_run_v2_service.main.uri}/api/scheduled/recommendations"
+    uri         = "${google_cloud_run_v2_service.main.uri}/api/scheduled/collect_recommendations"
 
     # Auth: oidc_token below is signed by the scheduler's service
     # account at invocation time. Two complementary defences:
@@ -406,7 +406,7 @@ resource "google_cloud_scheduler_job" "ri_exchange" {
 
   http_target {
     http_method = "POST"
-    uri         = "${google_cloud_run_v2_service.main.uri}/api/scheduled/ri-exchange"
+    uri         = "${google_cloud_run_v2_service.main.uri}/api/scheduled/ri_exchange_reshape"
 
     # Same OIDC-only model as the recommendations scheduler above —
     # see #159 for the rationale. Audience pinned to the receiving

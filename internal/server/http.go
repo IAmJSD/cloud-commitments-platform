@@ -319,13 +319,6 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 
 	ctx := r.Context()
 
-	// Ensure database connection is established (lazy initialization)
-	if err := app.ensureDB(ctx); err != nil {
-		log.Printf("Failed to establish database connection: %v", err)
-		http.Error(w, "Database connection failed", http.StatusServiceUnavailable)
-		return
-	}
-
 	// Extract task type from URL path: /api/scheduled/{task_type}.
 	// TrimPrefix is cleaner than splitting and indexing parts[2]; it also
 	// avoids the length-guard dance while remaining robust to extra slashes
@@ -336,7 +329,21 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Invalid path", http.StatusBadRequest)
 		return
 	}
-	taskType := ScheduledTaskType(taskTypeStr)
+	// Reject unknown task names before touching the database: a misconfigured
+	// scheduler URL is a client error, not an outage (#710).
+	taskType, err := ParseScheduledTaskType(taskTypeStr)
+	if err != nil {
+		log.Printf("Rejected scheduled task request: %v", err) // #nosec G706 -- error text quotes the value with %q
+		http.Error(w, "Unknown scheduled task", http.StatusBadRequest)
+		return
+	}
+
+	// Ensure database connection is established (lazy initialization)
+	if err = app.ensureDB(ctx); err != nil {
+		log.Printf("Failed to establish database connection: %v", err)
+		http.Error(w, "Database connection failed", http.StatusServiceUnavailable)
+		return
+	}
 
 	// Execute scheduled task. This HTTP-triggered path carries no owner
 	// token; TaskCollectRecommendations runs as if cron-triggered and skips

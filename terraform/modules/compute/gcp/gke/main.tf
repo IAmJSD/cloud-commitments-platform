@@ -40,7 +40,7 @@ locals {
   # SA, var.scheduled_task_auth_mode_override decides — its default is
   # the fail-closed "oidc" so an unauthenticated boot requires opting
   # in to "disabled" deliberately.
-  scheduled_task_oidc_audience = "${var.app_url}/api/scheduled/recommendations"
+  scheduled_task_oidc_audience = "${var.app_url}/api/scheduled/collect_recommendations"
   scheduled_task_oidc_subject  = try(google_service_account.scheduler[0].unique_id, "")
   scheduled_task_auth_mode = (
     length(google_service_account.scheduler) > 0

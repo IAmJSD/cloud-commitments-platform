@@ -461,9 +461,19 @@ func ParseScheduledEvent(rawEvent json.RawMessage) (ScheduledTaskType, Scheduled
 		}
 	}
 
-	// Map action to task type
-	if taskType, ok := scheduledEventActions[event.Action]; ok {
-		return taskType, ScheduledTaskParams{OwnerToken: event.OwnerToken}, nil
+	taskType, err := ParseScheduledTaskType(event.Action)
+	if err != nil {
+		return "", ScheduledTaskParams{}, err
 	}
-	return "", ScheduledTaskParams{}, fmt.Errorf("unknown scheduled task action: %q", event.Action)
+	return taskType, ScheduledTaskParams{OwnerToken: event.OwnerToken}, nil
+}
+
+// ParseScheduledTaskType maps a raw task name (an event action or the
+// /api/scheduled/{task} path segment) to its ScheduledTaskType, rejecting
+// names that are not in the roster.
+func ParseScheduledTaskType(name string) (ScheduledTaskType, error) {
+	if taskType, ok := scheduledEventActions[name]; ok {
+		return taskType, nil
+	}
+	return "", fmt.Errorf("unknown scheduled task action: %q", name)
 }

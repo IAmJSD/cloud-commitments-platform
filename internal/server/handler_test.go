@@ -587,3 +587,15 @@ func TestParseScheduledEvent(t *testing.T) {
 		})
 	}
 }
+
+func TestParseScheduledTaskType(t *testing.T) {
+	got, err := ParseScheduledTaskType("collect_recommendations")
+	if err != nil || got != TaskCollectRecommendations {
+		t.Fatalf("collect_recommendations: got %q, %v", got, err)
+	}
+	for _, bad := range []string{"recommendations", "ri-exchange", "scheduled_recommendations", ""} {
+		if _, err := ParseScheduledTaskType(bad); err == nil {
+			t.Errorf("%q: expected error", bad)
+		}
+	}
+}
