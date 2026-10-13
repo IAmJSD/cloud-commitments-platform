@@ -94,7 +94,11 @@ func (s *PostgresStore) TransitionLadderTrancheTx(ctx context.Context, tx pgx.Tx
 // returns an error the whole transaction rolls back and nothing is claimed, so
 // a claim and its execution row can never disagree after a crash. Rows locked
 // by a concurrent claim are skipped (FOR UPDATE SKIP LOCKED), so exactly one
-// caller wins each tranche.
+// caller wins each tranche. The whole claim runs under the config's ladder
+// lock (taken first), including the create callback: with a caller asOf earlier
+// than the planner's, a claim could otherwise fire a row the planner's netting
+// read had already excluded as expired, and the row would be bought AND
+// re-planned. A callback slower than ladderLockTimeout makes planners fail loudly.
 func (s *PostgresStore) ClaimDueLadderTranches(
 	ctx context.Context,
 	configID string,
@@ -106,7 +110,7 @@ func (s *PostgresStore) ClaimDueLadderTranches(
 		return nil, fmt.Errorf("ClaimDueLadderTranches limit must be positive, got %d", limit)
 	}
 	var claimed []LadderTrancheDB
-	err := s.WithTx(ctx, func(tx pgx.Tx) error {
+	err := s.withLadderConfigLock(ctx, configID, func(tx pgx.Tx) error {
 		due, err := selectDueLadderTranchesTx(ctx, tx, configID, asOf, limit)
 		if err != nil {
 			return err

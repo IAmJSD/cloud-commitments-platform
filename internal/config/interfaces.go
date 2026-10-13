@@ -75,9 +75,13 @@ type StoreInterface interface {
 	// LockPlanProvidersTx takes the transaction-scoped advisory lock of every
 	// named provider, in sorted order, so two plan steps that resolve the same
 	// provider's recommendations cannot both attach the same capacity. Lock
-	// order is advisory lock, then LockPurchasePlanTx; nothing else takes these
-	// locks, so it cannot deadlock. Duplicates are taken once; an empty list
-	// and an empty provider name are errors.
+	// order is advisory lock, then LockPurchasePlanTx. The ladder config lock
+	// (PlanAndSaveLadderRun, ClaimDueLadderTranches) is always taken BEFORE both:
+	// ClaimDueLadderTranches's create callback may take these locks, so they
+	// come after the ladder lock; code holding an execution or tranche row
+	// (retry linker, reconciler) must never take the ladder lock. No cycle.
+	// Duplicates are taken once; an empty list and an empty provider name are
+	// errors.
 	LockPlanProvidersTx(ctx context.Context, tx pgx.Tx, providers []string) error
 	// OccupiedRampStepsInRangeTx returns the steps in [from, to] of planID that
 	// already have a fan-out unit which bought or is still working, ascending.
@@ -628,6 +632,16 @@ type StoreInterface interface {
 	// a non-nil pointer (zero when no scheduled tranches exist) so callers can
 	// pass it directly to AllocationInput.InFlightUSDPerHour. Never returns
 	// nil without an error.
+	// PlanAndSaveLadderRun is the ladder planning persist: in ONE READ COMMITTED
+	// transaction under the config's advisory lock it reads the in-flight
+	// commitment (scheduled rows within LadderFireGrace plus fired rows), calls
+	// build with it, then inserts the run, sweeps overdue tranches and inserts
+	// the new ones (append-only, L5). Overlapping runs for one config serialize:
+	// the second nets the first's committed rows. build must be pure compute
+	// (no I/O); run.StartedAt must equal asOf. The lock is also taken first by
+	// ClaimDueLadderTranches. SaveLadderRunWithTranches below bypasses it and
+	// must not be used for planning.
+	PlanAndSaveLadderRun(ctx context.Context, configID string, asOf time.Time, build LadderPlanBuilder) (*LadderRunDB, error)
 	SaveLadderRun(ctx context.Context, run *LadderRunDB) (*LadderRunDB, error)
 	SaveLadderRunWithTranches(ctx context.Context, run *LadderRunDB, tranches []LadderTrancheDB) (*LadderRunDB, error)
 	GetInFlightLadderCommitUSDHr(ctx context.Context, configID string, asOf time.Time) (*float64, error)

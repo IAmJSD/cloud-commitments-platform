@@ -372,24 +372,35 @@ func (s *PostgresStore) SaveLadderRunWithTranches(ctx context.Context, run *Ladd
 	}
 	var result LadderRunDB
 	err := s.WithTx(ctx, func(tx pgx.Tx) error {
-		row := tx.QueryRow(ctx, ladderRunInsertQuery, ladderRunInsertArgs(run, ladderRunPlanJSON(run))...)
-		scanned, err := scanLadderRun(row)
+		saved, err := insertLadderRunWithTranchesTx(ctx, tx, run, tranches)
 		if err != nil {
-			return fmt.Errorf("failed to insert ladder_run id=%s: %w", run.ID, err)
-		}
-		if err := cancelOverdueLadderTranchesTx(ctx, tx, run.ConfigID, run.StartedAt); err != nil {
 			return err
 		}
-		if err := insertLadderTranchesTx(ctx, tx, tranches); err != nil {
-			return err
-		}
-		result = scanned
+		result = *saved
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &result, nil
+}
+
+// insertLadderRunWithTranchesTx is the shared write half of
+// SaveLadderRunWithTranches and PlanAndSaveLadderRun: run row, overdue sweep,
+// then the new tranches. run.ID must be set.
+func insertLadderRunWithTranchesTx(ctx context.Context, tx pgx.Tx, run *LadderRunDB, tranches []LadderTrancheDB) (*LadderRunDB, error) {
+	row := tx.QueryRow(ctx, ladderRunInsertQuery, ladderRunInsertArgs(run, ladderRunPlanJSON(run))...)
+	scanned, err := scanLadderRun(row)
+	if err != nil {
+		return nil, fmt.Errorf("failed to insert ladder_run id=%s: %w", run.ID, err)
+	}
+	if err := cancelOverdueLadderTranchesTx(ctx, tx, run.ConfigID, run.StartedAt); err != nil {
+		return nil, err
+	}
+	if err := insertLadderTranchesTx(ctx, tx, tranches); err != nil {
+		return nil, err
+	}
+	return &scanned, nil
 }
 
 // GetInFlightLadderCommitUSDHr returns the total hourly USD commitment already
@@ -410,15 +421,9 @@ func (s *PostgresStore) SaveLadderRunWithTranches(ctx context.Context, run *Ladd
 // nil without a non-nil error, so callers can pass it directly to
 // AllocationInput.InFlightUSDPerHour without an extra nil-guard.
 func (s *PostgresStore) GetInFlightLadderCommitUSDHr(ctx context.Context, configID string, asOf time.Time) (*float64, error) {
-	var total float64
-	err := s.db.QueryRow(ctx, `
-		SELECT COALESCE(SUM(amount_usd_hr), 0)
-		FROM ladder_tranches
-		WHERE config_id = $1
-		  AND (status = $2 OR (status = $3 AND scheduled_date > $4))
-	`, configID, string(ladder.TrancheStatusFired), string(ladder.TrancheStatusScheduled), ladderGraceCutoff(asOf)).Scan(&total)
+	total, err := inFlightLadderCommit(ctx, s.db, configID, asOf)
 	if err != nil {
-		return nil, fmt.Errorf("GetInFlightLadderCommitUSDHr config_id=%s: %w", configID, err)
+		return nil, err
 	}
 	return &total, nil
 }

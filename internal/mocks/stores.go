@@ -1928,6 +1928,27 @@ func (m *MockConfigStore) SaveLadderRun(ctx context.Context, run *config.LadderR
 	return v, args.Error(1)
 }
 
+// PlanAndSaveLadderRun mocks the PlanAndSaveLadderRun operation. With no
+// expectation registered it runs build with zero in-flight and returns the run
+// it produced (transaction succeeds), so tests that only care about other
+// calls stay green.
+func (m *MockConfigStore) PlanAndSaveLadderRun(ctx context.Context, configID string, asOf time.Time, build config.LadderPlanBuilder) (*config.LadderRunDB, error) {
+	m.record("PlanAndSaveLadderRun", ctx, configID, asOf)
+	if !isExpected(&m.Mock, "PlanAndSaveLadderRun") {
+		run, _, err := build(0)
+		return run, err
+	}
+	args := m.Called(ctx, configID, asOf)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.LadderRunDB)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.LadderRunDB, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 // SaveLadderRunWithTranches mocks the SaveLadderRunWithTranches operation.
 // Returns the run unchanged (transaction succeeds) when no expectation is
 // registered, so tests that only care about other calls stay green.
