@@ -61,8 +61,9 @@ enable_nat_logging    = false
 # Scheduled Tasks (Cloud Scheduler)
 # ==============================================
 
-enable_scheduled_tasks  = true
-recommendation_schedule = "0 2 * * *"
+enable_scheduled_tasks      = true
+recommendation_schedule     = "0 2 * * *"
+enable_ri_exchange_schedule = true
 
 # ==============================================
 # Database Migration
