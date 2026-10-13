@@ -43,7 +43,7 @@ func TestTransitionLadderTranche_RejectsIllegalEdgesWithoutQuerying(t *testing.T
 			if validateLadderTrancheEdge(from, to) == nil && (from != ladder.TrancheStatusScheduled || to != ladder.TrancheStatusFired) {
 				continue
 			}
-			applied, err := s.TransitionLadderTranche(context.Background(), "id", from, to)
+			applied, err := s.TransitionLadderTrancheTx(context.Background(), nil, "id", from, to, "test")
 			assert.Error(t, err, "%s -> %s", from, to)
 			assert.False(t, applied)
 		}
@@ -53,4 +53,17 @@ func TestTransitionLadderTranche_RejectsIllegalEdgesWithoutQuerying(t *testing.T
 func TestLadderGraceCutoff_IsExactComplementOfNettingBound(t *testing.T) {
 	asOf := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
 	assert.Equal(t, asOf.Add(-24*time.Hour), ladderGraceCutoff(asOf))
+}
+
+// A failed or canceled transition without a reason is rejected before any SQL.
+func TestTransitionLadderTranche_RequiresReasonForFailedAndCanceled(t *testing.T) {
+	s := &PostgresStore{}
+	for _, c := range []struct{ from, to ladder.TrancheStatus }{
+		{ladder.TrancheStatusFired, ladder.TrancheStatusFailed},
+		{ladder.TrancheStatusScheduled, ladder.TrancheStatusCancelled},
+	} {
+		applied, err := s.TransitionLadderTrancheTx(context.Background(), nil, "id", c.from, c.to, "")
+		assert.ErrorContains(t, err, "needs a status reason", "%s -> %s", c.from, c.to)
+		assert.False(t, applied)
+	}
 }

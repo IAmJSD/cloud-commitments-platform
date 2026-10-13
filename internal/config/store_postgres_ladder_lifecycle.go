@@ -49,21 +49,37 @@ func validateLadderTrancheEdge(from, to ladder.TrancheStatus) error {
 // failure. An illegal edge is an error. scheduled -> fired is not allowed here
 // because a claim must create the execution in the same transaction; use
 // ClaimDueLadderTranches. A scheduled tranche that already has an execution
-// cannot be canceled.
-func (s *PostgresStore) TransitionLadderTranche(ctx context.Context, id string, from, to ladder.TrancheStatus) (bool, error) {
+// cannot be canceled. reason is stored in status_reason and is required for
+// the failed and canceled outcomes, so a terminal tranche always says why.
+func (s *PostgresStore) TransitionLadderTranche(ctx context.Context, id string, from, to ladder.TrancheStatus, reason string) (bool, error) {
+	var moved bool
+	err := s.WithTx(ctx, func(tx pgx.Tx) error {
+		var txErr error
+		moved, txErr = s.TransitionLadderTrancheTx(ctx, tx, id, from, to, reason)
+		return txErr
+	})
+	return moved, err
+}
+
+// TransitionLadderTrancheTx is TransitionLadderTranche inside the caller's
+// transaction, for callers that must re-check other rows under lock first.
+func (s *PostgresStore) TransitionLadderTrancheTx(ctx context.Context, tx pgx.Tx, id string, from, to ladder.TrancheStatus, reason string) (bool, error) {
 	if err := validateLadderTrancheEdge(from, to); err != nil {
 		return false, err
 	}
 	if from == ladder.TrancheStatusScheduled && to == ladder.TrancheStatusFired {
 		return false, fmt.Errorf("ladder tranche %s: scheduled -> fired must go through ClaimDueLadderTranches", id)
 	}
-	tag, err := s.db.Exec(ctx, `
+	if reason == "" && (to == ladder.TrancheStatusFailed || to == ladder.TrancheStatusCancelled) {
+		return false, fmt.Errorf("ladder tranche %s: a %s transition needs a status reason", id, to)
+	}
+	tag, err := tx.Exec(ctx, `
 		UPDATE ladder_tranches
-		SET status = $3
+		SET status = $3, status_reason = NULLIF($4, '')
 		WHERE id = $1
 		  AND status = $2
 		  AND ($2 <> 'scheduled' OR execution_id IS NULL)
-	`, id, string(from), string(to))
+	`, id, string(from), string(to), reason)
 	if err != nil {
 		return false, fmt.Errorf("failed to transition ladder_tranche id=%s %s -> %s: %w", id, from, to, err)
 	}
