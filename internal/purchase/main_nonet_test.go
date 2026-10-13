@@ -3,28 +3,48 @@ package purchase
 import (
 	"fmt"
 	"net"
-	"net/http"
 	"os"
+	"sync/atomic"
 	"testing"
 )
 
-// loopbackOnly fails any HTTP request that leaves the machine, so a test that
-// reaches a real cloud API fails loudly instead of silently spending money.
-type loopbackOnly struct{ next http.RoundTripper }
-
-func (l loopbackOnly) RoundTrip(r *http.Request) (*http.Response, error) {
-	if ip := net.ParseIP(r.URL.Hostname()); r.URL.Hostname() != "localhost" && (ip == nil || !ip.IsLoopback()) {
-		return nil, fmt.Errorf("purchase tests must not make network calls: %s", r.URL.Redacted())
-	}
-	return l.next.RoundTrip(r)
-}
-
+// TestMain routes every proxy-aware HTTP client in this test binary (Go's
+// default transport and the AWS SDK clients, which honor HTTP(S)_PROXY) into a
+// local listener that counts and drops connections. If any non-loopback
+// connection is attempted the run fails after the tests finish. Loopback
+// traffic (httptest) bypasses the proxy and is unaffected. Not covered: code
+// that dials directly (raw net.Dial, gRPC) or builds a transport with no proxy.
 func TestMain(m *testing.M) {
-	http.DefaultTransport = loopbackOnly{next: http.DefaultTransport}
-	// Point every AWS SDK client at a dead loopback port: an unstubbed call
-	// fails at once and never reaches AWS.
-	_ = os.Setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:1")
-	_ = os.Setenv("AWS_ACCESS_KEY_ID", "test")
-	_ = os.Setenv("AWS_SECRET_ACCESS_KEY", "test")
-	os.Exit(m.Run())
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "no-network guard: listen:", err)
+		os.Exit(1)
+	}
+	var attempts atomic.Int64
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			attempts.Add(1)
+			_ = c.Close()
+		}
+	}()
+	proxy := "http://" + ln.Addr().String()
+	for k, v := range map[string]string{
+		"HTTP_PROXY": proxy, "HTTPS_PROXY": proxy, "http_proxy": proxy, "https_proxy": proxy,
+		"NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost",
+		"AWS_EC2_METADATA_DISABLED": "true",
+		"AWS_ACCESS_KEY_ID":         "test", "AWS_SECRET_ACCESS_KEY": "test",
+	} {
+		_ = os.Setenv(k, v)
+	}
+	code := m.Run()
+	_ = ln.Close()
+	if n := attempts.Load(); n > 0 {
+		fmt.Fprintf(os.Stderr, "FAIL: purchase tests attempted %d outbound network connection(s)\n", n)
+		code = 1
+	}
+	os.Exit(code)
 }
