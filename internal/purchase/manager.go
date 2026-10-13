@@ -254,7 +254,7 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 	if execErr != nil {
 		logging.Errorf("Failed to execute purchase %s: %v", exec.ExecutionID, execErr)
 	}
-	if err := m.saveTerminalExecution(ctx, exec, execErr); err != nil {
+	if err := m.saveOrRecoverTerminal(ctx, exec, execErr); err != nil {
 		logging.Errorf("AUDIT LOSS: failed to save execution status: %v", err)
 		// Wrap with ErrAuditLoss regardless of whether executePurchase itself
 		// failed. When execErr != nil (provider/partial error), finalizeExecution
@@ -307,11 +307,14 @@ func (m *Manager) saveTerminalExecution(ctx context.Context, exec *config.Purcha
 		// outcome-unknown one.
 		exec.NoSubmission = true
 	}
+	// Guarded on "running": the executor owns the row only while it holds the
+	// claim, so a row the reaper failed or an operator canceled in the meantime
+	// is never silently overwritten (issue #829).
 	if exec.PlanID == "" || !provenNotSubmitted {
-		return m.config.SavePurchaseExecution(ctx, exec)
+		return m.config.SaveExecutionIfStatus(ctx, exec, executorOwnedStatuses)
 	}
 	return m.config.WithTx(ctx, func(tx pgx.Tx) error {
-		if err := m.config.SavePurchaseExecutionTx(ctx, tx, exec); err != nil {
+		if err := m.config.SaveExecutionIfStatusTx(ctx, tx, exec, executorOwnedStatuses); err != nil {
 			return err
 		}
 		return m.config.DeleteSuppressionsByExecutionTx(ctx, tx, exec.ExecutionID)
@@ -548,7 +551,7 @@ func (m *Manager) claimAndRedrive(ctx context.Context, exec *config.PurchaseExec
 	// on the same approved row. The CAS transitions "approved" -> "running";
 	// only the winner proceeds.
 	// System-initiated: recovery sweep passes nil so transitioned_by = NULL.
-	claimed, claimErr := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"approved"}, "running", nil)
+	claimed, claimErr := m.claimRunning(ctx, exec.ExecutionID, []string{"approved"}, nil)
 	if claimErr != nil {
 		// ErrNotFound: row vanished between SELECT and CAS - benign race.
 		// ErrExecutionNotInExpectedStatus: another sweep or the original run

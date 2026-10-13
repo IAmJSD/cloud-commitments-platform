@@ -95,7 +95,7 @@ func TestAzurePricingRefusalEntryPoints(t *testing.T) {
 				}
 				return nil
 			}
-			expectClaim(store, exec, []string{"pending", "notified"}, "approved")
+			expectClaim(store, exec, []string{"pending", "notified"})
 			var err error
 			if entry == "approve" {
 				_, _, err = mgr.ApproveAndExecute(context.Background(), exec.ExecutionID, "operator@example.com", nil)

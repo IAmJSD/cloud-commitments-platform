@@ -99,7 +99,7 @@ func TestManager_ApproveExecution_Success(t *testing.T) {
 	}
 
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-456")
 
 	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "")
@@ -128,7 +128,7 @@ func TestManager_ApproveExecution_StampsApprovedBy(t *testing.T) {
 	}
 
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-456")
 
 	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "operator@example.com")
@@ -163,7 +163,7 @@ func TestManager_ApproveExecution_NotifiedStatus(t *testing.T) {
 	}
 
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-456")
 
 	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "")
@@ -252,7 +252,7 @@ func TestManager_ApproveExecution_TransitionFails(t *testing.T) {
 		ApprovalToken: config.HashApprovalToken("valid-token"),
 	}
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "approved", (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil)).
 		Return(nil, errors.New(`execution exec-123 cannot transition from "canceled" to "approved"`))
 
 	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "")
@@ -281,7 +281,7 @@ func TestManager_ApproveAndExecute_EmptyPlanID(t *testing.T) {
 		Status:        "approved",
 		ApprovalToken: "tok",
 	}
-	store.On("TransitionExecutionStatus", ctx, "exec-direct-1", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-direct-1", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	// No GetPurchasePlan / GetPlanAccounts / UpdatePurchasePlan calls — see AssertNotCalled below.
 	sender.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
 	store.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
@@ -326,7 +326,7 @@ func TestManager_ApproveAndExecute_SkipsTokenCheck(t *testing.T) {
 		StepNumber:      1,
 		Recommendations: approvalTestRecs(),
 	}
-	store.On("TransitionExecutionStatus", ctx, "exec-456", approveFromStatuses, "approved",
+	store.On("TransitionExecutionStatus", ctx, "exec-456", approveFromStatuses, "running",
 		mock.MatchedBy(func(actor *string) bool { return actor != nil && *actor == actorUUID })).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-789")
 
@@ -360,7 +360,7 @@ func TestManager_RunPlannedPurchaseNow_ExecutesFromPaused(t *testing.T) {
 		StepNumber:      1,
 		Recommendations: approvalTestRecs(),
 	}
-	store.On("TransitionExecutionStatus", ctx, "exec-run-now", []string{"pending", "notified", "paused"}, "approved", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-run-now", []string{"pending", "notified", "paused"}, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-run-now")
 
 	final, revocationToken, err := manager.RunPlannedPurchaseNow(ctx, "exec-run-now", "operator@example.com", nil)
@@ -387,7 +387,7 @@ func TestManager_RunPlannedPurchaseNow_LostCASReturnsError(t *testing.T) {
 	ctx := context.Background()
 	manager, store, _ := newApproveManager(t)
 
-	store.On("TransitionExecutionStatus", ctx, "exec-race", []string{"pending", "notified", "paused"}, "approved", (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-race", []string{"pending", "notified", "paused"}, "running", (*string)(nil)).
 		Return(nil, config.ErrExecutionNotInExpectedStatus)
 
 	final, _, err := manager.RunPlannedPurchaseNow(ctx, "exec-race", "operator@example.com", nil)
@@ -412,7 +412,7 @@ func TestManager_DirectExecute_StampsAuditFieldsAfterClaim(t *testing.T) {
 		StepNumber:      1,
 		Recommendations: approvalTestRecs(),
 	}
-	store.On("TransitionExecutionStatus", ctx, "exec-direct-stamp", approveFromStatuses, "approved",
+	store.On("TransitionExecutionStatus", ctx, "exec-direct-stamp", approveFromStatuses, "running",
 		mock.MatchedBy(func(actor *string) bool { return actor != nil && *actor == actorUUID })).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-direct-stamp")
 
@@ -433,7 +433,7 @@ func TestManager_DirectExecute_RefusedLeavesNoExecutedAt(t *testing.T) {
 	ctx := context.Background()
 	manager, store, _ := newApproveManager(t)
 
-	store.On("TransitionExecutionStatus", ctx, "exec-direct-lost", approveFromStatuses, "approved", (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-direct-lost", approveFromStatuses, "running", (*string)(nil)).
 		Return(nil, config.ErrExecutionNotInExpectedStatus)
 
 	final, _, err := manager.DirectExecute(ctx, "exec-direct-lost", "operator@example.com", nil)
@@ -457,7 +457,7 @@ func TestManager_ApproveAndExecute_ReturnsRowOnExecutionFailure(t *testing.T) {
 		Status:          "approved",
 		Recommendations: approvalTestRecs(),
 	}
-	store.On("TransitionExecutionStatus", ctx, "exec-fail-after-claim", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-fail-after-claim", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	store.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
 	final, token, err := manager.ApproveAndExecute(ctx, "exec-fail-after-claim", "operator@example.com", nil)
@@ -548,7 +548,7 @@ func TestManager_ApproveAndExecute_FourEyesOn_AllowsDifferentApprover(t *testing
 
 	store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOnForManager(), nil)
 	store.On("GetExecutionByID", ctx, "exec-direct-diff").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-direct-diff", approveFromStatuses, "approved", &approverUUID).Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-direct-diff", approveFromStatuses, "running", &approverUUID).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-fourEyes")
 
 	_, _, err := manager.ApproveAndExecute(ctx, "exec-direct-diff", approverEmail, &approverUUID)
@@ -645,7 +645,7 @@ func TestManager_ApproveAndExecute_FourEyesOff_AllowsSelfApprove(t *testing.T) {
 
 	creatorID := "user-creator"
 	updated := &config.PurchaseExecution{ExecutionID: "exec-mode-off", PlanID: "plan-fourEyes", Status: "approved", StepNumber: 1, Recommendations: approvalTestRecs()}
-	store.On("TransitionExecutionStatus", ctx, "exec-mode-off", approveFromStatuses, "approved", &creatorID).Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-mode-off", approveFromStatuses, "running", &creatorID).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-fourEyes")
 
 	_, _, err := manager.ApproveAndExecute(ctx, "exec-mode-off", "creator@example.com", &creatorID)
@@ -716,7 +716,7 @@ func TestManager_ApproveExecution_FourEyesOn_DifferentActor_Allowed(t *testing.T
 	store.On("GetExecutionByID", ctx, "exec-sqs-diff").Return(execution, nil)
 	store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOnForManager(), nil)
 	store.On("GetUserEmailByID", ctx, creatorID).Return("creator@example.com", nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-sqs-diff", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-sqs-diff", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-fourEyes")
 
 	_, err := manager.ApproveExecution(ctx, "exec-sqs-diff", "valid-token", "approver@example.com")
@@ -1055,7 +1055,7 @@ func TestManager_ApproveExecution_ValidTokenWithinTTL(t *testing.T) {
 		Recommendations: approvalTestRecs(),
 	}
 	store.On("GetExecutionByID", ctx, "exec-live").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-live", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-live", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-live")
 
 	_, err := manager.ApproveExecution(ctx, "exec-live", "valid-token", "")
@@ -1086,7 +1086,7 @@ func TestManager_ApproveExecution_NilExpiresAt_LegacyRow(t *testing.T) {
 		Recommendations: approvalTestRecs(),
 	}
 	store.On("GetExecutionByID", ctx, "exec-legacy").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-legacy", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-legacy", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-legacy")
 
 	_, err := manager.ApproveExecution(ctx, "exec-legacy", "valid-token", "")
@@ -1148,7 +1148,7 @@ func TestManager_ApproveExecution_AWSOrphanFallsThrough(t *testing.T) {
 		Recommendations: approvalTestRecs(),
 	}
 	store.On("GetExecutionByID", ctx, "exec-aws-ambient").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-aws-ambient", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-aws-ambient", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-aws")
 
 	_, err := manager.ApproveExecution(ctx, "exec-aws-ambient", "valid-token", "")
@@ -1268,7 +1268,7 @@ func TestApproveExecution_MintsRevocationToken(t *testing.T) {
 	// returned and executeAndFinalize continued operating on -- in place; it
 	// does no fetch of its own (see rotateApprovalToken's doc comment for why).
 	store.On("GetExecutionByID", ctx, "exec-rotate").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-rotate", approveFromStatuses, "approved", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-rotate", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-rotate")
 
 	_, err := manager.ApproveExecution(ctx, "exec-rotate", "pre-rotate-token", "")

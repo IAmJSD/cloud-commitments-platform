@@ -82,7 +82,7 @@ func TestFireScheduledDelayedPurchases_CASLostToRevokeClassifiedAsRaceLost(t *te
 	row := dueExec("exec-revoked")
 	store.On("GetScheduledExecutionsDue", ctx).
 		Return([]config.PurchaseExecution{row}, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-revoked", []string{"scheduled"}, "approved", (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-revoked", []string{"scheduled"}, "running", (*string)(nil)).
 		Return(nil, fmt.Errorf("%w: execution exec-revoked cannot transition from %q to %q",
 			config.ErrExecutionNotInExpectedStatus, "cancelled", "approved"))
 
@@ -109,7 +109,7 @@ func TestFireScheduledDelayedPurchases_RowVanishedTreatedAsRaceLost(t *testing.T
 	row := dueExec("exec-gone")
 	store.On("GetScheduledExecutionsDue", ctx).
 		Return([]config.PurchaseExecution{row}, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-gone", []string{"scheduled"}, "approved", (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-gone", []string{"scheduled"}, "running", (*string)(nil)).
 		Return(nil, fmt.Errorf("%w: execution exec-gone", config.ErrNotFound))
 
 	mgr := newFireManager(store)
@@ -133,7 +133,7 @@ func TestFireScheduledDelayedPurchases_HardDBErrorClassifiedAsErrored(t *testing
 	row := dueExec("exec-dberr")
 	store.On("GetScheduledExecutionsDue", ctx).
 		Return([]config.PurchaseExecution{row}, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-dberr", []string{"scheduled"}, "approved", (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-dberr", []string{"scheduled"}, "running", (*string)(nil)).
 		Return(nil, fmt.Errorf("connection reset by peer"))
 
 	mgr := newFireManager(store)
@@ -192,7 +192,7 @@ func TestFireScheduledDelayedPurchases_EndToEnd(t *testing.T) {
 
 	approved := row
 	approved.Status = "approved"
-	store.On("TransitionExecutionStatus", ctx, "exec-scheduled-fire", []string{"scheduled"}, "approved", (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-scheduled-fire", []string{"scheduled"}, "running", (*string)(nil)).
 		Return(&approved, nil)
 
 	store.On("GetPurchasePlan", ctx, "plan-1").Return(plan, nil)
@@ -203,11 +203,13 @@ func TestFireScheduledDelayedPurchases_EndToEnd(t *testing.T) {
 	store.On("CompletePlanStep", ctx, "plan-1", 1).Return(nil)
 
 	var savedFinal *config.PurchaseExecution
-	store.SavePurchaseExecutionFn = func(_ context.Context, e *config.PurchaseExecution) error {
-		c := *e
-		savedFinal = &c
-		return nil
-	}
+	// The audit stamp and the terminal save are both guarded on running; an
+	// unguarded SavePurchaseExecution would be an unexpected call here.
+	store.On("SaveExecutionIfStatus", ctx, mock.Anything, []string{"running"}).
+		Run(func(args mock.Arguments) {
+			c := *args.Get(1).(*config.PurchaseExecution)
+			savedFinal = &c
+		}).Return(nil)
 	store.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
 	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
 
@@ -270,7 +272,7 @@ func TestFireScheduledDelayedPurchases_AuditGapAfterCASStillFires(t *testing.T) 
 
 	approved := row
 	approved.Status = "approved"
-	store.On("TransitionExecutionStatus", ctx, "exec-auditgap-fire", []string{"scheduled"}, "approved", (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-auditgap-fire", []string{"scheduled"}, "running", (*string)(nil)).
 		Return(&approved, nil)
 
 	store.On("GetPurchasePlan", ctx, "plan-1").Return(plan, nil)
