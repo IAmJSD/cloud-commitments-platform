@@ -264,7 +264,7 @@ func TestManager_GetOrCreateExecution_ExistingBareRowIsFailedNotRotated(t *testi
 	mockStore := new(MockConfigStore)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-	nextExec := time.Now().Add(24 * time.Hour)
+	nextExec := time.Now().Add(10 * 24 * time.Hour) // beyond the 3-day veto window
 	pastDeadline := time.Now().Add(-10 * 24 * time.Hour)
 	plan := &config.PurchasePlan{ID: "plan-123", Enabled: true, AutoPurchase: true, NotificationDaysBefore: 3, NextExecutionDate: &pastDeadline}
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
@@ -299,7 +299,7 @@ func TestManager_GetOrCreateExecution_ExistingBareRowApprovedMeanwhileIsNotOverw
 	mockStore := new(MockConfigStore)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
-	nextExec := time.Now().Add(24 * time.Hour)
+	nextExec := time.Now().Add(10 * 24 * time.Hour) // beyond the 3-day veto window
 	pastDeadline := time.Now().Add(-10 * 24 * time.Hour)
 	plan := &config.PurchasePlan{ID: "plan-123", Enabled: true, AutoPurchase: true, NotificationDaysBefore: 3, NextExecutionDate: &pastDeadline}
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)

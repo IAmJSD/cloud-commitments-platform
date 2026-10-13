@@ -153,7 +153,7 @@ func TestAttach_PlanChangedSinceListedSkipsQuietly(t *testing.T) {
 
 func TestAttach_PreCreatedEmptyRootRow(t *testing.T) {
 	plan := attachPlan(time.Now().Add(48*time.Hour), 1e6)
-	root := config.PurchaseExecution{ExecutionID: "root", PlanID: plan.ID, Status: "pending", StepNumber: 1, ScheduledDate: time.Now().Add(24 * time.Hour)}
+	root := config.PurchaseExecution{ExecutionID: "root", PlanID: plan.ID, Status: "pending", StepNumber: 1, ScheduledDate: time.Now().Add(10 * 24 * time.Hour)}
 
 	t.Run("attaches in place without a second row", func(t *testing.T) {
 		m, store := attachManager(t, plan, plan, &fakeResolver{recs: attachRecs()}, root)
@@ -164,9 +164,9 @@ func TestAttach_PreCreatedEmptyRootRow(t *testing.T) {
 		assert.Equal(t, "root", exec.ExecutionID)
 		assert.Empty(t, savedRows(store))
 	})
-	t.Run("a due empty row is left to the scheduler", func(t *testing.T) {
+	t.Run("an empty row due inside the veto window is left to the scheduler", func(t *testing.T) {
 		due := root
-		due.ScheduledDate = time.Now().Add(-time.Hour)
+		due.ScheduledDate = time.Now().Add(time.Hour) // plan NotificationDaysBefore is 3
 		res := &fakeResolver{recs: attachRecs()}
 		m, _ := attachManager(t, plan, plan, res, due)
 		_, _, _, err := m.getOrCreateExecution(context.Background(), plan)
@@ -175,12 +175,41 @@ func TestAttach_PreCreatedEmptyRootRow(t *testing.T) {
 	})
 }
 
-func TestAttachScheduledDate_LateAttachGetsTheVetoWindow(t *testing.T) {
+func TestAttachScheduledDate_NeverInsideTheVetoWindow(t *testing.T) {
 	now := time.Now()
-	late := now.Add(-48 * time.Hour)
-	assert.WithinDuration(t, now.AddDate(0, 0, 3), attachScheduledDate(&config.PurchasePlan{NotificationDaysBefore: 3, NextExecutionDate: &late}, now), time.Second)
-	future := now.Add(48 * time.Hour)
-	assert.Equal(t, future, attachScheduledDate(&config.PurchasePlan{NotificationDaysBefore: 3, NextExecutionDate: &future}, now))
+	plan := func(d time.Duration) *config.PurchasePlan {
+		next := now.Add(d)
+		return &config.PurchasePlan{NotificationDaysBefore: 30, NextExecutionDate: &next}
+	}
+	windowEnd := now.AddDate(0, 0, 30)
+	assert.WithinDuration(t, windowEnd, attachScheduledDate(plan(-48*time.Hour), now), time.Second, "date past")
+	assert.WithinDuration(t, windowEnd, attachScheduledDate(plan(10*time.Minute), now), time.Second, "date in the future but inside the window")
+	beyond := plan(45 * 24 * time.Hour)
+	assert.Equal(t, *beyond.NextExecutionDate, attachScheduledDate(beyond, now), "date beyond the window is unchanged")
+}
+
+func TestAttach_NewRowGetsTheVetoWindowWhenThePlanDateIsClose(t *testing.T) {
+	plan := attachPlan(time.Now().Add(10*time.Minute), 1e6) // NotificationDaysBefore = 3
+	m, store := attachManager(t, plan, plan, &fakeResolver{recs: attachRecs()})
+	store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
+	store.On("CreateSuppressionTx", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	exec, _, _, err := m.getOrCreateExecution(context.Background(), plan)
+	require.NoError(t, err)
+	assert.WithinDuration(t, time.Now().AddDate(0, 0, 3), exec.ScheduledDate, time.Minute)
+	assert.WithinDuration(t, time.Now().AddDate(0, 0, 3), savedRows(store)[0].ScheduledDate, time.Minute)
+}
+
+// An overdue plan whose step already has a recommendation-bearing row is not
+// notified again (the plan date has passed; the scheduler owns the row).
+func TestAttach_OverduePlanWithRecommendationBearingRowIsSkipped(t *testing.T) {
+	plan := attachPlan(time.Now().Add(-time.Hour), 1e6)
+	row := config.PurchaseExecution{ExecutionID: "has-recs", PlanID: plan.ID, Status: "notified", StepNumber: 1, Recommendations: attachRecs()}
+	m, _ := attachManager(t, plan, plan, &fakeResolver{recs: attachRecs()}, row)
+
+	exec, _, _, err := m.getOrCreateExecution(context.Background(), plan)
+	require.ErrorIs(t, err, errExecutionNotNotifiable)
+	assert.Nil(t, exec)
 }
 
 func TestShouldRetryOverduePlan_Window(t *testing.T) {

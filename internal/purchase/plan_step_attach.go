@@ -93,10 +93,11 @@ func (m *Manager) claimFromRows(ctx context.Context, tx pgx.Tx, locked *config.P
 			claim.existing = root
 			return claim, nil
 		}
-		if root.ScheduledDate.Before(time.Now()) {
-			// A due empty row is failed by the scheduler (S10); attaching to it
-			// would hand the scheduler a due, never-vetoed purchase.
-			return stepClaim{}, fmt.Errorf("%w: empty execution %s is already due", errPlanStepSkipped, root.ExecutionID)
+		if root.ScheduledDate.Before(vetoWindowEnd(locked, time.Now())) {
+			// The row keeps its own date. One due, or due before the veto window
+			// ends, would be bought before anyone could cancel; it is left to
+			// the scheduler, which fails a due empty row (S10).
+			return stepClaim{}, fmt.Errorf("%w: empty execution %s is due inside the veto window", errPlanStepSkipped, root.ExecutionID)
 		}
 		return m.attachStep(ctx, tx, locked, claim, root)
 	}
@@ -246,12 +247,19 @@ func (m *Manager) writeAttached(ctx context.Context, tx pgx.Tx, locked *config.P
 	return claim, nil
 }
 
-// attachScheduledDate is the plan's next date, or NotificationDaysBefore days
-// from now when that date has already passed, so a late attach still gets its
-// veto window before the scheduler can buy.
+// vetoWindowEnd is the earliest time a freshly emailed step may be bought:
+// NotificationDaysBefore days from now.
+func vetoWindowEnd(locked *config.PurchasePlan, now time.Time) time.Time {
+	return now.AddDate(0, 0, locked.NotificationDaysBefore)
+}
+
+// attachScheduledDate is the later of the plan's next date and the end of the
+// veto window, so the scheduler (which buys any notified row once its date
+// passes) can never buy before the operator has had NotificationDaysBefore
+// days to cancel, whether the plan date is past or only close.
 func attachScheduledDate(locked *config.PurchasePlan, now time.Time) time.Time {
-	if locked.NextExecutionDate.Before(now) {
-		return now.AddDate(0, 0, locked.NotificationDaysBefore)
+	if end := vetoWindowEnd(locked, now); locked.NextExecutionDate.Before(end) {
+		return end
 	}
 	return *locked.NextExecutionDate
 }

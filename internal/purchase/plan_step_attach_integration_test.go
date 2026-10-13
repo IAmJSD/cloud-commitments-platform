@@ -82,6 +82,8 @@ func TestAttachIntegration_NewRowAttachesSuppressesAndBecomesNotified(t *testing
 	rows := stepRowsInDB(ctx, t, store, plan.ID)
 	require.Len(t, rows, 1)
 	assert.Equal(t, "notified", rows[0].Status, "a successful email leaves the new row notified")
+	assert.WithinDuration(t, time.Now().AddDate(0, 0, 30), rows[0].ScheduledDate, time.Minute,
+		"the plan date is a day away but the veto window is 30 days, so the row is scheduled at the window end")
 	assert.NotEmpty(t, rows[0].ApprovalToken)
 	assert.NotEmpty(t, rows[0].IdempotencyKey)
 	require.Len(t, rows[0].Recommendations, 2)
@@ -143,7 +145,7 @@ func TestAttachIntegration_NoMatchAndCap(t *testing.T) {
 	})
 	t.Run("pre-created empty root row is attached in place", func(t *testing.T) {
 		plan := attachPlanInDB(ctx, t, store, "attach-root", time.Now().Add(24*time.Hour))
-		root := &config.PurchaseExecution{PlanID: plan.ID, ExecutionID: "00000000-0000-4000-8000-0000000000a1", Status: "pending", StepNumber: 1, ScheduledDate: time.Now().Add(24 * time.Hour)}
+		root := &config.PurchaseExecution{PlanID: plan.ID, ExecutionID: "00000000-0000-4000-8000-0000000000a1", Status: "pending", StepNumber: 1, ScheduledDate: time.Now().Add(40 * 24 * time.Hour)}
 		require.NoError(t, store.SavePurchaseExecution(ctx, root))
 		m := &Manager{config: store, email: newCountingSender(ctx), resolver: &fakeResolver{recs: []config.RecommendationRecord{attachRec("rec-a", 2)}}}
 
