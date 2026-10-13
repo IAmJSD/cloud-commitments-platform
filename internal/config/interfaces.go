@@ -72,6 +72,13 @@ type StoreInterface interface {
 	// atomically with respect to concurrent completions and creations.
 	// Returns (nil, nil) when the plan does not exist.
 	LockPurchasePlanTx(ctx context.Context, tx pgx.Tx, planID string) (*PurchasePlan, error)
+	// LockPlanProvidersTx takes the transaction-scoped advisory lock of every
+	// named provider, in sorted order, so two plan steps that resolve the same
+	// provider's recommendations cannot both attach the same capacity. Lock
+	// order is advisory lock, then LockPurchasePlanTx; nothing else takes these
+	// locks, so it cannot deadlock. Duplicates are taken once; an empty list
+	// and an empty provider name are errors.
+	LockPlanProvidersTx(ctx context.Context, tx pgx.Tx, providers []string) error
 	// OccupiedRampStepsInRangeTx returns the steps in [from, to] of planID that
 	// already have a fan-out unit which bought or is still working, ascending.
 	// Callers about to mint executions for a step range use it to refuse a step

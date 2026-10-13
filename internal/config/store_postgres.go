@@ -1677,6 +1677,36 @@ func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) (
 	return scanExecutionRows(rows)
 }
 
+// planStepProviderLockPrefix namespaces the per-provider plan-step advisory lock.
+const planStepProviderLockPrefix = "cudly:planstep:"
+
+// LockPlanProvidersTx implements StoreInterface.LockPlanProvidersTx. Sorted
+// acquisition keeps two callers with overlapping provider sets from
+// deadlocking on each other.
+func (s *PostgresStore) LockPlanProvidersTx(ctx context.Context, tx pgx.Tx, providers []string) error {
+	if len(providers) == 0 {
+		return errors.New("lock plan providers: no providers given")
+	}
+	sorted := make([]string, 0, len(providers))
+	seen := make(map[string]struct{}, len(providers))
+	for _, p := range providers {
+		if p == "" {
+			return errors.New("lock plan providers: empty provider name")
+		}
+		if _, dup := seen[p]; !dup {
+			seen[p] = struct{}{}
+			sorted = append(sorted, p)
+		}
+	}
+	sort.Strings(sorted)
+	for _, p := range sorted {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", planStepProviderLockPrefix+p); err != nil {
+			return fmt.Errorf("lock plan provider %s: %w", p, err)
+		}
+	}
+	return nil
+}
+
 // submitDedupeStatuses are the execution states that still stand for a
 // commitment the submitter asked for: awaiting approval, being bought, or
 // bought. A failed, expired or canceled row bought nothing, so a resubmit
