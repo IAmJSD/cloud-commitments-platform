@@ -865,13 +865,6 @@ func (m *mockConfigStore) PlanAndSaveLadderRun(_ context.Context, _ string, _ ti
 	run, _, err := build(0)
 	return run, err
 }
-func (m *mockConfigStore) SaveLadderRunWithTranches(_ context.Context, run *config.LadderRunDB, _ []config.LadderTrancheDB) (*config.LadderRunDB, error) {
-	return run, nil
-}
-func (m *mockConfigStore) GetInFlightLadderCommitUSDHr(_ context.Context, _ string, _ time.Time) (*float64, error) {
-	zero := 0.0
-	return &zero, nil
-}
 func (m *mockConfigStore) GetLadderRun(_ context.Context, _ string) (*config.LadderRunDB, error) {
 	return nil, nil
 }
