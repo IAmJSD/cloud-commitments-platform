@@ -331,6 +331,10 @@ func (m *mockConfigStore) LockLadderTrancheForRetryTx(ctx context.Context, tx pg
 	return "", false, nil
 }
 
+func (m *mockConfigStore) GetLadderExecutionGate(ctx context.Context, idempotencyKey string) (*config.LadderExecutionGate, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
 	return false, "", nil
 }

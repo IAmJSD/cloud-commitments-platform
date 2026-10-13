@@ -241,12 +241,7 @@ func isMultiAccountAckable(execErr error) bool {
 func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseExecution) error {
 	// Last line of defense before money moves (issue #1718). Every executor
 	// entry point funnels through here, so one check covers all of them.
-	execErr := armedRedriveRefusal(exec)
-	if execErr == nil {
-		if refusal := m.staleAzurePricingRefusal(ctx, exec); refusal != nil {
-			execErr = beforeSubmission(refusal)
-		}
-	}
+	execErr := m.preExecutionRefusal(ctx, exec)
 	if execErr == nil {
 		execErr = m.executePurchase(ctx, exec)
 	}
@@ -276,6 +271,22 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 		}
 	}
 	return execErr
+}
+
+// preExecutionRefusal runs every check that must pass before any provider call.
+// All refusals except the armed re-drive one are beforeSubmission errors, so
+// the row ends failed with no_submission stamped.
+func (m *Manager) preExecutionRefusal(ctx context.Context, exec *config.PurchaseExecution) error {
+	if err := armedRedriveRefusal(exec); err != nil {
+		return err
+	}
+	if refusal := m.staleAzurePricingRefusal(ctx, exec); refusal != nil {
+		return beforeSubmission(refusal)
+	}
+	if refusal := m.ladderExecutionRefusal(ctx, exec); refusal != nil {
+		return beforeSubmission(refusal)
+	}
+	return nil
 }
 
 // beforeSubmissionError marks a failure that happened before any cloud
