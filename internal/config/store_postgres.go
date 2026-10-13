@@ -93,7 +93,8 @@ func getGlobalConfigFrom(ctx context.Context, q globalConfigExecutor) (*GlobalCo
 		       COALESCE(ladder_execution_enabled, false),
 		       offering_class,
 		       require_different_approver,
-		       auto_purchase_enabled
+		       auto_purchase_enabled,
+		       auto_purchase_changed_by, auto_purchase_changed_at, auto_purchase_changed_via
 		FROM global_config
 		WHERE id = 1
 	`
@@ -128,6 +129,9 @@ func getGlobalConfigFrom(ctx context.Context, q globalConfigExecutor) (*GlobalCo
 		&config.OfferingClass,
 		&config.RequireDifferentApprover,
 		&config.AutoPurchaseEnabled,
+		&config.AutoPurchaseChangedBy,
+		&config.AutoPurchaseChangedAt,
+		&config.AutoPurchaseChangedVia,
 	)
 
 	if err != nil {
@@ -261,8 +265,9 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 			grace_period_days,
 			recommendations_cache_stale_hours, recommendations_lookback_days,
 			purchase_delay_hours, laddering_enabled, ladder_execution_enabled, offering_class,
-			require_different_approver, auto_purchase_enabled
-		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+			require_different_approver, auto_purchase_enabled,
+			auto_purchase_changed_by, auto_purchase_changed_at, auto_purchase_changed_via
+		) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
 		ON CONFLICT (id) DO UPDATE SET
 			enabled_providers = $1,
 			notification_email = $2,
@@ -289,6 +294,9 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 			offering_class = $23,
 			require_different_approver = $24,
 			auto_purchase_enabled = $25,
+			auto_purchase_changed_by = $26,
+			auto_purchase_changed_at = $27,
+			auto_purchase_changed_via = $28,
 			updated_at = NOW()
 	`
 
@@ -358,6 +366,9 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 		offeringClass,
 		config.RequireDifferentApprover,
 		config.AutoPurchaseEnabled,
+		config.AutoPurchaseChangedBy,
+		config.AutoPurchaseChangedAt,
+		config.AutoPurchaseChangedVia,
 	)
 
 	if err != nil {

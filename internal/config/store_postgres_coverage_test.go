@@ -602,6 +602,9 @@ func TestSaveGlobalConfig_OfferingClassBindsAt23(t *testing.T) {
 			"standard",       // $23 offering_class -- the field this test guards
 			pgxmock.AnyArg(), // $24 require_different_approver
 			pgxmock.AnyArg(), // $25 auto_purchase_enabled
+			pgxmock.AnyArg(), // $26 auto_purchase_changed_by
+			pgxmock.AnyArg(), // $27 auto_purchase_changed_at
+			pgxmock.AnyArg(), // $28 auto_purchase_changed_via
 		).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 

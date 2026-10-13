@@ -85,6 +85,14 @@ type GlobalConfig struct {
 	// Manual purchases (Opportunities, token approval) are unaffected.
 	AutoPurchaseEnabled bool `json:"auto_purchase_enabled" db:"auto_purchase_enabled"`
 
+	// AutoPurchaseChanged{By,At,Via} stamp the last change of the switch
+	// (migration 000115): actor, time, credential kind. NULL = never changed.
+	// json:"-" so PUT /api/config cannot forge them by unmarshalling onto this
+	// struct; the whole-config upsert round-trips them (read, modify, write).
+	AutoPurchaseChangedBy  *string    `json:"-" db:"auto_purchase_changed_by"`
+	AutoPurchaseChangedAt  *time.Time `json:"-" db:"auto_purchase_changed_at"`
+	AutoPurchaseChangedVia *string    `json:"-" db:"auto_purchase_changed_via"`
+
 	// OfferingClass controls the EC2 Reserved Instance offering class used
 	// during purchase. Accepted values: "convertible" (default) and
 	// "standard". Convertible RIs can be exchanged for a different
