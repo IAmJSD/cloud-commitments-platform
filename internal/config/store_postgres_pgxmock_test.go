@@ -66,6 +66,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		"require_different_approver",
 		"auto_purchase_enabled",
 		"auto_purchase_changed_by", "auto_purchase_changed_at", "auto_purchase_changed_via",
+		"ladder_execution_changed_by", "ladder_execution_changed_at", "ladder_execution_changed_via",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		[]string{"aws"}, strPtr("ops@example.com"), true,
@@ -81,6 +82,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		"convertible",
 		false,
 		false,
+		nil, nil, nil,
 		nil, nil, nil,
 	)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
@@ -130,6 +132,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 		"require_different_approver",
 		"auto_purchase_enabled",
 		"auto_purchase_changed_by", "auto_purchase_changed_at", "auto_purchase_changed_via",
+		"ladder_execution_changed_by", "ladder_execution_changed_at", "ladder_execution_changed_via",
 	}
 	baseRow := func(graceJSON string) []any {
 		return []any{
@@ -146,6 +149,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 			"convertible",
 			false,
 			false,
+			nil, nil, nil,
 			nil, nil, nil,
 		}
 	}
@@ -209,6 +213,7 @@ var globalConfigCols = []string{
 	"require_different_approver",
 	"auto_purchase_enabled",
 	"auto_purchase_changed_by", "auto_purchase_changed_at", "auto_purchase_changed_via",
+	"ladder_execution_changed_by", "ladder_execution_changed_at", "ladder_execution_changed_via",
 }
 
 // TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite proves the F2
@@ -242,6 +247,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite(t *testing.T) {
 		false,         // require_different_approver
 		false,         // auto_purchase_enabled
 		nil, nil, nil, // auto_purchase_changed_by/at/via
+		nil, nil, nil, // ladder_execution_changed_by/at/via
 	)
 
 	// Strict order: the SELECT and the UPSERT must sit between the same
@@ -250,7 +256,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite(t *testing.T) {
 	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectQuery("FROM global_config").WillReturnRows(seeded)
-	mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(28)...).
+	mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(31)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -301,6 +307,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_ApplyErrorRollsBack(t *testing.T) {
 		false,
 		false,
 		nil, nil, nil,
+		nil, nil, nil,
 	)
 
 	mock.ExpectBegin()
@@ -339,6 +346,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_PropagatesOnlyChangedDefaults(t *testi
 			false,
 			false,
 			nil, nil, nil,
+			nil, nil, nil,
 		)
 	}
 	setCoverage := func(existing *GlobalConfig) error {
@@ -353,7 +361,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_PropagatesOnlyChangedDefaults(t *testi
 		mock.ExpectExec("pg_advisory_xact_lock").WithArgs(pgxmock.AnyArg()).
 			WillReturnResult(pgxmock.NewResult("SELECT", 1))
 		mock.ExpectQuery("FROM global_config").WillReturnRows(seeded())
-		mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(28)...).
+		mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(31)...).
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
 		mock.ExpectExec("UPDATE service_configs").
 			WithArgs(false, 1, false, "no-upfront", true, 70.0, false, RampImmediate).
@@ -372,7 +380,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_PropagatesOnlyChangedDefaults(t *testi
 		mock.ExpectExec("pg_advisory_xact_lock").WithArgs(pgxmock.AnyArg()).
 			WillReturnResult(pgxmock.NewResult("SELECT", 1))
 		mock.ExpectQuery("FROM global_config").WillReturnRows(seeded())
-		mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(28)...).
+		mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(31)...).
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
 		dbErr := errors.New("service_configs update failed")
 		mock.ExpectExec("UPDATE service_configs").WithArgs(anyArgsCfg(8)...).WillReturnError(dbErr)
@@ -3299,9 +3307,11 @@ func TestPGXMock_UpdateGlobalConfigAtomic_PreservesAutoPurchaseStamps(t *testing
 		false,
 		true,
 		&by, &at, &via,
+		&by, &at, &via, // ladder_execution_changed_by/at/via
 	)
-	args := anyArgsCfg(28)
+	args := anyArgsCfg(31)
 	args[25], args[26], args[27] = &by, &at, &via
+	args[28], args[29], args[30] = &by, &at, &via
 
 	mock.ExpectBegin()
 	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(pgxmock.AnyArg()).

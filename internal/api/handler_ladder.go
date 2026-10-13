@@ -128,6 +128,10 @@ func (h *Handler) upsertLadderConfig(ctx context.Context, req *events.LambdaFunc
 		return nil, err
 	}
 
+	if err := h.gateLadderConfigWrite(ctx, req, session, &cfg); err != nil {
+		return nil, err
+	}
+
 	result, err := h.config.UpsertLadderConfig(ctx, &cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to upsert ladder config: %w", err)
