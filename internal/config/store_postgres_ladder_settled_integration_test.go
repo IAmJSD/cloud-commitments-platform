@@ -19,32 +19,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const settledAtMigration = 117
-
-// TestPostgresStoreDB_LadderSettledAt runs against a dedicated database named
-// pr842a_* (LADDER_SETTLED_TEST_DATABASE_URL). It covers migration 000117
-// (down, up, idempotent re-run, legacy rows keep NULL), the stamp written by
+// TestPostgresStoreDB_LadderSettledAt covers the stamp written by
 // TransitionLadderTrancheTx, the CHECK that rejects an unstamped completed
-// row, and the boundaries of settledLadderCommit.
+// row, and the boundaries of settledLadderCommit. Migration behavior is in
+// the migrations package (000117). Set LADDER_SETTLED_TEST_DATABASE_URL to a
+// dedicated pr842a_* database to run it without Docker.
 func TestPostgresStoreDB_LadderSettledAt(t *testing.T) {
-	dsn := os.Getenv("LADDER_SETTLED_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("set LADDER_SETTLED_TEST_DATABASE_URL to a dedicated pr842a_* test database")
-	}
-	parsed, err := url.Parse(dsn)
-	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(strings.TrimPrefix(parsed.Path, "/"), "pr842a_"), "database must be dedicated to PR-A verification")
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	pool, err := pgxpool.New(ctx, dsn)
-	require.NoError(t, err)
-	defer pool.Close()
-	path := getTestMigrationsPath()
-	require.NoError(t, migrations.RunMigrations(ctx, pool, path, "", ""))
-	_, err = pool.Exec(ctx, `TRUNCATE ladder_tranches, ladder_runs, ladder_configs, cloud_accounts CASCADE`)
-	require.NoError(t, err, "the dedicated database is reset so the test is re-runnable")
-	store := &PostgresStore{db: pool}
+	store, pool := settledTestStore(ctx, t)
 	cfgID := seedLadderConfig(ctx, t, store)
 
 	insert := func(status ladder.TrancheStatus, amount float64, settled *time.Time) string {
@@ -127,35 +110,30 @@ func TestPostgresStoreDB_LadderSettledAt(t *testing.T) {
 		add(ladder.TrancheStatusFired, 32, nil)
 		add(ladder.TrancheStatusScheduled, 64, nil)
 		assert.InDelta(t, 4, sum(), 1e-9, "only completed rows count")
-		assert.InDelta(t, 0, mustSettled(ctx, t, pool, cfgID, time.Now().Add(time.Hour)), 1e-9, "other config's completions after the anchor only")
+		mine := lifecycleTranche(cfgID, 128, ladder.TrancheStatusCompleted, anchor)
+		mine.SettledAt = &after
+		require.NoError(t, store.SaveLadderTranches(ctx, []LadderTrancheDB{mine}))
+		assert.InDelta(t, 4, sum(), 1e-9, "another config's completed rows are not counted")
+		assert.InDelta(t, 128, mustSettled(ctx, t, pool, cfgID, anchor), 1e-9, "scoped to its own config")
 	})
+}
 
-	t.Run("migration down and up", func(t *testing.T) {
-		require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, settledAtMigration-1))
-		assert.Equal(t, 0, settledColumns(ctx, t, pool), "down drops the column")
-		assert.Equal(t, 0, settledConstraints(ctx, t, pool), "down drops the constraint")
-
-		legacy := lifecycleTranche(cfgID, 5, ladder.TrancheStatusCompleted, time.Now().UTC())
-		_, err := pool.Exec(ctx, `INSERT INTO ladder_tranches (id, config_id, layer_type, amount_usd_hr, term, payment_option, scheduled_date, status)
-			VALUES ($1, $2, $3, 5, $4, $5, $6, 'completed')`, legacy.ID, cfgID, string(legacy.LayerType), string(legacy.Term), string(legacy.PaymentOption), legacy.ScheduledDate)
+func settledTestStore(ctx context.Context, t *testing.T) (*PostgresStore, *pgxpool.Pool) {
+	t.Helper()
+	if dsn := os.Getenv("LADDER_SETTLED_TEST_DATABASE_URL"); dsn != "" {
+		parsed, err := url.Parse(dsn)
 		require.NoError(t, err)
-
-		require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, settledAtMigration))
-		assert.Equal(t, 1, settledColumns(ctx, t, pool))
-		var validated bool
-		require.NoError(t, pool.QueryRow(ctx, `SELECT convalidated FROM pg_constraint WHERE conname = 'ladder_tranches_completed_has_settled_at'`).Scan(&validated))
-		assert.False(t, validated, "the constraint is NOT VALID so legacy rows stay")
-		assert.Nil(t, settledAt(legacy.ID), "a legacy completed row keeps NULL")
-		got, err := settledLadderCommit(ctx, pool, cfgID, time.Now().Add(24*time.Hour))
+		require.True(t, strings.HasPrefix(strings.TrimPrefix(parsed.Path, "/"), "pr842a_"), "database must be dedicated to PR-A verification")
+		pool, err := pgxpool.New(ctx, dsn)
 		require.NoError(t, err)
-		assert.GreaterOrEqual(t, got, 5.0, "a NULL legacy completed row is counted whatever the anchor")
-
-		up, err := os.ReadFile(getTestMigrationsPath() + "/000117_ladder_tranches_settled_at.up.sql")
-		require.NoError(t, err)
-		_, err = pool.Exec(ctx, string(up))
-		require.NoError(t, err, "the up statement must be idempotent")
-		assert.Equal(t, 1, settledConstraints(ctx, t, pool), "a re-run adds no second constraint")
-	})
+		t.Cleanup(pool.Close)
+		require.NoError(t, migrations.RunMigrations(ctx, pool, getTestMigrationsPath(), "", ""))
+		_, err = pool.Exec(ctx, `TRUNCATE ladder_tranches, ladder_runs, ladder_configs, cloud_accounts CASCADE`)
+		require.NoError(t, err, "the dedicated database is reset so the test is re-runnable")
+		return &PostgresStore{db: pool}, pool
+	}
+	store := setupLadderStore(ctx, t)
+	return store, store.db.(interface{ Pool() *pgxpool.Pool }).Pool()
 }
 
 func mustSettled(ctx context.Context, t *testing.T, pool *pgxpool.Pool, cfgID string, anchor time.Time) float64 {
@@ -172,18 +150,4 @@ func requireCheckViolation(t *testing.T, err error) {
 	require.ErrorAs(t, err, &pgErr)
 	assert.Equal(t, "23514", pgErr.Code)
 	assert.Equal(t, "ladder_tranches_completed_has_settled_at", pgErr.ConstraintName)
-}
-
-func settledColumns(ctx context.Context, t *testing.T, pool *pgxpool.Pool) int {
-	t.Helper()
-	var n int
-	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_name = 'ladder_tranches' AND column_name = 'settled_at'`).Scan(&n))
-	return n
-}
-
-func settledConstraints(ctx context.Context, t *testing.T, pool *pgxpool.Pool) int {
-	t.Helper()
-	var n int
-	require.NoError(t, pool.QueryRow(ctx, `SELECT count(*) FROM pg_constraint WHERE conname = 'ladder_tranches_completed_has_settled_at'`).Scan(&n))
-	return n
 }

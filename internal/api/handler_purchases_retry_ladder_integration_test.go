@@ -24,7 +24,7 @@ import (
 
 func (r *ladderRetryRig) setTrancheStatus(t *testing.T, status string) {
 	require.NoError(t, r.store.WithTx(context.Background(), func(tx pgx.Tx) error {
-		_, err := tx.Exec(context.Background(), `UPDATE ladder_tranches SET status = $2 WHERE id = $1`, r.trancheID, status)
+		_, err := tx.Exec(context.Background(), `UPDATE ladder_tranches SET status = $2, settled_at = CASE WHEN $2 = 'completed' THEN now() END WHERE id = $1`, r.trancheID, status)
 		return err
 	}))
 }
