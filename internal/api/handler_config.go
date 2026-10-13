@@ -94,7 +94,7 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 	// ClientError(400) on a bad body or validation failure, which the store
 	// propagates unchanged; DB/transport errors surface as 500. A changed
 	// default reaches the service configs inside the same transaction.
-	var switchBefore bool
+	var switchBefore, ladderBefore bool
 	merged, err := h.config.UpdateGlobalConfigAtomic(ctx, func(existing *config.GlobalConfig) error {
 		// Snapshot before the wholesale unmarshal: this body writes onto the
 		// entire GlobalConfig, so ri_exchange_mode / ri_exchange_enabled reach
@@ -104,6 +104,7 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		// write lands on.
 		before := riExchangeArmStateOf(existing)
 		switchBefore = existing.AutoPurchaseEnabled
+		ladderBefore = existing.LadderExecutionEnabled
 
 		// grace_period_days is a map: json.Unmarshal into a non-nil map MERGES
 		// keys (an omitted key can never be deleted). When the caller sends the
@@ -121,14 +122,24 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		if gErr := h.requireRIExchangeAutoModeGrant(ctx, req, before, riExchangeArmStateOf(existing)); gErr != nil {
 			return gErr
 		}
-		return h.requireAutoPurchaseSwitchGrant(ctx, req, session, switchBefore, existing)
+		return h.requireSwitchGrants(ctx, req, session, switchBefore, ladderBefore, existing)
 	})
 	if err != nil {
 		return nil, err
 	}
 	logAutoPurchaseSwitchChange(ctx, session, switchBefore, merged)
+	logLadderExecutionSwitchChange(ctx, session, ladderBefore, merged)
 
 	return &StatusResponse{Status: "updated"}, nil
+}
+
+// requireSwitchGrants chains the arming gates of the two money-spending
+// switches: auto-purchase, then ladder execution.
+func (h *Handler) requireSwitchGrants(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session, autoBefore, ladderBefore bool, cfg *config.GlobalConfig) error {
+	if err := h.requireAutoPurchaseSwitchGrant(ctx, req, session, autoBefore, cfg); err != nil {
+		return err
+	}
+	return h.requireLadderExecutionSwitchGrant(ctx, req, session, ladderBefore, cfg)
 }
 
 func (h *Handler) requireGlobalConfigScope(ctx context.Context, session *Session) error {

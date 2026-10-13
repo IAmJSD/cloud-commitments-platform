@@ -93,6 +93,12 @@ type GlobalConfig struct {
 	AutoPurchaseChangedAt  *time.Time `json:"-" db:"auto_purchase_changed_at"`
 	AutoPurchaseChangedVia *string    `json:"-" db:"auto_purchase_changed_via"`
 
+	// LadderExecutionChanged{By,At,Via} stamp the last change of
+	// LadderExecutionEnabled (migration 000116); same json:"-" reasoning.
+	LadderExecutionChangedBy  *string    `json:"-" db:"ladder_execution_changed_by"`
+	LadderExecutionChangedAt  *time.Time `json:"-" db:"ladder_execution_changed_at"`
+	LadderExecutionChangedVia *string    `json:"-" db:"ladder_execution_changed_via"`
+
 	// OfferingClass controls the EC2 Reserved Instance offering class used
 	// during purchase. Accepted values: "convertible" (default) and
 	// "standard". Convertible RIs can be exchanged for a different

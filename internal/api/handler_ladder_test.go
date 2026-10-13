@@ -37,6 +37,7 @@ func newLadderHandler(t *testing.T) (*Handler, *MockConfigStore, **config.Ladder
 	// .Maybe() so the 400-path test (store never reached) doesn't trip
 	// AssertExpectations on an unmet expectation. The success tests prove the
 	// store was reached by asserting *captured is non-nil (set only in Run).
+	mockStore.On("GetLadderConfig", ctx, mock.Anything, mock.Anything).Return((*config.LadderConfigDB)(nil), nil).Maybe()
 	mockStore.On("UpsertLadderConfig", ctx, mock.AnythingOfType("*config.LadderConfigDB")).
 		Run(func(args mock.Arguments) {
 			captured = args.Get(1).(*config.LadderConfigDB)
@@ -213,10 +214,10 @@ func ladderScopedReq(body string) *events.LambdaFunctionURLRequest {
 }
 
 // ladderScopedBody builds a valid ladder config body targeting accountID.
-// mode=auto_approve with max_hourly_commit_per_run omitted (nil => no cap) is
-// the shape from the issue's failure scenario.
+// The config is disabled so these scope tests stay independent of the arming
+// grant (covered in ladder_arming_grant_test.go).
 func ladderScopedBody(accountID string) string {
-	return `{"cloud_account_id":"` + accountID + `","provider":"aws","enabled":true,` +
+	return `{"cloud_account_id":"` + accountID + `","provider":"aws","enabled":false,` +
 		`"mode":"auto_approve","cadence":"daily",` + ladderValidRamp + `}`
 }
 
@@ -230,6 +231,7 @@ func ladderScopedHandler(t *testing.T) (*Handler, *MockConfigStore) {
 		Return(&config.CloudAccount{ID: scopedInAccount, Name: "in-scope", Provider: "aws"}, nil).Maybe()
 	mockStore.On("GetCloudAccount", mock.Anything, scopedOutAccount).
 		Return(&config.CloudAccount{ID: scopedOutAccount, Name: "victim-account", Provider: "aws"}, nil).Maybe()
+	mockStore.On("GetLadderConfig", mock.Anything, mock.Anything, mock.Anything).Return((*config.LadderConfigDB)(nil), nil).Maybe()
 	return h, mockStore
 }
 
@@ -272,6 +274,7 @@ func TestUpsertLadderConfig_UnrestrictedSessionUnaffected(t *testing.T) {
 	handler, mockStore := scopedHandler(t) // no accounts => grantAdmin => unrestricted
 	mockStore.On("GetCloudAccount", mock.Anything, scopedOutAccount).
 		Return(&config.CloudAccount{ID: scopedOutAccount, Name: "victim-account", Provider: "aws"}, nil)
+	mockStore.On("GetLadderConfig", mock.Anything, mock.Anything, mock.Anything).Return((*config.LadderConfigDB)(nil), nil)
 	mockStore.On("UpsertLadderConfig", mock.Anything, mock.AnythingOfType("*config.LadderConfigDB")).
 		Return(&config.LadderConfigDB{ID: "written-row", CloudAccountID: scopedOutAccount}, nil)
 
