@@ -65,6 +65,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		"offering_class",
 		"require_different_approver",
 		"auto_purchase_enabled",
+		"auto_purchase_changed_by", "auto_purchase_changed_at", "auto_purchase_changed_via",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		[]string{"aws"}, strPtr("ops@example.com"), true,
@@ -80,6 +81,7 @@ func TestPGXMock_GetGlobalConfig_Success(t *testing.T) {
 		"convertible",
 		false,
 		false,
+		nil, nil, nil,
 	)
 	mock.ExpectQuery("SELECT").WillReturnRows(rows)
 
@@ -127,6 +129,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 		"offering_class",
 		"require_different_approver",
 		"auto_purchase_enabled",
+		"auto_purchase_changed_by", "auto_purchase_changed_at", "auto_purchase_changed_via",
 	}
 	baseRow := func(graceJSON string) []any {
 		return []any{
@@ -143,6 +146,7 @@ func TestPGXMock_GetGlobalConfig_GracePeriodDays(t *testing.T) {
 			"convertible",
 			false,
 			false,
+			nil, nil, nil,
 		}
 	}
 
@@ -204,6 +208,7 @@ var globalConfigCols = []string{
 	"offering_class",
 	"require_different_approver",
 	"auto_purchase_enabled",
+	"auto_purchase_changed_by", "auto_purchase_changed_at", "auto_purchase_changed_via",
 }
 
 // TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite proves the F2
@@ -236,6 +241,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite(t *testing.T) {
 		"convertible", // offering_class
 		false,         // require_different_approver
 		false,         // auto_purchase_enabled
+		nil, nil, nil, // auto_purchase_changed_by/at/via
 	)
 
 	// Strict order: the SELECT and the UPSERT must sit between the same
@@ -244,7 +250,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_LockedReadModifyWrite(t *testing.T) {
 	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("SELECT", 1))
 	mock.ExpectQuery("FROM global_config").WillReturnRows(seeded)
-	mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(25)...).
+	mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(28)...).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -294,6 +300,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_ApplyErrorRollsBack(t *testing.T) {
 		"convertible",
 		false,
 		false,
+		nil, nil, nil,
 	)
 
 	mock.ExpectBegin()
@@ -331,6 +338,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_PropagatesOnlyChangedDefaults(t *testi
 			"convertible",
 			false,
 			false,
+			nil, nil, nil,
 		)
 	}
 	setCoverage := func(existing *GlobalConfig) error {
@@ -345,7 +353,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_PropagatesOnlyChangedDefaults(t *testi
 		mock.ExpectExec("pg_advisory_xact_lock").WithArgs(pgxmock.AnyArg()).
 			WillReturnResult(pgxmock.NewResult("SELECT", 1))
 		mock.ExpectQuery("FROM global_config").WillReturnRows(seeded())
-		mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(25)...).
+		mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(28)...).
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
 		mock.ExpectExec("UPDATE service_configs").
 			WithArgs(false, 1, false, "no-upfront", true, 70.0, false, RampImmediate).
@@ -364,7 +372,7 @@ func TestPGXMock_UpdateGlobalConfigAtomic_PropagatesOnlyChangedDefaults(t *testi
 		mock.ExpectExec("pg_advisory_xact_lock").WithArgs(pgxmock.AnyArg()).
 			WillReturnResult(pgxmock.NewResult("SELECT", 1))
 		mock.ExpectQuery("FROM global_config").WillReturnRows(seeded())
-		mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(25)...).
+		mock.ExpectExec("INSERT INTO global_config").WithArgs(anyArgsCfg(28)...).
 			WillReturnResult(pgxmock.NewResult("INSERT", 1))
 		dbErr := errors.New("service_configs update failed")
 		mock.ExpectExec("UPDATE service_configs").WithArgs(anyArgsCfg(8)...).WillReturnError(dbErr)
@@ -3263,4 +3271,50 @@ func TestPGXMock_ReserveApprovedRIExchange_RejectsRowThatIsNotProcessing(t *test
 	_, err := store.ReserveApprovedRIExchange(context.Background(), id, "1000", "1000")
 	require.ErrorContains(t, err, "is not processing")
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_UpdateGlobalConfigAtomic_PreservesAutoPurchaseStamps proves the
+// whole-config upsert writes back the stamps it read (migration 000115). The RI
+// exchange config path is a read-modify-write of the whole row, so an upsert that
+// omitted them would reset them to NULL on any unrelated config save.
+func TestPGXMock_UpdateGlobalConfigAtomic_PreservesAutoPurchaseStamps(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	by, via := "user-1", "user-session"
+	at := time.Date(2026, 10, 13, 1, 2, 3, 0, time.UTC)
+	seeded := pgxmock.NewRows(globalConfigCols).AddRow(
+		[]string{"aws"}, strPtr("ops@example.com"), true,
+		3, "all-upfront", 80.0, RampImmediate,
+		false, "manual", 95.0,
+		0.0, 0.0, 30,
+		true, "daily", 3,
+		"{}",
+		24, 7,
+		0,
+		false,
+		false,
+		"convertible",
+		false,
+		true,
+		&by, &at, &via,
+	)
+	args := anyArgsCfg(28)
+	args[25], args[26], args[27] = &by, &at, &via
+
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	mock.ExpectQuery("FROM global_config").WillReturnRows(seeded)
+	mock.ExpectExec("INSERT INTO global_config").WithArgs(args...).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	_, err := store.UpdateGlobalConfigAtomic(ctx, func(existing *GlobalConfig) error {
+		existing.RIExchangeEnabled = true
+		return nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
