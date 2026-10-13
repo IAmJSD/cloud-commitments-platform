@@ -1317,6 +1317,9 @@ type LadderTrancheDB struct {
 	ConfigID    *string `json:"config_id,omitempty"`
 	RunID       *string `json:"run_id,omitempty"`
 	ExecutionID *string `json:"execution_id,omitempty"` // references purchase_executions.execution_id
+	// SettledAt is stamped by TransitionLadderTrancheTx when the tranche
+	// becomes completed; a CHECK requires it on every completed row.
+	SettledAt *time.Time `json:"settled_at,omitempty"`
 
 	// Required fields.
 	ID            string               `json:"id"`

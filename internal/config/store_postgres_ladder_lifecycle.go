@@ -75,7 +75,8 @@ func (s *PostgresStore) TransitionLadderTrancheTx(ctx context.Context, tx pgx.Tx
 	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE ladder_tranches
-		SET status = $3, status_reason = NULLIF($4, '')
+		SET status = $3, status_reason = NULLIF($4, ''),
+		    settled_at = CASE WHEN $3 = 'completed' THEN clock_timestamp() ELSE settled_at END
 		WHERE id = $1
 		  AND status = $2
 		  AND ($2 <> 'scheduled' OR execution_id IS NULL)
@@ -144,7 +145,7 @@ func (s *PostgresStore) ClaimDueLadderTranches(
 func selectDueLadderTranchesTx(ctx context.Context, tx pgx.Tx, configID string, asOf time.Time, limit int) ([]LadderTrancheDB, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id, config_id, run_id, layer_type, amount_usd_hr, term,
-		       payment_option, scheduled_date, status, created_at
+		       payment_option, scheduled_date, status, settled_at, created_at
 		FROM ladder_tranches
 		WHERE config_id = $1
 		  AND status = 'scheduled'
@@ -163,7 +164,7 @@ func selectDueLadderTranchesTx(ctx context.Context, tx pgx.Tx, configID string, 
 	for rows.Next() {
 		var tr LadderTrancheDB
 		if err := rows.Scan(&tr.ID, &tr.ConfigID, &tr.RunID, &tr.LayerType, &tr.AmountUSDHr, &tr.Term,
-			&tr.PaymentOption, &tr.ScheduledDate, &tr.Status, &tr.CreatedAt); err != nil {
+			&tr.PaymentOption, &tr.ScheduledDate, &tr.Status, &tr.SettledAt, &tr.CreatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan due ladder_tranche: %w", err)
 		}
 		out = append(out, tr)
