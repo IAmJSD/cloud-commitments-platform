@@ -289,6 +289,9 @@ func (r *RampSchedule) CumulativePercent(step int) float64 {
 
 // GetCurrentCoverage calculates the current effective coverage based on ramp progress.
 func (r *RampSchedule) GetCurrentCoverage(baseCoverage float64) float64 {
+	if r.Type == "immediate" {
+		return baseCoverage // base*100/100 is not exact in floating point
+	}
 	return baseCoverage * r.CumulativePercent(r.CurrentStep) / 100
 }
 

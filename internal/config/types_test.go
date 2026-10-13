@@ -1,6 +1,7 @@
 package config
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -122,6 +123,15 @@ func TestRampSchedule_CumulativePercent(t *testing.T) {
 func TestRampSchedule_GetCurrentCoverageUsesCumulativePercent(t *testing.T) {
 	s := RampSchedule{Type: "custom", PercentPerStep: 40, TotalSteps: 3, CurrentStep: 2}
 	assert.Equal(t, 80*s.CumulativePercent(2)/100, s.GetCurrentCoverage(80))
+}
+
+// An immediate schedule returns the base untouched: base*100/100 would turn
+// 0.1694 into 0.16939999999999997 and math.MaxFloat64 into +Inf.
+func TestRampSchedule_GetCurrentCoverageImmediateIsExact(t *testing.T) {
+	s := RampSchedule{Type: "immediate"}
+	for _, base := range []float64{0.1694, 80, math.MaxFloat64} {
+		assert.Equal(t, base, s.GetCurrentCoverage(base))
+	}
 }
 
 func TestRampSchedule_GetNextPurchaseDate(t *testing.T) {
