@@ -159,12 +159,12 @@ func TestClaimPin_ApprovedRowSkipsCapRecheck(t *testing.T) {
 	ctx := context.Background()
 	exec := dueRecExec("approved", upfrontRec(1e9))
 	store := new(MockConfigStore)
-	store.On("GetPurchasePlan", ctx, exec.PlanID).Return(autoPlan(nil), nil)
-	store.On("GetPlanAccounts", ctx, exec.PlanID).Return(nil, errors.New("accounts unavailable"))
+	store.On("GetPurchasePlan", mock.Anything, exec.PlanID).Return(autoPlan(nil), nil)
+	store.On("GetPlanAccounts", mock.Anything, exec.PlanID).Return(nil, errors.New("accounts unavailable"))
 	claimed := exec
 	claimed.Status = "running"
 	store.On("TransitionExecutionStatusPinned", ctx, exec.ExecutionID, mock.Anything, "running", (*string)(nil), false).Return(&claimed, nil)
-	store.On("SavePurchaseExecution", ctx, mock.Anything).Return(nil)
+	store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
 	manager := &Manager{config: store, email: new(MockEmailSender), providerFactory: new(MockProviderFactory)}
 
 	didClaim, err := manager.claimAndExecute(ctx, &exec)
@@ -209,11 +209,12 @@ func TestClaimPin_RecLessRowStillFailsInsteadOfBuying(t *testing.T) {
 	store, factory := new(MockConfigStore), new(MockProviderFactory)
 	exec := dueRecExec("pending")
 	manager := newPinManager(ctx, store, factory, exec, autoPlan(nil), autoPlan(nil))
+	store.On("GetPurchasePlan", mock.Anything, exec.PlanID).Return(autoPlan(nil), nil)
 	claimed := exec
 	claimed.Status = "running"
 	store.On("TransitionExecutionStatusPinned", ctx, "exec-gate", mock.Anything, "running", (*string)(nil), true).Return(&claimed, nil)
 	var saved *config.PurchaseExecution
-	store.On("SavePurchaseExecutionTx", ctx, mock.Anything, mock.Anything).
+	store.On("SavePurchaseExecutionTx", mock.Anything, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { saved = args.Get(2).(*config.PurchaseExecution) }).Return(nil)
 	result, err := manager.ProcessScheduledPurchases(ctx)
 	require.NoError(t, err)

@@ -6674,9 +6674,9 @@ func TestHandler_approvePurchaseViaSession_FourEyesOn_DifferentApproverSucceeds(
 	// refused at execution (#609), and this test is about the 4-eyes check.
 	approved := &config.PurchaseExecution{ExecutionID: execID, Status: "approved"}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
-	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
+	mockConfig.On("GetGlobalConfig", mock.Anything).Return(fourEyesCfgOn(), nil)
 	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "running", &approverID).Return(approved, nil)
-	mockConfig.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockConfig.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{UserID: approverID, Email: approverEmail}, nil)

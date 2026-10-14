@@ -105,7 +105,8 @@ func TestApprove_ClaimsRunningAndStampsGuarded(t *testing.T) {
 	store.On("GetExecutionByID", mock.Anything, "exec-g").Return(&config.PurchaseExecution{ExecutionID: "exec-g", PlanID: "plan-g", Status: "pending"}, nil).Maybe()
 	store.On("TransitionExecutionStatus", ctx, "exec-g", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-g")
-	store.On("SaveExecutionIfStatus", ctx, mock.Anything, []string{"running"}).Return(nil)
+	store.On("SaveExecutionIfStatus", ctx, mock.Anything, []string{"running"}).Return(nil).Once()
+	store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{"running"}).Return(nil).Once()
 
 	_, _, err := manager.ApproveAndExecute(ctx, "exec-g", "approver@example.invalid", nil)
 	require.NoError(t, err)

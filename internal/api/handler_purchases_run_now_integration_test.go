@@ -21,12 +21,20 @@ import (
 // runNowService buys every recommendation except the call numbered failOn.
 type runNowService struct {
 	fanoutServiceClient
-	calls  atomic.Int32
-	failOn int32
+	calls      atomic.Int32
+	failOn     int32
+	onPurchase func(context.Context)
 }
 
 func (s *runNowService) PurchaseCommitment(ctx context.Context, rec common.Recommendation, opts common.PurchaseOptions) (common.PurchaseResult, error) {
-	if s.calls.Add(1) == s.failOn {
+	call := s.calls.Add(1)
+	if s.onPurchase != nil {
+		s.onPurchase(ctx)
+	}
+	if err := ctx.Err(); err != nil {
+		return common.PurchaseResult{}, err
+	}
+	if call == s.failOn {
 		return common.PurchaseResult{}, errors.New("provider rejected the purchase")
 	}
 	return s.fanoutServiceClient.PurchaseCommitment(ctx, rec, opts)
@@ -144,4 +152,53 @@ func TestRunNow_LostClaimIsConflict(t *testing.T) {
 	assert.Equal(t, "running", row.Status)
 	assert.Nil(t, row.ExecutedAt)
 	assert.Zero(t, service.calls.Load())
+}
+
+func TestRunNow_CanceledRequestAfterClaimPersistsTerminalOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		failOn  int32
+		status  string
+		history int
+	}{
+		{name: "completed", status: "completed", history: 1},
+		{name: "failed", failOn: 1, status: "failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, service := newRunNowFixture(t, tc.failOn, fanoutRecs())
+			requestCtx, cancel := context.WithCancel(f.ctx)
+			defer cancel()
+			var claimStatus string
+			var claimErr error
+			service.onPurchase = func(context.Context) {
+				row, err := f.store.GetExecutionByID(f.ctx, f.execution.ExecutionID)
+				claimErr = err
+				if row != nil {
+					claimStatus = row.Status
+				}
+				cancel()
+			}
+			_, runErr := f.handler.runPlannedPurchase(requestCtx, f.request, f.execution.ExecutionID)
+			require.NoError(t, claimErr)
+			require.Equal(t, "running", claimStatus)
+			require.ErrorIs(t, requestCtx.Err(), context.Canceled)
+			if tc.failOn == 0 {
+				require.NoError(t, runErr)
+			} else {
+				require.Error(t, runErr)
+			}
+			verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer verifyCancel()
+			row, err := f.store.GetExecutionByID(verifyCtx, f.execution.ExecutionID)
+			require.NoError(t, err)
+			require.Equal(t, tc.status, row.Status)
+			var histories int
+			require.NoError(t, f.pool.QueryRow(verifyCtx, "SELECT count(*) FROM purchase_history WHERE plan_id=$1", f.planID).Scan(&histories))
+			require.Equal(t, tc.history, histories)
+			freshRequest := *f.request
+			_, retryErr := f.handler.runPlannedPurchase(verifyCtx, &freshRequest, f.execution.ExecutionID)
+			require.Error(t, retryErr)
+			assert.EqualValues(t, 1, service.calls.Load())
+		})
+	}
 }

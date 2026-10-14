@@ -240,12 +240,12 @@ func TestHandleExecutePurchase_ApprovedStatus(t *testing.T) {
 	runningExec.Status = "running"
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-approved",
 		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&runningExec, nil)
-	mockStore.On("GetPurchasePlan", ctx, "plan-approved").Return(plan, nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
-	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	mockStore.On("CompletePlanStep", ctx, "plan-approved", 1).Return(nil)
-	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockSTS.On("GetCallerIdentity", ctx, mock.Anything).Return(nil, errors.New("sts error"))
+	mockStore.On("GetPurchasePlan", mock.Anything, "plan-approved").Return(plan, nil)
+	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	mockStore.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockStore.On("CompletePlanStep", mock.Anything, "plan-approved", 1).Return(nil)
+	mockStore.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
+	mockSTS.On("GetCallerIdentity", mock.Anything, mock.Anything).Return(nil, errors.New("sts error"))
 	mockProv := new(MockProvider)
 	mockSvc := new(MockServiceClient)
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProv, nil)
@@ -326,16 +326,17 @@ func TestHandleExecutePurchase_SaveError(t *testing.T) {
 		Recommendations: []config.RecommendationRecord{rec},
 	}
 
-	mockStore.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil).Once()
+	mockStore.On("GetGlobalConfig", mock.Anything).Return(autoPurchaseOnCfg(), nil)
 	mockStore.On("GetExecutionByID", ctx, "exec-save-err").Return(exec, nil)
 	// claimAndExecute CASes the row to "running" before executing (issue #1013).
 	runningExec := *exec
 	runningExec.Status = "running"
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-save-err",
 		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&runningExec, nil)
-	mockStore.On("GetPurchasePlan", ctx, "plan-save-err").Return(plan, nil)
-	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(errors.New("save failed"))
-	mockSTS.On("GetCallerIdentity", ctx, mock.Anything).Return(nil, errors.New("sts error"))
+	mockStore.On("GetPurchasePlan", mock.Anything, "plan-save-err").Return(plan, nil)
+	mockStore.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(errors.New("save failed"))
+	mockSTS.On("GetCallerIdentity", mock.Anything, mock.Anything).Return(nil, errors.New("sts error"))
 
 	// Provider factory returns error → purchase fails
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(nil, errors.New("provider error"))
@@ -409,10 +410,10 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	// regression that drops it (e.g. passes "" or exec.ExecutionID by
 	// mistake) would mismatch the mock expectation and fail the test.
 	plan := &config.PurchasePlan{ID: planID, Name: "test-plan"}
-	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.Anything).Return(nil)
-	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	mockStore.On("CompletePlanStep", ctx, planID, 1).Return(nil)
+	mockStore.On("GetPurchasePlan", mock.Anything, planID).Return(plan, nil)
+	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
+	mockStore.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockStore.On("CompletePlanStep", mock.Anything, planID, 1).Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,
@@ -514,14 +515,14 @@ func TestProcessMessage_ApproveFourEyesOn_DifferentApproverSucceeds(t *testing.T
 	// row TransitionExecutionStatus returns) in place.
 	mockStore.On("GetExecutionByID", ctx, "exec-appv-diff").Return(exec, nil).Times(3)
 	mockStore.On("GetCloudAccount", ctx, accountID).Return(account, nil)
-	mockStore.On("GetGlobalConfig", ctx).Return(fourEyesCfgOnForManager(), nil)
+	mockStore.On("GetGlobalConfig", mock.Anything).Return(fourEyesCfgOnForManager(), nil)
 	mockStore.On("GetUserEmailByID", ctx, creatorID).Return("owner@example.com", nil)
 	mockStore.On("TransitionExecutionStatus", ctx, "exec-appv-diff", []string{"pending", "notified"}, "running", (*string)(nil)).Return(approved, nil)
 	plan := &config.PurchasePlan{ID: planID, Name: "test-plan"}
-	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.Anything).Return(nil)
-	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
-	mockStore.On("CompletePlanStep", ctx, planID, 1).Return(nil)
+	mockStore.On("GetPurchasePlan", mock.Anything, planID).Return(plan, nil)
+	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
+	mockStore.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
+	mockStore.On("CompletePlanStep", mock.Anything, planID, 1).Return(nil)
 
 	manager := &Manager{
 		config:       mockStore,

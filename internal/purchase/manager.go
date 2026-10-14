@@ -227,6 +227,17 @@ func isMultiAccountAckable(execErr error) bool {
 	return errors.As(execErr, &partial)
 }
 
+const (
+	// Combined execution and persistence budgets require lambda_timeout >= 270s.
+	purchaseExecutionTimeout = 4 * time.Minute
+	terminalSaveTimeout      = 30 * time.Second
+)
+
+// detachedTimeout keeps ctx values but drops its cancellation and deadline.
+func detachedTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), d)
+}
+
 // executeAndFinalize runs a purchase and handles status updates, record saving, and progress.
 //
 // The root execution row is ALWAYS saved with its finalized status — including
@@ -239,17 +250,23 @@ func isMultiAccountAckable(execErr error) bool {
 // claimAndExecute claims the root to "running" first (issue #1013), would strand
 // the root row in "running" until the reaper failed it.
 func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseExecution) error {
+	// A disconnected caller must not cancel a purchase after the claim.
+	// Its terminal outcome must survive an exhausted execution budget too.
+	execCtx, cancelExec := detachedTimeout(ctx, purchaseExecutionTimeout)
+	defer cancelExec()
 	// Last line of defense before money moves (issue #1718). Every executor
 	// entry point funnels through here, so one check covers all of them.
-	execErr := m.preExecutionRefusal(ctx, exec)
+	execErr := m.preExecutionRefusal(execCtx, exec)
 	if execErr == nil {
-		execErr = m.executePurchase(ctx, exec)
+		execErr = m.executePurchase(execCtx, exec)
 	}
 	m.finalizeExecution(exec, execErr)
 	if execErr != nil {
 		logging.Errorf("Failed to execute purchase %s: %v", exec.ExecutionID, execErr)
 	}
-	if err := m.saveOrRecoverTerminal(ctx, exec, execErr); err != nil {
+	saveCtx, cancelSave := detachedTimeout(ctx, terminalSaveTimeout)
+	defer cancelSave()
+	if err := m.saveOrRecoverTerminal(saveCtx, exec, execErr); err != nil {
 		logging.Errorf("AUDIT LOSS: failed to save execution status: %v", err)
 		// Wrap with ErrAuditLoss regardless of whether executePurchase itself
 		// failed. When execErr != nil (provider/partial error), finalizeExecution
@@ -266,8 +283,8 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 		}
 	}
 	if execErr == nil {
-		if err := m.updatePlanProgress(ctx, exec); err != nil {
-			m.recordRampAdvanceRefusal(ctx, exec, err)
+		if err := m.updatePlanProgress(saveCtx, exec); err != nil {
+			m.recordRampAdvanceRefusal(saveCtx, exec, err)
 		}
 	}
 	return execErr
