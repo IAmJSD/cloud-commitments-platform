@@ -193,7 +193,8 @@ func recHourlyCommitment(rec *RecommendationRecord) (float64, error) {
 func rampBaselineStale(old, next *PurchasePlan) bool {
 	shape := func(p *PurchasePlan) string {
 		var svcs []string
-		for _, svc := range p.Services {
+		for k := range p.Services {
+			svc := p.Services[k]
 			if svc.Enabled {
 				svcs = append(svcs, fmt.Sprintf("%s|%s|%d|%s", strings.ToLower(svc.Provider), svc.Service, svc.Term, svc.Payment))
 			}

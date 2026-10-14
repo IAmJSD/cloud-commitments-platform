@@ -802,7 +802,7 @@ func (s *PostgresStore) UpdatePurchasePlan(ctx context.Context, plan *PurchasePl
 		if err != nil {
 			return err
 		}
-		if err := s.UpdatePurchasePlanTx(ctx, tx, &pending); err != nil {
+		if err = s.UpdatePurchasePlanTx(ctx, tx, &pending); err != nil {
 			return err
 		}
 		if old == nil || !rampBaselineStale(old, &pending) {
