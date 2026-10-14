@@ -606,7 +606,7 @@ func TestPostgresStore_UpsertRecommendations_AZArbiter(t *testing.T) {
 // tenancy updates in place, regional non-EC2 rows (platform and tenancy ”) are
 // unchanged, and a row written by pre-PR-C code is found and updated. A batch
 // of rows differing only by platform or tenancy is covered with the 9-column
-// index drop (migration 000112).
+// index drop (migration 000119).
 func TestPostgresStore_UpsertRecommendations_PlatformTenancyArbiter(t *testing.T) {
 	ctx := context.Background()
 	container, err := testhelpers.SetupPostgresContainer(ctx, t)
@@ -695,6 +695,9 @@ func TestPostgresStore_UpsertRecommendations_MultiAZBatch(t *testing.T) {
 	var oldIdx bool
 	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'recommendations_natural_key_idx')`).Scan(&oldIdx))
 	require.False(t, oldIdx, "8-column index must be gone after the full migration chain")
+	var nineColIdx bool
+	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'recommendations_natural_key_az_idx')`).Scan(&nineColIdx))
+	require.False(t, nineColIdx, "9-column index must be gone after the full migration chain (000119)")
 
 	savingsByAZ := func(t *testing.T) map[string]float64 {
 		t.Helper()
@@ -731,5 +734,84 @@ func TestPostgresStore_UpsertRecommendations_MultiAZBatch(t *testing.T) {
 		batch := []config.RecommendationRecord{zonalAWSRec("us-east-1a", 1), zonalAWSRec("us-east-1b", 2)}
 		require.NoError(t, store.ReplaceRecommendations(ctx, t0.Add(3*time.Hour), batch))
 		assert.Equal(t, map[string]float64{"us-east-1a": 1, "us-east-1b": 2}, savingsByAZ(t))
+	})
+}
+
+// Issue #806, PR-E: once migration 000119 drops the 9-column index, EC2 recs
+// that differ only by platform or tenancy upsert in ONE batch (the shape
+// persistCollection writes) without a unique violation, and both rows persist.
+func TestPostgresStore_UpsertRecommendations_PlatformTenancyBatch(t *testing.T) {
+	ctx := context.Background()
+	container, err := testhelpers.SetupPostgresContainer(ctx, t)
+	require.NoError(t, err)
+	defer container.Cleanup(ctx)
+	pool := container.DB.Pool()
+	require.NoError(t, migrations.RunMigrations(ctx, pool, getMigrationsPath(), "", ""))
+	store := config.NewPostgresStore(container.DB)
+	t0 := time.Now().UTC().Truncate(time.Second)
+	collect := []config.SuccessfulCollect{{Provider: "aws"}}
+
+	ec2 := func(platform, tenancy string, savings float64) config.RecommendationRecord {
+		rec := awsRec("p-"+platform+tenancy, "ec2", "us-east-1", "m5.large", savings)
+		rec.Details = json.RawMessage(`{"instance_type":"m5.large","platform":"` + platform + `","tenancy":"` + tenancy + `"}`)
+		return rec
+	}
+	savingsByKey := func(t *testing.T) map[string]float64 {
+		t.Helper()
+		rows, err := pool.Query(ctx, `SELECT platform || '|' || tenancy, monthly_savings FROM recommendations`)
+		require.NoError(t, err)
+		defer rows.Close()
+		out := map[string]float64{}
+		for rows.Next() {
+			var k string
+			var v float64
+			require.NoError(t, rows.Scan(&k, &v))
+			out[k] = v
+		}
+		require.NoError(t, rows.Err())
+		return out
+	}
+	reset := func(t *testing.T) {
+		t.Helper()
+		require.NoError(t, store.ReplaceRecommendations(ctx, t0, nil))
+	}
+
+	t.Run("two rows differing only by platform in one batch both persist", func(t *testing.T) {
+		reset(t)
+		require.NoError(t, store.UpsertRecommendations(ctx, t0,
+			[]config.RecommendationRecord{ec2("Linux/UNIX", "default", 10), ec2("Windows", "default", 20)}, collect))
+		assert.Equal(t, map[string]float64{"Linux/UNIX|default": 10, "Windows|default": 20}, savingsByKey(t))
+	})
+
+	t.Run("two rows differing only by tenancy in one batch both persist", func(t *testing.T) {
+		reset(t)
+		require.NoError(t, store.UpsertRecommendations(ctx, t0,
+			[]config.RecommendationRecord{ec2("Linux/UNIX", "default", 10), ec2("Linux/UNIX", "dedicated", 20)}, collect))
+		assert.Equal(t, map[string]float64{"Linux/UNIX|default": 10, "Linux/UNIX|dedicated": 20}, savingsByKey(t))
+	})
+
+	t.Run("same-key re-upsert updates in place and leaves the sibling alone", func(t *testing.T) {
+		require.NoError(t, store.UpsertRecommendations(ctx, t0.Add(time.Hour),
+			[]config.RecommendationRecord{ec2("Linux/UNIX", "default", 11), ec2("Linux/UNIX", "dedicated", 20)}, collect))
+		assert.Equal(t, map[string]float64{"Linux/UNIX|default": 11, "Linux/UNIX|dedicated": 20}, savingsByKey(t))
+	})
+
+	t.Run("regional non-EC2 row alongside EC2 platform rows is unaffected", func(t *testing.T) {
+		reset(t)
+		rds := awsRec("r1", "rds", "us-east-1", "db.m5.large", 30)
+		batch := []config.RecommendationRecord{ec2("Linux/UNIX", "default", 10), ec2("Windows", "default", 20), rds}
+		require.NoError(t, store.UpsertRecommendations(ctx, t0, batch, collect))
+		assert.Equal(t, map[string]float64{"Linux/UNIX|default": 10, "Windows|default": 20, "|": 30}, savingsByKey(t))
+	})
+
+	t.Run("cross-run Linux then Windows both persist", func(t *testing.T) {
+		// The transitional case that failed with SQLSTATE 23505 while the
+		// 9-column index was live: one collection stored Linux, a later one
+		// adds Windows on the same 9-column key (a successful collection sweeps
+		// rows it does not re-send, so the later batch carries both).
+		reset(t)
+		require.NoError(t, store.UpsertRecommendations(ctx, t0, []config.RecommendationRecord{ec2("Linux/UNIX", "default", 10)}, collect))
+		require.NoError(t, store.UpsertRecommendations(ctx, t0.Add(time.Hour), []config.RecommendationRecord{ec2("Linux/UNIX", "default", 10), ec2("Windows", "default", 20)}, collect))
+		assert.Equal(t, map[string]float64{"Linux/UNIX|default": 10, "Windows|default": 20}, savingsByKey(t))
 	})
 }
