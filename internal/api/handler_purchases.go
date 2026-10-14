@@ -110,7 +110,7 @@ func (h *Handler) isExecutionInScope(ctx context.Context, scope auth.AccountScop
 // so the result is deterministic regardless of map iteration order.
 func buildPlannedPurchase(plan *config.PurchasePlan, exec *config.PurchaseExecution) PlannedPurchase {
 	svc := firstServiceConfig(plan)
-	return PlannedPurchase{
+	row := PlannedPurchase{
 		ID:               exec.ExecutionID,
 		PlanID:           exec.PlanID,
 		PlanName:         plan.Name,
@@ -119,7 +119,6 @@ func buildPlannedPurchase(plan *config.PurchasePlan, exec *config.PurchaseExecut
 		Service:          svc.Service,
 		ResourceType:     "Various",
 		Region:           "Multiple",
-		Count:            len(exec.Recommendations),
 		Term:             svc.Term,
 		Payment:          svc.Payment,
 		EstimatedSavings: exec.EstimatedSavings,
@@ -131,6 +130,21 @@ func buildPlannedPurchase(plan *config.PurchasePlan, exec *config.PurchaseExecut
 
 		HasRecommendations: len(exec.Recommendations) > 0,
 	}
+	if len(exec.Recommendations) > 0 {
+		first := exec.Recommendations[0]
+		row.ResourceType, row.Region = first.ResourceType, first.Region
+		for i := range exec.Recommendations {
+			rec := &exec.Recommendations[i]
+			row.Count += rec.Count
+			if rec.ResourceType == "" || rec.ResourceType != first.ResourceType {
+				row.ResourceType = "Various"
+			}
+			if rec.Region == "" || rec.Region != first.Region {
+				row.Region = "Multiple"
+			}
+		}
+	}
+	return row
 }
 
 // authorizeExecutionManagement enforces creator-scope ownership on the
