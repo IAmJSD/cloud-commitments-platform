@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/planstep"
 	"github.com/google/uuid"
@@ -24,7 +25,8 @@ var errPlanStepSkipped = fmt.Errorf("%w: step skipped", errExecutionNotNotifiabl
 
 // stepResolver resolves the recommendations a plan's next step would buy.
 type stepResolver interface {
-	Resolve(ctx context.Context, plan *config.PurchasePlan, accountIDs []string) ([]config.RecommendationRecord, error)
+	Resolve(ctx context.Context, plan *config.PurchasePlan, accountIDs []string, step int,
+		baseline config.PlanRampBaseline, committed map[string]config.PlanRampQuantity) (planstep.Result, error)
 }
 
 type planstepResolver struct {
@@ -32,11 +34,9 @@ type planstepResolver struct {
 	store planstep.Store
 }
 
-func (r planstepResolver) Resolve(ctx context.Context, plan *config.PurchasePlan, accountIDs []string) ([]config.RecommendationRecord, error) {
-	// Step 1 with no baseline or ledger sizes exactly like the pre-cumulative
-	// resolver; C3 (platform#631) replaces this with the real step and ledger.
-	res, err := planstep.Resolve(ctx, r.src, r.store, plan, accountIDs, 1, nil, nil)
-	return res.Recs, err
+func (r planstepResolver) Resolve(ctx context.Context, plan *config.PurchasePlan, accountIDs []string, step int,
+	baseline config.PlanRampBaseline, committed map[string]config.PlanRampQuantity) (planstep.Result, error) {
+	return planstep.Resolve(ctx, r.src, r.store, plan, accountIDs, step, baseline, committed)
 }
 
 // SetRecommendationSource wires the strict recommendation read the plan-step
@@ -149,18 +149,91 @@ func (m *Manager) attachStep(ctx context.Context, tx pgx.Tx, locked *config.Purc
 	for i := range accounts {
 		ids = append(ids, accounts[i].ID)
 	}
-	recs, err := m.resolver.Resolve(ctx, locked, ids)
+	res, err := m.resolveCumulative(ctx, tx, locked, claim.number, ids)
 	if errors.Is(err, planstep.ErrNoMatch) {
-		return m.noMatch(ctx, tx, locked, claim, root)
+		return m.noMatch(ctx, tx, locked, claim, root, res.Skipped)
+	}
+	if errors.Is(err, planstep.ErrTargetMet) {
+		return m.targetMet(ctx, tx, locked, claim, root, res)
 	}
 	if err != nil {
 		return stepClaim{}, fmt.Errorf("plan %s step %d: %w", locked.ID, claim.number, err)
 	}
+	if len(res.Skipped) > 0 {
+		logging.Warnf("plan %s step %d: %s", locked.ID, claim.number, skippedNote(res.Skipped))
+	}
+	recs := res.Recs
 	sort.Slice(recs, func(i, j int) bool { return recs[i].ID < recs[j].ID })
 	if capErr := CheckStepCommitmentCap(locked, recs); capErr != nil {
 		return m.failStep(ctx, tx, locked, claim, root, fmt.Sprintf("%v (recommendations: %s)", capErr, recIDs(recs)))
 	}
 	return m.writeAttached(ctx, tx, locked, claim, root, recs)
+}
+
+// resolveCumulative reads the frozen baseline and the plan's own ledger in the
+// claim's transaction (both locks are held, so no concurrent tick can change
+// them) and resolves the step against them. At step 1 it freezes the baseline
+// from what the step saw, including when nothing sized to a purchase: a base
+// whose target floors to 0 still has to be frozen or step 2 would find no
+// baseline and strand. In that case the step is judged again against the
+// frozen baseline, so "target met" and "hidden" are told apart exactly as at
+// any later step.
+func (m *Manager) resolveCumulative(ctx context.Context, tx pgx.Tx, locked *config.PurchasePlan, step int, ids []string) (planstep.Result, error) {
+	baseline, err := m.config.GetPlanRampBaselineTx(ctx, tx, locked.ID)
+	if err != nil {
+		return planstep.Result{}, err
+	}
+	committed, err := m.config.ListPlanCommittedTx(ctx, tx, locked.ID)
+	if err != nil {
+		return planstep.Result{}, err
+	}
+	res, err := m.resolver.Resolve(ctx, locked, ids, step, baseline, committed)
+	if step != 1 || baseline != nil || len(res.Baseline) == 0 {
+		return res, err
+	}
+	if _, setErr := m.config.SetPlanRampBaselineTx(ctx, tx, locked.ID, res.Baseline); setErr != nil {
+		return planstep.Result{}, setErr
+	}
+	if errors.Is(err, planstep.ErrNoMatch) {
+		return m.resolver.Resolve(ctx, locked, ids, step, res.Baseline, committed)
+	}
+	return res, err
+}
+
+// skippedNote names the identities left out for lack of a baseline.
+func skippedNote(skipped []string) string {
+	shown := skipped
+	if len(shown) > 5 {
+		shown = shown[:5]
+	}
+	names := make([]string, len(shown))
+	for i, k := range shown {
+		names[i] = strings.ReplaceAll(k, "\x1f", "/")
+	}
+	return fmt.Sprintf("%d recommendation(s) without a frozen baseline skipped (under-buy): %s", len(skipped), strings.Join(names, ", "))
+}
+
+// targetMet completes a step whose cumulative target is already held as a
+// no-op row and advances the ramp (platform#631 Q1). No email, no
+// suppression, no purchase. The claim hands back nothing to notify.
+func (m *Manager) targetMet(ctx context.Context, tx pgx.Tx, locked *config.PurchasePlan, claim stepClaim, root *config.PurchaseExecution, res planstep.Result) (stepClaim, error) {
+	note := fmt.Sprintf("target already met: target %d, committed %d", res.Target, res.Committed)
+	if len(res.Skipped) > 0 {
+		note += "; " + skippedNote(res.Skipped)
+	}
+	rootID := ""
+	if root != nil {
+		rootID = root.ExecutionID
+	}
+	err := m.config.CompleteTargetMetStepTx(ctx, tx, locked.ID, claim.number, rootID, note)
+	if errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
+		return stepClaim{}, fmt.Errorf("%w: execution %s changed before the step could be completed", errPlanStepSkipped, rootID)
+	}
+	if err != nil {
+		return stepClaim{}, fmt.Errorf("plan %s step %d: %w", locked.ID, claim.number, err)
+	}
+	claim.targetMet = true
+	return claim, nil
 }
 
 func recIDs(recs []config.RecommendationRecord) string {
@@ -174,7 +247,7 @@ func recIDs(recs []config.RecommendationRecord) string {
 // noMatch handles ErrNoMatch: no row until the grace window after the plan's
 // date has passed (a cold or lagging recommendation cache is not a failure),
 // then one failed row.
-func (m *Manager) noMatch(ctx context.Context, tx pgx.Tx, locked *config.PurchasePlan, claim stepClaim, root *config.PurchaseExecution) (stepClaim, error) {
+func (m *Manager) noMatch(ctx context.Context, tx pgx.Tx, locked *config.PurchasePlan, claim stepClaim, root *config.PurchaseExecution, skipped []string) (stepClaim, error) {
 	global, err := m.config.GetGlobalConfig(ctx)
 	if err != nil {
 		return stepClaim{}, fmt.Errorf("failed to read grace period: %w", err)
@@ -184,8 +257,11 @@ func (m *Manager) noMatch(ctx context.Context, tx pgx.Tx, locked *config.Purchas
 	if time.Now().Before(deadline) {
 		return stepClaim{}, fmt.Errorf("%w: no recommendation matches plan %s yet, retrying until %s", errPlanStepSkipped, locked.ID, deadline.Format(time.RFC3339))
 	}
-	return m.failStep(ctx, tx, locked, claim, root, fmt.Sprintf(
-		"no current recommendation matched plan %s step %d by %s (%d-day grace after the plan date)", locked.ID, claim.number, deadline.Format("2006-01-02"), grace))
+	reason := fmt.Sprintf("no current recommendation matched plan %s step %d by %s (%d-day grace after the plan date)", locked.ID, claim.number, deadline.Format("2006-01-02"), grace)
+	if len(skipped) > 0 {
+		reason += "; " + skippedNote(skipped)
+	}
+	return m.failStep(ctx, tx, locked, claim, root, reason)
 }
 
 // failStep gives the step its one failed row: a new row written in tx, or the

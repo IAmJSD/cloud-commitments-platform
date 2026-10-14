@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/planstep"
 )
 
 // fakeResolver stands in for planstep.Resolve (fixture): it returns recs or
@@ -16,10 +17,10 @@ type fakeResolver struct {
 	before func()
 }
 
-func (f *fakeResolver) Resolve(context.Context, *config.PurchasePlan, []string) ([]config.RecommendationRecord, error) {
+func (f *fakeResolver) Resolve(context.Context, *config.PurchasePlan, []string, int, config.PlanRampBaseline, map[string]config.PlanRampQuantity) (planstep.Result, error) {
 	f.calls.Add(1)
 	if f.before != nil {
 		f.before()
 	}
-	return f.recs, f.err
+	return planstep.Result{Recs: f.recs}, f.err
 }
