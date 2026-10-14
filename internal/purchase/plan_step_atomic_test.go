@@ -17,7 +17,7 @@ import (
 
 func stepTestPlan() *config.PurchasePlan {
 	next := time.Now().Add(24 * time.Hour)
-	return &config.PurchasePlan{ID: "plan-s", RampSchedule: config.RampSchedule{CurrentStep: 1}, NextExecutionDate: &next}
+	return &config.PurchasePlan{ID: "plan-s", Enabled: true, AutoPurchase: true, RampSchedule: config.RampSchedule{CurrentStep: 1}, NextExecutionDate: &next}
 }
 
 func stepRow(status string, mutate func(*config.PurchaseExecution)) config.PurchaseExecution {

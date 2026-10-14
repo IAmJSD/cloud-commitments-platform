@@ -104,6 +104,9 @@ func (m *Manager) claimFromRows(ctx context.Context, tx pgx.Tx, locked *config.P
 		}
 		return m.attachStep(ctx, tx, locked, claim, root)
 	}
+	if !locked.AutoPurchase {
+		return stepClaim{}, fmt.Errorf("%w: manual plan has no scheduled root", errPlanStepSkipped)
+	}
 	return m.attachStep(ctx, tx, locked, claim, nil)
 }
 
@@ -127,7 +130,7 @@ func planProviders(plan *config.PurchasePlan) []string {
 // compared at the microsecond precision PostgreSQL stores, so an in-memory plan
 // with nanoseconds (Linux clocks) is not mistaken for a changed one.
 func planUnchanged(listed, locked *config.PurchasePlan, providers []string) bool {
-	return locked.Enabled && locked.AutoPurchase && locked.NextExecutionDate != nil && listed.NextExecutionDate != nil &&
+	return locked.Enabled && locked.AutoPurchase == listed.AutoPurchase && locked.NextExecutionDate != nil && listed.NextExecutionDate != nil &&
 		locked.NextExecutionDate.Truncate(time.Microsecond).Equal(listed.NextExecutionDate.Truncate(time.Microsecond)) &&
 		strings.Join(planProviders(locked), ",") == strings.Join(providers, ",")
 }
@@ -167,8 +170,14 @@ func (m *Manager) attachStep(ctx context.Context, tx pgx.Tx, locked *config.Purc
 	}
 	recs := res.Recs
 	sort.Slice(recs, func(i, j int) bool { return recs[i].ID < recs[j].ID })
-	if capErr := CheckStepCommitmentCap(locked, recs); capErr != nil {
-		return m.failStep(ctx, tx, locked, claim, root, fmt.Sprintf("%v (recommendations: %s)", capErr, recIDs(recs)))
+	return m.attachWithinCap(ctx, tx, locked, claim, root, recs)
+}
+
+func (m *Manager) attachWithinCap(ctx context.Context, tx pgx.Tx, locked *config.PurchasePlan, claim stepClaim, root *config.PurchaseExecution, recs []config.RecommendationRecord) (stepClaim, error) {
+	if locked.AutoPurchase || locked.MaxStepCommitment != nil {
+		if capErr := CheckStepCommitmentCap(locked, recs); capErr != nil {
+			return m.failStep(ctx, tx, locked, claim, root, fmt.Sprintf("%v (recommendations: %s)", capErr, recIDs(recs)))
+		}
 	}
 	return m.writeAttached(ctx, tx, locked, claim, root, recs)
 }
