@@ -616,6 +616,7 @@ func TestPGXMock_UpdatePurchasePlan_NotFound(t *testing.T) {
 
 	plan := &PurchasePlan{ID: "missing-id", Services: map[string]ServiceConfig{}, RampSchedule: RampSchedule{}}
 	mock.ExpectBegin()
+	mock.ExpectQuery("FOR UPDATE").WithArgs("missing-id").WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery("UPDATE").WithArgs(anyArgsCfg(12)...).
 		WillReturnRows(pgxmock.NewRows([]string{"updated_at"}))
 	mock.ExpectQuery("SELECT EXISTS").WithArgs("missing-id").

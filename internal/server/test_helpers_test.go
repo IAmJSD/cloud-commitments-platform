@@ -486,6 +486,10 @@ func (m *mockConfigStoreForHealth) ListPlanCommittedTx(_ context.Context, _ pgx.
 	return nil, nil
 }
 
+func (m *mockConfigStoreForHealth) CompleteTargetMetStepTx(_ context.Context, _ pgx.Tx, _ string, _ int, _, _ string) error {
+	return nil
+}
+
 func (m *mockConfigStoreForHealth) SetExecutionRecommendationsIfEmptyTx(_ context.Context, _ pgx.Tx, _ string, _ []config.RecommendationRecord, _, _ float64) (bool, error) {
 	return false, nil
 }

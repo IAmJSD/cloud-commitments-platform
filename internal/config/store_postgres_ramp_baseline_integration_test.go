@@ -140,3 +140,47 @@ func TestPlanRampBaseline_ImmutableAndOutOfFullRowWrites(t *testing.T) {
 		return nil
 	}))
 }
+
+// An edit that changes what the baseline describes clears it (the next step
+// then fails loud for want of a baseline); one that does not leaves it.
+func TestPlanRampBaseline_ClearedOnlyByServiceOrRampShapeEdit(t *testing.T) {
+	ctx := context.Background()
+	f := newRampFixture(ctx, t, 1, 0, 4)
+	key := baselineKey(t, baselineRec(f.accounts[0], "m5.large", 100))
+	freeze := func() {
+		require.NoError(t, f.store.WithTx(ctx, func(tx pgx.Tx) error {
+			_, err := f.store.SetPlanRampBaselineTx(ctx, tx, f.planID, PlanRampBaseline{key: {Count: 100}})
+			return err
+		}))
+	}
+	edit := func(mutate func(p *PurchasePlan)) {
+		p, err := f.store.GetPurchasePlan(ctx, f.planID)
+		require.NoError(t, err)
+		mutate(p)
+		require.NoError(t, f.store.UpdatePurchasePlan(ctx, p))
+	}
+	edit(func(p *PurchasePlan) {
+		p.Services = map[string]ServiceConfig{"ec2": {Provider: "aws", Service: "ec2", Enabled: true, Term: 1, Payment: "no-upfront", Coverage: 80}}
+	})
+	freeze()
+	edit(func(p *PurchasePlan) { p.Name = "renamed" })
+	assert.NotNil(t, f.baseline(ctx, t), "a rename keeps the baseline")
+	edit(func(p *PurchasePlan) {
+		svc := p.Services["ec2"]
+		svc.Coverage = 50
+		p.Services["ec2"] = svc
+	})
+	assert.NotNil(t, f.baseline(ctx, t), "a coverage change keeps it: the target scales with coverage")
+
+	edit(func(p *PurchasePlan) { p.RampSchedule.TotalSteps = 5 })
+	assert.Nil(t, f.baseline(ctx, t), "a ramp shape change clears it")
+
+	freeze()
+	edit(func(p *PurchasePlan) {
+		for k, svc := range p.Services {
+			svc.Term = 3
+			p.Services[k] = svc
+		}
+	})
+	assert.Nil(t, f.baseline(ctx, t), "a service identity change clears it")
+}

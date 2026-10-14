@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -179,4 +181,26 @@ func recHourlyCommitment(rec *RecommendationRecord) (float64, error) {
 		return 0, nil
 	}
 	return *d.Hourly, nil
+}
+
+// rampBaselineStale reports whether an edit changes what the frozen baseline
+// describes: which services are bought (provider, service, term, payment of
+// the enabled ones) or the ramp's shape (type, percent, steps, interval).
+// Coverage and the current position are deliberately not part of it: the
+// baseline holds demand counts, and the target scales with coverage. A stale
+// baseline is cleared rather than reused, so the next step fails loud (every
+// identity is skipped) instead of sizing against the wrong demand.
+func rampBaselineStale(old, next *PurchasePlan) bool {
+	shape := func(p *PurchasePlan) string {
+		var svcs []string
+		for _, svc := range p.Services {
+			if svc.Enabled {
+				svcs = append(svcs, fmt.Sprintf("%s|%s|%d|%s", strings.ToLower(svc.Provider), svc.Service, svc.Term, svc.Payment))
+			}
+		}
+		sort.Strings(svcs)
+		r := p.RampSchedule
+		return fmt.Sprintf("%s;%s|%v|%d|%d", strings.Join(svcs, ","), r.Type, r.PercentPerStep, r.TotalSteps, r.StepIntervalDays)
+	}
+	return shape(old) != shape(next)
 }

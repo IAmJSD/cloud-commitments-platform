@@ -321,6 +321,11 @@ func (m *MockConfigStore) ListPlanCommittedTx(ctx context.Context, tx pgx.Tx, pl
 	return v, args.Error(1)
 }
 
+func (m *MockConfigStore) CompleteTargetMetStepTx(ctx context.Context, tx pgx.Tx, planID string, stepNumber int, rootID, note string) error {
+	m.record("CompleteTargetMetStepTx", ctx, tx, planID, stepNumber, rootID, note)
+	return m.Called(ctx, tx, planID, stepNumber, rootID, note).Error(0)
+}
+
 func (m *MockConfigStore) SetExecutionRecommendationsIfEmptyTx(ctx context.Context, tx pgx.Tx, executionID string, recs []config.RecommendationRecord, upfront, savings float64) (bool, error) {
 	m.record("SetExecutionRecommendationsIfEmptyTx", ctx, tx, executionID, recs, upfront, savings)
 	args := m.Called(ctx, tx, executionID, recs, upfront, savings)
