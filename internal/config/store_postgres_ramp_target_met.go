@@ -40,7 +40,7 @@ func (s *PostgresStore) CompleteTargetMetStepTx(ctx context.Context, tx pgx.Tx, 
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*) FROM purchase_executions
 		 WHERE plan_id = $1 AND status = $2 AND NOT no_submission
-		   AND jsonb_typeof(recommendations) = 'array' AND jsonb_array_length(recommendations) > 0`,
+		   AND CASE WHEN jsonb_typeof(recommendations) = 'array' THEN jsonb_array_length(recommendations) ELSE 0 END > 0`,
 		planID, StatusFailed).Scan(&unknown); err != nil {
 		return fmt.Errorf("failed to count unknown-outcome executions of plan %s: %w", planID, err)
 	}
@@ -61,7 +61,7 @@ func (s *PostgresStore) CompleteTargetMetStepTx(ctx context.Context, tx pgx.Tx, 
 			UPDATE purchase_executions
 			   SET status = $2, completed_at = $3, error = $4, pre_approval_skip_reason = $5
 			 WHERE execution_id = $1 AND status IN ('pending', 'notified')
-			   AND (jsonb_typeof(recommendations) <> 'array' OR jsonb_array_length(recommendations) = 0)`,
+			   AND CASE WHEN jsonb_typeof(recommendations) = 'array' THEN jsonb_array_length(recommendations) ELSE 0 END = 0`,
 			rootID, StatusCompleted, now, note, PreApprovalSkipRampTargetMet)
 		if err != nil {
 			return fmt.Errorf("failed to complete target-met root row %s: %w", rootID, err)
