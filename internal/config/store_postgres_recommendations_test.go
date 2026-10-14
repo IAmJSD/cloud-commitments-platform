@@ -581,13 +581,14 @@ func TestPostgresStore_UpsertRecommendations_AZArbiter(t *testing.T) {
 
 	t.Run("row written by pre-PR2b code is found and updated", func(t *testing.T) {
 		require.NoError(t, store.ReplaceRecommendations(ctx, t0, nil))
-		// What the old code stored: AZ only inside details, 8-column semantics.
+		// What the old code stored: AZ, platform and tenancy only inside details (the
+		// collector always sets all three on a zonal EC2 rec), 8-column semantics.
 		_, err := pool.Exec(ctx, `
 			INSERT INTO recommendations
 			    (collected_at, provider, service, region, resource_type, engine, payload,
 			     upfront_cost, monthly_savings, term, payment_option)
 			VALUES ($1, 'aws', 'ec2', 'us-east-1', 'm5.large', '',
-			        '{"details":{"availability_zone":"us-east-1a"}}'::jsonb, 100, 5, 12, 'no-upfront')`, t0)
+			        '{"details":{"platform":"Linux/UNIX","tenancy":"default","availability_zone":"us-east-1a"}}'::jsonb, 100, 5, 12, 'no-upfront')`, t0)
 		require.NoError(t, err)
 		require.NoError(t, store.UpsertRecommendations(ctx, t0.Add(time.Hour), []config.RecommendationRecord{zonalAWSRec("us-east-1a", 40)}, collect))
 		var n int
@@ -596,6 +597,82 @@ func TestPostgresStore_UpsertRecommendations_AZArbiter(t *testing.T) {
 		got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
 		require.NoError(t, err)
 		require.Len(t, got, 1)
+		assert.InDelta(t, 40.0, got[0].Savings, 0.001)
+	})
+}
+
+// Issue #806, PR-C: the upsert arbiter is the 11-column index that adds the
+// generated platform and tenancy columns. A re-upsert on the same platform and
+// tenancy updates in place, regional non-EC2 rows (platform and tenancy ”) are
+// unchanged, and a row written by pre-PR-C code is found and updated. A batch
+// of rows differing only by platform or tenancy is covered with the 9-column
+// index drop (migration 000112).
+func TestPostgresStore_UpsertRecommendations_PlatformTenancyArbiter(t *testing.T) {
+	ctx := context.Background()
+	container, err := testhelpers.SetupPostgresContainer(ctx, t)
+	require.NoError(t, err)
+	defer container.Cleanup(ctx)
+	pool := container.DB.Pool()
+	require.NoError(t, migrations.RunMigrations(ctx, pool, getMigrationsPath(), "", ""))
+	store := config.NewPostgresStore(container.DB)
+	t0 := time.Now().UTC().Truncate(time.Second)
+	collect := []config.SuccessfulCollect{{Provider: "aws"}}
+
+	ec2 := func(platform, tenancy string, savings float64) config.RecommendationRecord {
+		rec := awsRec("p-"+platform+tenancy, "ec2", "us-east-1", "m5.large", savings)
+		rec.Details = json.RawMessage(`{"instance_type":"m5.large","platform":"` + platform + `","tenancy":"` + tenancy + `"}`)
+		return rec
+	}
+	columns := func(t *testing.T) (platform, tenancy string, n int) {
+		t.Helper()
+		require.NoError(t, pool.QueryRow(ctx, `SELECT COUNT(*) FROM recommendations`).Scan(&n))
+		require.NoError(t, pool.QueryRow(ctx, `SELECT platform, tenancy FROM recommendations LIMIT 1`).Scan(&platform, &tenancy))
+		return platform, tenancy, n
+	}
+
+	t.Run("same platform and tenancy re-upsert updates in place", func(t *testing.T) {
+		require.NoError(t, store.UpsertRecommendations(ctx, t0, []config.RecommendationRecord{ec2("Windows", "dedicated", 10)}, collect))
+		require.NoError(t, store.UpsertRecommendations(ctx, t0.Add(time.Hour), []config.RecommendationRecord{ec2("Windows", "dedicated", 25)}, collect))
+		got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.InDelta(t, 25.0, got[0].Savings, 0.001)
+		platform, tenancy, n := columns(t)
+		assert.Equal(t, 1, n)
+		assert.Equal(t, "Windows", platform, "the generated column is derived from the payload")
+		assert.Equal(t, "dedicated", tenancy)
+	})
+
+	t.Run("regional non-EC2 row has empty platform and tenancy and updates in place", func(t *testing.T) {
+		require.NoError(t, store.ReplaceRecommendations(ctx, t0, nil))
+		rds := awsRec("r1", "rds", "us-east-1", "db.m5.large", 10)
+		require.NoError(t, store.UpsertRecommendations(ctx, t0, []config.RecommendationRecord{rds}, collect))
+		rds.Savings = 30
+		require.NoError(t, store.UpsertRecommendations(ctx, t0.Add(time.Hour), []config.RecommendationRecord{rds}, collect))
+		got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.InDelta(t, 30.0, got[0].Savings, 0.001)
+		platform, tenancy, n := columns(t)
+		assert.Equal(t, 1, n)
+		assert.Empty(t, platform)
+		assert.Empty(t, tenancy)
+	})
+
+	t.Run("row written by pre-PR-C code is found and updated", func(t *testing.T) {
+		require.NoError(t, store.ReplaceRecommendations(ctx, t0, nil))
+		// What the old code stored: platform and tenancy only inside details.
+		_, err := pool.Exec(ctx, `
+			INSERT INTO recommendations
+			    (collected_at, provider, service, region, resource_type, engine, payload,
+			     upfront_cost, monthly_savings, term, payment_option)
+			VALUES ($1, 'aws', 'ec2', 'us-east-1', 'm5.large', '',
+			        '{"details":{"platform":"Linux/UNIX","tenancy":"default"}}'::jsonb, 100, 5, 12, 'no-upfront')`, t0)
+		require.NoError(t, err)
+		require.NoError(t, store.UpsertRecommendations(ctx, t0.Add(time.Hour), []config.RecommendationRecord{ec2("Linux/UNIX", "default", 40)}, collect))
+		got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
+		require.NoError(t, err)
+		require.Len(t, got, 1, "the legacy row must be the conflict target, not duplicated")
 		assert.InDelta(t, 40.0, got[0].Savings, 0.001)
 	})
 }
