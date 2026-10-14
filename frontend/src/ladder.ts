@@ -18,6 +18,7 @@ import { escapeHtml, formatDate } from './utils';
 import { showToast } from './toast';
 import { canAccess } from './permissions';
 import { initLadderTimeline } from './ladder-timeline';
+import { initLadderAccountSelector } from './ladder-account-selector';
 
 // ==========================================
 // MODULE STATE
@@ -31,6 +32,7 @@ let configModalSaveInFlight = false;
 
 // Cached configs from the last successful load.
 let cachedConfigs: api.LadderConfig[] = [];
+let selectedAccount: ReturnType<typeof initLadderAccountSelector> | undefined;
 
 // ==========================================
 // PUBLIC API
@@ -52,6 +54,7 @@ export async function initLadderingSettings(globalEnabled: boolean): Promise<voi
   if (!container) return;
 
   container.innerHTML = renderLadderingSection(globalEnabled);
+  selectedAccount = undefined;
   wireKillSwitchToggle();
   wireModalCloseButtons();
 
@@ -138,9 +141,9 @@ function renderLadderingSection(globalEnabled: boolean): string {
         <input type="hidden" id="ladder-cfg-id">
 
         <div class="form-row">
-          <label for="ladder-cfg-account">Cloud Account ID</label>
-          <input type="text" id="ladder-cfg-account" placeholder="UUID of the cloud account"
-                 required autocomplete="off">
+          <label for="ladder-cfg-account">Cloud Account</label>
+          <select id="ladder-cfg-account" required aria-describedby="ladder-cfg-account-status"></select>
+          <span id="ladder-cfg-account-status" class="form-hint" role="status"></span>
         </div>
 
         <div class="form-row">
@@ -378,7 +381,6 @@ function openLadderConfigModal(existing?: api.LadderConfig): void {
 
   // Populate modal fields.
   setValue('ladder-cfg-id', existing?.id ?? '');
-  setValue('ladder-cfg-account', existing?.cloud_account_id ?? '');
   setSelectValue('ladder-cfg-provider', existing?.provider ?? 'aws');
   setChecked('ladder-cfg-enabled', existing?.enabled ?? false);
   setSelectValue('ladder-cfg-mode', existing?.mode ?? 'email_approval');
@@ -397,19 +399,18 @@ function openLadderConfigModal(existing?: api.LadderConfig): void {
   setValue('ladder-cfg-ramp-schedule',
     existing?.ramp_schedule ? JSON.stringify(existing.ramp_schedule, null, 2) : defaultRamp);
 
-  // Disable account/provider fields when editing an existing row (they form
-  // the upsert key and cannot be changed without a delete+re-create).
-  const accountInput = document.getElementById('ladder-cfg-account') as HTMLInputElement | null;
-  const providerSelect = document.getElementById('ladder-cfg-provider') as HTMLSelectElement | null;
-  if (accountInput) accountInput.readOnly = !!existing;
-  if (providerSelect) providerSelect.disabled = !!existing;
-
+  selectedAccount = initLadderAccountSelector(document.getElementById('ladder-config-form')!, existing);
   modal.classList.remove('hidden');
 }
 
 // Exported for unit testing (see renderConfigTable note).
 export async function saveLadderConfig(): Promise<void> {
   if (configModalSaveInFlight) return;
+  const identity = selectedAccount?.();
+  if (!canAccess('update', 'config') || !identity) {
+    showToast({ message: 'Select an available registered account before saving. Configuration update permission is required.', kind: 'error' });
+    return;
+  }
 
   const maxHourlyRaw = (document.getElementById('ladder-cfg-max-hourly') as HTMLInputElement | null)?.value?.trim() ?? '';
   const maxHourly: number | null = maxHourlyRaw === '' ? null : Number(maxHourlyRaw);
@@ -429,8 +430,7 @@ export async function saveLadderConfig(): Promise<void> {
 
   const cfg: api.LadderConfig = {
     id: (document.getElementById('ladder-cfg-id') as HTMLInputElement | null)?.value || undefined,
-    cloud_account_id: (document.getElementById('ladder-cfg-account') as HTMLInputElement | null)?.value?.trim() ?? '',
-    provider: (document.getElementById('ladder-cfg-provider') as HTMLSelectElement | null)?.value ?? 'aws',
+    ...identity,
     enabled: (document.getElementById('ladder-cfg-enabled') as HTMLInputElement | null)?.checked ?? false,
     mode: ((document.getElementById('ladder-cfg-mode') as HTMLSelectElement | null)?.value ?? 'email_approval') as api.LadderConfig['mode'],
     cadence: ((document.getElementById('ladder-cfg-cadence') as HTMLSelectElement | null)?.value ?? 'daily') as api.LadderConfig['cadence'],
@@ -443,11 +443,6 @@ export async function saveLadderConfig(): Promise<void> {
     max_actions_per_run: Number((document.getElementById('ladder-cfg-max-actions') as HTMLInputElement | null)?.value ?? '10'),
     ramp_schedule: rampSchedule,
   };
-
-  if (!cfg.cloud_account_id) {
-    showToast({ message: 'Cloud Account ID is required.', kind: 'error' });
-    return;
-  }
 
   configModalSaveInFlight = true;
   const saveBtn = document.getElementById('ladder-config-save-btn') as HTMLButtonElement | null;

@@ -14,6 +14,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
       ? route.fallback() : route.abort());
     await seedAuth(page);
     await mockApi(page);
+    await page.route('**/api/config', route => route.fulfill({ json: { global: {}, services: [] } }));
     await page.route('**/api/commitment-options', route => route.fulfill({ json: { status: 'ok', aws: {} } }));
     await page.route('**/api/ri-exchange/config', route => route.fulfill({ json: {
       mode: 'manual', auto_exchange_enabled: false, utilization_threshold: 80,
@@ -58,7 +59,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
       await expect(field('provider')).toHaveValue(config.provider);
       await expect(field('provider')).toBeDisabled();
       await expect(field('account')).toHaveValue(config.cloud_account_id);
-      await expect(field('account')).toHaveAttribute('readonly');
+      await expect(field('account')).toBeDisabled();
       await expect(field('id')).toHaveValue(config.id!);
       await expect(field('mode')).toHaveValue(config.mode);
       await expect(field('cadence')).toHaveValue(config.cadence);
@@ -83,12 +84,13 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
       expect(saves[index]).toEqual(expected);
       await expect(page.locator('#ladder-configs-table-container tbody tr').filter({ has: edit('azure') })).toContainText(`${target.toFixed(1)}%`);
       await page.getByRole('button', { name: 'Dismiss notification' }).click();
+      await expect(page.getByRole('button', { name: 'Dismiss notification' })).toHaveCount(0);
     }
 
     await page.locator('#ladder-add-config-btn').click();
     await expect(field('id')).toHaveValue('');
     await expect(field('account')).toHaveValue('');
-    await expect(field('account')).not.toHaveAttribute('readonly');
+    await expect(field('account')).toBeEnabled();
     await expect(field('provider')).toBeEnabled();
     await expect(field('provider')).toHaveValue('aws');
     await expect(field('mode')).toHaveValue('email_approval');
@@ -99,15 +101,15 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
       'lookback-days': '30', 'buf-util-threshold': '90', 'max-hourly': '', 'max-actions': '10',
     })) await expect(field(name)).toHaveValue(value);
     expect(JSON.parse(await field('ramp-schedule').inputValue())).toEqual({ steps: [{ after_days: 0, fraction: 1 }] });
-    await field('account').fill('new-account');
     await field('provider').selectOption('gcp');
+    await field('account').selectOption('acct-200');
     await field('mode').selectOption('auto_approve');
     await field('cadence').selectOption('weekly');
     await page.locator('#ladder-config-save-btn').click();
     await expect(modal).toBeHidden();
     expect(saves).toHaveLength(3);
     expect(saves[2]).toEqual({
-      cloud_account_id: 'new-account', provider: 'gcp', mode: 'auto_approve', cadence: 'weekly',
+      cloud_account_id: 'acct-200', provider: 'gcp', mode: 'auto_approve', cadence: 'weekly',
       enabled: false, target_coverage: 100, buffer_fraction: 0.1, baseline_percentile: 5,
       lookback_days: 30, buffer_utilization_threshold: 90, max_hourly_commit_per_run: null,
       max_actions_per_run: 10, ramp_schedule: { steps: [{ after_days: 0, fraction: 1 }] },
