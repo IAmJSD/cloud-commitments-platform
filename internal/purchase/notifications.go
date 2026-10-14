@@ -38,7 +38,8 @@ func (m *Manager) SendUpcomingPurchaseNotifications(ctx context.Context) (*Notif
 	for _rvc := range plans {
 		plan := plans[_rvc]
 		if err := m.failDueManualStep(ctx, &plan); err != nil {
-			return nil, err
+			logging.Errorf("Failed to inspect due manual plan step for plan %s: %v", plan.ID, err)
+			continue
 		}
 		if m.shouldNotifyPlan(plan, autoPurchaseEnabled) || shouldRetryOverduePlan(plan, autoPurchaseEnabled, global, time.Now()) {
 			if m.sendPlanNotification(ctx, &plan) {

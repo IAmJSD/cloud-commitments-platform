@@ -9,6 +9,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/planstep"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -537,6 +538,42 @@ func TestManager_SendUpcomingPurchaseNotifications_WithNotification(t *testing.T
 
 	mockStore.AssertExpectations(t)
 	mockEmail.AssertExpectations(t)
+}
+
+func TestManager_SendUpcomingPurchaseNotifications_ManualCleanupErrorDoesNotBlockLaterPlan(t *testing.T) {
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	sender := new(MockEmailSender)
+	nextDate := time.Now().Add(3 * 24 * time.Hour)
+	plans := []config.PurchasePlan{
+		{ID: "manual-failed", Enabled: true, NotificationDaysBefore: 7, NextExecutionDate: &nextDate},
+		{ID: "automatic-next", Enabled: true, AutoPurchase: true, NotificationDaysBefore: 7, NextExecutionDate: &nextDate},
+	}
+	address := "fixture@example.invalid"
+	store.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
+	store.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &address, AutoPurchaseEnabled: true}, nil)
+	store.On("WithTx", ctx, mock.Anything).Return(errors.New("manual cleanup transaction failed")).Once()
+	store.On("WithTx", ctx, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+		require.NoError(t, args.Get(1).(func(pgx.Tx) error)(nil))
+	}).Once()
+	expectStepRows(store, &plans[1], config.PurchaseExecution{
+		ExecutionID: "automatic-root", PlanID: plans[1].ID, Status: "pending", StepNumber: 1,
+		ScheduledDate: nextDate, Recommendations: []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Count: 1}},
+	})
+	store.On("RotatePendingApprovalToken", ctx, "automatic-root", mock.Anything, mock.Anything).Return(true, nil).Once()
+	store.On("StampPlanNotificationSent", ctx, plans[1].ID, mock.AnythingOfType("time.Time")).Return(nil).Once()
+	sender.On("SendScheduledPurchaseNotification", ctx, mock.MatchedBy(func(data email.NotificationData) bool {
+		return data.PlanID == plans[1].ID
+	})).Return(nil).Once()
+
+	manager := &Manager{config: store, email: sender, dashboardURL: "https://dashboard.example.invalid"}
+	result, err := manager.SendUpcomingPurchaseNotifications(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, result.Notified)
+	store.AssertNotCalled(t, "LockPurchasePlanTx", mock.Anything, mock.Anything, plans[0].ID)
+	store.AssertNotCalled(t, "StampPlanNotificationSent", mock.Anything, plans[0].ID, mock.Anything)
+	store.AssertExpectations(t)
+	sender.AssertExpectations(t)
 }
 
 func TestManager_SendUpcomingPurchaseNotifications_TooFarAway(t *testing.T) {
