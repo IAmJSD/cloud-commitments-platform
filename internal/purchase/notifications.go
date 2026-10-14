@@ -37,6 +37,9 @@ func (m *Manager) SendUpcomingPurchaseNotifications(ctx context.Context) (*Notif
 	notified := 0
 	for _rvc := range plans {
 		plan := plans[_rvc]
+		if err := m.failDueManualStep(ctx, &plan); err != nil {
+			return nil, err
+		}
 		if m.shouldNotifyPlan(plan, autoPurchaseEnabled) || shouldRetryOverduePlan(plan, autoPurchaseEnabled, global, time.Now()) {
 			if m.sendPlanNotification(ctx, &plan) {
 				notified++
@@ -52,7 +55,7 @@ func (m *Manager) SendUpcomingPurchaseNotifications(ctx context.Context) (*Notif
 // shouldNotifyPlan checks if a plan should trigger a notification.
 // autoPurchaseEnabled is the global scheduling.auto_purchase kill switch.
 func (m *Manager) shouldNotifyPlan(plan config.PurchasePlan, autoPurchaseEnabled bool) bool {
-	if !autoPurchaseEnabled || !plan.Enabled || !plan.AutoPurchase {
+	if !plan.Enabled || (plan.AutoPurchase && !autoPurchaseEnabled) {
 		return false
 	}
 
@@ -90,13 +93,54 @@ func planGraceDays(plan *config.PurchasePlan, global *config.GlobalConfig) int {
 // one day past the grace window, so the first tick at or after the deadline can
 // write the failed row. A step that already has a row is skipped by the claim.
 func shouldRetryOverduePlan(plan config.PurchasePlan, autoPurchaseEnabled bool, global *config.GlobalConfig, now time.Time) bool {
-	if !autoPurchaseEnabled || !plan.Enabled || !plan.AutoPurchase || plan.NextExecutionDate == nil || !plan.NextExecutionDate.Before(now) {
+	if !plan.Enabled || (plan.AutoPurchase && !autoPurchaseEnabled) || plan.NextExecutionDate == nil || !plan.NextExecutionDate.Before(now) {
 		return false
 	}
 	if plan.LastNotificationSent != nil && now.Sub(*plan.LastNotificationSent).Hours() < config.MinHoursBetweenNotifications {
 		return false
 	}
 	return now.Before(plan.NextExecutionDate.AddDate(0, 0, planGraceDays(&plan, global)+1))
+}
+
+func (m *Manager) failDueManualStep(ctx context.Context, plan *config.PurchasePlan) error {
+	if !plan.Enabled || plan.AutoPurchase {
+		return nil
+	}
+	var root *config.PurchaseExecution
+	if err := m.config.WithTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		root, err = m.dueManualRootTx(ctx, tx, plan.ID)
+		return err
+	}); err != nil {
+		return fmt.Errorf("failed to inspect due manual plan step: %w", err)
+	}
+	if root == nil {
+		return nil
+	}
+	err := m.failExistingPlanStep(ctx, root, "scheduled plan step reached its scheduled date without recommendations; no purchase was submitted")
+	if errors.Is(err, errExecutionNotNotifiable) {
+		return nil
+	}
+	return err
+}
+
+func (m *Manager) dueManualRootTx(ctx context.Context, tx pgx.Tx, planID string) (*config.PurchaseExecution, error) {
+	locked, err := m.config.LockPurchasePlanTx(ctx, tx, planID)
+	if err != nil {
+		return nil, err
+	}
+	if locked == nil || !locked.Enabled || locked.AutoPurchase {
+		return nil, nil
+	}
+	rows, err := m.config.ListExecutionsForPlanStepTx(ctx, tx, planID, locked.RampSchedule.CurrentStep+1)
+	if err != nil || len(rows) == 0 {
+		return nil, err
+	}
+	candidate, blocked := adoptableRootRow(rows)
+	if blocked == nil && len(candidate.Recommendations) == 0 && !candidate.ScheduledDate.After(time.Now()) {
+		return candidate, nil
+	}
+	return nil, nil
 }
 
 // errExecutionNotNotifiable marks an existing execution for the plan's date
@@ -250,7 +294,7 @@ func adoptableRootRow(rows []config.PurchaseExecution) (*config.PurchaseExecutio
 // from the stale read overwriting the approval. A won CAS returns the fresh
 // row, which is the one the error text is written onto.
 func (m *Manager) failExistingPlanStep(ctx context.Context, exec *config.PurchaseExecution, reason string) error {
-	failed, err := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{"pending", "notified"}, "failed", nil)
+	failed, err := m.config.TransitionExecutionStatusPinned(ctx, exec.ExecutionID, []string{"pending", "notified"}, "failed", nil, true)
 	if errors.Is(err, config.ErrNotFound) || errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
 		return fmt.Errorf("%w: %s changed state before it could be failed", errExecutionNotNotifiable, exec.ExecutionID)
 	}

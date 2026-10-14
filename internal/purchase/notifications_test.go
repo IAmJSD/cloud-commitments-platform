@@ -82,6 +82,7 @@ func TestManager_SendUpcomingPurchaseNotifications_NotAutoPurchase(t *testing.T)
 	}
 
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return(plans, nil)
+	expectStepRows(mockStore, &plans[0])
 
 	manager := &Manager{
 		config:       mockStore,
@@ -278,7 +279,7 @@ func TestManager_GetOrCreateExecution_ExistingBareRowIsFailedNotRotated(t *testi
 	expectStepRows(mockStore, plan, *bare)
 	failed := *bare
 	failed.Status = "failed"
-	mockStore.On("TransitionExecutionStatus", ctx, "bare-exec-id", []string{"pending", "notified"}, "failed", (*string)(nil)).Return(&failed, nil)
+	mockStore.On("TransitionExecutionStatusPinned", ctx, "bare-exec-id", []string{"pending", "notified"}, "failed", (*string)(nil), true).Return(&failed, nil)
 	mockStore.On("SavePurchaseExecution", ctx, &failed).Return(nil)
 
 	manager := &Manager{config: mockStore, resolver: &fakeResolver{err: planstep.ErrNoMatch}}
@@ -307,7 +308,7 @@ func TestManager_GetOrCreateExecution_ExistingBareRowApprovedMeanwhileIsNotOverw
 		ExecutionID: "bare-exec-id", PlanID: "plan-123", Status: "pending", StepNumber: 1, ScheduledDate: nextExec,
 	}
 	expectStepRows(mockStore, plan, *stale)
-	mockStore.On("TransitionExecutionStatus", ctx, "bare-exec-id", []string{"pending", "notified"}, "failed", (*string)(nil)).
+	mockStore.On("TransitionExecutionStatusPinned", ctx, "bare-exec-id", []string{"pending", "notified"}, "failed", (*string)(nil), true).
 		Return(nil, config.ErrExecutionNotInExpectedStatus)
 	// No SavePurchaseExecution expectation: an upsert here would clobber the approval.
 

@@ -259,3 +259,105 @@ func TestAttach_UnsupportedPlanFailsTheStepVisibly(t *testing.T) {
 	assert.Equal(t, "failed", saved[0].Status)
 	assert.Contains(t, saved[0].Error, "multi-step ramps do not support Savings Plans")
 }
+
+func TestAttach_ManualPlanRequiresExplicitRootAndHonorsOptionalCap(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		cap        *float64
+		root       bool
+		wantAttach bool
+	}{
+		{"no implicit row", nil, false, false},
+		{"manual without cap", nil, true, true},
+		{"manual exact cap", f64(240), true, true},
+		{"manual over cap", f64(239), true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plan := attachPlan(time.Now().Add(84*time.Hour), 1e6)
+			plan.AutoPurchase, plan.MaxStepCommitment = false, tc.cap
+			root := config.PurchaseExecution{ExecutionID: "manual-root", PlanID: plan.ID, Status: "pending", StepNumber: 1, ScheduledDate: *plan.NextExecutionDate}
+			var rows []config.PurchaseExecution
+			if tc.root {
+				rows = append(rows, root)
+			}
+			res := &fakeResolver{recs: attachRecs()}
+			m, store := attachManager(t, plan, plan, res, rows...)
+			for _, expected := range store.ExpectedCalls {
+				if expected.Method == "GetGlobalConfig" {
+					expected.Maybe()
+				}
+			}
+			store.On("SetExecutionRecommendationsIfEmptyTx", mock.Anything, mock.Anything, root.ExecutionID, mock.Anything, mock.Anything, mock.Anything).Return(true, nil).Maybe()
+			store.On("CreateSuppressionTx", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+			failed := root
+			failed.Status = "failed"
+			store.On("TransitionExecutionStatusPinned", mock.Anything, root.ExecutionID, []string{"pending", "notified"}, "failed", (*string)(nil), true).Return(&failed, nil).Maybe()
+			store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil).Maybe()
+			exec, _, _, err := m.getOrCreateExecution(context.Background(), plan)
+			if tc.wantAttach {
+				require.NoError(t, err)
+				require.Len(t, exec.Recommendations, 2)
+				assert.Equal(t, root.ExecutionID, exec.ExecutionID)
+				assert.Equal(t, root.ScheduledDate, exec.ScheduledDate)
+			} else {
+				require.ErrorIs(t, err, errExecutionNotNotifiable)
+				if !tc.root {
+					assert.Zero(t, res.calls.Load())
+				} else {
+					assert.Contains(t, err.Error(), "exceeds max_step_commitment")
+				}
+			}
+			store.AssertExpectations(t)
+		})
+	}
+}
+
+func TestManualDueStepCleanupWithoutEmailAfterLongDowntime(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		future     bool
+		lostClaim  bool
+		futurePlan bool
+	}{
+		{"due empty root", false, false, false},
+		{"attach wins race", false, true, false},
+		{"future root", true, false, false},
+		{"due root with future plan date", false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			plan := attachPlan(time.Now().Add(-20*24*time.Hour), 1)
+			plan.AutoPurchase = false
+			root := config.PurchaseExecution{ExecutionID: "due-root", PlanID: plan.ID, Status: "pending", StepNumber: 1, ScheduledDate: *plan.NextExecutionDate}
+			if tc.futurePlan {
+				next := time.Now().Add(20 * 24 * time.Hour)
+				plan.NextExecutionDate = &next
+			}
+			if tc.future {
+				root.ScheduledDate = time.Now().Add(time.Hour)
+			}
+			m, store := attachManager(t, plan, plan, &fakeResolver{}, root)
+			store.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{*plan}, nil)
+			failed := root
+			failed.Status = "failed"
+			if !tc.future {
+				if tc.lostClaim {
+					store.On("TransitionExecutionStatusPinned", ctx, root.ExecutionID, []string{"pending", "notified"}, "failed", (*string)(nil), true).Return(nil, config.ErrExecutionNotInExpectedStatus).Once()
+				} else {
+					store.On("TransitionExecutionStatusPinned", ctx, root.ExecutionID, []string{"pending", "notified"}, "failed", (*string)(nil), true).Return(&failed, nil).Once()
+					store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(row *config.PurchaseExecution) bool {
+						return row.ExecutionID == root.ExecutionID && row.NoSubmission && row.Status == "failed" && len(row.Recommendations) == 0 && row.ScheduledDate.Equal(root.ScheduledDate)
+					})).Return(nil).Once()
+				}
+			}
+			result, err := m.SendUpcomingPurchaseNotifications(ctx)
+			require.NoError(t, err)
+			assert.Zero(t, result.Notified)
+			assert.Zero(t, plan.RampSchedule.CurrentStep)
+			if tc.future || tc.lostClaim {
+				store.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+			}
+			store.AssertExpectations(t)
+		})
+	}
+}
