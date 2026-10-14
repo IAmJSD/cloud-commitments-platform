@@ -200,7 +200,7 @@ func TestCreatePlannedPurchases_ConcurrentCreatesMintOneStepEach(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, err := f.create(ctx, 1)
+			_, err := f.create(ctx, 2)
 			errs <- err
 		}()
 	}
@@ -226,6 +226,8 @@ func TestCreatePlannedPurchases_ConcurrentCreatesMintOneStepEach(t *testing.T) {
 
 	assert.Equal(t, 1, f.executionsForStep(ctx, t, 3),
 		"ramp step 3 must end with exactly one execution row, not one per racer")
+	assert.Equal(t, 1, f.executionsForStep(ctx, t, 4),
+		"the same winning transaction must also create step 4 exactly once")
 }
 
 // TestCreatePlannedPurchases_BlocksOnTheRampLockAndSeesTheWinner forces the

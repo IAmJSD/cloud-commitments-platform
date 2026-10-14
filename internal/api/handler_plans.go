@@ -458,7 +458,7 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 		return nil, err
 	}
 
-	if _, err := h.getPlanForPurchaseCreation(ctx, planID); err != nil {
+	if _, err = h.getPlanForPurchaseCreation(ctx, planID); err != nil {
 		return nil, err
 	}
 
@@ -469,7 +469,11 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 		return txErr
 	})
 	if err != nil {
-		if _, ok := IsClientError(err); ok || errors.Is(err, errNotFound) {
+		clientErr, isClient := IsClientError(err)
+		if isClient {
+			return nil, clientErr
+		}
+		if errors.Is(err, errNotFound) {
 			return nil, err
 		}
 		return nil, mapCreatePlanStorageError(err, "plan not found", "failed to schedule purchases", "createPlannedPurchases: transaction failed: %v", err)
