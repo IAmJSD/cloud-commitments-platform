@@ -1364,13 +1364,14 @@ func TestHandler_HandleRequest_CreatePlannedPurchases(t *testing.T) {
 	mockAuth.grantAdmin()
 	mockAuth.On("ValidateCSRFToken", ctx, mock.Anything, mock.Anything).Return(nil)
 
-	plan := &config.PurchasePlan{
-		ID:           "11111111-1111-1111-1111-111111111111",
-		Name:         "Test Plan",
-		RampSchedule: config.RampSchedule{StepIntervalDays: 7},
-	}
+	plan := bareStepAPIPlan()
+	plan.ID = "11111111-1111-1111-1111-111111111111"
+	plan.AutoPurchase = false
 
 	mockStore.On("GetPurchasePlan", mock.Anything, "11111111-1111-1111-1111-111111111111").Return(plan, nil)
+	mockStore.On("GetPlanAccounts", mock.Anything, plan.ID).Return([]config.CloudAccount{{Provider: "azure"}}, nil)
+	mockStore.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil).Times(2)
+	mockStore.On("UpdatePurchasePlan", mock.Anything, mock.Anything).Return(nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth, corsAllowedOrigin: "*", apiKey: "test-key"}
 
@@ -1381,7 +1382,7 @@ func TestHandler_HandleRequest_CreatePlannedPurchases(t *testing.T) {
 			"Authorization": "Bearer test-token",
 			"X-CSRF-Token":  "test-csrf",
 		},
-		Body: `{"count": 2, "start_date": "2024-12-01"}`,
+		Body: `{"count": 2, "start_date": "` + time.Now().AddDate(0, 0, 7).Format("2006-01-02") + `"}`,
 		RequestContext: events.LambdaFunctionURLRequestContext{
 			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
 				Method: "POST",
@@ -1392,8 +1393,8 @@ func TestHandler_HandleRequest_CreatePlannedPurchases(t *testing.T) {
 
 	resp, err := handler.HandleRequest(ctx, req)
 	require.NoError(t, err)
-	// Plan steps cannot carry recommendations yet (#609), so the route refuses.
-	assert.Equal(t, 409, resp.StatusCode)
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.JSONEq(t, `{"created":2}`, resp.Body)
 }
 
 // Tests for edge cases in getPlan.

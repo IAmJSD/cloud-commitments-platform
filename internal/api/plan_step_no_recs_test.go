@@ -2,8 +2,9 @@ package api
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
@@ -13,9 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Issue #609 (tier A). Plan steps carry no recommendations, so a step can
-// never buy anything. These tests use the reported plan: Azure compute, 1 year,
-// monthly payment, Auto-Purchase on.
+// The reported plan uses Azure compute, one year, monthly payment and a weekly ramp.
 
 const (
 	bareStepAPIPlanID = "11111111-1111-1111-1111-111111111609"
@@ -24,18 +23,19 @@ const (
 
 func bareStepAPIPlan() *config.PurchasePlan {
 	return &config.PurchasePlan{
-		ID:           bareStepAPIPlanID,
-		Name:         "Azure compute 80% weekly",
-		Enabled:      true,
-		AutoPurchase: true,
+		ID:                     bareStepAPIPlanID,
+		Name:                   "Azure compute 80% weekly",
+		Enabled:                true,
+		AutoPurchase:           true,
+		NotificationDaysBefore: 2,
 		Services: map[string]config.ServiceConfig{
-			"azure:compute": {Provider: "azure", Service: "compute", Term: 1, Payment: "monthly"},
+			"azure:compute": {Provider: "azure", Service: "compute", Enabled: true, Term: 1, Payment: "monthly", Coverage: 80},
 		},
-		RampSchedule: config.RampSchedule{CurrentStep: 0, TotalSteps: 4, StepIntervalDays: 7},
+		RampSchedule: config.RampSchedule{Type: "weekly", PercentPerStep: 25, CurrentStep: 0, TotalSteps: 4, StepIntervalDays: 7},
 	}
 }
 
-func TestAddPurchasesToPlanIsRefusedWhileStepsCannotCarryRecommendations(t *testing.T) {
+func TestAddPurchasesToPlanCreatesFutureRoots(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
@@ -46,26 +46,111 @@ func TestAddPurchasesToPlanIsRefusedWhileStepsCannotCarryRecommendations(t *test
 		Email:  "admin@example.com",
 	}, nil)
 	mockAuth.grantAdmin()
-	mockStore.On("GetPurchasePlan", ctx, bareStepAPIPlanID).Return(bareStepAPIPlan(), nil)
-	// Nothing may be written: reaching the transaction at all is the defect.
-	mockStore.On("WithTx", ctx, mock.AnythingOfType("func(pgx.Tx) error")).
-		Return(errors.New("transaction opened: the guard did not fire")).Maybe()
+	plan := bareStepAPIPlan()
+	plan.AutoPurchase = false
+	mockStore.On("GetPurchasePlan", ctx, bareStepAPIPlanID).Return(plan, nil)
+	mockStore.On("GetPlanAccounts", ctx, bareStepAPIPlanID).Return([]config.CloudAccount{{ID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", Provider: "azure"}}, nil)
+	mockStore.On("SavePurchaseExecution", ctx, mock.Anything).Return(nil).Times(4)
+	mockStore.On("UpdatePurchasePlan", ctx, mock.Anything).Return(nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer admin-token"},
-		Body:    `{"count": 4, "start_date": "2026-10-07"}`,
+		Body:    `{"count": 4, "start_date": "` + time.Now().AddDate(0, 0, 7).Format("2006-01-02") + `"}`,
 	}
 
 	result, err := handler.createPlannedPurchases(ctx, req, bareStepAPIPlanID)
 
-	require.Error(t, err, "Add Purchases must not create steps that cannot buy anything")
-	assert.Nil(t, result)
-	ce, ok := IsClientError(err)
-	require.True(t, ok, "expected a client error, got %v", err)
-	assert.Equal(t, 409, ce.code)
-	assert.Contains(t, ce.Error(), "#631")
-	mockStore.AssertNotCalled(t, "SavePurchaseExecutionTx")
+	require.NoError(t, err)
+	require.Equal(t, 4, result.Created)
+	mockStore.AssertExpectations(t)
+}
+
+func TestAddPurchasesValidatesLockedPlan(t *testing.T) {
+	tests := []struct {
+		name     string
+		change   func(*config.PurchasePlan)
+		switchOn bool
+		want     string
+	}{
+		{"disabled", func(p *config.PurchasePlan) { p.Enabled = false }, true, "enabled"},
+		{"missing auto cap", func(p *config.PurchasePlan) { p.MaxStepCommitment = nil }, true, "max_step_commitment"},
+		{"invalid cap", func(p *config.PurchasePlan) { v := 1.005; p.MaxStepCommitment = &v }, true, "decimal"},
+		{"switch off", func(*config.PurchasePlan) {}, false, "disabled globally"},
+		{"complete", func(p *config.PurchasePlan) { p.RampSchedule.CurrentStep = 4 }, true, "remaining"},
+		{"negative step", func(p *config.PurchasePlan) { p.RampSchedule.CurrentStep = -1 }, true, "negative"},
+		{"no interval", func(p *config.PurchasePlan) { p.RampSchedule.StepIntervalDays = 0 }, true, "positive"},
+		{"no veto", func(p *config.PurchasePlan) { p.NotificationDaysBefore = 0 }, true, "veto"},
+		{"ignored filter", func(p *config.PurchasePlan) {
+			s := p.Services["azure:compute"]
+			s.IncludeRegions = []string{"eastus"}
+			p.Services["azure:compute"] = s
+		}, true, "include_regions"},
+		{"automatic", func(*config.PurchasePlan) {}, true, ""},
+		{"manual switch off", func(p *config.PurchasePlan) { p.AutoPurchase = false; p.MaxStepCommitment = nil }, false, ""},
+		{"immediate", func(p *config.PurchasePlan) {
+			p.RampSchedule = config.RampSchedule{Type: "immediate", PercentPerStep: 100, TotalSteps: 1}
+		}, true, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			store := new(MockConfigStore)
+			plan := bareStepAPIPlan()
+			cap := 100.0
+			plan.MaxStepCommitment = &cap
+			tt.change(plan)
+			store.On("GetPurchasePlan", ctx, plan.ID).Return(plan, nil)
+			store.On("GetPlanAccounts", ctx, plan.ID).Return([]config.CloudAccount{{ID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", Provider: "azure"}}, nil).Maybe()
+			store.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{AutoPurchaseEnabled: tt.switchOn}, nil).Maybe()
+			if tt.want == "" {
+				store.On("SavePurchaseExecution", ctx, mock.Anything).Return(nil).Once()
+				store.On("UpdatePurchasePlan", ctx, mock.Anything).Return(nil).Once()
+			}
+			h := &Handler{config: store}
+			first := time.Now().AddDate(0, 0, 7)
+			n, err := h.createPlannedPurchasesTx(ctx, nil, plan.ID, 1, first, nil, &Session{UserID: apiKeyAdminUserID})
+			if tt.want != "" {
+				require.ErrorContains(t, err, tt.want)
+				assert.Zero(t, n)
+				store.AssertNotCalled(t, "SavePurchaseExecutionTx")
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, 1, n)
+				require.True(t, first.Equal(*plan.NextExecutionDate))
+			}
+		})
+	}
+}
+
+func TestAddPurchasesAnchorsPartlyCompletedRamp(t *testing.T) {
+	for _, step := range []int{0, 2} {
+		t.Run(fmt.Sprint(step), func(t *testing.T) {
+			ctx := context.Background()
+			store := new(MockConfigStore)
+			plan := bareStepAPIPlan()
+			plan.AutoPurchase = false
+			plan.RampSchedule.CurrentStep = step
+			older := time.Now().AddDate(0, 0, 1)
+			plan.NextExecutionDate = &older
+			first := time.Now().AddDate(0, 0, 10)
+			store.On("GetPurchasePlan", ctx, plan.ID).Return(plan, nil)
+			store.On("GetPlanAccounts", ctx, plan.ID).Return([]config.CloudAccount{{Provider: "azure"}}, nil)
+			var rows []config.PurchaseExecution
+			store.On("SavePurchaseExecution", ctx, mock.Anything).Run(func(a mock.Arguments) { rows = append(rows, *a.Get(1).(*config.PurchaseExecution)) }).Return(nil).Times(2)
+			store.On("UpdatePurchasePlan", ctx, mock.Anything).Return(nil)
+			h := &Handler{config: store}
+			_, err := h.createPlannedPurchasesTx(ctx, nil, plan.ID, 2, first, nil, &Session{UserID: apiKeyAdminUserID})
+			require.NoError(t, err)
+			require.Len(t, rows, 2)
+			assert.True(t, rows[0].ScheduledDate.Equal(first))
+			assert.True(t, rows[1].ScheduledDate.Equal(first.AddDate(0, 0, 7)))
+			assert.Equal(t, step+1, rows[0].StepNumber)
+			assert.True(t, first.Equal(*plan.NextExecutionDate))
+			plan.RampSchedule.CurrentStep++
+			assert.True(t, plan.RampSchedule.GetNextPurchaseDate().Equal(first.AddDate(0, 0, 7)))
+		})
+	}
 }
 
 func TestRetryOfBarePlanStepIsRefusedAndCreatesNothing(t *testing.T) {

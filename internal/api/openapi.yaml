@@ -446,8 +446,10 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: >
-            Plan steps cannot yet carry recommendations (platform#631), so no
-            purchases can be added to a plan. Purchase from Opportunities instead.
+            The plan is disabled, has unsupported scheduling settings, no target
+            accounts or insufficient remaining steps, or the requested steps are
+            occupied. Automatic plans also require a valid commitment cap and
+            the global automatic purchasing switch.
           content:
             application/json:
               schema:
