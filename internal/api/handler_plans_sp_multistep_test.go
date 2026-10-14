@@ -49,7 +49,7 @@ func TestCreatePlan_RejectsArmedMultiStepSavingsPlan(t *testing.T) {
 func TestMergeUpdatedPlan_RejectsArmedMultiStepSavingsPlan(t *testing.T) {
 	existing := &config.PurchasePlan{Name: "p", RampSchedule: config.RampSchedule{Type: "immediate", PercentPerStep: 100, TotalSteps: 1}}
 	_, err := mergeUpdatedPlan(existing, &PlanRequest{Name: "p", Provider: "aws", Service: "savingsplans",
-		RampSchedule: "weekly-25pct", Enabled: true, AutoPurchase: true}, "id")
+		RampSchedule: "weekly-25pct", Enabled: true, AutoPurchase: true}, "id", false)
 	requireSP400(t, err)
 }
 

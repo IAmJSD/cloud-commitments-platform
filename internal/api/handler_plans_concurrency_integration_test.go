@@ -15,6 +15,8 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +24,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
+	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -261,4 +264,104 @@ func TestCreatePlannedPurchases_CanceledStepIsReschedulable(t *testing.T) {
 	resp, err := f.create(ctx, 1)
 	require.NoError(t, err, "a step whose only rows were canceled must be reschedulable")
 	assert.Equal(t, 1, resp.Created)
+}
+
+func TestUpdatePlan_CapPresencePostgres(t *testing.T) {
+	cap100, cap5 := 100.0, 5.0
+	cases := []struct {
+		name   string
+		field  string
+		auto   bool
+		status int
+		want   *float64
+	}{
+		{"manual null clears", `,"max_step_commitment":null`, false, 200, nil},
+		{"omitted preserves", "", false, 200, &cap100},
+		{"numeric replaces", `,"max_step_commitment":5`, false, 200, &cap5},
+		{"automatic omitted preserves", "", true, 200, &cap100},
+		{"automatic numeric decreases", `,"max_step_commitment":5`, true, 200, &cap5},
+		{"automatic null refuses", `,"max_step_commitment":null`, true, 400, &cap100},
+		{"string refuses", `,"max_step_commitment":"5"`, false, 400, &cap100},
+		{"zero refuses", `,"max_step_commitment":0`, false, 400, &cap100},
+		{"negative refuses", `,"max_step_commitment":-1`, false, 400, &cap100},
+		{"precision refuses", `,"max_step_commitment":1.005`, false, 400, &cap100},
+		{"unknown remains ignored", `,"max_step_commitment":null,"future_field":false`, false, 200, nil},
+		{"case-insensitive null", `,"MAX_STEP_COMMITMENT":null`, false, 200, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			f := newCreateConcurrencyFixture(ctx, t)
+			plan, err := f.store.GetPurchasePlan(ctx, f.planID)
+			require.NoError(t, err)
+			plan.Enabled, plan.AutoPurchase = true, tc.auto
+			plan.NotificationDaysBefore = 2
+			plan.MaxStepCommitment = &cap100
+			plan.Services = map[string]config.ServiceConfig{"aws:ec2": {Provider: "aws", Service: "ec2", Enabled: true, Term: 1, Payment: "no-upfront", Coverage: 80}}
+			next := time.Now().AddDate(0, 0, 7)
+			plan.NextExecutionDate = &next
+			require.NoError(t, f.store.UpdatePurchasePlan(ctx, plan))
+			before, err := f.store.GetPurchasePlan(ctx, f.planID)
+			require.NoError(t, err)
+			auth := f.handler.auth.(*MockAuthService)
+			auth.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+			body := fmt.Sprintf(`{"name":"Concurrent Create Plan","provider":"aws","service":"ec2","term":1,"payment":"no-upfront","target_coverage":80,"ramp_schedule":"weekly-25pct","enabled":true,"auto_purchase":%t,"notification_days_before":2%s}`, tc.auto, tc.field)
+			req := &events.LambdaFunctionURLRequest{
+				Headers: map[string]string{"Authorization": "Bearer admin-token", "Content-Type": "application/json", "X-CSRF-Token": "test-csrf"}, Body: body,
+				RequestContext: events.LambdaFunctionURLRequestContext{HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "PUT", Path: "/api/plans/" + f.planID}},
+			}
+			response, err := f.handler.HandleRequest(ctx, req)
+			require.NoError(t, err)
+			require.Equal(t, tc.status, response.StatusCode, response.Body)
+			stored, err := f.store.GetPurchasePlan(ctx, f.planID)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, stored.MaxStepCommitment)
+			assert.Equal(t, tc.auto, stored.AutoPurchase)
+			assert.Equal(t, before.RampSchedule.CurrentStep, stored.RampSchedule.CurrentStep)
+			assert.True(t, before.RampSchedule.StartDate.Equal(stored.RampSchedule.StartDate))
+			assert.True(t, before.NextExecutionDate.Equal(*stored.NextExecutionDate))
+			req.RequestContext.HTTP.Method, req.Body = "GET", ""
+			response, err = f.handler.HandleRequest(ctx, req)
+			require.NoError(t, err)
+			require.Equal(t, 200, response.StatusCode, response.Body)
+			var returned config.PurchasePlan
+			require.NoError(t, json.Unmarshal([]byte(response.Body), &returned))
+			assert.Equal(t, tc.want, returned.MaxStepCommitment)
+		})
+	}
+}
+
+type concurrentCapStore struct{ config.StoreInterface }
+
+func (s concurrentCapStore) UpdatePurchasePlan(ctx context.Context, plan *config.PurchasePlan) error {
+	winner, err := s.GetPurchasePlan(ctx, plan.ID)
+	if err != nil {
+		return err
+	}
+	cap80 := 80.0
+	winner.MaxStepCommitment = &cap80
+	if err = s.StoreInterface.UpdatePurchasePlan(ctx, winner); err != nil {
+		return err
+	}
+	return s.StoreInterface.UpdatePurchasePlan(ctx, plan)
+}
+
+func TestUpdatePlan_CapNullPreservesConcurrentWinner(t *testing.T) {
+	ctx := context.Background()
+	f := newCreateConcurrencyFixture(ctx, t)
+	plan, err := f.store.GetPurchasePlan(ctx, f.planID)
+	require.NoError(t, err)
+	cap100 := 100.0
+	plan.MaxStepCommitment = &cap100
+	require.NoError(t, f.store.UpdatePurchasePlan(ctx, plan))
+	f.handler.auth.(*MockAuthService).On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	f.handler.config = concurrentCapStore{StoreInterface: f.store}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token", "Content-Type": "application/json", "X-CSRF-Token": "test-csrf"}, Body: `{"name":"Concurrent Create Plan","ramp_schedule":"weekly-25pct","enabled":false,"auto_purchase":false,"max_step_commitment":null}`, RequestContext: events.LambdaFunctionURLRequestContext{HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "PUT", Path: "/api/plans/" + f.planID}}}
+	response, err := f.handler.HandleRequest(ctx, req)
+	require.NoError(t, err)
+	require.Equal(t, 409, response.StatusCode, response.Body)
+	stored, err := f.store.GetPurchasePlan(ctx, f.planID)
+	require.NoError(t, err)
+	require.NotNil(t, stored.MaxStepCommitment)
+	assert.Equal(t, 80.0, *stored.MaxStepCommitment)
 }

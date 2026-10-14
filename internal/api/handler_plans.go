@@ -294,6 +294,12 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
+	var capField struct {
+		MaxStepCommitment json.RawMessage `json:"max_step_commitment"`
+	}
+	if err = json.Unmarshal([]byte(httpReq.Body), &capField); err != nil {
+		return nil, NewClientError(400, "invalid request body")
+	}
 
 	// Fetch existing plan to preserve data not sent in request. Do NOT wrap
 	// err with the raw plan UUID: a non-ClientError propagates to the router's
@@ -306,7 +312,7 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 			"updatePlan: GetPurchasePlan failed")
 	}
 
-	plan, err := mergeUpdatedPlan(existingPlan, &req, planID)
+	plan, err := mergeUpdatedPlan(existingPlan, &req, planID, capField.MaxStepCommitment != nil)
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +331,7 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 // mergeUpdatedPlan builds the plan an update request describes, carrying over
 // the state the request cannot express (timestamps, ramp progress, services)
 // from the stored plan, and validates it.
-func mergeUpdatedPlan(existingPlan *config.PurchasePlan, req *PlanRequest, planID string) (*config.PurchasePlan, error) {
+func mergeUpdatedPlan(existingPlan *config.PurchasePlan, req *PlanRequest, planID string, capPresent bool) (*config.PurchasePlan, error) {
 	// Create new plan from request
 	plan := req.toPurchasePlan()
 	plan.ID = planID
@@ -343,8 +349,11 @@ func mergeUpdatedPlan(existingPlan *config.PurchasePlan, req *PlanRequest, planI
 		return nil, err
 	}
 
-	if req.MaxStepCommitment == nil {
+	if req.MaxStepCommitment == nil && !capPresent {
 		plan.MaxStepCommitment = existingPlan.MaxStepCommitment
+	}
+	if capPresent && req.MaxStepCommitment == nil && plan.AutoPurchase {
+		return nil, NewClientError(400, "max_step_commitment cannot be cleared while auto_purchase is enabled")
 	}
 
 	// If no services were created from request, preserve existing services
