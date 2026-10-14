@@ -905,6 +905,10 @@ func (m *mockConfigStore) ListPlanCommittedTx(_ context.Context, _ pgx.Tx, _ str
 	return nil, nil
 }
 
+func (m *mockConfigStore) CompleteTargetMetStepTx(_ context.Context, _ pgx.Tx, _ string, _ int, _, _ string) error {
+	return nil
+}
+
 func (m *mockConfigStore) SetExecutionRecommendationsIfEmptyTx(_ context.Context, _ pgx.Tx, _ string, _ []config.RecommendationRecord, _, _ float64) (bool, error) {
 	return false, nil
 }

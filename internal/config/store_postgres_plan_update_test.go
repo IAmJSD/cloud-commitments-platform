@@ -18,6 +18,7 @@ func TestUpdatePurchasePlanPreservesTokenOnCommitFailure(t *testing.T) {
 	plan := &PurchasePlan{ID: "plan", UpdatedAt: readVersion}
 	commitErr := errors.New("commit failed")
 	mock.ExpectBegin()
+	mock.ExpectQuery("FOR UPDATE").WithArgs("plan").WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery(`UPDATE purchase_plans[\s\S]*WHERE id = \$1 AND updated_at = \$8[\s\S]*RETURNING updated_at`).
 		WithArgs(anyArgsCfg(12)...).
 		WillReturnRows(pgxmock.NewRows([]string{"updated_at"}).AddRow(readVersion.Add(time.Second)))
@@ -35,6 +36,7 @@ func TestUpdatePurchasePlanPropagatesConflictProbeFailure(t *testing.T) {
 	readVersion := plan.UpdatedAt
 	probeErr := errors.New("probe failed")
 	mock.ExpectBegin()
+	mock.ExpectQuery("FOR UPDATE").WithArgs(plan.ID).WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery("UPDATE purchase_plans").WithArgs(anyArgsCfg(12)...).
 		WillReturnRows(pgxmock.NewRows([]string{"updated_at"}))
 	mock.ExpectQuery("SELECT EXISTS").WithArgs(plan.ID).WillReturnError(probeErr)

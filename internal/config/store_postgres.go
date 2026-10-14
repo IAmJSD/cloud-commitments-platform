@@ -798,7 +798,25 @@ func (s *PostgresStore) persistRampPosition(ctx context.Context, tx pgx.Tx, plan
 func (s *PostgresStore) UpdatePurchasePlan(ctx context.Context, plan *PurchasePlan) error {
 	pending := *plan
 	if err := s.WithTx(ctx, func(tx pgx.Tx) error {
-		return s.UpdatePurchasePlanTx(ctx, tx, &pending)
+		old, err := s.LockPurchasePlanTx(ctx, tx, pending.ID)
+		if err != nil {
+			return err
+		}
+		if updErr := s.UpdatePurchasePlanTx(ctx, tx, &pending); updErr != nil {
+			return updErr
+		}
+		if old == nil || !rampBaselineStale(old, &pending) {
+			return nil
+		}
+		// After the update, never before: clearing bumps updated_at, which
+		// would fail the update's own optimistic-lock check.
+		err = tx.QueryRow(ctx,
+			`UPDATE purchase_plans SET ramp_baseline = NULL WHERE id = $1 AND ramp_baseline IS NOT NULL RETURNING updated_at`,
+			pending.ID).Scan(&pending.UpdatedAt)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("failed to clear ramp baseline of plan %s: %w", pending.ID, err)
+		}
+		return nil
 	}); err != nil {
 		return err
 	}

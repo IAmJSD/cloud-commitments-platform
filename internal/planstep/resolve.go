@@ -56,6 +56,10 @@ type Result struct {
 	// Skipped lists identities with no baseline at step > 1 (new recs, newly
 	// added accounts). They are never frozen at first sight: under-buy.
 	Skipped []string
+	// Target and Committed total the judged identities' cumulative target and
+	// what the plan already holds. Set only with ErrTargetMet, for the no-op
+	// row's note.
+	Target, Committed int
 }
 
 // ramp carries the cumulative-sizing inputs and accumulates its outputs.
@@ -155,17 +159,20 @@ func (r *ramp) targetMet(plan *config.PurchasePlan) bool {
 	if len(r.baseline) == 0 {
 		return false
 	}
-	judged := 0
+	judged, target, committed := 0, 0, 0
 	for key, base := range r.baseline {
 		svc, ok := planServiceOf(plan, key)
 		if !ok {
 			continue
 		}
 		judged++
-		if r.target(base.Count, svc.Coverage) > r.committed[key].Count {
+		t, c := r.target(base.Count, svc.Coverage), r.committed[key].Count
+		if t > c {
 			return false
 		}
+		target, committed = target+t, committed+c
 	}
+	r.out.Target, r.out.Committed = target, committed
 	return judged > 0
 }
 

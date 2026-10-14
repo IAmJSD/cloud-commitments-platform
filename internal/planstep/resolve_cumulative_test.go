@@ -101,6 +101,8 @@ func TestCumulativeTargetMet(t *testing.T) {
 		require.ErrorIs(t, err, ErrTargetMet)
 		assert.NotErrorIs(t, err, ErrNoMatch)
 		assert.Empty(t, res.Recs)
+		assert.Equal(t, 40, res.Target)
+		assert.Equal(t, committed, res.Committed)
 	}
 }
 

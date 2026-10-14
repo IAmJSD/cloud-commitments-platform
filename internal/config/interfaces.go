@@ -108,6 +108,11 @@ type StoreInterface interface {
 	// recommendation identity (see its implementation for the status rules).
 	// The caller holds LockPurchasePlanTx.
 	ListPlanCommittedTx(ctx context.Context, tx pgx.Tx, planID string) (map[string]PlanRampQuantity, error)
+	// CompleteTargetMetStepTx records a plan step whose cumulative target is
+	// already held as a completed no-op row (new, or rootID's empty root row
+	// completed in place) and advances the ramp over it in the same
+	// transaction. The caller holds LockPurchasePlanTx.
+	CompleteTargetMetStepTx(ctx context.Context, tx pgx.Tx, planID string, stepNumber int, rootID, note string) error
 	// SetExecutionRecommendationsIfEmptyTx attaches resolved recommendations
 	// and their totals to a pending/notified execution that has none yet.
 	// Returns false when another resolver already attached them (or the row
