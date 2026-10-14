@@ -16,6 +16,7 @@
 
 import { openNewPlanModal, closePlanModal, openAddPurchasesModal } from '../plans';
 import type { ToastOptions } from '../toast';
+import * as api from '../api';
 
 jest.mock('../api', () => ({
   getPlans: jest.fn(),
@@ -458,7 +459,7 @@ describe('Add Purchases modal: inline range validation (#771)', () => {
     ppList.id = 'planned-purchases-list';
     document.body.replaceChildren(plansList, ppList);
 
-    await openAddPurchasesModal('plan-xyz', 'My Test Plan');
+    await openAddPurchasesModal('plan-xyz', 'My Test Plan', 3);
   });
 
   function countInput(): HTMLInputElement {
@@ -623,14 +624,11 @@ describe('Add Purchases modal: inline range validation (#771)', () => {
 /**
  * The start-date input must have its `min` attribute set to today's ISO date
  * so the browser date-picker blocks past dates while still allowing today.
- * The default value stays tomorrow (to encourage scheduling ahead), but min
- * is today so a same-day purchase remains possible.
+ * The suggested value allows the plan's notice period, but min stays today.
  */
 describe('Add Purchases modal: start-date picker enforces future-only dates (QA 5.6)', () => {
   // Local-calendar ISO YYYY-MM-DD. Mirrors plans.ts toLocalDateInputValue.
-  // The production code must derive both `value` and `min` from local-time
-  // components (not toISOString, which is UTC) so a user west of UTC at
-  // 6pm local doesn't see "today" greyed out in the picker.
+  // The picker minimum stays local even though scheduled wire dates are UTC.
   function toLocalDateInputValue(d: Date): string {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -646,7 +644,7 @@ describe('Add Purchases modal: start-date picker enforces future-only dates (QA 
     ppList.id = 'planned-purchases-list';
     document.body.replaceChildren(plansList, ppList);
 
-    await openAddPurchasesModal('plan-xyz', 'My Test Plan');
+    await openAddPurchasesModal('plan-xyz', 'My Test Plan', 3);
   });
 
   it('sets min to today on the start-date input after the modal opens', () => {
@@ -656,11 +654,10 @@ describe('Add Purchases modal: start-date picker enforces future-only dates (QA 
     expect(input.min).toBe(toLocalDateInputValue(new Date()));
   });
 
-  it('keeps the default value set to tomorrow, not today', () => {
+  it('suggests a UTC date beyond the configured notice window', () => {
     const input = document.getElementById('add-purchases-start-date') as HTMLInputElement;
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    expect(input.value).toBe(toLocalDateInputValue(tomorrow));
+    const now = new Date();
+    expect(input.value).toBe(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 5)).toISOString().slice(0, 10));
   });
 
   it('uses the local calendar day, not UTC, so users west of UTC can still pick today', () => {
@@ -674,5 +671,58 @@ describe('Add Purchases modal: start-date picker enforces future-only dates (QA 
     const now = new Date();
     const localDay = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     expect(input.min).toBe(localDay);
+  });
+});
+
+describe('Add Purchases configured notice lead time', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    document.body.replaceChildren();
+  });
+  afterEach(() => jest.useRealTimers());
+
+  it.each([
+    [0, '2026-10-15T23:59:00Z', '2026-10-17'],
+    [1, '2026-12-31T23:59:00Z', '2027-01-03'],
+    [3, '2026-10-15T23:59:00Z', '2026-10-20'],
+    [30, '2026-01-31T23:59:00Z', '2026-03-04'],
+    [3, '2026-10-14T23:00:00-07:00', '2026-10-20'],
+    [3, '2026-10-15T00:01:00+14:00', '2026-10-19'],
+    [3, '2026-03-07T23:59:00-05:00', '2026-03-13'],
+    [3, '2026-10-24T23:59:00+02:00', '2026-10-29'],
+  ])('uses N=%s at %s to suggest %s', async (notice, now, expected) => {
+    jest.useFakeTimers({ now: new Date(now) });
+    await openAddPurchasesModal('plan-notice', 'Notice plan', notice);
+    expect((document.getElementById('add-purchases-start-date') as HTMLInputElement).value).toBe(expected);
+    expect(document.getElementById('add-purchases-date-help')?.textContent).toContain(`${notice}-day notification window`);
+    expect(document.querySelector('button[type="submit"]')).not.toBeDisabled();
+  });
+
+  it.each([undefined, NaN, Infinity, -1, 31, 1.5])('fails visibly for invalid notice %s', async notice => {
+    await openAddPurchasesModal('plan-notice', 'Notice plan', notice as number);
+    expect(document.getElementById('add-purchases-error')?.textContent).toContain('missing or invalid');
+    const count = document.getElementById('add-purchases-count') as HTMLInputElement;
+    count.dispatchEvent(new Event('input'));
+    expect(document.querySelector('button[type="submit"]')).toBeDisabled();
+    document.getElementById('add-purchases-form')?.dispatchEvent(new Event('submit', { cancelable: true }));
+    expect(api.createPlannedPurchases).not.toHaveBeenCalled();
+  });
+
+  it('preserves an earlier selected date and submits it while showing a warning', async () => {
+    jest.useFakeTimers({ now: new Date('2026-10-15T23:59:00Z') });
+    (api.createPlannedPurchases as jest.Mock).mockResolvedValue({});
+    (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+    await openAddPurchasesModal('plan-notice', 'Notice plan', 3);
+    const date = document.getElementById('add-purchases-start-date') as HTMLInputElement;
+    const minimum = date.min;
+    date.value = '2026-10-16';
+    date.dispatchEvent(new Event('input'));
+    expect(date.value).toBe('2026-10-16');
+    expect(date.min).toBe(minimum);
+    expect(document.getElementById('add-purchases-date-warning')?.textContent).toContain('may leave too little notice');
+    expect(document.querySelector('button[type="submit"]')).not.toBeDisabled();
+    document.getElementById('add-purchases-form')?.dispatchEvent(new Event('submit', { cancelable: true }));
+    expect(api.createPlannedPurchases).toHaveBeenCalledWith('plan-notice', 1, '2026-10-16');
+    await Promise.resolve();
   });
 });

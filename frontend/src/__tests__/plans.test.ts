@@ -2420,6 +2420,7 @@ describe('Plans Module', () => {
             name: 'Test Plan',
             enabled: true,
             auto_purchase: false,
+            notification_days_before: 3,
             services: {}
           }
         ]
@@ -2432,6 +2433,13 @@ describe('Plans Module', () => {
       addBtn?.click();
 
       await new Promise(resolve => setTimeout(resolve, 50));
+    });
+
+    test('default date leaves the displayed plan notification window intact', () => {
+      const now = new Date();
+      const expected = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 5));
+      const input = document.getElementById('add-purchases-start-date') as HTMLInputElement;
+      expect(input.value).toBe(expected.toISOString().slice(0, 10));
     });
 
     test('cancel button closes modal', async () => {

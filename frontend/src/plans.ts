@@ -1165,7 +1165,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           ` : ''}
         </div>
         <div class="plan-actions">
-          ${canAddPurchases && !isUnassigned ? `<button data-action="add-purchases" data-id="${escapeHtmlAttr(plan.id)}" data-name="${escapeHtmlAttr(plan.name)}" class="primary">Add Purchases</button>` : ''}
+          ${canAddPurchases && !isUnassigned ? `<button data-action="add-purchases" data-id="${escapeHtmlAttr(plan.id)}" data-name="${escapeHtmlAttr(plan.name)}" data-notification-days="${escapeHtmlAttr(String(plan.notification_days_before))}" class="primary">Add Purchases</button>` : ''}
           ${canManagePlan && !isUnassigned ? `<button data-action="edit-plan" data-id="${escapeHtmlAttr(plan.id)}">Edit</button>` : ''}
           <button data-action="view-history" data-id="${escapeHtmlAttr(plan.id)}" class="secondary">History</button>
           ${canDeletePlan ? `<button data-action="delete-plan" data-id="${escapeHtmlAttr(plan.id)}" class="danger">Delete</button>` : ''}
@@ -1240,7 +1240,7 @@ function renderPlans(plans: LocalPlan[]): void {
     toggle.addEventListener('change', () => void togglePlan(toggle.dataset['id'] || '', toggle.checked));
   });
   container.querySelectorAll<HTMLButtonElement>('[data-action="add-purchases"]').forEach(btn => {
-    btn.addEventListener('click', () => void openAddPurchasesModal(btn.dataset['id'] || '', btn.dataset['name'] || ''));
+    btn.addEventListener('click', () => void openAddPurchasesModal(btn.dataset['id'] || '', btn.dataset['name'] || '', Number(btn.dataset['notificationDays'])));
   });
   container.querySelectorAll<HTMLButtonElement>('[data-action="edit-plan"]').forEach(btn => {
     btn.addEventListener('click', () => void editPlan(btn.dataset['id'] || ''));
@@ -2206,7 +2206,7 @@ export function closePurchaseModal(): void {
 /**
  * Open modal to add planned purchases for a plan
  */
-export async function openAddPurchasesModal(planId: string, planName: string): Promise<void> {
+export async function openAddPurchasesModal(planId: string, planName: string, notificationDays: number): Promise<void> {
   // Remove existing modal if present
   document.getElementById('add-purchases-modal')?.remove();
 
@@ -2227,9 +2227,10 @@ export async function openAddPurchasesModal(planId: string, planName: string): P
           <p class="help-text">How many purchase steps to schedule (based on the plan's ramp schedule settings)</p>
 
           <label>Start Date:
-            <input type="date" id="add-purchases-start-date" required>
+            <input type="date" id="add-purchases-start-date" aria-describedby="add-purchases-date-help add-purchases-date-warning" required>
           </label>
-          <p class="help-text">When to schedule the first purchase. Subsequent purchases follow the plan's interval.</p>
+          <p id="add-purchases-date-help" class="help-text"></p>
+          <p id="add-purchases-date-warning" class="help-text" role="status"></p>
 
           <div id="add-purchases-error" class="error-message hidden"></div>
 
@@ -2243,23 +2244,36 @@ export async function openAddPurchasesModal(planId: string, planName: string): P
   `;
   document.body.appendChild(modal);
 
-  // Set default start date to tomorrow.
-  //
-  // Date inputs use the user's *local* calendar day, so we must build the
-  // ISO string from local components (toISOString returns UTC). For a user
-  // west of UTC on the evening of day D, `new Date().toISOString()` returns
-  // D+1's calendar date, which would make `min` reject "today" in the
-  // picker and contradict the QA 5.6 promise that same-day purchases stay
-  // selectable. Mirrors isPlanOverdue's local-midnight pattern above.
   const startDateInput = document.getElementById('add-purchases-start-date') as HTMLInputElement;
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  startDateInput.value = toLocalDateInputValue(tomorrow);
-  startDateInput.min = toLocalDateInputValue(new Date());
+  const now = new Date();
+  const validNotice = Number.isInteger(notificationDays) && notificationDays >= 0 && notificationDays <= 30;
+  startDateInput.min = toLocalDateInputValue(now);
+  if (validNotice) {
+    // The API parses date-only values at UTC midnight. The extra calendar
+    // day avoids opening just before the notification/veto overlap ends.
+    const suggested = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + notificationDays + 2)).toISOString().slice(0, 10);
+    startDateInput.value = suggested;
+    document.getElementById('add-purchases-date-help')!.textContent = `This plan has a ${notificationDays}-day notification window. Dates use midnight UTC; subsequent purchases follow the plan's interval.`;
+    const updateDateWarning = (): void => {
+      const selected = Date.parse(`${startDateInput.value}T00:00:00Z`);
+      document.getElementById('add-purchases-date-warning')!.textContent = selected < Date.now() + notificationDays * 24 * 60 * 60 * 1000
+        ? `This date may leave too little notice for recommendations to attach. Suggested start date: ${suggested}.`
+        : '';
+    };
+    startDateInput.addEventListener('input', updateDateWarning);
+    updateDateWarning();
+  } else {
+    const error = document.getElementById('add-purchases-error')!;
+    error.textContent = 'The plan notification window is missing or invalid. Reload the plan before scheduling purchases.';
+    error.classList.remove('hidden');
+  }
 
   // Add event listeners
   document.getElementById('add-purchases-cancel')?.addEventListener('click', closeAddPurchasesModal);
-  document.getElementById('add-purchases-form')?.addEventListener('submit', (e) => void handleAddPurchases(e));
+  document.getElementById('add-purchases-form')?.addEventListener('submit', (e) => {
+    if (validNotice) void handleAddPurchases(e);
+    else e.preventDefault();
+  });
 
   // Inline range validation on the count field: surfaces a
   // "Must be a whole number between 1 and 52" message under the input
@@ -2276,10 +2290,11 @@ export async function openAddPurchasesModal(planId: string, planName: string): P
   const submitBtn = modal.querySelector<HTMLButtonElement>('button[type="submit"]');
   if (countInput && submitBtn) {
     const syncSubmitBtn = (): void => {
-      submitBtn.disabled = countInput.getAttribute('aria-invalid') === 'true';
+      submitBtn.disabled = !validNotice || countInput.getAttribute('aria-invalid') === 'true';
     };
     countInput.addEventListener('input', syncSubmitBtn);
     countInput.addEventListener('blur', syncSubmitBtn);
+    syncSubmitBtn();
   }
 
   // Engage focus trap + Escape handler. The modal element itself is
