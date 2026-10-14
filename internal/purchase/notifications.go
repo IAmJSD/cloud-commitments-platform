@@ -191,6 +191,9 @@ func (m *Manager) getOrCreateExecution(ctx context.Context, plan *config.Purchas
 	if step.failedNew {
 		return nil, "", false, bareStepFailure(plan.ID, step.number, step.failureReason)
 	}
+	if step.targetMet {
+		return nil, "", false, fmt.Errorf("%w: step %d of plan %s already has its target and was completed as a no-op", errExecutionNotNotifiable, step.number, plan.ID)
+	}
 	if step.blocked != nil {
 		return nil, "", false, step.blocked
 	}
@@ -218,6 +221,7 @@ type stepClaim struct {
 	emptyRoot     *config.PurchaseExecution
 	blocked       error
 	failedNew     bool
+	targetMet     bool
 	failureReason string
 }
 
