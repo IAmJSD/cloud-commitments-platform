@@ -237,3 +237,25 @@ func TestPlanUnchanged_ComparesDatesAtMicrosecondPrecision(t *testing.T) {
 	locked.NextExecutionDate = &moved
 	assert.False(t, planUnchanged(listed, locked, providers), "a microsecond is a change")
 }
+
+// An already-armed multi-step Savings Plans plan (platform#631 Q7) must produce
+// one visible failed row with the reason, not an error on every tick.
+func TestAttach_UnsupportedPlanFailsTheStepVisibly(t *testing.T) {
+	listed := attachPlan(time.Now().Add(48*time.Hour), 1e6)
+	locked := attachPlan(*listed.NextExecutionDate, 1e6)
+	for _, p := range []*config.PurchasePlan{listed, locked} {
+		p.Services = map[string]config.ServiceConfig{"aws/savingsplans": {Enabled: true, Provider: "aws", Service: "savingsplans"}}
+		p.RampSchedule = config.RampSchedule{Type: "weekly", PercentPerStep: 25, TotalSteps: 4}
+	}
+	res := &fakeResolver{err: planstep.Precheck(locked)}
+	require.ErrorIs(t, res.err, planstep.ErrUnsupportedPlan)
+	m, store := attachManager(t, listed, locked, res)
+	store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
+
+	_, _, _, err := m.getOrCreateExecution(context.Background(), listed)
+	require.ErrorIs(t, err, errExecutionNotNotifiable)
+	saved := savedRows(store)
+	require.Len(t, saved, 1)
+	assert.Equal(t, "failed", saved[0].Status)
+	assert.Contains(t, saved[0].Error, "multi-step ramps do not support Savings Plans")
+}

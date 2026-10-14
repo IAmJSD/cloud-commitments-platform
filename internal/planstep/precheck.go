@@ -17,7 +17,8 @@ var ErrUnsupportedPlan = errors.New("plan settings are not supported by recommen
 // Precheck refuses, with a plan-specific error, the plan settings Resolve does
 // not apply: any Include*/Exclude*/MinCount filter on a service config (the
 // plan-step request never sets them, so honoring them would buy something other
-// than what the plan says), and an immediate ramp whose PercentPerStep is not
+// than what the plan says), an armed multi-step plan with a Savings Plans
+// service (platform#631 Q7), and an immediate ramp whose PercentPerStep is not
 // 100 (an immediate ramp ignores that field when validated but Resolve sizes
 // with it).
 func Precheck(plan *config.PurchasePlan) error {
@@ -35,6 +36,9 @@ func Precheck(plan *config.PurchasePlan) error {
 	if plan.RampSchedule.Type == "immediate" && plan.RampSchedule.PercentPerStep != 100 {
 		return fmt.Errorf("%w: plan %s has an immediate ramp with percent_per_step %v (must be 100)",
 			ErrUnsupportedPlan, plan.ID, plan.RampSchedule.PercentPerStep)
+	}
+	if err := plan.CheckNoMultiStepSavingsPlans(); err != nil {
+		return fmt.Errorf("%w: plan %s: %w", ErrUnsupportedPlan, plan.ID, err)
 	}
 	return nil
 }

@@ -17,6 +17,9 @@ func planWith(svc config.ServiceConfig, ramp config.RampSchedule) *config.Purcha
 func TestPrecheck(t *testing.T) {
 	ok := config.ServiceConfig{Provider: "aws", Service: "ec2", Enabled: true}
 	weekly := config.RampSchedule{Type: "weekly", PercentPerStep: 25}
+	sp := config.ServiceConfig{Provider: "aws", Service: "savingsplans", Enabled: true}
+	weekly4 := config.RampSchedule{Type: "weekly", PercentPerStep: 25, TotalSteps: 4}
+	armed := func(p *config.PurchasePlan) *config.PurchasePlan { p.Enabled, p.AutoPurchase = true, true; return p }
 	cases := []struct {
 		name string
 		plan *config.PurchasePlan
@@ -35,6 +38,9 @@ func TestPrecheck(t *testing.T) {
 		{"exclude types", planWith(withSvc(ok, func(s *config.ServiceConfig) { s.ExcludeTypes = []string{"m5.large"} }), weekly), "exclude_types"},
 		{"min count", planWith(withSvc(ok, func(s *config.ServiceConfig) { s.MinCount = 1 }), weekly), "min_count"},
 		{"negative min count", planWith(withSvc(ok, func(s *config.ServiceConfig) { s.MinCount = -1 }), weekly), "min_count"},
+		{"armed multi-step savings plan", armed(planWith(sp, weekly4)), "multi-step ramps do not support Savings Plans"},
+		{"armed single-step savings plan", armed(planWith(sp, config.RampSchedule{Type: "immediate", PercentPerStep: 100, TotalSteps: 1})), ""},
+		{"armed multi-step non-SP", armed(planWith(ok, weekly4)), ""},
 		{"filter on a disabled service still refuses", planWith(withSvc(ok, func(s *config.ServiceConfig) { s.Enabled = false; s.MinCount = 2 }), weekly), "min_count"},
 	}
 	for _, tc := range cases {

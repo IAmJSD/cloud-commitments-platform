@@ -156,6 +156,9 @@ func (m *Manager) attachStep(ctx context.Context, tx pgx.Tx, locked *config.Purc
 	if errors.Is(err, planstep.ErrTargetMet) {
 		return m.targetMet(ctx, tx, locked, claim, root, res)
 	}
+	if errors.Is(err, planstep.ErrUnsupportedPlan) {
+		return m.failStep(ctx, tx, locked, claim, root, err.Error())
+	}
 	if err != nil {
 		return stepClaim{}, fmt.Errorf("plan %s step %d: %w", locked.ID, claim.number, err)
 	}

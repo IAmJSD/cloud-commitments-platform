@@ -3,6 +3,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/mail"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 )
 
@@ -597,6 +599,29 @@ func (p *PurchasePlan) Validate() error {
 		}
 	}
 
+	return p.CheckNoMultiStepSavingsPlans()
+}
+
+// ErrMultiStepSavingsPlans marks an armed multi-step plan with an enabled
+// Savings Plans service. Step 1 suppresses the whole SP recommendation for 7
+// days, so later steps find nothing and the ramp strands (platform#631, Q7).
+// Read-only query for already-armed hits: runbooks/armed-multi-step-savings-plans-plans.md.
+var ErrMultiStepSavingsPlans = errors.New("multi-step ramps do not support Savings Plans: use a single-step (immediate) ramp or remove the Savings Plans service")
+
+// CheckNoMultiStepSavingsPlans refuses an armed (enabled and auto-purchase)
+// plan that has more than one ramp step and an enabled Savings Plans service.
+// It is the one definition, shared by plan validation (create, update, arm) and
+// the step precheck at attach. Single-step plans are unaffected.
+func (p *PurchasePlan) CheckNoMultiStepSavingsPlans() error {
+	if !p.Enabled || !p.AutoPurchase || p.RampSchedule.TotalSteps <= 1 {
+		return nil
+	}
+	for key := range p.Services {
+		svc := p.Services[key]
+		if svc.Enabled && common.IsSavingsPlan(common.ServiceType(svc.Service)) {
+			return fmt.Errorf("%w (service %q, total_steps %d)", ErrMultiStepSavingsPlans, key, p.RampSchedule.TotalSteps)
+		}
+	}
 	return nil
 }
 

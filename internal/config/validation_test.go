@@ -1109,3 +1109,39 @@ func TestLadderCapMicros(t *testing.T) {
 		assert.Error(t, err, in)
 	}
 }
+
+func TestPurchasePlan_CheckNoMultiStepSavingsPlans(t *testing.T) {
+	svc := func(name string, enabled bool) map[string]ServiceConfig {
+		return map[string]ServiceConfig{"aws/" + name: {Provider: "aws", Service: name, Enabled: enabled}}
+	}
+	cases := []struct {
+		name    string
+		enabled bool
+		auto    bool
+		steps   int
+		svcs    map[string]ServiceConfig
+		wantErr bool
+	}{
+		{"armed 4-step SP", true, true, 4, svc("savingsplans", true), true},
+		{"armed 2-step SP (boundary)", true, true, 2, svc("savingsplans", true), true},
+		{"armed 1-step SP", true, true, 1, svc("savingsplans", true), false},
+		{"armed 0-step SP", true, true, 0, svc("savingsplans", true), false},
+		{"armed 4-step compute SP", true, true, 4, svc("savings-plans-compute", true), true},
+		{"armed 4-step disabled SP service", true, true, 4, svc("savingsplans", false), false},
+		{"armed 4-step non-SP", true, true, 4, svc("rds", true), false},
+		{"not auto-purchase", true, false, 4, svc("savingsplans", true), false},
+		{"disabled", false, true, 4, svc("savingsplans", true), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &PurchasePlan{Enabled: tc.enabled, AutoPurchase: tc.auto, Services: tc.svcs,
+				RampSchedule: RampSchedule{TotalSteps: tc.steps}}
+			err := p.CheckNoMultiStepSavingsPlans()
+			if tc.wantErr {
+				require.ErrorIs(t, err, ErrMultiStepSavingsPlans)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
