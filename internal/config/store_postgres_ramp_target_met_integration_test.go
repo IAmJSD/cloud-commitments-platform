@@ -53,3 +53,78 @@ func TestCompleteTargetMetStepTx_RealPlan(t *testing.T) {
 	require.ErrorIs(t, err, ErrExecutionNotInExpectedStatus)
 	assert.Equal(t, 2, f.currentStep(ctx, t))
 }
+
+// G3: a zero-buy failed fan-out on the step refuses the target-met advance too.
+func TestTargetMet_TargetMetRefusedOverFailedFanOut(t *testing.T) {
+	ctx := context.Background()
+	f := newRampFixture(ctx, t, 1, 1, 4)
+	f.rowWithRecs(ctx, t, 2, &f.accounts[0], StatusFailed, true)
+	err := f.store.WithTx(ctx, func(tx pgx.Tx) error {
+		if _, err := f.store.LockPurchasePlanTx(ctx, tx, f.planID); err != nil {
+			return err
+		}
+		return f.store.CompleteTargetMetStepTx(ctx, tx, f.planID, 2, "", "target already met")
+	})
+	require.ErrorIs(t, err, ErrRampStepIncomplete)
+	assert.Equal(t, 1, f.currentStep(ctx, t))
+	var n int
+	require.NoError(t, f.store.db.QueryRow(ctx, `SELECT count(*) FROM purchase_executions WHERE plan_id=$1 AND pre_approval_skip_reason=$2`, f.planID, PreApprovalSkipRampTargetMet).Scan(&n))
+	assert.Equal(t, 0, n)
+}
+
+// A pending root that already carries attached recommendations is never completed as a no-op.
+func TestTargetMet_RootWithRecsNotCompleted(t *testing.T) {
+	ctx := context.Background()
+	f := newRampFixture(ctx, t, 1, 1, 4)
+	root := f.rowWithRecs(ctx, t, 2, nil, "pending", false, baselineRec(f.accounts[0], "m5.large", 5))
+	err := f.store.WithTx(ctx, func(tx pgx.Tx) error {
+		return f.store.CompleteTargetMetStepTx(ctx, tx, f.planID, 2, root.ExecutionID, "n")
+	})
+	require.ErrorIs(t, err, ErrExecutionNotInExpectedStatus)
+	assert.Equal(t, 1, f.currentStep(ctx, t))
+	var st string
+	require.NoError(t, f.store.db.QueryRow(ctx, `SELECT status FROM purchase_executions WHERE execution_id=$1`, root.ExecutionID).Scan(&st))
+	assert.Equal(t, "pending", st)
+}
+
+// The unknown-outcome count excludes failed rows that never submitted.
+func TestTargetMet_UnknownCountExcludesNoSubmission(t *testing.T) {
+	ctx := context.Background()
+	f := newRampFixture(ctx, t, 1, 1, 4)
+	r := baselineRec(f.accounts[0], "m5.large", 3)
+	f.rowWithRecs(ctx, t, 1, &f.accounts[0], StatusCompleted, false, r)
+	f.rowWithRecs(ctx, t, 1, &f.accounts[0], StatusFailed, true, r)
+	require.NoError(t, f.store.WithTx(ctx, func(tx pgx.Tx) error {
+		return f.store.CompleteTargetMetStepTx(ctx, tx, f.planID, 2, "", "met")
+	}))
+	var note string
+	require.NoError(t, f.store.db.QueryRow(ctx, `SELECT error FROM purchase_executions WHERE plan_id=$1 AND pre_approval_skip_reason=$2`, f.planID, PreApprovalSkipRampTargetMet).Scan(&note))
+	assert.Contains(t, note, "; 0 failed row(s) of unknown outcome")
+}
+
+// A failed, submitted row whose recommendations are JSON null (scalar) must not break the count.
+func TestTargetMet_UnknownCountScalarRecs(t *testing.T) {
+	ctx := context.Background()
+	f := newRampFixture(ctx, t, 1, 1, 4)
+	r := baselineRec(f.accounts[0], "m5.large", 3)
+	f.rowWithRecs(ctx, t, 1, &f.accounts[0], StatusCompleted, false, r)
+	f.rowWithRecs(ctx, t, 1, &f.accounts[0], StatusFailed, false)
+	var typ string
+	require.NoError(t, f.store.db.QueryRow(ctx, `SELECT coalesce(jsonb_typeof(recommendations),'sqlnull') FROM purchase_executions WHERE plan_id=$1 AND status=$2`, f.planID, StatusFailed).Scan(&typ))
+	t.Logf("recommendations jsonb type of the failed row: %s", typ)
+	require.NoError(t, f.store.WithTx(ctx, func(tx pgx.Tx) error {
+		return f.store.CompleteTargetMetStepTx(ctx, tx, f.planID, 2, "", "met")
+	}))
+}
+
+// A pre-created empty root (recommendations JSON null) completes in place.
+func TestTargetMet_NullRootCompletes(t *testing.T) {
+	ctx := context.Background()
+	f := newRampFixture(ctx, t, 1, 1, 4)
+	f.rowWithRecs(ctx, t, 1, &f.accounts[0], StatusCompleted, false, baselineRec(f.accounts[0], "m5.large", 3))
+	root := f.rowWithRecs(ctx, t, 2, nil, "pending", false)
+	require.NoError(t, f.store.WithTx(ctx, func(tx pgx.Tx) error {
+		return f.store.CompleteTargetMetStepTx(ctx, tx, f.planID, 2, root.ExecutionID, "met")
+	}))
+	assert.Equal(t, 2, f.currentStep(ctx, t))
+}
