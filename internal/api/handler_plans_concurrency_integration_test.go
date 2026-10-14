@@ -53,8 +53,10 @@ func newCreateConcurrencyFixture(ctx context.Context, t *testing.T) *createConcu
 	store := config.NewPostgresStore(container.DB)
 
 	plan := &config.PurchasePlan{
-		Name:     "Concurrent Create Plan",
-		Services: map[string]config.ServiceConfig{},
+		Name:                   "Concurrent Create Plan",
+		Enabled:                true,
+		NotificationDaysBefore: 2,
+		Services:               map[string]config.ServiceConfig{"azure:compute": {Provider: "azure", Service: "compute", Enabled: true, Term: 1, Payment: "monthly", Coverage: 80}},
 		RampSchedule: config.RampSchedule{
 			Type: "weekly", PercentPerStep: 25, StepIntervalDays: 7,
 			CurrentStep: 2, TotalSteps: 4, StartDate: time.Now().AddDate(0, 0, -14),
@@ -63,7 +65,7 @@ func newCreateConcurrencyFixture(ctx context.Context, t *testing.T) *createConcu
 	require.NoError(t, store.CreatePurchasePlan(ctx, plan))
 
 	acct := &config.CloudAccount{
-		Name: "acct-a", Provider: "aws", ExternalID: "333333333333", Enabled: true,
+		Name: "acct-a", Provider: "azure", ExternalID: "fixture-subscription-a", Enabled: true,
 	}
 	require.NoError(t, store.CreateCloudAccount(ctx, acct))
 	require.NoError(t, store.SetPlanAccounts(ctx, plan.ID, []string{acct.ID}))
@@ -91,22 +93,80 @@ func newCreateConcurrencyFixture(ctx context.Context, t *testing.T) *createConcu
 	}
 }
 
-// create creates `count` steps through createPlannedPurchasesTx, the path
-// POST /plans/{id}/purchases used to reach. The handler itself refuses
-// unconditionally while plan steps cannot carry recommendations (platform#609,
-// tier A), so the ramp lock and guard are driven here directly.
+// create exercises authentication and scheduling against the real store.
 func (f *createConcurrencyFixture) create(ctx context.Context, count int) (*CreatePlannedPurchasesResponse, error) {
-	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	created := 0
-	err := f.store.WithTx(ctx, func(tx pgx.Tx) error {
-		n, txErr := f.handler.createPlannedPurchasesTx(ctx, tx, f.planID, count, start, nil)
-		created = n
-		return txErr
-	})
+	body, err := json.Marshal(CreatePlannedPurchasesRequest{Count: count, StartDate: time.Now().AddDate(0, 0, 7).Format("2006-01-02")})
 	if err != nil {
 		return nil, err
 	}
-	return &CreatePlannedPurchasesResponse{Created: created}, nil
+	return f.handler.createPlannedPurchases(ctx, &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token"}, Body: string(body)}, f.planID)
+}
+
+type membershipChangingStore struct {
+	config.StoreInterface
+	beforeLock func() error
+}
+
+func (s membershipChangingStore) LockPurchasePlanTx(ctx context.Context, tx pgx.Tx, id string) (*config.PurchasePlan, error) {
+	if err := s.beforeLock(); err != nil {
+		return nil, err
+	}
+	return s.StoreInterface.LockPurchasePlanTx(ctx, tx, id)
+}
+
+func TestCreatePlannedPurchases_MembershipChangesBeforeLock(t *testing.T) {
+	ctx := context.Background()
+	f := newCreateConcurrencyFixture(ctx, t)
+	accounts, err := f.store.GetPlanAccounts(ctx, f.planID)
+	require.NoError(t, err)
+	inaccessible := &config.CloudAccount{Name: "acct-b", Provider: "azure", ExternalID: "fixture-subscription-b", Enabled: true}
+	require.NoError(t, f.store.CreateCloudAccount(ctx, inaccessible))
+	var userID string
+	require.NoError(t, f.pool.QueryRow(ctx, `SELECT id FROM users WHERE email='creator@example.com'`).Scan(&userID))
+	auth := new(MockAuthService)
+	auth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{UserID: userID}, nil)
+	auth.grantScoped(accounts[0].ID)
+	f.handler.auth = auth
+	f.handler.config = membershipChangingStore{StoreInterface: f.store, beforeLock: func() error {
+		return f.store.SetPlanAccounts(ctx, f.planID, []string{inaccessible.ID})
+	}}
+	_, err = f.create(ctx, 1)
+	require.ErrorIs(t, err, errNotFound)
+	assert.Zero(t, f.executionsForStep(ctx, t, 3))
+}
+
+func TestCreatePlannedPurchases_RoutedDatesAndRollback(t *testing.T) {
+	ctx := context.Background()
+	f := newCreateConcurrencyFixture(ctx, t)
+	auth := f.handler.auth.(*MockAuthService)
+	auth.On("ValidateCSRFToken", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+	first := time.Now().AddDate(0, 0, 7).UTC().Truncate(24 * time.Hour)
+	request := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-token", "X-CSRF-Token": "test-csrf", "Content-Type": "application/json"},
+		Body:           `{"count":2,"start_date":"` + first.Format("2006-01-02") + `"}`,
+		RequestContext: events.LambdaFunctionURLRequestContext{HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "POST", Path: "/api/plans/" + f.planID + "/purchases"}}}
+	// Fail the second insert in this dedicated test database, proving atomic rollback.
+	_, err := f.pool.Exec(ctx, `CREATE FUNCTION fail_step_four() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.step_number = 4 THEN RAISE EXCEPTION 'injected failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER fail_step_four BEFORE INSERT ON purchase_executions FOR EACH ROW EXECUTE FUNCTION fail_step_four()`)
+	require.NoError(t, err)
+	response, err := f.handler.HandleRequest(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, 500, response.StatusCode)
+	assert.Zero(t, f.executionsForStep(ctx, t, 3))
+	_, err = f.pool.Exec(ctx, `ALTER TABLE purchase_executions DISABLE TRIGGER fail_step_four`)
+	require.NoError(t, err)
+	response, err = f.handler.HandleRequest(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, 200, response.StatusCode)
+	assert.JSONEq(t, `{"created":2}`, response.Body)
+	var scheduled time.Time
+	var creator *string
+	require.NoError(t, f.pool.QueryRow(ctx, `SELECT scheduled_date, created_by_user_id FROM purchase_executions WHERE plan_id=$1 AND step_number=3`, f.planID).Scan(&scheduled, &creator))
+	assert.True(t, first.Equal(scheduled))
+	require.NotNil(t, creator)
+	plan, err := f.store.GetPurchasePlan(ctx, f.planID)
+	require.NoError(t, err)
+	assert.True(t, first.Equal(*plan.NextExecutionDate))
+	plan.RampSchedule.CurrentStep++
+	assert.True(t, plan.RampSchedule.GetNextPurchaseDate().Equal(first.AddDate(0, 0, 7)))
 }
 
 // executionsForStep counts the plan's execution rows stamped with step.
@@ -140,7 +200,7 @@ func TestCreatePlannedPurchases_ConcurrentCreatesMintOneStepEach(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, err := f.create(ctx, 1)
+			_, err := f.create(ctx, 2)
 			errs <- err
 		}()
 	}
@@ -166,6 +226,8 @@ func TestCreatePlannedPurchases_ConcurrentCreatesMintOneStepEach(t *testing.T) {
 
 	assert.Equal(t, 1, f.executionsForStep(ctx, t, 3),
 		"ramp step 3 must end with exactly one execution row, not one per racer")
+	assert.Equal(t, 1, f.executionsForStep(ctx, t, 4),
+		"the same winning transaction must also create step 4 exactly once")
 }
 
 // TestCreatePlannedPurchases_BlocksOnTheRampLockAndSeesTheWinner forces the

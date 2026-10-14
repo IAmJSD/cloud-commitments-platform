@@ -11,6 +11,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/planstep"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -432,7 +433,6 @@ func (h *Handler) deletePlan(ctx context.Context, req *events.LambdaFunctionURLR
 	return map[string]string{"status": "deleted"}, nil
 }
 
-//nolint:unparam // the response is nil only while steps cannot carry recommendations (platform#609); tier B returns it again
 func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.LambdaFunctionURLRequest, planID string) (*CreatePlannedPurchasesResponse, error) {
 	if err := validateUUID(planID); err != nil {
 		return nil, err
@@ -453,25 +453,32 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 		return nil, err
 	}
 
-	// Parsed only so malformed input still gets its specific 400 before the
-	// tier-A refusal below.
-	if _, _, err = h.parseCreatePurchasesRequest(httpReq.Body); err != nil {
+	req, startDate, err := h.parseCreatePurchasesRequest(httpReq.Body)
+	if err != nil {
 		return nil, err
 	}
 
-	if _, err := h.getPlanForPurchaseCreation(ctx, planID); err != nil {
+	if _, err = h.getPlanForPurchaseCreation(ctx, planID); err != nil {
 		return nil, err
 	}
 
-	// Issue #609 (tier A): nothing attaches recommendations to a plan step, so
-	// every step this endpoint minted was a bare row that could never buy
-	// anything yet showed up as healthy. Refuse until steps can carry
-	// recommendations (tier B). createPlannedPurchasesTx and
-	// createPurchaseExecutionsTx stay in place for that change; the handler no
-	// longer reaches them, so the creator stamp (#950), the single transaction
-	// and the ramp lock (#1861) are exercised through them directly in tests.
-	return nil, NewClientError(409,
-		"plan steps cannot yet carry recommendations (tracked in platform#631), so no purchases can be added to a plan; purchase from Opportunities instead")
+	created := 0
+	err = h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		var txErr error
+		created, txErr = h.createPlannedPurchasesTx(ctx, tx, planID, req.Count, startDate, resolveCreatorUserID(session), session)
+		return txErr
+	})
+	if err != nil {
+		clientErr, isClient := IsClientError(err)
+		if isClient {
+			return nil, clientErr
+		}
+		if errors.Is(err, errNotFound) {
+			return nil, err
+		}
+		return nil, mapCreatePlanStorageError(err, "plan not found", "failed to schedule purchases", "createPlannedPurchases: transaction failed: %v", err)
+	}
+	return &CreatePlannedPurchasesResponse{Created: created}, nil
 }
 
 // createPlannedPurchasesTx is the transactional body of createPlannedPurchases:
@@ -485,7 +492,7 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 // two creates both see the step free and each mints a root row for it, and
 // approving both re-fans-out over accounts that already bought. CompletePlanStep
 // takes this same lock, so a completion cannot interleave either.
-func (h *Handler) createPlannedPurchasesTx(ctx context.Context, tx pgx.Tx, planID string, count int, startDate time.Time, creator *string) (int, error) {
+func (h *Handler) createPlannedPurchasesTx(ctx context.Context, tx pgx.Tx, planID string, count int, startDate time.Time, creator *string, session *Session) (int, error) {
 	plan, err := h.config.LockPurchasePlanTx(ctx, tx, planID)
 	if err != nil {
 		logging.Errorf("createPlannedPurchases: LockPurchasePlanTx failed (plan=%s): %v", planID, err)
@@ -493,6 +500,12 @@ func (h *Handler) createPlannedPurchasesTx(ctx context.Context, tx pgx.Tx, planI
 	}
 	if plan == nil {
 		return 0, NewClientError(404, "plan not found")
+	}
+	if err := h.requirePlanMutationAccess(ctx, session, planID); err != nil {
+		return 0, err
+	}
+	if err := h.validatePurchaseScheduling(ctx, plan, count, startDate); err != nil {
+		return 0, err
 	}
 
 	if refuseErr := h.refuseOccupiedRampSteps(ctx, tx, plan, planID, count); refuseErr != nil {
@@ -507,6 +520,65 @@ func (h *Handler) createPlannedPurchasesTx(ctx context.Context, tx pgx.Tx, planI
 		return 0, planErr
 	}
 	return created, nil
+}
+
+func (h *Handler) validatePurchaseScheduling(ctx context.Context, plan *config.PurchasePlan, count int, startDate time.Time) error {
+	if !plan.Enabled {
+		return NewClientError(409, "plan must be enabled before purchases can be scheduled")
+	}
+	if err := validateScheduledRamp(plan, count); err != nil {
+		return err
+	}
+	accounts, err := h.config.GetPlanAccounts(ctx, plan.ID)
+	if err != nil {
+		return err
+	}
+	if len(accounts) == 0 {
+		return NewClientError(409, "plan must have target accounts before purchases can be scheduled")
+	}
+	if plan.AutoPurchase {
+		if err := h.requireAutomaticScheduling(ctx, plan); err != nil {
+			return err
+		}
+	}
+	if !startDate.After(time.Now()) {
+		return NewClientError(400, "start_date must be in the future")
+	}
+	return nil
+}
+
+func validateScheduledRamp(plan *config.PurchasePlan, count int) error {
+	if err := plan.Validate(); err != nil {
+		return NewClientError(409, fmt.Sprintf("plan cannot be scheduled: %v", err))
+	}
+	if err := planstep.Precheck(plan); err != nil {
+		return NewClientError(409, err.Error())
+	}
+	if err := plan.RequireVetoWindow(); err != nil {
+		return NewClientError(409, err.Error())
+	}
+	ramp := plan.RampSchedule
+	if count > ramp.TotalSteps-ramp.CurrentStep || (ramp.Type == "immediate" && ramp.TotalSteps != 1) {
+		return NewClientError(409, "count exceeds the plan's remaining ramp steps")
+	}
+	if ramp.Type != "immediate" && ramp.StepIntervalDays <= 0 {
+		return NewClientError(409, "step interval must be positive for scheduled ramp purchases")
+	}
+	return nil
+}
+
+func (h *Handler) requireAutomaticScheduling(ctx context.Context, plan *config.PurchasePlan) error {
+	if plan.MaxStepCommitment == nil {
+		return NewClientError(409, "automatic plans require max_step_commitment")
+	}
+	global, err := h.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if global == nil || !global.AutoPurchaseEnabled {
+		return NewClientError(409, "automatic purchasing is disabled globally")
+	}
+	return nil
 }
 
 // refuseOccupiedRampSteps blocks a create whose steps overlap one that is
@@ -608,9 +680,6 @@ func (h *Handler) getPlanForPurchaseCreation(ctx context.Context, planID string)
 // reachable only by admin / update-any holders.
 func (h *Handler) createPurchaseExecutionsTx(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan, planID string, count int, startDate time.Time, creator *string) (int, error) {
 	intervalDays := plan.RampSchedule.StepIntervalDays
-	if intervalDays == 0 {
-		intervalDays = 7 // Default to weekly if not set
-	}
 
 	created := 0
 	for i := 0; i < count; i++ {
@@ -642,11 +711,10 @@ func (h *Handler) createPurchaseExecutionsTx(ctx context.Context, tx pgx.Tx, pla
 // inside the caller's transaction so it commits atomically with the
 // SavePurchaseExecutionTx writes from createPurchaseExecutionsTx.
 func (h *Handler) updatePlanNextExecutionDateTx(ctx context.Context, tx pgx.Tx, plan *config.PurchasePlan, startDate time.Time) error {
-	if plan.NextExecutionDate == nil || plan.NextExecutionDate.After(startDate) {
-		plan.NextExecutionDate = &startDate
-		if err := h.config.UpdatePurchasePlanTx(ctx, tx, plan); err != nil {
-			return fmt.Errorf("failed to update plan: %w", err)
-		}
+	plan.RampSchedule.StartDate = startDate.AddDate(0, 0, -plan.RampSchedule.CurrentStep*plan.RampSchedule.StepIntervalDays)
+	plan.NextExecutionDate = &startDate
+	if err := h.config.UpdatePurchasePlanTx(ctx, tx, plan); err != nil {
+		return fmt.Errorf("failed to update plan: %w", err)
 	}
 	return nil
 }

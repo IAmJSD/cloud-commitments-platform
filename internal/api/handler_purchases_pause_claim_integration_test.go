@@ -102,6 +102,8 @@ func newPauseClaimFixture(t *testing.T) *pauseClaimFixture {
 	account.Enabled = true
 	account.AWSAuthMode = "access_keys"
 	require.NoError(t, f.store.UpdateCloudAccount(ctx, &account))
+	_, err = f.pool.Exec(ctx, `UPDATE cloud_accounts SET provider = 'aws', external_id = '333333333333' WHERE id = $1`, account.ID)
+	require.NoError(t, err)
 	var creator string
 	require.NoError(t, f.pool.QueryRow(ctx, "SELECT id::text FROM users WHERE email='creator@example.com'").Scan(&creator))
 	plan, err = f.store.GetPurchasePlan(ctx, plan.ID)
@@ -111,6 +113,7 @@ func newPauseClaimFixture(t *testing.T) *pauseClaimFixture {
 	persistedAccount, err := f.store.GetCloudAccount(ctx, account.ID)
 	require.NoError(t, err)
 	require.True(t, persistedAccount.Enabled)
+	require.Equal(t, "aws", persistedAccount.Provider)
 	require.Equal(t, "access_keys", persistedAccount.AWSAuthMode)
 	f.service = &pauseClaimService{entered: make(chan struct{}), release: make(chan struct{})}
 	f.manager = purchase.NewManager(purchase.ManagerConfig{

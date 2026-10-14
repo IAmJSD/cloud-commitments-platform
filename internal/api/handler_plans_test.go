@@ -721,17 +721,28 @@ func TestHandler_updatePlan_InvalidBody(t *testing.T) {
 
 // MockAuthService is a mock implementation of AuthServiceInterface
 
-// createStepsViaTx drives the transactional step-creation path
-// (createPlannedPurchasesTx) that POST /plans/{id}/purchases used to reach.
-// The handler now refuses unconditionally (platform#609, tier A), so the
-// behavior these tests pin (creator stamping #950, single transaction, ramp
-// guard #1861) is exercised here until tier B restores the endpoint.
+// createStepsViaTx isolates transactional creator, rollback and occupied-step behavior.
 func createStepsViaTx(ctx context.Context, h *Handler, count int, creator *string) (int, error) {
 	const planID = "11111111-1111-1111-1111-111111111111"
-	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	plan, err := h.config.GetPurchasePlan(ctx, planID)
+	if err != nil {
+		return 0, err
+	}
+	plan.Enabled = true
+	plan.NotificationDaysBefore = 1
+	plan.RampSchedule.Type = "weekly"
+	plan.RampSchedule.PercentPerStep = 25
+	plan.RampSchedule.TotalSteps = 52
+	plan.Services = map[string]config.ServiceConfig{"azure:compute": {Provider: "azure", Service: "compute", Enabled: true, Term: 1, Payment: "monthly", Coverage: 80}}
+	if store, ok := h.config.(*MockConfigStore); ok {
+		store.GetPlanAccountsFn = func(context.Context, string) ([]config.CloudAccount, error) {
+			return []config.CloudAccount{{Provider: "azure"}}, nil
+		}
+	}
+	start := time.Now().AddDate(0, 0, 7)
 	created := 0
-	err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
-		n, txErr := h.createPlannedPurchasesTx(ctx, tx, planID, count, start, creator)
+	err = h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		n, txErr := h.createPlannedPurchasesTx(ctx, tx, planID, count, start, creator, &Session{UserID: apiKeyAdminUserID})
 		created = n
 		return txErr
 	})
