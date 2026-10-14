@@ -919,7 +919,8 @@ function setupFeedbackLink(): void {
   const feedbackEmail = 'contact@leanercloud.com';
   const subject = 'CUDly Feedback';
 
-  const body = `Hi CUDly Team,
+  const refreshFeedbackLink = (): void => {
+    const body = `Hi CUDly Team,
 
 I'd like to share some feedback about CUDly:
 
@@ -967,6 +968,12 @@ Please attach any relevant screenshots to this email.
 Thank you for helping us improve CUDly!
 `;
 
-  const mailtoUrl = `mailto:${feedbackEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-  feedbackLink.href = mailtoUrl;
+    const mailtoUrl = `mailto:${feedbackEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    feedbackLink.href = mailtoUrl;
+  };
+
+  refreshFeedbackLink();
+  feedbackLink.onclick = refreshFeedbackLink;
+  feedbackLink.onfocus = refreshFeedbackLink;
+  feedbackLink.oncontextmenu = refreshFeedbackLink;
 }

@@ -163,6 +163,63 @@ describe('App Module', () => {
   });
 
   describe('setupEventListeners', () => {
+    describe('feedback context', () => {
+      let originalURL: string;
+      let link: HTMLAnchorElement;
+
+      beforeEach(() => {
+        originalURL = window.location.href;
+        jest.useFakeTimers().setSystemTime(new Date('2026-10-13T23:59:00Z'));
+        window.history.replaceState(null, '', '/purchases');
+        document.body.innerHTML = '<a id="feedback-link">Feedback</a>';
+        link = document.getElementById('feedback-link') as HTMLAnchorElement;
+        link.addEventListener('click', event => event.preventDefault());
+        setupEventListeners();
+      });
+
+      afterEach(() => {
+        jest.useRealTimers();
+        jest.restoreAllMocks();
+        window.history.replaceState(null, '', originalURL);
+      });
+
+      function expectContext(date: string): void {
+        const params = new URLSearchParams(link.href.split('?')[1]);
+        expect(link.href).toMatch(/^mailto:/);
+        expect(params.get('subject')).toBe('CUDly Feedback');
+        expect(params.get('body')).toContain('## Steps to Reproduce (for bugs)');
+        expect(params.get('body')).toContain(`- Browser: ${navigator.userAgent}`);
+        expect(params.get('body')).toContain(`- URL: ${window.location.href}`);
+        expect(params.get('body')).toContain(`- Date: ${date}`);
+      }
+
+      test('provides initial feedback context', () => {
+        expectContext('2026-10-13T23:59:00.000Z');
+      });
+
+      test.each(['/plans', '/home', '/opportunities?filter=a%26b%2Bc#details'])('uses the current %s URL and date when activated', path => {
+        link.focus();
+        window.history.pushState(null, '', path);
+        jest.setSystemTime(new Date('2026-10-14T00:01:00Z'));
+        link.click();
+        expectContext('2026-10-14T00:01:00.000Z');
+      });
+
+      test.each(['focus', 'contextmenu'])('refreshes context on %s for link inspection', event => {
+        window.history.pushState(null, '', '/plans');
+        jest.setSystemTime(new Date('2026-10-14T00:02:00Z'));
+        link.dispatchEvent(new Event(event, { cancelable: true }));
+        expectContext('2026-10-14T00:02:00.000Z');
+      });
+
+      test('refreshes once after repeated setup', () => {
+        setupEventListeners();
+        const writes = jest.spyOn(link, 'href', 'set');
+        link.click();
+        expect(writes).toHaveBeenCalledTimes(1);
+      });
+    });
+
     test('sets up tab button click handlers', () => {
       document.body.innerHTML = `
         <button class="tab-btn" data-tab="dashboard">Dashboard</button>
