@@ -60,7 +60,10 @@ func cumRec(account, typ string, count int) config.RecommendationRecord {
 		Count: count, Term: 1, Payment: "no-upfront", UpfrontCost: float64(count), Savings: float64(count) / 10, CloudAccountID: &account}
 }
 
-func newCumFixture(t *testing.T, coverage float64, stored ...int) *cumFixture {
+// cumCoverage is the plan coverage every scenario sizes against.
+const cumCoverage = 80
+
+func newCumFixture(t *testing.T, stored ...int) *cumFixture {
 	t.Helper()
 	ctx := context.Background()
 	store, pool := rampStepStore(ctx, t)
@@ -72,7 +75,7 @@ func newCumFixture(t *testing.T, coverage float64, stored ...int) *cumFixture {
 	next := time.Now().Add(24 * time.Hour).Truncate(time.Microsecond)
 	plan := &config.PurchasePlan{
 		Name: "cumulative", Enabled: true, AutoPurchase: true, NotificationDaysBefore: 30, MaxStepCommitment: f64(1e9),
-		Services: map[string]config.ServiceConfig{"ec2": {Provider: "aws", Service: "ec2", Enabled: true, Term: 1, Payment: "no-upfront", Coverage: coverage}},
+		Services: map[string]config.ServiceConfig{"ec2": {Provider: "aws", Service: "ec2", Enabled: true, Term: 1, Payment: "no-upfront", Coverage: cumCoverage}},
 		RampSchedule: config.RampSchedule{Type: "weekly", PercentPerStep: 25, StepIntervalDays: 7, TotalSteps: 4,
 			StartDate: next.AddDate(0, 0, -7)},
 		NextExecutionDate: &next,
@@ -82,7 +85,7 @@ func newCumFixture(t *testing.T, coverage float64, stored ...int) *cumFixture {
 	require.NoError(t, store.SetPlanAccounts(ctx, plan.ID, []string{acct.ID}))
 
 	f := &cumFixture{t: t, ctx: ctx, store: store, pool: pool, planID: plan.ID, account: acct.ID, src: &cumSource{}}
-	var rows []config.RecommendationRecord
+	rows := make([]config.RecommendationRecord, 0, len(stored))
 	for i, n := range stored {
 		rows = append(rows, cumRec(acct.ID, fmt.Sprintf("m5.t%d", i), n))
 	}
@@ -157,7 +160,7 @@ func TestCumulativeAttach_WeeklyRampBuysTwentyEachStep(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := newCumFixture(t, 80, 100)
+			f := newCumFixture(t, 100)
 			setup(f)
 			for step := 1; step <= 4; step++ {
 				exec, err := f.tick()
@@ -186,7 +189,7 @@ func (f *cumFixture) baseline() (b config.PlanRampBaseline, err error) {
 }
 
 func TestCumulativeAttach_TargetMetCompletesNoOpAndAdvances(t *testing.T) {
-	f := newCumFixture(t, 80, 100)
+	f := newCumFixture(t, 100)
 	f.src.shown = func() []config.RecommendationRecord {
 		return []config.RecommendationRecord{cumRec(f.account, "m5.t0", 100)}
 	}
@@ -229,7 +232,7 @@ func TestCumulativeAttach_TargetMetCompletesNoOpAndAdvances(t *testing.T) {
 }
 
 func TestCumulativeAttach_StepOneNoMatchWithBaselineFreezesAndStepTwoBuys(t *testing.T) {
-	f := newCumFixture(t, 80, 3)
+	f := newCumFixture(t, 3)
 	f.src.shown = func() []config.RecommendationRecord {
 		return []config.RecommendationRecord{cumRec(f.account, "m5.t0", 3)}
 	}
@@ -251,7 +254,7 @@ func TestCumulativeAttach_StepOneNoMatchWithBaselineFreezesAndStepTwoBuys(t *tes
 }
 
 func TestCumulativeAttach_HiddenIdentityIsNoMatchNotNoOp(t *testing.T) {
-	f := newCumFixture(t, 80, 100)
+	f := newCumFixture(t, 100)
 	visible := true
 	f.src.shown = func() []config.RecommendationRecord {
 		if !visible {
@@ -280,7 +283,7 @@ func TestCumulativeAttach_HiddenIdentityIsNoMatchNotNoOp(t *testing.T) {
 }
 
 func TestCumulativeAttach_NewIdentityAfterStepOneIsSkippedAndNoted(t *testing.T) {
-	f := newCumFixture(t, 80, 100, 50)
+	f := newCumFixture(t, 100, 50)
 	only := true
 	f.src.shown = func() []config.RecommendationRecord {
 		if only {
@@ -304,7 +307,7 @@ func TestCumulativeAttach_NewIdentityAfterStepOneIsSkippedAndNoted(t *testing.T)
 }
 
 func TestCumulativeAttach_ZeroBuyFanOutCannotAdvance(t *testing.T) {
-	f := newCumFixture(t, 80, 100)
+	f := newCumFixture(t, 100)
 	f.src.shown = func() []config.RecommendationRecord {
 		return []config.RecommendationRecord{cumRec(f.account, "m5.t0", 100)}
 	}
@@ -332,7 +335,7 @@ func TestCumulativeAttach_ZeroBuyFanOutCannotAdvance(t *testing.T) {
 }
 
 func TestCumulativeAttach_ConcurrentTicksMintOneRowAndOneBaseline(t *testing.T) {
-	f := newCumFixture(t, 80, 100)
+	f := newCumFixture(t, 100)
 	f.src.shown = func() []config.RecommendationRecord {
 		return []config.RecommendationRecord{cumRec(f.account, "m5.t0", 100)}
 	}
@@ -352,7 +355,7 @@ func TestCumulativeAttach_ConcurrentTicksMintOneRowAndOneBaseline(t *testing.T) 
 }
 
 func TestCumulativeAttach_TargetMetCompletesThePreCreatedRootInPlace(t *testing.T) {
-	f := newCumFixture(t, 80, 100)
+	f := newCumFixture(t, 100)
 	f.src.shown = func() []config.RecommendationRecord {
 		return []config.RecommendationRecord{cumRec(f.account, "m5.t0", 100)}
 	}
