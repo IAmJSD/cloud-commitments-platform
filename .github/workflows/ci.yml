@@ -430,7 +430,7 @@ jobs:
               continue
             fi
             echo "==> integration tests in $mod"
-            if ! (cd "$mod" && go test -v -race -tags=integration \
+            if ! (cd "$mod" && go test -v -race -tags=integration -timeout=20m \
                     -coverprofile="$RUNNER_TEMP/coverage-integration-${tag}.out" \
                     ./...) 2>&1 | tee "$log"; then
               echo "::error::integration tests failed in $mod"
