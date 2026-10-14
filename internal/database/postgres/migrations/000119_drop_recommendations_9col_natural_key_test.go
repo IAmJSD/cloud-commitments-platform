@@ -13,14 +13,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const insertRecForMigration112 = `
+const insertRecForMigration119 = `
 	INSERT INTO recommendations
 	    (collected_at, provider, service, region, resource_type, engine, payload,
 	     upfront_cost, monthly_savings, term, payment_option)
 	VALUES ($1::timestamptz, 'aws', 'ec2', 'us-east-1', $2, '', $3::jsonb, 0, 0, 1, 'all-upfront')
 `
 
-// TestMigration_DropRecommendations9ColNaturalKey locks down migration 000112
+// TestMigration_DropRecommendations9ColNaturalKey locks down migration 000119
 // (issue #806, PR-E): rows that differ only by platform or tenancy coexist once
 // the 9-column index is gone, the 11-column index still dedupes, and the
 // rollback recreates the 9-column index after collapsing those duplicates.
@@ -51,39 +51,39 @@ func TestMigration_DropRecommendations9ColNaturalKey(t *testing.T) {
 		other   = `{"availability_zone":"us-east-1b","details":{"platform":"Linux/UNIX","tenancy":"default"}}`
 	)
 
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 111))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 119)))
 	require.True(t, indexExists("recommendations_natural_key_az_idx"))
 	require.True(t, indexExists("recommendations_natural_key_az_tp_idx"))
 
 	// A regional row and one EC2 row exist before the migration.
-	_, err = pool.Exec(ctx, insertRecForMigration112, "2026-01-01T00:00:00Z", "regional", `{"details":{"scope":"Region"}}`)
+	_, err = pool.Exec(ctx, insertRecForMigration119, "2026-01-01T00:00:00Z", "regional", `{"details":{"scope":"Region"}}`)
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, insertRecForMigration112, "2026-01-01T00:00:00Z", "ec2", linux)
+	_, err = pool.Exec(ctx, insertRecForMigration119, "2026-01-01T00:00:00Z", "ec2", linux)
 	require.NoError(t, err)
 
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 112))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 119))
 	assert.False(t, indexExists("recommendations_natural_key_az_idx"), "9-column index must be dropped")
 	assert.True(t, indexExists("recommendations_natural_key_az_tp_idx"), "11-column index must remain")
 
 	// Rows differing only by platform or tenancy now coexist; an exact
 	// duplicate and a duplicate regional row are still rejected by the
 	// 11-column index.
-	_, err = pool.Exec(ctx, insertRecForMigration112, "2026-01-02T00:00:00Z", "ec2", windows)
+	_, err = pool.Exec(ctx, insertRecForMigration119, "2026-01-02T00:00:00Z", "ec2", windows)
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, insertRecForMigration112, "2026-01-03T00:00:00Z", "ec2", rhel)
+	_, err = pool.Exec(ctx, insertRecForMigration119, "2026-01-03T00:00:00Z", "ec2", rhel)
 	require.NoError(t, err)
-	_, err = pool.Exec(ctx, insertRecForMigration112, "2026-01-03T00:00:00Z", "ec2", other)
+	_, err = pool.Exec(ctx, insertRecForMigration119, "2026-01-03T00:00:00Z", "ec2", other)
 	require.NoError(t, err, "a different AZ is a different row under both indexes")
 	assert.Equal(t, 4, count("ec2"))
-	_, err = pool.Exec(ctx, insertRecForMigration112, "2026-01-03T00:00:00Z", "ec2", linux)
+	_, err = pool.Exec(ctx, insertRecForMigration119, "2026-01-03T00:00:00Z", "ec2", linux)
 	require.Error(t, err, "same platform and tenancy must still violate the 11-column index")
-	_, err = pool.Exec(ctx, insertRecForMigration112, "2026-01-03T00:00:00Z", "regional", `{"details":{"scope":"Region"}}`)
+	_, err = pool.Exec(ctx, insertRecForMigration119, "2026-01-03T00:00:00Z", "regional", `{"details":{"scope":"Region"}}`)
 	require.Error(t, err, "regional duplicate must still violate the 11-column index")
 
 	// Rollback: platform/tenancy-only duplicates collapse to the newest, the
 	// other-AZ row and the regional row are untouched, and the 9-column index
 	// is recreated with its original shape.
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 111))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 119)))
 	assert.Equal(t, 2, count("ec2"), "only duplicates under the 9-column key may be deleted")
 	assert.Equal(t, 1, count("regional"))
 	rows, err := pool.Query(ctx, `SELECT availability_zone, platform, tenancy FROM recommendations WHERE resource_type = 'ec2' ORDER BY availability_zone`)
@@ -109,6 +109,6 @@ func TestMigration_DropRecommendations9ColNaturalKey(t *testing.T) {
 	assert.True(t, indexExists("recommendations_natural_key_az_tp_idx"))
 
 	// Re-applying the up migration after a rollback works.
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 112))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 119))
 	assert.False(t, indexExists("recommendations_natural_key_az_idx"))
 }

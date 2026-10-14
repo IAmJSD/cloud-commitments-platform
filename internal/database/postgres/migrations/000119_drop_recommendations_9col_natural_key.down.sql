@@ -1,4 +1,4 @@
--- Rollback of 000112: recreate the 9-column unique index exactly as defined by
+-- Rollback of 000119: recreate the 9-column unique index exactly as defined by
 -- 000109.
 --
 -- Only safe together with a code rollback to the pre-PR-C upsert (9-column

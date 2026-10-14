@@ -1,4 +1,4 @@
--- Migration 000112: drop the 9-column recommendations_natural_key_az_idx
+-- Migration 000119: drop the 9-column recommendations_natural_key_az_idx
 -- (#806, PR-E of the platform/tenancy identity work).
 --
 -- Migration 000111 added the generated platform and tenancy columns and the

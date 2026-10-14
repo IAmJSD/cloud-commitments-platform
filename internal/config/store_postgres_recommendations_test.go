@@ -606,7 +606,7 @@ func TestPostgresStore_UpsertRecommendations_AZArbiter(t *testing.T) {
 // tenancy updates in place, regional non-EC2 rows (platform and tenancy ”) are
 // unchanged, and a row written by pre-PR-C code is found and updated. A batch
 // of rows differing only by platform or tenancy is covered with the 9-column
-// index drop (migration 000112).
+// index drop (migration 000119).
 func TestPostgresStore_UpsertRecommendations_PlatformTenancyArbiter(t *testing.T) {
 	ctx := context.Background()
 	container, err := testhelpers.SetupPostgresContainer(ctx, t)
@@ -697,7 +697,7 @@ func TestPostgresStore_UpsertRecommendations_MultiAZBatch(t *testing.T) {
 	require.False(t, oldIdx, "8-column index must be gone after the full migration chain")
 	var nineColIdx bool
 	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'recommendations_natural_key_az_idx')`).Scan(&nineColIdx))
-	require.False(t, nineColIdx, "9-column index must be gone after the full migration chain (000112)")
+	require.False(t, nineColIdx, "9-column index must be gone after the full migration chain (000119)")
 
 	savingsByAZ := func(t *testing.T) map[string]float64 {
 		t.Helper()
@@ -737,7 +737,7 @@ func TestPostgresStore_UpsertRecommendations_MultiAZBatch(t *testing.T) {
 	})
 }
 
-// Issue #806, PR-E: once migration 000112 drops the 9-column index, EC2 recs
+// Issue #806, PR-E: once migration 000119 drops the 9-column index, EC2 recs
 // that differ only by platform or tenancy upsert in ONE batch (the shape
 // persistCollection writes) without a unique violation, and both rows persist.
 func TestPostgresStore_UpsertRecommendations_PlatformTenancyBatch(t *testing.T) {
