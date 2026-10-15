@@ -630,6 +630,7 @@ type RecommendationRecord struct {
 	PurchaseID        string   `json:"purchase_id,omitempty" dynamodbav:"purchase_id,omitempty"`
 	Error             string   `json:"error,omitempty" dynamodbav:"error,omitempty"`
 	CloudAccountID    *string  `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
+	SourceAccountID   *string  `json:"source_account_id,omitempty" dynamodbav:"source_account_id,omitempty"`
 	// SuppressedCount is the cumulative count already committed against
 	// this recommendation's 6-tuple (account, provider, service, region,
 	// resource_type, engine) within the active grace window. The
