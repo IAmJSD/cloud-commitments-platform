@@ -3,8 +3,9 @@ import { test, expect, type Locator } from '@playwright/test';
 test.use({ hasTouch: true });
 import { mockApi, seedAuth } from './fixtures/recs';
 
-for (const width of [1440, 1280, 390, 320]) {
-  test(`local Create/Edit preview at ${width}px (mock API, no writes)`, async ({ page }, testInfo) => {
+for (const width of [1440, 1280, 390, 320]) test.describe(`viewport ${width}px`, () => {
+  test.use({ isMobile: width <= 390 });
+  test(`local Create/Edit preview at ${width}px (mock API, no writes)`, async ({ page, isMobile }, testInfo) => {
     test.setTimeout(60_000);
     await page.setViewportSize({ width, height: 900 });
     const errors: string[] = [], writes: string[] = [];
@@ -239,6 +240,6 @@ for (const width of [1440, 1280, 390, 320]) {
     await page.keyboard.press('Escape');
     expect(writes).toEqual([]);
     expect(errors).toEqual([]);
-    await testInfo.attach('production-preview-receipt', { body: JSON.stringify({ width, scripts, writes, errors }), contentType: 'application/json' });
+    await testInfo.attach('production-preview-receipt', { body: JSON.stringify({ width, isMobile, scripts, writes, errors }), contentType: 'application/json' });
   });
-}
+});
