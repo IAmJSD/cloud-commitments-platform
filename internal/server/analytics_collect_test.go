@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/testutil"
 )
@@ -119,4 +121,75 @@ func TestHandleCollectAnalytics_DDLStepsAreBounded(t *testing.T) {
 	testutil.AssertTrue(t, store.createFuturePartHadDeadline, "CreateFuturePartitions must run under a bounded context")
 	testutil.AssertTrue(t, store.dropOldPartHadDeadline, "DropOldPartitions must run under a bounded context")
 	testutil.AssertTrue(t, store.refreshHadDeadline, "RefreshMaterializedViews must run under a bounded context")
+}
+
+// TestHandleCollectAnalytics_CurrentPartitionErrorSkipsCollect is the #271
+// regression: when the current month's partition cannot be ensured the
+// pipeline must not run Collect (which would COPY the snapshot into the
+// catch-all default partition that retention never reclaims) and must surface
+// the failure as a wrapped error rather than a "partial" status inside a
+// success envelope.
+func TestHandleCollectAnalytics_CurrentPartitionErrorSkipsCollect(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	causeErr := errors.New("lock timeout")
+	store := &mockAnalyticsStore{createPartErr: causeErr}
+	collector := &mockAnalyticsCollector{}
+	app := &Application{
+		appConfig:          ApplicationConfig{Analytics: AnalyticsConfig{Enabled: true, RetentionMonths: 24, PartitionsAhead: 3}},
+		Analytics:          store,
+		AnalyticsCollector: collector,
+	}
+	result, err := app.handleCollectAnalytics(ctx)
+	testutil.AssertTrue(t, errors.Is(err, causeErr), "current-month partition failure must wrap the cause so errors.Is matches")
+	testutil.AssertEqual(t, 0, collector.calls)
+	testutil.AssertEqual(t, "failed", result["status"])
+	testutil.AssertEqual(t, false, result["partitions_ensured"])
+	testutil.AssertEqual(t, false, result["snapshots_written"])
+}
+
+// TestHandleCollectAnalytics_AheadPartitionErrorStillCollects is the #271
+// review follow-up: when the current month's partition exists but creating a
+// future month fails (e.g. "default partition would be violated" by a stray
+// future-dated row, or a lock timeout), today's snapshot still lands in the
+// correct monthly partition, so Collect must run and the run is "partial"
+// rather than aborted (an abort would never self-heal).
+func TestHandleCollectAnalytics_AheadPartitionErrorStillCollects(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	store := &mockAnalyticsStore{createFuturePartErr: errors.New("updated partition constraint for default partition would be violated")}
+	collector := &mockAnalyticsCollector{}
+	app := &Application{
+		appConfig:          ApplicationConfig{Analytics: AnalyticsConfig{Enabled: true, RetentionMonths: 24, PartitionsAhead: 3}},
+		Analytics:          store,
+		AnalyticsCollector: collector,
+	}
+	result, err := app.handleCollectAnalytics(ctx)
+	testutil.AssertNoError(t, err)
+	testutil.AssertEqual(t, 1, store.createPartCalls)
+	testutil.AssertEqual(t, 1, collector.calls)
+	testutil.AssertEqual(t, "partial", result["status"])
+	testutil.AssertEqual(t, false, result["partitions_ensured"])
+	testutil.AssertEqual(t, true, result["snapshots_written"])
+}
+
+// TestHandleCollectAnalytics_EnsuresCurrentMonthPartition pins that the hard
+// prerequisite targets the current UTC month (the month Collect stamps rows
+// with) and runs under a bounded DDL context.
+func TestHandleCollectAnalytics_EnsuresCurrentMonthPartition(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	store := &mockAnalyticsStore{}
+	app := &Application{
+		appConfig:          ApplicationConfig{Analytics: AnalyticsConfig{Enabled: true, RetentionMonths: 24, PartitionsAhead: 3}},
+		Analytics:          store,
+		AnalyticsCollector: &mockAnalyticsCollector{},
+	}
+	before := time.Now().UTC()
+	_, err := app.handleCollectAnalytics(ctx)
+	after := time.Now().UTC()
+	testutil.AssertNoError(t, err)
+	testutil.AssertEqual(t, 1, store.createPartCalls)
+	testutil.AssertTrue(t, store.createPartHadDeadline, "CreatePartition must run under a bounded context")
+	got := store.createPartMonth
+	inWindow := (got.Year() == before.Year() && got.Month() == before.Month()) ||
+		(got.Year() == after.Year() && got.Month() == after.Month())
+	testutil.AssertTrue(t, inWindow, "CreatePartition must target the current UTC month")
 }

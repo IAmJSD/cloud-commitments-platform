@@ -61,6 +61,10 @@ type PurchaseManagerInterface interface {
 // monthly partitions provisioned ahead of time and applies retention.
 type AnalyticsStoreInterface interface {
 	RefreshMaterializedViews(ctx context.Context) error
+	// CreatePartition idempotently ensures the monthly partition containing
+	// forMonth exists. The collect task requires the current month's partition
+	// before writing so snapshots never land in the default partition (#271).
+	CreatePartition(ctx context.Context, forMonth time.Time) error
 	// CreateFuturePartitions ensures partitions exist for the current month
 	// plus monthsAhead months ahead (M3: partitions otherwise stop after the
 	// seeded months and every insert falls into the catch-all default).

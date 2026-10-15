@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -50,12 +49,16 @@ func TestHandleCleanupExpiredRecords_NilAuthAndConfig(t *testing.T) {
 
 type mockAnalyticsStore struct {
 	refreshErr             error
+	createPartErr          error
 	createFuturePartErr    error
+	createPartCalls        int
+	createPartMonth        time.Time
 	dropOldPartErr         error
 	createFuturePartMonths int
 	dropOldPartRetention   int
 	// *HadDeadline capture whether each DDL step ran under a bounded context, so
 	// the 06-N3 fix (per-step timeouts under RDS Proxy) is positively asserted.
+	createPartHadDeadline       bool
 	createFuturePartHadDeadline bool
 	dropOldPartHadDeadline      bool
 	refreshHadDeadline          bool
@@ -64,6 +67,13 @@ type mockAnalyticsStore struct {
 func (m *mockAnalyticsStore) RefreshMaterializedViews(ctx context.Context) error {
 	_, m.refreshHadDeadline = ctx.Deadline()
 	return m.refreshErr
+}
+
+func (m *mockAnalyticsStore) CreatePartition(ctx context.Context, forMonth time.Time) error {
+	_, m.createPartHadDeadline = ctx.Deadline()
+	m.createPartCalls++
+	m.createPartMonth = forMonth
+	return m.createPartErr
 }
 
 func (m *mockAnalyticsStore) CreateFuturePartitions(ctx context.Context, monthsAhead int) error {
@@ -447,29 +457,6 @@ func TestHandleCollectAnalytics_CollectErrorIsPartial(t *testing.T) {
 	result, err := app.handleCollectAnalytics(ctx)
 	testutil.AssertNoError(t, err) // best-effort: logged, not propagated
 	testutil.AssertEqual(t, "partial", result["status"])
-}
-
-// TestHandleCollectAnalytics_PartitionErrorSkipsCollect is the #271
-// regression: when CreateFuturePartitions fails the pipeline must not run
-// Collect (which would COPY the snapshot into the catch-all default partition
-// that retention never reclaims) and must surface the failure as an error
-// rather than a "partial" status inside a success envelope.
-func TestHandleCollectAnalytics_PartitionErrorSkipsCollect(t *testing.T) {
-	ctx := testutil.TestContext(t)
-	store := &mockAnalyticsStore{createFuturePartErr: errors.New("lock timeout")}
-	collector := &mockAnalyticsCollector{}
-	app := &Application{
-		appConfig:          ApplicationConfig{Analytics: AnalyticsConfig{Enabled: true, RetentionMonths: 24, PartitionsAhead: 3}},
-		Analytics:          store,
-		AnalyticsCollector: collector,
-	}
-	result, err := app.handleCollectAnalytics(ctx)
-	testutil.AssertTrue(t, err != nil, "partition creation failure must be returned as an error")
-	testutil.AssertTrue(t, strings.Contains(err.Error(), "lock timeout"), "error must wrap the partition failure")
-	testutil.AssertEqual(t, 0, collector.calls)
-	testutil.AssertEqual(t, "failed", result["status"])
-	testutil.AssertEqual(t, false, result["partitions_ensured"])
-	testutil.AssertEqual(t, false, result["snapshots_written"])
 }
 
 func TestHandleCollectAnalytics_NilCollectorSkips(t *testing.T) {
