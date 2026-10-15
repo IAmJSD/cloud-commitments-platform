@@ -197,7 +197,10 @@ for (const width of [1440, 1280, 390, 320]) test.describe(`viewport ${width}px`,
       const labels = await dense.locator('[data-preview-step]').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')));
       const session = await page.context().newCDPSession(page);
       try {
-        await session.send('Input.synthesizeScrollGesture', { x: right, y, xDistance: left - right, gestureSourceType: 'touch', speed: 600 });
+        await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: right, y, id: 1 }] });
+        for (let move = 1; move <= 12; move++) { await page.evaluate(() => new Promise(requestAnimationFrame)); await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: right + (left - right) * move / 12, y, id: 1 }] }); }
+        await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
         await expect.poll(() => scroll.evaluate(element => element.scrollLeft)).toBeGreaterThan(beforeScroll);
         expect(await dense.locator('[data-preview-step]').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')))).toEqual(labels);
       } finally { await session.detach(); }
