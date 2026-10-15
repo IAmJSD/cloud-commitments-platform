@@ -3752,11 +3752,7 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer func() {
-		if rbErr := tx.Rollback(ctx); rbErr != nil {
-			_ = rbErr // rollback error intentionally discarded; Postgres logs rollback failures
-		}
-	}()
+	defer rollbackTx(ctx, tx, "DeleteCloudAccount")
 
 	// Reset any linked approved registration first (explicit NULL so we don't
 	// rely on the FK's ON DELETE SET NULL behavior).
@@ -4064,11 +4060,7 @@ func (s *PostgresStore) SetPlanAccounts(ctx context.Context, planID string, acco
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer func() {
-		if rbErr := tx.Rollback(ctx); rbErr != nil {
-			_ = rbErr // rollback error intentionally discarded; Postgres logs rollback failures
-		}
-	}()
+	defer rollbackTx(ctx, tx, "SetPlanAccounts")
 
 	if setErr := s.setPlanAccountsTx(ctx, tx, planID, accountIDs); setErr != nil {
 		return setErr
