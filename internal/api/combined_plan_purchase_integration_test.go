@@ -350,6 +350,7 @@ func TestCombinedPlanPurchase_AutomaticAttachmentOverCapRefuses(t *testing.T) {
 	plan, err := f.store.GetPurchasePlan(context.Background(), f.planID)
 	require.NoError(t, err)
 	assert.Zero(t, plan.RampSchedule.CurrentStep)
+	require.NotNil(t, plan.NextExecutionDate)
 	assert.True(t, plan.NextExecutionDate.Equal(f.first))
 }
 
