@@ -31,6 +31,26 @@ const (
 
 const gcpCloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
 
+// ProblemNotStored is the AWSConfigError.Problem for a credential that has
+// not been saved for the account.
+const ProblemNotStored = "not stored"
+
+// AWSConfigError reports an AWS account row whose configuration the resolver
+// cannot use. Field and Problem are fixed, tenant-safe strings (a setting name
+// and what is wrong with it) that callers may show to users; Error() keeps the
+// detailed log-oriented text the resolver has always returned.
+type AWSConfigError struct {
+	Field   string
+	Problem string
+	msg     string
+}
+
+func (e *AWSConfigError) Error() string { return e.msg }
+
+func awsConfigErrorf(field, problem, format string, args ...any) error {
+	return &AWSConfigError{Field: field, Problem: problem, msg: fmt.Sprintf(format, args...)}
+}
+
 // awsAccessKeyPayload is the JSON structure stored for CredTypeAWSAccessKeys.
 type awsAccessKeyPayload struct {
 	AccessKeyID     string `json:"access_key_id"`
@@ -130,7 +150,7 @@ func ResolveAWSCredentialProviderWithOpts(
 	case "workload_identity_federation":
 		return resolveWebIdentityProvider(account, stsClient)
 	default:
-		return nil, fmt.Errorf("credentials: unsupported aws_auth_mode %q for account %s", account.AWSAuthMode, account.ID)
+		return nil, awsConfigErrorf("aws_auth_mode", "is not a supported mode", "credentials: unsupported aws_auth_mode %q for account %s", account.AWSAuthMode, account.ID)
 	}
 }
 
@@ -143,19 +163,19 @@ func resolveAccessKeyProvider(ctx context.Context, account *config.CloudAccount,
 		return nil, fmt.Errorf("credentials: load access keys for account %s: %w", account.ID, err)
 	}
 	if raw == nil {
-		return nil, fmt.Errorf("credentials: no access keys stored for account %s", account.ID)
+		return nil, awsConfigErrorf("aws_access_keys", ProblemNotStored, "credentials: no access keys stored for account %s", account.ID)
 	}
 	var payload awsAccessKeyPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, fmt.Errorf("credentials: parse access key payload for account %s: %w", account.ID, err)
+		return nil, awsConfigErrorf("aws_access_keys", "stored payload is not valid JSON", "credentials: parse access key payload for account %s: %v", account.ID, err)
 	}
 	// Validate required fields after unmarshal (03-N5): empty fields would
 	// flow through to the SDK and fail with a less descriptive error later.
 	if payload.AccessKeyID == "" {
-		return nil, fmt.Errorf("credentials: access_key_id is empty in stored payload for account %s", account.ID)
+		return nil, awsConfigErrorf("aws_access_keys", "stored payload is missing access_key_id", "credentials: access_key_id is empty in stored payload for account %s", account.ID)
 	}
 	if payload.SecretAccessKey == "" {
-		return nil, fmt.Errorf("credentials: secret_access_key is empty in stored payload for account %s", account.ID)
+		return nil, awsConfigErrorf("aws_access_keys", "stored payload is missing secret_access_key", "credentials: secret_access_key is empty in stored payload for account %s", account.ID)
 	}
 	return credentials.NewStaticCredentialsProvider(payload.AccessKeyID, payload.SecretAccessKey, ""), nil
 }
@@ -178,7 +198,7 @@ func resolveRoleARNProvider(
 ) (aws.CredentialsProvider, error) {
 	if account.AWSRoleARN == "" {
 		if ambient == nil {
-			return nil, fmt.Errorf("credentials: aws_role_arn is empty and no ambient credentials available (account %s)", account.ID)
+			return nil, awsConfigErrorf("aws_role_arn", "is required", "credentials: aws_role_arn is empty and no ambient credentials available (account %s)", account.ID)
 		}
 		if err := VerifyHostAccount(ctx, account, ambientSTS); err != nil {
 			return nil, err
@@ -221,7 +241,7 @@ func resolveBastionProvider(
 	opts AWSResolveOptions,
 ) (aws.CredentialsProvider, error) {
 	if account.AWSBastionID == "" {
-		return nil, fmt.Errorf("credentials: aws_bastion_id is required for bastion auth mode (account %s)", account.ID)
+		return nil, awsConfigErrorf("aws_bastion_id", "is required", "credentials: aws_bastion_id is required for bastion auth mode (account %s)", account.ID)
 	}
 	if opts.AccountLookup == nil || opts.STSClientFactory == nil {
 		// Legacy fallback: trust caller's stsClient. Tracked in known_issues/03.
@@ -257,18 +277,18 @@ func resolveBastionProvider(
 // the AWS_WEB_IDENTITY_TOKEN_FILE environment variable (standard AKS/GKE projected token path).
 func resolveWebIdentityProvider(account *config.CloudAccount, stsClient STSClient) (aws.CredentialsProvider, error) {
 	if account.AWSRoleARN == "" {
-		return nil, fmt.Errorf("credentials: aws_role_arn required for workload_identity_federation mode (account %s)", account.ID)
+		return nil, awsConfigErrorf("aws_role_arn", "is required", "credentials: aws_role_arn required for workload_identity_federation mode (account %s)", account.ID)
 	}
 	tokenFile := account.AWSWebIdentityTokenFile
 	if tokenFile == "" {
 		tokenFile = os.Getenv("AWS_WEB_IDENTITY_TOKEN_FILE")
 	}
 	if tokenFile == "" {
-		return nil, fmt.Errorf("credentials: aws_web_identity_token_file required for workload_identity_federation mode (account %s)", account.ID)
+		return nil, awsConfigErrorf("aws_web_identity_token_file", "is required", "credentials: aws_web_identity_token_file required for workload_identity_federation mode (account %s)", account.ID)
 	}
 	// Validate token file path to prevent directory traversal.
 	if strings.Contains(tokenFile, "..") || !filepath.IsAbs(tokenFile) {
-		return nil, fmt.Errorf("credentials: aws_web_identity_token_file must be an absolute path without '..' (account %s)", account.ID)
+		return nil, awsConfigErrorf("aws_web_identity_token_file", "must be an absolute path without '..'", "credentials: aws_web_identity_token_file must be an absolute path without '..' (account %s)", account.ID)
 	}
 	sessionSuffix := account.ID
 	if len(sessionSuffix) > 8 {
