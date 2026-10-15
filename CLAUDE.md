@@ -133,8 +133,9 @@ coordinates agents on one machine; assignment is what coordinates people.
    pick another issue. Agents that share one GitHub login can't tell their
    claims apart by author, so each puts its worker id in every marker
    (for example `Claiming: working on this [cc-platform-w3]`) and compares
-   claims by worker id; same-machine agents can also use the bus below. An assignment with no marker comment (for
-   example a maintainer assigning someone) still means the issue is taken,
+   claims by worker id; same-machine agents can also use the bus below.
+   An assignment with no marker comment (for example a maintainer
+   assigning someone) still means the issue is taken,
    and so does an older free-form claim comment such as `claimed by <worker>`.
 
 3. **Respect other people's claims.** An issue with an active claim or an
