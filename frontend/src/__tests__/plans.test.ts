@@ -212,6 +212,20 @@ describe('Plans Module', () => {
   });
 
   describe('loadPlans', () => {
+    test('wires actual form values to the no-write schedule preview', () => {
+      const button = document.createElement('button');
+      button.id = 'preview-plan-schedule-btn';
+      document.getElementById('plan-modal')!.appendChild(button);
+      (document.querySelector('input[value="custom"]') as HTMLInputElement).checked = true;
+      (document.getElementById('ramp-step-percent') as HTMLInputElement).value = '33';
+      setupPlanHandlers();
+      button.click();
+      expect(document.querySelectorAll('[data-preview-step]')).toHaveLength(3);
+      expect(api.createPlan).not.toHaveBeenCalled();
+      expect(api.updatePlan).not.toHaveBeenCalled();
+      expect(api.createPlannedPurchases).not.toHaveBeenCalled();
+    });
+
     test('fetches and renders plans', async () => {
       (api.getPlans as jest.Mock).mockResolvedValue({
         plans: [

@@ -16,6 +16,8 @@ import { openModal, closeModal } from './modal';
 import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
+import { suggestedPurchaseStartDate } from './lib/calendar-date';
+import { openPlanSchedulePreview } from './plan-schedule-preview';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
 // "Plan from N selected" button-click time. The Plan flow used to re-derive
@@ -2251,7 +2253,7 @@ export async function openAddPurchasesModal(planId: string, planName: string, no
   if (validNotice) {
     // The API parses date-only values at UTC midnight. The extra calendar
     // day avoids opening just before the notification/veto overlap ends.
-    const suggested = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + notificationDays + 2)).toISOString().slice(0, 10);
+    const suggested = suggestedPurchaseStartDate(notificationDays, now);
     startDateInput.value = suggested;
     document.getElementById('add-purchases-date-help')!.textContent = `This plan has a ${notificationDays}-day notification window. Dates use midnight UTC; subsequent purchases follow the plan's interval.`;
     const updateDateWarning = (): void => {
@@ -2366,6 +2368,17 @@ let _unsubAccount: (() => void) | null = null;
  * the page level.
  */
 export function setupPlanHandlers(): void {
+  const preview = document.getElementById('preview-plan-schedule-btn');
+  if (preview) preview.onclick = () => {
+    const value = (id: string): string => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null)?.value ?? '';
+    const parent = document.getElementById('plan-modal');
+    if (!parent) return;
+    try {
+      openPlanSchedulePreview({ name: value('plan-name'), preset: document.querySelector<HTMLInputElement>('input[name="ramp-schedule"]:checked')?.value ?? '',
+        coverage: value('plan-coverage'), stepPercent: value('ramp-step-percent'), intervalDays: value('ramp-interval-days'),
+        notificationDays: value('plan-notify-days'), term: value('plan-term'), payment: value('plan-payment') }, parent);
+    } catch (error) { showToast({ message: (error as Error).message, kind: 'error' }); }
+  };
   // Drop any previous subscriptions before re-registering so we don't
   // accumulate duplicate loadPlans() calls on each invocation.
   _unsubProvider?.();
