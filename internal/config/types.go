@@ -1328,6 +1328,9 @@ type LadderTrancheDB struct {
 	// SettledAt is stamped by TransitionLadderTrancheTx when the tranche
 	// becomes completed; a CHECK requires it on every completed row.
 	SettledAt *time.Time `json:"settled_at,omitempty"`
+	// Nil basis preserves unproven history; native rates are lossless rational text.
+	AmountBasis    *LadderAmountBasis `json:"amount_basis,omitempty"`
+	CommitmentRate *string            `json:"commitment_rate,omitempty"`
 
 	// Required fields.
 	ID            string               `json:"id"`

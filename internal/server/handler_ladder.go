@@ -703,6 +703,7 @@ func buildTrancheDBRows(tranches []pkgladder.Tranche, runID string, configID *st
 		}
 		amountUSDHr, _ := r.Float64()
 		runIDCopy := runID
+		basis := config.LadderAmountOnDemand // The pinned pre-go349 SDK emits OD amounts.
 		rows = append(rows, config.LadderTrancheDB{
 			ID:            tr.ID,
 			ConfigID:      configID,
@@ -712,6 +713,7 @@ func buildTrancheDBRows(tranches []pkgladder.Tranche, runID string, configID *st
 			PaymentOption: tr.PaymentOption,
 			Status:        pkgladder.TrancheStatusScheduled,
 			AmountUSDHr:   amountUSDHr,
+			AmountBasis:   &basis,
 			ScheduledDate: tr.FireAfter,
 		})
 	}

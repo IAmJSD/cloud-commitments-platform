@@ -145,7 +145,7 @@ func (s *PostgresStore) ClaimDueLadderTranches(
 func selectDueLadderTranchesTx(ctx context.Context, tx pgx.Tx, configID string, asOf time.Time, limit int) ([]LadderTrancheDB, error) {
 	rows, err := tx.Query(ctx, `
 		SELECT id, config_id, run_id, layer_type, amount_usd_hr, term,
-		       payment_option, scheduled_date, status, settled_at, created_at
+		       payment_option, scheduled_date, status, settled_at, created_at, amount_basis, commitment_rate
 		FROM ladder_tranches
 		WHERE config_id = $1
 		  AND status = 'scheduled'
@@ -164,8 +164,11 @@ func selectDueLadderTranchesTx(ctx context.Context, tx pgx.Tx, configID string, 
 	for rows.Next() {
 		var tr LadderTrancheDB
 		if err := rows.Scan(&tr.ID, &tr.ConfigID, &tr.RunID, &tr.LayerType, &tr.AmountUSDHr, &tr.Term,
-			&tr.PaymentOption, &tr.ScheduledDate, &tr.Status, &tr.SettledAt, &tr.CreatedAt); err != nil {
+			&tr.PaymentOption, &tr.ScheduledDate, &tr.Status, &tr.SettledAt, &tr.CreatedAt, &tr.AmountBasis, &tr.CommitmentRate); err != nil {
 			return nil, fmt.Errorf("failed to scan due ladder_tranche: %w", err)
+		}
+		if _, err := trancheCommitmentRate(&tr); err != nil {
+			return nil, fmt.Errorf("invalid due ladder_tranche %s: %w", tr.ID, err)
 		}
 		out = append(out, tr)
 	}

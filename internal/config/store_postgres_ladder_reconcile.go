@@ -38,7 +38,7 @@ func (s *PostgresStore) ListFiredLadderTranches(ctx context.Context, limit int) 
 	}
 	rows, err := s.db.Query(ctx, `
 		SELECT id, config_id, run_id, execution_id, layer_type, amount_usd_hr, term,
-		       payment_option, scheduled_date, status, settled_at, created_at
+		       payment_option, scheduled_date, status, settled_at, created_at, amount_basis, commitment_rate
 		FROM ladder_tranches
 		WHERE status = 'fired' AND execution_id IS NOT NULL
 		ORDER BY scheduled_date, id
@@ -52,8 +52,11 @@ func (s *PostgresStore) ListFiredLadderTranches(ctx context.Context, limit int) 
 	for rows.Next() {
 		var tr LadderTrancheDB
 		if err := rows.Scan(&tr.ID, &tr.ConfigID, &tr.RunID, &tr.ExecutionID, &tr.LayerType, &tr.AmountUSDHr, &tr.Term,
-			&tr.PaymentOption, &tr.ScheduledDate, &tr.Status, &tr.SettledAt, &tr.CreatedAt); err != nil {
+			&tr.PaymentOption, &tr.ScheduledDate, &tr.Status, &tr.SettledAt, &tr.CreatedAt, &tr.AmountBasis, &tr.CommitmentRate); err != nil {
 			return nil, fmt.Errorf("failed to scan fired ladder_tranche: %w", err)
+		}
+		if _, err := trancheCommitmentRate(&tr); err != nil {
+			return nil, fmt.Errorf("invalid fired ladder_tranche %s: %w", tr.ID, err)
 		}
 		out = append(out, tr)
 	}

@@ -22,6 +22,8 @@ package config
 
 import (
 	"context"
+	"encoding/json"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,9 +31,85 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLadderTrancheProvenance_InsertClaimAndReconcile(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	store := setupLadderStore(ctx, t)
+	cfgID := seedLadderConfig(ctx, t, store)
+	asOf := time.Now().UTC().Truncate(time.Microsecond)
+	od, native, rate := LadderAmountOnDemand, LadderAmountCommitment, "2/6"
+	rows := []LadderTrancheDB{
+		lifecycleTranche(cfgID, 12.5, ladder.TrancheStatusScheduled, asOf.Add(-time.Hour)),
+		lifecycleTranche(cfgID, 8, ladder.TrancheStatusScheduled, asOf.Add(-time.Minute)),
+		lifecycleTranche(cfgID, 3, ladder.TrancheStatusScheduled, asOf),
+	}
+	rows[1].AmountBasis = &od
+	rows[2].AmountBasis, rows[2].CommitmentRate = &native, &rate
+	require.NoError(t, store.SaveLadderTranches(ctx, rows))
+	require.Equal(t, "2/6", rate, "canonical storage must not mutate caller metadata")
+	want := make(map[string]*LadderTrancheDB)
+	for i := range rows {
+		want[rows[i].ID] = &rows[i]
+	}
+	check := func(tr *LadderTrancheDB) {
+		t.Helper()
+		original := want[tr.ID]
+		require.NotNil(t, original)
+		require.Equal(t, original.AmountBasis, tr.AmountBasis)
+		require.Equal(t, original.AmountUSDHr, tr.AmountUSDHr)
+		require.Equal(t, original.ConfigID, tr.ConfigID)
+		require.Equal(t, original.RunID, tr.RunID)
+		require.Equal(t, original.LayerType, tr.LayerType)
+		require.Equal(t, original.Term, tr.Term)
+		require.Equal(t, original.PaymentOption, tr.PaymentOption)
+		require.True(t, original.ScheduledDate.Equal(tr.ScheduledDate))
+		if original.CommitmentRate == nil {
+			require.Nil(t, tr.CommitmentRate)
+		} else {
+			require.NotNil(t, tr.CommitmentRate)
+			require.Equal(t, "1/3", *tr.CommitmentRate)
+		}
+	}
+	var calls atomic.Int64
+	create := newExecCreator(ctx, t, store, &calls)
+	claimed, err := store.ClaimDueLadderTranches(ctx, cfgID, asOf, 10, func(ctx context.Context, tx pgx.Tx, tr LadderTrancheDB) (string, error) {
+		check(&tr)
+		require.Equal(t, ladder.TrancheStatusScheduled, tr.Status)
+		require.Nil(t, tr.ExecutionID)
+		return create(ctx, tx, tr)
+	})
+	require.NoError(t, err)
+	require.Len(t, claimed, len(rows))
+	require.Equal(t, int64(3), calls.Load())
+	fired, err := store.ListFiredLadderTranches(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, fired, len(rows))
+	for i := range fired {
+		check(&fired[i])
+		require.Equal(t, ladder.TrancheStatusFired, fired[i].Status)
+		require.NotNil(t, fired[i].ExecutionID)
+	}
+	for _, wire := range []string{
+		`{"commitment_rate":"1/3"}`, `{"amount_basis":"on_demand_equivalent","commitment_rate":"1/3"}`,
+		`{"amount_basis":"commitment"}`, `{"amount_basis":"unknown"}`,
+		`{"amount_basis":"commitment","commitment_rate":""}`, `{"amount_basis":"commitment","commitment_rate":"0"}`,
+		`{"amount_basis":"commitment","commitment_rate":"-1"}`, `{"amount_basis":"commitment","commitment_rate":"2"}`,
+		`{"amount_basis":"commitment","commitment_rate":"NaN"}`, `{"amount_basis":"commitment","commitment_rate":"Inf"}`,
+	} {
+		bad := lifecycleTranche(cfgID, 1, ladder.TrancheStatusScheduled, asOf)
+		require.NoError(t, json.Unmarshal([]byte(wire), &bad))
+		first := lifecycleTranche(cfgID, 1, ladder.TrancheStatusScheduled, asOf)
+		require.Error(t, store.SaveLadderTranches(ctx, []LadderTrancheDB{first, bad}), wire)
+		var count int
+		require.NoError(t, store.db.QueryRow(ctx, `SELECT count(*) FROM ladder_tranches`).Scan(&count))
+		require.Equal(t, len(rows), count, "invalid batch must roll back its first insert")
+	}
+}
 
 // setupLadderStore starts a container, runs migrations, and returns a store.
 // It skips (not fails) only when this environment has no usable Docker daemon,

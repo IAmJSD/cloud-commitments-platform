@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 	"time"
@@ -8,6 +9,37 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLadderTrancheDB_AmountProvenanceJSON(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, wire  string
+		basis, rate any
+	}{
+		{"historical unknown", `{"amount_usd_hr":12.5}`, nil, nil},
+		{"explicit null unknown", `{"amount_usd_hr":12.5,"amount_basis":null,"commitment_rate":null}`, nil, nil},
+		{"verified OD", `{"amount_usd_hr":12.5,"amount_basis":"on_demand_equivalent"}`, "on_demand_equivalent", nil},
+		{"native exact rate", `{"amount_usd_hr":12.5,"amount_basis":"commitment","commitment_rate":"1/3"}`, "commitment", "1/3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tr LadderTrancheDB
+			require.NoError(t, json.Unmarshal([]byte(tc.wire), &tr))
+			encoded, err := json.Marshal(tr)
+			require.NoError(t, err)
+			var got map[string]any
+			require.NoError(t, json.Unmarshal(encoded, &got))
+			assert.Equal(t, 12.5, got["amount_usd_hr"])
+			assert.Equal(t, tc.basis, got["amount_basis"])
+			assert.Equal(t, tc.rate, got["commitment_rate"])
+			if tc.basis == nil {
+				assert.NotContains(t, got, "amount_basis")
+			}
+			if tc.rate == nil {
+				assert.NotContains(t, got, "commitment_rate")
+			}
+		})
+	}
+}
 
 func TestRampSchedule_GetCurrentCoverage(t *testing.T) {
 	tests := []struct {

@@ -602,6 +602,14 @@ func TestExecuteLadderRun_ImmediateStepIsTrancheAndPlanShowsOnlyIt(t *testing.T)
 	require.NoError(t, app.executeLadderRun(ctx, &dbCfg, cap, "123456789012", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, now))
 
 	require.Len(t, store.savedTranches, 2)
+	for i := range store.savedTranches {
+		encoded, err := json.Marshal(&store.savedTranches[i])
+		require.NoError(t, err)
+		var persisted map[string]any
+		require.NoError(t, json.Unmarshal(encoded, &persisted))
+		assert.Equal(t, "on_demand_equivalent", persisted["amount_basis"])
+		assert.NotContains(t, persisted, "commitment_rate")
+	}
 	assert.True(t, store.savedTranches[0].ScheduledDate.Equal(now), "immediate tranche scheduled_date must be the run start")
 	assert.InDelta(t, 2.5, store.savedTranches[0].AmountUSDHr, 1e-9)
 	assert.InDelta(t, 7.5, store.savedTranches[1].AmountUSDHr, 1e-9)

@@ -1,0 +1,1 @@
+ALTER TABLE ladder_tranches VALIDATE CONSTRAINT ladder_tranche_amount_provenance;
