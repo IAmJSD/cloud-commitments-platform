@@ -72,13 +72,18 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 			return beforeSubmission(fmt.Errorf("execution %s: %w", exec.ExecutionID, ErrPlanStepNoRecommendations))
 		}
 
-		// Fan out across plan accounts when accounts are configured.
+		// Fan out across plan accounts when accounts are configured, unless
+		// this lineage's first attempt pinned the other shape (issue #97).
 		if exec.CloudAccountID == nil {
 			accounts, err := m.config.GetPlanAccounts(ctx, exec.PlanID)
 			if err != nil {
 				return fmt.Errorf("failed to load plan accounts for plan %s: %w", exec.PlanID, err)
 			}
-			if len(accounts) > 0 {
+			fanOut, err := m.lineageFansOut(ctx, exec, accounts)
+			if err != nil {
+				return err
+			}
+			if fanOut {
 				return m.executeScopeAware(ctx, exec, plan, accounts)
 			}
 		}

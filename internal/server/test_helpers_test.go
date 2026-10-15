@@ -368,6 +368,9 @@ func (m *mockConfigStoreForHealth) SaveExecutionIfStatus(ctx context.Context, e 
 func (m *mockConfigStoreForHealth) SaveExecutionIfStatusTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution, _ []string) error {
 	return m.SavePurchaseExecution(ctx, e)
 }
+func (m *mockConfigStoreForHealth) PinExecutionFanOutShape(_ context.Context, _ string, shape string) (string, error) {
+	return shape, nil
+}
 func (m *mockConfigStoreForHealth) RecoverReapedExecution(ctx context.Context, e *config.PurchaseExecution) error {
 	return m.SavePurchaseExecution(ctx, e)
 }

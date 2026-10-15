@@ -1,0 +1,43 @@
+package mocks
+
+import (
+	"context"
+	"sync"
+)
+
+// fanOutShapePins is the in-memory stand-in for the
+// purchase_execution_fan_out_shapes table: the first shape pinned for a lineage
+// key is kept and returned to every later caller. The zero value is ready.
+type fanOutShapePins struct {
+	mu   sync.Mutex
+	pins map[string]string
+}
+
+func (p *fanOutShapePins) pin(lineageKey, shape string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if pinned, ok := p.pins[lineageKey]; ok {
+		return pinned
+	}
+	if p.pins == nil {
+		p.pins = make(map[string]string)
+	}
+	p.pins[lineageKey] = shape
+	return shape
+}
+
+// PinExecutionFanOutShape mocks the fan-out shape pin (issue #97).
+// PinExecutionFanOutShapeFn takes priority; with no expectation registered it
+// behaves like the real store (first writer wins per lineage key), so one mock
+// shared across successive attempts of a lineage sees what the first pinned.
+func (m *MockConfigStore) PinExecutionFanOutShape(ctx context.Context, lineageKey, shape string) (string, error) {
+	m.record("PinExecutionFanOutShape", ctx, lineageKey, shape)
+	if m.PinExecutionFanOutShapeFn != nil {
+		return m.PinExecutionFanOutShapeFn(ctx, lineageKey, shape)
+	}
+	if !isExpected(&m.Mock, "PinExecutionFanOutShape") {
+		return m.fanOutShapes.pin(lineageKey, shape), nil
+	}
+	args := m.Called(ctx, lineageKey, shape)
+	return args.String(0), args.Error(1)
+}
