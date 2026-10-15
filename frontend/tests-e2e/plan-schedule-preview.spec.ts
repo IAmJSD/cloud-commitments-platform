@@ -187,20 +187,55 @@ for (const width of [1440, 1280, 390, 320]) test.describe(`viewport ${width}px`,
     expect((await dense.locator('svg').boundingBox())!.width).toBeGreaterThanOrEqual(4896);
     expect(await dense.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     if (width <= 390) {
-      const scroll = dense.locator('.schedule-preview-scroll');
-      await scroll.scrollIntoViewIfNeeded();
-      const box = (await scroll.boundingBox())!, svgBox = (await dense.locator('svg').boundingBox())!;
-      const y = svgBox.y + svgBox.height * 304 / 370, left = box.x + 40, right = box.x + box.width - 40;
-      const hit = await page.evaluate(({ x, y }) => { const element = document.elementFromPoint(x, y); return { tag: element?.tagName, control: !!element?.closest("[data-preview-step],[data-preview-boundary]"), action: element ? getComputedStyle(element).touchAction : null }; }, { x: right, y });
-      expect(hit.tag).toBe('svg'); expect(hit.control).toBe(false); expect(hit.action).toBe('auto');
-      const beforeScroll = await scroll.evaluate(element => element.scrollLeft);
-      const labels = await dense.locator('[data-preview-step]').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')));
-      const session = await page.context().newCDPSession(page);
-      try {
-        await session.send('Input.synthesizeScrollGesture', { x: right, y, xDistance: left - right, gestureSourceType: 'touch', speed: 600 });
-        await expect.poll(() => scroll.evaluate(element => element.scrollLeft)).toBeGreaterThan(beforeScroll);
-        expect(await dense.locator('[data-preview-step]').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')))).toEqual(labels);
-      } finally { await session.detach(); }
+      const scroll = dense.locator('.schedule-preview-scroll'), meta = await page.locator('meta[name="viewport"]').evaluate(element => element.outerHTML);
+      const geometry = await scroll.evaluate(element => ({ width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height }));
+      const matrix = [];
+      for (const method of ['synth', 'direct']) {
+        const baseline = await page.context().newPage();
+        try {
+          await baseline.setViewportSize(page.viewportSize()!);
+          await baseline.setContent(`${meta}<style>body{margin:0}div{display:flex;align-items:flex-start;overflow:auto;width:${geometry.width - 2}px;height:${geometry.height - 2}px;border:1px solid}svg{display:block;flex:1 0 auto;max-width:none;height:auto}</style><div><svg width="4896" height="370" viewBox="0 0 4896 370"></svg></div>`);
+          for (const product of [false, true]) {
+            if (product) { await page.bringToFront(); await dense.getByRole('button', { name: 'Close preview' }).click(); await page.locator('#preview-plan-schedule-btn').click(); }
+            const host = product ? page : baseline, target = product ? scroll : baseline.locator('div');
+            await host.bringToFront(); await target.scrollIntoViewIfNeeded();
+            const box = (await target.boundingBox())!, svg = (await target.locator('svg').boundingBox())!;
+            const y = svg.y + svg.height * 304 / 370, left = box.x + 40, right = box.x + box.width - 40;
+            const hit = await host.evaluate(({ x, y }) => { const element = document.elementFromPoint(x, y), ancestors = [];
+              for (let node = element; node; node = node.parentElement) { const css = getComputedStyle(node); ancestors.push({ tag: node.tagName, touch: css.touchAction, overflow: css.overflow }); }
+              return { tag: element?.tagName, control: !!element?.closest('[data-preview-step],[data-preview-boundary]'), action: element && getComputedStyle(element).touchAction, viewport: [innerWidth, innerHeight, visualViewport?.scale], ancestors }; }, { x: right, y });
+            expect.soft(hit.tag).toBe('svg'); expect.soft(hit.control).toBe(false); expect.soft(hit.action).toBe('auto');
+            const beforeScroll = await target.evaluate(element => element.scrollLeft), labels = product ? await dense.locator('[data-preview-step]').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label'))) : [];
+            const session = await host.context().newCDPSession(host);
+            try {
+              const browser = await session.send('Browser.getVersion');
+              if (method === 'synth') await session.send('Input.synthesizeScrollGesture', { x: right, y, xDistance: left - right, gestureSourceType: 'touch', speed: 600 });
+              else {
+                await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: right, y, id: 1 }] });
+                for (let move = 1; move <= 12; move++) { await host.evaluate(() => new Promise(requestAnimationFrame)); await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: right + (left - right) * move / 12, y, id: 1 }] }); }
+                await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+                await host.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+              }
+              await expect.configure({ soft: true }).poll(() => target.evaluate(element => element.scrollLeft)).toBeGreaterThan(beforeScroll);
+              const metrics = await target.evaluate(element => ({ width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height, clientWidth: element.clientWidth, clientHeight: element.clientHeight, overflowX: getComputedStyle(element).overflowX, scrollWidth: element.scrollWidth, afterScroll: element.scrollLeft }));
+              matrix.push({ method, product, browser, hit, beforeScroll, metrics });
+              if (product) expect.soft(await dense.locator('[data-preview-step]').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')))).toEqual(labels);
+            } finally { await session.detach(); }
+          }
+        } finally { await baseline.close(); }
+      }
+      await testInfo.attach('native-pan-matrix', { body: JSON.stringify({ isMobile, matrix }), contentType: 'application/json' });
+      const reference = matrix.find(entry => entry.product)!;
+      for (const entry of matrix) {
+        expect.soft(entry.metrics.width).toBeCloseTo(geometry.width, 1);
+        expect.soft(entry.metrics.height).toBeCloseTo(geometry.height, 1);
+        expect.soft(entry.hit.viewport).toEqual(reference.hit.viewport);
+        expect.soft(entry.metrics.clientWidth).toBe(reference.metrics.clientWidth);
+        expect.soft(entry.metrics.clientHeight).toBe(reference.metrics.clientHeight);
+        expect.soft(entry.metrics.scrollWidth).toBe(reference.metrics.scrollWidth);
+        expect.soft(entry.metrics.overflowX).toBe(reference.metrics.overflowX);
+      }
+      await page.bringToFront();
     }
     await dense.locator('[data-preview-step="0"]').focus();
     await page.keyboard.press('ArrowRight');
