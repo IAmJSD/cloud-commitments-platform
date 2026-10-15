@@ -306,6 +306,25 @@ func (app *Application) scheduledAuthMiddleware(next http.Handler) http.Handler 
 	return app.scheduledAuth.Middleware(next)
 }
 
+// scheduledTaskHTTPTimeout bounds a scheduled task triggered over HTTP. The
+// task runs detached from the request context, so this is what stops it. It
+// matches the --task CLI default (cmd/server getTaskTimeout).
+const scheduledTaskHTTPTimeout = 15 * time.Minute
+
+// scheduledResponseGrace is the extra time past scheduledTaskHTTPTimeout
+// allowed for writing the response.
+const scheduledResponseGrace = 30 * time.Second
+
+// extendScheduledWriteDeadline lifts the server-wide WriteTimeout (30s) for
+// this response, so a task that runs longer can still report its result to a
+// scheduler that is waiting for it instead of the connection being dropped.
+func extendScheduledWriteDeadline(w http.ResponseWriter) {
+	deadline := time.Now().Add(scheduledTaskHTTPTimeout + scheduledResponseGrace)
+	if err := http.NewResponseController(w).SetWriteDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		log.Printf("Failed to extend scheduled task write deadline: %v", err)
+	}
+}
+
 // handleScheduledHTTP handles scheduled tasks via HTTP endpoint
 // This is used by GCP Cloud Scheduler and Azure Logic Apps. Auth is
 // enforced upstream by scheduledAuthMiddleware (see CreateHTTPServer);
@@ -316,8 +335,6 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	ctx := r.Context()
 
 	// Extract task type from URL path: /api/scheduled/{task_type}.
 	// TrimPrefix is cleaner than splitting and indexing parts[2]; it also
@@ -337,6 +354,15 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Unknown scheduled task", http.StatusBadRequest)
 		return
 	}
+
+	// Run the task on a context detached from the request (#784). The
+	// scheduler gives up after its attempt deadline (Cloud Scheduler 320s,
+	// Logic Apps 120s) and drops the connection, which cancels r.Context().
+	// Inheriting that cancellation could abort a sweep mid-purchase and drop
+	// the finalize/history write. The task stays bounded by its own timeout.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), scheduledTaskHTTPTimeout)
+	defer cancel()
+	extendScheduledWriteDeadline(w)
 
 	// Ensure database connection is established (lazy initialization)
 	if err = app.ensureDB(ctx); err != nil {
