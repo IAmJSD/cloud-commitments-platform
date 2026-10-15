@@ -18,14 +18,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// captureConfigLogs redirects the shared logger into a buffer for the
-// duration of the test. Tests using it must not run in parallel.
-func captureConfigLogs(t *testing.T) *bytes.Buffer {
+// captureConfigLogs redirects the shared logger into a buffer at the given
+// level for the duration of the test. Tests using it must not run in
+// parallel.
+func captureConfigLogs(t *testing.T, level logging.Level) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
 	prevOut := logging.SetOutput(&buf)
 	prevLevel := logging.GetLevel()
-	logging.SetLevelValue(logging.LevelDebug)
+	logging.SetLevelValue(level)
 	t.Cleanup(func() {
 		logging.SetOutput(prevOut)
 		logging.SetLevelValue(prevLevel)
@@ -56,12 +57,16 @@ var rollbackSites = []struct {
 	{"WithTx", "WithTx", func(ctx context.Context, s *PostgresStore) error {
 		return s.WithTx(ctx, func(pgx.Tx) error { return errors.New("user code failed") })
 	}},
+	{"withLadderConfigLock", "ladder config lock cfg-1", func(ctx context.Context, s *PostgresStore) error {
+		return s.withLadderConfigLock(ctx, "cfg-1", func(pgx.Tx) error { return nil })
+	}},
 }
 
 func TestTxRollbackFailureIsLogged(t *testing.T) {
 	for _, tc := range rollbackSites {
 		t.Run(tc.name, func(t *testing.T) {
-			buf := captureConfigLogs(t)
+			// Capture at Warn so a downgrade of the log level is caught.
+			buf := captureConfigLogs(t, logging.LevelWarn)
 			mock := newMock(t)
 			mock.ExpectBegin()
 			rbErr := errors.New("conn reset by peer")
@@ -73,6 +78,7 @@ func TestTxRollbackFailureIsLogged(t *testing.T) {
 			require.NoError(t, mock.ExpectationsWereMet())
 
 			out := buf.String()
+			assert.Contains(t, out, "[WARN]", "rollback failure must be logged at WARN")
 			assert.Contains(t, out, "conn reset by peer", "rollback failure must be logged")
 			assert.Contains(t, out, tc.op, "log line must name the failing operation")
 		})
@@ -82,7 +88,7 @@ func TestTxRollbackFailureIsLogged(t *testing.T) {
 func TestTxRollbackAfterCloseIsQuiet(t *testing.T) {
 	for _, tc := range rollbackSites {
 		t.Run(tc.name, func(t *testing.T) {
-			buf := captureConfigLogs(t)
+			buf := captureConfigLogs(t, logging.LevelDebug)
 			mock := newMock(t)
 			mock.ExpectBegin()
 			mock.ExpectRollback().WillReturnError(pgx.ErrTxClosed)
@@ -93,4 +99,28 @@ func TestTxRollbackAfterCloseIsQuiet(t *testing.T) {
 				"pgx.ErrTxClosed is the benign post-Commit case and must not be logged")
 		})
 	}
+}
+
+// TestTxRollbackRunsOnDetachedContext covers the usual failure path: the
+// request context is canceled while the transaction body runs. The rollback
+// must not inherit that cancellation (it would fail with context.Canceled,
+// leave the rollback undone and log noise); it runs on a detached context.
+func TestTxRollbackRunsOnDetachedContext(t *testing.T) {
+	buf := captureConfigLogs(t, logging.LevelDebug)
+	mock := newMock(t)
+	mock.ExpectBegin()
+	// The delay makes pgxmock honor ctx: a canceled ctx returns
+	// ctx.Err() at once, a live one waits and then succeeds.
+	mock.ExpectRollback().WillDelayFor(20 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	err := storeWith(mock).WithTx(ctx, func(pgx.Tx) error {
+		cancel()
+		return ctx.Err()
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	require.NoError(t, mock.ExpectationsWereMet())
+	assert.NotContains(t, buf.String(), "rollback",
+		"rollback on a detached context must succeed and log nothing")
 }

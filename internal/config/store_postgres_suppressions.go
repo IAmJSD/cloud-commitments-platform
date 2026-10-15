@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/google/uuid"
@@ -35,14 +36,24 @@ func (s *PostgresStore) WithTx(ctx context.Context, fn func(tx pgx.Tx) error) er
 	return nil
 }
 
+// rollbackTimeout bounds the deferred rollback, which runs on a context
+// detached from the request so a canceled request still rolls back.
+const rollbackTimeout = 5 * time.Second
+
 // rollbackTx is the deferred best-effort rollback for a pgx transaction.
 // After a successful Commit, Rollback returns pgx.ErrTxClosed, which is
 // expected and stays quiet. Any other error is a genuine rollback failure
 // (dropped connection, server-side abort) and is logged with op so it is
 // visible. It is logged rather than returned so it never masks the error
 // (or commit result) the caller already has.
+//
+// The rollback runs on context.WithoutCancel(ctx) with a short timeout: a
+// canceled request ctx is the usual reason a tx body fails, and rolling
+// back on it would fail with a context error instead of rolling back.
 func rollbackTx(ctx context.Context, tx pgx.Tx, op string) {
-	if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+	rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
+	if err := tx.Rollback(rbCtx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
 		logging.Warnf("%s: transaction rollback failed: %v", op, err)
 	}
 }
