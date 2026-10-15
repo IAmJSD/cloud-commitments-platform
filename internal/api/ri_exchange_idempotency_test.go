@@ -103,7 +103,7 @@ func azureDoubleSpendHandler(t *testing.T, ledger *exchangeClaimLedger, committe
 	// Registered for any session and without Once() so that a regression
 	// committing twice fails by ASSERTION on the recorded sessions below,
 	// rather than panicking the test binary on an unexpected mock call.
-	opsClient.On("ExecuteExchange", ctx, mock.Anything).Run(func(args mock.Arguments) {
+	opsClient.On("ExecuteExchange", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		*committed = append(*committed, args.String(1))
 	}).Return(&azurecompute.ExchangeResult{SessionID: "sess-1", Status: "Succeeded"}, nil).Maybe()
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })

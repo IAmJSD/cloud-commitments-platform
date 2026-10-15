@@ -1234,7 +1234,11 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 		return nil, err
 	}
 
-	result, err := client.ExecuteExchange(ctx, preview.SessionID)
+	// Past the claim the exchange may commit at Azure; a cancelled request must
+	// not abort the submit or its long-running-operation poll (#790).
+	execCtx, cancelExec := detachedRIExchangeContext(ctx, riExchangeExecutionTimeout)
+	defer cancelExec()
+	result, err := client.ExecuteExchange(execCtx, preview.SessionID)
 	if err != nil {
 		logging.Errorf("azure exchange execution failed: %v", err)
 		// Non-4xx failures here are ambiguous: BeginPost may already have
@@ -1918,7 +1922,11 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 		return nil, err
 	}
 
-	exchangeID, quote, err := exchange.ExecuteExchange(ctx, exchange.ExchangeExecuteRequest{
+	// Past the claim the exchange may commit at AWS; a cancelled request must
+	// not abort it midway (#790).
+	execCtx, cancelExec := detachedRIExchangeContext(ctx, riExchangeExecutionTimeout)
+	defer cancelExec()
+	exchangeID, quote, err := h.awsExchangeExecutor()(execCtx, exchange.ExchangeExecuteRequest{
 		Region:           region,
 		ReservedIDs:      body.RIIDs,
 		Targets:          toExchangeTargets(body.Targets),
@@ -2302,6 +2310,9 @@ func (h *Handler) approveRIExchangeViaToken(ctx context.Context, req *events.Lam
 // stampRIExchangeApprover records session.Email as approved_by. Best-effort: the
 // exchange already executed, so a stamp failure is logged, not surfaced.
 func (h *Handler) stampRIExchangeApprover(ctx context.Context, id string, session *Session) {
+	// Runs after money moved, so the audit write must not die with the request (#790).
+	ctx, cancel := detachedRIExchangeContext(ctx, riExchangeTerminalSaveTimeout)
+	defer cancel()
 	if err := h.config.StampRIExchangeApprovedBy(ctx, id, session.Email); err != nil {
 		logging.Errorf("failed to stamp approved_by on exchange %s: %v", id, err)
 	}
@@ -2566,6 +2577,8 @@ func (h *Handler) validateExchangeApproval(ctx context.Context, id, token string
 }
 
 // failExchange marks an exchange as failed, logging if the DB write also fails.
+//
+//nolint:unparam // (result, error) shape lets executeApprovedExchange tail-call it; a failed exchange is a 200 "failed" body, not an error
 func (h *Handler) failExchange(ctx context.Context, id, reason string) (any, error) {
 	if failErr := h.config.FailRIExchange(ctx, id, reason); failErr != nil {
 		logging.Errorf("failed to mark exchange %s as failed (DB may be unavailable): %v", id, failErr)
@@ -2659,19 +2672,21 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 		return h.failExchange(ctx, id, fmt.Sprintf("reserved ceiling %q is not a decimal", ceiling))
 	}
 
-	execFn := exchange.ExecuteExchange
-	if h.executeExchangeFn != nil {
-		execFn = h.executeExchangeFn
-	}
-	exchangeID, freshQ, execErr := execFn(ctx, exchange.ExchangeExecuteRequest{
+	// The provider call and the terminal ledger write that records its outcome
+	// must survive a cancelled approval request (#790).
+	execCtx, cancelExec := detachedRIExchangeContext(ctx, riExchangeExecutionTimeout)
+	defer cancelExec()
+	exchangeID, freshQ, execErr := h.awsExchangeExecutor()(execCtx, exchange.ExchangeExecuteRequest{
 		Region:           region,
 		ReservedIDs:      record.SourceRIIDs,
 		TargetOfferingID: record.TargetOfferingID,
 		TargetCount:      int32(record.TargetCount), // #nosec G115 -- RI quantity stored from validated API request; AWS limits RI counts well below math.MaxInt32
 		MaxPaymentDueUSD: effectiveCap,
 	})
+	saveCtx, cancelSave := detachedRIExchangeContext(ctx, riExchangeTerminalSaveTimeout)
+	defer cancelSave()
 	if execErr != nil {
-		return h.failExchange(ctx, id, execErr.Error())
+		return h.failExchange(saveCtx, id, execErr.Error())
 	}
 
 	// H3: persist the amount AWS actually accepted, not the reserved ceiling.
@@ -2680,7 +2695,7 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 	// H4: retry the ledger write via retryCompleteWithPayment; persistent
 	// failure is returned as an error (HTTP 500) so the caller knows money
 	// moved but the record was not updated.
-	if completeErr := h.retryCompleteWithPayment(ctx, id, exchangeID, acceptedPaymentDue); completeErr != nil {
+	if completeErr := h.retryCompleteWithPayment(saveCtx, id, exchangeID, acceptedPaymentDue); completeErr != nil {
 		logging.Errorf("all ledger write attempts failed for exchange %s after money moved: %v",
 			id, completeErr)
 		return nil, fmt.Errorf("exchange executed (id=%s) but ledger update failed: %w",

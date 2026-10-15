@@ -403,7 +403,7 @@ func TestApproveRIExchange_SessionAdmin(t *testing.T) {
 	// returns a non-error result map. Since execErr == nil, StampRIExchangeApprovedBy
 	// is called as best-effort audit trail.
 	mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil)
-	mockStore.On("StampRIExchangeApprovedBy", ctx, id, adminSession.Email).Return(nil)
+	mockStore.On("StampRIExchangeApprovedBy", mock.Anything, id, adminSession.Email).Return(nil)
 
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{
@@ -418,7 +418,7 @@ func TestApproveRIExchange_SessionAdmin(t *testing.T) {
 	mockStore.AssertCalled(t, "GetRIExchangeRecord", ctx, id)
 	mockStore.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing", mock.Anything)
 	mockStore.AssertCalled(t, "FailRIExchange", ctx, id, mock.AnythingOfType("string"))
-	mockStore.AssertCalled(t, "StampRIExchangeApprovedBy", ctx, id, adminSession.Email)
+	mockStore.AssertCalled(t, "StampRIExchangeApprovedBy", mock.Anything, id, adminSession.Email)
 }
 
 // TestApproveRIExchange_SessionApproveOwn verifies that a user with approve-own
@@ -460,7 +460,7 @@ func TestApproveRIExchange_SessionApproveOwn(t *testing.T) {
 			RIExchangeMaxPerExchangeUSD: 500,
 		}, nil)
 		mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil)
-		mockStore.On("StampRIExchangeApprovedBy", ctx, id, ownerSession.Email).Return(nil)
+		mockStore.On("StampRIExchangeApprovedBy", mock.Anything, id, ownerSession.Email).Return(nil)
 
 		req := &events.LambdaFunctionURLRequest{
 			Headers: map[string]string{
@@ -537,7 +537,7 @@ func TestApproveRIExchange_SessionScope(t *testing.T) {
 			Return(&config.RIExchangeRecord{ID: id, Status: "processing", SourceRIIDs: []string{"ri-1"}, PaymentDue: "50.00"}, nil).Maybe()
 		mockStore.On("ReserveApprovedRIExchange", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("500.000000", nil).Maybe()
 		mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil).Maybe()
-		mockStore.On("StampRIExchangeApprovedBy", ctx, id, mock.Anything).Return(nil).Maybe()
+		mockStore.On("StampRIExchangeApprovedBy", mock.Anything, id, mock.Anything).Return(nil).Maybe()
 
 		return &Handler{
 			config:                 mockStore,
@@ -630,7 +630,7 @@ func fourEyesRIExchangeFixture(t *testing.T, creatorID *string, approverID strin
 		Return(&config.RIExchangeRecord{ID: id, Status: "processing", SourceRIIDs: []string{"ri-1"}, PaymentDue: "50.00"}, nil)
 	mockStore.On("ReserveApprovedRIExchange", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("500.000000", nil)
 	mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil)
-	mockStore.On("StampRIExchangeApprovedBy", ctx, id, mock.Anything).Return(nil)
+	mockStore.On("StampRIExchangeApprovedBy", mock.Anything, id, mock.Anything).Return(nil)
 
 	return &Handler{config: mockStore, auth: mockAuth}, mockStore, id, token
 }
@@ -730,7 +730,7 @@ func TestApproveRIExchange_TokenPathAttributesResolvedApprover(t *testing.T) {
 		_, err := h.approveRIExchange(ctx, sessionReq("sess"), id, token)
 		require.NoError(t, err)
 		store.AssertCalled(t, "TransitionRIExchangeStatus", ctx, id, "pending", "processing", &approver)
-		store.AssertCalled(t, "StampRIExchangeApprovedBy", ctx, id, approver+"@example.com")
+		store.AssertCalled(t, "StampRIExchangeApprovedBy", mock.Anything, id, approver+"@example.com")
 	})
 
 	t.Run("no session leaves the actor unset", func(t *testing.T) {
@@ -772,7 +772,7 @@ func TestApproveRIExchange_TokenPathSkipsStampWhenExecutionErrors(t *testing.T) 
 	mockStore.On("ReserveApprovedRIExchange", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("500.000000", nil)
 	mockStore.On("TransitionRIExchangeStatus", ctx, id, "pending", "processing", &approver).
 		Return(&config.RIExchangeRecord{ID: id, Status: "processing"}, nil)
-	mockStore.On("CompleteRIExchangeWithPayment", ctx, id, "exch-518", "0").
+	mockStore.On("CompleteRIExchangeWithPayment", mock.Anything, id, "exch-518", "0").
 		Return(fmt.Errorf("DB write failed")).Times(3)
 
 	h := &Handler{
@@ -2333,7 +2333,7 @@ func TestApproveRIExchange_SessionActorStamped(t *testing.T) {
 		RIExchangeMaxDailyUSD: 1000, RIExchangeMaxPerExchangeUSD: 500,
 	}, nil)
 	mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil)
-	mockStore.On("StampRIExchangeApprovedBy", ctx, id, adminSession.Email).Return(nil)
+	mockStore.On("StampRIExchangeApprovedBy", mock.Anything, id, adminSession.Email).Return(nil)
 
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{
@@ -2398,7 +2398,7 @@ func TestExecuteApprovedExchange_EffectiveCap_BoundedByDailyHeadroom(t *testing.
 		},
 	}
 
-	mockStore.On("CompleteRIExchangeWithPayment", ctx, id, "exch-h2-handler", "40.000000").Return(nil)
+	mockStore.On("CompleteRIExchangeWithPayment", mock.Anything, id, "exch-h2-handler", "40.000000").Return(nil)
 
 	record := &config.RIExchangeRecord{
 		ID:               id,
@@ -2452,7 +2452,7 @@ func TestExecuteApprovedExchange_AcceptedAmountFromFreshQuote(t *testing.T) {
 
 	// The FRESH amount "35.500000" must reach CompleteRIExchangeWithPayment,
 	// not the stale "30.00" from record.PaymentDue.
-	mockStore.On("CompleteRIExchangeWithPayment", ctx, id, "exch-h3-fresh", "35.500000").Return(nil)
+	mockStore.On("CompleteRIExchangeWithPayment", mock.Anything, id, "exch-h3-fresh", "35.500000").Return(nil)
 
 	record := &config.RIExchangeRecord{
 		ID:               id,
@@ -2499,7 +2499,7 @@ func TestExecuteApprovedExchange_LedgerWriteFailure_ReturnsError(t *testing.T) {
 	}
 
 	// Fail all three retry attempts.
-	mockStore.On("CompleteRIExchangeWithPayment", ctx, id, "exch-h4-test", "0").
+	mockStore.On("CompleteRIExchangeWithPayment", mock.Anything, id, "exch-h4-test", "0").
 		Return(fmt.Errorf("DB write failed")).Times(3)
 
 	record := &config.RIExchangeRecord{
@@ -2629,7 +2629,7 @@ func TestExecuteApprovedExchange_SettlesAcceptedAmountWithinReservedCeiling(t *t
 		RIExchangeMaxDailyUSD: 1000, RIExchangeMaxPerExchangeUSD: 500,
 	}, nil)
 	mockStore.On("ReserveApprovedRIExchange", ctx, id, "1000.000000", "500.000000").Return("400.000000", nil)
-	mockStore.On("CompleteRIExchangeWithPayment", ctx, id, "exch-1", "390.000000").Return(nil)
+	mockStore.On("CompleteRIExchangeWithPayment", mock.Anything, id, "exch-1", "390.000000").Return(nil)
 
 	var got exchange.ExchangeExecuteRequest
 	h := &Handler{config: mockStore, executeExchangeFn: func(_ context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {

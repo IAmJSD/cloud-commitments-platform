@@ -129,7 +129,7 @@ type Handler struct {
 	commitmentOpts CommitmentOptsInterface
 
 	// executeExchangeFn is the RI exchange execution function injected by tests.
-	// When nil (the production default), executeApprovedExchange calls
+	// When nil (the production default), awsExchangeExecutor returns
 	// exchange.ExecuteExchange directly. Tests inject a stub so the handler
 	// can be exercised end-to-end without live AWS credentials or a real RI.
 	executeExchangeFn func(ctx context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error)
