@@ -8,6 +8,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/google/uuid"
@@ -193,6 +194,9 @@ func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time
 
 	for i := range recs {
 		rec := recs[i]
+		if rec.SourceAccountID != nil && (!utf8.ValidString(*rec.SourceAccountID) || strings.ContainsRune(*rec.SourceAccountID, 0)) {
+			return fmt.Errorf("invalid source_account_id encoding")
+		}
 		payload, err := json.Marshal(rec)
 		if err != nil {
 			return fmt.Errorf("failed to marshal recommendation %d: %w", i, err)

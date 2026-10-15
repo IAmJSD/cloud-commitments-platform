@@ -30,6 +30,7 @@ import (
 
 type completenessHTTP struct {
 	resourceType string
+	accounts     []any
 	details      []string
 	fallback     []string
 	failScope    bool
@@ -80,14 +81,18 @@ func (f *completenessHTTP) Do(req *http.Request) (*http.Response, error) {
 			if input.LookbackPeriodInDays == "THIRTY_DAYS" {
 				quantities = f.fallback
 			}
-			for _, quantity := range quantities {
-				details = append(details, map[string]any{
+			for i, quantity := range quantities {
+				detail := map[string]any{
 					"RecommendedNumberOfInstancesToPurchase": quantity,
 					"EstimatedMonthlySavingsAmount":          "10", "EstimatedMonthlyOnDemandCost": "30",
 					"InstanceDetails": map[string]any{"RDSInstanceDetails": map[string]any{
 						"InstanceType": f.resourceType, "Region": "us-east-1", "DeploymentOption": "Single-AZ",
 					}},
-				})
+				}
+				if i < len(f.accounts) {
+					detail["AccountId"] = f.accounts[i]
+				}
+				details = append(details, detail)
 			}
 			if f.failScope && call == 1 {
 				status = http.StatusBadRequest

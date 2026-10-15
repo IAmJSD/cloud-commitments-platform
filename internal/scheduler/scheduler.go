@@ -1639,7 +1639,12 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 			continue
 		}
 
+		var sourceAccountID *string
+		if rec.Account != "" {
+			sourceAccountID = new(rec.Account)
+		}
 		record := config.RecommendationRecord{
+			SourceAccountID:   sourceAccountID,
 			Provider:          providerName,
 			Service:           string(rec.Service),
 			Region:            rec.Region,
