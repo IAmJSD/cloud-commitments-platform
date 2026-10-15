@@ -255,7 +255,8 @@ func TestSender_SendPasswordResetEmail_NoFromEmail(t *testing.T) {
 	ctx := context.Background()
 	err := sender.SendPasswordResetEmail(ctx, "user@example.com", "https://example.com/reset")
 
-	require.NoError(t, err)
+	// Must surface the misconfiguration rather than report a send that never happened (#270).
+	require.ErrorIs(t, err, ErrNoFromEmail)
 }
 
 func TestSender_SendWelcomeEmail_NoFromEmail(t *testing.T) {
@@ -266,7 +267,19 @@ func TestSender_SendWelcomeEmail_NoFromEmail(t *testing.T) {
 	ctx := context.Background()
 	err := sender.SendWelcomeEmail(ctx, "user@example.com", "https://example.com", "user")
 
-	require.NoError(t, err)
+	// Must surface the misconfiguration rather than report a send that never happened (#270).
+	require.ErrorIs(t, err, ErrNoFromEmail)
+}
+
+func TestSender_SendUserInviteEmail_NoFromEmail(t *testing.T) {
+	sender := &Sender{
+		fromEmail: "",
+	}
+
+	err := sender.SendUserInviteEmail(context.Background(), "user@example.com", "https://example.com/setup")
+
+	// A new user can never get a setup link if this silently succeeds (#270).
+	require.ErrorIs(t, err, ErrNoFromEmail)
 }
 
 // Test error cases for template functions.

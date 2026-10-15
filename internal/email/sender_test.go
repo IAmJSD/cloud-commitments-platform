@@ -155,6 +155,9 @@ func TestSender_SendNotification_NoTopic(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestSender_SendToEmail_NoFromEmail: with FROM_EMAIL unset the SES path
+// cannot send anything, so it must report ErrNoFromEmail instead of a
+// silent nil that lets callers (password reset, invites) claim success (#270).
 func TestSender_SendToEmail_NoFromEmail(t *testing.T) {
 	sender := &Sender{
 		fromEmail: "",
@@ -163,8 +166,31 @@ func TestSender_SendToEmail_NoFromEmail(t *testing.T) {
 	ctx := context.Background()
 	err := sender.SendToEmail(ctx, "recipient@example.com", "Test Subject", "Test Body")
 
-	// Should not error when no from email is configured
-	assert.NoError(t, err)
+	require.ErrorIs(t, err, ErrNoFromEmail)
+}
+
+// TestSender_DirectSend_InvalidFromEmail covers both public SES entry points
+// with empty and malformed FROM_EMAIL values: each must return ErrNoFromEmail
+// and never reach SES (#270).
+func TestSender_DirectSend_InvalidFromEmail(t *testing.T) {
+	ctx := context.Background()
+	for _, from := range []string{"", "noreply@", "noreply@localhost", "@example.com"} {
+		t.Run("from="+from, func(t *testing.T) {
+			mockSES := new(MockSESClient)
+			sender := NewSenderWithClients(nil, mockSES, SenderConfig{FromEmail: from})
+
+			err := sender.SendToEmailWithCC(ctx, "to@example.com", []string{"cc@example.com"}, "Subject", "Body")
+			require.ErrorIs(t, err, ErrNoFromEmail)
+
+			err = sender.SendToEmailWithCCMultipart(ctx, "to@example.com", nil, "Subject", "text", "<p>html</p>")
+			require.ErrorIs(t, err, ErrNoFromEmail)
+
+			err = sender.SendToEmailWithCCMultipart(ctx, "to@example.com", nil, "Subject", "text", "")
+			require.ErrorIs(t, err, ErrNoFromEmail)
+
+			mockSES.AssertNotCalled(t, "SendEmail", mock.Anything, mock.Anything)
+		})
+	}
 }
 
 func TestTemplates_NewRecommendations(t *testing.T) {
