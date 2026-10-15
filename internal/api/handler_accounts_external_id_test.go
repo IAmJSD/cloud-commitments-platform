@@ -146,7 +146,7 @@ func TestCreateAccount_AWSExternalID_RoleArnHappyPath(t *testing.T) {
 // that the validation does NOT fire when role_arn mode is paired with
 // an empty role ARN — that combination is the self-account onboarding
 // path (uses ambient Lambda credentials, no AssumeRole, no ExternalId
-// needed). See awsAmbientCredResult in handler_accounts.go.
+// needed). See credentials.resolveRoleARNProvider.
 func TestCreateAccount_AWSExternalID_RoleArnNoRoleArnSelfAccount(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
