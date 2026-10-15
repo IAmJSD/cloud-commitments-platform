@@ -28,6 +28,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/ctxutil"
 )
 
 // reshapeEC2Client is the narrow slice of the EC2 client that
@@ -1236,14 +1237,15 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 
 	// Past the claim the exchange may commit at Azure; a cancelled request must
 	// not abort the submit or its long-running-operation poll (#790).
-	execCtx, cancelExec := detachedRIExchangeContext(ctx, riExchangeExecutionTimeout)
+	execCtx, cancelExec := ctxutil.DetachedWithTimeout(ctx, riExchangeExecutionTimeout)
 	defer cancelExec()
 	result, err := client.ExecuteExchange(execCtx, preview.SessionID)
 	if err != nil {
 		logging.Errorf("azure exchange execution failed: %v", err)
 		// Non-4xx failures here are ambiguous: BeginPost may already have
-		// submitted the exchange, and a ctx cancellation mid-poll looks
-		// identical to one that never reached Azure. Say so rather than
+		// submitted the exchange, and exhausting the riExchangeExecutionTimeout
+		// budget mid-poll looks identical to a call that never reached Azure
+		// (a request cancel no longer reaches execCtx). Say so rather than
 		// reporting a flat failure that invites the retry this claim now
 		// refuses (#1642).
 		return nil, mapAzureExchangeError(
@@ -1924,7 +1926,7 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 
 	// Past the claim the exchange may commit at AWS; a cancelled request must
 	// not abort it midway (#790).
-	execCtx, cancelExec := detachedRIExchangeContext(ctx, riExchangeExecutionTimeout)
+	execCtx, cancelExec := ctxutil.DetachedWithTimeout(ctx, riExchangeExecutionTimeout)
 	defer cancelExec()
 	exchangeID, quote, err := h.awsExchangeExecutor()(execCtx, exchange.ExchangeExecuteRequest{
 		Region:           region,
@@ -2311,7 +2313,7 @@ func (h *Handler) approveRIExchangeViaToken(ctx context.Context, req *events.Lam
 // exchange already executed, so a stamp failure is logged, not surfaced.
 func (h *Handler) stampRIExchangeApprover(ctx context.Context, id string, session *Session) {
 	// Runs after money moved, so the audit write must not die with the request (#790).
-	ctx, cancel := detachedRIExchangeContext(ctx, riExchangeTerminalSaveTimeout)
+	ctx, cancel := ctxutil.DetachedWithTimeout(ctx, riExchangeTerminalSaveTimeout)
 	defer cancel()
 	if err := h.config.StampRIExchangeApprovedBy(ctx, id, session.Email); err != nil {
 		logging.Errorf("failed to stamp approved_by on exchange %s: %v", id, err)
@@ -2578,8 +2580,15 @@ func (h *Handler) validateExchangeApproval(ctx context.Context, id, token string
 
 // failExchange marks an exchange as failed, logging if the DB write also fails.
 //
+// Every caller runs after the pending -> processing transition committed, so
+// the write is detached from the request (#790): a cancel there would
+// otherwise strand the record in "processing", where the approval retry gets
+// 409 from the transition guard and the row keeps counting against the daily cap.
+//
 //nolint:unparam // (result, error) shape lets executeApprovedExchange tail-call it; a failed exchange is a 200 "failed" body, not an error
 func (h *Handler) failExchange(ctx context.Context, id, reason string) (any, error) {
+	ctx, cancel := ctxutil.DetachedWithTimeout(ctx, riExchangeTerminalSaveTimeout)
+	defer cancel()
 	if failErr := h.config.FailRIExchange(ctx, id, reason); failErr != nil {
 		logging.Errorf("failed to mark exchange %s as failed (DB may be unavailable): %v", id, failErr)
 	}
@@ -2674,7 +2683,7 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 
 	// The provider call and the terminal ledger write that records its outcome
 	// must survive a cancelled approval request (#790).
-	execCtx, cancelExec := detachedRIExchangeContext(ctx, riExchangeExecutionTimeout)
+	execCtx, cancelExec := ctxutil.DetachedWithTimeout(ctx, riExchangeExecutionTimeout)
 	defer cancelExec()
 	exchangeID, freshQ, execErr := h.awsExchangeExecutor()(execCtx, exchange.ExchangeExecuteRequest{
 		Region:           region,
@@ -2683,7 +2692,7 @@ func (h *Handler) executeApprovedExchange(ctx context.Context, id string, record
 		TargetCount:      int32(record.TargetCount), // #nosec G115 -- RI quantity stored from validated API request; AWS limits RI counts well below math.MaxInt32
 		MaxPaymentDueUSD: effectiveCap,
 	})
-	saveCtx, cancelSave := detachedRIExchangeContext(ctx, riExchangeTerminalSaveTimeout)
+	saveCtx, cancelSave := ctxutil.DetachedWithTimeout(ctx, riExchangeTerminalSaveTimeout)
 	defer cancelSave()
 	if execErr != nil {
 		return h.failExchange(saveCtx, id, execErr.Error())

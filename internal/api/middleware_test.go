@@ -522,7 +522,7 @@ func TestApproveRIExchangeViaSession_RequiresCSRF(t *testing.T) {
 		RIExchangeMaxDailyUSD:       1000,
 		RIExchangeMaxPerExchangeUSD: 500,
 	}, nil).Maybe()
-	mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil).Maybe()
+	mockStore.On("FailRIExchange", mock.Anything, id, mock.AnythingOfType("string")).Return(nil).Maybe()
 	mockStore.On("StampRIExchangeApprovedBy", mock.Anything, id, adminSession.Email).Return(nil).Maybe()
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -598,7 +598,7 @@ func TestApproveRIExchange_CSRFFailureDoesNotFallThroughToToken(t *testing.T) {
 		RIExchangeMaxDailyUSD:       1000,
 		RIExchangeMaxPerExchangeUSD: 500,
 	}, nil).Maybe()
-	mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil).Maybe()
+	mockStore.On("FailRIExchange", mock.Anything, id, mock.AnythingOfType("string")).Return(nil).Maybe()
 	mockStore.On("StampRIExchangeApprovedBy", mock.Anything, id, adminSession.Email).Return(nil).Maybe()
 
 	h := &Handler{config: mockStore, auth: mockAuth}
@@ -654,7 +654,7 @@ func TestApproveRIExchangeViaSession_PassesCSRF(t *testing.T) {
 		RIExchangeMaxDailyUSD:       1000,
 		RIExchangeMaxPerExchangeUSD: 500,
 	}, nil)
-	mockStore.On("FailRIExchange", ctx, id, mock.AnythingOfType("string")).Return(nil)
+	mockStore.On("FailRIExchange", mock.Anything, id, mock.AnythingOfType("string")).Return(nil)
 	mockStore.On("StampRIExchangeApprovedBy", mock.Anything, id, adminSession.Email).Return(nil)
 
 	h := &Handler{config: mockStore, auth: mockAuth}

@@ -39,14 +39,20 @@ func (p *ctxProbe) assertDetached(t *testing.T, start time.Time) {
 	require.NoError(t, p.errAfterCancel,
 		"canceling the request must not cancel an exchange already submitted to the provider")
 	require.True(t, p.hasDeadline, "the detached exchange must still be bounded by its own timeout")
-	assert.WithinDuration(t, start.Add(riExchangeExecutionTimeout), p.deadline, 5*time.Second)
+	// A literal rather than riExchangeExecutionTimeout, so the test pins the
+	// budget itself: it must stay inside the documented lambda_timeout >= 270s
+	// requirement (4m execution + 30s terminal save).
+	assert.WithinDuration(t, start.Add(4*time.Minute), p.deadline, 5*time.Second)
 }
 
-// liveCtx matches a context that has not been canceled, so a mock expectation
-// fails when a terminal write is attempted on the dead request context, as a
-// real database driver would.
+// liveCtx matches a context that has not been canceled and carries the 30s
+// terminal-save budget, so a mock expectation fails when a terminal write is
+// attempted on the dead request context, as a real database driver would.
 func liveCtx() any {
-	return mock.MatchedBy(func(ctx context.Context) bool { return ctx.Err() == nil })
+	return mock.MatchedBy(func(ctx context.Context) bool {
+		deadline, ok := ctx.Deadline()
+		return ctx.Err() == nil && ok && time.Until(deadline) <= 30*time.Second
+	})
 }
 
 func approvedExchangeStore(t *testing.T, id string) *MockConfigStore {
@@ -186,4 +192,51 @@ func TestExecuteAzureExchange_RequestCancelDoesNotCancelExchange(t *testing.T) {
 	require.NoError(t, err)
 	probe.assertDetached(t, start)
 	assert.Equal(t, "Succeeded", res.(*AzureExecuteExchangeResponse).Status)
+}
+
+// TestExecuteApprovedExchange_RequestCancelBeforeReserveRecordsFailure covers
+// the window between the pending -> processing transition and the provider
+// call. A cancel there fails the reservation; the failure write must still land,
+// or the record is stranded in "processing": the approval retry gets 409 from
+// the transition guard and the row keeps counting against the daily cap.
+func TestExecuteApprovedExchange_RequestCancelBeforeReserveRecordsFailure(t *testing.T) {
+	const id = "550e8400-e29b-41d4-a716-000000000792"
+	reqCtx, cancelRequest := context.WithCancel(context.Background())
+	defer cancelRequest()
+
+	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
+	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{
+		RIExchangeMaxDailyUSD: 1000, RIExchangeMaxPerExchangeUSD: 500,
+	}, nil)
+	store.On("ReserveApprovedRIExchange", mock.Anything, id, "1000.000000", "500.000000").
+		Run(func(mock.Arguments) { cancelRequest() }).
+		Return("", context.Canceled).Once()
+	store.On("FailRIExchange", liveCtx(), id, "daily spending cap check failed").Return(nil).Once()
+
+	called := false
+	h := &Handler{config: store, executeExchangeFn: func(context.Context, exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
+		called = true
+		return "", nil, nil
+	}}
+
+	resp, err := h.executeApprovedExchange(reqCtx, id, approvedExchangeRecord(id))
+	require.NoError(t, err)
+	assert.Equal(t, "failed", resp.(map[string]any)["status"])
+	assert.False(t, called, "a failed reservation must never reach the provider")
+}
+
+// TestStampRIExchangeApprover_SurvivesRequestCancel pins the approved_by audit
+// write, which runs after money moved, to a detached context.
+func TestStampRIExchangeApprover_SurvivesRequestCancel(t *testing.T) {
+	const id = "550e8400-e29b-41d4-a716-000000000793"
+	reqCtx, cancelRequest := context.WithCancel(context.Background())
+	cancelRequest()
+
+	store := new(MockConfigStore)
+	t.Cleanup(func() { store.AssertExpectations(t) })
+	store.On("StampRIExchangeApprovedBy", liveCtx(), id, "approver@example.com").Return(nil).Once()
+
+	h := &Handler{config: store}
+	h.stampRIExchangeApprover(reqCtx, id, &Session{Email: "approver@example.com"})
 }

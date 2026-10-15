@@ -17,19 +17,12 @@ import (
 // goroutine forever. On Lambda the invocation itself is still bounded by the
 // function timeout, which no context can extend.
 //
-// Same pattern as purchase.detachedTimeout (#706 / #789); kept local to the
-// exchange path rather than shared so the two money paths can be reconciled
-// deliberately.
+// The detaching itself is ctxutil.DetachedWithTimeout, shared with the
+// purchase path (#706 / #789).
 const (
 	riExchangeExecutionTimeout    = 4 * time.Minute
 	riExchangeTerminalSaveTimeout = 30 * time.Second
 )
-
-// detachedRIExchangeContext keeps ctx values but drops its cancellation and
-// deadline, replacing them with a fresh timeout of d.
-func detachedRIExchangeContext(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), d)
-}
 
 // awsExchangeExecutor returns the AWS RI exchange execution function: the
 // test-injected executeExchangeFn when set, exchange.ExecuteExchange otherwise.
