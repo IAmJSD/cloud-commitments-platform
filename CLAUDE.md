@@ -89,17 +89,18 @@ coordinates agents on one machine; assignment is what coordinates people.
    ```bash
    for p in p0 p1 p2 p3; do
      echo "== priority/$p"
-     gh issue list --repo LeanerCloud/cloud-commitments-platform --label "priority/$p" --limit 500 \
+     gh issue list --repo LeanerCloud/cloud-commitments-platform --label "priority/$p" --limit 1000 \
        --search "no:assignee -label:status/blocked -label:status/needs-info -label:status/wontdo sort:created-asc" \
        --json number,title --jq '.[] | "#\(.number) \(.title)"'
    done
    echo "== no priority label"
-   gh issue list --repo LeanerCloud/cloud-commitments-platform --limit 500 \
+   gh issue list --repo LeanerCloud/cloud-commitments-platform --limit 1000 \
      --search "no:assignee -label:status/blocked -label:status/needs-info -label:status/wontdo sort:created-asc -label:priority/p0 -label:priority/p1 -label:priority/p2 -label:priority/p3" \
      --json number,title --jq '.[] | "#\(.number) \(.title)"'
    ```
 
-   Issues with no `priority/*` label come after `p3`. The query only sees
+   `--limit` truncates silently, so if a priority ever has more than 1000
+   open issues, raise it. Issues with no `priority/*` label come after `p3`. The query only sees
    assignees, so open the issue and check its comments for a claim (step 2)
    too. Before claiming, also check that no open PR already addresses it:
    `gh pr list --repo LeanerCloud/cloud-commitments-platform --search "<issue number> in:body"`.
@@ -126,14 +127,19 @@ coordinates agents on one machine; assignment is what coordinates people.
 
    A person's claim is active when their latest marker is `Claiming:` or
    `Taking over:`; a later `Released:` from them ends it. The earliest
-   active claim wins. If that is not you, edit your comment to
-   `Released: claimed by someone else first`, remove yourself as assignee
-   and pick another issue. An assignment with no marker comment (for
+   active claim wins. If that is not you, post
+   `gh issue comment <N> --repo LeanerCloud/cloud-commitments-platform --body "Released: claimed by someone else first"`
+   (your latest marker is what counts), remove yourself as assignee and
+   pick another issue. Agents that share one GitHub login can't tell their
+   claims apart by author, so each puts its worker id in every marker
+   (for example `Claiming: working on this [cc-platform-w3]`) and compares
+   claims by worker id; same-machine agents can also use the bus below. An assignment with no marker comment (for
    example a maintainer assigning someone) still means the issue is taken,
    and so does an older free-form claim comment such as `claimed by <worker>`.
 
 3. **Respect other people's claims.** An issue with an active claim or an
-   assignee belongs to that person. Do not work on it, even if it looks
+   assignee belongs to that person. A maintainer's assignment or
+   `Taking over:` overrides any claim. Do not work on it, even if it looks
    stale. If it has had no activity and no linked PR for 7 days, ask on
    the issue, mentioning the owner. Take it over once they agree or
    release it. If they have not replied after 3 more days, post
@@ -149,7 +155,7 @@ coordinates agents on one machine; assignment is what coordinates people.
    stay connected (and the PR labeling rule below can find the issue).
 
 5. **Release what you drop.** If you stop working on an issue without a
-   PR, post `Released: <where you got to>` and unassign yourself
+   PR, post `Released: <where you got to>` as a new comment and unassign yourself
    (`gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform --remove-assignee @me`), so the next
    person can pick it up. If the issue turns out to be already fixed, say
    which PR or commit fixed it and ask a maintainer to close it.
