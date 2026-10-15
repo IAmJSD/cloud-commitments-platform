@@ -155,3 +155,127 @@ test('rechecks operation-time UTC midnight and refuses stale reset without repla
   expect(point(2).getAttribute('aria-label')).toContain('2026-11-04');
   expect(document.getElementById('preview-date-error')?.textContent).toMatch(/future/);
 });
+
+
+const pointerPreview = (input: PlanSchedulePreviewInput = draft) => {
+  openPlanSchedulePreview(input, parent);
+  const svg = document.querySelector<SVGSVGElement>('#plan-schedule-preview svg')!;
+  let captured = false;
+  Object.assign(svg, {
+    getScreenCTM: () => ({ inverse: () => ({}) }),
+    createSVGPoint: () => ({ x: 0, y: 0, matrixTransform() { return { x: this.x, y: this.y }; } }),
+    setPointerCapture: jest.fn(() => { captured = true; }),
+    hasPointerCapture: () => captured,
+    releasePointerCapture: jest.fn(() => { captured = false; }),
+  });
+  const send = (type: string, target: Element, x: number, id = 1, primary = true): void => {
+    target.dispatchEvent(Object.assign(new Event(type, { bubbles: true, cancelable: true }),
+      { pointerId: id, isPrimary: primary, button: 0, clientX: x, clientY: 0 }));
+  };
+  const x = (index: number): number => Number(point(index).querySelector('circle')!.getAttribute('cx'));
+  return { svg, send, x, day: 544 / ((input.preset === 'immediate' ? 0 : (Math.floor(100 / Number(input.stepPercent)) - 1) * 7) + 8) };
+};
+
+test('drags dates from off-center grabs without jumping and keeps the frozen scale, shares and nodes', () => {
+  const { svg, send, x, day } = pointerPreview();
+  const input = field('preview-selected-date'), node = point(1), origin = x(1) + 18;
+  send('pointerdown', node, origin);
+  Object.assign(svg, { getScreenCTM: () => { throw new Error('Coordinate frame must stay frozen'); } });
+  send('pointermove', svg, origin + day / 4);
+  expect(node.getAttribute('aria-label')).toContain('2026-10-27');
+  send('pointermove', svg, origin + day);
+  expect(node.getAttribute('aria-label')).toContain('2026-10-28');
+  expect(input.value).toBe('2026-10-28');
+  expect(document.activeElement).toBe(node);
+  expect(input.disabled).toBe(true);
+  expect(x(1)).toBeCloseTo(origin - 18 + day);
+  send('pointerup', svg, origin + day);
+  expect(input.disabled).toBe(false);
+  expect(document.activeElement).toBe(node);
+  expect(point(1)).toBe(node);
+  expect(point(1).getAttribute('aria-label')).toContain('target 40%');
+  expect(parent.querySelector('input')?.value).toBe('unchanged');
+});
+
+test.each(['pointercancel', 'lostpointercapture', 'Escape'])('rolls back a captured draft on %s and closes only on a subsequent Escape', reason => {
+  const { svg, send, x, day } = pointerPreview(), origin = x(1);
+  send('pointerdown', point(1), origin);
+  send('pointermove', svg, origin + day);
+  expect(field('preview-selected-date').value).toBe('2026-10-28');
+  if (reason === 'Escape') point(1).dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  else send(reason, svg, origin + day);
+  expect(field('preview-selected-date').value).toBe('2026-10-27');
+  expect(document.getElementById('preview-date-changes')?.textContent).toContain('(0)');
+  expect(svg.releasePointerCapture).toHaveBeenCalled();
+  expect(document.getElementById('plan-schedule-preview')).not.toBeNull();
+  point(1).dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  expect(document.getElementById('plan-schedule-preview')).toBeNull();
+});
+
+test('redistributes endpoint gestures, focuses their owner before disabling inputs and supplies keyboard activation', () => {
+  const { svg, send, day } = pointerPreview();
+  const handle = document.querySelector<SVGGElement>('[data-preview-boundary="end"]')!;
+  const origin = Number(handle.querySelector('.preview-handle-marker')!.getAttribute('x')) + 6;
+  field('preview-range-end').focus();
+  send('pointerdown', handle, origin);
+  expect(document.activeElement).toBe(handle);
+  send('pointermove', svg, origin + day * 3);
+  expect(field('preview-range-end').value).toBe('2026-11-13');
+  expect(point(1).getAttribute('aria-label')).toContain('2026-10-28');
+  handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+  expect(field('preview-range-end').value).toBe('2026-11-13');
+  send('pointerup', svg, origin + day * 3);
+  handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+  expect(field('preview-range-end').value).toBe('2026-11-14');
+  handle.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
+  expect(document.activeElement).toBe(field('preview-range-end'));
+});
+
+test('rejects collisions/outside release, ignores other pointers and dirty input, and releases capture on close', () => {
+  const { svg, send, x, day } = pointerPreview(), origin = x(1);
+  send('pointerdown', svg, 100); expect(svg.setPointerCapture).not.toHaveBeenCalled();
+  send('pointerdown', point(1), origin, 2, false);
+  send('pointermove', svg, origin + day, 2);
+  expect(point(1).getAttribute('aria-label')).toContain('2026-10-27');
+  send('pointerdown', point(1), origin);
+  send('pointermove', svg, origin + day, 2);
+  send('pointermove', svg, origin + day * 7);
+  expect(field('preview-selected-date').value).toBe('2026-10-27');
+  expect(document.getElementById('preview-date-error')?.textContent).toMatch(/order/);
+  send('pointerup', svg, 1000);
+  expect(document.getElementById('preview-date-error')?.textContent).toMatch(/plot/i);
+  field('preview-selected-date').value = '';
+  field('preview-selected-date').dispatchEvent(new Event('input'));
+  send('pointerdown', point(1), origin);
+  expect(field('preview-selected-date').value).toBe('');
+  field('preview-reset-dates').click();
+  send('pointerdown', point(1), x(1));
+  field('close-schedule-preview').click();
+  expect(svg.releasePointerCapture).toHaveBeenCalledTimes(2);
+  openPlanSchedulePreview({ ...draft, preset: 'immediate' }, parent);
+  expect(document.querySelector('[data-preview-boundary]')).toBeNull();
+});
+
+test('rechecks midnight on release and rolls back exactly with a reopen warning', () => {
+  const { svg, send, x, day } = pointerPreview(), origin = x(1);
+  send('pointerdown', point(1), origin);
+  send('pointermove', svg, origin + day);
+  jest.setSystemTime(new Date('2026-10-20T00:00:00Z'));
+  send('pointerup', svg, origin + day);
+  expect(point(1).getAttribute('aria-label')).toContain('2026-10-27');
+  expect(document.getElementById('preview-date-error')?.textContent).toMatch(/reopen/i);
+  expect(field('preview-selected-date').disabled).toBe(false);
+});
+
+
+test('reports capture failure and leaves dates and date-input access intact', () => {
+  const { svg, send, x } = pointerPreview();
+  Object.assign(svg, { setPointerCapture: () => { throw new Error('Capture unavailable'); } });
+  const hit = point(1).querySelector<HTMLElement>('.preview-touch-target')!;
+  expect(hit.namespaceURI).toBe('http://www.w3.org/1999/xhtml');
+  expect(hit.tabIndex).toBe(-1);
+  send('pointerdown', hit, x(1));
+  expect(point(1).getAttribute('aria-label')).toContain('2026-10-27');
+  expect(field('preview-selected-date').disabled).toBe(false);
+  expect(document.getElementById('preview-date-error')?.textContent).toContain('Use date inputs');
+});

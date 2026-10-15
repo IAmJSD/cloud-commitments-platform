@@ -1,8 +1,11 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Locator } from '@playwright/test';
+
+test.use({ hasTouch: true });
 import { mockApi, seedAuth } from './fixtures/recs';
 
-for (const width of [1440, 1280, 390, 320]) {
-  test(`local Create/Edit preview at ${width}px (mock API, no writes)`, async ({ page }, testInfo) => {
+for (const width of [1440, 1280, 390, 320]) test.describe(`viewport ${width}px`, () => {
+  test.use({ isMobile: width <= 390 });
+  test(`local Create/Edit preview at ${width}px (mock API, no writes)`, async ({ page, isMobile }, testInfo) => {
     test.setTimeout(60_000);
     await page.setViewportSize({ width, height: 900 });
     const errors: string[] = [], writes: string[] = [];
@@ -62,6 +65,80 @@ for (const width of [1440, 1280, 390, 320]) {
       const addDays = (date: string, days: number): string => new Date(Date.parse(`${date}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
       const rangeStart = preview.locator('#preview-range-start'), rangeEnd = preview.locator('#preview-range-end');
       const original = await rangeStart.inputValue(), later = addDays(await rangeEnd.inputValue(), 2);
+
+      const beginDrag = async (target: Locator, offset = 0) => {
+        await target.scrollIntoViewIfNeeded();
+        const box = (await target.boundingBox())!, svgBox = (await preview.locator('svg').boundingBox())!;
+        const svgWidth = await preview.locator('svg').evaluate(element => (element as SVGSVGElement).viewBox.baseVal.width);
+        const span = (Date.parse(await rangeEnd.inputValue()) - Date.parse(await rangeStart.inputValue())) / 86_400_000 + 8;
+        const origin = { x: box.x + box.width / 2 + offset, y: box.y + box.height / 2 };
+        await preview.locator('svg').evaluate(element => element.addEventListener('pointerdown', event => element.setAttribute('data-test-pointer-id', String((event as PointerEvent).pointerId)), { once: true }));
+        await page.mouse.move(origin.x, origin.y); await page.mouse.down();
+        return { ...origin, id: Number(await preview.locator('svg').getAttribute('data-test-pointer-id')), day: svgBox.width / svgWidth * (svgWidth - 96) / span, plotLeft: svgBox.x + 48 * svgBox.width / svgWidth };
+      };
+      const firstHit = preview.locator('[data-preview-step="0"] .preview-hit');
+      let drag = await beginDrag(firstHit, 10);
+      await page.mouse.move(drag.x + drag.day / 4, drag.y);
+      await expect(rangeStart).toHaveValue(original);
+      await page.mouse.move(drag.x + drag.day, drag.y); await page.mouse.up();
+      await expect(rangeStart).toHaveValue(addDays(original, 1));
+      await expect(preview.locator('[data-preview-step="0"]')).toBeFocused();
+      await preview.getByRole('button', { name: 'Reset draft dates' }).click();
+      drag = await beginDrag(firstHit);
+      await page.mouse.move(drag.x + drag.day, drag.y);
+      await page.mouse.move(drag.x + drag.day * 7, drag.y);
+      await expect(preview.locator('#preview-date-error')).toContainText('order');
+      await page.mouse.move(drag.plotLeft - 3, drag.y); await page.mouse.up();
+      await expect(rangeStart).toHaveValue(addDays(original, 1));
+      await expect(preview.locator('#preview-date-error')).toContainText('plot');
+      await preview.getByRole('button', { name: 'Reset draft dates' }).click();
+      const endHandle = preview.locator('[data-preview-boundary="end"]');
+      await rangeEnd.focus();
+      drag = await beginDrag(endHandle.locator('.preview-handle-hit'));
+      await expect(endHandle).toBeFocused();
+      await expect(rangeEnd).toBeDisabled();
+      await page.mouse.move(drag.x + drag.day * 3, drag.y); await page.mouse.up();
+      await expect(rangeEnd).toHaveValue(addDays(later, 1));
+      await endHandle.press('Enter'); await expect(rangeEnd).toBeFocused();
+      const startHandle = preview.locator('[data-preview-boundary="start"]');
+      drag = await beginDrag(startHandle.locator('.preview-handle-hit'));
+      await page.mouse.move(drag.x + drag.day, drag.y); await page.mouse.up();
+      await expect(rangeStart).toHaveValue(addDays(original, 1));
+      await expect(preview.locator('[data-preview-step="3"]')).toHaveAttribute('aria-label', /target 80%/);
+      await preview.getByRole('button', { name: 'Reset draft dates' }).click();
+      drag = await beginDrag(firstHit);
+      await page.mouse.move(drag.x + drag.day, drag.y);
+      await preview.locator('svg').evaluate((element, id) => (element as SVGSVGElement).releasePointerCapture(id), drag.id);
+      await page.mouse.move(drag.x + drag.day + 1, drag.y);
+      await expect(rangeStart).toHaveValue(original); await page.mouse.up();
+      await expect(preview.locator('#preview-date-changes summary')).toHaveText('Draft date changes (0)');
+      drag = await beginDrag(firstHit);
+      await page.mouse.move(drag.x + drag.day, drag.y);
+      await page.keyboard.press('Escape'); await page.mouse.up();
+      await expect(preview).toBeVisible();
+      await expect(rangeStart).toHaveValue(original);
+      await page.keyboard.press('Escape'); await expect(preview).toHaveCount(0);
+      await expect(trigger).toBeFocused(); await trigger.click();
+      if (width <= 390) {
+        const session = await page.context().newCDPSession(page);
+        try {
+          for (const [target, control] of [[firstHit, rangeStart], [endHandle.locator('.preview-handle-hit'), rangeEnd]] as const) {
+            await target.scrollIntoViewIfNeeded();
+            const box = (await target.boundingBox())!, svgBox = (await preview.locator('svg').boundingBox())!;
+            const svgWidth = await preview.locator('svg').evaluate(element => (element as SVGSVGElement).viewBox.baseVal.width);
+            const span = (Date.parse(await rangeEnd.inputValue()) - Date.parse(await rangeStart.inputValue())) / 86_400_000 + 8;
+            const x = box.x + box.width / 2, y = box.y + box.height / 2, day = svgBox.width / svgWidth * (svgWidth - 96) / span;
+            const beforeDate = await control.inputValue();
+            const labels = await preview.locator('[data-preview-step]').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')));
+            await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 1 }] });
+            await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + day, y, id: 1 }] });
+            await expect(control).toHaveValue(addDays(beforeDate, 1));
+            await session.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+            await expect(control).toHaveValue(beforeDate);
+            expect(await preview.locator('[data-preview-step]').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')))).toEqual(labels);
+          }
+        } finally { await session.detach(); }
+      }
       const endNode = await rangeEnd.elementHandle();
       await rangeStart.fill(later); await rangeStart.dispatchEvent('change');
       await expect(preview.locator('#preview-date-error')).not.toBeEmpty();
@@ -109,9 +186,30 @@ for (const width of [1440, 1280, 390, 320]) {
     await expect(dense.locator('[data-preview-step]')).toHaveCount(100);
     expect((await dense.locator('svg').boundingBox())!.width).toBeGreaterThanOrEqual(4896);
     expect(await dense.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    if (width <= 390) {
+      const scroll = dense.locator('.schedule-preview-scroll');
+      await scroll.scrollIntoViewIfNeeded();
+      const box = (await scroll.boundingBox())!, svgBox = (await dense.locator('svg').boundingBox())!;
+      const y = svgBox.y + svgBox.height * 304 / 370, left = box.x + 40, right = box.x + box.width - 40;
+      const hit = await page.evaluate(({ x, y }) => { const element = document.elementFromPoint(x, y); return { tag: element?.tagName, control: !!element?.closest("[data-preview-step],[data-preview-boundary]"), action: element ? getComputedStyle(element).touchAction : null }; }, { x: right, y });
+      expect(hit.tag).toBe('svg'); expect(hit.control).toBe(false); expect(hit.action).toBe('auto');
+      const beforeScroll = await scroll.evaluate(element => element.scrollLeft);
+      const labels = await dense.locator('[data-preview-step]').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')));
+      const session = await page.context().newCDPSession(page);
+      try {
+        await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: right, y, id: 1 }] });
+        for (let move = 1; move <= 12; move++) { await page.evaluate(() => new Promise(requestAnimationFrame)); await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: right + (left - right) * move / 12, y, id: 1 }] }); }
+        await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+        await expect.poll(() => scroll.evaluate(element => element.scrollLeft)).toBeGreaterThan(beforeScroll);
+        expect(await dense.locator('[data-preview-step]').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')))).toEqual(labels);
+      } finally { await session.detach(); }
+    }
     await dense.locator('[data-preview-step="0"]').focus();
     await page.keyboard.press('ArrowRight');
     await expect(dense.locator('#preview-selected-step')).toHaveText('Step 2');
+    await expect(dense.locator('[data-preview-step="1"] .preview-touch-target')).toHaveCSS('outline-width', '2px');
+    await expect(dense.locator('[data-preview-step="1"] .preview-touch-target')).toHaveCSS('outline-style', 'solid');
     await page.keyboard.press('Escape');
     const parent = page.locator('#plan-modal');
     await parent.locator('label.ramp-option').filter({ hasText: 'Weekly 25%' }).click();
@@ -125,7 +223,7 @@ for (const width of [1440, 1280, 390, 320]) {
       await step.selectOption(String(index));
       await overlap.locator('#preview-selected-date').fill(after(index)); await overlap.locator('#preview-selected-date').dispatchEvent('change');
     }
-    const positions = await overlap.locator('.preview-hit').evaluateAll(elements => elements.map(element => Number(element.getAttribute('cx'))));
+    const positions = await overlap.locator('.preview-hit').evaluateAll(elements => elements.map(element => Number(element.getAttribute('x')) + 22));
     expect(positions[1]! - positions[0]!).toBeLessThan(3);
     for (let index = 0; index < 4; index++) {
       await step.selectOption(String(index));
@@ -145,6 +243,6 @@ for (const width of [1440, 1280, 390, 320]) {
     await page.keyboard.press('Escape');
     expect(writes).toEqual([]);
     expect(errors).toEqual([]);
-    await testInfo.attach('production-preview-receipt', { body: JSON.stringify({ width, scripts, writes, errors }), contentType: 'application/json' });
+    await testInfo.attach('production-preview-receipt', { body: JSON.stringify({ width, isMobile, scripts, writes, errors }), contentType: 'application/json' });
   });
-}
+});
