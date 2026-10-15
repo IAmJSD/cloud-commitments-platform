@@ -7,7 +7,8 @@
 //
 // Refuses to run unless CUDLY_REKEY_FROM_ZERO_KEY=1 is set. Idempotent —
 // running it a second time finds nothing to re-key (zero-key Decrypt fails
-// on real-key rows, so they fall into the "skipped" bucket).
+// on real-key rows and real-key Decrypt succeeds, so they fall into the
+// "skipped" bucket; rows readable under neither key are errors).
 package main
 
 import (
@@ -108,8 +109,9 @@ func initDB(ctx context.Context, resolver secrets.Resolver) (*database.Connectio
 }
 
 // rekeyAccountCredentials walks account_credentials and re-encrypts every row
-// whose ciphertext decrypts under the zero key. Real-key rows are detected by
-// decrypt failure (AES-GCM authentication tag mismatch) and skipped. Each
+// whose ciphertext decrypts under the zero key. Rows that fail the zero-key
+// decrypt but decrypt under the real key are skipped; rows that decrypt under
+// neither key are counted as errored. Each
 // re-key is committed in its own transaction so a partial run leaves the
 // database in a consistent state.
 func rekeyAccountCredentials(ctx context.Context, db *database.Connection, zeroKey, realKey []byte) (counters, error) {
@@ -167,7 +169,14 @@ const (
 func rekeyOne(ctx context.Context, db *database.Connection, id, blob string, zeroKey, realKey []byte) rekeyOutcome {
 	plaintext, err := credentials.Decrypt(zeroKey, blob)
 	if err != nil {
-		// Decrypt with zero key failed — assume already real-key encrypted.
+		// Zero-key decrypt failed. Count the row as already re-keyed only if
+		// the real key can read it; a row unreadable under both keys (corrupt,
+		// truncated, empty, or written under some other key) is an error, so
+		// the run fails instead of declaring the migration complete.
+		if _, realErr := credentials.Decrypt(realKey, blob); realErr != nil {
+			log.Printf("rekey: id=%s decrypts under neither zero key nor real key: %v", id, realErr)
+			return outcomeErrored
+		}
 		return outcomeSkipped
 	}
 	newBlob, err := credentials.Encrypt(realKey, plaintext)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -45,6 +46,41 @@ func TestRekey_DecryptionRouting(t *testing.T) {
 	got, err = credentials.Decrypt(realKey, realBlob)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, got)
+}
+
+// TestRekeyOne_UndecryptableRowsError is the regression test for issue #272:
+// a row that decrypts under neither the zero key nor the real key (corrupt,
+// truncated, empty, or written under a third key) must be counted as errored,
+// not as skippedAlreadyReal, so the run fails instead of reporting success.
+// Only a row that decrypts under the real key may be skipped. None of these
+// paths touch the DB, so a nil connection is safe here.
+func TestRekeyOne_UndecryptableRowsError(t *testing.T) {
+	ctx := context.Background()
+	zeroKey := credentials.DevKey()
+	realKey := decodeHex(t, strings.Repeat("ab", 32))
+	thirdKey := decodeHex(t, strings.Repeat("cd", 32))
+	plaintext := []byte(`{"access_key_id":"AKIA","secret_access_key":"abc"}`)
+
+	realBlob, err := credentials.Encrypt(realKey, plaintext)
+	require.NoError(t, err)
+	thirdBlob, err := credentials.Encrypt(thirdKey, plaintext)
+	require.NoError(t, err)
+
+	assert.Equal(t, outcomeSkipped, rekeyOne(ctx, nil, "real", realBlob, zeroKey, realKey),
+		"a real-key row is already re-keyed and must be skipped")
+
+	cases := map[string]string{
+		"third key":      thirdBlob,
+		"truncated":      realBlob[:len(realBlob)/2],
+		"base64 corrupt": "!!!not-base64!!!",
+		"empty":          "",
+	}
+	for name, blob := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, outcomeErrored, rekeyOne(ctx, nil, name, blob, zeroKey, realKey),
+				"a row that decrypts under neither key must be counted as errored")
+		})
+	}
 }
 
 func TestIsEqual_KeyComparison(t *testing.T) {

@@ -122,9 +122,13 @@ just transformed at-rest data.
 ## Idempotency
 
 The job is safe to rerun. Real-key rows fail the zero-key Decrypt check
-(AES-GCM authentication tag mismatch) and fall into the
-`skippedAlreadyReal` bucket. The second run reports
+(AES-GCM authentication tag mismatch), are confirmed readable under the real
+key, and fall into the `skippedAlreadyReal` bucket. The second run reports
 `reKeyed=0 skippedAlreadyReal=N`.
+
+A row that decrypts under neither the zero key nor the real key (corrupt,
+truncated, empty, or written under some other key) is counted as `errored`,
+its ID is logged, and the run exits non-zero.
 
 ## Troubleshooting
 
