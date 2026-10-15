@@ -653,8 +653,8 @@ paths:
         approval token plus a session signed in as the contact email of an
         account on the execution. A session that lacks the permission, or is
         outside the account scope, falls through to token mode when a token
-        is present; with no token the denial is final. Also routed for GET
-        with the token in the query string.
+        is present; with no token the denial is final. GET is not routed:
+        the email links to the dashboard, which POSTs after confirmation.
       security:
         - bearerAuth: []
         - {}

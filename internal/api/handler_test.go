@@ -987,6 +987,66 @@ func TestHandler_HandleRequest_CancelPurchase(t *testing.T) {
 	assert.Equal(t, "canceled", body["status"])
 }
 
+// A GET to the cancel URL must never cancel (issue #578): mail scanners and
+// link previewers prefetch URLs, and a GET skips the CSRF check that a
+// session-authed POST must pass. The scheduled-purchase email links to the
+// SPA deep link /purchases/cancel/{id}?token=..., which POSTs after the user
+// confirms. The request below would cancel if it were a POST (see
+// TestHandler_HandleRequest_CancelPurchase): valid session, valid token.
+func TestHandler_HandleRequest_CancelPurchase_GETDoesNotCancel(t *testing.T) {
+	execID := "45645645-6456-4564-5645-645645645645"
+	approver := "admin@example.com"
+	accountID := "acct-1"
+
+	mockConfig := new(MockConfigStore)
+	exec := &config.PurchaseExecution{
+		ExecutionID:   execID,
+		ApprovalToken: "token456",
+		Status:        "pending",
+		Recommendations: []config.RecommendationRecord{
+			{ID: "r1", CloudAccountID: &accountID},
+		},
+	}
+	mockConfig.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: approver}, nil
+	}
+	mockConfig.On("GetExecutionByID", mock.Anything, execID).Return(exec, nil).Maybe()
+	mockConfig.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{
+		NotificationEmail: &approver,
+	}, nil).Maybe()
+
+	mockAuth := new(MockAuthService)
+	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
+	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{Email: approver}, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", mock.Anything, "", "cancel-any", "purchases").Return(false, nil).Maybe()
+	mockAuth.On("HasPermissionAPI", mock.Anything, "", "cancel-own", "purchases").Return(false, nil).Maybe()
+
+	mockPurchase := new(MockPurchaseManager)
+	mockPurchase.On("CancelExecution", mock.Anything, execID, "token456", approver).Return(nil).Maybe()
+
+	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
+
+	req := &events.LambdaFunctionURLRequest{
+		QueryStringParameters: map[string]string{"token": "token456"},
+		Headers:               map[string]string{"authorization": "Bearer sess-tok"},
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Method: "GET",
+				Path:   "/api/purchases/cancel/" + execID,
+			},
+		},
+	}
+
+	resp, err := handler.HandleRequest(context.Background(), req)
+	require.NoError(t, err)
+	// No cancel route matches GET, so the request falls to the generic
+	// GET /api/purchases/{id} details route, which rejects "cancel/<id>" as
+	// an invalid ID. Without a session it would be a 401 instead.
+	assert.Equal(t, 400, resp.StatusCode)
+	mockPurchase.AssertNotCalled(t, "CancelExecution", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockConfig.AssertNotCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestHandler_HandleRequest_GetHistory(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
