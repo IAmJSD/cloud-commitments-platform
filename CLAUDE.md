@@ -99,8 +99,10 @@ coordinates agents on one machine; assignment is what coordinates people.
      --json number,title --jq '.[] | "#\(.number) \(.title)"'
    ```
 
-   `--limit` truncates silently, so if a priority ever has more than 1000
-   open issues, raise it. Issues with no `priority/*` label come after `p3`. The query only sees
+   GitHub search returns at most 1000 results whatever `--limit` says, and
+   truncates silently. If a query returns exactly 1000, split it into
+   non-overlapping windows (for example add `created:<2026-07-01` and
+   `created:>=2026-07-01`) and run each. Issues with no `priority/*` label come after `p3`. The query only sees
    assignees, so open the issue and check its comments for a claim (step 2)
    too. Before claiming, also check that no open PR already addresses it:
    `gh pr list --repo LeanerCloud/cloud-commitments-platform --search "<issue number> in:body"`.
