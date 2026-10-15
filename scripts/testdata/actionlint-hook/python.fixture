@@ -1,0 +1,8 @@
+name: bad python
+on: push
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - shell: python
+        run: print(undefined_name)

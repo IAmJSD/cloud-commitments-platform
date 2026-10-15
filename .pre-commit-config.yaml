@@ -102,23 +102,16 @@ repos:
   # versions, so an expression injection is caught before the push rather than
   # after. Keep the versions here and in ci.yml in lockstep.
   #
-  # actionlint is a local docker_image hook rather than the upstream
-  # rhysd/actionlint hook for the reason spelled out above for hadolint: the
-  # upstream actionlint-docker hook's entry pins the image by mutable tag, and
-  # `rev:` only pins the hook definition, not the image it runs. This entry
-  # pins the digest, so the ruleset can only change by editing this line.
-  #
-  # The image bundles shellcheck. actionlint silently skips every run: block
-  # and still exits 0 when shellcheck is absent from PATH, which is how the
-  # rollback.yml injection (#1542) went unflagged, so a system hook that
-  # depends on each developer having shellcheck installed would reintroduce
-  # exactly that gap.
+  # Match the pinned CI image, including Python 3.12. Require env-owned checkers
+  # because actionlint silently skips ShellCheck and pyflakes when missing.
   - repo: local
     hooks:
       - id: actionlint
         name: Lint GitHub Actions workflows
-        language: docker_image
-        entry: rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        language: python
+        language_version: python3.12
+        additional_dependencies: ['shellcheck-py==0.11.0.1', 'pyflakes==3.4.0']
+        entry: python scripts/actionlint-hook.py
         types: [yaml]
         files: ^\.github/workflows/
 

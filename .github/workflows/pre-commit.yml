@@ -29,7 +29,9 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.13"
+          python-version: |
+            3.12
+            3.13
 
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
@@ -215,6 +217,9 @@ jobs:
 
       - name: Install pre-commit
         run: pip install 'pre-commit==4.0.1'
+
+      - name: Verify actionlint native transport and pinned image parity
+        run: bash scripts/test-actionlint-hook.sh --docker-parity
 
       # Cache pre-commit's per-hook environments (Go, Python, Node, etc.
       # virtualenvs it builds on first run). Keyed on the hook config
