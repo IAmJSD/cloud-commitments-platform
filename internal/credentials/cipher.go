@@ -204,6 +204,10 @@ func Decrypt(key []byte, blob string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("credentials: create GCM: %w", err)
 	}
+	// gcm.Open panics on a wrong-length nonce; reject it as malformed instead.
+	if len(nonce) != gcm.NonceSize() {
+		return nil, fmt.Errorf("credentials: malformed blob (nonce is %d bytes, want %d)", len(nonce), gcm.NonceSize())
+	}
 
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {

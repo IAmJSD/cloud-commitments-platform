@@ -111,9 +111,8 @@ func initDB(ctx context.Context, resolver secrets.Resolver) (*database.Connectio
 // rekeyAccountCredentials walks account_credentials and re-encrypts every row
 // whose ciphertext decrypts under the zero key. Rows that fail the zero-key
 // decrypt but decrypt under the real key are skipped; rows that decrypt under
-// neither key are counted as errored. Each
-// re-key is committed in its own transaction so a partial run leaves the
-// database in a consistent state.
+// neither key are counted as errored. Each re-key is committed in its own
+// transaction so a partial run leaves the database in a consistent state.
 func rekeyAccountCredentials(ctx context.Context, db *database.Connection, zeroKey, realKey []byte) (counters, error) {
 	var cs counters
 

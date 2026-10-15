@@ -53,7 +53,8 @@ func TestRekey_DecryptionRouting(t *testing.T) {
 // truncated, empty, or written under a third key) must be counted as errored,
 // not as skippedAlreadyReal, so the run fails instead of reporting success.
 // Only a row that decrypts under the real key may be skipped. None of these
-// paths touch the DB, so a nil connection is safe here.
+// paths touch the DB, so a nil connection is safe here. Do not add a case that
+// decrypts under the zero key: that path opens a transaction on the DB.
 func TestRekeyOne_UndecryptableRowsError(t *testing.T) {
 	ctx := context.Background()
 	zeroKey := credentials.DevKey()
@@ -74,10 +75,16 @@ func TestRekeyOne_UndecryptableRowsError(t *testing.T) {
 		"truncated":      realBlob[:len(realBlob)/2],
 		"base64 corrupt": "!!!not-base64!!!",
 		"empty":          "",
+		"short nonce":    "AAAA.BBBBBBBBBBBBBBBBBBBB",
 	}
 	for name, blob := range cases {
 		t.Run(name, func(t *testing.T) {
-			assert.Equal(t, outcomeErrored, rekeyOne(ctx, nil, name, blob, zeroKey, realKey),
+			// NotPanics turns a crash (e.g. a malformed nonce reaching
+			// gcm.Open, or a future case that reaches the nil DB) into a
+			// clean test failure.
+			var got rekeyOutcome
+			require.NotPanics(t, func() { got = rekeyOne(ctx, nil, name, blob, zeroKey, realKey) })
+			assert.Equal(t, outcomeErrored, got,
 				"a row that decrypts under neither key must be counted as errored")
 		})
 	}

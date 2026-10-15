@@ -128,7 +128,9 @@ key, and fall into the `skippedAlreadyReal` bucket. The second run reports
 
 A row that decrypts under neither the zero key nor the real key (corrupt,
 truncated, empty, or written under some other key) is counted as `errored`,
-its ID is logged, and the run exits non-zero.
+its ID is logged, and the run exits non-zero. Every later run keeps exiting
+non-zero until that row is fixed: restore its credentials from the tenant
+(re-onboard the account) or delete the row, then rerun.
 
 ## Troubleshooting
 
