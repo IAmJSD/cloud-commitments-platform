@@ -248,8 +248,8 @@
 .schedule-preview-notice { margin: 0 0 24px; padding: 12px; background: var(--cudly-info-bg); border-radius: 8px; }
 .schedule-preview-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 24px; }
 .schedule-preview-layout h3 { margin: 0 0 12px; font-size: 16px; }
-.schedule-preview-scroll { overflow: auto; max-width: 100%; border: 1px solid var(--cudly-border); border-radius: 8px; }
-.schedule-preview-scroll svg { display: block; max-width: none; height: 310px; }
+.schedule-preview-scroll { display: flex; align-items: flex-start; overflow: auto; max-width: 100%; border: 1px solid var(--cudly-border); border-radius: 8px; }
+.schedule-preview-scroll svg { display: block; flex: 1 0 auto; max-width: none; height: auto; }
 .schedule-preview-scroll text { fill: var(--cudly-text-muted); font: 12px system-ui; font-variant-numeric: tabular-nums; pointer-events: none; }
 .preview-grid { stroke: var(--cudly-border); fill: none; pointer-events: none; }
 .preview-staircase { stroke: var(--cudly-primary); stroke-width: 2; fill: none; pointer-events: none; }
@@ -260,7 +260,10 @@
 .schedule-preview-layout dl { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 0 0 24px; }
 .schedule-preview-layout dt { color: var(--cudly-text-muted); }
 .schedule-preview-layout dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.schedule-preview-layout input[readonly] { display: block; width: 100%; padding: 8px; border: 1px solid var(--cudly-border); border-radius: 4px; }
+.schedule-preview-layout input, .schedule-preview-layout select { display: block; width: 100%; box-sizing: border-box; margin: 4px 0 12px; padding: 8px; border: 1px solid var(--cudly-border); border-radius: 4px; }
+.schedule-preview-layout input:focus-visible, .schedule-preview-layout select:focus-visible { outline: 2px solid var(--cudly-primary); outline-offset: 2px; }
+#preview-date-error { color: var(--cudly-error); overflow-wrap: anywhere; }
+#preview-date-changes li { margin-bottom: 8px; overflow-wrap: anywhere; }
 .schedule-preview-layout details { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--cudly-border); }
 .schedule-preview-layout summary { cursor: pointer; margin-bottom: 12px; }
 @media (max-width: 900px) {
