@@ -75,6 +75,115 @@ Do this in the same PR that closes the issue. A full sweep of the directory
 should happen at the start of each sprint. Full convention and entry format
 are in `CONTRIBUTING.md` under "Known Issues Sweep".
 
+## Issue assignment — claim before you work (MANDATORY)
+
+Several people (and their agents) work through this repo's issue queue in
+parallel. GitHub issue assignment is the lock that keeps two of them from
+fixing the same thing. The `~/.claude/agent-comms/` bus below only
+coordinates agents on one machine; assignment is what coordinates people.
+
+1. **Pick work in priority order.** Take the highest-priority open issue
+   that nobody owns, oldest first within a priority. Skip anything
+   labelled `status/blocked`, `status/needs-info` or `status/wontdo`:
+
+   ```bash
+   for p in p0 p1 p2 p3; do
+     echo "== priority/$p"
+     gh issue list --repo LeanerCloud/cloud-commitments-platform --label "priority/$p" --limit 1000 \
+       --search "no:assignee -label:status/blocked -label:status/needs-info -label:status/wontdo sort:created-asc" \
+       --json number,title --jq '.[] | "#\(.number) \(.title)"'
+   done
+   echo "== no priority label"
+   gh issue list --repo LeanerCloud/cloud-commitments-platform --limit 1000 \
+     --search "no:assignee -label:status/blocked -label:status/needs-info -label:status/wontdo sort:created-asc -label:priority/p0 -label:priority/p1 -label:priority/p2 -label:priority/p3" \
+     --json number,title --jq '.[] | "#\(.number) \(.title)"'
+   ```
+
+   GitHub search returns at most 1000 results whatever `--limit` says, and
+   truncates silently. If a query returns exactly 1000, split it into
+   non-overlapping windows (for example add `created:<2026-07-01` and
+   `created:>=2026-07-01`) and run each. Issues with no `priority/*` label
+   come after `p3`. The query only sees assignees, so open the issue and
+   check its comments for a claim (step 2) too. Before claiming, also check
+   that no open PR already addresses it:
+   `gh pr list --repo LeanerCloud/cloud-commitments-platform --search "<issue number> in:body"`.
+
+2. **Claim it before writing any code.** Post a claim comment, and also
+   assign yourself if you have write access. Claims, takeovers and releases
+   are all comments starting with a fixed marker (`Claiming:`,
+   `Taking over:` or `Released:`), because comment timestamps are what
+   decide who claimed first; `gh issue view` cannot show when someone was
+   assigned. Agents that share one GitHub login can't tell their claims
+   apart by author, so each ends every marker with its worker id, shown as
+   `[<worker-id>]` below (leave it out if the login is yours alone), and
+   compares claims by worker id; same-machine agents can also use the bus
+   below.
+
+   ```bash
+   gh issue comment <N> --repo LeanerCloud/cloud-commitments-platform \
+     --body "Claiming: working on this [<worker-id>]"
+   gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform \
+     --add-assignee @me   # needs write access
+   ```
+
+   Then list the assignees and markers and work out who holds the issue:
+
+   ```bash
+   gh issue view <N> --repo LeanerCloud/cloud-commitments-platform --json assignees,comments \
+     --jq '"assignees: \([.assignees[].login] | join(", "))",
+           (.comments[] | select((.body | test("^(Claiming|Taking over|Released):"))
+                                 or (.body | test("claimed by"; "i")))
+            | "\(.createdAt) \(.author.login): \(.body | split("\n")[0])")'
+   ```
+
+   A claim is active when its owner's latest marker is `Claiming:` or
+   `Taking over:`; a later `Released:` from them ends it. The earliest
+   active claim wins. If that is not you, release it and pick another
+   issue (your latest marker is what counts):
+
+   ```bash
+   gh issue comment <N> --repo LeanerCloud/cloud-commitments-platform \
+     --body "Released: claimed by someone else first [<worker-id>]"
+   gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform --remove-assignee @me
+   ```
+
+   An assignment with no marker comment (for example a maintainer
+   assigning someone) still means the issue is taken, and so does an older
+   free-form claim comment such as `claimed by <worker>`.
+
+3. **Respect other people's claims.** An issue with an active claim or an
+   assignee belongs to that person. Do not work on it, even if it looks
+   stale. A maintainer's assignment or a maintainer's `Taking over:`
+   overrides any claim; everyone else uses the flow below. If the issue
+   has had no activity and no linked PR for 7 days, ask on the issue,
+   mentioning the owner. Take it over once they agree or release it. If
+   they have not replied after 3 more days, post
+   `Taking over: no reply since <date> [<worker-id>]`. That marker is your
+   claim and supersedes only the stale owner's claim: when you work out
+   the earliest active claim as in step 2, ignore the stale owner, but any
+   other active claim posted before your takeover still wins. Then move
+   the assignment to yourself (or ask a maintainer to, if you lack write
+   access):
+
+   ```bash
+   gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform \
+     --add-assignee @me --remove-assignee <old-owner>
+   ```
+
+4. **Link the PR.** Put `Closes #<N>` in the PR body so the issue and PR
+   stay connected (and the PR labeling rule below can find the issue).
+
+5. **Release what you drop.** If you stop working on an issue without a
+   PR, post `Released: <where you got to> [<worker-id>]` as a new comment
+   and unassign yourself
+   (`gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform --remove-assignee @me`), so the next
+   person can pick it up. If the issue turns out to be already fixed, say
+   which PR or commit fixed it and ask a maintainer to close it.
+
+Work that is not tracked by an issue yet (for example a larger UI or
+integration effort) gets an issue first, assigned to whoever is doing it,
+so it shows up as taken.
+
 ## Post-push CI watcher (MANDATORY — even for one-line fix commits)
 
 After **every** `git push` that publishes new commits to a PR branch on
