@@ -102,9 +102,10 @@ coordinates agents on one machine; assignment is what coordinates people.
    GitHub search returns at most 1000 results whatever `--limit` says, and
    truncates silently. If a query returns exactly 1000, split it into
    non-overlapping windows (for example add `created:<2026-07-01` and
-   `created:>=2026-07-01`) and run each. Issues with no `priority/*` label come after `p3`. The query only sees
-   assignees, so open the issue and check its comments for a claim (step 2)
-   too. Before claiming, also check that no open PR already addresses it:
+   `created:>=2026-07-01`) and run each. Issues with no `priority/*` label
+   come after `p3`. The query only sees assignees, so open the issue and
+   check its comments for a claim (step 2) too. Before claiming, also check
+   that no open PR already addresses it:
    `gh pr list --repo LeanerCloud/cloud-commitments-platform --search "<issue number> in:body"`.
 
 2. **Claim it before writing any code.** Post a claim comment, and also
@@ -112,53 +113,68 @@ coordinates agents on one machine; assignment is what coordinates people.
    are all comments starting with a fixed marker (`Claiming:`,
    `Taking over:` or `Released:`), because comment timestamps are what
    decide who claimed first; `gh issue view` cannot show when someone was
-   assigned.
+   assigned. Agents that share one GitHub login can't tell their claims
+   apart by author, so each ends every marker with its worker id, shown as
+   `[<worker-id>]` below (leave it out if the login is yours alone), and
+   compares claims by worker id; same-machine agents can also use the bus
+   below.
 
    ```bash
-   gh issue comment <N> --repo LeanerCloud/cloud-commitments-platform --body "Claiming: working on this"
-   gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform --add-assignee @me   # needs write access
+   gh issue comment <N> --repo LeanerCloud/cloud-commitments-platform \
+     --body "Claiming: working on this [<worker-id>]"
+   gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform \
+     --add-assignee @me   # needs write access
    ```
 
-   Then list the markers and work out who holds the issue:
+   Then list the assignees and markers and work out who holds the issue:
 
    ```bash
-   gh issue view <N> --repo LeanerCloud/cloud-commitments-platform --json comments \
-     --jq '.comments[] | select(.body | test("^(Claiming|Taking over|Released):"))
-           | "\(.createdAt) \(.author.login): \(.body | split("\n")[0])"'
+   gh issue view <N> --repo LeanerCloud/cloud-commitments-platform --json assignees,comments \
+     --jq '"assignees: \([.assignees[].login] | join(", "))",
+           (.comments[] | select(.body | test("^(Claiming|Taking over|Released):"))
+            | "\(.createdAt) \(.author.login): \(.body | split("\n")[0])")'
    ```
 
-   A person's claim is active when their latest marker is `Claiming:` or
+   A claim is active when its owner's latest marker is `Claiming:` or
    `Taking over:`; a later `Released:` from them ends it. The earliest
-   active claim wins. If that is not you, post
-   `gh issue comment <N> --repo LeanerCloud/cloud-commitments-platform --body "Released: claimed by someone else first"`
-   (your latest marker is what counts), remove yourself as assignee and
-   pick another issue. Agents that share one GitHub login can't tell their
-   claims apart by author, so each puts its worker id in every marker
-   (for example `Claiming: working on this [cc-platform-w3]`) and compares
-   claims by worker id; same-machine agents can also use the bus below.
+   active claim wins. If that is not you, release it and pick another
+   issue (your latest marker is what counts):
+
+   ```bash
+   gh issue comment <N> --repo LeanerCloud/cloud-commitments-platform \
+     --body "Released: claimed by someone else first [<worker-id>]"
+   gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform --remove-assignee @me
+   ```
+
    An assignment with no marker comment (for example a maintainer
-   assigning someone) still means the issue is taken,
-   and so does an older free-form claim comment such as `claimed by <worker>`.
+   assigning someone) still means the issue is taken, and so does an older
+   free-form claim comment such as `claimed by <worker>`.
 
 3. **Respect other people's claims.** An issue with an active claim or an
-   assignee belongs to that person. A maintainer's assignment or
-   `Taking over:` overrides any claim. Do not work on it, even if it looks
-   stale. If it has had no activity and no linked PR for 7 days, ask on
-   the issue, mentioning the owner. Take it over once they agree or
-   release it. If they have not replied after 3 more days, post
-   `Taking over: no reply since <date>`. That marker is your claim and
-   supersedes only the stale owner's claim: when you work out the earliest
-   active claim as in step 2, ignore the stale owner, but any other active
-   claim posted before your takeover still wins. Then move the assignment
-   to yourself:
-   `gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform --add-assignee @me --remove-assignee <old-owner>`
-   (or ask a maintainer to, if you lack write access).
+   assignee belongs to that person. Do not work on it, even if it looks
+   stale. A maintainer's assignment or a maintainer's `Taking over:`
+   overrides any claim; everyone else uses the flow below. If the issue
+   has had no activity and no linked PR for 7 days, ask on the issue,
+   mentioning the owner. Take it over once they agree or release it. If
+   they have not replied after 3 more days, post
+   `Taking over: no reply since <date> [<worker-id>]`. That marker is your
+   claim and supersedes only the stale owner's claim: when you work out
+   the earliest active claim as in step 2, ignore the stale owner, but any
+   other active claim posted before your takeover still wins. Then move
+   the assignment to yourself (or ask a maintainer to, if you lack write
+   access):
+
+   ```bash
+   gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform \
+     --add-assignee @me --remove-assignee <old-owner>
+   ```
 
 4. **Link the PR.** Put `Closes #<N>` in the PR body so the issue and PR
    stay connected (and the PR labeling rule below can find the issue).
 
 5. **Release what you drop.** If you stop working on an issue without a
-   PR, post `Released: <where you got to>` as a new comment and unassign yourself
+   PR, post `Released: <where you got to> [<worker-id>]` as a new comment
+   and unassign yourself
    (`gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform --remove-assignee @me`), so the next
    person can pick it up. If the issue turns out to be already fixed, say
    which PR or commit fixed it and ask a maintainer to close it.
