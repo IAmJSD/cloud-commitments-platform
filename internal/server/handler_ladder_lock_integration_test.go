@@ -15,6 +15,7 @@ import (
 
 	pkgladder "github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -105,4 +106,33 @@ func TestLadderLock_ConcurrentRunsPlanTheGapOnce(t *testing.T) {
 
 	// Target is 10: the second run must have netted the first's rows (gap 0).
 	assert.InDelta(t, 10.0, e.live(ctx, t), 1e-9, "two concurrent runs must not both plan the gap")
+}
+
+func TestLadderLock_MixedBasisReachesActualPlanner(t *testing.T) {
+	ctx := context.Background()
+	e := newLadderB1Env(ctx, t, ladderB1Conn(ctx, t), ladderB1TwoStep)
+	od, native, rate := config.LadderAmountOnDemand, config.LadderAmountCommitment, "1/2"
+	seed := []config.LadderTrancheDB{
+		{ID: uuid.New().String(), ConfigID: &e.cfg.ID, LayerType: pkgladder.LayerConvertibleRI, AmountUSDHr: 1, AmountBasis: &od, Term: pkgladder.Term1Year, PaymentOption: pkgladder.PaymentNoUpfront, Status: pkgladder.TrancheStatusScheduled, ScheduledDate: e.start.Add(time.Hour)},
+		{ID: uuid.New().String(), ConfigID: &e.cfg.ID, LayerType: pkgladder.LayerConvertibleRI, AmountUSDHr: 2, AmountBasis: &native, CommitmentRate: &rate, Term: pkgladder.Term1Year, PaymentOption: pkgladder.PaymentNoUpfront, Status: pkgladder.TrancheStatusFired, ScheduledDate: e.start.Add(-time.Hour)},
+	}
+	require.NoError(t, e.app.Config.SaveLadderTranches(ctx, seed))
+	id := e.run(ctx, t, e.start)
+	_, total := e.planAndTotal(ctx, t, id)
+	require.Equal(t, 5.0, total)
+	var basis string
+	require.NoError(t, e.conn.QueryRow(ctx, "SELECT amount_basis FROM ladder_tranches WHERE run_id=$1 LIMIT 1", id).Scan(&basis))
+	require.Equal(t, string(od), basis)
+}
+
+func TestLadderLock_UnknownBasisPersistsNoRun(t *testing.T) {
+	ctx := context.Background()
+	e := newLadderB1Env(ctx, t, ladderB1Conn(ctx, t), ladderB1TwoStep)
+	seed := config.LadderTrancheDB{ID: uuid.New().String(), ConfigID: &e.cfg.ID, LayerType: pkgladder.LayerConvertibleRI, AmountUSDHr: 2, Term: pkgladder.Term1Year, PaymentOption: pkgladder.PaymentNoUpfront, Status: pkgladder.TrancheStatusFired, ScheduledDate: e.start}
+	require.NoError(t, e.app.Config.SaveLadderTranches(ctx, []config.LadderTrancheDB{seed}))
+	err := e.app.executeLadderRun(ctx, e.cfg, e.cap, "123456789012", pkgladder.Term1Year, pkgladder.PaymentNoUpfront, e.start)
+	require.Error(t, err)
+	var runs int
+	require.NoError(t, e.conn.QueryRow(ctx, "SELECT count(*) FROM ladder_runs WHERE config_id=$1", e.cfg.ID).Scan(&runs))
+	require.Zero(t, runs)
 }

@@ -340,7 +340,7 @@ func (app *Application) executeLadderRun(
 }
 
 // ladderRunPlanner holds the read-side data of one run and turns the locked
-// in-flight figure into the run row and tranche rows to persist. plan is pure
+// on-demand-equivalent netting total into the run row and tranche rows to persist. plan is pure
 // compute (it runs while the per-config lock is held).
 type ladderRunPlanner struct {
 	dbCfg       *config.LadderConfigDB

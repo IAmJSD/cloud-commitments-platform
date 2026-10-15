@@ -81,7 +81,10 @@ func TestLadderLock_ClaimWaitsForPlanner(t *testing.T) {
 	defer cancel()
 	store := setupLadderStore(ctx, t)
 	cfgID := seedLadderConfigWithExtID(ctx, t, store, "711111111111")
-	require.NoError(t, store.SaveLadderTranches(ctx, []LadderTrancheDB{lifecycleTranche(cfgID, 1, ladder.TrancheStatusScheduled, time.Now().UTC().Add(-time.Hour))}))
+	tr := lifecycleTranche(cfgID, 1, ladder.TrancheStatusScheduled, time.Now().UTC().Add(-time.Hour))
+	basis := LadderAmountOnDemand
+	tr.AmountBasis = &basis
+	require.NoError(t, store.SaveLadderTranches(ctx, []LadderTrancheDB{tr}))
 	release := holdLadderLock(ctx, t, store, cfgID)
 
 	var claimEntered atomic.Bool

@@ -28,6 +28,8 @@ func TestPostgresStoreDB_PlanAndSaveSettledTerm(t *testing.T) {
 	add := func(status ladder.TrancheStatus, amount float64, settled *time.Time) {
 		t.Helper()
 		tr := lifecycleTranche(cfgID, amount, status, asOf.Add(time.Hour))
+		basis := LadderAmountOnDemand
+		tr.AmountBasis = &basis
 		tr.SettledAt = settled
 		require.NoError(t, store.SaveLadderTranches(ctx, []LadderTrancheDB{tr}))
 	}

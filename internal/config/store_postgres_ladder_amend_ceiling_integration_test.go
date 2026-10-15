@@ -51,6 +51,8 @@ func (f *ceilingFixture) plan(target, existing, baseline *float64, amounts ...fl
 		trs := make([]LadderTrancheDB, len(amounts))
 		for i, a := range amounts {
 			trs[i] = lifecycleTranche(f.cfgID, a, ladder.TrancheStatusScheduled, time.Now().UTC().Add(time.Hour))
+			basis := LadderAmountOnDemand
+			trs[i].AmountBasis = &basis
 			trs[i].RunID = &runID
 			ids = append(ids, trs[i].ID)
 		}
@@ -179,6 +181,8 @@ func TestLadderAmendCeiling_WaitsForPlanner(t *testing.T) {
 			close(entered)
 			<-gate
 			tr := lifecycleTranche(f.cfgID, 10-inFlight, ladder.TrancheStatusScheduled, time.Now().UTC().Add(time.Hour))
+			basis := LadderAmountOnDemand
+			tr.AmountBasis = &basis
 			tr.RunID = &runID
 			return &LadderRunDB{ID: runID, ConfigID: &f.cfgID, StartedAt: asOf, Status: ladder.RunStatusPlanned,
 				TargetUSDHr: fptr(10), ExistingUSDHr: fptr(0), BaselineUSDHr: fptr(100)}, []LadderTrancheDB{tr}, nil
@@ -188,7 +192,13 @@ func TestLadderAmendCeiling_WaitsForPlanner(t *testing.T) {
 	var once sync.Once
 	release := func() { once.Do(func() { close(gate) }) }
 	t.Cleanup(release) // a failed wait below must not strand the planner
-	<-entered
+	select {
+	case <-entered:
+	case err := <-planned:
+		t.Fatalf("planner exited before entering callback: %v", err)
+	case <-f.ctx.Done():
+		t.Fatal(f.ctx.Err())
+	}
 	amended := make(chan error, 1)
 	go func() { amended <- f.amend(ids[0], 7) }()
 	waitForLadderWaiters(f.ctx, t, f.store, f.cfgID, 1)

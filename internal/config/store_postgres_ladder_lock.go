@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/big"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,7 +26,7 @@ const ladderConfigLockPrefix = "cudly:ladder-config:"
 var ladderLockTimeout = 30 * time.Second
 
 // LadderPlanBuilder computes a run and its new tranches from the config's
-// in-flight commitment. It runs while the per-config lock is held inside the
+// measured on-demand-equivalent total. It runs while the per-config lock is held inside the
 // persist transaction: it must be pure compute (no provider or network I/O).
 type LadderPlanBuilder func(inFlightUSDHr float64) (*LadderRunDB, []LadderTrancheDB, error)
 
@@ -169,16 +170,44 @@ func (s *PostgresStore) PlanAndSaveLadderRun(ctx context.Context, configID strin
 // a fresh READ COMMITTED snapshot, so a tranche fired at the first and
 // completed before the second is counted by both (safe); the reverse order
 // could miss one completing between the two.
-func lockedLadderCommit(ctx context.Context, q queryRower, configID string, asOf time.Time) (float64, error) {
-	inFlight, err := inFlightLadderCommit(ctx, q, configID, asOf)
+func lockedLadderCommit(ctx context.Context, q dbConn, configID string, asOf time.Time) (float64, error) {
+	inFlight, err := ladderNettingRows(ctx, q,
+		"status = $2 OR (status = $3 AND scheduled_date > $4)",
+		configID, string(ladder.TrancheStatusFired), string(ladder.TrancheStatusScheduled), ladderGraceCutoff(asOf))
 	if err != nil {
 		return 0, err
 	}
-	settled, err := settledLadderCommit(ctx, q, configID, ladderSettleAnchor(asOf))
+	settled, err := ladderNettingRows(ctx, q, "status = 'completed' AND settled_at > $2",
+		configID, ladderSettleAnchor(asOf))
 	if err != nil {
 		return 0, err
 	}
-	return inFlight + settled, nil
+	return nettingFloat(inFlight.Add(inFlight, settled))
+}
+
+func ladderNettingRows(ctx context.Context, q dbConn, predicate string, args ...any) (*big.Rat, error) {
+	rows, err := q.Query(ctx, "SELECT id,layer_type,amount_usd_hr::text,amount_basis,commitment_rate FROM ladder_tranches WHERE config_id=$1 AND ("+predicate+")", args...)
+	if err != nil {
+		return nil, fmt.Errorf("read ladder netting rows: %w", err)
+	}
+	defer rows.Close()
+	total := new(big.Rat)
+	for rows.Next() {
+		var tr LadderTrancheDB
+		var amount string
+		if err := rows.Scan(&tr.ID, &tr.LayerType, &amount, &tr.AmountBasis, &tr.CommitmentRate); err != nil {
+			return nil, err
+		}
+		od, err := nettingOnDemand(amount, &tr)
+		if err != nil {
+			return nil, fmt.Errorf("net tranche %s (%s): %w", tr.ID, tr.LayerType, err)
+		}
+		total.Add(total, od)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return total, nil
 }
 
 // queryRower is satisfied by pgx.Tx and the pool connection.
