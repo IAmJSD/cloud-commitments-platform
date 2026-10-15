@@ -159,6 +159,14 @@ func (app *Application) initializeUntilReady(ctx context.Context, init func(cont
 // background initializer. A variable so tests can shorten it.
 var shutdownGracePeriod = 30 * time.Second
 
+// scheduledTaskUnwindShare reserves 1/N of shutdownGracePeriod (5s of 30s) for
+// detached scheduled tasks to unwind after they are canceled at the end of
+// the drain window. The whole sequence stays inside shutdownGracePeriod, which
+// matches Container Apps' default 30s termination grace. Cloud Run sends
+// SIGKILL 10s after SIGTERM, so there a task still running at that point is
+// hard-killed; the advisory lock and row CAS make the next tick safe.
+const scheduledTaskUnwindShare = 6
+
 // StartHTTPServer starts the HTTP server with graceful shutdown on SIGINT/SIGTERM.
 // It blocks until the server exits cleanly. In container orchestrators (Cloud Run,
 // Container Apps, Fargate) SIGTERM is the normal stop signal; without this wiring
@@ -192,8 +200,18 @@ func StartHTTPServer(app *Application, port int) error {
 		log.Printf("Shutdown signal received; draining HTTP server (30s grace)...")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGracePeriod)
 		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
+		// Drain for most of the grace period, leaving the last part for
+		// canceled scheduled tasks to unwind.
+		drainCtx, cancelDrain := context.WithTimeout(shutdownCtx, shutdownGracePeriod-shutdownGracePeriod/scheduledTaskUnwindShare)
+		defer cancelDrain()
+		if err := server.Shutdown(drainCtx); err != nil {
 			log.Printf("HTTP server forced shutdown: %v", err)
+		}
+		// Scheduled tasks run detached from their request (#784), so draining
+		// does not stop them. Cancel any still running and wait for them to
+		// return before main closes the database under them.
+		if !app.scheduledTasks.stop(shutdownCtx) {
+			log.Printf("Scheduled tasks did not stop within the shutdown grace period")
 		}
 		// The initializer shares app.DB with app.Close; let it exit first.
 		select {
@@ -306,25 +324,6 @@ func (app *Application) scheduledAuthMiddleware(next http.Handler) http.Handler 
 	return app.scheduledAuth.Middleware(next)
 }
 
-// scheduledTaskHTTPTimeout bounds a scheduled task triggered over HTTP. The
-// task runs detached from the request context, so this is what stops it. It
-// matches the --task CLI default (cmd/server getTaskTimeout).
-const scheduledTaskHTTPTimeout = 15 * time.Minute
-
-// scheduledResponseGrace is the extra time past scheduledTaskHTTPTimeout
-// allowed for writing the response.
-const scheduledResponseGrace = 30 * time.Second
-
-// extendScheduledWriteDeadline lifts the server-wide WriteTimeout (30s) for
-// this response, so a task that runs longer can still report its result to a
-// scheduler that is waiting for it instead of the connection being dropped.
-func extendScheduledWriteDeadline(w http.ResponseWriter) {
-	deadline := time.Now().Add(scheduledTaskHTTPTimeout + scheduledResponseGrace)
-	if err := http.NewResponseController(w).SetWriteDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
-		log.Printf("Failed to extend scheduled task write deadline: %v", err)
-	}
-}
-
 // handleScheduledHTTP handles scheduled tasks via HTTP endpoint
 // This is used by GCP Cloud Scheduler and Azure Logic Apps. Auth is
 // enforced upstream by scheduledAuthMiddleware (see CreateHTTPServer);
@@ -358,10 +357,11 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 	// Run the task on a context detached from the request (#784). The
 	// scheduler gives up after its attempt deadline (Cloud Scheduler 320s,
 	// Logic Apps 120s) and drops the connection, which cancels r.Context().
-	// Inheriting that cancellation could abort a sweep mid-purchase and drop
-	// the finalize/history write. The task stays bounded by its own timeout.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), scheduledTaskHTTPTimeout)
-	defer cancel()
+	// Inheriting that cancellation could abort a task midway (e.g. between a
+	// provider call and the write recording it). The task stays bounded by
+	// scheduledTaskHTTPTimeout and is canceled on server shutdown.
+	ctx, done := app.scheduledTasks.start(r.Context(), scheduledTaskHTTPTimeout)
+	defer done()
 	extendScheduledWriteDeadline(w)
 
 	// Ensure database connection is established (lazy initialization)

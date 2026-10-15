@@ -93,6 +93,10 @@ type Application struct {
 	// Only tests set it.
 	initRetryDelay time.Duration
 
+	// scheduledTasks tracks detached HTTP-triggered scheduled tasks so server
+	// shutdown can cancel and wait for them (#784).
+	scheduledTasks scheduledTaskTracker
+
 	// encKeySource is the env var name that resolved the credential encryption
 	// key (e.g. "CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME"). Set during
 	// reinitializeAfterConnect; surfaced via /health.
