@@ -26,6 +26,12 @@ func (p *fanOutShapePins) pin(lineageKey, shape string) string {
 	return shape
 }
 
+func (p *fanOutShapePins) get(lineageKey string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.pins[lineageKey]
+}
+
 // PinExecutionFanOutShape mocks the fan-out shape pin (issue #97).
 // PinExecutionFanOutShapeFn takes priority; with no expectation registered it
 // behaves like the real store (first writer wins per lineage key), so one mock
@@ -39,5 +45,20 @@ func (m *MockConfigStore) PinExecutionFanOutShape(ctx context.Context, lineageKe
 		return m.fanOutShapes.pin(lineageKey, shape), nil
 	}
 	args := m.Called(ctx, lineageKey, shape)
+	return args.String(0), args.Error(1)
+}
+
+// GetExecutionFanOutShape mocks the pinned-shape read (issue #97).
+// GetExecutionFanOutShapeFn takes priority; with no expectation registered it
+// reads what PinExecutionFanOutShape's default pinned on this mock.
+func (m *MockConfigStore) GetExecutionFanOutShape(ctx context.Context, lineageKey string) (string, error) {
+	m.record("GetExecutionFanOutShape", ctx, lineageKey)
+	if m.GetExecutionFanOutShapeFn != nil {
+		return m.GetExecutionFanOutShapeFn(ctx, lineageKey)
+	}
+	if !isExpected(&m.Mock, "GetExecutionFanOutShape") {
+		return m.fanOutShapes.get(lineageKey), nil
+	}
+	args := m.Called(ctx, lineageKey)
 	return args.String(0), args.Error(1)
 }

@@ -142,6 +142,9 @@ type StoreInterface interface {
 	// FanOutShapeMulti) for the execution lineage lineageKey unless one is
 	// already recorded, and returns the recorded shape (issue #97).
 	PinExecutionFanOutShape(ctx context.Context, lineageKey, shape string) (string, error)
+	// GetExecutionFanOutShape returns the shape pinned for lineageKey, or ""
+	// when none is pinned yet (issue #97).
+	GetExecutionFanOutShape(ctx context.Context, lineageKey string) (string, error)
 	GetPendingExecutions(ctx context.Context) ([]PurchaseExecution, error)
 	// GetExecutionsByStatuses returns executions in any of the given states,
 	// newest first, capped at `limit`. Used by the History handler to render

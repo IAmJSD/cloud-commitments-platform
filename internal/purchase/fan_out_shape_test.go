@@ -30,9 +30,14 @@ type lineageRig struct {
 
 // shapeTestAccountA is a cloud account that exists in config throughout; only
 // its membership in the plan changes between attempts.
-var shapeTestAccountA = config.CloudAccount{
-	ID: "acct-A", Name: "A", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys",
-}
+var (
+	shapeTestAccountA = config.CloudAccount{
+		ID: "acct-A", Name: "A", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys",
+	}
+	shapeTestAccountB = config.CloudAccount{
+		ID: "acct-B", Name: "B", Provider: "aws", ExternalID: "222222222222", AWSAuthMode: "access_keys",
+	}
+)
 
 func newLineageRig(t *testing.T) *lineageRig {
 	t.Helper()
@@ -51,9 +56,10 @@ func newLineageRig(t *testing.T) *lineageRig {
 		return append([]config.CloudAccount(nil), r.planAccounts...), nil
 	}
 	r.store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
-		if id == shapeTestAccountA.ID {
-			acct := shapeTestAccountA
-			return &acct, nil
+		for _, acct := range []config.CloudAccount{shapeTestAccountA, shapeTestAccountB} {
+			if acct.ID == id {
+				return &acct, nil
+			}
 		}
 		return nil, nil
 	}
@@ -95,16 +101,22 @@ func (r *lineageRig) setPlanAccounts(accounts ...config.CloudAccount) {
 // same IdempotencyKey, no cloud_account_id and unpurchased recommendations.
 func (r *lineageRig) attempt(executionID string) ([]string, error) {
 	r.t.Helper()
+	return r.attemptKeyed(executionID, "lineage-97", scopedTestRec("acct-A"))
+}
+
+// attemptKeyed is attempt with an explicit lineage key and recommendations.
+func (r *lineageRig) attemptKeyed(executionID, lineageKey string, recs ...config.RecommendationRecord) ([]string, error) {
+	r.t.Helper()
 	r.mu.Lock()
 	r.tokens = nil
 	r.mu.Unlock()
 	exec := &config.PurchaseExecution{
 		ExecutionID:     executionID,
-		IdempotencyKey:  "lineage-97",
+		IdempotencyKey:  lineageKey,
 		PlanID:          "plan-x",
 		StepNumber:      1,
 		Source:          common.PurchaseSourceWeb,
-		Recommendations: []config.RecommendationRecord{scopedTestRec("acct-A")},
+		Recommendations: recs,
 	}
 	err := r.manager.executePurchase(context.Background(), exec)
 	r.mu.Lock()
@@ -164,6 +176,8 @@ func TestRetryAfterPlanLosesLastAccountBuysNothing(t *testing.T) {
 	retry, err := r.attempt("attempt-2")
 	require.Error(t, err, "the retry must be refused, not run on a path the first attempt did not take")
 	assert.Empty(t, retry, "nothing may be bought under a token the first attempt never used (issue #97)")
+	var notSubmitted *beforeSubmissionError
+	assert.ErrorAs(t, err, &notSubmitted, "the refusal happens before any provider call and must say so")
 }
 
 // TestUnchangedPlanKeepsItsTokensAcrossRetries pins backward compatibility: a
@@ -192,16 +206,131 @@ func TestUnchangedPlanKeepsItsTokensAcrossRetries(t *testing.T) {
 }
 
 // TestFanOutShapePinFailureBuysNothing: when the shape cannot be pinned the
-// executor cannot know which tokens a previous attempt used, so it must fail
-// closed before any provider call.
+// executor cannot know which tokens another attempt used, so it must fail
+// closed before any provider call. On the single-account path the refusal is
+// stamped as before-submission; on the fan-out it fails the account like a
+// credential failure does.
 func TestFanOutShapePinFailureBuysNothing(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		accounts []config.CloudAccount
+	}{
+		{"single-account path", nil},
+		{"fan-out path", []config.CloudAccount{shapeTestAccountA}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newLineageRig(t)
+			r.setPlanAccounts(tc.accounts...)
+			r.store.PinExecutionFanOutShapeFn = func(_ context.Context, _, _ string) (string, error) {
+				return "", errors.New("db unavailable")
+			}
+
+			got, err := r.attempt("attempt-1")
+			require.ErrorContains(t, err, "db unavailable")
+			assert.Empty(t, got, "nothing may be bought when the lineage's shape cannot be pinned")
+			if tc.accounts == nil {
+				var notSubmitted *beforeSubmissionError
+				assert.ErrorAs(t, err, &notSubmitted, "the refusal happens before any provider call and must say so")
+			}
+		})
+	}
+}
+
+// TestRetryAfterPreSubmissionRefusalFollowsReconfiguredPlan: an attempt refused
+// before any provider call derived no token that needs protecting, so it must
+// not pin its shape. Here the plan has no accounts and the step's recs span two
+// accounts, which the single-account path refuses (#1902). The operator then
+// attaches both accounts so the step can fan out; the retry must fan out and
+// buy each account once, not be bound to the single-account path and refused
+// on every retry.
+func TestRetryAfterPreSubmissionRefusalFollowsReconfiguredPlan(t *testing.T) {
 	r := newLineageRig(t)
-	r.setPlanAccounts(shapeTestAccountA)
+	recs := func() []config.RecommendationRecord {
+		b := scopedTestRec("acct-B")
+		b.ResourceType = "c5.large"
+		return []config.RecommendationRecord{scopedTestRec("acct-A"), b}
+	}
+
+	first, err := r.attemptKeyed("attempt-1", "lineage-97", recs()...)
+	require.Error(t, err, "the single-account path must refuse recs that span accounts")
+	require.Empty(t, first)
+	pinned, err := r.store.GetExecutionFanOutShape(context.Background(), "lineage-97")
+	require.NoError(t, err)
+	assert.Empty(t, pinned, "an attempt that never reached submission must not pin the lineage's shape")
+
+	r.setPlanAccounts(shapeTestAccountA, shapeTestAccountB)
+
+	retry, err := r.attemptKeyed("attempt-2", "lineage-97", recs()...)
+	require.NoError(t, err)
+	want := []string{
+		common.DeriveIdempotencyToken("lineage-97:acct-A", 0),
+		common.DeriveIdempotencyToken("lineage-97:acct-B", 0),
+	}
+	sort.Strings(want)
+	assert.Equal(t, want, retry, "the retry must fan out across the newly attached accounts")
+}
+
+// TestColonLineageKeysAreNeverPinned: only root lineages are pinned. A
+// scopeless per-account row ("<root key>:<account id>", issue #1537) must
+// neither read nor write a pin under its own key, whichever path it takes, and
+// a fan-out must pin its ROOT key, never a per-account one.
+func TestColonLineageKeysAreNeverPinned(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		accounts []config.CloudAccount
+	}{
+		{"account still on the plan: re-attached single-account re-drive", []config.CloudAccount{shapeTestAccountA}},
+		{"plan has no accounts: single-account path", nil},
+	} {
+		t.Run("scopeless per-account row, "+tc.name, func(t *testing.T) {
+			r := newLineageRig(t)
+			r.setPlanAccounts(tc.accounts...)
+
+			got, err := r.attemptKeyed("successor", "root-lineage:acct-A", scopedTestRec("acct-A"))
+			require.NoError(t, err)
+			require.Equal(t, []string{common.DeriveIdempotencyToken("root-lineage:acct-A", 0)}, got)
+			store := r.store
+			store.AssertNotCalled(t, "GetExecutionFanOutShape")
+			store.AssertNotCalled(t, "PinExecutionFanOutShape")
+		})
+	}
+
+	t.Run("root fan-out pins the root key", func(t *testing.T) {
+		r := newLineageRig(t)
+		r.setPlanAccounts(shapeTestAccountA)
+		var mu sync.Mutex
+		var keys []string
+		r.store.PinExecutionFanOutShapeFn = func(_ context.Context, key, shape string) (string, error) {
+			mu.Lock()
+			keys = append(keys, key)
+			mu.Unlock()
+			return shape, nil
+		}
+
+		_, err := r.attempt("attempt-1")
+		require.NoError(t, err)
+		mu.Lock()
+		defer mu.Unlock()
+		require.NotEmpty(t, keys, "a fan-out that submits must pin its lineage")
+		for _, k := range keys {
+			assert.Equal(t, "lineage-97", k, "only the root lineage key may be pinned")
+		}
+	})
+}
+
+// TestConcurrentAttemptPinnedOtherShapeBuysNothing: the read said nothing was
+// pinned, but by the time this attempt pins, a concurrent attempt of the same
+// lineage pinned the other shape and submitted under it. This attempt must not
+// submit under its own shape's tokens.
+func TestConcurrentAttemptPinnedOtherShapeBuysNothing(t *testing.T) {
+	r := newLineageRig(t)
 	r.store.PinExecutionFanOutShapeFn = func(_ context.Context, _, _ string) (string, error) {
-		return "", errors.New("db unavailable")
+		return config.FanOutShapeMulti, nil
 	}
 
 	got, err := r.attempt("attempt-1")
-	require.ErrorContains(t, err, "db unavailable")
-	assert.Empty(t, got, "nothing may be bought when the lineage's shape cannot be pinned")
+	require.Error(t, err)
+	assert.Empty(t, got, "nothing may be bought under the losing shape's tokens")
+	var notSubmitted *beforeSubmissionError
+	assert.ErrorAs(t, err, &notSubmitted)
 }

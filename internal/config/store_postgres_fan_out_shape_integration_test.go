@@ -22,6 +22,10 @@ func TestPinExecutionFanOutShape(t *testing.T) {
 
 	t.Run("first writer wins", func(t *testing.T) {
 		key := uuid.NewString()
+		unpinned, err := store.GetExecutionFanOutShape(ctx, key)
+		require.NoError(t, err)
+		assert.Empty(t, unpinned, "a lineage nothing pinned reads as empty")
+
 		got, err := store.PinExecutionFanOutShape(ctx, key, FanOutShapeSingle)
 		require.NoError(t, err)
 		assert.Equal(t, FanOutShapeSingle, got)
@@ -29,6 +33,10 @@ func TestPinExecutionFanOutShape(t *testing.T) {
 		got, err = store.PinExecutionFanOutShape(ctx, key, FanOutShapeMulti)
 		require.NoError(t, err)
 		assert.Equal(t, FanOutShapeSingle, got, "a later attempt must get the first attempt's shape back")
+
+		read, err := store.GetExecutionFanOutShape(ctx, key)
+		require.NoError(t, err)
+		assert.Equal(t, FanOutShapeSingle, read, "the read must return the pinned shape")
 	})
 
 	t.Run("concurrent first attempts agree", func(t *testing.T) {

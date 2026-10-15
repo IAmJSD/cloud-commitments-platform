@@ -107,6 +107,10 @@ func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.Purchas
 	if err != nil {
 		return beforeSubmission(err)
 	}
+	// Pinned only now that the attempt can submit (issue #97); see fan_out_shape.go.
+	if err := m.pinLineageShape(ctx, exec, config.FanOutShapeSingle); err != nil {
+		return err
+	}
 	// #646: stamp the resolved target account on history, not the ambient
 	// AWS host account. resolveSingleAccountProvider returns the target's
 	// ExternalID (the provider-appropriate account identifier for AWS /
@@ -289,6 +293,13 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 		// instead of being silently dropped. Extracted to a helper to keep
 		// executeForAccount under the gocyclo:10 budget.
 		return false, m.persistFailedAccountExecution(ctx, &acctExec, account, credErr)
+	}
+	// Pinned on the ROOT lineage, and only once this account can submit (issue
+	// #97); see fan_out_shape.go.
+	if pinErr := m.pinLineageShape(ctx, baseExec, config.FanOutShapeMulti); pinErr != nil {
+		acctExec.Status = "failed"
+		acctExec.Error = pinErr.Error()
+		return false, m.persistFailedAccountExecution(ctx, &acctExec, account, pinErr)
 	}
 
 	accountID := account.ExternalID

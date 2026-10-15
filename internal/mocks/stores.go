@@ -53,6 +53,7 @@ type MockConfigStore struct {
 	ListPendingExecutionIDsForAccountFn func(ctx context.Context, accountID string) ([]string, error)
 	SavePurchaseExecutionFn             func(ctx context.Context, exec *config.PurchaseExecution) error
 	PinExecutionFanOutShapeFn           func(ctx context.Context, lineageKey, shape string) (string, error)
+	GetExecutionFanOutShapeFn           func(ctx context.Context, lineageKey string) (string, error)
 	GetUserEmailByIDFn                  func(ctx context.Context, userID string) (string, error)
 	mock.Mock
 	// callLog records every invocation, including the ones served from a

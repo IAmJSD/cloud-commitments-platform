@@ -2,7 +2,10 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // Fan-out shapes of a purchase execution lineage (issue #97). The shape decides
@@ -39,4 +42,19 @@ func (s *PostgresStore) PinExecutionFanOutShape(ctx context.Context, lineageKey,
 		return "", fmt.Errorf("failed to pin fan-out shape for lineage %s: %w", lineageKey, err)
 	}
 	return pinned, nil
+}
+
+// GetExecutionFanOutShape returns the fan-out shape pinned for the execution
+// lineage keyed by lineageKey, or "" when none is pinned yet.
+func (s *PostgresStore) GetExecutionFanOutShape(ctx context.Context, lineageKey string) (string, error) {
+	var shape string
+	err := s.db.QueryRow(ctx,
+		`SELECT shape FROM purchase_execution_fan_out_shapes WHERE idempotency_key = $1`, lineageKey).Scan(&shape)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to read fan-out shape for lineage %s: %w", lineageKey, err)
+	}
+	return shape, nil
 }
