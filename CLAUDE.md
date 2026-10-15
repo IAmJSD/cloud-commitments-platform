@@ -75,6 +75,75 @@ Do this in the same PR that closes the issue. A full sweep of the directory
 should happen at the start of each sprint. Full convention and entry format
 are in `CONTRIBUTING.md` under "Known Issues Sweep".
 
+## Issue assignment — claim before you work (MANDATORY)
+
+Several people (and their agents) work through this repo's issue queue in
+parallel. GitHub issue assignment is the lock that keeps two of them from
+fixing the same thing. The `~/.claude/agent-comms/` bus below only
+coordinates agents on one machine; assignment is what coordinates people.
+
+1. **Pick work in priority order.** Take the highest-priority open issue
+   that nobody owns, oldest first within a priority. Skip anything
+   labelled `status/blocked`, `status/needs-info` or `status/wontdo`:
+
+   ```bash
+   for p in p0 p1 p2 p3; do
+     echo "== priority/$p"
+     gh issue list --repo LeanerCloud/cloud-commitments-platform --label "priority/$p" --limit 500 \
+       --search "no:assignee -label:status/blocked -label:status/needs-info -label:status/wontdo sort:created-asc" \
+       --json number,title --jq '.[] | "#\(.number) \(.title)"'
+   done
+   echo "== no priority label"
+   gh issue list --repo LeanerCloud/cloud-commitments-platform --limit 500 \
+     --search "no:assignee -label:status/blocked -label:status/needs-info -label:status/wontdo sort:created-asc -label:priority/p0 -label:priority/p1 -label:priority/p2 -label:priority/p3" \
+     --json number,title --jq '.[] | "#\(.number) \(.title)"'
+   ```
+
+   Issues with no `priority/*` label come after `p3`. The query only sees
+   assignees, so open the issue and check its comments for a claim (step 2)
+   too. Before claiming, also check that no open PR already addresses it:
+   `gh pr list --repo LeanerCloud/cloud-commitments-platform --search "<issue number> in:body"`.
+
+2. **Claim it before writing any code.** Assign yourself, then re-read the
+   assignees and comments. If someone else is also assigned or has posted
+   a claim comment, the earliest claim on the issue timeline wins; if that
+   is not you, remove yourself and pick another issue.
+
+   ```bash
+   gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform --add-assignee @me
+   gh issue view <N> --repo LeanerCloud/cloud-commitments-platform --json assignees --jq '[.assignees[].login]'
+   ```
+
+   If you cannot assign yourself (no write access yet), comment
+   `Claiming: working on this` on the issue instead. A claim comment
+   counts the same as an assignment, including the 7-day rule in step 3.
+   After posting, re-read the issue the same way: if an earlier claim
+   exists, delete your comment and pick another issue.
+
+3. **Respect other people's claims.** An issue that is assigned, or has a
+   claim comment, belongs to that person. Do not work on it, even if it
+   looks stale. If it has had no activity and no linked PR for 7 days, ask
+   on the issue, mentioning the owner. Take it over once they agree or
+   unassign. If they have not replied after 3 more days, comment that you
+   are taking it over. That comment is your claim and supersedes only the
+   stale owner's claim: when you check for an earlier claim as in step 2,
+   ignore the stale owner, but any other claim posted before your takeover
+   comment still wins. Then move the assignment to yourself:
+   `gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform --add-assignee @me --remove-assignee <old-owner>`
+   (or ask a maintainer to, if you lack write access).
+
+4. **Link the PR.** Put `Closes #<N>` in the PR body so the issue and PR
+   stay connected (and the PR labeling rule below can find the issue).
+
+5. **Release what you drop.** If you stop working on an issue without a
+   PR, unassign yourself (`gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform --remove-assignee @me`)
+   and leave a short comment on where you got to, so the next person
+   can pick it up.
+
+Work that is not tracked by an issue yet (for example a larger UI or
+integration effort) gets an issue first, assigned to whoever is doing it,
+so it shows up as taken.
+
 ## Post-push CI watcher (MANDATORY — even for one-line fix commits)
 
 After **every** `git push` that publishes new commits to a PR branch on
