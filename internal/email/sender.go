@@ -268,9 +268,8 @@ func (s *Sender) SendToEmailWithCCMultipart(ctx context.Context, toEmail string,
 	if htmlBody == "" {
 		return s.SendToEmailWithCC(ctx, toEmail, ccEmails, subject, textBody)
 	}
-	if s.fromEmail == "" {
-		logging.Debug("No from email configured, skipping direct email")
-		return nil
+	if !isValidFromEmail(s.fromEmail) {
+		return ErrNoFromEmail
 	}
 	if s.sesClient == nil {
 		return fmt.Errorf("SES client not initialized")
@@ -303,9 +302,11 @@ func (s *Sender) SendToEmailWithCCMultipart(ctx context.Context, toEmail string,
 // entries across To/Cc are stripped so a single inbox is never addressed
 // twice.
 func (s *Sender) SendToEmailWithCC(ctx context.Context, toEmail string, ccEmails []string, subject, body string) error {
-	if s.fromEmail == "" {
-		logging.Debug("No from email configured, skipping direct email")
-		return nil
+	// Empty or malformed FROM_EMAIL means nothing can go out. Return
+	// ErrNoFromEmail rather than nil so callers (password reset, invites,
+	// welcome mail) don't report a send that never happened (#270).
+	if !isValidFromEmail(s.fromEmail) {
+		return ErrNoFromEmail
 	}
 	if s.sesClient == nil {
 		return fmt.Errorf("SES client not initialized")
