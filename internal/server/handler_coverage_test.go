@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -446,6 +447,29 @@ func TestHandleCollectAnalytics_CollectErrorIsPartial(t *testing.T) {
 	result, err := app.handleCollectAnalytics(ctx)
 	testutil.AssertNoError(t, err) // best-effort: logged, not propagated
 	testutil.AssertEqual(t, "partial", result["status"])
+}
+
+// TestHandleCollectAnalytics_PartitionErrorSkipsCollect is the #271
+// regression: when CreateFuturePartitions fails the pipeline must not run
+// Collect (which would COPY the snapshot into the catch-all default partition
+// that retention never reclaims) and must surface the failure as an error
+// rather than a "partial" status inside a success envelope.
+func TestHandleCollectAnalytics_PartitionErrorSkipsCollect(t *testing.T) {
+	ctx := testutil.TestContext(t)
+	store := &mockAnalyticsStore{createFuturePartErr: errors.New("lock timeout")}
+	collector := &mockAnalyticsCollector{}
+	app := &Application{
+		appConfig:          ApplicationConfig{Analytics: AnalyticsConfig{Enabled: true, RetentionMonths: 24, PartitionsAhead: 3}},
+		Analytics:          store,
+		AnalyticsCollector: collector,
+	}
+	result, err := app.handleCollectAnalytics(ctx)
+	testutil.AssertTrue(t, err != nil, "partition creation failure must be returned as an error")
+	testutil.AssertTrue(t, strings.Contains(err.Error(), "lock timeout"), "error must wrap the partition failure")
+	testutil.AssertEqual(t, 0, collector.calls)
+	testutil.AssertEqual(t, "failed", result["status"])
+	testutil.AssertEqual(t, false, result["partitions_ensured"])
+	testutil.AssertEqual(t, false, result["snapshots_written"])
 }
 
 func TestHandleCollectAnalytics_NilCollectorSkips(t *testing.T) {

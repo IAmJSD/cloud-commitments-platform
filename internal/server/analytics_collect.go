@@ -108,9 +108,11 @@ func newAnalyticsCollector(dbConn *database.Connection, configStore config.Store
 // handleCollectAnalytics runs the scheduled analytics pipeline end to end:
 // ensure upcoming partitions exist, collect a snapshot across all tenants,
 // apply retention, then refresh the materialized views over the fresh data.
-// Each step is best-effort and recorded in the result so a single failure
-// (e.g. a transient retention lock) doesn't abort the rest of the pipeline,
-// but a hard failure still flips status to "partial" for observability.
+// Partition creation is a hard prerequisite: if it fails the run aborts with an
+// error before writing anything (#271). The remaining steps are best-effort and
+// recorded in the result so a single failure (e.g. a transient retention lock)
+// doesn't abort the rest of the pipeline, but a hard failure still flips status
+// to "partial" for observability.
 func (app *Application) handleCollectAnalytics(ctx context.Context) (map[string]any, error) {
 	cfg := app.appConfig.Analytics
 	result := map[string]any{
@@ -134,12 +136,15 @@ func (app *Application) handleCollectAnalytics(ctx context.Context) (map[string]
 
 	// 1. Ensure upcoming partitions exist BEFORE writing so the snapshot lands
 	//    in a real monthly partition rather than the catch-all default (M3).
+	//    This is a hard prerequisite, not a best-effort step: if it fails,
+	//    Collect would COPY every tenant's snapshot into savings_snapshots_default,
+	//    which retention never drops, so abort and surface the error (#271).
 	if err := withDDLTimeout(ctx, app.Analytics.CreateFuturePartitions, cfg.PartitionsAhead); err != nil {
-		log.Printf("Warning: failed to ensure future partitions: %v", err)
-		result["status"] = "partial"
-	} else {
-		result["partitions_ensured"] = true
+		log.Printf("Error: failed to ensure future partitions, skipping analytics collection: %v", err)
+		result["status"] = "failed"
+		return result, fmt.Errorf("analytics collection aborted: failed to ensure future partitions: %w", err)
 	}
+	result["partitions_ensured"] = true
 
 	// 2. Collect a snapshot across all tenants.
 	if err := app.AnalyticsCollector.Collect(ctx); err != nil {
