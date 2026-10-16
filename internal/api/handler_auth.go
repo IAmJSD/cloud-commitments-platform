@@ -372,9 +372,6 @@ func (h *Handler) resetPassword(ctx context.Context, req *events.LambdaFunctionU
 	pwdResetReq.NewPassword = decoded
 
 	if err := h.auth.ConfirmPasswordReset(ctx, pwdResetReq); err != nil {
-		if errors.Is(err, auth.ErrAccountDeactivated) {
-			return nil, NewClientError(403, err.Error())
-		}
 		if errors.Is(err, auth.ErrUserChanged) {
 			return nil, NewClientError(409, err.Error())
 		}

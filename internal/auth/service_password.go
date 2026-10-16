@@ -391,12 +391,14 @@ func (s *Service) ConfirmPasswordReset(ctx context.Context, req PasswordResetCon
 	readResetToken, readPasswordHash := user.PasswordResetToken, user.PasswordHash
 
 	// An admin-deactivated account must not reactivate itself through a reset
-	// (A03-006). The token is still consumed so the link cannot be replayed.
+	// (A03-006). The token is still consumed so the link cannot be replayed,
+	// and the caller gets the unknown-token error so the response does not
+	// reveal that the account is deactivated (issue #595).
 	if user.DeactivatedAt != nil {
 		if updateErr := s.store.ConsumePasswordResetToken(ctx, user.ID, readResetToken); updateErr != nil {
 			logging.Warnf("Failed to invalidate reset token for deactivated user %s: %v", user.ID, updateErr)
 		}
-		return ErrAccountDeactivated
+		return ErrInvalidResetToken
 	}
 
 	if err := s.processPasswordReset(user, req.NewPassword); err != nil {
@@ -514,17 +516,17 @@ func (s *Service) validateResetToken(ctx context.Context, token string) (*User, 
 	user, err := s.store.GetUserByResetToken(ctx, tokenHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("invalid or expired reset token")
+			return nil, ErrInvalidResetToken
 		}
 		return nil, err
 	}
 	if user == nil {
-		return nil, fmt.Errorf("invalid or expired reset token")
+		return nil, ErrInvalidResetToken
 	}
 
 	// Constant-time comparison after fetch to close the SQL-equality timing oracle.
 	if subtle.ConstantTimeCompare([]byte(user.PasswordResetToken), []byte(tokenHash)) != 1 {
-		return nil, fmt.Errorf("invalid or expired reset token")
+		return nil, ErrInvalidResetToken
 	}
 
 	if user.PasswordResetExpiry == nil || time.Now().After(*user.PasswordResetExpiry) {

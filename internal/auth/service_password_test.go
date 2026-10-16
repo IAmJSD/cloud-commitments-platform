@@ -697,7 +697,9 @@ func TestService_ConfirmPasswordReset(t *testing.T) {
 
 		err := service.ConfirmPasswordReset(ctx, req)
 		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrAccountDeactivated)
+		// Same error as an unknown token so account state is not revealed (issue #595).
+		assert.ErrorIs(t, err, ErrInvalidResetToken)
+		assert.Equal(t, "invalid or expired reset token", err.Error())
 		// Active must stay false: this is the exact regression this test
 		// guards against.
 		assert.False(t, deactivatedUser.Active)
