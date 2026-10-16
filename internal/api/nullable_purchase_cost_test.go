@@ -79,7 +79,7 @@ func TestCoverageHandlerUnknownUpfrontSameService(t *testing.T) {
 			store.ListCloudAccountsFn = func(context.Context, config.CloudAccountFilter) ([]config.CloudAccount, error) {
 				return []config.CloudAccount{}, nil
 			}
-			scheduler.On("ListRecommendations", ctx, config.RecommendationFilter{}).Return([]config.RecommendationRecord{{Provider: "aws", Service: "ec2", Savings: 100}}, nil)
+			scheduler.On("ListRecommendations", mock.Anything, config.RecommendationFilter{}).Return([]config.RecommendationRecord{{Provider: "aws", Service: "ec2", Savings: 100}}, nil)
 			auth, req := adminInventoryReq(ctx)
 			handler := &Handler{auth: auth, config: store, scheduler: scheduler}
 			result, err := handler.getCoverageBreakdown(ctx, req, map[string]string{})

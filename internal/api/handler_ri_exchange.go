@@ -1069,7 +1069,8 @@ func (h *Handler) resolveAzureExchangeAccountID(ctx context.Context, subscriptio
 //
 // When the sentinel check fails, a second call with the amount dimension
 // neutralized (MaxPurchaseAmount: 0, which matchPurchaseAmountConstraint
-// always treats as satisfied) disambiguates the cause: if that second call
+// treats as satisfied by any well-formed cap; a malformed negative cap still
+// denies it, issue #83) disambiguates the cause: if that second call
 // still fails, some other dimension (account/provider/service/region) is
 // the real reason and its error is returned unchanged; otherwise the amount
 // constraint was specifically the blocker and a currency-specific 403 is

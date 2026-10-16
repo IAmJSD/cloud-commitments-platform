@@ -105,7 +105,7 @@ go run scripts/generate-federation-iac.go \
 # Azure target
 go run scripts/generate-federation-iac.go \
   --target azure --source aws \
-  --account-name "prod-azure" --account-id "sub-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" \
+  --account-name "prod-azure" --account-id "00000000-1111-2222-3333-444444444444" \
   --tenant-id "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" \
   --cudly-api-url "https://cudly.example.com"
 

@@ -1486,6 +1486,9 @@ func (h *Handler) parseDiscoverOrgRoot(ctx context.Context, session *Session, ra
 	if err != nil {
 		return nil, err
 	}
+	if err := h.requireUnrestrictedDiscoveryScope(ctx, session); err != nil {
+		return nil, err
+	}
 	if root.Provider != "aws" {
 		return nil, NewClientError(400, "discover-org requires an aws account")
 	}
@@ -1493,6 +1496,26 @@ func (h *Handler) parseDiscoverOrgRoot(ctx context.Context, session *Session, ra
 		return nil, NewClientError(400, "account is not configured as an org root (set aws_is_org_root=true)")
 	}
 	return root, nil
+}
+
+// requireUnrestrictedDiscoveryScope refuses org discovery for account-scoped
+// callers (issue #626). Discovery persists EVERY organization member as a new
+// row, deduped against all aws rows regardless of scope, so a scoped caller
+// would create rows outside their scope (or inside it via a name match) and
+// learn from the created/skipped counts which external ids other tenants
+// already registered. Filtering per member cannot help: the new rows get fresh
+// UUIDs, so only a name match could ever place one in scope. Runs after
+// requireAccountAccess so an out-of-scope root keeps its enumeration-safe 404,
+// and before the root's credentials are loaded or AWS is called.
+func (h *Handler) requireUnrestrictedDiscoveryScope(ctx context.Context, session *Session) error {
+	scope, err := h.getAccountScope(ctx, session)
+	if err != nil {
+		return fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if !scope.AllowsAll() {
+		return NewClientError(403, "permission denied: org discovery creates rows for every organization member and requires unrestricted account access")
+	}
+	return nil
 }
 
 // buildOrgRootAWSConfig resolves the org-root account's stored credentials and

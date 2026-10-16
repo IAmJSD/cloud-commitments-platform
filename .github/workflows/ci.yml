@@ -526,6 +526,9 @@ jobs:
         # output, so a scanner that can no longer fail cannot ship as coverage.
         run: bash scripts/test-scan-shipped-image.sh
 
+      - name: Run govulncheck retry self-tests
+        run: bash scripts/test-govulncheck-retry.sh
+
       - name: Scan the shipped image for Go advisories
         run: bash scripts/scan-shipped-image.sh cudly:${{ github.sha }}
 
@@ -565,6 +568,17 @@ jobs:
           terraform -chdir=iac/federation/azure-target/terraform init -backend=false -lockfile=readonly -input=false
           terraform -chdir=iac/federation/azure-target/terraform fmt -check -recursive
           terraform -chdir=iac/federation/azure-target/terraform test
+
+      - name: Test AWS compute modules
+        if: matrix.cloud == 'aws'
+        run: |
+          for t in terraform/modules/compute/aws/*/tests; do
+            [ -d "$t" ] || continue
+            d=$(dirname "$t")
+            terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
+            terraform -chdir="$d" fmt -check -recursive
+            terraform -chdir="$d" test
+          done
 
       - name: Terraform Init
         run: |
@@ -628,11 +642,12 @@ jobs:
           # between PRs without an intentional bump in this repo.
           # Bumping is a deliberate review item, not a drift.
           go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
-          # Scan both platform-owned modules independently.
+          # Scan both platform-owned modules independently. The wrapper retries
+          # only transient vulnerability-DB fetch failures, never findings (#74).
           set -e
           for mod in . tests/e2e; do
             echo "==> govulncheck in $mod"
-            (cd "$mod" && govulncheck ./...)
+            (cd "$mod" && bash "$GITHUB_WORKSPACE/scripts/govulncheck-retry.sh" ./...)
           done
 
       - name: Run npm audit (frontend)

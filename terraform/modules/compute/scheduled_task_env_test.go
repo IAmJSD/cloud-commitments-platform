@@ -37,7 +37,7 @@ const awsEnvDir = "../../environments/aws"
 
 var (
 	passLineRe  = regexp.MustCompile(`(?m)^\s*(\w+)\s*=\s*var\.(\w+)\s*$`)
-	tfvarsOffRe = regexp.MustCompile(`(?m)^\s*(enable_\w+)\s*=\s*false\b`)
+	tfvarsOffRe = regexp.MustCompile(`(?m)^\s*(enable_\w+)\s*=\s*"?false\b`)
 	defaultRe   = regexp.MustCompile(`(?m)^\s*default\s*=\s*(\S+)`)
 )
 
@@ -271,6 +271,9 @@ func TestEnvChecksNegatives(t *testing.T) {
 	}
 	if got := tfvarsProblems("a.tfvars", "enable_finalize_revocations_schedule = false\nenable_fire_scheduled_purchases_schedule = false\n# enable_scheduled_tasks = false\n"); len(got) != 1 || !strings.Contains(got[0], "finalize_revocations") {
 		t.Errorf("tfvarsProblems = %v", got)
+	}
+	if got := tfvarsProblems("a.tfvars", "enable_finalize_revocations_schedule = \"false\"\n"); len(got) != 1 {
+		t.Errorf("quoted \"false\" must count as off: %v", got)
 	}
 	if len(tfvarsProblems("a.tfvars.json", "{}")) != 1 {
 		t.Error("JSON tfvars must fail loudly")

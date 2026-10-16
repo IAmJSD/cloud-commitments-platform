@@ -434,22 +434,29 @@ const marketplaceRoleAssumptionMessage = "could not assume the role configured f
 // that the credential provider makes lazily inside an EC2 request. Its text
 // names the host account and role ARNs, so it must never reach the caller.
 func isRoleAssumptionFailure(err error) bool {
+	return roleAssumptionOperationError(err) != nil
+}
+
+// roleAssumptionOperationError returns the STS AssumeRole operation error in
+// err's chain, or nil when there is none.
+func roleAssumptionOperationError(err error) *smithy.OperationError {
 	for ; err != nil; err = errors.Unwrap(err) {
 		var opErr *smithy.OperationError
 		if errors.As(err, &opErr) && opErr.ServiceID == "STS" && strings.HasPrefix(opErr.OperationName, "AssumeRole") {
-			return true
+			return opErr
 		}
 	}
-	return false
+	return nil
 }
 
 // mapAWSMarketplaceError maps an AWS SDK error to an appropriate ClientError.
 // AWS client-fault errors (4xx-category codes) produce a 4xx response with the
 // original AWS message so the caller gets actionable feedback. All other errors
-// produce a 502 (AWS-side failure).
+// produce a 502 (AWS-side failure). STS AssumeRole failures are classified by
+// roleAssumptionClientError and never echo the AWS text.
 func mapAWSMarketplaceError(opMsg string, err error) error {
-	if isRoleAssumptionFailure(err) {
-		return NewClientError(400, marketplaceRoleAssumptionMessage)
+	if opErr := roleAssumptionOperationError(err); opErr != nil {
+		return roleAssumptionClientError(opMsg, opErr)
 	}
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {

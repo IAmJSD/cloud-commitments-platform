@@ -4,21 +4,29 @@
 **Related commits:** `32f9e4ffc` (pending-in-history), `b44283746` (failed + expired states)
 **Status:** ✔️ Resolved — verified 2026-04-25.
 
+> **Amendment (#712):** the AWS trigger claimed below (`cleanup-lambda/main.tf:98`)
+> is false: no environment consumes the `cleanup-lambda` module, so nothing
+> schedules cleanup on AWS. The same holds for the Terraform behind the
+> "matches what the cleanup-lambda Terraform actually configures" sentence
+> under "Original problem". Only Azure Container Apps schedules cleanup today. Retention
+> scheduling is tracked by #712.
+
 ## Resolution
 
 `internal/server/handler.go::handleCleanupExpiredRecords` (line 153) calls
 `CleanupOldExecutions(ctx, 30)` with a 30-day retention. Wired as the
 `TaskCleanupExpiredRecords` scheduled task type and triggered by:
 
-- **AWS:** EventBridge rule `cleanup_schedule` in
-  `terraform/modules/compute/aws/cleanup-lambda/main.tf:98`
-- **Azure:** dedicated cleanup Function App
-- **Container Apps:** scheduled task
+- **AWS:** ~~EventBridge rule `cleanup_schedule` in
+  `terraform/modules/compute/aws/cleanup-lambda/main.tf:98`~~ (unconsumed module, see amendment)
+- **Azure Container Apps:** a Logic App calls `/api/scheduled/cleanup` daily
+  when `enable_scheduled_tasks` is true. (The `azure/cleanup-function` module
+  is not consumed by any environment, and AKS has no scheduler, #893.)
 
 The `CleanupOldExecutions` Postgres implementation in
 `internal/config/store_postgres.go` runs the expected
-`DELETE FROM purchase_executions WHERE …`, so the table is now bounded
-on every supported deployment target.
+`DELETE FROM purchase_executions WHERE …`, so the table is bounded
+only where that task is scheduled (Azure Container Apps today, see amendment).
 
 ## Original problem (historical context)
 

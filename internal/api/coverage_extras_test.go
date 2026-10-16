@@ -87,6 +87,8 @@ func TestHandler_approvePurchase_PurchaseError(t *testing.T) {
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	// After issue #286, approvePurchase is session-first: with a Bearer
 	// header present the dispatch consults the approve-{any,own} RBAC
 	// matrix BEFORE falling through to the token branch. The session
@@ -160,6 +162,8 @@ func TestHandler_cancelPurchase_PurchaseError(t *testing.T) {
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	// Session has no admin role / cancel permissions → cancelPurchase's
 	// session-authed pre-check falls through to authorizeApprovalAction →
 	// purchase manager invocation, which is what this test's

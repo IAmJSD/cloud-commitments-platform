@@ -50,6 +50,7 @@ on:
       - 'frontend/**'
       - 'Dockerfile'
       - 'terraform/modules/compute/aws/lambda/**'
+      - '!terraform/modules/compute/aws/lambda/tests/**'
       - 'terraform/modules/database/aws/**'
       - 'terraform/modules/secrets/aws/**'
       - 'terraform/modules/networking/aws/**'

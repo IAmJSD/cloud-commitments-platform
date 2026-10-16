@@ -225,6 +225,14 @@ type StoreInterface interface {
 	// row whose recommendations were attached after the caller's gate check. A
 	// lost pin returns ErrExecutionNotInExpectedStatus like any lost CAS.
 	TransitionExecutionStatusPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*PurchaseExecution, error)
+	// TransitionExecutionStatusTokenPinned is TransitionExecutionStatus that
+	// also requires the row's stored approval token hash to match rawToken and
+	// to be unexpired, in the same statement as the status change, so a token
+	// rotated or expired after the caller validated it cannot win the
+	// transition (issue #590). A lost token pin on a row still in an allowed
+	// status returns ErrApprovalTokenChanged; a lost status CAS returns
+	// ErrExecutionNotInExpectedStatus as usual.
+	TransitionExecutionStatusTokenPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, rawToken string) (*PurchaseExecution, error)
 	// RescheduleAwaitingExecution sets scheduled_date on an execution that is
 	// still pending or notified and touches no other column. It returns false
 	// (and writes nothing) when the row has left those statuses, so a cancel or
@@ -326,7 +334,8 @@ type StoreInterface interface {
 	// applied independently and only when populated (see PurchaseHistoryFilter).
 	// The account predicate matches BOTH identifier columns:
 	//   (cloud_account_id = ANY(AccountIDs)
-	//      OR (provider = $p AND account_id = ANY(ExternalIDsByProvider[p])) OR ...)
+	//      OR ((provider = '' OR LOWER(provider) = LOWER($p))
+	//          AND account_id = ANY(ExternalIDsByProvider[p])) OR ...)
 	// because purchase_history rows carry the cloud_accounts UUID FK
 	// (cloud_account_id, NULL on direct-execute/ambient/pre-000011 rows) and the
 	// cloud-provider external number (account_id, always populated) independently.
@@ -335,7 +344,9 @@ type StoreInterface interface {
 	// resolves AccountIDs to their external account numbers grouped by provider
 	// and populates ExternalIDsByProvider so rows that carry only account_id are
 	// also matched, while the per-provider grouping keeps a reused external number
-	// across providers (aws/123 vs azure/123) from leaking the wrong rows.
+	// across providers (aws/123 vs azure/123) from leaking the wrong rows. The
+	// provider gate is case-insensitive and a row with an empty (unknown) stored
+	// provider matches on account_id alone (issue #24).
 	GetPurchaseHistoryFiltered(ctx context.Context, filter PurchaseHistoryFilter) ([]PurchaseHistoryRecord, error)
 	// GetPurchaseHistoryByPurchaseID returns the single purchase_history row
 	// whose purchase_id matches (AWS ReservedInstancesId / Azure reservation

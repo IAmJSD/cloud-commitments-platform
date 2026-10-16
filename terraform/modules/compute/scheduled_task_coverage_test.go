@@ -133,6 +133,8 @@ var (
 	// Only a local's first-line value resolves, with no local-to-local recursion;
 	// an unresolved local leaves the task unwired (an undocumented gap).
 	localRef = regexp.MustCompile(`\blocal\.(\w+)`)
+	// requestAttr is the single-line attribute that carries the request target.
+	requestAttr = regexp.MustCompile(`(?m)^\s*(?:uri|input|args)\s*=.*$`)
 	// literalRes are the task-name patterns of the contract test (schedulerRefs)
 	// plus the CloudFormation Input JSON.
 	literalRes = func() []*regexp.Regexp {
@@ -165,14 +167,15 @@ func blocks(src, header string) []string {
 }
 
 // schedulerScopes returns the text of each scheduler resource in src. A
-// `local.x` reference inside one (a job whose uri is a local) is resolved by
-// appending its definition from the locals blocks of all.
+// `local.x` reference on a request-carrying line (uri, input, args) is resolved
+// by appending its definition from the locals blocks of all; a local used by an
+// oidc_token audience or a description does not make the job wired.
 func schedulerScopes(src, all string) []string {
 	var scopes []string
 	locals := strings.Join(blocks(all, `\blocals\s*\{`), "\n")
 	for _, h := range schedulerHeaders {
 		for _, body := range blocks(src, h) {
-			for _, ref := range localRef.FindAllStringSubmatch(body, -1) {
+			for _, ref := range localRef.FindAllStringSubmatch(strings.Join(requestAttr.FindAllString(body, -1), "\n"), -1) {
 				if def := regexp.MustCompile(`(?m)^\s*` + ref[1] + `\s*=\s*(.+)$`).FindStringSubmatch(locals); def != nil {
 					body += "\n" + def[1]
 				}
@@ -365,6 +368,7 @@ func TestCheckerNegatives(t *testing.T) {
 		"trailing comment after a real uri":              {job(collectURI + " # note"), []string{"collect_recommendations"}, nil},
 		"literal only in locals is not wired":            {aud + job(`uri = "x"`), nil, nil},
 		"local name clash with a plain attribute":        {"resource \"x\" \"r\" {\n  name = \"x/api/scheduled/cleanup\"\n}\nlocals {\n  name = \"zzz\"\n}\n" + job("uri = local.name"), nil, nil},
+		"audience local holding the task is not wired":   {aud + job("uri = \"x\"\noidc_token {\n  audience = local.aud\n}"), nil, nil},
 		"job uri resolved through a local":               {aud + job("uri = local.aud"), []string{"collect_recommendations"}, nil},
 		"literal outside a scheduler block":              {"resource \"aws_lambda_permission\" \"p\" {\n" + finalize + "\n}\n", nil, nil},
 		"unknown task in a scheduler block":              {target(`input = jsonencode({ action = "bogus_task" })`), nil, []string{"bogus_task"}},

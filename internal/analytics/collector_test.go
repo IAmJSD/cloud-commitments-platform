@@ -311,6 +311,10 @@ func (m *mockConfigStore) TransitionExecutionStatusPinned(ctx context.Context, e
 	return nil, nil
 }
 
+func (m *mockConfigStore) TransitionExecutionStatusTokenPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, rawToken string) (*config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) RescheduleAwaitingExecution(_ context.Context, _ string, _ time.Time) (bool, error) {
 	return false, nil
 }

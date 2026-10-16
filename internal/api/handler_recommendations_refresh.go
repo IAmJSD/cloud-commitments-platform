@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/scheduler"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -122,6 +124,21 @@ func (h *Handler) requireUnrestrictedAccountScope(ctx context.Context, session *
 		return NewClientError(403, "permission denied: refreshing recommendations covers every account and requires unrestricted account access")
 	}
 	return nil
+}
+
+// recommendationsReadContext returns the context to pass to
+// ListRecommendations for a caller with the given (already resolved) account
+// scope. Only an unrestricted scope may let the read kick the cold-start
+// collection or the stale-cache refresh: both collect for every registered
+// account and the cold-start kick holds the same in-flight marker as the
+// refresh above (issue #627). A scoped caller gets a pure cache read. Callers
+// resolve the scope once and return a lookup error before reading, so a scope
+// that cannot be established never reaches here.
+func recommendationsReadContext(ctx context.Context, scope auth.AccountScope) context.Context {
+	if !scope.AllowsAll() {
+		return ctx
+	}
+	return scheduler.WithBackgroundCollection(ctx)
 }
 
 // runMarkedCollection triggers the actual collection after MarkCollectionStarted

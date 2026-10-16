@@ -483,6 +483,23 @@ func (m *MockConfigStore) TransitionExecutionStatusPinned(ctx context.Context, e
 	return v, args.Error(1)
 }
 
+// TransitionExecutionStatusTokenPinned mocks the token-pinned transition
+// (issue #590). It does not delegate to TransitionExecutionStatus: a caller
+// that must pin the approval token is expected to call this method, so a test
+// has to register it explicitly.
+func (m *MockConfigStore) TransitionExecutionStatusTokenPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, rawToken string) (*config.PurchaseExecution, error) {
+	m.record("TransitionExecutionStatusTokenPinned", ctx, executionID, fromStatuses, toStatus, actor, rawToken)
+	args := m.Called(ctx, executionID, fromStatuses, toStatus, actor, rawToken)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.PurchaseExecution)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.PurchaseExecution, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 // RescheduleAwaitingExecution mocks the conditional scheduled_date update.
 func (m *MockConfigStore) RescheduleAwaitingExecution(ctx context.Context, executionID string, scheduledDate time.Time) (bool, error) {
 	args := m.Called(ctx, executionID, scheduledDate)
