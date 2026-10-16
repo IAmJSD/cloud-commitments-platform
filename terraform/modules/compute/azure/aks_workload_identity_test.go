@@ -117,6 +117,9 @@ func workloadIdentityProblems(raw string) []string {
 	if !has(deploy, `\bservice_account_name\s*=\s*kubernetes_service_account\.app\[0\]\.metadata\[0\]\.name\b`) {
 		fail("kubernetes_deployment.app must run as kubernetes_service_account.app")
 	}
+	if !has(deploy, `(?s)\bdepends_on\s*=\s*\[[^\]]*\bazurerm_federated_identity_credential\.workload\b`) {
+		fail("kubernetes_deployment.app must depend on azurerm_federated_identity_credential.workload; nothing in the deployment references it, so without the dependency pods can start before token exchange works")
+	}
 	tmpl, _ := hclBlock(deploy, `\btemplate`)
 	tmplMeta, _ := hclBlock(tmpl, `\bmetadata`)
 	podLabels, _ := hclBlock(tmplMeta, `\blabels\s*=`)
@@ -151,6 +154,7 @@ func TestAKSWorkloadIdentityGuardDetectsEachMissingPiece(t *testing.T) {
 		{"oidc issuer disabled", `oidc_issuer_enabled\s*=\s*true`, `oidc_issuer_enabled = false`},
 		{"workload identity disabled", `workload_identity_enabled\s*=\s*true`, `workload_identity_enabled = false`},
 		{"federated credential removed", `resource\s+"azurerm_federated_identity_credential"\s+"workload"`, `resource "azurerm_federated_identity_credential" "renamed"`},
+		{"federated credential dependency removed", `(?m)^[ \t]*azurerm_federated_identity_credential\.workload,[ \t]*\n`, ``},
 		{"wrong issuer", `azurerm_kubernetes_cluster\.main\.oidc_issuer_url`, `"https://example.invalid/"`},
 		{"wrong audience", `"api://AzureADTokenExchange"`, `"api://other"`},
 		{"subject namespace hardcoded", `system:serviceaccount:\$\{local\.workload_namespace\}`, `system:serviceaccount:default`},
