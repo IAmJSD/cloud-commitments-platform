@@ -345,6 +345,9 @@ func (a *configExchangeStoreAdapter) FailRIExchange(ctx context.Context, id, err
 	return a.store.FailRIExchange(ctx, id, errorMsg)
 }
 
+// exchangeToConfigRecord leaves CreatedByUserID nil on purpose: these rows are
+// written by the scheduler or the ladder engine, which have no human creator,
+// and pkg/exchange.ExchangeRecord has no field to carry one (issue #518).
 func exchangeToConfigRecord(r *exchange.ExchangeRecord) *config.RIExchangeRecord {
 	return &config.RIExchangeRecord{
 		ID:                 r.ID,

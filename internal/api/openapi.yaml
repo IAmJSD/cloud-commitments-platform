@@ -1364,7 +1364,10 @@ paths:
         created, within the deployment account scope. Token mode (email
         link): the approval token in the query string, no session needed
         unless 4-eyes mode is on, in which case a token request with no
-        session fails with 500. A session that holds approve permission wins
+        session fails with 500, including for an exchange with no recorded
+        creator (every scheduler- or ladder-created exchange); such an
+        exchange has no requester to differ from, so under 4-eyes any
+        signed-in approver may approve it. A session that holds approve permission wins
         over a token in the same request (the token is ignored); a session
         that lacks the permission, or holds only approve-own for an exchange
         it did not create, falls through to token mode when a token is

@@ -1055,8 +1055,9 @@ type RIExchangeRecord struct {
 	Mode               string   `json:"mode"`
 	// CreatedByUserID is the UUID of the session user who submitted the exchange.
 	// Always nil today: every exchange is created by the scheduler or the ladder
-	// engine, and pkg/exchange.ExchangeRecord carries no creator (see issue #233
-	// for the policy on creator-less rows). Exposed to the frontend so the Approve button
+	// engine, and pkg/exchange.ExchangeRecord carries no creator (the 4-eyes
+	// policy for creator-less rows is requireDifferentRIExchangeApprover in
+	// internal/api, issue #518). Exposed to the frontend so the Approve button
 	// can apply the approve-own ownership check client-side.
 	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
 	// ApprovedBy carries the email of the session user who approved the exchange
