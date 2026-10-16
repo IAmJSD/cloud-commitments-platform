@@ -1138,6 +1138,10 @@ func recommendationID(rec config.RecommendationRecord) (string, error) {
 //     aren't on Lambda, kick off a background CollectRecommendations so
 //     the NEXT read sees fresh data. Lambda skips this (goroutines freeze
 //     between invocations); the scheduled cron is Lambda's refresh path.
+//
+// Steps 2 and 4 run only when ctx carries WithBackgroundCollection, which the
+// API sets for callers with unrestricted account scope. Both collect across
+// every account, so a scoped reader gets a pure cache read (issue #627).
 func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	logging.Info("Reading recommendations from cache...")
 
@@ -1146,7 +1150,8 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 		return nil, fmt.Errorf("failed to read recommendations freshness: %w", err)
 	}
 
-	if freshness.LastCollectedAt == nil {
+	mayCollect := BackgroundCollectionAllowed(ctx)
+	if mayCollect && freshness.LastCollectedAt == nil {
 		s.kickColdStartCollection(ctx)
 	}
 
@@ -1175,7 +1180,7 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 	// Background refresh is only attempted on non-Lambda runtimes; skip
 	// the DB config read entirely on Lambda so GetGlobalConfig is not called
 	// on the hot read path (Lambda has no persistent goroutines).
-	if !s.isLambda {
+	if mayCollect && !s.isLambda {
 		ttl, disabled := s.resolveEffectiveCacheTTL(ctx)
 		if disabled {
 			return recs, nil

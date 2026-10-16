@@ -124,7 +124,7 @@ func TestPerAccountPerms_Recommendations_ListFilter(t *testing.T) {
 	}
 
 	mockSched := new(MockScheduler)
-	mockSched.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{recA, recB}, nil)
+	mockSched.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockStore := new(MockConfigStore)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
@@ -175,7 +175,7 @@ func TestPerAccountPerms_Recommendations_ListFilter_AdminSeesAll(t *testing.T) {
 	}
 
 	mockSched := new(MockScheduler)
-	mockSched.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{recA, recB}, nil)
+	mockSched.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockAuth, req := adminDashboardReq(ctx) // reuse adminDashboardReq: admin session
 	handler := &Handler{
@@ -494,7 +494,7 @@ func TestPerAccountPerms_DashboardSummary_AggregatesAllowedSubsetOnly(t *testing
 	}
 
 	mockSched := new(MockScheduler)
-	mockSched.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{recA, recB}, nil)
+	mockSched.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockStore := new(MockConfigStore)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
@@ -551,7 +551,7 @@ func TestPerAccountPerms_DashboardSummary_CommitmentMetricsExcludeOtherAccounts(
 	ctx := context.Background()
 
 	mockSched := new(MockScheduler)
-	mockSched.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
+	mockSched.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 
 	purchaseTime := time.Now().AddDate(0, -2, 0) // active 1-year commitment
 	// Only account A's purchase history is returned by the scoped query; the
@@ -854,7 +854,7 @@ func TestPerAccountPerms_CoverageBreakdown_RecsFilteredByAllowedAccounts(t *test
 	}
 
 	mockSched := new(MockScheduler)
-	mockSched.On("ListRecommendations", ctx, config.RecommendationFilter{}).
+	mockSched.On("ListRecommendations", mock.Anything, config.RecommendationFilter{}).
 		Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockStore := new(MockConfigStore)
@@ -929,7 +929,7 @@ func TestPerAccountPerms_CoverageBreakdown_AdminSeesAll(t *testing.T) {
 	}
 
 	mockSched := new(MockScheduler)
-	mockSched.On("ListRecommendations", ctx, config.RecommendationFilter{}).
+	mockSched.On("ListRecommendations", mock.Anything, config.RecommendationFilter{}).
 		Return([]config.RecommendationRecord{recA, recB}, nil)
 
 	mockStore := new(MockConfigStore)

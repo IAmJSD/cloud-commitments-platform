@@ -20,7 +20,7 @@ func TestHandler_getRecommendations(t *testing.T) {
 	mockScheduler := new(MockScheduler)
 
 	// Mock the scheduler to return empty recommendations
-	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
+	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 
 	handler := &Handler{
 		scheduler: mockScheduler,
@@ -56,7 +56,7 @@ func TestGetRecommendations_PushdownFilters(t *testing.T) {
 		mockScheduler := new(MockScheduler)
 		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 		mockScheduler.On(
-			"ListRecommendations", ctx,
+			"ListRecommendations", mock.Anything,
 			config.RecommendationFilter{Provider: "aws", Service: "ec2", Region: "us-east-1"},
 		).Return([]config.RecommendationRecord{}, nil)
 
@@ -76,7 +76,7 @@ func TestGetRecommendations_PushdownFilters(t *testing.T) {
 		mockScheduler := new(MockScheduler)
 		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 		mockScheduler.On(
-			"ListRecommendations", ctx,
+			"ListRecommendations", mock.Anything,
 			config.RecommendationFilter{AccountIDs: []string{validUUID}},
 		).Return([]config.RecommendationRecord{}, nil)
 
@@ -399,7 +399,7 @@ func TestGetRecommendations_AccountIDFilter(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			mockScheduler := new(MockScheduler)
 			if tt.wantStatus == 0 {
-				mockScheduler.On("ListRecommendations", ctx, mock.Anything).
+				mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).
 					Return(tt.mockReturn, nil)
 			}
 			handler := &Handler{
@@ -457,7 +457,7 @@ func TestGetRecommendations_EnabledProvidersFilter(t *testing.T) {
 
 	t.Run("disabled provider recs are excluded", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("ListRecommendations", ctx, mock.Anything).
+		mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).
 			Return([]config.RecommendationRecord{awsRec, azureRec, gcpRec}, nil)
 		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 
@@ -485,7 +485,7 @@ func TestGetRecommendations_EnabledProvidersFilter(t *testing.T) {
 
 	t.Run("empty enabled_providers passes all recs through (permissive default)", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("ListRecommendations", ctx, mock.Anything).
+		mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).
 			Return([]config.RecommendationRecord{awsRec, azureRec}, nil)
 		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 
@@ -508,7 +508,7 @@ func TestGetRecommendations_EnabledProvidersFilter(t *testing.T) {
 
 	t.Run("config read error is surfaced (fail loud)", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("ListRecommendations", ctx, mock.Anything).
+		mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).
 			Return([]config.RecommendationRecord{awsRec}, nil)
 		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
 
@@ -643,7 +643,7 @@ func TestGetRecommendations_MinSavingsFilters(t *testing.T) {
 
 	t.Run("min_savings_usd filter is wired to RecommendationFilter.MinSavingsUSD not MinSavingsPct", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f config.RecommendationFilter) bool {
+		mockScheduler.On("ListRecommendations", mock.Anything, mock.MatchedBy(func(f config.RecommendationFilter) bool {
 			// Dollar filter must be set; percentage filter must be zero.
 			return f.MinSavingsUSD == 30 && f.MinSavingsPct == 0
 		})).Return([]config.RecommendationRecord{}, nil)
@@ -660,7 +660,7 @@ func TestGetRecommendations_MinSavingsFilters(t *testing.T) {
 
 	t.Run("min_savings_pct filter is wired to RecommendationFilter.MinSavingsPct not MinSavingsUSD", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f config.RecommendationFilter) bool {
+		mockScheduler.On("ListRecommendations", mock.Anything, mock.MatchedBy(func(f config.RecommendationFilter) bool {
 			// Percentage filter must be set; dollar filter must be zero.
 			return f.MinSavingsPct == 30 && f.MinSavingsUSD == 0
 		})).Return([]config.RecommendationRecord{}, nil)
@@ -678,7 +678,7 @@ func TestGetRecommendations_MinSavingsFilters(t *testing.T) {
 
 	t.Run("both filters can be combined independently", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f config.RecommendationFilter) bool {
+		mockScheduler.On("ListRecommendations", mock.Anything, mock.MatchedBy(func(f config.RecommendationFilter) bool {
 			return f.MinSavingsUSD == 50 && f.MinSavingsPct == 20
 		})).Return([]config.RecommendationRecord{}, nil)
 		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
@@ -733,7 +733,7 @@ func TestGetRecommendations_MinSavingsFilters(t *testing.T) {
 
 	t.Run("absent filters pass through zero values in RecommendationFilter", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("ListRecommendations", ctx, mock.MatchedBy(func(f config.RecommendationFilter) bool {
+		mockScheduler.On("ListRecommendations", mock.Anything, mock.MatchedBy(func(f config.RecommendationFilter) bool {
 			return f.MinSavingsUSD == 0 && f.MinSavingsPct == 0
 		})).Return([]config.RecommendationRecord{}, nil)
 		t.Cleanup(func() { mockScheduler.AssertExpectations(t) })

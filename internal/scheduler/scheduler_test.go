@@ -980,7 +980,7 @@ func TestScheduler_ListRecommendations_StaleHoursZeroDisablesBackgroundRefresh(t
 // map into the DB-facing RecommendationFilter. The SQL pushdown semantics
 // themselves are covered by store_postgres_recommendations_test.go.
 func TestScheduler_ListRecommendations_PassesFilterToStore(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithBackgroundCollection(context.Background())
 	mockStore := new(MockConfigStore)
 
 	now := time.Now().UTC()
@@ -1112,7 +1112,7 @@ func TestScheduler_ListRecommendations_ColdStart_Lambda_NeverMarksOrCollects(t *
 // and no collection. Only reachable on non-Lambda -- Lambda never calls
 // MarkCollectionStarted at all (see the test above).
 func TestScheduler_ListRecommendations_ColdStart_AlreadyInFlight_NoOp(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithBackgroundCollection(context.Background())
 	mockStore := new(MockConfigStore)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
@@ -1139,7 +1139,7 @@ func TestScheduler_ListRecommendations_ColdStart_AlreadyInFlight_NoOp(t *testing
 // is a best-effort kick, not a requirement for serving cached data. Only
 // reachable on non-Lambda -- Lambda never calls MarkCollectionStarted.
 func TestScheduler_ListRecommendations_ColdStart_MarkErrorDoesNotFailRead(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithBackgroundCollection(context.Background())
 	mockStore := new(MockConfigStore)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
@@ -1169,7 +1169,7 @@ func TestScheduler_ListRecommendations_ColdStart_MarkErrorDoesNotFailRead(t *tes
 //     gate opens, so the recorded Err() is non-nil;
 //   - a removed spawn never reaches the gate, so the wait for it times out.
 func TestScheduler_ListRecommendations_ColdStart_NonLambda_KicksBackgroundCollect(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(WithBackgroundCollection(context.Background()))
 	defer cancel()
 	mockStore := new(MockConfigStore)
 
