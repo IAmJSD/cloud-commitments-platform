@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -94,7 +95,14 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 		return nil, err
 	}
 
-	recommendations, err := h.scheduler.ListRecommendations(h.recommendationsReadContext(ctx, session), filter)
+	// Resolve the account scope once: it decides both whether this read may
+	// kick a background collection (issue #627) and the post-filter below.
+	scope, err := h.getAccountScope(ctx, session)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+
+	recommendations, err := h.scheduler.ListRecommendations(recommendationsReadContext(ctx, scope), filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recommendations: %w", err)
 	}
@@ -109,7 +117,7 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 	}
 
 	// Filter by allowed accounts if the user has restricted access
-	recommendations, err = h.filterRecommendationsByAllowedAccounts(ctx, session, recommendations)
+	recommendations, err = h.filterRecommendationsByScope(ctx, scope, recommendations)
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +133,12 @@ func (h *Handler) filterRecommendationsByAllowedAccounts(ctx context.Context, se
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
+	return h.filterRecommendationsByScope(ctx, allowedAccounts, recs)
+}
+
+// filterRecommendationsByScope is filterRecommendationsByAllowedAccounts for a
+// caller that has already resolved the session's account scope.
+func (h *Handler) filterRecommendationsByScope(ctx context.Context, allowedAccounts auth.AccountScope, recs []config.RecommendationRecord) ([]config.RecommendationRecord, error) {
 	if allowedAccounts.AllowsAll() {
 		return recs, nil
 	}

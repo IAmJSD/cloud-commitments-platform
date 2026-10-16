@@ -215,30 +215,40 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 	}
 
 	// --- on-demand gap: recommendations -------------------------------------
-	// Recommendations represent uncommitted demand that could be purchased.
-	// Their Savings field is the monthly on-demand cost of the uncovered gap.
-	// Scope recs to the account chip the same way fetchCommitmentRecords scopes
-	// commitments above — otherwise the covered side honors the chip but the
-	// on-demand side bleeds in other accounts' gaps, producing misleading
-	// per-service coverage (issue #866 follow-up: CR pass on PR #881).
-	recs, err := h.scheduler.ListRecommendations(h.recommendationsReadContext(ctx, session), buildCoverageRecFilter(params))
+	recs, err := h.fetchCoverageOnDemandRecs(ctx, session, params)
 	if err != nil {
-		// Non-fatal: recommendations are best-effort for coverage display.
-		// An empty rec list is treated as "no uncovered gap" — coverage
-		// will show covered-only totals rather than failing the whole page.
-		recs = nil
-	}
-	// Apply the same allowed-accounts scope as the commitments query above so
-	// restricted users cannot infer data from accounts they are not entitled to.
-	if recs != nil {
-		recs, err = h.filterRecommendationsByAllowedAccounts(ctx, session, recs)
-		if err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 	onDemandByKey := aggregateOnDemandByKey(recs, params["provider"])
 
 	return buildCoverageBreakdown(coveredByKey, onDemandByKey), nil
+}
+
+// fetchCoverageOnDemandRecs reads the recommendations behind the coverage
+// breakdown's on-demand gap. Recommendations represent uncommitted demand
+// that could be purchased; their Savings field is the monthly on-demand cost
+// of the uncovered gap. Recs are scoped to the account chip the same way
+// fetchCommitmentRecords scopes commitments; otherwise the covered side honors
+// the chip but the on-demand side bleeds in other accounts' gaps, producing
+// misleading per-service coverage (issue #866 follow-up: CR pass on PR #881).
+//
+// The session's account scope is resolved once and used both to decide
+// whether this read may kick a background collection (issue #627) and to
+// post-filter the recs, so restricted users cannot infer data from accounts
+// they are not entitled to.
+func (h *Handler) fetchCoverageOnDemandRecs(ctx context.Context, session *Session, params map[string]string) ([]config.RecommendationRecord, error) {
+	scope, err := h.getAccountScope(ctx, session)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	recs, err := h.scheduler.ListRecommendations(recommendationsReadContext(ctx, scope), buildCoverageRecFilter(params))
+	if err != nil {
+		// Non-fatal: recommendations are best-effort for coverage display.
+		// An empty rec list is treated as "no uncovered gap": coverage
+		// shows covered-only totals rather than failing the whole page.
+		return nil, nil
+	}
+	return h.filterRecommendationsByScope(ctx, scope, recs)
 }
 
 // buildCoverageRecFilter translates the query-string chip params into a

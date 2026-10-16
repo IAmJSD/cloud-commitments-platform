@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/scheduler"
 	"github.com/aws/aws-lambda-go/events"
@@ -126,15 +127,15 @@ func (h *Handler) requireUnrestrictedAccountScope(ctx context.Context, session *
 }
 
 // recommendationsReadContext returns the context to pass to
-// ListRecommendations. Only a session with unrestricted account scope may let
-// the read kick the cold-start collection or the stale-cache refresh: both
-// collect for every registered account and the cold-start kick holds the same
-// in-flight marker as the refresh above (issue #627). A scoped session, or one
-// whose scope cannot be established, gets a pure cache read; the handler's
-// own scope filter still reports a scope lookup failure.
-func (h *Handler) recommendationsReadContext(ctx context.Context, session *Session) context.Context {
-	scope, err := h.getAccountScope(ctx, session)
-	if err != nil || !scope.AllowsAll() {
+// ListRecommendations for a caller with the given (already resolved) account
+// scope. Only an unrestricted scope may let the read kick the cold-start
+// collection or the stale-cache refresh: both collect for every registered
+// account and the cold-start kick holds the same in-flight marker as the
+// refresh above (issue #627). A scoped caller gets a pure cache read. Callers
+// resolve the scope once and return a lookup error before reading, so a scope
+// that cannot be established never reaches here.
+func recommendationsReadContext(ctx context.Context, scope auth.AccountScope) context.Context {
+	if !scope.AllowsAll() {
 		return ctx
 	}
 	return scheduler.WithBackgroundCollection(ctx)

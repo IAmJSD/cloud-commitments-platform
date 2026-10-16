@@ -111,8 +111,8 @@ func TestRecommendationsRead_BackgroundCollectionOnlyForUnrestrictedReaders(t *t
 	}
 }
 
-// A scope that cannot be established fails closed: the read is not allowed to
-// kick a collection (whatever the handler then does with the lookup error).
+// A scope that cannot be established fails closed: the handler returns the
+// lookup error before reading, so nothing can kick a collection.
 func TestRecommendationsRead_ScopeLookupErrorNeverAllowsBackgroundCollection(t *testing.T) {
 	for _, ep := range recsReadEndpoints {
 		t.Run(ep.name, func(t *testing.T) {
@@ -126,8 +126,10 @@ func TestRecommendationsRead_ScopeLookupErrorNeverAllowsBackgroundCollection(t *
 			var allowed []bool
 			h := &Handler{config: recsReadStore(), scheduler: capturingScheduler(&allowed), auth: mockAuth}
 
-			_ = ep.call(h, context.Background(), scopedRequest(""))
-			assert.NotContains(t, allowed, true)
+			err := ep.call(h, context.Background(), scopedRequest(""))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "scope lookup failed")
+			assert.Empty(t, allowed, "no recommendations read may happen without an established scope")
 		})
 	}
 }
@@ -159,5 +161,19 @@ func TestGetRecommendations_ColdStartMarkerOnlyForUnrestrictedReaders(t *testing
 			require.NoError(t, err)
 			store.AssertNumberOfCalls(t, "MarkCollectionStarted", tc.wantMarks)
 		})
+	}
+}
+
+// GET /api/recommendations resolves the account scope once and uses it for both
+// the background-collection decision and the post-filter.
+func TestGetRecommendations_ResolvesAccountScopeOnce(t *testing.T) {
+	for _, accounts := range [][]string{nil, {scopedInAccount}} {
+		var allowed []bool
+		mockAuth := scopedAuth(accounts)
+		h := &Handler{config: recsReadStore(), scheduler: capturingScheduler(&allowed), auth: mockAuth}
+
+		_, err := h.getRecommendations(context.Background(), scopedRequest(""), map[string]string{})
+		require.NoError(t, err)
+		mockAuth.AssertNumberOfCalls(t, "GetAllowedAccountsAPI", 1)
 	}
 }

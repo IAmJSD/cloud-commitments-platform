@@ -1745,8 +1745,9 @@ func TestFilterDashboardRecommendations_FreshSlice(t *testing.T) {
 	handler := &Handler{auth: mockAuth, config: mockStore}
 	_ = listCalled // asserted implicitly: if not called the name map is empty and MatchesAccount uses only ID
 
-	filtered, err := handler.filterDashboardRecommendations(ctx, session, input)
+	scope, err := handler.getAccountScope(ctx, session)
 	require.NoError(t, err)
+	filtered := handler.filterDashboardRecommendations(ctx, scope, input)
 
 	// Only account A's rec must pass through.
 	require.Len(t, filtered, 1)

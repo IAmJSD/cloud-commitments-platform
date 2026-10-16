@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -27,17 +28,21 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	recommendations, err := h.scheduler.ListRecommendations(h.recommendationsReadContext(ctx, session), config.RecommendationFilter{
+	// Resolve the account scope once for both the background-collection
+	// decision (issue #627) and the recommendations post-filter.
+	scope, err := h.getAccountScope(ctx, session)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+
+	recommendations, err := h.scheduler.ListRecommendations(recommendationsReadContext(ctx, scope), config.RecommendationFilter{
 		Provider: params["provider"],
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recommendations: %w", err)
 	}
 
-	recommendations, err = h.filterDashboardRecommendations(ctx, session, recommendations)
-	if err != nil {
-		return nil, err
-	}
+	recommendations = h.filterDashboardRecommendations(ctx, scope, recommendations)
 
 	// Issue #196 — cap the headline "potential savings" by the per-account
 	// coverage target. Without this scaling the dashboard always reports
@@ -160,15 +165,12 @@ func (h *Handler) resolveAllowedAccountScope(ctx context.Context, session *Sessi
 }
 
 // filterDashboardRecommendations applies the session's allowed_accounts filter
-// to the recommendations list before aggregation so scoped users don't see
-// cross-account totals. Admin/unrestricted sessions pass through unchanged.
-func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *Session, recs []config.RecommendationRecord) ([]config.RecommendationRecord, error) {
-	allowed, err := h.getAccountScope(ctx, session)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
-	}
+// (already resolved into allowed) to the recommendations list before
+// aggregation so scoped users don't see cross-account totals.
+// Admin/unrestricted sessions pass through unchanged.
+func (h *Handler) filterDashboardRecommendations(ctx context.Context, allowed auth.AccountScope, recs []config.RecommendationRecord) []config.RecommendationRecord {
 	if allowed.AllowsAll() {
-		return recs, nil
+		return recs
 	}
 
 	nameByID := h.resolveAccountNamesByID(ctx)
@@ -182,7 +184,7 @@ func (h *Handler) filterDashboardRecommendations(ctx context.Context, session *S
 			filtered = append(filtered, recs[_rvc])
 		}
 	}
-	return filtered, nil
+	return filtered
 }
 
 // summarizeRecommendationsWithCoverage is the dashboard reducer that
