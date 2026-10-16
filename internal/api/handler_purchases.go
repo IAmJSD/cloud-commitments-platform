@@ -423,9 +423,12 @@ func (h *Handler) requireDeleteOrCancelPurchasePermission(ctx context.Context, r
 //
 // Gate logic:
 //   - stateless admin API key: always permitted.
-//   - update-any:purchases or cancel-any:purchases: permitted without an
-//     owner check (full-scope management and cancel-any operator paths).
-//   - otherwise: fetch the execution and require creator match.
+//   - update-any:purchases: permitted without an owner check or Constraints.
+//   - cancel-any:purchases: permitted without an owner check when its
+//     Constraints cover every recommendation (issue #678); a Constraints
+//     denial falls back to the creator branch.
+//   - otherwise: fetch the execution and require creator match, then apply
+//     cancel-own Constraints if the creator also holds cancel-own.
 //     Legacy rows with a NULL creator are out of reach for non-privileged
 //     users (matching cancel-own / approve-own / retry-own behavior).
 func (h *Handler) authorizePlannedPurchaseCancel(ctx context.Context, session *Session, executionID string) error {
@@ -435,30 +438,91 @@ func (h *Handler) authorizePlannedPurchaseCancel(ctx context.Context, session *S
 	if h.auth == nil {
 		return NewClientError(500, "authentication service not configured")
 	}
-	// update-any and cancel-any both grant full-scope access without an owner check.
-	for _, verb := range []string{auth.ActionUpdateAny, auth.ActionCancelAny} {
-		has, err := h.auth.HasPermissionAPI(ctx, session.UserID, verb, auth.ResourcePurchases)
-		if err != nil {
-			return fmt.Errorf("permission check failed: %w", err)
-		}
-		if has {
-			return nil
+	// update-any grants full-scope access without an owner check or
+	// Constraints (tracked by #961).
+	hasUpdate, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionUpdateAny, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	if hasUpdate {
+		return nil
+	}
+	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionCancelAny, auth.ResourcePurchases)
+	if err != nil {
+		return fmt.Errorf("permission check failed: %w", err)
+	}
+	execution, err := h.loadPlannedExecution(ctx, executionID)
+	if err != nil {
+		return err
+	}
+	// cancel-any is bounded by its Constraints (issue #678); a 403 falls back
+	// to the creator branch exactly as authorizeSessionCancel does.
+	var anyErr error
+	if hasAny {
+		// Wrapped for consistency; DELETE planned has no token fall-through.
+		anyErr = wrapConstraintDenied(h.requirePermissionConstraints(ctx, session, auth.ActionCancelAny, auth.ResourcePurchases, revokeExecutionConstraintSets(execution)))
+		if anyErr == nil || !isForbidden(anyErr) {
+			return anyErr
 		}
 	}
+	return h.authorizePlannedCreatorCancel(ctx, session, execution, anyErr)
+}
+
+// loadPlannedExecution fetches the row, mapping a missing one to errNotFound.
+func (h *Handler) loadPlannedExecution(ctx context.Context, executionID string) (*config.PurchaseExecution, error) {
 	execution, err := h.config.GetExecutionByID(ctx, executionID)
 	if errors.Is(err, config.ErrNotFound) {
-		return errNotFound
+		return nil, errNotFound
 	}
 	if err != nil {
-		return fmt.Errorf("failed to get execution: %w", err)
+		return nil, fmt.Errorf("failed to get execution: %w", err)
 	}
+	return execution, nil
+}
+
+// authorizePlannedCreatorCancel is the creator branch of
+// authorizePlannedPurchaseCancel. anyErr is the cancel-any Constraints denial
+// (nil when the session has no cancel-any); it is returned instead of the
+// ownership 403 so a constraint refusal stays terminal.
+func (h *Handler) authorizePlannedCreatorCancel(ctx context.Context, session *Session, execution *config.PurchaseExecution, anyErr error) error {
 	// requireDeleteOrCancelPurchasePermission already validated the session;
-	// UserID is either the API-key sentinel (handled above) or a real user UUID
-	// from ValidateSession. The nil/empty guard here is therefore defensive.
+	// UserID is either the API-key sentinel (handled by the caller) or a real
+	// user UUID from ValidateSession. The nil/empty guard here is defensive.
 	if execution.CreatedByUserID == nil || *execution.CreatedByUserID != session.UserID {
+		if anyErr != nil {
+			return anyErr
+		}
 		return NewClientError(403, "permission denied: cannot cancel another user's scheduled purchase")
 	}
-	return nil
+	// A creator match alone is enough (delete:purchases holders need no
+	// cancel-own, #961); a creator who also holds cancel-own is bounded by it.
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionCancelOwn)
+	if err != nil {
+		return err
+	}
+	if !hasOwn {
+		return nil
+	}
+	return wrapConstraintDenied(h.requirePermissionConstraints(ctx, session, auth.ActionCancelOwn, auth.ResourcePurchases, revokeExecutionConstraintSets(execution)))
+}
+
+// sessionHoldsVerb reports whether the principal that requirePermissionConstraints
+// evaluates holds verb on purchases: the owner for a user session, the KEY's
+// effective permissions for a user-API-key session. The key path probes with an
+// empty, non-strict set, which any held permission satisfies whatever its
+// Constraints, so a denial means the verb is not held.
+func (h *Handler) sessionHoldsVerb(ctx context.Context, session *Session, verb string) (bool, error) {
+	var has bool
+	var err error
+	if session.UserAPIKeyID != "" {
+		has, err = h.auth.HasAPIKeyPermissionForConstraintsAPI(ctx, session.UserAPIKeyID, session.UserID, verb, auth.ResourcePurchases, []auth.PermissionConstraints{{}})
+	} else {
+		has, err = h.auth.HasPermissionAPI(ctx, session.UserID, verb, auth.ResourcePurchases)
+	}
+	if err != nil {
+		return false, fmt.Errorf("permission check failed: %w", err)
+	}
+	return has, nil
 }
 
 func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (*DeletePlannedPurchaseResponse, error) {

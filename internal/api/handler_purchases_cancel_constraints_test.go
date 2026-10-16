@@ -276,3 +276,168 @@ func TestRevokeViaEmailToken_SessionBranchEnforcesCancelConstraints(t *testing.T
 		store.AssertCalled(t, "TransitionExecutionStatus", mock.Anything, cancelExecID, mock.Anything, "revocation_requested", mock.Anything)
 	})
 }
+
+func deletePlannedReq() *events.LambdaFunctionURLRequest {
+	return &events.LambdaFunctionURLRequest{Headers: map[string]string{"authorization": "Bearer sess-tok"}}
+}
+
+func TestDeletePlannedPurchase_CancelConstraints(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	creator := revokeConstraintsUser
+	del := auth.Permission{Action: auth.ActionDelete, Resource: auth.ResourcePurchases}
+	run := func(creatorID *string, perms ...auth.Permission) (*DeletePlannedPurchaseResponse, *MockConfigStore, error) {
+		exec := cancelRouteExec("pending")
+		exec.CreatedByUserID = creatorID
+		h, store := cancelRouteHandler(exec, perms...)
+		resp, err := h.deletePlannedPurchase(ctx, deletePlannedReq(), cancelExecID)
+		return resp, store, err
+	}
+	notTransitioned := func(t *testing.T, store *MockConfigStore) {
+		t.Helper()
+		store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	}
+
+	t.Run("constrained cancel-any out of scope is denied", func(t *testing.T) {
+		t.Parallel()
+		_, store, err := run(nil, awsOnly(auth.ActionCancelAny))
+		requireRevokeForbidden(t, err, constraintDenied)
+		notTransitioned(t, store)
+	})
+	t.Run("unconstrained and in-scope cancel-any cancel", func(t *testing.T) {
+		t.Parallel()
+		for _, c := range []*auth.PermissionConstraints{nil, {Providers: []string{"azure"}}} {
+			resp, _, err := run(nil, revokePerm(auth.ActionCancelAny, c))
+			require.NoError(t, err)
+			assert.Equal(t, "canceled", resp.Status)
+		}
+	})
+	t.Run("constrained any falls back to creator with unconstrained own", func(t *testing.T) {
+		t.Parallel()
+		resp, _, err := run(&creator, awsOnly(auth.ActionCancelAny), revokePerm(auth.ActionCancelOwn, nil))
+		require.NoError(t, err)
+		assert.Equal(t, "canceled", resp.Status)
+	})
+	t.Run("constrained any for a non-creator keeps the constraint message", func(t *testing.T) {
+		t.Parallel()
+		other := "someone-else"
+		_, store, err := run(&other, awsOnly(auth.ActionCancelAny), revokePerm(auth.ActionCancelOwn, nil))
+		requireRevokeForbidden(t, err, constraintDenied)
+		notTransitioned(t, store)
+	})
+	t.Run("creator with constrained cancel-own out of scope is denied", func(t *testing.T) {
+		t.Parallel()
+		_, store, err := run(&creator, awsOnly(auth.ActionCancelOwn))
+		requireRevokeForbidden(t, err, constraintDenied)
+		notTransitioned(t, store)
+	})
+	t.Run("creator with delete and no cancel-own still deletes", func(t *testing.T) {
+		t.Parallel()
+		resp, _, err := run(&creator, del)
+		require.NoError(t, err)
+		assert.Equal(t, "canceled", resp.Status)
+	})
+	t.Run("row with no creator is denied for delete-only callers", func(t *testing.T) {
+		t.Parallel()
+		_, store, err := run(nil, del)
+		requireRevokeForbidden(t, err, "another user's scheduled purchase")
+		notTransitioned(t, store)
+	})
+	t.Run("update-any is unchanged and unconstrained", func(t *testing.T) {
+		t.Parallel()
+		resp, _, err := run(nil, revokePerm(auth.ActionUpdateAny, &auth.PermissionConstraints{Providers: []string{"aws"}}))
+		require.NoError(t, err)
+		assert.Equal(t, "canceled", resp.Status)
+	})
+}
+
+// plannedKeyHandler models a delete:purchases user-API-key request whose owner
+// created the execution and holds cancel-own. keyCancelOwn is what the KEY holds
+// (probe), keyInScope what its cancel-own Constraints allow for the execution.
+func plannedKeyHandler(keyCancelOwn, keyInScope bool) (*Handler, *MockConfigStore) {
+	ctx := mock.Anything
+	owner, keyID := revokeConstraintsUser, "key-1"
+	exec := cancelRouteExec("pending")
+	exec.CreatedByUserID = &owner
+	store := new(MockConfigStore)
+	store.On("GetExecutionByID", ctx, cancelExecID).Return(exec, nil)
+	store.On("TransitionExecutionStatus", ctx, cancelExecID, mock.Anything, "canceled", mock.Anything).
+		Return(&config.PurchaseExecution{ExecutionID: cancelExecID, Status: "canceled"}, nil).Maybe()
+	store.On("DeleteSuppressionsByExecutionTx", ctx, ctx, cancelExecID).Return(nil).Maybe()
+	m := new(MockAuthService)
+	m.On("HasAPIKeyPermissionAPI", ctx, "user-key-value", auth.ActionDelete, auth.ResourcePurchases).Return(owner, keyID, true, nil)
+	m.On("GetAllowedAccountsAPI", ctx, owner).Return([]string{}, nil)
+	m.On("HasPermissionAPI", ctx, owner, mock.Anything, auth.ResourcePurchases).Return(false, nil).Maybe()
+	m.On("HasPermissionAPI", ctx, owner, auth.ActionCancelOwn, auth.ResourcePurchases).Return(true, nil).Maybe()
+	m.On("HasAPIKeyPermissionForConstraintsAPI", ctx, keyID, owner, auth.ActionCancelOwn, auth.ResourcePurchases, []auth.PermissionConstraints{{}}).Return(keyCancelOwn, nil)
+	m.On("HasAPIKeyPermissionForConstraintsAPI", ctx, keyID, owner, auth.ActionCancelOwn, auth.ResourcePurchases, mock.Anything).Return(keyInScope, nil).Maybe()
+	return &Handler{config: store, auth: m}, store
+}
+
+func TestDeletePlannedPurchase_APIKeyCancelOwnFollowsTheKey(t *testing.T) {
+	t.Parallel()
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "user-key-value"}}
+	t.Run("delete-only key keeps working although the owner holds cancel-own", func(t *testing.T) {
+		t.Parallel()
+		h, _ := plannedKeyHandler(false, false)
+		resp, err := h.deletePlannedPurchase(context.Background(), req, cancelExecID)
+		require.NoError(t, err)
+		assert.Equal(t, "canceled", resp.Status)
+	})
+	t.Run("key with constrained cancel-own out of scope is denied", func(t *testing.T) {
+		t.Parallel()
+		h, store := plannedKeyHandler(true, false)
+		_, err := h.deletePlannedPurchase(context.Background(), req, cancelExecID)
+		requireRevokeForbidden(t, err, constraintDenied)
+		store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+	t.Run("key with in-scope cancel-own is allowed", func(t *testing.T) {
+		t.Parallel()
+		h, _ := plannedKeyHandler(true, true)
+		_, err := h.deletePlannedPurchase(context.Background(), req, cancelExecID)
+		require.NoError(t, err)
+	})
+}
+
+func TestDeletePlannedPurchase_ConstraintStoreErrorDoesNotFallBack(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	boom := errors.New("constraint store down")
+	exec := cancelRouteExec("pending")
+	owner := revokeConstraintsUser
+	exec.CreatedByUserID = &owner
+	store := new(MockConfigStore)
+	store.On("GetExecutionByID", mock.Anything, cancelExecID).Return(exec, nil)
+	m := new(MockAuthService)
+	m.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{UserID: owner}, nil)
+	m.On("GetAllowedAccountsAPI", mock.Anything, owner).Return([]string{}, nil)
+	m.On("HasPermissionAPI", mock.Anything, owner, auth.ActionCancelAny, auth.ResourcePurchases).Return(true, nil)
+	m.On("HasPermissionAPI", mock.Anything, owner, mock.Anything, auth.ResourcePurchases).Return(false, nil).Maybe()
+	m.On("HasPermissionForConstraintsAPI", mock.Anything, owner, auth.ActionCancelAny, auth.ResourcePurchases, mock.Anything).Return(false, boom)
+	// cancel-own is deliberately denied: a fallback would let the creator delete.
+	h := &Handler{config: store, auth: m}
+	_, err := h.deletePlannedPurchase(ctx, deletePlannedReq(), cancelExecID)
+	require.ErrorIs(t, err, boom)
+	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestDeletePlannedPurchase_APIKeyVerbProbeErrorRefuses(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("key store down")
+	owner, keyID := revokeConstraintsUser, "key-1"
+	exec := cancelRouteExec("pending")
+	exec.CreatedByUserID = &owner
+	store := new(MockConfigStore)
+	store.On("GetExecutionByID", mock.Anything, cancelExecID).Return(exec, nil)
+	m := new(MockAuthService)
+	m.On("HasAPIKeyPermissionAPI", mock.Anything, "user-key-value", auth.ActionDelete, auth.ResourcePurchases).Return(owner, keyID, true, nil)
+	m.On("GetAllowedAccountsAPI", mock.Anything, owner).Return([]string{}, nil)
+	m.On("HasPermissionAPI", mock.Anything, owner, mock.Anything, auth.ResourcePurchases).Return(false, nil).Maybe()
+	m.On("HasAPIKeyPermissionForConstraintsAPI", mock.Anything, keyID, owner, auth.ActionCancelOwn, auth.ResourcePurchases, []auth.PermissionConstraints{{}}).Return(false, boom)
+
+	h := &Handler{config: store, auth: m}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"x-api-key": "user-key-value"}}
+	_, err := h.deletePlannedPurchase(context.Background(), req, cancelExecID)
+	require.ErrorIs(t, err, boom)
+	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
