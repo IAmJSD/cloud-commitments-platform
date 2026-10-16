@@ -117,6 +117,12 @@ type Handler struct {
 	// via the credentials resolved for the org-root account.
 	discoverOrgFn func(context.Context, aws.Config) (*accounts.OrgDiscoveryResult, error)
 
+	// now is the wall clock for the start_date guard in
+	// validatePurchaseScheduling. Nil (the production default) means
+	// time.Now; tests inject a fixed instant so date-boundary cases are
+	// deterministic. Read it through h.clock().
+	now func() time.Time
+
 	// lambdaInvoker is the async-invoke client used by postRefreshRecommendations
 	// and triggerColdStartCollect. In production it is constructed lazily from the
 	// cached awsCfg. Tests inject a stub to avoid live Lambda calls.

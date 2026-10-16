@@ -437,7 +437,16 @@ paths:
               schema:
                 $ref: '#/components/schemas/CreatePlannedPurchasesResponse'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: >
+            Invalid request body, count outside 1-52, start_date not in
+            YYYY-MM-DD form, or start_date not in the future
+            ("start_date must be in the future"). start_date is read as
+            midnight UTC, so today's date and earlier are refused; the
+            earliest accepted date is tomorrow in UTC.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -3341,6 +3350,10 @@ components:
         start_date:
           type: string
           format: date
+          description: >
+            First purchase date (YYYY-MM-DD), interpreted as midnight UTC.
+            Must be after the current time, so the earliest accepted value
+            is tomorrow's date in UTC.
 
     CreatePlannedPurchasesResponse:
       type: object
