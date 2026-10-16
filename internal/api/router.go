@@ -157,12 +157,12 @@ func (r *Router) registerRoutes() {
 		// above). Approve + Cancel stay AuthPublic (token-based paths that
 		// are deliberately unauthenticated).
 		{ExactPath: "/api/purchases/execute", Method: "POST", Handler: r.executePurchaseHandler, Auth: AuthUser},
-		// Approve is POST only: a GET must never change purchase state, or a
-		// mail scanner prefetching the link would approve it. The approval
-		// email links to the SPA deep link /purchases/approve/{id}?token=...,
-		// which POSTs the token after the user confirms (issue #549).
+		// Approve and Cancel are POST only: a GET must never change purchase
+		// state, or a mail scanner prefetching the link would approve or
+		// cancel it. The emails link to the SPA deep links
+		// /purchases/{approve,cancel}/{id}?token=..., which POST the token
+		// after the user confirms (issues #549, #578).
 		{PathPrefix: "/api/purchases/approve/", Method: "POST", Handler: r.approvePurchaseHandler, Auth: AuthPublic},
-		{PathPrefix: "/api/purchases/cancel/", Method: "GET", Handler: r.cancelPurchaseHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/purchases/cancel/", Method: "POST", Handler: r.cancelPurchaseHandler, Auth: AuthPublic},
 		// Revoke a completed purchase via email one-click link (issue #291).
 		// AuthPublic + token-based auth pattern: the token is embedded in the
