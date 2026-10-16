@@ -326,3 +326,37 @@ test('layers are told apart by point shape as well as color, and a selection wit
   expect(Chart).not.toHaveBeenCalled();
   expect(document.querySelector('.ladder-timeline-chart')!.hasAttribute('hidden')).toBe(true);
 });
+
+// Mixed run: commitment 5 @ 1/2 (OD 10), legacy OD 2, and a deploy-skew row without the new fields.
+const mixed = [
+  { ...event, id: 'm1', amount_usd_hr: '5.000000', amount_basis: 'commitment' as const, commitment_rate: '1/2', od_usd_hr: '10.000000', scheduled_date: '2030-01-01T00:00:00Z' },
+  { ...event, id: 'm2', amount_usd_hr: '2.000000', amount_basis: 'on_demand_equivalent' as const, od_usd_hr: '2.000000', scheduled_date: '2030-01-02T00:00:00Z' },
+  { ...event, id: 'm3', amount_usd_hr: '1.000000', scheduled_date: '2030-01-03T00:00:00Z' },
+];
+
+test('chart, table and selection total use on-demand-equivalent values, falling back to the native amount', async () => {
+  jest.mocked(getLadderEvents).mockResolvedValue(mixed);
+  await initLadderTimeline(document.getElementById('timeline')!, [], false);
+  const config = jest.mocked(Chart).mock.calls[0]![1] as unknown as { data: { datasets: { data: { y: number }[] }[] } };
+  expect(config.data.datasets[0]!.data.map(point => point.y)).toEqual([10, 12, 13]);
+  const cells = Array.from(document.querySelectorAll('tbody tr')).map(row => row.children[4]!.textContent);
+  expect(cells).toEqual(['$10.00/hr', '$2.00/hr', '$1.00/hr']);
+  expect(document.querySelector('[data-summary]')!.textContent).toContain('$13.00/hr');
+  expect(document.querySelector('table caption, table')!.textContent).toContain('on-demand-equivalent $/hr');
+});
+
+test('editor labels each row by its basis and keeps the native amount', async () => {
+  jest.mocked(getLadderEvents).mockResolvedValue(mixed);
+  jest.mocked(getLadderRuns).mockResolvedValue([{ ...run, total_hourly_commit: '8.000000' }]);
+  await initLadderTimeline(document.getElementById('timeline')!, [], false);
+  const open = (id: string): string => {
+    document.querySelector<HTMLButtonElement>(`[data-event="${id}"]`)!.click();
+    const label = document.querySelector('label[for="ladder-event-amount"]')!.textContent!;
+    const value = (document.getElementById('ladder-event-amount') as HTMLInputElement).value;
+    document.querySelector<HTMLButtonElement>('.ladder-event-editor [data-cancel]')!.click();
+    return `${label}|${value}`;
+  };
+  expect(open('m1')).toBe('Planning budget (commitment $/hr)|5.000000');
+  expect(open('m2')).toBe('Planning budget (on-demand-equivalent $/hr)|2.000000');
+  expect(open('m3')).toBe('Planning budget (on-demand-equivalent $/hr)|1.000000');
+});

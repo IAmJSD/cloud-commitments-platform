@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
@@ -108,4 +109,23 @@ func TestLadderTimelineCursorRejectsPartialAndInvalidInput(t *testing.T) {
 		require.Error(t, err)
 		require.Nil(t, cursor)
 	}
+}
+
+type failingTimelineStore struct{ timelineTestStore }
+
+func (s *failingTimelineStore) ListLadderTimeline(context.Context, string, string, *config.LadderTimelineCursor) (*config.LadderTimelinePage, error) {
+	return nil, fmt.Errorf("row 9: %w", config.ErrLadderTimelineRate)
+}
+
+func TestLadderTimelineMalformedRateReturnsFixedError(t *testing.T) {
+	h, original := ladderScopedHandler(t)
+	h.config = &failingTimelineStore{timelineTestStore{MockConfigStore: original}}
+	req := ladderScopedReq("")
+	req.QueryStringParameters = map[string]string{"account_id": scopedInAccount, "provider": "aws"}
+	result, err := NewRouter(h).Route(context.Background(), "GET", "/api/ladder/tranches", req)
+	clientErr, ok := IsClientError(err)
+	require.True(t, ok)
+	require.Equal(t, 500, clientErr.code)
+	require.NotContains(t, clientErr.Error(), "row 9")
+	require.Nil(t, result)
 }

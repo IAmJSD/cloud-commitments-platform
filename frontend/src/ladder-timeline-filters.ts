@@ -34,6 +34,15 @@ export function formatLadderUnits(units: bigint): string {
   return `${units / 1000000n}.${(units % 1000000n).toString().padStart(6, '0')}`;
 }
 
+/** On-demand-equivalent amount; absent on an older API, whose amounts were all on-demand-equivalent. */
+export function ladderOdAmount(event: LadderEvent): string {
+  return event.od_usd_hr ?? event.amount_usd_hr;
+}
+
+export function ladderTotalOd(events: readonly LadderEvent[]): string {
+  return formatLadderUnits(events.reduce((total, event) => total + ladderAmountUnits(ladderOdAmount(event)), 0n));
+}
+
 export function ladderTotal(events: readonly LadderEvent[]): string {
   return formatLadderUnits(events.reduce((total, event) => total + ladderAmountUnits(event.amount_usd_hr), 0n));
 }
@@ -120,7 +129,7 @@ export function ladderCumulative(sorted: readonly LadderEvent[], base: bigint): 
   let running = base;
   for (const event of sorted) {
     if (ladderNotCountedNote(event) !== undefined) { rowTotals.set(event.id, null); continue; }
-    const amount = ladderAmountUnits(event.amount_usd_hr);
+    const amount = ladderAmountUnits(ladderOdAmount(event));
     running += amount;
     rowTotals.set(event.id, running);
     const at = times.indexOf(Date.parse(event.scheduled_date));

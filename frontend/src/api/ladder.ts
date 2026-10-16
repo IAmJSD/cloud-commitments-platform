@@ -7,7 +7,7 @@
  */
 
 import { apiRequest } from './client';
-import { ladderTotal } from '../ladder-timeline-filters';
+import { ladderTotal, ladderTotalOd } from '../ladder-timeline-filters';
 
 /**
  * A single ramp step within a ladder ramp schedule.
@@ -90,6 +90,10 @@ export interface LadderEvent {
   run_status: string;
   execution_id?: string;
   amount_usd_hr: string;
+  /** Optional so a frontend newer than the API (deploy skew) falls back to the native amount. */
+  amount_basis?: 'commitment' | 'on_demand_equivalent';
+  commitment_rate?: string;
+  od_usd_hr?: string;
   scheduled_date: string;
   created_at: string;
   revision: number;
@@ -114,6 +118,7 @@ interface TimelinePage {
   runs?: LadderRun[];
   total_count: number;
   total_usd_hr?: string;
+  total_od_usd_hr?: string;
   next_cursor?: LadderCursor;
 }
 
@@ -125,6 +130,7 @@ async function completeTimeline<T extends LadderEvent | LadderRun>(
   const seen = new Set<string>();
   let count: number | undefined;
   let total: string | undefined;
+  let totalOd: string | undefined;
   while (true) {
     const page = await apiRequest<TimelinePage>(`/ladder/${endpoint}?${params}`);
     if (!page || !Number.isSafeInteger(page.total_count) || page.total_count < 0) {
@@ -139,6 +145,12 @@ async function completeTimeline<T extends LadderEvent | LadderRun>(
         throw new Error('The ladder timeline changed while loading. Reload to try again.');
       }
       total = page.total_usd_hr;
+      if (page.total_od_usd_hr !== undefined) {
+        if (typeof page.total_od_usd_hr !== 'string' || (totalOd !== undefined && totalOd !== page.total_od_usd_hr)) {
+          throw new Error('The ladder timeline changed while loading. Reload to try again.');
+        }
+        totalOd = page.total_od_usd_hr;
+      }
     }
     const rows = endpoint === 'tranches' ? page.events : page.runs;
     if (!Array.isArray(rows)) throw new Error('Ladder timeline rows are unavailable.');
@@ -154,6 +166,9 @@ async function completeTimeline<T extends LadderEvent | LadderRun>(
   }
   if (items.length !== count) throw new Error('The ladder timeline changed while loading. Reload to try again.');
   if (endpoint === 'tranches' && ladderTotal(items as LadderEvent[]) !== total) {
+    throw new Error('The ladder timeline changed while loading. Reload to try again.');
+  }
+  if (endpoint === 'tranches' && totalOd !== undefined && ladderTotalOd(items as LadderEvent[]) !== totalOd) {
     throw new Error('The ladder timeline changed while loading. Reload to try again.');
   }
   return items;
