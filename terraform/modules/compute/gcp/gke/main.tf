@@ -595,9 +595,16 @@ resource "kubernetes_deployment" "app" {
             failure_threshold     = 3
           }
 
+          # Readiness is the traffic-admission signal: /ready answers 503
+          # until this replica has completed database initialization, so a
+          # cold pod stays out of the Service endpoints (and out of the GCE
+          # Ingress NEG, whose health check GKE infers from this probe when
+          # the Ingress is created) (#648, #488). Liveness above stays on
+          # /health, which answers 200 while the process is alive, so a slow
+          # initialization never gets the pod killed.
           readiness_probe {
             http_get {
-              path = var.health_check_path
+              path = var.readiness_probe_path
               port = var.health_check_port
             }
             initial_delay_seconds = var.readiness_probe_initial_delay

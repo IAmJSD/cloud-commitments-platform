@@ -182,16 +182,24 @@ resource "google_cloud_run_v2_service" "main" {
         }
       }
 
-      # Startup probe
+      # Startup probe. Cloud Run admits an instance to traffic once its
+      # startup probe passes, so this is the readiness gate: /ready answers
+      # 503 until the instance has completed database initialization, so a
+      # cold instance is never admitted (#648, #488). A startup probe that
+      # never passes shuts the container down, so the failure budget must
+      # outlast a slow-but-recovering init: 10 s delay + 24 x 10 s = 250 s,
+      # above the 120 s default migration timeout (CUDLY_MIGRATION_TIMEOUT)
+      # plus database connect retries, and inside Cloud Run's 600 s cap on
+      # failure_threshold x period_seconds. Liveness below stays on /health.
       startup_probe {
         http_get {
-          path = "/health"
+          path = "/ready"
           port = 8080
         }
         initial_delay_seconds = 10
         timeout_seconds       = 3
         period_seconds        = 10
-        failure_threshold     = 3
+        failure_threshold     = 24
       }
 
       # Liveness probe
