@@ -579,7 +579,7 @@ func TestExecuteAzureExchange_InScopeSubscriptionAllowed(t *testing.T) {
 		&azurecompute.ExchangePreview{SessionID: "sess-fresh", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
 		[]azurecompute.CompatibleOffering{}, nil,
 	)
-	opsClient.On("ExecuteExchange", ctx, "sess-fresh").Return(
+	opsClient.On("ExecuteExchange", mock.Anything, "sess-fresh").Return(
 		&azurecompute.ExchangeResult{SessionID: "sess-fresh", Status: "Succeeded"}, nil,
 	)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
@@ -872,7 +872,7 @@ func TestExecuteAzureExchange_USDCurrencyCapStillEnforced(t *testing.T) {
 		&azurecompute.ExchangePreview{SessionID: "sess-usd-ok", NetPayable: toPtr(50.00), NetPayableCurrency: "USD"},
 		[]azurecompute.CompatibleOffering{}, nil,
 	)
-	opsClient.On("ExecuteExchange", ctx, "sess-usd-ok").Return(&azurecompute.ExchangeResult{
+	opsClient.On("ExecuteExchange", mock.Anything, "sess-usd-ok").Return(&azurecompute.ExchangeResult{
 		SessionID: "sess-usd-ok", NetPayable: toPtr(50.00), NetPayableCurrency: "USD", Status: "Succeeded",
 	}, nil)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
@@ -917,7 +917,7 @@ func TestExecuteAzureExchange_NonUSDWithoutCapStillAllowed(t *testing.T) {
 		&azurecompute.ExchangePreview{SessionID: "sess-kwd-ok", NetPayable: toPtr(500.00), NetPayableCurrency: "KWD"},
 		[]azurecompute.CompatibleOffering{}, nil,
 	)
-	opsClient.On("ExecuteExchange", ctx, "sess-kwd-ok").Return(&azurecompute.ExchangeResult{
+	opsClient.On("ExecuteExchange", mock.Anything, "sess-kwd-ok").Return(&azurecompute.ExchangeResult{
 		SessionID: "sess-kwd-ok", NetPayable: toPtr(500.00), NetPayableCurrency: "KWD", Status: "Succeeded",
 	}, nil)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
@@ -1181,7 +1181,7 @@ func TestExecuteAzureExchange_HappyPath(t *testing.T) {
 		},
 		[]azurecompute.CompatibleOffering{}, nil,
 	)
-	opsClient.On("ExecuteExchange", ctx, mock.MatchedBy(func(sessionID string) bool {
+	opsClient.On("ExecuteExchange", mock.Anything, mock.MatchedBy(func(sessionID string) bool {
 		return sessionID == freshSessionID
 	})).Return(&azurecompute.ExchangeResult{
 		SessionID:          freshSessionID,
@@ -1267,7 +1267,7 @@ func TestExecuteAzureExchange_ConstraintSetPinsAllDimensions(t *testing.T) {
 		&azurecompute.ExchangePreview{SessionID: "sess-dims", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
 		[]azurecompute.CompatibleOffering{}, nil,
 	)
-	opsClient.On("ExecuteExchange", ctx, "sess-dims").Return(
+	opsClient.On("ExecuteExchange", mock.Anything, "sess-dims").Return(
 		&azurecompute.ExchangeResult{SessionID: "sess-dims", Status: "Succeeded"}, nil,
 	)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
@@ -1380,7 +1380,7 @@ func TestExecuteAzureExchange_ConstraintRegionsAreLowerCased(t *testing.T) {
 		&azurecompute.ExchangePreview{SessionID: "sess-case", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
 		[]azurecompute.CompatibleOffering{}, nil,
 	)
-	opsClient.On("ExecuteExchange", ctx, "sess-case").Return(
+	opsClient.On("ExecuteExchange", mock.Anything, "sess-case").Return(
 		&azurecompute.ExchangeResult{SessionID: "sess-case", Status: "Succeeded"}, nil,
 	)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
@@ -1439,7 +1439,7 @@ func TestExecuteAzureExchange_LowercaseUSDTakesUSDCapPath(t *testing.T) {
 		&azurecompute.ExchangePreview{SessionID: "sess-lower-usd", NetPayable: toPtr(50.00), NetPayableCurrency: "USD"},
 		[]azurecompute.CompatibleOffering{}, nil,
 	)
-	opsClient.On("ExecuteExchange", ctx, "sess-lower-usd").Return(
+	opsClient.On("ExecuteExchange", mock.Anything, "sess-lower-usd").Return(
 		&azurecompute.ExchangeResult{SessionID: "sess-lower-usd", Status: "Succeeded"}, nil,
 	)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
@@ -1560,7 +1560,7 @@ func TestExecuteAzureExchange_CommitFailureClassification(t *testing.T) {
 				&azurecompute.ExchangePreview{SessionID: "sess-commit-fail", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
 				[]azurecompute.CompatibleOffering{}, nil,
 			)
-			opsClient.On("ExecuteExchange", ctx, "sess-commit-fail").Return(nil, tt.commitErr)
+			opsClient.On("ExecuteExchange", mock.Anything, "sess-commit-fail").Return(nil, tt.commitErr)
 			t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
 			h := newAzureExecuteMoneyPathHandler(t, opsClient)
@@ -2054,7 +2054,7 @@ func TestExecuteAzureExchange_UnreportedSourceRegionAllowedWithoutRegionScope(t 
 		&azurecompute.ExchangePreview{SessionID: "sess-shared", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
 		[]azurecompute.CompatibleOffering{}, nil,
 	)
-	opsClient.On("ExecuteExchange", ctx, "sess-shared").Return(
+	opsClient.On("ExecuteExchange", mock.Anything, "sess-shared").Return(
 		&azurecompute.ExchangeResult{SessionID: "sess-shared", Status: "Succeeded"}, nil,
 	)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })

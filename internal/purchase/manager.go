@@ -12,6 +12,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/provider"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/ctxutil"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/oidc"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -233,11 +234,6 @@ const (
 	terminalSaveTimeout      = 30 * time.Second
 )
 
-// detachedTimeout keeps ctx values but drops its cancellation and deadline.
-func detachedTimeout(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(ctx), d)
-}
-
 // executeAndFinalize runs a purchase and handles status updates, record saving, and progress.
 //
 // The root execution row is ALWAYS saved with its finalized status — including
@@ -252,7 +248,7 @@ func detachedTimeout(ctx context.Context, d time.Duration) (context.Context, con
 func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseExecution) error {
 	// A disconnected caller must not cancel a purchase after the claim.
 	// Its terminal outcome must survive an exhausted execution budget too.
-	execCtx, cancelExec := detachedTimeout(ctx, purchaseExecutionTimeout)
+	execCtx, cancelExec := ctxutil.DetachedWithTimeout(ctx, purchaseExecutionTimeout)
 	defer cancelExec()
 	// Last line of defense before money moves (issue #1718). Every executor
 	// entry point funnels through here, so one check covers all of them.
@@ -264,7 +260,7 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 	if execErr != nil {
 		logging.Errorf("Failed to execute purchase %s: %v", exec.ExecutionID, execErr)
 	}
-	saveCtx, cancelSave := detachedTimeout(ctx, terminalSaveTimeout)
+	saveCtx, cancelSave := ctxutil.DetachedWithTimeout(ctx, terminalSaveTimeout)
 	defer cancelSave()
 	if err := m.saveOrRecoverTerminal(saveCtx, exec, execErr); err != nil {
 		logging.Errorf("AUDIT LOSS: failed to save execution status: %v", err)

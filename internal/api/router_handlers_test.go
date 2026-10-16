@@ -805,7 +805,7 @@ func TestHandler_rejectRIExchange_ValidTokenAndRecord(t *testing.T) {
 func TestHandler_failExchange(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockStore.On("FailRIExchange", ctx, "11111111-1111-1111-1111-111111111111", "test reason").Return(nil)
+	mockStore.On("FailRIExchange", mock.Anything, "11111111-1111-1111-1111-111111111111", "test reason").Return(nil)
 
 	h := &Handler{config: mockStore}
 	result, err := h.failExchange(ctx, "11111111-1111-1111-1111-111111111111", "test reason")
@@ -819,7 +819,7 @@ func TestHandler_failExchange_DBError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	// Even when DB fails, failExchange returns the failure result (logging the error)
-	mockStore.On("FailRIExchange", ctx, "11111111-1111-1111-1111-111111111111", "reason").
+	mockStore.On("FailRIExchange", mock.Anything, "11111111-1111-1111-1111-111111111111", "reason").
 		Return(errors.New("db down"))
 
 	h := &Handler{config: mockStore}
