@@ -61,14 +61,16 @@ func (h *Handler) buildMarketplaceEC2Client(cfg aws.Config) marketplaceEC2Client
 // credential resolver the purchase path uses. A role_arn account without a role
 // ARN is accepted only when it is the host account (credentials.ErrNotHostAccount
 // otherwise). Rows without a cloud account (reachable only by sell-any callers
-// with unrestricted scope) keep the host's own credentials.
+// with unrestricted scope) get the host's own credentials only when the row's
+// AWS account id is confirmed as the host account; see
+// loadMarketplaceHostAWSConfig.
 func (h *Handler) loadMarketplaceAWSConfig(ctx context.Context, row *config.PurchaseHistoryRecord) (aws.Config, error) {
 	base, err := h.loadAWSConfigWithRegion(ctx, row.Region)
 	if err != nil {
 		return aws.Config{}, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 	if row.CloudAccountID == nil || strings.TrimSpace(*row.CloudAccountID) == "" {
-		return base, nil
+		return loadMarketplaceHostAWSConfig(ctx, row, base)
 	}
 	account, err := h.config.GetCloudAccount(ctx, *row.CloudAccountID)
 	if err != nil {
@@ -92,6 +94,32 @@ func (h *Handler) loadMarketplaceAWSConfig(ctx context.Context, row *config.Purc
 	cfg := base.Copy()
 	cfg.Credentials = provider
 	return cfg, nil
+}
+
+// marketplaceNoCloudAccountMessage is the tenant-visible refusal for a row with
+// no cloud account whose AWS account is not the host account. Like
+// credentials.ErrNotHostAccount it never carries the host account id.
+const marketplaceNoCloudAccountMessage = "this purchase is not linked to a cloud account and its AWS account is not confirmed as the CUDly host account; it cannot be listed or canceled from here"
+
+// loadMarketplaceHostAWSConfig handles a row with no cloud account: the
+// ambient single-account deployment (purchase.SingleCloudAccountIDFromRecs
+// returns nil) and legacy or account-deleted rows (cloud_account_id has no
+// backfill and is ON DELETE SET NULL). The host's credentials can only act on
+// the host account, so they are used only when the row's AWS account id
+// passes the same host identity check the resolver applies to a role_arn
+// account with no role ARN. Anything else, including an empty account id or a
+// failed STS lookup, is refused before any EC2 client is built.
+func loadMarketplaceHostAWSConfig(ctx context.Context, row *config.PurchaseHistoryRecord, base aws.Config) (aws.Config, error) {
+	accountID := strings.TrimSpace(row.AccountID)
+	if accountID == "" {
+		logging.Warnf("marketplace: purchase %s has neither a cloud account nor an AWS account id; refusing to sign with host credentials", row.PurchaseID)
+		return aws.Config{}, NewClientError(400, marketplaceNoCloudAccountMessage)
+	}
+	hostCheck := &config.CloudAccount{ID: "purchase " + row.PurchaseID, Provider: "aws", ExternalID: accountID}
+	if err := credentials.VerifyHostAccount(ctx, hostCheck, sts.NewFromConfig(base)); err != nil {
+		return aws.Config{}, NewClientError(400, marketplaceNoCloudAccountMessage)
+	}
+	return base, nil
 }
 
 // MarketplacePriceTier is the JSON-decodable shape accepted in the request body.

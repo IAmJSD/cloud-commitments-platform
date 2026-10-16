@@ -193,7 +193,9 @@ func TestMarketplacePermissionConstraintsHTTP(t *testing.T) {
 				row.PurchaseID, row.CloudAccountID, row.Provider, row.Service = uuid.NewString(), &account, "aws", "ec2"
 				switch tc.missing {
 				case "account":
-					row.CloudAccountID = nil
+					// A row with no cloud account is signed with the host's
+					// credentials only when it belongs to the host account (#261).
+					row.CloudAccountID, row.AccountID = nil, marketplaceHostAccount
 				case "provider":
 					row.Provider = " "
 				case "service":
