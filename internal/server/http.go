@@ -159,6 +159,14 @@ func (app *Application) initializeUntilReady(ctx context.Context, init func(cont
 // background initializer. A variable so tests can shorten it.
 var shutdownGracePeriod = 30 * time.Second
 
+// scheduledTaskUnwindShare reserves 1/N of shutdownGracePeriod (5s of 30s) for
+// detached scheduled tasks to unwind after they are canceled at the end of
+// the drain window. The whole sequence stays inside shutdownGracePeriod, which
+// matches Container Apps' default 30s termination grace. Cloud Run sends
+// SIGKILL 10s after SIGTERM, so there a task still running at that point is
+// hard-killed; the advisory lock and row CAS make the next tick safe.
+const scheduledTaskUnwindShare = 6
+
 // StartHTTPServer starts the HTTP server with graceful shutdown on SIGINT/SIGTERM.
 // It blocks until the server exits cleanly. In container orchestrators (Cloud Run,
 // Container Apps, Fargate) SIGTERM is the normal stop signal; without this wiring
@@ -192,8 +200,18 @@ func StartHTTPServer(app *Application, port int) error {
 		log.Printf("Shutdown signal received; draining HTTP server (30s grace)...")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGracePeriod)
 		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
+		// Drain for most of the grace period, leaving the last part for
+		// canceled scheduled tasks to unwind.
+		drainCtx, cancelDrain := context.WithTimeout(shutdownCtx, shutdownGracePeriod-shutdownGracePeriod/scheduledTaskUnwindShare)
+		defer cancelDrain()
+		if err := server.Shutdown(drainCtx); err != nil {
 			log.Printf("HTTP server forced shutdown: %v", err)
+		}
+		// Scheduled tasks run detached from their request (#784), so draining
+		// does not stop them. Cancel any still running and wait for them to
+		// return before main closes the database under them.
+		if !app.scheduledTasks.stop(shutdownCtx) {
+			log.Printf("Scheduled tasks did not stop within the shutdown grace period")
 		}
 		// The initializer shares app.DB with app.Close; let it exit first.
 		select {
@@ -317,8 +335,6 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	ctx := r.Context()
-
 	// Extract task type from URL path: /api/scheduled/{task_type}.
 	// TrimPrefix is cleaner than splitting and indexing parts[2]; it also
 	// avoids the length-guard dance while remaining robust to extra slashes
@@ -337,6 +353,16 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Unknown scheduled task", http.StatusBadRequest)
 		return
 	}
+
+	// Run the task on a context detached from the request (#784). The
+	// scheduler gives up after its attempt deadline (Cloud Scheduler 320s,
+	// Logic Apps 120s) and drops the connection, which cancels r.Context().
+	// Inheriting that cancellation could abort a task midway (e.g. between a
+	// provider call and the write recording it). The task stays bounded by
+	// scheduledTaskHTTPTimeout and is canceled on server shutdown.
+	ctx, done := app.scheduledTasks.start(r.Context(), scheduledTaskHTTPTimeout)
+	defer done()
+	extendScheduledWriteDeadline(w)
 
 	// Ensure database connection is established (lazy initialization)
 	if err = app.ensureDB(ctx); err != nil {
