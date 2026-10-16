@@ -178,9 +178,9 @@ variable "healthy_threshold" {
 }
 
 variable "unhealthy_threshold" {
-  description = "Number of consecutive failed health checks"
+  description = "Consecutive failed ALB health checks before a target is marked unhealthy. The check is readiness (/ready), which also answers 503 while the database is unreachable, and ECS replaces targets the ALB marks unhealthy, so this is set high enough that a short database blip or a Multi-AZ failover does not cycle every task: with the default 30s interval, 6 failures is about 180s of continuous 503 before replacement starts."
   type        = number
-  default     = 3
+  default     = 6
 }
 
 variable "log_retention_days" {

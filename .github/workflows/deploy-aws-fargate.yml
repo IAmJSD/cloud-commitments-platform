@@ -140,6 +140,7 @@ jobs:
       cancel-in-progress: false
     outputs:
       alb_url: ${{ steps.outputs.outputs.alb_url }}
+      app_url: ${{ steps.outputs.outputs.app_url }}
       service_name: ${{ steps.outputs.outputs.service_name }}
     # Set at job level, not workflow level: workflow-level `env:` is resolved
     # before this job's `environment:` is in scope, so an environment-scoped
@@ -223,8 +224,13 @@ jobs:
         id: outputs
         run: |
           cd terraform/environments/aws
-          echo "alb_url=$(terraform output -raw fargate_alb_dns_name 2>/dev/null | grep -v '::' || echo "")" >> "$GITHUB_OUTPUT"
-          echo "service_name=$(terraform output -raw fargate_service_name 2>/dev/null | grep -v '::' || echo "")" >> "$GITHUB_OUTPUT"
+          {
+            echo "alb_url=$(terraform output -raw fargate_alb_dns_name 2>/dev/null | grep -v '::' || echo "")"
+            # The URL that actually serves the app (https on the api-<env>
+            # alias when HTTPS is enabled), for the test-deployment gates (#647).
+            echo "app_url=$(terraform output -raw fargate_app_url 2>/dev/null | grep -v '::' || echo "")"
+            echo "service_name=$(terraform output -raw fargate_service_name 2>/dev/null | grep -v '::' || echo "")"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Save deployment info
         env:
@@ -265,21 +271,27 @@ jobs:
       contents: read
 
     steps:
-      - name: Get ALB URL
+      # Gate on the URL that serves the app, not the bare ALB DNS name: with
+      # HTTPS enabled the port 80 listener answers 301 on every path, so an
+      # http://<ALB> gate would never reach a task (#647). fargate_app_url is
+      # https on the api-<env> alias then (the name the listener certificate
+      # covers), otherwise http on the ALB DNS name.
+      - name: Get app URL
         id: get-url
+        env:
+          APP_URL: ${{ needs.deploy.outputs.app_url }}
         run: |
-          ALB_URL="${{ needs.deploy.outputs.alb_url }}"
-          if [ -z "$ALB_URL" ]; then
-            echo "Failed to get ALB URL from deploy outputs"
+          if [ -z "$APP_URL" ]; then
+            echo "Failed to get the app URL (fargate_app_url) from deploy outputs"
             exit 1
           fi
-          # Ensure URL has scheme and no trailing slash
-          case "$ALB_URL" in
-            http://*|https://*) ;; # already has scheme
-            *) ALB_URL="http://$ALB_URL" ;;
+          case "$APP_URL" in
+            http://*|https://*) ;;
+            *) echo "fargate_app_url has no scheme: $APP_URL"; exit 1 ;;
           esac
-          ALB_URL="${ALB_URL%/}"
-          echo "url=$ALB_URL" >> "$GITHUB_OUTPUT"
+          APP_URL="${APP_URL%/}"
+          echo "Gating on $APP_URL"
+          echo "url=$APP_URL" >> "$GITHUB_OUTPUT"
 
       - name: Wait for deployment
         run: |
@@ -296,12 +308,14 @@ jobs:
       # Fast fail gate: the server initializes its database in the background
       # at startup, so no warm-up request is needed to make progress (#488).
       # /ready answers 503 while the task that answers is still initializing,
-      # which the script counts as a failed attempt (#647).
+      # which the script counts as a failed attempt (#647). 30 x 10s covers the
+      # 300s ECS health check grace period, so a slow first boot that ECS
+      # still tolerates does not fail this gate.
       - name: Test readiness endpoint
         env:
           APP_URL: ${{ steps.get-url.outputs.url }}
           HEALTH_REQUIRED_STREAK: "1"
-          HEALTH_MAX_ATTEMPTS: "10"
+          HEALTH_MAX_ATTEMPTS: "30"
           HEALTH_INTERVAL_SECONDS: "10"
         run: bash scripts/wait-for-healthy.sh "$APP_URL"
 
