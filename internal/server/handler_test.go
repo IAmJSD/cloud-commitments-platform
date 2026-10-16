@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -596,6 +597,21 @@ func TestParseScheduledTaskType(t *testing.T) {
 	for _, bad := range []string{"recommendations", "ri-exchange", "scheduled_recommendations", ""} {
 		if _, err := ParseScheduledTaskType(bad); err == nil {
 			t.Errorf("%q: expected error", bad)
+		}
+	}
+}
+
+func TestScheduledTaskNames(t *testing.T) {
+	names := ScheduledTaskNames()
+	if len(names) != len(scheduledEventActions) {
+		t.Fatalf("got %d names, roster has %d", len(names), len(scheduledEventActions))
+	}
+	if !slices.IsSorted(names) {
+		t.Errorf("names are not sorted: %v", names)
+	}
+	for _, name := range names {
+		if _, err := ParseScheduledTaskType(name); err != nil {
+			t.Errorf("listed name %q is not parseable: %v", name, err)
 		}
 	}
 }

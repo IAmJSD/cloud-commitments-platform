@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
+	"slices"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
@@ -476,4 +477,16 @@ func ParseScheduledTaskType(name string) (ScheduledTaskType, error) {
 		return taskType, nil
 	}
 	return "", fmt.Errorf("unknown scheduled task action: %q", name)
+}
+
+// ScheduledTaskNames returns every task name the server accepts from a
+// scheduler, sorted. Infrastructure tests use it to check that each task is
+// wired on every platform.
+func ScheduledTaskNames() []string {
+	names := make([]string, 0, len(scheduledEventActions))
+	for name := range scheduledEventActions {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
 }
