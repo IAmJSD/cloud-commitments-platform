@@ -472,42 +472,21 @@ func TestAmbientCredResult(t *testing.T) {
 		wantOK      bool
 		wantFound   bool
 	}{
+		// AWS accounts are tested through the credential resolver
+		// (awsResolverCredResult), never by this shape-only check (#722).
 		{
-			name:        "aws workload_identity_federation no ARN",
-			acct:        &config.CloudAccount{Provider: "aws", AWSAuthMode: "workload_identity_federation"},
-			wantOK:      false,
-			wantFound:   true,
-			msgContains: "aws_role_arn",
-		},
-		{
-			name:        "aws workload_identity_federation with ARN",
-			acct:        &config.CloudAccount{Provider: "aws", AWSAuthMode: "workload_identity_federation", AWSRoleARN: "arn:aws:iam::123456789012:role/R"},
-			wantOK:      true,
-			wantFound:   true,
-			msgContains: "web identity",
-		},
-		{
-			name:        "aws role_arn no ARN (self-account)",
-			acct:        &config.CloudAccount{Provider: "aws", AWSAuthMode: "role_arn"},
-			wantOK:      true,
-			wantFound:   true,
-			msgContains: "ambient",
-		},
-		{
-			name:        "aws role_arn with ARN",
-			acct:        &config.CloudAccount{Provider: "aws", AWSAuthMode: "role_arn", AWSRoleARN: "arn:aws:iam::123456789012:role/R"},
-			wantOK:      true,
-			wantFound:   true,
-			msgContains: "role assumption",
-		},
-		{
-			name:      "aws unknown mode — not handled (falls through to credential check)",
-			acct:      &config.CloudAccount{Provider: "aws", AWSAuthMode: "unknown_mode"},
+			name:      "aws role_arn no ARN — not handled",
+			acct:      &config.CloudAccount{Provider: "aws", AWSAuthMode: "role_arn"},
 			wantFound: false,
 		},
 		{
-			name:      "aws access_keys — not handled",
-			acct:      &config.CloudAccount{Provider: "aws", AWSAuthMode: "access_keys"},
+			name:      "aws role_arn with ARN — not handled",
+			acct:      &config.CloudAccount{Provider: "aws", AWSAuthMode: "role_arn", AWSRoleARN: "arn:aws:iam::123456789012:role/R"},
+			wantFound: false,
+		},
+		{
+			name:      "aws workload_identity_federation — not handled",
+			acct:      &config.CloudAccount{Provider: "aws", AWSAuthMode: "workload_identity_federation", AWSRoleARN: "arn:aws:iam::123456789012:role/R"},
 			wantFound: false,
 		},
 		{

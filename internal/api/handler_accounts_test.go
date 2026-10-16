@@ -1516,9 +1516,9 @@ func TestDiscoverOrgAccounts_HappyPathDedupesAndPersists(t *testing.T) {
 	// Inspect the persisted rows. Defaults locked in (CR pass 1):
 	//   * enabled=false   — operator review gate
 	//   * AWSAuthMode=""  — NOT "bastion": setting bastion mode while the
-	//                       row's AWSRoleARN is empty would cause
-	//                       awsAmbientCredResult to mis-classify the
-	//                       account as "ambient host" creds. Operator must
+	//                       row's AWSRoleARN is empty would leave a
+	//                       half-configured bastion row with no role
+	//                       to assume. Operator must
 	//                       set BOTH mode and role ARN before enabling.
 	//   * AWSBastionID=<root.ID> — pre-filled so the operator only needs
 	//                              to add the role ARN, not chase the

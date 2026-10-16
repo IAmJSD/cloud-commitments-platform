@@ -397,7 +397,8 @@ func validateAuthMode(req CloudAccountRequest) error {
 // budget.
 //
 // Self-account onboarding uses role_arn with an empty role ARN to mean
-// "use ambient Lambda/container credentials" (see awsAmbientCredResult).
+// "use ambient Lambda/container credentials" (see
+// credentials.resolveRoleARNProvider).
 // That path never calls sts:AssumeRole, so the ExternalId requirement
 // doesn't apply — only enforce the validation when an actual cross-
 // account role ARN is set. The same exemption is applied to bastion
@@ -714,13 +715,13 @@ func (h *Handler) saveAccountCredentials(ctx context.Context, httpReq *events.La
 	return nil, nil
 }
 
-// ambientCredResult returns the test result for auth modes that don't require a stored
-// credential (role ARN, managed identity, application default). The second return value
-// is true when the check was handled and the caller should return immediately.
+// ambientCredResult returns the test result for Azure / GCP auth modes that
+// don't require a stored credential (managed identity, application default).
+// AWS accounts never reach it: they are tested end-to-end through the
+// credential resolver by awsResolverCredResult. The second return value is
+// true when the check was handled and the caller should return immediately.
 func ambientCredResult(acct *config.CloudAccount) (AccountTestResult, bool) {
 	switch acct.Provider {
-	case "aws":
-		return awsAmbientCredResult(acct)
 	case "azure":
 		if acct.AzureAuthMode == "managed_identity" {
 			return AccountTestResult{OK: true, Message: "managed identity configured (no stored credential required)"}, true
@@ -729,25 +730,6 @@ func ambientCredResult(acct *config.CloudAccount) (AccountTestResult, bool) {
 		if acct.GCPAuthMode == "application_default" {
 			return AccountTestResult{OK: true, Message: "application default credentials configured (no stored credential required)"}, true
 		}
-	}
-	return AccountTestResult{}, false
-}
-
-func awsAmbientCredResult(acct *config.CloudAccount) (AccountTestResult, bool) {
-	switch acct.AWSAuthMode {
-	case "workload_identity_federation":
-		if acct.AWSRoleARN == "" {
-			return AccountTestResult{OK: false, Message: "aws_role_arn is required but not set"}, true
-		}
-		return AccountTestResult{OK: true, Message: "web identity federation configured (no stored credential required)"}, true
-	case "role_arn", "bastion":
-		if acct.AWSRoleARN == "" {
-			// Self-account: role_arn mode with no role ARN means "use ambient
-			// Lambda execution role credentials" — the account is CUDly's own
-			// host and doesn't need cross-account role assumption.
-			return AccountTestResult{OK: true, Message: "ambient credentials (CUDly host account)"}, true
-		}
-		return AccountTestResult{OK: true, Message: "role assumption configured (no stored credential required)"}, true
 	}
 	return AccountTestResult{}, false
 }
@@ -767,6 +749,12 @@ func (h *Handler) testAccountCredentials(ctx context.Context, req *events.Lambda
 	acct, err := h.requireAccountAccess(ctx, session, id)
 	if err != nil {
 		return nil, err
+	}
+	if acct.Provider == "aws" {
+		// Exercise the same resolver collection and purchases use, then
+		// probe sts:GetCallerIdentity, so the test cannot report OK for a
+		// config real use rejects (#722).
+		return h.awsResolverCredResult(ctx, acct), nil
 	}
 	if res, ok := ambientCredResult(acct); ok {
 		return res, nil
@@ -1576,10 +1564,9 @@ func (h *Handler) persistDiscoveredMembers(ctx context.Context, root *config.Clo
 		// Defaults the spec mandates: persist disabled (operator review gate)
 		// + bastion-id pre-filled with this org root's ID. AWSAuthMode is
 		// LEFT EMPTY on purpose — pre-setting it to "bastion" while
-		// AWSRoleARN is empty would cause awsAmbientCredResult to falsely
-		// classify the row as having valid ambient creds (the role_arn /
-		// bastion + empty-AWSRoleARN branch returns OK with the "ambient
-		// host" message, which is wrong for a discovered member account).
+		// AWSRoleARN is empty would leave the row in a half-configured
+		// bastion shape (no role to assume) that the operator could
+		// mistake for a usable account.
 		// The operator's review step must set both AWSAuthMode="bastion"
 		// AND a non-empty AWSRoleARN before flipping enabled=true; the
 		// scheduler silently skips disabled rows in the meantime, and the
