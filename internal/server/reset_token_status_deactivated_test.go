@@ -87,22 +87,14 @@ func TestHandleRequest_ResetPasswordStatus_DeactivatedUserLooksLikeUnknownToken(
 		"deactivated token must be indistinguishable from an unknown token")
 }
 
-func TestHandleRequest_ConfirmPasswordReset_DeactivatedUserRefused(t *testing.T) {
-	ctx := context.Background()
-	handler, mockStore := newResetTokenHarness(t)
-
-	user := deactivatedResetUser()
-	mockStore.On("GetUserByResetToken", mock.Anything, hashSessionTokenForTest(deactivatedResetRawToken)).
-		Return(user, nil).Once()
-	mockStore.On("ConsumePasswordResetToken", mock.Anything, user.ID, user.PasswordResetToken).
-		Return(nil).Once()
-
+func resetConfirmRequest(t *testing.T, token string) *events.LambdaFunctionURLRequest {
+	t.Helper()
 	body, err := json.Marshal(map[string]string{
-		"token":        deactivatedResetRawToken,
+		"token":        token,
 		"new_password": base64.StdEncoding.EncodeToString([]byte("Str0ng-Passw0rd-For-Test!")),
 	})
 	require.NoError(t, err)
-	resp, err := handler.HandleRequest(ctx, &events.LambdaFunctionURLRequest{
+	return &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Content-Type": "application/json"},
 		Body:    string(body),
 		RequestContext: events.LambdaFunctionURLRequestContext{
@@ -111,7 +103,36 @@ func TestHandleRequest_ConfirmPasswordReset_DeactivatedUserRefused(t *testing.T)
 				Path:   "/api/auth/reset-password",
 			},
 		},
-	})
+	}
+}
+
+// Issue #595: the confirm endpoint refuses a deactivated user's live token
+// (A03-006) with the same response as an unknown token, so it does not
+// reveal that the account is deactivated. The token is still consumed (the
+// ConsumePasswordResetToken expectation) and no password write happens (any
+// other store call would fail the mock).
+func TestHandleRequest_ConfirmPasswordReset_DeactivatedUserLooksLikeUnknownToken(t *testing.T) {
+	ctx := context.Background()
+	handler, mockStore := newResetTokenHarness(t)
+
+	user := deactivatedResetUser()
+	mockStore.On("GetUserByResetToken", mock.Anything, hashSessionTokenForTest(deactivatedResetRawToken)).
+		Return(user, nil).Once()
+	mockStore.On("ConsumePasswordResetToken", mock.Anything, user.ID, user.PasswordResetToken).
+		Return(nil).Once()
+	mockStore.On("GetUserByResetToken", mock.Anything, hashSessionTokenForTest("unknown-token")).
+		Return((*auth.User)(nil), pgx.ErrNoRows).Once()
+
+	deactivated, err := handler.HandleRequest(ctx, resetConfirmRequest(t, deactivatedResetRawToken))
 	require.NoError(t, err)
-	assert.Equal(t, 403, resp.StatusCode, "body: %s", resp.Body)
+	unknown, err := handler.HandleRequest(ctx, resetConfirmRequest(t, "unknown-token"))
+	require.NoError(t, err)
+
+	require.Equal(t, 400, unknown.StatusCode, "body: %s", unknown.Body)
+	assert.Equal(t, unknown.StatusCode, deactivated.StatusCode, "body: %s", deactivated.Body)
+	assert.Equal(t, unknown.Headers, deactivated.Headers,
+		"deactivated token must be indistinguishable from an unknown token")
+	assert.JSONEq(t, unknown.Body, deactivated.Body,
+		"deactivated token must be indistinguishable from an unknown token")
+	assert.NotContains(t, deactivated.Body, "deactivated")
 }

@@ -413,7 +413,7 @@ func TestIntegration_ResetConfirmRejectsStaleRead(t *testing.T) {
 		err := f.svc.ConfirmPasswordReset(ctx, PasswordResetConfirm{Token: token, NewPassword: credentialRaceNew})
 		require.ErrorIs(t, err, ErrUserChanged)
 		assert.Equal(t, winner(), f.stored())
-		require.ErrorIs(t, f.svc.ConfirmPasswordReset(ctx, PasswordResetConfirm{Token: token, NewPassword: credentialRaceNew}), ErrAccountDeactivated)
+		require.ErrorIs(t, f.svc.ConfirmPasswordReset(ctx, PasswordResetConfirm{Token: token, NewPassword: credentialRaceNew}), ErrInvalidResetToken)
 		assert.Empty(t, f.stored().PasswordResetToken)
 	})
 }

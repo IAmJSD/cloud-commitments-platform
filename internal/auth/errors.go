@@ -86,10 +86,11 @@ var (
 	// than the most-permissive default. Mapped to 400 (issue #61).
 	ErrEmptyAPIKeyPermissions = errors.New("at least one permission is required")
 
-	// ErrAccountDeactivated: ConfirmPasswordReset refused an admin-deactivated
-	// account (A03-006). Safe to name, since the caller already holds a valid
-	// reset token mailed to the account.
-	ErrAccountDeactivated = errors.New("account is deactivated")
+	// ErrInvalidResetToken: the reset token is unknown, already used, or
+	// belongs to an admin-deactivated account (A03-006). The deactivated case
+	// shares this error so the reset endpoint never reveals account state
+	// (issue #595). Mapped to 400.
+	ErrInvalidResetToken = errors.New("invalid or expired reset token")
 
 	// ErrUserChanged: a field-scoped user write found the row changed since the
 	// caller read it (issue #474). Mapped to 409.

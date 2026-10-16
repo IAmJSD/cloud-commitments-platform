@@ -732,18 +732,16 @@ func TestHandler_resetPassword_Error(t *testing.T) {
 	assert.Contains(t, ce.Error(), "invalid or expired reset token")
 }
 
-// TestHandler_resetPassword_AccountDeactivated is the regression test for
-// issue #89 / audit finding A03-006: ConfirmPasswordReset returning
-// auth.ErrAccountDeactivated must map to 403, ahead of the generic
-// isResetPasswordClientError(400) path -- deleting that branch in the
-// handler would leave every OTHER resetPassword test green while this one
-// alone catches the regression.
-func TestHandler_resetPassword_AccountDeactivated(t *testing.T) {
+// TestHandler_resetPassword_InvalidResetToken: the service answers a
+// deactivated user's live token with auth.ErrInvalidResetToken (A03-006,
+// issue #595), which must map to the same 400 and message as an unknown
+// token rather than a 500 or a status that reveals account state.
+func TestHandler_resetPassword_InvalidResetToken(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).Return(auth.ErrAccountDeactivated)
+	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).Return(auth.ErrInvalidResetToken)
 
 	handler := &Handler{auth: mockAuth}
 
@@ -754,9 +752,9 @@ func TestHandler_resetPassword_AccountDeactivated(t *testing.T) {
 	assert.Nil(t, result)
 
 	ce, ok := IsClientError(err)
-	require.True(t, ok, "ErrAccountDeactivated must be wrapped as a client error, not a 500")
-	assert.Equal(t, 403, ce.code)
-	assert.Contains(t, ce.Error(), "deactivated")
+	require.True(t, ok, "ErrInvalidResetToken must be wrapped as a client error, not a 500")
+	assert.Equal(t, 400, ce.code)
+	assert.Equal(t, "invalid or expired reset token", ce.Error())
 }
 
 // A reset that lost a race to a concurrent account change is a 409, not a 500 (issue #493).
