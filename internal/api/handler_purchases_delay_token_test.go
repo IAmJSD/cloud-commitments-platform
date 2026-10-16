@@ -129,3 +129,23 @@ func TestHandleRequest_ApproveViaToken_DelayConfigured_ReplayOfScheduledIs409(t 
 	require.NoError(t, err)
 	assert.Equal(t, 409, resp.StatusCode, resp.Body)
 }
+
+// TestScheduleApprovedExecution_EmptyTokenOnTokenPathStaysPinned checks the
+// email-link path is chosen explicitly, not inferred from a non-empty token:
+// an empty token on that path must still go to the token-pinned CAS (which
+// refuses it) and never fall back to the unpinned status-only CAS.
+func TestScheduleApprovedExecution_EmptyTokenOnTokenPathStaysPinned(t *testing.T) {
+	store := new(MockConfigStore)
+	store.On("TransitionExecutionStatusTokenPinned", mock.Anything, tokenErrExecID, []string{"pending", "notified"}, "scheduled", mock.Anything, "").
+		Return(nil, fmt.Errorf("%w: empty token", config.ErrApprovalTokenChanged)).Once()
+	h := &Handler{config: store}
+
+	_, err := h.scheduleApprovedExecution(context.Background(), &config.PurchaseExecution{ExecutionID: tokenErrExecID, Status: "pending"},
+		time.Hour, "actor@example.com", nil, tokenApproval(""))
+
+	require.ErrorIs(t, err, config.ErrApprovalTokenChanged)
+	store.AssertExpectations(t)
+	store.AssertNotCalled(t, "TransitionExecutionStatus",
+		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
+}

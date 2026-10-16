@@ -770,7 +770,7 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 		if err := purchase.ValidateApprovalToken(execution, token); err != nil {
 			return nil, tokenActionError(err)
 		}
-		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), actor, nil, token)
+		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), actor, nil, tokenApproval(token))
 	}
 	// ApproveExecution now runs the purchase synchronously inside the
 	// same call (issue #372). When it returns nil the AWS API call
@@ -859,7 +859,7 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 		return nil, fmt.Errorf("failed to read global config for purchase delay check: %w", cfgErr)
 	}
 	if globalCfg.GetPurchaseDelay() > 0 {
-		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), session.Email, actor, "")
+		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), session.Email, actor, sessionApproval())
 	}
 
 	// revocationToken is the raw token ApproveAndExecute mints for this
@@ -1055,10 +1055,10 @@ func (h *Handler) requirePlanStepCap(ctx context.Context, execution *config.Purc
 // Revoking a status=scheduled execution (via the revoke handler or the
 // History "Revoke" button) transitions it to "canceled" at zero cloud cost.
 //
-// approvalToken is the raw email-link token on the token path and "" on the
-// session path; see scheduleApprovedExecution.
-func (h *Handler) approveWithDelay(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string, approvalToken string) (any, error) {
-	updated, err := h.scheduleApprovedExecution(ctx, execution, delay, actor, transitionedBy, approvalToken)
+// gate says whether the approval came from the email-link token or a
+// session; see scheduleApprovedExecution.
+func (h *Handler) approveWithDelay(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string, gate approvalGate) (any, error) {
+	updated, err := h.scheduleApprovedExecution(ctx, execution, delay, actor, transitionedBy, gate)
 	if err != nil {
 		if errors.Is(err, config.ErrApprovalTokenChanged) {
 			// The token was rotated or expired after approveViaToken validated
@@ -1087,6 +1087,25 @@ func (h *Handler) approveWithDelay(ctx context.Context, execution *config.Purcha
 	}, nil
 }
 
+// approvalGate records which approval path reached scheduleApprovedExecution.
+// The path is explicit rather than inferred from an empty token, so an
+// email-link approval that somehow arrives with an empty token is still sent
+// to the token-pinned CAS (which refuses it) instead of the unpinned one.
+type approvalGate struct {
+	token       string
+	tokenPinned bool
+}
+
+// tokenApproval is the gate for the email-link path.
+func tokenApproval(token string) approvalGate {
+	return approvalGate{token: token, tokenPinned: true}
+}
+
+// sessionApproval is the gate for the signed-in session path.
+func sessionApproval() approvalGate {
+	return approvalGate{}
+}
+
 // scheduleApprovedExecution atomically transitions an execution from
 // status=pending or status=notified to status=scheduled, then stamps
 // ScheduledExecutionAt = now+delay and ApprovedBy. No SDK call is made.
@@ -1102,17 +1121,17 @@ func (h *Handler) approveWithDelay(ctx context.Context, execution *config.Purcha
 // returns ErrExecutionNotInExpectedStatus and we surface a 409 instead of
 // blindly overwriting the canceled state.
 //
-// A non-empty approvalToken (the email-link path) is also pinned inside the
+// On the email-link path (tokenApproval) the token is also pinned inside the
 // CAS: the row's stored token hash must still match it and be unexpired, so
 // a re-notification that rotated the token after the caller validated its
 // snapshot rejects the transition with config.ErrApprovalTokenChanged
-// (issue #590). The session path passes "" and is not token-gated.
-func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string, approvalToken string) (*config.PurchaseExecution, error) {
+// (issue #590). The session path (sessionApproval) is not token-gated.
+func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string, gate approvalGate) (*config.PurchaseExecution, error) {
 	from := []string{"pending", "notified"}
 	var updated *config.PurchaseExecution
 	var err error
-	if approvalToken != "" {
-		updated, err = h.config.TransitionExecutionStatusTokenPinned(ctx, execution.ExecutionID, from, "scheduled", transitionedBy, approvalToken)
+	if gate.tokenPinned {
+		updated, err = h.config.TransitionExecutionStatusTokenPinned(ctx, execution.ExecutionID, from, "scheduled", transitionedBy, gate.token)
 	} else {
 		updated, err = h.config.TransitionExecutionStatus(ctx, execution.ExecutionID, from, "scheduled", transitionedBy)
 	}

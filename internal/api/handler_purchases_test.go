@@ -5614,7 +5614,7 @@ func TestHandler_scheduleApprovedExecution_CASGuardsConcurrentCancel(t *testing.
 
 	handler := &Handler{config: mockConfig}
 
-	_, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com", nil, "")
+	_, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com", nil, sessionApproval())
 	require.Error(t, err, "concurrent cancel must surface as an error, not a silent overwrite")
 	// SavePurchaseExecution must NEVER be called: the canceled row is untouched.
 	mockConfig.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
@@ -5650,7 +5650,7 @@ func TestHandler_scheduleApprovedExecution_HappyPath(t *testing.T) {
 
 	handler := &Handler{config: mockConfig}
 
-	result, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com", nil, "")
+	result, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com", nil, sessionApproval())
 	require.NoError(t, err)
 	assert.Equal(t, "scheduled", result.Status)
 	assert.NotNil(t, result.ScheduledExecutionAt, "ScheduledExecutionAt must be stamped")
@@ -5674,7 +5674,7 @@ func TestApproveWithDelay_CASLostMaps409(t *testing.T) {
 
 	handler := &Handler{config: mockConfig}
 
-	_, err := handler.approveWithDelay(ctx, exec, 48*time.Hour, "actor@example.com", nil, "")
+	_, err := handler.approveWithDelay(ctx, exec, 48*time.Hour, "actor@example.com", nil, sessionApproval())
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "CAS-lost error must be a ClientError")
