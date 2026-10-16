@@ -26,7 +26,7 @@ type riExchangeClients struct {
 	listConvertibleRIs func(ctx context.Context) ([]ec2svc.ConvertibleRI, error)
 	getRIUtilization   func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error)
 	exchangeClient     exchange.ExchangeClientInterface
-	lookupOffering     func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error)
+	lookupOffering     exchange.LookupOfferingFunc
 	accountID          string
 	region             string
 }
@@ -59,20 +59,35 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 			return recsClient.GetRIUtilization(ctx, lookbackDays, awsCfg.Region)
 		},
 		exchangeClient: exchange.NewExchangeClient(awsCfg),
-		lookupOffering: func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error) {
-			return ec2Client.FindConvertibleOffering(ctx, ec2svc.FindConvertibleOfferingParams{
-				InstanceType:       instanceType,
-				ProductDescription: productDesc,
-				Tenancy:            tenancy,
-				Scope:              scope,
-				Duration:           duration,
-			})
-		},
-		accountID: resolveAccountID(ctx, awsCfg),
-		region:    awsCfg.Region,
+		lookupOffering: newConvertibleOfferingLookup(ec2Client),
+		accountID:      resolveAccountID(ctx, awsCfg),
+		region:         awsCfg.Region,
 	}
 
 	return app.executeRIExchangeReshape(ctx, cfg, clients)
+}
+
+// convertibleOfferingFinder is the slice of the EC2 client the offering
+// lookup needs. Satisfied by *ec2svc.Client.
+type convertibleOfferingFinder interface {
+	FindConvertibleOffering(ctx context.Context, params ec2svc.FindConvertibleOfferingParams) (string, error)
+}
+
+// newConvertibleOfferingLookup adapts the EC2 client to exchange.LookupOfferingFunc.
+// AvailabilityZone is the source RI's AZ (empty for regional RIs); the provider
+// refuses a zonal lookup without one, so a zonal RI never exchanges into an
+// offering in another zone.
+func newConvertibleOfferingLookup(finder convertibleOfferingFinder) exchange.LookupOfferingFunc {
+	return func(ctx context.Context, p exchange.LookupOfferingParams) (string, error) {
+		return finder.FindConvertibleOffering(ctx, ec2svc.FindConvertibleOfferingParams{
+			InstanceType:       p.InstanceType,
+			ProductDescription: p.ProductDescription,
+			Tenancy:            p.Tenancy,
+			Scope:              p.Scope,
+			AvailabilityZone:   p.AvailabilityZone,
+			Duration:           p.Duration,
+		})
+	}
 }
 
 // executeRIExchangeReshape contains the core exchange logic, separated from AWS
@@ -263,6 +278,7 @@ func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recomme
 			ProductDescription: inst.ProductDescription,
 			InstanceTenancy:    inst.InstanceTenancy,
 			Scope:              inst.Scope,
+			AvailabilityZone:   inst.AvailabilityZone,
 			Duration:           inst.Duration,
 		}
 	}
