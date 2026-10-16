@@ -1,0 +1,19 @@
+# Fixture: an unbalanced brace inside a string skews the scanner's block depth,
+# so it believes it is still inside the per-secret resource when the next
+# resource starts. The closing brace is indented (not `terraform fmt` output),
+# so the column-0 reset does not apply either. The per-secret exemption must be
+# dropped as soon as another construct opens, or the project grant below would
+# inherit it. Must exit 1.
+
+resource "google_secret_manager_secret_iam_member" "skewed" {
+  project   = var.project_id
+  secret_id = "{"
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workload.email}"
+  }
+
+resource "google_project_iam_member" "after" {
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${google_service_account.workload.email}"
+}

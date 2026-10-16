@@ -1,0 +1,8 @@
+# Fixture: a waiver without a reason does not count. Must exit 1.
+
+locals {
+  deploy_roles = toset([
+    # gcp-secret-scope: allow
+    "roles/secretmanager.admin",
+  ])
+}

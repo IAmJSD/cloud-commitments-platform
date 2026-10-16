@@ -1,0 +1,19 @@
+# Fixture: the role sits in a map of objects iterated by for_each and is read
+# back through `each.value.role`. Must exit 1.
+
+locals {
+  grants = {
+    reader = {
+      role   = "roles/secretmanager.secretAccessor"
+      member = "serviceAccount:reader@example.iam.gserviceaccount.com"
+    }
+  }
+}
+
+resource "google_project_iam_member" "grants" {
+  for_each = local.grants
+
+  project = var.project_id
+  role    = each.value.role
+  member  = each.value.member
+}

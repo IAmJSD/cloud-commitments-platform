@@ -2,6 +2,7 @@ locals {
   deploy_roles = toset([
     "roles/run.admin",
     "roles/cloudsql.admin",
+    # gcp-secret-scope: allow - deploy SA creates and manages the secrets (LeanerCloud/cloud-commitments-platform#149)
     "roles/secretmanager.admin",
     "roles/artifactregistry.admin",
     "roles/cloudscheduler.admin",

@@ -1,0 +1,22 @@
+# Fixture: an authoritative project policy built from a `google_iam_policy` data
+# source whose bindings come from a `dynamic` block over a local list. Neither
+# the data block nor the policy resource carries the literal. Must exit 1.
+
+locals {
+  policy_roles = ["roles/viewer", "roles/secretmanager.secretAccessor"]
+}
+
+data "google_iam_policy" "project" {
+  dynamic "binding" {
+    for_each = local.policy_roles
+    content {
+      role    = binding.value
+      members = ["serviceAccount:${google_service_account.workload.email}"]
+    }
+  }
+}
+
+resource "google_project_iam_policy" "project" {
+  project     = var.project_id
+  policy_data = data.google_iam_policy.project.policy_data
+}

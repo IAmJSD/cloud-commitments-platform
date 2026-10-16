@@ -1,0 +1,7 @@
+# Fixture: a tfvars file supplying a Secret Manager role to a list variable.
+# Must exit 1.
+
+project_roles = [
+  "roles/compute.viewer",
+  "roles/secretmanager.secretAccessor",
+]

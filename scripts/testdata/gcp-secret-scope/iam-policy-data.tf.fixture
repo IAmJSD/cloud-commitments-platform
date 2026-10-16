@@ -1,0 +1,15 @@
+# Fixture: a literal role inside a `google_iam_policy` data block feeding
+# google_project_iam_policy. The data block is not a scope-wide IAM resource, so
+# a scanner keyed on resource type misses it. Must exit 1.
+
+data "google_iam_policy" "project" {
+  binding {
+    role    = "roles/secretmanager.secretAccessor"
+    members = ["serviceAccount:${google_service_account.workload.email}"]
+  }
+}
+
+resource "google_project_iam_policy" "project" {
+  project     = var.project_id
+  policy_data = data.google_iam_policy.project.policy_data
+}
