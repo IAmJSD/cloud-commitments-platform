@@ -159,3 +159,74 @@ func TestRecoverStrandedApprovals_EC2RowIsFailedNotRedriven(t *testing.T) {
 	assert.NotContains(t, saved.Error, "then Retry", "Retry is refused for this row, so the message must not point at it")
 	mockFactory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
 }
+
+// TestApproveAndExecuteRefusesAWSNoTokenRetrySuccessor pins the refusal on the
+// approval entry points (issue #780). The ProcessMessage test above covers the
+// SQS/cron executor; this drives the two ways an operator approves a pending
+// row: the email-link token path (ApproveExecution, which calls
+// ApproveAndExecute with no session UUID) and the session path
+// (ApproveAndExecute with the session user's UUID as transitionedBy).
+//
+// The aws/rds case is the positive control: the same harness and entry point
+// buy exactly once for a retry successor that has a provider-side duplicate
+// guard, so a zero count on the refused rows means the guard fired, not that
+// the harness never reached the provider.
+func TestApproveAndExecuteRefusesAWSNoTokenRetrySuccessor(t *testing.T) {
+	const rawToken = "approve-780"
+	sessionUser := "55555555-6666-7777-8888-999999999780"
+
+	paths := []struct {
+		name           string
+		transitionedBy *string
+		approve        func(m *Manager, id string) error
+	}{
+		{"token", nil, func(m *Manager, id string) error {
+			_, err := m.ApproveExecution(context.Background(), id, rawToken, "approver@example.com")
+			return err
+		}},
+		{"session", &sessionUser, func(m *Manager, id string) error {
+			_, _, err := m.ApproveAndExecute(context.Background(), id, "approver@example.com", &sessionUser)
+			return err
+		}},
+	}
+
+	m := NewManager(ManagerConfig{})
+	for _, path := range paths {
+		for _, service := range append(append([]string{}, awsNoTokenSlugs...), "rds") {
+			path, service := path, service
+			refused := service != "rds"
+			t.Run(path.name+"/"+service, func(t *testing.T) {
+				exec := armedExecution("aws", service, 1, "pending")
+				exec.ApprovalToken = config.HashApprovalToken(rawToken)
+				mgr, store, rec := armedHarness(t, m.mapServiceType(service))
+				var saved []config.PurchaseExecution
+				store.SavePurchaseExecutionFn = func(_ context.Context, e *config.PurchaseExecution) error {
+					saved = append(saved, *e)
+					return nil
+				}
+				store.On("GetExecutionByID", mock.Anything, exec.ExecutionID).Return(exec, nil).Maybe()
+				claimed := *exec
+				claimed.Status = "running"
+				store.On("TransitionExecutionStatus", mock.Anything, exec.ExecutionID,
+					[]string{"pending", "notified"}, "running", path.transitionedBy).Return(&claimed, nil).Once()
+
+				err := path.approve(mgr, exec.ExecutionID)
+
+				if !refused {
+					require.NoError(t, err)
+					assert.Equal(t, 1, rec.count(), "positive control: an aws/rds retry successor must still buy once on the %s approve path", path.name)
+					return
+				}
+				assert.Equal(t, 0, rec.count(),
+					"approving a %s retry successor via the %s path must buy NOTHING; one call here may be a second commitment", service, path.name)
+				require.Error(t, err, "the refusal must surface to the approver")
+				assert.Contains(t, err.Error(), "refusing to execute retry attempt 1")
+				require.NotEmpty(t, saved, "the refused row must be persisted, not left running")
+				final := saved[len(saved)-1]
+				assert.Equal(t, "failed", final.Status)
+				assert.Contains(t, final.Error, "Check EC2 Reserved Instances or Redshift Reserved Nodes")
+				store.AssertExpectations(t)
+			})
+		}
+	}
+}
