@@ -38,6 +38,21 @@ import (
 // Each fixture registers its full happy path with .Maybe(). If a route's
 // CSRF check is removed, the request runs on to the money-moving call and the
 // AssertNotCalled fails. It does not panic on an earlier unmocked call.
+//
+// What the rows pin, per check:
+//
+//   - The shared pre-lookup check in requireSessionBeforeLookup
+//     (handler_purchases.go) runs validateCSRF for every purchase row, so
+//     removing it fails the purchase rows. The RI-exchange session check
+//     (handler_ri_exchange.go, approveRIExchangeViaSession) fails the RI rows.
+//   - The per-handler validateCSRF calls in approvePurchaseViaSession,
+//     cancelPurchaseViaSession and tryRevokeViaSession sit behind that shared
+//     check, so removing only one of them leaves every row green. They are
+//     defense in depth; the guard deliberately pins the outer gate, not them.
+//   - authPublicCSRFExempt is a per-route claim (for example, the GET revoke
+//     and unsubscribe handlers don't read a session). If an exempt handler
+//     later starts reading the session, this guard can't tell; the class
+//     check only forces the choice for routes that are new to the table.
 
 const (
 	csrfGuardSession  = "csrf-guard-sess"
