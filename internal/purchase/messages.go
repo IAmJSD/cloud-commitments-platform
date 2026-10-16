@@ -177,8 +177,10 @@ func (m *Manager) handleApproveMessage(ctx context.Context, msg *AsyncMessage) e
 		return err
 	}
 	// The SQS worker sends no email itself, so the minted revocation token
-	// (issue #103) has no consumer here; only the error matters.
-	_, err := m.ApproveExecution(ctx, msg.ExecutionID, msg.Token, msg.ActorEmail)
+	// (issue #103) has no consumer here; only the error matters. It carries
+	// no session, so there are no permission Constraints to re-check against
+	// the claimed row (nil ClaimedRowCheck, issue #415).
+	_, err := m.ApproveExecution(ctx, msg.ExecutionID, msg.Token, msg.ActorEmail, nil)
 	return err
 }
 
