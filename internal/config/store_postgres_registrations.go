@@ -9,15 +9,53 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // ErrRegistrationConflict is returned when a registration status transition fails
 // because another request already changed the status (concurrent modification).
 var ErrRegistrationConflict = errors.New("registration status conflict: already processed")
 
-// CreateAccountRegistration inserts a new registration request. Returns an error
-// wrapping "duplicate" when the partial unique index rejects a second pending
-// registration for the same provider+external_id.
+// ErrDuplicatePendingRegistration is returned by CreateAccountRegistration when
+// a pending registration already exists for the same provider+external_id.
+var ErrDuplicatePendingRegistration = errors.New("a pending registration already exists for this account")
+
+// ErrReferenceTokenCollision is returned by CreateAccountRegistration when the
+// generated reference_token is already taken. The caller should regenerate the
+// token and retry; it says nothing about whether the account is registered.
+var ErrReferenceTokenCollision = errors.New("registration reference token collision")
+
+// Unique constraints on account_registrations (migration 000017). Matched by
+// name so a new unique constraint cannot silently fold into an existing branch.
+const (
+	pgUniqueViolation                    = "23505"
+	registrationPendingUniqueIndex       = "idx_account_registrations_pending_unique"
+	registrationReferenceTokenConstraint = "account_registrations_reference_token_key"
+)
+
+// classifyRegistrationInsertError maps a unique violation on a known
+// account_registrations constraint to its sentinel, using the driver's SQLSTATE
+// and constraint name rather than the message text (which varies with
+// lc_messages and driver versions). The driver error stays wrapped. Every
+// other error, including unique violations on other constraints, is returned
+// as a generic insert failure.
+func classifyRegistrationInsertError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+		switch pgErr.ConstraintName {
+		case registrationPendingUniqueIndex:
+			return fmt.Errorf("%w: %w", ErrDuplicatePendingRegistration, err)
+		case registrationReferenceTokenConstraint:
+			return fmt.Errorf("%w: %w", ErrReferenceTokenCollision, err)
+		}
+	}
+	return fmt.Errorf("failed to create account registration: %w", err)
+}
+
+// CreateAccountRegistration inserts a new registration request. It returns an
+// error wrapping ErrDuplicatePendingRegistration when the partial unique index
+// rejects a second pending registration for the same provider+external_id, and
+// one wrapping ErrReferenceTokenCollision when reg.ReferenceToken is taken.
 func (s *PostgresStore) CreateAccountRegistration(ctx context.Context, reg *AccountRegistration) error {
 	if reg.ID == "" {
 		reg.ID = uuid.New().String()
@@ -61,11 +99,7 @@ func (s *PostgresStore) CreateAccountRegistration(ctx context.Context, reg *Acco
 		reg.CreatedAt, reg.UpdatedAt,
 	)
 	if err != nil {
-		if strings.Contains(err.Error(), "idx_account_registrations_pending_unique") ||
-			strings.Contains(err.Error(), "duplicate key") {
-			return fmt.Errorf("duplicate: a pending registration already exists for this account")
-		}
-		return fmt.Errorf("failed to create account registration: %w", err)
+		return classifyRegistrationInsertError(err)
 	}
 	return nil
 }
