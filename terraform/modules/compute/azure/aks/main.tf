@@ -4,6 +4,13 @@
 locals {
   name_prefix = "${var.project_name}-${var.environment}-aks"
 
+  # The one Kubernetes identity allowed to assume the workload UAI. The
+  # namespace and service account below are created from these same locals,
+  # and the federated credential's subject is built from them too, so the
+  # three cannot drift apart (#198).
+  workload_namespace            = var.environment
+  workload_service_account_name = "${var.project_name}-api"
+
   common_tags = merge(
     var.tags,
     {
@@ -83,6 +90,19 @@ resource "azurerm_kubernetes_cluster" "main" {
 
   azure_policy_enabled = var.enable_azure_policy
 
+  # Microsoft Entra Workload ID (#198). The OIDC issuer publishes the
+  # cluster's service-account token signing keys so Entra can validate a
+  # projected token, and workload_identity_enabled installs the mutating
+  # webhook that injects AZURE_CLIENT_ID / AZURE_TENANT_ID /
+  # AZURE_FEDERATED_TOKEN_FILE into pods labeled
+  # azure.workload.identity/use = "true". Both default to false; without them
+  # the service-account annotation below does nothing and no pod can obtain a
+  # token for azurerm_user_assigned_identity.workload. They grant no access by
+  # themselves: only the federated credential further down lets a specific
+  # service account exchange its token for the UAI.
+  oidc_issuer_enabled       = true
+  workload_identity_enabled = true
+
   # Kubernetes RBAC (authorization within the cluster). Real identity binding
   # is the azure_active_directory_role_based_access_control block below --
   # this flag alone does not add Entra integration.
@@ -142,6 +162,24 @@ resource "azurerm_user_assigned_identity" "workload" {
   tags = local.common_tags
 }
 
+# Bind the workload UAI to exactly one Kubernetes service account (#198).
+#
+# Entra exchanges a projected service-account token for a UAI token only when
+# the token's issuer and subject match a federated credential on that UAI. The
+# subject pins the namespace and service account name, so no other pod in the
+# cluster (including other service accounts in the same namespace) can assume
+# this identity. Not gated on var.deploy_kubernetes_resources: the credential
+# is pure Azure-side configuration, and an operator who creates the
+# namespace/service account out of band must use these same names.
+resource "azurerm_federated_identity_credential" "workload" {
+  name                = "${local.name_prefix}-workload-fic"
+  resource_group_name = var.resource_group_name
+  parent_id           = azurerm_user_assigned_identity.workload.id
+  audience            = ["api://AzureADTokenExchange"]
+  issuer              = azurerm_kubernetes_cluster.main.oidc_issuer_url
+  subject             = "system:serviceaccount:${local.workload_namespace}:${local.workload_service_account_name}"
+}
+
 # Grant the workload identity access to Key Vault secrets.
 #
 # This MUST be an RBAC role assignment, not an azurerm_key_vault_access_policy.
@@ -194,7 +232,7 @@ resource "kubernetes_namespace" "app" {
   count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
-    name = var.environment
+    name = local.workload_namespace
 
     labels = {
       environment = var.environment
@@ -245,7 +283,7 @@ resource "kubernetes_service_account" "app" {
   count = var.deploy_kubernetes_resources ? 1 : 0
 
   metadata {
-    name      = "${var.project_name}-api"
+    name      = local.workload_service_account_name
     namespace = kubernetes_namespace.app[0].metadata[0].name
 
     annotations = {
@@ -287,6 +325,11 @@ resource "kubernetes_deployment" "app" {
         labels = {
           app         = "${var.project_name}-api"
           environment = var.environment
+          # Opts the pod into the workload identity webhook (#198), which
+          # projects the service-account token and sets the AZURE_* env vars
+          # DefaultAzureCredential reads. Must be a pod label, not a
+          # service-account annotation.
+          "azure.workload.identity/use" = "true"
         }
       }
 
@@ -493,10 +536,13 @@ resource "kubernetes_deployment" "app" {
   # parallel. This buys ordering only, not a propagation wait: the assignment
   # returns as soon as ARM accepts the write, so a pod started immediately
   # after can still 403 until the grant propagates, and recovers on restart.
+  # The federated credential is listed for the same reason: without it the
+  # token exchange fails, and nothing in the deployment references it either.
   depends_on = [
     kubernetes_namespace.app,
     kubernetes_secret.database,
-    azurerm_role_assignment.workload_kv_secrets_user
+    azurerm_role_assignment.workload_kv_secrets_user,
+    azurerm_federated_identity_credential.workload,
   ]
 }
 
