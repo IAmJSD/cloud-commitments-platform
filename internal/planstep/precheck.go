@@ -22,6 +22,9 @@ var ErrUnsupportedPlan = errors.New("plan settings are not supported by recommen
 // 100 (an immediate ramp ignores that field when validated but Resolve sizes
 // with it).
 func Precheck(plan *config.PurchasePlan) error {
+	if err := plan.RampSchedule.ValidateAllocationMode(); err != nil {
+		return fmt.Errorf("%w: plan %s: %w", ErrUnsupportedPlan, plan.ID, err)
+	}
 	keys := make([]string, 0, len(plan.Services))
 	for k := range plan.Services {
 		keys = append(keys, k)
@@ -33,7 +36,7 @@ func Precheck(plan *config.PurchasePlan) error {
 			return fmt.Errorf("%w: plan %s service %q sets %s", ErrUnsupportedPlan, plan.ID, k, field)
 		}
 	}
-	if plan.RampSchedule.Type == "immediate" && plan.RampSchedule.PercentPerStep != 100 {
+	if plan.RampSchedule.AllocationMode == "" && plan.RampSchedule.Type == "immediate" && plan.RampSchedule.PercentPerStep != 100 {
 		return fmt.Errorf("%w: plan %s has an immediate ramp with percent_per_step %v (must be 100)",
 			ErrUnsupportedPlan, plan.ID, plan.RampSchedule.PercentPerStep)
 	}

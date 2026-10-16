@@ -627,6 +627,9 @@ func (p *PurchasePlan) CheckNoMultiStepSavingsPlans() error {
 
 // Validate validates the RampSchedule.
 func (r *RampSchedule) Validate() error {
+	if err := r.ValidateAllocationMode(); err != nil {
+		return err
+	}
 	if r.Type != "" && !isValidRampScheduleType(r.Type) {
 		return fmt.Errorf("invalid ramp schedule type: %s (valid: %s)", r.Type, strings.Join(ValidRampScheduleTypes, ", "))
 	}
@@ -643,6 +646,20 @@ func (r *RampSchedule) Validate() error {
 		return fmt.Errorf("total steps must be between 0 and %d, got: %d", MaxTotalSteps, r.TotalSteps)
 	}
 	return nil
+}
+
+func (r *RampSchedule) ValidateAllocationMode() error {
+	switch r.AllocationMode {
+	case "":
+		return nil
+	case RampAllocationEqualCount:
+		if r.TotalSteps < 1 || r.TotalSteps > MaxTotalSteps || (r.Type == "immediate" && r.TotalSteps != 1) {
+			return fmt.Errorf("invalid equal-count total steps: %d", r.TotalSteps)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported ramp allocation mode: %q", r.AllocationMode)
+	}
 }
 
 // validatePercentPerStep checks PercentPerStep bounds based on ramp type.

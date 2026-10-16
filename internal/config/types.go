@@ -246,15 +246,20 @@ type PurchasePlan struct {
 	Unassigned bool `json:"unassigned,omitempty" dynamodbav:"unassigned,omitempty"`
 }
 
+type RampAllocationMode string
+
+const RampAllocationEqualCount RampAllocationMode = "equal_count"
+
 // RampSchedule defines how purchases are spread over time.
 type RampSchedule struct {
-	Type             string    `json:"type" dynamodbav:"type"` // immediate, weekly, monthly, custom
-	PercentPerStep   float64   `json:"percent_per_step" dynamodbav:"percent_per_step"`
-	StepIntervalDays int       `json:"step_interval_days" dynamodbav:"step_interval_days"`
-	CurrentStep      int       `json:"current_step" dynamodbav:"current_step"`
-	TotalSteps       int       `json:"total_steps" dynamodbav:"total_steps"`
-	StartDate        time.Time `json:"start_date" dynamodbav:"start_date"`
-	DatesManaged     bool      `json:"dates_managed,omitempty" dynamodbav:"dates_managed,omitempty"`
+	Type             string             `json:"type" dynamodbav:"type"` // immediate, weekly, monthly, custom
+	PercentPerStep   float64            `json:"percent_per_step" dynamodbav:"percent_per_step"`
+	StepIntervalDays int                `json:"step_interval_days" dynamodbav:"step_interval_days"`
+	CurrentStep      int                `json:"current_step" dynamodbav:"current_step"`
+	TotalSteps       int                `json:"total_steps" dynamodbav:"total_steps"`
+	StartDate        time.Time          `json:"start_date" dynamodbav:"start_date"`
+	DatesManaged     bool               `json:"dates_managed,omitempty" dynamodbav:"dates_managed,omitempty"`
+	AllocationMode   RampAllocationMode `json:"allocation_mode,omitempty" dynamodbav:"allocation_mode,omitempty"`
 }
 
 // PresetRampSchedules provides common ramp-up configurations.
@@ -284,6 +289,9 @@ var PresetRampSchedules = map[string]RampSchedule{
 func (r *RampSchedule) CumulativePercent(step int) float64 {
 	if r.Type == "immediate" {
 		return 100
+	}
+	if r.AllocationMode == RampAllocationEqualCount && r.TotalSteps > 0 {
+		return 100 * float64(min(step, r.TotalSteps)) / float64(r.TotalSteps)
 	}
 	return math.Min(100, float64(step)*r.PercentPerStep)
 }

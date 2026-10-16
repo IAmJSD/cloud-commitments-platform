@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -66,6 +67,8 @@ type Result struct {
 type ramp struct {
 	step      int
 	cum       float64
+	mode      config.RampAllocationMode
+	count     int
 	baseline  config.PlanRampBaseline
 	committed map[string]config.PlanRampQuantity
 	out       Result
@@ -106,7 +109,7 @@ func Resolve(ctx context.Context, src Source, store Store, plan *config.Purchase
 	for _, id := range accountIDs {
 		allowed[id] = struct{}{}
 	}
-	r := &ramp{step: step, cum: plan.RampSchedule.CumulativePercent(step), baseline: baseline, committed: committed}
+	r := &ramp{step: step, cum: plan.RampSchedule.CumulativePercent(step), mode: plan.RampSchedule.AllocationMode, count: plan.RampSchedule.TotalSteps, baseline: baseline, committed: committed}
 	if step == 1 {
 		r.out.Baseline = config.PlanRampBaseline{}
 	}
@@ -124,7 +127,11 @@ func (r *ramp) emptyErr(plan *config.PurchasePlan) error {
 	if len(r.out.Baseline) == 0 {
 		r.out.Baseline = nil // an empty baseline is never frozen
 	}
-	if r.targetMet(plan) {
+	met, err := r.targetMet(plan)
+	if err != nil {
+		return err
+	}
+	if met {
 		return ErrTargetMet
 	}
 	return ErrNoMatch
@@ -155,9 +162,9 @@ func (r *ramp) resolveServices(ctx context.Context, src Source, store Store, pla
 // baselined identity of an enabled plan service has its cumulative target
 // committed. It reads no `shown`: an identity that is merely hidden (still has
 // a gap) is not met, so it ends as ErrNoMatch, never a silent no-op advance.
-func (r *ramp) targetMet(plan *config.PurchasePlan) bool {
+func (r *ramp) targetMet(plan *config.PurchasePlan) (bool, error) {
 	if len(r.baseline) == 0 {
-		return false
+		return false, nil
 	}
 	judged, target, committed := 0, 0, 0
 	for key, base := range r.baseline {
@@ -166,14 +173,21 @@ func (r *ramp) targetMet(plan *config.PurchasePlan) bool {
 			continue
 		}
 		judged++
-		t, c := r.target(base.Count, svc.Coverage), r.committed[key].Count
+		t, err := r.target(base.Count, svc.Coverage)
+		if err != nil {
+			return false, err
+		}
+		c := r.committed[key].Count
+		if err := r.validateCounts(c); err != nil {
+			return false, err
+		}
 		if t > c {
-			return false
+			return false, nil
 		}
 		target, committed = target+t, committed+c
 	}
 	r.out.Target, r.out.Committed = target, committed
-	return judged > 0
+	return judged > 0, nil
 }
 
 // planServiceOf finds the enabled plan service an identity key belongs to
@@ -192,10 +206,19 @@ func planServiceOf(plan *config.PurchasePlan, key string) (config.ServiceConfig,
 	return config.ServiceConfig{}, false
 }
 
-// target is floor(base * coverage * cum / 10000); coverage*cum is multiplied
-// before the base so 100*10 over 10000 stays exact.
-func (r *ramp) target(base int, coverage float64) int {
-	return int(math.Floor(float64(base) * (coverage * r.cum) / 10000))
+// Legacy targets multiply coverage*cum first; marked targets use exact shares.
+func (r *ramp) target(base int, coverage float64) (int, error) {
+	if r.mode == config.RampAllocationEqualCount {
+		if err := r.validateCounts(base); err != nil {
+			return 0, err
+		}
+		share, err := r.equalCountShare(coverage, r.step)
+		if err != nil {
+			return 0, err
+		}
+		return floorAllocation(share.Mul(share, big.NewRat(int64(base), 1)))
+	}
+	return int(math.Floor(float64(base) * (coverage * r.cum) / 10000)), nil
 }
 
 func sortedKeys(m map[string]config.ServiceConfig) []string {
@@ -225,7 +248,7 @@ func claimIdentities(seen map[string]struct{}, recs []config.RecommendationRecor
 
 func resolveService(ctx context.Context, src Source, store Store, svc *config.ServiceConfig, percentPerStep float64, r *ramp,
 	accountIDs []string, allowed map[string]struct{}, enabledProviders []string) ([]config.RecommendationRecord, error) {
-	wantPayment, err := validateInputs(svc, percentPerStep)
+	wantPayment, err := r.validateInputs(svc, percentPerStep)
 	if err != nil {
 		return nil, err
 	}
@@ -262,8 +285,8 @@ func resolveService(ctx context.Context, src Source, store Store, svc *config.Se
 
 // validateInputs rejects sizing inputs outside (0,100] (custom ramps too) and
 // returns the plan payment normalized for the provider.
-func validateInputs(svc *config.ServiceConfig, percentPerStep float64) (string, error) {
-	if svc.Coverage <= 0 || svc.Coverage > 100 || percentPerStep <= 0 || percentPerStep > 100 || svc.Term <= 0 {
+func (r *ramp) validateInputs(svc *config.ServiceConfig, percentPerStep float64) (string, error) {
+	if svc.Coverage <= 0 || svc.Coverage > 100 || svc.Term <= 0 || (r.mode == "" && (percentPerStep <= 0 || percentPerStep > 100)) {
 		return "", fmt.Errorf("invalid sizing inputs (coverage %v, percent per step %v, term %d)", svc.Coverage, percentPerStep, svc.Term)
 	}
 	payment, ok := config.NormalizePaymentOption(svc.Provider, svc.Payment)
@@ -322,42 +345,56 @@ func (r *ramp) sizeFromStored(shown *config.RecommendationRecord, stored map[str
 		return config.RecommendationRecord{}, false, errors.New("no stored row to price from (cache changed mid-read)")
 	}
 	if common.IsSavingsPlan(common.ServiceType(base.Service)) {
-		return size(shown, base, coverage*percentPerStep, 0)
+		var share *big.Rat
+		if r.mode == config.RampAllocationEqualCount {
+			share, err = r.equalCountShare(coverage, 1)
+			if err != nil {
+				return config.RecommendationRecord{}, false, err
+			}
+		}
+		return size(shown, base, coverage*percentPerStep, 0, share)
 	}
-	n, ok := r.countToBuy(key, shown.Count, coverage)
-	if !ok {
-		return config.RecommendationRecord{}, false, nil
+	n, ok, err := r.countToBuy(key, shown.Count, coverage)
+	if err != nil || !ok {
+		return config.RecommendationRecord{}, false, err
 	}
-	return size(shown, base, 0, n)
+	return size(shown, base, 0, n, nil)
 }
 
 // countToBuy applies the cumulative formula to one count identity and records
 // the baseline entry (step 1, shown > 0). ok=false means skip: no baseline at
 // step > 1.
-func (r *ramp) countToBuy(key string, shown int, coverage float64) (int, bool) {
+func (r *ramp) countToBuy(key string, shown int, coverage float64) (buy int, ok bool, err error) {
+	if validationErr := r.validateCounts(shown, r.committed[key].Count); validationErr != nil {
+		return 0, false, validationErr
+	}
 	base, frozen := r.baseline[key]
 	switch {
 	case !frozen && r.step == 1:
 		base = config.PlanRampQuantity{Count: shown}
 	case !frozen:
 		r.out.Skipped = append(r.out.Skipped, key)
-		return 0, false
+		return 0, false, nil
 	}
 	if r.step == 1 && base.Count > 0 {
 		r.out.Baseline[key] = base
 	}
-	gap := r.target(base.Count, coverage) - r.committed[key].Count
-	if gap <= 0 {
-		return 0, true
+	target, err := r.target(base.Count, coverage)
+	if err != nil {
+		return 0, false, err
 	}
-	return min(gap, shown), true
+	gap := target - r.committed[key].Count
+	if gap <= 0 {
+		return 0, true, nil
+	}
+	return min(gap, shown), true, nil
 }
 
 // size returns shown sized to n units (count recs) or to product/10000 of its
 // hourly commitment (Savings Plans; product = coverage*percentPerStep,
 // multiplied before dividing) and priced from the unsuppressed stored row.
 // keep=false means the rec sized to nothing.
-func size(shown, stored *config.RecommendationRecord, product float64, n int) (config.RecommendationRecord, bool, error) {
+func size(shown, stored *config.RecommendationRecord, product float64, n int, share *big.Rat) (config.RecommendationRecord, bool, error) {
 	if stored.Count <= 0 {
 		return config.RecommendationRecord{}, false, fmt.Errorf("stored count %d cannot price a share", stored.Count)
 	}
@@ -371,7 +408,7 @@ func size(shown, stored *config.RecommendationRecord, product float64, n int) (c
 	var ratio float64
 	var err error
 	if common.IsSavingsPlan(common.ServiceType(stored.Service)) {
-		ratio, err = sizeSP(&out, stored, product)
+		ratio, err = sizeSP(&out, stored, product, share)
 	} else {
 		ratio = sizeCount(&out, stored, n)
 	}
@@ -401,12 +438,18 @@ func sizeCount(out, stored *config.RecommendationRecord, n int) float64 {
 
 // sizeSP rewrites out's hourly_commitment (rounded down to whole cents, never
 // up) and returns the ratio to the stored commitment; 0 means below one cent.
-func sizeSP(out, stored *config.RecommendationRecord, product float64) (float64, error) {
+func sizeSP(out, stored *config.RecommendationRecord, product float64, share *big.Rat) (float64, error) {
 	keys, hourly, err := decodeHourly(stored.Details)
 	if err != nil {
 		return 0, err
 	}
 	sized := math.Floor(hourly*product/100) / 100
+	if share != nil {
+		sized, err = exactSPHourly(hourly, share)
+		if err != nil {
+			return 0, err
+		}
+	}
 	if sized < spHourlyStep {
 		return 0, nil
 	}
