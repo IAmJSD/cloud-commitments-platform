@@ -346,10 +346,6 @@ if [ -n "$SA_CLOUDRUN_EXISTS" ]; then
   import_if_missing \
     "module.compute_cloud_run[0].google_project_iam_member.compute_commitment_admin" \
     "${PROJECT} roles/compute.admin ${SA_MEMBER}"
-
-  import_if_missing \
-    "module.compute_cloud_run[0].google_project_iam_member.recommender_viewer" \
-    "${PROJECT} roles/recommender.viewer ${SA_MEMBER}"
 fi
 
 # Scheduler service account + job

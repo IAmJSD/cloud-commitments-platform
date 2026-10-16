@@ -487,11 +487,35 @@ resource "google_project_iam_member" "compute_commitment_writer" {
   member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
-# Recommender Viewer: read access to the Recommender API (commitment
-# recommendations, cost insights) for surfacing optimization suggestions.
-resource "google_project_iam_member" "recommender_viewer" {
+# Recommendation read access: custom project role cudlyRecommendationReader
+# granting only recommender.usageCommitmentRecommendations.list, the one
+# permission the collector needs to list
+# projects/<id>/locations/<region>/recommenders/
+# google.compute.commitment.UsageCommitmentRecommender (cloud-commitments-go
+# providers/gcp computeengine client). Replaces roles/recommender.viewer, which
+# granted get/list on every recommender and insight type in the project
+# (issue #788). Same role ID and permission as the CLI setup wizard
+# (cloud-commitments-cli#2124). The Cloud SQL / Memorystore Performance
+# recommender calls are not covered; they 403 and are logged as a per-service
+# warning without failing the collection.
+#
+# Like cudlyCommitmentWriter, this needs roles/iam.roleAdmin on the deployer
+# SA (terraform/environments/gcp/ci-cd-permissions); there is deliberately no
+# fallback to the predefined role.
+resource "google_project_iam_custom_role" "cudly_recommendation_reader" {
+  project     = var.project_id
+  role_id     = "cudlyRecommendationReader"
+  title       = "CUDly Recommendation Reader"
+  description = "Minimum permission for CUDly to list Compute Engine committed use discount recommendations."
+  permissions = [
+    "recommender.usageCommitmentRecommendations.list",
+  ]
+  stage = "GA"
+}
+
+resource "google_project_iam_member" "recommendation_reader" {
   project = var.project_id
-  role    = "roles/recommender.viewer"
+  role    = google_project_iam_custom_role.cudly_recommendation_reader.id
   member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
