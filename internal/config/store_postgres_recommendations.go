@@ -33,11 +33,7 @@ func (s *PostgresStore) ReplaceRecommendations(ctx context.Context, collectedAt 
 	if err != nil {
 		return fmt.Errorf("failed to begin tx: %w", err)
 	}
-	defer func() {
-		if rbErr := tx.Rollback(ctx); rbErr != nil {
-			_ = rbErr // rollback error intentionally discarded; Postgres logs rollback failures
-		}
-	}()
+	defer rollbackTx(ctx, tx, "ReplaceRecommendations")
 
 	if _, err := tx.Exec(ctx, `DELETE FROM recommendations`); err != nil {
 		return fmt.Errorf("failed to wipe recommendations: %w", err)
@@ -88,11 +84,7 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 	if err != nil {
 		return fmt.Errorf("failed to begin tx: %w", err)
 	}
-	defer func() {
-		if rbErr := tx.Rollback(ctx); rbErr != nil {
-			_ = rbErr // rollback error intentionally discarded; Postgres logs rollback failures
-		}
-	}()
+	defer rollbackTx(ctx, tx, "UpsertRecommendations")
 
 	if err := insertRecommendationsBatched(ctx, tx, collectedAt, recs, true); err != nil {
 		return err

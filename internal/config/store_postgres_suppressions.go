@@ -9,7 +9,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -23,19 +25,7 @@ func (s *PostgresStore) WithTx(ctx context.Context, fn func(tx pgx.Tx) error) er
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	// Defer a best-effort rollback for the error path. When Commit
-	// succeeds, Rollback is a no-op (pgx returns ErrTxClosed); we
-	// swallow that single sentinel so the deferred call never clobbers
-	// the happy path with a spurious error.
-	defer func() {
-		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
-			// Log-only: the caller already has the user-code error (or
-			// got a commit error), so surfacing rollback failures here
-			// would mask them. We rely on Postgres' own server logs for
-			// rollback-abort visibility.
-			_ = rbErr
-		}
-	}()
+	defer rollbackTx(ctx, tx, "WithTx")
 
 	if err := fn(tx); err != nil {
 		return err
@@ -44,6 +34,28 @@ func (s *PostgresStore) WithTx(ctx context.Context, fn func(tx pgx.Tx) error) er
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 	return nil
+}
+
+// rollbackTimeout bounds the deferred rollback, which runs on a context
+// detached from the request so a canceled request still rolls back.
+const rollbackTimeout = 5 * time.Second
+
+// rollbackTx is the deferred best-effort rollback for a pgx transaction.
+// After a successful Commit, Rollback returns pgx.ErrTxClosed, which is
+// expected and stays quiet. Any other error is a genuine rollback failure
+// (dropped connection, server-side abort) and is logged with op so it is
+// visible. It is logged rather than returned so it never masks the error
+// (or commit result) the caller already has.
+//
+// The rollback runs on context.WithoutCancel(ctx) with a short timeout: a
+// canceled request ctx is the usual reason a tx body fails, and rolling
+// back on it would fail with a context error instead of rolling back.
+func rollbackTx(ctx context.Context, tx pgx.Tx, op string) {
+	rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
+	if err := tx.Rollback(rbCtx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		logging.Warnf("%s: transaction rollback failed: %v", op, err)
+	}
 }
 
 // CreateSuppression inserts a suppression row using a one-call

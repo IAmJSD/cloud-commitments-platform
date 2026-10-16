@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"math/big"
 	"time"
 
@@ -54,12 +53,8 @@ func (s *PostgresStore) withLadderConfigLock(ctx context.Context, configID strin
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer func() {
-		// ErrTxClosed after Commit is expected; the deferred call also covers a panic in fn.
-		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
-			log.Printf("ladder config lock %s: rollback: %v", configID, rbErr)
-		}
-	}()
+	// The deferred call also covers a panic in fn.
+	defer rollbackTx(ctx, tx, "ladder config lock "+configID)
 
 	if err := acquireLadderConfigLock(ctx, tx, configID); err != nil {
 		return err
