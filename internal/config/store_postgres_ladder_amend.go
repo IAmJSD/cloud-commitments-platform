@@ -56,6 +56,8 @@ type lockedLadderTranche struct {
 	executionID *string
 	revision    int64
 	amount      string
+	basis       *LadderAmountBasis
+	rate        *string
 	date        time.Time
 	future      bool
 }
@@ -96,7 +98,7 @@ func amendLadderTrancheTx(ctx context.Context, tx pgx.Tx, configID, id, accountI
 	if err != nil {
 		return err
 	}
-	err = checkLadderConfigCeiling(ctx, tx, run.configID, tranche.amount, amendment.AmountUSDHr)
+	err = checkLadderConfigCeiling(ctx, tx, run.configID, tranche, amendment.AmountUSDHr)
 	if err != nil {
 		return err
 	}
@@ -140,10 +142,10 @@ func lockLadderRun(ctx context.Context, tx pgx.Tx, id, accountID, provider strin
 
 func lockLadderTranche(ctx context.Context, tx pgx.Tx, id string, run lockedLadderRun, proposed time.Time) (lockedLadderTranche, error) {
 	var t lockedLadderTranche
-	err := tx.QueryRow(ctx, `SELECT status,execution_id,revision,amount_usd_hr::text,scheduled_date,
+	err := tx.QueryRow(ctx, `SELECT status,execution_id,revision,amount_usd_hr::text,amount_basis,commitment_rate,scheduled_date,
  scheduled_date>clock_timestamp() AND $4::timestamptz>clock_timestamp()
  FROM ladder_tranches WHERE id=$1 AND config_id=$2 AND run_id=$3 FOR UPDATE`, id, run.configID, run.runID, proposed).
-		Scan(&t.status, &t.executionID, &t.revision, &t.amount, &t.date, &t.future)
+		Scan(&t.status, &t.executionID, &t.revision, &t.amount, &t.basis, &t.rate, &t.date, &t.future)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, ErrLadderAmendNotFound
 	}

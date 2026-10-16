@@ -29,6 +29,37 @@ func (f *ceilingFixture) setBasis(id, basis, rate string) {
 	require.NoError(f.t, err)
 }
 
+func TestLadderAmendCeiling_RaiseOnCommitmentRowNetsInOnDemand(t *testing.T) {
+	f := newCeilingFixture(t)
+	_, ids := f.plan(fptr(10), fptr(0), fptr(100), 4)
+	f.setBasis(ids[0], "commitment", "1/2")
+	require.ErrorIs(t, f.amend(ids[0], 6), ErrLadderAmendInvalid, "6 commitment at rate 1/2 is 12 on-demand against a ceiling of 10")
+	require.NoError(t, f.amend(ids[0], 5), "5 commitment at rate 1/2 is exactly the ceiling of 10")
+}
+
+func TestLadderAmendCeiling_NullBasisIsAssumedOnDemand(t *testing.T) {
+	f := newCeilingFixture(t)
+	_, ids := f.plan(fptr(10), fptr(0), fptr(100), 5, 5)
+	f.setBasis(ids[0], "", "")
+	f.setBasis(ids[1], "", "")
+	require.NoError(t, f.amend(ids[0], 4))
+	require.ErrorIs(t, f.amend(ids[0], 6), ErrLadderAmendInvalid, "assumed on-demand: 6+5 > 10")
+	require.NoError(t, f.amend(ids[0], 5))
+}
+
+func TestLadderAmendRunTotal_SingleCommitmentBasisRun(t *testing.T) {
+	f := newCeilingFixture(t)
+	runID, ids := f.plan(fptr(100), fptr(0), fptr(100), 4, 4)
+	for _, id := range ids {
+		f.setBasis(id, "commitment", "1/2")
+	}
+	_, err := f.store.db.Exec(f.ctx, "UPDATE ladder_runs SET total_hourly_commit=8 WHERE id=$1", runID)
+	require.NoError(t, err)
+	require.ErrorIs(t, f.amend(ids[0], 5), ErrLadderAmendInvalid, "run total 9 > original 8")
+	require.NoError(t, f.amend(ids[0], 3))
+	require.NoError(t, f.amend(ids[1], 5), "run total back to 8")
+}
+
 func seedNettingRows(t *testing.T, f *ceilingFixture, basis LadderAmountBasis, rate string, amounts ...string) {
 	t.Helper()
 	for _, a := range amounts {
