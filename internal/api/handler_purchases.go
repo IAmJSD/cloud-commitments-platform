@@ -1399,6 +1399,8 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 	//      action they can perform from the dashboard. The token in
 	//      the URL is informational at that point — the session has
 	//      already authenticated the actor.
+	//      A session whose held cancel verb is denied by its Constraints
+	//      (issue #678) is final: it does not fall through to the token.
 	//   2. token != "" → legacy email-link flow without a qualifying
 	//      session. authorizeApprovalAction enforces the per-account
 	//      contact_email gate from PR #101; the purchase service
@@ -1860,7 +1862,13 @@ func (h *Handler) authorizeCancelSession(ctx context.Context, session *Session, 
 
 // authorizeSessionCancel returns nil when the session is permitted to cancel
 // the given execution under the cancel-any / cancel-own RBAC rules added in
-// issue #46. Returns a 403 ClientError otherwise.
+// issue #46, and the Constraints of the permission that grants the verb cover
+// every recommendation of the execution (issue #678, same strict sets as the
+// #404 revoke check). A constrained cancel-any falls back to cancel-own only on
+// a 403; a Constraints denial is terminal for the email-token fall-through (it
+// is wrapped so fallsThroughToToken does not hand it to the contact_email
+// branch). The token branch itself is a separate capability and is not
+// Constraints-checked. Returns a 403 ClientError otherwise.
 func (h *Handler) authorizeSessionCancel(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
 	// Stateless admin API key: full access, no user row. Administrators-group
 	// users pass via the cancel-any HasPermissionAPI check below.
@@ -1875,22 +1883,38 @@ func (h *Handler) authorizeSessionCancel(ctx context.Context, session *Session, 
 	if err != nil {
 		return fmt.Errorf("permission check failed: %w", err)
 	}
+	var anyErr error
 	if hasAny {
-		return nil
+		anyErr = wrapConstraintDenied(h.requirePermissionConstraints(ctx, session, auth.ActionCancelAny, auth.ResourcePurchases, revokeExecutionConstraintSets(execution)))
+		if anyErr == nil || !isForbidden(anyErr) {
+			return anyErr
+		}
 	}
+	return h.authorizeCancelOwn(ctx, session, execution, anyErr)
+}
 
+// authorizeCancelOwn requires cancel-own, a matching creator and the cancel-own
+// Constraints. anyErr is the cancel-any Constraints denial (nil when the
+// session has no cancel-any); it is returned instead of the generic denials so
+// a constraint refusal stays terminal.
+func (h *Handler) authorizeCancelOwn(ctx context.Context, session *Session, execution *config.PurchaseExecution, anyErr error) error {
 	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionCancelOwn, auth.ResourcePurchases)
 	if err != nil {
 		return fmt.Errorf("permission check failed: %w", err)
 	}
 	if !hasOwn {
+		if anyErr != nil {
+			return anyErr
+		}
 		return NewClientError(403, "permission denied: requires cancel-any or cancel-own on purchases")
 	}
-
 	if execution.CreatedByUserID == nil || *execution.CreatedByUserID != session.UserID {
+		if anyErr != nil {
+			return anyErr
+		}
 		return NewClientError(403, "permission denied: cannot cancel another user's pending purchase")
 	}
-	return nil
+	return wrapConstraintDenied(h.requirePermissionConstraints(ctx, session, auth.ActionCancelOwn, auth.ResourcePurchases, revokeExecutionConstraintSets(execution)))
 }
 
 // requireSession validates the request's session token and returns the

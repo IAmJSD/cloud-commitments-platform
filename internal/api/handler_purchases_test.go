@@ -3127,6 +3127,7 @@ func buildSessionCancelHandler(exec *config.PurchaseExecution, session *Session,
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(session, nil)
+	mockAuth.allowConstraintChecks()
 	// cancelPurchaseViaSession enforces CSRF on the session-authed path (issue
 	// #404). sessionCancelReq carries no CSRF header, so ValidateCSRFToken is
 	// called with an empty csrfToken. Tests exercising the session-authed cancel
@@ -5956,6 +5957,7 @@ func TestHandler_revokePurchase_SessionAdminCancelAny(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").
 		Return(&Session{UserID: adminUserID, Email: adminEmail}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, adminUserID, "cancel-any", "purchases").Return(true, nil)
+	mockAuth.allowConstraintChecks()
 	// requireExecutionAccess (issue #92) runs before RBAC; unrestricted
 	// here since scope is not under test.
 	mockAuth.On("GetAllowedAccountsAPI", ctx, adminUserID).Return([]string{}, nil)
@@ -6002,6 +6004,7 @@ func TestHandler_revokePurchase_SessionOwnerCancelOwn(t *testing.T) {
 		Return(&Session{UserID: ownerUserID, Email: ownerEmail}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, "cancel-any", "purchases").Return(false, nil)
 	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, "cancel-own", "purchases").Return(true, nil)
+	mockAuth.allowConstraintChecks()
 	// requireExecutionAccess (issue #92) runs before RBAC; unrestricted
 	// here since scope is not under test.
 	mockAuth.On("GetAllowedAccountsAPI", ctx, ownerUserID).Return([]string{}, nil)
