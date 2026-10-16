@@ -788,7 +788,7 @@ func (h *Handler) validateSecurityContext(ctx context.Context, req *events.Lambd
 		h.auth.RecordAPIKeyUsageAsync(principal.APIKeyID)
 	}
 
-	if h.requiresCSRFValidation(method, path, req) {
+	if h.requiresCSRFValidation(method, path) {
 		if err := h.validateCSRF(ctx, req); err != nil {
 			logging.Warnf("CSRF validation failed: %v", err)
 			return ctx, h.buildResponse(403, corsHeaders, map[string]string{"error": "CSRF validation failed"}, nil)
