@@ -42,6 +42,8 @@ func tokenErrHandler(t *testing.T, exec *config.PurchaseExecution, getErr error)
 	auth := new(MockAuthService)
 	auth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	auth.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{Email: approver}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	auth.On("ValidateCSRFToken", mock.Anything, "sess-tok", "").Return(nil).Maybe()
 	for _, perm := range []string{"approve-any", "approve-own", "cancel-any", "cancel-own", "revoke-any", "revoke-own"} {
 		auth.On("HasPermissionAPI", mock.Anything, "", perm, "purchases").Return(false, nil).Maybe()
 	}
