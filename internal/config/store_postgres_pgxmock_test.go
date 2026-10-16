@@ -1215,7 +1215,7 @@ func TestPGXMock_GetActivePurchaseHistory_Unscoped(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "acct-1")...)
 	mock.ExpectQuery(
-		`SELECT account_id, purchase_id, .*revocation_window_closes_at, revoked_at, revoked_via, support_case_id, offering_class, listing_id, listing_state FROM purchase_history WHERE term > 0 AND timestamp \+ make_interval\(hours => term \* 8760\) >= \$1 AND revoked_at IS NULL ORDER BY timestamp DESC$`,
+		`SELECT account_id, purchase_id, .*revocation_window_closes_at, revoked_at, revoked_via, support_case_id, offering_class, listing_id, listing_state FROM purchase_history WHERE term > 0 AND \(extract\(epoch FROM \(timestamp AT TIME ZONE 'UTC'\)\) \+ term::numeric \* 31536000\) >= extract\(epoch FROM \(\$1::timestamptz AT TIME ZONE 'UTC'\)\) AND revoked_at IS NULL ORDER BY timestamp DESC$`,
 	).WithArgs(now).WillReturnRows(rows)
 
 	records, err := store.GetActivePurchaseHistory(ctx, now, nil, nil)
@@ -1239,7 +1239,7 @@ func TestPGXMock_GetActivePurchaseHistory_AccountScoped(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "111122223333")...)
 	mock.ExpectQuery(
-		`FROM purchase_history WHERE term > 0 AND timestamp \+ make_interval\(hours => term \* 8760\) >= \$1 AND revoked_at IS NULL AND \(cloud_account_id = ANY\(\$2\) OR \(provider = \$3 AND account_id = ANY\(\$4\)\)\) ORDER BY timestamp DESC$`,
+		`FROM purchase_history WHERE term > 0 AND \(extract\(epoch FROM \(timestamp AT TIME ZONE 'UTC'\)\) \+ term::numeric \* 31536000\) >= extract\(epoch FROM \(\$1::timestamptz AT TIME ZONE 'UTC'\)\) AND revoked_at IS NULL AND \(cloud_account_id = ANY\(\$2\) OR \(provider = \$3 AND account_id = ANY\(\$4\)\)\) ORDER BY timestamp DESC$`,
 	).WithArgs(now, []string{"acct-uuid-1"}, "aws", []string{"111122223333"}).WillReturnRows(rows)
 
 	records, err := store.GetActivePurchaseHistory(ctx, now,

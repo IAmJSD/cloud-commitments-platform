@@ -2334,6 +2334,23 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 	return s.queryPurchaseHistory(ctx, query, limit)
 }
 
+// activeExpiryEpochExpr is a purchase_history row's commitment expiry
+// (timestamp + term * 8760 hours) as Unix epoch seconds. It must stay the
+// same expression as the one indexed by
+// idx_purchase_history_active_expiry (migration 000126), or the planner cannot
+// use that index and GetActivePurchaseHistory falls back to evaluating every
+// row (issue #33).
+//
+// The obvious form, timestamp + make_interval(hours => term * 8760), cannot be
+// indexed: timestamptz + interval is only STABLE because day and month
+// intervals depend on the session time zone. Converting to UTC wall time and
+// taking the epoch is IMMUTABLE, and for an hours-only interval it is exact
+// arithmetic on the same instant, so the rows matched are unchanged. numeric
+// arithmetic cannot overflow, so no term value can make an INSERT fail on the
+// index expression. 31536000 = 8760 * 3600, the same 365-day year as the
+// analytics collector's HoursPerYear.
+const activeExpiryEpochExpr = "(extract(epoch FROM (timestamp AT TIME ZONE 'UTC')) + term::numeric * 31536000)"
+
 // GetActivePurchaseHistory retrieves every purchase_history row still within its
 // commitment term at asOf, optionally scoped to a set of accounts via the same
 // dual-column predicate as GetPurchaseHistoryFiltered (appendAccountPredicate):
@@ -2351,13 +2368,24 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 // (expiry >= asOf): a commitment expiring exactly at asOf is still active,
 // matching the API layer's isActiveCommitment (!now.After(expiry)) so the SQL
 // result set and the Go-side active checks share one boundary definition.
+//
+// The expiry is compared as Unix epoch seconds (activeExpiryEpochExpr) so the
+// predicate can use idx_purchase_history_active_expiry (migration 000126)
+// instead of evaluating every row ever recorded (issue #33).
 func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]PurchaseHistoryRecord, error) {
+	query, args := activePurchaseHistoryQuery(asOf, accountIDs, externalIDsByProvider)
+	return s.queryPurchaseHistory(ctx, query, args...)
+}
+
+// activePurchaseHistoryQuery builds GetActivePurchaseHistory's SQL and bind
+// args. It is separate so the integration tests can EXPLAIN the exact query.
+func activePurchaseHistoryQuery(asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) (query string, args []any) {
 	conds := []string{
 		"term > 0",
-		"timestamp + make_interval(hours => term * 8760) >= $1",
+		activeExpiryEpochExpr + " >= extract(epoch FROM ($1::timestamptz AT TIME ZONE 'UTC'))",
 		"revoked_at IS NULL",
 	}
-	args := []any{asOf}
+	args = []any{asOf}
 	conds, args = appendAccountPredicate(conds, args, accountIDs, externalIDsByProvider)
 
 	// The column list MUST match scanPurchaseHistoryRow's scan destinations
@@ -2365,7 +2393,7 @@ func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.
 	// offering_class, listing_id, listing_state to the scanner and every other
 	// purchase-history SELECT but missed this one, which broke every real-Postgres
 	// call here (dashboard KPIs, /api/inventory/*, analytics collector).
-	query := fmt.Sprintf(`
+	query = fmt.Sprintf(`
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
@@ -2375,8 +2403,7 @@ func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.
 		WHERE %s
 		ORDER BY timestamp DESC
 	`, strings.Join(conds, " AND "))
-
-	return s.queryPurchaseHistory(ctx, query, args...)
+	return query, args
 }
 
 // appendAccountPredicate pulls the dual-column account-predicate arg-building
