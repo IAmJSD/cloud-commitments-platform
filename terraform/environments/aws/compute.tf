@@ -197,8 +197,10 @@ module "compute_fargate" {
     : var.fargate_certificate_arn
   )
 
-  # Health checks
-  health_check_path = "/health"
+  # Health checks. The ALB target group check admits traffic, so it uses the
+  # readiness endpoint: /ready answers 503 until the task has initialized
+  # (#647). The container liveness check stays on /health inside the module.
+  health_check_path = "/ready"
 
   # CORS
   allowed_origins = var.lambda_allowed_origins

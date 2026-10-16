@@ -143,9 +143,20 @@ variable "certificate_arn" {
 }
 
 variable "health_check_path" {
-  description = "Health check path"
+  description = "ALB target group health check path. This check admits traffic, so it must be the readiness endpoint (/ready answers 503 until the task has finished initializing, #647); /health answers 200 even while degraded and is liveness only."
   type        = string
-  default     = "/health"
+  default     = "/ready"
+}
+
+variable "health_check_grace_period_seconds" {
+  description = "Seconds ECS ignores failing ALB health checks on a new task before replacing it. The ALB keeps an unready task out of rotation either way; this only stops ECS from killing a task whose database initialization (connect retries plus migrations) is still running."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = var.health_check_grace_period_seconds >= 0 && var.health_check_grace_period_seconds <= 2147483647 && floor(var.health_check_grace_period_seconds) == var.health_check_grace_period_seconds
+    error_message = "health_check_grace_period_seconds must be a whole number between 0 and 2147483647."
+  }
 }
 
 variable "health_check_interval" {
