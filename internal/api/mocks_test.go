@@ -346,6 +346,12 @@ func (m *MockAuthService) GetUserPermissionsAPI(ctx context.Context, userID stri
 	return args.Get(0), args.Error(1)
 }
 
+func (m *MockAuthService) GetAPIKeyEffectivePermissionsAPI(ctx context.Context, keyID, userID string) ([]auth.APIPermission, error) {
+	args := m.Called(ctx, keyID, userID)
+	perms, _ := args.Get(0).([]auth.APIPermission)
+	return perms, args.Error(1)
+}
+
 // allowConstraintChecks stubs the SEC-01 execution-time permission
 // constraint check (HasPermissionForConstraintsAPI and the user-API-key
 // variant HasAPIKeyPermissionForConstraintsAPI) to succeed for any request,
