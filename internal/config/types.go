@@ -798,10 +798,12 @@ type PurchaseHistoryFilter struct {
 	// external ids by provider, so the predicate matches each external id only
 	// against rows of its own provider:
 	//
-	//	(provider = $p AND account_id = ANY($extsForP))
+	//	((provider = '' OR LOWER(provider) = LOWER($p)) AND account_id = ANY($extsForP))
 	//
 	// This keeps the (provider, external_id) pairing intact so a filter for
 	// aws/123 never pulls azure/123 rows that reuse the same external number.
+	// The provider comparison ignores case, and a row whose stored provider is
+	// empty (unknown) matches on account_id alone (issue #24).
 	// The "" provider key means "provider unknown" (legacy raw external number)
 	// and matches account_id without a provider gate. Empty/nil skips this half
 	// of the account predicate.
