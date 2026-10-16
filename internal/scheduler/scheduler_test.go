@@ -1932,7 +1932,7 @@ func TestScheduler_CollectAzureRecommendations_AllAccountsFailLoud(t *testing.T)
 	require.Error(t, err, "collectAzureRecommendations must fail loud when the only account has unusable credentials (COR-03)")
 	assert.Contains(t, err.Error(), "Azure: all 1 accounts failed",
 		"the per-account fan-out must surface the all-accounts-failed shape so the scheduler keeps stale rows and records last_collection_error")
-	assert.Contains(t, err.Error(), "all 4 Azure recommendation services failed")
+	assert.Contains(t, err.Error(), "all 5 Azure recommendation services failed")
 	assert.Contains(t, err.Error(), fixtureMarker)
 	assert.Positive(t, atomic.LoadInt32(&calls), "the managed-identity fixture must receive token requests")
 	assert.Nil(t, recs)

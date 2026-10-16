@@ -278,10 +278,10 @@ func (app *Application) processOneLadderConfig(
 // have not yet been bought. Tranches completed after `now` are counted too (see
 // below): a safe under-buy, and a deliberate deviation from go's InFlight doc.
 //
-// Units: tranche amounts are stored exactly as Allocate emits them, which is
-// ON-DEMAND-EQUIVALENT $/hr until Allocate converts to commitment dollars
-// (go#349). Do not convert here. The store nets each stored row to
-// on-demand-equivalent dollars by its own basis and rate.
+// Units: Allocate sizes the gap in on-demand-equivalent dollars and emits
+// tranches in commitment dollars with the rate they were sized with. Rows are
+// stored as basis=commitment plus that rate; the store nets each row back to
+// on-demand-equivalent dollars by its own rate.
 //
 // Persistence is APPEND-ONLY (see persistLadderRun): every run inserts its new
 // scheduled tranches and NEVER supersedes existing ones. Netting already
@@ -317,6 +317,18 @@ func (app *Application) executeLadderRun(
 		return fmt.Errorf("GetLayerStates: %w", err)
 	}
 
+	// Rates are provider data, fetched outside the transaction. No capability or
+	// a fetch error fails the run: the allocator never gets a guessed rate. An
+	// empty map is valid and yields a Hold-only run.
+	rater, ok := capability.(pkgladder.CommitmentRateCapability)
+	if !ok {
+		return fmt.Errorf("capability %T does not provide commitment rates", capability)
+	}
+	rates, err := rater.GetCommitmentRates(ctx, scope, term, paymentOpt)
+	if err != nil {
+		return fmt.Errorf("GetCommitmentRates: %w", err)
+	}
+
 	// L5 netting runs inside the persist transaction (PlanAndSaveLadderRun):
 	// the store reads the config's in-flight commitment (scheduled tranches
 	// still within config.LadderFireGrace plus fired, unresolved ones) under
@@ -327,7 +339,7 @@ func (app *Application) executeLadderRun(
 	// provider reads above stay outside the transaction: no lock is held across
 	// network I/O.
 	in := &ladderRunPlanner{
-		dbCfg: dbCfg, engineCfg: engineCfg, baseline: baseline, layerStates: layerStates,
+		dbCfg: dbCfg, engineCfg: engineCfg, baseline: baseline, layerStates: layerStates, rates: rates,
 		layers: capability.SupportedLayers(), term: term, paymentOpt: paymentOpt, now: now,
 	}
 	savedRun, err := app.Config.PlanAndSaveLadderRun(ctx, dbCfg.ID, now, in.plan)
@@ -347,6 +359,7 @@ type ladderRunPlanner struct {
 	engineCfg   pkgladder.LadderConfig
 	baseline    pkgladder.UsageBaseline
 	layerStates map[pkgladder.LayerType]pkgladder.LayerState
+	rates       map[pkgladder.LayerType]float64
 	layers      []pkgladder.LayerSpec
 	term        pkgladder.Term
 	paymentOpt  pkgladder.PaymentOption
@@ -356,18 +369,20 @@ type ladderRunPlanner struct {
 }
 
 func (p *ladderRunPlanner) plan(rows []config.LadderInFlightRow) (*config.LadderRunDB, []config.LadderTrancheDB, error) {
-	inFlight, err := config.LadderInFlightOnDemand(rows)
-	if err != nil {
-		return nil, nil, fmt.Errorf("net in-flight tranches: %w", err)
+	// Allocate rejects a row on a layer outside Layers, so it cannot be silently un-netted.
+	inFlight := make([]pkgladder.InFlightTranche, len(rows))
+	for i, r := range rows {
+		inFlight[i] = pkgladder.InFlightTranche{Layer: r.Layer, CommitmentUSDPerHour: r.CommitmentUSDPerHour, Rate: r.Rate}
 	}
 	allocResult, err := pkgladder.Allocate(&pkgladder.AllocationInput{
-		Now:                p.now,
-		Baseline:           p.baseline,
-		LayerStates:        p.layerStates,
-		Layers:             p.layers,
-		Config:             p.engineCfg,
-		DataSources:        []string{dataSourceAWSCostExplorer},
-		InFlightUSDPerHour: &inFlight,
+		Now:             p.now,
+		Baseline:        p.baseline,
+		LayerStates:     p.layerStates,
+		Layers:          p.layers,
+		Config:          p.engineCfg,
+		DataSources:     []string{dataSourceAWSCostExplorer},
+		InFlight:        inFlight,
+		CommitmentRates: p.rates,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("allocate: %w", err)
@@ -539,8 +554,8 @@ func ladderConfigToEngine(dbCfg *config.LadderConfigDB, accountID string) (pkgla
 // allocation rather than recomputed independently:
 //   - target = baseline low-water * targetCoveragePct/100 (the coverage goal),
 //   - existing = sum of per-layer ExistingUSDPerHour,
-//   - gap = sum of the planned allocation gaps (what is actually being placed
-//     this run), NOT target - existing.
+//   - gap = sum of the planned allocations' on-demand-equivalent gaps (the unit
+//     of target and existing), NOT target - existing.
 //
 // When the baseline low-water is nil the run is a Hold-only no-op (Allocate
 // returns no allocations), so target and gap stay nil (never 0-coerced);
@@ -600,9 +615,10 @@ func assembleLadderPlan(
 				target = new(big.Rat).Mul(low, pctFrac)
 			}
 		}
-		// gap is what is actually being placed this run (Σ allocation gaps),
-		// consistent with total_hourly_commit, not target - existing.
-		gap = sumAllocationGaps(allocResult.Allocations)
+		// gap is what is being placed this run in on-demand-equivalent dollars,
+		// so it compares with target and existing; total_hourly_commit is the
+		// same placement in commitment dollars.
+		gap = sumAllocationOnDemandGaps(allocResult.Allocations)
 	}
 
 	return &pkgladder.LadderPlan{
@@ -638,26 +654,24 @@ func ratToFloat64Ptr(r *big.Rat) *float64 {
 	return &f
 }
 
-// sumAllocationGaps sums the GapUSDPerHour across all allocations as an exact
-// *big.Rat. It returns a zero (non-nil) rat for an empty allocation set: a
+// sumAllocationOnDemandGaps sums the on-demand-equivalent gap across all
+// allocations as an exact *big.Rat, the unit of target and existing. It returns a zero (non-nil) rat for an empty allocation set: a
 // Hold-only run plans exactly $0 of new commitment, which is a meaningful
 // value here (what is being placed), not "not computed".
-func sumAllocationGaps(allocs []pkgladder.Allocation) *big.Rat {
+func sumAllocationOnDemandGaps(allocs []pkgladder.Allocation) *big.Rat {
 	sum := new(big.Rat)
 	for _, a := range allocs {
-		if a.GapUSDPerHour != nil {
-			sum.Add(sum, a.GapUSDPerHour)
+		if a.OnDemandEquivalentUSDPerHour != nil {
+			sum.Add(sum, a.OnDemandEquivalentUSDPerHour)
 		}
 	}
 	return sum
 }
 
 // sumTrancheRowAmounts sums the amounts of the tranche rows a run persists.
-// This is the non-nullable total_hourly_commit stored in the run row; it is 0
-// for a no-op (Hold-only) plan, which is the correct semantic (zero new
-// commitment, not "not computed"). Units are whatever Allocate emits:
-// on-demand-equivalent $/hr until the commitment-dollar conversion lands
-// (go#349); this code stores amounts unchanged.
+// This is the non-nullable total_hourly_commit stored in the run row, in
+// commitment dollars; it is 0 for a no-op (Hold-only) plan, which is the
+// correct semantic (zero new commitment, not "not computed").
 func sumTrancheRowAmounts(rows []config.LadderTrancheDB) float64 {
 	var sum float64
 	for i := range rows {
@@ -707,18 +721,23 @@ func buildTrancheDBRows(tranches []pkgladder.Tranche, runID string, configID *st
 		}
 		amountUSDHr, _ := r.Float64()
 		runIDCopy := runID
-		basis := config.LadderAmountOnDemand // The pinned pre-go349 SDK emits OD amounts.
+		if tr.CommitmentRate == "" {
+			return nil, fmt.Errorf("tranche %s: empty commitment rate", tr.ID)
+		}
+		basis := config.LadderAmountCommitment
+		rate := tr.CommitmentRate
 		rows = append(rows, config.LadderTrancheDB{
-			ID:            tr.ID,
-			ConfigID:      configID,
-			RunID:         &runIDCopy,
-			LayerType:     tr.Layer,
-			Term:          tr.Term,
-			PaymentOption: tr.PaymentOption,
-			Status:        pkgladder.TrancheStatusScheduled,
-			AmountUSDHr:   amountUSDHr,
-			AmountBasis:   &basis,
-			ScheduledDate: tr.FireAfter,
+			ID:             tr.ID,
+			ConfigID:       configID,
+			RunID:          &runIDCopy,
+			LayerType:      tr.Layer,
+			Term:           tr.Term,
+			PaymentOption:  tr.PaymentOption,
+			Status:         pkgladder.TrancheStatusScheduled,
+			AmountUSDHr:    amountUSDHr,
+			AmountBasis:    &basis,
+			CommitmentRate: &rate,
+			ScheduledDate:  tr.FireAfter,
 		})
 	}
 	return rows, nil

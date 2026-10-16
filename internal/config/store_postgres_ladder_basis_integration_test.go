@@ -130,3 +130,21 @@ func TestLadderNetting_NullBasisStillFailsLoudBeforeBuilder(t *testing.T) {
 	require.Error(t, err)
 	require.False(t, built)
 }
+
+func TestLadderAmend_CommitmentRowKeepsNativeAmountAfterReload(t *testing.T) {
+	f := newCeilingFixture(t)
+	_, ids := f.plan(fptr(10), fptr(0), fptr(100), 5)
+	f.setBasis(ids[0], "commitment", "1/2")
+	require.NoError(t, f.amend(ids[0], 4))
+	var amount float64
+	var basis, rate string
+	require.NoError(t, f.store.db.QueryRow(f.ctx, "SELECT amount_usd_hr,amount_basis,commitment_rate FROM ladder_tranches WHERE id=$1", ids[0]).Scan(&amount, &basis, &rate))
+	require.Equal(t, 4.0, amount, "the amend stores the native commitment amount, not an on-demand conversion")
+	require.Equal(t, "commitment", basis)
+	require.Equal(t, "1/2", rate)
+	rows, err := inFlightLadderRows(f.ctx, f.store.db, true, f.cfgID, time.Now())
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, 4.0, rows[0].CommitmentUSDPerHour)
+	require.Equal(t, 8.0, mustOnDemand(t, rows))
+}

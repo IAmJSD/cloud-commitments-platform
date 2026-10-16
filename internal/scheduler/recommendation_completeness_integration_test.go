@@ -68,7 +68,7 @@ func (f *completenessHTTP) Do(req *http.Request) (*http.Response, error) {
 	case "AWSInsightsIndexService.GetReservationPurchaseRecommendation":
 		allowed := map[string]bool{
 			"Amazon Elastic Compute Cloud - Compute": true, "Amazon Relational Database Service": true,
-			"Amazon ElastiCache": true, "Amazon OpenSearch Service": true, "Amazon Redshift": true,
+			"Amazon ElastiCache": true, "Amazon OpenSearch Service": true, "Amazon Redshift": true, "Amazon MemoryDB Service": true,
 		}
 		if !allowed[input.Service] {
 			f.unexpected.Add(1)
@@ -393,7 +393,8 @@ func assertSavingsPlansPersistence(t *testing.T, rows []config.RecommendationRec
 		require.NotNil(t, row.SavingsPercentage)
 		require.Equal(t, 25.0, *row.SavingsPercentage)
 		require.NotNil(t, row.MonthlyCost)
-		monthly := 1460.0
+		// Fixture: $2/hr commitment, $3 upfront. Recurring = (2 x 8760 x years - 3) / (12 x years).
+		monthly := (2.0*8760*float64(row.Term) - 3) / (12 * float64(row.Term))
 		if row.Payment == "all-upfront" {
 			monthly = 0
 		}
