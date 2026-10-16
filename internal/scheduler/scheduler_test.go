@@ -938,42 +938,70 @@ func TestScheduler_ListRecommendations(t *testing.T) {
 	assert.Len(t, recs, 2)
 }
 
-// Pin the disable-sentinel contract: when GlobalConfig.RecommendationsCacheStaleHours
-// is 0, ListRecommendations must serve from cache (the existing behavior) without
-// kicking off a background refresh — even when the cached row is older than any
-// hard-coded fallback TTL. The cache-staleness path should treat 0 as "auto-refresh
-// disabled" rather than "stale immediately". Regression guard for PR #308.
-func TestScheduler_ListRecommendations_StaleHoursZeroDisablesBackgroundRefresh(t *testing.T) {
+// staleListRecommendations serves a cache older than any TTL through
+// ListRecommendations with the given RecommendationsCacheStaleHours. The first
+// GetGlobalConfig call (the TTL resolution) succeeds; any later call can only
+// come from the background refresh's CollectRecommendations, so it signals the
+// returned channel and fails, which ends the refresh immediately.
+func staleListRecommendations(t *testing.T, staleHours int) <-chan struct{} {
+	t.Helper()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 
-	old := time.Now().Add(-72 * time.Hour) // older than any reasonable default TTL
-	cached := []config.RecommendationRecord{
-		{Provider: "aws", Service: "ec2", Region: "us-east-1", Savings: 1},
-	}
+	old := time.Now().Add(-72 * time.Hour)
 	mockStore.On("GetRecommendationsFreshness", ctx).
 		Return(&config.RecommendationsFreshness{LastCollectedAt: &old}, nil)
 	mockStore.On("ListStoredRecommendations", ctx, mock.Anything).
-		Return(cached, nil)
+		Return([]config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", Savings: 1}}, nil)
 	mockStore.On("GetServiceConfig", ctx, "aws", "ec2").Return(nil, config.ErrNotFound)
-	// Disable sentinel: 0 must NOT trigger a background refresh.
+
+	refreshed := make(chan struct{}, 1)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{
-		RecommendationsCacheStaleHours: 0,
-	}, nil)
+		RecommendationsCacheStaleHours: staleHours,
+	}, nil).Once()
+	// The refresh runs on its own timeout context, so match any ctx.
+	mockStore.On("GetGlobalConfig", mock.Anything).Return(nil, errors.New("refresh started")).
+		Run(func(mock.Arguments) {
+			select {
+			case refreshed <- struct{}{}:
+			default:
+			}
+		})
 
 	scheduler := &Scheduler{config: mockStore}
-
 	recs, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
+	return refreshed
+}
 
-	// Asserting via mock expectations: MarkCollectionStarted is what the
-	// background-refresh path would call. When the sentinel is 0, no refresh
-	// fires, so MarkCollectionStarted MUST NOT be called (and absence of an
-	// `On(...)` expectation for it would cause testify-mock to panic if it
-	// were called — the Len assertion above is the primary check, this is the
-	// second-line guard).
-	mockStore.AssertNotCalled(t, "MarkCollectionStarted", mock.Anything)
+// Pin the disable-sentinel contract: when GlobalConfig.RecommendationsCacheStaleHours
+// is 0, ListRecommendations must serve from cache without kicking off a
+// background refresh, even when the cached row is older than any hard-coded
+// fallback TTL. Regression guard for PR #308. The refresh goroutine's first
+// store call is the second GetGlobalConfig in CollectRecommendations, so that
+// is what must never happen (MarkCollectionStarted belongs to the cold-start
+// path and says nothing about stale refreshes).
+func TestScheduler_ListRecommendations_StaleHoursZeroDisablesBackgroundRefresh(t *testing.T) {
+	refreshed := staleListRecommendations(t, 0)
+
+	select {
+	case <-refreshed:
+		t.Fatal("background refresh started although RecommendationsCacheStaleHours == 0 disables it")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// Positive control for the test above: with a finite TTL the same stale cache
+// must start a refresh, proving the signal can fire at all.
+func TestScheduler_ListRecommendations_StaleCacheKicksBackgroundRefresh(t *testing.T) {
+	refreshed := staleListRecommendations(t, 24)
+
+	select {
+	case <-refreshed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("expected a background refresh for a cache older than the stale TTL")
+	}
 }
 
 // Filter pass-through: the handler-level RecommendationQueryParams fields
