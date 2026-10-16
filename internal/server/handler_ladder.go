@@ -275,13 +275,13 @@ func (app *Application) processOneLadderConfig(
 // commitment (scheduled tranches still fireable, plus fired tranches not yet
 // resolved). The Allocate engine subtracts this from the raw gap so each daily
 // run plans only what is still needed, preventing pile-up when prior tranches
-// have not yet been bought. Completed tranches are deliberately NOT counted
-// here: they are executed purchases already reflected in the engine's
-// ExistingUSDPerHour, so counting them again would double-subtract.
+// have not yet been bought. Tranches completed after `now` are counted too (see
+// below): a safe under-buy, and a deliberate deviation from go's InFlight doc.
 //
 // Units: tranche amounts are stored exactly as Allocate emits them, which is
 // ON-DEMAND-EQUIVALENT $/hr until Allocate converts to commitment dollars
-// (go#349). Do not convert here.
+// (go#349). Do not convert here. The store nets each stored row to
+// on-demand-equivalent dollars by its own basis and rate.
 //
 // Persistence is APPEND-ONLY (see persistLadderRun): every run inserts its new
 // scheduled tranches and NEVER supersedes existing ones. Netting already
@@ -355,7 +355,11 @@ type ladderRunPlanner struct {
 	allocations, tranches, holds int // set by plan, for the log line
 }
 
-func (p *ladderRunPlanner) plan(inFlight float64) (*config.LadderRunDB, []config.LadderTrancheDB, error) {
+func (p *ladderRunPlanner) plan(rows []config.LadderInFlightRow) (*config.LadderRunDB, []config.LadderTrancheDB, error) {
+	inFlight, err := config.LadderInFlightOnDemand(rows)
+	if err != nil {
+		return nil, nil, fmt.Errorf("net in-flight tranches: %w", err)
+	}
 	allocResult, err := pkgladder.Allocate(&pkgladder.AllocationInput{
 		Now:                p.now,
 		Baseline:           p.baseline,

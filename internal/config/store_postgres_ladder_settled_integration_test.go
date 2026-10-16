@@ -95,9 +95,9 @@ func TestPostgresStoreDB_LadderSettledAt(t *testing.T) {
 		}
 		before, equal, after := anchor.Add(-time.Microsecond), anchor, anchor.Add(time.Microsecond)
 		sum := func() float64 {
-			v, err := settledLadderCommit(ctx, pool, otherCfg, anchor)
+			rows, err := settledLadderRows(ctx, pool, true, otherCfg, anchor)
 			require.NoError(t, err)
-			return v
+			return mustOnDemand(t, rows)
 		}
 		assert.InDelta(t, 0, sum(), 1e-9, "no rows")
 		add(ladder.TrancheStatusCompleted, 1, &before)
@@ -138,9 +138,9 @@ func settledTestStore(ctx context.Context, t *testing.T) (*PostgresStore, *pgxpo
 
 func mustSettled(ctx context.Context, t *testing.T, pool *pgxpool.Pool, cfgID string, anchor time.Time) float64 {
 	t.Helper()
-	v, err := settledLadderCommit(ctx, pool, cfgID, anchor)
+	rows, err := settledLadderRows(ctx, pool, true, cfgID, anchor)
 	require.NoError(t, err)
-	return v
+	return mustOnDemand(t, rows)
 }
 
 func requireCheckViolation(t *testing.T, err error) {

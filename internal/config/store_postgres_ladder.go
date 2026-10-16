@@ -327,7 +327,7 @@ func insertLadderTranchesTx(ctx context.Context, tx pgx.Tx, tranches []LadderTra
 
 // cancelOverdueLadderTranchesTx marks the config's scheduled tranches that have
 // outlived LadderFireGrace as cancelled: scheduled_date <= ladderGraceCutoff(asOf),
-// the exact complement of the netting bound in GetInFlightLadderCommitUSDHr.
+// the exact complement of the netting bound in inFlightLadderRows.
 // No executor transitions tranches yet (issue #118), so without this the
 // overdue amount grows with every run and a future due-row sweep would buy all
 // of it at once (#544). Rows already linked to an execution are left alone.
@@ -408,34 +408,6 @@ func insertLadderRunWithTranchesTx(ctx context.Context, tx pgx.Tx, run *LadderRu
 		return nil, err
 	}
 	return &scanned, nil
-}
-
-// GetInFlightLadderCommitUSDHr returns the total hourly USD commitment already
-// in flight for the given config: the SUM of amount_usd_hr for ladder_tranches
-// rows where config_id=$1 and either
-//   - status = 'scheduled' and scheduled_date > ladderGraceCutoff(asOf): not yet
-//     bought and still fireable (future, or due but within LadderFireGrace), or
-//   - status = 'fired': claimed for purchase but not yet resolved (approval
-//     pending, in progress, or outcome unknown). Fired nets regardless of age;
-//     only a transition to completed or failed releases it.
-//
-// Excluded: completed (counted in the engine's ExistingUSDPerHour, but only if
-// that figure was read after the tranche became visible: a caller that read
-// ExistingUSDPerHour before this call must also add settledLadderCommit with
-// ladderSettleAnchor(asOf), as PlanAndSaveLadderRun does, or a tranche that
-// completes in between is netted nowhere), failed and cancelled (never bought; counting
-// them would silently under-buy), and scheduled rows past the grace window
-// (cancelled by cancelOverdueLadderTranchesTx with the complementary bound).
-//
-// Returns a non-nil *float64 (zero when nothing is in flight); never returns
-// nil without a non-nil error, so callers can pass it directly to
-// AllocationInput.InFlightUSDPerHour without an extra nil-guard.
-func (s *PostgresStore) GetInFlightLadderCommitUSDHr(ctx context.Context, configID string, asOf time.Time) (*float64, error) {
-	total, err := inFlightLadderCommit(ctx, s.db, configID, asOf)
-	if err != nil {
-		return nil, err
-	}
-	return &total, nil
 }
 
 // LatestLadderRunStartedAt returns the maximum started_at for the given

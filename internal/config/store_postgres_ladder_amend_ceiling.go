@@ -51,11 +51,7 @@ func checkLadderConfigCeiling(ctx context.Context, tx pgx.Tx, configID, oldAmoun
 	if err != nil {
 		return err
 	}
-	inFlight, err := inFlightLadderCommit(ctx, tx, configID, now)
-	if err != nil {
-		return err
-	}
-	settled, err := settledLadderCommit(ctx, tx, configID, ladderSettleAnchor(snap.anchor))
+	inFlight, settled, err := ladderCommittedOnDemand(ctx, tx, configID, now, ladderSettleAnchor(snap.anchor))
 	if err != nil {
 		return err
 	}
@@ -69,6 +65,24 @@ func checkLadderConfigCeiling(ctx context.Context, tx pgx.Tx, configID, oldAmoun
 		return ErrLadderAmendInvalid
 	}
 	return nil
+}
+
+// ladderCommittedOnDemand nets the in-flight and settled-after-anchor rows to
+// on-demand-equivalent dollars, assuming on-demand for rows with no stored basis.
+func ladderCommittedOnDemand(ctx context.Context, tx pgx.Tx, configID string, now, anchor time.Time) (inFlight, settled float64, err error) {
+	inFlightRows, err := inFlightLadderRows(ctx, tx, true, configID, now)
+	if err != nil {
+		return 0, 0, err
+	}
+	settledRows, err := settledLadderRows(ctx, tx, true, configID, anchor)
+	if err != nil {
+		return 0, 0, err
+	}
+	if inFlight, err = LadderInFlightOnDemand(inFlightRows); err != nil {
+		return 0, 0, err
+	}
+	settled, err = LadderInFlightOnDemand(settledRows)
+	return inFlight, settled, err
 }
 
 type ladderCeilingSnapshot struct {

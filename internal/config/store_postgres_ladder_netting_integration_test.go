@@ -24,8 +24,8 @@ func TestLadderNetting_MixedStoredBasis(t *testing.T) {
 	rows[0].AmountBasis = &od
 	rows[1].AmountBasis, rows[1].CommitmentRate = &native, &rate
 	require.NoError(t, store.SaveLadderTranches(ctx, rows))
-	_, err := store.PlanAndSaveLadderRun(ctx, cfg, lockTestAsOf, func(odTotal float64) (*LadderRunDB, []LadderTrancheDB, error) {
-		require.Equal(t, 55.0, odTotal)
+	_, err := store.PlanAndSaveLadderRun(ctx, cfg, lockTestAsOf, func(rows []LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) {
+		require.Equal(t, 55.0, mustOnDemand(t, rows))
 		return lockTestRun(cfg), nil, nil
 	})
 	require.NoError(t, err)
@@ -42,7 +42,7 @@ func TestLadderNetting_UnknownRefusesBeforeBuilder(t *testing.T) {
 	row := lifecycleTranche(cfg, 5, ladder.TrancheStatusFired, lockTestAsOf)
 	require.NoError(t, store.SaveLadderTranches(ctx, []LadderTrancheDB{row}))
 	built := false
-	_, err := store.PlanAndSaveLadderRun(ctx, cfg, lockTestAsOf, func(float64) (*LadderRunDB, []LadderTrancheDB, error) {
+	_, err := store.PlanAndSaveLadderRun(ctx, cfg, lockTestAsOf, func([]LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) {
 		built = true
 		return lockTestRun(cfg), nil, nil
 	})
@@ -51,7 +51,7 @@ func TestLadderNetting_UnknownRefusesBeforeBuilder(t *testing.T) {
 	require.Zero(t, countRuns(ctx, t, store, cfg))
 	_, err = store.db.Exec(ctx, "UPDATE ladder_tranches SET amount_basis='commitment',commitment_rate='bad' WHERE id=$1", row.ID)
 	require.NoError(t, err)
-	_, err = store.PlanAndSaveLadderRun(ctx, cfg, lockTestAsOf, func(float64) (*LadderRunDB, []LadderTrancheDB, error) {
+	_, err = store.PlanAndSaveLadderRun(ctx, cfg, lockTestAsOf, func([]LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) {
 		built = true
 		return lockTestRun(cfg), nil, nil
 	})
@@ -89,8 +89,8 @@ func TestLadderNetting_SelectionBoundaries(t *testing.T) {
 	add(ladder.TrancheStatusCancelled, 256, lockTestAsOf, nil, "")
 	other := seedLadderConfigWithExtID(ctx, t, store, "fixture-other")
 	require.NoError(t, store.SaveLadderTranches(ctx, []LadderTrancheDB{lifecycleTranche(other, 512, ladder.TrancheStatusFired, lockTestAsOf)}))
-	_, err := store.PlanAndSaveLadderRun(ctx, cfg, lockTestAsOf, func(total float64) (*LadderRunDB, []LadderTrancheDB, error) {
-		require.Equal(t, 68.0, total)
+	_, err := store.PlanAndSaveLadderRun(ctx, cfg, lockTestAsOf, func(rows []LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) {
+		require.Equal(t, 68.0, mustOnDemand(t, rows))
 		return lockTestRun(cfg), nil, nil
 	})
 	require.NoError(t, err)
@@ -139,9 +139,9 @@ func TestLadderNetting_CompletionBetweenReadsCountsTwice(t *testing.T) {
 		require.NoError(t, err)
 		transitioned = true
 	}}
-	_, err := store.PlanAndSaveLadderRun(ctx, cfg, lockTestAsOf, func(total float64) (*LadderRunDB, []LadderTrancheDB, error) {
+	_, err := store.PlanAndSaveLadderRun(ctx, cfg, lockTestAsOf, func(rows []LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) {
 		require.True(t, transitioned)
-		require.Equal(t, 6.0, total)
+		require.Equal(t, 6.0, mustOnDemand(t, rows))
 		return lockTestRun(cfg), nil, nil
 	})
 	require.NoError(t, err)
@@ -155,7 +155,7 @@ func TestLadderNetting_ReadFailureDoesNotBecomeZero(t *testing.T) {
 	original := store.db
 	store.db = nettingHookDB{dbConn: original, hook: cancel}
 	built := false
-	_, err := store.PlanAndSaveLadderRun(ctx, cfg, lockTestAsOf, func(float64) (*LadderRunDB, []LadderTrancheDB, error) {
+	_, err := store.PlanAndSaveLadderRun(ctx, cfg, lockTestAsOf, func([]LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) {
 		built = true
 		return lockTestRun(cfg), nil, nil
 	})

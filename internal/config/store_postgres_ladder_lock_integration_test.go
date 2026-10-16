@@ -54,7 +54,7 @@ func holdLadderLock(ctx context.Context, t *testing.T, store *PostgresStore, cfg
 	t.Helper()
 	entered, gate, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 	go func() {
-		_, err := store.PlanAndSaveLadderRun(ctx, cfgID, lockTestAsOf, func(float64) (*LadderRunDB, []LadderTrancheDB, error) {
+		_, err := store.PlanAndSaveLadderRun(ctx, cfgID, lockTestAsOf, func([]LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) {
 			close(entered)
 			<-gate
 			return lockTestRun(cfgID), nil, nil
@@ -112,7 +112,7 @@ func TestLadderLock_IsPerConfig(t *testing.T) {
 	a := seedLadderConfigWithExtID(ctx, t, store, "721111111111")
 	b := seedLadderConfigWithExtID(ctx, t, store, "722222222222")
 	release := holdLadderLock(ctx, t, store, a)
-	_, err := store.PlanAndSaveLadderRun(ctx, b, lockTestAsOf, func(float64) (*LadderRunDB, []LadderTrancheDB, error) {
+	_, err := store.PlanAndSaveLadderRun(ctx, b, lockTestAsOf, func([]LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) {
 		return lockTestRun(b), nil, nil
 	})
 	require.NoError(t, err, "a held lock on config A must not block config B")
@@ -124,14 +124,18 @@ func TestLadderLock_ReleasedOnBuildErrorPanicAndCancel(t *testing.T) {
 	defer cancel()
 	store := setupLadderStore(ctx, t)
 	cfgID := seedLadderConfigWithExtID(ctx, t, store, "731111111111")
-	ok := func(float64) (*LadderRunDB, []LadderTrancheDB, error) { return lockTestRun(cfgID), nil, nil } //nolint:unparam // matches LadderPlanBuilder
+	ok := func([]LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) { //nolint:unparam // matches LadderPlanBuilder
+		return lockTestRun(cfgID), nil, nil
+	}
 	plan := func(c context.Context, b LadderPlanBuilder) error {
 		_, err := store.PlanAndSaveLadderRun(c, cfgID, lockTestAsOf, b)
 		return err
 	}
 
 	t.Run("build error", func(t *testing.T) {
-		err := plan(ctx, func(float64) (*LadderRunDB, []LadderTrancheDB, error) { return nil, nil, errors.New("boom") })
+		err := plan(ctx, func([]LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) {
+			return nil, nil, errors.New("boom")
+		})
 		require.ErrorContains(t, err, "boom")
 		before := countRuns(ctx, t, store, cfgID)
 		require.NoError(t, plan(ctx, ok))
@@ -139,7 +143,7 @@ func TestLadderLock_ReleasedOnBuildErrorPanicAndCancel(t *testing.T) {
 	})
 	t.Run("build panic", func(t *testing.T) {
 		assert.Panics(t, func() {
-			_ = plan(ctx, func(float64) (*LadderRunDB, []LadderTrancheDB, error) { panic("boom") })
+			_ = plan(ctx, func([]LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) { panic("boom") })
 		})
 		before := countRuns(ctx, t, store, cfgID)
 		require.NoError(t, plan(ctx, ok), "the lock must be free after a panic")
@@ -166,7 +170,7 @@ func TestLadderLock_EmptyConfigIDRejected(t *testing.T) {
 	defer cancel()
 	store := setupLadderStore(ctx, t)
 	built := false
-	_, err := store.PlanAndSaveLadderRun(ctx, "", time.Now().UTC(), func(float64) (*LadderRunDB, []LadderTrancheDB, error) {
+	_, err := store.PlanAndSaveLadderRun(ctx, "", time.Now().UTC(), func([]LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) {
 		built = true
 		return nil, nil, nil
 	})
@@ -181,9 +185,9 @@ func TestLadderLock_RejectsNilRunAndStartedAtMismatch(t *testing.T) {
 	defer cancel()
 	store := setupLadderStore(ctx, t)
 	cfgID := seedLadderConfigWithExtID(ctx, t, store, "751111111111")
-	_, err := store.PlanAndSaveLadderRun(ctx, cfgID, lockTestAsOf, func(float64) (*LadderRunDB, []LadderTrancheDB, error) { return nil, nil, nil })
+	_, err := store.PlanAndSaveLadderRun(ctx, cfgID, lockTestAsOf, func([]LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) { return nil, nil, nil })
 	require.ErrorContains(t, err, "nil run")
-	_, err = store.PlanAndSaveLadderRun(ctx, cfgID, lockTestAsOf.Add(time.Second), func(float64) (*LadderRunDB, []LadderTrancheDB, error) {
+	_, err = store.PlanAndSaveLadderRun(ctx, cfgID, lockTestAsOf.Add(time.Second), func([]LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) {
 		return lockTestRun(cfgID), nil, nil
 	})
 	require.ErrorContains(t, err, "does not match asOf")
@@ -203,7 +207,7 @@ func TestLadderLock_TimeoutBoundsOnlyTheWaitAndIsolationIsReadCommitted(t *testi
 	defer func() { ladderLockTimeout = old }()
 
 	release := holdLadderLock(ctx, t, store, cfgID)
-	_, err := store.PlanAndSaveLadderRun(ctx, cfgID, lockTestAsOf, func(float64) (*LadderRunDB, []LadderTrancheDB, error) {
+	_, err := store.PlanAndSaveLadderRun(ctx, cfgID, lockTestAsOf, func([]LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) {
 		return lockTestRun(cfgID), nil, nil
 	})
 	var pgErr *pgconn.PgError
