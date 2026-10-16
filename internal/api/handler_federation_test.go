@@ -1758,3 +1758,64 @@ func TestAWSTargetTemplate_ThumbprintWiring(t *testing.T) {
 	assert.NotContains(t, src, `Default: "`+allZeroThumbprint+`"`,
 		"the all-zeros placeholder must not be reintroduced as a default")
 }
+
+// TestGetFederationIaC_BundleTfvarsEscapesSessionEmail is the server half of
+// #952. The bundle's tfvars embed the session user's email, which only has to
+// pass mail.ParseAddress, so a quoted local part can carry '"', '\' and HCL's
+// "${" / "%{" sequences. The tfvars must carry it as one HCL string literal,
+// and the shell-escaped CFN deploy script in the same bundle must not be
+// HCL-escaped on top of that.
+func TestGetFederationIaC_BundleTfvarsEscapesSessionEmail(t *testing.T) {
+	t.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
+	const email = `"o\"q${x}%{y}"@example.com`
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
+		UserID: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+		Email:  email,
+	}, nil)
+	mockAuth.grantAdmin()
+	h := NewHandler(HandlerConfig{ConfigStore: new(MockConfigStore), AuthService: mockAuth})
+	mockSourceIdentity(h, defaultTestSourceIdentity())
+
+	for _, tc := range []struct{ target, source string }{{"aws", "gcp"}, {"gcp", "aws"}, {"azure", "gcp"}} {
+		t.Run(tc.target+"-"+tc.source, func(t *testing.T) {
+			res, err := h.getFederationIaC(context.Background(), federationReqWithDomain(map[string]string{
+				"target": tc.target, "source": tc.source, "format": "bundle",
+			}))
+			require.NoError(t, err)
+			zipBytes, err := base64.StdEncoding.DecodeString(res.Content)
+			require.NoError(t, err)
+			zr, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
+			require.NoError(t, err)
+
+			files := map[string]string{}
+			for _, f := range zr.File {
+				rc, err := f.Open()
+				require.NoError(t, err)
+				var buf bytes.Buffer
+				_, err = buf.ReadFrom(rc)
+				require.NoError(t, rc.Close())
+				require.NoError(t, err)
+				files[f.Name] = buf.String()
+			}
+
+			var tfvars string
+			for name, content := range files {
+				if strings.HasSuffix(name, ".tfvars") {
+					tfvars = content
+				}
+			}
+			require.NotEmpty(t, tfvars, "bundle must contain a .tfvars file")
+			// Decodes back to the email exactly: \" -> ", \\ -> \, $${ -> ${, %%{ -> %{.
+			assert.Contains(t, tfvars, `contact_email = "\"o\\\"q$${x}%%{y}\"@example.com"`+"\n")
+			assert.NotContains(t, tfvars, email, "raw email must not reach the tfvars")
+
+			if tc.target == "aws" {
+				deploy := files["cloudformation/deploy-cfn.sh"]
+				require.NotEmpty(t, deploy, "aws bundle must contain the CFN deploy script")
+				assert.Contains(t, deploy, shellEscape(email), "CFN deploy script keeps its shell escaping")
+				assert.NotContains(t, deploy, "$${", "CFN deploy script must not be HCL-escaped")
+			}
+		})
+	}
+}

@@ -95,14 +95,17 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"text/template"
+	"unicode"
 )
 
 // iacData mirrors internal/api/handler_federation.go:federationIaCData.
@@ -175,7 +178,91 @@ func gcpOIDCIssuerURI(source, tenantID string) string {
 	return ""
 }
 
+// hclEscape escapes s for use inside a double-quoted HCL string. Besides the
+// backslash and the quote, HCL treats "${" and "%{" as the start of an
+// interpolation or a template directive, so those are doubled into the
+// literal "$${" and "%%{" forms (#952).
+func hclEscape(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `"`, `\"`, "${", "$${", "%{", "%%{").Replace(s)
+}
+
+// shellEscape escapes s for use inside a double-quoted Bash word. It is the
+// same rule as shellEscape in internal/api/handler_federation.go.
+func shellEscape(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `"`, `\"`, "`", "\\`", `$`, `\$`).Replace(s)
+}
+
+// jsonEscape escapes s for use inside a JSON string literal. HTML escaping is
+// off so that values such as the <AZURE_TENANT_ID> placeholder render as is.
+func jsonEscape(s string) string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(s); err != nil {
+		panic("encoding a string as JSON cannot fail: " + err.Error())
+	}
+	// Encode writes "<escaped>" plus a newline; keep only what is between the quotes.
+	quoted := strings.TrimSuffix(buf.String(), "\n")
+	return quoted[1 : len(quoted)-1]
+}
+
+// escaperFor picks the escaping rule for a template from its file name, so
+// that every value lands in its output file as data rather than syntax (#952).
+// The rule follows the output grammar, not the field: the same AccountName is
+// HCL in a .tfvars file and Bash in a .sh file. An unknown suffix is an error
+// rather than "no escaping", so a new template type cannot render raw values.
+//
+// Escaping covers quoted strings. Values also appear in # comments, where only
+// a line break could change the structure; checkNoControlChars rejects those
+// before anything is rendered, which is why the escapers need not handle them.
+func escaperFor(tmplPath string) (func(string) string, error) {
+	switch {
+	case strings.HasSuffix(tmplPath, ".tfvars.tmpl"):
+		return hclEscape, nil
+	case strings.HasSuffix(tmplPath, ".sh.tmpl"):
+		return shellEscape, nil
+	case strings.HasSuffix(tmplPath, ".json.tmpl"):
+		return jsonEscape, nil
+	default:
+		return nil, fmt.Errorf("no escaping rule for template %s", tmplPath)
+	}
+}
+
+// escapeData returns a copy of data with escape applied to every string
+// field. It walks the struct by reflection so that a field added to iacData
+// later is escaped without anyone having to remember to list it here.
+func escapeData(data iacData, escape func(string) string) iacData {
+	v := reflect.ValueOf(&data).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		if f := v.Field(i); f.Kind() == reflect.String {
+			f.SetString(escape(f.String()))
+		}
+	}
+	return data
+}
+
+// checkNoControlChars rejects any flag whose value contains a control
+// character such as a newline. No flag this script takes can legitimately hold
+// one, and a line break is the one character the per-format escaping above
+// does not neutralize: values are also rendered into # comment lines, where a
+// newline would start a new line of HCL or Bash (#952).
+func checkNoControlChars(fs *flag.FlagSet) error {
+	var err error
+	fs.Visit(func(f *flag.Flag) {
+		if err == nil && strings.IndexFunc(f.Value.String(), unicode.IsControl) >= 0 {
+			err = fmt.Errorf("--%s %s contains a control character such as a newline or tab, which is not allowed",
+				f.Name, displayClaim(f.Value.String()))
+		}
+	})
+	return err
+}
+
 func renderTmpl(tmplPath string, data iacData) (string, error) {
+	escape, err := escaperFor(tmplPath)
+	if err != nil {
+		return "", err
+	}
+	data = escapeData(data, escape)
 	b, err := os.ReadFile(tmplPath)
 	if err != nil {
 		return "", fmt.Errorf("read %s: %w\n\nRun this script from the repository root directory.", tmplPath, err)
@@ -654,6 +741,12 @@ func main() {
 		CUDlyAPIURL:       *cudlyAPIURL,
 	}
 	if err := populateData(&data, *target, *source, *tenantID, *projectID, *saEmail, *oidcSubjectClaim, *sourceAccountID); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	// After populateData, so the field-specific validators above still give
+	// their more precise diagnosis for the flags they cover.
+	if err := checkNoControlChars(flag.CommandLine); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
