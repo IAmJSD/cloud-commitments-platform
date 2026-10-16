@@ -254,6 +254,7 @@ type RampSchedule struct {
 	CurrentStep      int       `json:"current_step" dynamodbav:"current_step"`
 	TotalSteps       int       `json:"total_steps" dynamodbav:"total_steps"`
 	StartDate        time.Time `json:"start_date" dynamodbav:"start_date"`
+	DatesManaged     bool      `json:"dates_managed,omitempty" dynamodbav:"dates_managed,omitempty"`
 }
 
 // PresetRampSchedules provides common ramp-up configurations.

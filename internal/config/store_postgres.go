@@ -728,6 +728,9 @@ func advanceRampStep(ctx context.Context, tx pgx.Tx, plan *PurchasePlan, stepNum
 // next_execution_date at the step after it (or clearing it on a finished ramp)
 // and stamping the execution timestamps.
 func (s *PostgresStore) persistRampPosition(ctx context.Context, tx pgx.Tx, plan *PurchasePlan) error {
+	if plan.RampSchedule.DatesManaged {
+		return s.persistManagedRampPosition(ctx, tx, plan)
+	}
 	if plan.RampSchedule.IsComplete() {
 		plan.NextExecutionDate = nil
 	} else {
