@@ -369,6 +369,9 @@ func plannedKeyHandler(keyCancelOwn, keyInScope bool) (*Handler, *MockConfigStor
 	m.On("GetAllowedAccountsAPI", ctx, owner).Return([]string{}, nil)
 	m.On("HasPermissionAPI", ctx, owner, mock.Anything, auth.ResourcePurchases).Return(false, nil).Maybe()
 	m.On("HasPermissionAPI", ctx, owner, auth.ActionCancelOwn, auth.ResourcePurchases).Return(true, nil).Maybe()
+	// The key holds neither full-scope verb (#979: probed on the key).
+	m.On("HasAPIKeyPermissionForConstraintsAPI", ctx, keyID, owner, auth.ActionUpdateAny, auth.ResourcePurchases, []auth.PermissionConstraints{{}}).Return(false, nil)
+	m.On("HasAPIKeyPermissionForConstraintsAPI", ctx, keyID, owner, auth.ActionCancelAny, auth.ResourcePurchases, []auth.PermissionConstraints{{}}).Return(false, nil)
 	m.On("HasAPIKeyPermissionForConstraintsAPI", ctx, keyID, owner, auth.ActionCancelOwn, auth.ResourcePurchases, []auth.PermissionConstraints{{}}).Return(keyCancelOwn, nil)
 	m.On("HasAPIKeyPermissionForConstraintsAPI", ctx, keyID, owner, auth.ActionCancelOwn, auth.ResourcePurchases, mock.Anything).Return(keyInScope, nil).Maybe()
 	return &Handler{config: store, auth: m}, store
@@ -433,6 +436,8 @@ func TestDeletePlannedPurchase_APIKeyVerbProbeErrorRefuses(t *testing.T) {
 	m.On("HasAPIKeyPermissionAPI", mock.Anything, "user-key-value", auth.ActionDelete, auth.ResourcePurchases).Return(owner, keyID, true, nil)
 	m.On("GetAllowedAccountsAPI", mock.Anything, owner).Return([]string{}, nil)
 	m.On("HasPermissionAPI", mock.Anything, owner, mock.Anything, auth.ResourcePurchases).Return(false, nil).Maybe()
+	m.On("HasAPIKeyPermissionForConstraintsAPI", mock.Anything, keyID, owner, auth.ActionUpdateAny, auth.ResourcePurchases, []auth.PermissionConstraints{{}}).Return(false, nil)
+	m.On("HasAPIKeyPermissionForConstraintsAPI", mock.Anything, keyID, owner, auth.ActionCancelAny, auth.ResourcePurchases, []auth.PermissionConstraints{{}}).Return(false, nil)
 	m.On("HasAPIKeyPermissionForConstraintsAPI", mock.Anything, keyID, owner, auth.ActionCancelOwn, auth.ResourcePurchases, []auth.PermissionConstraints{{}}).Return(false, boom)
 
 	h := &Handler{config: store, auth: m}
