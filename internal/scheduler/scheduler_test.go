@@ -942,10 +942,12 @@ func TestScheduler_ListRecommendations(t *testing.T) {
 // ListRecommendations with the given RecommendationsCacheStaleHours. The first
 // GetGlobalConfig call (the TTL resolution) succeeds; any later call can only
 // come from the background refresh's CollectRecommendations, so it signals the
-// returned channel and fails, which ends the refresh immediately.
+// returned channel and fails, which ends the refresh immediately. The read
+// runs as an unrestricted reader (WithBackgroundCollection), the only caller
+// allowed to kick a refresh; without it neither TTL case could ever refresh.
 func staleListRecommendations(t *testing.T, staleHours int) <-chan struct{} {
 	t.Helper()
-	ctx := context.Background()
+	ctx := WithBackgroundCollection(context.Background())
 	mockStore := new(MockConfigStore)
 
 	old := time.Now().Add(-72 * time.Hour)
