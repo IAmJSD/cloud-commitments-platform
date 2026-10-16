@@ -50,6 +50,7 @@ seed_fixture() {
     iac/federation/aws-target/terraform/main.tf
     internal/iacfiles/templates/aws-cross-account-cli.sh.tmpl
     internal/iacfiles/templates/aws-wif-cli.sh.tmpl
+    cloudformation/stacks/CUDly-CrossAccount/template.yaml
   )
   local f
   for f in "${files[@]}"; do
@@ -109,6 +110,41 @@ grep -v 'ec2:CreateTags' \
   "$REPO_ROOT/iac/federation/aws-target/cloudformation/template.yaml" \
   > "$FIX7/iac/federation/aws-target/cloudformation/template.yaml"
 run_case "federation drift (target CFN missing ec2:CreateTags) exits 1" 1 --root "$FIX7"
+
+# Case 8 (#289): a required customer-account read missing from one policy only
+# fails the required-actions check (the stack template is outside the parity groups).
+FIX8="$TMP_BASE/drift-required-stack"
+seed_fixture "$FIX8"
+grep -v 'ec2:DescribeInstanceTypes$' \
+  "$REPO_ROOT/cloudformation/stacks/CUDly-CrossAccount/template.yaml" \
+  > "$FIX8/cloudformation/stacks/CUDly-CrossAccount/template.yaml"
+run_case "required action (CrossAccount stack missing ec2:DescribeInstanceTypes) exits 1" 1 --root "$FIX8"
+
+# Case 9 (#289): the same read missing from every flavor stays in parity but must still fail.
+FIX9="$TMP_BASE/drift-required-all"
+seed_fixture "$FIX9"
+for f in iac/federation/aws-cross-account/cloudformation/template.yaml iac/federation/aws-cross-account/terraform/main.tf \
+  iac/federation/aws-target/cloudformation/template.yaml iac/federation/aws-target/terraform/main.tf \
+  internal/iacfiles/templates/aws-cross-account-cli.sh.tmpl internal/iacfiles/templates/aws-wif-cli.sh.tmpl; do
+  sed 's/ce:GetCostAndUsage//' "$REPO_ROOT/$f" > "$FIX9/$f"
+done
+run_case "required action missing from all flavors (parity holds) exits 1" 1 --root "$FIX9"
+
+# Case 10: a commented-out action is not a grant.
+FIX10="$TMP_BASE/commented-out"
+seed_fixture "$FIX10"
+sed 's/^\( *\)- ec2:DescribeInstanceTypes$/\1# - ec2:DescribeInstanceTypes/' \
+  "$REPO_ROOT/cloudformation/stacks/CUDly-CrossAccount/template.yaml" \
+  > "$FIX10/cloudformation/stacks/CUDly-CrossAccount/template.yaml"
+run_case "commented-out required action exits 1" 1 --root "$FIX10"
+
+# Case 11: a required read missing from all three runtime copies (parity holds) must fail.
+FIX11="$TMP_BASE/drift-required-runtime"
+seed_fixture "$FIX11"
+for f in cloudformation/stacks/CUDly/template.yaml terraform/modules/compute/aws/lambda/main.tf terraform/modules/compute/aws/fargate/main.tf; do
+  sed 's/ce:GetCostAndUsage//' "$REPO_ROOT/$f" > "$FIX11/$f"
+done
+run_case "required action missing from all runtime copies exits 1" 1 --root "$FIX11"
 
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."

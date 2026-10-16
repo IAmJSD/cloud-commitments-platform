@@ -63,6 +63,7 @@ resource "aws_iam_policy" "cudly" {
           Sid    = "CostExplorer"
           Effect = "Allow"
           Action = [
+            "ce:GetCostAndUsage",
             "ce:GetReservationPurchaseRecommendation",
             "ce:GetReservationUtilization",
             "ce:GetReservationCoverage",
@@ -80,6 +81,7 @@ resource "aws_iam_policy" "cudly" {
             "ec2:DescribeReservedInstancesOfferings",
             "ec2:DescribeReservedInstances",
             "ec2:DescribeInstanceTypeOfferings",
+            "ec2:DescribeInstanceTypes",
             "ec2:GetReservedInstancesExchangeQuote",
             "ec2:AcceptReservedInstancesExchangeQuote",
             "ec2:DescribeRegions",

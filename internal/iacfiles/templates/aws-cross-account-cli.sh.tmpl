@@ -35,11 +35,11 @@ PERMISSIONS_POLICY=$(cat <<'JSON'
     "Effect": "Allow",
     "Resource": "*",
     "Action": [
-      "ce:GetReservationPurchaseRecommendation","ce:GetReservationUtilization",
+      "ce:GetCostAndUsage","ce:GetReservationPurchaseRecommendation","ce:GetReservationUtilization",
       "ce:GetReservationCoverage","ce:GetSavingsPlansPurchaseRecommendation",
       "ce:GetSavingsPlansUtilization","ce:GetSavingsPlansCoverage",
       "ec2:PurchaseReservedInstancesOffering","ec2:DescribeReservedInstancesOfferings",
-      "ec2:DescribeReservedInstances","ec2:DescribeInstanceTypeOfferings",
+      "ec2:DescribeReservedInstances","ec2:DescribeInstanceTypeOfferings","ec2:DescribeInstanceTypes",
       "ec2:GetReservedInstancesExchangeQuote","ec2:AcceptReservedInstancesExchangeQuote",
       "rds:PurchaseReservedDBInstancesOffering","rds:DescribeReservedDBInstancesOfferings",
       "rds:DescribeReservedDBInstances",

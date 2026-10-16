@@ -87,6 +87,7 @@ Resources:
           - Sid: CostExplorer
             Effect: Allow
             Action:
+              - ce:GetCostAndUsage
               - ce:GetReservationPurchaseRecommendation
               - ce:GetReservationUtilization
               - ce:GetReservationCoverage
@@ -104,6 +105,7 @@ Resources:
               - ec2:PurchaseReservedInstancesOffering
               - ec2:DescribeRegions
               - ec2:DescribeInstanceTypeOfferings
+              - ec2:DescribeInstanceTypes
             Resource: "*"
           - Sid: EC2ReservedInstanceTagging
             Effect: Allow
