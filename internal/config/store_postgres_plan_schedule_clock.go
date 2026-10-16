@@ -47,6 +47,33 @@ func (s *PostgresStore) planScheduleNextDateTx(ctx context.Context, tx pgx.Tx, p
 	return &root.ScheduledDate, nil
 }
 
+// ResolveManagedPlanRootTx requires the plan row lock before execution locks.
+func (s *PostgresStore) ResolveManagedPlanRootTx(ctx context.Context, tx pgx.Tx, plan *PurchasePlan) (*PurchaseExecution, error) {
+	if plan == nil || !plan.RampSchedule.DatesManaged {
+		return nil, fmt.Errorf("managed root resolution requires a managed plan")
+	}
+	if plan.RampSchedule.IsComplete() {
+		return nil, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT execution_id FROM purchase_executions
+		WHERE plan_id=$1 AND step_number=$2 ORDER BY execution_id FOR UPDATE`, plan.ID, plan.RampSchedule.CurrentStep+1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	return s.managedPlanNextRootTx(ctx, tx, plan)
+}
+
 func (s *PostgresStore) managedPlanNextRootTx(ctx context.Context, tx pgx.Tx, plan *PurchasePlan) (*PurchaseExecution, error) {
 	rows, err := s.ListExecutionsForPlanStepTx(ctx, tx, plan.ID, plan.RampSchedule.CurrentStep+1)
 	if err != nil {

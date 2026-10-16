@@ -66,6 +66,12 @@ func (m *Manager) claimPlanStep(ctx context.Context, tx pgx.Tx, plan *config.Pur
 	if locked == nil {
 		return stepClaim{}, fmt.Errorf("plan not found: %s", plan.ID)
 	}
+	if locked.RampSchedule.DatesManaged != plan.RampSchedule.DatesManaged {
+		return stepClaim{}, errPlanStepSkipped
+	}
+	if locked.RampSchedule.DatesManaged {
+		return m.claimManagedPlanStep(ctx, tx, plan, locked, providers)
+	}
 	if !planUnchanged(plan, locked, providers) {
 		return stepClaim{}, fmt.Errorf("%w: plan %s changed since it was listed", errPlanStepSkipped, plan.ID)
 	}

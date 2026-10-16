@@ -130,8 +130,11 @@ func (m *Manager) dueManualRootTx(ctx context.Context, tx pgx.Tx, planID string)
 	if err != nil {
 		return nil, err
 	}
-	if locked == nil || !locked.Enabled || locked.AutoPurchase {
+	if !enabledManualPlan(locked) {
 		return nil, nil
+	}
+	if locked.RampSchedule.DatesManaged {
+		return m.dueManagedPlanRootTx(ctx, tx, locked)
 	}
 	rows, err := m.config.ListExecutionsForPlanStepTx(ctx, tx, planID, locked.RampSchedule.CurrentStep+1)
 	if err != nil || len(rows) == 0 {
