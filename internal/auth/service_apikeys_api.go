@@ -92,10 +92,10 @@ func normalizeAPIKeyPermissions(perms []Permission) []Permission {
 
 // APICreateAPIKeyRequest represents the API request to create an API key.
 type APICreateAPIKeyRequest struct {
-	ExpiresAt   *time.Time   `json:"expires_at,omitempty"`
-	Name        string       `json:"name"`
-	Password    string       `json:"password"` //nolint:gosec // G117: intentional credential field in request struct -- decoded by the handler and verified against the caller's own stored hash, never re-stored
-	Permissions []Permission `json:"permissions,omitempty"`
+	ExpiresAt   *time.Time      `json:"expires_at,omitempty"`
+	Name        string          `json:"name"`
+	Password    string          `json:"password"` //nolint:gosec // G117: intentional credential field in request struct -- decoded by the handler and verified against the caller's own stored hash, never re-stored
+	Permissions []APIPermission `json:"permissions,omitempty"`
 }
 
 // APIKeyInfo represents public API key information (without sensitive data).
@@ -183,9 +183,12 @@ type APIListAPIKeysResponse struct {
 // CreateAPIKeyAPI creates a new API key and returns API-friendly response.
 //
 // req may be any struct whose JSON representation is compatible with
-// APICreateAPIKeyRequest (name, expires_at, permissions). The handler lives
-// in a different package (api) and passes api.CreateAPIKeyRequest, which
-// carries the same JSON fields but is a distinct Go type. A direct type
+// APICreateAPIKeyRequest (name, expires_at, permissions in the API wire shape:
+// APIPermission, with accounts/max_amount constraint tags, not the storage
+// shape). The handler lives in a different package (api) and passes
+// api.CreateAPIKeyRequest, which carries the same JSON fields but is a
+// distinct Go type. Permissions must stay APIPermission: decoding them into
+// Permission silently dropped the account and amount constraints. A direct type
 // assertion would always fail and return a 500; JSON re-encoding handles any
 // caller-package type transparently (issue #1440).
 func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error) {
@@ -208,7 +211,7 @@ func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (
 	}
 
 	// Create the API key
-	apiKey, keyInfo, err := s.CreateAPIKey(ctx, userID, createReq.Name, createReq.Password, createReq.Permissions, createReq.ExpiresAt)
+	apiKey, keyInfo, err := s.CreateAPIKey(ctx, userID, createReq.Name, createReq.Password, apiPermissionsToPermissions(createReq.Permissions), createReq.ExpiresAt)
 	if err != nil {
 		return nil, err
 	}

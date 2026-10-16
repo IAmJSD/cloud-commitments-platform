@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -222,4 +223,41 @@ func TestAPIAdapters_UpdateGroup_AllFieldsReachStore(t *testing.T) {
 		assert.Equal(t, existing().Permissions, got.Permissions)
 		assert.Equal(t, existing().AllowedAccounts, got.AllowedAccounts)
 	})
+}
+
+func TestAPIAdapters_CreateAPIKey_AllFieldsReachStore(t *testing.T) {
+	ctx := context.Background()
+	expiresAt := time.Now().Add(24 * time.Hour)
+	req := APICreateAPIKeyRequest{
+		Name:        "scoped",
+		Password:    testAPIKeyPassword,
+		Permissions: constrainedAPIPermissions(t),
+		ExpiresAt:   &expiresAt,
+	}
+	checks := map[string]func(*testing.T, *UserAPIKey){
+		"Name":        func(t *testing.T, k *UserAPIKey) { assert.Equal(t, req.Name, k.Name) },
+		"Password":    func(t *testing.T, k *UserAPIKey) {}, // re-verified against the user's hash, never stored
+		"Permissions": func(t *testing.T, k *UserAPIKey) { assert.Equal(t, constrainedPermissions, k.Permissions) },
+		"ExpiresAt":   func(t *testing.T, k *UserAPIKey) { assert.True(t, req.ExpiresAt.Equal(*k.ExpiresAt)) },
+	}
+	requireFieldsCovered(t, req, checks)
+
+	store := new(MockStore)
+	svc := &Service{store: store}
+	store.On("GetUserByID", ctx, "user-1").Return(&User{
+		ID: "user-1", Email: "test@example.com", Active: true,
+		PasswordHash: testAPIKeyPasswordHash, GroupIDs: []string{DefaultAdminGroupID},
+	}, nil)
+	store.On("GetGroup", ctx, DefaultAdminGroupID).Return(&Group{
+		ID: DefaultAdminGroupID, Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
+	}, nil)
+	var got *UserAPIKey
+	store.On("CreateAPIKey", ctx, mock.AnythingOfType("*auth.UserAPIKey")).
+		Run(func(args mock.Arguments) { got = args.Get(1).(*UserAPIKey) }).Return(nil)
+	_, err := svc.CreateAPIKeyAPI(ctx, "user-1", req)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	for name, check := range checks {
+		t.Run(name, func(t *testing.T) { check(t, got) })
+	}
 }
