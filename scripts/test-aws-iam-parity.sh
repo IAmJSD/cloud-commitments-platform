@@ -146,6 +146,14 @@ for f in cloudformation/stacks/CUDly/template.yaml terraform/modules/compute/aws
 done
 run_case "required action missing from all runtime copies exits 1" 1 --root "$FIX11"
 
+# Case 12 (#916): the Savings Plans offerings and RI exchange-quote reads missing from the CrossAccount stack.
+FIX12="$TMP_BASE/drift-required-stack-sp-exchange"
+seed_fixture "$FIX12"
+grep -v 'savingsplans:DescribeSavingsPlansOfferings$\|ec2:GetReservedInstancesExchangeQuote$' \
+  "$REPO_ROOT/cloudformation/stacks/CUDly-CrossAccount/template.yaml" \
+  > "$FIX12/cloudformation/stacks/CUDly-CrossAccount/template.yaml"
+run_case "CrossAccount stack missing SP offerings and exchange-quote reads exits 1" 1 --root "$FIX12"
+
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."
 [[ "$fail" -eq 0 ]]

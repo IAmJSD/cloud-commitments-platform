@@ -162,6 +162,7 @@ REQUIRED_CUSTOMER_ACTIONS=(
   ce:GetReservationPurchaseRecommendation ce:GetReservationUtilization ce:GetReservationCoverage
   ce:GetSavingsPlansPurchaseRecommendation ce:GetSavingsPlansUtilization ce:GetSavingsPlansCoverage
   ec2:DescribeInstanceTypeOfferings ec2:DescribeInstanceTypes
+  ec2:GetReservedInstancesExchangeQuote savingsplans:DescribeSavingsPlansOfferings
 )
 
 for f in "$FED_XACC_CFN" "$FED_XACC_TF" "$FED_WIF_CFN" "$FED_WIF_TF" "$FED_XACC_CLI" "$FED_WIF_CLI" \
