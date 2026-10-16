@@ -26,7 +26,7 @@ compute_platform = "lambda"
 # Lambda settings (when compute_platform = "lambda")
 lambda_architecture     = "arm64"  # arm64 for Graviton (cheaper)
 lambda_memory_size      = 512
-lambda_timeout          = 60       # Seconds
+lambda_timeout          = 300      # Seconds, 300-900 (covers the 270s exchange/purchase budget)
 lambda_reserved_concurrency = -1   # -1 = no limit
 lambda_log_retention_days   = 30
 
