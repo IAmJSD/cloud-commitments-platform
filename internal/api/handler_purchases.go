@@ -1055,7 +1055,7 @@ func (h *Handler) authorizeScopedSessionApprove(ctx context.Context, session *Se
 func (h *Handler) authorizeSessionApprove(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
 	// The stateless admin API key has full access and no user row to resolve
 	// permissions from. Administrators-group users fall through and pass via
-	// the approve-any HasPermissionAPI check below, since {admin, *} matches
+	// the approve-any check below, since {admin, *} matches
 	// any requested permission.
 	if session.UserID == apiKeyAdminUserID {
 		return nil
@@ -1064,17 +1064,17 @@ func (h *Handler) authorizeSessionApprove(ctx context.Context, session *Session,
 		return NewClientError(500, "authentication service not configured")
 	}
 
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveAny, auth.ResourcePurchases)
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionApproveAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if hasAny {
 		return wrapConstraintDenied(h.enforcePurchaseConstraints(ctx, session, auth.ActionApproveAny, execution.Recommendations))
 	}
 
-	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveOwn, auth.ResourcePurchases)
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionApproveOwn)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if !hasOwn {
 		return NewClientError(403, "permission denied: requires approve-any or approve-own on purchases")
@@ -1113,16 +1113,16 @@ func (h *Handler) approveConstraintsForSession(ctx context.Context, session *Ses
 // session holds (approve-any first, then approve-own). bound is false when no
 // verb applies to this row, so the caller falls back to the plan cap.
 func (h *Handler) enforceHeldApproveConstraints(ctx context.Context, session *Session, execution *config.PurchaseExecution) (bound bool, err error) {
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveAny, auth.ResourcePurchases)
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionApproveAny)
 	if err != nil {
-		return false, fmt.Errorf("permission check failed: %w", err)
+		return false, err
 	}
 	if hasAny {
 		return true, h.enforcePurchaseConstraints(ctx, session, auth.ActionApproveAny, execution.Recommendations)
 	}
-	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveOwn, auth.ResourcePurchases)
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionApproveOwn)
 	if err != nil {
-		return false, fmt.Errorf("permission check failed: %w", err)
+		return false, err
 	}
 	// A plan-step row has no creator (plan_step_attach.go), so its approve-own
 	// holder is bound by their Constraints regardless of it.
@@ -1401,7 +1401,7 @@ func (h *Handler) requireDifferentApprover(ctx context.Context, session *Session
 //     component is a 500 as per feedback_fail_closed_middleware.md.
 func (h *Handler) authorizeSessionExecuteDirect(ctx context.Context, session *Session, creatorID string, recs []config.RecommendationRecord) error {
 	// Stateless admin API key: full access, no user row. Administrators-group
-	// users pass via the execute-any HasPermissionAPI check below, since
+	// users pass via the execute-any check below, since
 	// {admin, *} matches any requested permission.
 	if session.UserID == apiKeyAdminUserID {
 		return nil
@@ -1410,17 +1410,21 @@ func (h *Handler) authorizeSessionExecuteDirect(ctx context.Context, session *Se
 		return NewClientError(500, "authentication service not configured")
 	}
 
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionExecuteAny, auth.ResourcePurchases)
+	// Both verbs are probed on the principal enforcePurchaseConstraints
+	// judges: the key (intersected with its owner) for a user API key, so a
+	// key holding execute-own is not routed to its owner's execute-any and
+	// then refused on the key's (issue #1005).
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionExecuteAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if hasAny {
 		return h.enforcePurchaseConstraints(ctx, session, auth.ActionExecuteAny, recs)
 	}
 
-	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionExecuteOwn, auth.ResourcePurchases)
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionExecuteOwn)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if !hasOwn {
 		return NewClientError(403, "permission denied: requires execute-any or execute-own on purchases")
@@ -1935,7 +1939,7 @@ func (h *Handler) authorizeCancelSession(ctx context.Context, session *Session, 
 // Constraints-checked. Returns a 403 ClientError otherwise.
 func (h *Handler) authorizeSessionCancel(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
 	// Stateless admin API key: full access, no user row. Administrators-group
-	// users pass via the cancel-any HasPermissionAPI check below.
+	// users pass via the cancel-any check below.
 	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}
@@ -1943,9 +1947,9 @@ func (h *Handler) authorizeSessionCancel(ctx context.Context, session *Session, 
 		return NewClientError(500, "authentication service not configured")
 	}
 
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionCancelAny, auth.ResourcePurchases)
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionCancelAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	var anyErr error
 	if hasAny {
@@ -1962,9 +1966,9 @@ func (h *Handler) authorizeSessionCancel(ctx context.Context, session *Session, 
 // session has no cancel-any); it is returned instead of the generic denials so
 // a constraint refusal stays terminal.
 func (h *Handler) authorizeCancelOwn(ctx context.Context, session *Session, execution *config.PurchaseExecution, anyErr error) error {
-	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionCancelOwn, auth.ResourcePurchases)
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionCancelOwn)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if !hasOwn {
 		if anyErr != nil {
@@ -2519,7 +2523,7 @@ var errRetryLadderTrancheSettled = errors.New("ladder tranche is settled")
 // non-admins, same as the cancel path).
 func (h *Handler) authorizeSessionRetry(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
 	// Stateless admin API key: full access, no user row. Administrators-group
-	// users pass via the retry-any HasPermissionAPI check below.
+	// users pass via the retry-any check below.
 	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}
@@ -2527,17 +2531,17 @@ func (h *Handler) authorizeSessionRetry(ctx context.Context, session *Session, e
 		return NewClientError(500, "authentication service not configured")
 	}
 
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionRetryAny, auth.ResourcePurchases)
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionRetryAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if hasAny {
 		return nil
 	}
 
-	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionRetryOwn, auth.ResourcePurchases)
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionRetryOwn)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if !hasOwn {
 		return NewClientError(403, "permission denied: requires retry-any or retry-own on purchases")
