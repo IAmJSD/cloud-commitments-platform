@@ -63,10 +63,10 @@ func TestAccountScope_EmptyExplicitListGrantsNothing(t *testing.T) {
 }
 
 func TestAccountScope_RestrictedAllowsOnlyItsOwn(t *testing.T) {
-	s := ScopeForAccounts([]string{"acct-A", "prod-name"})
+	s := ScopeForAccounts([]string{"acct-A", "prod-name"}).WithRegisteredNames([]string{"prod-name", "other-name"})
 
 	assert.True(t, s.Allows("acct-A", ""), "matches by ID")
-	assert.True(t, s.Allows("some-uuid", "prod-name"), "matches by display name")
+	assert.True(t, s.Allows("some-uuid", "prod-name"), "matches by a unique display name")
 	assert.False(t, s.Allows("acct-B", ""), "an account outside the list is denied")
 	assert.False(t, s.Allows("acct-B", "other-name"))
 	assert.False(t, s.AllowsAll())
@@ -119,7 +119,9 @@ func TestAccountScope_ParityWithLegacyHelpers(t *testing.T) {
 	for _, legacy := range [][]string{
 		nil, {}, {"*"}, {"acct-A"}, {"acct-A", "acct-B"}, {"prod-name"},
 	} {
-		s := ScopeFromLegacyList(legacy)
+		// Every probe name is unique among the registered accounts, which is
+		// the only case where the name match is unchanged (issue #433).
+		s := ScopeFromLegacyList(legacy).WithRegisteredNames([]string{"prod-name", "nope"})
 		assert.Equal(t, IsUnrestrictedAccess(legacy), s.AllowsAll(),
 			"AllowsAll must agree with IsUnrestrictedAccess for %v", legacy)
 		for _, probe := range []struct{ id, name string }{
@@ -149,4 +151,56 @@ func TestAccountScope_LegacyConversionIsBorrowedSafety(t *testing.T) {
 	assert.False(t, ScopeForAccounts([]string{}).AllowsAll(),
 		"the raw-input constructor must NOT inherit the legacy empty-means-all rule")
 	assert.False(t, ScopeForAccounts(nil).Allows("acct-A", ""))
+}
+
+// Issue #433: display names are not unique. A name entry matches only when
+// exactly one registered account carries that name.
+func TestAccountScope_SharedNameMatchesNoAccountByName(t *testing.T) {
+	registered := []string{"prod", "prod", "solo"} // aws "prod", azure "prod", gcp "solo"
+	s := ScopeForAccounts([]string{"prod", "solo"}).WithRegisteredNames(registered)
+
+	assert.False(t, s.Allows("uuid-aws-prod", "prod"), "a shared name must not grant the first account")
+	assert.False(t, s.Allows("uuid-az-prod", "prod"), "nor the other account with the same name")
+	assert.True(t, s.Allows("uuid-solo", "solo"), "a unique name still matches")
+	assert.False(t, s.Allows("uuid-other", "other"))
+}
+
+func TestAccountScope_IDEntriesIgnoreNameAmbiguity(t *testing.T) {
+	s := ScopeForAccounts([]string{"uuid-aws-prod"}).WithRegisteredNames([]string{"prod", "prod"})
+
+	assert.True(t, s.Allows("uuid-aws-prod", "prod"), "an ID entry grants its account whatever the name")
+	assert.True(t, s.Allows("uuid-aws-prod", ""))
+	assert.False(t, s.Allows("uuid-az-prod", "prod"))
+	assert.Equal(t, []string{"uuid-aws-prod"}, s.FilterIDs([]string{"uuid-aws-prod", "uuid-az-prod"}))
+}
+
+// Name matching is opt-in: a scope that never learned the registered names
+// (or learned an empty list) is ID-only, so forgetting the step fails closed.
+func TestAccountScope_NameMatchRequiresRegisteredNames(t *testing.T) {
+	s := ScopeForAccounts([]string{"acct-A", "prod"})
+	assert.False(t, s.Allows("uuid-prod", "prod"), "no registered names: ID only")
+	assert.True(t, s.Allows("acct-A", ""))
+
+	assert.False(t, s.WithRegisteredNames(nil).Allows("uuid-prod", "prod"))
+	assert.False(t, s.WithRegisteredNames([]string{"other"}).Allows("uuid-prod", "prod"),
+		"a name no registered account carries does not match")
+
+	var zero AccountScope
+	assert.False(t, zero.WithRegisteredNames([]string{"prod"}).Allows("uuid-prod", "prod"),
+		"the zero value still denies")
+}
+
+func TestAccountScope_WithRegisteredNamesEdgeCases(t *testing.T) {
+	assert.True(t, UnrestrictedScope().WithRegisteredNames([]string{"a", "a"}).Allows("x", "a"),
+		"unrestricted stays unrestricted")
+
+	s := ScopeForAccounts([]string{""}).WithRegisteredNames([]string{""})
+	assert.False(t, s.Allows("uuid", ""), "an empty name never matches")
+
+	base := ScopeForAccounts([]string{"prod"})
+	_ = base.WithRegisteredNames([]string{"prod"})
+	assert.False(t, base.Allows("uuid", "prod"), "WithRegisteredNames returns a copy")
+
+	assert.True(t, ScopeForAccounts([]string{"Prod"}).WithRegisteredNames([]string{"Prod", "prod"}).Allows("uuid", "Prod"),
+		"names are compared exactly, as entries are")
 }

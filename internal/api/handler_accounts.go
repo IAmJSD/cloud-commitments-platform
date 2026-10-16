@@ -103,7 +103,8 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 
 	// Filter by allowed accts if the user has restricted access.
 	// An empty list or one containing "*" grants unrestricted access.
-	// Otherwise each entry is matched against the account's ID or Name.
+	// Otherwise each entry is matched against the account's ID, or its Name
+	// when no other registered account shares it (issue #433).
 	allowedAccounts, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)

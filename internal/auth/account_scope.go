@@ -24,9 +24,18 @@ import "strings"
 // admin API key, or a group carrying the "*" wildcard.
 type AccountScope struct {
 	// Accounts is the explicit allow-list, meaningful only when
-	// Unrestricted is false. Entries match by cloud account ID or by
-	// display name, mirroring MatchesAccount.
+	// Unrestricted is false. Entries match by cloud account ID, or by
+	// display name when that name belongs to exactly one registered account
+	// (see WithRegisteredNames).
 	Accounts []string
+
+	// uniqueNames holds the display names carried by exactly one registered
+	// cloud account. Allows matches an entry by name only when the name is in
+	// this set, so a name shared by two accounts grants neither of them by
+	// name (issue #433). nil (the zero value, and every scope built without
+	// WithRegisteredNames) matches by ID only: name matching is opt-in, so
+	// forgetting to populate it fails closed.
+	uniqueNames map[string]struct{}
 
 	// Unrestricted grants access to every account. Set it only where
 	// unlimited access has been positively established.
@@ -96,8 +105,40 @@ func ScopeFromLegacyList(accounts []string) AccountScope {
 	return ScopeForAccounts(accounts)
 }
 
+// WithRegisteredNames returns a copy of the scope that may match entries by
+// display name. names must hold the display name of EVERY registered cloud
+// account (all providers, enabled or not), one element per account, so that
+// duplicates are visible. Only names that occur exactly once become matchable.
+//
+// Display names are not unique. Without this check, a group scoped to the
+// name "prod" was granted every account called "prod", including one added
+// later under another provider or tenant (issue #433). With it, a shared name
+// matches no account by name; the accounts stay reachable through ID entries.
+// Pass a partial list and a name could look unique when it is not, so callers
+// that cannot load the full list must leave the scope ID-only.
+func (s AccountScope) WithRegisteredNames(names []string) AccountScope {
+	if s.Unrestricted {
+		return s
+	}
+	counts := make(map[string]int, len(names))
+	for _, n := range names {
+		if n != "" {
+			counts[n]++
+		}
+	}
+	s.uniqueNames = make(map[string]struct{}, len(counts))
+	for n, c := range counts {
+		if c == 1 {
+			s.uniqueNames[n] = struct{}{}
+		}
+	}
+	return s
+}
+
 // Allows reports whether the scope permits the given cloud account, matched by
-// internal ID or display name. Pass "" for the name when unavailable.
+// internal ID, or by display name when the scope was built with
+// WithRegisteredNames and no other registered account has that name. Pass ""
+// for the name when unavailable.
 //
 // A restricted scope with no accounts allows nothing, which is what makes the
 // zero value deny.
@@ -105,11 +146,12 @@ func (s AccountScope) Allows(accountID, accountName string) bool {
 	if s.Unrestricted {
 		return true
 	}
+	_, nameMatchable := s.uniqueNames[accountName]
 	for _, a := range s.Accounts {
 		if a == accountID {
 			return true
 		}
-		if accountName != "" && a == accountName {
+		if nameMatchable && accountName != "" && a == accountName {
 			return true
 		}
 	}
