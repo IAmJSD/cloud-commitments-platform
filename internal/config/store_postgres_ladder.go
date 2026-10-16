@@ -458,14 +458,15 @@ func (s *PostgresStore) LatestLadderRunStartedAt(ctx context.Context, configID s
 // one of fromStatuses to toStatus via a CAS UPDATE. Returns the updated row
 // on success, or (nil, nil) when zero rows are affected (race lost or
 // unexpected current status). A hard DB error is returned as a non-nil error.
+// A transition to RunStatusCancelled is refused with
+// ErrLadderRunCancelViaTransition: cancels go through CancelLadderRun, which
+// stamps cancelled_by in the same UPDATE.
 func (s *PostgresStore) TransitionLadderRunStatus(ctx context.Context, id string, fromStatuses []ladder.RunStatus, toStatus ladder.RunStatus) (*LadderRunDB, error) {
-	// Convert the typed enum slice to the plain []string that pgx encodes for
-	// the ANY($3) text[] comparison. Keeping the public signature typed while
-	// converting here confines the stringly-typed shape to the DB boundary.
-	from := make([]string, len(fromStatuses))
-	for i, st := range fromStatuses {
-		from[i] = string(st)
+	if toStatus == ladder.RunStatusCancelled {
+		return nil, ErrLadderRunCancelViaTransition
 	}
+	// Typed public signature; the stringly-typed shape stays at the DB boundary.
+	from := ladderRunStatusStrings(fromStatuses)
 	query := `
 		UPDATE ladder_runs
 		SET status = $2, updated_at = NOW()
