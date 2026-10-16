@@ -110,7 +110,8 @@ coordinates agents on one machine; assignment is what coordinates people.
    come after `p3`. The query only sees assignees, so open the issue and
    check its comments for a claim (step 2) too. Before claiming, also check
    that no open PR already addresses it:
-   `gh pr list --repo LeanerCloud/cloud-commitments-platform --search "<issue number> in:body"`.
+   `gh pr list --repo LeanerCloud/cloud-commitments-platform --limit 1000 --search "<issue number> in:body"`
+   (split it the same way if it returns 1000).
 
 2. **Claim it before writing any code.** Post a claim comment, and also
    assign yourself if you have write access. Claims, takeovers and releases
@@ -151,6 +152,10 @@ coordinates agents on one machine; assignment is what coordinates people.
    gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform --remove-assignee @me
    ```
 
+   Skip the `--remove-assignee` when another worker on your shared login
+   still holds an active claim: the assignment is that worker's too, and
+   removing it would make the issue look unowned.
+
    An assignment with no marker comment (for example a maintainer
    assigning someone) still means the issue is taken, and so does an older
    free-form claim comment such as `claimed by <worker>`.
@@ -179,7 +184,8 @@ coordinates agents on one machine; assignment is what coordinates people.
 
 5. **Release what you drop.** If you stop working on an issue without a
    PR, post `Released: <where you got to> [<worker-id>]` as a new comment
-   and unassign yourself
+   and unassign yourself (unless another worker on your shared login
+   still holds an active claim)
    (`gh issue edit <N> --repo LeanerCloud/cloud-commitments-platform --remove-assignee @me`), so the next
    person can pick it up. If the issue turns out to be already fixed, say
    which PR or commit fixed it and ask a maintainer to close it.
