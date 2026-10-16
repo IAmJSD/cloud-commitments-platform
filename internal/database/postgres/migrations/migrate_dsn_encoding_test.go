@@ -4,6 +4,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // TestBuildMigrateDSN_RoundTripsReservedCharacters builds the DSN from pool
@@ -57,68 +59,96 @@ func TestBuildMigrateDSN_RoundTripsReservedCharacters(t *testing.T) {
 	}
 }
 
-// TestDatabaseMigrationWorkflow_EncodesPassword guards the shell half of
-// issue #301: the workflow must never interpolate the raw password into the
-// migration URL's userinfo.
-func TestDatabaseMigrationWorkflow_EncodesPassword(t *testing.T) {
-	path := filepath.Join(mainModuleRoot(t), ".github", "workflows", "database-migration.yml")
-	content, err := os.ReadFile(path)
-	require.NoError(t, err)
-
-	var dsnLines int
-	for _, line := range strings.Split(string(content), "\n") {
-		if !strings.Contains(line, "DB_URL=\"pgx5://") {
-			continue
-		}
-		dsnLines++
-		assert.NotContains(t, line, "${DB_PASSWORD}", "raw password in migration URL: %s", strings.TrimSpace(line))
-		assert.Contains(t, line, "${ENCODED_PASSWORD}", "migration URL must use the encoded password: %s", strings.TrimSpace(line))
-	}
-	assert.NotZero(t, dsnLines, "no migration URL found in %s; update this guard", path)
+// shellMigrationSources lists every file that runs the migrate CLI from shell
+// against a pgx5:// URL (issue #557). Each passes the password through
+// PGPASSWORD, which pgx reads when the URL has none, so no shell encoder
+// (jq, awk) is needed and the secret never appears in the URL or argv.
+var shellMigrationSources = []string{
+	".github/workflows/ci.yml",
+	".github/workflows/database-migration.yml",
+	"scripts/entrypoint.sh",
+	"docs/DEPLOYMENT.md",
 }
 
-// TestDatabaseMigrationWorkflow_MasksEncodedPassword guards that the
-// percent-encoded password (not covered by GitHub's automatic secret masking)
-// is registered with ::add-mask:: after each assignment and before the
-// migration URL is built.
-func TestDatabaseMigrationWorkflow_MasksEncodedPassword(t *testing.T) {
-	path := filepath.Join(mainModuleRoot(t), ".github", "workflows", "database-migration.yml")
-	content, err := os.ReadFile(path)
-	require.NoError(t, err)
+// pgx5UserInfo captures the userinfo of a pgx5:// URL in shell text.
+var pgx5UserInfo = regexp.MustCompile(`pgx5://([^@/\s"]*)@`)
 
-	const (
-		assignment = "ENCODED_PASSWORD=$("
-		mask       = `echo "::add-mask::${ENCODED_PASSWORD//%/%25}"`
-		emptyCheck = `if [ -z "$ENCODED_PASSWORD" ]; then`
-		emptyFail  = `echo "::error::failed to encode the database password"`
-		dsn        = `DB_URL="pgx5://`
-	)
-	var assignments, masks, emptyChecks, emptyFails int
-	var pendingAssignment bool
-	for _, raw := range strings.Split(string(content), "\n") {
+// migrateWithPGPassword is the only accepted form for a migrate invocation
+// whose step (if any) does not set PGPASSWORD in its env.
+const migrateWithPGPassword = `PGPASSWORD="$DB_PASSWORD" migrate -path `
+
+// TestShellMigrationURLs_PassPasswordViaPGPASSWORD guards issue #557: no shell
+// migration URL carries a password, no shell percent-encoder remains, and
+// every migrate invocation gets the password from PGPASSWORD.
+func TestShellMigrationURLs_PassPasswordViaPGPASSWORD(t *testing.T) {
+	root := mainModuleRoot(t)
+	for _, rel := range shellMigrationSources {
+		t.Run(rel, func(t *testing.T) {
+			content, err := os.ReadFile(filepath.Join(root, rel))
+			require.NoError(t, err)
+			text := string(content)
+			assertNoPasswordInURLs(t, text)
+			assert.NotContains(t, text, "ENCODED_PASSWORD", "shell password encoders are gone; use PGPASSWORD")
+			assert.NotContains(t, text, "@uri", "shell password encoders are gone; use PGPASSWORD")
+
+			var invocations int
+			if strings.HasSuffix(rel, ".yml") {
+				invocations = checkWorkflowMigrateSteps(t, content)
+			} else {
+				invocations = checkMigrateLines(t, text, false)
+			}
+			assert.NotZero(t, invocations, "no migrate invocation found in %s; update this guard", rel)
+		})
+	}
+}
+
+func assertNoPasswordInURLs(t *testing.T, text string) {
+	t.Helper()
+	matches := pgx5UserInfo.FindAllStringSubmatch(text, -1)
+	assert.NotEmpty(t, matches, "no pgx5:// URL with a user found; update this guard")
+	for _, m := range matches {
+		assert.NotContains(t, m[1], ":", "migration URL carries a password: %s", m[0])
+	}
+}
+
+// checkMigrateLines asserts that each `migrate -path` line either runs in a
+// step whose env sets PGPASSWORD or sets it itself, and returns the count.
+func checkMigrateLines(t *testing.T, script string, envHasPGPassword bool) int {
+	t.Helper()
+	var n int
+	for _, raw := range strings.Split(script, "\n") {
 		line := strings.TrimSpace(raw)
-		switch {
-		case strings.HasPrefix(line, assignment):
-			assert.False(t, pendingAssignment, "ENCODED_PASSWORD assigned again before it was masked")
-			assignments++
-			pendingAssignment = true
-		case line == emptyCheck:
-			assert.True(t, pendingAssignment, "empty-encode check must sit between the assignment and its mask")
-			emptyChecks++
-		case line == emptyFail:
-			assert.True(t, pendingAssignment, "empty-encode failure must sit between the assignment and its mask")
-			emptyFails++
-		case line == mask:
-			assert.True(t, pendingAssignment, "add-mask without a preceding ENCODED_PASSWORD assignment")
-			masks++
-			pendingAssignment = false
-		case strings.HasPrefix(line, dsn):
-			assert.False(t, pendingAssignment, "migration URL built before ENCODED_PASSWORD was masked")
+		if !strings.Contains(line, "migrate -path ") {
+			continue
+		}
+		n++
+		if !envHasPGPassword {
+			assert.True(t, strings.HasPrefix(line, migrateWithPGPassword),
+				"migrate must get the password from PGPASSWORD: %s", line)
 		}
 	}
-	assert.False(t, pendingAssignment, "last ENCODED_PASSWORD assignment is never masked")
-	assert.Equal(t, 4, assignments, "expected one ENCODED_PASSWORD assignment per migration step")
-	assert.Equal(t, assignments, masks, "every ENCODED_PASSWORD assignment needs an add-mask line")
-	assert.Equal(t, assignments, emptyChecks, "every ENCODED_PASSWORD assignment needs an empty-encode check")
-	assert.Equal(t, assignments, emptyFails, "every empty-encode check needs its ::error:: line")
+	return n
+}
+
+// checkWorkflowMigrateSteps applies checkMigrateLines to every step of a
+// workflow, honoring a PGPASSWORD set in the step's env.
+func checkWorkflowMigrateSteps(t *testing.T, content []byte) int {
+	t.Helper()
+	var wf struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Env map[string]string `yaml:"env"`
+				Run string            `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	require.NoError(t, yaml.Unmarshal(content, &wf))
+	var n int
+	for _, job := range wf.Jobs {
+		for _, step := range job.Steps {
+			_, hasEnv := step.Env["PGPASSWORD"]
+			n += checkMigrateLines(t, step.Run, hasEnv)
+		}
+	}
+	return n
 }

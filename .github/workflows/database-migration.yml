@@ -364,7 +364,9 @@ jobs:
 
       - name: Run migrations
         env:
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD_AWS }}
+          # migrate reads the password from PGPASSWORD (pgx), so it never goes
+          # into the URL and needs no percent-encoding or derived-value mask.
+          PGPASSWORD: ${{ secrets.DB_PASSWORD_AWS }}
           DB_ENDPOINT: ${{ steps.get-endpoint.outputs.endpoint }}
           DIRECTION: ${{ inputs.direction }}
           STEPS: ${{ inputs.steps }}
@@ -372,18 +374,7 @@ jobs:
           set -uo pipefail
           # pgx5://, not postgresql://: migrate is installed with -tags 'pgx5'
           # above and golang-migrate dispatches on the URL scheme (issue #1849).
-          # Percent-encode the password: it may contain @ : / ? # % or spaces.
-          ENCODED_PASSWORD=$(printf '%s' "$DB_PASSWORD" | jq -sRr @uri)
-          if [ -n "$DB_PASSWORD" ]; then
-            if [ -z "$ENCODED_PASSWORD" ]; then
-              echo "::error::failed to encode the database password"
-              exit 1
-            fi
-            # The percent-encoded form is not the registered secret, so mask it too.
-            # The runner unescapes %25 in command data, so send % as %25.
-            echo "::add-mask::${ENCODED_PASSWORD//%/%25}"
-          fi
-          DB_URL="pgx5://cudly:${ENCODED_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
+          DB_URL="pgx5://cudly@${DB_ENDPOINT}:5432/cudly?sslmode=require"
 
           # `validate` already rejects a malformed `steps`/`direction` before this
           # job is ever reached, but this job sits behind an environment gate and
@@ -414,23 +405,15 @@ jobs:
 
       - name: Get migration version
         env:
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD_AWS }}
+          # migrate reads the password from PGPASSWORD (pgx), so it never goes
+          # into the URL and needs no percent-encoding or derived-value mask.
+          PGPASSWORD: ${{ secrets.DB_PASSWORD_AWS }}
           DB_ENDPOINT: ${{ steps.get-endpoint.outputs.endpoint }}
         run: |
           set -uo pipefail
           # pgx5://, not postgresql://: migrate is installed with -tags 'pgx5'
           # above and golang-migrate dispatches on the URL scheme (issue #1849).
-          # Percent-encode the password: it may contain @ : / ? # % or spaces.
-          ENCODED_PASSWORD=$(printf '%s' "$DB_PASSWORD" | jq -sRr @uri)
-          if [ -n "$DB_PASSWORD" ]; then
-            if [ -z "$ENCODED_PASSWORD" ]; then
-              echo "::error::failed to encode the database password"
-              exit 1
-            fi
-            # The percent-encoded form is not the registered secret, so mask it too.
-            echo "::add-mask::${ENCODED_PASSWORD//%/%25}"
-          fi
-          DB_URL="pgx5://cudly:${ENCODED_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
+          DB_URL="pgx5://cudly@${DB_ENDPOINT}:5432/cudly?sslmode=require"
           VERSION=$(migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" version 2>&1 || echo "unknown")
           echo "Current migration version: $VERSION"
           echo "MIGRATION_VERSION=$VERSION" >> "$GITHUB_ENV"
@@ -512,7 +495,9 @@ jobs:
 
       - name: Run migrations
         env:
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD_GCP }}
+          # migrate reads the password from PGPASSWORD (pgx), so it never goes
+          # into the URL and needs no percent-encoding or derived-value mask.
+          PGPASSWORD: ${{ secrets.DB_PASSWORD_GCP }}
           DB_ENDPOINT: ${{ steps.get-endpoint.outputs.endpoint }}
           DIRECTION: ${{ inputs.direction }}
           STEPS: ${{ inputs.steps }}
@@ -520,17 +505,7 @@ jobs:
           set -uo pipefail
           # pgx5://, not postgresql://: migrate is installed with -tags 'pgx5'
           # above and golang-migrate dispatches on the URL scheme (issue #1849).
-          # Percent-encode the password: it may contain @ : / ? # % or spaces.
-          ENCODED_PASSWORD=$(printf '%s' "$DB_PASSWORD" | jq -sRr @uri)
-          if [ -n "$DB_PASSWORD" ]; then
-            if [ -z "$ENCODED_PASSWORD" ]; then
-              echo "::error::failed to encode the database password"
-              exit 1
-            fi
-            # The percent-encoded form is not the registered secret, so mask it too.
-            echo "::add-mask::${ENCODED_PASSWORD//%/%25}"
-          fi
-          DB_URL="pgx5://cudly:${ENCODED_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
+          DB_URL="pgx5://cudly@${DB_ENDPOINT}:5432/cudly?sslmode=require"
 
           STEPS="${STEPS:-0}"
 
@@ -627,7 +602,9 @@ jobs:
 
       - name: Run migrations
         env:
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD_AZURE }}
+          # migrate reads the password from PGPASSWORD (pgx), so it never goes
+          # into the URL and needs no percent-encoding or derived-value mask.
+          PGPASSWORD: ${{ secrets.DB_PASSWORD_AZURE }}
           DB_ENDPOINT: ${{ steps.get-endpoint.outputs.endpoint }}
           DIRECTION: ${{ inputs.direction }}
           STEPS: ${{ inputs.steps }}
@@ -635,17 +612,7 @@ jobs:
           set -uo pipefail
           # pgx5://, not postgresql://: migrate is installed with -tags 'pgx5'
           # above and golang-migrate dispatches on the URL scheme (issue #1849).
-          # Percent-encode the password: it may contain @ : / ? # % or spaces.
-          ENCODED_PASSWORD=$(printf '%s' "$DB_PASSWORD" | jq -sRr @uri)
-          if [ -n "$DB_PASSWORD" ]; then
-            if [ -z "$ENCODED_PASSWORD" ]; then
-              echo "::error::failed to encode the database password"
-              exit 1
-            fi
-            # The percent-encoded form is not the registered secret, so mask it too.
-            echo "::add-mask::${ENCODED_PASSWORD//%/%25}"
-          fi
-          DB_URL="pgx5://cudly:${ENCODED_PASSWORD}@${DB_ENDPOINT}:5432/cudly?sslmode=require"
+          DB_URL="pgx5://cudly@${DB_ENDPOINT}:5432/cudly?sslmode=require"
 
           STEPS="${STEPS:-0}"
 
