@@ -569,6 +569,17 @@ jobs:
           terraform -chdir=iac/federation/azure-target/terraform fmt -check -recursive
           terraform -chdir=iac/federation/azure-target/terraform test
 
+      - name: Test AWS compute modules
+        if: matrix.cloud == 'aws'
+        run: |
+          for t in terraform/modules/compute/aws/*/tests; do
+            [ -d "$t" ] || continue
+            d=$(dirname "$t")
+            terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
+            terraform -chdir="$d" fmt -check -recursive
+            terraform -chdir="$d" test
+          done
+
       - name: Terraform Init
         run: |
           cd terraform/environments/${{ matrix.cloud }}

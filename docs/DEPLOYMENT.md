@@ -592,11 +592,13 @@ Each cloud provider has lifecycle policies configured via Terraform (`terraform/
 
 ### Database Cleanup Jobs
 
-Automated cleanup for expired sessions and completed purchase executions, running on a daily schedule:
+The server's `cleanup` task deletes expired sessions and old completed or canceled purchase executions. Today only Azure schedules it:
 
-- **AWS:** Lambda function triggered by EventBridge (`terraform/modules/compute/aws/cleanup-lambda/`)
-- **Azure:** Azure Function App with timer trigger
-- **GCP:** Cloud Function with Cloud Scheduler
+- **Azure Container Apps (when `enable_scheduled_tasks` is true):** a Logic App calls `/api/scheduled/cleanup` daily (`terraform/modules/compute/azure/container-apps/scheduled-tasks.tf`)
+- **AWS:** nothing schedules it. The `terraform/modules/compute/aws/cleanup-lambda/` module is not consumed by any environment.
+- **GCP:** nothing schedules it. The `terraform/modules/compute/gcp/cleanup-function/` module is not consumed by any environment.
+
+AKS has no scheduler (#893). Scheduling for AWS (Lambda, Fargate, CloudFormation) and GCP is tracked by #712.
 
 Alternatively, use pg_cron for database-native scheduling.
 
