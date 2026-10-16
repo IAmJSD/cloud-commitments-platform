@@ -635,7 +635,13 @@ type StoreInterface interface {
 	// Returns (nil, nil) when zero rows are affected (CAS race lost or wrong
 	// current status), so callers can distinguish a race from a hard error.
 	// Statuses are typed ladder.RunStatus so callers cannot pass an arbitrary
-	// string that would never match a stored status.
+	// string that would never match a stored status. A transition to
+	// RunStatusCancelled is refused (ErrLadderRunCancelViaTransition).
+	//
+	// CancelLadderRun is the only way to cancel a ladder run: a CAS UPDATE
+	// from one of fromStatuses to cancelled that stamps cancelled_by with the
+	// actor's email in the same statement. An empty actor is refused
+	// (ErrLadderRunCancelActorRequired); (nil, nil) means the CAS lost.
 	// PlanAndSaveLadderRun is the ladder planning persist: in ONE READ COMMITTED
 	// transaction under the config's advisory lock it reads the in-flight
 	// commitment (scheduled rows within LadderFireGrace plus fired rows), calls
@@ -655,6 +661,7 @@ type StoreInterface interface {
 	SaveLadderTranches(ctx context.Context, tranches []LadderTrancheDB) error
 	LatestLadderRunStartedAt(ctx context.Context, configID string) (*time.Time, error)
 	TransitionLadderRunStatus(ctx context.Context, id string, fromStatuses []ladder.RunStatus, toStatus ladder.RunStatus) (*LadderRunDB, error)
+	CancelLadderRun(ctx context.Context, id string, fromStatuses []ladder.RunStatus, cancelledBy string) (*LadderRunDB, error)
 
 	// Notification mutes (issue #297 / migration 000091).
 	// UpsertNotificationMute inserts or updates a mute row for (email, scope).

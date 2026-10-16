@@ -368,6 +368,44 @@ func TestPostgresStore_TransitionLadderRunStatus_CAS(t *testing.T) {
 	})
 }
 
+// TestPostgresStore_CancelLadderRun_StampsCancelledBy proves a canceled run
+// persists who canceled it (issue #542) and that the generic transition can
+// no longer cancel a run without that stamp.
+func TestPostgresStore_CancelLadderRun_StampsCancelledBy(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	store := setupLadderStore(ctx, t)
+
+	run, err := store.SaveLadderRun(ctx, &LadderRunDB{
+		StartedAt: time.Now().UTC(),
+		Status:    ladder.RunStatusAwaitingApproval,
+	})
+	require.NoError(t, err)
+
+	refused, err := store.TransitionLadderRunStatus(ctx, run.ID,
+		[]ladder.RunStatus{ladder.RunStatusAwaitingApproval}, ladder.RunStatusCancelled)
+	require.ErrorIs(t, err, ErrLadderRunCancelViaTransition)
+	assert.Nil(t, refused)
+
+	lost, err := store.CancelLadderRun(ctx, run.ID,
+		[]ladder.RunStatus{ladder.RunStatusExecuting}, "alice@example.com")
+	require.NoError(t, err)
+	assert.Nil(t, lost, "CAS miss must return (nil, nil)")
+
+	updated, err := store.CancelLadderRun(ctx, run.ID,
+		[]ladder.RunStatus{ladder.RunStatusAwaitingApproval}, "alice@example.com")
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, ladder.RunStatusCancelled, updated.Status)
+
+	got, err := store.GetLadderRun(ctx, run.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, ladder.RunStatusCancelled, got.Status)
+	require.NotNil(t, got.CancelledBy, "ladder_runs.cancelled_by must be stamped on cancel")
+	assert.Equal(t, "alice@example.com", *got.CancelledBy)
+}
+
 // TestPostgresStore_SaveLadderRunWithTranches_Atomicity proves the run+tranche
 // persist is transactional (B2): on success both land, and on a tranche-insert
 // failure the run row is rolled back too (never a status=planned run with no

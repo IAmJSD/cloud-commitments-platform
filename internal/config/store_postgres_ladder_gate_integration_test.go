@@ -52,7 +52,7 @@ func TestGetLadderExecutionGate(t *testing.T) {
 	})
 
 	t.Run("canceled run is reported", func(t *testing.T) {
-		_, err := store.TransitionLadderRunStatus(ctx, run.ID, []ladder.RunStatus{ladder.RunStatusExecuting}, ladder.RunStatusCancelled)
+		_, err := store.CancelLadderRun(ctx, run.ID, []ladder.RunStatus{ladder.RunStatusExecuting}, "admin@example.com")
 		require.NoError(t, err)
 		g, err := store.GetLadderExecutionGate(ctx, tr.ID)
 		require.NoError(t, err)

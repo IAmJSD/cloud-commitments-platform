@@ -887,6 +887,9 @@ func (m *mockConfigStore) LatestLadderRunStartedAt(_ context.Context, _ string) 
 func (m *mockConfigStore) TransitionLadderRunStatus(_ context.Context, _ string, _ []ladder.RunStatus, _ ladder.RunStatus) (*config.LadderRunDB, error) {
 	return nil, nil
 }
+func (m *mockConfigStore) CancelLadderRun(_ context.Context, _ string, _ []ladder.RunStatus, _ string) (*config.LadderRunDB, error) {
+	return nil, nil
+}
 func (m *mockConfigStore) UpdateGlobalConfigAtomic(_ context.Context, apply func(*config.GlobalConfig) error) (*config.GlobalConfig, error) {
 	cfg := &config.GlobalConfig{}
 	if err := apply(cfg); err != nil {
