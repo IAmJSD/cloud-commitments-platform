@@ -5382,12 +5382,13 @@ func TestHandler_deletePlannedPurchase_UserAPIKey_Allowed(t *testing.T) {
 		Return(ownerUserID, keyID, true, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, ownerUserID).Return([]string{}, nil)
 	// authorizePlannedPurchaseCancel falls through to the ownership check
-	// since the owning user holds neither update-any nor cancel-any.
-	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, auth.ActionUpdateAny, auth.ResourcePurchases).Return(false, nil)
-	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, auth.ActionCancelAny, auth.ResourcePurchases).Return(false, nil)
+	// since the key holds neither update-any nor cancel-any (issue #979: the
+	// full-scope verbs are probed on the key, not the owner).
 	// The key holds delete:purchases only: probing its cancel-own is denied.
-	mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", ctx, keyID, ownerUserID, auth.ActionCancelOwn, auth.ResourcePurchases, []auth.PermissionConstraints{{}}).
-		Return(false, nil)
+	for _, verb := range []string{auth.ActionUpdateAny, auth.ActionCancelAny, auth.ActionCancelOwn} {
+		mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", ctx, keyID, ownerUserID, verb, auth.ResourcePurchases, []auth.PermissionConstraints{{}}).
+			Return(false, nil)
+	}
 
 	creator := ownerUserID
 	execution := &config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator}
