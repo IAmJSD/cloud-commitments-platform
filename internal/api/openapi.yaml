@@ -227,11 +227,15 @@ paths:
         - name: limit
           in: query
           description: >-
-            Opt-in page size (1-1000). When neither limit nor cursor is sent,
-            every matching recommendation is returned in one response (legacy
-            behavior). When either is sent, rows are returned in ascending id
-            order, one page at a time; summary and regions still describe the
-            full filtered set.
+            Opt-in maximum page size in rows (1-1000). When neither limit nor
+            cursor is present, every matching recommendation is returned in
+            one response (legacy behavior); a present but empty value is a
+            400. When either is sent, rows are returned in ascending id order,
+            one page at a time, and a page can hold fewer than limit rows
+            (follow next_cursor, not the row count) because each page is also
+            capped at 4 MiB of serialized JSON. A single row larger than that
+            is returned alone. summary and regions still describe the full
+            filtered set.
           schema:
             type: integer
             minimum: 1

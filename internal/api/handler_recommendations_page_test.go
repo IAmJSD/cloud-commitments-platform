@@ -191,6 +191,13 @@ func TestGetRecommendations_PaginationRejectsBadParams(t *testing.T) {
 		// can reject it.
 		"oversized cursor":   {"cursor": strings.Repeat("A", maxRecommendationsCursorLen+4)},
 		"bad cursor + limit": {"limit": "10", "cursor": "%%%"},
+		// Present but empty must not fall back to the unbounded legacy shape.
+		"empty limit":                {"limit": ""},
+		"blank limit":                {"limit": "   "},
+		"empty cursor":               {"cursor": ""},
+		"blank cursor":               {"cursor": " \t"},
+		"valid limit + empty cursor": {"limit": "10", "cursor": ""},
+		"empty limit + valid cursor": {"limit": "", "cursor": encodeRecommendationsCursor("rec-000001")},
 	}
 	for name, params := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -213,4 +220,160 @@ func TestGetRecommendations_PaginationMaxLimitAccepted(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, resp.Recommendations, 3)
 	assert.Empty(t, resp.NextCursor)
+}
+
+// bigDetailsRecs returns n recommendations whose Details blob is detailBytes
+// of quote-heavy JSON. Each quote doubles again when the body is re-encoded
+// into the Lambda response envelope, so measuring raw JSON would undercount.
+func bigDetailsRecs(n, detailBytes int) []config.RecommendationRecord {
+	recs := pageTestRecs(n)
+	note := strings.Repeat(`"<&\\`, detailBytes/4)
+	details, err := json.Marshal(map[string]string{"note": note})
+	if err != nil {
+		panic(err)
+	}
+	for i := range recs {
+		recs[i].ResourceType = "m5.large"
+		recs[i].Details = details
+	}
+	return recs
+}
+
+// lambdaPayloadLen is the size of the Lambda invoke response that would carry
+// resp, matching how handler.go and the Lambda runtime encode it.
+func lambdaPayloadLen(t *testing.T, resp *RecommendationsResponse) (bodyInEnvelope, total int) {
+	t.Helper()
+	body, err := json.Marshal(resp)
+	require.NoError(t, err)
+	quoted, err := json.Marshal(string(body))
+	require.NoError(t, err)
+	envelope, err := json.Marshal(events.LambdaFunctionURLResponse{
+		StatusCode: 200,
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body:       string(body),
+	})
+	require.NoError(t, err)
+	return len(quoted) - 2, len(envelope)
+}
+
+// TestGetRecommendations_PageCutByByteBudget: with large Details, limit rows
+// would be far over the Lambda cap, so pages must be cut by serialized bytes
+// while still visiting every row exactly once, in order, with full totals.
+func TestGetRecommendations_PageCutByByteBudget(t *testing.T) {
+	const total = 1500
+	recs := bigDetailsRecs(total, 1500) // ~10 KB per row in the envelope
+	h := pageTestHandler(t, recs)
+
+	_, fullSize := lambdaPayloadLen(t, buildRecommendationsResponse(append([]config.RecommendationRecord(nil), recs...)))
+	require.Greater(t, fullSize, 2*lambdaResponseCapBytes, "fixture must be far over the cap")
+
+	seen := make(map[string]int, total)
+	var order []string
+	cutByBytes := false
+	params := map[string]string{"limit": strconv.Itoa(MaxRecommendationsPageSize)}
+	for pages := 0; ; pages++ {
+		require.Less(t, pages, total, "cursor walk did not terminate")
+		resp, err := h.getRecommendations(context.Background(), pageTestReq(), params)
+		require.NoError(t, err)
+
+		inEnvelope, payload := lambdaPayloadLen(t, resp)
+		assert.LessOrEqual(t, inEnvelope, recommendationsPageByteBudget, "page %d over the byte budget", pages)
+		assert.Less(t, payload, lambdaResponseCapBytes, "page %d over the Lambda cap", pages)
+		require.NotEmpty(t, resp.Recommendations, "a page must never be empty mid-walk")
+		if resp.NextCursor != "" && len(resp.Recommendations) < MaxRecommendationsPageSize {
+			cutByBytes = true
+		}
+
+		assert.Equal(t, total, resp.Summary.TotalCount)
+		assert.InDelta(t, float64(total*10), resp.Summary.TotalMonthlySavings, 1e-6)
+		assert.InDelta(t, float64(total*20), resp.Summary.TotalUpfrontCost, 1e-6)
+
+		for i := range resp.Recommendations {
+			seen[resp.Recommendations[i].ID]++
+			order = append(order, resp.Recommendations[i].ID)
+		}
+		if resp.NextCursor == "" {
+			break
+		}
+		params = map[string]string{"limit": strconv.Itoa(MaxRecommendationsPageSize), "cursor": resp.NextCursor}
+	}
+
+	assert.True(t, cutByBytes, "expected at least one page cut by the byte budget before limit")
+	assert.Len(t, seen, total)
+	for id, n := range seen {
+		assert.Equal(t, 1, n, "row %s returned %d times", id, n)
+	}
+	assert.IsIncreasing(t, order)
+}
+
+// TestBuildBudgetedPage_OversizedRowAlone: a row that alone exceeds the
+// budget is returned on its own page so the walk advances, and the rows
+// around it still pack normally.
+func TestBuildBudgetedPage_OversizedRowAlone(t *testing.T) {
+	recs := pageTestRecs(6) // ~1 KB rows: rec-000000 .. rec-000005
+	huge := bigDetailsRecs(1, 8000)[0]
+	recs[2].Details = huge.Details // rec-000003 (pageTestRecs is reversed)
+	const budget = 4000            // fits a few small rows, never the big one
+
+	var pages [][]string
+	page := recommendationsPage{enabled: true, limit: MaxRecommendationsPageSize}
+	for range len(recs) + 1 {
+		resp, err := buildBudgetedPage(append([]config.RecommendationRecord(nil), recs...), page, budget)
+		require.NoError(t, err)
+		require.NotEmpty(t, resp.Recommendations)
+		ids := make([]string, 0, len(resp.Recommendations))
+		for i := range resp.Recommendations {
+			ids = append(ids, resp.Recommendations[i].ID)
+		}
+		pages = append(pages, ids)
+		if len(ids) > 1 {
+			inEnvelope, _ := lambdaPayloadLen(t, resp)
+			assert.LessOrEqual(t, inEnvelope, budget, "multi-row page over budget: %v", ids)
+		}
+		if resp.NextCursor == "" {
+			break
+		}
+		cursor, err := decodeRecommendationsCursor(resp.NextCursor)
+		require.NoError(t, err)
+		page.afterID = cursor
+	}
+
+	assert.Contains(t, pages, []string{"rec-000003"}, "oversized row must be alone on its page")
+	all := make([]string, 0, len(recs))
+	for _, p := range pages {
+		all = append(all, p...)
+	}
+	assert.Equal(t, []string{"rec-000000", "rec-000001", "rec-000002", "rec-000003", "rec-000004", "rec-000005"}, all)
+	assert.Greater(t, len(pages[0]), 1, "small rows before the big one must still share a page")
+}
+
+// TestBuildBudgetedPage_TightBudgetSweep sweeps the budget one byte at a time
+// so the accounting is checked at its exact edges: every multi-row page must
+// fit (counting the summary, regions, keys and next_cursor), and the page
+// must be maximal, i.e. one more row would not have fit.
+func TestBuildBudgetedPage_TightBudgetSweep(t *testing.T) {
+	recs := pageTestRecs(6)
+	page := recommendationsPage{enabled: true, limit: MaxRecommendationsPageSize}
+	for budget := 1500; budget <= 7000; budget++ {
+		resp, err := buildBudgetedPage(append([]config.RecommendationRecord(nil), recs...), page, budget)
+		require.NoError(t, err)
+		n := len(resp.Recommendations)
+		require.GreaterOrEqual(t, n, 1)
+		if n > 1 {
+			inEnvelope, _ := lambdaPayloadLen(t, resp)
+			require.LessOrEqual(t, inEnvelope, budget, "budget %d: %d rows do not fit", budget, n)
+		}
+		if n < len(recs) {
+			// The same page plus the next row, with that row's cursor.
+			bigger, err := buildBudgetedPage(append([]config.RecommendationRecord(nil), recs...),
+				recommendationsPage{enabled: true, limit: n + 1}, 1<<30)
+			require.NoError(t, err)
+			bigger.NextCursor = encodeRecommendationsCursor(bigger.Recommendations[n].ID)
+			inEnvelope, _ := lambdaPayloadLen(t, bigger)
+			// The paginator overcounts by at most 2 bytes (one comma and the
+			// one-byte cursor placeholder in the overhead), so anything it
+			// rejected must have been within 2 bytes of overflowing.
+			require.Greater(t, inEnvelope+2, budget, "budget %d: page of %d rows is not maximal", budget, n)
+		}
+	}
 }

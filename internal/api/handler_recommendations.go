@@ -126,7 +126,7 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 		return nil, err
 	}
 
-	return buildRecommendationsPageResponse(recommendations, page), nil
+	return buildRecommendationsPageResponse(recommendations, page)
 }
 
 // filterRecommendationsByAllowedAccounts filters recommendations to only include
