@@ -1941,9 +1941,11 @@ func TestSummarizePurchaseHistory_CancelPendingDoesNotChangeKPIs(t *testing.T) {
 // execution environment freezes as soon as the response is returned, so the
 // sweep must complete synchronously before getHistory returns; on long-running
 // servers it must stay asynchronous so the read response is never blocked on
-// the transitions. Detection reuses runtime.IsLambda (AWS_LAMBDA_RUNTIME_API),
-// the same helper the SWR cache goroutine gate uses, so the sub-tests flip
-// that env var via t.Setenv.
+// the transitions. The mode comes from Handler.isLambda (HandlerConfig.IsLambda,
+// the Application's single captured value), the same field the SWR cache
+// goroutine gate reads. Each sub-test sets AWS_LAMBDA_RUNTIME_API to the
+// opposite of the handler's mode to prove the live environment is ignored
+// (issue #110).
 func TestHandler_getHistory_ExpireIfStale_LambdaGuard(t *testing.T) {
 	approverEmail := "ops@example.com"
 	staleID := "stale-exec-lambda-guard"
@@ -1961,9 +1963,9 @@ func TestHandler_getHistory_ExpireIfStale_LambdaGuard(t *testing.T) {
 	}
 
 	t.Run("Lambda: sweep completes synchronously before the handler returns", func(t *testing.T) {
-		// Any non-empty value marks the process as running on Lambda
-		// (runtime.IsLambda checks presence, not content).
-		t.Setenv("AWS_LAMBDA_RUNTIME_API", "127.0.0.1:9001")
+		// The environment says "not Lambda"; the handler's configured mode
+		// must win (issue #110).
+		t.Setenv("AWS_LAMBDA_RUNTIME_API", "")
 
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
@@ -1978,7 +1980,7 @@ func TestHandler_getHistory_ExpireIfStale_LambdaGuard(t *testing.T) {
 		mockStore.On("ExpireExecutionAtomic", mock.Anything, mock.Anything, staleID).Return(true, nil).Once()
 
 		mockAuth, req := adminHistoryReq(ctx)
-		handler := &Handler{auth: mockAuth, config: mockStore}
+		handler := &Handler{auth: mockAuth, config: mockStore, isLambda: true}
 
 		result, err := handler.getHistory(ctx, req, map[string]string{})
 		require.NoError(t, err)
@@ -1995,9 +1997,9 @@ func TestHandler_getHistory_ExpireIfStale_LambdaGuard(t *testing.T) {
 	})
 
 	t.Run("non-Lambda: sweep stays asynchronous and never blocks the response", func(t *testing.T) {
-		// Explicitly clear the marker so the test is deterministic even if
-		// the outer environment sets it; t.Setenv restores it afterwards.
-		t.Setenv("AWS_LAMBDA_RUNTIME_API", "")
+		// The environment says "Lambda"; the handler's configured mode must
+		// win (issue #110). t.Setenv restores the variable afterwards.
+		t.Setenv("AWS_LAMBDA_RUNTIME_API", "127.0.0.1:9001")
 
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
@@ -2020,7 +2022,7 @@ func TestHandler_getHistory_ExpireIfStale_LambdaGuard(t *testing.T) {
 		}).Return(true, nil).Once()
 
 		mockAuth, req := adminHistoryReq(ctx)
-		handler := &Handler{auth: mockAuth, config: mockStore}
+		handler := &Handler{auth: mockAuth, config: mockStore, isLambda: false}
 
 		done := make(chan struct{})
 		var result any

@@ -158,14 +158,17 @@ func TestHandler_getHistory_TruncatedPerClass(t *testing.T) {
 }
 
 func TestHandler_getHistory_StaleSweepBoundedToDefaultListLimit(t *testing.T) {
-	t.Setenv("AWS_LAMBDA_RUNTIME_API", "127.0.0.1:9001")
 	ctx := context.Background()
 	stale := executionsWithStatus(150, "pending", time.Now().Add(-8*24*time.Hour), "stale")
 	store := newStarvationStore(ctx)
 	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(stale, nil)
 	store.On("ExpireExecutionAtomic", mock.Anything, mock.Anything, mock.Anything).Return(false, nil)
 
-	runStarvationHistory(t, ctx, store)
+	// Lambda mode (synchronous sweep) so the call count is final on return.
+	mockAuth, req := adminHistoryReq(ctx)
+	handler := &Handler{auth: mockAuth, config: store, isLambda: true}
+	_, err := handler.getHistory(ctx, req, map[string]string{})
+	require.NoError(t, err)
 
 	store.AssertNumberOfCalls(t, "ExpireExecutionAtomic", config.DefaultListLimit)
 }

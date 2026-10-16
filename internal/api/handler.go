@@ -17,7 +17,6 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/oidc"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/runtime"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -44,6 +43,7 @@ type Handler struct {
 	signer             oidc.Signer                     // Optional: OIDC issuer signer (backed by cloud KMS)
 	insurance          InsuranceProvider               // Optional: Archera comparison (nil = off)
 	issuerURL          string                          // Canonical OIDC issuer URL (falls back to dashboardURL / request domain)
+	isLambda           bool                            // Lambda mode from HandlerConfig.IsLambda; gates background goroutines
 
 	awsCfgOnce sync.Once  // guards one-time loading of the base AWS config
 	awsCfg     aws.Config // cached base AWS config (no region override)
@@ -148,15 +148,21 @@ type Handler struct {
 
 // getRIUtilizationCache returns the Postgres-backed TTL cache for Cost
 // Explorer results, lazy-initialized on first call so tests that never
-// exercise the RI Exchange paths don't need to wire it up. Lambda
-// detection happens here (once) via runtime.IsLambda so SWR is gated
-// off on Lambda where background goroutines freeze between
-// invocations.
+// exercise the RI Exchange paths don't need to wire it up. The Lambda
+// mode comes from h.isLambda (HandlerConfig.IsLambda, i.e. the
+// Application's captured value, issue #110) so SWR is gated off on
+// Lambda where background goroutines freeze between invocations.
 func (h *Handler) getRIUtilizationCache() *riUtilizationCache {
 	h.riUtilizationCacheOnce.Do(func() {
-		h.riUtilizationCache = newRIUtilizationCache(h.config, runtime.IsLambda())
+		h.riUtilizationCache = newRIUtilizationCache(h.config, h.isLambda)
 	})
 	return h.riUtilizationCache
+}
+
+// IsLambda reports the Lambda mode this handler was constructed with
+// (HandlerConfig.IsLambda). It never re-reads the environment.
+func (h *Handler) IsLambda() bool {
+	return h.isLambda
 }
 
 // NewHandler creates a new API handler.
@@ -190,6 +196,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		insurance:           cfg.Insurance,
 		commitmentOpts:      cfg.CommitmentOpts,
 		encryptionKeySource: cfg.EncryptionKeySource,
+		isLambda:            cfg.IsLambda,
 	}
 
 	// Pre-load API key (with a 5s timeout to avoid stalling cold-start indefinitely)
