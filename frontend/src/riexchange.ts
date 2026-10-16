@@ -41,6 +41,10 @@ const exchangePaymentPattern = /^\d+(?:\.\d+)?$/;
 // Generation counter to prevent stale utilization data from overwriting fresh data
 let utilizationGeneration = 0;
 
+// Generation counter so a superseded loadRIExchange (chip changed while the
+// account lookup was in flight) never issues its list call.
+let scopeGeneration = 0;
+
 // The AWS account the convertible-RI list is currently scoped to (the
 // single-select account chip value, or undefined for all-accounts). Tracked
 // at module scope so the asynchronous utilization re-render preserves the
@@ -58,13 +62,18 @@ function providerLabel(provider: string): string {
 
 // resolveScope reads the Main Header global Provider/Account chips so every
 // RI Exchange load is scoped consistently with the other Inventory sub-tabs
-// (issue #871). The account chip is single-select; an account_id is forwarded
-// only when exactly one account is active.
-function resolveScope(): { provider: Provider | ''; accountID?: string } {
+// (issue #871). The account chip holds a CloudAccount UUID, but the RI
+// endpoints expect the provider account number / subscription GUID
+// (external_id), so the single selected account is translated here.
+async function resolveScope(): Promise<{ provider: Provider | ''; accountID?: string }> {
   const provider = state.getCurrentProvider();
   const accountIDs = state.getCurrentAccountIDs();
-  const accountID = accountIDs.length === 1 ? accountIDs[0] : undefined;
-  return { provider, accountID };
+  if (accountIDs.length !== 1) return { provider };
+  const accounts = await api.listAccountsMinimal();
+  const account = accounts.find(a => a.id === accountIDs[0]);
+  if (!account) throw new Error(`Selected account ${accountIDs[0]} was not found`);
+  if (!account.external_id) throw new Error(`Selected account ${accountIDs[0]} has no provider account ID`);
+  return { provider, accountID: account.external_id };
 }
 
 // Mode label mapping — single source of truth
@@ -89,7 +98,31 @@ void MODE_VALUES;
  *            for GCP" empty state and no list endpoint is called.
  */
 export async function loadRIExchange(): Promise<void> {
-  const { provider, accountID } = resolveScope();
+  const generation = ++scopeGeneration;
+  let scope: Awaited<ReturnType<typeof resolveScope>>;
+  try {
+    scope = await resolveScope();
+  } catch (error) {
+    if (generation !== scopeGeneration) return;
+    utilizationGeneration++;
+    currentRIs = [];
+    currentUtilization = new Map();
+    currentRecommendations = [];
+    currentRIAccountID = undefined;
+    const message = 'Select a valid account to load this section.';
+    for (const id of ['ri-exchange-recommendations-list', 'ri-exchange-history-list']) {
+      const el = document.getElementById(id);
+      if (el) renderEmptyState(el, message);
+    }
+    renderReshapeStalenessBanner('', null);
+    const container = document.getElementById('ri-exchange-instances-list');
+    if (container) {
+      container.innerHTML = `<p class="error">Failed to resolve the selected account: ${escapeHtml((error as Error).message)}</p>`;
+    }
+    return;
+  }
+  if (generation !== scopeGeneration) return;
+  const { provider, accountID } = scope;
 
   if (provider === 'gcp') {
     renderGCPEmptyStates();
@@ -98,8 +131,8 @@ export async function loadRIExchange(): Promise<void> {
 
   if (provider === 'azure') {
     await Promise.all([
-      loadExchangeableAzureRIs(accountID),
-      loadExchangeHistory(),
+      loadExchangeableAzureRIs(accountID, generation),
+      loadExchangeHistory(generation),
     ]);
     renderReshapeNotApplicable('azure');
     return;
@@ -107,9 +140,9 @@ export async function loadRIExchange(): Promise<void> {
 
   // AWS (default / empty provider): full convertible-RI flow.
   await Promise.all([
-    loadConvertibleRIs(accountID),
-    loadReshapeRecommendations(),
-    loadExchangeHistory(),
+    loadConvertibleRIs(accountID, generation),
+    loadReshapeRecommendations(generation),
+    loadExchangeHistory(generation),
   ]);
 }
 
@@ -252,7 +285,7 @@ function closeExchangeModalIfOpen(): void {
 // Convertible RIs table
 // ──────────────────────────────────────────────
 
-async function loadConvertibleRIs(accountID?: string): Promise<void> {
+async function loadConvertibleRIs(accountID?: string, generation: number = scopeGeneration): Promise<void> {
   const container = document.getElementById('ri-exchange-instances-list');
   if (!container) return;
 
@@ -268,12 +301,15 @@ async function loadConvertibleRIs(accountID?: string): Promise<void> {
   try {
     // issue #871: scope to the selected account so the page honours the
     // Main Header global filter.
-    currentRIs = await api.listConvertibleRIs(accountID);
+    const ris = await api.listConvertibleRIs(accountID);
+    if (generation !== scopeGeneration) return;
+    currentRIs = ris;
     renderRIsTable(container, accountID);
     // Load utilization asynchronously (Cost Explorer is slow)
     utilizationGeneration++;
     void loadUtilization(utilizationGeneration);
   } catch (error) {
+    if (generation !== scopeGeneration) return;
     teardownSkeleton(container);
     const err = error as Error;
     container.innerHTML = `<p class="error">Failed to load convertible RIs: ${escapeHtml(err.message)}</p>`;
@@ -287,7 +323,7 @@ async function loadConvertibleRIs(accountID?: string): Promise<void> {
  * The optional accountID is the selected subscription chip; it scopes the
  * capacity-provider registration check on the backend.
  */
-async function loadExchangeableAzureRIs(accountID?: string): Promise<void> {
+async function loadExchangeableAzureRIs(accountID: string | undefined, generation: number): Promise<void> {
   const container = document.getElementById('ri-exchange-instances-list');
   if (!container) return;
 
@@ -304,8 +340,10 @@ async function loadExchangeableAzureRIs(accountID?: string): Promise<void> {
 
   try {
     const reservations = await api.listExchangeableAzureRIs(accountID);
+    if (generation !== scopeGeneration) return;
     renderAzureRIsTable(container, reservations, accountID);
   } catch (error) {
+    if (generation !== scopeGeneration) return;
     teardownSkeleton(container);
     const err = error as Error;
     container.innerHTML = `<p class="error">Failed to load Azure reservations: ${escapeHtml(err.message)}</p>`;
@@ -479,7 +517,7 @@ function appendAzureCell(tr: HTMLTableRowElement, text: string): void {
 // Reshape recommendations
 // ──────────────────────────────────────────────
 
-export async function loadReshapeRecommendations(): Promise<void> {
+export async function loadReshapeRecommendations(generation: number = scopeGeneration): Promise<void> {
   const container = document.getElementById('ri-exchange-recommendations-list');
   if (!container) return;
 
@@ -491,10 +529,12 @@ export async function loadReshapeRecommendations(): Promise<void> {
 
   try {
     const resp: ReshapeRecommendationsResponse = await api.getReshapeRecommendations();
+    if (generation !== scopeGeneration) return;
     currentRecommendations = resp.recommendations ?? [];
     renderRecommendations(container);
     renderReshapeStalenessBanner(resp.recs_staleness, resp.recs_collected_at);
   } catch (error) {
+    if (generation !== scopeGeneration) return;
     teardownSkeleton(container);
     const err = error as Error;
     container.innerHTML = `<p class="error">Failed to load recommendations: ${escapeHtml(err.message)}</p>`;
@@ -2252,7 +2292,7 @@ function canApproveRIExchangeRow(rec: RIExchangeHistoryRecord): boolean {
   return canAccess('approve-own', 'purchases') && rec.created_by_user_id === user.id;
 }
 
-async function loadExchangeHistory(): Promise<void> {
+async function loadExchangeHistory(generation: number = scopeGeneration): Promise<void> {
   const container = document.getElementById('ri-exchange-history-list');
   if (!container) return;
 
@@ -2264,8 +2304,10 @@ async function loadExchangeHistory(): Promise<void> {
 
   try {
     const records = await api.getRIExchangeHistory();
+    if (generation !== scopeGeneration) return;
     renderExchangeHistory(container, records);
   } catch (error) {
+    if (generation !== scopeGeneration) return;
     const err = error as Error;
     container.textContent = '';
     const errorP = document.createElement('p');
