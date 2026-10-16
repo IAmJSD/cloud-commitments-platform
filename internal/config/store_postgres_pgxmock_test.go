@@ -1057,12 +1057,17 @@ func purchaseHistoryRow(now time.Time, provider, acct string) []interface{} {
 }
 
 // TestPGXMock_GetPurchaseHistoryFiltered_AllFilters asserts the SQL emitted
-// when every filter is set: WHERE provider = $1 AND (cloud_account_id =
-// ANY($2) OR (provider = $3 AND account_id = ANY($4))) AND timestamp >= $5 AND
-// timestamp <= $6, ORDER BY timestamp DESC, LIMIT $7. The account predicate is
-// dual-column with a provider-scoped external-id half so a row carrying only one
-// identifier is still matched without leaking across providers (issue
-// #701/#498/#866 + provider-coupling).
+// when every filter is set:
+//
+//	WHERE provider = $1
+//	  AND (cloud_account_id = ANY($2)
+//	       OR ((provider = '' OR LOWER(provider) = LOWER($3)) AND account_id = ANY($4)))
+//	  AND timestamp >= $5 AND timestamp <= $6
+//	ORDER BY timestamp DESC LIMIT $7
+//
+// The account predicate is dual-column with a provider-scoped external-id half
+// so a row carrying only one identifier is still matched without leaking across
+// providers (issue #701/#498/#866 + provider-coupling).
 func TestPGXMock_GetPurchaseHistoryFiltered_AllFilters(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
@@ -1074,7 +1079,7 @@ func TestPGXMock_GetPurchaseHistoryFiltered_AllFilters(t *testing.T) {
 
 	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "acct-1")...)
 	mock.ExpectQuery(
-		`SELECT account_id, purchase_id, timestamp, provider, service, region.*FROM purchase_history WHERE provider = \$1 AND \(cloud_account_id = ANY\(\$2\) OR \(provider = \$3 AND account_id = ANY\(\$4\)\)\) AND timestamp >= \$5 AND timestamp <= \$6.*ORDER BY timestamp DESC.*LIMIT \$7`,
+		`SELECT account_id, purchase_id, timestamp, provider, service, region.*FROM purchase_history WHERE provider = \$1 AND \(cloud_account_id = ANY\(\$2\) OR \(\(provider = '' OR LOWER\(provider\) = LOWER\(\$3\)\) AND account_id = ANY\(\$4\)\)\) AND timestamp >= \$5 AND timestamp <= \$6.*ORDER BY timestamp DESC.*LIMIT \$7`,
 	).WithArgs("aws", []string{"acct-uuid-1"}, "aws", []string{"111122223333"}, start, end, 50).WillReturnRows(rows)
 
 	records, err := store.GetPurchaseHistoryFiltered(ctx, PurchaseHistoryFilter{
@@ -1109,7 +1114,7 @@ func TestPGXMock_GetPurchaseHistoryFiltered_ExternalIDOnly(t *testing.T) {
 	// (purchaseHistoryRow already writes a NULL cloud_account_id).
 	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "999988887777")...)
 	mock.ExpectQuery(
-		`FROM purchase_history WHERE \(cloud_account_id = ANY\(\$1\) OR \(provider = \$2 AND account_id = ANY\(\$3\)\)\).*ORDER BY timestamp DESC.*LIMIT \$4`,
+		`FROM purchase_history WHERE \(cloud_account_id = ANY\(\$1\) OR \(\(provider = '' OR LOWER\(provider\) = LOWER\(\$2\)\) AND account_id = ANY\(\$3\)\)\).*ORDER BY timestamp DESC.*LIMIT \$4`,
 	).WithArgs([]string{"acct-uuid-B"}, "aws", []string{"999988887777"}, 100).WillReturnRows(rows)
 
 	records, err := store.GetPurchaseHistoryFiltered(ctx, PurchaseHistoryFilter{
@@ -1137,7 +1142,7 @@ func TestPGXMock_GetPurchaseHistoryFiltered_MultiProviderExternalIDs(t *testing.
 	now := time.Now().Truncate(time.Second)
 	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "123")...)
 	mock.ExpectQuery(
-		`FROM purchase_history WHERE \(\(provider = \$1 AND account_id = ANY\(\$2\)\) OR \(provider = \$3 AND account_id = ANY\(\$4\)\)\).*ORDER BY timestamp DESC.*LIMIT \$5`,
+		`FROM purchase_history WHERE \(\(\(provider = '' OR LOWER\(provider\) = LOWER\(\$1\)\) AND account_id = ANY\(\$2\)\) OR \(\(provider = '' OR LOWER\(provider\) = LOWER\(\$3\)\) AND account_id = ANY\(\$4\)\)\).*ORDER BY timestamp DESC.*LIMIT \$5`,
 	).WithArgs("aws", []string{"123"}, "azure", []string{"123"}, 100).WillReturnRows(rows)
 
 	records, err := store.GetPurchaseHistoryFiltered(ctx, PurchaseHistoryFilter{
@@ -1239,7 +1244,7 @@ func TestPGXMock_GetActivePurchaseHistory_AccountScoped(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	rows := pgxmock.NewRows(purchaseHistoryCols).AddRow(purchaseHistoryRow(now, "aws", "111122223333")...)
 	mock.ExpectQuery(
-		`FROM purchase_history WHERE term > 0 AND \(extract\(epoch FROM \(timestamp AT TIME ZONE 'UTC'\)\) \+ term::numeric \* 31536000\) >= extract\(epoch FROM \(\$1::timestamptz AT TIME ZONE 'UTC'\)\) AND revoked_at IS NULL AND \(cloud_account_id = ANY\(\$2\) OR \(provider = \$3 AND account_id = ANY\(\$4\)\)\) ORDER BY timestamp DESC$`,
+		`FROM purchase_history WHERE term > 0 AND \(extract\(epoch FROM \(timestamp AT TIME ZONE 'UTC'\)\) \+ term::numeric \* 31536000\) >= extract\(epoch FROM \(\$1::timestamptz AT TIME ZONE 'UTC'\)\) AND revoked_at IS NULL AND \(cloud_account_id = ANY\(\$2\) OR \(\(provider = '' OR LOWER\(provider\) = LOWER\(\$3\)\) AND account_id = ANY\(\$4\)\)\) ORDER BY timestamp DESC$`,
 	).WithArgs(now, []string{"acct-uuid-1"}, "aws", []string{"111122223333"}).WillReturnRows(rows)
 
 	records, err := store.GetActivePurchaseHistory(ctx, now,

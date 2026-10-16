@@ -2418,14 +2418,20 @@ func activePurchaseHistoryQuery(asOf time.Time, accountIDs []string, externalIDs
 // compared against rows of its own provider:
 //
 //	(cloud_account_id = ANY($u)
-//	   OR (provider = $p1 AND account_id = ANY($e1))
-//	   OR (provider = $p2 AND account_id = ANY($e2)))
+//	   OR ((provider = '' OR LOWER(provider) = LOWER($p1)) AND account_id = ANY($e1))
+//	   OR ((provider = '' OR LOWER(provider) = LOWER($p2)) AND account_id = ANY($e2)))
 //
 // This preserves the (provider, external_id) pairing so a filter for aws/123
 // never matches azure/123 rows. The "" provider key (legacy raw external
 // number, unknown provider) matches account_id with no provider gate. Providers
 // are sorted for deterministic SQL. The OR is wrapped in parentheses so it
 // composes with the surrounding AND chain.
+//
+// The provider gate is case-insensitive, and a row whose stored provider is
+// empty (unknown) matches on account_id alone, the same way the "" filter key
+// does. Without this, a NULL-cloud_account_id row stored as "AWS" or "" was
+// silently dropped even though its account_id matched (issue #24). A row
+// stored under a different, non-empty provider is still excluded.
 func appendAccountPredicate(conds []string, args []any, accountIDs []string, externalIDsByProvider map[string][]string) (outConds []string, outArgs []any) {
 	if len(accountIDs) == 0 && len(externalIDsByProvider) == 0 {
 		return conds, args
@@ -2448,7 +2454,9 @@ func appendAccountPredicate(conds []string, args []any, accountIDs []string, ext
 		args = append(args, provider)
 		providerArg := len(args)
 		args = append(args, exts)
-		ors = append(ors, fmt.Sprintf("(provider = $%d AND account_id = ANY($%d))", providerArg, len(args)))
+		ors = append(ors, fmt.Sprintf(
+			"((provider = '' OR LOWER(provider) = LOWER($%d)) AND account_id = ANY($%d))",
+			providerArg, len(args)))
 	}
 	if len(ors) == 0 {
 		return conds, args
@@ -2479,7 +2487,7 @@ func sortedProviderKeys(m map[string][]string) []string {
 // The account predicate matches BOTH identifier columns:
 //
 //	(cloud_account_id = ANY($uuids)
-//	   OR (provider = $p AND account_id = ANY($extsForP)) OR ...)
+//	   OR ((provider = '' OR LOWER(provider) = LOWER($p)) AND account_id = ANY($extsForP)) OR ...)
 //
 // purchase_history carries two account identifiers and either may be the only
 // one populated on a given row: cloud_account_id (the cloud_accounts UUID FK,
