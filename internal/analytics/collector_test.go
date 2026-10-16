@@ -483,6 +483,9 @@ func (m *mockConfigStore) GetRecommendationsFreshness(_ context.Context) (*confi
 func (m *mockConfigStore) SetRecommendationsCollectionError(_ context.Context, _ string) error {
 	return nil
 }
+func (m *mockConfigStore) SetRecommendationsCollectionPartial(_ context.Context, _ *config.RecommendationsCollectionPartial) error {
+	return nil
+}
 func (m *mockConfigStore) MarkCollectionStarted(_ context.Context) (string, bool, error) {
 	return "mock-owner-token", true, nil
 }

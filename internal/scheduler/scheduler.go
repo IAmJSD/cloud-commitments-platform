@@ -213,7 +213,7 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context, ownerToken strin
 	// deterministic regardless of goroutine completion order. After Wait, ctx
 	// cancellation is propagated. No concurrency cap — the universe is at
 	// most 3 providers.
-	allRecommendations, totalSavings, successfulProviders, successfulCollects, failedProviders, err := s.collectAllProviders(ctx, globalCfg)
+	allRecommendations, totalSavings, successfulProviders, successfulCollects, failedProviders, partial, err := s.collectAllProviders(ctx, globalCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +221,7 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context, ownerToken strin
 	logging.Infof("Collected %d recommendations with $%.2f/month potential savings",
 		len(allRecommendations), totalSavings)
 
-	s.persistCollection(ctx, allRecommendations, successfulCollects, failedProviders)
+	s.persistCollection(ctx, allRecommendations, successfulCollects, failedProviders, partial)
 
 	// Send notification if we have recommendations
 	if len(allRecommendations) > 0 && totalSavings > 0 {
@@ -262,28 +262,18 @@ func (s *Scheduler) CollectRecommendations(ctx context.Context, ownerToken strin
 	}, nil
 }
 
-// persistCollection writes the collection results to the recommendations
-// cache via UpsertRecommendations, which:
-//
-//   - Upserts each row by natural key so re-collected recommendations
-//     reuse the same PK across runs (stable IDs for frontend).
-//   - Evicts stale rows (collected_at < $now) but ONLY for the
-//     (provider, account) pairs that successfully collected in this run.
-//     Failed pairs' rows stay visible so the dashboard isn't blanked out
-//     by transient cloud-API failures, even when one of several accounts
-//     under the same provider succeeded.
-//
-// On any failure (including partial), the collection error is additionally
-// recorded in recommendations_state so the frontend banner renders while
-// the user still sees the valid rows we managed to upsert.
 // providerOutcome bundles a single provider's collection outcome for the
 // deterministic merge in collectAllProviders. Only one of recs/err is
 // meaningful per outcome — err != nil means the provider failed entirely
 // (mirrors the pre-fan-out `continue` branch); err == nil means the provider
 // succeeded (possibly partially — partial-account-failure semantics live in
 // fanOutPerAccount, not here).
+//
+// gap is non-nil when at least one of the provider's sweeps was incomplete;
+// it is surfaced in recommendations_state.last_collection_partial (#87).
 type providerOutcome struct {
 	err                 error
+	gap                 *sweepGap
 	recs                []config.RecommendationRecord
 	succeededAccountIDs []string
 }
@@ -306,6 +296,7 @@ func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.G
 	successfulProviders []string,
 	successfulCollects []config.SuccessfulCollect,
 	failedProviders map[string]string,
+	partial *config.RecommendationsCollectionPartial,
 	err error,
 ) {
 	failedProviders = map[string]string{}
@@ -321,11 +312,12 @@ func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.G
 		providerName := providerName // capture per-iteration
 		g.Go(func() error {
 			logging.Infof("Collecting recommendations from %s...", providerName)
-			recs, succeededAccountIDs, perr := s.collectProviderRecommendations(gctx, providerName, globalCfg)
+			recs, succeededAccountIDs, gap, perr := s.collectProviderRecommendations(gctx, providerName, globalCfg)
 			mu.Lock()
 			outcomes[providerName] = providerOutcome{
 				recs:                recs,
 				succeededAccountIDs: succeededAccountIDs,
+				gap:                 gap,
 				err:                 perr,
 			}
 			mu.Unlock()
@@ -342,7 +334,7 @@ func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.G
 		logging.Warnf("collectAllProviders: errgroup.Wait returned unexpected error: %v", waitErr)
 	}
 	if cerr := ctx.Err(); cerr != nil {
-		return nil, 0, nil, nil, nil, cerr
+		return nil, 0, nil, nil, nil, nil, cerr
 	}
 
 	// Deterministic merge: walk EnabledProviders in config order so
@@ -365,8 +357,24 @@ func (s *Scheduler) collectAllProviders(ctx context.Context, globalCfg *config.G
 			totalSavings += rec.Savings
 		}
 		allRecommendations = append(allRecommendations, out.recs...)
+		partial = appendPartialProvider(partial, providerName, out.gap)
 	}
-	return allRecommendations, totalSavings, successfulProviders, successfulCollects, failedProviders, nil
+	return allRecommendations, totalSavings, successfulProviders, successfulCollects, failedProviders, partial, nil
+}
+
+// appendPartialProvider adds providerName's incomplete-sweep summary to
+// partial, allocating it on first use. A complete provider (nil gap) leaves
+// partial unchanged, so a collection whose every sweep was complete yields
+// nil and persistCollection leaves the column cleared.
+func appendPartialProvider(partial *config.RecommendationsCollectionPartial, providerName string, gap *sweepGap) *config.RecommendationsCollectionPartial {
+	if gap == nil {
+		return partial
+	}
+	if partial == nil {
+		partial = &config.RecommendationsCollectionPartial{}
+	}
+	partial.Providers = append(partial.Providers, gap.toProviderSweep(providerName))
+	return partial
 }
 
 // clearCollectionStartedBestEffort clears last_collection_started_at on the
@@ -387,7 +395,27 @@ func (s *Scheduler) clearCollectionStartedBestEffort(ctx context.Context, ownerT
 	}
 }
 
-func (s *Scheduler) persistCollection(ctx context.Context, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect, failedProviders map[string]string) {
+// persistCollection writes the collection results to the recommendations
+// cache via UpsertRecommendations, which:
+//
+//   - Upserts each row by natural key so re-collected recommendations
+//     reuse the same PK across runs (stable IDs for frontend).
+//   - Evicts stale rows (collected_at < $now) but ONLY for the
+//     (provider, account) pairs that successfully collected in this run.
+//     Failed pairs' rows stay visible so the dashboard isn't blanked out
+//     by transient cloud-API failures, even when one of several accounts
+//     under the same provider succeeded.
+//
+// On any failure (including partial), the collection error is additionally
+// recorded in recommendations_state so the frontend banner renders while
+// the user still sees the valid rows we managed to upsert.
+//
+// UpsertRecommendations also resets last_collection_partial, so a complete
+// collection clears the previous run's partial marker; a non-nil partial
+// re-records it straight after (issue #87). The two writes mirror the
+// existing error-column pattern and are not atomic: if the second write
+// fails, the run is logged and reads as complete until the next collection.
+func (s *Scheduler) persistCollection(ctx context.Context, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect, failedProviders map[string]string, partial *config.RecommendationsCollectionPartial) {
 	if err := s.config.UpsertRecommendations(ctx, time.Now().UTC(), recs, successfulCollects); err != nil {
 		logging.Errorf("Failed to persist recommendations: %v", err)
 		if setErr := s.config.SetRecommendationsCollectionError(ctx, err.Error()); setErr != nil {
@@ -399,6 +427,12 @@ func (s *Scheduler) persistCollection(ctx context.Context, recs []config.Recomme
 	if len(failedProviders) > 0 {
 		if err := s.config.SetRecommendationsCollectionError(ctx, joinProviderErrors(failedProviders)); err != nil {
 			logging.Errorf("Failed to record collection error: %v", err)
+		}
+	}
+
+	if partial != nil {
+		if err := s.config.SetRecommendationsCollectionPartial(ctx, partial); err != nil {
+			logging.Errorf("Failed to record partial collection: %v", err)
 		}
 	}
 }
@@ -420,8 +454,10 @@ func joinProviderErrors(failed map[string]string) string {
 // []config.SuccessfulCollect for account-scoped eviction. For the AWS
 // ambient path (no registered accounts) the slice contains a single empty
 // string sentinel that expandSuccessfulCollects translates into a nil
-// CloudAccountID. Provider-level errors propagate unchanged.
-func (s *Scheduler) collectProviderRecommendations(ctx context.Context, providerName string, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, []string, error) {
+// CloudAccountID. The *sweepGap is non-nil when some account's sweep was
+// incomplete (its rows are kept; see tolerateIncompleteSweep). Provider-level
+// errors propagate unchanged.
+func (s *Scheduler) collectProviderRecommendations(ctx context.Context, providerName string, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, []string, *sweepGap, error) {
 	switch providerName {
 	case "aws":
 		return s.collectAWSRecommendations(ctx, globalCfg)
@@ -431,7 +467,7 @@ func (s *Scheduler) collectProviderRecommendations(ctx context.Context, provider
 		return s.collectGCPRecommendations(ctx, globalCfg)
 	default:
 		logging.Warnf("Unknown provider: %s", providerName)
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 }
 
@@ -475,17 +511,17 @@ func expandSuccessfulCollects(providerName string, accountIDs []string) []config
 // Returns the merged recommendations + the IDs of accounts that succeeded
 // (or [""] for the ambient path so the caller can synthesize a nil
 // CloudAccountID for eviction).
-func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, []string, error) {
+func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, []string, *sweepGap, error) {
 	accounts, err := s.enabledAccounts(ctx, "aws")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Backward-compatible fallback: no registered accounts → ambient credentials
 	if len(accounts) == 0 {
-		recs, complete, err := s.collectAWSAmbient(ctx, globalCfg)
+		recs, gap, err := s.collectAWSAmbient(ctx, globalCfg)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		// Issue #604: if the Lambda's STS identity matches a registered
 		// (possibly disabled) cloud_accounts row, tag every rec with that
@@ -495,18 +531,18 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 		// in those cases.
 		if acctID := s.resolveAmbientHostAccountID(ctx); acctID != "" {
 			recs = s.tagAccount(recs, acctID)
-			return recs, ambientEvictionRoster(complete, acctID), nil
+			return recs, ambientEvictionRoster(gap == nil, acctID), gap.forAccount(), nil
 		}
-		return recs, ambientEvictionRoster(complete, ""), nil
+		return recs, ambientEvictionRoster(gap == nil, ""), gap.forAccount(), nil
 	}
 
-	recs, outcome := fanOutPerAccount(ctx, "AWS", accounts, func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, bool, error) {
+	recs, outcome := fanOutPerAccount(ctx, "AWS", accounts, func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
 		return s.collectAWSForAccount(ctx, globalCfg, acct)
 	})
 	if outcome.FailedCount == len(accounts) && len(accounts) > 0 {
-		return nil, nil, errAllAccountsFailed("AWS", outcome)
+		return nil, nil, nil, errAllAccountsFailed("AWS", outcome)
 	}
-	return recs, outcome.SucceededAccountIDs, nil
+	return recs, outcome.SucceededAccountIDs, outcome.Gap, nil
 }
 
 // accountOutcome is the per-provider summary returned by
@@ -533,7 +569,12 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 // account while a sweep fails per subscription; evicting on a partial
 // sweep deletes the un-queried subscriptions' previous rows. See
 // tolerateIncompleteSweep and issue #1652.
+//
+// Gap is the merged incomplete-sweep summary across IncompleteAccountIDs
+// (nil when every succeeded account swept completely), surfaced in
+// recommendations_state.last_collection_partial (issue #87).
 type accountOutcome struct {
+	Gap                  *sweepGap
 	LastErr              string
 	SucceededAccountIDs  []string
 	IncompleteAccountIDs []string
@@ -555,7 +596,7 @@ func fanOutPerAccount(
 	ctx context.Context,
 	providerLabel string,
 	accounts []config.CloudAccount,
-	fn func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, bool, error),
+	fn func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error),
 ) ([]config.RecommendationRecord, accountOutcome) {
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(execution.ConcurrencyFromEnv())
@@ -569,7 +610,7 @@ func fanOutPerAccount(
 	for _rvc := range accounts {
 		acct := accounts[_rvc]
 		g.Go(func() error {
-			recs, complete, err := fn(gctx, acct)
+			recs, gap, err := fn(gctx, acct)
 			if err != nil {
 				if isAccountPermissionError(providerLabel, err) {
 					// Operator-fixable misconfiguration (missing IAM role
@@ -596,10 +637,11 @@ func fanOutPerAccount(
 			// SucceededAccountIDs, the roster that authorizes stale-row
 			// eviction. See tolerateIncompleteSweep for why (issue #1652).
 			outcome.SucceededCount++
-			if complete {
+			if gap == nil {
 				outcome.SucceededAccountIDs = append(outcome.SucceededAccountIDs, acct.ID)
 			} else {
 				outcome.IncompleteAccountIDs = append(outcome.IncompleteAccountIDs, acct.ID)
+				outcome.Gap = mergeSweepGaps(outcome.Gap, gap.forAccount())
 			}
 			mu.Unlock()
 			return nil
@@ -643,10 +685,10 @@ func errAllAccountsFailed(providerLabel string, outcome accountOutcome) error {
 		providerLabel, outcome.FailedCount, outcome.LastErr)
 }
 
-func (s *Scheduler) collectAWSAmbient(ctx context.Context, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, bool, error) {
+func (s *Scheduler) collectAWSAmbient(ctx context.Context, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, *sweepGap, error) {
 	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "aws", nil)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to create AWS provider: %w", err)
+		return nil, nil, fmt.Errorf("failed to create AWS provider: %w", err)
 	}
 	return s.fetchAndConvert(ctx, prov, "aws", nil, s.hostAWSAccountID(ctx), globalCfg)
 }
@@ -727,46 +769,46 @@ func (s *Scheduler) resolveAmbientAccountID(ctx context.Context, providerName, e
 // fallback path in collectAzureRecommendations when no accounts are registered.
 // subscriptionID is passed explicitly to avoid an unnecessary Azure API round-trip
 // to auto-discover subscriptions — the caller already resolved it from env.
-func (s *Scheduler) collectAzureAmbient(ctx context.Context, subscriptionID string) ([]config.RecommendationRecord, bool, error) {
+func (s *Scheduler) collectAzureAmbient(ctx context.Context, subscriptionID string) ([]config.RecommendationRecord, *sweepGap, error) {
 	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "azure", &provider.ProviderConfig{
 		AzureSubscriptionID: subscriptionID,
 	})
 	if err != nil {
-		return nil, false, fmt.Errorf("create ambient Azure provider: %w", err)
+		return nil, nil, fmt.Errorf("create ambient Azure provider: %w", err)
 	}
 	recClient, err := prov.GetRecommendationsClient(ctx)
 	if err != nil {
-		return nil, false, fmt.Errorf("get Azure recommendations client: %w", err)
+		return nil, nil, fmt.Errorf("get Azure recommendations client: %w", err)
 	}
 	recs, err := recClient.GetAllRecommendations(ctx)
-	complete, err := tolerateIncompleteSweep("azure", err)
+	gap, err := tolerateIncompleteSweep("azure", err)
 	if err != nil {
-		return nil, false, fmt.Errorf("get Azure recommendations: %w", err)
+		return nil, nil, fmt.Errorf("get Azure recommendations: %w", err)
 	}
-	return s.convertRecommendations(recs, "azure"), complete, nil
+	return s.convertRecommendations(recs, "azure"), gap, nil
 }
 
 // collectGCPAmbient collects GCP recommendations using Application Default
 // Credentials. Used by the ambient fallback path in collectGCPRecommendations
 // when no accounts are registered.
-func (s *Scheduler) collectGCPAmbient(ctx context.Context) ([]config.RecommendationRecord, bool, error) {
+func (s *Scheduler) collectGCPAmbient(ctx context.Context) ([]config.RecommendationRecord, *sweepGap, error) {
 	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "gcp", nil)
 	if err != nil {
-		return nil, false, fmt.Errorf("create ambient GCP provider: %w", err)
+		return nil, nil, fmt.Errorf("create ambient GCP provider: %w", err)
 	}
 	recClient, err := prov.GetRecommendationsClient(ctx)
 	if err != nil {
-		return nil, false, fmt.Errorf("get GCP recommendations client: %w", err)
+		return nil, nil, fmt.Errorf("get GCP recommendations client: %w", err)
 	}
 	recs, err := recClient.GetAllRecommendations(ctx)
-	complete, err := tolerateIncompleteSweep("gcp", err)
+	gap, err := tolerateIncompleteSweep("gcp", err)
 	if err != nil {
-		return nil, false, fmt.Errorf("get GCP recommendations: %w", err)
+		return nil, nil, fmt.Errorf("get GCP recommendations: %w", err)
 	}
-	return s.convertRecommendations(recs, "gcp"), complete, nil
+	return s.convertRecommendations(recs, "gcp"), gap, nil
 }
 
-func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.GlobalConfig, acct config.CloudAccount) ([]config.RecommendationRecord, bool, error) {
+func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.GlobalConfig, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
 	// Self-account: role_arn mode with no role ARN means "use the CUDly
 	// Lambda's own (ambient) credentials to access this account" -- see
 	// credentials.resolveRoleARNProvider, which documents the identical
@@ -781,22 +823,22 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 	// host-identity check instead (issue #402).
 	if acct.AWSAuthMode == "role_arn" && acct.AWSRoleARN == "" {
 		if err := credentials.VerifyHostAccount(ctx, &acct, s.stsClient); err != nil {
-			return nil, false, err
+			return nil, nil, err
 		}
 		prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "aws", nil)
 		if err != nil {
-			return nil, false, fmt.Errorf("create ambient provider: %w", err)
+			return nil, nil, fmt.Errorf("create ambient provider: %w", err)
 		}
 		return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, acct.ExternalID, globalCfg)
 	}
 	awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, &acct, s.credStore, s.assumeRoleSTS)
 	if err != nil {
-		return nil, false, fmt.Errorf("resolve credentials: %w", err)
+		return nil, nil, fmt.Errorf("resolve credentials: %w", err)
 	}
 	cfg := &provider.ProviderConfig{Name: "aws", AWSCredentialsProvider: awsCreds}
 	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "aws", cfg)
 	if err != nil {
-		return nil, false, fmt.Errorf("create provider: %w", err)
+		return nil, nil, fmt.Errorf("create provider: %w", err)
 	}
 	return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, acct.ExternalID, globalCfg)
 }
@@ -807,10 +849,10 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 // running natively on Azure with managed identity), falls back to ambient
 // credentials and tags recommendations with the registered subscription's
 // UUID if found in cloud_accounts.
-func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.GlobalConfig) ([]config.RecommendationRecord, []string, error) {
+func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.GlobalConfig) ([]config.RecommendationRecord, []string, *sweepGap, error) {
 	accounts, err := s.enabledAccounts(ctx, "azure")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if len(accounts) == 0 {
 		// Issue #662: mirror the AWS ambient-path tagging fix for Azure.
@@ -820,27 +862,27 @@ func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.G
 		subscriptionID := os.Getenv("AZURE_SUBSCRIPTION_ID")
 		if subscriptionID == "" {
 			logging.Info("No enabled Azure accounts — skipping Azure recommendations")
-			return nil, nil, nil
+			return nil, nil, nil, nil
 		}
-		recs, complete, err := s.collectAzureAmbient(ctx, subscriptionID)
+		recs, gap, err := s.collectAzureAmbient(ctx, subscriptionID)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if acctID := s.resolveAmbientAccountID(ctx, "azure", subscriptionID); acctID != "" {
 			recs = s.tagAccount(recs, acctID)
-			return recs, ambientEvictionRoster(complete, acctID), nil
+			return recs, ambientEvictionRoster(gap == nil, acctID), gap.forAccount(), nil
 		}
-		return recs, ambientEvictionRoster(complete, ""), nil
+		return recs, ambientEvictionRoster(gap == nil, ""), gap.forAccount(), nil
 	}
 
 	recs, outcome := fanOutPerAccount(ctx, "Azure", accounts, s.collectAzureForAccount)
 	if outcome.FailedCount == len(accounts) && len(accounts) > 0 {
-		return nil, nil, errAllAccountsFailed("Azure", outcome)
+		return nil, nil, nil, errAllAccountsFailed("Azure", outcome)
 	}
-	return recs, outcome.SucceededAccountIDs, nil
+	return recs, outcome.SucceededAccountIDs, outcome.Gap, nil
 }
 
-func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, bool, error) {
+func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
 	// Every recommendation returned below is tagged with THIS account's UUID
 	// (see tagAccount at the end of this function), so the provider must be
 	// pinned to this account's subscription. An empty AzureSubscriptionID
@@ -849,7 +891,7 @@ func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.Clou
 	// other subscriptions' recommendations under this account and expose them
 	// to anyone authorized for it. Fail loud instead; the row is misconfigured.
 	if acct.AzureSubscriptionID == "" {
-		return nil, false, fmt.Errorf("cloud account %s has no azure_subscription_id configured", acct.ID)
+		return nil, nil, fmt.Errorf("cloud account %s has no azure_subscription_id configured", acct.ID)
 	}
 
 	azCred, err := credentials.ResolveAzureTokenCredentialWithOpts(ctx, &acct, s.credStore, credentials.AzureResolveOptions{
@@ -857,24 +899,24 @@ func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.Clou
 		IssuerURL: s.oidcIssuerURL,
 	})
 	if err != nil {
-		return nil, false, fmt.Errorf("resolve credentials: %w", err)
+		return nil, nil, fmt.Errorf("resolve credentials: %w", err)
 	}
 	azProv, err := azureprovider.NewAzureProvider(&provider.ProviderConfig{Profile: acct.AzureSubscriptionID})
 	if err != nil {
-		return nil, false, fmt.Errorf("create provider: %w", err)
+		return nil, nil, fmt.Errorf("create provider: %w", err)
 	}
 	azProv.SetCredential(azCred)
 
 	recClient, err := azProv.GetRecommendationsClient(ctx)
 	if err != nil {
-		return nil, false, fmt.Errorf("get recommendations client: %w", err)
+		return nil, nil, fmt.Errorf("get recommendations client: %w", err)
 	}
 	recs, err := recClient.GetAllRecommendations(ctx)
-	complete, err := tolerateIncompleteSweep("azure", err)
+	gap, err := tolerateIncompleteSweep("azure", err)
 	if err != nil {
-		return nil, false, fmt.Errorf("get recommendations: %w", err)
+		return nil, nil, fmt.Errorf("get recommendations: %w", err)
 	}
-	return s.tagAccount(s.convertRecommendations(recs, "azure"), acct.ID), complete, nil
+	return s.tagAccount(s.convertRecommendations(recs, "azure"), acct.ID), gap, nil
 }
 
 // collectGCPRecommendations fans out across all enabled GCP accounts,
@@ -883,10 +925,10 @@ func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.Clou
 // running natively on GCP with ADC), falls back to ambient credentials
 // and tags recommendations with the registered project's UUID if found
 // in cloud_accounts.
-func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.GlobalConfig) ([]config.RecommendationRecord, []string, error) {
+func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.GlobalConfig) ([]config.RecommendationRecord, []string, *sweepGap, error) {
 	accounts, err := s.enabledAccounts(ctx, "gcp")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if len(accounts) == 0 {
 		// Issue #662: mirror the AWS ambient-path tagging fix for GCP.
@@ -896,33 +938,33 @@ func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.Glo
 		projectID := os.Getenv("GCP_PROJECT_ID")
 		if projectID == "" {
 			logging.Info("No enabled GCP accounts — skipping GCP recommendations")
-			return nil, nil, nil
+			return nil, nil, nil, nil
 		}
-		recs, complete, err := s.collectGCPAmbient(ctx)
+		recs, gap, err := s.collectGCPAmbient(ctx)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if acctID := s.resolveAmbientAccountID(ctx, "gcp", projectID); acctID != "" {
 			recs = s.tagAccount(recs, acctID)
-			return recs, ambientEvictionRoster(complete, acctID), nil
+			return recs, ambientEvictionRoster(gap == nil, acctID), gap.forAccount(), nil
 		}
-		return recs, ambientEvictionRoster(complete, ""), nil
+		return recs, ambientEvictionRoster(gap == nil, ""), gap.forAccount(), nil
 	}
 
 	recs, outcome := fanOutPerAccount(ctx, "GCP", accounts, s.collectGCPForAccount)
 	if outcome.FailedCount == len(accounts) && len(accounts) > 0 {
-		return nil, nil, errAllAccountsFailed("GCP", outcome)
+		return nil, nil, nil, errAllAccountsFailed("GCP", outcome)
 	}
-	return recs, outcome.SucceededAccountIDs, nil
+	return recs, outcome.SucceededAccountIDs, outcome.Gap, nil
 }
 
-func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, bool, error) {
+func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
 	gcpTS, err := credentials.ResolveGCPTokenSourceWithOpts(ctx, &acct, s.credStore, credentials.GCPResolveOptions{
 		Signer:    s.oidcSigner,
 		IssuerURL: s.oidcIssuerURL,
 	})
 	if err != nil {
-		return nil, false, fmt.Errorf("resolve credentials: %w", err)
+		return nil, nil, fmt.Errorf("resolve credentials: %w", err)
 	}
 
 	var prov provider.Provider
@@ -932,21 +974,21 @@ func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudA
 		// ADC mode (application_default): use ambient credentials
 		created, createErr := s.providerFactory.CreateAndValidateProvider(ctx, "gcp", nil)
 		if createErr != nil {
-			return nil, false, fmt.Errorf("create ambient GCP provider: %w", createErr)
+			return nil, nil, fmt.Errorf("create ambient GCP provider: %w", createErr)
 		}
 		prov = created
 	}
 
 	recClient, err := prov.GetRecommendationsClient(ctx)
 	if err != nil {
-		return nil, false, fmt.Errorf("get recommendations client: %w", err)
+		return nil, nil, fmt.Errorf("get recommendations client: %w", err)
 	}
 	recs, err := recClient.GetAllRecommendations(ctx)
-	complete, err := tolerateIncompleteSweep("gcp", err)
+	gap, err := tolerateIncompleteSweep("gcp", err)
 	if err != nil {
-		return nil, false, fmt.Errorf("get recommendations: %w", err)
+		return nil, nil, fmt.Errorf("get recommendations: %w", err)
 	}
-	return s.tagAccount(s.convertRecommendations(recs, "gcp"), acct.ID), complete, nil
+	return s.tagAccount(s.convertRecommendations(recs, "gcp"), acct.ID), gap, nil
 }
 
 // enabledAccounts returns all enabled cloud accounts for the given provider.
@@ -983,8 +1025,9 @@ func (s *Scheduler) enabledAccounts(ctx context.Context, providerName string) ([
 // other error is returned unchanged, preserving the existing fail-loud
 // behavior.
 //
-// The complete return value is what stops a tolerated sweep from being
-// mistaken for a whole one. It is false only for a partial sweep, and callers
+// The gap return value is what stops a tolerated sweep from being mistaken
+// for a whole one. It is nil for a complete sweep (and for a hard error, which
+// callers handle via err first); non-nil only for a partial sweep, and callers
 // must keep such an account OUT of the succeeded-account roster: that roster
 // drives UpsertRecommendations' stale-row eviction, which deletes with
 //
@@ -1003,45 +1046,45 @@ func (s *Scheduler) enabledAccounts(ctx context.Context, providerName string) ([
 // flaky subscription, the opposite failure and the one the succeeded-account
 // roster exists to prevent.
 //
-// NOTE: the incompleteness still reaches the state table only as a log line;
-// UpsertRecommendations continues to clear last_collection_error. That column
-// is a single global row (recommendations_state WHERE id = 1), not per
-// account, so representing one account's partial sweep in it is a separate
-// design decision and is left as follow-up work. With eviction withheld the
-// residue is observability, not lost rows.
-func tolerateIncompleteSweep(providerName string, err error) (complete bool, _ error) {
+// The gap is also how the incompleteness leaves the logs (issue #87): it is
+// threaded up through fanOutPerAccount and collectAllProviders into
+// recommendations_state.last_collection_partial, which the freshness API
+// serves, so the dashboard can tell 1-of-10 coverage from full coverage. It
+// is sanitized (counts and reason categories); the failed subscription IDs
+// and raw errors stay in this WARN log only. See sweepGap.
+func tolerateIncompleteSweep(providerName string, err error) (*sweepGap, error) {
 	var incomplete *awsrecommendations.IncompleteRecommendationsError
 	if errors.As(err, &incomplete) {
 		logging.Warnf("%s recommendations incomplete: failed_details=%d failed_scopes=%d; %v; keeping collected rows and withholding stale-row eviction",
 			providerName, incomplete.FailedDetails, incomplete.FailedScopes, incomplete)
-		return false, nil
+		return gapFromAWSIncomplete(incomplete), nil
 	}
 	partial := azureprovider.AsPartialSubscriptionFailure(err)
 	if partial == nil {
-		return err == nil, err
+		return nil, err
 	}
 	logging.Warnf(
 		"%s recommendations incomplete: %d of %d subscriptions succeeded; not queried: %s (keeping the %d that did, "+
 			"and holding back stale-row eviction so the un-queried subscriptions' previous rows survive)",
 		providerName, partial.Succeeded, partial.Attempted,
 		strings.Join(partial.FailedSubscriptionIDs(), ", "), partial.Succeeded)
-	return false, nil
+	return gapFromPartialSubscriptions(partial), nil
 }
 
 // fetchAndConvert is a convenience for the AWS ambient path.
 //
-// The bool reports whether the sweep covered everything it was asked to; see
+// The *sweepGap is nil when the sweep covered everything it was asked to; see
 // tolerateIncompleteSweep for why an incomplete one must not authorize
 // stale-row eviction.
-func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider, providerName string, accountID *string, expectedAccount string, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, bool, error) {
+func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider, providerName string, accountID *string, expectedAccount string, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, *sweepGap, error) {
 	recClient, err := prov.GetRecommendationsClient(ctx)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to get %s recommendations client: %w", providerName, err)
+		return nil, nil, fmt.Errorf("failed to get %s recommendations client: %w", providerName, err)
 	}
 	recs, err := recClient.GetAllRecommendations(ctx)
-	complete, err := tolerateIncompleteSweep(providerName, err)
+	gap, err := tolerateIncompleteSweep(providerName, err)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to get %s recommendations: %w", providerName, err)
+		return nil, nil, fmt.Errorf("failed to get %s recommendations: %w", providerName, err)
 	}
 	recs = dropForeignZonalEC2(recs, expectedAccount)
 	if len(recs) == 0 && globalCfg != nil {
@@ -1057,20 +1100,20 @@ func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider,
 				LookbackPeriod: fmt.Sprintf("%dd", lookbackDays),
 			}
 			fallbackRecs, recErr := recClient.GetRecommendations(ctx, &params)
-			fallbackComplete, recErr := tolerateIncompleteSweep(providerName, recErr)
+			fallbackGap, recErr := tolerateIncompleteSweep(providerName, recErr)
 			if recErr != nil {
-				return nil, false, fmt.Errorf("failed to get %s recommendations with default term/payment fallback (service=%s, term=%s, payment=%s, lookback=%s): %w",
+				return nil, nil, fmt.Errorf("failed to get %s recommendations with default term/payment fallback (service=%s, term=%s, payment=%s, lookback=%s): %w",
 					providerName, params.Service, params.Term, params.PaymentOption, params.LookbackPeriod, recErr)
 			}
 			recs = append(recs, dropForeignZonalEC2(fallbackRecs, expectedAccount)...)
-			complete = complete && fallbackComplete
+			gap = mergeSweepGaps(gap, fallbackGap)
 		}
 	}
 	result := s.convertRecommendations(recs, providerName)
 	if accountID != nil {
 		result = s.tagAccount(result, *accountID)
 	}
-	return result, complete, nil
+	return result, gap, nil
 }
 
 // tagAccount assigns the stored account identity and updates its recommendation ID.

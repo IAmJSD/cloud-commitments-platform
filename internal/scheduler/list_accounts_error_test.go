@@ -19,15 +19,15 @@ func TestCollectRecommendations_ListAccountsErrorFailsClosed(t *testing.T) {
 	tests := []struct {
 		name    string
 		env     map[string]string
-		collect func(*Scheduler) ([]config.RecommendationRecord, []string, error)
+		collect func(*Scheduler) ([]config.RecommendationRecord, []string, *sweepGap, error)
 	}{
-		{"aws", nil, func(s *Scheduler) ([]config.RecommendationRecord, []string, error) {
+		{"aws", nil, func(s *Scheduler) ([]config.RecommendationRecord, []string, *sweepGap, error) {
 			return s.collectAWSRecommendations(context.Background(), &config.GlobalConfig{})
 		}},
-		{"azure", map[string]string{"AZURE_SUBSCRIPTION_ID": "sub-a"}, func(s *Scheduler) ([]config.RecommendationRecord, []string, error) {
+		{"azure", map[string]string{"AZURE_SUBSCRIPTION_ID": "sub-a"}, func(s *Scheduler) ([]config.RecommendationRecord, []string, *sweepGap, error) {
 			return s.collectAzureRecommendations(context.Background(), &config.GlobalConfig{})
 		}},
-		{"gcp", map[string]string{"GCP_PROJECT_ID": "proj-a"}, func(s *Scheduler) ([]config.RecommendationRecord, []string, error) {
+		{"gcp", map[string]string{"GCP_PROJECT_ID": "proj-a"}, func(s *Scheduler) ([]config.RecommendationRecord, []string, *sweepGap, error) {
 			return s.collectGCPRecommendations(context.Background(), &config.GlobalConfig{})
 		}},
 	}
@@ -42,12 +42,13 @@ func TestCollectRecommendations_ListAccountsErrorFailsClosed(t *testing.T) {
 			factory := new(MockProviderFactory)
 			s := &Scheduler{config: store, providerFactory: factory}
 
-			recs, succeeded, err := tt.collect(s)
+			recs, succeeded, gap, err := tt.collect(s)
 
 			require.Error(t, err)
 			assert.ErrorIs(t, err, listErr)
 			assert.Empty(t, recs)
 			assert.Empty(t, succeeded, "a failed listing must not make any account eligible for eviction")
+			assert.Nil(t, gap, "a failed listing is a failure, not a partial sweep")
 			factory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
 		})
 	}

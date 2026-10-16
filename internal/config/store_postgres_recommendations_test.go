@@ -227,6 +227,63 @@ func TestPostgresStore_Freshness_RoundTrip(t *testing.T) {
 	assert.Equal(t, "aws failed", *fr.LastCollectionError)
 }
 
+// TestPostgresStore_CollectionPartial_RecordedAndCleared pins issue #87: a
+// partial sweep's summary round-trips through recommendations_state, survives
+// an error write (both can be true of one run), and is cleared by the next
+// Upsert or Replace -- i.e. by the next persisted collection, which re-sets
+// it only if that collection was partial too.
+func TestPostgresStore_CollectionPartial_RecordedAndCleared(t *testing.T) {
+	ctx := context.Background()
+	store, cleanup := setupRecommendationsStore(ctx, t)
+	defer cleanup()
+
+	fr, err := store.GetRecommendationsFreshness(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, fr.LastCollectionPartial, "a fresh deployment reads as complete")
+
+	partial := &config.RecommendationsCollectionPartial{
+		Providers: []config.PartialProviderSweep{{
+			Provider:           "azure",
+			IncompleteAccounts: 1,
+			AttemptedScopes:    10,
+			FailedScopes:       9,
+			Reasons:            map[string]int{config.PartialReasonPermissionDenied: 9},
+		}},
+	}
+	recordPartial := func() {
+		t.Helper()
+		require.NoError(t, store.SetRecommendationsCollectionPartial(ctx, partial))
+		got, getErr := store.GetRecommendationsFreshness(ctx)
+		require.NoError(t, getErr)
+		require.Equal(t, partial, got.LastCollectionPartial)
+	}
+
+	recordPartial()
+	require.NoError(t, store.SetRecommendationsCollectionError(ctx, "gcp: failed"))
+	fr, err = store.GetRecommendationsFreshness(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, partial, fr.LastCollectionPartial, "recording an error must not drop the partial marker")
+
+	now := time.Now().UTC().Truncate(time.Second)
+	require.NoError(t, store.UpsertRecommendations(ctx, now, nil, nil))
+	fr, err = store.GetRecommendationsFreshness(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, fr.LastCollectionPartial, "the next persisted collection must clear the marker")
+	assert.Nil(t, fr.LastCollectionError)
+
+	recordPartial()
+	require.NoError(t, store.ReplaceRecommendations(ctx, now.Add(time.Minute), nil))
+	fr, err = store.GetRecommendationsFreshness(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, fr.LastCollectionPartial, "a full resync must clear the marker too")
+
+	recordPartial()
+	require.NoError(t, store.SetRecommendationsCollectionPartial(ctx, nil))
+	fr, err = store.GetRecommendationsFreshness(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, fr.LastCollectionPartial, "a nil partial clears the column")
+}
+
 // TestPostgresStore_UpsertRecommendations_StoresAllTermVariants pins
 // the broadened-natural-key behavior from migration 000032: when
 // Azure returns multiple `(term, payment)` variants for the same
