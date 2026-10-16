@@ -24,6 +24,37 @@ import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
 
 /**
+ * describeDuplicateSubmit words the outcome of a submit the backend collapsed
+ * onto an earlier execution (duplicate=true, #758). It names that execution
+ * and its real state, so a direct-mode submit that joined a still-pending
+ * approval never claims it executed immediately (#759).
+ */
+function duplicateState(status: string): string {
+  // Exactly the statuses the duplicate lookup can return
+  // (internal/config/store_postgres.go); anything else gets a neutral line so
+  // a backend change cannot produce a false claim.
+  switch (status) {
+    case 'pending':
+    case 'notified':
+      return 'it is still awaiting approval';
+    case 'approved':
+    case 'running':
+      return 'it is being executed';
+    case 'completed':
+      return 'it was already executed';
+    case 'partially_completed':
+      return 'it was partially executed';
+    default:
+      return `its status is ${status}`;
+  }
+}
+
+function describeDuplicateSubmit(result: api.PurchaseResult): string {
+  const id = result.execution_id.slice(0, 8);
+  return `This matches an existing execution ${id}, so no new request was created; ${duplicateState(result.status)}. Check Purchase History.`;
+}
+
+/**
  * Initialize app
  */
 export async function init(): Promise<void> {
@@ -465,7 +496,13 @@ export async function handleExecutePurchase(): Promise<void> {
     clearPurchaseModalRecommendations();
     clearExecuteMode();
 
-    if (isDirect) {
+    if (result.duplicate) {
+      showToast({
+        message: describeDuplicateSubmit(result),
+        kind: 'info',
+        timeout: 15_000,
+      });
+    } else if (isDirect) {
       // Direct-execute: purchase is already committed; inform the user.
       showToast({
         message: `Purchase executed immediately (id ${result.execution_id.slice(0, 8)}). Check Purchase History for the result.`,
@@ -636,7 +673,14 @@ async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
     // name a recipient whose email never arrived. Multi-bucket purchases can
     // route to different approvers; dedupe so the toast is compact.
     const recipients = new Set<string>();
+    const joined: string[] = [];
+    let fresh = 0;
     for (const r of fulfilled) {
+      if (r.value.duplicate) {
+        joined.push(describeDuplicateSubmit(r.value));
+        continue;
+      }
+      fresh++;
       if (
         r.value.email_sent !== false &&
         r.value.status !== 'failed' &&
@@ -645,20 +689,25 @@ async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
         recipients.add(r.value.approval_recipient);
       }
     }
-    const noun = succeeded === 1 ? 'purchase' : 'purchases';
-    let message: string;
-    if (recipients.size === 0) {
-      message = `${succeeded} ${noun} submitted — check your email to approve each.`;
-    } else if (recipients.size === 1) {
-      message = `${succeeded} ${noun} sent for approval to ${[...recipients][0]}.`;
-    } else {
-      message = `${succeeded} ${noun} sent for approval to ${recipients.size} recipients (${[...recipients].sort().join(', ')}).`;
+    for (const message of joined) {
+      showToast({ message, kind: 'info', timeout: 15_000 });
     }
-    showToast({
-      message,
-      kind: 'success',
-      timeout: 15_000,
-    });
+    if (fresh > 0) {
+      const noun = fresh === 1 ? 'purchase' : 'purchases';
+      let message: string;
+      if (recipients.size === 0) {
+        message = `${fresh} ${noun} submitted — check your email to approve each.`;
+      } else if (recipients.size === 1) {
+        message = `${fresh} ${noun} sent for approval to ${[...recipients][0]}.`;
+      } else {
+        message = `${fresh} ${noun} sent for approval to ${recipients.size} recipients (${[...recipients].sort().join(', ')}).`;
+      }
+      showToast({
+        message,
+        kind: 'success',
+        timeout: 15_000,
+      });
+    }
   } else {
     // Prefix each failure with its bucket's account so the user knows what to
     // retry when one account's bucket fails and another's succeeds (issue #333).
@@ -683,15 +732,26 @@ async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
     let submittedNote = '';
     if (succeeded > 0 && succeeded < results.length) {
       const submittedLabels: string[] = [];
+      const joinedLabels: string[] = [];
       results.forEach((r, i) => {
         const ok =
           r.status === 'fulfilled' &&
           r.value.email_sent !== false &&
           r.value.status !== 'failed';
-        if (ok && buckets[i]) submittedLabels.push(fanOutBucketLabel(buckets[i]));
+        if (!ok || !buckets[i]) return;
+        if (r.value.duplicate) {
+          joinedLabels.push(
+            `${fanOutBucketLabel(buckets[i])} (existing ${r.value.execution_id.slice(0, 8)}: ${duplicateState(r.value.status).replace(/^(it was|it is|it) /, '')})`,
+          );
+        } else {
+          submittedLabels.push(fanOutBucketLabel(buckets[i]));
+        }
       });
+      if (joinedLabels.length > 0) {
+        submittedNote += ` Joined existing: ${joinedLabels.join(', ')}.`;
+      }
       if (submittedLabels.length > 0) {
-        submittedNote = ` Submitted (awaiting approval): ${submittedLabels.slice(0, 5).join(', ')}${
+        submittedNote += ` Submitted (awaiting approval): ${submittedLabels.slice(0, 5).join(', ')}${
           submittedLabels.length > 5 ? ` +${submittedLabels.length - 5} more` : ''
         }.`;
       }

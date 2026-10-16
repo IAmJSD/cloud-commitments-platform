@@ -422,6 +422,10 @@ export interface PurchaseResult {
   // True when the request was handled via the direct-execute path (issue
   // #289). Absent (undefined) on the standard approval-required flow.
   direct_execute?: boolean;
+  // True when this submit collapsed onto an earlier execution with the same
+  // creator and recommendations (#644, #758). execution_id and status then
+  // describe that earlier row, whatever mode this submit used.
+  duplicate?: boolean;
   // Per-rec payment-option coercion notices (#1503 follow-up). Present only
   // when the backend normalized a requested payment option onto a token that
   // bills on a DIFFERENT schedule (e.g. Azure "partial-upfront" -> "monthly"):
