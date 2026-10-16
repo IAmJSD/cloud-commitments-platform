@@ -732,12 +732,6 @@ func (h *Handler) buildResponseHeaders() map[string]string {
 	return corsHeaders
 }
 
-// validateRequest validates the incoming request and returns error response if validation fails.
-func (h *Handler) validateRequest(ctx context.Context, req *events.LambdaFunctionURLRequest, method, path string, corsHeaders map[string]string) *events.LambdaFunctionURLResponse {
-	_, response := h.validateRequestContext(ctx, req, method, path, corsHeaders)
-	return response
-}
-
 func (h *Handler) validateRequestContext(ctx context.Context, req *events.LambdaFunctionURLRequest, method, path string, corsHeaders map[string]string) (context.Context, *events.LambdaFunctionURLResponse) {
 	// Validate request body size
 	if err := validateRequestBodySize(req.Body); err != nil {
@@ -757,12 +751,6 @@ func (h *Handler) validateRequestContext(ctx context.Context, req *events.Lambda
 	}
 
 	return requestCtx, nil
-}
-
-// validateSecurity validates authentication and CSRF token.
-func (h *Handler) validateSecurity(ctx context.Context, req *events.LambdaFunctionURLRequest, method, path string, corsHeaders map[string]string) *events.LambdaFunctionURLResponse {
-	_, response := h.validateSecurityContext(ctx, req, method, path, corsHeaders)
-	return response
 }
 
 func (h *Handler) validateSecurityContext(ctx context.Context, req *events.LambdaFunctionURLRequest, method, path string, corsHeaders map[string]string) (context.Context, *events.LambdaFunctionURLResponse) {

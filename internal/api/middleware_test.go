@@ -68,11 +68,12 @@ func TestValidateSecurity_UnauthenticatedDeploymentInfoRejectedByMiddleware(t *t
 	handler := &Handler{apiKey: "secret-key"}
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{}}
 
-	resp := handler.validateSecurity(context.Background(), req, "GET", "/api/info/deployment", map[string]string{})
+	_, resp := handler.validateSecurityContext(context.Background(), req, "GET", "/api/info/deployment", map[string]string{})
 	require.NotNil(t, resp, "middleware must refuse /api/info/deployment itself, not rely on Router.Route")
 	assert.Equal(t, 401, resp.StatusCode)
 
-	assert.Nil(t, handler.validateSecurity(context.Background(), req, "GET", "/api/info", map[string]string{}))
+	_, resp = handler.validateSecurityContext(context.Background(), req, "GET", "/api/info", map[string]string{})
+	assert.Nil(t, resp)
 }
 
 func TestHandler_authenticate(t *testing.T) {

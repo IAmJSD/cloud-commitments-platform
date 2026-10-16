@@ -241,7 +241,7 @@ func (h *Handler) requiresCSRFValidation(method, path string) bool {
 	//
 	// Note: /api/purchases/approve/ and /api/purchases/cancel/ are NOT listed
 	// here. Those routes are AuthPublic and listed in isPublicEndpoint(), so
-	// validateSecurity() short-circuits before requiresCSRFValidation() is
+	// validateSecurityContext() short-circuits before requiresCSRFValidation() is
 	// reached on the token-only (email-link) path. For the session-authed path
 	// (approvePurchaseViaSession / cancelPurchaseViaSession), CSRF is enforced
 	// directly inside those functions -- a blanket middleware exemption would

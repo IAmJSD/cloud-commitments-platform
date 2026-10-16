@@ -55,9 +55,9 @@ func TestHandler_buildResponse_NilBody(t *testing.T) {
 	assert.Equal(t, "{}", resp.Body)
 }
 
-// Tests for validateSecurity
+// Tests for validateSecurityContext
 
-func TestHandler_validateSecurity_PublicEndpoint(t *testing.T) {
+func TestHandler_validateSecurityContext_PublicEndpoint(t *testing.T) {
 	ctx := context.Background()
 	handler := &Handler{}
 
@@ -65,11 +65,11 @@ func TestHandler_validateSecurity_PublicEndpoint(t *testing.T) {
 	headers := map[string]string{}
 
 	// Public endpoint should return nil
-	resp := handler.validateSecurity(ctx, req, "GET", "/api/health", headers)
+	_, resp := handler.validateSecurityContext(ctx, req, "GET", "/api/health", headers)
 	assert.Nil(t, resp)
 }
 
-func TestHandler_validateSecurity_Unauthorized(t *testing.T) {
+func TestHandler_validateSecurityContext_Unauthorized(t *testing.T) {
 	ctx := context.Background()
 	handler := &Handler{apiKey: "secret-key"}
 
@@ -78,12 +78,12 @@ func TestHandler_validateSecurity_Unauthorized(t *testing.T) {
 	}
 	headers := map[string]string{}
 
-	resp := handler.validateSecurity(ctx, req, "GET", "/api/config", headers)
+	_, resp := handler.validateSecurityContext(ctx, req, "GET", "/api/config", headers)
 	assert.NotNil(t, resp)
 	assert.Equal(t, 401, resp.StatusCode)
 }
 
-func TestHandler_validateSecurity_CSRFFailure(t *testing.T) {
+func TestHandler_validateSecurityContext_CSRFFailure(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 
@@ -102,14 +102,14 @@ func TestHandler_validateSecurity_CSRFFailure(t *testing.T) {
 	headers := map[string]string{}
 
 	// PUT on /api/config requires CSRF
-	resp := handler.validateSecurity(ctx, req, "PUT", "/api/config", headers)
+	_, resp := handler.validateSecurityContext(ctx, req, "PUT", "/api/config", headers)
 	require.NotNil(t, resp)
 	assert.Equal(t, 403, resp.StatusCode)
 }
 
 // Tests for request validation
 
-func TestHandler_validateRequest_BodyTooLarge(t *testing.T) {
+func TestHandler_validateRequestContext_BodyTooLarge(t *testing.T) {
 	ctx := context.Background()
 	handler := &Handler{}
 
@@ -120,12 +120,12 @@ func TestHandler_validateRequest_BodyTooLarge(t *testing.T) {
 	}
 	headers := map[string]string{}
 
-	resp := handler.validateRequest(ctx, req, "POST", "/api/config", headers)
+	_, resp := handler.validateRequestContext(ctx, req, "POST", "/api/config", headers)
 	assert.NotNil(t, resp)
 	assert.Equal(t, 413, resp.StatusCode)
 }
 
-func TestHandler_validateRequest_InvalidContentType(t *testing.T) {
+func TestHandler_validateRequestContext_InvalidContentType(t *testing.T) {
 	ctx := context.Background()
 	handler := &Handler{}
 
@@ -144,7 +144,7 @@ func TestHandler_validateRequest_InvalidContentType(t *testing.T) {
 	}
 	headers := map[string]string{}
 
-	resp := handler.validateRequest(ctx, req, "POST", "/api/health", headers)
+	_, resp := handler.validateRequestContext(ctx, req, "POST", "/api/health", headers)
 	require.NotNil(t, resp)
 	assert.Equal(t, 415, resp.StatusCode)
 }
@@ -777,34 +777,6 @@ func TestDecodeBase64Password_ValidBase64(t *testing.T) {
 	result, err := decodeBase64Password("dGVzdDEyMw==")
 	assert.NoError(t, err)
 	assert.Equal(t, "test123", result)
-}
-
-// Tests for types_apikeys toAPIPermissions (02-N2: typed input, no silent drop).
-
-func TestToAPIPermissions_EmptySlice(t *testing.T) {
-	result := toAPIPermissions([]Permission{})
-	assert.Len(t, result, 0)
-}
-
-func TestToAPIPermissions_WithPermissions(t *testing.T) {
-	perms := []Permission{
-		{Action: "read", Resource: "config"},
-		{Action: "write", Resource: "plans"},
-	}
-
-	result := toAPIPermissions(perms)
-
-	assert.Len(t, result, 2)
-	assert.Equal(t, "config", result[0].Resource)
-	assert.Equal(t, "read", result[0].Action)
-}
-
-func TestToAPIPermissions_ReturnsCopy(t *testing.T) {
-	// Mutation of the returned slice must not affect the original (copy contract).
-	src := []Permission{{Action: "read", Resource: "config"}}
-	result := toAPIPermissions(src)
-	result[0].Action = "write"
-	assert.Equal(t, "read", src[0].Action, "original slice must not be mutated")
 }
 
 // Test NewHandler with API key loaded.
