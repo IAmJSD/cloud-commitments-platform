@@ -13,7 +13,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/jackc/pgx/v5"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,25 +45,15 @@ func (f *createConcurrencyFixture) extraAccount(ctx context.Context, t *testing.
 	return acct.ID
 }
 
-// holdPlanLock stands in for the editor command: an open transaction holding
-// the plan row FOR UPDATE, rolled back at test end unless the test commits it.
-func (f *createConcurrencyFixture) holdPlanLock(ctx context.Context, t *testing.T) pgx.Tx {
+// holdPlanLock is the shared command footprint (plan, executions, accounts).
+func (f *createConcurrencyFixture) holdPlanLock(ctx context.Context, t *testing.T) *testhelpers.Footprint {
 	t.Helper()
-	command, err := f.pool.Begin(ctx)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = command.Rollback(ctx) })
-	_, err = command.Exec(ctx, `SELECT 1 FROM purchase_plans WHERE id = $1 FOR UPDATE`, f.planID)
-	require.NoError(t, err)
-	return command
+	return testhelpers.HoldCommandFootprint(ctx, t, f.pool, f.planID)
 }
 
 func awaitLockWait(ctx context.Context, t *testing.T, f *createConcurrencyFixture) {
 	t.Helper()
-	require.Eventually(t, func() bool {
-		var n int
-		require.NoError(t, f.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'`).Scan(&n))
-		return n > 0
-	}, 15*time.Second, 50*time.Millisecond, "writer must wait on the plan lock")
+	testhelpers.WaitForLockWait(ctx, t, f.pool, "")
 }
 
 const (
