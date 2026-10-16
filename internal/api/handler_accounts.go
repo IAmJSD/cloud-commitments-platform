@@ -1329,6 +1329,9 @@ func (h *Handler) setPlanAccounts(ctx context.Context, httpReq *events.LambdaFun
 		if errors.Is(err, config.ErrNotFound) {
 			return nil, NewClientError(404, err.Error())
 		}
+		if errors.Is(err, config.ErrEditorReconciliationRequired) {
+			return nil, editorReconciliationError()
+		}
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 

@@ -511,6 +511,9 @@ func (h *Handler) createPlannedPurchasesTx(ctx context.Context, tx pgx.Tx, planI
 	if err := h.requirePlanMutationAccess(ctx, session, planID); err != nil {
 		return 0, err
 	}
+	if plan.RampSchedule.DatesManaged {
+		return 0, editorReconciliationError()
+	}
 	if err := h.validatePurchaseScheduling(ctx, plan, count, startDate); err != nil {
 		return 0, err
 	}

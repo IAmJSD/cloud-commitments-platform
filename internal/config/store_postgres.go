@@ -4147,6 +4147,9 @@ func (s *PostgresStore) SetPlanAccounts(ctx context.Context, planID string, acco
 	}
 	defer rollbackTx(ctx, tx, "SetPlanAccounts")
 
+	if guardErr := requireManagedAccountsTx(ctx, tx, planID, accountIDs); guardErr != nil {
+		return guardErr
+	}
 	if setErr := s.setPlanAccountsTx(ctx, tx, planID, accountIDs); setErr != nil {
 		return setErr
 	}
