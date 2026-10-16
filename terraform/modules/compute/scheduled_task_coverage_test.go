@@ -33,13 +33,18 @@ var optInRequired = map[string]bool{
 	"cleanup":                     true,
 }
 
-const dimTask = "missingTask"
+const (
+	dimTask    = "missingTask"
+	dimPass    = "missingEnvPassThrough"
+	dimDefault = "missingEnvDefault"
+)
 
 var (
-	validDims = []string{dimTask}
+	validDims = []string{dimTask, dimPass, dimDefault}
 	allEight  = []string{"analytics_collect", "cleanup", "collect_recommendations", "finalize_revocations",
 		"fire_scheduled_purchases", "process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}
-	sevenGCP = []string{"analytics_collect", "cleanup", "finalize_revocations", "fire_scheduled_purchases",
+	reapAnalytics = []string{"analytics_collect", "reap_stuck_purchases"}
+	sevenGCP      = []string{"analytics_collect", "cleanup", "finalize_revocations", "fire_scheduled_purchases",
 		"process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}
 )
 
@@ -48,7 +53,11 @@ var (
 // aws/cleanup-lambda and gcp/cleanup-function run cleanup outside the server
 // task and are not scanned, so cleanup shows as a gap on AWS and GCP.
 var knownGaps = map[string]map[string][]string{
-	"aws-lambda": {dimTask: {"cleanup", "finalize_revocations", "process_scheduled_purchases", "send_notifications"}},
+	"aws-lambda": {
+		dimTask:    {"cleanup", "finalize_revocations", "process_scheduled_purchases", "send_notifications"},
+		dimPass:    reapAnalytics,
+		dimDefault: reapAnalytics,
+	},
 	"aws-fargate": {dimTask: {"analytics_collect", "cleanup", "finalize_revocations",
 		"process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}},
 	"cloudformation": {dimTask: {"analytics_collect", "cleanup", "finalize_revocations",
@@ -60,11 +69,17 @@ var knownGaps = map[string]map[string][]string{
 	"azure-aks": {dimTask: allEight}, // no scheduler resources at all: #893
 }
 
-type platform struct{ name, dir string }
+// aws platforms are also checked against terraform/environments/aws: envBlock
+// is the module block in compute.tf, needsPermission whether sweeps.tf must
+// hold an aws_lambda_permission (Lambda only).
+type platform struct {
+	name, dir, envBlock  string
+	aws, needsPermission bool
+}
 
 var platforms = []platform{
-	{name: "aws-lambda", dir: "aws/lambda"},
-	{name: "aws-fargate", dir: "aws/fargate"},
+	{name: "aws-lambda", dir: "aws/lambda", aws: true, envBlock: "compute_lambda", needsPermission: true},
+	{name: "aws-fargate", dir: "aws/fargate", aws: true, envBlock: "compute_fargate"},
 	{name: "cloudformation", dir: "../../../cloudformation/stacks/CUDly"},
 	{name: "gcp-cloud-run", dir: "gcp/cloud-run"},
 	{name: "gcp-gke", dir: "gcp/gke"},
@@ -255,6 +270,11 @@ func TestEveryServerTaskIsClassified(t *testing.T) {
 			t.Errorf("opt-in task %q is not a required roster task", name)
 		}
 	}
+	for _, name := range requiredTasks() {
+		if _, ok := taskVars[name]; !ok {
+			t.Errorf("required task %q has no taskVars entry; classify it as exempt or add one", name)
+		}
+	}
 	for _, prob := range knownGapsProblems(knownGaps) {
 		t.Error(prob)
 	}
@@ -295,6 +315,15 @@ func TestRequiredTasksWiredPerPlatform(t *testing.T) {
 		}
 		for _, prob := range checkGaps(missing, knownGaps[p.name][dimTask]) {
 			t.Errorf("%s: %s (missing now: %v)", p.name, prob, missing)
+		}
+		if p.aws {
+			sweeps, err := sweepProblems(p.dir, p.needsPermission)
+			if err != nil {
+				t.Errorf("%s: %v", p.name, err)
+			}
+			for _, prob := range sweeps {
+				t.Errorf("%s: sweeps.tf: %s", p.name, prob)
+			}
 		}
 	}
 }
