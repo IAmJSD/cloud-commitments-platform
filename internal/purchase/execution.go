@@ -100,15 +100,8 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 // plain error when nothing committed. Split out of executePurchase to keep that
 // function under the gocyclo budget.
 func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan) error {
-	if err := requireRecsMatchRowAccount(exec); err != nil {
-		return beforeSubmission(err)
-	}
-	provCfg, targetAccountID, err := m.resolveSingleAccountProvider(ctx, exec)
+	provCfg, targetAccountID, err := m.prepareSingleAccountSubmission(ctx, exec)
 	if err != nil {
-		return beforeSubmission(err)
-	}
-	// Pinned only now that the attempt can submit (issue #97); see fan_out_shape.go.
-	if err := m.pinLineageShape(ctx, exec, config.FanOutShapeSingle); err != nil {
 		return err
 	}
 	// #646: stamp the resolved target account on history, not the ambient
@@ -156,6 +149,26 @@ func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.Purchas
 		return &partialPurchaseError{errors: purchaseErrors}
 	}
 	return nil
+}
+
+// prepareSingleAccountSubmission runs the single-account path's pre-submission
+// steps: check the recs match the row's account, resolve the provider and
+// target account, then pin the lineage's shape now that the attempt can submit
+// (issue #97; see fan_out_shape.go). Every error it returns is before
+// submission. Split out of executeSingleAccount to keep that function under
+// the gocyclo budget.
+func (m *Manager) prepareSingleAccountSubmission(ctx context.Context, exec *config.PurchaseExecution) (*provider.ProviderConfig, string, error) {
+	if err := requireRecsMatchRowAccount(exec); err != nil {
+		return nil, "", beforeSubmission(err)
+	}
+	provCfg, targetAccountID, err := m.resolveSingleAccountProvider(ctx, exec)
+	if err != nil {
+		return nil, "", beforeSubmission(err)
+	}
+	if err := m.pinLineageShape(ctx, exec, config.FanOutShapeSingle); err != nil {
+		return nil, "", err // already beforeSubmission
+	}
+	return provCfg, targetAccountID, nil
 }
 
 // anyRecPurchased reports whether at least one recommendation in the slice
