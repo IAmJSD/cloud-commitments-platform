@@ -1,0 +1,9 @@
+# Fixture: a scope-wide grant whose block is not laid out the way
+# `terraform fmt` produces (indented header), so a column-0 block matcher never
+# enters it. Must exit 1.
+
+  resource "google_project_iam_member" "indented" {
+    project = var.project_id
+    role    = "roles/secretmanager.secretAccessor"
+    member  = "serviceAccount:${google_service_account.workload.email}"
+  }

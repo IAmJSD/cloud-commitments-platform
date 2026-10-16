@@ -1,0 +1,18 @@
+# Fixture: a scope-wide Secret Manager role reached through locals + for_each,
+# carrying a waiver with a reason on the line directly above it. Must exit 0.
+
+locals {
+  deploy_roles = toset([
+    "roles/run.admin",
+    # gcp-secret-scope: allow - deploy SA creates and manages the secrets (fixture)
+    "roles/secretmanager.admin",
+  ])
+}
+
+resource "google_project_iam_member" "deploy" {
+  for_each = local.deploy_roles
+
+  project = var.project_id
+  role    = each.key
+  member  = "serviceAccount:${google_service_account.deploy.email}"
+}

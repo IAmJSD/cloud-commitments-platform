@@ -1,0 +1,8 @@
+# Fixture: the role name is assembled with format(), the other way to build a
+# predefined role name the scanner cannot resolve. Must exit 1.
+
+resource "google_folder_iam_member" "assembled" {
+  folder = var.folder_id
+  role   = format("roles/%s", var.role_suffix)
+  member = "serviceAccount:${google_service_account.workload.email}"
+}

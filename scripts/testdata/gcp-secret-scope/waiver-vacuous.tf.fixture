@@ -1,0 +1,9 @@
+# Fixture: a waiver whose next line carries no Secret Manager role excuses
+# nothing. It must fail rather than sit there matching nothing. Must exit 1.
+
+locals {
+  deploy_roles = toset([
+    # gcp-secret-scope: allow - left behind after the role was removed
+    "roles/run.admin",
+  ])
+}

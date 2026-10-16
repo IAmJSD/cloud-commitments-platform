@@ -1,0 +1,16 @@
+# Fixture: a custom role carrying Secret Manager permissions, bound at project
+# scope. That is the same blast radius as roles/secretmanager.secretAccessor
+# without ever naming a roles/secretmanager.* role. Must exit 1.
+
+resource "google_project_iam_custom_role" "reader" {
+  project     = var.project_id
+  role_id     = "secretReader"
+  title       = "Secret reader"
+  permissions = ["secretmanager.versions.access"]
+}
+
+resource "google_project_iam_member" "reader" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.reader.id
+  member  = "serviceAccount:${google_service_account.workload.email}"
+}
