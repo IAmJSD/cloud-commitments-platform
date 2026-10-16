@@ -204,7 +204,7 @@ resource "aws_iam_policy" "iam" {
         # starts with cudly- and no root-path one. Denying all of IAM on that
         # shape, rather than mirroring today's Allow lists, is what keeps a
         # later cudly-* Allow from reopening the bypass;
-        # TestDeployPolicyDeniesPathBearingCudlyARNs in policy_guard_test.go
+        # TestDeployPolicyDeniesPathBearingCudlyARNs in policy_path_guard_test.go
         # checks both directions (impostor refused, real roles untouched), and
         # TestCudlyIAMResourcesUseRootPath fails if a module ever sets a path.
         #
