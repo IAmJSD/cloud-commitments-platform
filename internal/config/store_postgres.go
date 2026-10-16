@@ -9,6 +9,7 @@ import (
 	"hash/fnv"
 	"math/big"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1191,7 +1192,7 @@ func (s *PostgresStore) RotatePendingApprovalToken(ctx context.Context, executio
 // and the legacy cancelled_by (issue #119), matching what the other cancel paths
 // record and what History reads.
 func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*PurchaseExecution, error) {
-	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, nil)
+	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, nil, nil)
 }
 
 // TransitionExecutionStatusPinned is TransitionExecutionStatus that also
@@ -1200,7 +1201,21 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 // claim makes the pin fail with ErrExecutionNotInExpectedStatus, so a row is
 // never run on a snapshot different from the one that was gated.
 func (s *PostgresStore) TransitionExecutionStatusPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*PurchaseExecution, error) {
-	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, &sawEmptyRecommendations)
+	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, &sawEmptyRecommendations, nil)
+}
+
+// TransitionExecutionStatusTokenPinned is TransitionExecutionStatus that also
+// requires approval_token_hash to equal the hash of rawToken and the token to
+// be unexpired, checked in the same UPDATE as the status change. The caller's
+// earlier token check ran against a snapshot; a re-notification that rotates
+// the token between that read and this write would otherwise still let the
+// old token win the transition (issue #590). An empty rawToken never matches.
+func (s *PostgresStore) TransitionExecutionStatusTokenPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, rawToken string) (*PurchaseExecution, error) {
+	if rawToken == "" {
+		return nil, fmt.Errorf("%w: execution %s: no approval token supplied", ErrApprovalTokenChanged, executionID)
+	}
+	tokenHash := HashApprovalToken(rawToken)
+	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, nil, &tokenHash)
 }
 
 // RescheduleAwaitingExecution is a conditional single-column update: the
@@ -1215,7 +1230,7 @@ func (s *PostgresStore) RescheduleAwaitingExecution(ctx context.Context, executi
 	return tag.RowsAffected() == 1, nil
 }
 
-func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmpty *bool) (*PurchaseExecution, error) {
+func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmpty *bool, tokenHash *string) (*PurchaseExecution, error) {
 	var cancelActor *string
 	if toStatus == StatusCanceled {
 		cancelActor = actor
@@ -1228,6 +1243,8 @@ func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, execution
 		    cancelled_by = COALESCE((SELECT email FROM users WHERE id = $5), cancelled_by)
 		WHERE execution_id = $1 AND status = ANY($3)
 		  AND ($6::boolean IS NULL OR (recommendations IN ('[]'::jsonb, 'null'::jsonb)) = $6)
+		  AND ($7::text IS NULL OR (approval_token_hash = $7
+		       AND (approval_token_expires_at IS NULL OR approval_token_expires_at > NOW())))
 		RETURNING plan_id, execution_id, status, step_number, scheduled_date,
 		          notification_sent, approval_token_hash, recommendations,
 		          total_upfront_cost, estimated_savings, completed_at, error, expires_at,
@@ -1238,31 +1255,45 @@ func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, execution
 		          idempotency_key, scheduled_execution_at, no_submission
 	`
 
-	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses, actor, cancelActor, sawEmpty)
+	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses, actor, cancelActor, sawEmpty, tokenHash)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(records) == 0 {
-		existing, existErr := s.GetExecutionByID(ctx, executionID)
-		if errors.Is(existErr, ErrNotFound) {
-			// Wrap ErrNotFound so callers (e.g. the purchase reaper) can
-			// use errors.Is to distinguish "row vanished mid-flight" — a
-			// legitimate CAS race-loss — from a hard DB error.
-			return nil, fmt.Errorf("%w: execution %s", ErrNotFound, executionID)
-		}
-		if existErr != nil {
-			// A hard DB error during the probe must NOT read as a benign
-			// race-loss: propagate it so callers see the outage.
-			return nil, fmt.Errorf("transition %s: probe after zero-row CAS failed: %w", executionID, existErr)
-		}
-		// Wrap ErrExecutionNotInExpectedStatus so callers can use
-		// errors.Is to recognize CAS rejection (status changed between
-		// SELECT and UPDATE) as race-lost rather than a real error.
-		return nil, fmt.Errorf("%w: execution %s cannot transition from %q to %q", ErrExecutionNotInExpectedStatus, executionID, existing.Status, toStatus)
+		return nil, s.transitionRejection(ctx, executionID, fromStatuses, toStatus, tokenHash != nil)
 	}
 
 	return &records[0], nil
+}
+
+// transitionRejection explains a zero-row transitionExecutionStatus by probing
+// the row: gone (ErrNotFound), a hard DB error, a token pin lost on a row still
+// in an allowed status (ErrApprovalTokenChanged), or a status CAS lost
+// (ErrExecutionNotInExpectedStatus). Extracted to keep the caller under the
+// gocyclo threshold.
+func (s *PostgresStore) transitionRejection(ctx context.Context, executionID string, fromStatuses []string, toStatus string, tokenPinned bool) error {
+	existing, existErr := s.GetExecutionByID(ctx, executionID)
+	if errors.Is(existErr, ErrNotFound) {
+		// Wrap ErrNotFound so callers (e.g. the purchase reaper) can
+		// use errors.Is to distinguish "row vanished mid-flight" — a
+		// legitimate CAS race-loss — from a hard DB error.
+		return fmt.Errorf("%w: execution %s", ErrNotFound, executionID)
+	}
+	if existErr != nil {
+		// A hard DB error during the probe must NOT read as a benign
+		// race-loss: propagate it so callers see the outage.
+		return fmt.Errorf("transition %s: probe after zero-row CAS failed: %w", executionID, existErr)
+	}
+	// The status still allowed the transition, so the token pin is what
+	// rejected it: the stored token was rotated or expired (issue #590).
+	if tokenPinned && slices.Contains(fromStatuses, existing.Status) {
+		return fmt.Errorf("%w: execution %s", ErrApprovalTokenChanged, executionID)
+	}
+	// Wrap ErrExecutionNotInExpectedStatus so callers can use
+	// errors.Is to recognize CAS rejection (status changed between
+	// SELECT and UPDATE) as race-lost rather than a real error.
+	return fmt.Errorf("%w: execution %s cannot transition from %q to %q", ErrExecutionNotInExpectedStatus, executionID, existing.Status, toStatus)
 }
 
 // SetCancelledBy stamps both the canceled_by and legacy cancelled_by columns

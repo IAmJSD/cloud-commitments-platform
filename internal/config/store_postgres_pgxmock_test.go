@@ -2807,7 +2807,7 @@ func TestPGXMock_TransitionExecutionStatus_ProbeHardErrorNotMappedToNotFound(t *
 
 	// CAS UPDATE matches zero rows (status already transitioned or row gone).
 	mock.ExpectQuery(`UPDATE purchase_executions`).
-		WithArgs(anyArgsCfg(6)...).
+		WithArgs(anyArgsCfg(7)...).
 		WillReturnRows(pgxmock.NewRows(execCols))
 
 	// Probe fails with a hard DB error, not an empty result.

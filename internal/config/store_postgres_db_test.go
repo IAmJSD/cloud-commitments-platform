@@ -1783,6 +1783,88 @@ func TestPostgresStoreDB_TransitionExecutionStatusPinned(t *testing.T) {
 	})
 }
 
+// TestPostgresStoreDB_TransitionExecutionStatusTokenPinned (issue #590): the
+// delayed email-link approval re-checks the approval token inside the status
+// CAS, so a token rotated (re-notification) or expired after the caller read
+// its snapshot loses the transition and leaves the row untouched, while the
+// current token still wins it.
+func TestPostgresStoreDB_TransitionExecutionStatusTokenPinned(t *testing.T) {
+	conn := setupTestContainerDB(t)
+	if conn == nil {
+		return
+	}
+	store := NewPostgresStore(conn)
+	ctx := context.Background()
+	plan := &PurchasePlan{Name: "token pinned", Enabled: true, Services: map[string]ServiceConfig{}, RampSchedule: PresetRampSchedules["immediate"]}
+	require.NoError(t, store.CreatePurchasePlan(ctx, plan))
+	from := []string{"pending", "notified"}
+	const oldToken, newToken = "old-raw-token", "new-raw-token"
+	newRow := func(t *testing.T, expiresAt time.Time) *PurchaseExecution {
+		t.Helper()
+		exec := &PurchaseExecution{PlanID: plan.ID, Status: "notified", StepNumber: 1, ScheduledDate: time.Now(),
+			ApprovalToken: HashApprovalToken(oldToken), ApprovalTokenExpiresAt: &expiresAt}
+		require.NoError(t, store.SavePurchaseExecution(ctx, exec))
+		return exec
+	}
+	requireUntouched := func(t *testing.T, id string) {
+		t.Helper()
+		reread, err := store.GetExecutionByID(ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, "notified", reread.Status, "a rejected transition must leave the row as it was")
+	}
+
+	t.Run("token rotated after the snapshot loses the transition", func(t *testing.T) {
+		exec := newRow(t, time.Now().Add(time.Hour))
+		snapshot, err := store.GetExecutionByID(ctx, exec.ExecutionID)
+		require.NoError(t, err)
+		require.True(t, ApprovalTokenMatches(snapshot.ApprovalToken, oldToken), "the caller's snapshot validates the old token")
+		rotated, err := store.RotatePendingApprovalToken(ctx, exec.ExecutionID, HashApprovalToken(newToken), time.Now().Add(time.Hour))
+		require.NoError(t, err)
+		require.True(t, rotated)
+
+		_, err = store.TransitionExecutionStatusTokenPinned(ctx, exec.ExecutionID, from, "scheduled", nil, oldToken)
+		require.ErrorIs(t, err, ErrApprovalTokenChanged)
+		requireUntouched(t, exec.ExecutionID)
+
+		got, err := store.TransitionExecutionStatusTokenPinned(ctx, exec.ExecutionID, from, "scheduled", nil, newToken)
+		require.NoError(t, err)
+		assert.Equal(t, "scheduled", got.Status, "the current token still schedules the row")
+	})
+
+	t.Run("token expired after the snapshot loses the transition", func(t *testing.T) {
+		exec := newRow(t, time.Now().Add(-time.Minute))
+		_, err := store.TransitionExecutionStatusTokenPinned(ctx, exec.ExecutionID, from, "scheduled", nil, oldToken)
+		require.ErrorIs(t, err, ErrApprovalTokenChanged)
+		requireUntouched(t, exec.ExecutionID)
+	})
+
+	t.Run("wrong or empty token loses the transition", func(t *testing.T) {
+		exec := newRow(t, time.Now().Add(time.Hour))
+		for _, tok := range []string{"not-the-token", ""} {
+			_, err := store.TransitionExecutionStatusTokenPinned(ctx, exec.ExecutionID, from, "scheduled", nil, tok)
+			require.ErrorIs(t, err, ErrApprovalTokenChanged, "token %q", tok)
+			requireUntouched(t, exec.ExecutionID)
+		}
+	})
+
+	t.Run("a row with no stored token never matches", func(t *testing.T) {
+		exec := &PurchaseExecution{PlanID: plan.ID, Status: "notified", StepNumber: 1, ScheduledDate: time.Now()}
+		require.NoError(t, store.SavePurchaseExecution(ctx, exec))
+		_, err := store.TransitionExecutionStatusTokenPinned(ctx, exec.ExecutionID, from, "scheduled", nil, oldToken)
+		require.ErrorIs(t, err, ErrApprovalTokenChanged)
+		requireUntouched(t, exec.ExecutionID)
+	})
+
+	t.Run("matching token on a row past the allowed statuses is a status CAS loss", func(t *testing.T) {
+		exec := newRow(t, time.Now().Add(time.Hour))
+		_, err := store.TransitionExecutionStatusTokenPinned(ctx, exec.ExecutionID, from, "scheduled", nil, oldToken)
+		require.NoError(t, err)
+		_, err = store.TransitionExecutionStatusTokenPinned(ctx, exec.ExecutionID, from, "scheduled", nil, oldToken)
+		require.ErrorIs(t, err, ErrExecutionNotInExpectedStatus, "a replay of a scheduled row is a status race loss")
+		require.NotErrorIs(t, err, ErrApprovalTokenChanged)
+	})
+}
+
 // TestPostgresStoreDB_StepCapAndKillSwitchRoundTrip proves, against a real
 // PostgreSQL, that max_step_commitment round-trips through every plan read and
 // write path (NULL stays NULL) and that auto_purchase_enabled round-trips
