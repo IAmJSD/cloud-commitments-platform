@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -97,7 +98,7 @@ func TestGenerateFederationIaC_TfvarsCombinations(t *testing.T) {
 			name: "azure target, aws source",
 			args: []string{
 				"--target", "azure", "--source", "aws",
-				"--account-name", "Acme", "--account-id", "sub-1234",
+				"--account-name", "Acme", "--account-id", "11111111-2222-3333-4444-555555555555",
 				"--tenant-id", "11111111-2222-3333-4444-555555555555",
 				"--contact-email", "ops@example.com", "--cudly-api-url", "https://cudly.example.com",
 				"--output", "-",
@@ -111,7 +112,7 @@ func TestGenerateFederationIaC_TfvarsCombinations(t *testing.T) {
 			name: "azure target, gcp source",
 			args: []string{
 				"--target", "azure", "--source", "gcp",
-				"--account-name", "Acme", "--account-id", "sub-1234",
+				"--account-name", "Acme", "--account-id", "11111111-2222-3333-4444-555555555555",
 				"--tenant-id", "11111111-2222-3333-4444-555555555555",
 				"--contact-email", "ops@example.com", "--cudly-api-url", "https://cudly.example.com",
 				"--output", "-",
@@ -324,7 +325,7 @@ func TestGenerator_AzureMissingURLPreservesOutput(t *testing.T) {
 			output := filepath.Join(t.TempDir(), "existing-output")
 			const sentinel = "existing operator data\n"
 			require.NoError(t, os.WriteFile(output, []byte(sentinel), 0o600))
-			args := []string{"--target", "azure", "--source", "aws", "--account-name", "Acme", "--account-id", "subscription"}
+			args := []string{"--target", "azure", "--source", "aws", "--account-name", "Acme", "--account-id", "11111111-2222-3333-4444-555555555555"}
 			if format == "bundle" {
 				args = append(args, "--format", "bundle")
 			}
@@ -386,11 +387,117 @@ func TestGenerator_NonAzureDoesNotRequireAPIURL(t *testing.T) {
 	for _, target := range []string{"aws", "gcp"} {
 		t.Run(target, func(t *testing.T) {
 			res := runGenerator(t,
-				"--target", target, "--source", "aws", "--account-name", "Acme", "--account-id", "999888777666",
+				"--target", target, "--source", "aws", "--account-name", "Acme", "--account-id", validAccountIDFor(target),
 				"--source-account-id", "111122223333", "--output", "-",
 			)
 			require.Zero(t, res.exitCode, "stderr: %s", res.stderr)
 			require.Contains(t, res.stdout, `cudly_api_url = ""`)
+		})
+	}
+}
+
+// accountIDArgs is a complete, otherwise-valid invocation for target with
+// --source aws, so the only thing that can make it fail is --account-id.
+func accountIDArgs(target, accountID, output string) []string {
+	args := []string{
+		"--target", target, "--source", "aws",
+		"--account-name", "Acme", "--account-id", accountID,
+		"--output", output,
+	}
+	switch target {
+	case "aws", "gcp":
+		args = append(args, "--source-account-id", "111122223333")
+	case "azure":
+		args = append(args,
+			"--tenant-id", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+			"--cudly-api-url", "https://cudly.example.com")
+	}
+	return args
+}
+
+// TestGenerator_RejectsMalformedAccountID is the regression test for #164:
+// --account-id was checked for presence but never for format, so a malformed
+// value flowed into AccountExternalID (and from there SubscriptionID or
+// ProjectID) and out into the rendered tfvars, surfacing later as a confusing
+// Terraform or provider error far from its cause. The flag means a different
+// thing per --target, so each target arm gets its own malformed shapes,
+// including values a normalizer would have "fixed" (padding, case, braces):
+// the generator must reject those rather than rewrite them into validity.
+func TestGenerator_RejectsMalformedAccountID(t *testing.T) {
+	cases := []struct {
+		name      string
+		target    string
+		accountID string
+		wantShape string
+	}{
+		{name: "aws too short", target: "aws", accountID: "12345", wantShape: "AWS account ID"},
+		{name: "aws too long", target: "aws", accountID: "9998887776661", wantShape: "AWS account ID"},
+		{name: "aws non-digit characters", target: "aws", accountID: "99988877766a", wantShape: "AWS account ID"},
+		{name: "aws leading plus sign", target: "aws", accountID: "+99888777666", wantShape: "AWS account ID"},
+		{name: "aws whitespace padded", target: "aws", accountID: " 999888777666", wantShape: "AWS account ID"},
+		{name: "azure not a GUID", target: "azure", accountID: "sub-1234", wantShape: "Azure subscription ID"},
+		{name: "azure GUID without hyphens", target: "azure", accountID: "11111111222233334444555555555555", wantShape: "Azure subscription ID"},
+		{name: "azure GUID in braces", target: "azure", accountID: "{11111111-2222-3333-4444-555555555555}", wantShape: "Azure subscription ID"},
+		{name: "azure whitespace padded", target: "azure", accountID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee ", wantShape: "Azure subscription ID"},
+		{name: "azure non-hex digit", target: "azure", accountID: "1111111g-2222-3333-4444-555555555555", wantShape: "Azure subscription ID"},
+		{name: "gcp uppercase", target: "gcp", accountID: "My-Project", wantShape: "GCP project ID"},
+		{name: "gcp digit first", target: "gcp", accountID: "1my-project", wantShape: "GCP project ID"},
+		{name: "gcp trailing hyphen", target: "gcp", accountID: "my-project-", wantShape: "GCP project ID"},
+		{name: "gcp too short", target: "gcp", accountID: "abcde", wantShape: "GCP project ID"},
+		{name: "gcp too long", target: "gcp", accountID: "a" + strings.Repeat("b", 30), wantShape: "GCP project ID"},
+		{name: "gcp underscore", target: "gcp", accountID: "my_project", wantShape: "GCP project ID"},
+		{name: "gcp whitespace padded", target: "gcp", accountID: " my-project", wantShape: "GCP project ID"},
+		{name: "gcp HCL quote injection", target: "gcp", accountID: "my-project\"\nevil = \"x", wantShape: "GCP project ID"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			output := filepath.Join(t.TempDir(), "output")
+			res := runGenerator(t, accountIDArgs(tc.target, tc.accountID, output)...)
+			require.NotZero(t, res.exitCode, "stdout: %s; stderr: %s", res.stdout, res.stderr)
+			require.Contains(t, res.stderr, "--account-id")
+			require.Contains(t, res.stderr, strconv.Quote(tc.accountID), "error must name the rejected value")
+			require.Contains(t, res.stderr, "is not a valid "+tc.wantShape)
+			require.Contains(t, res.stderr, "--target "+tc.target)
+			require.Empty(t, res.stdout)
+			_, err := os.Stat(output)
+			require.ErrorIs(t, err, os.ErrNotExist, "no artifact may be written for a rejected --account-id")
+		})
+	}
+}
+
+// TestGenerator_AcceptsValidAccountID is the positive control for
+// TestGenerator_RejectsMalformedAccountID: well-formed values for each target,
+// including the boundaries of each rule, still render and appear verbatim in
+// the output.
+func TestGenerator_AcceptsValidAccountID(t *testing.T) {
+	cases := []struct {
+		name      string
+		target    string
+		accountID string
+	}{
+		// The AWS rows are multi-line so each 12-digit value sits alone on an
+		// accountID line, the shape .gitallowed exempts for synthetic fixtures.
+		{
+			name:      "aws 12 digits",
+			target:    "aws",
+			accountID: "123456789012",
+		},
+		{
+			name:      "aws leading zeros",
+			target:    "aws",
+			accountID: "000011112222",
+		},
+		{name: "azure lowercase GUID", target: "azure", accountID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+		{name: "azure uppercase GUID", target: "azure", accountID: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"},
+		{name: "gcp typical", target: "gcp", accountID: "my-project"},
+		{name: "gcp minimum length", target: "gcp", accountID: "abcdef"},
+		{name: "gcp maximum length", target: "gcp", accountID: "a" + strings.Repeat("b", 28) + "9"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := runGenerator(t, accountIDArgs(tc.target, tc.accountID, "-")...)
+			require.Zero(t, res.exitCode, "stderr: %s", res.stderr)
+			require.Contains(t, res.stdout, tc.accountID)
 		})
 	}
 }

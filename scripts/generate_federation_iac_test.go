@@ -129,6 +129,21 @@ func awsWIFArgs(subjectClaim, output string) []string {
 	return args
 }
 
+// validAccountIDFor returns a well-formed --account-id for target. The flag is
+// validated per target (#164), so a fixture that varies --target must vary
+// the account ID with it or it fails on --account-id before reaching the
+// check under test.
+func validAccountIDFor(target string) string {
+	switch target {
+	case "azure":
+		return "11111111-2222-3333-4444-555555555555"
+	case "gcp":
+		return "my-project"
+	default:
+		return "123456789012"
+	}
+}
+
 // TestGenerator_RejectsHostileOIDCSubjectClaim is the regression test for the
 // #1691 review finding: the generator used to assign --oidc-subject-claim
 // straight onto the template data with no validation and no escaping, and the
@@ -266,7 +281,7 @@ func TestGenerator_RejectsInapplicableSubjectClaim(t *testing.T) {
 				"--target", tc.target,
 				"--source", tc.source,
 				"--account-name", "prod",
-				"--account-id", "123456789012",
+				"--account-id", validAccountIDFor(tc.target),
 				"--oidc-subject-claim", "123456789012345678901",
 				"--output", filepath.Join(t.TempDir(), "generated.tfvars"),
 			)
@@ -377,7 +392,7 @@ func TestGenerator_OverlongClaimIsNotEchoed(t *testing.T) {
 				"--target", tc.target,
 				"--source", tc.source,
 				"--account-name", "prod",
-				"--account-id", "123456789012",
+				"--account-id", validAccountIDFor(tc.target),
 				"--oidc-subject-claim", claim,
 				"--output", filepath.Join(t.TempDir(), "generated.tfvars"),
 			)
