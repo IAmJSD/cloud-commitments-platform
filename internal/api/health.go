@@ -83,9 +83,11 @@ func (h *Handler) checkConfigStore(ctx context.Context) HealthCheck {
 // Returns one of three logical states via Status + Message:
 //
 //   - "healthy" / "ok": real key loaded from a Secrets Manager / Vault.
-//   - "degraded" / "dev_key_in_use": CREDENTIAL_ENCRYPTION_ALLOW_DEV_KEY=1 was
-//     set, so the all-zero key is in use. Acceptable for local dev only;
+//   - "degraded" / "credential store degraded": CREDENTIAL_ENCRYPTION_ALLOW_DEV_KEY=1
+//     was set, so the all-zero key is in use. Acceptable for local dev only;
 //     monitoring should alert on this state in any deployed environment.
+//     /health is a public route, so the body stays generic and the cause
+//     (dev key in use) goes to the server log only, like checkConfigStore (#15).
 //   - "unhealthy" / "not configured": no credStore was wired in (config error).
 //
 // NOTE: "ok" only confirms the key is valid (LoadKey succeeded + startup guard
@@ -99,9 +101,10 @@ func (h *Handler) checkCredentialStore() HealthCheck {
 		}
 	}
 	if h.encryptionKeySource == credentials.EnvAllowDev {
+		logging.Warnf("health: credential store is using the insecure all-zero dev key (%s=1)", credentials.EnvAllowDev)
 		return HealthCheck{
 			Status:  "degraded",
-			Message: "dev_key_in_use",
+			Message: "credential store degraded",
 		}
 	}
 	return HealthCheck{Status: "healthy"}
