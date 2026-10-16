@@ -282,3 +282,23 @@ func TestDevKey_AllZero(t *testing.T) {
 		assert.Equal(t, byte(0), b)
 	}
 }
+
+// TestDecrypt_WrongNonceLength guards against gcm.Open panicking
+// ("incorrect nonce length given to GCM") on a blob whose nonce part decodes
+// to anything other than 12 bytes. Decrypt must return an error instead, so
+// callers (e.g. cmd/rekey) can count the row as unreadable rather than crash.
+func TestDecrypt_WrongNonceLength(t *testing.T) {
+	cases := map[string]string{
+		"short nonce": "AAAA.BBBBBBBBBBBBBBBBBBBB",
+		"empty nonce": ".BBBBBBBBBBBBBBBBBBBB",
+		"long nonce":  strings.Repeat("A", 24) + ".BBBBBBBBBBBBBBBBBBBB",
+	}
+	for name, blob := range cases {
+		t.Run(name, func(t *testing.T) {
+			var err error
+			require.NotPanics(t, func() { _, err = Decrypt(testKey, blob) })
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "nonce")
+		})
+	}
+}
