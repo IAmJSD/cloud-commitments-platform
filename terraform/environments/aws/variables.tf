@@ -312,6 +312,66 @@ variable "fire_scheduled_purchases_schedule" {
   default     = "rate(15 minutes)"
 }
 
+variable "enable_process_scheduled_purchases_schedule" {
+  description = "Enable the scheduled process_scheduled_purchases sweep. Opt-in, default false. Note (#894): the stuck-purchase reaper can fail stranded approved rows before process re-drives them."
+  type        = bool
+  default     = false
+}
+
+variable "process_scheduled_purchases_schedule" {
+  description = "EventBridge schedule for the process_scheduled_purchases sweep (default rate(1 hour))."
+  type        = string
+  default     = "rate(1 hour)"
+}
+
+variable "enable_send_notifications_schedule" {
+  description = "Enable the scheduled send_notifications sweep. Opt-in, default false; enable it together with process_scheduled_purchases."
+  type        = bool
+  default     = false
+}
+
+variable "send_notifications_schedule" {
+  description = "EventBridge schedule for the send_notifications sweep (default rate(1 day))."
+  type        = string
+  default     = "rate(1 day)"
+}
+
+variable "enable_finalize_revocations_schedule" {
+  description = "Enable the scheduled finalize_revocations sweep (idempotent audit repair)."
+  type        = bool
+  default     = true
+}
+
+variable "finalize_revocations_schedule" {
+  description = "EventBridge schedule for the finalize_revocations sweep (default rate(1 hour))."
+  type        = string
+  default     = "rate(1 hour)"
+}
+
+variable "enable_reap_stuck_purchases_schedule" {
+  description = "Enable the scheduled stuck-purchase reaper sweep (issue #678 backstop)."
+  type        = bool
+  default     = true
+}
+
+variable "reap_stuck_purchases_schedule" {
+  description = "EventBridge schedule for the reap_stuck_purchases sweep (default rate(5 minutes))."
+  type        = string
+  default     = "rate(5 minutes)"
+}
+
+variable "enable_analytics_collect_schedule" {
+  description = "Enable the scheduled savings-snapshot analytics collection."
+  type        = bool
+  default     = true
+}
+
+variable "analytics_collect_schedule" {
+  description = "EventBridge schedule for the analytics_collect sweep (default rate(1 day))."
+  type        = string
+  default     = "rate(1 day)"
+}
+
 # ==============================================
 # Multi-Account Configuration
 # ==============================================
