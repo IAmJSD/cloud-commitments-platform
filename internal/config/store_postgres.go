@@ -867,18 +867,24 @@ func (s *PostgresStore) StampPlanNotificationSent(ctx context.Context, planID st
 
 // DeletePurchasePlan deletes a purchase plan.
 func (s *PostgresStore) DeletePurchasePlan(ctx context.Context, planID string) error {
-	query := `DELETE FROM purchase_plans WHERE id = $1`
-
-	result, err := s.db.Exec(ctx, query, planID)
-	if err != nil {
-		return fmt.Errorf("failed to delete purchase plan: %w", err)
-	}
-
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("purchase plan not found: %s", planID)
-	}
-
-	return nil
+	return s.WithTx(ctx, func(tx pgx.Tx) error {
+		plan, err := s.LockPurchasePlanTx(ctx, tx, planID)
+		if err != nil {
+			return err
+		}
+		if plan == nil {
+			return fmt.Errorf("purchase plan not found: %s", planID)
+		}
+		if plan.RampSchedule.DatesManaged {
+			if err := requireManagedDeleteTx(ctx, tx, planID); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM purchase_plans WHERE id = $1`, planID); err != nil {
+			return fmt.Errorf("failed to delete purchase plan: %w", err)
+		}
+		return nil
+	})
 }
 
 // buildListPlansQuery returns the SQL query and args for ListPurchasePlans.
@@ -1237,13 +1243,35 @@ func (s *PostgresStore) TransitionExecutionStatusTokenPinned(ctx context.Context
 // RescheduleAwaitingExecution is a conditional single-column update: the
 // status predicate makes a lost race a benign no-op instead of an overwrite.
 func (s *PostgresStore) RescheduleAwaitingExecution(ctx context.Context, executionID string, scheduledDate time.Time) (bool, error) {
-	tag, err := s.db.Exec(ctx, `
-		UPDATE purchase_executions SET scheduled_date = $2, updated_at = NOW()
-		WHERE execution_id = $1 AND status IN ('pending', 'notified')`, executionID, scheduledDate)
+	var planID *string
+	err := s.db.QueryRow(ctx, `SELECT plan_id::text FROM purchase_executions WHERE execution_id = $1`, executionID).Scan(&planID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
 		return false, fmt.Errorf("reschedule execution %s: %w", executionID, err)
 	}
-	return tag.RowsAffected() == 1, nil
+	updated := false
+	err = s.WithTx(ctx, func(tx pgx.Tx) error {
+		if planID != nil {
+			plan, lockErr := s.LockPurchasePlanTx(ctx, tx, *planID)
+			if lockErr != nil {
+				return lockErr
+			}
+			if plan != nil && plan.RampSchedule.DatesManaged {
+				return fmt.Errorf("%w: reschedule of execution %s", ErrEditorReconciliationRequired, executionID)
+			}
+		}
+		tag, execErr := tx.Exec(ctx, `
+			UPDATE purchase_executions SET scheduled_date = $2, updated_at = NOW()
+			WHERE execution_id = $1 AND status IN ('pending', 'notified')`, executionID, scheduledDate)
+		updated = execErr == nil && tag.RowsAffected() == 1
+		return execErr
+	})
+	if err != nil {
+		return false, fmt.Errorf("reschedule execution %s: %w", executionID, err)
+	}
+	return updated, nil
 }
 
 func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmpty *bool, tokenHash *string) (*PurchaseExecution, error) {

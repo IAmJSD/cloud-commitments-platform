@@ -118,3 +118,26 @@ func sameAccountSet(a, b []string) bool {
 	}
 	return true
 }
+
+// requireManagedDeleteTx refuses deleting a managed plan while an execution may
+// hold or buy capacity: the FK would detach it (ON DELETE SET NULL) and it
+// would then buy with no plan. Judged under the caller's plan lock, so a root
+// inserted by a command that committed first is seen. Settled history
+// (completed, canceled, expired, failed without submission) does not block.
+func requireManagedDeleteTx(ctx context.Context, tx pgx.Tx, planID string) error {
+	rows, err := tx.Query(ctx, `SELECT status, no_submission FROM purchase_executions WHERE plan_id = $1`, planID)
+	if err != nil {
+		return fmt.Errorf("failed to read plan executions: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e PurchaseExecution
+		if err := rows.Scan(&e.Status, &e.NoSubmission); err != nil {
+			return fmt.Errorf("failed to scan plan execution: %w", err)
+		}
+		if holdsCapacity(&e) && e.Status != StatusCompleted && e.Status != StatusPartiallyCompleted {
+			return fmt.Errorf("%w: plan %s", ErrManagedPlanLiveExecutions, planID)
+		}
+	}
+	return rows.Err()
+}

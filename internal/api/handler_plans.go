@@ -434,6 +434,10 @@ func (h *Handler) deletePlan(ctx context.Context, req *events.LambdaFunctionURLR
 	}
 
 	if err := h.config.DeletePurchasePlan(ctx, planID); err != nil {
+		if errors.Is(err, config.ErrManagedPlanLiveExecutions) {
+			return nil, planEditorRefusal(http.StatusConflict, codeManagedPlanLiveExecutions,
+				"this plan still has active or unsettled purchases; cancel or revoke them first")
+		}
 		return nil, err
 	}
 

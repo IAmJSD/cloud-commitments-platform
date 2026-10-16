@@ -278,6 +278,9 @@ func (h *Handler) requireResumeVetoWindow(ctx context.Context, executionID strin
 	if err != nil {
 		return fmt.Errorf("failed to read plan %s before resuming execution %s: %w", row.PlanID, executionID, err)
 	}
+	if plan.RampSchedule.DatesManaged {
+		return editorReconciliationError()
+	}
 	if vetoErr := plan.RequireVetoWindow(); vetoErr != nil {
 		return NewClientError(409, fmt.Sprintf("execution %s cannot be resumed: %v", executionID, vetoErr))
 	}
@@ -306,6 +309,9 @@ func (h *Handler) pushPastScheduledDate(ctx context.Context, row *config.Purchas
 	// approve landing after the resume must not be overwritten. A lost
 	// condition is a benign no-op (the row is no longer awaiting approval).
 	if _, err := h.config.RescheduleAwaitingExecution(ctx, row.ExecutionID, now.AddDate(0, 0, plan.NotificationDaysBefore)); err != nil {
+		if errors.Is(err, config.ErrEditorReconciliationRequired) {
+			return editorReconciliationError()
+		}
 		return fmt.Errorf("failed to reschedule resumed execution %s: %w", row.ExecutionID, err)
 	}
 	return nil

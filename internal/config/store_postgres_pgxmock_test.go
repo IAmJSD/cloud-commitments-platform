@@ -630,13 +630,28 @@ func TestPGXMock_UpdatePurchasePlan_NotFound(t *testing.T) {
 
 // ─── DeletePurchasePlan ───────────────────────────────────────────────────────
 
+func expectLockedUnmanagedPlan(mock pgxmock.PgxPoolIface) {
+	now := time.Now().Truncate(time.Second)
+	svcJSON, _ := json.Marshal(map[string]ServiceConfig{})
+	rampJSON, _ := json.Marshal(RampSchedule{})
+	mock.ExpectBegin()
+	mock.ExpectQuery("FOR UPDATE").WithArgs("plan-id").WillReturnRows(pgxmock.NewRows([]string{
+		"id", "name", "enabled", "auto_purchase", "notification_days_before",
+		"services", "ramp_schedule", "created_at", "updated_at",
+		"next_execution_date", "last_execution_date", "last_notification_sent", "max_step_commitment",
+	}).AddRow("plan-id", "My Plan", true, false, 3, svcJSON, rampJSON, now, now,
+		sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, (*float64)(nil)))
+}
+
 func TestPGXMock_DeletePurchasePlan_Success(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
 	ctx := context.Background()
 
+	expectLockedUnmanagedPlan(mock)
 	mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectCommit()
 
 	err := store.DeletePurchasePlan(ctx, "plan-id")
 	require.NoError(t, err)
@@ -648,8 +663,9 @@ func TestPGXMock_DeletePurchasePlan_NotFound(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg()).
-		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectBegin()
+	mock.ExpectQuery("FOR UPDATE").WithArgs("plan-id").WillReturnError(pgx.ErrNoRows)
+	mock.ExpectRollback()
 
 	err := store.DeletePurchasePlan(ctx, "plan-id")
 	require.Error(t, err)
