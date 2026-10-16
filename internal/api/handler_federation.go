@@ -529,7 +529,10 @@ func writeAzureTemplateFiles(zw *zip.Writer, data federationIaCData, format, tem
 	if err != nil {
 		return fmt.Errorf("azure %s: read template: %w", format, err)
 	}
-	deployScript, err := renderTemplate("templates/azure-wif-bicep-deploy.sh.tmpl", data)
+	// The deploy script embeds the session user's email in a double-quoted
+	// bash string, so render it shell-escaped like the CLI and CFN scripts
+	// (#958). The params JSON interpolates no fields and stays unescaped.
+	deployScript, err := renderTemplate("templates/azure-wif-bicep-deploy.sh.tmpl", shellEscapeData(data))
 	if err != nil {
 		return fmt.Errorf("azure %s: render deploy script: %w", format, err)
 	}
