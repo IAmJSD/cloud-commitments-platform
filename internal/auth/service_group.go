@@ -464,11 +464,3 @@ func matchAllRegionsConstraint(permRegions, reqRegions []string) bool {
 	}
 	return true
 }
-
-// matchPurchaseAmountConstraint checks if requested amount is within permitted limit.
-func matchPurchaseAmountConstraint(permMax, reqMax float64) bool {
-	if permMax > 0 && reqMax > permMax {
-		return false
-	}
-	return true
-}
