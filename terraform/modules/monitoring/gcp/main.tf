@@ -617,9 +617,23 @@ resource "google_monitoring_uptime_check_config" "service_health" {
     }
   }
 
+  # /health answers 200 by design even when every dependency is down (it is
+  # the liveness contract, #488), so the verdict has to come from the body.
+  # Match the top-level "status" field exactly: a CONTAINS_STRING "healthy"
+  # matcher also matches "unhealthy" and every nested check's
+  # {"status":"healthy"}, so it passed on a degraded replica (#649). The check
+  # stays on /health, not /ready (pointing an uptime monitor at /ready would
+  # flap the alert on every deploy); service_unavailable below only fires
+  # after 180s of failures, so a replica that reports "degraded" briefly while
+  # it initializes does not page.
   content_matchers {
     content = "healthy"
-    matcher = "CONTAINS_STRING"
+    matcher = "MATCHES_JSON_PATH"
+
+    json_path_matcher {
+      json_path    = "$.status"
+      json_matcher = "EXACT_MATCH"
+    }
   }
 }
 
