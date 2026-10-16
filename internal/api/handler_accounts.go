@@ -581,12 +581,12 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 
 // deleteAccount handles DELETE /api/accounts/:id.
 //
-// Preflights the delete against pending/notified purchase_executions
-// (issue #606). Migration 000053 also enforces ON DELETE RESTRICT at the
-// DB level so a race that slips past the preflight still can't orphan a
-// pending execution — but the preflight gives the frontend a structured
-// 409 (with the count + execution_ids) so it can offer a Cancel-All-Then-
-// Delete affordance instead of surfacing a raw FK-violation 500.
+// Preflights the delete against the purchase_executions that still need the
+// account (preflightAccountDelete). Executions in a terminal status do not
+// block: DeleteCloudAccount detaches them (cloud_account_id = NULL) and keeps
+// them as history (issue #265). Migration 000053 also enforces ON DELETE
+// RESTRICT at the DB level, so a live execution that races past the
+// preflight still can't be orphaned.
 func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionURLRequest, id string) (any, error) {
 	if err := validateUUID(id); err != nil {
 		return nil, err
@@ -604,44 +604,20 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 		return nil, err
 	}
 
-	// Preflight: refuse the delete if pending/notified executions still
-	// reference this account. The frontend uses the pending_count + the
-	// pending_execution_ids list to drive the Cancel-All-Then-Delete UX.
-	pendingCount, err := h.config.CountPendingExecutionsForAccount(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("accounts: %w", err)
-	}
-	if pendingCount > 0 {
-		execIDs, listErr := h.config.ListPendingExecutionIDsForAccount(ctx, id)
-		if listErr != nil {
-			// Count succeeded but list failed — still surface the 409 so the
-			// operator gets a clear "cancel them first" message instead of
-			// the raw FK error from the eventual DB delete. The list payload
-			// is omitted; the frontend falls back to a generic message.
-			return nil, NewClientErrorWithDetails(409,
-				fmt.Sprintf("cannot delete account: %d pending purchase(s) must be canceled first", pendingCount),
-				map[string]any{
-					"pending_count": pendingCount,
-					"reason":        "pending_executions",
-				})
-		}
-		return nil, NewClientErrorWithDetails(409,
-			fmt.Sprintf("cannot delete account: %d pending purchase(s) must be canceled first", pendingCount),
-			map[string]any{
-				"pending_count":         pendingCount,
-				"pending_execution_ids": execIDs,
-				"reason":                "pending_executions",
-			})
+	if err := h.preflightAccountDelete(ctx, id); err != nil {
+		return nil, err
 	}
 
 	if err := h.config.DeleteCloudAccount(ctx, id); err != nil {
-		// Race: the preflight count was 0 but a pending execution row was
-		// inserted concurrently before we issued the DELETE. Migration 000053
-		// enforces ON DELETE RESTRICT, so Postgres raises SQLSTATE 23503
-		// (foreign_key_violation). Map this to the same structured 409 the
-		// preflight branch returns so the frontend's Cancel-All-Then-Delete
-		// affordance still kicks in — minus the count/ids, which we can't
-		// supply without re-querying (and the operator can just retry).
+		// Race: the preflight found no live execution but one was inserted
+		// concurrently before we issued the DELETE. Migration 000053 enforces
+		// ON DELETE RESTRICT, so Postgres raises SQLSTATE 23503
+		// (foreign_key_violation). Terminal executions never cause this:
+		// DeleteCloudAccount detaches them in the same transaction. Map it to
+		// the same structured 409 the preflight returns so the frontend's
+		// Cancel-All-Then-Delete affordance still kicks in — minus the
+		// count/ids, which we can't supply without re-querying (and the
+		// operator can just retry).
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 			return nil, NewClientErrorWithDetails(409,
@@ -654,6 +630,66 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 	}
 
 	return nil, nil
+}
+
+// preflightAccountDelete refuses the delete with a structured 409 while any
+// purchase execution still needs the account:
+//
+//   - pending/notified rows (reason "pending_executions", issue #606): the
+//     frontend uses pending_count + pending_execution_ids to drive the
+//     Cancel-All-Then-Delete UX.
+//   - any other non-terminal row, e.g. approved, running, scheduled or
+//     paused (reason "active_executions", issue #265). These can't be
+//     canceled from the account page, so the operator has to let them
+//     finish, or revoke or delete them, first.
+//
+// Terminal rows are not counted: DeleteCloudAccount detaches them and keeps
+// them as history.
+func (h *Handler) preflightAccountDelete(ctx context.Context, id string) error {
+	pendingCount, err := h.config.CountPendingExecutionsForAccount(ctx, id)
+	if err != nil {
+		return fmt.Errorf("accounts: %w", err)
+	}
+	if pendingCount > 0 {
+		return h.pendingExecutionsConflict(ctx, id, pendingCount)
+	}
+
+	liveCount, err := h.config.CountLiveExecutionsForAccount(ctx, id)
+	if err != nil {
+		return fmt.Errorf("accounts: %w", err)
+	}
+	if liveCount > 0 {
+		return NewClientErrorWithDetails(409,
+			fmt.Sprintf("cannot delete account: %d in-progress purchase(s) (approved, running, scheduled or paused) still use it; "+
+				"wait for them to finish, or revoke or delete them, first", liveCount),
+			map[string]any{
+				"active_count": liveCount,
+				"reason":       "active_executions",
+			})
+	}
+	return nil
+}
+
+// pendingExecutionsConflict builds the issue #606 409 for pendingCount
+// pending/notified executions, with their IDs when they can be listed.
+func (h *Handler) pendingExecutionsConflict(ctx context.Context, id string, pendingCount int) error {
+	msg := fmt.Sprintf("cannot delete account: %d pending purchase(s) must be canceled first", pendingCount)
+	execIDs, listErr := h.config.ListPendingExecutionIDsForAccount(ctx, id)
+	if listErr != nil {
+		// Count succeeded but list failed — still surface the 409 so the
+		// operator gets a clear "cancel them first" message instead of
+		// the raw FK error from the eventual DB delete. The list payload
+		// is omitted; the frontend falls back to a generic message.
+		return NewClientErrorWithDetails(409, msg, map[string]any{
+			"pending_count": pendingCount,
+			"reason":        "pending_executions",
+		})
+	}
+	return NewClientErrorWithDetails(409, msg, map[string]any{
+		"pending_count":         pendingCount,
+		"pending_execution_ids": execIDs,
+		"reason":                "pending_executions",
+	})
 }
 
 // parseAndValidateCredentialsRequest performs all input validation that must

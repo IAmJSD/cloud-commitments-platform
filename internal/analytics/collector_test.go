@@ -299,6 +299,10 @@ func (m *mockConfigStore) CountPendingExecutionsForAccount(ctx context.Context, 
 	return 0, nil
 }
 
+func (m *mockConfigStore) CountLiveExecutionsForAccount(ctx context.Context, accountID string) (int, error) {
+	return 0, nil
+}
+
 func (m *mockConfigStore) ListPendingExecutionIDsForAccount(ctx context.Context, accountID string) ([]string, error) {
 	return nil, nil
 }
