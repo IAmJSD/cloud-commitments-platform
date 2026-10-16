@@ -231,10 +231,14 @@ func validateRequestedPermissions(requested []Permission) error {
 // would break edits of data this endpoint already accepted.
 //
 // MaxPurchaseAmount has no blank form: zero already means "no cap" on both
-// sides of the comparison, so there is nothing here to disambiguate.
+// sides of the comparison. A negative or NaN cap is refused instead
+// (validateMaxPurchaseAmount, issue #83).
 func validateConstraintEntries(permIndex int, p Permission) error {
 	if p.Constraints == nil {
 		return nil
+	}
+	if err := validateMaxPurchaseAmount(permIndex, p); err != nil {
+		return err
 	}
 	dimensions := []struct {
 		name   string
@@ -502,9 +506,13 @@ func listCovers(held, req []string) bool {
 // amountCovers reports whether a grant capped at reqMax stays within a holder
 // capped at heldMax. Zero means "no cap" on both sides (mirroring
 // matchPurchaseAmountConstraint), so a capped holder cannot hand out an
-// uncapped grant.
+// uncapped grant. A malformed (negative/NaN) held cap denies everything at
+// enforcement, so it covers nothing here either (issue #83).
 func amountCovers(heldMax, reqMax float64) bool {
-	if heldMax <= 0 {
+	if invalidPurchaseAmountCap(heldMax) {
+		return false
+	}
+	if heldMax == 0 {
 		return true
 	}
 	return reqMax > 0 && reqMax <= heldMax
