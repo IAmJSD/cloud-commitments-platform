@@ -2,7 +2,10 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
@@ -58,7 +61,37 @@ func TestHandler_checkCredentialStore_DevKeyInUse(t *testing.T) {
 	}
 	check := h.checkCredentialStore()
 	assert.Equal(t, "degraded", check.Status)
-	assert.Equal(t, "dev_key_in_use", check.Message)
+	// /health is a public route: the body must not say which key is in use
+	// (#15). The detail goes to the server log only.
+	assert.Equal(t, "credential store degraded", check.Message)
+}
+
+// TestHandler_GetHealth_DevKeyNotDisclosed checks the public /health body
+// never names the dev key or the env var that selected it (#15).
+func TestHandler_GetHealth_DevKeyNotDisclosed(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
+
+	handler := &Handler{
+		config:              mockStore,
+		auth:                new(MockAuthService),
+		credStore:           &stubCredStore{},
+		encryptionKeySource: credentials.EnvAllowDev,
+	}
+
+	response, err := handler.GetHealth(ctx)
+	require.NoError(t, err)
+
+	// Monitoring still sees the degraded state.
+	assert.Equal(t, "degraded", response.Status)
+	assert.Equal(t, "degraded", response.Checks["credential_store"].Status)
+
+	body, err := json.Marshal(response)
+	require.NoError(t, err)
+	for _, leak := range []string{"dev_key", "dev key", credentials.EnvAllowDev, "CREDENTIAL_ENCRYPTION"} {
+		assert.NotContains(t, strings.ToLower(string(body)), strings.ToLower(leak))
+	}
 }
 
 func TestHandler_checkCredentialStore_NotConfigured(t *testing.T) {
@@ -227,4 +260,19 @@ func TestHealthCheck_Structure(t *testing.T) {
 
 	assert.Equal(t, "unhealthy", check.Status)
 	assert.Equal(t, "Service unavailable", check.Message)
+}
+
+// TestHandler_checkCredentialStore_DevKeyWarnsOnce checks the dev-key warning
+// is logged once per process, not on every /health probe.
+func TestHandler_checkCredentialStore_DevKeyWarnsOnce(t *testing.T) {
+	devKeyWarnOnce = sync.Once{}
+	t.Cleanup(func() { devKeyWarnOnce = sync.Once{} })
+	buf := captureDefaultLog(t)
+
+	h := &Handler{credStore: &stubCredStore{}, encryptionKeySource: credentials.EnvAllowDev}
+	for i := 0; i < 3; i++ {
+		assert.Equal(t, "degraded", h.checkCredentialStore().Status)
+	}
+
+	assert.Equal(t, 1, strings.Count(buf.String(), "insecure all-zero dev key"), buf.String())
 }

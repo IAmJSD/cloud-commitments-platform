@@ -99,7 +99,8 @@ type Application struct {
 
 	// encKeySource is the env var name that resolved the credential encryption
 	// key (e.g. "CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME"). Set during
-	// reinitializeAfterConnect; surfaced via /health.
+	// reinitializeAfterConnect. /health reports only a generic degraded state
+	// from it, never the source itself (#15).
 	encKeySource string
 
 	// State from the most recent migration attempt. Surfaced by /health so
