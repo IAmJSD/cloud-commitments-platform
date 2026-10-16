@@ -3,6 +3,7 @@ package config
 import (
 	"math"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -79,4 +80,32 @@ func TestAssumeOnDemandIfUnknown_OnlyForUnprovenBasis(t *testing.T) {
 	require.Same(t, orphan, assumeOnDemandIfUnknown(orphan), "a rate without a basis is corrupt, not legacy")
 	_, err := nettingOnDemand("1", &LadderTrancheDB{})
 	require.Error(t, err, "netting still refuses an unknown basis")
+}
+
+func TestNewLadderInFlightRow_FloatFieldsFeedAllocate(t *testing.T) {
+	od, native := LadderAmountOnDemand, LadderAmountCommitment
+	legacy, err := newLadderInFlightRow("12.5", &LadderTrancheDB{AmountBasis: &od})
+	require.NoError(t, err)
+	require.Equal(t, 1.0, legacy.Rate)
+	require.Equal(t, 12.5, legacy.CommitmentUSDPerHour)
+
+	// Tight bound: the rate is the largest float not above the exact rate.
+	for _, text := range []string{"1/10", "1/3", "1/2"} {
+		exact, ok := new(big.Rat).SetString(text)
+		require.True(t, ok)
+		row, rowErr := newLadderInFlightRow("1", &LadderTrancheDB{AmountBasis: &native, CommitmentRate: &text})
+		require.NoError(t, rowErr, text)
+		require.LessOrEqual(t, new(big.Rat).SetFloat64(row.Rate).Cmp(exact), 0, text)
+		require.Greater(t, new(big.Rat).SetFloat64(math.Nextafter(row.Rate, 2)).Cmp(exact), 0, text)
+	}
+
+	one := "1"
+	row, err := newLadderInFlightRow("3", &LadderTrancheDB{AmountBasis: &native, CommitmentRate: &one})
+	require.NoError(t, err)
+	require.Equal(t, 1.0, row.Rate)
+
+	tiny := "1/1" + strings.Repeat("0", 400)
+	row, err = newLadderInFlightRow("1", &LadderTrancheDB{AmountBasis: &native, CommitmentRate: &tiny})
+	require.NoError(t, err)
+	require.Equal(t, math.SmallestNonzeroFloat64, row.Rate, "a rate below float range must not become 0")
 }

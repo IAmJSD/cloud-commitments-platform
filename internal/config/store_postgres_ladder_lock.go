@@ -99,7 +99,7 @@ func acquireLadderConfigLock(ctx context.Context, tx pgx.Tx, configID string) er
 // runs' windows never overlap.
 const ladderSettleSkewMargin = time.Minute
 
-// ladderSettleAnchor is the anchor every caller passes to settledLadderCommit
+// ladderSettleAnchor is the anchor every caller passes to settledLadderRows
 // for an existing-commitment read taken at or after asOf.
 func ladderSettleAnchor(asOf time.Time) time.Time { return asOf.Add(-ladderSettleSkewMargin) }
 

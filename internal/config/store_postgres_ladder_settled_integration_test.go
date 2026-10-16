@@ -21,7 +21,7 @@ import (
 
 // TestPostgresStoreDB_LadderSettledAt covers the stamp written by
 // TransitionLadderTrancheTx, the CHECK that rejects an unstamped completed
-// row, and the boundaries of settledLadderCommit. Migration behavior is in
+// row, and the boundaries of settledLadderRows. Migration behavior is in
 // the migrations package (000117). Set LADDER_SETTLED_TEST_DATABASE_URL to a
 // dedicated pr842a_* database to run it without Docker.
 func TestPostgresStoreDB_LadderSettledAt(t *testing.T) {
@@ -85,7 +85,7 @@ func TestPostgresStoreDB_LadderSettledAt(t *testing.T) {
 		requireCheckViolation(t, err)
 	})
 
-	t.Run("settledLadderCommit boundaries", func(t *testing.T) {
+	t.Run("settledLadderRows boundaries", func(t *testing.T) {
 		otherCfg := seedLadderConfigWithExtID(ctx, t, store, "333333333333")
 		anchor := time.Now().UTC().Truncate(time.Microsecond)
 		add := func(status ladder.TrancheStatus, amount float64, settled *time.Time) {

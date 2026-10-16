@@ -99,7 +99,12 @@ func TestLadderNetting_LegacyOnlyRowsKeepTheExactTotalBitForBit(t *testing.T) {
 	}
 	want, err := nettingFloat(exact)
 	require.NoError(t, err)
-	got := mustOnDemand(t, plannedRows(t, f))
+	rows := plannedRows(t, f)
+	require.Len(t, rows, len(amounts))
+	for _, r := range rows {
+		require.Equal(t, 1.0, r.Rate, "legacy on-demand rows carry rate 1")
+	}
+	got := mustOnDemand(t, rows)
 	require.Equal(t, math.Float64bits(want), math.Float64bits(got))
 }
 
