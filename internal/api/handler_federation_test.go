@@ -1002,7 +1002,8 @@ func TestBuildAzureTemplateZip_IncludesRenderedDeployScript(t *testing.T) {
 				"deploy script must handle success codes")
 			assert.Contains(t, script, "409",
 				"deploy script must handle 409 already-pending")
-			assert.Contains(t, script, `CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-`,
+			assert.Contains(t, script, `CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-}"`+"\n"+
+				`[ -n "$CONTACT_EMAIL" ] || CONTACT_EMAIL="admin@example.com"`,
 				"deploy script must pre-fill CONTACT_EMAIL with env-override support")
 		})
 	}
