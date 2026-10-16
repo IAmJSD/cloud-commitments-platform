@@ -6,6 +6,7 @@
 
 jest.mock('../api', () => ({
   getPurchaseDetails: jest.fn(),
+  getApprovalDetails: jest.fn(),
   listAccounts: jest.fn().mockResolvedValue([]),
   getDeploymentInfo: jest.fn().mockResolvedValue({}),
 }));
@@ -29,8 +30,8 @@ describe('handlePurchaseDeeplink approve (issue #247)', () => {
   afterEach(() => jest.restoreAllMocks());
 
   it.each([
-    ['the details fetch fails', () => (api.getPurchaseDetails as jest.Mock).mockRejectedValue(new Error('403 Forbidden'))],
-    ['the details carry no recommendations', () => (api.getPurchaseDetails as jest.Mock).mockResolvedValue({
+    ['the details fetch fails', () => (api.getApprovalDetails as jest.Mock).mockRejectedValue(new Error('403 Forbidden'))],
+    ['the details carry no recommendations', () => (api.getApprovalDetails as jest.Mock).mockResolvedValue({
       execution_id: EXEC_ID, status: 'pending', total_upfront_cost: 0, estimated_savings: 0, recommendations: [],
     })],
   ])('does not offer Approve when %s', async (_label, arrange) => {
@@ -50,8 +51,9 @@ describe('handlePurchaseDeeplink approve (issue #247)', () => {
   it.each([
     [403, 'forbidden', 'view:purchases'],
     [404, 'execution not found', 'not found or is outside your account access'],
+    [410, 'approval token has expired', 'The approval link has expired.'],
   ])('details fetch failing with %s is permanent: no retry advice, keeps server message', async (status, message, wording) => {
-    (api.getPurchaseDetails as jest.Mock).mockRejectedValue(Object.assign(new Error(message), { status }));
+    (api.getApprovalDetails as jest.Mock).mockRejectedValue(Object.assign(new Error(message), { status }));
 
     await expect(handlePurchaseDeeplink()).resolves.toBe(true);
 
@@ -66,7 +68,7 @@ describe('handlePurchaseDeeplink approve (issue #247)', () => {
     [401, 'unauthorized'],
     [undefined, 'Failed to fetch'],
   ])('details fetch failing with %s keeps the retry path', async (status, message) => {
-    (api.getPurchaseDetails as jest.Mock).mockRejectedValue(Object.assign(new Error(message), { status }));
+    (api.getApprovalDetails as jest.Mock).mockRejectedValue(Object.assign(new Error(message), { status }));
 
     await expect(handlePurchaseDeeplink()).resolves.toBe(true);
 
@@ -77,7 +79,7 @@ describe('handlePurchaseDeeplink approve (issue #247)', () => {
   });
 
   it('shows the upfront amount and approves when details load', async () => {
-    (api.getPurchaseDetails as jest.Mock).mockResolvedValue({
+    (api.getApprovalDetails as jest.Mock).mockResolvedValue({
       execution_id: EXEC_ID, status: 'pending', total_upfront_cost: 1200, estimated_savings: 10,
       recommendations: [{ id: 'r1', provider: 'aws', service: 'ec2', region: 'us-east-1', resource_type: 'm5.large',
         count: 1, term: 1, payment: 'all-upfront', upfront_cost: 1200, monthly_cost: 0, savings: 10, selected: true, purchased: false }],
@@ -92,6 +94,15 @@ describe('handlePurchaseDeeplink approve (issue #247)', () => {
     await done;
 
     expect(apiRequest).toHaveBeenCalledWith(`/purchases/approve/${EXEC_ID}`, expect.objectContaining({ method: 'POST' }));
+  });
+
+  it('loads the details through the token-authorized read, not the view:purchases route (issue #529)', async () => {
+    (api.getApprovalDetails as jest.Mock).mockRejectedValue(Object.assign(new Error('execution not found'), { status: 404 }));
+
+    await handlePurchaseDeeplink();
+
+    expect(api.getApprovalDetails).toHaveBeenCalledWith(EXEC_ID, 'tok-xyz');
+    expect(api.getPurchaseDetails).not.toHaveBeenCalled();
   });
 });
 

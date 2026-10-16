@@ -51,6 +51,20 @@ export async function getPurchaseDetails(executionId: string): Promise<PurchaseD
 }
 
 /**
+ * Get purchase details on the approval email's deep link (issue #529). The
+ * backend authorizes the read like the approve it precedes: a session with
+ * view:purchases in scope, or the email token plus a session email that is
+ * the account's contact approver. The token goes in the body, not the URL
+ * (issue #398).
+ */
+export async function getApprovalDetails(executionId: string, token: string): Promise<PurchaseDetails> {
+  return apiRequest<PurchaseDetails>(`/purchases/approve/${encodeURIComponent(executionId)}/details`, {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  });
+}
+
+/**
  * Cancel a scheduled purchase
  */
 export async function cancelPurchase(executionId: string): Promise<void> {
