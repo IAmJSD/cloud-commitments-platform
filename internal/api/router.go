@@ -21,7 +21,7 @@ type RouteHandler func(ctx context.Context, req *events.LambdaFunctionURLRequest
 // Router.Route enforces these levels itself as a defense-in-depth check,
 // in addition to the authentication middleware that runs
 // earlier in the request pipeline. If middleware ordering ever changes or
-// a new route bypasses validateSecurity, the router-level enforcement
+// a new route bypasses validateSecurityContext, the router-level enforcement
 // still rejects unauthorized requests.
 type AuthLevel int
 
@@ -386,7 +386,7 @@ func (r *Router) registerRoutes() {
 // already runs in the middleware pipeline before dispatch,
 // but Router.Route also enforces the per-route Auth level so routes stay
 // protected even if middleware ordering changes or a new code path
-// bypasses validateSecurity. AuthAdmin routes require admin access;
+// bypasses validateSecurityContext. AuthAdmin routes require admin access;
 // AuthUser routes require any authenticated user; AuthPublic routes are
 // unauthenticated. There is no implicit default — every route declares
 // its level at registration time and NewRouter rejects authUnset.
@@ -895,11 +895,6 @@ func (r *Router) rejectRIExchangeHandler(ctx context.Context, req *events.Lambda
 		return nil, err
 	}
 	return r.h.rejectRIExchange(ctx, params["id"], req.QueryStringParameters["token"])
-}
-
-// formatNotFoundError creates a detailed not found error message.
-func formatNotFoundError(method, path string) error {
-	return fmt.Errorf("%w: %s %s", errNotFound, method, path)
 }
 
 // Cloud Account route wrappers.

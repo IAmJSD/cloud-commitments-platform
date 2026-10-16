@@ -790,26 +790,6 @@ func TestHandler_revokeAPIKey_PermissionDenied(t *testing.T) {
 // alongside the handler (CodeRabbit finding on PR #1523 -- keep the usage-
 // stats bounded context in its own file pair).
 
-func TestFormatTimePtr(t *testing.T) {
-	t.Run("nil pointer returns empty string", func(t *testing.T) {
-		result := formatTimePtr(nil)
-		assert.Empty(t, result)
-	})
-
-	t.Run("valid time formats correctly", func(t *testing.T) {
-		testTime := time.Date(2024, 6, 15, 10, 30, 0, 0, time.UTC)
-		result := formatTimePtr(&testTime)
-		assert.Equal(t, "2024-06-15T10:30:00Z", result)
-	})
-
-	t.Run("time with timezone formats correctly", func(t *testing.T) {
-		loc, _ := time.LoadLocation("America/New_York")
-		testTime := time.Date(2024, 6, 15, 10, 30, 0, 0, loc)
-		result := formatTimePtr(&testTime)
-		assert.Contains(t, result, "2024-06-15T10:30:00")
-	})
-}
-
 // TestRequirePermission_UserAPIKey is the regression test for issue #1142:
 // user API keys previously hit a hard 401 in requirePermission (only the
 // admin API key and bearer-token sessions were recognized), so the per-key

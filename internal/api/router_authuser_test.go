@@ -15,7 +15,7 @@ import (
 // These tests cover the defense-in-depth AuthUser enforcement added to
 // Router.Route — see issue #60. Before the fix, AuthUser routes (e.g.
 // /api/auth/logout, /api/api-keys, /api/federation/iac) fell through the
-// router with no auth check; only the validateSecurity middleware
+// router with no auth check; only the validateSecurityContext middleware
 // protected them. These tests pin the router-level enforcement so a
 // future middleware refactor can't silently expose them.
 

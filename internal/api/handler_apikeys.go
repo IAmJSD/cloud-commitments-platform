@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
@@ -167,12 +166,4 @@ func apiKeyIDFromPath(path string, hasTrailingAction bool) (string, error) {
 		return "", err
 	}
 	return keyID, nil
-}
-
-// Helper function to format time pointer as string.
-func formatTimePtr(t *time.Time) string {
-	if t == nil {
-		return ""
-	}
-	return t.Format("2006-01-02T15:04:05Z07:00")
 }
