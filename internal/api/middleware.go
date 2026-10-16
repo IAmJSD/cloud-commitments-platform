@@ -518,15 +518,18 @@ func (h *Handler) checkRateLimitStrict(ctx context.Context, req *events.LambdaFu
 
 // requireMFASession is requireSession plus the "mfa" bucket applied per IP and
 // then per session user, both fail-closed, so a stolen session cannot reset its
-// guessing budget by rotating IPs (#94).
+// guessing budget by rotating IPs (#94). The session is checked first so
+// requests without a valid session are refused with 401 before they reach
+// either bucket and cannot spend the per-IP budget of users behind the same
+// NAT (#442).
 func (h *Handler) requireMFASession(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Session, error) {
 	const endpoint = "mfa"
-	if err := h.checkRateLimitStrict(ctx, req, endpoint); err != nil {
-		return nil, err
-	}
 	session, err := h.requireSession(ctx, req)
 	if err != nil {
 		return nil, err
+	}
+	if limitErr := h.checkRateLimitStrict(ctx, req, endpoint); limitErr != nil {
+		return nil, limitErr
 	}
 	if h.rateLimiter == nil {
 		return session, nil

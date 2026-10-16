@@ -421,7 +421,9 @@ func TestIntegration_ResetConfirmRejectsStaleRead(t *testing.T) {
 func (f *credentialRaceFixture) enrollMFA() []string {
 	setup, err := f.svc.MFASetup(f.t.Context(), f.user.ID, credentialRacePassword)
 	require.NoError(f.t, err)
-	codes, err := f.svc.MFAEnable(f.t.Context(), f.user.ID, generateTOTP(setup.Secret, time.Now().Unix()/30))
+	// Enroll with the previous step's code: MFAEnable spends its step (#442), and
+	// callers then sign in with the current one.
+	codes, err := f.svc.MFAEnable(f.t.Context(), f.user.ID, generateTOTP(setup.Secret, time.Now().Unix()/30-1))
 	require.NoError(f.t, err)
 	return codes
 }

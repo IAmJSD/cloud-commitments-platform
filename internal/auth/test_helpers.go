@@ -78,8 +78,8 @@ func (m *MockStore) SetPendingMFASecret(ctx context.Context, userID, secret stri
 	return m.Called(ctx, userID, secret, expiresAt).Error(0)
 }
 
-func (m *MockStore) EnableMFA(ctx context.Context, userID, pendingSecret string, recoveryHashes []string) error {
-	return m.Called(ctx, userID, pendingSecret, recoveryHashes).Error(0)
+func (m *MockStore) EnableMFA(ctx context.Context, userID, pendingSecret string, totpCounter int64, recoveryHashes []string) error {
+	return m.Called(ctx, userID, pendingSecret, totpCounter, recoveryHashes).Error(0)
 }
 
 func (m *MockStore) ReplaceMFARecoveryCodes(ctx context.Context, userID, readSecret string, readCodes, newHashes []string) error {

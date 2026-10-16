@@ -220,6 +220,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		"register",
 		"approve_cancel_public",
 		"mfa",
+		"login_mfa",
 	)
 
 	return h
