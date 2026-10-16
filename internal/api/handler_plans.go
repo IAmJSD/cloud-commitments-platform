@@ -144,6 +144,9 @@ func mapCreatePlanStorageError(err error, notFoundMsg, genericMsg, logFmt string
 	if errors.Is(err, config.ErrPurchasePlanConflict) {
 		return NewClientError(http.StatusConflict, "plan changed; refresh the plan and try again")
 	}
+	if errors.Is(err, config.ErrEditorReconciliationRequired) {
+		return editorReconciliationError()
+	}
 	logging.Errorf(logFmt, logArgs...)
 	return NewClientError(http.StatusInternalServerError, genericMsg)
 }
@@ -388,6 +391,10 @@ func preserveRampProgress(existingPlan, plan *config.PurchasePlan) error {
 	if rampScheduleShapeUnchanged(existingPlan.RampSchedule, plan.RampSchedule) {
 		plan.RampSchedule.CurrentStep = existingPlan.RampSchedule.CurrentStep
 		plan.RampSchedule.StartDate = existingPlan.RampSchedule.StartDate
+		// Editor-owned markers the request cannot express; dropping them hands
+		// the plan back to the interval formula.
+		plan.RampSchedule.DatesManaged = existingPlan.RampSchedule.DatesManaged
+		plan.RampSchedule.AllocationMode = existingPlan.RampSchedule.AllocationMode
 		plan.NextExecutionDate = existingPlan.NextExecutionDate
 		return nil
 	}

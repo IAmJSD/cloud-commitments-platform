@@ -177,9 +177,12 @@ func (h *Handler) authorizeExecutionManagement(ctx context.Context, session *Ses
 		return NewClientError(500, "authentication service not configured")
 	}
 
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionUpdateAny, auth.ResourcePurchases)
+	// Evaluated against the session's effective permissions: for a user API
+	// key that is the key (intersected with its owner), not the owner alone,
+	// so a key without update-any cannot borrow the owner's (issue #979).
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionUpdateAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if hasAny {
 		return nil
@@ -439,17 +442,19 @@ func (h *Handler) authorizePlannedPurchaseCancel(ctx context.Context, session *S
 		return NewClientError(500, "authentication service not configured")
 	}
 	// update-any grants full-scope access without an owner check or
-	// Constraints (tracked by #961).
-	hasUpdate, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionUpdateAny, auth.ResourcePurchases)
+	// Constraints (tracked by #961). Both full-scope verbs are evaluated
+	// against the session's effective permissions: the key's for a user API
+	// key, never the owner's alone (issue #979).
+	hasUpdate, err := h.sessionHoldsVerb(ctx, session, auth.ActionUpdateAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if hasUpdate {
 		return nil
 	}
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionCancelAny, auth.ResourcePurchases)
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionCancelAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	execution, err := h.loadPlannedExecution(ctx, executionID)
 	if err != nil {

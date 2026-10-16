@@ -753,7 +753,7 @@ func (s *PostgresStore) UpdatePurchasePlan(ctx context.Context, plan *PurchasePl
 		if err != nil {
 			return err
 		}
-		if updErr := s.UpdatePurchasePlanTx(ctx, tx, &pending); updErr != nil {
+		if updErr := s.updatePurchasePlanGuardedTx(ctx, tx, old, &pending); updErr != nil {
 			return updErr
 		}
 		if old == nil || !rampBaselineStale(old, &pending) {
@@ -775,8 +775,24 @@ func (s *PostgresStore) UpdatePurchasePlan(ctx context.Context, plan *PurchasePl
 	return nil
 }
 
-// UpdatePurchasePlanTx rejects snapshots that lost a race with another plan writer.
+// UpdatePurchasePlanTx rejects snapshots that lost a race with another plan
+// writer and refuses changes to what the editor owns on a managed plan. It
+// re-locks the row, which every caller already holds, to judge the guard on
+// the locked version.
 func (s *PostgresStore) UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, plan *PurchasePlan) error {
+	old, err := s.LockPurchasePlanTx(ctx, tx, plan.ID)
+	if err != nil {
+		return err
+	}
+	return s.updatePurchasePlanGuardedTx(ctx, tx, old, plan)
+}
+
+// updatePurchasePlanGuardedTx runs the managed-plan guard against old, the row
+// locked by the caller's transaction, and then the optimistic update.
+func (s *PostgresStore) updatePurchasePlanGuardedTx(ctx context.Context, tx pgx.Tx, old, plan *PurchasePlan) error {
+	if err := requireManagedPlanUpdateTx(old, plan); err != nil {
+		return err
+	}
 	// Marshal services and ramp_schedule to JSONB
 	servicesJSON, err := json.Marshal(plan.Services)
 	if err != nil {

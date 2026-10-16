@@ -163,6 +163,9 @@ func TestPGXMock_CompletePlanStep_LocksAndAdvances(t *testing.T) {
 		WithArgs("plan-123").
 		WillReturnRows(rampPlanRows(t, "plan-123", ramp, now, stale, sql.NullTime{Valid: false}))
 	expectFanOut(mock, "plan-123", 2, 3, 0)
+	mock.ExpectQuery(`SELECT[\s\S]*FROM purchase_plans[\s\S]*WHERE id = \$1 FOR UPDATE`).
+		WithArgs("plan-123").
+		WillReturnRows(rampPlanRows(t, "plan-123", ramp, now, stale, sql.NullTime{Valid: false}))
 	mock.ExpectQuery(`UPDATE purchase_plans`).
 		WithArgs(completeStepUpdateArgs(2, stale, false)...).
 		WillReturnRows(pgxmock.NewRows([]string{"updated_at"}).AddRow(now))
@@ -353,6 +356,10 @@ func TestPGXMock_CompletePlanStep_CompletedRampClearsNextDate(t *testing.T) {
 	ramp := RampSchedule{Type: "weekly", PercentPerStep: 25, StepIntervalDays: 7, CurrentStep: 4, TotalSteps: 4, StartDate: now}
 
 	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT[\s\S]*FROM purchase_plans[\s\S]*WHERE id = \$1 FOR UPDATE`).
+		WithArgs("plan-done").
+		WillReturnRows(rampPlanRows(t, "plan-done", ramp, now, stale, sql.NullTime{Valid: true, Time: now}))
+	// The managed-plan guard re-locks the row before the update.
 	mock.ExpectQuery(`SELECT[\s\S]*FROM purchase_plans[\s\S]*WHERE id = \$1 FOR UPDATE`).
 		WithArgs("plan-done").
 		WillReturnRows(rampPlanRows(t, "plan-done", ramp, now, stale, sql.NullTime{Valid: true, Time: now}))
