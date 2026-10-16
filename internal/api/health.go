@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
@@ -93,6 +94,11 @@ func (h *Handler) checkConfigStore(ctx context.Context) HealthCheck {
 // NOTE: "ok" only confirms the key is valid (LoadKey succeeded + startup guard
 // passed); it does NOT guarantee that all DB rows have been re-keyed. Detect
 // pre-rekey state by alerting on application-level decrypt-failure ERROR logs.
+// devKeyWarnOnce limits the dev-key warning to once per process: /health is
+// polled every few seconds by load balancers, and the degraded status in the
+// response already keeps monitoring alerting.
+var devKeyWarnOnce sync.Once
+
 func (h *Handler) checkCredentialStore() HealthCheck {
 	if h.credStore == nil {
 		return HealthCheck{
@@ -101,7 +107,9 @@ func (h *Handler) checkCredentialStore() HealthCheck {
 		}
 	}
 	if h.encryptionKeySource == credentials.EnvAllowDev {
-		logging.Warnf("health: credential store is using the insecure all-zero dev key (%s=1)", credentials.EnvAllowDev)
+		devKeyWarnOnce.Do(func() {
+			logging.Warnf("health: credential store is using the insecure all-zero dev key (%s=1)", credentials.EnvAllowDev)
+		})
 		return HealthCheck{
 			Status:  "degraded",
 			Message: "credential store degraded",

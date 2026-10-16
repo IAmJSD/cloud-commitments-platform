@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
@@ -259,4 +260,19 @@ func TestHealthCheck_Structure(t *testing.T) {
 
 	assert.Equal(t, "unhealthy", check.Status)
 	assert.Equal(t, "Service unavailable", check.Message)
+}
+
+// TestHandler_checkCredentialStore_DevKeyWarnsOnce checks the dev-key warning
+// is logged once per process, not on every /health probe.
+func TestHandler_checkCredentialStore_DevKeyWarnsOnce(t *testing.T) {
+	devKeyWarnOnce = sync.Once{}
+	t.Cleanup(func() { devKeyWarnOnce = sync.Once{} })
+	buf := captureDefaultLog(t)
+
+	h := &Handler{credStore: &stubCredStore{}, encryptionKeySource: credentials.EnvAllowDev}
+	for i := 0; i < 3; i++ {
+		assert.Equal(t, "degraded", h.checkCredentialStore().Status)
+	}
+
+	assert.Equal(t, 1, strings.Count(buf.String(), "insecure all-zero dev key"), buf.String())
 }
