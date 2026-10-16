@@ -206,8 +206,7 @@ func TestGroupWrite_AcceptsZeroAndPositiveMaxAmount(t *testing.T) {
 
 func TestCreateAPIKey_NegativeMaxPurchaseAmount(t *testing.T) {
 	ctx := context.Background()
-	const password = "CorrectHorse@123"
-	passwordHash, err := newTestService().hashPassword(password)
+	passwordHash, err := newTestService().hashPassword(testAPIKeyPassword)
 	require.NoError(t, err)
 	expiresAt := time.Now().Add(24 * time.Hour)
 	grpID := "99999999-9999-4999-8999-999999999999"
@@ -222,7 +221,7 @@ func TestCreateAPIKey_NegativeMaxPurchaseAmount(t *testing.T) {
 		}, nil).Maybe()
 		mockStore.On("CreateAPIKey", ctx, mock.AnythingOfType("*auth.UserAPIKey")).Return(nil).Maybe()
 
-		_, _, err := service.CreateAPIKey(ctx, "user-123", "ci", password, []Permission{
+		_, _, err := service.CreateAPIKey(ctx, "user-123", "ci", testAPIKeyPassword, []Permission{
 			{Action: ActionView, Resource: ResourcePlans},
 			{Action: ActionView, Resource: ResourcePlans, Constraints: &PermissionConstraints{MaxPurchaseAmount: amount}},
 		}, &expiresAt)
