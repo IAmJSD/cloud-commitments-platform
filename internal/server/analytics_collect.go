@@ -105,12 +105,24 @@ func newAnalyticsCollector(dbConn *database.Connection, configStore config.Store
 	return analytics.NewCollector(analytics.CollectorConfig{AnalyticsStore: store}, configStore)
 }
 
+// ensureCurrentAnalyticsPartition idempotently creates the savings_snapshots
+// partition for the current UTC month (the month Collect stamps rows with)
+// under a bounded DDL context (06-N3).
+func (app *Application) ensureCurrentAnalyticsPartition(ctx context.Context) error {
+	stepCtx, cancel := context.WithTimeout(ctx, analyticsDDLTimeout)
+	defer cancel()
+	return app.Analytics.CreatePartition(stepCtx, time.Now().UTC())
+}
+
 // handleCollectAnalytics runs the scheduled analytics pipeline end to end:
 // ensure upcoming partitions exist, collect a snapshot across all tenants,
 // apply retention, then refresh the materialized views over the fresh data.
-// Each step is best-effort and recorded in the result so a single failure
-// (e.g. a transient retention lock) doesn't abort the rest of the pipeline,
-// but a hard failure still flips status to "partial" for observability.
+// The current month's partition is a hard prerequisite: if it cannot be ensured
+// the run aborts with an error before writing anything (#271). The remaining
+// steps, including provisioning future partitions, are best-effort and
+// recorded in the result so a single failure (e.g. a transient retention lock)
+// doesn't abort the rest of the pipeline, but a hard failure still flips status
+// to "partial" for observability.
 func (app *Application) handleCollectAnalytics(ctx context.Context) (map[string]any, error) {
 	cfg := app.appConfig.Analytics
 	result := map[string]any{
@@ -132,10 +144,26 @@ func (app *Application) handleCollectAnalytics(ctx context.Context) (map[string]
 		return result, nil
 	}
 
-	// 1. Ensure upcoming partitions exist BEFORE writing so the snapshot lands
-	//    in a real monthly partition rather than the catch-all default (M3).
+	// 1a. Ensure the CURRENT month's partition exists BEFORE writing. This is
+	//     the hard prerequisite: without it Collect would COPY every tenant's
+	//     snapshot into savings_snapshots_default, which retention never drops,
+	//     so abort and surface the error (#271). CreatePartition is idempotent,
+	//     and Collect stamps rows with the current UTC time.
+	if err := app.ensureCurrentAnalyticsPartition(ctx); err != nil {
+		log.Printf("Error: failed to ensure current-month savings partition, skipping analytics collection: %v", err)
+		result["status"] = "failed"
+		return result, fmt.Errorf("analytics collection aborted: failed to ensure current-month partition: %w", err)
+	}
+
+	// 1b. Provision upcoming partitions ahead of time. Best-effort: today's
+	//     snapshot already has a real partition, so a failure on a future month
+	//     (lock timeout, or a stray future-dated row in the default partition
+	//     blocking its creation) must not stop collection, otherwise the run
+	//     would fail every day without ever healing. Logged loudly and flagged
+	//     "partial" so it is visible.
 	if err := withDDLTimeout(ctx, app.Analytics.CreateFuturePartitions, cfg.PartitionsAhead); err != nil {
-		log.Printf("Warning: failed to ensure future partitions: %v", err)
+		log.Printf("ERROR: failed to ensure future savings partitions (%d months ahead); "+
+			"upcoming months' snapshots will land in savings_snapshots_default if their partition is still missing when they start: %v", cfg.PartitionsAhead, err)
 		result["status"] = "partial"
 	} else {
 		result["partitions_ensured"] = true

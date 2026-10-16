@@ -49,12 +49,16 @@ func TestHandleCleanupExpiredRecords_NilAuthAndConfig(t *testing.T) {
 
 type mockAnalyticsStore struct {
 	refreshErr             error
+	createPartErr          error
 	createFuturePartErr    error
+	createPartCalls        int
+	createPartMonth        time.Time
 	dropOldPartErr         error
 	createFuturePartMonths int
 	dropOldPartRetention   int
 	// *HadDeadline capture whether each DDL step ran under a bounded context, so
 	// the 06-N3 fix (per-step timeouts under RDS Proxy) is positively asserted.
+	createPartHadDeadline       bool
 	createFuturePartHadDeadline bool
 	dropOldPartHadDeadline      bool
 	refreshHadDeadline          bool
@@ -63,6 +67,13 @@ type mockAnalyticsStore struct {
 func (m *mockAnalyticsStore) RefreshMaterializedViews(ctx context.Context) error {
 	_, m.refreshHadDeadline = ctx.Deadline()
 	return m.refreshErr
+}
+
+func (m *mockAnalyticsStore) CreatePartition(ctx context.Context, forMonth time.Time) error {
+	_, m.createPartHadDeadline = ctx.Deadline()
+	m.createPartCalls++
+	m.createPartMonth = forMonth
+	return m.createPartErr
 }
 
 func (m *mockAnalyticsStore) CreateFuturePartitions(ctx context.Context, monthsAhead int) error {
