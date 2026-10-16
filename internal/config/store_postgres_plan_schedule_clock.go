@@ -93,6 +93,34 @@ func (s *PostgresStore) managedPlanNextRootTx(ctx context.Context, tx pgx.Tx, pl
 	return root, nil
 }
 
+func (s *PostgresStore) lockTargetMetPlanTx(ctx context.Context, tx pgx.Tx, planID, rootID string) (*PurchasePlan, error) {
+	plan, err := s.LockPurchasePlanTx(ctx, tx, planID)
+	if err != nil {
+		return nil, err
+	}
+	if plan == nil {
+		return nil, fmt.Errorf("%w: purchase plan %s", ErrNotFound, planID)
+	}
+	if err := s.requireManagedTargetMetRootTx(ctx, tx, plan, rootID); err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
+func (s *PostgresStore) requireManagedTargetMetRootTx(ctx context.Context, tx pgx.Tx, plan *PurchasePlan, rootID string) error {
+	if !plan.RampSchedule.DatesManaged {
+		return nil
+	}
+	root, err := s.ResolveManagedPlanRootTx(ctx, tx, plan)
+	if err != nil {
+		return err
+	}
+	if root == nil || root.ExecutionID != rootID {
+		return fmt.Errorf("%w: managed target-met root is unavailable", ErrExecutionNotInExpectedStatus)
+	}
+	return nil
+}
+
 func managedPlanNextRoot(plan *PurchasePlan, rows []PurchaseExecution) (*PurchaseExecution, error) {
 	var root *PurchaseExecution
 	blocked := false

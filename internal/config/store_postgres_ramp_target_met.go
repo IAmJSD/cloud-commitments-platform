@@ -36,6 +36,10 @@ func (s *PostgresStore) CompleteTargetMetStepTx(ctx context.Context, tx pgx.Tx, 
 	if stepNumber <= 0 {
 		return fmt.Errorf("cannot complete ramp step %d of plan %s: step numbers are 1-based", stepNumber, planID)
 	}
+	plan, err := s.lockTargetMetPlanTx(ctx, tx, planID, rootID)
+	if err != nil {
+		return err
+	}
 	var unknown int
 	if err := tx.QueryRow(ctx, `
 		SELECT count(*) FROM purchase_executions
@@ -60,22 +64,15 @@ func (s *PostgresStore) CompleteTargetMetStepTx(ctx context.Context, tx pgx.Tx, 
 		tag, err := tx.Exec(ctx, `
 			UPDATE purchase_executions
 			   SET status = $2, completed_at = $3, error = $4, pre_approval_skip_reason = $5
-			 WHERE execution_id = $1 AND status IN ('pending', 'notified')
+			 WHERE execution_id = $1 AND plan_id = $6 AND step_number = $7 AND status IN ('pending', 'notified')
 			   AND CASE WHEN jsonb_typeof(recommendations) = 'array' THEN jsonb_array_length(recommendations) ELSE 0 END = 0`,
-			rootID, StatusCompleted, now, note, PreApprovalSkipRampTargetMet)
+			rootID, StatusCompleted, now, note, PreApprovalSkipRampTargetMet, planID, stepNumber)
 		if err != nil {
 			return fmt.Errorf("failed to complete target-met root row %s: %w", rootID, err)
 		}
 		if tag.RowsAffected() != 1 {
 			return fmt.Errorf("%w: root row %s", ErrExecutionNotInExpectedStatus, rootID)
 		}
-	}
-	plan, err := s.LockPurchasePlanTx(ctx, tx, planID)
-	if err != nil {
-		return err
-	}
-	if plan == nil {
-		return fmt.Errorf("%w: purchase plan %s", ErrNotFound, planID)
 	}
 	if err := advanceRampStep(ctx, tx, plan, stepNumber); err != nil {
 		return err
