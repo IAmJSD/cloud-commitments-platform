@@ -1055,6 +1055,8 @@ func TestScheduler_ListRecommendations_FreshnessError(t *testing.T) {
 	assert.Nil(t, recs)
 }
 
+// Pins the outer isLambda guard in ListRecommendations (mayCollect && !s.isLambda).
+//
 // Lambda runtime must NOT spawn a background refresh even when the
 // cache is stale — goroutines freeze between invocations.
 //
@@ -1116,6 +1118,9 @@ func TestScheduler_ListRecommendations_StaleSingleFlight(t *testing.T) {
 	_ = ctx
 }
 
+// Pins the isLambda guard in kickColdStartCollection (it also fails if the
+// outer guard in ListRecommendations is removed).
+//
 // Cold-start (LastCollectedAt==nil) on Lambda marks a collection started
 // On Lambda, kickColdStartCollection must return immediately WITHOUT ever
 // calling MarkCollectionStarted at all: a goroutine started inside a Lambda
