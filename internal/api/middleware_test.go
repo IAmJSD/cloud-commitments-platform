@@ -624,7 +624,7 @@ func TestApproveRIExchange_CSRFFailureDoesNotFallThroughToToken(t *testing.T) {
 // a fix that also breaks the happy path.
 func TestApproveRIExchangeViaSession_PassesCSRF(t *testing.T) {
 	ctx := context.Background()
-	id := "550e8400-e29b-41d4-a716-446655440021"
+	id := "550e8400-e29b-41d4-a716-446655440022"
 	creatorID := "creator-uuid"
 
 	mockStore := new(MockConfigStore)
