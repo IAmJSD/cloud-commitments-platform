@@ -33,6 +33,7 @@ const (
 // riStatusOpts tweaks the fixture for the less common cases.
 type riStatusOpts struct {
 	fourEyes    bool // global 4-eyes mode on; the admin session is the creator
+	noCreator   bool // with fourEyes: the record has no creator, as every scheduler/ladder row does
 	noApprove   bool // the session holds no approve permission
 	approveOwn  bool // the session holds approve-own only (not the creator)
 	dbError     bool // the record lookup fails
@@ -49,7 +50,7 @@ func riStatusHandler(rec riStatusRecord, o riStatusOpts) *Handler {
 		if rec == riRecNoToken {
 			record.ApprovalToken = ""
 		}
-		if o.fourEyes || o.approveOwn {
+		if (o.fourEyes && !o.noCreator) || o.approveOwn {
 			creator := "admin-uuid"
 			if o.approveOwn {
 				creator = "someone-else"
@@ -182,6 +183,8 @@ func TestHandleRequest_ApproveRIExchange_StatusCodes(t *testing.T) {
 		{name: "403 session without approve right and no token", rec: riRecPending, sess: riSessCSRF, opts: riStatusOpts{noApprove: true}, want: 403, wantError: "permission denied: requires approve-any or approve-own on purchases"},
 		{name: "403 4-eyes creator cannot approve own exchange", rec: riRecPending, sess: riSessCSRF, opts: riStatusOpts{fourEyes: true}, want: 403, wantError: "approval declined: 4-eyes mode requires a different approver than the requester"},
 		{name: "500 4-eyes on and token without session", rec: riRecPending, sess: riSessNone, token: riStatusRawToken, opts: riStatusOpts{fourEyes: true}, want: 500, wantError: "4-eyes approval mode is enabled but no session could be resolved; sign in before approving"},
+		{name: "500 4-eyes on and token without session on a creator-less exchange", rec: riRecPending, sess: riSessNone, token: riStatusRawToken, opts: riStatusOpts{fourEyes: true, noCreator: true}, want: 500, wantError: "4-eyes approval mode is enabled but no session could be resolved; sign in before approving"},
+		{name: "200 4-eyes on and session approves a creator-less exchange", rec: riRecPending, sess: riSessCSRF, opts: riStatusOpts{fourEyes: true, noCreator: true}, want: 200, wantBody: `"status"`},
 		{name: "200 approve-own session that is not the creator falls through to the token", rec: riRecPending, sess: riSessCSRF, token: riStatusRawToken, opts: riStatusOpts{approveOwn: true}, want: 200, wantBody: `"status"`},
 		{name: "403 body token is not read", rec: riRecPending, sess: riSessNone, body: `{"token":"` + riStatusRawToken + `"}`, want: 403, wantError: "CSRF validation failed"},
 		{name: "429 rate limited", rec: riRecPending, sess: riSessNone, token: riStatusRawToken, opts: riStatusOpts{rateLimited: true}, want: 429, wantError: "too many requests, please try again later"},

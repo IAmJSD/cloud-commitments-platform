@@ -2539,12 +2539,26 @@ func (h *Handler) requireNoDirectExchangeUnderFourEyes(ctx context.Context) erro
 }
 
 // requireDifferentRIExchangeApprover applies the purchase 4-eyes check when a creator
-// is recorded; automated exchanges have none and stay approvable (see issue #233).
+// is recorded. Every exchange row today is written by the scheduler or the ladder
+// engine with no creator (pkg/exchange.ExchangeRecord carries none), so there is
+// no human requester to differ from: under 4-eyes such a row stays approvable by
+// any identified approver, but never by an anonymous token holder (issue #518).
 func (h *Handler) requireDifferentRIExchangeApprover(ctx context.Context, session *Session, record *config.RIExchangeRecord) error {
-	if record.CreatedByUserID == nil {
+	if record.CreatedByUserID != nil {
+		return h.requireDifferentApprover(ctx, session, record.ID, record.CreatedByUserID)
+	}
+	if session != nil {
 		return nil
 	}
-	return h.requireDifferentApprover(ctx, session, record.ID, record.CreatedByUserID)
+	cfg, err := h.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("4-eyes policy check: failed to load global config: %w", err)
+	}
+	if cfg == nil || !cfg.RequireDifferentApprover {
+		return nil
+	}
+	logging.Warnf("4-eyes[%s]: mode on; system-created exchange approved with no session; denying (fail-closed)", record.ID)
+	return NewClientError(500, "4-eyes approval mode is enabled but no session could be resolved; sign in before approving")
 }
 
 // validateExchangeApproval validates ID, token, and record state for an exchange approval.
