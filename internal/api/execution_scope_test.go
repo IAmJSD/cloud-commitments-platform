@@ -246,7 +246,7 @@ func TestExecutionEndpoints_ScopeMatrix(t *testing.T) {
 
 					if !sc.allow {
 						require.Error(t, err)
-						assert.True(t, IsNotFoundError(err), "expected 404 not-found, got %v", err)
+						assert.True(t, isNotFound404(err), "expected 404 not-found, got %v", err)
 						// A denied call reaches no mutation of any endpoint.
 						store.AssertNotCalled(t, "SavePurchaseExecution")
 						store.AssertNotCalled(t, "TransitionExecutionStatus")
@@ -301,9 +301,21 @@ func TestExecutionEndpoints_OutOfScopeNoTokenIs404(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newScopeTestHandler(t, scopeTestExecution(adhoc, tc.status), []string{"Other"}, new(MockConfigStore), new(MockPurchaseManager))
 			_, err := tc.call(h, scopeTestRequest())
-			assert.True(t, IsNotFoundError(err), "expected 404 not-found, got %v", err)
+			assert.True(t, isNotFound404(err), "expected 404 not-found, got %v", err)
 		})
 	}
+}
+
+// isNotFound404 accepts either form of the enumeration-safe 404: errNotFound
+// from the scope gate, or the "execution not found" ClientError the approve,
+// cancel and revoke routes answer for both a missing and a hidden execution
+// (issue #597).
+func isNotFound404(err error) bool {
+	if IsNotFoundError(err) {
+		return true
+	}
+	ce, ok := IsClientError(err)
+	return ok && ce.code == 404 && ce.message == "execution not found"
 }
 
 // TestRevoke_AuthorizedNonRevocableStatusIs409: moving the status check

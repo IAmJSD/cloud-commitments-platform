@@ -867,6 +867,8 @@ func TestHandler_HandleRequest_ApprovePurchase(t *testing.T) {
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{Email: approver}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", mock.Anything, "sess-tok", "").Return(nil)
 	// Issue #286: dispatch consults approve-{any,own} BEFORE the
 	// contact_email gate. Returning false for both verbs lets the
 	// dispatch fall through to the legacy token branch this test
@@ -954,6 +956,8 @@ func TestHandler_HandleRequest_CancelPurchase(t *testing.T) {
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{Email: approver}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", mock.Anything, "sess-tok", "").Return(nil)
 	// Session has no admin role / cancel permissions → cancelPurchase's
 	// session-authed pre-check falls through to authorizeApprovalAction →
 	// MockPurchaseManager.CancelExecution, exercising the legacy

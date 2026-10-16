@@ -130,23 +130,30 @@ func TestHandleLambdaHTTPEvent_StaticPath(t *testing.T) {
 //
 // This drives the real failing scenario end-to-end: a base64-encoded,
 // form-urlencoded POST body hitting POST /api/purchases/revoke/{execID}.
-// With a session that lacks cancel permission, revokeViaEmailToken answers 403
-// "permission denied" when the token fails to resolve, or falls through to the
-// token branch and answers the DIFFERENT 403 "no per-account contact email"
-// from authorizeApprovalAction once the token has been parsed out of the
-// decoded body. Only the second message is reachable when the token resolves,
-// so asserting it proves the fix. (A request with no session never reaches
-// either: it gets 401 before the lookup, issue #435.)
+// The session lacks cancel permission but is the account's contact email.
+// When the token fails to resolve, revokeViaEmailToken answers the 404 a
+// missing execution gets (issue #597). Once the token has been parsed out of
+// the decoded body, it falls through to the token branch, passes the
+// contact_email gate, and answers 403 "invalid revocation token" because the
+// token does not match. Only the second answer is reachable when the token
+// resolves, so asserting it proves the fix. (A request with no session never
+// reaches either: it gets 401 before the lookup, issue #435.)
 func TestHandleLambdaHTTPEvent_DecodesBase64FormBody(t *testing.T) {
 	execID := "11111111-1111-1111-1111-111111111111"
+	accountID := "acct-1"
 	exec := &config.PurchaseExecution{
-		ExecutionID: execID,
-		Status:      "completed",
+		ExecutionID:     execID,
+		Status:          "completed",
+		ApprovalToken:   config.HashApprovalToken("a-different-token"),
+		Recommendations: []config.RecommendationRecord{{ID: "r1", CloudAccountID: &accountID}},
 	}
 
 	mockStore := new(mocks.MockConfigStore)
 	mockStore.On("GetExecutionByID", mock.Anything, execID).Return(exec, nil)
 	mockStore.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil)
+	mockStore.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, ContactEmail: "user@example.com"}, nil
+	}
 
 	app := &Application{
 		API: api.NewHandler(api.HandlerConfig{ConfigStore: mockStore, AuthService: sessionOnlyAuth{}}),
@@ -158,6 +165,7 @@ func TestHandleLambdaHTTPEvent_DecodesBase64FormBody(t *testing.T) {
 		Headers: map[string]string{
 			"content-type":  "application/x-www-form-urlencoded",
 			"authorization": "Bearer sess-tok",
+			"x-csrf-token":  "csrf-ok",
 		},
 		RequestContext: events.LambdaFunctionURLRequestContext{
 			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
@@ -175,8 +183,8 @@ func TestHandleLambdaHTTPEvent_DecodesBase64FormBody(t *testing.T) {
 	resp, err := app.handleLambdaHTTPEvent(ctx, rawEvent)
 	testutil.AssertNoError(t, err)
 	testutil.AssertEqual(t, 403, resp.StatusCode)
-	testutil.AssertContains(t, resp.Body, "no per-account contact email")
-	testutil.AssertTrue(t, !strings.Contains(resp.Body, "requires cancel-any"),
+	testutil.AssertContains(t, resp.Body, "invalid revocation token")
+	testutil.AssertTrue(t, !strings.Contains(resp.Body, "execution not found"),
 		"token must have been resolved from the decoded body, not left empty")
 
 	mockStore.AssertExpectations(t)
@@ -213,4 +221,13 @@ func (sessionOnlyAuth) HasPermissionAPI(context.Context, string, string, string)
 
 func (sessionOnlyAuth) GetAllowedAccountsAPI(context.Context, string) ([]string, error) {
 	return nil, nil
+}
+
+// ValidateCSRFToken accepts "csrf-ok" for "sess-tok": the email-link routes
+// validate CSRF before the execution lookup (issue #597).
+func (sessionOnlyAuth) ValidateCSRFToken(_ context.Context, sessionToken, csrfToken string) error {
+	if sessionToken != "sess-tok" || csrfToken != "csrf-ok" {
+		return errors.New("invalid CSRF token")
+	}
+	return nil
 }
