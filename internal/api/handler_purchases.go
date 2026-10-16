@@ -616,25 +616,20 @@ func (h *Handler) disablePlan(ctx context.Context, planID string) error {
 	return nil
 }
 
-// loadApproveExecution fetches an execution by ID, returns a 404 ClientError
-// when not found, and then runs the issue-#609 orphan preflight check.
-// Extracted from approvePurchase to keep that function below the gocyclo
-// threshold — same pattern as loadCancelableExecution in the purchase package.
-func (h *Handler) loadApproveExecution(ctx context.Context, execID string) (*config.PurchaseExecution, error) {
-	execution, err := h.config.GetExecutionByID(ctx, execID)
-	if errors.Is(err, config.ErrNotFound) {
-		return nil, NewClientError(404, "execution not found")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to get execution: %w", err)
-	}
-	// Preflight (issue #609): reject non-AWS orphan executions before the
-	// cloud SDK is reached. Delegates to the centralized predicate in the
-	// purchase package so the logic is maintained in one place.
+// rejectOrphanExecution runs the issue-#609 orphan preflight: non-AWS
+// executions whose account no longer exists are rejected with a 409 before
+// the cloud SDK is reached. Delegates to the centralized predicate in the
+// purchase package so the logic is maintained in one place. It runs only
+// once the session is authorized for the execution, so the 409 cannot tell
+// an unauthorized caller that the execution exists (issue #597). The token
+// branch needs no copy: an orphan has no per-account contact_email, so
+// authorizeApprovalAction never authorizes it, and ApproveExecution runs
+// the same predicate itself.
+func rejectOrphanExecution(execution *config.PurchaseExecution) error {
 	if err := purchase.OrphanExecutionError(execution); err != nil {
-		return nil, NewClientError(409, err.Error())
+		return NewClientError(409, err.Error())
 	}
-	return execution, nil
+	return nil
 }
 
 // Purchase action handlers.
@@ -647,7 +642,7 @@ func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctio
 		return nil, err
 	}
 
-	execution, err := h.loadApproveExecution(ctx, execID)
+	execution, err := h.getExecutionOr404(ctx, execID)
 	if err != nil {
 		return nil, err
 	}
@@ -665,6 +660,7 @@ func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctio
 	//      validates the token itself before mutating state.
 	//   3. token == "" → a session denial above is final (issue #173);
 	//      with no session, approvePurchaseViaSession returns 401.
+	// A final denial answers exactly like a missing execution (issue #597).
 	if session := h.tryGetSession(ctx, req); session != nil {
 		switch err := h.authorizeScopedSessionApprove(ctx, session, execution); {
 		case err == nil:
@@ -675,8 +671,9 @@ func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctio
 			// chance (a logged-in user without approve-* or outside the
 			// account scope may still be the per-account contact recipient).
 		default:
-			// Transient failure — propagate instead of silently widening.
-			return nil, err
+			// A final denial (no token) or a transient failure — propagate
+			// instead of silently widening; the denial is concealed.
+			return nil, concealExecutionDenial(err)
 		}
 	}
 
@@ -692,11 +689,57 @@ func (h *Handler) approvePurchase(ctx context.Context, req *events.LambdaFunctio
 // approve/cancel/revoke routes needs a session (the token alone never
 // authorizes), so an unauthenticated caller gets the same response for a
 // missing and an existing execution ID (issue #435).
+//
+// CSRF is validated here too, before the lookup (issue #597). Every
+// remaining caller is session-authenticated, and the session bearer token
+// is cookie-equivalent, so the token branch needs CSRF as much as the
+// session branch does. Checking it only on the session branch, after the
+// lookup, answered "CSRF validation failed" for an existing execution and
+// 404 for a missing one.
 func (h *Handler) requireSessionBeforeLookup(ctx context.Context, req *events.LambdaFunctionURLRequest) error {
 	if h.tryGetSession(ctx, req) == nil {
 		return NewClientError(401, "sign in with the account's contact email to approve or cancel this purchase")
 	}
+	if err := h.validateCSRF(ctx, req); err != nil {
+		return errCSRFRejected
+	}
 	return nil
+}
+
+// executionNotFound is the answer for an execution ID that does not exist
+// on the approve, cancel and revoke routes. concealExecutionDenial returns
+// the same error for an execution the caller may not act on, so the two
+// cases have the same status, headers and body (issue #597).
+func executionNotFound() *clientError {
+	return &clientError{code: 404, message: "execution not found"}
+}
+
+// concealedDenialError is the "execution not found" 404 returned in place of
+// a final authorization denial. It responds exactly like executionNotFound
+// (IsClientError resolves it through Unwrap) and keeps the denial it hides
+// in cause, for logs and tests only.
+type concealedDenialError struct {
+	*clientError
+	cause error
+}
+
+func (e *concealedDenialError) Unwrap() error { return e.clientError }
+
+// concealExecutionDenial maps a final authorization denial on an existing
+// execution (an account-scope miss, an RBAC or contact_email 403, or a 401
+// from the contact_email gate) to the 404 a missing execution gets, so a
+// signed-in caller cannot use the approve, cancel and revoke routes to
+// learn which execution IDs exist (issue #597). Only direct *clientError
+// values are mapped: a Constraints denial (constraintDeniedError) goes to a
+// caller who already holds approve-* for the execution, and wrapped
+// backend failures must keep surfacing as 500s.
+func concealExecutionDenial(err error) error {
+	ce, ok := err.(*clientError) //nolint:errorlint // strict (unwrapped) assertion is deliberate; see isPermissionDenied
+	if !errors.Is(err, errNotFound) && (!ok || (ce.code != 401 && ce.code != 403)) {
+		return err
+	}
+	logging.Infof("purchase action denied, answered as execution not found: %v", err)
+	return &concealedDenialError{clientError: executionNotFound(), cause: err}
 }
 
 // tokenActionError maps the email-link approve/cancel failures that are the
@@ -725,7 +768,7 @@ func tokenActionError(err error) error {
 func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, token string) (any, error) {
 	actor, err := h.authorizeApprovalAction(ctx, req, execution)
 	if err != nil {
-		return nil, err
+		return nil, concealExecutionDenial(err)
 	}
 	// 4-eyes mode (issue #1005): resolve the session again for identity
 	// comparison. On the email-token deep-link flow the user is logged in
@@ -763,11 +806,14 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	}
 	if globalCfg.GetPurchaseDelay() > 0 {
 		// The delayed branch bypasses ApproveExecution, which is where the
-		// token is otherwise validated (issue #586).
+		// token is otherwise validated (issue #586). This check reads the
+		// snapshot loaded at the start of the request; approveWithDelay pins
+		// the token again inside the status CAS so a token rotated since
+		// cannot win the transition (issue #590).
 		if err := purchase.ValidateApprovalToken(execution, token); err != nil {
 			return nil, tokenActionError(err)
 		}
-		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), actor, nil)
+		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), actor, nil, token)
 	}
 	// ApproveExecution now runs the purchase synchronously inside the
 	// same call (issue #372). When it returns nil the AWS API call
@@ -832,6 +878,12 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 		return nil, err
 	}
 
+	// approvePurchase only calls this with a session it has authorized, so
+	// the orphan 409 reveals nothing to an unauthorized caller (issue #597).
+	if err := rejectOrphanExecution(execution); err != nil {
+		return nil, err
+	}
+
 	if execution.Status != "pending" && execution.Status != "notified" {
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be approved (status=%s)", execution.ExecutionID, execution.Status))
 	}
@@ -856,7 +908,7 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 		return nil, fmt.Errorf("failed to read global config for purchase delay check: %w", cfgErr)
 	}
 	if globalCfg.GetPurchaseDelay() > 0 {
-		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), session.Email, actor)
+		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), session.Email, actor, "")
 	}
 
 	// revocationToken is the raw token ApproveAndExecute mints for this
@@ -1051,9 +1103,17 @@ func (h *Handler) requirePlanStepCap(ctx context.Context, execution *config.Purc
 // scheduled_execution_at <= NOW() and fires the actual SDK call.
 // Revoking a status=scheduled execution (via the revoke handler or the
 // History "Revoke" button) transitions it to "canceled" at zero cloud cost.
-func (h *Handler) approveWithDelay(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string) (any, error) {
-	updated, err := h.scheduleApprovedExecution(ctx, execution, delay, actor, transitionedBy)
+//
+// approvalToken is the raw email-link token on the token path and "" on the
+// session path; see scheduleApprovedExecution.
+func (h *Handler) approveWithDelay(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string, approvalToken string) (any, error) {
+	updated, err := h.scheduleApprovedExecution(ctx, execution, delay, actor, transitionedBy, approvalToken)
 	if err != nil {
+		if errors.Is(err, config.ErrApprovalTokenChanged) {
+			// The token was rotated or expired after approveViaToken validated
+			// it against the request's snapshot (issue #590).
+			return nil, NewClientError(403, "invalid approval token")
+		}
 		if errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
 			// A concurrent Cancel beat the approve: the CAS rejected because the row
 			// is no longer in a schedulable status. Return 409 so the client knows to
@@ -1090,8 +1150,21 @@ func (h *Handler) approveWithDelay(ctx context.Context, execution *config.Purcha
 // "canceled" between the caller's SELECT and this write, TransitionExecutionStatus
 // returns ErrExecutionNotInExpectedStatus and we surface a 409 instead of
 // blindly overwriting the canceled state.
-func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string) (*config.PurchaseExecution, error) {
-	updated, err := h.config.TransitionExecutionStatus(ctx, execution.ExecutionID, []string{"pending", "notified"}, "scheduled", transitionedBy)
+//
+// A non-empty approvalToken (the email-link path) is also pinned inside the
+// CAS: the row's stored token hash must still match it and be unexpired, so
+// a re-notification that rotated the token after the caller validated its
+// snapshot rejects the transition with config.ErrApprovalTokenChanged
+// (issue #590). The session path passes "" and is not token-gated.
+func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string, approvalToken string) (*config.PurchaseExecution, error) {
+	from := []string{"pending", "notified"}
+	var updated *config.PurchaseExecution
+	var err error
+	if approvalToken != "" {
+		updated, err = h.config.TransitionExecutionStatusTokenPinned(ctx, execution.ExecutionID, from, "scheduled", transitionedBy, approvalToken)
+	} else {
+		updated, err = h.config.TransitionExecutionStatus(ctx, execution.ExecutionID, from, "scheduled", transitionedBy)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition execution %s to scheduled: %w", execution.ExecutionID, err)
 	}
@@ -1351,15 +1424,16 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 			// returning a wrapped error, h.auth==nil 500). Propagate
 			// instead of silently widening to the contact_email gate —
 			// a stale auth backend should not mask itself as a 403 about
-			// missing contact emails. CR feedback on PR #216.
-			return nil, err
+			// missing contact emails. CR feedback on PR #216. A final
+			// denial answers like a missing execution (issue #597).
+			return nil, concealExecutionDenial(err)
 		}
 	}
 
 	if token != "" {
 		actor, err := h.authorizeApprovalAction(ctx, req, execution)
 		if err != nil {
-			return nil, err
+			return nil, concealExecutionDenial(err)
 		}
 		if err := h.purchase.CancelExecution(ctx, execID, token, actor); err != nil {
 			return nil, tokenActionError(err)
@@ -1553,7 +1627,7 @@ func (h *Handler) revokeViaEmailToken(ctx context.Context, req *events.LambdaFun
 	// this iteration) and confirm the caller is the authorized contact email.
 	actor, err := h.authorizeApprovalAction(ctx, req, execution)
 	if err != nil {
-		return nil, err
+		return nil, concealExecutionDenial(err)
 	}
 	if err := validateRevokeToken(execution, token); err != nil {
 		return nil, err
@@ -1569,7 +1643,7 @@ func (h *Handler) revokeViaEmailToken(ctx context.Context, req *events.LambdaFun
 func (h *Handler) getExecutionOr404(ctx context.Context, execID string) (*config.PurchaseExecution, error) {
 	execution, err := h.config.GetExecutionByID(ctx, execID)
 	if errors.Is(err, config.ErrNotFound) || (err == nil && execution == nil) {
-		return nil, NewClientError(404, "execution not found")
+		return nil, executionNotFound()
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get execution: %w", err)
@@ -1632,7 +1706,8 @@ func (h *Handler) tryRevokeViaSession(ctx context.Context, req *events.LambdaFun
 		// Fall through to the token branch.
 		return nil, false, nil
 	default:
-		return nil, true, sessErr
+		// A final denial answers like a missing execution (issue #597).
+		return nil, true, concealExecutionDenial(sessErr)
 	}
 }
 

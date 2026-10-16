@@ -94,7 +94,7 @@ func TestExecutedNotification_TokenApprovePath(t *testing.T) {
 		},
 	}
 
-	// First call: loadApproveExecution fetches the pending execution.
+	// First call: getExecutionOr404 fetches the pending execution.
 	// Second call: approveViaToken re-fetches after ApproveExecution returns,
 	// to pick up the FINAL execution state (status, completed_at) for the
 	// email body -- not the token, which comes from the return value below.
@@ -108,6 +108,8 @@ func TestExecutedNotification_TokenApprovePath(t *testing.T) {
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contact}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
 
@@ -164,7 +166,7 @@ func TestExecutedNotification_TokenApprovePath_RefetchFailureStillEmailsToken(t 
 	mockConfig := new(MockConfigStore)
 	exec := approvalTestExec(execID, contact, mockConfig)
 
-	// First call: loadApproveExecution fetches the pending execution.
+	// First call: getExecutionOr404 fetches the pending execution.
 	// Second call: approveViaToken re-fetches for the final email state,
 	// but this time the store errors -- the handler must fall back to the
 	// pre-approve snapshot for those fields, and still emails the token.
@@ -179,6 +181,8 @@ func TestExecutedNotification_TokenApprovePath_RefetchFailureStillEmailsToken(t 
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contact}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
 

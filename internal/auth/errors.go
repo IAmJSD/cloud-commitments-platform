@@ -53,8 +53,9 @@ var (
 	// malformed input, NOT a request for the "*" wildcard: the group-edit
 	// form renders an empty stored resource as the selected "All (*)" option
 	// and saves it back as view:*, and the same widening is reachable
-	// directly through the API because nothing validated the list. Mapped to
-	// 400 (issues #1730, #1550).
+	// directly through the API because nothing validated the list. Also
+	// returned for a negative or NaN MaxPurchaseAmount on a group or API-key
+	// write (issue #83). Mapped to 400 (issues #1730, #1550).
 	ErrInvalidPermission = errors.New("invalid permission")
 
 	// ErrSystemManagedGroup is returned when a write targets one of the

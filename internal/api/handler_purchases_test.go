@@ -62,6 +62,8 @@ func TestHandler_approvePurchase(t *testing.T) {
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	// After issue #286 the session-authed approve dispatch consults the
 	// approve-{any,own} verb matrix BEFORE falling through to the token
 	// branch. The session here is the approver's mailbox (no role / no
@@ -105,6 +107,8 @@ func TestHandler_cancelPurchase(t *testing.T) {
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: approver}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	// Session has no admin role and no cancel permissions, so cancelPurchase's
 	// session-authed pre-check (added to fix the deep-link contact_email gate)
 	// falls through to authorizeApprovalAction. The contact_email + globalNotify
@@ -144,6 +148,8 @@ func TestHandler_approvePurchase_RejectsMismatchedSession(t *testing.T) {
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	// Session belongs to someone who is NOT the authorized approver.
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: "wrong@example.com"}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	// After issue #286 the dispatch consults approve-{any,own} BEFORE
 	// the contact_email gate. The wrong@example.com session has neither
 	// verb, so the dispatch returns 403 from authorizeSessionApprove,
@@ -161,8 +167,8 @@ func TestHandler_approvePurchase_RejectsMismatchedSession(t *testing.T) {
 		Headers: map[string]string{"authorization": "Bearer sess-tok"},
 	}
 	_, err := handler.approvePurchase(ctx, req, execID, "valid-token")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not the authorized approver")
+	// The contact_email denial answers like a missing execution (issue #597).
+	requireConcealedDenial(t, err, "not the authorized approver")
 	// ApproveExecution must not have been called — purchase manager mock
 	// asserts nothing by construction; a .On(...) entry above would create
 	// a false positive, so we pin the negative by confirming the error is
@@ -203,6 +209,8 @@ func TestHandler_approvePurchase_RejectsMissingContactEmail(t *testing.T) {
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: globalNotify}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	// Issue #286 dispatch consults approve-{any,own} BEFORE the contact_email
 	// gate. globalNotify session has neither verb → 403 → fall through to
 	// token branch → authorizeApprovalAction surfaces the "no per-account
@@ -218,8 +226,8 @@ func TestHandler_approvePurchase_RejectsMissingContactEmail(t *testing.T) {
 		Headers: map[string]string{"authorization": "Bearer sess-tok"},
 	}
 	_, err := handler.approvePurchase(ctx, req, execID, "valid-token")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no per-account contact email")
+	// The contact_email denial answers like a missing execution (issue #597).
+	requireConcealedDenial(t, err, "no per-account contact email")
 	mockPurchase.AssertNotCalled(t, "ApproveExecution", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -273,6 +281,8 @@ func TestHandler_approvePurchase_AcceptsContactEmailSession(t *testing.T) {
 	// Session email matches the account contact email — global notify is
 	// NOT enough here because a contact email exists for the account.
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contactEmail}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	// Issue #286: dispatch consults approve-{any,own} BEFORE the contact_email
 	// gate. The contact-email session has neither verb (no Role / no UserID)
 	// → 403 → fall through to token branch → authorizeApprovalAction matches
@@ -455,6 +465,8 @@ func TestHandler_approvePurchase_SessionApproveAny_PermissionConstraintsDenied(t
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	userSession := &Session{UserID: "dddddddd-dddd-dddd-dddd-dddddddddddd", Email: "capped@example.com"}
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(userSession, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	// The bare verb/resource gate passes - this is exactly what happens for
 	// a permission that carries Constraints, because HasPermissionAPI checks
 	// with nil request-side constraints.
@@ -532,6 +544,8 @@ func TestHandler_approvePurchase_SessionApproveAny_TokenPresent_ConstraintsDenie
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", ctx, "capped-token").Return(capped, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "capped-token", "").Return(nil)
 	mockAuth.On("HasPermissionAPI", ctx, capped.UserID, "approve-any", "purchases").Return(true, nil)
 	mockAuth.On("HasPermissionForConstraintsAPI", ctx, capped.UserID, "approve-any", "purchases",
 		purchaseConstraintSets(exec.Recommendations)).Return(false, nil)
@@ -614,6 +628,8 @@ func TestHandler_approveViaToken_GlobalConfigError_FailsClosed(t *testing.T) {
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contactEmail}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	// No approve-any / approve-own permissions — dispatch falls to token path.
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
@@ -763,13 +779,17 @@ func TestHandler_approvePurchase_AzureOrphanRejects409(t *testing.T) {
 		ApprovalToken: "valid-token",
 		Status:        "pending",
 		// CloudAccountID intentionally nil — account was deleted.
-		Recommendations: []config.RecommendationRecord{{ID: "r1", Provider: "azure"}},
+		Recommendations: []config.RecommendationRecord{{ID: "r1", Provider: "azure", UpfrontCost: 100}},
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: "admin@example.com"}, nil)
-	mockAuth.grantAdmin()
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
+	// The orphan guard runs once the session is authorized to approve
+	// (issue #597), so the caller holds approve-any, not just admin:*.
+	mockAuth.grantAdminPurchaser()
 
 	mockPurchase := new(MockPurchaseManager)
 
@@ -800,13 +820,17 @@ func TestHandler_approvePurchase_GCPOrphanRejects409(t *testing.T) {
 		ExecutionID:     execID,
 		ApprovalToken:   "valid-token",
 		Status:          "pending",
-		Recommendations: []config.RecommendationRecord{{ID: "r1", Provider: "gcp"}},
+		Recommendations: []config.RecommendationRecord{{ID: "r1", Provider: "gcp", UpfrontCost: 100}},
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: "admin@example.com"}, nil)
-	mockAuth.grantAdmin()
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
+	// The orphan guard runs once the session is authorized to approve
+	// (issue #597), so the caller holds approve-any, not just admin:*.
+	mockAuth.grantAdminPurchaser()
 
 	mockPurchase := new(MockPurchaseManager)
 
@@ -942,6 +966,8 @@ func TestHandler_approvePurchase_RejectsGlobalNotifyWhenContactSet(t *testing.T)
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: globalNotify}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	// Issue #286: dispatch consults approve-{any,own} BEFORE the
 	// contact_email gate. Returning false for both verbs lets the
 	// dispatch fall through to the token branch where the
@@ -957,8 +983,8 @@ func TestHandler_approvePurchase_RejectsGlobalNotifyWhenContactSet(t *testing.T)
 		Headers: map[string]string{"authorization": "Bearer sess-tok"},
 	}
 	_, err := handler.approvePurchase(ctx, req, execID, "valid-token")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not the authorized approver")
+	// The contact_email denial answers like a missing execution (issue #597).
+	requireConcealedDenial(t, err, "not the authorized approver")
 	mockPurchase.AssertNotCalled(t, "ApproveExecution", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -3023,8 +3049,8 @@ func TestHandler_approvePurchase_OutOfScope(t *testing.T) {
 		Headers: map[string]string{"Authorization": "Bearer operator-token"},
 	}
 	_, err := handler.approvePurchase(ctx, req, executionID, "")
-	require.Error(t, err)
-	assert.True(t, IsNotFoundError(err), "expected 404 not-found, got %v", err)
+	// The scope miss answers like a missing execution (issue #597).
+	requireConcealedDenial(t, err, "not found")
 	mockStore.AssertNotCalled(t, "GetGlobalConfig")
 }
 
@@ -3225,8 +3251,8 @@ func TestHandler_cancelPurchase_Session_CancelOwn_RejectsNonCreator(t *testing.T
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, true)
 
 	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "another user's pending purchase")
+	// The denial answers like a missing execution (issue #597).
+	requireConcealedDenial(t, err, "another user's pending purchase")
 	mockConfig.AssertNotCalled(t, "WithTx")
 	mockConfig.AssertNotCalled(t, "SavePurchaseExecution")
 	mockAuth.AssertExpectations(t)
@@ -3244,8 +3270,8 @@ func TestHandler_cancelPurchase_Session_NoVerb_Rejects(t *testing.T) {
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, false)
 
 	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cancel-any or cancel-own")
+	// The denial answers like a missing execution (issue #597).
+	requireConcealedDenial(t, err, "cancel-any or cancel-own")
 	mockConfig.AssertNotCalled(t, "WithTx")
 	mockConfig.AssertNotCalled(t, "SavePurchaseExecution")
 	mockAuth.AssertExpectations(t)
@@ -3408,8 +3434,8 @@ func TestHandler_cancelPurchase_Session_LegacyNullCreator_NonAdminRejected(t *te
 	handler, mockConfig, mockAuth := buildSessionCancelHandler(exec, session, false, true)
 
 	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "another user's pending purchase")
+	// The denial answers like a missing execution (issue #597).
+	requireConcealedDenial(t, err, "another user's pending purchase")
 	mockConfig.AssertNotCalled(t, "WithTx")
 	mockConfig.AssertNotCalled(t, "SavePurchaseExecution")
 	mockAuth.AssertExpectations(t)
@@ -3584,6 +3610,8 @@ func TestHandler_cancelPurchase_DeepLink_TransientAuthErrorPropagates(t *testing
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(session, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", mock.Anything, "sess-tok", "").Return(nil)
 	// Simulate a transient auth-backend failure on the cancel-any check.
 	// authorizeSessionCancel wraps this as "permission check failed: …"
 	// — NOT a 403 ClientError. The pre-check must propagate.
@@ -3629,9 +3657,9 @@ func TestHandler_cancelPurchase_DeepLink_NonPrivilegedSessionStillHitsContactGat
 	mockConfig.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil)
 
 	_, err := handler.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, "deep-link-token")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no per-account contact email configured for this execution",
-		"non-privileged session must fall through to the contact_email gate from PR #101")
+	// The non-privileged session falls through to the contact_email gate
+	// from PR #101, whose denial answers like a missing execution (issue #597).
+	requireConcealedDenial(t, err, "no per-account contact email configured for this execution")
 	mockConfig.AssertNotCalled(t, "SavePurchaseExecution")
 	mockAuth.AssertExpectations(t)
 }
@@ -5614,7 +5642,7 @@ func TestHandler_scheduleApprovedExecution_CASGuardsConcurrentCancel(t *testing.
 
 	handler := &Handler{config: mockConfig}
 
-	_, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com", nil)
+	_, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com", nil, "")
 	require.Error(t, err, "concurrent cancel must surface as an error, not a silent overwrite")
 	// SavePurchaseExecution must NEVER be called: the canceled row is untouched.
 	mockConfig.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
@@ -5650,7 +5678,7 @@ func TestHandler_scheduleApprovedExecution_HappyPath(t *testing.T) {
 
 	handler := &Handler{config: mockConfig}
 
-	result, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com", nil)
+	result, err := handler.scheduleApprovedExecution(ctx, exec, 48*time.Hour, "actor@example.com", nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "scheduled", result.Status)
 	assert.NotNil(t, result.ScheduledExecutionAt, "ScheduledExecutionAt must be stamped")
@@ -5674,7 +5702,7 @@ func TestApproveWithDelay_CASLostMaps409(t *testing.T) {
 
 	handler := &Handler{config: mockConfig}
 
-	_, err := handler.approveWithDelay(ctx, exec, 48*time.Hour, "actor@example.com", nil)
+	_, err := handler.approveWithDelay(ctx, exec, 48*time.Hour, "actor@example.com", nil, "")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "CAS-lost error must be a ClientError")
@@ -5736,6 +5764,8 @@ func TestHandler_revokePurchase_ValidToken(t *testing.T) {
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	// Provide a session for the revoker so authorizeApprovalAction resolves actor.
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: revokerEmail}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	// RBAC: revoker has no cancel-any or cancel-own, so falls through to token path.
 	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-own", "purchases").Return(false, nil).Maybe()
@@ -5782,6 +5812,8 @@ func TestHandler_revokePurchase_InvalidToken(t *testing.T) {
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contactEmail}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-own", "purchases").Return(false, nil).Maybe()
 
@@ -5836,6 +5868,8 @@ func TestHandler_revokePurchase_NotFound(t *testing.T) {
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(&Session{Email: "admin@example.com"}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", mock.Anything, "sess-tok", "").Return(nil)
 	handler := &Handler{config: mockStore, auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"authorization": "Bearer sess-tok"}}
 	_, err := handler.revokeViaEmailToken(ctx, req, execID, "some-token")
@@ -5878,6 +5912,8 @@ func TestHandler_revokePurchase_ExpiredToken(t *testing.T) {
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: contactEmail}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-own", "purchases").Return(false, nil).Maybe()
 
@@ -6004,6 +6040,8 @@ func TestHandler_revokePurchase_SessionNoPermissionNoToken(t *testing.T) {
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "user-token").
 		Return(&Session{UserID: userID, Email: userEmail}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "user-token", "").Return(nil)
 	mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-any", "purchases").Return(false, nil)
 	mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-own", "purchases").Return(false, nil)
 
@@ -6012,10 +6050,8 @@ func TestHandler_revokePurchase_SessionNoPermissionNoToken(t *testing.T) {
 		Headers: map[string]string{"authorization": "Bearer user-token"},
 	}
 	_, err := handler.revokeViaEmailToken(ctx, req, execID, "")
-	require.Error(t, err, "no permission and no token must be denied")
-	ce, ok := IsClientError(err)
-	require.True(t, ok, "expected a client error")
-	assert.Equal(t, 403, ce.code)
+	// No permission and no token: denied, answered like a missing execution (issue #597).
+	requireConcealedDenial(t, err, "requires cancel-any or cancel-own")
 	mockStore.AssertExpectations(t)
 	mockAuth.AssertExpectations(t)
 }
@@ -6372,6 +6408,8 @@ func TestRevokePurchase_POSTPerformsRevoke(t *testing.T) {
 
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(&Session{Email: revokerEmail}, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("HasPermissionAPI", ctx, "", "cancel-own", "purchases").Return(false, nil).Maybe()
 
@@ -6566,6 +6604,8 @@ func TestRequireDifferentApprover_EmailTokenPath_ModeOn(t *testing.T) {
 	// through to the token branch. The 4-eyes check then uses the session
 	// identity against CreatedByUserID and must deny.
 	mockAuth.On("ValidateSession", ctx, "sess-tok").Return(creatorSession, nil)
+	// CSRF is validated before the execution lookup (issue #597).
+	mockAuth.On("ValidateCSRFToken", ctx, "sess-tok", "").Return(nil)
 	mockAuth.On("HasPermissionAPI", ctx, creatorID, "approve-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("HasPermissionAPI", ctx, creatorID, "approve-own", "purchases").Return(false, nil).Maybe()
 

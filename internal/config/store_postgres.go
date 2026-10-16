@@ -9,6 +9,7 @@ import (
 	"hash/fnv"
 	"math/big"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1191,7 +1192,7 @@ func (s *PostgresStore) RotatePendingApprovalToken(ctx context.Context, executio
 // and the legacy cancelled_by (issue #119), matching what the other cancel paths
 // record and what History reads.
 func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*PurchaseExecution, error) {
-	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, nil)
+	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, nil, nil)
 }
 
 // TransitionExecutionStatusPinned is TransitionExecutionStatus that also
@@ -1200,7 +1201,21 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 // claim makes the pin fail with ErrExecutionNotInExpectedStatus, so a row is
 // never run on a snapshot different from the one that was gated.
 func (s *PostgresStore) TransitionExecutionStatusPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*PurchaseExecution, error) {
-	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, &sawEmptyRecommendations)
+	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, &sawEmptyRecommendations, nil)
+}
+
+// TransitionExecutionStatusTokenPinned is TransitionExecutionStatus that also
+// requires approval_token_hash to equal the hash of rawToken and the token to
+// be unexpired, checked in the same UPDATE as the status change. The caller's
+// earlier token check ran against a snapshot; a re-notification that rotates
+// the token between that read and this write would otherwise still let the
+// old token win the transition (issue #590). An empty rawToken never matches.
+func (s *PostgresStore) TransitionExecutionStatusTokenPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, rawToken string) (*PurchaseExecution, error) {
+	if rawToken == "" {
+		return nil, fmt.Errorf("%w: execution %s: no approval token supplied", ErrApprovalTokenChanged, executionID)
+	}
+	tokenHash := HashApprovalToken(rawToken)
+	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, nil, &tokenHash)
 }
 
 // RescheduleAwaitingExecution is a conditional single-column update: the
@@ -1215,7 +1230,7 @@ func (s *PostgresStore) RescheduleAwaitingExecution(ctx context.Context, executi
 	return tag.RowsAffected() == 1, nil
 }
 
-func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmpty *bool) (*PurchaseExecution, error) {
+func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmpty *bool, tokenHash *string) (*PurchaseExecution, error) {
 	var cancelActor *string
 	if toStatus == StatusCanceled {
 		cancelActor = actor
@@ -1228,6 +1243,8 @@ func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, execution
 		    cancelled_by = COALESCE((SELECT email FROM users WHERE id = $5), cancelled_by)
 		WHERE execution_id = $1 AND status = ANY($3)
 		  AND ($6::boolean IS NULL OR (recommendations IN ('[]'::jsonb, 'null'::jsonb)) = $6)
+		  AND ($7::text IS NULL OR (approval_token_hash = $7
+		       AND (approval_token_expires_at IS NULL OR approval_token_expires_at > NOW())))
 		RETURNING plan_id, execution_id, status, step_number, scheduled_date,
 		          notification_sent, approval_token_hash, recommendations,
 		          total_upfront_cost, estimated_savings, completed_at, error, expires_at,
@@ -1238,31 +1255,45 @@ func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, execution
 		          idempotency_key, scheduled_execution_at, no_submission
 	`
 
-	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses, actor, cancelActor, sawEmpty)
+	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses, actor, cancelActor, sawEmpty, tokenHash)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(records) == 0 {
-		existing, existErr := s.GetExecutionByID(ctx, executionID)
-		if errors.Is(existErr, ErrNotFound) {
-			// Wrap ErrNotFound so callers (e.g. the purchase reaper) can
-			// use errors.Is to distinguish "row vanished mid-flight" — a
-			// legitimate CAS race-loss — from a hard DB error.
-			return nil, fmt.Errorf("%w: execution %s", ErrNotFound, executionID)
-		}
-		if existErr != nil {
-			// A hard DB error during the probe must NOT read as a benign
-			// race-loss: propagate it so callers see the outage.
-			return nil, fmt.Errorf("transition %s: probe after zero-row CAS failed: %w", executionID, existErr)
-		}
-		// Wrap ErrExecutionNotInExpectedStatus so callers can use
-		// errors.Is to recognize CAS rejection (status changed between
-		// SELECT and UPDATE) as race-lost rather than a real error.
-		return nil, fmt.Errorf("%w: execution %s cannot transition from %q to %q", ErrExecutionNotInExpectedStatus, executionID, existing.Status, toStatus)
+		return nil, s.transitionRejection(ctx, executionID, fromStatuses, toStatus, tokenHash != nil)
 	}
 
 	return &records[0], nil
+}
+
+// transitionRejection explains a zero-row transitionExecutionStatus by probing
+// the row: gone (ErrNotFound), a hard DB error, a token pin lost on a row still
+// in an allowed status (ErrApprovalTokenChanged), or a status CAS lost
+// (ErrExecutionNotInExpectedStatus). Extracted to keep the caller under the
+// gocyclo threshold.
+func (s *PostgresStore) transitionRejection(ctx context.Context, executionID string, fromStatuses []string, toStatus string, tokenPinned bool) error {
+	existing, existErr := s.GetExecutionByID(ctx, executionID)
+	if errors.Is(existErr, ErrNotFound) {
+		// Wrap ErrNotFound so callers (e.g. the purchase reaper) can
+		// use errors.Is to distinguish "row vanished mid-flight" — a
+		// legitimate CAS race-loss — from a hard DB error.
+		return fmt.Errorf("%w: execution %s", ErrNotFound, executionID)
+	}
+	if existErr != nil {
+		// A hard DB error during the probe must NOT read as a benign
+		// race-loss: propagate it so callers see the outage.
+		return fmt.Errorf("transition %s: probe after zero-row CAS failed: %w", executionID, existErr)
+	}
+	// The status still allowed the transition, so the token pin is what
+	// rejected it: the stored token was rotated or expired (issue #590).
+	if tokenPinned && slices.Contains(fromStatuses, existing.Status) {
+		return fmt.Errorf("%w: execution %s", ErrApprovalTokenChanged, executionID)
+	}
+	// Wrap ErrExecutionNotInExpectedStatus so callers can use
+	// errors.Is to recognize CAS rejection (status changed between
+	// SELECT and UPDATE) as race-lost rather than a real error.
+	return fmt.Errorf("%w: execution %s cannot transition from %q to %q", ErrExecutionNotInExpectedStatus, executionID, existing.Status, toStatus)
 }
 
 // SetCancelledBy stamps both the canceled_by and legacy cancelled_by columns
@@ -2334,6 +2365,23 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 	return s.queryPurchaseHistory(ctx, query, limit)
 }
 
+// activeExpiryEpochExpr is a purchase_history row's commitment expiry
+// (timestamp + term * 8760 hours) as Unix epoch seconds. It must stay the
+// same expression as the one indexed by
+// idx_purchase_history_active_expiry (migration 000126), or the planner cannot
+// use that index and GetActivePurchaseHistory falls back to evaluating every
+// row (issue #33).
+//
+// The obvious form, timestamp + make_interval(hours => term * 8760), cannot be
+// indexed: timestamptz + interval is only STABLE because day and month
+// intervals depend on the session time zone. Converting to UTC wall time and
+// taking the epoch is IMMUTABLE, and for an hours-only interval it is exact
+// arithmetic on the same instant, so the rows matched are unchanged. numeric
+// arithmetic cannot overflow, so no term value can make an INSERT fail on the
+// index expression. 31536000 = 8760 * 3600, the same 365-day year as the
+// analytics collector's HoursPerYear.
+const activeExpiryEpochExpr = "(extract(epoch FROM (timestamp AT TIME ZONE 'UTC')) + term::numeric * 31536000)"
+
 // GetActivePurchaseHistory retrieves every purchase_history row still within its
 // commitment term at asOf, optionally scoped to a set of accounts via the same
 // dual-column predicate as GetPurchaseHistoryFiltered (appendAccountPredicate):
@@ -2351,13 +2399,24 @@ func (s *PostgresStore) GetAllPurchaseHistory(ctx context.Context, limit int) ([
 // (expiry >= asOf): a commitment expiring exactly at asOf is still active,
 // matching the API layer's isActiveCommitment (!now.After(expiry)) so the SQL
 // result set and the Go-side active checks share one boundary definition.
+//
+// The expiry is compared as Unix epoch seconds (activeExpiryEpochExpr) so the
+// predicate can use idx_purchase_history_active_expiry (migration 000126)
+// instead of evaluating every row ever recorded (issue #33).
 func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]PurchaseHistoryRecord, error) {
+	query, args := activePurchaseHistoryQuery(asOf, accountIDs, externalIDsByProvider)
+	return s.queryPurchaseHistory(ctx, query, args...)
+}
+
+// activePurchaseHistoryQuery builds GetActivePurchaseHistory's SQL and bind
+// args. It is separate so the integration tests can EXPLAIN the exact query.
+func activePurchaseHistoryQuery(asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) (query string, args []any) {
 	conds := []string{
 		"term > 0",
-		"timestamp + make_interval(hours => term * 8760) >= $1",
+		activeExpiryEpochExpr + " >= extract(epoch FROM ($1::timestamptz AT TIME ZONE 'UTC'))",
 		"revoked_at IS NULL",
 	}
-	args := []any{asOf}
+	args = []any{asOf}
 	conds, args = appendAccountPredicate(conds, args, accountIDs, externalIDsByProvider)
 
 	// The column list MUST match scanPurchaseHistoryRow's scan destinations
@@ -2365,7 +2424,7 @@ func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.
 	// offering_class, listing_id, listing_state to the scanner and every other
 	// purchase-history SELECT but missed this one, which broke every real-Postgres
 	// call here (dashboard KPIs, /api/inventory/*, analytics collector).
-	query := fmt.Sprintf(`
+	query = fmt.Sprintf(`
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
@@ -2375,8 +2434,7 @@ func (s *PostgresStore) GetActivePurchaseHistory(ctx context.Context, asOf time.
 		WHERE %s
 		ORDER BY timestamp DESC
 	`, strings.Join(conds, " AND "))
-
-	return s.queryPurchaseHistory(ctx, query, args...)
+	return query, args
 }
 
 // appendAccountPredicate pulls the dual-column account-predicate arg-building

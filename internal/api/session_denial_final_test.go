@@ -73,8 +73,8 @@ func TestApprovePurchase_SessionDenialWithoutTokenIsFinal(t *testing.T) {
 
 	_, err := h.approvePurchase(ctx, denialTestRequest(), denialTestExecID, "")
 
-	requireForbidden(t, err)
-	assert.Contains(t, err.Error(), "requires approve-any or approve-own")
+	// The denial answers like a missing execution (issue #597).
+	requireConcealedDenial(t, err, "requires approve-any or approve-own")
 	mockPurchase.AssertNotCalled(t, "ApproveAndExecute", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -88,8 +88,7 @@ func TestCancelPurchase_SessionDenialWithoutTokenIsFinal(t *testing.T) {
 
 	_, err := h.cancelPurchase(ctx, denialTestRequest(), denialTestExecID, "")
 
-	requireForbidden(t, err)
-	assert.Contains(t, err.Error(), "requires cancel-any or cancel-own")
+	requireConcealedDenial(t, err, "requires cancel-any or cancel-own")
 	store.AssertNotCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -103,8 +102,7 @@ func TestRevokePurchase_SessionDenialWithoutTokenIsFinal(t *testing.T) {
 
 	_, err := h.revokeViaEmailToken(ctx, denialTestRequest(), denialTestExecID, "")
 
-	requireForbidden(t, err)
-	assert.Contains(t, err.Error(), "requires cancel-any or cancel-own")
+	requireConcealedDenial(t, err, "requires cancel-any or cancel-own")
 }
 
 func TestApproveRIExchange_SessionDenialWithoutTokenIsFinal(t *testing.T) {

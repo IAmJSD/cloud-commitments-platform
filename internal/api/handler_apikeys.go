@@ -90,6 +90,8 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 //     500 (issue #61).
 //   - ErrAPIKeyExpiresAtRequired / ErrAPIKeyExpiresAtTooFar / ErrAPIKeyExpiresAtInPast
 //     -> 400: caller-correctable request validation.
+//   - ErrInvalidPermission -> 400: a malformed permission entry, e.g. a
+//     negative MaxPurchaseAmount (issue #83).
 //   - All other errors pass through unchanged for handleRequestError to
 //     render as 500.
 func mapCreateAPIKeyError(err error) error {
@@ -99,7 +101,8 @@ func mapCreateAPIKeyError(err error) error {
 	case errors.Is(err, auth.ErrEmptyAPIKeyPermissions),
 		errors.Is(err, auth.ErrAPIKeyExpiresAtRequired),
 		errors.Is(err, auth.ErrAPIKeyExpiresAtTooFar),
-		errors.Is(err, auth.ErrAPIKeyExpiresAtInPast):
+		errors.Is(err, auth.ErrAPIKeyExpiresAtInPast),
+		errors.Is(err, auth.ErrInvalidPermission):
 		return NewClientError(400, err.Error())
 	}
 	return fmt.Errorf("failed to create API key: %w", err)

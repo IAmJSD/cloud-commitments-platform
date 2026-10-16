@@ -158,6 +158,11 @@ func (s *Service) validateCreateAPIKeyRequest(user *User, password, name string,
 	if len(permissions) == 0 {
 		return ErrEmptyAPIKeyPermissions
 	}
+	for i, p := range permissions {
+		if err := validateMaxPurchaseAmount(i, p); err != nil {
+			return err
+		}
+	}
 	// ExpiresAt is mandatory and capped: a nil value used to mean "never
 	// expires", which let a single leaked key outlive any credential rotation.
 	if expiresAt == nil {
