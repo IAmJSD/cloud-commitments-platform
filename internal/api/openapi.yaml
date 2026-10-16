@@ -224,6 +224,26 @@ paths:
           schema:
             type: string
         - $ref: '#/components/parameters/AccountID'
+        - name: limit
+          in: query
+          description: >-
+            Opt-in page size (1-1000). When neither limit nor cursor is sent,
+            every matching recommendation is returned in one response (legacy
+            behavior). When either is sent, rows are returned in ascending id
+            order, one page at a time; summary and regions still describe the
+            full filtered set.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: cursor
+          in: query
+          description: >-
+            Opaque next_cursor value from the previous page. Implies
+            pagination; the page size defaults to 500 when limit is omitted.
+          schema:
+            type: string
+            maxLength: 1024
       responses:
         '200':
           description: Recommendations list
@@ -3073,11 +3093,30 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RecommendationRecord'
-        total_savings:
-          type: number
-          format: double
-        count:
-          type: integer
+        regions:
+          type: array
+          items:
+            type: string
+        summary:
+          type: object
+          description: Totals over the full filtered set, not just the returned page.
+          properties:
+            total_count:
+              type: integer
+            total_monthly_savings:
+              type: number
+              format: double
+            total_upfront_cost:
+              type: number
+              format: double
+            avg_payback_months:
+              type: number
+              format: double
+        next_cursor:
+          type: string
+          description: >-
+            Present only on a paginated request that has more rows; pass it as
+            the cursor query parameter to fetch the next page.
 
     RecommendationRecord:
       type: object

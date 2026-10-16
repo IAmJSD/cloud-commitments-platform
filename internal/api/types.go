@@ -442,6 +442,9 @@ type RecommendationsResponse struct {
 	Recommendations []config.RecommendationRecord `json:"recommendations"`
 	Regions         []string                      `json:"regions"`
 	Summary         RecommendationsSummary        `json:"summary"`
+	// NextCursor is set only on a paginated request (limit or cursor sent)
+	// that has more rows; pass it back as ?cursor= for the next page.
+	NextCursor string `json:"next_cursor,omitempty"`
 }
 
 // UsagePoint is a single sample in the per-recommendation usage time

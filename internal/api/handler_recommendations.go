@@ -94,6 +94,10 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 	if err != nil {
 		return nil, err
 	}
+	page, err := parseRecommendationsPage(params)
+	if err != nil {
+		return nil, err
+	}
 
 	// Resolve the account scope once: it decides both whether this read may
 	// kick a background collection (issue #627) and the post-filter below.
@@ -122,7 +126,7 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 		return nil, err
 	}
 
-	return buildRecommendationsResponse(recommendations), nil
+	return buildRecommendationsPageResponse(recommendations, page), nil
 }
 
 // filterRecommendationsByAllowedAccounts filters recommendations to only include
@@ -195,17 +199,28 @@ func (h *Handler) filterRecommendationsByEnabledProviders(ctx context.Context, r
 }
 
 // buildRecommendationsResponse calculates summary statistics and collects
-// unique regions from a set of recommendations.
+// unique regions from a set of recommendations, returning all of them as rows
+// (the legacy unpaginated shape).
 func buildRecommendationsResponse(recommendations []config.RecommendationRecord) *RecommendationsResponse {
+	return summarizeRecommendations(recommendations, recommendations)
+}
+
+// summarizeRecommendations computes the summary and region list over all (the
+// full filtered set) and returns rows as the response body. rows is either all
+// itself or one page of it (issue #723), so the totals never shrink to the
+// page.
+func summarizeRecommendations(all, rows []config.RecommendationRecord) *RecommendationsResponse {
 	regionSet := make(map[string]struct{})
 	var totalSavings, totalUpfront float64
-	for i := range recommendations {
-		rec := &recommendations[i]
+	for i := range all {
+		rec := &all[i]
 		totalSavings += rec.Savings
 		totalUpfront += rec.UpfrontCost
 		if rec.Region != "" {
 			regionSet[rec.Region] = struct{}{}
 		}
+	}
+	for i := range rows {
 		// Surface the compute size (VCPU / MemoryGB) at the top level so
 		// the frontend Capacity column can render it without parsing the
 		// opaque Details blob. The canonical values live in the typed
@@ -214,8 +229,8 @@ func buildRecommendationsResponse(recommendations []config.RecommendationRecord)
 		// pointers when this is a compute rec with a known size. Non-compute
 		// recs, legacy rows with empty Details, and decode failures all
 		// leave the pointers nil, so JSON omits them and the frontend
-		// renders "—".
-		stampComputeCapacity(rec)
+		// renders "—". Only returned rows are decoded.
+		stampComputeCapacity(&rows[i])
 	}
 
 	regions := make([]string, 0, len(regionSet))
@@ -229,9 +244,9 @@ func buildRecommendationsResponse(recommendations []config.RecommendationRecord)
 	}
 
 	return &RecommendationsResponse{
-		Recommendations: recommendations,
+		Recommendations: rows,
 		Summary: RecommendationsSummary{
-			TotalCount:          len(recommendations),
+			TotalCount:          len(all),
 			TotalMonthlySavings: totalSavings,
 			TotalUpfrontCost:    totalUpfront,
 			AvgPaybackMonths:    avgPayback,
