@@ -420,7 +420,7 @@ func TestAuthServiceAdapter_CreateAPIKeyAPI(t *testing.T) {
 	result, err := adapter.CreateAPIKeyAPI(ctx, "user-1", auth.APICreateAPIKeyRequest{
 		Name:        "my-key",
 		Password:    password,
-		Permissions: []auth.Permission{{Action: auth.ActionView, Resource: auth.ResourceRecommendations}},
+		Permissions: []auth.APIPermission{{Action: auth.ActionView, Resource: auth.ResourceRecommendations}},
 		ExpiresAt:   &expiresAt,
 	})
 	require.NoError(t, err)

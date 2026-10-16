@@ -72,30 +72,37 @@ func effectiveLifetimeUsage(key *UserAPIKey) *int64 {
 	return &total
 }
 
-// normalizeAPIKeyPermissions returns perms unchanged, or []Permission{} when
-// nil. CreateAPIKey now rejects new keys with zero permissions (issue #61),
+// normalizeAPIKeyPermissions converts a stored key's permissions to the
+// documented wire shape (APIPermission: constraints.accounts /
+// constraints.max_amount, issue #951), returning []APIPermission{} when perms
+// is nil. CreateAPIKey now rejects new keys with zero permissions (issue #61),
 // but a legacy key minted before that fix can still have a NULL permissions
 // column, which the JSONB scan surfaces as a nil slice. Since
 // APIKeyInfo.Permissions is no longer omitempty (issue #61), a raw nil would
 // serialize as "permissions":null instead of the intended "permissions":[]
 // -- both mean "no scope", but a client that expects the field to always be
 // an array (never null) would otherwise have to special-case it.
-func normalizeAPIKeyPermissions(perms []Permission) []Permission {
-	if perms == nil {
-		return []Permission{}
+func normalizeAPIKeyPermissions(perms []Permission) []APIPermission {
+	out := make([]APIPermission, len(perms))
+	for i, p := range perms {
+		out[i] = permissionToAPIPermission(p)
 	}
-	return perms
+	return out
 }
 
 // API wrapper methods for API key operations
 // These methods return API-friendly types and handle type conversions
 
 // APICreateAPIKeyRequest represents the API request to create an API key.
+// Permissions use the documented wire shape (APIPermission, whose
+// constraints carry accounts / max_amount) rather than the storage shape
+// (Permission: account_ids / max_purchase_amount), so the JSON re-encoding in
+// CreateAPIKeyAPI keeps every constraint the caller sent (issue #951).
 type APICreateAPIKeyRequest struct {
-	ExpiresAt   *time.Time   `json:"expires_at,omitempty"`
-	Name        string       `json:"name"`
-	Password    string       `json:"password"` //nolint:gosec // G117: intentional credential field in request struct -- decoded by the handler and verified against the caller's own stored hash, never re-stored
-	Permissions []Permission `json:"permissions,omitempty"`
+	ExpiresAt   *time.Time      `json:"expires_at,omitempty"`
+	Name        string          `json:"name"`
+	Password    string          `json:"password"` //nolint:gosec // G117: intentional credential field in request struct -- decoded by the handler and verified against the caller's own stored hash, never re-stored
+	Permissions []APIPermission `json:"permissions,omitempty"`
 }
 
 // APIKeyInfo represents public API key information (without sensitive data).
@@ -118,8 +125,11 @@ type APIKeyInfo struct {
 	// simply has no info populated. Hiding it behind omitempty made a
 	// zero-scope key indistinguishable from a fully-scoped one in
 	// listAPIKeys, which was itself part of the audit gap the issue raised.
-	Permissions []Permission `json:"permissions"`
-	IsActive    bool         `json:"is_active"`
+	// It uses the documented wire shape (constraints.accounts /
+	// constraints.max_amount), the same one the create request accepts
+	// (issue #951).
+	Permissions []APIPermission `json:"permissions"`
+	IsActive    bool            `json:"is_active"`
 	// Usage counters (issue #340/#344 deferred sub-task). RequestCountWindow
 	// is a fixed/tumbling window count, not a true rolling 24h total, and is
 	// zero once that window has closed -- see effectiveWindowUsage,
@@ -187,7 +197,9 @@ type APIListAPIKeysResponse struct {
 // in a different package (api) and passes api.CreateAPIKeyRequest, which
 // carries the same JSON fields but is a distinct Go type. A direct type
 // assertion would always fail and return a 500; JSON re-encoding handles any
-// caller-package type transparently (issue #1440).
+// caller-package type transparently (issue #1440). The permissions are then
+// mapped field by field from the wire shape to the storage shape, as the
+// group endpoints do, so accounts and max_amount survive (issue #951).
 func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error) {
 	var createReq APICreateAPIKeyRequest
 	switch r := req.(type) {
@@ -208,7 +220,8 @@ func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (
 	}
 
 	// Create the API key
-	apiKey, keyInfo, err := s.CreateAPIKey(ctx, userID, createReq.Name, createReq.Password, createReq.Permissions, createReq.ExpiresAt)
+	permissions := apiPermissionsToPermissions(createReq.Permissions)
+	apiKey, keyInfo, err := s.CreateAPIKey(ctx, userID, createReq.Name, createReq.Password, permissions, createReq.ExpiresAt)
 	if err != nil {
 		return nil, err
 	}
