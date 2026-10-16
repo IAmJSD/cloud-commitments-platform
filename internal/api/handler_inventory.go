@@ -221,7 +221,7 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 	// commitments above — otherwise the covered side honors the chip but the
 	// on-demand side bleeds in other accounts' gaps, producing misleading
 	// per-service coverage (issue #866 follow-up: CR pass on PR #881).
-	recs, err := h.scheduler.ListRecommendations(ctx, buildCoverageRecFilter(params))
+	recs, err := h.scheduler.ListRecommendations(h.recommendationsReadContext(ctx, session), buildCoverageRecFilter(params))
 	if err != nil {
 		// Non-fatal: recommendations are best-effort for coverage display.
 		// An empty rec list is treated as "no uncovered gap" — coverage

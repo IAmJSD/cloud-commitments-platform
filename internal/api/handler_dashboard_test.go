@@ -62,7 +62,7 @@ func TestHandler_getDashboardSummary(t *testing.T) {
 		DefaultCoverage: 75.0,
 	}
 
-	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
+	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return(recommendations, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
 	mockStore.On("GetServiceConfig", ctx, "", mock.Anything).Return(nil, config.ErrNotFound)
 	// No account_id / account_ids filter → calculateCommitmentMetrics fetches the
@@ -126,7 +126,7 @@ func TestHandler_getDashboardSummary_PerAccountCoverageScalesSavings(t *testing.
 		{Provider: "aws", Service: "rds", Savings: 100.0, CloudAccountID: &acctB},
 	}
 
-	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
+	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return(recommendations, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
 	mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(&config.ServiceConfig{
@@ -169,7 +169,7 @@ func TestHandler_getDashboardSummary_ZeroCoverageInServiceConfigFallsThroughToFu
 		{Provider: "aws", Service: "rds", Savings: 200.0, CloudAccountID: &acctA},
 	}
 
-	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
+	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return(recommendations, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
 	mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	// Global ServiceConfig has Coverage=0 (zero-value — operator never set it).
@@ -1197,7 +1197,7 @@ func TestHandler_getDashboardSummary_CurrentSavingsPopulated(t *testing.T) {
 	mockScheduler := new(MockScheduler)
 	mockStore := new(MockConfigStore)
 
-	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(recommendations, nil)
+	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return(recommendations, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
 	// No account_id / account_ids filter, so calculateCommitmentMetrics fetches
 	// across all accounts via GetActivePurchaseHistory (uncapped, active-only).
@@ -1242,7 +1242,7 @@ func TestHandler_getDashboardSummary_CurrentSavingsJSON(t *testing.T) {
 	mockScheduler := new(MockScheduler)
 	mockStore := new(MockConfigStore)
 
-	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(
+	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return(
 		[]config.RecommendationRecord{{Service: "EC2", Savings: 400.0}}, nil)
 	mockStore.On("GetServiceConfig", ctx, "", "EC2").Return(nil, config.ErrNotFound)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
@@ -1285,7 +1285,7 @@ func TestHandler_getDashboardSummary_CurrentSavingsZeroWhenNoCommitments(t *test
 	mockScheduler := new(MockScheduler)
 	mockStore := new(MockConfigStore)
 
-	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(
+	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return(
 		[]config.RecommendationRecord{
 			{Service: "EC2", Savings: 500.0},
 			{Service: "RDS", Savings: 300.0},
@@ -1348,7 +1348,7 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 
 	t.Run("scheduler error", func(t *testing.T) {
 		mockScheduler := new(MockScheduler)
-		mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return(nil, errors.New("scheduler error"))
+		mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return(nil, errors.New("scheduler error"))
 
 		mockAuth, req := adminDashboardReq(ctx)
 		handler := &Handler{auth: mockAuth, scheduler: mockScheduler}
@@ -1362,7 +1362,7 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 		mockScheduler := new(MockScheduler)
 		mockStore := new(MockConfigStore)
 
-		mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
+		mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(nil, nil)
 		mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
@@ -1386,7 +1386,7 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 			DefaultCoverage: 0,
 		}
 
-		mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
+		mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
 		mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 
@@ -1433,7 +1433,7 @@ func TestGetDashboardSummary_ScopedUser_ExplicitOutOfScopeAccountIsIgnored(t *te
 		mockScheduler.AssertExpectations(t)
 	})
 
-	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
+	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
 	// Deliberately NOT stubbing GetActivePurchaseHistory: the fix must never
 	// reach it for this request, so any call (with any arguments, including
@@ -1499,7 +1499,7 @@ func TestGetDashboardSummary_ScopedUser_ExplicitInScopeAccountStillWorks(t *test
 		mockScheduler.AssertExpectations(t)
 	})
 
-	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
+	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
 	mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string{acctAUUID}, map[string][]string(nil)).Return(purchases, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
@@ -1577,7 +1577,7 @@ func TestGetDashboardSummary_ScopedUser_LegacyExternalAccountIDStillMatchesAllow
 		mockScheduler.AssertExpectations(t)
 	})
 
-	mockScheduler.On("ListRecommendations", ctx, mock.Anything).Return([]config.RecommendationRecord{}, nil)
+	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
 	// filterUUIDs is empty (the raw external number isn't a known UUID), so
 	// only the external-id half of the dual-column predicate carries the match.

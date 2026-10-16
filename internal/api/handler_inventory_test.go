@@ -450,7 +450,7 @@ func TestHandler_getCoverageBreakdown_Integration(t *testing.T) {
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{}, nil
 	}
-	mockScheduler.On("ListRecommendations", ctx, config.RecommendationFilter{}).Return(recs, nil)
+	mockScheduler.On("ListRecommendations", mock.Anything, config.RecommendationFilter{}).Return(recs, nil)
 
 	mockAuth, req := adminInventoryReq(ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore, scheduler: mockScheduler}
@@ -543,7 +543,7 @@ func TestHandler_getCoverageBreakdown_ProviderAndAccountChip(t *testing.T) {
 	// The crux of the F1 fix: the on-demand fetch MUST scope by account_id.
 	mockScheduler.On(
 		"ListRecommendations",
-		ctx,
+		mock.Anything,
 		config.RecommendationFilter{AccountIDs: []string{"acc-1"}},
 	).Return(acc1Recs, nil)
 
@@ -653,7 +653,7 @@ func TestHandler_getCoverageBreakdown_AzureAllUpfrontConsistency(t *testing.T) {
 	// No Azure on-demand recommendations: the only signal for Azure is the
 	// covered commitment. Pre-fix this yields nil/zero coverage; post-fix the
 	// amortized upfront makes Azure 100% covered for compute.
-	mockScheduler.On("ListRecommendations", ctx, config.RecommendationFilter{}).Return([]config.RecommendationRecord{}, nil)
+	mockScheduler.On("ListRecommendations", mock.Anything, config.RecommendationFilter{}).Return([]config.RecommendationRecord{}, nil)
 
 	mockAuth, req := adminInventoryReq(ctx)
 	handler := &Handler{auth: mockAuth, config: mockStore, scheduler: mockScheduler}

@@ -930,7 +930,7 @@ func TestGetRecommendations_UserAPIKey(t *testing.T) {
 
 	mockScheduler := new(MockScheduler)
 	t.Cleanup(func() { mockScheduler.AssertExpectations(t) })
-	mockScheduler.On("ListRecommendations", ctx, mock.Anything).
+	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).
 		Return([]config.RecommendationRecord{}, nil)
 
 	handler := &Handler{auth: mockAuth, scheduler: mockScheduler}

@@ -27,7 +27,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	recommendations, err := h.scheduler.ListRecommendations(ctx, config.RecommendationFilter{
+	recommendations, err := h.scheduler.ListRecommendations(h.recommendationsReadContext(ctx, session), config.RecommendationFilter{
 		Provider: params["provider"],
 	})
 	if err != nil {

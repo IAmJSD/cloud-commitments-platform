@@ -94,7 +94,7 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 		return nil, err
 	}
 
-	recommendations, err := h.scheduler.ListRecommendations(ctx, filter)
+	recommendations, err := h.scheduler.ListRecommendations(h.recommendationsReadContext(ctx, session), filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recommendations: %w", err)
 	}
