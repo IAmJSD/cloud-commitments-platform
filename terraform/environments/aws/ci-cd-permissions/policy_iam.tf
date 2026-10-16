@@ -185,6 +185,43 @@ resource "aws_iam_policy" "iam" {
         Action   = ["iam:PutRolePermissionsBoundary"]
         Resource = ["arn:aws:iam::*:role/cudly-terraform-deploy"]
       },
+      {
+        # THE IAM PATH IS PART OF THE ARN (#197). Every cudly-* grant to the
+        # deploy role (IAMRolesAndPolicies and IAMPassRoleScopedByService in
+        # policy_data.tf, IAMRoleMutationRequiresBoundary above) is scoped by a
+        # trailing-wildcard ARN such as arn:aws:iam::*:role/cudly-*, and in an
+        # IAM resource ARN `*` matches any run of characters INCLUDING `/`. A
+        # role, policy or instance profile created with Path "/cudly-x/" and an
+        # arbitrary name therefore has the ARN .../role/cudly-x/EvilRole and
+        # satisfies that scope: the prefix meant to identify our resources can
+        # be carried in the path, which whoever creates the resource chooses.
+        #
+        # Every IAM resource this repo creates sits at the default path "/"
+        # (no aws_iam_role, aws_iam_policy or aws_iam_instance_profile sets
+        # `path`, and names cannot contain `/`), so a genuine one never has a
+        # second `/` after the prefix. That makes the impostor shape exactly
+        # expressible: cudly-*/* matches every path-bearing ARN whose path
+        # starts with cudly- and no root-path one. Denying all of IAM on that
+        # shape, rather than mirroring today's Allow lists, is what keeps a
+        # later cudly-* Allow from reopening the bypass;
+        # TestDeployPolicyDeniesPathBearingCudlyARNs in policy_guard_test.go
+        # checks both directions (impostor refused, real roles untouched), and
+        # TestCudlyIAMResourcesUseRootPath fails if a module ever sets a path.
+        #
+        # This turns the containment #197 describes (CreateRole is gated on the
+        # boundary, so a path-bearing cudly-* role the deploy role creates is
+        # itself boundaried) into an independent guard: an out-of-band
+        # cudly-x/... role is now unreachable from the deploy role whether or
+        # not it carries a boundary.
+        Sid    = "IAMDenyPathBearingCudlyResources"
+        Effect = "Deny"
+        Action = ["iam:*"]
+        Resource = [
+          "arn:aws:iam::*:role/cudly-*/*",
+          "arn:aws:iam::*:policy/cudly-*/*",
+          "arn:aws:iam::*:instance-profile/cudly-*/*",
+        ]
+      },
     ]
   })
 

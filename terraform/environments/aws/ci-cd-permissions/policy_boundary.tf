@@ -274,6 +274,13 @@ resource "aws_iam_policy" "workload_boundary" {
         #
         # Scoped rather than "*" for the reason given in the previous statement:
         # an unscoped AssumeRole escapes the boundary entirely.
+        #
+        # role/CUDly* also matches a path-bearing role (role/CUDly-x/Evil,
+        # #197), and unlike PassRoleCeiling that is deliberately NOT denied
+        # here: the targets live in customer accounts whose owner chooses the
+        # role's name as freely as its path, so a path guard narrows nothing
+        # (the missing per-account condition is #1636's concern), while it
+        # could break a customer who deployed the target role under a path.
         Sid      = "CrossAccountAssumeRoleCeiling"
         Effect   = "Allow"
         Action   = ["sts:AssumeRole"]
@@ -310,6 +317,19 @@ resource "aws_iam_policy" "workload_boundary" {
         Effect   = "Deny"
         Action   = ["iam:PassRole"]
         Resource = ["arn:aws:iam::*:role/cudly-terraform-deploy"]
+      },
+      {
+        # PassRoleCeiling's role/cudly-* also matches a PATH-bearing role such
+        # as role/cudly-x/EvilRole, because `*` in an IAM ARN crosses `/` and
+        # the path is chosen by whoever creates the role (#197). Every role
+        # Terraform creates sits at path "/", so cudly-*/* matches no genuine
+        # one; see IAMDenyPathBearingCudlyResources in policy_iam.tf for the
+        # full argument. Without this, a cudly-x/... role created out of band,
+        # with no boundary, is a legal PassRole target for every workload role.
+        Sid      = "DenyPassPathBearingRole"
+        Effect   = "Deny"
+        Action   = ["iam:PassRole"]
+        Resource = ["arn:aws:iam::*:role/cudly-*/*"]
       },
     ]
   })
