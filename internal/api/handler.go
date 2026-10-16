@@ -135,8 +135,9 @@ type Handler struct {
 	executeExchangeFn func(ctx context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error)
 
 	// encryptionKeySource is the env var name that resolved the credential
-	// encryption key. Empty when no credStore is configured. Used by the
-	// /health endpoint only — never logged outside that one place.
+	// encryption key. Empty when no credStore is configured. Read only by the
+	// /health credential_store check, which keeps it out of the public body
+	// and logs the dev-key case server-side (#15).
 	encryptionKeySource string
 
 	// Optional Azure revoke client factory injected by tests. When nil, the

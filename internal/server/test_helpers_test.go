@@ -431,7 +431,7 @@ func (m *mockConfigStoreForHealth) SaveLadderRun(_ context.Context, run *config.
 	return run, nil
 }
 func (m *mockConfigStoreForHealth) PlanAndSaveLadderRun(_ context.Context, _ string, _ time.Time, build config.LadderPlanBuilder) (*config.LadderRunDB, error) {
-	run, _, err := build(0)
+	run, _, err := build(nil)
 	return run, err
 }
 func (m *mockConfigStoreForHealth) GetLadderRun(_ context.Context, _ string) (*config.LadderRunDB, error) {

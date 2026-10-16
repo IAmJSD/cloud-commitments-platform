@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -127,4 +128,51 @@ func TestBackgroundCollectionAllowed(t *testing.T) {
 	derived, cancel := context.WithTimeout(WithBackgroundCollection(context.Background()), time.Minute)
 	defer cancel()
 	assert.True(t, BackgroundCollectionAllowed(derived))
+}
+
+// maybeKickBackgroundRefresh carries its own isLambda guard, separate from the
+// one in ListRecommendations, so a future caller that skips the outer check
+// still cannot start a refresh goroutine that freezes between Lambda
+// invocations (issue #962). Calling it directly is the only way to reach that
+// guard: through ListRecommendations the outer guard always returns first.
+//
+// The refresh's first store call (GetGlobalConfig inside
+// CollectRecommendations) blocks until the test ends, so on a wrongly kicked
+// refresh the collecting flag, which the kick sets synchronously, is still
+// held when it is checked. The non-Lambda case is the positive control: the
+// same harness must see the refresh start.
+func TestMaybeKickBackgroundRefresh_LambdaGuard(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		isLambda bool
+		wantKick bool
+	}{
+		{name: "lambda never kicks", isLambda: true, wantKick: false},
+		{name: "non-lambda kicks (control)", isLambda: false, wantKick: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mockStore := new(MockConfigStore)
+			started := make(chan struct{}, 1)
+			release := make(chan struct{})
+			t.Cleanup(func() { close(release) })
+			mockStore.On("GetGlobalConfig", mock.Anything).
+				Run(func(mock.Arguments) {
+					started <- struct{}{}
+					<-release
+				}).
+				Return(nil, errors.New("refresh started")).Maybe()
+
+			s := &Scheduler{config: mockStore, isLambda: tc.isLambda}
+			old := time.Now().Add(-72 * time.Hour)
+			s.maybeKickBackgroundRefresh(&config.RecommendationsFreshness{LastCollectedAt: &old}, time.Nanosecond)
+
+			assert.Equal(t, tc.wantKick, s.collecting.Load(), "collecting flag after the kick")
+			select {
+			case <-started:
+				assert.True(t, tc.wantKick, "a background refresh started on Lambda")
+			case <-time.After(200 * time.Millisecond):
+				assert.False(t, tc.wantKick, "expected a background refresh on a non-Lambda runtime")
+			}
+		})
+	}
 }

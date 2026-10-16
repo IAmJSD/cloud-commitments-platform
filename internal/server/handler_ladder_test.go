@@ -194,11 +194,11 @@ func (s *ladderTestStore) PlanAndSaveLadderRun(_ context.Context, _ string, _ ti
 	if s.inFlightErr != nil {
 		return nil, s.inFlightErr
 	}
-	inFlight := 0.0
+	var rows []config.LadderInFlightRow
 	if s.inFlightUSDHr != nil {
-		inFlight = *s.inFlightUSDHr
+		rows = []config.LadderInFlightRow{{Layer: pkgladder.LayerComputeSP, CommitmentUSDPerHour: *s.inFlightUSDHr, Rate: 1}}
 	}
-	run, tranches, err := build(inFlight)
+	run, tranches, err := build(rows)
 	if err != nil {
 		return nil, err
 	}
@@ -1226,7 +1226,7 @@ func (s *ladderStatefulStore) PlanAndSaveLadderRun(_ context.Context, configID s
 			inFlight += tr.AmountUSDHr
 		}
 	}
-	run, tranches, err := build(inFlight)
+	run, tranches, err := build([]config.LadderInFlightRow{{Layer: pkgladder.LayerComputeSP, CommitmentUSDPerHour: inFlight, Rate: 1}})
 	if err != nil {
 		return nil, err
 	}

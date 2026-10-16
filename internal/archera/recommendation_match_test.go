@@ -135,6 +135,19 @@ func TestMatchRecommendationRefusesUnprovenAssociation(t *testing.T) {
 			c.Region = &i.InstanceFamily
 		}},
 		{"missing_current_region", func(_ *RecommendationIdentity, c *ComparisonIdentity, _ *LineItemIdentity) { c.Region = nil }},
+		{"line_item_region", func(_ *RecommendationIdentity, _ *ComparisonIdentity, i *LineItemIdentity) { i.Region = "eu-west-1" }},
+		{"current_payment", func(_ *RecommendationIdentity, c *ComparisonIdentity, _ *LineItemIdentity) {
+			c.CurrentPayment = "all_upfront"
+		}},
+		{"other_plan", func(_ *RecommendationIdentity, _ *ComparisonIdentity, i *LineItemIdentity) {
+			i.PlanID = "faadf00d-ffff-4aba-8ada-abcdefabcdef"
+		}},
+		{"non_aws_recommendation", func(r *RecommendationIdentity, c *ComparisonIdentity, i *LineItemIdentity) {
+			r.Provider, c.Provider, i.Provider = "gcp", "gcp", "gcp"
+		}},
+		{"invalid_payment", func(r *RecommendationIdentity, c *ComparisonIdentity, i *LineItemIdentity) {
+			r.Payment, c.CurrentPayment, i.Payment = "monthly", "monthly", "monthly"
+		}},
 		{"current_offer", func(_ *RecommendationIdentity, c *ComparisonIdentity, _ *LineItemIdentity) {
 			c.CurrentOfferID = "faadf00d-ffff-4aba-8ada-abcdefabcdef"
 		}},

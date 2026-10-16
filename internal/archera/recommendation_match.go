@@ -32,6 +32,7 @@ type ComparisonIdentity struct {
 	IsCurrent                                                         bool
 	LineItemID, CurrentOfferID, Provider, CurrentType, CurrentPayment string
 	CurrentSelectedAmount                                             *big.Rat
+	Candidates                                                        []CandidateIdentity
 }
 
 type MatchStatus string
@@ -44,6 +45,7 @@ const (
 type RecommendationMatch struct {
 	Status                                               MatchStatus
 	LineItemID, Reason, AmountProvenance, EconomicStatus string
+	Candidates                                           []CandidateAssociation
 }
 
 func MatchRecommendation(planID string, rec *RecommendationIdentity, rows []ComparisonIdentity, items []LineItemIdentity) (RecommendationMatch, error) {
@@ -81,6 +83,9 @@ func MatchRecommendation(planID string, rec *RecommendationIdentity, rows []Comp
 		Status: ResourceAssociated, LineItemID: row.LineItemID,
 		AmountProvenance: "stored_decimal_only", EconomicStatus: "unavailable_source_precision",
 	}
+	for i := range row.Candidates {
+		result.Candidates = append(result.Candidates, associateCandidate(rec, &row.Candidates[i]))
+	}
 	return result, nil
 }
 
@@ -94,7 +99,7 @@ func validRecommendation(r *RecommendationIdentity) bool {
 	if r.NativeDurationSeconds != awsSPYearSeconds && r.NativeDurationSeconds != awsSPThreeYearSeconds {
 		return false
 	}
-	return validDimensions(r) && validPayment(r.Payment) && sameAmount(r.HourlyCommitment, r.HourlyCommitment)
+	return validDimensions(r) && validPayment(r.Payment)
 }
 
 func validDimensions(r *RecommendationIdentity) bool {
@@ -183,7 +188,7 @@ func validMatchUUID(id string) bool {
 }
 
 func validLineReference(planID string, item *LineItemIdentity) bool {
-	return validMatchUUID(item.ID) && validMatchUUID(item.OfferID) && validMatchUUID(item.PlanID) && strings.EqualFold(planID, item.PlanID)
+	return validMatchUUID(item.ID) && validMatchUUID(item.PlanID) && strings.EqualFold(planID, item.PlanID)
 }
 
 func validComparisonReference(row *ComparisonIdentity, items map[string]*LineItemIdentity) bool {

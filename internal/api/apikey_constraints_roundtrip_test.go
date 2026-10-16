@@ -14,12 +14,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Issue #951: POST /api/api-keys decodes permissions in the documented
-// OpenAPI shape (constraints.accounts / constraints.max_amount). These tests
-// drive the real HTTP handler into the real auth.Service (backed by
-// auth.MockStore, so no database) and check that the account and amount
-// constraints reach the stored key, and that the create and list responses
-// return them in the same documented shape.
+// Issue #951: the create and list API-key responses must return permission
+// constraints in the documented OpenAPI shape (constraints.accounts /
+// constraints.max_amount), the same shape POST /api/api-keys accepts. These
+// tests drive the real HTTP handler into the real auth.Service (backed by
+// auth.MockStore, so no database). That the create path stores the
+// constraints is covered at the service and adapter level by #957's tests.
 
 const (
 	roundtripUserID  = "user-951"
@@ -144,22 +144,11 @@ func firstPermissionConstraints(t *testing.T, perms any) map[string]any {
 	return constraints
 }
 
-func TestHandleRequest_CreateAPIKey_KeepsAccountAndAmountConstraints(t *testing.T) {
-	h, _, stored := newAPIKeyRoundtripHandler(t)
+func TestHandleRequest_CreateAPIKey_ResponseUsesDocumentedConstraintShape(t *testing.T) {
+	h, _, _ := newAPIKeyRoundtripHandler(t)
 
 	resp := apiKeyRoundtripRequest(t, h, "POST", constrainedAPIKeyBody(t, 500.5))
 	require.Equal(t, 200, resp.StatusCode, "body: %s", resp.Body)
-
-	// The key handed to the store is what authorization reads later.
-	require.NotNil(t, *stored, "the service never reached the store")
-	require.Len(t, (*stored).Permissions, 1)
-	got := (*stored).Permissions[0].Constraints
-	require.NotNil(t, got, "constraints were dropped entirely")
-	assert.Equal(t, []string{roundtripAccount}, got.AccountIDs, "accounts constraint was dropped")
-	assert.InDelta(t, 500.5, got.MaxPurchaseAmount, 0, "max_amount constraint was dropped")
-	assert.Equal(t, []string{"aws"}, got.Providers)
-	assert.Equal(t, []string{"ec2"}, got.Services)
-	assert.Equal(t, []string{"us-east-1"}, got.Regions)
 
 	var created struct {
 		Info struct {
@@ -207,9 +196,9 @@ func TestHandleRequest_ListAPIKeys_ReturnsDocumentedConstraintShape(t *testing.T
 }
 
 // The negative spend-cap check from issue #83 runs on the converted
-// permissions, so it must now be reachable over HTTP. Before the #951 fix the
-// negative max_amount was dropped during decoding and the key was minted with
-// no cap at all.
+// permissions, so it must be reachable over HTTP, not only at the service
+// level. Before #957 the negative max_amount was dropped during decoding and
+// the key was minted with no cap at all.
 func TestHandleRequest_CreateAPIKey_RejectsNegativeMaxAmount(t *testing.T) {
 	h, _, stored := newAPIKeyRoundtripHandler(t)
 

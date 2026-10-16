@@ -35,7 +35,7 @@ func TestService_CreateAPIKeyAPI(t *testing.T) {
 		req := APICreateAPIKeyRequest{
 			Name:        "Test API Key",
 			Password:    testAPIKeyPassword,
-			Permissions: permissions,
+			Permissions: []APIPermission{{Action: ActionView, Resource: ResourceRecommendations}},
 			ExpiresAt:   &expiresAt,
 		}
 

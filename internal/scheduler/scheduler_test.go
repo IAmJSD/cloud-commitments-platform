@@ -942,10 +942,12 @@ func TestScheduler_ListRecommendations(t *testing.T) {
 // ListRecommendations with the given RecommendationsCacheStaleHours. The first
 // GetGlobalConfig call (the TTL resolution) succeeds; any later call can only
 // come from the background refresh's CollectRecommendations, so it signals the
-// returned channel and fails, which ends the refresh immediately.
+// returned channel and fails, which ends the refresh immediately. The read
+// runs as an unrestricted reader (WithBackgroundCollection), the only caller
+// allowed to kick a refresh; without it neither TTL case could ever refresh.
 func staleListRecommendations(t *testing.T, staleHours int) <-chan struct{} {
 	t.Helper()
-	ctx := context.Background()
+	ctx := WithBackgroundCollection(context.Background())
 	mockStore := new(MockConfigStore)
 
 	old := time.Now().Add(-72 * time.Hour)
@@ -1055,8 +1057,16 @@ func TestScheduler_ListRecommendations_FreshnessError(t *testing.T) {
 
 // Lambda runtime must NOT spawn a background refresh even when the
 // cache is stale — goroutines freeze between invocations.
+//
+// The read is marked WithBackgroundCollection, so the isLambda guard in
+// ListRecommendations is the only thing standing between it and the refresh
+// (an unmarked read never refreshes, issue #962). GetGlobalConfig is stubbed
+// as optional so dropping that guard fails the AssertNotCalled below with a
+// clear message: the guard skips the TTL resolution read, which is the first
+// GetGlobalConfig call on this path.
 func TestScheduler_ListRecommendations_LambdaSkipsBackgroundRefresh(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithBackgroundCollection(context.Background())
+	require.True(t, BackgroundCollectionAllowed(ctx), "the read must be allowed to collect, or this test is vacuous")
 	mockStore := new(MockConfigStore)
 
 	// Cache is stale (older than the 1ns TTL set below).
@@ -1065,6 +1075,8 @@ func TestScheduler_ListRecommendations_LambdaSkipsBackgroundRefresh(t *testing.T
 		Return(&config.RecommendationsFreshness{LastCollectedAt: &old}, nil)
 	mockStore.On("ListStoredRecommendations", ctx, mock.Anything).
 		Return([]config.RecommendationRecord{}, nil)
+	mockStore.On("GetGlobalConfig", mock.Anything).
+		Return(&config.GlobalConfig{RecommendationsCacheStaleHours: 1}, nil).Maybe()
 
 	scheduler := &Scheduler{
 		config:   mockStore,
@@ -1113,8 +1125,16 @@ func TestScheduler_ListRecommendations_StaleSingleFlight(t *testing.T) {
 // false-409 window on the refresh endpoint for nothing (fix-review finding
 // 3 on issue #106's PR). GetGlobalConfig -- only ever called by
 // CollectRecommendations -- must also never fire.
+//
+// The read is marked WithBackgroundCollection, so the isLambda guard in
+// kickColdStartCollection is the only thing that keeps it from taking the
+// marker (an unmarked read never even calls it, issue #962).
+// MarkCollectionStarted is stubbed as optional, returning "lost the race",
+// so dropping that guard fails the AssertNotCalled below with a clear message
+// instead of an unexpected-call panic.
 func TestScheduler_ListRecommendations_ColdStart_Lambda_NeverMarksOrCollects(t *testing.T) {
-	ctx := context.Background()
+	ctx := WithBackgroundCollection(context.Background())
+	require.True(t, BackgroundCollectionAllowed(ctx), "the read must be allowed to collect, or this test is vacuous")
 	mockStore := new(MockConfigStore)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
@@ -1122,6 +1142,7 @@ func TestScheduler_ListRecommendations_ColdStart_Lambda_NeverMarksOrCollects(t *
 		Return(&config.RecommendationsFreshness{LastCollectedAt: nil}, nil)
 	mockStore.On("ListStoredRecommendations", ctx, mock.Anything).
 		Return([]config.RecommendationRecord{}, nil)
+	mockStore.On("MarkCollectionStarted", mock.Anything).Return("", false, nil).Maybe()
 
 	scheduler := &Scheduler{config: mockStore, isLambda: true}
 

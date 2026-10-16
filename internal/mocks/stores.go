@@ -2023,7 +2023,7 @@ func (m *MockConfigStore) SaveLadderRun(ctx context.Context, run *config.LadderR
 func (m *MockConfigStore) PlanAndSaveLadderRun(ctx context.Context, configID string, asOf time.Time, build config.LadderPlanBuilder) (*config.LadderRunDB, error) {
 	m.record("PlanAndSaveLadderRun", ctx, configID, asOf)
 	if !isExpected(&m.Mock, "PlanAndSaveLadderRun") {
-		run, _, err := build(0)
+		run, _, err := build(nil)
 		return run, err
 	}
 	args := m.Called(ctx, configID, asOf)

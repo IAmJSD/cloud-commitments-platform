@@ -362,6 +362,7 @@ func revokeConstraintSet(accountID, provider, service, region string) auth.Permi
 // revokeExecutionConstraintSets builds one set per recommendation. An
 // execution with none gets a single empty strict set so a constrained grant
 // still denies instead of the empty slice failing the permission check loudly.
+// The session cancel paths (issue #678) reuse it.
 func revokeExecutionConstraintSets(execution *config.PurchaseExecution) []auth.PermissionConstraints {
 	if len(execution.Recommendations) == 0 {
 		return []auth.PermissionConstraints{revokeConstraintSet("", "", "", "")}

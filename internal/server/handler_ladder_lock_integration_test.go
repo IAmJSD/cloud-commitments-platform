@@ -31,7 +31,7 @@ type hookedLadderStore struct {
 }
 
 func (h *hookedLadderStore) PlanAndSaveLadderRun(ctx context.Context, configID string, asOf time.Time, build config.LadderPlanBuilder) (*config.LadderRunDB, error) {
-	return h.PostgresStore.PlanAndSaveLadderRun(ctx, configID, asOf, func(inFlight float64) (*config.LadderRunDB, []config.LadderTrancheDB, error) {
+	return h.PostgresStore.PlanAndSaveLadderRun(ctx, configID, asOf, func(inFlight []config.LadderInFlightRow) (*config.LadderRunDB, []config.LadderTrancheDB, error) {
 		if h.calls.Add(1) == 1 {
 			close(h.entered)
 			<-h.gate

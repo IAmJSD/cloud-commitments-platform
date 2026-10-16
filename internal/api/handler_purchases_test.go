@@ -3127,6 +3127,7 @@ func buildSessionCancelHandler(exec *config.PurchaseExecution, session *Session,
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(session, nil)
+	mockAuth.allowConstraintChecks()
 	// cancelPurchaseViaSession enforces CSRF on the session-authed path (issue
 	// #404). sessionCancelReq carries no CSRF header, so ValidateCSRFToken is
 	// called with an empty csrfToken. Tests exercising the session-authed cancel
@@ -5273,6 +5274,8 @@ func buildCancelOwnHandler(userID, creatorID string) (*Handler, *MockConfigStore
 	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "update-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, userID).Return([]string{}, nil).Maybe()
 
+	mockAuth.allowConstraintChecks()
+
 	creator := creatorID
 	exec := &config.PurchaseExecution{ExecutionID: ownExecID, Status: "pending", CreatedByUserID: &creator}
 	mockConfig := new(MockConfigStore)
@@ -5382,6 +5385,9 @@ func TestHandler_deletePlannedPurchase_UserAPIKey_Allowed(t *testing.T) {
 	// since the owning user holds neither update-any nor cancel-any.
 	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, auth.ActionUpdateAny, auth.ResourcePurchases).Return(false, nil)
 	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, auth.ActionCancelAny, auth.ResourcePurchases).Return(false, nil)
+	// The key holds delete:purchases only: probing its cancel-own is denied.
+	mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", ctx, keyID, ownerUserID, auth.ActionCancelOwn, auth.ResourcePurchases, []auth.PermissionConstraints{{}}).
+		Return(false, nil)
 
 	creator := ownerUserID
 	execution := &config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator}
@@ -5956,6 +5962,7 @@ func TestHandler_revokePurchase_SessionAdminCancelAny(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").
 		Return(&Session{UserID: adminUserID, Email: adminEmail}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, adminUserID, "cancel-any", "purchases").Return(true, nil)
+	mockAuth.allowConstraintChecks()
 	// requireExecutionAccess (issue #92) runs before RBAC; unrestricted
 	// here since scope is not under test.
 	mockAuth.On("GetAllowedAccountsAPI", ctx, adminUserID).Return([]string{}, nil)
@@ -6002,6 +6009,7 @@ func TestHandler_revokePurchase_SessionOwnerCancelOwn(t *testing.T) {
 		Return(&Session{UserID: ownerUserID, Email: ownerEmail}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, "cancel-any", "purchases").Return(false, nil)
 	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, "cancel-own", "purchases").Return(true, nil)
+	mockAuth.allowConstraintChecks()
 	// requireExecutionAccess (issue #92) runs before RBAC; unrestricted
 	// here since scope is not under test.
 	mockAuth.On("GetAllowedAccountsAPI", ctx, ownerUserID).Return([]string{}, nil)

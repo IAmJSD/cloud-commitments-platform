@@ -45,3 +45,38 @@ func TestLadderNetting_ExactRatesAndBoundary(t *testing.T) {
 	_, err := nettingFloat(new(big.Rat).SetInt(new(big.Int).Lsh(big.NewInt(1), 2048)))
 	require.Error(t, err)
 }
+
+func TestLadderInFlightOnDemand_RoundsAwayFromUnderstating(t *testing.T) {
+	native, third := LadderAmountCommitment, "1/3"
+	tr := &LadderTrancheDB{AmountBasis: &native, CommitmentRate: &third}
+	row, err := newLadderInFlightRow("1.000001", tr)
+	require.NoError(t, err)
+	exact := big.NewRat(3000003, 1000000)
+	require.LessOrEqual(t, new(big.Rat).SetFloat64(row.Rate).Cmp(big.NewRat(1, 3)), 0, "rate rounds down")
+	require.GreaterOrEqual(t, new(big.Rat).SetFloat64(row.CommitmentUSDPerHour).Cmp(big.NewRat(1000001, 1000000)), 0, "commitment rounds up")
+	row.exactOD = nil // consumers that only see the floats must still not understate
+	total, err := LadderInFlightOnDemand([]LadderInFlightRow{row})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, new(big.Rat).SetFloat64(total).Cmp(exact), 0)
+}
+
+func TestLadderInFlightOnDemand_RejectsUnusableRows(t *testing.T) {
+	for _, row := range []LadderInFlightRow{
+		{CommitmentUSDPerHour: 1, Rate: 0}, {CommitmentUSDPerHour: 1, Rate: 1.5}, {CommitmentUSDPerHour: 1, Rate: math.NaN()},
+		{CommitmentUSDPerHour: -1, Rate: 1}, {CommitmentUSDPerHour: math.Inf(1), Rate: 1},
+	} {
+		_, err := LadderInFlightOnDemand([]LadderInFlightRow{row})
+		require.Error(t, err, "%+v", row)
+	}
+}
+
+func TestAssumeOnDemandIfUnknown_OnlyForUnprovenBasis(t *testing.T) {
+	assumed := assumeOnDemandIfUnknown(&LadderTrancheDB{})
+	require.NotNil(t, assumed.AmountBasis)
+	require.Equal(t, LadderAmountOnDemand, *assumed.AmountBasis)
+	rate := "1/2"
+	orphan := &LadderTrancheDB{CommitmentRate: &rate}
+	require.Same(t, orphan, assumeOnDemandIfUnknown(orphan), "a rate without a basis is corrupt, not legacy")
+	_, err := nettingOnDemand("1", &LadderTrancheDB{})
+	require.Error(t, err, "netting still refuses an unknown basis")
+}
