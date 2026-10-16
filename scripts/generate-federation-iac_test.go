@@ -438,7 +438,7 @@ func TestGenerator_RejectsMalformedAccountID(t *testing.T) {
 		{name: "azure not a GUID", target: "azure", accountID: "sub-1234", wantShape: "Azure subscription ID"},
 		{name: "azure GUID without hyphens", target: "azure", accountID: "11111111222233334444555555555555", wantShape: "Azure subscription ID"},
 		{name: "azure GUID in braces", target: "azure", accountID: "{11111111-2222-3333-4444-555555555555}", wantShape: "Azure subscription ID"},
-		{name: "azure whitespace padded", target: "azure", accountID: "11111111-2222-3333-4444-555555555555 ", wantShape: "Azure subscription ID"},
+		{name: "azure whitespace padded", target: "azure", accountID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee ", wantShape: "Azure subscription ID"},
 		{name: "azure non-hex digit", target: "azure", accountID: "1111111g-2222-3333-4444-555555555555", wantShape: "Azure subscription ID"},
 		{name: "gcp uppercase", target: "gcp", accountID: "My-Project", wantShape: "GCP project ID"},
 		{name: "gcp digit first", target: "gcp", accountID: "1my-project", wantShape: "GCP project ID"},
@@ -475,10 +475,20 @@ func TestGenerator_AcceptsValidAccountID(t *testing.T) {
 		target    string
 		accountID string
 	}{
-		{name: "aws 12 digits", target: "aws", accountID: "999888777666"},
-		{name: "aws leading zeros", target: "aws", accountID: "000011112222"},
-		{name: "azure lowercase GUID", target: "azure", accountID: "11111111-2222-3333-4444-abcdefabcdef"},
-		{name: "azure uppercase GUID", target: "azure", accountID: "11111111-2222-3333-4444-ABCDEFABCDEF"},
+		// The AWS rows are multi-line so each 12-digit value sits alone on an
+		// accountID line, the shape .gitallowed exempts for synthetic fixtures.
+		{
+			name:      "aws 12 digits",
+			target:    "aws",
+			accountID: "123456789012",
+		},
+		{
+			name:      "aws leading zeros",
+			target:    "aws",
+			accountID: "000011112222",
+		},
+		{name: "azure lowercase GUID", target: "azure", accountID: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"},
+		{name: "azure uppercase GUID", target: "azure", accountID: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"},
 		{name: "gcp typical", target: "gcp", accountID: "my-project"},
 		{name: "gcp minimum length", target: "gcp", accountID: "abcdef"},
 		{name: "gcp maximum length", target: "gcp", accountID: "a" + strings.Repeat("b", 28) + "9"},
