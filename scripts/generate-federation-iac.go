@@ -61,7 +61,7 @@
 //	# Azure target — WIF App Registration tfvars
 //	go run scripts/generate-federation-iac.go \
 //	  --target azure --source aws \
-//	  --account-name "prod-azure" --account-id "sub-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" \
+//	  --account-name "prod-azure" --account-id "00000000-1111-2222-3333-444444444444" \
 //	  --tenant-id "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" \
 //	  --cudly-api-url "https://cudly.example.com"
 //
@@ -518,14 +518,45 @@ func validateAzureAPIURL(baseURL string) error {
 	return nil
 }
 
+// accountIDRule is the expected shape of --account-id for one target.
+type accountIDRule struct {
+	re    *regexp.Regexp
+	shape string
+}
+
+// accountIDRules maps each target to the format of --account-id, which means
+// a different thing per target (#164). The aws arm reuses sourceAccountIDRE so
+// the 12-digit rule lives in one place. The azure arm is a GUID in any letter
+// case. The gcp arm is Google's documented project ID rule: 6 to 30
+// characters, lowercase letters, digits and hyphens, starting with a letter
+// and not ending with a hyphen. Values are rejected, never trimmed or
+// lowercased into validity.
+var accountIDRules = map[string]accountIDRule{
+	"aws": {sourceAccountIDRE, "AWS account ID for --target aws: it must be exactly 12 digits"},
+	"azure": {
+		regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`),
+		"Azure subscription ID for --target azure: it must be a GUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)",
+	},
+	"gcp": {
+		regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`),
+		"GCP project ID for --target gcp: it must be 6-30 lowercase letters, digits or hyphens, " +
+			"starting with a letter and not ending with a hyphen",
+	},
+}
+
 // validateCloudFlags checks --target before --source, for the diagnostic
-// ordering described in populateData.
-func validateCloudFlags(target, source string) error {
+// ordering described in populateData, and then --account-id against the
+// shape that target expects so a malformed value fails here rather than in
+// the rendered artifact.
+func validateCloudFlags(target, source, accountID string) error {
 	if !validTargets[target] {
 		return fmt.Errorf("--target must be aws, azure, or gcp (got %q)", target)
 	}
 	if !validSources[source] {
 		return fmt.Errorf("--source must be aws, azure, or gcp (got %q)", source)
+	}
+	if rule, ok := accountIDRules[target]; ok && !rule.re.MatchString(accountID) {
+		return fmt.Errorf("--account-id %q is not a valid %s", accountID, rule.shape)
 	}
 	return nil
 }
@@ -535,7 +566,7 @@ func populateData(data *iacData, target, source, tenantID, projectID, saEmail, o
 	// --target is checked first so that a typo there is reported as a bad
 	// --target rather than as an inapplicable --oidc-subject-claim, which would
 	// send the operator off to drop a flag that was never the problem.
-	if err := validateCloudFlags(target, source); err != nil {
+	if err := validateCloudFlags(target, source, data.AccountExternalID); err != nil {
 		return err
 	}
 	// The claim is then validated outside the switch, so the check covers the
