@@ -2,7 +2,12 @@
 package api
 
 import (
+	"context"
+	"net/mail"
+	"strings"
 	"time"
+
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 )
 
 // RateLimitConfig defines the rate limiting parameters for a specific endpoint/operation.
@@ -44,6 +49,10 @@ func getDefaultRateLimits() map[string]RateLimitConfig {
 		// recovery code. Applied per IP AND per session user (#94), so rotating
 		// source IPs does not reset one account's guessing budget.
 		"mfa": NewRateLimitConfig(10, 15*60), // 10 attempts / 15 minutes / IP and / user (#94)
+		// login_mfa is Login's TOTP / recovery-code leg, keyed per account email
+		// on top of the per-IP login bucket, so rotating source IPs does not
+		// reset one account's code-guessing budget (#442).
+		"login_mfa": NewRateLimitConfig(10, 15*60), // 10 attempts / 15 minutes / email (#442)
 	}
 }
 
@@ -60,4 +69,40 @@ func assertRateLimitKeysKnown(keys ...string) {
 				": add it to getDefaultRateLimits() (issue #1016)")
 		}
 	}
+}
+
+// checkLoginMFARateLimit throttles Login's TOTP / recovery-code leg per account
+// (#442): the "login" bucket is per IP only, so a caller holding the password
+// could rotate source IPs to keep guessing codes. It runs only when the request
+// carries an MFA code, before any password or code is checked, and fails closed
+// like checkRateLimitStrict.
+//
+// The key is the email exactly as Login resolves it (display name stripped by
+// mail.ParseAddress), lower-cased so case variants share one budget. An email
+// Login would reject as malformed is not counted; Login fails before any code
+// is checked. A caller without the password can spend a victim's budget, but
+// wrong passwords already lock that account for AccountLockoutDuration, so this
+// adds no new denial of service. The 429 does not depend on whether the
+// account exists.
+func (h *Handler) checkLoginMFARateLimit(ctx context.Context, email, mfaCode string) error {
+	if h.rateLimiter == nil || mfaCode == "" {
+		return nil
+	}
+	parsed, err := mail.ParseAddress(email)
+	if err != nil {
+		return nil
+	}
+	const endpoint = "login_mfa"
+	key := strings.ToLower(parsed.Address)
+	allowed, err := h.rateLimiter.AllowWithEmail(ctx, key, endpoint)
+	if err != nil {
+		logging.Errorf("ALERT: rate limiter error on credential endpoint %s for %s; request denied (02-M1): %v",
+			endpoint, redactEmail(key), err)
+		return NewClientError(503, "service temporarily unavailable, please try again later")
+	}
+	if !allowed {
+		logging.Warnf("Rate limit exceeded for %s for: %s", endpoint, redactEmail(key))
+		return NewClientError(429, "too many requests, please try again later")
+	}
+	return nil
 }

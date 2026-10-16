@@ -1072,8 +1072,8 @@ func (m *MockAuthStore) SetPendingMFASecret(ctx context.Context, userID, secret 
 	return m.Called(ctx, userID, secret, expiresAt).Error(0)
 }
 
-func (m *MockAuthStore) EnableMFA(ctx context.Context, userID, pendingSecret string, recoveryHashes []string) error {
-	return m.Called(ctx, userID, pendingSecret, recoveryHashes).Error(0)
+func (m *MockAuthStore) EnableMFA(ctx context.Context, userID, pendingSecret string, totpCounter int64, recoveryHashes []string) error {
+	return m.Called(ctx, userID, pendingSecret, totpCounter, recoveryHashes).Error(0)
 }
 
 func (m *MockAuthStore) ClearPendingMFASecret(ctx context.Context, userID string) error {

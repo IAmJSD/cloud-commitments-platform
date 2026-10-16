@@ -250,8 +250,8 @@ func TestMFAEnable_HappyPath(t *testing.T) {
 	user.MFAPendingSecretExpiresAt = &expiresAt
 
 	mockStore.On("GetUserByID", ctx, user.ID).Return(user, nil)
-	mockStore.On("EnableMFA", ctx, user.ID, secret, mock.AnythingOfType("[]string")).Run(func(args mock.Arguments) {
-		assert.Len(t, args.Get(3).([]string), recoveryCodeCount)
+	mockStore.On("EnableMFA", ctx, user.ID, secret, currentTOTPStep(), mock.AnythingOfType("[]string")).Run(func(args mock.Arguments) {
+		assert.Len(t, args.Get(4).([]string), recoveryCodeCount)
 	}).Return(nil).Once()
 
 	codes, err := service.MFAEnable(ctx, user.ID, totpFor(secret))
@@ -806,7 +806,7 @@ func TestMFALifecycle_LockedAccountRefusedBeforeCodeCheck(t *testing.T) {
 			// Permissive stubs so an unfixed service fails by assertion, not by panic.
 			writes := []string{"ClaimTOTPCounter", "EnableMFA", "DisableMFA", "ReplaceMFARecoveryCodes", "ClearPendingMFASecret", "RecordFailedLogin"}
 			mockStore.On("ClaimTOTPCounter", mock.Anything, user.ID, mock.Anything).Return(true, nil).Maybe()
-			mockStore.On("EnableMFA", mock.Anything, user.ID, mock.Anything, mock.Anything).Return(nil).Maybe()
+			mockStore.On("EnableMFA", mock.Anything, user.ID, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 			mockStore.On("DisableMFA", mock.Anything, user.ID, mock.Anything, mock.Anything).Return(nil).Maybe()
 			mockStore.On("ReplaceMFARecoveryCodes", mock.Anything, user.ID, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 			mockStore.On("ClearPendingMFASecret", mock.Anything, user.ID).Return(nil).Maybe()

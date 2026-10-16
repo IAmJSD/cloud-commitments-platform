@@ -37,6 +37,10 @@ func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLReques
 	}
 	loginReq.Password = decoded
 
+	if limitErr := h.checkLoginMFARateLimit(ctx, loginReq.Email, loginReq.MFACode); limitErr != nil {
+		return nil, limitErr
+	}
+
 	response, err := h.auth.Login(ctx, loginReq)
 	if err != nil {
 		// Map MFA sentinels to machine-readable error codes so the

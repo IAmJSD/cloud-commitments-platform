@@ -68,7 +68,7 @@ func (m *mockAuthStoreForHealth) SetPendingMFASecret(context.Context, string, st
 	return nil
 }
 
-func (m *mockAuthStoreForHealth) EnableMFA(context.Context, string, string, []string) error {
+func (m *mockAuthStoreForHealth) EnableMFA(context.Context, string, string, int64, []string) error {
 	return nil
 }
 
