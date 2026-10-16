@@ -27,7 +27,7 @@ func TestService_CreateAPIKeyAPI(t *testing.T) {
 			GroupIDs:     []string{DefaultAdminGroupID},
 		}
 
-		permissions := []Permission{
+		permissions := []APIPermission{
 			{Action: ActionView, Resource: ResourceRecommendations},
 		}
 
