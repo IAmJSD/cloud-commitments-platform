@@ -162,6 +162,10 @@ func (r *Router) registerRoutes() {
 		// cancel it. The emails link to the SPA deep links
 		// /purchases/{approve,cancel}/{id}?token=..., which POST the token
 		// after the user confirms (issues #549, #578).
+		// Read-only details for the approval deep link's confirm modal
+		// (issue #529). Must precede the approve route, which shares its
+		// prefix. POST so the token travels in the body (issue #398).
+		{PathPrefix: "/api/purchases/approve/", PathSuffix: "/details", Method: "POST", Handler: r.approvalDetailsHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/purchases/approve/", Method: "POST", Handler: r.approvePurchaseHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/purchases/cancel/", Method: "POST", Handler: r.cancelPurchaseHandler, Auth: AuthPublic},
 		// Revoke a completed purchase via email one-click link (issue #291).
@@ -603,6 +607,13 @@ func (r *Router) approvePurchaseHandler(ctx context.Context, req *events.LambdaF
 	}
 	token := resolveApprovalToken(req)
 	return r.h.approvePurchase(ctx, req, params["id"], token)
+}
+
+func (r *Router) approvalDetailsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	if err := r.h.checkRateLimit(ctx, req, "approve_cancel_public"); err != nil {
+		return nil, err
+	}
+	return r.h.getApprovalDetails(ctx, req, params["id"], resolveApprovalToken(req))
 }
 
 func (r *Router) cancelPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {

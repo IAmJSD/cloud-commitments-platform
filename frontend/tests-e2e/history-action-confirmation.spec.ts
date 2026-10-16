@@ -137,10 +137,10 @@ test('approve is not offered when the purchase details cannot be loaded (issue #
   await expect.poll(() => fixture.posts.length).toBe(1);
 });
 
-for (const [status, wording] of [[403, 'view:purchases'], [404, 'outside your account access']] as const) {
+for (const [status, wording] of [[403, 'view:purchases'], [404, 'outside your account access'], [410, 'approval link has expired']] as const) {
   test(`approval link with details ${status} shows permanent wording without retry advice (issue #529)`, async ({ page }) => {
     const fixture = await historyFixture(page, 'approve');
-    await page.route(`**/api/purchases/${ID}`, route => route.fulfill({ status, json: { error: 'denied by server' } }));
+    await page.route(`**/api/purchases/approve/${ID}/details`, route => route.fulfill({ status, json: { error: 'denied by server' } }));
     await page.goto(`/purchases/approve/${ID}?token=tok`);
     const alert = page.getByRole('alert');
     await expect(alert).toContainText('cannot be approved without showing the amount');
