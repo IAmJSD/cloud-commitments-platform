@@ -15,6 +15,11 @@ var ErrEmptyPurchaseID = errors.New("purchase history record has no purchase id"
 // ErrPurchasePlanConflict means a plan changed after the caller read it.
 var ErrPurchasePlanConflict = errors.New("purchase plan changed")
 
+// ErrEditorReconciliationRequired means the plan is editor-managed and a legacy
+// writer tried to change what only the schedule editor may. Permanent for the
+// request: callers map it to 409; a background caller would skip, not retry.
+var ErrEditorReconciliationRequired = errors.New("plan is managed by the schedule editor")
+
 // ErrExecutionNotInExpectedStatus is returned by TransitionExecutionStatus
 // when the target execution exists but its current status is not in the
 // allowed `fromStatuses` set -- i.e. the atomic CAS rejected because some

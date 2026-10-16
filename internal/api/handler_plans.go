@@ -388,6 +388,10 @@ func preserveRampProgress(existingPlan, plan *config.PurchasePlan) error {
 	if rampScheduleShapeUnchanged(existingPlan.RampSchedule, plan.RampSchedule) {
 		plan.RampSchedule.CurrentStep = existingPlan.RampSchedule.CurrentStep
 		plan.RampSchedule.StartDate = existingPlan.RampSchedule.StartDate
+		// Editor-owned markers the request cannot express; dropping them hands
+		// the plan back to the interval formula.
+		plan.RampSchedule.DatesManaged = existingPlan.RampSchedule.DatesManaged
+		plan.RampSchedule.AllocationMode = existingPlan.RampSchedule.AllocationMode
 		plan.NextExecutionDate = existingPlan.NextExecutionDate
 		return nil
 	}
