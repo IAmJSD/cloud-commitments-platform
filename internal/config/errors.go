@@ -23,6 +23,13 @@ var ErrPurchasePlanConflict = errors.New("purchase plan changed")
 // distinguish this legitimate race-loss from a hard DB error.
 var ErrExecutionNotInExpectedStatus = errors.New("execution not in expected status")
 
+// ErrApprovalTokenChanged is returned (wrapped) by
+// TransitionExecutionStatusTokenPinned when the execution is still in an
+// allowed status but its stored approval token no longer matches the one the
+// caller supplied, or has expired: the token was rotated (re-notification) or
+// lapsed after the caller validated it and before the transition (issue #590).
+var ErrApprovalTokenChanged = errors.New("approval token no longer matches the execution")
+
 // ErrRampStepIncomplete is returned (wrapped) by CompletePlanStep when the
 // ramp step the completing execution belongs to has not been bought in full:
 // another cloud account on that step is still outstanding, or nothing on the

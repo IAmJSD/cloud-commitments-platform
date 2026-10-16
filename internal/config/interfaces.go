@@ -225,6 +225,14 @@ type StoreInterface interface {
 	// row whose recommendations were attached after the caller's gate check. A
 	// lost pin returns ErrExecutionNotInExpectedStatus like any lost CAS.
 	TransitionExecutionStatusPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*PurchaseExecution, error)
+	// TransitionExecutionStatusTokenPinned is TransitionExecutionStatus that
+	// also requires the row's stored approval token hash to match rawToken and
+	// to be unexpired, in the same statement as the status change, so a token
+	// rotated or expired after the caller validated it cannot win the
+	// transition (issue #590). A lost token pin on a row still in an allowed
+	// status returns ErrApprovalTokenChanged; a lost status CAS returns
+	// ErrExecutionNotInExpectedStatus as usual.
+	TransitionExecutionStatusTokenPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, rawToken string) (*PurchaseExecution, error)
 	// RescheduleAwaitingExecution sets scheduled_date on an execution that is
 	// still pending or notified and touches no other column. It returns false
 	// (and writes nothing) when the row has left those statuses, so a cancel or

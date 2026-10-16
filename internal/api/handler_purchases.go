@@ -763,11 +763,14 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	}
 	if globalCfg.GetPurchaseDelay() > 0 {
 		// The delayed branch bypasses ApproveExecution, which is where the
-		// token is otherwise validated (issue #586).
+		// token is otherwise validated (issue #586). This check reads the
+		// snapshot loaded at the start of the request; approveWithDelay pins
+		// the token again inside the status CAS so a token rotated since
+		// cannot win the transition (issue #590).
 		if err := purchase.ValidateApprovalToken(execution, token); err != nil {
 			return nil, tokenActionError(err)
 		}
-		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), actor, nil)
+		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), actor, nil, token)
 	}
 	// ApproveExecution now runs the purchase synchronously inside the
 	// same call (issue #372). When it returns nil the AWS API call
@@ -856,7 +859,7 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 		return nil, fmt.Errorf("failed to read global config for purchase delay check: %w", cfgErr)
 	}
 	if globalCfg.GetPurchaseDelay() > 0 {
-		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), session.Email, actor)
+		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), session.Email, actor, "")
 	}
 
 	// revocationToken is the raw token ApproveAndExecute mints for this
@@ -1051,9 +1054,17 @@ func (h *Handler) requirePlanStepCap(ctx context.Context, execution *config.Purc
 // scheduled_execution_at <= NOW() and fires the actual SDK call.
 // Revoking a status=scheduled execution (via the revoke handler or the
 // History "Revoke" button) transitions it to "canceled" at zero cloud cost.
-func (h *Handler) approveWithDelay(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string) (any, error) {
-	updated, err := h.scheduleApprovedExecution(ctx, execution, delay, actor, transitionedBy)
+//
+// approvalToken is the raw email-link token on the token path and "" on the
+// session path; see scheduleApprovedExecution.
+func (h *Handler) approveWithDelay(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string, approvalToken string) (any, error) {
+	updated, err := h.scheduleApprovedExecution(ctx, execution, delay, actor, transitionedBy, approvalToken)
 	if err != nil {
+		if errors.Is(err, config.ErrApprovalTokenChanged) {
+			// The token was rotated or expired after approveViaToken validated
+			// it against the request's snapshot (issue #590).
+			return nil, NewClientError(403, "invalid approval token")
+		}
 		if errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
 			// A concurrent Cancel beat the approve: the CAS rejected because the row
 			// is no longer in a schedulable status. Return 409 so the client knows to
@@ -1090,8 +1101,21 @@ func (h *Handler) approveWithDelay(ctx context.Context, execution *config.Purcha
 // "canceled" between the caller's SELECT and this write, TransitionExecutionStatus
 // returns ErrExecutionNotInExpectedStatus and we surface a 409 instead of
 // blindly overwriting the canceled state.
-func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string) (*config.PurchaseExecution, error) {
-	updated, err := h.config.TransitionExecutionStatus(ctx, execution.ExecutionID, []string{"pending", "notified"}, "scheduled", transitionedBy)
+//
+// A non-empty approvalToken (the email-link path) is also pinned inside the
+// CAS: the row's stored token hash must still match it and be unexpired, so
+// a re-notification that rotated the token after the caller validated its
+// snapshot rejects the transition with config.ErrApprovalTokenChanged
+// (issue #590). The session path passes "" and is not token-gated.
+func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *config.PurchaseExecution, delay time.Duration, actor string, transitionedBy *string, approvalToken string) (*config.PurchaseExecution, error) {
+	from := []string{"pending", "notified"}
+	var updated *config.PurchaseExecution
+	var err error
+	if approvalToken != "" {
+		updated, err = h.config.TransitionExecutionStatusTokenPinned(ctx, execution.ExecutionID, from, "scheduled", transitionedBy, approvalToken)
+	} else {
+		updated, err = h.config.TransitionExecutionStatus(ctx, execution.ExecutionID, from, "scheduled", transitionedBy)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to transition execution %s to scheduled: %w", execution.ExecutionID, err)
 	}
