@@ -209,8 +209,8 @@ func (f *rampFixture) occupied(ctx context.Context, t *testing.T, from, to int) 
 //
 // Account C's row is `failed`. It cannot be retried when the provider refuses
 // re-drive (Azure savings plans), and it cannot be canceled at all --
-// IsCancelable and CancelExecutionAtomic both admit only pending/notified/
-// scheduled. Without an exit the step is held open forever and the plan never
+// IsCancelable and CancelExecutionAtomic both admit only pending/notified.
+// Without an exit the step is held open forever and the plan never
 // buys the rest of its ramp. Detaching the account from the plan is the exit.
 func TestRampGate_DetachingAnAccountReleasesTheStep(t *testing.T) {
 	ctx := context.Background()

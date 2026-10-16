@@ -881,10 +881,10 @@ func TestManager_CancelExecution_AlreadyCompleted(t *testing.T) {
 // approved/running/paused/failed/expired execution that the dashboard
 // (session) path refuses. Each non-cancelable status must now be rejected with
 // no write to the store — approved/running rows in particular are mid-execution
-// and canceling them would desync the DB from the cloud. Pending, notified, and
-// scheduled are cancelable; all other states are not.
+// and canceling them would desync the DB from the cloud. Only pending and
+// notified are cancelable; a scheduled row is revoked, not canceled (issue #73).
 func TestManager_CancelExecution_RejectsNonCancelableStatus(t *testing.T) {
-	rejected := []string{"approved", "running", "paused", "failed", "expired", "completed", "canceled"}
+	rejected := []string{"approved", "running", "paused", "failed", "expired", "completed", "canceled", "scheduled"}
 	for _, status := range rejected {
 		t.Run(status, func(t *testing.T) {
 			ctx := context.Background()
@@ -909,6 +909,12 @@ func TestManager_CancelExecution_RejectsNonCancelableStatus(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "execution cannot be canceled")
 			assert.Contains(t, err.Error(), status)
+			assert.ErrorIs(t, err, config.ErrExecutionNotInExpectedStatus)
+			// A rejected row was never raced, so the message must not claim it.
+			assert.NotContains(t, err.Error(), "concurrent operation")
+			if status == "scheduled" {
+				assert.Contains(t, err.Error(), "use the revoke endpoint before it fires")
+			}
 			// Status guard fires before the atomic UPDATE — a rejected
 			// cancel must never reach CancelExecutionAtomic.
 			mockStore.AssertNotCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -918,14 +924,12 @@ func TestManager_CancelExecution_RejectsNonCancelableStatus(t *testing.T) {
 }
 
 // TestManager_CancelExecution_AllowsCancelableStatus confirms the inverse of
-// the #645 guard: pending, notified, and scheduled rows are all cancelable on
+// the #645 guard: pending and notified rows are cancelable on
 // the token path, and the cancel commits (status flip + suppression cleanup)
 // in a single tx. Without this the alignment fix could silently over-restrict
 // and break the legitimate email-link cancel of a row awaiting approval.
-// "scheduled" is included because the cloud SDK has not been called yet (issue
-// #291 wave-2) and IsCancelable already permits it.
 func TestManager_CancelExecution_AllowsCancelableStatus(t *testing.T) {
-	allowed := []string{"pending", "notified", "scheduled"}
+	allowed := []string{"pending", "notified"}
 	for _, status := range allowed {
 		t.Run(status, func(t *testing.T) {
 			ctx := context.Background()

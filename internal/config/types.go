@@ -537,17 +537,18 @@ var HealthScoredExecutionStatuses = []string{
 }
 
 // IsCancelable reports whether an execution may still be canceled. Only the
-// pre-purchase states ("pending"/"notified"/"scheduled") qualify: once a row
+// pre-approval states ("pending"/"notified") qualify. A "scheduled" row is not
+// canceled: it is revoked through the revoke endpoint
+// (CancelScheduledExecutionAtomic), which carries its own RBAC. Once a row
 // reaches "approved" or "running" the AWS commitment is being or has been
 // created, so canceling would leave the DB and the cloud out of sync;
 // "canceled", "completed", "failed", "expired", and "paused" are likewise
-// non-cancelable. The "scheduled" state is cancellable because the cloud SDK
-// has not been called yet (issue #291 wave-2).
+// non-cancelable.
 // Both cancel paths (purchase.Manager.CancelExecution on the email-token flow
 // and the session-authed cancelPurchaseViaSession) call this single predicate
 // so the policy can never drift between them (issue #645).
 func (e *PurchaseExecution) IsCancelable() bool {
-	return e.Status == "pending" || e.Status == "notified" || e.Status == "scheduled"
+	return e.Status == "pending" || e.Status == "notified"
 }
 
 // RecommendationRecord stores a recommendation with purchase status.

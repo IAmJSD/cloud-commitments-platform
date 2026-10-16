@@ -1372,10 +1372,9 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 
 // guardCancelableViaSession returns a ClientError if execution is not eligible
 // for cancellation on the session path (pending|notified only):
-//   - "scheduled" executions are cancelable (IsCancelable returns true) but must
-//     go through the /revoke endpoint; routing them through the pending/notified
-//     CAS would fail with a misleading "concurrent operation" 409 (CodeRabbit
-//     finding #6, PR #1277).
+//   - "scheduled" executions are not IsCancelable; they go through the /revoke
+//     endpoint. The explicit branch keeps the revoke pointer in the 409 instead
+//     of the generic message (CodeRabbit finding #6, PR #1277; issue #73).
 //   - all other non-IsCancelable statuses (approved, completed, etc.) are rejected
 //     with a generic "cannot be canceled" 409.
 func guardCancelableViaSession(execution *config.PurchaseExecution) error {

@@ -1128,8 +1128,8 @@ func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistoryS
 		switch p.Status {
 		case "pending", "notified", "scheduled":
 			// "scheduled" (issue #239) is a pre-purchase state like
-			// pending/notified (PurchaseExecution.IsCancelable groups all
-			// three): the cloud SDK has not been called yet. It must not
+			// pending/notified (the cloud SDK has not been called yet;
+			// scheduled is revoked, not canceled). It must not
 			// fall through to the default TotalCompleted++ below, or the
 			// "Total Upfront Spent" card counts money not yet spent.
 			summary.TotalPending++

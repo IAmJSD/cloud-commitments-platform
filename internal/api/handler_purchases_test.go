@@ -3304,8 +3304,8 @@ func TestHandler_cancelPurchase_Session_RejectsEachNonCancelableStatus(t *testin
 }
 
 // TestHandler_cancelPurchase_Session_ScheduledRoutedToRevoke is the regression
-// guard for CodeRabbit finding #6 on PR #1277. A "scheduled" row is cancelable
-// (IsCancelable returns true) but ONLY via the /revoke flow
+// guard for CodeRabbit finding #6 on PR #1277. A "scheduled" row is not cancelable
+// (IsCancelable returns false); it is revoked via the /revoke flow
 // (CancelScheduledExecutionAtomic). The /cancel path must NOT pass it to
 // CancelExecutionAtomic (pending/notified-only CAS) -- doing so would fail the
 // CAS and surface a misleading "concurrent operation already transitioned it"

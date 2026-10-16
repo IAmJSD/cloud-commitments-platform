@@ -474,3 +474,15 @@ func TestGlobalConfig_GracePeriodFor(t *testing.T) {
 		assert.Equal(t, DefaultGracePeriodDays, cfg.GracePeriodFor("gcp"))
 	})
 }
+
+// A scheduled row is revoked, not canceled (issue #73): the cancel CAS matches
+// only pending/notified, so the predicate must agree.
+func TestPurchaseExecution_IsCancelable(t *testing.T) {
+	for status, want := range map[string]bool{
+		"pending": true, "notified": true, "scheduled": false, "approved": false,
+		"running": false, "paused": false, "failed": false, "expired": false,
+		"completed": false, "canceled": false,
+	} {
+		assert.Equal(t, want, (&PurchaseExecution{Status: status}).IsCancelable(), status)
+	}
+}

@@ -1806,9 +1806,8 @@ func TestSummarizePurchaseHistory_CancelledExcludedFromKPIs(t *testing.T) {
 // fell through to the default TotalCompleted++ branch: a delayed purchase
 // whose provider call has not fired yet counted toward TotalCompleted and
 // the "Total Upfront Spent" card counted money not yet spent.
-// PurchaseExecution.IsCancelable groups "scheduled" with "pending"/
-// "notified" as pre-purchase states (the cloud SDK has not been called),
-// so it must land in TotalPending like those two, not TotalCompleted.
+// "scheduled" is a pre-purchase state like "pending"/"notified" (the cloud
+// SDK has not been called; it is revoked rather than canceled), so it must land in TotalPending like those two, not TotalCompleted.
 func TestSummarizePurchaseHistory_ScheduledExcludedFromKPIs(t *testing.T) {
 	purchases := []config.PurchaseHistoryRecord{
 		{Status: "completed", UpfrontCost: new(float64(100.0)), EstimatedSavings: 10.0},

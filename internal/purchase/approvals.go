@@ -590,17 +590,17 @@ func (m *Manager) loadCancelableExecution(ctx context.Context, executionID, toke
 		return nil, err
 	}
 
-	// Only pre-purchase rows (pending/notified/scheduled) are cancelable --
-	// shares the single PurchaseExecution.IsCancelable predicate with the
-	// session path in cancelPurchaseViaSession so the policy can never drift
-	// between the two flows (issue #645). The "scheduled" state is also
-	// cancelable because the cloud SDK has not been called yet (issue #291
-	// wave-2). The previous predicate rejected only completed/canceled, which
-	// let an email-link holder cancel an approved/running/paused/failed/expired
-	// execution that the dashboard user cannot. Restricting to the pre-purchase
-	// states is also the in-flight guard: approved/running rows are
-	// mid-execution (the AWS commitment is being or has been created), so
-	// canceling them would leave the DB and the cloud out of sync.
+	// Only pre-approval rows (pending/notified) are cancelable -- shares the
+	// single PurchaseExecution.IsCancelable predicate with the session path in
+	// cancelPurchaseViaSession so the policy can never drift between the two
+	// flows (issue #645). A scheduled row is revoked, not canceled: the atomic
+	// cancel UPDATE matches only pending/notified, so letting it through would
+	// report a "concurrent operation" that never happened (issue #73).
+	// approved/running rows are mid-execution (the AWS commitment is being or
+	// has been created), so canceling them would desync the DB from the cloud.
+	if execution.Status == "scheduled" {
+		return nil, fmt.Errorf("%w: execution cannot be canceled, current status: scheduled; use the revoke endpoint before it fires", config.ErrExecutionNotInExpectedStatus)
+	}
 	if !execution.IsCancelable() {
 		return nil, fmt.Errorf("%w: execution cannot be canceled, current status: %s", config.ErrExecutionNotInExpectedStatus, execution.Status)
 	}
