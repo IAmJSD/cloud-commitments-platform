@@ -839,6 +839,12 @@ func (m *mockConfigStore) SaveExecutionIfStatus(ctx context.Context, e *config.P
 func (m *mockConfigStore) SaveExecutionIfStatusTx(ctx context.Context, _ pgx.Tx, e *config.PurchaseExecution, _ []string) error {
 	return m.SavePurchaseExecution(ctx, e)
 }
+func (m *mockConfigStore) GetExecutionFanOutShape(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+func (m *mockConfigStore) PinExecutionFanOutShape(_ context.Context, _ string, shape string) (string, error) {
+	return shape, nil
+}
 func (m *mockConfigStore) RecoverReapedExecution(ctx context.Context, e *config.PurchaseExecution) error {
 	return m.SavePurchaseExecution(ctx, e)
 }

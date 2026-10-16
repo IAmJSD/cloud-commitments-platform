@@ -52,11 +52,16 @@ type MockConfigStore struct {
 	CountPendingExecutionsForAccountFn  func(ctx context.Context, accountID string) (int, error)
 	ListPendingExecutionIDsForAccountFn func(ctx context.Context, accountID string) ([]string, error)
 	SavePurchaseExecutionFn             func(ctx context.Context, exec *config.PurchaseExecution) error
+	PinExecutionFanOutShapeFn           func(ctx context.Context, lineageKey, shape string) (string, error)
+	GetExecutionFanOutShapeFn           func(ctx context.Context, lineageKey string) (string, error)
 	GetUserEmailByIDFn                  func(ctx context.Context, userID string) (string, error)
 	mock.Mock
 	// callLog records every invocation, including the ones served from a
 	// default without reaching mock.Called. See assertions.go.
 	callLog callLog
+	// fanOutShapes backs PinExecutionFanOutShape's default: first writer wins
+	// per lineage key, like the real table.
+	fanOutShapes fanOutShapePins
 }
 
 // GetGlobalConfig mocks the GetGlobalConfig operation. Returns an empty

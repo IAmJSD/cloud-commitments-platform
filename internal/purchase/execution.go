@@ -72,13 +72,18 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 			return beforeSubmission(fmt.Errorf("execution %s: %w", exec.ExecutionID, ErrPlanStepNoRecommendations))
 		}
 
-		// Fan out across plan accounts when accounts are configured.
+		// Fan out across plan accounts when accounts are configured, unless
+		// this lineage's first attempt pinned the other shape (issue #97).
 		if exec.CloudAccountID == nil {
 			accounts, err := m.config.GetPlanAccounts(ctx, exec.PlanID)
 			if err != nil {
 				return fmt.Errorf("failed to load plan accounts for plan %s: %w", exec.PlanID, err)
 			}
-			if len(accounts) > 0 {
+			fanOut, err := m.lineageFansOut(ctx, exec, accounts)
+			if err != nil {
+				return err
+			}
+			if fanOut {
 				return m.executeScopeAware(ctx, exec, plan, accounts)
 			}
 		}
@@ -95,12 +100,9 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 // plain error when nothing committed. Split out of executePurchase to keep that
 // function under the gocyclo budget.
 func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan) error {
-	if err := requireRecsMatchRowAccount(exec); err != nil {
-		return beforeSubmission(err)
-	}
-	provCfg, targetAccountID, err := m.resolveSingleAccountProvider(ctx, exec)
+	provCfg, targetAccountID, err := m.prepareSingleAccountSubmission(ctx, exec)
 	if err != nil {
-		return beforeSubmission(err)
+		return err
 	}
 	// #646: stamp the resolved target account on history, not the ambient
 	// AWS host account. resolveSingleAccountProvider returns the target's
@@ -147,6 +149,26 @@ func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.Purchas
 		return &partialPurchaseError{errors: purchaseErrors}
 	}
 	return nil
+}
+
+// prepareSingleAccountSubmission runs the single-account path's pre-submission
+// steps: check the recs match the row's account, resolve the provider and
+// target account, then pin the lineage's shape now that the attempt can submit
+// (issue #97; see fan_out_shape.go). Every error it returns is before
+// submission. Split out of executeSingleAccount to keep that function under
+// the gocyclo budget.
+func (m *Manager) prepareSingleAccountSubmission(ctx context.Context, exec *config.PurchaseExecution) (*provider.ProviderConfig, string, error) {
+	if err := requireRecsMatchRowAccount(exec); err != nil {
+		return nil, "", beforeSubmission(err)
+	}
+	provCfg, targetAccountID, err := m.resolveSingleAccountProvider(ctx, exec)
+	if err != nil {
+		return nil, "", beforeSubmission(err)
+	}
+	if err := m.pinLineageShape(ctx, exec, config.FanOutShapeSingle); err != nil {
+		return nil, "", err // already beforeSubmission
+	}
+	return provCfg, targetAccountID, nil
 }
 
 // anyRecPurchased reports whether at least one recommendation in the slice
@@ -284,6 +306,13 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 		// instead of being silently dropped. Extracted to a helper to keep
 		// executeForAccount under the gocyclo:10 budget.
 		return false, m.persistFailedAccountExecution(ctx, &acctExec, account, credErr)
+	}
+	// Pinned on the ROOT lineage, and only once this account can submit (issue
+	// #97); see fan_out_shape.go.
+	if pinErr := m.pinLineageShape(ctx, baseExec, config.FanOutShapeMulti); pinErr != nil {
+		acctExec.Status = "failed"
+		acctExec.Error = pinErr.Error()
+		return false, m.persistFailedAccountExecution(ctx, &acctExec, account, pinErr)
 	}
 
 	accountID := account.ExternalID
