@@ -462,6 +462,75 @@ func TestGCPWIFCLI_ProviderReuseIsVerified(t *testing.T) {
 	})
 }
 
+// TestGCPWIFCLI_IssuerValidated covers #211: CUDLY_ISSUER_URL is
+// environment-overridable and reaches --issuer-uri, which Google STS fetches
+// the discovery document from. The script used to check only that it was
+// non-empty, so plain http://, embedded whitespace, quotes or shell syntax
+// reached gcloud. The guard mirrors the one on --issuer-uri in
+// arm/CUDly-CrossSubscription/setup-gcp-wif.sh and rejects a trailing slash as
+// azure-wif-cli.sh.tmpl does.
+func TestGCPWIFCLI_IssuerValidated(t *testing.T) {
+	reject := []struct {
+		name   string
+		issuer string
+	}{
+		{"plain http", "http://cudly.example.com/oidc"},
+		{"embedded space", "https://cudly.example.com/oi dc"},
+		{"single quote", "https://cudly.example.com/o'idc"},
+		{"double quote", `https://cudly.example.com/o"idc`},
+		{"command substitution", "https://cudly.example.com/$(id)"},
+		{"trailing slash", "https://cudly.example.com/oidc/"},
+		{"no scheme", "cudly.example.com/oidc"},
+		{"scheme without host", "https://"},
+		{"uppercase scheme", "HTTPS://cudly.example.com/oidc"},
+		{"userinfo", "https://a@b.com"},
+		{"query", "https://a.com/oidc?x=1"},
+		{"fragment", "https://a.com/oidc#f"},
+		{"embedded newline", "https://a.com\nhttps://b.com"},
+		{"IPv6 literal", "https://[::1]/oidc"},
+	}
+	for _, tc := range reject {
+		t.Run("reject/"+tc.name, func(t *testing.T) {
+			exitCode, _, stderr, calls := runGCPWIFScript(t, t.TempDir(),
+				map[string]string{"CUDLY_ISSUER_URL": tc.issuer})
+
+			if exitCode == 0 {
+				t.Errorf("CUDLY_ISSUER_URL %q was accepted (exit 0)", tc.issuer)
+			}
+			if len(calls) != 0 {
+				t.Errorf("no gcloud call may be made before the issuer is validated, got %d: %v", len(calls), calls)
+			}
+			if !strings.Contains(stderr, "CUDLY_ISSUER_URL") {
+				t.Errorf("stderr must name the rejected variable, got:\n%s", stderr)
+			}
+		})
+	}
+
+	// Positive controls, so a guard rejecting everything cannot pass above.
+	accept := []struct {
+		name   string
+		issuer string
+	}{
+		{"default rendered value", baseData().CUDlyAPIURL + "/oidc"},
+		{"host with port", "https://cudly.example.com:8443/oidc"},
+		{"nested path", "https://cudly.example.com/api/v1/oidc"},
+	}
+	for _, tc := range accept {
+		t.Run("accept/"+tc.name, func(t *testing.T) {
+			exitCode, _, stderr, calls := runGCPWIFScript(t, t.TempDir(),
+				map[string]string{"CUDLY_ISSUER_URL": tc.issuer})
+
+			if exitCode != 0 {
+				t.Fatalf("CUDLY_ISSUER_URL %q was rejected (exit %d); stderr:\n%s", tc.issuer, exitCode, stderr)
+			}
+			created := callsContaining(calls, "providers create-oidc")
+			if len(created) != 1 || !strings.Contains(created[0], "--issuer-uri="+tc.issuer) {
+				t.Errorf("provider must be created with --issuer-uri=%s, got: %v", tc.issuer, created)
+			}
+		})
+	}
+}
+
 // TestGCPWIFCLI_SubjectValidated covers #1661 item 2: CUDLY_FEDERATED_SUBJECT is
 // environment-overridable and lands inside the CEL string literal of
 // --attribute-condition, so a value carrying a quote closes the literal and the

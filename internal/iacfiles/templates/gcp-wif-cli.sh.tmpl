@@ -34,6 +34,18 @@ CUDLY_FEDERATED_SUBJECT="${CUDLY_FEDERATED_SUBJECT:-cudly-controller}"
 : "${SERVICE_ACCOUNT_EMAIL:?set SERVICE_ACCOUNT_EMAIL to the CUDly target service account in the project}"
 : "${CUDLY_ISSUER_URL:?set CUDLY_ISSUER_URL to the OIDC issuer URL of your CUDly deployment (base URL + /oidc)}"
 
+# CUDLY_ISSUER_URL becomes the provider's --issuer-uri, the address Google STS
+# fetches the OIDC discovery document from, so it must be an HTTPS URL with no
+# whitespace, quotes or shell syntax. The pattern is the one applied to
+# --issuer-uri in arm/CUDly-CrossSubscription/setup-gcp-wif.sh; a trailing slash
+# is refused as in azure-wif-cli.sh. The default (base URL + /oidc) never ends in
+# one.
+if ! [[ "${CUDLY_ISSUER_URL}" =~ ^https://[a-zA-Z0-9.-]+(:[0-9]+)?(/[-a-zA-Z0-9._~/]*)?$ ]] \
+   || [[ "${CUDLY_ISSUER_URL}" == */ ]]; then
+  echo "ERROR: CUDLY_ISSUER_URL must be an https:// URL without a trailing slash, using only [-a-zA-Z0-9._~/] in the path (got: ${CUDLY_ISSUER_URL})." >&2
+  exit 1
+fi
+
 # CUDLY_FEDERATED_SUBJECT is interpolated into the CEL string literal of the
 # provider's --attribute-condition below and into the principal:// identifier of
 # the impersonation grant. A quote closes that literal and the rest of the value

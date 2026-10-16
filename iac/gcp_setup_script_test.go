@@ -3,6 +3,7 @@ package iac
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -285,5 +286,73 @@ func TestSetupScriptRejectsInsecureCredentialSource(t *testing.T) {
 				t.Errorf("stderr must name the rejected flag, got:\n%s", stderr)
 			}
 		})
+	}
+}
+
+// gcloudExistingProviderStub reports an existing OIDC provider whose issuer and
+// condition match what setup-gcp-wif.sh expects but whose attribute mapping is
+// empty, so the script reaches normalize_mapping with an empty mapping.
+const gcloudExistingProviderStub = `#!/usr/bin/env bash
+printf '%s\n' "gcloud $*" >> "${STUB_LOG}"
+case "$*" in
+  *"projects describe"*) echo "000000000000" ;;
+  *"providers describe"*"attributeCondition"*) echo "google.subject == 'cudly-controller'" ;;
+  *"providers describe"*"oidc.issuerUri"*) echo "https://cudly.example.com/oidc" ;;
+  *"providers describe"*"attributeMapping"*) ;;
+esac
+exit 0
+`
+
+// TestSetupScriptEmptyExistingMappingFailsCleanly covers #211: normalize_mapping
+// expanded "${pairs[@]}" on an empty array under set -u, which bash < 4.4 (macOS
+// /bin/bash 3.2) reports as "unbound variable" instead of reaching the
+// mapping-mismatch error. The unbound-variable failure only reproduces on such a
+// bash; on bash >= 4.4 this test passes with or without the fix.
+func TestSetupScriptEmptyExistingMappingFailsCleanly(t *testing.T) {
+	bashPath := "/bin/bash"
+	if _, err := os.Stat(bashPath); err != nil {
+		t.Fatalf("%s is required: %v", bashPath, err)
+	}
+	verOut, verErr := exec.Command(bashPath, "-c", `echo "${BASH_VERSINFO[0]} ${BASH_VERSINFO[1]}"`).Output()
+	if verErr != nil {
+		t.Fatalf("detect %s version: %v", bashPath, verErr)
+	}
+	var major, minor int
+	if _, err := fmt.Sscanf(string(verOut), "%d %d", &major, &minor); err != nil {
+		t.Fatalf("parse %s version %q: %v", bashPath, verOut, err)
+	}
+	if major > 4 || (major == 4 && minor >= 4) {
+		t.Skipf("%s is bash %d.%d; the empty-array unbound-variable bug only exists on bash < 4.4", bashPath, major, minor)
+	}
+
+	dir := t.TempDir()
+	stubDir := filepath.Join(dir, "bin")
+	if err := os.Mkdir(stubDir, 0o700); err != nil {
+		t.Fatalf("create stub dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stubDir, "gcloud"), []byte(gcloudExistingProviderStub), 0o755); err != nil {
+		t.Fatalf("write gcloud stub: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bashPath, append([]string{setupScript}, setupScriptOIDCArgs()...)...)
+	cmd.Env = []string{
+		"PATH=" + stubDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"STUB_LOG=" + filepath.Join(dir, "gcloud.log"),
+	}
+	var errBuf strings.Builder
+	cmd.Stderr = &errBuf
+	var exitErr *exec.ExitError
+	if err := cmd.Run(); err != nil && !errors.As(err, &exitErr) {
+		t.Fatalf("run %s: %v", setupScript, err)
+	}
+
+	stderr := errBuf.String()
+	if strings.Contains(stderr, "unbound variable") {
+		t.Errorf("normalize_mapping must not trip set -u on an empty mapping; stderr:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "different attribute mapping") {
+		t.Errorf("an empty existing mapping must be reported as a mapping mismatch; stderr:\n%s", stderr)
 	}
 }

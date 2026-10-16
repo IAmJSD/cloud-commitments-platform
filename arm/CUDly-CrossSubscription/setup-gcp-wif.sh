@@ -258,7 +258,9 @@ normalize_mapping() {
   local mapping="$1" pair_sep="$2"
   local -a pairs
   IFS="$pair_sep" read -ra pairs <<<"$mapping"
-  printf '%s\n' "${pairs[@]}" | sort
+  # The ${arr[@]+...} form keeps an empty array from tripping set -u on bash < 4.4
+  # (macOS /bin/bash 3.2).
+  printf '%s\n' ${pairs[@]+"${pairs[@]}"} | sort
 }
 
 # ── Idempotent provider creation ───────────────────────────────────────────────
