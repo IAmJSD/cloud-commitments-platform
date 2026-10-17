@@ -3248,7 +3248,7 @@ func TestPGXMock_GetExecutionsByStatuses_ExcludesCleanCompleted(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
 
-	mock.ExpectQuery(`(?s)FROM purchase_executions\s+WHERE status = ANY\(\$1\)\s+AND NOT \(status = 'completed' AND COALESCE\(error, ''\) = ''\)\s+ORDER BY scheduled_date DESC\s+LIMIT \$2`).
+	mock.ExpectQuery(`(?s)FROM purchase_executions\s+WHERE status = ANY\(\$1\)\s+AND NOT \(status = 'completed' AND COALESCE\(error, ''\) = ''\)\s+ORDER BY .*LIMIT \$2`).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows(stuckExecCols()))
 
@@ -3358,4 +3358,24 @@ func TestPGXMock_UpdateGlobalConfigAtomic_PreservesAutoPurchaseStamps(t *testing
 	})
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_GetExecutionsByStatuses_FuturePendingStepsSortLast pins the
+// issue #680 ORDER BY: future pending ramp steps sort after every other row
+// (soonest first among themselves), and everything else keeps scheduled_date
+// DESC. Under a plain scheduled_date DESC, 20 plans of 52 future steps fill
+// MaxListLimit and a pending approval due today never comes back.
+func TestPGXMock_GetExecutionsByStatuses_FuturePendingStepsSortLast(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+
+	mock.ExpectQuery(`(?s)ORDER BY \(status = 'pending' AND scheduled_date > now\(\)\) ASC,\s+`+
+		`CASE WHEN status = 'pending' AND scheduled_date > now\(\) THEN scheduled_date END ASC,\s+`+
+		`scheduled_date DESC\s+LIMIT \$2`).
+		WithArgs(pgxmock.AnyArg(), MaxListLimit).
+		WillReturnRows(pgxmock.NewRows(stuckExecCols()))
+
+	_, err := store.GetExecutionsByStatuses(context.Background(), []string{"pending", "notified"}, MaxListLimit)
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }

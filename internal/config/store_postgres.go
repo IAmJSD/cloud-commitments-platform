@@ -1481,6 +1481,16 @@ func (s *PostgresStore) CancelScheduledExecutionAtomic(ctx context.Context, tx p
 // without changing the narrower GetPendingExecutions contract the scheduler
 // depends on.
 //
+// Pending rows dated in the future are the one exception to newest-first
+// (issue #680): plan creation writes every ramp step up front as a pending
+// row, up to 52 per plan, so about 20 plans fill MaxListLimit with steps
+// months ahead and a plain scheduled_date DESC would cut off a pending
+// approval due today. Those future pending steps sort after every other row,
+// and among themselves soonest first, so the cap drops the farthest steps.
+// No other status is affected: a notified, scheduled or in-flight row is
+// actionable whatever its date, and terminal statuses never match the
+// pending predicate, so their order is unchanged.
+//
 // Executions with status 'completed' and an empty error are excluded: they are
 // already represented by their purchase_history rows, so returning them would
 // only consume the cap (the History handler skips them anyway).
@@ -1506,7 +1516,9 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		  AND NOT (status = 'completed' AND COALESCE(error, '') = '')
-		ORDER BY scheduled_date DESC
+		ORDER BY (status = 'pending' AND scheduled_date > now()) ASC,
+		         CASE WHEN status = 'pending' AND scheduled_date > now() THEN scheduled_date END ASC,
+		         scheduled_date DESC
 		LIMIT $2
 	`
 	return s.queryExecutions(ctx, query, statuses, limit)
