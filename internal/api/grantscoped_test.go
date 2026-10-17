@@ -105,6 +105,8 @@ func TestGrantScoped_MatchesByAccountName(t *testing.T) {
 
 	mine := &config.CloudAccount{ID: scopedInAccount, Name: "prod-account"}
 	mockStore.On("GetCloudAccount", ctx, scopedInAccount).Return(mine, nil)
+	// The name is unique among the registered accounts, so it may match (#433).
+	mockStore.On("ListCloudAccounts", ctx, config.CloudAccountFilter{}).Return([]config.CloudAccount{*mine}, nil)
 
 	got, err := h.requireAccountAccess(ctx, &Session{UserID: scopedUserID}, scopedInAccount)
 
