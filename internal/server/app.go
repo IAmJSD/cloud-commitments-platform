@@ -1204,6 +1204,10 @@ func (a *authServiceAdapter) GetUserPermissionsAPI(ctx context.Context, userID s
 	return a.service.GetUserPermissionsAPI(ctx, userID)
 }
 
+func (a *authServiceAdapter) GetAPIKeyEffectivePermissionsAPI(ctx context.Context, keyID, userID string) ([]auth.APIPermission, error) {
+	return a.service.GetAPIKeyEffectivePermissionsAPI(ctx, keyID, userID)
+}
+
 // Account access.
 func (a *authServiceAdapter) GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error) {
 	// ResolveAllowedAccounts rather than BuildAuthContext: it fails closed when
