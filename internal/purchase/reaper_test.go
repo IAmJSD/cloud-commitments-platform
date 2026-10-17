@@ -69,8 +69,7 @@ func TestReapStuckExecutions_StaleApprovedFlippedToFailed(t *testing.T) {
 	transitioned := row
 	transitioned.Status = failedStatus
 
-	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
-		Return([]config.PurchaseExecution{row}, nil)
+	expectStuckLists(ctx, store, reapAfter, row)
 	store.On("TransitionExecutionStatus", ctx, "exec-A", stuckStatuses, failedStatus, (*string)(nil)).
 		Return(&transitioned, nil)
 	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
@@ -104,7 +103,7 @@ func TestReapStuckExecutions_EC2RowIsNotAdvertisedAsSafeToRetry(t *testing.T) {
 	row := stuckExecWithAWSEC2Rec("exec-ec2", "running")
 	transitioned := row
 	transitioned.Status = failedStatus
-	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).Return([]config.PurchaseExecution{row}, nil)
+	expectStuckLists(ctx, store, reapAfter, row)
 	store.On("TransitionExecutionStatus", ctx, "exec-ec2", stuckStatuses, failedStatus, (*string)(nil)).Return(&transitioned, nil)
 	var saved *config.PurchaseExecution
 	store.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
@@ -128,8 +127,7 @@ func TestReapStuckExecutions_StaleRunningFlippedToFailed(t *testing.T) {
 	transitioned := row
 	transitioned.Status = failedStatus
 
-	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
-		Return([]config.PurchaseExecution{row}, nil)
+	expectStuckLists(ctx, store, reapAfter, row)
 	store.On("TransitionExecutionStatus", ctx, "exec-B", stuckStatuses, failedStatus, (*string)(nil)).
 		Return(&transitioned, nil)
 	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
@@ -156,8 +154,7 @@ func TestReapStuckExecutions_YoungerThanThresholdNotTouched(t *testing.T) {
 	store := new(MockConfigStore)
 	reapAfter := 10 * time.Minute
 
-	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
-		Return([]config.PurchaseExecution{}, nil)
+	expectStuckLists(ctx, store, reapAfter)
 	// No TransitionExecutionStatus / SavePurchaseExecution expectations
 	// — mock.AssertExpectations will fail if either is called.
 
@@ -173,30 +170,37 @@ func TestReapStuckExecutions_YoungerThanThresholdNotTouched(t *testing.T) {
 
 func TestReapStuckExecutions_TerminalStatusNotTouched(t *testing.T) {
 	// The store filters out terminal statuses via the WHERE clause; the
-	// reaper never sees completed/failed/canceled rows. Verify the
-	// reaper passes only stuckStatuses (approved/running) to the store
-	// — never the terminal set. This regression-guards a future change
-	// that accidentally widens stuckStatuses.
+	// reaper never sees completed/failed/canceled rows. Verify every pass
+	// passes only stuckStatuses (approved/running) to the store — never
+	// the terminal set — and that together the passes list both. This
+	// regression-guards a future change that accidentally widens
+	// stuckStatuses.
 	ctx := context.Background()
 	store := new(MockConfigStore)
 	reapAfter := 10 * time.Minute
 
+	seen := map[string]bool{}
 	store.On("ListStuckExecutions", ctx, mock.MatchedBy(func(statuses []string) bool {
-		// Must contain "approved" and "running" and NOT contain any
-		// terminal status.
-		seen := map[string]bool{}
+		// NOT contain any terminal or pre-approval status.
 		for _, s := range statuses {
-			seen[s] = true
+			if s != "approved" && s != "running" {
+				return false
+			}
 		}
-		return seen["approved"] && seen["running"] &&
-			!seen["completed"] && !seen["failed"] && !seen["canceled"] && !seen["pending"] && !seen["notified"]
-	}), reapAfter).
+		return len(statuses) > 0
+	}), mock.Anything).
+		Run(func(args mock.Arguments) {
+			for _, s := range args.Get(1).([]string) {
+				seen[s] = true
+			}
+		}).
 		Return([]config.PurchaseExecution{}, nil)
 
 	mgr := newReaperManager(store)
 	_, err := mgr.ReapStuckExecutions(ctx, reapAfter)
 	require.NoError(t, err)
 	store.AssertExpectations(t)
+	assert.True(t, seen["approved"] && seen["running"], "both stuck statuses must be listed, got %v", seen)
 }
 
 func TestReapStuckExecutions_CASRaceLostNoError(t *testing.T) {
@@ -211,8 +215,7 @@ func TestReapStuckExecutions_CASRaceLostNoError(t *testing.T) {
 	reapAfter := 10 * time.Minute
 
 	row := stuckExec("exec-race", "approved")
-	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
-		Return([]config.PurchaseExecution{row}, nil)
+	expectStuckLists(ctx, store, reapAfter, row)
 	store.On("TransitionExecutionStatus", ctx, "exec-race", stuckStatuses, failedStatus, (*string)(nil)).
 		Return(nil, fmt.Errorf("%w: execution exec-race cannot transition from %q to %q",
 			config.ErrExecutionNotInExpectedStatus, "completed", "failed"))
@@ -242,8 +245,7 @@ func TestReapStuckExecutions_RowVanishedTreatedAsRaceLost(t *testing.T) {
 	reapAfter := 10 * time.Minute
 
 	row := stuckExec("exec-gone", "approved")
-	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
-		Return([]config.PurchaseExecution{row}, nil)
+	expectStuckLists(ctx, store, reapAfter, row)
 	store.On("TransitionExecutionStatus", ctx, "exec-gone", stuckStatuses, failedStatus, (*string)(nil)).
 		Return(nil, fmt.Errorf("%w: execution exec-gone", config.ErrNotFound))
 
@@ -269,8 +271,7 @@ func TestReapStuckExecutions_HardDBErrorClassifiedAsErrored(t *testing.T) {
 	reapAfter := 10 * time.Minute
 
 	row := stuckExec("exec-dbflake", "running")
-	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
-		Return([]config.PurchaseExecution{row}, nil)
+	expectStuckLists(ctx, store, reapAfter, row)
 	store.On("TransitionExecutionStatus", ctx, "exec-dbflake", stuckStatuses, failedStatus, (*string)(nil)).
 		Return(nil, errors.New("connection refused"))
 
@@ -294,8 +295,7 @@ func TestReapStuckExecutions_CASReturnsNilNilTreatedAsRaceLost(t *testing.T) {
 	reapAfter := 10 * time.Minute
 
 	row := stuckExec("exec-nilnil", "running")
-	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
-		Return([]config.PurchaseExecution{row}, nil)
+	expectStuckLists(ctx, store, reapAfter, row)
 	store.On("TransitionExecutionStatus", ctx, "exec-nilnil", stuckStatuses, failedStatus, (*string)(nil)).
 		Return(nil, nil)
 
@@ -319,7 +319,7 @@ func TestReapStuckExecutions_ThreeStuckRowsAllReaped(t *testing.T) {
 		stuckExec("exec-2", "running"),
 		stuckExec("exec-3", "approved"),
 	}
-	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).Return(rows, nil)
+	expectStuckLists(ctx, store, reapAfter, rows...)
 
 	for _, r := range rows {
 		flipped := r
@@ -348,11 +348,29 @@ func TestReapStuckExecutions_ListStoreError(t *testing.T) {
 	store := new(MockConfigStore)
 	reapAfter := 10 * time.Minute
 
-	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
+	store.On("ListStuckExecutions", ctx, []string{"running"}, reapAfter).
 		Return(nil, errors.New("db down"))
 
 	mgr := newReaperManager(store)
 	_, err := mgr.ReapStuckExecutions(ctx, reapAfter)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to list stuck executions")
+	store.AssertExpectations(t)
+}
+
+// A failure on the approved pass propagates the same way as one on the
+// running pass: the sweep must not report success with approved rows unseen.
+func TestReapStuckExecutions_ApprovedListStoreError(t *testing.T) {
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	reapAfter := 10 * time.Minute
+
+	store.On("ListStuckExecutions", ctx, []string{"running"}, reapAfter).
+		Return([]config.PurchaseExecution{}, nil)
+	store.On("ListStuckExecutions", ctx, []string{"approved"}, approvedReapAfter(reapAfter)).
+		Return(nil, errors.New("db down"))
+
+	_, err := newReaperManager(store).ReapStuckExecutions(ctx, reapAfter)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to list stuck executions")
 	store.AssertExpectations(t)
@@ -370,8 +388,7 @@ func TestReapStuckExecutions_SaveErrorAfterCASStillCountsAsReaped(t *testing.T) 
 	row := stuckExec("exec-saveflake", "approved")
 	flipped := row
 	flipped.Status = failedStatus
-	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
-		Return([]config.PurchaseExecution{row}, nil)
+	expectStuckLists(ctx, store, reapAfter, row)
 	store.On("TransitionExecutionStatus", ctx, "exec-saveflake", stuckStatuses, failedStatus, (*string)(nil)).
 		Return(&flipped, nil)
 	store.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
@@ -459,8 +476,7 @@ func TestReapStuckExecutions_AzureSPNotSafeToRetry(t *testing.T) {
 	transitioned := row
 	transitioned.Status = failedStatus
 
-	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
-		Return([]config.PurchaseExecution{row}, nil)
+	expectStuckLists(ctx, store, reapAfter, row)
 	store.On("TransitionExecutionStatus", ctx, "exec-azsp", stuckStatuses, failedStatus, (*string)(nil)).
 		Return(&transitioned, nil)
 	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
@@ -490,8 +506,7 @@ func TestReapStuckExecutions_EmptyRecsNotSafeToRetry(t *testing.T) {
 	transitioned := row
 	transitioned.Status = failedStatus
 
-	store.On("ListStuckExecutions", ctx, stuckStatuses, reapAfter).
-		Return([]config.PurchaseExecution{row}, nil)
+	expectStuckLists(ctx, store, reapAfter, row)
 	store.On("TransitionExecutionStatus", ctx, "exec-empty", stuckStatuses, failedStatus, (*string)(nil)).
 		Return(&transitioned, nil)
 	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
