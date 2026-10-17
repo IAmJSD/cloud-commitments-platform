@@ -54,6 +54,11 @@ type HandlerConfig struct {
 	APIKeySecretARN     string
 	EncryptionKeySource string
 	EnableDashboard     bool
+	// IsLambda is the caller's (Application's) single answer to "am I on
+	// Lambda". It gates the background goroutines (RI utilization SWR
+	// refresh, stale-execution sweep) that would freeze mid-flight on Lambda.
+	// The handler never re-reads the environment itself (issue #110).
+	IsLambda bool
 }
 
 // CommitmentOptsInterface lets us swap the real *commitmentopts.Service for
