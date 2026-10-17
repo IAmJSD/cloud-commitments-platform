@@ -536,6 +536,38 @@ var HealthScoredExecutionStatuses = []string{
 	LegacyStatusCanceled,
 }
 
+// StatusRevocationRequested records that an operator asked for a completed
+// purchase to be revoked. The cloud-side revocation happens outside this
+// system (an AWS support case), and no code moves a row out of this status.
+const StatusRevocationRequested = "revocation_requested"
+
+// TerminalExecutionStatuses are the execution statuses that no executor,
+// scheduler or reaper will act on again. DeleteCloudAccount detaches rows in
+// these statuses from the account being deleted (cloud_account_id = NULL, the
+// same treatment purchase_history gets from its ON DELETE SET NULL FK) so the
+// history survives the delete, and CountLiveExecutionsForAccount counts every
+// other row as one that still needs the account (issue #265).
+//
+// It is an ALLOWLIST on purpose: a status added to the schema later counts as
+// live, and so blocks the delete, until someone classifies it here. Blocking
+// a delete is recoverable; detaching an execution that will still run is not,
+// because a row with no account falls back to plan fan-out or ambient
+// credentials.
+//
+// A failed row is listed even though it can be retried. A retry of a row
+// detached here still carries the deleted account on its recommendations, so
+// the executor refuses it before submission ("account not found") instead of
+// buying elsewhere.
+var TerminalExecutionStatuses = []string{
+	StatusCompleted,
+	StatusPartiallyCompleted,
+	StatusFailed,
+	StatusCanceled,
+	LegacyStatusCanceled,
+	StatusExpired,
+	StatusRevocationRequested,
+}
+
 // IsCancelable reports whether an execution may still be canceled. Only the
 // pre-approval states ("pending"/"notified") qualify. A "scheduled" row is not
 // canceled: it is revoked through the revoke endpoint

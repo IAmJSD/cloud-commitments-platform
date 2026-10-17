@@ -10,6 +10,7 @@ locals {
     process_scheduled_purchases = { rule = "process", enabled = var.enable_process_scheduled_purchases_schedule, schedule = var.process_scheduled_purchases_schedule }
     send_notifications          = { rule = "notify", enabled = var.enable_send_notifications_schedule, schedule = var.send_notifications_schedule }
     finalize_revocations        = { rule = "finalize", enabled = var.enable_finalize_revocations_schedule, schedule = var.finalize_revocations_schedule }
+    cleanup                     = { rule = "cleanup", enabled = var.enable_cleanup_schedule, schedule = var.cleanup_schedule }
   }
   active_sweeps = { for k, v in local.sweep_tasks : k => v if v.enabled }
 }

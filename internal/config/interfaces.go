@@ -208,6 +208,13 @@ type StoreInterface interface {
 	// 409 with a count so the frontend can offer Cancel-All-Then-Delete UX
 	// instead of surfacing a raw constraint error. See issue #606.
 	CountPendingExecutionsForAccount(ctx context.Context, accountID string) (int, error)
+	// CountLiveExecutionsForAccount returns the number of purchase_executions
+	// referencing the given cloud account whose status is not in
+	// TerminalExecutionStatuses (pending, notified, approved, running,
+	// scheduled, paused, or any status not yet classified). These are the
+	// rows that block DeleteCloudAccount; terminal rows are detached and kept
+	// as history instead (issue #265).
+	CountLiveExecutionsForAccount(ctx context.Context, accountID string) (int, error)
 	// ListPendingExecutionIDsForAccount returns the execution IDs of all
 	// pending / notified executions referencing this account, used by the
 	// frontend's Cancel-All-Then-Delete flow when the operator opts to

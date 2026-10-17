@@ -613,6 +613,27 @@ jobs:
             terraform -chdir="$d" test
           done
 
+      # The post-deploy /health gate and the GCP uptime check must read the
+      # body's top-level "status", not just the 200 (#649).
+      - name: Test /health gate modules
+        if: matrix.cloud == 'gcp'
+        run: |
+          for d in terraform/modules/deployment-checks terraform/modules/monitoring/gcp; do
+            terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
+            terraform -chdir="$d" fmt -check -recursive
+            terraform -chdir="$d" test
+          done
+
+      - name: Test CI/CD trust (immutable ids)
+        # Skips a cloud until it has a tests dir. The lock file is gitignored,
+        # so no -lockfile=readonly.
+        run: |
+          d=terraform/environments/${{ matrix.cloud }}/ci-cd-permissions
+          if [ -d "$d/tests" ]; then
+            terraform -chdir="$d" init -backend=false -input=false
+            terraform -chdir="$d" test
+          fi
+
       - name: Terraform Init
         run: |
           cd terraform/environments/${{ matrix.cloud }}

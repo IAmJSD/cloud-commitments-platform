@@ -31,6 +31,15 @@ project_id = "your-gcp-project-id"
 #
 github_repo = "LeanerCloud/cloud-commitments-platform"
 
+# ─── github_owner_id / github_repo_id ───────────────────────────────────────────
+# Immutable numeric ids. The WIF condition and the SA binding match on these, so
+# a renamed or re-created repository (same name, new id) cannot impersonate the
+# deploy SA. Required; look them up with:
+#   gh api repos/LeanerCloud/cloud-commitments-platform --jq '.owner.id, .id'
+#
+github_owner_id = "86753534"
+github_repo_id  = "1391259743"
+
 # ─── deploy_ref ────────────────────────────────────────────────────────────────
 # Git ref whose workflows are permitted to impersonate the deploy SA.
 # Only exact-match pushes to this branch can obtain a GCP token.

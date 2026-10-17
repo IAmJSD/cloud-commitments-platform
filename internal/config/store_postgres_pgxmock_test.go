@@ -1779,6 +1779,7 @@ func TestPGXMock_DeleteCloudAccount_Success(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	expectDetachTerminalExecutions(mock)
 	mock.ExpectExec("DELETE FROM cloud_accounts").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectCommit()
@@ -1795,6 +1796,7 @@ func TestPGXMock_DeleteCloudAccount_WithLinkedRegistration(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	expectDetachTerminalExecutions(mock)
 	mock.ExpectExec("DELETE FROM cloud_accounts").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectCommit()
@@ -1811,6 +1813,7 @@ func TestPGXMock_DeleteCloudAccount_NotFound(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	expectDetachTerminalExecutions(mock)
 	mock.ExpectExec("DELETE FROM cloud_accounts").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectRollback()
@@ -1818,6 +1821,59 @@ func TestPGXMock_DeleteCloudAccount_NotFound(t *testing.T) {
 	err := store.DeleteCloudAccount(ctx, "missing")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
+}
+
+// expectDetachTerminalExecutions expects DeleteCloudAccount's issue #265
+// detach of the account's terminal executions, parameterized by exactly
+// TerminalExecutionStatuses.
+func expectDetachTerminalExecutions(mock pgxmock.PgxPoolIface) {
+	mock.ExpectExec(`UPDATE purchase_executions\s+SET cloud_account_id = NULL\s+WHERE cloud_account_id = \$1\s+AND status = ANY\(\$2\)`).
+		WithArgs(pgxmock.AnyArg(), TerminalExecutionStatuses).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+}
+
+func TestPGXMock_DeleteCloudAccount_DetachFailsRollsBack(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectExec("UPDATE purchase_executions").WithArgs(pgxmock.AnyArg(), TerminalExecutionStatuses).
+		WillReturnError(errors.New("boom"))
+	mock.ExpectRollback()
+
+	err := store.DeleteCloudAccount(ctx, "acct-id")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to detach terminal executions")
+}
+
+func TestPGXMock_CountLiveExecutionsForAccount(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM purchase_executions\s+WHERE cloud_account_id = \$1\s+AND status <> ALL\(\$2\)`).
+		WithArgs("acct-id", TerminalExecutionStatuses).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3))
+
+	n, err := store.CountLiveExecutionsForAccount(ctx, "acct-id")
+	require.NoError(t, err)
+	assert.Equal(t, 3, n)
+}
+
+func TestPGXMock_CountLiveExecutionsForAccount_Error(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectQuery("SELECT COUNT").WithArgs("acct-id", TerminalExecutionStatuses).
+		WillReturnError(errors.New("boom"))
+
+	_, err := store.CountLiveExecutionsForAccount(ctx, "acct-id")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to count live executions for account")
 }
 
 // ─── ListCloudAccounts ────────────────────────────────────────────────────────

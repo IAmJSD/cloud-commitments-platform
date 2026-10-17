@@ -6,7 +6,7 @@ import { mockApi, seedAuth } from './fixtures/recs';
 for (const width of [1440, 1280, 390, 320]) test.describe(`viewport ${width}px`, () => {
   test.use({ isMobile: width <= 390 });
   test(`local Create/Edit preview at ${width}px (mock API, no writes)`, async ({ page, isMobile }, testInfo) => {
-    test.setTimeout(60_000);
+    test.setTimeout(90_000);
     await page.setViewportSize({ width, height: 900 });
     const errors: string[] = [], writes: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -28,13 +28,74 @@ for (const width of [1440, 1280, 390, 320]) test.describe(`viewport ${width}px`,
     const scripts = await page.locator('script[src]').evaluateAll(elements => elements.map(element => (element as HTMLScriptElement).src));
     expect(scripts.some(source => /app\.[a-f0-9]+\.js/.test(source))).toBe(true);
     for (const mode of ['Create', 'Edit']) {
-      await page.emulateMedia({ reducedMotion: mode === 'Create' ? 'no-preference' : 'reduce' });
+      await page.emulateMedia({ reducedMotion: mode === 'Create' && width > 390 ? 'no-preference' : 'reduce' });
       await page.locator(mode === 'Create' ? '#new-plan-btn' : '[data-action="edit-plan"][data-id="draft-plan"]').click();
       const parent = page.locator('#plan-modal');
       await expect(parent).toBeVisible();
+      await expect(parent.locator('#plan-name')).toBeFocused();
+      const advanced = parent.locator('#plan-advanced-settings'), summary = advanced.locator(':scope > summary');
+      await expect(advanced).not.toHaveAttribute('open', '');
+      await summary.focus(); await summary.press('Enter'); await expect(advanced).toHaveAttribute('open', '');
+      await expect(parent.locator('#plan-description')).toBeDisabled();
+      await expect(advanced).toContainText('Descriptions are unavailable and are not saved');
+      const payment = await parent.locator('#plan-payment').inputValue();
+      await advanced.scrollIntoViewIfNeeded(); await page.screenshot({ path: testInfo.outputPath(mode.toLowerCase() + '-advanced.png'), fullPage: true });
+      await summary.press('Space'); await expect(advanced).not.toHaveAttribute('open', '');
+      expect(await parent.locator('#plan-payment').inputValue()).toBe(payment);
+
       if (mode === 'Create') {
         await page.locator('#plan-name').fill('Capacity ladder');
         await parent.locator('label.ramp-option').filter({ hasText: 'Weekly 25%' }).click();
+        const panel = parent.locator('#plan-editor-panel'), date = panel.locator('[data-editor="date"]');
+        await expect(panel).toBeVisible(); await expect(panel).toContainText('Custom step dates can be set once saving them is supported');
+        await expect(panel).not.toContainText('does not save date changes');
+        await expect(panel.locator('[data-preview-step]')).toHaveCount(4);
+        await expect(panel.locator('svg [role="button"]')).toHaveCount(0);
+        for (const key of ['step', 'date', 'start', 'end', 'reset']) await expect(panel.locator(`[data-editor="${key}"]`)).toBeDisabled();
+        await parent.locator('#plan-account-search').fill('AWS');
+        await parent.locator('.account-suggestion-item').first().click(); await expect(parent.locator('button[type="submit"]')).toBeEnabled();
+        await summary.click();
+        await parent.locator('#plan-notify-days').fill('1.5'); await summary.click();
+        await parent.locator('button[type="submit"]').click();
+        await expect(advanced).toHaveAttribute('open', '');
+        await expect(parent.locator('#plan-notify-days')).toBeFocused();
+        expect(await parent.locator('#plan-notify-days').evaluate(element => element.validity.stepMismatch)).toBe(true);
+        await parent.locator('#plan-notify-days').fill('3'); await summary.click();
+        await parent.locator('#plan-name').fill(''); await parent.locator('button[type="submit"]').click();
+        await expect(advanced).not.toHaveAttribute('open', '');
+        await expect(parent.locator('#plan-name')).toBeFocused(); await parent.locator('#plan-name').fill('Capacity ladder');
+        const labels = await panel.locator('[data-preview-step]').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')));
+        const point = panel.locator('[data-preview-step="1"]'); await point.scrollIntoViewIfNeeded();
+        const pointBox = (await point.boundingBox())!;
+        await page.mouse.move(pointBox.x + pointBox.width / 2, pointBox.y + pointBox.height / 2); await page.mouse.down();
+        await page.mouse.move(pointBox.x + pointBox.width / 2 + 60, pointBox.y + pointBox.height / 2); await page.mouse.up();
+        expect(await panel.locator('[data-preview-step]').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')))).toEqual(labels);
+        expect(await parent.locator('#plan-form').evaluate(element => element.inert)).toBe(false);
+        await expect(panel.locator('[data-editor="changes"] summary')).toHaveText('Local date changes (0)');
+        expect(await parent.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+        await parent.locator('.plan-editor-layout').evaluate(element => { element.scrollTop = 0; });
+        await page.screenshot({ path: testInfo.outputPath('create-inline-graph.png'), fullPage: true });
+        await panel.locator('.editor-draft-notice').scrollIntoViewIfNeeded(); await page.screenshot({ path: testInfo.outputPath('create-inline-notice.png'), fullPage: true });
+        await parent.locator('#close-plan-modal-btn').scrollIntoViewIfNeeded();
+        const footer = (await parent.locator('.modal-buttons').boundingBox())!;
+        expect(footer.y + footer.height).toBeLessThanOrEqual(900);
+        await page.screenshot({ path: testInfo.outputPath('create-inline-actions.png'), fullPage: true });
+        await parent.locator('#preview-plan-schedule-btn').focus(); await page.keyboard.press('Tab');
+        await expect(parent.locator('button[type="submit"]')).toBeFocused(); await page.keyboard.press('Tab');
+        await expect(panel.locator('.schedule-preview-scroll')).toBeFocused();
+        await page.keyboard.press('Shift+Tab'); await expect(parent.locator('button[type="submit"]')).toBeFocused();
+        await page.keyboard.press('Shift+Tab'); await expect(parent.locator('#preview-plan-schedule-btn')).toBeFocused();
+        await summary.click(); await expect(advanced).toHaveAttribute('open', '');
+        await parent.locator('#close-plan-modal-btn').click(); await expect(parent).toBeHidden();
+        await page.locator('#new-plan-btn').click(); await parent.locator('#plan-name').fill('Capacity ladder');
+        await expect(advanced).not.toHaveAttribute('open', '');
+        await parent.locator('label.ramp-option').filter({ hasText: 'Weekly 25%' }).click();
+        await expect(panel.locator('[data-editor="changes"] summary')).toHaveText('Local date changes (0)');
+        await expect(panel.locator('[data-editor="date"]')).toBeDisabled();
+
+      } else {
+        await expect(parent.locator('#plan-editor-panel')).toBeHidden();
+        await expect(parent.locator('#plan-editor-panel')).toBeEmpty();
       }
       const before = await parent.locator('input, select, textarea').evaluateAll(elements => elements.map(element => (element as HTMLInputElement).value));
       const trigger = page.locator('#preview-plan-schedule-btn');

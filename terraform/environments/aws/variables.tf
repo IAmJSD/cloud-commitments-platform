@@ -229,9 +229,16 @@ variable "lambda_memory_size" {
 }
 
 variable "lambda_timeout" {
-  description = "Lambda timeout in seconds"
+  # Feeds module.compute_lambda's timeout; see the coupling note on that
+  # variable (terraform/modules/compute/aws/lambda/variables.tf, #913).
+  description = "Lambda timeout in seconds (300-900; must cover the 270s detached exchange/purchase budget)"
   type        = number
-  default     = 30
+  default     = 300
+
+  validation {
+    condition     = var.lambda_timeout >= 300 && var.lambda_timeout <= 900
+    error_message = "lambda_timeout must be between 300 and 900 seconds: RI exchanges and purchases run up to 270s (4m execution + 30s terminal save) after the request, and Lambda cuts the invocation off at this timeout (#913)."
+  }
 }
 
 
@@ -368,6 +375,18 @@ variable "enable_analytics_collect_schedule" {
 
 variable "analytics_collect_schedule" {
   description = "EventBridge schedule for the analytics_collect sweep (default rate(1 day))."
+  type        = string
+  default     = "rate(1 day)"
+}
+
+variable "enable_cleanup_schedule" {
+  description = "Enable the scheduled server cleanup sweep. Opt-in, default false: it deletes expired sessions and purchase_executions that are completed (scheduled_date), canceled (updated_at) or in a status outside failed/canceled (expires_at) and older than 30 days. The first run deletes the whole backlog; export any history you want to keep first."
+  type        = bool
+  default     = false
+}
+
+variable "cleanup_schedule" {
+  description = "EventBridge schedule for the cleanup sweep (default rate(1 day))."
   type        = string
   default     = "rate(1 day)"
 }

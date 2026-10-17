@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -56,6 +57,28 @@ type APIPermissionConstraint struct {
 	Services  []string `json:"services,omitempty"`
 	Regions   []string `json:"regions,omitempty"`
 	MaxAmount float64  `json:"max_amount,omitempty"`
+
+	// maxAmountSet records that the decoded JSON carried a non-null
+	// max_amount, so an explicit 0 can be told from an absent field. Only
+	// UnmarshalJSON sets it; a Go-built literal is never "explicit".
+	maxAmountSet bool
+}
+
+// UnmarshalJSON decodes the constraint and records whether max_amount was
+// present and non-null (null counts as absent).
+func (c *APIPermissionConstraint) UnmarshalJSON(b []byte) error {
+	type plain APIPermissionConstraint // no methods, so no recursion
+	var probe struct {
+		MaxAmount *float64 `json:"max_amount"`
+	}
+	if err := json.Unmarshal(b, (*plain)(c)); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(b, &probe); err != nil {
+		return err
+	}
+	c.maxAmountSet = probe.MaxAmount != nil
+	return nil
 }
 
 // APICreateUserRequest is the request type for creating users via API.
@@ -292,15 +315,18 @@ func (s *Service) ChangePasswordAPI(ctx context.Context, userID, currentPassword
 // apiPermissionsToPermissions converts a request-side permission list. A nil
 // result for an empty input preserves the "not sent" signal APIUpdateGroupRequest
 // relies on.
-func apiPermissionsToPermissions(in []APIPermission) []Permission {
+func apiPermissionsToPermissions(in []APIPermission) ([]Permission, error) {
 	if len(in) == 0 {
-		return nil
+		return nil, nil
 	}
 	out := make([]Permission, len(in))
 	for i, p := range in {
+		if err := validateExplicitZeroCap(i, p); err != nil {
+			return nil, err
+		}
 		out[i] = apiPermissionToPermission(p)
 	}
-	return out
+	return out, nil
 }
 
 // CreateGroupAPI creates a new group via the API. actorUserID is the acting
@@ -312,7 +338,10 @@ func (s *Service) CreateGroupAPI(ctx context.Context, actorUserID string, reqInt
 	if !ok {
 		return nil, fmt.Errorf("invalid request type")
 	}
-	perms := apiPermissionsToPermissions(req.Permissions)
+	perms, err := apiPermissionsToPermissions(req.Permissions)
+	if err != nil {
+		return nil, err
+	}
 	// A new group has no permissions yet, so nothing can be "carried over":
 	// pass a nil existing set, which makes every carved-out verb a grant.
 	if err := s.checkGrantCeiling(ctx, actorUserID, perms, nil); err != nil {
@@ -356,6 +385,21 @@ func applyUpdateGroupRequest(group *Group, req APIUpdateGroupRequest, perms []Pe
 	}
 }
 
+// updateRequestPermissions converts an update request's permission list.
+func updateRequestPermissions(req APIUpdateGroupRequest) ([]Permission, error) {
+	// req.Permissions == nil means the field was omitted: leave the group's
+	// permissions unchanged (this endpoint's pre-existing "not sent"
+	// contract). A non-nil-but-empty slice means the client explicitly sent
+	// `"permissions": []` (encoding/json allocates the slice before leaving
+	// it empty, so this is distinguishable from omission after decode),
+	// which this endpoint has no way to honor as "clear all permissions" --
+	// refuse rather than silently no-op it (issue #237).
+	if req.Permissions != nil && len(req.Permissions) == 0 {
+		return nil, ErrEmptyPermissions
+	}
+	return apiPermissionsToPermissions(req.Permissions)
+}
+
 // UpdateGroupAPI updates a group via the API. It refuses to touch a
 // system-managed group at all, and checks any requested permission list
 // against the acting principal's own effective permissions before writing
@@ -377,17 +421,10 @@ func (s *Service) UpdateGroupAPI(ctx context.Context, actorUserID, groupID strin
 		return nil, fmt.Errorf("%w: %q is seeded and maintained by migrations", ErrSystemManagedGroup, group.Name)
 	}
 
-	// req.Permissions == nil means the field was omitted: leave the group's
-	// permissions unchanged (this endpoint's pre-existing "not sent"
-	// contract). A non-nil-but-empty slice means the client explicitly sent
-	// `"permissions": []` (encoding/json allocates the slice before leaving
-	// it empty, so this is distinguishable from omission after decode),
-	// which this endpoint has no way to honor as "clear all permissions" --
-	// refuse rather than silently no-op it (issue #237).
-	if req.Permissions != nil && len(req.Permissions) == 0 {
-		return nil, ErrEmptyPermissions
+	perms, err := updateRequestPermissions(req)
+	if err != nil {
+		return nil, err
 	}
-	perms := apiPermissionsToPermissions(req.Permissions)
 	if err := s.checkGrantCeiling(ctx, actorUserID, perms, group.Permissions); err != nil {
 		return nil, err
 	}

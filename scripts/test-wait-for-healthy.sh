@@ -20,21 +20,35 @@ mkdir -p "$WORK/bin"
 #   H = HTTP 200 healthy
 #   D = HTTP 200 but degraded body: what /health returned pre-#488, which the
 #       pre-fix loop caught only by parsing the body
-#   U = HTTP 503 with the degraded body: what /ready returns, and what
-#       --fail-with-body still prints
+#   U = HTTP 503 with the degraded body: what /ready returns
+#   M = HTTP 301 to https://app.example/ready with an empty body: what an
+#       http:// URL gets from an HTTPS-only ALB listener (#647)
 #   R = connection refused
+# Models the real curl flags the callers use: -o FILE, -w with %{http_code} and
+# %{redirect_url}, -f/--fail (exit 22 on >= 400, no body) and --fail-with-body
+# (exit 22 on >= 400, body still written). Without either, curl exits 0 for any
+# HTTP status, including 3xx and 5xx.
 cat > "$WORK/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 fwb=0
 fail=0
+out=""
+wfmt=""
+prev=""
 for a in "$@"; do
-  url="$a"
-  [ "$a" = "--fail-with-body" ] && fwb=1
-  # -f/--fail, alone or inside a short cluster such as -fsS.
+  case "$prev" in
+    -o) out="$a"; prev=""; continue ;;
+    -w) wfmt="$a"; prev=""; continue ;;
+  esac
   case "$a" in
-    --*) [ "$a" = "--fail" ] && fail=1 ;;
+    -o|-w) prev="$a"; continue ;;
+    --fail-with-body) fwb=1 ;;
+    --fail) fail=1 ;;
+    --*) ;;
+    # -f inside a short cluster such as -fsS.
     -*f*) fail=1 ;;
   esac
+  url="$a"
 done
 # Real curl (7.76+) rejects -f/--fail together with --fail-with-body.
 if [ "$fwb" = 1 ] && [ "$fail" = 1 ]; then
@@ -51,15 +65,33 @@ tokens=($SCENARIO)
 i=$n
 ((i >= ${#tokens[@]})) && i=$((${#tokens[@]} - 1))
 echo $((n + 1)) > "$STATE"
+degraded='{"status":"degraded","checks":{"auth_store":{"status":"unhealthy","message":"auth store not initialized"}}}'
+location=""
 case "${tokens[$i]}" in
-  H) echo '{"status":"healthy","checks":{}}' ;;
-  D) echo '{"status":"degraded","checks":{"auth_store":{"status":"unhealthy","message":"auth store not initialized"}}}' ;;
-  # Real curl only prints the body on a 503 when --fail-with-body was passed;
-  # modeling that keeps the failure-diagnostics coverage honest.
-  U) [ "$fwb" = 1 ] && echo '{"status":"degraded","checks":{"auth_store":{"status":"unhealthy","message":"auth store not initialized"}}}'
-     echo "curl: (22) The requested URL returned error: 503" >&2; exit 22 ;;
-  R) echo "curl: (7) Failed to connect" >&2; exit 7 ;;
+  H) code=200; body='{"status":"healthy","checks":{}}' ;;
+  D) code=200; body="$degraded" ;;
+  U) code=503; body="$degraded" ;;
+  M) code=301; body=""; location="https://app.example/ready" ;;
+  R) echo "curl: (7) Failed to connect" >&2
+     [ -n "$wfmt" ] && printf '000 '
+     exit 7 ;;
 esac
+if ((code >= 400)) && [ "$fail" = 1 ]; then
+  echo "curl: (22) The requested URL returned error: $code" >&2
+  exit 22
+fi
+if [ -n "$body" ]; then
+  if [ -n "$out" ]; then echo "$body" > "$out"; else echo "$body"; fi
+fi
+if [ -n "$wfmt" ]; then
+  w="${wfmt//'%{http_code}'/$code}"
+  printf '%s' "${w//'%{redirect_url}'/$location}"
+fi
+if ((code >= 400)) && [ "$fwb" = 1 ]; then
+  echo "curl: (22) The requested URL returned error: $code" >&2
+  exit 22
+fi
+exit 0
 STUB
 chmod +x "$WORK/bin/curl"
 
@@ -93,6 +125,12 @@ run_case "ready once then not ready forever fails with the degraded body" 1 "H U
 run_case "connection refused forever fails with curl error" 1 "R" "Failed to connect"
 
 run_case "curl error mid-streak resets it (H R H H U, streak 3, must not pass)" 1 "H R H H U" "Failed to connect"
+
+# #647: an http:// URL in front of an HTTPS-only listener answers 301 on every
+# path. Counting that as ready made the gate pass without reaching the app.
+run_case "301 redirect forever fails and names the redirect target" 1 "M" "HTTP 301 redirect to https://app.example/ready"
+run_case "301 mid-streak resets it (H H M H H U, must not pass)" 1 "H H M H H U" "auth store not initialized"
+run_case "503 failure keeps the status and the body" 1 "U" "HTTP 503: {\"status\":\"degraded\""
 
 # run_env_case LABEL EXPECTED_EXIT SCENARIO OUTPUT_SUBSTRING [ENV=VAL ...]
 # Runs the SUT with ONLY the given env overrides (plus a zero sleep interval),
@@ -166,12 +204,19 @@ run_case "rollout race H U H H H passes under the readiness gate" 0 "H U H H H" 
 # flag combinations that the installed curl rejects. Skipped when python3 is
 # missing; curl older than 7.76 has no --fail-with-body and would fail here.
 if command -v python3 > /dev/null; then
-  # Two servers: one always answers 200, the other 503 with a degraded body.
+  # Three servers: one always answers 200, one 503 with a degraded body, and one
+  # 301 to https on every path (an HTTPS-only ALB's port 80 listener, #647).
   python3 - > "$WORK/port" <<'PY' &
 import http.server, sys, threading
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.server.mode == "redirect":
+            self.send_response(301)
+            self.send_header("Location", "https://app.example.invalid" + self.path)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         code = 200 if self.server.mode == "ok" else 503
         body = b'{"status":"degraded","checks":{"database":{"status":"unhealthy"}}}' if code == 503 else b'{"status":"healthy","checks":{}}'
         self.send_response(code)
@@ -182,11 +227,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 servers = []
-for mode in ("ok", "unready"):
+for mode in ("ok", "unready", "redirect"):
     s = http.server.HTTPServer(("127.0.0.1", 0), Handler)
     s.mode = mode
     servers.append(s)
-print(servers[0].server_port, servers[1].server_port, flush=True)
+print(servers[0].server_port, servers[1].server_port, servers[2].server_port, flush=True)
 for s in servers[1:]:
     threading.Thread(target=s.serve_forever, daemon=True).start()
 servers[0].serve_forever()
@@ -194,7 +239,7 @@ PY
   SRV_PID=$!
   trap 'kill "$SRV_PID" 2>/dev/null || true; wait "$SRV_PID" 2>/dev/null || true; rm -rf "$WORK"' EXIT
   for _ in {1..50}; do [[ -s "$WORK/port" ]] && break; sleep 0.1; done
-  read -r OK_PORT UNREADY_PORT < "$WORK/port"
+  read -r OK_PORT UNREADY_PORT REDIRECT_PORT < "$WORK/port"
 
   out=$(HEALTH_INTERVAL_SECONDS=0 HEALTH_MAX_ATTEMPTS=3 HEALTH_REQUIRED_STREAK=3 \
     "$SUT" "http://127.0.0.1:${OK_PORT}" 2>&1) && real_ok=0 || real_ok=$?
@@ -213,6 +258,18 @@ PY
     ((pass++)) || true
   else
     echo "FAIL: real curl against a 503 /ready (exit $real_503)"; echo "$out"
+    ((fail++)) || true
+  fi
+
+  # The reviewer's repro on #1025: a server answering 301 on every path must
+  # NOT pass, and the failure must name where it redirected to.
+  out=$(HEALTH_INTERVAL_SECONDS=0 HEALTH_MAX_ATTEMPTS=3 HEALTH_REQUIRED_STREAK=3 \
+    "$SUT" "http://127.0.0.1:${REDIRECT_PORT}" 2>&1) && real_301=0 || real_301=$?
+  if [[ "$real_301" -eq 1 && "$out" == *"HTTP 301 redirect to https://app.example.invalid/ready"* ]]; then
+    echo "PASS: real curl rejects a 301 /ready and names the redirect target"
+    ((pass++)) || true
+  else
+    echo "FAIL: real curl against a 301 /ready (exit $real_301)"; echo "$out"
     ((fail++)) || true
   fi
 fi

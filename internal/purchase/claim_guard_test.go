@@ -86,7 +86,7 @@ func TestReapOne_AnnotationLostToRecoveryIsBenign(t *testing.T) {
 	row := stuckExec("exec-R", "running")
 	failed := row
 	failed.Status = failedStatus
-	store.On("TransitionExecutionStatus", ctx, "exec-R", stuckStatuses, failedStatus, (*string)(nil)).Return(&failed, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-R", []string{"running"}, failedStatus, (*string)(nil)).Return(&failed, nil)
 	store.On("SaveExecutionIfStatus", ctx, mock.Anything, []string{failedStatus}).Return(lostGuard())
 
 	result := &ReapResult{}

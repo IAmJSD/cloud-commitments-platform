@@ -49,9 +49,22 @@ variable "memory_size" {
 }
 
 variable "timeout" {
-  description = "Lambda timeout in seconds"
+  # Must cover the longest work the handler detaches from the request: an RI
+  # exchange or purchase gets 4m of execution plus a 30s terminal save
+  # (riExchangeExecutionTimeout / purchaseExecutionTimeout + their terminal
+  # save budgets). Lambda ends the invocation at this timeout whatever the
+  # context deadline says, so a shorter value cuts that work off mid-flight
+  # (#913). 300 = 270s of budget + 30s for the request work before it.
+  # Pinned against the Go constants by TestLambdaTimeoutCoversRIExchangeBudget
+  # and TestLambdaTimeoutCoversPurchaseBudget.
+  description = "Lambda timeout in seconds (300-900; must cover the 270s detached exchange/purchase budget)"
   type        = number
-  default     = 30
+  default     = 300
+
+  validation {
+    condition     = var.timeout >= 300 && var.timeout <= 900
+    error_message = "timeout must be between 300 and 900 seconds: RI exchanges and purchases run up to 270s (4m execution + 30s terminal save) after the request, and Lambda cuts the invocation off at this timeout (#913)."
+  }
 }
 
 variable "database_host" {
@@ -265,6 +278,18 @@ variable "finalize_revocations_schedule" {
   description = "EventBridge schedule for the finalize_revocations sweep."
   type        = string
   default     = "rate(1 hour)"
+}
+
+variable "enable_cleanup_schedule" {
+  description = "Enable the scheduled server cleanup sweep. Opt-in: default false. It deletes expired sessions and, via CleanupOldExecutions(30), purchase_executions that are completed with scheduled_date older than 30 days, canceled with updated_at older than 30 days, or in a status outside failed/canceled with expires_at older than 30 days. The first run deletes the whole backlog, so export any history you want to keep first."
+  type        = bool
+  default     = false
+}
+
+variable "cleanup_schedule" {
+  description = "EventBridge schedule for the cleanup sweep."
+  type        = string
+  default     = "rate(1 day)"
 }
 
 variable "purchase_approved_reap_after" {

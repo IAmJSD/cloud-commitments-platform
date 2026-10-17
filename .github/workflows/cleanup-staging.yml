@@ -347,9 +347,10 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    # GCP: the WIF provider keys on assertion.repository and assertion.ref
-    # only (gcp/ci-cd-permissions/github_oidc.tf:37), and the impersonation
-    # binding is on attribute.repository -- nothing reads the subject. So this
+    # GCP: the WIF provider keys on assertion.repository_owner_id,
+    # assertion.repository_id and assertion.ref (gcp/ci-cd-permissions/
+    # github_oidc.tf), and the impersonation binding is on
+    # attribute.repository_id -- nothing reads the subject. So this
     # binding does NOT affect whether the token mints; it is here for parity
     # and so protection rules can apply once they exist. GCP therefore stays
     # main-only via assertion.ref regardless.

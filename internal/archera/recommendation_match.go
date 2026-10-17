@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/insurance"
 	"github.com/google/uuid"
 )
 
@@ -17,6 +18,7 @@ const (
 type RecommendationIdentity struct {
 	Provider, SourceAccountID, Service, PlanType, OfferingID string
 	Region, TopLevelRegion, InstanceFamily, Payment          string
+	CloudAccountID                                           string
 	NativeDurationSeconds                                    int64
 	HourlyCommitment                                         *big.Rat
 }
@@ -42,14 +44,29 @@ const (
 	ResourceAssociated MatchStatus = "resource_associated"
 )
 
+// Reason names why a match, candidate, amount or economic status holds.
+type Reason string
+
+const (
+	ReasonIdentityUnproven           Reason = "identity_unproven"
+	ReasonAmbiguousLineItems         Reason = "ambiguous_line_items"
+	ReasonComparisonBasisUnproven    Reason = "comparison_basis_unproven"
+	ReasonCandidateBasisUnproven     Reason = "candidate_basis_unproven"
+	ReasonStoredDecimalOnly          Reason = "stored_decimal_only"
+	ReasonUnavailableSourcePrecision Reason = "unavailable_source_precision"
+)
+
+const commitmentSavingsPlan = "savings_plan"
+
 type RecommendationMatch struct {
-	Status                                               MatchStatus
-	LineItemID, Reason, AmountProvenance, EconomicStatus string
-	Candidates                                           []CandidateAssociation
+	Status                                   MatchStatus
+	LineItemID                               string
+	Reason, AmountProvenance, EconomicStatus Reason
+	Candidates                               []CandidateAssociation
 }
 
 func MatchRecommendation(planID string, rec *RecommendationIdentity, rows []ComparisonIdentity, items []LineItemIdentity) (RecommendationMatch, error) {
-	unavailable := RecommendationMatch{Status: MatchUnavailable, Reason: "identity_unproven"}
+	unavailable := RecommendationMatch{Status: MatchUnavailable, Reason: ReasonIdentityUnproven}
 	if !validRecommendation(rec) {
 		return unavailable, nil
 	}
@@ -60,33 +77,58 @@ func MatchRecommendation(planID string, rec *RecommendationIdentity, rows []Comp
 	if index == nil {
 		return unavailable, nil
 	}
-	var selected *LineItemIdentity
-	for i := range items {
-		if !sameResource(rec, &items[i]) {
-			continue
-		}
-		if selected != nil {
-			unavailable.Reason = "ambiguous_line_items"
-			return unavailable, nil
-		}
-		selected = &items[i]
-	}
-	if selected == nil {
+	id, status := SelectLineItem(rec, items)
+	switch status {
+	case SelectAmbiguous:
+		unavailable.Reason = ReasonAmbiguousLineItems
+		return unavailable, nil
+	case SelectNone:
 		return unavailable, nil
 	}
-	row := index[strings.ToLower(selected.ID)]
+	row := index[strings.ToLower(id)]
 	if !sameCurrentBasis(rec, row) {
-		unavailable.Reason = "comparison_basis_unproven"
+		unavailable.Reason = ReasonComparisonBasisUnproven
 		return unavailable, nil
 	}
 	result := RecommendationMatch{
 		Status: ResourceAssociated, LineItemID: row.LineItemID,
-		AmountProvenance: "stored_decimal_only", EconomicStatus: "unavailable_source_precision",
+		AmountProvenance: ReasonStoredDecimalOnly, EconomicStatus: ReasonUnavailableSourcePrecision,
 	}
 	for i := range row.Candidates {
 		result.Candidates = append(result.Candidates, associateCandidate(rec, &row.Candidates[i]))
 	}
 	return result, nil
+}
+
+// SelectStatus says how many line items share the recommendation's resource identity.
+type SelectStatus string
+
+const (
+	SelectOne       SelectStatus = "selected"
+	SelectNone      SelectStatus = "none"
+	SelectAmbiguous SelectStatus = "ambiguous"
+)
+
+// SelectLineItem returns the ID of the single line item that is the recommendation's resource,
+// or an empty ID with SelectNone (no match, or an unsupported recommendation) or SelectAmbiguous.
+func SelectLineItem(rec *RecommendationIdentity, items []LineItemIdentity) (string, SelectStatus) {
+	if !validRecommendation(rec) {
+		return "", SelectNone
+	}
+	id, found := "", false
+	for i := range items {
+		if !sameResource(rec, &items[i]) {
+			continue
+		}
+		if found {
+			return "", SelectAmbiguous
+		}
+		id, found = items[i].ID, true
+	}
+	if !found {
+		return "", SelectNone
+	}
+	return id, SelectOne
 }
 
 func validRecommendation(r *RecommendationIdentity) bool {
@@ -112,8 +154,8 @@ func validDimensions(r *RecommendationIdentity) bool {
 }
 
 func validPayment(payment string) bool {
-	switch payment {
-	case "no_upfront", "partial_upfront", "all_upfront":
+	switch insurance.PaymentOption(payment) {
+	case insurance.PaymentNoUpfront, insurance.PaymentPartialUpfront, insurance.PaymentAllUpfront:
 		return true
 	default:
 		return false
@@ -131,13 +173,13 @@ type resourceIdentity struct {
 func sameResource(r *RecommendationIdentity, item *LineItemIdentity) bool {
 	want := resourceIdentity{r.Provider, r.SourceAccountID, r.OfferingID, r.PlanType, r.Region, r.InstanceFamily, r.Payment}
 	got := resourceIdentity{item.Provider, item.SourceAccountID, item.ProviderOfferingID, item.PlanType, item.Region, item.InstanceFamily, item.Payment}
-	return want == got && item.Type == "savings_plan" && item.DurationSeconds != nil &&
+	return want == got && item.Type == commitmentSavingsPlan && item.DurationSeconds != nil &&
 		item.DurationSeconds.Cmp(new(big.Rat).SetInt64(r.NativeDurationSeconds)) == 0 &&
 		sameAmount(r.HourlyCommitment, item.SelectedCommitment)
 }
 
 func sameCurrentBasis(r *RecommendationIdentity, row *ComparisonIdentity) bool {
-	return row != nil && row.IsCurrent && row.Region != nil && *row.Region == r.Region && row.Provider == r.Provider && row.CurrentType == "savings_plan" &&
+	return row != nil && row.IsCurrent && row.Region != nil && *row.Region == r.Region && row.Provider == r.Provider && row.CurrentType == commitmentSavingsPlan &&
 		row.CurrentPayment == r.Payment && sameAmount(r.HourlyCommitment, row.CurrentSelectedAmount)
 }
 
