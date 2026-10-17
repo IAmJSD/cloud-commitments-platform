@@ -50,6 +50,7 @@ type MockConfigStore struct {
 	GetPlanAccountsFn                   func(ctx context.Context, planID string) ([]config.CloudAccount, error)
 	SaveAccountServiceOverrideFn        func(ctx context.Context, override *config.AccountServiceOverride) error
 	CountPendingExecutionsForAccountFn  func(ctx context.Context, accountID string) (int, error)
+	CountLiveExecutionsForAccountFn     func(ctx context.Context, accountID string) (int, error)
 	ListPendingExecutionIDsForAccountFn func(ctx context.Context, accountID string) ([]string, error)
 	SavePurchaseExecutionFn             func(ctx context.Context, exec *config.PurchaseExecution) error
 	PinExecutionFanOutShapeFn           func(ctx context.Context, lineageKey, shape string) (string, error)
@@ -667,6 +668,20 @@ func (m *MockConfigStore) CountPendingExecutionsForAccount(ctx context.Context, 
 		return m.CountPendingExecutionsForAccountFn(ctx, accountID)
 	}
 	if !isExpected(&m.Mock, "CountPendingExecutionsForAccount") {
+		return 0, nil
+	}
+	args := m.Called(ctx, accountID)
+	return args.Int(0), args.Error(1)
+}
+
+// CountLiveExecutionsForAccount mocks the CountLiveExecutionsForAccount operation.
+// Defaults to (0, nil) when no Fn is set and no expectation is registered.
+func (m *MockConfigStore) CountLiveExecutionsForAccount(ctx context.Context, accountID string) (int, error) {
+	m.record("CountLiveExecutionsForAccount", ctx, accountID)
+	if m.CountLiveExecutionsForAccountFn != nil {
+		return m.CountLiveExecutionsForAccountFn(ctx, accountID)
+	}
+	if !isExpected(&m.Mock, "CountLiveExecutionsForAccount") {
 		return 0, nil
 	}
 	args := m.Called(ctx, accountID)

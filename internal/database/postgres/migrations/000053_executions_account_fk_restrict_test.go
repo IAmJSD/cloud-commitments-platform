@@ -80,8 +80,12 @@ func TestMigration_ExecutionsAccountFKRestrict(t *testing.T) {
 		"expected FK violation, got %v", err)
 
 	// RESTRICT applies to every referencing row regardless of status, so the
-	// account delete only succeeds once the execution row itself is removed
-	// (the API layer's Cancel-All-And-Delete flow does exactly that).
+	// account delete only succeeds once no execution row references it. The
+	// API never deletes execution rows for this: Cancel-All-And-Delete only
+	// cancels them, and config.PostgresStore.DeleteCloudAccount detaches
+	// terminal rows (cloud_account_id = NULL) in its own transaction before
+	// the DELETE (issue #265). Removing the row is just the shortest way to
+	// show the constraint stops binding once nothing references the account.
 	_, err = pool.Exec(ctx, `
 		DELETE FROM purchase_executions
 		 WHERE execution_id = 'eeeeeeee-eeee-eeee-eeee-eeeeeeee0001'

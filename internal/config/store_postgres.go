@@ -1964,6 +1964,26 @@ func (s *PostgresStore) CountPendingExecutionsForAccount(ctx context.Context, ac
 	return n, nil
 }
 
+// CountLiveExecutionsForAccount returns the number of purchase executions
+// referencing this cloud account whose status is not in
+// TerminalExecutionStatuses: rows an executor, scheduler or reaper may still
+// act on, which need the account to exist. DeleteCloudAccount detaches every
+// other row, so these are exactly the rows that block the delete (issue #265).
+// It includes the pending/notified rows CountPendingExecutionsForAccount
+// counts.
+func (s *PostgresStore) CountLiveExecutionsForAccount(ctx context.Context, accountID string) (int, error) {
+	var n int
+	err := s.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM purchase_executions
+		WHERE cloud_account_id = $1
+		  AND status <> ALL($2)
+	`, accountID, TerminalExecutionStatuses).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count live executions for account: %w", err)
+	}
+	return n, nil
+}
+
 // ListPendingExecutionIDsForAccount returns the execution IDs that the
 // frontend's Cancel-All-Then-Delete flow needs to POST cancel for. Capped
 // at 1000 rows — a single account with more pending executions than that
@@ -3896,6 +3916,8 @@ func (s *PostgresStore) UpdateCloudAccount(ctx context.Context, account *CloudAc
 }
 
 // DeleteCloudAccount deletes a cloud account. Cascades to credentials and overrides.
+// Terminal purchase executions are kept as history with cloud_account_id set to
+// NULL; a live execution still blocks the delete through the FK (issue #265).
 // If an approved account_registrations row points at this account, it is reset to
 // 'pending' in the same transaction so the admin can re-approve through the normal
 // flow instead of being left with a dead-end "Approved (account pending link)" row.
@@ -3918,6 +3940,23 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 		   AND status           = 'approved'
 	`, id); err != nil {
 		return fmt.Errorf("failed to reset linked registration: %w", err)
+	}
+
+	// Detach the account's terminal executions so they survive as history
+	// (issue #265). Migration 000053's ON DELETE RESTRICT FK otherwise blocks
+	// the delete for every referencing row whatever its status. Live rows are
+	// left attached, so the DELETE below still fails on the FK (SQLSTATE
+	// 23503) while any remain, and this UPDATE rolls back with it. Migration
+	// 000128 keeps updated_at unchanged on these rows: detaching is not a
+	// lifecycle event, and the plan health score and the retention sweep both
+	// read updated_at as one.
+	if _, err = tx.Exec(ctx, `
+		UPDATE purchase_executions
+		   SET cloud_account_id = NULL
+		 WHERE cloud_account_id = $1
+		   AND status = ANY($2)
+	`, id, TerminalExecutionStatuses); err != nil {
+		return fmt.Errorf("failed to detach terminal executions: %w", err)
 	}
 
 	tag, err := tx.Exec(ctx, `DELETE FROM cloud_accounts WHERE id = $1`, id)
