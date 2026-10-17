@@ -649,12 +649,33 @@ func TestPGXMock_DeletePurchasePlan_Success(t *testing.T) {
 	ctx := context.Background()
 
 	expectLockedUnmanagedPlan(mock)
-	mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg()).
+	mock.ExpectExec(`(?s)UPDATE purchase_executions.*WHERE plan_id = \$1.*'pending', 'notified', 'paused'.*DELETE FROM purchase_suppressions`).
+		WithArgs("plan-id", StatusCanceled).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectExec("DELETE FROM purchase_plans").WithArgs("plan-id").
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectCommit()
 
 	err := store.DeletePurchasePlan(ctx, "plan-id")
 	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_DeletePurchasePlan_CancelFailureKeepsPlan pins issue #862's
+// ordering: the plan row is deleted only after its open step rows were
+// canceled in the same transaction, so a failed cancel leaves both in place.
+func TestPGXMock_DeletePurchasePlan_CancelFailureKeepsPlan(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	expectLockedUnmanagedPlan(mock)
+	mock.ExpectExec("UPDATE purchase_executions").WithArgs("plan-id", StatusCanceled).
+		WillReturnError(errors.New("db down"))
+	mock.ExpectRollback()
+
+	err := store.DeletePurchasePlan(ctx, "plan-id")
+	require.ErrorContains(t, err, "cancel open executions")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -880,11 +880,38 @@ func (s *PostgresStore) DeletePurchasePlan(ctx context.Context, planID string) e
 				return err
 			}
 		}
+		if err := cancelOpenPlanExecutionsTx(ctx, tx, planID); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `DELETE FROM purchase_plans WHERE id = $1`, planID); err != nil {
 			return fmt.Errorf("failed to delete purchase plan: %w", err)
 		}
 		return nil
 	})
+}
+
+// cancelOpenPlanExecutionsTx cancels the plan's step rows that can still be
+// approved or run (pending, notified, paused) in the delete's transaction.
+// purchase_executions.plan_id is ON DELETE SET NULL (migration 000033), and
+// token approval applies the plan's max_step_commitment and the approve-own
+// plan-step rule only while plan_id is set (approveConstraintsForSession), so
+// a row left open would become approvable past its plan's cap (issue #862).
+// The rows' suppressions go with them, as on the other cancel paths.
+func cancelOpenPlanExecutionsTx(ctx context.Context, tx pgx.Tx, planID string) error {
+	const q = `
+		WITH canceled AS (
+			UPDATE purchase_executions
+			   SET status = $2, updated_at = NOW()
+			 WHERE plan_id = $1
+			   AND status IN ('pending', 'notified', 'paused')
+			RETURNING execution_id
+		)
+		DELETE FROM purchase_suppressions
+		 WHERE execution_id IN (SELECT execution_id FROM canceled)`
+	if _, err := tx.Exec(ctx, q, planID, StatusCanceled); err != nil {
+		return fmt.Errorf("failed to cancel open executions of purchase plan: %w", err)
+	}
+	return nil
 }
 
 // buildListPlansQuery returns the SQL query and args for ListPurchasePlans.
