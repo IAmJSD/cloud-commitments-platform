@@ -6,7 +6,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -19,8 +18,11 @@ import (
 
 const neverStartedMigration = "000127_never_started_legacy_ramps_to_new"
 
-// stagedMigrations returns a directory holding every migration but the one
-// under test, and a func that adds it, so the test runs the real runner twice.
+// stagedMigrations returns a directory holding every migration that sorts
+// before the one under test, and a func that adds it plus every later
+// migration, so the test runs the real runner twice. Later migrations must be
+// held back too: golang-migrate never applies a version below the current
+// one, so staging them in the first run would skip the target.
 func stagedMigrations(t *testing.T) (dir string, addTarget func()) {
 	t.Helper()
 	src := rampMigrationsPath()
@@ -32,14 +34,22 @@ func stagedMigrations(t *testing.T) (dir string, addTarget func()) {
 		require.NoError(t, readErr)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), b, 0o600))
 	}
+	var held []string
 	for _, e := range entries {
-		if filepath.Ext(e.Name()) == ".sql" && !strings.HasPrefix(e.Name(), neverStartedMigration) {
+		if filepath.Ext(e.Name()) != ".sql" {
+			continue
+		}
+		// Zero-padded version prefixes sort lexically in version order.
+		if e.Name() < neverStartedMigration {
 			copyFile(e.Name())
+		} else {
+			held = append(held, e.Name())
 		}
 	}
 	return dir, func() {
-		copyFile(neverStartedMigration + ".up.sql")
-		copyFile(neverStartedMigration + ".down.sql")
+		for _, name := range held {
+			copyFile(name)
+		}
 	}
 }
 
