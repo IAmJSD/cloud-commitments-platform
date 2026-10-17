@@ -181,8 +181,11 @@ func TestAuthorizeSessionRevoke_APIKeySessionUsesKeyConstraints(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
-	mockAuth.On("HasPermissionAPI", ctx, revokeConstraintsUser, auth.ActionRevokeAny, auth.ResourcePurchases).Return(true, nil)
-	mockAuth.On("HasPermissionAPI", ctx, revokeConstraintsUser, auth.ActionRevokeOwn, auth.ResourcePurchases).Return(false, nil)
+	// The verbs are probed on the key, not the owner (issue #1005): the key
+	// holds revoke-any but not revoke-own, and its revoke-any Constraints deny.
+	probe := []auth.PermissionConstraints{{}}
+	mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", ctx, "key-1", revokeConstraintsUser, auth.ActionRevokeAny, auth.ResourcePurchases, probe).Return(true, nil)
+	mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", ctx, "key-1", revokeConstraintsUser, auth.ActionRevokeOwn, auth.ResourcePurchases, probe).Return(false, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, revokeConstraintsUser).Return([]string{}, nil)
 	mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", ctx, "key-1", revokeConstraintsUser, auth.ActionRevokeAny, auth.ResourcePurchases, mock.Anything).Return(false, nil)
 

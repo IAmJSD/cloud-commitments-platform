@@ -360,10 +360,13 @@ func mergeUpdatedPlan(existingPlan *config.PurchasePlan, req *PlanRequest, planI
 		return nil, NewClientError(400, "max_step_commitment cannot be cleared while auto_purchase is enabled")
 	}
 
-	// If no services were created from request, preserve existing services
-	if len(plan.Services) == 0 && len(existingPlan.Services) > 0 {
-		plan.Services = existingPlan.Services
+	// Fold the request's single service into the stored map rather than
+	// replacing it, so other services survive the edit (issue #934).
+	services, err := mergeRequestedServices(existingPlan.Services, plan.Services)
+	if err != nil {
+		return nil, err
 	}
+	plan.Services = services
 
 	// Validate the plan
 	if err := plan.Validate(); err != nil {
@@ -434,6 +437,10 @@ func (h *Handler) deletePlan(ctx context.Context, req *events.LambdaFunctionURLR
 	}
 
 	if err := h.config.DeletePurchasePlan(ctx, planID); err != nil {
+		if errors.Is(err, config.ErrManagedPlanLiveExecutions) {
+			return nil, planEditorRefusal(http.StatusConflict, codeManagedPlanLiveExecutions,
+				"this plan still has active or unsettled purchases; cancel or revoke them first")
+		}
 		return nil, err
 	}
 
@@ -511,6 +518,9 @@ func (h *Handler) createPlannedPurchasesTx(ctx context.Context, tx pgx.Tx, planI
 	if err := h.requirePlanMutationAccess(ctx, session, planID); err != nil {
 		return 0, err
 	}
+	if plan.RampSchedule.DatesManaged {
+		return 0, editorReconciliationError()
+	}
 	if err := h.validatePurchaseScheduling(ctx, plan, count, startDate); err != nil {
 		return 0, err
 	}
@@ -548,10 +558,24 @@ func (h *Handler) validatePurchaseScheduling(ctx context.Context, plan *config.P
 			return err
 		}
 	}
-	if !startDate.After(time.Now()) {
+	// start_date is a date-only value parsed as midnight UTC, so today's
+	// date is already in the past and is refused along with any earlier
+	// day: tomorrow (UTC) is the first accepted date. The check runs here,
+	// under the plan lock, because a request can wait on that lock past
+	// UTC midnight (#873, #50).
+	if !startDate.After(h.clock()) {
 		return NewClientError(400, "start_date must be in the future")
 	}
 	return nil
+}
+
+// clock returns the handler's current time: the injected now func when a
+// test set one, time.Now otherwise.
+func (h *Handler) clock() time.Time {
+	if h.now != nil {
+		return h.now()
+	}
+	return time.Now()
 }
 
 func validateScheduledRamp(plan *config.PurchasePlan, count int) error {

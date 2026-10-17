@@ -460,7 +460,7 @@ func TestExecuteRIExchangeReshape_NoConvertibleRIs(t *testing.T) {
 			return nil, nil
 		},
 		exchangeClient: &mockExchangeClient{},
-		lookupOffering: func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error) {
+		lookupOffering: func(ctx context.Context, _ exchange.LookupOfferingParams) (string, error) {
 			return "", nil
 		},
 		accountID: "123456789",
@@ -587,7 +587,7 @@ func TestExecuteRIExchangeReshape_ManualMode(t *testing.T) {
 				}, nil
 			},
 		},
-		lookupOffering: func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error) {
+		lookupOffering: func(ctx context.Context, _ exchange.LookupOfferingParams) (string, error) {
 			return "offering-123", nil
 		},
 		accountID: "123456789",
@@ -706,7 +706,7 @@ func TestExecuteRIExchangeReshape_AutoMode(t *testing.T) {
 				}, nil
 			},
 		},
-		lookupOffering: func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error) {
+		lookupOffering: func(ctx context.Context, _ exchange.LookupOfferingParams) (string, error) {
 			return "offering-456", nil
 		},
 		accountID: "123456789",
@@ -821,7 +821,7 @@ func TestExecuteRIExchangeReshape_DailyCapHitMidRun(t *testing.T) {
 				}, nil
 			},
 		},
-		lookupOffering: func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error) {
+		lookupOffering: func(ctx context.Context, _ exchange.LookupOfferingParams) (string, error) {
 			return "offering-cap-test", nil
 		},
 		accountID: "123456789",

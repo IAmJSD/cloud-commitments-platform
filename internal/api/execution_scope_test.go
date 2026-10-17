@@ -199,6 +199,11 @@ func newScopeTestHandler(t *testing.T, exec *config.PurchaseExecution, scope []s
 		}
 		return nil, nil
 	}
+	// The registered accounts, which getAccountScope loads so that the
+	// name-scoped sessions below can match by (unique) display name (#433).
+	store.ListCloudAccountsFn = func(context.Context, config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return []config.CloudAccount{scopeTestProd, scopeTestStage}, nil
+	}
 	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
 		for _, a := range []config.CloudAccount{scopeTestProd, scopeTestStage} {
 			if a.ID == id {

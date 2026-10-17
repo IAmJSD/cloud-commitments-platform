@@ -34,8 +34,8 @@ func (s *PostgresStore) createPurchasePlan(ctx context.Context, executor globalC
 			id, name, enabled, auto_purchase, notification_days_before,
 			services, ramp_schedule, created_at, updated_at,
 			next_execution_date, last_execution_date, last_notification_sent,
-			max_step_commitment
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			max_step_commitment, ramp_ledger_state
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'new')
 		RETURNING updated_at
 	`
 

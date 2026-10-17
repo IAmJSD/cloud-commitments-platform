@@ -448,3 +448,45 @@ func (s *Service) HasAPIKeyPermissionForConstraintsAPI(ctx context.Context, keyI
 	}
 	return true, nil
 }
+
+// GetAPIKeyEffectivePermissionsAPI returns the effective permission set of a
+// user API key: the key's own permissions intersected with its owner's
+// group-derived permissions (ComputeEffectivePermissions), the same set
+// HasAPIKeyPermissionAPI enforces. Each entry carries the key's constraints,
+// not the owner's. GET /api/auth/me/permissions uses it so a scoped key is
+// told what it can do rather than what its owner can (issue #62).
+//
+// keyID and userID come from the request's already-authenticated principal.
+// The key is re-checked here (owner match, revocation, expiry, owner active,
+// password rotation) so a key that stopped being valid mid-request is
+// refused. Fail closed: any lookup failure returns an error, never the
+// owner's permissions.
+func (s *Service) GetAPIKeyEffectivePermissionsAPI(ctx context.Context, keyID, userID string) ([]APIPermission, error) {
+	key, err := s.store.GetAPIKeyByID(ctx, keyID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load API key: %w", err)
+	}
+	if key == nil || key.UserID != userID {
+		return nil, fmt.Errorf("API key not found")
+	}
+	err = validateAPIKeyStatus(key)
+	if err != nil {
+		return nil, err
+	}
+	user, err := s.lookupAPIKeyUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if key.PasswordVersion != user.PasswordVersion {
+		return nil, ErrAPIKeyPasswordRotated
+	}
+	perms, err := s.ComputeEffectivePermissions(ctx, key, user)
+	if err != nil {
+		return nil, fmt.Errorf("computing effective API key permissions: %w", err)
+	}
+	result := make([]APIPermission, len(perms))
+	for i, p := range perms {
+		result[i] = permissionToAPIPermission(p)
+	}
+	return result, nil
+}

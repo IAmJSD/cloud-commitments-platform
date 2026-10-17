@@ -12,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"text/template"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -101,7 +103,18 @@ func gcpOIDCIssuerURI(source, tenantID string) string {
 }
 
 // renderTemplate renders a named template from the embedded iacfiles.Templates FS.
+// It refuses data holding a line break or other control character; see
+// checkRenderDataSingleLine.
 func renderTemplate(tmplPath string, data federationIaCData) (string, error) {
+	if err := checkRenderDataSingleLine(data); err != nil {
+		return "", fmt.Errorf("render template %s: %w", tmplPath, err)
+	}
+	return executeTemplate(tmplPath, data)
+}
+
+// executeTemplate parses and executes a template with no checks on data.
+// Only renderTemplate calls it outside tests.
+func executeTemplate(tmplPath string, data federationIaCData) (string, error) {
 	tmplBytes, err := iacfiles.Templates.ReadFile(tmplPath)
 	if err != nil {
 		return "", fmt.Errorf("read template %s: %w", tmplPath, err)
@@ -115,6 +128,41 @@ func renderTemplate(tmplPath string, data federationIaCData) (string, error) {
 		return "", fmt.Errorf("render template %s: %w", tmplPath, err)
 	}
 	return buf.String(), nil
+}
+
+// checkRenderDataSingleLine fails closed when any string field of data holds
+// a control character other than a horizontal tab. The shell and tfvars
+// templates print several fields on "#" comment lines, and shellEscape and
+// hclEscape escape quoting metacharacters but not line breaks, so a CR or LF
+// there would end the comment and run the rest of the value as shell or HCL
+// (#970). The generic bundles fill no stored account fields today, and the
+// account write paths reject control characters, so this guard only trips on
+// data that bypassed them (a record stored before that validation, a future
+// caller that fills account fields, or a bad config value); an error is safer
+// than a script that runs something unintended.
+// A tab is allowed because it cannot end a line, and the session email can
+// legitimately hold one in a quoted local part. It walks the struct by
+// reflection so a new field cannot be missed.
+func checkRenderDataSingleLine(data federationIaCData) error {
+	v := reflect.ValueOf(data)
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Field(i)
+		if f.Kind() != reflect.String {
+			continue
+		}
+		if at := strings.IndexFunc(f.String(), isRenderControlChar); at >= 0 {
+			r, _ := utf8.DecodeRuneInString(f.String()[at:])
+			return fmt.Errorf("field %s contains control character %U", v.Type().Field(i).Name, r)
+		}
+	}
+	return nil
+}
+
+// isRenderControlChar reports whether r is a control character that
+// checkRenderDataSingleLine refuses: every C0 and C1 control and DEL except
+// the horizontal tab.
+func isRenderControlChar(r rune) bool {
+	return r != '\t' && unicode.IsControl(r)
 }
 
 // getFederationIaC handles GET /api/federation/iac
@@ -404,9 +452,8 @@ func shellEscape(s string) string {
 // hclEscape escapes a string for use inside a double-quoted HCL string. HCL
 // also starts an interpolation at "${" and a template directive at "%{", so
 // both are doubled into their literal "$${" and "%%{" forms (#952). Line
-// breaks are not handled: the one user-supplied value, the session email,
-// cannot hold one (mail.ParseAddress rejects CR and LF), and the rest come
-// from server configuration or are derived by the server.
+// breaks are not escaped: renderTemplate refuses any value holding one
+// (checkRenderDataSingleLine, #970).
 func hclEscape(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `"`, `\"`, "${", "$${", "%{", "%%{").Replace(s)
 }

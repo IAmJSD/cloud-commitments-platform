@@ -20,6 +20,9 @@ func testEqualCountAttach(t *testing.T, count int, want []int) {
 	}
 	_, err := f.pool.Exec(f.ctx, `UPDATE purchase_plans SET ramp_schedule = ramp_schedule || jsonb_build_object('allocation_mode','equal_count','total_steps',$2::int,'percent_per_step',$3::float8), services = jsonb_set(services,'{ec2,coverage}','100') WHERE id=$1`, f.planID, count, percent)
 	require.NoError(t, err)
+	var ledger string
+	require.NoError(t, f.pool.QueryRow(f.ctx, `SELECT ramp_ledger_state FROM purchase_plans WHERE id=$1`, f.planID).Scan(&ledger))
+	require.Equal(t, "new", ledger)
 	f.shownSuppressed(97)
 	for i, n := range want {
 		exec, tickErr := f.tick()
@@ -27,8 +30,17 @@ func testEqualCountAttach(t *testing.T, count int, want []int) {
 		assert.Equal(t, n, totalCount(exec), "exact equal-count allocation step %d", i+1)
 		f.buy(i + 1)
 	}
-	b, err := f.baseline()
-	require.NoError(t, err)
+	var b config.PlanRampBaseline
+	if f.plan().RampSchedule.IsComplete() {
+		require.NoError(t, f.pool.QueryRow(f.ctx, `SELECT ramp_baseline FROM purchase_plans WHERE id=$1`, f.planID).Scan(&b))
+		require.ErrorIs(t, f.store.WithTx(f.ctx, func(tx pgx.Tx) error {
+			_, readErr := f.store.GetPlanRampBaselineTx(f.ctx, tx, f.planID)
+			return readErr
+		}), config.ErrRampLedgerUntrusted)
+	} else {
+		b, err = f.baseline()
+		require.NoError(t, err)
+	}
 	for _, q := range b {
 		assert.Equal(t, 97, q.Count)
 	}

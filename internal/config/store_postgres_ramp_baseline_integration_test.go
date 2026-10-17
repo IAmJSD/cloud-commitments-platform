@@ -159,8 +159,16 @@ func TestPlanRampBaseline_ClearedOnlyByServiceOrRampShapeEdit(t *testing.T) {
 		mutate(p)
 		require.NoError(t, f.store.UpdatePurchasePlan(ctx, p))
 	}
+	assertStale := func() {
+		var raw []byte
+		require.NoError(t, f.store.db.QueryRow(ctx, `SELECT ramp_baseline FROM purchase_plans WHERE id=$1`, f.planID).Scan(&raw))
+		assert.Nil(t, raw)
+		readErr := f.store.WithTx(ctx, func(tx pgx.Tx) error { _, err := f.store.GetPlanRampBaselineTx(ctx, tx, f.planID); return err })
+		assert.ErrorIs(t, readErr, ErrRampLedgerUntrusted)
+	}
+	services := map[string]ServiceConfig{"ec2": {Provider: "aws", Service: "ec2", Enabled: true, Term: 1, Payment: "no-upfront", Coverage: 80}}
 	edit(func(p *PurchasePlan) {
-		p.Services = map[string]ServiceConfig{"ec2": {Provider: "aws", Service: "ec2", Enabled: true, Term: 1, Payment: "no-upfront", Coverage: 80}}
+		p.Services = services
 	})
 	freeze()
 	edit(func(p *PurchasePlan) { p.Name = "renamed" })
@@ -173,8 +181,11 @@ func TestPlanRampBaseline_ClearedOnlyByServiceOrRampShapeEdit(t *testing.T) {
 	assert.NotNil(t, f.baseline(ctx, t), "a coverage change keeps it: the target scales with coverage")
 
 	edit(func(p *PurchasePlan) { p.RampSchedule.TotalSteps = 5 })
-	assert.Nil(t, f.baseline(ctx, t), "a ramp shape change clears it")
+	assertStale()
 
+	f = newRampFixture(ctx, t, 1, 0, 4)
+	key = baselineKey(t, baselineRec(f.accounts[0], "m5.large", 100))
+	edit(func(p *PurchasePlan) { p.Services = services })
 	freeze()
 	edit(func(p *PurchasePlan) {
 		for k, svc := range p.Services {
@@ -182,5 +193,5 @@ func TestPlanRampBaseline_ClearedOnlyByServiceOrRampShapeEdit(t *testing.T) {
 			p.Services[k] = svc
 		}
 	})
-	assert.Nil(t, f.baseline(ctx, t), "a service identity change clears it")
+	assertStale()
 }

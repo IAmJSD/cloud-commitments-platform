@@ -45,8 +45,9 @@ const (
 	TaskCollectAnalytics  ScheduledTaskType = "analytics_collect"
 	TaskRIExchangeReshape ScheduledTaskType = "ri_exchange_reshape"
 	// TaskReapStuckPurchases sweeps purchase_executions stuck in
-	// approved/running longer than PURCHASE_APPROVED_REAP_AFTER and flips
-	// them to "failed" via the existing TransitionExecutionStatus CAS.
+	// running longer than PURCHASE_APPROVED_REAP_AFTER (approved rows wait
+	// longer, see purchase.minApprovedReapAfter) and flips them to "failed"
+	// via the existing TransitionExecutionStatus CAS.
 	// Backstop for synchronous-executor crashes (Lambda timeout, OOM,
 	// network hang) that leave rows orphaned in an in-flight state.
 	// See internal/purchase/reaper.go + issue #678.

@@ -68,6 +68,7 @@ type rampStepFixture struct {
 
 	mu        sync.Mutex
 	purchased []string // one entry per commitment that reached the fake cloud
+	counts    []int
 
 	// onPurchase, when set, runs inside each fake provider call (issue #829 tests).
 	onPurchase func()
@@ -156,6 +157,7 @@ func newRampStepFixture(ctx context.Context, t *testing.T) *rampStepFixture {
 			opts := args.Get(2).(common.PurchaseOptions)
 			f.mu.Lock()
 			f.purchased = append(f.purchased, opts.IdempotencyToken)
+			f.counts = append(f.counts, args.Get(1).(common.Recommendation).Count)
 			f.mu.Unlock()
 			if f.onPurchase != nil {
 				f.onPurchase()

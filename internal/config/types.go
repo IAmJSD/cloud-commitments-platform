@@ -970,6 +970,10 @@ type PurchaseHistoryRecord struct {
 	// empty otherwise. Excluded from DB persistence (computed at read
 	// time so updates to the persistent-failure map land instantly).
 	OpsHint string `json:"ops_hint,omitempty" dynamodbav:"-"`
+	// RedriveUnsafe is true when OpsHint is a permanent refusal from
+	// purchase.RedriveRefusalReason (provider has no duplicate guard), not an
+	// operator-fixable misconfiguration. Computed at read time, like OpsHint.
+	RedriveUnsafe bool `json:"redrive_unsafe,omitempty" dynamodbav:"-"`
 	// IsAuditGap marks a synthesized "completed" row whose purchase_history
 	// write failed after a successful purchase (issue #621). Such a row is
 	// reconstructed from the execution so the purchase stays visible, but its

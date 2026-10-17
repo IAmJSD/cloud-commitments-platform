@@ -102,11 +102,8 @@ func (h *Handler) submitRegistration(ctx context.Context, req *events.LambdaFunc
 	}
 	reg.RegCredentialPayload = encrypted
 
-	if err := h.config.CreateAccountRegistration(ctx, reg); err != nil {
-		if strings.Contains(err.Error(), "duplicate") {
-			return nil, NewClientError(409, "a pending registration already exists for this account")
-		}
-		return nil, fmt.Errorf("registrations: %w", err)
+	if err := h.insertRegistration(ctx, reg); err != nil {
+		return nil, err
 	}
 
 	// Notify admins (synchronous, errors logged but not propagated).
@@ -127,9 +124,35 @@ func (h *Handler) submitRegistration(ctx context.Context, req *events.LambdaFunc
 	}
 
 	return map[string]string{
-		"reference_token": token,
+		"reference_token": reg.ReferenceToken,
 		"status":          "pending",
 	}, nil
+}
+
+// maxReferenceTokenAttempts bounds how often insertRegistration regenerates a
+// colliding reference token before giving up.
+const maxReferenceTokenAttempts = 3
+
+// insertRegistration stores reg, mapping a duplicate pending registration to
+// 409 and regenerating reg.ReferenceToken on a token collision. Any other
+// store error is returned wrapped, so it surfaces as a generic 500.
+func (h *Handler) insertRegistration(ctx context.Context, reg *config.AccountRegistration) error {
+	for attempt := 1; ; attempt++ {
+		err := h.config.CreateAccountRegistration(ctx, reg)
+		switch {
+		case err == nil:
+			return nil
+		case errors.Is(err, config.ErrDuplicatePendingRegistration):
+			return NewClientError(409, "a pending registration already exists for this account")
+		case !errors.Is(err, config.ErrReferenceTokenCollision) || attempt >= maxReferenceTokenAttempts:
+			return fmt.Errorf("registrations: %w", err)
+		}
+		token, tokErr := generateReferenceToken()
+		if tokErr != nil {
+			return fmt.Errorf("registrations: generate token: %w", tokErr)
+		}
+		reg.ReferenceToken = token
+	}
 }
 
 // getRegistrationStatus handles GET /api/register/:token.
@@ -422,6 +445,14 @@ func validateRegistrationRequest(req *RegistrationRequest) error {
 	}
 	if req.AccountName == "" {
 		return NewClientError(400, "account_name is required")
+	}
+	// Approval re-validates through validateCloudAccountRequest, which rejects
+	// control characters; reject the rest here so a submission that could
+	// never be approved fails at submit time instead (#970).
+	if err := validateNoControlChars(
+		namedField{"account_name", req.AccountName}, namedField{"external_id", req.ExternalID},
+	); err != nil {
+		return err
 	}
 	if req.ContactEmail == "" {
 		return NewClientError(400, "contact_email is required")
