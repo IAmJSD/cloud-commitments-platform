@@ -227,6 +227,14 @@ type AuthServiceInterface interface {
 	// (union of all group permissions). Used by GET /api/auth/me/permissions.
 	// Returns []auth.APIPermission converted to []PermissionEntry by the handler.
 	GetUserPermissionsAPI(ctx context.Context, userID string) (any, error)
+	// GetAPIKeyEffectivePermissionsAPI returns a user API key's effective
+	// permission set (the key's permissions intersected with its owner's,
+	// carrying the key's constraints): the set HasAPIKeyPermissionAPI
+	// enforces. Used by GET /api/auth/me/permissions for user-API-key
+	// principals so the key, not its owner, is described (issue #62). A
+	// non-nil error means the key or its owner could not be confirmed, and
+	// callers must refuse rather than fall back to the owner's permissions.
+	GetAPIKeyEffectivePermissionsAPI(ctx context.Context, keyID, userID string) ([]auth.APIPermission, error)
 	// Account access - returns the union of allowed_accounts from all user groups (empty = all access)
 	GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error)
 	// API Key management
@@ -533,8 +541,10 @@ type PermissionEntry struct {
 }
 
 // UserPermissionsResponse is the response shape for GET /api/auth/me/permissions.
-// Permissions is the effective set derived from the union of the user's groups.
-// IsAdmin mirrors whether the effective set contains the {admin, *} wildcard.
+// Permissions is the caller's effective set: for a user session, the union of
+// the user's groups; for a user API key, the key's permissions intersected
+// with its owner's (issue #62); for the admin API key, {admin, *}.
+// IsAdmin mirrors whether that effective set contains the {admin, *} wildcard.
 type UserPermissionsResponse struct {
 	Permissions []PermissionEntry `json:"permissions"`
 	IsAdmin     bool              `json:"is_admin"`

@@ -311,9 +311,9 @@ func (h *Handler) authorizeSessionRevokeExecution(ctx context.Context, session *
 		return nil
 	}
 
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionRevokeAny, auth.ResourcePurchases)
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionRevokeAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	var anyErr error
 	if hasAny {
@@ -323,9 +323,9 @@ func (h *Handler) authorizeSessionRevokeExecution(ctx context.Context, session *
 		}
 	}
 
-	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionRevokeOwn, auth.ResourcePurchases)
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionRevokeOwn)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if !hasOwn {
 		if anyErr != nil {
@@ -406,15 +406,15 @@ func (h *Handler) dispatchProviderRevoke(ctx context.Context, record *config.Pur
 func (h *Handler) authorizeSessionRevoke(ctx context.Context, session *Session, record *config.PurchaseHistoryRecord) error {
 	// The stateless admin API key has full access and no user row to resolve
 	// permissions from. Administrators-group users fall through and pass via
-	// the revoke-any HasPermissionAPI check below, since {admin, *} matches
+	// the revoke-any check below, since {admin, *} matches
 	// any requested permission.
 	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}
 
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionRevokeAny, auth.ResourcePurchases)
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionRevokeAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	var anyErr error
 	if hasAny {
@@ -424,9 +424,9 @@ func (h *Handler) authorizeSessionRevoke(ctx context.Context, session *Session, 
 		}
 	}
 
-	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionRevokeOwn, auth.ResourcePurchases)
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionRevokeOwn)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if !hasOwn {
 		if anyErr != nil {

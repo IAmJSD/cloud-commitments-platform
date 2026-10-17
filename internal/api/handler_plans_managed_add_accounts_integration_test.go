@@ -13,6 +13,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,6 +43,17 @@ func (f *createConcurrencyFixture) extraAccount(ctx context.Context, t *testing.
 	acct := &config.CloudAccount{Name: name, Provider: "azure", ExternalID: "ext-" + name, Enabled: true}
 	require.NoError(t, f.store.CreateCloudAccount(ctx, acct))
 	return acct.ID
+}
+
+// holdPlanLock is the shared command footprint (plan, executions, accounts).
+func (f *createConcurrencyFixture) holdPlanLock(ctx context.Context, t *testing.T) *testhelpers.Footprint {
+	t.Helper()
+	return testhelpers.HoldCommandFootprint(ctx, t, f.pool, f.planID)
+}
+
+func awaitLockWait(ctx context.Context, t *testing.T, f *createConcurrencyFixture) {
+	t.Helper()
+	testhelpers.WaitForLockWait(ctx, t, f.pool, "")
 }
 
 const (
@@ -130,21 +142,12 @@ func TestManagedMarkerCommittedUnderLockRefusesWaitingWriters(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newCreateConcurrencyFixture(ctx, t)
 			o := other(f)
-			command, err := f.pool.Begin(ctx)
-			require.NoError(t, err)
-			defer func() { _ = command.Rollback(ctx) }()
-			_, err = command.Exec(ctx, `SELECT 1 FROM purchase_plans WHERE id = $1 FOR UPDATE`, f.planID)
-			require.NoError(t, err)
-
+			command := f.holdPlanLock(ctx, t)
 			done := make(chan error, 1)
 			go func() { done <- write(f, o) }()
-			require.Eventually(t, func() bool {
-				var n int
-				require.NoError(t, f.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'`).Scan(&n))
-				return n > 0
-			}, 15*time.Second, 50*time.Millisecond, "writer must wait on the plan lock")
+			awaitLockWait(ctx, t, f)
 
-			_, err = command.Exec(ctx, `UPDATE purchase_plans SET ramp_schedule = ramp_schedule || '{"dates_managed":true}' WHERE id = $1`, f.planID)
+			_, err := command.Exec(ctx, `UPDATE purchase_plans SET ramp_schedule = ramp_schedule || '{"dates_managed":true}' WHERE id = $1`, f.planID)
 			require.NoError(t, err)
 			require.NoError(t, command.Commit(ctx))
 			requireEditorRefusal(t, <-done)

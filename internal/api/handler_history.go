@@ -11,6 +11,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/jackc/pgx/v5"
 )
@@ -397,6 +398,14 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver, createdByEma
 	// inputs, so this is safe to call unconditionally.
 	if exec.Status == "failed" {
 		row.OpsHint = resolveOpsHint(exec.Error)
+		// A re-drive the backend will always refuse is permanent, so it wins
+		// over the operator-fixable failure-reason hint (which promises that
+		// fixing the config makes Retry work). Same call and input as the
+		// retry handler's gate so the two cannot disagree (issue #161).
+		if reason := purchase.RedriveRefusalReason(&exec); reason != "" {
+			row.OpsHint = reason
+			row.RedriveUnsafe = true
+		}
 	}
 	annotateHistoryRowByStatus(&row, exec, approver)
 	return row

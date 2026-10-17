@@ -646,6 +646,11 @@ func (h *Handler) requireRIExchangeAutoModeGrant(ctx context.Context, req *event
 // Fails closed: every path that cannot establish the scope returns an error
 // alongside a zero AccountScope, so a caller that ignores the error still
 // denies.
+//
+// A restricted scope matches an entry by display name only when exactly one
+// registered account carries that name (withRegisteredAccountNames, issue
+// #433). Every scoped handler gets its scope here, so this is the one place
+// that has to load the account list.
 func (h *Handler) getAccountScope(ctx context.Context, session *Session) (auth.AccountScope, error) {
 	if session.UserID == apiKeyAdminUserID {
 		// Positively unrestricted: the stateless admin API key is an
@@ -666,7 +671,29 @@ func (h *Handler) getAccountScope(ctx context.Context, session *Session) (auth.A
 	// Safe here and only here: GetAllowedAccountsAPI has already failed closed
 	// on an unestablishable scope, so an empty list at this point genuinely
 	// means "no restriction configured".
-	return auth.ScopeFromLegacyList(resolved), nil
+	return h.withRegisteredAccountNames(ctx, auth.ScopeFromLegacyList(resolved)), nil
+}
+
+// withRegisteredAccountNames lets a restricted scope match entries by display
+// name, limited to names that exactly one cloud account carries. Display names
+// are not unique, so matching a shared name would grant every account that
+// uses it, including ones registered later (issue #433). When the account list
+// cannot be loaded the scope stays ID-only: that only narrows access, and ID
+// entries keep working.
+func (h *Handler) withRegisteredAccountNames(ctx context.Context, scope auth.AccountScope) auth.AccountScope {
+	if scope.AllowsAll() || len(scope.Accounts) == 0 || h.config == nil {
+		return scope
+	}
+	registered, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
+	if err != nil {
+		logging.Warnf("account scope: cannot load cloud accounts, matching scope entries by ID only: %v", err)
+		return scope
+	}
+	names := make([]string, len(registered))
+	for i := range registered {
+		names[i] = registered[i].Name
+	}
+	return scope.WithRegisteredNames(names)
 }
 
 // setSecurityHeaders adds comprehensive security headers to the response.

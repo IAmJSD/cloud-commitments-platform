@@ -313,7 +313,7 @@ variable "fire_scheduled_purchases_schedule" {
 }
 
 variable "enable_process_scheduled_purchases_schedule" {
-  description = "Enable the scheduled process_scheduled_purchases sweep. Opt-in, default false. Note (#894): the stuck-purchase reaper can fail stranded approved rows before process re-drives them."
+  description = "Enable the scheduled process_scheduled_purchases sweep. Opt-in, default false."
   type        = bool
   default     = false
 }

@@ -629,6 +629,11 @@ func TestHandler_getUpcomingPurchases_ScopedUser(t *testing.T) {
 			planB.ID: {{ID: "acc-stage", Name: "Staging"}},
 		},
 	}
+	// Registered accounts, loaded by getAccountScope so the unique name
+	// "Production" can match by name (#433).
+	mockStore.ListCloudAccountsFn = func(context.Context, config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return []config.CloudAccount{{ID: "acc-prod", Name: "Production"}, {ID: "acc-stage", Name: "Staging"}}, nil
+	}
 
 	mockAuth.On("ValidateSession", ctx, "viewer-token").Return(&Session{
 		UserID: "viewer-1",

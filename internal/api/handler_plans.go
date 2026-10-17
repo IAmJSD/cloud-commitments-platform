@@ -360,10 +360,13 @@ func mergeUpdatedPlan(existingPlan *config.PurchasePlan, req *PlanRequest, planI
 		return nil, NewClientError(400, "max_step_commitment cannot be cleared while auto_purchase is enabled")
 	}
 
-	// If no services were created from request, preserve existing services
-	if len(plan.Services) == 0 && len(existingPlan.Services) > 0 {
-		plan.Services = existingPlan.Services
+	// Fold the request's single service into the stored map rather than
+	// replacing it, so other services survive the edit (issue #934).
+	services, err := mergeRequestedServices(existingPlan.Services, plan.Services)
+	if err != nil {
+		return nil, err
 	}
+	plan.Services = services
 
 	// Validate the plan
 	if err := plan.Validate(); err != nil {
@@ -434,6 +437,10 @@ func (h *Handler) deletePlan(ctx context.Context, req *events.LambdaFunctionURLR
 	}
 
 	if err := h.config.DeletePurchasePlan(ctx, planID); err != nil {
+		if errors.Is(err, config.ErrManagedPlanLiveExecutions) {
+			return nil, planEditorRefusal(http.StatusConflict, codeManagedPlanLiveExecutions,
+				"this plan still has active or unsettled purchases; cancel or revoke them first")
+		}
 		return nil, err
 	}
 
