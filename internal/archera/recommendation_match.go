@@ -17,6 +17,7 @@ const (
 type RecommendationIdentity struct {
 	Provider, SourceAccountID, Service, PlanType, OfferingID string
 	Region, TopLevelRegion, InstanceFamily, Payment          string
+	CloudAccountID                                           string
 	NativeDurationSeconds                                    int64
 	HourlyCommitment                                         *big.Rat
 }
