@@ -70,7 +70,7 @@ func TestReapStuckExecutions_StaleApprovedFlippedToFailed(t *testing.T) {
 	transitioned.Status = failedStatus
 
 	expectStuckLists(ctx, store, reapAfter, row)
-	store.On("TransitionExecutionStatus", ctx, "exec-A", stuckStatuses, failedStatus, (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-A", []string{"approved"}, failedStatus, (*string)(nil)).
 		Return(&transitioned, nil)
 	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
 		// Canonical error message + previous-status attribution.
@@ -104,7 +104,7 @@ func TestReapStuckExecutions_EC2RowIsNotAdvertisedAsSafeToRetry(t *testing.T) {
 	transitioned := row
 	transitioned.Status = failedStatus
 	expectStuckLists(ctx, store, reapAfter, row)
-	store.On("TransitionExecutionStatus", ctx, "exec-ec2", stuckStatuses, failedStatus, (*string)(nil)).Return(&transitioned, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-ec2", []string{"running"}, failedStatus, (*string)(nil)).Return(&transitioned, nil)
 	var saved *config.PurchaseExecution
 	store.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
 		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).Return(nil)
@@ -128,7 +128,7 @@ func TestReapStuckExecutions_StaleRunningFlippedToFailed(t *testing.T) {
 	transitioned.Status = failedStatus
 
 	expectStuckLists(ctx, store, reapAfter, row)
-	store.On("TransitionExecutionStatus", ctx, "exec-B", stuckStatuses, failedStatus, (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-B", []string{"running"}, failedStatus, (*string)(nil)).
 		Return(&transitioned, nil)
 	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
 		// "running" attribution path
@@ -216,7 +216,7 @@ func TestReapStuckExecutions_CASRaceLostNoError(t *testing.T) {
 
 	row := stuckExec("exec-race", "approved")
 	expectStuckLists(ctx, store, reapAfter, row)
-	store.On("TransitionExecutionStatus", ctx, "exec-race", stuckStatuses, failedStatus, (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-race", []string{"approved"}, failedStatus, (*string)(nil)).
 		Return(nil, fmt.Errorf("%w: execution exec-race cannot transition from %q to %q",
 			config.ErrExecutionNotInExpectedStatus, "completed", "failed"))
 	// No SavePurchaseExecution expectation — we lost the race, the real
@@ -246,7 +246,7 @@ func TestReapStuckExecutions_RowVanishedTreatedAsRaceLost(t *testing.T) {
 
 	row := stuckExec("exec-gone", "approved")
 	expectStuckLists(ctx, store, reapAfter, row)
-	store.On("TransitionExecutionStatus", ctx, "exec-gone", stuckStatuses, failedStatus, (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-gone", []string{"approved"}, failedStatus, (*string)(nil)).
 		Return(nil, fmt.Errorf("%w: execution exec-gone", config.ErrNotFound))
 
 	mgr := newReaperManager(store)
@@ -272,7 +272,7 @@ func TestReapStuckExecutions_HardDBErrorClassifiedAsErrored(t *testing.T) {
 
 	row := stuckExec("exec-dbflake", "running")
 	expectStuckLists(ctx, store, reapAfter, row)
-	store.On("TransitionExecutionStatus", ctx, "exec-dbflake", stuckStatuses, failedStatus, (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-dbflake", []string{"running"}, failedStatus, (*string)(nil)).
 		Return(nil, errors.New("connection refused"))
 
 	mgr := newReaperManager(store)
@@ -296,7 +296,7 @@ func TestReapStuckExecutions_CASReturnsNilNilTreatedAsRaceLost(t *testing.T) {
 
 	row := stuckExec("exec-nilnil", "running")
 	expectStuckLists(ctx, store, reapAfter, row)
-	store.On("TransitionExecutionStatus", ctx, "exec-nilnil", stuckStatuses, failedStatus, (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-nilnil", []string{"running"}, failedStatus, (*string)(nil)).
 		Return(nil, nil)
 
 	mgr := newReaperManager(store)
@@ -324,7 +324,7 @@ func TestReapStuckExecutions_ThreeStuckRowsAllReaped(t *testing.T) {
 	for _, r := range rows {
 		flipped := r
 		flipped.Status = failedStatus
-		store.On("TransitionExecutionStatus", ctx, r.ExecutionID, stuckStatuses, failedStatus, (*string)(nil)).
+		store.On("TransitionExecutionStatus", ctx, r.ExecutionID, []string{r.Status}, failedStatus, (*string)(nil)).
 			Return(&flipped, nil).Once()
 		store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
 			return e.ExecutionID == r.ExecutionID && e.Status == failedStatus
@@ -389,7 +389,7 @@ func TestReapStuckExecutions_SaveErrorAfterCASStillCountsAsReaped(t *testing.T) 
 	flipped := row
 	flipped.Status = failedStatus
 	expectStuckLists(ctx, store, reapAfter, row)
-	store.On("TransitionExecutionStatus", ctx, "exec-saveflake", stuckStatuses, failedStatus, (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-saveflake", []string{"approved"}, failedStatus, (*string)(nil)).
 		Return(&flipped, nil)
 	store.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
 		Return(errors.New("write conflict"))
@@ -477,7 +477,7 @@ func TestReapStuckExecutions_AzureSPNotSafeToRetry(t *testing.T) {
 	transitioned.Status = failedStatus
 
 	expectStuckLists(ctx, store, reapAfter, row)
-	store.On("TransitionExecutionStatus", ctx, "exec-azsp", stuckStatuses, failedStatus, (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-azsp", []string{"approved"}, failedStatus, (*string)(nil)).
 		Return(&transitioned, nil)
 	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
 		// "safe to retry" MUST NOT appear — Azure SP is not idempotent.
@@ -507,7 +507,7 @@ func TestReapStuckExecutions_EmptyRecsNotSafeToRetry(t *testing.T) {
 	transitioned.Status = failedStatus
 
 	expectStuckLists(ctx, store, reapAfter, row)
-	store.On("TransitionExecutionStatus", ctx, "exec-empty", stuckStatuses, failedStatus, (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, "exec-empty", []string{"running"}, failedStatus, (*string)(nil)).
 		Return(&transitioned, nil)
 	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
 		return e.ExecutionID == "exec-empty" &&
