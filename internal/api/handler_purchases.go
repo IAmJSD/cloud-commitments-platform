@@ -1895,7 +1895,14 @@ func revocationWindowClosesAt(execution *config.PurchaseExecution) string {
 // transitionedBy is the acting user's UUID (resolveCreatorUserID), or nil when
 // the caller has no user row. It must never be an email: transitioned_by is a
 // UUID foreign key. revokedBy is the email shown as the requester.
+//
+// The revocation window is enforced here, not only in validateRevokeToken, so
+// the session-authed branch (tryRevokeViaSession) cannot flip an execution
+// whose window closed long ago to revocation_requested (issue #260).
 func (h *Handler) revokeViaSession(ctx context.Context, execution *config.PurchaseExecution, revokedBy string, transitionedBy *string) (any, error) {
+	if err := checkRevocationWindow(execution); err != nil {
+		return nil, err
+	}
 	updated, err := h.config.TransitionExecutionStatus(
 		ctx, execution.ExecutionID,
 		[]string{"completed", "partially_completed"}, "revocation_requested", transitionedBy)
