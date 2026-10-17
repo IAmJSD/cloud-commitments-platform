@@ -119,13 +119,14 @@ Workload Identity Federation endpoint for a short-lived SA access token, and set
 
 ### Attribute condition
 
-The WIF provider enforces **two** conditions simultaneously:
+The WIF provider enforces **three** conditions simultaneously:
 
 ```text
-assertion.repository == '<github_repo>' && assertion.ref == '<deploy_ref>'
+assertion.repository_owner_id == '<github_owner_id>' && assertion.repository_id == '<github_repo_id>' && assertion.ref == '<deploy_ref>'
 ```
 
-Only workflows running from the exact repository **and** the exact ref (branch) configured in
+Only workflows running from the exact repository (matched by immutable numeric ids, so a rename
+or delete-and-recreate under the same name does not match) **and** the exact ref (branch) configured in
 `terraform.tfvars` can obtain a GCP token. Any other branch, PR, fork, tag, or
 `workflow_dispatch` from a different ref is rejected with:
 
@@ -148,4 +149,12 @@ gcloud iam workload-identity-pools providers describe github-actions \
   --format="value(attributeCondition)"
 ```
 
-To change the allowed repo, update `github_repo` in `terraform.tfvars` and re-apply.
+To change the allowed repo, update `github_owner_id` and `github_repo_id` in `terraform.tfvars`
+(`gh api repos/<owner>/<repo> --jq '.owner.id, .id'`) and re-apply. The `principalSet` member is
+keyed on `attribute.repository_id`; the `attribute.repository` mapping is kept so the old member
+keeps resolving while the replacement is created first. `github_repo` is still the skip toggle
+(empty disables WIF setup) but no longer feeds the condition or the member.
+
+AWS and Azure match the GitHub immutable OIDC subject (`repo:<owner>@<owner_id>/<repo>@<repo_id>:...`),
+which depends on the repository setting `use_immutable_subject` (Settings, Actions, OIDC). Check it with
+`gh api repos/<owner>/<repo>/actions/oidc/customization/sub`. GCP does not use `sub`, so it is unaffected.
