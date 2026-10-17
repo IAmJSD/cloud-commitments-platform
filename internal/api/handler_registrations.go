@@ -446,6 +446,14 @@ func validateRegistrationRequest(req *RegistrationRequest) error {
 	if req.AccountName == "" {
 		return NewClientError(400, "account_name is required")
 	}
+	// Approval re-validates through validateCloudAccountRequest, which rejects
+	// control characters; reject the rest here so a submission that could
+	// never be approved fails at submit time instead (#970).
+	if err := validateNoControlChars(
+		namedField{"account_name", req.AccountName}, namedField{"external_id", req.ExternalID},
+	); err != nil {
+		return err
+	}
 	if req.ContactEmail == "" {
 		return NewClientError(400, "contact_email is required")
 	}
