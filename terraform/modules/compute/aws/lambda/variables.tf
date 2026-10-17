@@ -49,9 +49,22 @@ variable "memory_size" {
 }
 
 variable "timeout" {
-  description = "Lambda timeout in seconds"
+  # Must cover the longest work the handler detaches from the request: an RI
+  # exchange or purchase gets 4m of execution plus a 30s terminal save
+  # (riExchangeExecutionTimeout / purchaseExecutionTimeout + their terminal
+  # save budgets). Lambda ends the invocation at this timeout whatever the
+  # context deadline says, so a shorter value cuts that work off mid-flight
+  # (#913). 300 = 270s of budget + 30s for the request work before it.
+  # Pinned against the Go constants by TestLambdaTimeoutCoversRIExchangeBudget
+  # and TestLambdaTimeoutCoversPurchaseBudget.
+  description = "Lambda timeout in seconds (300-900; must cover the 270s detached exchange/purchase budget)"
   type        = number
-  default     = 30
+  default     = 300
+
+  validation {
+    condition     = var.timeout >= 300 && var.timeout <= 900
+    error_message = "timeout must be between 300 and 900 seconds: RI exchanges and purchases run up to 270s (4m execution + 30s terminal save) after the request, and Lambda cuts the invocation off at this timeout (#913)."
+  }
 }
 
 variable "database_host" {

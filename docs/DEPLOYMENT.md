@@ -143,7 +143,7 @@ compute_platform = "lambda"
 # Lambda configuration
 lambda_architecture        = "arm64"
 lambda_memory_size         = 512
-lambda_timeout             = 60
+lambda_timeout             = 300 # 300-900: covers the 270s exchange/purchase budget
 
 # Database configuration (Aurora Serverless v2)
 database_engine_version       = "16.4"

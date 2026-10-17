@@ -9,6 +9,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/exchange"
 	azurecompute "github.com/LeanerCloud/cloud-commitments-go/providers/azure/services/compute"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/testutil/lambdatimeout"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -40,9 +41,17 @@ func (p *ctxProbe) assertDetached(t *testing.T, start time.Time) {
 		"canceling the request must not cancel an exchange already submitted to the provider")
 	require.True(t, p.hasDeadline, "the detached exchange must still be bounded by its own timeout")
 	// A literal rather than riExchangeExecutionTimeout, so the test pins the
-	// budget itself: it must stay inside the documented lambda_timeout >= 270s
-	// requirement (4m execution + 30s terminal save).
+	// budget itself: with the terminal save it must stay inside the lambda_timeout
+	// >= 300s floor (4m execution + 30s terminal save + 30s margin, #913).
 	assert.WithinDuration(t, start.Add(4*time.Minute), p.deadline, 5*time.Second)
+}
+
+// TestLambdaTimeoutCoversRIExchangeBudget keeps every shipped AWS Lambda
+// timeout above the detached RI exchange budget. The provider call and the
+// terminal ledger write run back to back after the request, and Lambda ends
+// the invocation at its timeout whatever the context deadline says (#913).
+func TestLambdaTimeoutCoversRIExchangeBudget(t *testing.T) {
+	lambdatimeout.AssertCovers(t, "../..", riExchangeExecutionTimeout+riExchangeTerminalSaveTimeout)
 }
 
 // liveCtx matches a context that has not been canceled and carries the 30s
