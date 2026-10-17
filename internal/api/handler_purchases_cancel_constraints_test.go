@@ -161,8 +161,10 @@ func TestAuthorizeSessionCancel_AdminAndAPIKeys(t *testing.T) {
 		t.Parallel()
 		for _, allowed := range []bool{false, true} {
 			mockAuth := new(MockAuthService)
-			mockAuth.On("HasPermissionAPI", ctx, revokeConstraintsUser, auth.ActionCancelAny, auth.ResourcePurchases).Return(true, nil)
-			mockAuth.On("HasPermissionAPI", ctx, revokeConstraintsUser, auth.ActionCancelOwn, auth.ResourcePurchases).Return(false, nil).Maybe()
+			// The verbs are probed on the key, not the owner (issue #1005).
+			probe := []auth.PermissionConstraints{{}}
+			mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", ctx, "key-1", revokeConstraintsUser, auth.ActionCancelAny, auth.ResourcePurchases, probe).Return(true, nil)
+			mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", ctx, "key-1", revokeConstraintsUser, auth.ActionCancelOwn, auth.ResourcePurchases, probe).Return(false, nil).Maybe()
 			mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", ctx, "key-1", revokeConstraintsUser, auth.ActionCancelAny, auth.ResourcePurchases, mock.Anything).Return(allowed, nil).Once()
 			h := &Handler{auth: mockAuth, config: &MockConfigStore{}}
 			err := h.authorizeSessionCancel(ctx, &Session{UserID: revokeConstraintsUser, UserAPIKeyID: "key-1"}, exec)

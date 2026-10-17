@@ -2419,23 +2419,23 @@ func (h *Handler) fetchAndAuthorizeRIExchange(ctx context.Context, session *Sess
 // to approveRIExchangeViaSession before fetching the record.
 func (h *Handler) sessionHasApproveRight(ctx context.Context, session *Session) error {
 	// Stateless admin API key: full access, no user row. Administrators-group
-	// users pass via the approve-any HasPermissionAPI check below.
+	// users pass via the approve-any check below.
 	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}
 	if h.auth == nil {
 		return NewClientError(500, "authentication service not configured")
 	}
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveAny, auth.ResourcePurchases)
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionApproveAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if hasAny {
 		return nil
 	}
-	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveOwn, auth.ResourcePurchases)
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionApproveOwn)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if hasOwn {
 		return nil
@@ -2452,7 +2452,7 @@ func (h *Handler) sessionHasApproveRight(ctx context.Context, session *Session) 
 // which prefers reusing the existing verbs to keep the matrix small.
 func (h *Handler) authorizeSessionApproveRIExchange(ctx context.Context, session *Session, record *config.RIExchangeRecord) error {
 	// Stateless admin API key: full access, no user row. Administrators-group
-	// users pass via the approve-any HasPermissionAPI check below.
+	// users pass via the approve-any check below.
 	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}
@@ -2460,17 +2460,17 @@ func (h *Handler) authorizeSessionApproveRIExchange(ctx context.Context, session
 		return NewClientError(500, "authentication service not configured")
 	}
 
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveAny, auth.ResourcePurchases)
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionApproveAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if hasAny {
 		return nil
 	}
 
-	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveOwn, auth.ResourcePurchases)
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionApproveOwn)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if !hasOwn {
 		return NewClientError(403, "permission denied: requires approve-any or approve-own on purchases")
