@@ -47,8 +47,8 @@ func TestMatchRecommendationAssociatesOnlyProvenResourceIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, ResourceAssociated, result.Status)
 	require.Equal(t, matchItem, result.LineItemID)
-	require.Equal(t, "stored_decimal_only", result.AmountProvenance)
-	require.Equal(t, "unavailable_source_precision", result.EconomicStatus)
+	require.Equal(t, ReasonStoredDecimalOnly, result.AmountProvenance)
+	require.Equal(t, ReasonUnavailableSourcePrecision, result.EconomicStatus)
 	require.Equal(t, "1/2", rec.HourlyCommitment.RatString())
 	require.Equal(t, "1/2", items[0].SelectedCommitment.RatString())
 	after, marshalErr := json.Marshal([]any{rec, rows, items})
@@ -200,4 +200,81 @@ func TestMatchRecommendationRejectsEqualMalformedUUIDReferences(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestMatchRecommendationUnavailableForNilOrZeroAmounts(t *testing.T) {
+	zero := func() *big.Rat { return new(big.Rat) }
+	tests := []struct {
+		name   string
+		change func(*RecommendationIdentity, *ComparisonIdentity, *LineItemIdentity)
+		reason Reason
+	}{
+		{"recommendation_nil", func(r *RecommendationIdentity, _ *ComparisonIdentity, _ *LineItemIdentity) { r.HourlyCommitment = nil }, ReasonIdentityUnproven},
+		{"recommendation_zero", func(r *RecommendationIdentity, _ *ComparisonIdentity, _ *LineItemIdentity) {
+			r.HourlyCommitment = zero()
+		}, ReasonIdentityUnproven},
+		{"item_nil", func(_ *RecommendationIdentity, _ *ComparisonIdentity, i *LineItemIdentity) {
+			i.SelectedCommitment = nil
+		}, ReasonIdentityUnproven},
+		{"item_zero", func(_ *RecommendationIdentity, _ *ComparisonIdentity, i *LineItemIdentity) {
+			i.SelectedCommitment = zero()
+		}, ReasonIdentityUnproven},
+		{"current_nil", func(_ *RecommendationIdentity, c *ComparisonIdentity, _ *LineItemIdentity) {
+			c.CurrentSelectedAmount = nil
+		}, ReasonComparisonBasisUnproven},
+		{"current_zero", func(_ *RecommendationIdentity, c *ComparisonIdentity, _ *LineItemIdentity) {
+			c.CurrentSelectedAmount = zero()
+		}, ReasonComparisonBasisUnproven},
+		{"all_zero", func(r *RecommendationIdentity, c *ComparisonIdentity, i *LineItemIdentity) {
+			r.HourlyCommitment, c.CurrentSelectedAmount, i.SelectedCommitment = zero(), zero(), zero()
+		}, ReasonIdentityUnproven},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, rows, items := matchFixture()
+			tt.change(r, &rows[0], &items[0])
+			got, err := MatchRecommendation(matchPlan, r, rows, items)
+			require.NoError(t, err)
+			require.Equal(t, MatchUnavailable, got.Status)
+			require.Equal(t, tt.reason, got.Reason)
+			require.Empty(t, got.LineItemID)
+			require.Empty(t, got.Candidates)
+		})
+	}
+}
+
+func TestSelectLineItem(t *testing.T) {
+	r, _, items := matchFixture()
+	id, status := SelectLineItem(r, items)
+	require.Equal(t, SelectOne, status)
+	require.Equal(t, matchItem, id)
+
+	other := items[0]
+	other.ID = "eaadf00d-ffff-4aba-8ada-abcdefabcdef"
+	other.Region = "eu-west-1"
+	id, status = SelectLineItem(r, []LineItemIdentity{other, items[0]})
+	require.Equal(t, SelectOne, status)
+	require.Equal(t, matchItem, id)
+
+	id, status = SelectLineItem(r, []LineItemIdentity{other})
+	require.Equal(t, SelectNone, status)
+	require.Empty(t, id)
+	id, status = SelectLineItem(r, nil)
+	require.Equal(t, SelectNone, status)
+	require.Empty(t, id)
+
+	twin := items[0]
+	twin.ID = other.ID
+	id, status = SelectLineItem(r, []LineItemIdentity{items[0], twin})
+	require.Equal(t, SelectAmbiguous, status)
+	require.Empty(t, id)
+
+	bad := *r
+	bad.HourlyCommitment = nil
+	id, status = SelectLineItem(&bad, items)
+	require.Equal(t, SelectNone, status)
+	require.Empty(t, id)
+	id, status = SelectLineItem(nil, items)
+	require.Equal(t, SelectNone, status)
+	require.Empty(t, id)
 }

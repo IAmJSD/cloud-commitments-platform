@@ -29,11 +29,11 @@ func TestMatchRecommendationPreservesVendorAlternativesWithoutNativeClaims(t *te
 	require.Len(t, got.Candidates, 3)
 	for i, association := range got.Candidates {
 		require.Equal(t, rows[0].Candidates[i].OfferID, association.OfferID)
-		require.Equal(t, "vendor_alternative", association.Status)
+		require.Equal(t, CandidateVendorAlternative, association.Status)
 		require.Empty(t, association.Reason)
-		require.Equal(t, "unavailable", association.NativeIdentityStatus)
+		require.Equal(t, CandidateUnavailable, association.NativeIdentityStatus)
 	}
-	require.Equal(t, "unavailable_source_precision", got.EconomicStatus)
+	require.Equal(t, ReasonUnavailableSourcePrecision, got.EconomicStatus)
 	after, err := json.Marshal([]any{r, rows, items})
 	require.NoError(t, err)
 	require.Equal(t, before, after)
@@ -64,9 +64,9 @@ func TestMatchRecommendationDoesNotBorrowCandidateBasis(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, ResourceAssociated, got.Status)
 			require.Len(t, got.Candidates, 1)
-			require.Equal(t, "unavailable", got.Candidates[0].Status)
+			require.Equal(t, CandidateUnavailable, got.Candidates[0].Status)
 			require.NotEmpty(t, got.Candidates[0].Reason)
-			require.Equal(t, "unavailable", got.Candidates[0].NativeIdentityStatus)
+			require.Equal(t, CandidateUnavailable, got.Candidates[0].NativeIdentityStatus)
 		})
 	}
 }
