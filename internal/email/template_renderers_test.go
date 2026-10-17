@@ -435,7 +435,7 @@ func TestRenderPurchaseConfirmationEmail_ArcheraBlock(t *testing.T) {
 
 	assert.Contains(t, body, "Archera")
 	assert.Contains(t, body, "7-day") // confirmation template uses "7-day enrollment window"
-	assert.Contains(t, body, "https://archera.ai/signup?mode=cudly")
+	assert.Contains(t, body, "https://www.archera.ai/cudly")
 	assert.Contains(t, body, "https://dashboard.example.com/archera-insurance")
 }
 

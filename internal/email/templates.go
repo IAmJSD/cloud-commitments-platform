@@ -10,6 +10,11 @@ import (
 )
 
 // Email templates
+//
+// The Archera signup link in the purchase confirmation and approval request
+// templates is spliced in from common.ArcheraSignupURL, the constant the CLI
+// also uses, so every surface sends buyers to the same attribution URL. The
+// frontend keeps its own copy in frontend/src/archera.ts (ARCHERA_SIGNUP_URL).
 
 const newRecommendationsTemplate = `CUDly - New Commitment Recommendations Available
 ================================================
@@ -119,7 +124,7 @@ terms, coverage, and pricing are set entirely by Archera. CUDly has no
 visibility into your Archera account or policy. Review Archera's terms
 of service and privacy policy before signing up.
 
-Sign up:   https://archera.ai/signup?mode=cudly
+Sign up:   ` + common.ArcheraSignupURL + `
 Permalink: {{.ArcheraEducationURL}}
 {{end}}
 This is an automated message from CUDly.
@@ -660,7 +665,7 @@ useful, but you should know about the financial relationship. Insurance
 terms, coverage, and pricing are set entirely by Archera. CUDly has no
 visibility into the buyer's Archera account or policy.
 
-Sign up:   https://archera.ai/signup?mode=cudly
+Sign up:   ` + common.ArcheraSignupURL + `
 Permalink: {{.ArcheraEducationURL}}
 {{end}}
 This is an automated message from CUDly. Do not share these links.
@@ -758,7 +763,7 @@ const purchaseApprovalRequestHTMLTemplate = `<!DOCTYPE html>
 </ol>
 <p style="margin:6px 0;">Archera charges an insurance premium for the coverage selected, a separate fee paid to Archera. The cloud commitment purchased through CUDly is unaffected: same price, same billing.</p>
 
-<p style="margin:12px 0 4px;"><a href="https://archera.ai/signup?mode=cudly" style="display:inline-block;padding:10px 22px;background:#1a73e8;color:#ffffff;text-decoration:none;font-weight:600;font-size:13px;border-radius:6px;">Sign up at Archera &rarr;</a></p>
+<p style="margin:12px 0 4px;"><a href="` + common.ArcheraSignupURL + `" style="display:inline-block;padding:10px 22px;background:#1a73e8;color:#ffffff;text-decoration:none;font-weight:600;font-size:13px;border-radius:6px;">Sign up at Archera &rarr;</a></p>
 
 <p style="color:#64748b;font-size:12px;font-style:italic;border-top:1px dashed #e2e8f0;padding-top:10px;margin-top:12px;"><strong>Full disclosure:</strong> Archera sponsors CUDly's development with a share of their insurance revenue; we surface the option because we think it's useful, but you should know about the financial relationship. Insurance terms, coverage, and pricing are set entirely by Archera. CUDly has no visibility into the buyer's Archera account or policy.</p>
 
