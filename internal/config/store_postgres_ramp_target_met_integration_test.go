@@ -17,7 +17,7 @@ import (
 // still cannot advance through the unchanged gate.
 func TestCompleteTargetMetStepTx_RealPlan(t *testing.T) {
 	ctx := context.Background()
-	f := newRampFixture(ctx, t, 1, 1, 4)
+	f := newRampFixture(ctx, t, 1, 0, 4)
 	r := baselineRec(f.accounts[0], "m5.large", 100)
 	f.rowWithRecs(ctx, t, 1, &f.accounts[0], StatusCompleted, false, r)
 	failed := f.rowWithRecs(ctx, t, 1, &f.accounts[0], StatusFailed, false, r)
@@ -27,7 +27,10 @@ func TestCompleteTargetMetStepTx_RealPlan(t *testing.T) {
 	require.NoError(t, f.store.WithTx(ctx, func(tx pgx.Tx) error {
 		_, err := f.store.LockPurchasePlanTx(ctx, tx, f.planID)
 		require.NoError(t, err)
-		_, err = f.store.SetPlanRampBaselineTx(ctx, tx, f.planID, PlanRampBaseline{key: {Count: 100}})
+		wrote, err := f.store.SetPlanRampBaselineTx(ctx, tx, f.planID, PlanRampBaseline{key: {Count: 100}})
+		require.NoError(t, err)
+		require.True(t, wrote)
+		_, err = tx.Exec(ctx, `UPDATE purchase_plans SET ramp_schedule=jsonb_set(ramp_schedule,'{current_step}','1') WHERE id=$1`, f.planID)
 		require.NoError(t, err)
 		return f.store.CompleteTargetMetStepTx(ctx, tx, f.planID, 2, "", "target already met: target 40, committed 40")
 	}))

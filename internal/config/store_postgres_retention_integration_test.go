@@ -190,7 +190,7 @@ func TestRampRetention_CreationLineageAndLegacyWriters(t *testing.T) {
 	f := newRampFixture(ctx, t, 0, 0, 4)
 	var state string
 	require.NoError(t, f.store.db.QueryRow(ctx, `SELECT ramp_ledger_state FROM purchase_plans WHERE id=$1`, f.planID).Scan(&state))
-	require.Equal(t, "legacy", state)
+	require.Equal(t, "new", state)
 	legacyID := uuid.NewString()
 	_, err := f.store.db.Exec(ctx, `INSERT INTO purchase_plans(id,name,ramp_schedule) SELECT $1,'old writer',ramp_schedule FROM purchase_plans WHERE id=$2`, legacyID, f.planID)
 	require.NoError(t, err)

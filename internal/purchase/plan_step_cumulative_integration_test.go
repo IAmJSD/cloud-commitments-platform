@@ -4,6 +4,7 @@ package purchase
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -65,8 +66,14 @@ const cumCoverage = 80
 
 func newCumFixture(t *testing.T, stored ...int) *cumFixture {
 	t.Helper()
+	store, pool := rampStepStore(context.Background(), t)
+	return newCumFixtureOn(t, store, pool, stored...)
+}
+
+// newCumFixtureOn builds the fixture on an already migrated store.
+func newCumFixtureOn(t *testing.T, store *config.PostgresStore, pool *pgxpool.Pool, stored ...int) *cumFixture {
+	t.Helper()
 	ctx := context.Background()
-	store, pool := rampStepStore(ctx, t)
 	attachGlobal(ctx, t, store)
 	acct := &config.CloudAccount{Name: "cum-acct", Provider: "aws", ExternalID: "111111111110", Enabled: true,
 		AWSAuthMode: "role_arn", AWSRoleARN: "arn:aws:iam::111111111110:role/cudly"}
@@ -170,8 +177,10 @@ func TestCumulativeAttach_WeeklyRampBuysTwentyEachStep(t *testing.T) {
 				f.buy(step)
 			}
 			assert.Equal(t, 4, f.plan().RampSchedule.CurrentStep)
-			base, err := f.baseline()
-			require.NoError(t, err)
+			var raw []byte
+			require.NoError(t, f.pool.QueryRow(f.ctx, `SELECT ramp_baseline FROM purchase_plans WHERE id=$1`, f.planID).Scan(&raw))
+			var base config.PlanRampBaseline
+			require.NoError(t, json.Unmarshal(raw, &base))
 			require.Len(t, base, 1)
 			for _, q := range base {
 				assert.Equal(t, 100, q.Count, "frozen at step 1 from shown")
