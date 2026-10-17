@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMigration_RecommendationsStatePartial locks down migration 000128:
+// TestMigration_RecommendationsStatePartial locks down migration 000129:
 // recommendations_state gains a nullable last_collection_partial JSONB
 // column (issue #87: incomplete multi-subscription sweeps visible outside
 // the logs), the seeded singleton row starts out NULL (= complete), and the
@@ -27,7 +27,7 @@ func TestMigration_RecommendationsStatePartial(t *testing.T) {
 	defer container.Cleanup(ctx)
 	pool := container.DB.Pool()
 
-	const version = 128
+	const version = 129
 	// Migration numbers are not contiguous, so pin at the real predecessor
 	// rather than version-1.
 	prev := previousMigrationVersion(t, version)
@@ -45,7 +45,7 @@ func TestMigration_RecommendationsStatePartial(t *testing.T) {
 		`).Scan(&exists))
 		return exists
 	}
-	assert.False(t, columnExists(), "last_collection_partial must not exist before 000128")
+	assert.False(t, columnExists(), "last_collection_partial must not exist before 000129")
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, version))
 
@@ -56,7 +56,7 @@ func TestMigration_RecommendationsStatePartial(t *testing.T) {
 		 WHERE table_name = 'recommendations_state'
 		   AND column_name = 'last_collection_partial'
 	`).Scan(&dataType, &isNullable)
-	require.NoError(t, err, "last_collection_partial must exist after 000128")
+	require.NoError(t, err, "last_collection_partial must exist after 000129")
 	assert.Equal(t, "jsonb", dataType)
 	assert.Equal(t, "YES", isNullable)
 
