@@ -558,10 +558,24 @@ func (h *Handler) validatePurchaseScheduling(ctx context.Context, plan *config.P
 			return err
 		}
 	}
-	if !startDate.After(time.Now()) {
+	// start_date is a date-only value parsed as midnight UTC, so today's
+	// date is already in the past and is refused along with any earlier
+	// day: tomorrow (UTC) is the first accepted date. The check runs here,
+	// under the plan lock, because a request can wait on that lock past
+	// UTC midnight (#873, #50).
+	if !startDate.After(h.clock()) {
 		return NewClientError(400, "start_date must be in the future")
 	}
 	return nil
+}
+
+// clock returns the handler's current time: the injected now func when a
+// test set one, time.Now otherwise.
+func (h *Handler) clock() time.Time {
+	if h.now != nil {
+		return h.now()
+	}
+	return time.Now()
 }
 
 func validateScheduledRamp(plan *config.PurchasePlan, count int) error {
