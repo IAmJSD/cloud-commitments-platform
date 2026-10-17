@@ -42,6 +42,9 @@ func (a *zoneRecordingEC2API) DescribeReservedInstancesOfferings(_ context.Conte
 		ReservedInstancesOfferings: []ec2types.ReservedInstancesOffering{{
 			ReservedInstancesOfferingId: aws.String("offering-in-zone"),
 			AvailabilityZone:            in.AvailabilityZone,
+			OfferingClass:               ec2types.OfferingClassTypeConvertible,
+			InstanceTenancy:             ec2types.TenancyDefault,
+			Duration:                    aws.Int64(31536000),
 		}},
 	}, nil
 }

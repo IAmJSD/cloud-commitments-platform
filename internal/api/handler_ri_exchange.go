@@ -106,8 +106,8 @@ var offeringIDPattern = regexp.MustCompile(
 // offerings for the source RI identified by ?source_ri_id=<uuid>.
 //
 // The handler looks up the source RI from DescribeReservedInstances,
-// extracts its ProductDescription / Tenancy / Scope / Duration /
-// OfferingType, and passes those to ec2svc.ListTargetOfferings which
+// extracts its ProductDescription / Tenancy / Scope / Duration,
+// and passes those to ec2svc.ListTargetOfferings which
 // calls DescribeReservedInstancesOfferings with the same typed-field
 // shape used by PR #690. Instance type is intentionally omitted from
 // the query so AWS returns all valid target instance types -- the full
@@ -174,7 +174,6 @@ func targetOfferingsForSource(ctx context.Context, ec2Client targetOfferingsEC2C
 		Scope:              sourceRI.Scope,
 		AvailabilityZone:   sourceRI.AvailabilityZone,
 		Duration:           sourceRI.Duration,
-		OfferingType:       sourceRI.OfferingType,
 	})
 	if err != nil {
 		if isOfferingZoneRefusal(err) {

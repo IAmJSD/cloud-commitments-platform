@@ -36,6 +36,10 @@ func (a *zoneRecordingTargetsAPI) DescribeReservedInstancesOfferings(_ context.C
 			ReservedInstancesOfferingId: aws.String("4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91"),
 			InstanceType:                ec2types.InstanceType("m5.xlarge"),
 			AvailabilityZone:            in.AvailabilityZone,
+			OfferingClass:               in.OfferingClass,
+			InstanceTenancy:             in.InstanceTenancy,
+			Duration:                    in.MinDuration,
+			OfferingType:                in.OfferingType,
 		}},
 	}, nil
 }
