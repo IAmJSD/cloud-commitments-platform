@@ -3947,7 +3947,7 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 	// the delete for every referencing row whatever its status. Live rows are
 	// left attached, so the DELETE below still fails on the FK (SQLSTATE
 	// 23503) while any remain, and this UPDATE rolls back with it. Migration
-	// 000127 keeps updated_at unchanged on these rows: detaching is not a
+	// 000128 keeps updated_at unchanged on these rows: detaching is not a
 	// lifecycle event, and the plan health score and the retention sweep both
 	// read updated_at as one.
 	if _, err = tx.Exec(ctx, `

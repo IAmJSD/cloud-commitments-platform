@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMigration_ExecutionsDetachKeepsUpdatedAt locks down migration 000127:
+// TestMigration_ExecutionsDetachKeepsUpdatedAt locks down migration 000128:
 // an UPDATE that only detaches a purchase_executions row from its cloud
 // account keeps updated_at, every other UPDATE still stamps NOW(), and the
 // down migration restores the stamp-everything trigger (issue #265).
@@ -50,7 +50,7 @@ func TestMigration_ExecutionsDetachKeepsUpdatedAt(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 127))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 128))
 	_, err := pool.Exec(ctx, `
 		INSERT INTO cloud_accounts (id, name, provider, external_id)
 		VALUES ($1, 'detach-test', 'azure', $2)`, acct, acct)
@@ -84,13 +84,13 @@ func TestMigration_ExecutionsDetachKeepsUpdatedAt(t *testing.T) {
 
 	t.Run("down restores the shared trigger", func(t *testing.T) {
 		id := seed(t)
-		require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 126))
+		require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, previousMigrationVersion(t, 128)))
 		exec(t, `UPDATE purchase_executions SET cloud_account_id = NULL WHERE execution_id = $1`, id)
 		assert.True(t, updatedAt(t, id).After(old), "after the down migration a detach stamps NOW() again")
 
 		var n int
 		require.NoError(t, pool.QueryRow(ctx,
 			`SELECT COUNT(*) FROM pg_proc WHERE proname = 'purchase_executions_set_updated_at'`).Scan(&n))
-		assert.Zero(t, n, "down must drop the 000127 trigger function")
+		assert.Zero(t, n, "down must drop the 000128 trigger function")
 	})
 }

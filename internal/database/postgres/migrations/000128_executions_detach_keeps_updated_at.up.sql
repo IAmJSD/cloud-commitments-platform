@@ -1,4 +1,4 @@
--- 000127: keep purchase_executions.updated_at when a row is only detached from
+-- 000128: keep purchase_executions.updated_at when a row is only detached from
 -- a deleted cloud account (issue #265).
 --
 -- DeleteCloudAccount now detaches the account's terminal executions
