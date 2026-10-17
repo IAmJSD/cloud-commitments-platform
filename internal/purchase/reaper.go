@@ -12,12 +12,13 @@ import (
 )
 
 // stuckStatuses are the in-flight execution statuses that the reaper will
-// flip to "failed" when the row has been sitting in one of them for longer
-// than the configured reapAfter duration. These are the only intermediate
-// states the synchronous executor passes through between the user clicking
-// approve and the row landing in a terminal state (completed/failed) —
-// pending/notified executions are advanced by the scheduler tick on its
-// own cadence, not by us. See ApproveExecution + executeAndFinalize for
+// flip to "failed" when the row has been sitting in one of them for too long:
+// reapAfter for "running", approvedReapAfter(reapAfter) for "approved" (see
+// reapPasses). These are the only intermediate states the synchronous
+// executor passes through between the user clicking approve and the row
+// landing in a terminal state (completed/failed) — pending/notified
+// executions are advanced by the scheduler tick on its own cadence, not by
+// us. See ApproveExecution + executeAndFinalize for
 // the originating state machine.
 //
 // Kept as a package-level var (not a const slice) so tests can read it
@@ -29,13 +30,13 @@ var stuckStatuses = []string{"approved", "running"}
 // migrating to a typed status enum) shows up at the one call site.
 const failedStatus = "failed"
 
-// DefaultReapAfter is the default age at which an approved/running execution
-// is considered stuck. The issue (#678) calls for "configurable via env var,
-// default 10m" — the threshold is intentionally conservative: the happy-path
-// executor completes in <60s; the longest legitimately-slow paths
-// (multi-account fan-out, provider rate-limit backoff) settle in <3min. 10
-// minutes leaves multiple multiples of headroom so the reaper never fights
-// a real executor.
+// DefaultReapAfter is the default age at which a running execution is
+// considered stuck (approved rows use approvedReapAfter). The issue (#678)
+// calls for "configurable via env var, default 10m" — the threshold is
+// intentionally conservative: the happy-path executor completes in <60s; the
+// longest legitimately-slow paths (multi-account fan-out, provider rate-limit
+// backoff) settle in <3min. 10 minutes leaves multiple multiples of headroom
+// so the reaper never fights a real executor.
 const DefaultReapAfter = 10 * time.Minute
 
 // reapAfterEnvVar is the env var read by ParseReapAfterFromEnv. Centralized
@@ -98,12 +99,59 @@ func ParseReapAfterFromEnv() time.Duration {
 	return d
 }
 
+// processSweepInterval is the default cadence of the process_scheduled_purchases
+// sweep, which is what runs RecoverStrandedApprovals (terraform:
+// process_scheduled_purchases_schedule defaults to "rate(1 hour)").
+const processSweepInterval = time.Hour
+
+// processSweepSlack covers the process sweep's own run time and EventBridge
+// delivery jitter, so a recovery run that starts on schedule can still claim
+// the row before the reaper's next tick.
+const processSweepSlack = 5 * time.Minute
+
+// minApprovedReapAfter is the earliest age at which the reaper may fail an
+// "approved" row (issue #894). RecoverStrandedApprovals only sees approved rows
+// older than staleApprovedThreshold, and it runs once per process sweep, so a
+// stranded approval first becomes recoverable somewhere in
+// (staleApprovedThreshold, staleApprovedThreshold + processSweepInterval]. The
+// reaper must wait past that window, or it fails the row first and the
+// idempotent re-drive never runs. "running" rows are not affected: recovery
+// never re-drives them, so the reaper stays their only backstop.
+const minApprovedReapAfter = staleApprovedThreshold + processSweepInterval + processSweepSlack
+
+// approvedReapAfter returns the age threshold the reaper applies to "approved"
+// rows: the configured reapAfter, raised to minApprovedReapAfter when lower.
+func approvedReapAfter(reapAfter time.Duration) time.Duration {
+	return max(reapAfter, minApprovedReapAfter)
+}
+
+// reapPass is one SELECT of the sweep: the statuses it lists and the age past
+// which those rows count as stuck.
+type reapPass struct {
+	statuses []string
+	after    time.Duration
+}
+
+// reapPasses splits the sweep by status so "approved" rows get the later
+// threshold that leaves room for RecoverStrandedApprovals (issue #894).
+func reapPasses(reapAfter time.Duration) []reapPass {
+	return []reapPass{
+		{statuses: []string{"running"}, after: reapAfter},
+		{statuses: []string{"approved"}, after: approvedReapAfter(reapAfter)},
+	}
+}
+
 // ReapStuckExecutions runs one sweep that finds purchase_executions stuck in
-// approved/running longer than reapAfter and atomically transitions them to
-// "failed" via the existing TransitionExecutionStatus CAS. Each successful
-// transition also persists a canonical error message so the History UI
-// (issue #621) can show why the row was reaped and the operator knows it's
-// safe to retry.
+// running longer than reapAfter, or in approved longer than
+// approvedReapAfter(reapAfter), and atomically transitions them to "failed" via
+// the existing TransitionExecutionStatus CAS. Each successful transition also
+// persists a canonical error message so the History UI (issue #621) can show
+// why the row was reaped and the operator knows it's safe to retry.
+//
+// Approved rows get the later threshold so the process sweep's
+// RecoverStrandedApprovals can re-drive them first (issue #894); the reaper
+// only fails the ones recovery never picked up, e.g. on deployments that do
+// not schedule the process sweep.
 //
 // Safety properties:
 //   - Local-status-only: the reaper never touches provider commitments. If
@@ -118,25 +166,27 @@ func ParseReapAfterFromEnv() time.Duration {
 //   - Per-row error-isolation: a failure on row N never blocks rows
 //     N+1..K. Counts are aggregated in ReapResult for the caller to log.
 func (m *Manager) ReapStuckExecutions(ctx context.Context, reapAfter time.Duration) (*ReapResult, error) {
-	stuck, err := m.config.ListStuckExecutions(ctx, stuckStatuses, reapAfter)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list stuck executions: %w", err)
+	result := &ReapResult{}
+	now := time.Now()
+	for _, pass := range reapPasses(reapAfter) {
+		stuck, err := m.config.ListStuckExecutions(ctx, pass.statuses, pass.after)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list stuck executions: %w", err)
+		}
+		result.Found += len(stuck)
+		for i := range stuck {
+			m.reapOne(ctx, &stuck[i], pass.after, now, result)
+		}
 	}
 
-	result := &ReapResult{Found: len(stuck)}
-	if len(stuck) == 0 {
-		logging.Debugf("purchase reaper: no stuck executions (threshold %s)", reapAfter)
+	if result.Found == 0 {
+		logging.Debugf("purchase reaper: no stuck executions (threshold running=%s approved=%s)",
+			reapAfter, approvedReapAfter(reapAfter))
 		return result, nil
 	}
 
-	now := time.Now()
-	for _rvc := range stuck {
-		exec := stuck[_rvc]
-		m.reapOne(ctx, &exec, reapAfter, now, result)
-	}
-
-	logging.Infof("purchase reaper sweep complete: found=%d reaped=%d race_lost=%d errored=%d (threshold %s)",
-		result.Found, result.Reaped, result.RaceLost, result.Errored, reapAfter)
+	logging.Infof("purchase reaper sweep complete: found=%d reaped=%d race_lost=%d errored=%d (threshold running=%s approved=%s)",
+		result.Found, result.Reaped, result.RaceLost, result.Errored, reapAfter, approvedReapAfter(reapAfter))
 
 	return result, nil
 }

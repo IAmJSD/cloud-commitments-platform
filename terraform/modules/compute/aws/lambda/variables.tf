@@ -232,7 +232,7 @@ variable "fire_scheduled_purchases_schedule" {
 }
 
 variable "enable_process_scheduled_purchases_schedule" {
-  description = "Enable the scheduled process_scheduled_purchases sweep (proposes purchases that are due). Opt-in: default false so no purchase proposal runs unless an operator asks for it. Note (#894): the stuck-purchase reaper can fail stranded approved rows before process re-drives them."
+  description = "Enable the scheduled process_scheduled_purchases sweep (proposes purchases that are due). Opt-in: default false so no purchase proposal runs unless an operator asks for it."
   type        = bool
   default     = false
 }
@@ -268,7 +268,7 @@ variable "finalize_revocations_schedule" {
 }
 
 variable "purchase_approved_reap_after" {
-  description = "Threshold age for the stuck-purchase reaper. Any execution sitting in approved/running longer than this gets flipped to failed on the next sweep. Parsed via Go time.ParseDuration (e.g. \"10m\", \"15m\", \"1h\"). Empty string falls back to the in-code default (10m)."
+  description = "Threshold age for the stuck-purchase reaper. Any execution sitting in running longer than this gets flipped to failed on the next sweep; approved rows wait at least 1h20m so the process sweep can re-drive them first (#894). Parsed via Go time.ParseDuration (e.g. \"10m\", \"15m\", \"1h\"). Empty string falls back to the in-code default (10m)."
   type        = string
   default     = ""
 }
