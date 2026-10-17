@@ -467,6 +467,10 @@ resource "aws_lb_target_group" "main" {
   vpc_id      = var.vpc_id
   target_type = "ip"
 
+  # Traffic admission: var.health_check_path defaults to /ready, which answers
+  # 503 until this task has finished database initialization, so the ALB never
+  # routes to a cold task (#647). /health answers 200 even while degraded and
+  # stays the container liveness check below.
   health_check {
     enabled             = true
     path                = var.health_check_path
@@ -670,6 +674,9 @@ resource "aws_ecs_task_definition" "main" {
         }
       }
 
+      # Liveness: a failing container health check makes ECS replace the task,
+      # so it must stay on /health (200 whenever the process is serving), not
+      # /ready (503 during initialization or a database outage).
       healthCheck = {
         command     = ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
         interval    = 30
@@ -714,6 +721,12 @@ resource "aws_ecs_service" "main" {
   }
 
   enable_execute_command = var.enable_execute_command
+
+  # ECS replaces a task its target group reports unhealthy. The ALB check is
+  # readiness (/ready), so without a grace period a task still connecting to
+  # the database or running migrations would be killed after
+  # unhealthy_threshold failed checks and never finish initializing.
+  health_check_grace_period_seconds = var.health_check_grace_period_seconds
 
   deployment_maximum_percent         = 200
   deployment_minimum_healthy_percent = 100

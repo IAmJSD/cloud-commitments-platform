@@ -128,6 +128,21 @@ output "fargate_api_url" {
   value       = var.compute_platform == "fargate" ? module.compute_fargate[0].api_url : null
 }
 
+# The URL that actually serves the app through the ALB, for the deploy smoke
+# gate. With HTTPS enabled the port 80 listener only answers 301 to https, so
+# the http:// ALB URL never reaches the app (#647); and https://<ALB DNS name>
+# fails TLS verification because the listener's certificate is the wildcard for
+# subdomain_zone_name. The api-<env> alias in dns_records.tf is covered by that
+# wildcard and points at the same ALB.
+output "fargate_app_url" {
+  description = "URL that serves the Fargate app through the ALB: https on the api-<env> alias when HTTPS is enabled, otherwise http on the ALB DNS name"
+  value = var.compute_platform != "fargate" ? null : (
+    module.compute_fargate[0].api_https_url != null && length(aws_route53_record.fargate_alb_alias) > 0
+    ? "https://${aws_route53_record.fargate_alb_alias[0].fqdn}"
+    : module.compute_fargate[0].api_url
+  )
+}
+
 output "fargate_log_group_name" {
   description = "Fargate CloudWatch log group name"
   value       = var.compute_platform == "fargate" ? module.compute_fargate[0].log_group_name : null
