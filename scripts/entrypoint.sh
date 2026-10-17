@@ -61,19 +61,22 @@ if [ "$DB_AUTO_MIGRATE" = "true" ]; then
   fi
 
   if [ -n "${DB_PASSWORD:-}" ]; then
-    # Run migrations if password is available
-    # URL-encode password to handle special characters (generated passwords contain =,[,$, etc.)
-    ENCODED_PASSWORD=$(printf '%s' "${DB_PASSWORD:-}" | awk 'BEGIN{split("",hex); for(i=0;i<256;i++){c=sprintf("%c",i); hex[c]=sprintf("%%%02X",i)}} {n=length($0); for(i=1;i<=n;i++){c=substr($0,i,1); if(c~/[A-Za-z0-9._~-]/)printf "%s",c; else printf "%s",hex[c]}}')
+    # Run migrations if password is available.
+    # The password goes to migrate through PGPASSWORD, not the URL: pgx reads
+    # it when the URL has no password, so no percent-encoding is needed for
+    # passwords with @ : / ? # % or spaces (generated ones contain =, [, $,
+    # etc.), and the secret stays out of migrate's command line. It is set
+    # for the migrate command only, not exported to the application.
     # pgx5://, not postgresql://: the migrate binary in this image is built
     # with -tags=pgx5 (see Dockerfile), and golang-migrate dispatches on the
     # URL scheme. The pgx/v5 driver registers "pgx5" only. See issue #1849.
-    DB_URL="pgx5://${DB_USER}:${ENCODED_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=${DB_SSL_MODE}"
+    DB_URL="pgx5://${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=${DB_SSL_MODE}"
 
     # `|| MIGRATE_EXIT_CODE=$?` keeps the failure out of errexit so the
     # diagnostic below runs. golang-migrate exits 0 on "no change", so any
     # non-zero status is a real failure.
     MIGRATE_EXIT_CODE=0
-    migrate -path "$DB_MIGRATIONS_PATH" -database "$DB_URL" up 2>&1 || MIGRATE_EXIT_CODE=$?
+    PGPASSWORD="$DB_PASSWORD" migrate -path "$DB_MIGRATIONS_PATH" -database "$DB_URL" up 2>&1 || MIGRATE_EXIT_CODE=$?
     if [ "$MIGRATE_EXIT_CODE" -ne 0 ]; then
       echo "   ❌ Migration failed with exit code $MIGRATE_EXIT_CODE"
       exit "$MIGRATE_EXIT_CODE"
