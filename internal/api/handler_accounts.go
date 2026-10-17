@@ -620,13 +620,17 @@ func (h *Handler) deleteAccount(ctx context.Context, req *events.LambdaFunctionU
 		// concurrently before we issued the DELETE. Migration 000053 enforces
 		// ON DELETE RESTRICT, so Postgres raises SQLSTATE 23503
 		// (foreign_key_violation). Terminal executions never cause this:
-		// DeleteCloudAccount detaches them in the same transaction. Map it to
-		// the same structured 409 the preflight returns so the frontend's
-		// Cancel-All-Then-Delete affordance still kicks in — minus the
-		// count/ids, which we can't supply without re-querying (and the
-		// operator can just retry).
+		// DeleteCloudAccount detaches them in the same transaction. Re-run the
+		// preflight so the client gets the same structured 409 (pending with
+		// counts and ids, or active), and fall back to a bare pending 409 if
+		// the re-query fails or no longer sees the blocker.
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			if perr := h.preflightAccountDelete(ctx, id); perr != nil {
+				if ce, ok := IsClientError(perr); ok {
+					return nil, ce
+				}
+			}
 			return nil, NewClientErrorWithDetails(409,
 				"cannot delete account: pending purchase(s) must be canceled first",
 				map[string]any{

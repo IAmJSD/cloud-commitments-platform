@@ -723,6 +723,93 @@ func TestDeleteAccount_FKViolationRace_Returns409(t *testing.T) {
 	assert.Equal(t, "pending_executions", details["reason"])
 }
 
+// TestDeleteAccount_FKViolationRace_RequeriesPreflight asserts that after a
+// 23503 race the handler re-runs the preflight, so the client gets the
+// specific structured 409 for whatever row raced in: pending (with its count)
+// or active (approved/running/scheduled/paused), not a generic pending 409.
+func TestDeleteAccount_FKViolationRace_RequeriesPreflight(t *testing.T) {
+	cases := []struct {
+		name       string
+		pending    int
+		live       int
+		wantReason string
+		wantKey    string
+	}{
+		{"pending row raced in", 2, 0, "pending_executions", "pending_count"},
+		{"active row raced in", 0, 1, "active_executions", "active_count"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mockAuth := new(MockAuthService)
+			setupAdminAuth(ctx, mockAuth)
+
+			store := setupAdminMock(ctx)
+			pendingCalls, liveCalls := 0, 0
+			// First call is the preflight (nothing yet); the second is the
+			// re-query after the FK violation, which sees the raced-in row.
+			store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
+				pendingCalls++
+				if pendingCalls == 1 {
+					return 0, nil
+				}
+				return tc.pending, nil
+			}
+			store.CountLiveExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
+				liveCalls++
+				if liveCalls == 1 {
+					return 0, nil
+				}
+				return tc.live, nil
+			}
+			store.DeleteCloudAccountFn = func(_ context.Context, _ string) error {
+				return &pgconn.PgError{Code: "23503"}
+			}
+			handler := &Handler{auth: mockAuth, config: store}
+
+			_, err := handler.deleteAccount(ctx, adminRequest(""), "11111111-1111-1111-1111-111111111111")
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "expected ClientError (409), got %T: %v", err, err)
+			assert.Equal(t, 409, ce.code)
+			details := ce.Details()
+			require.NotNil(t, details)
+			assert.Equal(t, tc.wantReason, details["reason"])
+			assert.Contains(t, details, tc.wantKey, "re-queried 409 carries the count")
+		})
+	}
+}
+
+// TestDeleteAccount_FKViolationRace_RequeryErrorFallsBack asserts that if the
+// re-query itself fails, the handler still returns the bare pending 409
+// rather than surfacing the re-query's 500.
+func TestDeleteAccount_FKViolationRace_RequeryErrorFallsBack(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	calls := 0
+	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
+		calls++
+		if calls == 1 {
+			return 0, nil
+		}
+		return 0, errors.New("connection reset")
+	}
+	store.DeleteCloudAccountFn = func(_ context.Context, _ string) error {
+		return &pgconn.PgError{Code: "23503"}
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	_, err := handler.deleteAccount(ctx, adminRequest(""), "11111111-1111-1111-1111-111111111111")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError (409), got %T: %v", err, err)
+	assert.Equal(t, 409, ce.code)
+	assert.Equal(t, "pending_executions", ce.Details()["reason"])
+}
+
 // TestDeleteAccount_NonFKError_StillReturns500 asserts that errors which
 // are NOT FK violations continue to bubble up as wrapped errors (500),
 // so we don't accidentally swallow real failures as 409s.
