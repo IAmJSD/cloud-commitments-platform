@@ -18,6 +18,7 @@ import { canAccess } from './permissions';
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 import { suggestedPurchaseStartDate } from './lib/calendar-date';
 import { openPlanSchedulePreview } from './plan-schedule-preview';
+import { mountPlanEditorPanel, readPlanScheduleInput } from './plan-editor-panel';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
 // "Plan from N selected" button-click time. The Plan flow used to re-derive
@@ -1266,6 +1267,24 @@ async function togglePlan(planId: string, enabled: boolean): Promise<void> {
   }
 }
 
+let disposePlanEditor: (() => void) | undefined;
+function openPlanForm(modal: HTMLElement, create: boolean): void {
+  disposePlanEditor?.(); disposePlanEditor = undefined;
+  const host = modal.querySelector<HTMLElement>('#plan-editor-panel'), form = modal.querySelector<HTMLFormElement>('#plan-form');
+  const advanced = modal.querySelector<HTMLDetailsElement>('#plan-advanced-settings');
+  if (advanced) advanced.open = false;
+  const revealInvalid = (event: Event): void => {
+    if (advanced?.contains(event.target as Node)) advanced.open = true;
+  };
+  form?.addEventListener('invalid', revealInvalid, true);
+  const disposePanel = create && host && form ? mountPlanEditorPanel(host, form) : undefined;
+  disposePlanEditor = () => {
+    try { disposePanel?.(); }
+    finally { form?.removeEventListener('invalid', revealInvalid, true); }
+  };
+  openModal(modal, { initialFocus: '#plan-name', onClose: () => { disposePlanEditor?.(); disposePlanEditor = undefined; } });
+}
+
 // editPlan loads the plan and opens the edit modal pre-filled. Returns true
 // when the modal opened, false when the plan could not be loaded (e.g. it was
 // deleted or is no longer accessible). Callers that render the plan in a list
@@ -1357,7 +1376,7 @@ async function editPlan(planId: string): Promise<boolean> {
     // Wire live range validation on all five numeric inputs (#702).
     wirePlanRangeInputs();
     const planModal = document.getElementById('plan-modal');
-    if (planModal) openModal(planModal);
+    if (planModal) openPlanForm(planModal, false);
     return true;
   } catch (error) {
     console.error('Failed to load plan:', error);
@@ -1519,7 +1538,7 @@ export async function savePlan(e: Event): Promise<void> {
 function refreshPlanSaveButtonState(): void {
   const form = document.getElementById('plan-form') as HTMLFormElement | null;
   if (!form) return;
-  const submitBtn = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+  const submitBtn = Array.from(form.elements).find((element): element is HTMLButtonElement => element instanceof HTMLButtonElement && element.type === 'submit');
   if (!submitBtn) return;
   const hasAccounts = planSelectedAccounts.length > 0;
   submitBtn.disabled = !hasAccounts;
@@ -1816,7 +1835,7 @@ export function openCreatePlanModal(snapshot?: readonly api.Recommendation[]): v
 
   const planModal = document.getElementById('plan-modal');
   if (planModal) {
-    openModal(planModal);
+    openPlanForm(planModal, true);
   }
 }
 
@@ -1848,7 +1867,7 @@ export function openNewPlanModal(): void {
 
   const planModal = document.getElementById('plan-modal');
   if (planModal) {
-    openModal(planModal);
+    openPlanForm(planModal, true);
   }
 }
 
@@ -2370,13 +2389,10 @@ let _unsubAccount: (() => void) | null = null;
 export function setupPlanHandlers(): void {
   const preview = document.getElementById('preview-plan-schedule-btn');
   if (preview) preview.onclick = () => {
-    const value = (id: string): string => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null)?.value ?? '';
-    const parent = document.getElementById('plan-modal');
-    if (!parent) return;
+    const parent = document.getElementById('plan-modal'), form = document.getElementById('plan-form') as HTMLFormElement | null;
+    if (!parent || !form) return;
     try {
-      openPlanSchedulePreview({ name: value('plan-name'), preset: document.querySelector<HTMLInputElement>('input[name="ramp-schedule"]:checked')?.value ?? '',
-        coverage: value('plan-coverage'), stepPercent: value('ramp-step-percent'), intervalDays: value('ramp-interval-days'),
-        notificationDays: value('plan-notify-days'), term: value('plan-term'), payment: value('plan-payment') }, parent);
+      openPlanSchedulePreview(readPlanScheduleInput(form), parent);
     } catch (error) { showToast({ message: (error as Error).message, kind: 'error' }); }
   };
   // Drop any previous subscriptions before re-registering so we don't
