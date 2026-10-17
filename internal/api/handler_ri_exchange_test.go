@@ -1237,14 +1237,21 @@ func TestListExchangeableAzureRIs_ScopedFiltersToOwnSubscription(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := scopedAzureAuth(t, "view", "purchases", []string{"acct-a"})
 	store := &MockConfigStore{}
+	azureListed := false
 	store.ListCloudAccountsFn = func(_ context.Context, filter config.CloudAccountFilter) ([]config.CloudAccount, error) {
-		require.NotNil(t, filter.Provider, "the scope filter must narrow to azure accounts")
-		require.Equal(t, "azure", *filter.Provider)
+		// getAccountScope loads every registered account (no filter) to find
+		// which display names are unique (#433); the handler's own lookup
+		// must narrow to azure.
+		if filter.Provider != nil {
+			require.Equal(t, "azure", *filter.Provider)
+			azureListed = true
+		}
 		return []config.CloudAccount{
 			{ID: "acct-a", Name: "A Team", Provider: "azure", ExternalID: "sub-a"},
 			{ID: "acct-b", Name: "B Team", Provider: "azure", ExternalID: "sub-b"},
 		}, nil
 	}
+	t.Cleanup(func() { assert.True(t, azureListed, "the scope filter must narrow to azure accounts") })
 	stub := &stubAzureExchangeClient{reservations: []azurecompute.ExchangeableReservation{
 		{ReservationID: "res-a", BillingScopeID: "/subscriptions/sub-a", SKU: "Standard_D2s_v3", Quantity: 1, Region: "eastus"},
 		{ReservationID: "res-b", BillingScopeID: "/subscriptions/sub-b", SKU: "Standard_D4s_v3", Quantity: 3, Region: "westeurope"},
@@ -1650,6 +1657,9 @@ func (m *mockAuthForExchange) ValidateUserAPIKeyAPI(_ context.Context, _ string)
 	return nil, nil, nil
 }
 func (m *mockAuthForExchange) RecordAPIKeyUsageAsync(_ string) {}
+func (m *mockAuthForExchange) GetAPIKeyEffectivePermissionsAPI(_ context.Context, _, _ string) ([]auth.APIPermission, error) {
+	return nil, nil
+}
 func (m *mockAuthForExchange) HasAPIKeyPermissionAPI(_ context.Context, _, _, _ string) (string, string, bool, error) {
 	return "admin", "", true, nil
 }

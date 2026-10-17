@@ -1530,21 +1530,22 @@ func TestHandler_getCurrentUserPermissions_AdminAPIKey(t *testing.T) {
 }
 
 // TestHandler_getCurrentUserPermissions_UserAPIKey guards CR #922 F2:
-// a user API key resolves to the owning user, and the handler must look
-// up that user's effective permissions instead of returning 401 because
-// the request has no bearer token.
+// a user API key resolves without a bearer token instead of returning 401.
+// Since issue #62 the handler describes the KEY's effective permissions,
+// never the owning user's (GetUserPermissionsAPI must not be consulted).
 func TestHandler_getCurrentUserPermissions_UserAPIKey(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	user := &auth.User{ID: "user-42"}
-	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return((any)(nil), any(user), nil)
+	key := &auth.UserAPIKey{ID: "key-42", UserID: "user-42"}
+	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(any(key), any(user), nil)
 
 	perms := []auth.APIPermission{
 		{Action: "view", Resource: "recommendations"},
 	}
-	mockAuth.On("GetUserPermissionsAPI", ctx, "user-42").Return(perms, nil)
+	mockAuth.On("GetAPIKeyEffectivePermissionsAPI", ctx, "key-42", "user-42").Return(perms, nil)
 
 	handler := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"X-API-Key": "user-key"}}
@@ -1553,6 +1554,27 @@ func TestHandler_getCurrentUserPermissions_UserAPIKey(t *testing.T) {
 	assert.False(t, result.IsAdmin)
 	require.Len(t, result.Permissions, 1)
 	assert.Equal(t, PermissionEntry{Action: "view", Resource: "recommendations"}, result.Permissions[0])
+	mockAuth.AssertNotCalled(t, "GetUserPermissionsAPI", mock.Anything, mock.Anything)
+}
+
+// TestHandler_getCurrentUserPermissions_UserAPIKeyWithoutKeyRecordRefuses:
+// a key that validates without a usable key record cannot be described, so
+// the handler refuses instead of falling back to the owner's permissions.
+func TestHandler_getCurrentUserPermissions_UserAPIKeyWithoutKeyRecordRefuses(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return((any)(nil), any(&auth.User{ID: "user-42"}), nil)
+
+	handler := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"X-API-Key": "user-key"}}
+	_, err := handler.getCurrentUserPermissions(ctx, req)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 401, ce.code)
+	mockAuth.AssertNotCalled(t, "GetUserPermissionsAPI", mock.Anything, mock.Anything)
 }
 
 // TestHandler_login_ErrorEquivalence verifies that two failed login attempts --

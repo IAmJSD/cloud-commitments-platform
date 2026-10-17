@@ -1878,6 +1878,9 @@ func TestGetAccount_InScope_ByName(t *testing.T) {
 	customStore := &mockConfigStoreAccounts{
 		MockConfigStore: setupAdminMock(ctx),
 		getResult:       &acct,
+		// "Production" is unique among the registered accounts, so it may
+		// match by name (#433).
+		listResult: []config.CloudAccount{acct},
 	}
 
 	handler := &Handler{auth: mockAuth, config: customStore}

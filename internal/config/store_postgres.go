@@ -867,17 +867,50 @@ func (s *PostgresStore) StampPlanNotificationSent(ctx context.Context, planID st
 
 // DeletePurchasePlan deletes a purchase plan.
 func (s *PostgresStore) DeletePurchasePlan(ctx context.Context, planID string) error {
-	query := `DELETE FROM purchase_plans WHERE id = $1`
+	return s.WithTx(ctx, func(tx pgx.Tx) error {
+		plan, err := s.LockPurchasePlanTx(ctx, tx, planID)
+		if err != nil {
+			return err
+		}
+		if plan == nil {
+			return fmt.Errorf("purchase plan not found: %s", planID)
+		}
+		if plan.RampSchedule.DatesManaged {
+			if err := requireManagedDeleteTx(ctx, tx, planID); err != nil {
+				return err
+			}
+		}
+		if err := cancelOpenPlanExecutionsTx(ctx, tx, planID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM purchase_plans WHERE id = $1`, planID); err != nil {
+			return fmt.Errorf("failed to delete purchase plan: %w", err)
+		}
+		return nil
+	})
+}
 
-	result, err := s.db.Exec(ctx, query, planID)
-	if err != nil {
-		return fmt.Errorf("failed to delete purchase plan: %w", err)
+// cancelOpenPlanExecutionsTx cancels the plan's step rows that can still be
+// approved or run (pending, notified, paused) in the delete's transaction.
+// purchase_executions.plan_id is ON DELETE SET NULL (migration 000033), and
+// token approval applies the plan's max_step_commitment and the approve-own
+// plan-step rule only while plan_id is set (approveConstraintsForSession), so
+// a row left open would become approvable past its plan's cap (issue #862).
+// The rows' suppressions go with them, as on the other cancel paths.
+func cancelOpenPlanExecutionsTx(ctx context.Context, tx pgx.Tx, planID string) error {
+	const q = `
+		WITH canceled AS (
+			UPDATE purchase_executions
+			   SET status = $2, updated_at = NOW()
+			 WHERE plan_id = $1
+			   AND status IN ('pending', 'notified', 'paused')
+			RETURNING execution_id
+		)
+		DELETE FROM purchase_suppressions
+		 WHERE execution_id IN (SELECT execution_id FROM canceled)`
+	if _, err := tx.Exec(ctx, q, planID, StatusCanceled); err != nil {
+		return fmt.Errorf("failed to cancel open executions of purchase plan: %w", err)
 	}
-
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("purchase plan not found: %s", planID)
-	}
-
 	return nil
 }
 
@@ -1237,13 +1270,35 @@ func (s *PostgresStore) TransitionExecutionStatusTokenPinned(ctx context.Context
 // RescheduleAwaitingExecution is a conditional single-column update: the
 // status predicate makes a lost race a benign no-op instead of an overwrite.
 func (s *PostgresStore) RescheduleAwaitingExecution(ctx context.Context, executionID string, scheduledDate time.Time) (bool, error) {
-	tag, err := s.db.Exec(ctx, `
-		UPDATE purchase_executions SET scheduled_date = $2, updated_at = NOW()
-		WHERE execution_id = $1 AND status IN ('pending', 'notified')`, executionID, scheduledDate)
+	var planID *string
+	err := s.db.QueryRow(ctx, `SELECT plan_id::text FROM purchase_executions WHERE execution_id = $1`, executionID).Scan(&planID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
 		return false, fmt.Errorf("reschedule execution %s: %w", executionID, err)
 	}
-	return tag.RowsAffected() == 1, nil
+	updated := false
+	err = s.WithTx(ctx, func(tx pgx.Tx) error {
+		if planID != nil {
+			plan, lockErr := s.LockPurchasePlanTx(ctx, tx, *planID)
+			if lockErr != nil {
+				return lockErr
+			}
+			if plan != nil && plan.RampSchedule.DatesManaged {
+				return fmt.Errorf("%w: reschedule of execution %s", ErrEditorReconciliationRequired, executionID)
+			}
+		}
+		tag, execErr := tx.Exec(ctx, `
+			UPDATE purchase_executions SET scheduled_date = $2, updated_at = NOW()
+			WHERE execution_id = $1 AND status IN ('pending', 'notified')`, executionID, scheduledDate)
+		updated = execErr == nil && tag.RowsAffected() == 1
+		return execErr
+	})
+	if err != nil {
+		return false, fmt.Errorf("reschedule execution %s: %w", executionID, err)
+	}
+	return updated, nil
 }
 
 func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmpty *bool, tokenHash *string) (*PurchaseExecution, error) {
@@ -1453,6 +1508,16 @@ func (s *PostgresStore) CancelScheduledExecutionAtomic(ctx context.Context, tx p
 // without changing the narrower GetPendingExecutions contract the scheduler
 // depends on.
 //
+// Pending rows dated in the future are the one exception to newest-first
+// (issue #680): plan creation writes every ramp step up front as a pending
+// row, up to 52 per plan, so about 20 plans fill MaxListLimit with steps
+// months ahead and a plain scheduled_date DESC would cut off a pending
+// approval due today. Those future pending steps sort after every other row,
+// and among themselves soonest first, so the cap drops the farthest steps.
+// No other status is affected: a notified, scheduled or in-flight row is
+// actionable whatever its date, and terminal statuses never match the
+// pending predicate, so their order is unchanged.
+//
 // Executions with status 'completed' and an empty error are excluded: they are
 // already represented by their purchase_history rows, so returning them would
 // only consume the cap (the History handler skips them anyway).
@@ -1478,7 +1543,9 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		  AND NOT (status = 'completed' AND COALESCE(error, '') = '')
-		ORDER BY scheduled_date DESC
+		ORDER BY (status = 'pending' AND scheduled_date > now()) ASC,
+		         CASE WHEN status = 'pending' AND scheduled_date > now() THEN scheduled_date END ASC,
+		         scheduled_date DESC
 		LIMIT $2
 	`
 	return s.queryExecutions(ctx, query, statuses, limit)
@@ -4186,6 +4253,9 @@ func (s *PostgresStore) SetPlanAccounts(ctx context.Context, planID string, acco
 	}
 	defer rollbackTx(ctx, tx, "SetPlanAccounts")
 
+	if guardErr := requireManagedAccountsTx(ctx, tx, planID, accountIDs); guardErr != nil {
+		return guardErr
+	}
 	if setErr := s.setPlanAccountsTx(ctx, tx, planID, accountIDs); setErr != nil {
 		return setErr
 	}

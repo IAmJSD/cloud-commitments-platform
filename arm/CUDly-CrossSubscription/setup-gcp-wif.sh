@@ -263,7 +263,18 @@ normalize_mapping() {
   printf '%s\n' ${pairs[@]+"${pairs[@]}"} | sort
 }
 
+# Resource names, computed before the provider block because the reuse path
+# compares an existing OIDC provider's allowed audiences against them.
+POOL_RESOURCE="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}"
+PROVIDER_RESOURCE="${POOL_RESOURCE}/providers/${PROVIDER_ID}"
+WIF_AUDIENCE="//iam.googleapis.com/${PROVIDER_RESOURCE}"
+
 # ── Idempotent provider creation ───────────────────────────────────────────────
+# --allowed-audiences is deliberately not passed to create-oidc: GCP then
+# accepts only the provider's own full resource name, which is the narrowest
+# value and the one the reuse check below expects. create-aws has no audience
+# list at all (an AWS provider verifies a signed GetCallerIdentity request, not
+# a token aud claim), so there is nothing to set or check for that type.
 if ! gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
      --project="$PROJECT" --location=global \
      --workload-identity-pool="$POOL_ID" &>/dev/null; then
@@ -327,6 +338,30 @@ ${DELETE_HINT}"
       die "provider '${PROVIDER_ID}' already exists but is not an OIDC provider for issuer ${ISSUER_URI} (describe reports issuer: ${EXISTING_ISSUER:-none}). Delete it and re-run:
 ${DELETE_HINT}"
     fi
+    # The checks in this block decide WHO may federate; the audience list
+    # decides which token audiences count as addressed to this provider. A
+    # list widened to include another relying party's audience lets a token
+    # minted for that party be exchanged here. An empty list is GCP's default
+    # (only this provider's own resource name, with or without the https:
+    # prefix), which is what every provider this script creates has, so it and
+    # a single entry naming this provider in either form are the only values
+    # accepted. value() joins a repeated field with ';', so a list with more
+    # than one entry, or an entry merely starting or ending with the expected
+    # name, can never compare equal to any of them.
+    EXISTING_AUDIENCES=$(gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
+      --project="$PROJECT" --location=global \
+      --workload-identity-pool="$POOL_ID" \
+      --format='value(oidc.allowedAudiences)')
+    case "$EXISTING_AUDIENCES" in
+      ""|"${WIF_AUDIENCE}"|"https://iam.googleapis.com/${PROVIDER_RESOURCE}") ;;
+      *) die "provider '${PROVIDER_ID}' already exists with a different allowed audience list, so this script cannot vouch for which tokens it accepts.
+  found   : ${EXISTING_AUDIENCES}
+  expected: (none, GCP's default) or exactly ${WIF_AUDIENCE}
+An audience list naming anything other than this provider lets a token issued
+by ${ISSUER_URI} for a different relying party be exchanged through it.
+Delete the provider and re-run:
+${DELETE_HINT}" ;;
+    esac
   fi
   if [[ "$EXISTING_CONDITION" != "$EXPECTED_CONDITION" ]]; then
     die "provider '${PROVIDER_ID}' already exists with a different attribute condition, so this script cannot vouch for which identities enter pool '${POOL_ID}'.
@@ -359,11 +394,10 @@ never authorised.
 Delete the provider and re-run:
 ${DELETE_HINT}"
   fi
-  echo "Reusing existing provider '${PROVIDER_ID}' (attribute condition and mapping match expected values)"
+  echo "Reusing existing provider '${PROVIDER_ID}' (attribute condition, mapping and, for OIDC, allowed audiences match expected values)"
 fi
 
 # ── Grant service account impersonation to one principal ──────────────────────
-POOL_RESOURCE="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}"
 if [[ "$PROVIDER_TYPE" == "aws" ]]; then
   # Session ARNs carry a per-session suffix, so the grant names the normalised
   # role attribute rather than an exact subject.
@@ -453,8 +487,6 @@ if [[ -n "$OTHER_GRANTS" ]]; then
 fi
 
 # ── Report the values CUDly needs (no secrets) ────────────────────────────────
-PROVIDER_RESOURCE="${POOL_RESOURCE}/providers/${PROVIDER_ID}"
-WIF_AUDIENCE="//iam.googleapis.com/${PROVIDER_RESOURCE}"
 echo ""
 if [[ "$PROVIDER_TYPE" == "aws" ]]; then
   CRED_CONFIG_ARGS=(--aws)

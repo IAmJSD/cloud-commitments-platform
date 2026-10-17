@@ -123,6 +123,14 @@ func NewScheduler(cfg SchedulerConfig) *Scheduler {
 	}
 }
 
+// IsLambda reports the Lambda mode this scheduler was constructed with
+// (SchedulerConfig.IsLambda). It never re-reads the environment: the value is
+// owned by whoever built the scheduler, so callers can assert that the mode
+// they threaded in is the one that gates background goroutines (issue #110).
+func (s *Scheduler) IsLambda() bool {
+	return s.isLambda
+}
+
 // cacheTTLFromEnv parses CUDLY_RECOMMENDATION_CACHE_TTL using
 // time.ParseDuration. Falls back to defaultCacheTTL on parse error (with
 // a warning) so a mis-set env doesn't take the feature offline.

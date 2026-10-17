@@ -491,7 +491,10 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		PurchaseManager: purchaseManager,
 		EmailSender:     deps.EmailSender,
 		STSClient:       deps.STSClient,
-		IsLambda:        runtime.IsLambda(),
+		// cfg.IsLambda, never a live runtime.IsLambda(): the Application has
+		// exactly one answer to "am I on Lambda", shared with the post-DB
+		// scheduler in ensureDB and the API handler (issue #110).
+		IsLambda: cfg.IsLambda,
 	})
 	purchaseManager.SetRecommendationSource(sched)
 
@@ -531,6 +534,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		OIDCSigner:        signer,
 		OIDCIssuerURL:     resolveOIDCIssuerURL(cfg),
 		Insurance:         archeraProvider,
+		IsLambda:          cfg.IsLambda,
 	})
 
 	log.Printf("CUDly Server initialization complete")
@@ -899,6 +903,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		CommitmentOpts:      commitmentOpts,
 		EncryptionKeySource: app.encKeySource,
 		Insurance:           app.archera,
+		IsLambda:            app.appConfig.IsLambda,
 	})
 	if app.API == nil {
 		return fmt.Errorf("failed to create API handler")
@@ -1202,6 +1207,10 @@ func (a *authServiceAdapter) HasPermissionForConstraintsAPI(ctx context.Context,
 
 func (a *authServiceAdapter) GetUserPermissionsAPI(ctx context.Context, userID string) (any, error) {
 	return a.service.GetUserPermissionsAPI(ctx, userID)
+}
+
+func (a *authServiceAdapter) GetAPIKeyEffectivePermissionsAPI(ctx context.Context, keyID, userID string) ([]auth.APIPermission, error) {
+	return a.service.GetAPIKeyEffectivePermissionsAPI(ctx, keyID, userID)
 }
 
 // Account access.

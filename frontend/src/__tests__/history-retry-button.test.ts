@@ -247,6 +247,29 @@ describe('History inline Retry button (issue #47)', () => {
     const hint = document.querySelector('.history-ops-hint');
     expect(hint).not.toBeNull();
     expect(hint?.textContent).toContain('FROM_EMAIL');
+    expect(hint?.getAttribute('title')).toContain('Operator action required');
+  });
+
+  test('redrive_unsafe row hides Retry and words the hint as permanent', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({
+          purchase_id: 'r-1',
+          created_by_user_id: ADMIN_USER.id,
+          ops_hint: 'Azure savings plans have no provider-side duplicate guard',
+          redrive_unsafe: true,
+        }),
+      ],
+    });
+
+    await loadHistory();
+    expect(document.querySelectorAll('.history-retry-btn')).toHaveLength(0);
+    const hint = document.querySelector('.history-ops-hint');
+    expect(hint?.textContent).toContain('Azure savings plans');
+    expect(hint?.getAttribute('title')).toContain('Permanent: this execution can never be retried; check the account');
+    expect(hint?.getAttribute('title')).not.toContain('Operator action required');
   });
 
   test('threshold-reached row renders override button + sends force=true on accept', async () => {

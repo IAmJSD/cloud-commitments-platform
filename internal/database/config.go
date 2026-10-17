@@ -140,22 +140,26 @@ func (c *Config) validatePoolSettings() error {
 // dsn formats a PostgreSQL connection string with the supplied password. It is
 // the single source of the DSN field layout so DSN and RedactedDSN can never
 // drift (a field added here applies to both the real and the redacted form).
+// Every string value goes through quoteDSNValue, so a space or quote in any
+// of them (not only the password) can neither break the DSN nor inject an
+// extra keyword such as sslmode=disable.
 func (c *Config) dsn(password string) string {
 	return fmt.Sprintf(
 		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s connect_timeout=%d",
-		c.Host,
+		quoteDSNValue(c.Host),
 		c.Port,
-		c.User,
+		quoteDSNValue(c.User),
 		quoteDSNValue(password),
-		c.Database,
-		c.SSLMode,
+		quoteDSNValue(c.Database),
+		quoteDSNValue(c.SSLMode),
 		int(c.ConnectTimeout.Seconds()),
 	)
 }
 
 // quoteDSNValue quotes a keyword/value DSN value per libpq rules when it is
 // empty or contains whitespace, a single quote or a backslash; otherwise it
-// returns the value unchanged.
+// returns the value unchanged. It is the only keyword/value encoder; URL
+// connection strings are built with net/url (url.UserPassword) instead.
 func quoteDSNValue(v string) string {
 	if v != "" && !strings.ContainsAny(v, " \t\n\r\f\v'\\") {
 		return v

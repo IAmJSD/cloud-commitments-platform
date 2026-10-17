@@ -158,14 +158,51 @@ func TestHandler_getHistory_TruncatedPerClass(t *testing.T) {
 }
 
 func TestHandler_getHistory_StaleSweepBoundedToDefaultListLimit(t *testing.T) {
-	t.Setenv("AWS_LAMBDA_RUNTIME_API", "127.0.0.1:9001")
 	ctx := context.Background()
 	stale := executionsWithStatus(150, "pending", time.Now().Add(-8*24*time.Hour), "stale")
 	store := newStarvationStore(ctx)
 	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(stale, nil)
 	store.On("ExpireExecutionAtomic", mock.Anything, mock.Anything, mock.Anything).Return(false, nil)
 
-	runStarvationHistory(t, ctx, store)
+	// Lambda mode (synchronous sweep) so the call count is final on return.
+	mockAuth, req := adminHistoryReq(ctx)
+	handler := &Handler{auth: mockAuth, config: store, isLambda: true}
+	_, err := handler.getHistory(ctx, req, map[string]string{})
+	require.NoError(t, err)
 
 	store.AssertNumberOfCalls(t, "ExpireExecutionAtomic", config.DefaultListLimit)
+}
+
+// TestHandler_getHistory_DueApprovalNotCrowdedOutByFutureRampSteps is the
+// issue #680 regression through the real getHistory path: 20 plans x 52
+// future pending ramp steps exceed the actionable cap, and the pending
+// approval due today must still be returned, with truncated set.
+func TestHandler_getHistory_DueApprovalNotCrowdedOutByFutureRampSteps(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	var execs []config.PurchaseExecution
+	for p := 0; p < 20; p++ {
+		for s := 1; s <= 52; s++ {
+			execs = append(execs, config.PurchaseExecution{
+				ExecutionID:   fmt.Sprintf("ramp-%d-%d", p, s),
+				Status:        "pending",
+				ScheduledDate: now.AddDate(0, 0, 7*s),
+			})
+		}
+	}
+	execs = append(execs, executionsWithStatus(1, "pending", now.Add(-time.Hour), "due")...)
+	store := newStarvationStore(ctx)
+	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(execs, nil)
+
+	body := runStarvationHistory(t, ctx, store)
+
+	ids := map[string]bool{}
+	for _, p := range body["purchases"].([]any) {
+		ids[p.(map[string]any)["purchase_id"].(string)] = true
+	}
+	assert.True(t, ids["due-0"], "pending approval due today must survive 1040 future ramp steps")
+	assert.True(t, ids["ramp-0-1"], "the soonest future ramp step survives the cap")
+	assert.False(t, ids["ramp-0-52"], "the farthest future ramp steps are the ones dropped")
+	assert.Len(t, body["purchases"], config.MaxListLimit)
+	assert.Equal(t, true, body["truncated"])
 }

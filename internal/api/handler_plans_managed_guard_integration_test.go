@@ -41,7 +41,7 @@ func setPlanManaged(ctx context.Context, t *testing.T, f *createConcurrencyFixtu
 		markers = `{"dates_managed":true,"allocation_mode":"equal_count"}`
 	}
 	_, err := f.pool.Exec(ctx, `UPDATE purchase_plans SET next_execution_date = now() + interval '3 days',
-		ramp_schedule = jsonb_set(ramp_schedule, '{current_step}', '0') || $2::jsonb WHERE id = $1`, f.planID, markers)
+		ramp_schedule = (jsonb_set(ramp_schedule, '{current_step}', '0') - 'dates_managed') || $2::jsonb WHERE id = $1`, f.planID, markers)
 	require.NoError(t, err)
 }
 
@@ -98,6 +98,15 @@ func TestManagedPlanRefusalIsHTTP409WithCode(t *testing.T) {
 	require.JSONEq(t, `{"error":"this plan is managed by the schedule editor; make this change in the editor","code":"editor_reconciliation_required"}`, resp.Body)
 }
 
+// limitedHandler serves the same store to a caller holding only perms, with
+// account scope restricted to scoped (nil means unrestricted).
+func limitedHandler(f *createConcurrencyFixture, perms []auth.Permission, scoped []string) *Handler {
+	limited := new(MockAuthService)
+	limited.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{UserID: "00000000-0000-0000-0000-000000000001", Email: "limited@example.com"}, nil).Maybe()
+	limited.grantPermissionsScoped(perms, scoped)
+	return &Handler{config: f.store, auth: limited}
+}
+
 func TestManagedPlanAuthorizationPrecedesGuard(t *testing.T) {
 	ctx := context.Background()
 	update := auth.Permission{Action: auth.ActionUpdate, Resource: auth.ResourcePlans}
@@ -120,10 +129,7 @@ func TestManagedPlanAuthorizationPrecedesGuard(t *testing.T) {
 			setPlanManaged(ctx, t, f, true)
 			_, err := f.pool.Exec(ctx, `UPDATE purchase_plans SET max_step_commitment = 1000 WHERE id = $1`, f.planID)
 			require.NoError(t, err)
-			limited := new(MockAuthService)
-			limited.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{UserID: "00000000-0000-0000-0000-000000000001", Email: "limited@example.com"}, nil).Maybe()
-			limited.grantPermissionsScoped(tc.perms, tc.scoped)
-			h := &Handler{config: f.store, auth: limited}
+			h := limitedHandler(f, tc.perms, tc.scoped)
 			if tc.patch {
 				_, err = h.patchPlan(ctx, managedGuardRequest(tc.body), f.planID)
 			} else {

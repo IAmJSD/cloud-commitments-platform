@@ -362,11 +362,11 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          description: The plan changed concurrently, or the request changes the ramp schedule of a plan that has already completed a step. Keep the schedule, or create a new plan.
+          description: The plan changed concurrently, the request changes the ramp schedule of a plan that has already completed a step (keep the schedule, or create a new plan), or the plan is managed by the schedule editor and the request changes what only the editor may (code editor_reconciliation_required).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorWithCode'
     patch:
       operationId: patchPlan
       tags: [Plans]
@@ -394,6 +394,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/EditorReconciliationRequired'
     delete:
       operationId: deletePlan
       tags: [Plans]
@@ -413,6 +415,12 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          description: The plan is managed by the schedule editor and still has active or unsettled purchases. Cancel or revoke them first (code managed_plan_has_live_executions).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorWithCode'
 
   /api/plans/{id}/purchases:
     parameters:
@@ -437,7 +445,16 @@ paths:
               schema:
                 $ref: '#/components/schemas/CreatePlannedPurchasesResponse'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: >
+            Invalid request body, count outside 1-52, start_date not in
+            YYYY-MM-DD form, or start_date not in the future
+            ("start_date must be in the future"). start_date is read as
+            midnight UTC, so today's date and earlier are refused; the
+            earliest accepted date is tomorrow in UTC.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -449,11 +466,12 @@ paths:
             The plan is disabled, has unsupported scheduling settings, no target
             accounts or insufficient remaining steps, or the requested steps are
             occupied. Automatic plans also require a valid commitment cap and
-            the global automatic purchasing switch.
+            the global automatic purchasing switch. A plan managed by the
+            schedule editor is refused whole (code editor_reconciliation_required).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorWithCode'
 
   # ---- Purchase Actions ---------------------------------------------------
   /api/purchases/execute:
@@ -911,6 +929,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/EditorReconciliationRequired'
 
   /api/purchases/planned/{id}/run:
     parameters:
@@ -2348,6 +2368,14 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    EditorReconciliationRequired:
+      description: >
+        The plan is managed by the schedule editor and this legacy change
+        needs the editor (code editor_reconciliation_required).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorWithCode'
     InternalError:
       description: Internal server error
       content:
@@ -2424,6 +2452,16 @@ components:
       properties:
         error:
           type: string
+
+    ErrorWithCode:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+          description: Machine-readable reason, for example editor_reconciliation_required.
 
     StatusResponse:
       type: object
@@ -3341,6 +3379,10 @@ components:
         start_date:
           type: string
           format: date
+          description: >
+            First purchase date (YYYY-MM-DD), interpreted as midnight UTC.
+            Must be after the current time, so the earliest accepted value
+            is tomorrow's date in UTC.
 
     CreatePlannedPurchasesResponse:
       type: object

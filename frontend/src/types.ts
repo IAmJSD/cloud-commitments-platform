@@ -286,6 +286,9 @@ export interface HistoryPurchase {
   // absent otherwise. Replaces the Retry button entirely -- there is
   // no actionable retry from a persistent misconfig.
   ops_hint?: string;
+  // redrive_unsafe: true when ops_hint is a permanent refusal (the provider
+  // has no duplicate-purchase guard), not something the operator can fix.
+  redrive_unsafe?: boolean;
 
   // Revocation window fields (issue #290).
   //

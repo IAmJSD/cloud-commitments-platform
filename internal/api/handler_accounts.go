@@ -103,7 +103,8 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 
 	// Filter by allowed accts if the user has restricted access.
 	// An empty list or one containing "*" grants unrestricted access.
-	// Otherwise each entry is matched against the account's ID or Name.
+	// Otherwise each entry is matched against the account's ID, or its Name
+	// when no other registered account shares it (issue #433).
 	allowedAccounts, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
@@ -359,6 +360,12 @@ func validateCloudAccountRequest(req CloudAccountRequest) error {
 
 	if req.ExternalID == "" {
 		return NewClientError(400, "external_id is required")
+	}
+
+	if err := validateNoControlChars(
+		namedField{"name", req.Name}, namedField{"external_id", req.ExternalID},
+	); err != nil {
+		return err
 	}
 
 	if err := validateEmailFormat(req.ContactEmail); err != nil {
@@ -1364,6 +1371,9 @@ func (h *Handler) setPlanAccounts(ctx context.Context, httpReq *events.LambdaFun
 	if err := h.config.SetPlanAccounts(ctx, id, body.AccountIDs); err != nil {
 		if errors.Is(err, config.ErrNotFound) {
 			return nil, NewClientError(404, err.Error())
+		}
+		if errors.Is(err, config.ErrEditorReconciliationRequired) {
+			return nil, editorReconciliationError()
 		}
 		return nil, fmt.Errorf("accounts: %w", err)
 	}

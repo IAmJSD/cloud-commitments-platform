@@ -147,7 +147,9 @@ type StoreInterface interface {
 	GetExecutionFanOutShape(ctx context.Context, lineageKey string) (string, error)
 	GetPendingExecutions(ctx context.Context) ([]PurchaseExecution, error)
 	// GetExecutionsByStatuses returns executions in any of the given states,
-	// newest first, capped at `limit`. Used by the History handler to render
+	// newest first, capped at `limit`, except that pending rows dated in the
+	// future (not-yet-due ramp steps) sort last, soonest first, so they cannot
+	// push a due row past the cap (issue #680). Used by the History handler to render
 	// pending + failed + expired alongside completed purchases; the scheduler
 	// keeps using GetPendingExecutions (which is narrower and doesn't share
 	// this method's status filter) to avoid accidental double-processing of

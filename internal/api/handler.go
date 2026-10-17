@@ -17,7 +17,6 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/oidc"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/runtime"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -44,6 +43,7 @@ type Handler struct {
 	signer             oidc.Signer                     // Optional: OIDC issuer signer (backed by cloud KMS)
 	insurance          InsuranceProvider               // Optional: Archera comparison (nil = off)
 	issuerURL          string                          // Canonical OIDC issuer URL (falls back to dashboardURL / request domain)
+	isLambda           bool                            // Lambda mode from HandlerConfig.IsLambda; gates background goroutines
 
 	awsCfgOnce sync.Once  // guards one-time loading of the base AWS config
 	awsCfg     aws.Config // cached base AWS config (no region override)
@@ -117,6 +117,12 @@ type Handler struct {
 	// via the credentials resolved for the org-root account.
 	discoverOrgFn func(context.Context, aws.Config) (*accounts.OrgDiscoveryResult, error)
 
+	// now is the wall clock for the start_date guard in
+	// validatePurchaseScheduling. Nil (the production default) means
+	// time.Now; tests inject a fixed instant so date-boundary cases are
+	// deterministic. Read it through h.clock().
+	now func() time.Time
+
 	// lambdaInvoker is the async-invoke client used by postRefreshRecommendations
 	// and triggerColdStartCollect. In production it is constructed lazily from the
 	// cached awsCfg. Tests inject a stub to avoid live Lambda calls.
@@ -148,15 +154,21 @@ type Handler struct {
 
 // getRIUtilizationCache returns the Postgres-backed TTL cache for Cost
 // Explorer results, lazy-initialized on first call so tests that never
-// exercise the RI Exchange paths don't need to wire it up. Lambda
-// detection happens here (once) via runtime.IsLambda so SWR is gated
-// off on Lambda where background goroutines freeze between
-// invocations.
+// exercise the RI Exchange paths don't need to wire it up. The Lambda
+// mode comes from h.isLambda (HandlerConfig.IsLambda, i.e. the
+// Application's captured value, issue #110) so SWR is gated off on
+// Lambda where background goroutines freeze between invocations.
 func (h *Handler) getRIUtilizationCache() *riUtilizationCache {
 	h.riUtilizationCacheOnce.Do(func() {
-		h.riUtilizationCache = newRIUtilizationCache(h.config, runtime.IsLambda())
+		h.riUtilizationCache = newRIUtilizationCache(h.config, h.isLambda)
 	})
 	return h.riUtilizationCache
+}
+
+// IsLambda reports the Lambda mode this handler was constructed with
+// (HandlerConfig.IsLambda). It never re-reads the environment.
+func (h *Handler) IsLambda() bool {
+	return h.isLambda
 }
 
 // NewHandler creates a new API handler.
@@ -190,6 +202,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		insurance:           cfg.Insurance,
 		commitmentOpts:      cfg.CommitmentOpts,
 		encryptionKeySource: cfg.EncryptionKeySource,
+		isLambda:            cfg.IsLambda,
 	}
 
 	// Pre-load API key (with a 5s timeout to avoid stalling cold-start indefinitely)
@@ -639,6 +652,11 @@ func (h *Handler) requireRIExchangeAutoModeGrant(ctx context.Context, req *event
 // Fails closed: every path that cannot establish the scope returns an error
 // alongside a zero AccountScope, so a caller that ignores the error still
 // denies.
+//
+// A restricted scope matches an entry by display name only when exactly one
+// registered account carries that name (withRegisteredAccountNames, issue
+// #433). Every scoped handler gets its scope here, so this is the one place
+// that has to load the account list.
 func (h *Handler) getAccountScope(ctx context.Context, session *Session) (auth.AccountScope, error) {
 	if session.UserID == apiKeyAdminUserID {
 		// Positively unrestricted: the stateless admin API key is an
@@ -659,7 +677,29 @@ func (h *Handler) getAccountScope(ctx context.Context, session *Session) (auth.A
 	// Safe here and only here: GetAllowedAccountsAPI has already failed closed
 	// on an unestablishable scope, so an empty list at this point genuinely
 	// means "no restriction configured".
-	return auth.ScopeFromLegacyList(resolved), nil
+	return h.withRegisteredAccountNames(ctx, auth.ScopeFromLegacyList(resolved)), nil
+}
+
+// withRegisteredAccountNames lets a restricted scope match entries by display
+// name, limited to names that exactly one cloud account carries. Display names
+// are not unique, so matching a shared name would grant every account that
+// uses it, including ones registered later (issue #433). When the account list
+// cannot be loaded the scope stays ID-only: that only narrows access, and ID
+// entries keep working.
+func (h *Handler) withRegisteredAccountNames(ctx context.Context, scope auth.AccountScope) auth.AccountScope {
+	if scope.AllowsAll() || len(scope.Accounts) == 0 || h.config == nil {
+		return scope
+	}
+	registered, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
+	if err != nil {
+		logging.Warnf("account scope: cannot load cloud accounts, matching scope entries by ID only: %v", err)
+		return scope
+	}
+	names := make([]string, len(registered))
+	for i := range registered {
+		names[i] = registered[i].Name
+	}
+	return scope.WithRegisteredNames(names)
 }
 
 // setSecurityHeaders adds comprehensive security headers to the response.

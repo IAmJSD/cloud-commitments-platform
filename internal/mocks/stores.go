@@ -1835,7 +1835,8 @@ func (m *MockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses 
 }
 
 // filterExecutionsLikeStore applies the store contract to canned rows: filter by
-// status, drop clean completed rows, order by ScheduledDate DESC, then cap.
+// status, drop clean completed rows, order by ScheduledDate DESC with future
+// pending rows last and soonest first (issue #680), then cap.
 func filterExecutionsLikeStore(rows []config.PurchaseExecution, statuses []string, limit int) []config.PurchaseExecution {
 	if len(statuses) == 0 {
 		return nil
@@ -1852,11 +1853,27 @@ func filterExecutionsLikeStore(rows []config.PurchaseExecution, statuses []strin
 		}
 		out = append(out, *r)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].ScheduledDate.After(out[j].ScheduledDate) })
+	now := time.Now()
+	sort.SliceStable(out, func(i, j int) bool { return executionSortsBefore(&out[i], &out[j], now) })
 	if len(out) > limit {
 		out = out[:limit]
 	}
 	return out
+}
+
+// executionSortsBefore mirrors GetExecutionsByStatuses' ORDER BY: rows that
+// are not future pending steps first, newest first; future pending steps
+// after them, soonest first.
+func executionSortsBefore(a, b *config.PurchaseExecution, now time.Time) bool {
+	aFuture := a.Status == "pending" && a.ScheduledDate.After(now)
+	bFuture := b.Status == "pending" && b.ScheduledDate.After(now)
+	if aFuture != bFuture {
+		return bFuture
+	}
+	if aFuture {
+		return a.ScheduledDate.Before(b.ScheduledDate)
+	}
+	return a.ScheduledDate.After(b.ScheduledDate)
 }
 
 // CountExecutionsByPlanAndStatus mocks the CountExecutionsByPlanAndStatus operation.
