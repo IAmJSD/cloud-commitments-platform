@@ -83,7 +83,7 @@ func TestAccountDeleteWaitsForCommandAccountShare(t *testing.T) {
 	f := newRampFixture(ctx, t, 1, 1, 3)
 	command := testhelpers.HoldCommandFootprint(ctx, t, f.store.db, f.planID)
 	done := inBackground(func() error { return f.store.DeleteCloudAccount(ctx, f.accounts[0]) })
-	testhelpers.WaitForLockWait(ctx, t, f.store.db, "%DELETE FROM cloud_accounts%")
+	testhelpers.WaitForLockWait(ctx, t, f.store.db, "%FROM cloud_accounts WHERE id = $1 FOR UPDATE%")
 	var n int
 	require.NoError(t, command.QueryRow(ctx, `SELECT count(*) FROM plan_accounts WHERE plan_id = $1`, f.planID).Scan(&n))
 	require.Equal(t, 1, n, "the command still sees its account while the delete waits")
