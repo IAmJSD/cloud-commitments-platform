@@ -95,6 +95,8 @@ module "compute_lambda" {
   reap_stuck_purchases_schedule               = var.reap_stuck_purchases_schedule
   enable_analytics_collect_schedule           = var.enable_analytics_collect_schedule
   analytics_collect_schedule                  = var.analytics_collect_schedule
+  enable_cleanup_schedule                     = var.enable_cleanup_schedule
+  cleanup_schedule                            = var.cleanup_schedule
 
   # Additional environment variables
   archera_org_id             = var.archera_org_id

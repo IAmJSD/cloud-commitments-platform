@@ -267,6 +267,18 @@ variable "finalize_revocations_schedule" {
   default     = "rate(1 hour)"
 }
 
+variable "enable_cleanup_schedule" {
+  description = "Enable the scheduled server cleanup sweep. Opt-in: default false. It deletes expired sessions and, via CleanupOldExecutions(30), purchase_executions that are completed with scheduled_date older than 30 days, canceled with updated_at older than 30 days, or in a status outside failed/canceled with expires_at older than 30 days. The first run deletes the whole backlog, so export any history you want to keep first."
+  type        = bool
+  default     = false
+}
+
+variable "cleanup_schedule" {
+  description = "EventBridge schedule for the cleanup sweep."
+  type        = string
+  default     = "rate(1 day)"
+}
+
 variable "purchase_approved_reap_after" {
   description = "Threshold age for the stuck-purchase reaper. Any execution sitting in running longer than this gets flipped to failed on the next sweep; approved rows wait at least 1h20m so the process sweep can re-drive them first (#894). Parsed via Go time.ParseDuration (e.g. \"10m\", \"15m\", \"1h\"). Empty string falls back to the in-code default (10m)."
   type        = string

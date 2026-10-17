@@ -37,7 +37,7 @@ const awsEnvDir = "../../environments/aws"
 
 var (
 	passLineRe  = regexp.MustCompile(`(?m)^\s*(\w+)\s*=\s*var\.(\w+)\s*$`)
-	tfvarsOffRe = regexp.MustCompile(`(?m)^\s*(enable_\w+)\s*=\s*"?false\b`)
+	tfvarsOffRe = regexp.MustCompile(`(?m)^\s*(enable_\w+)\s*=\s*(?:false|"false")\s*(?:(?:#|//).*)?$`)
 	defaultRe   = regexp.MustCompile(`(?m)^\s*default\s*=\s*(\S+)`)
 )
 
@@ -292,6 +292,12 @@ func TestEnvChecksNegatives(t *testing.T) {
 	}
 	if got := tfvarsProblems("a.tfvars", "enable_finalize_revocations_schedule = \"false\"\n"); len(got) != 1 {
 		t.Errorf("quoted \"false\" must count as off: %v", got)
+	}
+	if got := tfvarsProblems("a.tfvars", "enable_finalize_revocations_schedule = \"false\nenable_finalize_revocations_schedule = falsey\n"); len(got) != 0 {
+		t.Errorf("unterminated or longer values must not count as off: %v", got)
+	}
+	if got := tfvarsProblems("a.tfvars", "enable_finalize_revocations_schedule = false // note\n"); len(got) != 1 {
+		t.Errorf("a trailing // comment must not hide an off value: %v", got)
 	}
 	if len(tfvarsProblems("a.tfvars.json", "{}")) != 1 {
 		t.Error("JSON tfvars must fail loudly")

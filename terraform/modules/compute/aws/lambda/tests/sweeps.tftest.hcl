@@ -23,7 +23,7 @@ run "defaults" {
 
   assert {
     condition     = toset(keys(aws_cloudwatch_event_rule.sweep)) == toset(["finalize_revocations"])
-    error_message = "Only finalize_revocations is a default-on sweep."
+    error_message = "Only finalize_revocations is a default-on sweep (cleanup is opt-in)."
   }
   assert {
     condition     = length(aws_cloudwatch_event_rule.scheduled_recommendations) == 1 && length(aws_cloudwatch_event_rule.reap_stuck_purchases) == 1 && length(aws_cloudwatch_event_rule.analytics_collect) == 1
@@ -40,7 +40,7 @@ run "defaults" {
   assert {
     condition = alltrue([
       for k, r in aws_cloudwatch_event_rule.sweep :
-      length(r.name) <= 64 && startswith(r.name, "cudly-") && endswith(r.name, "-sweep-${ { process_scheduled_purchases = "process", send_notifications = "notify", finalize_revocations = "finalize" }[k]}")
+      length(r.name) <= 64 && startswith(r.name, "cudly-") && endswith(r.name, "-sweep-${ { process_scheduled_purchases = "process", send_notifications = "notify", finalize_revocations = "finalize", cleanup = "cleanup" }[k]}")
     ])
     error_message = "Rule names must be <= 64 chars, keep the cudly- prefix and end with -sweep-<rule>."
   }
@@ -69,11 +69,12 @@ run "opt_in" {
     enable_process_scheduled_purchases_schedule = true
     enable_send_notifications_schedule          = true
     enable_fire_scheduled_purchases_schedule    = true
+    enable_cleanup_schedule                     = true
   }
 
   assert {
-    condition     = toset(keys(aws_cloudwatch_event_rule.sweep)) == toset(["finalize_revocations", "process_scheduled_purchases", "send_notifications"])
-    error_message = "Opting in must add process and send_notifications."
+    condition     = toset(keys(aws_cloudwatch_event_rule.sweep)) == toset(["cleanup", "finalize_revocations", "process_scheduled_purchases", "send_notifications"])
+    error_message = "Opting in must add process, send_notifications and cleanup."
   }
   assert {
     condition     = length(aws_cloudwatch_event_rule.fire_scheduled_purchases) == 1
@@ -82,7 +83,7 @@ run "opt_in" {
   assert {
     condition = alltrue([
       for k, r in aws_cloudwatch_event_rule.sweep :
-      length(r.name) <= 64 && startswith(r.name, "cudly-") && endswith(r.name, "-sweep-${ { process_scheduled_purchases = "process", send_notifications = "notify", finalize_revocations = "finalize" }[k]}")
+      length(r.name) <= 64 && startswith(r.name, "cudly-") && endswith(r.name, "-sweep-${ { process_scheduled_purchases = "process", send_notifications = "notify", finalize_revocations = "finalize", cleanup = "cleanup" }[k]}")
     ])
     error_message = "Rule names must be <= 64 chars, keep the cudly- prefix and end with -sweep-<rule>."
   }
@@ -91,13 +92,13 @@ run "opt_in" {
     error_message = "Sweep rule names must be distinct."
   }
   assert {
-    condition     = length(aws_cloudwatch_event_target.sweep) == 3
+    condition     = length(aws_cloudwatch_event_target.sweep) == 4
     error_message = "Every opted-in sweep needs a target."
   }
   assert {
     condition = alltrue([
       for k, r in aws_cloudwatch_event_rule.sweep :
-      r.schedule_expression == { process_scheduled_purchases = var.process_scheduled_purchases_schedule, send_notifications = var.send_notifications_schedule, finalize_revocations = var.finalize_revocations_schedule }[k]
+      r.schedule_expression == { process_scheduled_purchases = var.process_scheduled_purchases_schedule, send_notifications = var.send_notifications_schedule, finalize_revocations = var.finalize_revocations_schedule, cleanup = var.cleanup_schedule }[k]
     ])
     error_message = "Schedule must come from the variable."
   }

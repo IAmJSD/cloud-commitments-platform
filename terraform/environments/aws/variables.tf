@@ -372,6 +372,18 @@ variable "analytics_collect_schedule" {
   default     = "rate(1 day)"
 }
 
+variable "enable_cleanup_schedule" {
+  description = "Enable the scheduled server cleanup sweep. Opt-in, default false: it deletes expired sessions and purchase_executions that are completed (scheduled_date), canceled (updated_at) or in a status outside failed/canceled (expires_at) and older than 30 days. The first run deletes the whole backlog; export any history you want to keep first."
+  type        = bool
+  default     = false
+}
+
+variable "cleanup_schedule" {
+  description = "EventBridge schedule for the cleanup sweep (default rate(1 day))."
+  type        = string
+  default     = "rate(1 day)"
+}
+
 # ==============================================
 # Multi-Account Configuration
 # ==============================================
