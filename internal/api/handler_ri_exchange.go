@@ -156,18 +156,56 @@ func (h *Handler) listTargetOfferings(ctx context.Context, req *events.LambdaFun
 		return nil, NewClientError(404, fmt.Sprintf("source RI %q not found in region %s", sourceRIID, cfg.Region))
 	}
 
+	offerings, err := targetOfferingsForSource(ctx, ec2Client, sourceRI)
+	if err != nil {
+		return nil, err
+	}
+
+	return &TargetOfferingsResponse{Offerings: offerings}, nil
+}
+
+// targetOfferingsForSource lists the exchange targets for sourceRI, keeping a
+// zonal RI's targets in its own AZ. A zone refusal (the source RI's scope and
+// AZ disagree) is a 422.
+func targetOfferingsForSource(ctx context.Context, ec2Client targetOfferingsEC2Client, sourceRI *ec2svc.ConvertibleRI) ([]ec2svc.TargetOffering, error) {
 	offerings, err := ec2Client.ListTargetOfferings(ctx, ec2svc.ListTargetOfferingsParams{
 		ProductDescription: sourceRI.ProductDescription,
 		Tenancy:            sourceRI.InstanceTenancy,
 		Scope:              sourceRI.Scope,
+		AvailabilityZone:   sourceRI.AvailabilityZone,
 		Duration:           sourceRI.Duration,
 		OfferingType:       sourceRI.OfferingType,
 	})
 	if err != nil {
+		if isOfferingZoneRefusal(err) {
+			return nil, NewClientError(422, fmt.Sprintf("source RI %q: %v", sourceRI.ReservedInstanceID, err))
+		}
 		return nil, fmt.Errorf("failed to list target offerings: %w", err)
 	}
+	return offerings, nil
+}
 
-	return &TargetOfferingsResponse{Offerings: offerings}, nil
+// offeringZoneRefusals are the messages the EC2 provider returns when it
+// refuses a zone-inconsistent offering lookup before calling AWS: a zonal RI
+// without an AZ, or a regional RI that names one. The provider exports no
+// sentinel, so these are matched by text; the target-offerings tests run the
+// real provider client so a reworded message fails them.
+var offeringZoneRefusals = []string{
+	"zonal RI offering needs an availability zone",
+	"regional RI offering must not name an availability zone",
+}
+
+// isOfferingZoneRefusal reports whether err is the provider's zone refusal.
+// It is the source RI's data that is inconsistent, so the caller maps it to a
+// 4xx rather than a 500.
+func isOfferingZoneRefusal(err error) bool {
+	msg := err.Error()
+	for _, r := range offeringZoneRefusals {
+		if strings.Contains(msg, r) {
+			return true
+		}
+	}
+	return false
 }
 
 // azureExchangeClient is the narrow interface that listExchangeableAzureRIs,

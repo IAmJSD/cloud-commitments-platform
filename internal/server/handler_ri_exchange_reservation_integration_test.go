@@ -88,7 +88,7 @@ func TestRIExchangeAutoWorkers_ConcreteStoreAndFixtureClient(t *testing.T) {
 		listConvertibleRIs: func(context.Context) ([]ec2svc.ConvertibleRI, error) { return ri(standaloneRIID), nil },
 		getRIUtilization:   func(context.Context, int) ([]recommendations.RIUtilization, error) { return util(standaloneRIID), nil },
 		exchangeClient:     quoteClient(standaloneRIID, &standaloneExecutions),
-		lookupOffering: func(context.Context, string, string, string, string, int64) (string, error) {
+		lookupOffering: func(context.Context, exchange.LookupOfferingParams) (string, error) {
 			return "offering-test", nil
 		},
 		accountID: "555555555555", region: "us-east-1",
@@ -108,7 +108,7 @@ func TestRIExchangeAutoWorkers_ConcreteStoreAndFixtureClient(t *testing.T) {
 	riInfos, utilInfos, metadata := convertForAutoExchange(ri(ladderRIID), util(ladderRIID))
 	ladder, err := exchange.RunAutoExchange(ctx, exchange.RunAutoExchangeParams{
 		Store: newConfigExchangeStoreAdapter(store), ExchangeClient: quoteClient(ladderRIID, &ladderExecutions),
-		LookupOffering: func(context.Context, string, string, string, string, int64) (string, error) {
+		LookupOffering: func(context.Context, exchange.LookupOfferingParams) (string, error) {
 			return "offering-test", nil
 		},
 		RIs: riInfos, Utilization: utilInfos, RIMetadata: metadata,
