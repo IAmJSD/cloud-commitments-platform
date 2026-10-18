@@ -98,9 +98,9 @@ func TestAzurePricingRefusalEntryPoints(t *testing.T) {
 			expectClaim(store, exec, []string{"pending", "notified"})
 			var err error
 			if entry == "approve" {
-				_, _, err = mgr.ApproveAndExecute(context.Background(), exec.ExecutionID, "operator@example.com", nil)
+				_, _, err = mgr.ApproveAndExecute(context.Background(), exec.ExecutionID, "operator@example.com", nil, nil)
 			} else {
-				_, _, err = mgr.DirectExecute(context.Background(), exec.ExecutionID, "operator@example.com", nil)
+				_, _, err = mgr.DirectExecute(context.Background(), exec.ExecutionID, "operator@example.com", nil, nil)
 			}
 			assert.Zero(t, recorder.count())
 			require.Error(t, err)

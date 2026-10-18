@@ -6721,7 +6721,10 @@ func TestHandler_approvePurchaseViaSession_FourEyesOn_DifferentApproverSucceeds(
 	}
 	// The approved row has no plan: a plan step with no recommendations is
 	// refused at execution (#609), and this test is about the 4-eyes check.
-	approved := &config.PurchaseExecution{ExecutionID: execID, Status: "approved"}
+	// It carries the recommendations the approver was checked against: the
+	// funnel re-runs that check on the claimed row (issue #415), and an
+	// empty claimed row fails it closed.
+	approved := &config.PurchaseExecution{ExecutionID: execID, Status: "running", Recommendations: exec.Recommendations}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockConfig.On("GetGlobalConfig", mock.Anything).Return(fourEyesCfgOn(), nil)
 	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "running", &approverID).Return(approved, nil)

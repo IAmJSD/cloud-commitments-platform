@@ -67,7 +67,7 @@ func TestApproveAzurePricingRequiresMigrationAndRecollection(t *testing.T) {
 			saved = &copy
 			return nil
 		}
-		_, _, approveErr := mgr.ApproveAndExecute(ctx, exec.ExecutionID, "operator@example.com", nil)
+		_, _, approveErr := mgr.ApproveAndExecute(ctx, exec.ExecutionID, "operator@example.com", nil, nil)
 		require.Equal(t, purchases, recorder.count())
 		require.NotNil(t, saved)
 		if purchases == 1 {

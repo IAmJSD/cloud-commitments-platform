@@ -27,7 +27,7 @@ func TestRunNow_NotifiedRowReachesArmedRedriveGuard(t *testing.T) {
 	store.On("GetExecutionByID", mock.Anything, exec.ExecutionID).Return(exec, nil).Maybe()
 	expectClaim(store, exec, runNowFrom)
 
-	_, _, err := mgr.RunPlannedPurchaseNow(context.Background(), exec.ExecutionID, "operator@example.com", nil)
+	_, _, err := mgr.RunPlannedPurchaseNow(context.Background(), exec.ExecutionID, "operator@example.com", nil, nil)
 
 	assert.Zero(t, rec.count())
 	require.Error(t, err)
@@ -45,7 +45,7 @@ func TestRunNow_NotifiedRowReachesStaleAzurePricingRefusal(t *testing.T) {
 	store.On("GetExecutionByID", mock.Anything, exec.ExecutionID).Return(exec, nil).Maybe()
 	expectClaim(store, exec, runNowFrom)
 
-	_, _, err := mgr.RunPlannedPurchaseNow(context.Background(), exec.ExecutionID, "operator@example.com", nil)
+	_, _, err := mgr.RunPlannedPurchaseNow(context.Background(), exec.ExecutionID, "operator@example.com", nil, nil)
 
 	assert.Zero(t, rec.count())
 	require.ErrorIs(t, err, ErrStaleAzurePricing)

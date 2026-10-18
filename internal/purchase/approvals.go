@@ -44,12 +44,15 @@ const directExecuteSkipReason = "direct-execute permission"
 // NULL — the column is nullable TEXT and we don't want to claim "approved
 // by nobody".
 //
+// check is the caller's ClaimedRowCheck, run against the claimed row before
+// any provider call (issue #415); the SQS approve worker passes nil.
+//
 // Returns the raw revocation token minted by ApproveAndExecute on success
 // (see that function's doc comment for why this must be a return value
 // rather than something the caller re-fetches from the DB). Empty on
 // failure, and best-effort empty if the mint itself failed after an
 // otherwise-successful approve.
-func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, actor string) (string, error) {
+func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, actor string, check ClaimedRowCheck) (string, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[%s]: ApproveExecution entry (auth=token actor=%q)", executionID, maskActor(actor))
 
@@ -76,7 +79,7 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 
 	// Token/SQS path: no authenticated session UUID is available, so the
 	// transition is recorded as system-initiated (transitioned_by = NULL).
-	_, revocationToken, err := m.ApproveAndExecute(ctx, executionID, actor, nil)
+	_, revocationToken, err := m.ApproveAndExecute(ctx, executionID, actor, nil, check)
 	if err != nil {
 		logging.Errorf("purchase[%s]: ApproveExecution (token path) failed after %s: %v",
 			executionID, time.Since(t0), err)
@@ -334,17 +337,18 @@ func (m *Manager) checkDifferentApprover(ctx context.Context, executionID string
 // per-account in parallel via executeMultiAccount.
 //
 // The returned row carries the approval's final status, also on an execution
-// error; it is nil when the run never started.
-func (m *Manager) ApproveAndExecute(ctx context.Context, executionID, actor string, transitionedBy *string) (*config.PurchaseExecution, string, error) {
-	return m.transitionApproveAndExecute(ctx, executionID, actor, transitionedBy, []string{"pending", "notified"}, "")
+// error; it is nil when the run never started. check runs against the claimed
+// row before any provider call; see ClaimedRowCheck.
+func (m *Manager) ApproveAndExecute(ctx context.Context, executionID, actor string, transitionedBy *string, check ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
+	return m.transitionApproveAndExecute(ctx, executionID, actor, transitionedBy, []string{"pending", "notified"}, "", check)
 }
 
 // DirectExecute is ApproveAndExecute for a session with the direct-execute
 // permission: the same 4-eyes-gated, CAS-guarded funnel, but it stamps the
 // executed_* audit fields once the CAS has won, so a refused or lost direct
 // execute leaves no executed_at on a row that never ran.
-func (m *Manager) DirectExecute(ctx context.Context, executionID, actor string, transitionedBy *string) (*config.PurchaseExecution, string, error) {
-	return m.transitionApproveAndExecute(ctx, executionID, actor, transitionedBy, []string{"pending", "notified"}, directExecuteSkipReason)
+func (m *Manager) DirectExecute(ctx context.Context, executionID, actor string, transitionedBy *string, check ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
+	return m.transitionApproveAndExecute(ctx, executionID, actor, transitionedBy, []string{"pending", "notified"}, directExecuteSkipReason, check)
 }
 
 // RunPlannedPurchaseNow lets an operator force a scheduled purchase (pending
@@ -365,9 +369,10 @@ func (m *Manager) DirectExecute(ctx context.Context, executionID, actor string, 
 // error rather than executing the purchase a second time.
 //
 // The returned row carries the run-now audit stamp and its final status, also
-// on an execution error; it is nil when the run never started.
-func (m *Manager) RunPlannedPurchaseNow(ctx context.Context, executionID, actor string, transitionedBy *string) (*config.PurchaseExecution, string, error) {
-	return m.transitionApproveAndExecute(ctx, executionID, actor, transitionedBy, []string{"pending", "notified", "paused"}, runNowSkipReason)
+// on an execution error; it is nil when the run never started. check runs
+// against the claimed row before any provider call; see ClaimedRowCheck.
+func (m *Manager) RunPlannedPurchaseNow(ctx context.Context, executionID, actor string, transitionedBy *string, check ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
+	return m.transitionApproveAndExecute(ctx, executionID, actor, transitionedBy, []string{"pending", "notified", "paused"}, runNowSkipReason, check)
 }
 
 // transitionApproveAndExecute is the shared body behind ApproveAndExecute
@@ -385,7 +390,13 @@ func (m *Manager) RunPlannedPurchaseNow(ctx context.Context, executionID, actor 
 //
 // A non-empty skipReason stamps the executed_* audit fields once the CAS wins.
 // The returned row is nil when the CAS was never won.
-func (m *Manager) transitionApproveAndExecute(ctx context.Context, executionID, actor string, transitionedBy *string, fromStatuses []string, skipReason string) (*config.PurchaseExecution, string, error) {
+//
+// check runs against the row the CAS returned, which is the row
+// executeAndFinalize buys, before any audit stamp or provider call (issue
+// #415). A refusal fails that row before submission (status "failed",
+// no_submission set, a plan row's suppressions released) and returns it with
+// an error satisfying errors.Is(err, ErrClaimedRowRefused).
+func (m *Manager) transitionApproveAndExecute(ctx context.Context, executionID, actor string, transitionedBy *string, fromStatuses []string, skipReason string, check ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[%s]: transitionApproveAndExecute starting (actor=%q, from=%v)", executionID, maskActor(actor), fromStatuses)
 
@@ -408,11 +419,9 @@ func (m *Manager) transitionApproveAndExecute(ctx context.Context, executionID, 
 	// executor (SQS, cron, re-drive, scheduler) can run this row, and there is
 	// no window where the row sits "approved" with a stale copy in flight
 	// (issue #829). A lost CAS surfaces ErrExecutionNotInExpectedStatus.
-	updated, err := m.claimRunning(ctx, executionID, fromStatuses, transitionedBy)
+	updated, err := m.claimAndCheck(ctx, executionID, fromStatuses, transitionedBy, check, t0)
 	if err != nil {
-		logging.Errorf("purchase[%s]: transitionApproveAndExecute status transition failed after %s: %v",
-			executionID, time.Since(t0), err)
-		return nil, "", fmt.Errorf("approve: %w", err)
+		return updated, "", err
 	}
 	logging.Infof("purchase[%s]: approved and claimed running in %s", executionID, time.Since(t0))
 

@@ -366,7 +366,9 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 		return nil, constraintErr
 	}
 
-	final, revocationToken, runErr := h.purchase.RunPlannedPurchaseNow(ctx, executionID, fourEyesActorIdentity(session), resolveCreatorUserID(session))
+	// The check above read a snapshot; the funnel re-runs it on the row its
+	// claim returns, the row it buys (issue #415).
+	final, revocationToken, runErr := h.purchase.RunPlannedPurchaseNow(ctx, executionID, fourEyesActorIdentity(session), resolveCreatorUserID(session), h.runNowClaimCheck(session))
 	if runErr != nil {
 		return nil, executeFailureError(executionID, "started", final, runErr)
 	}
@@ -394,6 +396,8 @@ func executeFailureError(executionID, action string, final *config.PurchaseExecu
 		return fmt.Errorf("execution %s could not be %s: %w", executionID, action, err)
 	case errors.Is(err, config.ErrAuditLoss):
 		return NewClientError(500, fmt.Sprintf("execution %s ran but its final status could not be saved: %v", executionID, err))
+	case errors.Is(err, purchase.ErrClaimedRowRefused):
+		return claimedRowRefusalError(final, err)
 	case errors.Is(err, purchase.ErrStaleAzurePricing):
 		return NewClientError(409, err.Error())
 	default:
@@ -825,6 +829,8 @@ func tokenActionError(err error) error {
 	switch {
 	case errors.Is(err, config.ErrAuditLoss):
 		return err
+	case errors.Is(err, purchase.ErrClaimedRowRefused):
+		return claimedRowRefusalError(nil, err)
 	case errors.Is(err, purchase.ErrStaleAzurePricing):
 		return NewClientError(409, err.Error())
 	case errors.Is(err, purchase.ErrInvalidApprovalToken):
@@ -900,7 +906,9 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	// sourced from this return value, never from a DB re-read, since
 	// only the token hash is stored and a re-read can only ever yield
 	// the hash.
-	revocationToken, approveErr := h.purchase.ApproveExecution(ctx, execution.ExecutionID, token, actor)
+	// approveConstraintsForSession above read a snapshot; the funnel re-runs
+	// it on the row its claim returns, the row it buys (issue #415).
+	revocationToken, approveErr := h.purchase.ApproveExecution(ctx, execution.ExecutionID, token, actor, h.tokenApproveClaimCheck(tokenSession))
 	if approveErr != nil {
 		return nil, tokenActionError(approveErr)
 	}
@@ -990,7 +998,9 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 	// approval (issue #103); only the token hash is stored, so this
 	// return value is the only place a raw, emailable token exists after
 	// the call returns.
-	final, revocationToken, approveErr := h.purchase.ApproveAndExecute(ctx, execution.ExecutionID, fourEyesActorIdentity(session), actor)
+	// authorizeApproveSession above read a snapshot; the funnel re-runs the
+	// approve-any/approve-own check on the row its claim returns (issue #415).
+	final, revocationToken, approveErr := h.purchase.ApproveAndExecute(ctx, execution.ExecutionID, fourEyesActorIdentity(session), actor, h.sessionApproveClaimCheck(session))
 	if approveErr != nil {
 		logging.Errorf("purchase[%s]: approvePurchaseViaSession failed after %s: %v",
 			execution.ExecutionID, time.Since(t0), approveErr)
@@ -3478,7 +3488,9 @@ func (h *Handler) directExecutePurchase(ctx context.Context, req *events.LambdaF
 	// approval (issue #103); only the token hash is stored, so this
 	// return value is the only place a raw, emailable token exists after
 	// the call returns.
-	final, revocationToken, err := h.purchase.DirectExecute(ctx, executionID, fourEyesActorIdentity(session), validUUIDPtrOrNil(&session.UserID))
+	// The direct-execute Constraints ran on the request's recommendations; the
+	// funnel re-runs them on the row its claim returns (issue #415).
+	final, revocationToken, err := h.purchase.DirectExecute(ctx, executionID, fourEyesActorIdentity(session), validUUIDPtrOrNil(&session.UserID), h.directExecuteClaimCheck(session))
 	if err != nil {
 		logging.Errorf("purchase[%s]: directExecutePurchase failed after %s: %v",
 			executionID, time.Since(t0), err)
