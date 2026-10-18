@@ -140,6 +140,54 @@ func TestHandler_getRecommendationsFreshness(t *testing.T) {
 		assert.WithinDuration(t, now, *got.LastCollectedAt, time.Second)
 	})
 
+	// Issue #87: the freshness payload is what the dashboard reads, so a
+	// partial sweep must reach it as a structured, sanitized field.
+	t.Run("surfaces last_collection_partial", func(t *testing.T) {
+		mockStore := new(MockConfigStore)
+		now := time.Now().UTC()
+		partial := &config.RecommendationsCollectionPartial{
+			Providers: []config.PartialProviderSweep{{
+				Provider:           "azure",
+				IncompleteAccounts: 1,
+				AttemptedScopes:    10,
+				FailedScopes:       9,
+				Reasons:            map[string]int{config.PartialReasonThrottled: 9},
+			}},
+		}
+		mockStore.On("GetRecommendationsFreshness", ctx).
+			Return(&config.RecommendationsFreshness{LastCollectedAt: &now, LastCollectionPartial: partial}, nil)
+
+		handler := &Handler{config: mockStore, apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"x-api-key": "test-key"},
+		}
+
+		got, err := handler.getRecommendationsFreshness(ctx, req)
+		require.NoError(t, err)
+		body, err := json.Marshal(got)
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"providers":[{"provider":"azure","incomplete_accounts":1,"attempted_scopes":10,`+
+			`"failed_scopes":9,"failed_details":0,"reasons":{"throttled":9}}]}`,
+			string(mustField(t, body, "last_collection_partial")))
+	})
+
+	t.Run("complete collection serializes last_collection_partial as null", func(t *testing.T) {
+		mockStore := new(MockConfigStore)
+		mockStore.On("GetRecommendationsFreshness", ctx).Return(&config.RecommendationsFreshness{}, nil)
+
+		handler := &Handler{config: mockStore, apiKey: "test-key"}
+		req := &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"x-api-key": "test-key"},
+		}
+
+		got, err := handler.getRecommendationsFreshness(ctx, req)
+		require.NoError(t, err)
+		body, err := json.Marshal(got)
+		require.NoError(t, err)
+		assert.Equal(t, "null", string(mustField(t, body, "last_collection_partial")),
+			"the key must always be present so the frontend can rely on it")
+	})
+
 	t.Run("surfaces store error", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
 		mockStore.On("GetRecommendationsFreshness", ctx).Return(nil, errors.New("db down"))
@@ -765,4 +813,14 @@ func TestConfidenceBucketFor(t *testing.T) {
 			assert.Equal(t, tc.want, confidenceBucketFor(tc.savings, tc.count))
 		})
 	}
+}
+
+// mustField returns the raw JSON of a top-level key, failing if it is absent.
+func mustField(t *testing.T, body []byte, key string) json.RawMessage {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(body, &fields))
+	raw, ok := fields[key]
+	require.True(t, ok, "response must carry %q", key)
+	return raw
 }

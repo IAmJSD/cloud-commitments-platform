@@ -132,7 +132,7 @@ func TestPersistCollectionMultiAZInOneBatch(t *testing.T) {
 	}
 
 	s := &Scheduler{config: store}
-	s.persistCollection(ctx, recs, []config.SuccessfulCollect{{Provider: "aws"}}, nil)
+	s.persistCollection(ctx, recs, []config.SuccessfulCollect{{Provider: "aws"}}, nil, nil)
 
 	rows, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
 	require.NoError(t, err)
@@ -171,7 +171,7 @@ func TestPersistCollectionPlatformTenancyInOneBatch(t *testing.T) {
 		}
 	}
 	persist := func(recs ...common.Recommendation) {
-		s.persistCollection(ctx, s.convertRecommendations(recs, "aws"), []config.SuccessfulCollect{{Provider: "aws"}}, nil)
+		s.persistCollection(ctx, s.convertRecommendations(recs, "aws"), []config.SuccessfulCollect{{Provider: "aws"}}, nil, nil)
 	}
 	keys := func() map[string]bool {
 		rows, err := pg.DB.Pool().Query(ctx, `SELECT platform || '|' || tenancy FROM recommendations`)

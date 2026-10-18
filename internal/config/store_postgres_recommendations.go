@@ -45,8 +45,9 @@ func (s *PostgresStore) ReplaceRecommendations(ctx context.Context, collectedAt 
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE recommendations_state
-		   SET last_collected_at     = $1,
-		       last_collection_error = NULL
+		   SET last_collected_at       = $1,
+		       last_collection_error   = NULL,
+		       last_collection_partial = NULL
 		 WHERE id = 1
 	`, collectedAt); err != nil {
 		return fmt.Errorf("failed to update state: %w", err)
@@ -109,8 +110,9 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 
 	if _, err := tx.Exec(ctx, `
 		UPDATE recommendations_state
-		   SET last_collected_at     = $1,
-		       last_collection_error = NULL
+		   SET last_collected_at       = $1,
+		       last_collection_error   = NULL,
+		       last_collection_partial = NULL
 		 WHERE id = 1
 	`, collectedAt); err != nil {
 		return fmt.Errorf("failed to update state: %w", err)
@@ -430,18 +432,20 @@ func (s *PostgresStore) ListStoredRecommendations(ctx context.Context, filter Re
 
 // GetRecommendationsFreshness returns the singleton freshness row. The
 // table is seeded with id=1 by the migration so a row always exists;
-// LastCollectedAt, LastCollectionError, and LastCollectionStartedAt can be NULL.
+// LastCollectedAt, LastCollectionError, LastCollectionStartedAt and
+// LastCollectionPartial can be NULL.
 func (s *PostgresStore) GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error) {
 	var (
 		lastCollectedAt         *time.Time
 		lastCollectionError     *string
 		lastCollectionStartedAt *time.Time
+		lastCollectionPartial   []byte
 	)
 	err := s.db.QueryRow(ctx, `
-		SELECT last_collected_at, last_collection_error, last_collection_started_at
+		SELECT last_collected_at, last_collection_error, last_collection_started_at, last_collection_partial
 		  FROM recommendations_state
 		 WHERE id = 1
-	`).Scan(&lastCollectedAt, &lastCollectionError, &lastCollectionStartedAt)
+	`).Scan(&lastCollectedAt, &lastCollectionError, &lastCollectionStartedAt, &lastCollectionPartial)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read recommendations_state: %w", err)
 	}
@@ -449,7 +453,26 @@ func (s *PostgresStore) GetRecommendationsFreshness(ctx context.Context) (*Recom
 		LastCollectedAt:         lastCollectedAt,
 		LastCollectionError:     lastCollectionError,
 		LastCollectionStartedAt: lastCollectionStartedAt,
+		LastCollectionPartial:   decodeCollectionPartial(lastCollectionPartial),
 	}, nil
+}
+
+// decodeCollectionPartial decodes the last_collection_partial JSONB column.
+// NULL decodes to nil (the last collection was complete). The column is only
+// ever written by SetRecommendationsCollectionPartial via json.Marshal, so an
+// undecodable value means the row was edited by hand; it is logged and read
+// as nil rather than failing the whole freshness read, which the scheduler's
+// cache-TTL check and every dashboard load depend on.
+func decodeCollectionPartial(raw []byte) *RecommendationsCollectionPartial {
+	if len(raw) == 0 {
+		return nil
+	}
+	var partial RecommendationsCollectionPartial
+	if err := json.Unmarshal(raw, &partial); err != nil {
+		logging.Warnf("recommendations_state.last_collection_partial is not valid JSON; ignoring it: %v", err)
+		return nil
+	}
+	return &partial
 }
 
 // SetRecommendationsCollectionError records the most recent collection's
@@ -474,6 +497,32 @@ func (s *PostgresStore) SetRecommendationsCollectionError(ctx context.Context, e
 		 WHERE id = 1
 	`, errMsg); err != nil {
 		return fmt.Errorf("failed to set collection error: %w", err)
+	}
+	return nil
+}
+
+// SetRecommendationsCollectionPartial records the most recent collection's
+// incomplete-sweep summary (issue #87), or clears it when partial is nil.
+// Like SetRecommendationsCollectionError it is called by the scheduler AFTER
+// UpsertRecommendations has reset the column to NULL, so a complete
+// collection leaves it cleared and only a partial one re-sets it. It touches
+// no other column; in particular it must not clear last_collection_started_at
+// (see SetRecommendationsCollectionError, issue #261).
+func (s *PostgresStore) SetRecommendationsCollectionPartial(ctx context.Context, partial *RecommendationsCollectionPartial) error {
+	var raw []byte
+	if partial != nil {
+		encoded, err := json.Marshal(partial)
+		if err != nil {
+			return fmt.Errorf("failed to encode collection partial: %w", err)
+		}
+		raw = encoded
+	}
+	if _, err := s.db.Exec(ctx, `
+		UPDATE recommendations_state
+		   SET last_collection_partial = $1::jsonb
+		 WHERE id = 1
+	`, raw); err != nil {
+		return fmt.Errorf("failed to set collection partial: %w", err)
 	}
 	return nil
 }

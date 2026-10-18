@@ -540,6 +540,10 @@ type StoreInterface interface {
 	ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error)
 	GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error)
 	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error
+	// SetRecommendationsCollectionPartial records (or, with nil, clears) the
+	// most recent collection's incomplete-sweep summary. Upsert/Replace
+	// clear it, so a later complete collection drops the marker.
+	SetRecommendationsCollectionPartial(ctx context.Context, partial *RecommendationsCollectionPartial) error
 	// MarkCollectionStarted atomically sets last_collection_started_at = now
 	// only when no in-flight collection is running (last_collection_started_at IS NULL
 	// OR older than 5 minutes), and stamps a freshly generated owner token

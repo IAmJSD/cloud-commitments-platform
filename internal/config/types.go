@@ -783,10 +783,63 @@ type PurchasePlanFilter struct {
 // the scheduler clears it on completion (success or failure). A value older
 // than 5 minutes means the scheduler crashed mid-run — the refresh handler
 // treats it as stale and allows a new collection.
+// LastCollectionPartial is non-nil when the most recent persisted collection
+// kept rows from a sweep that did not cover everything it was asked to (for
+// example 9 of 10 Azure subscriptions answered). It is cleared by the next
+// collection whose every sweep is complete.
 type RecommendationsFreshness struct {
-	LastCollectedAt         *time.Time `json:"last_collected_at"`
-	LastCollectionError     *string    `json:"last_collection_error"`
-	LastCollectionStartedAt *time.Time `json:"last_collection_started_at"`
+	LastCollectedAt         *time.Time                        `json:"last_collected_at"`
+	LastCollectionError     *string                           `json:"last_collection_error"`
+	LastCollectionStartedAt *time.Time                        `json:"last_collection_started_at"`
+	LastCollectionPartial   *RecommendationsCollectionPartial `json:"last_collection_partial"`
+}
+
+// RecommendationsCollectionPartial records that the most recent collection
+// was incomplete without having failed: its rows were kept and stored, but
+// some subscriptions, projects or collection scopes were never queried, so
+// the stored recommendations under-state the real opportunity (issue #87).
+//
+// It is deliberately aggregate-only. recommendations_state is one global row
+// that every user with view:recommendations reads, while accounts are
+// access-scoped, so it carries counts and a fixed set of reason categories --
+// never raw provider error text or subscription/project identifiers. The
+// failed identifiers are named in the scheduler's WARN log for operators.
+type RecommendationsCollectionPartial struct {
+	// Providers lists one entry per provider with at least one incomplete
+	// sweep, in the configured provider order.
+	Providers []PartialProviderSweep `json:"providers"`
+}
+
+// Reason categories for PartialProviderSweep.Reasons. The set is closed so
+// the API never echoes provider error text.
+const (
+	PartialReasonPermissionDenied    = "permission_denied"
+	PartialReasonThrottled           = "throttled"
+	PartialReasonTimeout             = "timeout"
+	PartialReasonCanceled            = "canceled"
+	PartialReasonNotFound            = "not_found"
+	PartialReasonProviderUnavailable = "provider_unavailable"
+	PartialReasonOther               = "other"
+)
+
+// PartialProviderSweep summarizes one provider's incomplete sweeps in a
+// collection. A "scope" is the unit a sweep fails in: a subscription for
+// Azure, a project for GCP, and a service/region collection scope for AWS.
+type PartialProviderSweep struct {
+	Provider string `json:"provider"`
+	// IncompleteAccounts is how many accounts (registered, or the single
+	// ambient host identity) returned rows from an incomplete sweep.
+	IncompleteAccounts int `json:"incomplete_accounts"`
+	// AttemptedScopes is how many scopes the incomplete sweeps were asked to
+	// cover. Zero when the provider does not report it (AWS).
+	AttemptedScopes int `json:"attempted_scopes"`
+	// FailedScopes is how many of those scopes could not be queried.
+	FailedScopes int `json:"failed_scopes"`
+	// FailedDetails is how many individual recommendation details were
+	// rejected inside scopes that otherwise answered (AWS only).
+	FailedDetails int `json:"failed_details"`
+	// Reasons counts the failure causes by PartialReason* category.
+	Reasons map[string]int `json:"reasons"`
 }
 
 // SuccessfulCollect identifies a (provider, account) pair whose collection
