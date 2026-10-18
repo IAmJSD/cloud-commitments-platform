@@ -1777,9 +1777,11 @@ func TestPGXMock_DeleteCloudAccount_Success(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectBegin()
+	expectLockDeletedAccount(mock)
 	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	expectDetachTerminalExecutions(mock)
+	expectDisableSoleAccountPlans(mock)
 	mock.ExpectExec("DELETE FROM cloud_accounts").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectCommit()
@@ -1794,9 +1796,11 @@ func TestPGXMock_DeleteCloudAccount_WithLinkedRegistration(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectBegin()
+	expectLockDeletedAccount(mock)
 	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	expectDetachTerminalExecutions(mock)
+	expectDisableSoleAccountPlans(mock)
 	mock.ExpectExec("DELETE FROM cloud_accounts").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectCommit()
@@ -1811,9 +1815,11 @@ func TestPGXMock_DeleteCloudAccount_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectBegin()
+	expectLockDeletedAccount(mock)
 	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	expectDetachTerminalExecutions(mock)
+	expectDisableSoleAccountPlans(mock)
 	mock.ExpectExec("DELETE FROM cloud_accounts").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectRollback()
@@ -1832,12 +1838,59 @@ func expectDetachTerminalExecutions(mock pgxmock.PgxPoolIface) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
 }
 
+// expectLockDeletedAccount expects DeleteCloudAccount's first statement: the
+// account row lock taken before the plans are picked (issue #264).
+func expectLockDeletedAccount(mock pgxmock.PgxPoolIface) {
+	mock.ExpectExec(`SELECT 1 FROM cloud_accounts WHERE id = \$1 FOR UPDATE`).WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+}
+
+// expectDisableSoleAccountPlans expects the issue #264 disable of enabled
+// plans whose only account is the deleted one.
+func expectDisableSoleAccountPlans(mock pgxmock.PgxPoolIface) {
+	mock.ExpectQuery(`UPDATE purchase_plans p\s+SET enabled = false\s+WHERE p.enabled`).WithArgs(pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("plan-1"))
+}
+
+func TestPGXMock_DeleteCloudAccount_LockFailsRollsBack(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SELECT 1 FROM cloud_accounts").WithArgs("acct-id").WillReturnError(errors.New("boom"))
+	mock.ExpectRollback()
+
+	err := store.DeleteCloudAccount(ctx, "acct-id")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to lock cloud account")
+}
+
+func TestPGXMock_DeleteCloudAccount_DisablePlansFailsRollsBack(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectBegin()
+	expectLockDeletedAccount(mock)
+	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	expectDetachTerminalExecutions(mock)
+	mock.ExpectQuery("UPDATE purchase_plans").WithArgs("acct-id").WillReturnError(errors.New("boom"))
+	mock.ExpectRollback()
+
+	err := store.DeleteCloudAccount(ctx, "acct-id")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to disable plans targeting only this account")
+}
+
 func TestPGXMock_DeleteCloudAccount_DetachFailsRollsBack(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
 	ctx := context.Background()
 
 	mock.ExpectBegin()
+	expectLockDeletedAccount(mock)
 	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
 	mock.ExpectExec("UPDATE purchase_executions").WithArgs(pgxmock.AnyArg(), TerminalExecutionStatuses).

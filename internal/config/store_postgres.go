@@ -3923,12 +3923,24 @@ func (s *PostgresStore) UpdateCloudAccount(ctx context.Context, account *CloudAc
 // If an approved account_registrations row points at this account, it is reset to
 // 'pending' in the same transaction so the admin can re-approve through the normal
 // flow instead of being left with a dead-end "Approved (account pending link)" row.
+// Enabled plans whose only target is this account are disabled in the same
+// transaction (issue #264); see disableSoleAccountPlansTx.
 func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer rollbackTx(ctx, tx, "DeleteCloudAccount")
+
+	// Lock the account row before reading which plans target it. A writer
+	// attaching the account to a plan holds a KEY SHARE lock on this row
+	// (the plan_accounts FK check) until it commits, so this waits for it and
+	// the plan disable below sees its rows. Without the lock the DELETE would
+	// still wait for that writer, but only after the plans were picked, and
+	// its cascade would leave that plan enabled with no accounts.
+	if _, err = tx.Exec(ctx, `SELECT 1 FROM cloud_accounts WHERE id = $1 FOR UPDATE`, id); err != nil {
+		return fmt.Errorf("failed to lock cloud account: %w", err)
+	}
 
 	// Reset any linked approved registration first (explicit NULL so we don't
 	// rely on the FK's ON DELETE SET NULL behavior).
@@ -3961,6 +3973,11 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 		return fmt.Errorf("failed to detach terminal executions: %w", err)
 	}
 
+	disabled, err := disableSoleAccountPlansTx(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+
 	tag, err := tx.Exec(ctx, `DELETE FROM cloud_accounts WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("failed to delete cloud account: %w", err)
@@ -3972,7 +3989,37 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("failed to commit cloud account deletion: %w", err)
 	}
+	if len(disabled) > 0 {
+		logging.Infof("deleting cloud account %s disabled %d plan(s) left with no target accounts: %v", id, len(disabled), disabled)
+	}
 	return nil
+}
+
+// disableSoleAccountPlansTx disables every enabled plan whose only
+// plan_accounts row is accountID, and returns their IDs (issue #264). The
+// account delete cascades those rows away, and a plan with no accounts is the
+// unscoped "universal plan" shape migration 000060 removed: the scheduler
+// would keep creating executions for it with no account to buy in. Disabling
+// rather than refusing the delete keeps the plan and its history for the
+// admin to re-target and re-enable. Plans already disabled are not rewritten,
+// so their updated_at (the plan edit token) does not move.
+func disableSoleAccountPlansTx(ctx context.Context, tx pgx.Tx, accountID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		UPDATE purchase_plans p
+		   SET enabled = false
+		 WHERE p.enabled
+		   AND EXISTS (SELECT 1 FROM plan_accounts pa WHERE pa.plan_id = p.id AND pa.account_id = $1)
+		   AND NOT EXISTS (SELECT 1 FROM plan_accounts pa WHERE pa.plan_id = p.id AND pa.account_id <> $1)
+		RETURNING p.id::text
+	`, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to disable plans targeting only this account: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("failed to disable plans targeting only this account: %w", err)
+	}
+	return ids, nil
 }
 
 // ListCloudAccounts returns accounts matching the filter, with credentials_configured derived.
