@@ -530,6 +530,131 @@ func TestDeleteAccount_PendingZero_DeletesNormally(t *testing.T) {
 	assert.True(t, deleteCalled, "delete should proceed when no pending executions")
 }
 
+// TestDeleteAccount_ActiveExecutions_Returns409 asserts the issue #265
+// preflight: with no cancelable pending/notified rows but an approved,
+// running, scheduled or paused row still on the account, the handler refuses
+// with a 409 that says why (reason "active_executions" + count) instead of
+// letting the FK raise the misleading "cancel pending purchases" 409.
+func TestDeleteAccount_ActiveExecutions_Returns409(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) { return 0, nil }
+	var liveAccount string
+	store.CountLiveExecutionsForAccountFn = func(_ context.Context, id string) (int, error) {
+		liveAccount = id
+		return 2, nil
+	}
+	deleteCalled := false
+	store.DeleteCloudAccountFn = func(_ context.Context, _ string) error {
+		deleteCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	const id = "11111111-1111-1111-1111-111111111111"
+	result, err := handler.deleteAccount(ctx, adminRequest(""), id)
+	assert.Nil(t, result)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %v", err)
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, ce.message, "2 in-progress purchase(s)")
+	assert.NotContains(t, ce.message, "canceled first", "these rows cannot be canceled; the message must not say to")
+	details := ce.Details()
+	require.NotNil(t, details)
+	assert.EqualValues(t, 2, details["active_count"])
+	assert.Equal(t, "active_executions", details["reason"])
+	assert.Equal(t, id, liveAccount, "the live count must be scoped to the account being deleted")
+	assert.False(t, deleteCalled, "DeleteCloudAccount must NOT be called while live executions exist")
+}
+
+// TestDeleteAccount_PendingTakesPrecedenceOverActive asserts the #606
+// Cancel-All-Then-Delete 409 still wins when cancelable rows exist, so the
+// frontend keeps getting the execution IDs it needs.
+func TestDeleteAccount_PendingTakesPrecedenceOverActive(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) { return 1, nil }
+	store.ListPendingExecutionIDsForAccountFn = func(_ context.Context, _ string) ([]string, error) {
+		return []string{"exec-1"}, nil
+	}
+	liveCalled := false
+	store.CountLiveExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
+		liveCalled = true
+		return 4, nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	_, err := handler.deleteAccount(ctx, adminRequest(""), "11111111-1111-1111-1111-111111111111")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError, got %v", err)
+	assert.Equal(t, 409, ce.code)
+	assert.Equal(t, "pending_executions", ce.Details()["reason"])
+	assert.False(t, liveCalled, "the live count is not needed once pending rows already block")
+}
+
+// TestDeleteAccount_OnlyTerminalExecutions_Deletes asserts the issue #265
+// happy path at the handler: no pending and no live rows means the delete
+// goes through (DeleteCloudAccount detaches the terminal history itself).
+func TestDeleteAccount_OnlyTerminalExecutions_Deletes(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) { return 0, nil }
+	liveCalled := false
+	store.CountLiveExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
+		liveCalled = true
+		return 0, nil
+	}
+	deleteCalled := false
+	store.DeleteCloudAccountFn = func(_ context.Context, _ string) error {
+		deleteCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	result, err := handler.deleteAccount(ctx, adminRequest(""), "11111111-1111-1111-1111-111111111111")
+	require.NoError(t, err)
+	assert.Nil(t, result)
+	assert.True(t, liveCalled, "the live preflight must run before the delete")
+	assert.True(t, deleteCalled)
+}
+
+// TestDeleteAccount_LiveCountErr_Returns500 asserts a failing live count is
+// surfaced as an error (500) and never falls through to the delete.
+func TestDeleteAccount_LiveCountErr_Returns500(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) { return 0, nil }
+	store.CountLiveExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
+		return 0, errors.New("db down")
+	}
+	deleteCalled := false
+	store.DeleteCloudAccountFn = func(_ context.Context, _ string) error {
+		deleteCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	_, err := handler.deleteAccount(ctx, adminRequest(""), "11111111-1111-1111-1111-111111111111")
+	require.Error(t, err)
+	_, ok := IsClientError(err)
+	assert.False(t, ok, "a store failure must not be reported as a client error")
+	assert.Contains(t, err.Error(), "db down")
+	assert.False(t, deleteCalled)
+}
+
 // TestDeleteAccount_PendingListErr_StillReturns409 asserts that a failure
 // listing execution_ids doesn't downgrade the 409 to a 500 — the operator
 // still gets the structured count and the explicit "cancel first" ask,
@@ -596,6 +721,93 @@ func TestDeleteAccount_FKViolationRace_Returns409(t *testing.T) {
 	details := ce.Details()
 	require.NotNil(t, details)
 	assert.Equal(t, "pending_executions", details["reason"])
+}
+
+// TestDeleteAccount_FKViolationRace_RequeriesPreflight asserts that after a
+// 23503 race the handler re-runs the preflight, so the client gets the
+// specific structured 409 for whatever row raced in: pending (with its count)
+// or active (approved/running/scheduled/paused), not a generic pending 409.
+func TestDeleteAccount_FKViolationRace_RequeriesPreflight(t *testing.T) {
+	cases := []struct {
+		name       string
+		pending    int
+		live       int
+		wantReason string
+		wantKey    string
+	}{
+		{"pending row raced in", 2, 0, "pending_executions", "pending_count"},
+		{"active row raced in", 0, 1, "active_executions", "active_count"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mockAuth := new(MockAuthService)
+			setupAdminAuth(ctx, mockAuth)
+
+			store := setupAdminMock(ctx)
+			pendingCalls, liveCalls := 0, 0
+			// First call is the preflight (nothing yet); the second is the
+			// re-query after the FK violation, which sees the raced-in row.
+			store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
+				pendingCalls++
+				if pendingCalls == 1 {
+					return 0, nil
+				}
+				return tc.pending, nil
+			}
+			store.CountLiveExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
+				liveCalls++
+				if liveCalls == 1 {
+					return 0, nil
+				}
+				return tc.live, nil
+			}
+			store.DeleteCloudAccountFn = func(_ context.Context, _ string) error {
+				return &pgconn.PgError{Code: "23503"}
+			}
+			handler := &Handler{auth: mockAuth, config: store}
+
+			_, err := handler.deleteAccount(ctx, adminRequest(""), "11111111-1111-1111-1111-111111111111")
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "expected ClientError (409), got %T: %v", err, err)
+			assert.Equal(t, 409, ce.code)
+			details := ce.Details()
+			require.NotNil(t, details)
+			assert.Equal(t, tc.wantReason, details["reason"])
+			assert.Contains(t, details, tc.wantKey, "re-queried 409 carries the count")
+		})
+	}
+}
+
+// TestDeleteAccount_FKViolationRace_RequeryErrorFallsBack asserts that if the
+// re-query itself fails, the handler still returns the bare pending 409
+// rather than surfacing the re-query's 500.
+func TestDeleteAccount_FKViolationRace_RequeryErrorFallsBack(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	store := setupAdminMock(ctx)
+	calls := 0
+	store.CountPendingExecutionsForAccountFn = func(_ context.Context, _ string) (int, error) {
+		calls++
+		if calls == 1 {
+			return 0, nil
+		}
+		return 0, errors.New("connection reset")
+	}
+	store.DeleteCloudAccountFn = func(_ context.Context, _ string) error {
+		return &pgconn.PgError{Code: "23503"}
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	_, err := handler.deleteAccount(ctx, adminRequest(""), "11111111-1111-1111-1111-111111111111")
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected ClientError (409), got %T: %v", err, err)
+	assert.Equal(t, 409, ce.code)
+	assert.Equal(t, "pending_executions", ce.Details()["reason"])
 }
 
 // TestDeleteAccount_NonFKError_StillReturns500 asserts that errors which
@@ -1753,6 +1965,9 @@ func TestGetAccount_InScope_ByName(t *testing.T) {
 	customStore := &mockConfigStoreAccounts{
 		MockConfigStore: setupAdminMock(ctx),
 		getResult:       &acct,
+		// "Production" is unique among the registered accounts, so it may
+		// match by name (#433).
+		listResult: []config.CloudAccount{acct},
 	}
 
 	handler := &Handler{auth: mockAuth, config: customStore}

@@ -11,7 +11,6 @@ import (
 	pkgladder "github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 	awsprovider "github.com/LeanerCloud/cloud-commitments-go/providers/aws"
 	awsladder "github.com/LeanerCloud/cloud-commitments-go/providers/aws/ladder"
-	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
 )
 
 // exchangeRunnerAdapter bridges internal/server wiring (exchange store, EC2 exchange
@@ -60,20 +59,10 @@ func (a *exchangeRunnerAdapter) RunAutoExchange(ctx context.Context, cfg exchang
 	riInfos, utilInfos, riMetadata := convertForAutoExchange(instances, utilData)
 	store := newConfigExchangeStoreAdapter(a.app.Config)
 
-	lookupOffering := func(ctx context.Context, instanceType, productDesc, tenancy, scope string, duration int64) (string, error) {
-		return ec2Client.FindConvertibleOffering(ctx, ec2svc.FindConvertibleOfferingParams{
-			InstanceType:       instanceType,
-			ProductDescription: productDesc,
-			Tenancy:            tenancy,
-			Scope:              scope,
-			Duration:           duration,
-		})
-	}
-
 	return exchange.RunAutoExchange(ctx, exchange.RunAutoExchangeParams{
 		Store:          store,
 		ExchangeClient: exchange.NewExchangeClient(awsCfg),
-		LookupOffering: lookupOffering,
+		LookupOffering: newConvertibleOfferingLookup(ec2Client),
 		RIs:            riInfos,
 		Utilization:    utilInfos,
 		Config:         cfg,

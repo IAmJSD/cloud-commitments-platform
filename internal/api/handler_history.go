@@ -11,7 +11,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/runtime"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/jackc/pgx/v5"
 )
@@ -246,11 +246,12 @@ func isStaleExecution(exec config.PurchaseExecution) bool {
 // response is returned, so a background goroutine would be suspended
 // mid-sweep and stale rows could stay "pending" indefinitely (issue #1170).
 // There the sweep runs synchronously before the handler returns, mirroring
-// the SWR cache's isLambda gate (ri_utilization_cache.go) and using the same
-// runtime.IsLambda detection helper. The sweep is a handful of cheap UPDATEs,
-// so the synchronous cost on Lambda is negligible. Errors are logged and
-// skipped — a missed transition leaves the row "pending" until the next
-// History load, which is better than failing the read response.
+// the SWR cache's isLambda gate (ri_utilization_cache.go) and reading the same
+// h.isLambda value (HandlerConfig.IsLambda, the Application's single captured
+// answer, issue #110) rather than the live environment. The sweep is a handful
+// of cheap UPDATEs, so the synchronous cost on Lambda is negligible. Errors are
+// logged and skipped — a missed transition leaves the row "pending" until the
+// next History load, which is better than failing the read response.
 //
 // The sweep is idempotent per execution ID: TransitionExecutionStatus is
 // guarded by the FROM-status list ("pending","notified"), so a concurrent
@@ -266,7 +267,7 @@ func (h *Handler) expireStaleExecutions(staleExecs []config.PurchaseExecution) {
 		logging.Warnf("history: sweeping %d of %d stale executions", config.DefaultListLimit, len(staleExecs))
 		staleExecs = staleExecs[:config.DefaultListLimit]
 	}
-	if runtime.IsLambda() {
+	if h.isLambda {
 		h.expireStaleExecutionsSweep(staleExecs)
 		return
 	}
@@ -386,6 +387,7 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver, createdByEma
 		PlanID:             exec.PlanID,
 		Status:             exec.Status,
 		CreatedByUserID:    createdBy,
+		CreatedBySystem:    exec.CreatedBySystem,
 		CreatedByUserEmail: createdByEmail,
 		RetryExecutionID:   retryExecID,
 		RetryAttemptN:      exec.RetryAttemptN,
@@ -397,6 +399,14 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver, createdByEma
 	// inputs, so this is safe to call unconditionally.
 	if exec.Status == "failed" {
 		row.OpsHint = resolveOpsHint(exec.Error)
+		// A re-drive the backend will always refuse is permanent, so it wins
+		// over the operator-fixable failure-reason hint (which promises that
+		// fixing the config makes Retry work). Same call and input as the
+		// retry handler's gate so the two cannot disagree (issue #161).
+		if reason := purchase.RedriveRefusalReason(&exec); reason != "" {
+			row.OpsHint = reason
+			row.RedriveUnsafe = true
+		}
 	}
 	annotateHistoryRowByStatus(&row, exec, approver)
 	return row

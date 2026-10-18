@@ -72,19 +72,22 @@ func effectiveLifetimeUsage(key *UserAPIKey) *int64 {
 	return &total
 }
 
-// normalizeAPIKeyPermissions returns perms unchanged, or []Permission{} when
-// nil. CreateAPIKey now rejects new keys with zero permissions (issue #61),
+// normalizeAPIKeyPermissions converts a stored key's permissions to the
+// documented wire shape (APIPermission: constraints.accounts /
+// constraints.max_amount, issue #951), returning []APIPermission{} when perms
+// is nil. CreateAPIKey now rejects new keys with zero permissions (issue #61),
 // but a legacy key minted before that fix can still have a NULL permissions
 // column, which the JSONB scan surfaces as a nil slice. Since
 // APIKeyInfo.Permissions is no longer omitempty (issue #61), a raw nil would
 // serialize as "permissions":null instead of the intended "permissions":[]
 // -- both mean "no scope", but a client that expects the field to always be
 // an array (never null) would otherwise have to special-case it.
-func normalizeAPIKeyPermissions(perms []Permission) []Permission {
-	if perms == nil {
-		return []Permission{}
+func normalizeAPIKeyPermissions(perms []Permission) []APIPermission {
+	out := make([]APIPermission, len(perms))
+	for i, p := range perms {
+		out[i] = permissionToAPIPermission(p)
 	}
-	return perms
+	return out
 }
 
 // API wrapper methods for API key operations
@@ -92,10 +95,10 @@ func normalizeAPIKeyPermissions(perms []Permission) []Permission {
 
 // APICreateAPIKeyRequest represents the API request to create an API key.
 type APICreateAPIKeyRequest struct {
-	ExpiresAt   *time.Time   `json:"expires_at,omitempty"`
-	Name        string       `json:"name"`
-	Password    string       `json:"password"` //nolint:gosec // G117: intentional credential field in request struct -- decoded by the handler and verified against the caller's own stored hash, never re-stored
-	Permissions []Permission `json:"permissions,omitempty"`
+	ExpiresAt   *time.Time      `json:"expires_at,omitempty"`
+	Name        string          `json:"name"`
+	Password    string          `json:"password"` //nolint:gosec // G117: intentional credential field in request struct -- decoded by the handler and verified against the caller's own stored hash, never re-stored
+	Permissions []APIPermission `json:"permissions,omitempty"`
 }
 
 // APIKeyInfo represents public API key information (without sensitive data).
@@ -118,8 +121,11 @@ type APIKeyInfo struct {
 	// simply has no info populated. Hiding it behind omitempty made a
 	// zero-scope key indistinguishable from a fully-scoped one in
 	// listAPIKeys, which was itself part of the audit gap the issue raised.
-	Permissions []Permission `json:"permissions"`
-	IsActive    bool         `json:"is_active"`
+	// It uses the documented wire shape (constraints.accounts /
+	// constraints.max_amount), the same one the create request accepts
+	// (issue #951).
+	Permissions []APIPermission `json:"permissions"`
+	IsActive    bool            `json:"is_active"`
 	// Usage counters (issue #340/#344 deferred sub-task). RequestCountWindow
 	// is a fixed/tumbling window count, not a true rolling 24h total, and is
 	// zero once that window has closed -- see effectiveWindowUsage,
@@ -183,9 +189,12 @@ type APIListAPIKeysResponse struct {
 // CreateAPIKeyAPI creates a new API key and returns API-friendly response.
 //
 // req may be any struct whose JSON representation is compatible with
-// APICreateAPIKeyRequest (name, expires_at, permissions). The handler lives
-// in a different package (api) and passes api.CreateAPIKeyRequest, which
-// carries the same JSON fields but is a distinct Go type. A direct type
+// APICreateAPIKeyRequest (name, expires_at, permissions in the API wire shape:
+// APIPermission, with accounts/max_amount constraint tags, not the storage
+// shape). The handler lives in a different package (api) and passes
+// api.CreateAPIKeyRequest, which carries the same JSON fields but is a
+// distinct Go type. Permissions must stay APIPermission: decoding them into
+// Permission silently dropped the account and amount constraints. A direct type
 // assertion would always fail and return a 500; JSON re-encoding handles any
 // caller-package type transparently (issue #1440).
 func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error) {
@@ -207,8 +216,12 @@ func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (
 		}
 	}
 
+	perms, err := apiPermissionsToPermissions(createReq.Permissions)
+	if err != nil {
+		return nil, err
+	}
 	// Create the API key
-	apiKey, keyInfo, err := s.CreateAPIKey(ctx, userID, createReq.Name, createReq.Password, createReq.Permissions, createReq.ExpiresAt)
+	apiKey, keyInfo, err := s.CreateAPIKey(ctx, userID, createReq.Name, createReq.Password, perms, createReq.ExpiresAt)
 	if err != nil {
 		return nil, err
 	}
@@ -438,4 +451,46 @@ func (s *Service) HasAPIKeyPermissionForConstraintsAPI(ctx context.Context, keyI
 		}
 	}
 	return true, nil
+}
+
+// GetAPIKeyEffectivePermissionsAPI returns the effective permission set of a
+// user API key: the key's own permissions intersected with its owner's
+// group-derived permissions (ComputeEffectivePermissions), the same set
+// HasAPIKeyPermissionAPI enforces. Each entry carries the key's constraints,
+// not the owner's. GET /api/auth/me/permissions uses it so a scoped key is
+// told what it can do rather than what its owner can (issue #62).
+//
+// keyID and userID come from the request's already-authenticated principal.
+// The key is re-checked here (owner match, revocation, expiry, owner active,
+// password rotation) so a key that stopped being valid mid-request is
+// refused. Fail closed: any lookup failure returns an error, never the
+// owner's permissions.
+func (s *Service) GetAPIKeyEffectivePermissionsAPI(ctx context.Context, keyID, userID string) ([]APIPermission, error) {
+	key, err := s.store.GetAPIKeyByID(ctx, keyID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load API key: %w", err)
+	}
+	if key == nil || key.UserID != userID {
+		return nil, fmt.Errorf("API key not found")
+	}
+	err = validateAPIKeyStatus(key)
+	if err != nil {
+		return nil, err
+	}
+	user, err := s.lookupAPIKeyUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if key.PasswordVersion != user.PasswordVersion {
+		return nil, ErrAPIKeyPasswordRotated
+	}
+	perms, err := s.ComputeEffectivePermissions(ctx, key, user)
+	if err != nil {
+		return nil, fmt.Errorf("computing effective API key permissions: %w", err)
+	}
+	result := make([]APIPermission, len(perms))
+	for i, p := range perms {
+		result[i] = permissionToAPIPermission(p)
+	}
+	return result, nil
 }

@@ -292,13 +292,14 @@ func adoptableRootRow(rows []config.PurchaseExecution) (*config.PurchaseExecutio
 }
 
 // failExistingPlanStep fails a pending/notified plan-step row that will never
-// carry recommendations, with reason. The status change is a compare-and-set,
+// be bought, with reason. The CAS pins the recommendations to what the caller
+// saw (empty for a bare row, non-empty for a refused attached one). The status change is a compare-and-set,
 // so a human approving the row between this tick's read and now wins: the row
 // is no longer awaiting approval and the tick skips it, instead of an upsert
 // from the stale read overwriting the approval. A won CAS returns the fresh
 // row, which is the one the error text is written onto.
 func (m *Manager) failExistingPlanStep(ctx context.Context, exec *config.PurchaseExecution, reason string) error {
-	failed, err := m.config.TransitionExecutionStatusPinned(ctx, exec.ExecutionID, []string{"pending", "notified"}, "failed", nil, true)
+	failed, err := m.config.TransitionExecutionStatusPinned(ctx, exec.ExecutionID, []string{"pending", "notified"}, "failed", nil, len(exec.Recommendations) == 0)
 	if errors.Is(err, config.ErrNotFound) || errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
 		return fmt.Errorf("%w: %s changed state before it could be failed", errExecutionNotNotifiable, exec.ExecutionID)
 	}
@@ -306,7 +307,14 @@ func (m *Manager) failExistingPlanStep(ctx context.Context, exec *config.Purchas
 		return fmt.Errorf("failed to fail plan step %d of plan %s: %w", exec.StepNumber, exec.PlanID, err)
 	}
 	stampFailedPlanStep(failed, reason)
-	if err := m.config.SavePurchaseExecution(ctx, failed); err != nil {
+	// The row is failed with NoSubmission, so its suppressions are released as
+	// for any proven not-submitted failure (saveTerminalExecution); a bare row has none.
+	if err := m.config.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := m.config.SavePurchaseExecutionTx(ctx, tx, failed); err != nil {
+			return err
+		}
+		return m.config.DeleteSuppressionsByExecutionTx(ctx, tx, failed.ExecutionID)
+	}); err != nil {
 		return fmt.Errorf("failed to record plan step %d of plan %s as failed: %w", failed.StepNumber, failed.PlanID, err)
 	}
 	return bareStepFailure(failed.PlanID, failed.StepNumber, reason)

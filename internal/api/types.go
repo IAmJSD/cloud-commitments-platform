@@ -12,6 +12,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/oidc"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/scheduler"
 )
 
@@ -54,6 +55,11 @@ type HandlerConfig struct {
 	APIKeySecretARN     string
 	EncryptionKeySource string
 	EnableDashboard     bool
+	// IsLambda is the caller's (Application's) single answer to "am I on
+	// Lambda". It gates the background goroutines (RI utilization SWR
+	// refresh, stale-execution sweep) that would freeze mid-flight on Lambda.
+	// The handler never re-reads the environment itself (issue #110).
+	IsLambda bool
 }
 
 // CommitmentOptsInterface lets us swap the real *commitmentopts.Service for
@@ -140,17 +146,23 @@ type BreakdownValue struct {
 // raw revocation token minted on a successful execute (issue #103: only its
 // hash is stored, so callers can no longer recover a raw, emailable token by
 // re-reading the execution from the store). Empty on failure.
+//
+// `check` (every execute entry point) re-runs the caller's permission
+// Constraints against the row the claim CAS returned, the row that is
+// actually bought, before any provider call (issue #415). The handler's own
+// pre-CAS check reads an earlier snapshot, which a repricing or a
+// recommendation attach can change before the CAS.
 type PurchaseManagerInterface interface {
-	ApproveExecution(ctx context.Context, execID, token, actor string) (string, error)
-	ApproveAndExecute(ctx context.Context, execID, actor string, transitionedBy *string) (*config.PurchaseExecution, string, error)
+	ApproveExecution(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (string, error)
+	ApproveAndExecute(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	// DirectExecute is ApproveAndExecute for the direct-execute permission; it
 	// stamps the executed_* audit fields only after the claim is won.
-	DirectExecute(ctx context.Context, execID, actor string, transitionedBy *string) (*config.PurchaseExecution, string, error)
+	DirectExecute(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	// RunPlannedPurchaseNow forces a pending or paused scheduled purchase to
 	// execute immediately (the "Run now" button), sharing ApproveAndExecute's
 	// 4-eyes-gated, CAS-guarded funnel instead of a bare status flip that
 	// nothing else consumes (issue #218).
-	RunPlannedPurchaseNow(ctx context.Context, execID, actor string, transitionedBy *string) (*config.PurchaseExecution, string, error)
+	RunPlannedPurchaseNow(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	CancelExecution(ctx context.Context, execID, token, actor string) error
 }
 
@@ -222,6 +234,14 @@ type AuthServiceInterface interface {
 	// (union of all group permissions). Used by GET /api/auth/me/permissions.
 	// Returns []auth.APIPermission converted to []PermissionEntry by the handler.
 	GetUserPermissionsAPI(ctx context.Context, userID string) (any, error)
+	// GetAPIKeyEffectivePermissionsAPI returns a user API key's effective
+	// permission set (the key's permissions intersected with its owner's,
+	// carrying the key's constraints): the set HasAPIKeyPermissionAPI
+	// enforces. Used by GET /api/auth/me/permissions for user-API-key
+	// principals so the key, not its owner, is described (issue #62). A
+	// non-nil error means the key or its owner could not be confirmed, and
+	// callers must refuse rather than fall back to the owner's permissions.
+	GetAPIKeyEffectivePermissionsAPI(ctx context.Context, keyID, userID string) ([]auth.APIPermission, error)
 	// Account access - returns the union of allowed_accounts from all user groups (empty = all access)
 	GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error)
 	// API Key management
@@ -531,8 +551,10 @@ type PermissionEntry struct {
 }
 
 // UserPermissionsResponse is the response shape for GET /api/auth/me/permissions.
-// Permissions is the effective set derived from the union of the user's groups.
-// IsAdmin mirrors whether the effective set contains the {admin, *} wildcard.
+// Permissions is the caller's effective set: for a user session, the union of
+// the user's groups; for a user API key, the key's permissions intersected
+// with its owner's (issue #62); for the admin API key, {admin, *}.
+// IsAdmin mirrors whether that effective set contains the {admin, *} wildcard.
 type UserPermissionsResponse struct {
 	Permissions []PermissionEntry `json:"permissions"`
 	IsAdmin     bool              `json:"is_admin"`

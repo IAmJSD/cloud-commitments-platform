@@ -18,7 +18,7 @@ export function openLadderEventEditor(event: LadderEvent, run: LadderRun, siblin
     <p>These are planning budgets. Purchases are not executed by this editor.</p>
     <div class="form-row"><label for="ladder-event-date">Scheduled date and time (UTC)</label>
       <input id="ladder-event-date" type="datetime-local" step="1" required></div>
-    <div class="form-row"><label for="ladder-event-amount">Planning budget (USD/hour)</label>
+    <div class="form-row"><label for="ladder-event-amount">Planning budget (${event.amount_basis === 'commitment' ? 'commitment $/hr' : 'on-demand-equivalent $/hr'})</label>
       <input id="ladder-event-amount" inputmode="decimal" required></div>
     <p id="ladder-event-preview" aria-live="polite"></p>
     <p>Original run ceiling: ${escapeHtml(formatLadderAmount(run.total_hourly_commit))}.

@@ -54,7 +54,7 @@ func TestSingleClaim_BothOrderingsBuyOnce(t *testing.T) {
 		claimed, execErr := f.manager.claimAndExecute(ctx, rowStatusCopy(row))
 		require.NoError(t, execErr)
 		require.True(t, claimed)
-		_, _, err := f.manager.ApproveAndExecute(ctx, row.ExecutionID, "approver@example.invalid", nil)
+		_, _, err := f.manager.ApproveAndExecute(ctx, row.ExecutionID, "approver@example.invalid", nil, nil)
 		require.ErrorIs(t, err, config.ErrExecutionNotInExpectedStatus)
 		assert.Equal(t, 1, f.purchaseCount()-before)
 		assert.Equal(t, "completed", rowStatus(ctx, t, f, row.ExecutionID).Status)
@@ -63,7 +63,7 @@ func TestSingleClaim_BothOrderingsBuyOnce(t *testing.T) {
 	t.Run("approve then claimAndExecute", func(t *testing.T) {
 		row := claimRaceRow(ctx, t, f, "notified")
 		before := f.purchaseCount()
-		_, _, err := f.manager.ApproveAndExecute(ctx, row.ExecutionID, "approver@example.invalid", nil)
+		_, _, err := f.manager.ApproveAndExecute(ctx, row.ExecutionID, "approver@example.invalid", nil, nil)
 		require.NoError(t, err)
 		claimed, execErr := f.manager.claimAndExecute(ctx, rowStatusCopy(row))
 		require.NoError(t, execErr)
@@ -85,10 +85,10 @@ func TestSingleClaim_ConcurrentExecutorsBuyOnce(t *testing.T) {
 	const n = 4
 	cases := map[string][]func(row *config.PurchaseExecution){}
 	approve := func(row *config.PurchaseExecution) {
-		_, _, _ = f.manager.ApproveAndExecute(ctx, row.ExecutionID, "a@example.invalid", nil)
+		_, _, _ = f.manager.ApproveAndExecute(ctx, row.ExecutionID, "a@example.invalid", nil, nil)
 	}
 	direct := func(row *config.PurchaseExecution) {
-		_, _, _ = f.manager.DirectExecute(ctx, row.ExecutionID, "a@example.invalid", nil)
+		_, _, _ = f.manager.DirectExecute(ctx, row.ExecutionID, "a@example.invalid", nil, nil)
 	}
 	cron := func(row *config.PurchaseExecution) { _, _ = f.manager.claimAndExecute(ctx, rowStatusCopy(row)) }
 	redrive := func(row *config.PurchaseExecution) { _, _ = f.manager.claimAndRedrive(ctx, rowStatusCopy(row)) }
@@ -170,7 +170,7 @@ func TestSingleClaim_ReaperInterleavingRecoversPurchasedRow(t *testing.T) {
 				require.Eventually(t, func() bool { return rowStatus(ctx, t, f, row.ExecutionID).Status == "failed" }, 5*time.Second, 10*time.Millisecond)
 			}
 
-			_, _, err := f.manager.ApproveAndExecute(ctx, row.ExecutionID, "a@example.invalid", nil)
+			_, _, err := f.manager.ApproveAndExecute(ctx, row.ExecutionID, "a@example.invalid", nil, nil)
 			require.NoError(t, err)
 			close(rs.release)
 			<-reaped
@@ -203,7 +203,7 @@ func TestSingleClaim_ExecutorArrivingMidApproveCannotBuyAgain(t *testing.T) {
 		c.Status = "approved"
 		midClaimed, _ = f.manager.claimAndExecute(ctx, c)
 	}
-	_, _, err := f.manager.ApproveAndExecute(ctx, row.ExecutionID, "a@example.invalid", nil)
+	_, _, err := f.manager.ApproveAndExecute(ctx, row.ExecutionID, "a@example.invalid", nil, nil)
 	require.NoError(t, err)
 	assert.False(t, midClaimed, "the row is running, so a second executor loses the claim")
 	assert.Equal(t, 1, f.purchaseCount())

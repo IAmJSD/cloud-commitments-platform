@@ -1,5 +1,5 @@
 variable "stack_name" {
-  description = "Name of the stack"
+  description = "Name of the stack. At most 30 chars: the Lambda IAM role uses name_prefix \"<stack_name>-lambda-\", which the AWS provider caps at 38 chars. Rule names (longest \"-fire-scheduled-purchases\", sweeps \"-sweep-<rule>\" up to 15 chars) fit well inside EventBridge's 64."
   type        = string
 }
 
@@ -49,9 +49,22 @@ variable "memory_size" {
 }
 
 variable "timeout" {
-  description = "Lambda timeout in seconds"
+  # Must cover the longest work the handler detaches from the request: an RI
+  # exchange or purchase gets 4m of execution plus a 30s terminal save
+  # (riExchangeExecutionTimeout / purchaseExecutionTimeout + their terminal
+  # save budgets). Lambda ends the invocation at this timeout whatever the
+  # context deadline says, so a shorter value cuts that work off mid-flight
+  # (#913). 300 = 270s of budget + 30s for the request work before it.
+  # Pinned against the Go constants by TestLambdaTimeoutCoversRIExchangeBudget
+  # and TestLambdaTimeoutCoversPurchaseBudget.
+  description = "Lambda timeout in seconds (300-900; must cover the 270s detached exchange/purchase budget)"
   type        = number
-  default     = 30
+  default     = 300
+
+  validation {
+    condition     = var.timeout >= 300 && var.timeout <= 900
+    error_message = "timeout must be between 300 and 900 seconds: RI exchanges and purchases run up to 270s (4m execution + 30s terminal save) after the request, and Lambda cuts the invocation off at this timeout (#913)."
+  }
 }
 
 variable "database_host" {
@@ -231,8 +244,56 @@ variable "fire_scheduled_purchases_schedule" {
   default     = "rate(15 minutes)"
 }
 
+variable "enable_process_scheduled_purchases_schedule" {
+  description = "Enable the scheduled process_scheduled_purchases sweep (proposes purchases that are due). Opt-in: default false so no purchase proposal runs unless an operator asks for it."
+  type        = bool
+  default     = false
+}
+
+variable "process_scheduled_purchases_schedule" {
+  description = "EventBridge schedule for the process_scheduled_purchases sweep."
+  type        = string
+  default     = "rate(1 hour)"
+}
+
+variable "enable_send_notifications_schedule" {
+  description = "Enable the scheduled send_notifications sweep. Opt-in: default false; enable it together with process_scheduled_purchases."
+  type        = bool
+  default     = false
+}
+
+variable "send_notifications_schedule" {
+  description = "EventBridge schedule for the send_notifications sweep."
+  type        = string
+  default     = "rate(1 day)"
+}
+
+variable "enable_finalize_revocations_schedule" {
+  description = "Enable the scheduled finalize_revocations sweep (idempotent audit repair of revoked purchases)."
+  type        = bool
+  default     = true
+}
+
+variable "finalize_revocations_schedule" {
+  description = "EventBridge schedule for the finalize_revocations sweep."
+  type        = string
+  default     = "rate(1 hour)"
+}
+
+variable "enable_cleanup_schedule" {
+  description = "Enable the scheduled server cleanup sweep. Opt-in: default false. It deletes expired sessions and, via CleanupOldExecutions(30), purchase_executions that are completed with scheduled_date older than 30 days, canceled with updated_at older than 30 days, or in a status outside failed/canceled with expires_at older than 30 days. The first run deletes the whole backlog, so export any history you want to keep first."
+  type        = bool
+  default     = false
+}
+
+variable "cleanup_schedule" {
+  description = "EventBridge schedule for the cleanup sweep."
+  type        = string
+  default     = "rate(1 day)"
+}
+
 variable "purchase_approved_reap_after" {
-  description = "Threshold age for the stuck-purchase reaper. Any execution sitting in approved/running longer than this gets flipped to failed on the next sweep. Parsed via Go time.ParseDuration (e.g. \"10m\", \"15m\", \"1h\"). Empty string falls back to the in-code default (10m)."
+  description = "Threshold age for the stuck-purchase reaper. Any execution sitting in running longer than this gets flipped to failed on the next sweep; approved rows wait at least 1h20m so the process sweep can re-drive them first (#894). Parsed via Go time.ParseDuration (e.g. \"10m\", \"15m\", \"1h\"). Empty string falls back to the in-code default (10m)."
   type        = string
   default     = ""
 }

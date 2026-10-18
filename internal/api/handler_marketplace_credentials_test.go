@@ -10,6 +10,7 @@ import (
 
 	awsprovider "github.com/LeanerCloud/cloud-commitments-go/providers/aws"
 	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -313,26 +314,149 @@ func TestLoadMarketplaceAWSConfig_FailsClosed(t *testing.T) {
 	})
 }
 
-// Rows without a cloud account keep the host's ambient credentials (reachable
-// only by sell-any callers); this documents the current behavior.
-func TestLoadMarketplaceAWSConfig_NoCloudAccountKeepsHostCredentials(t *testing.T) {
-	empty := ""
-	for name, id := range map[string]*string{"nil": nil, "empty": &empty} {
-		t.Run(name, func(t *testing.T) {
-			h := &Handler{config: &MockConfigStore{}}
-			h.awsCfgOnce.Do(func() {
-				h.awsCfg = aws.Config{
-					Region:      "us-east-1",
-					Credentials: awscreds.NewStaticCredentialsProvider(marketplaceHostKeyID, "host-secret", ""),
-				}
-			})
-			row := standardRow()
-			row.CloudAccountID = id
+// countingSTS records how many STS calls were made and answers them with the
+// wrapped transport.
+type countingSTS struct {
+	calls *int
+	next  aws.HTTPClient
+}
 
-			cfg, err := h.loadMarketplaceAWSConfig(context.Background(), row)
+func (c countingSTS) Do(r *http.Request) (*http.Response, error) {
+	*c.calls++
+	return c.next.Do(r)
+}
+
+// failingSTS fails every STS call at the transport.
+type failingSTS struct{}
+
+func (failingSTS) Do(*http.Request) (*http.Response, error) {
+	return nil, errors.New("sts unreachable")
+}
+
+// noCloudAccountRow is a purchase row with no cloud account (ambient
+// single-account deployment, legacy or account-deleted row) owned by the given
+// AWS account.
+func noCloudAccountRow(cloudAccountID *string, awsAccountID string) *config.PurchaseHistoryRecord {
+	row := standardRow()
+	row.CloudAccountID = cloudAccountID
+	row.AccountID = awsAccountID
+	return row
+}
+
+func hostOnlyHandler(transport aws.HTTPClient) *Handler {
+	// No GetCloudAccount expectation: a row without a cloud account must not
+	// look one up (the mock panics on an unexpected call).
+	h := &Handler{config: &MockConfigStore{}}
+	h.awsCfgOnce.Do(func() {
+		h.awsCfg = aws.Config{
+			Region:      "us-east-1",
+			Credentials: awscreds.NewStaticCredentialsProvider(marketplaceHostKeyID, "host-secret", ""),
+			HTTPClient:  transport,
+		}
+	})
+	return h
+}
+
+// A row with no cloud account gets the host's credentials only when its AWS
+// account id is the host account (issue #261).
+func TestLoadMarketplaceAWSConfig_NoCloudAccountHostRowUsesHostCredentials(t *testing.T) {
+	empty, blank := "", "  "
+	for name, id := range map[string]*string{"nil": nil, "empty": &empty, "blank": &blank} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			h := hostOnlyHandler(countingSTS{&calls, hostSTSTransport{}})
+
+			cfg, err := h.loadMarketplaceAWSConfig(context.Background(), noCloudAccountRow(id, marketplaceHostAccount))
 
 			require.NoError(t, err)
 			assert.Equal(t, marketplaceHostKeyID, signingKeyID(t, cfg))
+			assert.Equal(t, 1, calls, "the host identity must be checked before the host's credentials are used")
+		})
+	}
+}
+
+func TestLoadMarketplaceAWSConfig_NoCloudAccountRefusedUnlessHost(t *testing.T) {
+	cases := map[string]struct {
+		owner     string
+		transport aws.HTTPClient
+		wantSTS   bool
+	}{
+		"member account":     {owner: "222222222222", transport: hostSTSTransport{}, wantSTS: true},
+		"empty account id":   {owner: "", transport: hostSTSTransport{}, wantSTS: false},
+		"blank account id":   {owner: "   ", transport: hostSTSTransport{}, wantSTS: false},
+		"host identity fail": {owner: marketplaceHostAccount, transport: failingSTS{}, wantSTS: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			h := hostOnlyHandler(countingSTS{&calls, tc.transport})
+			h.awsCfg.Retryer = noRetry
+
+			cfg, err := h.loadMarketplaceAWSConfig(context.Background(), noCloudAccountRow(nil, tc.owner))
+
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "expected a client error, got %v", err)
+			assert.Equal(t, 400, ce.code)
+			assert.Equal(t, marketplaceNoCloudAccountMessage, ce.message)
+			assert.NotContains(t, ce.message, marketplaceHostAccount)
+			assert.Nil(t, cfg.Credentials, "a refused row must not get the host's credentials")
+			assert.Equal(t, tc.wantSTS, calls > 0)
+		})
+	}
+}
+
+// End to end through both handlers: a no-cloud-account row owned by a member
+// account never reaches EC2, and one owned by the host account is signed with
+// the host's credentials.
+func TestMarketplaceHandlers_NoCloudAccountRow(t *testing.T) {
+	run := map[string]func(*Handler) (any, error){
+		"list": func(h *Handler) (any, error) {
+			return h.marketplaceList(context.Background(), marketplaceReq(), validMarketplacePurchaseID)
+		},
+		"cancel": func(h *Handler) (any, error) {
+			return h.marketplaceCancel(context.Background(), marketplaceReq(), validMarketplacePurchaseID)
+		},
+	}
+	// A row with no cloud account is reachable only by an unrestricted
+	// sell-any caller; authorization itself is unchanged.
+	unrestricted := func(h *Handler) {
+		h.auth.(*MockAuthService).On("HasPermissionForConstraintsAPI", mock.Anything, "admin", auth.ActionSellAny, auth.ResourcePurchases,
+			[]auth.PermissionConstraints{{StrictScope: true, Regions: []string{"us-east-1"}}}).Return(true, nil)
+	}
+	for name, call := range run {
+		row := func(accountID string) *config.PurchaseHistoryRecord {
+			r := noCloudAccountRow(nil, accountID)
+			if name == "cancel" {
+				r.ListingState = config.ListingStateActive
+				r.ListingID = "ril-cancel"
+			}
+			return r
+		}
+		t.Run(name+"/member account refused", func(t *testing.T) {
+			h, built := marketplaceAccountHandler(t, nil, row("222222222222"))
+			unrestricted(h)
+			built.Region = "unset"
+
+			_, err := call(h)
+
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "expected a client error, got %v", err)
+			assert.Equal(t, 400, ce.code)
+			assert.Equal(t, marketplaceNoCloudAccountMessage, ce.message)
+			assert.Equal(t, "unset", built.Region, "no EC2 client may be built for a refused row")
+			store := h.config.(*MockConfigStore)
+			store.AssertNotCalled(t, "GetCloudAccount", mock.Anything, mock.Anything)
+		})
+		t.Run(name+"/host account uses host credentials", func(t *testing.T) {
+			h, built := marketplaceAccountHandler(t, nil, row(marketplaceHostAccount))
+			unrestricted(h)
+
+			_, err := call(h)
+
+			require.NoError(t, err)
+			assert.Equal(t, marketplaceHostKeyID, signingKeyID(t, *built))
+			store := h.config.(*MockConfigStore)
+			store.AssertNotCalled(t, "GetCloudAccount", mock.Anything, mock.Anything)
 		})
 	}
 }

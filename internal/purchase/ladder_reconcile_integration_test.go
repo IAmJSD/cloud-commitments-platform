@@ -8,6 +8,7 @@ package purchase
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -71,9 +72,10 @@ func (r *ladderRig) link(from, to string) {
 
 // firedTranche claims a real scheduled tranche with a real execution row.
 func (r *ladderRig) firedTranche(headStatus string, headProof bool, age time.Duration) (trancheID, headExec string) {
+	basis := config.LadderAmountOnDemand
 	tr := config.LadderTrancheDB{ID: uuid.New().String(), ConfigID: &r.cfgID, LayerType: ladder.LayerComputeSP,
 		Term: ladder.Term1Year, PaymentOption: ladder.PaymentNoUpfront, Status: ladder.TrancheStatusScheduled,
-		AmountUSDHr: 5, ScheduledDate: time.Now().Add(-time.Hour)}
+		AmountUSDHr: 5, ScheduledDate: time.Now().Add(-time.Hour), AmountBasis: &basis}
 	require.NoError(r.t, r.store.SaveLadderTranches(r.ctx, []config.LadderTrancheDB{tr}))
 	claimed, err := r.store.ClaimDueLadderTranches(r.ctx, r.cfgID, time.Now(), 10,
 		func(ctx context.Context, tx pgx.Tx, _ config.LadderTrancheDB) (string, error) {
@@ -99,10 +101,16 @@ func (r *ladderRig) state(trancheID string) (status string, reason *string) {
 }
 
 func (r *ladderRig) inFlight() float64 {
-	v, err := r.store.GetInFlightLadderCommitUSDHr(r.ctx, r.cfgID, time.Now())
-	require.NoError(r.t, err)
-	require.NotNil(r.t, v)
-	return *v
+	var v float64
+	abort := errors.New("read only")
+	_, err := r.store.PlanAndSaveLadderRun(r.ctx, r.cfgID, time.Now(), func(rows []config.LadderInFlightRow) (*config.LadderRunDB, []config.LadderTrancheDB, error) {
+		var err error
+		v, err = config.LadderInFlightOnDemand(rows)
+		require.NoError(r.t, err)
+		return nil, nil, abort
+	})
+	require.ErrorIs(r.t, err, abort)
+	return v
 }
 
 func TestReconcileLadderTranches_Mappings(t *testing.T) {

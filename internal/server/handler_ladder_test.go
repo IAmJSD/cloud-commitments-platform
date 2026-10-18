@@ -31,7 +31,19 @@ type fakeLadderCapability struct {
 	layerStates     map[pkgladder.LayerType]pkgladder.LayerState
 	layerStatesErr  error
 	supportedLayers []pkgladder.LayerSpec
+	rates           map[pkgladder.LayerType]float64 // nil means 1.0 for both default layers
+	ratesErr        error
 	t               *testing.T
+}
+
+func (f *fakeLadderCapability) GetCommitmentRates(_ context.Context, _ pkgladder.Scope, _ pkgladder.Term, _ pkgladder.PaymentOption) (map[pkgladder.LayerType]float64, error) {
+	if f.ratesErr != nil {
+		return nil, f.ratesErr
+	}
+	if f.rates != nil {
+		return f.rates, nil
+	}
+	return map[pkgladder.LayerType]float64{pkgladder.LayerConvertibleRI: 1, pkgladder.LayerEC2InstanceSP: 1}, nil
 }
 
 func (f *fakeLadderCapability) Provider() pkgcommon.ProviderType {
@@ -126,6 +138,7 @@ type ladderTestStore struct {
 	// L5: configurable in-flight hourly commitment handed to the plan builder
 	// by PlanAndSaveLadderRun. Defaults to zero.
 	inFlightUSDHr *float64
+	inFlightRows  []config.LadderInFlightRow // overrides inFlightUSDHr
 	inFlightErr   error
 
 	// Capture fields: non-nil if the call was made. savedRuns accumulates every
@@ -194,11 +207,11 @@ func (s *ladderTestStore) PlanAndSaveLadderRun(_ context.Context, _ string, _ ti
 	if s.inFlightErr != nil {
 		return nil, s.inFlightErr
 	}
-	inFlight := 0.0
+	rows := s.inFlightRows
 	if s.inFlightUSDHr != nil {
-		inFlight = *s.inFlightUSDHr
+		rows = []config.LadderInFlightRow{{Layer: pkgladder.LayerConvertibleRI, CommitmentUSDPerHour: *s.inFlightUSDHr, Rate: 1}}
 	}
-	run, tranches, err := build(inFlight)
+	run, tranches, err := build(rows)
 	if err != nil {
 		return nil, err
 	}
@@ -607,8 +620,8 @@ func TestExecuteLadderRun_ImmediateStepIsTrancheAndPlanShowsOnlyIt(t *testing.T)
 		require.NoError(t, err)
 		var persisted map[string]any
 		require.NoError(t, json.Unmarshal(encoded, &persisted))
-		assert.Equal(t, "on_demand_equivalent", persisted["amount_basis"])
-		assert.NotContains(t, persisted, "commitment_rate")
+		assert.Equal(t, "commitment", persisted["amount_basis"])
+		assert.Equal(t, "1", persisted["commitment_rate"])
 	}
 	assert.True(t, store.savedTranches[0].ScheduledDate.Equal(now), "immediate tranche scheduled_date must be the run start")
 	assert.InDelta(t, 2.5, store.savedTranches[0].AmountUSDHr, 1e-9)
@@ -1085,6 +1098,7 @@ func TestBuildTrancheDBRows_MalformedAmount_Errors(t *testing.T) {
 			PaymentOption:    pkgladder.PaymentNoUpfront,
 			Status:           pkgladder.TrancheStatusScheduled,
 			AmountUSDPerHour: "3/2",
+			CommitmentRate:   "1",
 			FireAfter:        time.Now(),
 		},
 		{
@@ -1117,10 +1131,10 @@ func TestRatToFloat64Ptr_PositiveValue(t *testing.T) {
 	// Build a *big.Rat from an Allocation's GapUSDPerHour (same boundary path
 	// used in the handler). ratToFloat64Ptr lives in this package so no import
 	// of math/big is needed in the test.
-	zeroInflight := 0.0
 	allocResult, err := pkgladder.Allocate(&pkgladder.AllocationInput{
-		Now:                time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
-		InFlightUSDPerHour: &zeroInflight,
+		Now:             time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC),
+		InFlight:        []pkgladder.InFlightTranche{},
+		CommitmentRates: map[pkgladder.LayerType]float64{pkgladder.LayerConvertibleRI: 1, pkgladder.LayerEC2InstanceSP: 1},
 		Baseline: pkgladder.UsageBaseline{
 			LowWaterUSDPerHour: nonZeroFloat64(5.0),
 			StableUSDPerHour:   nonZeroFloat64(4.5),
@@ -1219,14 +1233,14 @@ func (s *ladderStatefulStore) scheduledTrancheIDs(configID string) map[string]bo
 // any existing tranche's status. This mirrors the production store, whose
 // supersede/cancel path was removed.
 func (s *ladderStatefulStore) PlanAndSaveLadderRun(_ context.Context, configID string, asOf time.Time, build config.LadderPlanBuilder) (*config.LadderRunDB, error) {
-	inFlight := 0.0
+	var rows []config.LadderInFlightRow
 	for i := range s.tranches {
 		tr := &s.tranches[i]
 		if tr.ConfigID != nil && *tr.ConfigID == configID && tr.Status == pkgladder.TrancheStatusScheduled && tr.ScheduledDate.After(asOf) {
-			inFlight += tr.AmountUSDHr
+			rows = append(rows, config.LadderInFlightRow{Layer: tr.LayerType, CommitmentUSDPerHour: tr.AmountUSDHr, Rate: 1})
 		}
 	}
-	run, tranches, err := build(inFlight)
+	run, tranches, err := build(rows)
 	if err != nil {
 		return nil, err
 	}

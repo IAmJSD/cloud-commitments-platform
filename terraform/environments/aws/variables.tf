@@ -229,9 +229,16 @@ variable "lambda_memory_size" {
 }
 
 variable "lambda_timeout" {
-  description = "Lambda timeout in seconds"
+  # Feeds module.compute_lambda's timeout; see the coupling note on that
+  # variable (terraform/modules/compute/aws/lambda/variables.tf, #913).
+  description = "Lambda timeout in seconds (300-900; must cover the 270s detached exchange/purchase budget)"
   type        = number
-  default     = 30
+  default     = 300
+
+  validation {
+    condition     = var.lambda_timeout >= 300 && var.lambda_timeout <= 900
+    error_message = "lambda_timeout must be between 300 and 900 seconds: RI exchanges and purchases run up to 270s (4m execution + 30s terminal save) after the request, and Lambda cuts the invocation off at this timeout (#913)."
+  }
 }
 
 
@@ -310,6 +317,78 @@ variable "fire_scheduled_purchases_schedule" {
   description = "EventBridge schedule for the fire_scheduled_purchases sweep (default rate(15 minutes))."
   type        = string
   default     = "rate(15 minutes)"
+}
+
+variable "enable_process_scheduled_purchases_schedule" {
+  description = "Enable the scheduled process_scheduled_purchases sweep. Opt-in, default false."
+  type        = bool
+  default     = false
+}
+
+variable "process_scheduled_purchases_schedule" {
+  description = "EventBridge schedule for the process_scheduled_purchases sweep (default rate(1 hour))."
+  type        = string
+  default     = "rate(1 hour)"
+}
+
+variable "enable_send_notifications_schedule" {
+  description = "Enable the scheduled send_notifications sweep. Opt-in, default false; enable it together with process_scheduled_purchases."
+  type        = bool
+  default     = false
+}
+
+variable "send_notifications_schedule" {
+  description = "EventBridge schedule for the send_notifications sweep (default rate(1 day))."
+  type        = string
+  default     = "rate(1 day)"
+}
+
+variable "enable_finalize_revocations_schedule" {
+  description = "Enable the scheduled finalize_revocations sweep (idempotent audit repair)."
+  type        = bool
+  default     = true
+}
+
+variable "finalize_revocations_schedule" {
+  description = "EventBridge schedule for the finalize_revocations sweep (default rate(1 hour))."
+  type        = string
+  default     = "rate(1 hour)"
+}
+
+variable "enable_reap_stuck_purchases_schedule" {
+  description = "Enable the scheduled stuck-purchase reaper sweep (issue #678 backstop)."
+  type        = bool
+  default     = true
+}
+
+variable "reap_stuck_purchases_schedule" {
+  description = "EventBridge schedule for the reap_stuck_purchases sweep (default rate(5 minutes))."
+  type        = string
+  default     = "rate(5 minutes)"
+}
+
+variable "enable_analytics_collect_schedule" {
+  description = "Enable the scheduled savings-snapshot analytics collection."
+  type        = bool
+  default     = true
+}
+
+variable "analytics_collect_schedule" {
+  description = "EventBridge schedule for the analytics_collect sweep (default rate(1 day))."
+  type        = string
+  default     = "rate(1 day)"
+}
+
+variable "enable_cleanup_schedule" {
+  description = "Enable the scheduled server cleanup sweep. Opt-in, default false: it deletes expired sessions and purchase_executions that are completed (scheduled_date), canceled (updated_at) or in a status outside failed/canceled (expires_at) and older than 30 days. The first run deletes the whole backlog; export any history you want to keep first."
+  type        = bool
+  default     = false
+}
+
+variable "cleanup_schedule" {
+  description = "EventBridge schedule for the cleanup sweep (default rate(1 day))."
+  type        = string
+  default     = "rate(1 day)"
 }
 
 # ==============================================

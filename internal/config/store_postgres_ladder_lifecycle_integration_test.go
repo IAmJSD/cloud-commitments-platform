@@ -57,10 +57,9 @@ func newExecCreator(ctx context.Context, t *testing.T, store *PostgresStore, cal
 
 func inFlight(ctx context.Context, t *testing.T, store *PostgresStore, cfgID string, asOf time.Time) float64 {
 	t.Helper()
-	v, err := store.GetInFlightLadderCommitUSDHr(ctx, cfgID, asOf)
+	rows, err := inFlightLadderRows(ctx, store.db, true, cfgID, asOf)
 	require.NoError(t, err)
-	require.NotNil(t, v)
-	return *v
+	return mustOnDemand(t, rows)
 }
 
 // Property: for every status x scheduled_date offset around the grace

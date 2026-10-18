@@ -360,6 +360,11 @@ type PurchaseExecution struct {
 	// — a non-admin may cancel only executions they themselves created.
 	// NULL is treated as "not the current user".
 	CreatedByUserID *string `json:"created_by_user_id,omitempty" dynamodbav:"created_by_user_id,omitempty"`
+	// CreatedBySystem marks a row the scheduler sweep minted with no human
+	// initiator (issue #233). Server-only and insert-only: never bound from a
+	// request, never rewritten by the upsert. Implies CreatedByUserID == nil
+	// (CHECK in migration 000130).
+	CreatedBySystem bool `json:"-" dynamodbav:"-"`
 	// RetryExecutionID points from a *failed* execution to the new
 	// execution created when the user clicked Retry (issue #47). Set
 	// only on the original failed row; NULL on every other row including
@@ -534,6 +539,38 @@ var HealthScoredExecutionStatuses = []string{
 	StatusFailed,
 	StatusCanceled,
 	LegacyStatusCanceled,
+}
+
+// StatusRevocationRequested records that an operator asked for a completed
+// purchase to be revoked. The cloud-side revocation happens outside this
+// system (an AWS support case), and no code moves a row out of this status.
+const StatusRevocationRequested = "revocation_requested"
+
+// TerminalExecutionStatuses are the execution statuses that no executor,
+// scheduler or reaper will act on again. DeleteCloudAccount detaches rows in
+// these statuses from the account being deleted (cloud_account_id = NULL, the
+// same treatment purchase_history gets from its ON DELETE SET NULL FK) so the
+// history survives the delete, and CountLiveExecutionsForAccount counts every
+// other row as one that still needs the account (issue #265).
+//
+// It is an ALLOWLIST on purpose: a status added to the schema later counts as
+// live, and so blocks the delete, until someone classifies it here. Blocking
+// a delete is recoverable; detaching an execution that will still run is not,
+// because a row with no account falls back to plan fan-out or ambient
+// credentials.
+//
+// A failed row is listed even though it can be retried. A retry of a row
+// detached here still carries the deleted account on its recommendations, so
+// the executor refuses it before submission ("account not found") instead of
+// buying elsewhere.
+var TerminalExecutionStatuses = []string{
+	StatusCompleted,
+	StatusPartiallyCompleted,
+	StatusFailed,
+	StatusCanceled,
+	LegacyStatusCanceled,
+	StatusExpired,
+	StatusRevocationRequested,
 }
 
 // IsCancelable reports whether an execution may still be canceled. Only the
@@ -746,10 +783,63 @@ type PurchasePlanFilter struct {
 // the scheduler clears it on completion (success or failure). A value older
 // than 5 minutes means the scheduler crashed mid-run — the refresh handler
 // treats it as stale and allows a new collection.
+// LastCollectionPartial is non-nil when the most recent persisted collection
+// kept rows from a sweep that did not cover everything it was asked to (for
+// example 9 of 10 Azure subscriptions answered). It is cleared by the next
+// collection whose every sweep is complete.
 type RecommendationsFreshness struct {
-	LastCollectedAt         *time.Time `json:"last_collected_at"`
-	LastCollectionError     *string    `json:"last_collection_error"`
-	LastCollectionStartedAt *time.Time `json:"last_collection_started_at"`
+	LastCollectedAt         *time.Time                        `json:"last_collected_at"`
+	LastCollectionError     *string                           `json:"last_collection_error"`
+	LastCollectionStartedAt *time.Time                        `json:"last_collection_started_at"`
+	LastCollectionPartial   *RecommendationsCollectionPartial `json:"last_collection_partial"`
+}
+
+// RecommendationsCollectionPartial records that the most recent collection
+// was incomplete without having failed: its rows were kept and stored, but
+// some subscriptions, projects or collection scopes were never queried, so
+// the stored recommendations under-state the real opportunity (issue #87).
+//
+// It is deliberately aggregate-only. recommendations_state is one global row
+// that every user with view:recommendations reads, while accounts are
+// access-scoped, so it carries counts and a fixed set of reason categories --
+// never raw provider error text or subscription/project identifiers. The
+// failed identifiers are named in the scheduler's WARN log for operators.
+type RecommendationsCollectionPartial struct {
+	// Providers lists one entry per provider with at least one incomplete
+	// sweep, in the configured provider order.
+	Providers []PartialProviderSweep `json:"providers"`
+}
+
+// Reason categories for PartialProviderSweep.Reasons. The set is closed so
+// the API never echoes provider error text.
+const (
+	PartialReasonPermissionDenied    = "permission_denied"
+	PartialReasonThrottled           = "throttled"
+	PartialReasonTimeout             = "timeout"
+	PartialReasonCanceled            = "canceled"
+	PartialReasonNotFound            = "not_found"
+	PartialReasonProviderUnavailable = "provider_unavailable"
+	PartialReasonOther               = "other"
+)
+
+// PartialProviderSweep summarizes one provider's incomplete sweeps in a
+// collection. A "scope" is the unit a sweep fails in: a subscription for
+// Azure, a project for GCP, and a service/region collection scope for AWS.
+type PartialProviderSweep struct {
+	Provider string `json:"provider"`
+	// IncompleteAccounts is how many accounts (registered, or the single
+	// ambient host identity) returned rows from an incomplete sweep.
+	IncompleteAccounts int `json:"incomplete_accounts"`
+	// AttemptedScopes is how many scopes the incomplete sweeps were asked to
+	// cover. Zero when the provider does not report it (AWS).
+	AttemptedScopes int `json:"attempted_scopes"`
+	// FailedScopes is how many of those scopes could not be queried.
+	FailedScopes int `json:"failed_scopes"`
+	// FailedDetails is how many individual recommendation details were
+	// rejected inside scopes that otherwise answered (AWS only).
+	FailedDetails int `json:"failed_details"`
+	// Reasons counts the failure causes by PartialReason* category.
+	Reasons map[string]int `json:"reasons"`
 }
 
 // SuccessfulCollect identifies a (provider, account) pair whose collection
@@ -897,6 +987,8 @@ type PurchaseHistoryRecord struct {
 	// rows (where the action has already completed). Excluded from DB
 	// persistence.
 	CreatedByUserID string `json:"created_by_user_id,omitempty" dynamodbav:"-"`
+	// CreatedBySystem propagates the execution's scheduler-created marker (#233).
+	CreatedBySystem bool `json:"created_by_system,omitempty" dynamodbav:"-"`
 	// RetryExecutionID propagates the originating execution's pointer to
 	// its successor when the user retried it (issue #47). Set only on
 	// the *original* failed row that has been retried; the History UI
@@ -917,6 +1009,10 @@ type PurchaseHistoryRecord struct {
 	// empty otherwise. Excluded from DB persistence (computed at read
 	// time so updates to the persistent-failure map land instantly).
 	OpsHint string `json:"ops_hint,omitempty" dynamodbav:"-"`
+	// RedriveUnsafe is true when OpsHint is a permanent refusal from
+	// purchase.RedriveRefusalReason (provider has no duplicate guard), not an
+	// operator-fixable misconfiguration. Computed at read time, like OpsHint.
+	RedriveUnsafe bool `json:"redrive_unsafe,omitempty" dynamodbav:"-"`
 	// IsAuditGap marks a synthesized "completed" row whose purchase_history
 	// write failed after a successful purchase (issue #621). Such a row is
 	// reconstructed from the execution so the purchase stays visible, but its
@@ -1055,8 +1151,9 @@ type RIExchangeRecord struct {
 	Mode               string   `json:"mode"`
 	// CreatedByUserID is the UUID of the session user who submitted the exchange.
 	// Always nil today: every exchange is created by the scheduler or the ladder
-	// engine, and pkg/exchange.ExchangeRecord carries no creator (see issue #233
-	// for the policy on creator-less rows). Exposed to the frontend so the Approve button
+	// engine, and pkg/exchange.ExchangeRecord carries no creator (the 4-eyes
+	// policy for creator-less rows is requireDifferentRIExchangeApprover in
+	// internal/api, issue #518). Exposed to the frontend so the Approve button
 	// can apply the approve-own ownership check client-side.
 	CreatedByUserID *string `json:"created_by_user_id,omitempty"`
 	// ApprovedBy carries the email of the session user who approved the exchange

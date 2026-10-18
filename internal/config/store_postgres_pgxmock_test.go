@@ -630,16 +630,52 @@ func TestPGXMock_UpdatePurchasePlan_NotFound(t *testing.T) {
 
 // ─── DeletePurchasePlan ───────────────────────────────────────────────────────
 
+func expectLockedUnmanagedPlan(mock pgxmock.PgxPoolIface) {
+	now := time.Now().Truncate(time.Second)
+	svcJSON, _ := json.Marshal(map[string]ServiceConfig{})
+	rampJSON, _ := json.Marshal(RampSchedule{})
+	mock.ExpectBegin()
+	mock.ExpectQuery("FOR UPDATE").WithArgs("plan-id").WillReturnRows(pgxmock.NewRows([]string{
+		"id", "name", "enabled", "auto_purchase", "notification_days_before",
+		"services", "ramp_schedule", "created_at", "updated_at",
+		"next_execution_date", "last_execution_date", "last_notification_sent", "max_step_commitment",
+	}).AddRow("plan-id", "My Plan", true, false, 3, svcJSON, rampJSON, now, now,
+		sql.NullTime{}, sql.NullTime{}, sql.NullTime{}, (*float64)(nil)))
+}
+
 func TestPGXMock_DeletePurchasePlan_Success(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg()).
+	expectLockedUnmanagedPlan(mock)
+	mock.ExpectExec(`(?s)UPDATE purchase_executions.*WHERE plan_id = \$1.*'pending', 'notified', 'paused'.*DELETE FROM purchase_suppressions`).
+		WithArgs("plan-id", StatusCanceled).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectExec("DELETE FROM purchase_plans").WithArgs("plan-id").
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectCommit()
 
 	err := store.DeletePurchasePlan(ctx, "plan-id")
 	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_DeletePurchasePlan_CancelFailureKeepsPlan pins issue #862's
+// ordering: the plan row is deleted only after its open step rows were
+// canceled in the same transaction, so a failed cancel leaves both in place.
+func TestPGXMock_DeletePurchasePlan_CancelFailureKeepsPlan(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	expectLockedUnmanagedPlan(mock)
+	mock.ExpectExec("UPDATE purchase_executions").WithArgs("plan-id", StatusCanceled).
+		WillReturnError(errors.New("db down"))
+	mock.ExpectRollback()
+
+	err := store.DeletePurchasePlan(ctx, "plan-id")
+	require.ErrorContains(t, err, "cancel open executions")
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -648,8 +684,9 @@ func TestPGXMock_DeletePurchasePlan_NotFound(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg()).
-		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	mock.ExpectBegin()
+	mock.ExpectQuery("FOR UPDATE").WithArgs("plan-id").WillReturnError(pgx.ErrNoRows)
+	mock.ExpectRollback()
 
 	err := store.DeletePurchasePlan(ctx, "plan-id")
 	require.Error(t, err)
@@ -675,7 +712,7 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
 		"scheduled_execution_at",
-		"no_submission",
+		"no_submission", "created_by_system",
 	}
 	rows := pgxmock.NewRows(cols).AddRow(
 		"plan-1", "exec-1", "pending", 1, now,
@@ -687,7 +724,7 @@ func TestPGXMock_GetExecutionByID_Success(t *testing.T) {
 		nil, sql.NullTime{}, nil,
 		nil,            // idempotency_key (NULL: legacy-row scan path, migration 000066)
 		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
-		false,          // no_submission
+		false, false,   // no_submission, created_by_system
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -727,7 +764,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
 		"scheduled_execution_at",
-		"no_submission",
+		"no_submission", "created_by_system",
 	}
 	successorID := "exec-3"
 	rows := pgxmock.NewRows(cols).AddRow(
@@ -743,7 +780,7 @@ func TestPGXMock_GetExecutionByID_WithTimestamps(t *testing.T) {
 		nil, sql.NullTime{}, nil,
 		"idem-key-exec-2", // idempotency_key non-NULL: exercises the scan path
 		sql.NullTime{},    // scheduled_execution_at (NULL: not on the pre-fire delay path)
-		false,             // no_submission
+		false, false,      // no_submission, created_by_system
 	)
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg()).WillReturnRows(rows)
 
@@ -795,7 +832,7 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		"approval_token_expires_at",
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key", "scheduled_execution_at",
-		"no_submission",
+		"no_submission", "created_by_system",
 	}
 	schedAt := now.Add(2 * time.Hour)
 	rows := pgxmock.NewRows(cols).AddRow(
@@ -808,7 +845,7 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		nil, sql.NullTime{}, nil,
 		"idem-key-planned",
 		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
-		false,          // no_submission
+		false, false,   // no_submission, created_by_system
 	).AddRow(
 		"plan-1", "exec-2", "pending", 1, now,
 		sql.NullTime{}, "tok-456", recsJSON,
@@ -819,7 +856,7 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 		nil, sql.NullTime{}, nil,
 		"idem-key-delayed",
 		sql.NullTime{Time: schedAt, Valid: true}, // scheduled_execution_at populated (pre-fire delay path)
-		false,                                    // no_submission
+		false, false,                             // no_submission, created_by_system
 	)
 	// Regexp matcher: only matches if the issued SELECT projects both
 	// idempotency_key and scheduled_execution_at. The alternation forces both
@@ -878,7 +915,7 @@ func TestPGXMock_GetExecutionByID_ProjectsCoalescedCancelledBy(t *testing.T) {
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
 		"scheduled_execution_at",
-		"no_submission",
+		"no_submission", "created_by_system",
 	}
 	// Simulates the exact row shape the atomic-cancel paths produce: the
 	// actor lives only in canceled_by (legacy cancelled_by is NULL). What
@@ -895,7 +932,7 @@ func TestPGXMock_GetExecutionByID_ProjectsCoalescedCancelledBy(t *testing.T) {
 		nil, sql.NullTime{}, nil,
 		nil,
 		sql.NullTime{},
-		false,
+		false, false,
 	)
 	mock.ExpectQuery(`COALESCE\(canceled_by,\s*cancelled_by\)`).
 		WithArgs(pgxmock.AnyArg()).
@@ -1740,8 +1777,11 @@ func TestPGXMock_DeleteCloudAccount_Success(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectBegin()
+	expectLockDeletedAccount(mock)
 	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	expectDetachTerminalExecutions(mock)
+	expectDisableSoleAccountPlans(mock)
 	mock.ExpectExec("DELETE FROM cloud_accounts").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectCommit()
@@ -1756,8 +1796,11 @@ func TestPGXMock_DeleteCloudAccount_WithLinkedRegistration(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectBegin()
+	expectLockDeletedAccount(mock)
 	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	expectDetachTerminalExecutions(mock)
+	expectDisableSoleAccountPlans(mock)
 	mock.ExpectExec("DELETE FROM cloud_accounts").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectCommit()
@@ -1772,8 +1815,11 @@ func TestPGXMock_DeleteCloudAccount_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectBegin()
+	expectLockDeletedAccount(mock)
 	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	expectDetachTerminalExecutions(mock)
+	expectDisableSoleAccountPlans(mock)
 	mock.ExpectExec("DELETE FROM cloud_accounts").WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectRollback()
@@ -1781,6 +1827,106 @@ func TestPGXMock_DeleteCloudAccount_NotFound(t *testing.T) {
 	err := store.DeleteCloudAccount(ctx, "missing")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
+}
+
+// expectDetachTerminalExecutions expects DeleteCloudAccount's issue #265
+// detach of the account's terminal executions, parameterized by exactly
+// TerminalExecutionStatuses.
+func expectDetachTerminalExecutions(mock pgxmock.PgxPoolIface) {
+	mock.ExpectExec(`UPDATE purchase_executions\s+SET cloud_account_id = NULL\s+WHERE cloud_account_id = \$1\s+AND status = ANY\(\$2\)`).
+		WithArgs(pgxmock.AnyArg(), TerminalExecutionStatuses).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
+}
+
+// expectLockDeletedAccount expects DeleteCloudAccount's first statement: the
+// account row lock taken before the plans are picked (issue #264).
+func expectLockDeletedAccount(mock pgxmock.PgxPoolIface) {
+	mock.ExpectExec(`SELECT 1 FROM cloud_accounts WHERE id = \$1 FOR UPDATE`).WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+}
+
+// expectDisableSoleAccountPlans expects the issue #264 disable of enabled
+// plans whose only account is the deleted one.
+func expectDisableSoleAccountPlans(mock pgxmock.PgxPoolIface) {
+	mock.ExpectQuery(`UPDATE purchase_plans p\s+SET enabled = false\s+WHERE p.enabled`).WithArgs(pgxmock.AnyArg()).
+		WillReturnRows(pgxmock.NewRows([]string{"id"}).AddRow("plan-1"))
+}
+
+func TestPGXMock_DeleteCloudAccount_LockFailsRollsBack(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("SELECT 1 FROM cloud_accounts").WithArgs("acct-id").WillReturnError(errors.New("boom"))
+	mock.ExpectRollback()
+
+	err := store.DeleteCloudAccount(ctx, "acct-id")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to lock cloud account")
+}
+
+func TestPGXMock_DeleteCloudAccount_DisablePlansFailsRollsBack(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectBegin()
+	expectLockDeletedAccount(mock)
+	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	expectDetachTerminalExecutions(mock)
+	mock.ExpectQuery("UPDATE purchase_plans").WithArgs("acct-id").WillReturnError(errors.New("boom"))
+	mock.ExpectRollback()
+
+	err := store.DeleteCloudAccount(ctx, "acct-id")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to disable plans targeting only this account")
+}
+
+func TestPGXMock_DeleteCloudAccount_DetachFailsRollsBack(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectBegin()
+	expectLockDeletedAccount(mock)
+	mock.ExpectExec("UPDATE account_registrations").WithArgs(pgxmock.AnyArg()).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	mock.ExpectExec("UPDATE purchase_executions").WithArgs(pgxmock.AnyArg(), TerminalExecutionStatuses).
+		WillReturnError(errors.New("boom"))
+	mock.ExpectRollback()
+
+	err := store.DeleteCloudAccount(ctx, "acct-id")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to detach terminal executions")
+}
+
+func TestPGXMock_CountLiveExecutionsForAccount(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM purchase_executions\s+WHERE cloud_account_id = \$1\s+AND status <> ALL\(\$2\)`).
+		WithArgs("acct-id", TerminalExecutionStatuses).
+		WillReturnRows(pgxmock.NewRows([]string{"count"}).AddRow(3))
+
+	n, err := store.CountLiveExecutionsForAccount(ctx, "acct-id")
+	require.NoError(t, err)
+	assert.Equal(t, 3, n)
+}
+
+func TestPGXMock_CountLiveExecutionsForAccount_Error(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectQuery("SELECT COUNT").WithArgs("acct-id", TerminalExecutionStatuses).
+		WillReturnError(errors.New("boom"))
+
+	_, err := store.CountLiveExecutionsForAccount(ctx, "acct-id")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to count live executions for account")
 }
 
 // ─── ListCloudAccounts ────────────────────────────────────────────────────────
@@ -2036,6 +2182,11 @@ func TestPGXMock_ListAccountServiceOverrides_Error(t *testing.T) {
 
 // ─── SetPlanAccounts ──────────────────────────────────────────────────────────
 
+func expectUnmanagedPlan(mock pgxmock.PgxPoolIface) {
+	mock.ExpectQuery("SELECT COALESCE.*FOR SHARE").WithArgs("plan-1").
+		WillReturnRows(pgxmock.NewRows([]string{"managed"}).AddRow(false))
+}
+
 func TestPGXMock_SetPlanAccounts_Success(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
@@ -2046,6 +2197,7 @@ func TestPGXMock_SetPlanAccounts_Success(t *testing.T) {
 	require.NoError(t, err)
 
 	mock.ExpectBegin()
+	expectUnmanagedPlan(mock)
 	mock.ExpectQuery("SELECT services").WithArgs("plan-1").WillReturnRows(
 		pgxmock.NewRows([]string{"services"}).AddRow(servicesJSON),
 	)
@@ -2080,6 +2232,7 @@ func TestPGXMock_SetPlanAccounts_ProviderMismatchRollsBackBeforeDelete(t *testin
 	require.NoError(t, err)
 
 	mock.ExpectBegin()
+	expectUnmanagedPlan(mock)
 	mock.ExpectQuery("SELECT services").WithArgs("plan-1").WillReturnRows(
 		pgxmock.NewRows([]string{"services"}).AddRow(servicesJSON),
 	)
@@ -2105,6 +2258,7 @@ func TestPGXMock_SetPlanAccounts_Empty(t *testing.T) {
 	require.NoError(t, err)
 
 	mock.ExpectBegin()
+	expectUnmanagedPlan(mock)
 	mock.ExpectQuery("SELECT services").WithArgs("plan-1").WillReturnRows(
 		pgxmock.NewRows([]string{"services"}).AddRow(servicesJSON),
 	)
@@ -2123,6 +2277,7 @@ func TestPGXMock_SetPlanAccounts_EmptyMissingPlanReturnsNotFound(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT COALESCE.*FOR SHARE").WithArgs("missing-plan").WillReturnError(pgx.ErrNoRows)
 	mock.ExpectQuery("SELECT services").WithArgs("missing-plan").WillReturnError(pgx.ErrNoRows)
 	mock.ExpectRollback()
 
@@ -2593,7 +2748,7 @@ func stuckExecRow(execID, status string, scheduled time.Time) []any {
 		nil, sql.NullTime{}, nil,
 		nil,            // idempotency_key (NULL: legacy-row scan path, migration 000066)
 		sql.NullTime{}, // scheduled_execution_at (NULL: not on the pre-fire delay path)
-		false,          // no_submission
+		false, false,   // no_submission, created_by_system
 	}
 }
 
@@ -2608,7 +2763,7 @@ func stuckExecCols() []string {
 		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
 		"idempotency_key",
 		"scheduled_execution_at",
-		"no_submission",
+		"no_submission", "created_by_system",
 	}
 }
 
@@ -3223,7 +3378,7 @@ func TestPGXMock_GetExecutionsByStatuses_ExcludesCleanCompleted(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
 
-	mock.ExpectQuery(`(?s)FROM purchase_executions\s+WHERE status = ANY\(\$1\)\s+AND NOT \(status = 'completed' AND COALESCE\(error, ''\) = ''\)\s+ORDER BY scheduled_date DESC\s+LIMIT \$2`).
+	mock.ExpectQuery(`(?s)FROM purchase_executions\s+WHERE status = ANY\(\$1\)\s+AND NOT \(status = 'completed' AND COALESCE\(error, ''\) = ''\)\s+ORDER BY .*LIMIT \$2`).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(pgxmock.NewRows(stuckExecCols()))
 
@@ -3333,4 +3488,24 @@ func TestPGXMock_UpdateGlobalConfigAtomic_PreservesAutoPurchaseStamps(t *testing
 	})
 	require.NoError(t, err)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_GetExecutionsByStatuses_FuturePendingStepsSortLast pins the
+// issue #680 ORDER BY: future pending ramp steps sort after every other row
+// (soonest first among themselves), and everything else keeps scheduled_date
+// DESC. Under a plain scheduled_date DESC, 20 plans of 52 future steps fill
+// MaxListLimit and a pending approval due today never comes back.
+func TestPGXMock_GetExecutionsByStatuses_FuturePendingStepsSortLast(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+
+	mock.ExpectQuery(`(?s)ORDER BY \(status = 'pending' AND scheduled_date > now\(\)\) ASC,\s+`+
+		`CASE WHEN status = 'pending' AND scheduled_date > now\(\) THEN scheduled_date END ASC,\s+`+
+		`scheduled_date DESC\s+LIMIT \$2`).
+		WithArgs(pgxmock.AnyArg(), MaxListLimit).
+		WillReturnRows(pgxmock.NewRows(stuckExecCols()))
+
+	_, err := store.GetExecutionsByStatuses(context.Background(), []string{"pending", "notified"}, MaxListLimit)
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }

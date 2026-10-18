@@ -753,7 +753,7 @@ func (s *PostgresStore) UpdatePurchasePlan(ctx context.Context, plan *PurchasePl
 		if err != nil {
 			return err
 		}
-		if updErr := s.UpdatePurchasePlanTx(ctx, tx, &pending); updErr != nil {
+		if updErr := s.updatePurchasePlanGuardedTx(ctx, tx, old, &pending); updErr != nil {
 			return updErr
 		}
 		if old == nil || !rampBaselineStale(old, &pending) {
@@ -775,8 +775,24 @@ func (s *PostgresStore) UpdatePurchasePlan(ctx context.Context, plan *PurchasePl
 	return nil
 }
 
-// UpdatePurchasePlanTx rejects snapshots that lost a race with another plan writer.
+// UpdatePurchasePlanTx rejects snapshots that lost a race with another plan
+// writer and refuses changes to what the editor owns on a managed plan. It
+// re-locks the row, which every caller already holds, to judge the guard on
+// the locked version.
 func (s *PostgresStore) UpdatePurchasePlanTx(ctx context.Context, tx pgx.Tx, plan *PurchasePlan) error {
+	old, err := s.LockPurchasePlanTx(ctx, tx, plan.ID)
+	if err != nil {
+		return err
+	}
+	return s.updatePurchasePlanGuardedTx(ctx, tx, old, plan)
+}
+
+// updatePurchasePlanGuardedTx runs the managed-plan guard against old, the row
+// locked by the caller's transaction, and then the optimistic update.
+func (s *PostgresStore) updatePurchasePlanGuardedTx(ctx context.Context, tx pgx.Tx, old, plan *PurchasePlan) error {
+	if err := requireManagedPlanUpdateTx(old, plan); err != nil {
+		return err
+	}
 	// Marshal services and ramp_schedule to JSONB
 	servicesJSON, err := json.Marshal(plan.Services)
 	if err != nil {
@@ -851,17 +867,50 @@ func (s *PostgresStore) StampPlanNotificationSent(ctx context.Context, planID st
 
 // DeletePurchasePlan deletes a purchase plan.
 func (s *PostgresStore) DeletePurchasePlan(ctx context.Context, planID string) error {
-	query := `DELETE FROM purchase_plans WHERE id = $1`
+	return s.WithTx(ctx, func(tx pgx.Tx) error {
+		plan, err := s.LockPurchasePlanTx(ctx, tx, planID)
+		if err != nil {
+			return err
+		}
+		if plan == nil {
+			return fmt.Errorf("purchase plan not found: %s", planID)
+		}
+		if plan.RampSchedule.DatesManaged {
+			if err := requireManagedDeleteTx(ctx, tx, planID); err != nil {
+				return err
+			}
+		}
+		if err := cancelOpenPlanExecutionsTx(ctx, tx, planID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM purchase_plans WHERE id = $1`, planID); err != nil {
+			return fmt.Errorf("failed to delete purchase plan: %w", err)
+		}
+		return nil
+	})
+}
 
-	result, err := s.db.Exec(ctx, query, planID)
-	if err != nil {
-		return fmt.Errorf("failed to delete purchase plan: %w", err)
+// cancelOpenPlanExecutionsTx cancels the plan's step rows that can still be
+// approved or run (pending, notified, paused) in the delete's transaction.
+// purchase_executions.plan_id is ON DELETE SET NULL (migration 000033), and
+// token approval applies the plan's max_step_commitment and the approve-own
+// plan-step rule only while plan_id is set (approveConstraintsForSession), so
+// a row left open would become approvable past its plan's cap (issue #862).
+// The rows' suppressions go with them, as on the other cancel paths.
+func cancelOpenPlanExecutionsTx(ctx context.Context, tx pgx.Tx, planID string) error {
+	const q = `
+		WITH canceled AS (
+			UPDATE purchase_executions
+			   SET status = $2, updated_at = NOW()
+			 WHERE plan_id = $1
+			   AND status IN ('pending', 'notified', 'paused')
+			RETURNING execution_id
+		)
+		DELETE FROM purchase_suppressions
+		 WHERE execution_id IN (SELECT execution_id FROM canceled)`
+	if _, err := tx.Exec(ctx, q, planID, StatusCanceled); err != nil {
+		return fmt.Errorf("failed to cancel open executions of purchase plan: %w", err)
 	}
-
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("purchase plan not found: %s", planID)
-	}
-
 	return nil
 }
 
@@ -1043,8 +1092,8 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 			created_by_user_id, retry_execution_id, retry_attempt_n,
 			approval_token_expires_at,
 			executed_by_user_id, executed_at, pre_approval_skip_reason,
-			idempotency_key, scheduled_execution_at, no_submission
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
+			idempotency_key, scheduled_execution_at, no_submission, created_by_system
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
 		ON CONFLICT (execution_id) DO UPDATE SET
 			status = $3,
 			notification_sent = $6,
@@ -1081,7 +1130,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 		planIDArg = execution.PlanID
 	}
 
-	// created_by_user_id and retry_attempt_n are INSERT-only: the original
+	// created_by_user_id, created_by_system and retry_attempt_n are INSERT-only: the original
 	// creator and the retry-chain position must not be rewritten by an
 	// ON CONFLICT update (e.g. the scheduler upserting status transitions).
 	// They are omitted from the DO UPDATE SET clause above.
@@ -1123,6 +1172,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 		execution.IdempotencyKey,
 		execution.ScheduledExecutionAt,
 		execution.NoSubmission,
+		execution.CreatedBySystem,
 	)
 
 	if err != nil {
@@ -1221,13 +1271,35 @@ func (s *PostgresStore) TransitionExecutionStatusTokenPinned(ctx context.Context
 // RescheduleAwaitingExecution is a conditional single-column update: the
 // status predicate makes a lost race a benign no-op instead of an overwrite.
 func (s *PostgresStore) RescheduleAwaitingExecution(ctx context.Context, executionID string, scheduledDate time.Time) (bool, error) {
-	tag, err := s.db.Exec(ctx, `
-		UPDATE purchase_executions SET scheduled_date = $2, updated_at = NOW()
-		WHERE execution_id = $1 AND status IN ('pending', 'notified')`, executionID, scheduledDate)
+	var planID *string
+	err := s.db.QueryRow(ctx, `SELECT plan_id::text FROM purchase_executions WHERE execution_id = $1`, executionID).Scan(&planID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
 		return false, fmt.Errorf("reschedule execution %s: %w", executionID, err)
 	}
-	return tag.RowsAffected() == 1, nil
+	updated := false
+	err = s.WithTx(ctx, func(tx pgx.Tx) error {
+		if planID != nil {
+			plan, lockErr := s.LockPurchasePlanTx(ctx, tx, *planID)
+			if lockErr != nil {
+				return lockErr
+			}
+			if plan != nil && plan.RampSchedule.DatesManaged {
+				return fmt.Errorf("%w: reschedule of execution %s", ErrEditorReconciliationRequired, executionID)
+			}
+		}
+		tag, execErr := tx.Exec(ctx, `
+			UPDATE purchase_executions SET scheduled_date = $2, updated_at = NOW()
+			WHERE execution_id = $1 AND status IN ('pending', 'notified')`, executionID, scheduledDate)
+		updated = execErr == nil && tag.RowsAffected() == 1
+		return execErr
+	})
+	if err != nil {
+		return false, fmt.Errorf("reschedule execution %s: %w", executionID, err)
+	}
+	return updated, nil
 }
 
 func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmpty *bool, tokenHash *string) (*PurchaseExecution, error) {
@@ -1252,7 +1324,7 @@ func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, execution
 		          created_by_user_id, retry_execution_id, retry_attempt_n,
 		          approval_token_expires_at,
 		          executed_by_user_id, executed_at, pre_approval_skip_reason,
-		          idempotency_key, scheduled_execution_at, no_submission
+		          idempotency_key, scheduled_execution_at, no_submission, created_by_system
 	`
 
 	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses, actor, cancelActor, sawEmpty, tokenHash)
@@ -1437,6 +1509,16 @@ func (s *PostgresStore) CancelScheduledExecutionAtomic(ctx context.Context, tx p
 // without changing the narrower GetPendingExecutions contract the scheduler
 // depends on.
 //
+// Pending rows dated in the future are the one exception to newest-first
+// (issue #680): plan creation writes every ramp step up front as a pending
+// row, up to 52 per plan, so about 20 plans fill MaxListLimit with steps
+// months ahead and a plain scheduled_date DESC would cut off a pending
+// approval due today. Those future pending steps sort after every other row,
+// and among themselves soonest first, so the cap drops the farthest steps.
+// No other status is affected: a notified, scheduled or in-flight row is
+// actionable whatever its date, and terminal statuses never match the
+// pending predicate, so their order is unchanged.
+//
 // Executions with status 'completed' and an empty error are excluded: they are
 // already represented by their purchase_history rows, so returning them would
 // only consume the cap (the History handler skips them anyway).
@@ -1458,11 +1540,13 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		  AND NOT (status = 'completed' AND COALESCE(error, '') = '')
-		ORDER BY scheduled_date DESC
+		ORDER BY (status = 'pending' AND scheduled_date > now()) ASC,
+		         CASE WHEN status = 'pending' AND scheduled_date > now() THEN scheduled_date END ASC,
+		         scheduled_date DESC
 		LIMIT $2
 	`
 	return s.queryExecutions(ctx, query, statuses, limit)
@@ -1570,7 +1654,7 @@ func (s *PostgresStore) GetPlannedExecutions(ctx context.Context, statuses []str
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		ORDER BY scheduled_date ASC NULLS LAST, id ASC
@@ -1595,7 +1679,7 @@ func (s *PostgresStore) GetStaleApprovedExecutions(ctx context.Context, olderTha
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
 		WHERE status = 'approved' AND updated_at < NOW() - $1::interval
 	`
@@ -1637,7 +1721,7 @@ func (s *PostgresStore) ListStuckExecutions(ctx context.Context, statuses []stri
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
 		WHERE status = ANY($1)
 		  AND updated_at < NOW() - $2::interval
@@ -1658,7 +1742,7 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
 		WHERE status IN ('pending', 'notified')
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -1682,7 +1766,7 @@ func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) (
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
 		WHERE status IN ('pending', 'notified')
 		  AND (expires_at IS NULL OR expires_at > NOW())
@@ -1769,7 +1853,7 @@ func (s *PostgresStore) ListRecentSubmitsTx(ctx context.Context, tx pgx.Tx, crea
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
 		WHERE source = $3
 		  AND status IN (` + submitDedupeStatuses + `)
@@ -1799,7 +1883,7 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
 		WHERE execution_id = $1
 	`
@@ -1826,7 +1910,7 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
 		WHERE plan_id = $1 AND scheduled_date = $2
 	`
@@ -1877,6 +1961,26 @@ func (s *PostgresStore) CountPendingExecutionsForAccount(ctx context.Context, ac
 	`, accountID).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("failed to count pending executions for account: %w", err)
+	}
+	return n, nil
+}
+
+// CountLiveExecutionsForAccount returns the number of purchase executions
+// referencing this cloud account whose status is not in
+// TerminalExecutionStatuses: rows an executor, scheduler or reaper may still
+// act on, which need the account to exist. DeleteCloudAccount detaches every
+// other row, so these are exactly the rows that block the delete (issue #265).
+// It includes the pending/notified rows CountPendingExecutionsForAccount
+// counts.
+func (s *PostgresStore) CountLiveExecutionsForAccount(ctx context.Context, accountID string) (int, error) {
+	var n int
+	err := s.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM purchase_executions
+		WHERE cloud_account_id = $1
+		  AND status <> ALL($2)
+	`, accountID, TerminalExecutionStatuses).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count live executions for account: %w", err)
 	}
 	return n, nil
 }
@@ -1995,6 +2099,7 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 			&idempotencyKey,
 			&scheduledExecutionAt,
 			&exec.NoSubmission,
+			&exec.CreatedBySystem,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan execution: %w", err)
@@ -2035,7 +2140,7 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
 		WHERE status = 'scheduled'
 		  AND scheduled_execution_at IS NOT NULL
@@ -3813,15 +3918,29 @@ func (s *PostgresStore) UpdateCloudAccount(ctx context.Context, account *CloudAc
 }
 
 // DeleteCloudAccount deletes a cloud account. Cascades to credentials and overrides.
+// Terminal purchase executions are kept as history with cloud_account_id set to
+// NULL; a live execution still blocks the delete through the FK (issue #265).
 // If an approved account_registrations row points at this account, it is reset to
 // 'pending' in the same transaction so the admin can re-approve through the normal
 // flow instead of being left with a dead-end "Approved (account pending link)" row.
+// Enabled plans whose only target is this account are disabled in the same
+// transaction (issue #264); see disableSoleAccountPlansTx.
 func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer rollbackTx(ctx, tx, "DeleteCloudAccount")
+
+	// Lock the account row before reading which plans target it. A writer
+	// attaching the account to a plan holds a KEY SHARE lock on this row
+	// (the plan_accounts FK check) until it commits, so this waits for it and
+	// the plan disable below sees its rows. Without the lock the DELETE would
+	// still wait for that writer, but only after the plans were picked, and
+	// its cascade would leave that plan enabled with no accounts.
+	if _, err = tx.Exec(ctx, `SELECT 1 FROM cloud_accounts WHERE id = $1 FOR UPDATE`, id); err != nil {
+		return fmt.Errorf("failed to lock cloud account: %w", err)
+	}
 
 	// Reset any linked approved registration first (explicit NULL so we don't
 	// rely on the FK's ON DELETE SET NULL behavior).
@@ -3837,6 +3956,28 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 		return fmt.Errorf("failed to reset linked registration: %w", err)
 	}
 
+	// Detach the account's terminal executions so they survive as history
+	// (issue #265). Migration 000053's ON DELETE RESTRICT FK otherwise blocks
+	// the delete for every referencing row whatever its status. Live rows are
+	// left attached, so the DELETE below still fails on the FK (SQLSTATE
+	// 23503) while any remain, and this UPDATE rolls back with it. Migration
+	// 000128 keeps updated_at unchanged on these rows: detaching is not a
+	// lifecycle event, and the plan health score and the retention sweep both
+	// read updated_at as one.
+	if _, err = tx.Exec(ctx, `
+		UPDATE purchase_executions
+		   SET cloud_account_id = NULL
+		 WHERE cloud_account_id = $1
+		   AND status = ANY($2)
+	`, id, TerminalExecutionStatuses); err != nil {
+		return fmt.Errorf("failed to detach terminal executions: %w", err)
+	}
+
+	disabled, err := disableSoleAccountPlansTx(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+
 	tag, err := tx.Exec(ctx, `DELETE FROM cloud_accounts WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("failed to delete cloud account: %w", err)
@@ -3848,7 +3989,37 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 	if err = tx.Commit(ctx); err != nil {
 		return fmt.Errorf("failed to commit cloud account deletion: %w", err)
 	}
+	if len(disabled) > 0 {
+		logging.Infof("deleting cloud account %s disabled %d plan(s) left with no target accounts: %v", id, len(disabled), disabled)
+	}
 	return nil
+}
+
+// disableSoleAccountPlansTx disables every enabled plan whose only
+// plan_accounts row is accountID, and returns their IDs (issue #264). The
+// account delete cascades those rows away, and a plan with no accounts is the
+// unscoped "universal plan" shape migration 000060 removed: the scheduler
+// would keep creating executions for it with no account to buy in. Disabling
+// rather than refusing the delete keeps the plan and its history for the
+// admin to re-target and re-enable. Plans already disabled are not rewritten,
+// so their updated_at (the plan edit token) does not move.
+func disableSoleAccountPlansTx(ctx context.Context, tx pgx.Tx, accountID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		UPDATE purchase_plans p
+		   SET enabled = false
+		 WHERE p.enabled
+		   AND EXISTS (SELECT 1 FROM plan_accounts pa WHERE pa.plan_id = p.id AND pa.account_id = $1)
+		   AND NOT EXISTS (SELECT 1 FROM plan_accounts pa WHERE pa.plan_id = p.id AND pa.account_id <> $1)
+		RETURNING p.id::text
+	`, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to disable plans targeting only this account: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("failed to disable plans targeting only this account: %w", err)
+	}
+	return ids, nil
 }
 
 // ListCloudAccounts returns accounts matching the filter, with credentials_configured derived.
@@ -4131,6 +4302,9 @@ func (s *PostgresStore) SetPlanAccounts(ctx context.Context, planID string, acco
 	}
 	defer rollbackTx(ctx, tx, "SetPlanAccounts")
 
+	if guardErr := requireManagedAccountsTx(ctx, tx, planID, accountIDs); guardErr != nil {
+		return guardErr
+	}
 	if setErr := s.setPlanAccountsTx(ctx, tx, planID, accountIDs); setErr != nil {
 		return setErr
 	}

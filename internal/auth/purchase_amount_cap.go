@@ -17,14 +17,29 @@ import (
 // rather than falling through to "no cap" (issue #83). Write paths refuse such
 // a value (validateMaxPurchaseAmount), but rows already stored that way must
 // still fail closed here.
+//
+// When a cap applies, a malformed REQUESTED amount (negative, NaN or +/-Inf,
+// see invalidRequestedAmount) is denied too: NaN compares false against the
+// cap and a negative amount sits below it, so either would otherwise pass.
+// reqMax is computed server-side, so this is defense in depth. With no cap the
+// amount dimension is unrestricted and the request is allowed whatever its
+// amount, matching a permission with no constraints at all
+// (checkPermissionConstraints never calls the matcher for one).
 func matchPurchaseAmountConstraint(permMax, reqMax float64) bool {
 	if invalidPurchaseAmountCap(permMax) {
 		return false
 	}
-	if permMax > 0 && reqMax > permMax {
-		return false
+	if permMax == 0 {
+		return true
 	}
-	return true
+	return !invalidRequestedAmount(reqMax) && reqMax <= permMax
+}
+
+// invalidRequestedAmount reports whether a requested purchase amount cannot be
+// a real amount: negative, NaN or infinite. Zero is valid (a request that
+// carries no amount, e.g. a non-money permission check).
+func invalidRequestedAmount(v float64) bool {
+	return v < 0 || math.IsNaN(v) || math.IsInf(v, 0)
 }
 
 // invalidPurchaseAmountCap reports whether a stored MaxPurchaseAmount is
@@ -46,4 +61,18 @@ func validateMaxPurchaseAmount(permIndex int, p Permission) error {
 	return fmt.Errorf(
 		"%w: entry %d (%s:%s) has an invalid max purchase amount %v; a spend cap must be zero (no cap) or positive",
 		ErrInvalidPermission, permIndex, p.Action, p.Resource, p.Constraints.MaxPurchaseAmount)
+}
+
+// validateExplicitZeroCap refuses a permission whose JSON carried an explicit
+// max_amount of 0 (issue #133). Zero stays "no cap" when the field is absent
+// or null, but typing 0 into a cap field reads as "spend nothing" and silently
+// granting unlimited spend is the opposite. Applied to group writes; the HTTP
+// API-key path erases an explicit 0 before it gets here (#980).
+func validateExplicitZeroCap(permIndex int, p APIPermission) error {
+	if p.Constraints == nil || !p.Constraints.maxAmountSet || p.Constraints.MaxAmount != 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: entry %d (%s:%s) max_amount must be greater than 0; omit it for no limit",
+		ErrInvalidPermission, permIndex, p.Action, p.Resource)
 }

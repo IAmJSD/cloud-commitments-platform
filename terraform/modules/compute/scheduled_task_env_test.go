@@ -37,7 +37,7 @@ const awsEnvDir = "../../environments/aws"
 
 var (
 	passLineRe  = regexp.MustCompile(`(?m)^\s*(\w+)\s*=\s*var\.(\w+)\s*$`)
-	tfvarsOffRe = regexp.MustCompile(`(?m)^\s*(enable_\w+)\s*=\s*"?false\b`)
+	tfvarsOffRe = regexp.MustCompile(`(?m)^\s*(enable_\w+)\s*=\s*(?:false|"false")\s*(?:(?:#|//).*)?$`)
 	defaultRe   = regexp.MustCompile(`(?m)^\s*default\s*=\s*(\S+)`)
 )
 
@@ -135,14 +135,32 @@ func sweepProblems(dir string, needPermission bool) ([]string, error) {
 	}
 	src := stripComments(string(raw))
 	var problems []string
-	check := func(typ, attr, ref string) {
+	forEach := regexp.MustCompile(`(?m)^\s*for_each\s*=\s*local\.active_sweeps\s*$`)
+	action := regexp.MustCompile(`action\s*=\s*each\.key\b`)
+	check := func(typ, attr, ref string, extra ...*regexp.Regexp) {
 		body, ok := blockOnce(src, `resource\s+"`+typ+`"\s+"sweep"\s*\{`)
+		if !ok {
+			problems = append(problems, typ+".sweep is missing or duplicated")
+			return
+		}
+		if !forEach.MatchString(body) {
+			problems = append(problems, typ+".sweep lacks for_each = local.active_sweeps")
+		}
+		for _, re := range extra {
+			if !re.MatchString(body) {
+				problems = append(problems, typ+".sweep lacks "+re.String())
+			}
+		}
+		if attr == "" {
+			return
+		}
 		want := regexp.MustCompile(`(?m)^\s*` + attr + `\s*=\s*aws_cloudwatch_event_rule\.sweep\[each\.key\]\.` + ref + `\b`)
-		if !ok || !want.MatchString(body) {
-			problems = append(problems, typ+".sweep is missing or lacks "+attr+" = aws_cloudwatch_event_rule.sweep[each.key]."+ref)
+		if !want.MatchString(body) {
+			problems = append(problems, typ+".sweep lacks "+attr+" = aws_cloudwatch_event_rule.sweep[each.key]."+ref)
 		}
 	}
-	check("aws_cloudwatch_event_target", "rule", "name")
+	check("aws_cloudwatch_event_rule", "", "")
+	check("aws_cloudwatch_event_target", "rule", "name", action)
 	if needPermission {
 		check("aws_lambda_permission", "source_arn", "arn")
 	}
@@ -275,27 +293,39 @@ func TestEnvChecksNegatives(t *testing.T) {
 	if got := tfvarsProblems("a.tfvars", "enable_finalize_revocations_schedule = \"false\"\n"); len(got) != 1 {
 		t.Errorf("quoted \"false\" must count as off: %v", got)
 	}
+	if got := tfvarsProblems("a.tfvars", "enable_finalize_revocations_schedule = \"false\nenable_finalize_revocations_schedule = falsey\n"); len(got) != 0 {
+		t.Errorf("unterminated or longer values must not count as off: %v", got)
+	}
+	if got := tfvarsProblems("a.tfvars", "enable_finalize_revocations_schedule = false // note\n"); len(got) != 1 {
+		t.Errorf("a trailing // comment must not hide an off value: %v", got)
+	}
 	if len(tfvarsProblems("a.tfvars.json", "{}")) != 1 {
 		t.Error("JSON tfvars must fail loudly")
 	}
 }
 
 func TestSweepCrossWiring(t *testing.T) {
-	const target = "resource \"aws_cloudwatch_event_target\" \"sweep\" {\n  rule%s= aws_cloudwatch_event_rule.sweep[%s].name\n}\n"
-	const perm = "resource \"aws_lambda_permission\" \"sweep\" {\n  source_arn%s= aws_cloudwatch_event_rule.sweep[%s].arn\n}\n"
+	const rule = "resource \"aws_cloudwatch_event_rule\" \"sweep\" {\n  for_each = local.active_sweeps\n}\n"
+	const target = "resource \"aws_cloudwatch_event_target\" \"sweep\" {\n  for_each = local.active_sweeps\n  rule%s= aws_cloudwatch_event_rule.sweep[%s].name\n  input = jsonencode({ action = each.key })\n}\n"
+	const perm = "resource \"aws_lambda_permission\" \"sweep\" {\n  for_each = local.active_sweeps\n  source_arn%s= aws_cloudwatch_event_rule.sweep[%s].arn\n}\n"
 	good, goodPerm := fmt.Sprintf(target, " ", "each.key"), fmt.Sprintf(perm, " ", "each.key")
 	for name, c := range map[string]struct {
 		src      string
 		lambda   bool
 		wantProb bool
 	}{
-		"aligned":               {fmt.Sprintf(target, "      ", "each.key") + fmt.Sprintf(perm, "   ", "each.key"), true, false},
-		"unaligned":             {good + goodPerm, true, false},
-		"fargate needs no perm": {good, false, false},
-		"wrong key":             {fmt.Sprintf(target, " ", "each.value.rule") + goodPerm, true, true},
-		"wrong resource type":   {strings.Replace(good, "event_rule", "event_target", 1) + goodPerm, true, true},
-		"missing permission":    {good, true, true},
-		"missing target":        {goodPerm, true, true},
+		"aligned":                 {rule + fmt.Sprintf(target, "      ", "each.key") + fmt.Sprintf(perm, "   ", "each.key"), true, false},
+		"unaligned":               {rule + good + goodPerm, true, false},
+		"fargate needs no perm":   {rule + good, false, false},
+		"wrong key":               {rule + fmt.Sprintf(target, " ", "each.value.rule") + goodPerm, true, true},
+		"wrong resource type":     {rule + strings.Replace(good, "event_rule", "event_target", 1) + goodPerm, true, true},
+		"missing permission":      {rule + good, true, true},
+		"missing target":          {rule + goodPerm, true, true},
+		"missing rule":            {good + goodPerm, true, true},
+		"rule not for_each":       {strings.Replace(rule, "local.active_sweeps", "{}", 1) + good + goodPerm, true, true},
+		"target not for_each":     {rule + strings.Replace(good, "local.active_sweeps", "{}", 1) + goodPerm, true, true},
+		"permission not for_each": {rule + good + strings.Replace(goodPerm, "local.active_sweeps", "{}", 1), true, true},
+		"target action not key":   {rule + strings.Replace(good, "action = each.key", "action = each.value.rule", 1) + goodPerm, true, true},
 	} {
 		got, err := sweepProblems(writeFiles(t, map[string]string{"sweeps.tf": c.src}), c.lambda)
 		if err != nil || (len(got) > 0) != c.wantProb {

@@ -21,11 +21,21 @@ type PlanRampQuantity struct {
 // PlanRampBaseline maps RecIdentityKey to the base a ramp plan sizes against.
 type PlanRampBaseline map[string]PlanRampQuantity
 
-// SetPlanRampBaselineTx freezes a plan's ramp baseline. It writes only while
-// the column is NULL and reports whether it did: the baseline is immutable
-// once set. It has its own UPDATE and the plan's full-row UPDATE
-// (UpdatePurchasePlanTx) never names the column, so a plan saved from a stale
-// in-memory struct cannot clear or replace it.
+type rampLedgerState string
+
+const (
+	rampLedgerNew     rampLedgerState = "new"
+	rampLedgerTrusted rampLedgerState = "trusted"
+)
+
+func (s rampLedgerState) allowsSizing(raw []byte, current int) bool {
+	return s == rampLedgerTrusted && raw != nil || s == rampLedgerNew && raw == nil && current == 0
+}
+
+var ErrRampLedgerUntrusted = errors.New("this ramp's purchase history from before the retention ledger cannot be verified, so it cannot size further steps")
+
+// SetPlanRampBaselineTx freezes a baseline only while retention can prove its lineage.
+// The caller holds the plan lock; full-row plan writes cannot promote trust.
 func (s *PostgresStore) SetPlanRampBaselineTx(ctx context.Context, tx pgx.Tx, planID string, baseline PlanRampBaseline) (bool, error) {
 	if len(baseline) == 0 {
 		return false, fmt.Errorf("refusing to freeze an empty ramp baseline for plan %s", planID)
@@ -35,23 +45,35 @@ func (s *PostgresStore) SetPlanRampBaselineTx(ctx context.Context, tx pgx.Tx, pl
 		return false, fmt.Errorf("failed to marshal ramp baseline of plan %s: %w", planID, err)
 	}
 	tag, err := tx.Exec(ctx,
-		`UPDATE purchase_plans SET ramp_baseline = $2 WHERE id = $1 AND ramp_baseline IS NULL`, planID, raw)
+		`UPDATE purchase_plans SET ramp_baseline = $2,
+		 ramp_ledger_state = CASE WHEN ramp_ledger_protected(ramp_schedule) THEN 'trusted' ELSE ramp_ledger_state END
+		 WHERE id = $1 AND ramp_baseline IS NULL
+		 AND (COALESCE((ramp_schedule ->> 'total_steps')::int, 1) <= 1
+		      OR (ramp_ledger_state = 'new' AND COALESCE((ramp_schedule ->> 'current_step')::int, 0) = 0))`, planID, raw)
 	if err != nil {
 		return false, fmt.Errorf("failed to write ramp baseline of plan %s: %w", planID, err)
 	}
 	return tag.RowsAffected() == 1, nil
 }
 
-// GetPlanRampBaselineTx returns the frozen baseline, or nil when none was
-// written. It errors when the plan does not exist.
+// GetPlanRampBaselineTx refuses cumulative sizing when retained history is untrusted.
+// Fresh protected plans return nil until their baseline freezes under the plan lock.
 func (s *PostgresStore) GetPlanRampBaselineTx(ctx context.Context, tx pgx.Tx, planID string) (PlanRampBaseline, error) {
 	var raw []byte
-	err := tx.QueryRow(ctx, `SELECT ramp_baseline FROM purchase_plans WHERE id = $1`, planID).Scan(&raw)
+	var state rampLedgerState
+	var total, current int
+	err := tx.QueryRow(ctx, `SELECT ramp_baseline, ramp_ledger_state,
+		COALESCE((ramp_schedule ->> 'total_steps')::int, 1),
+		COALESCE((ramp_schedule ->> 'current_step')::int, 0)
+		FROM purchase_plans WHERE id = $1`, planID).Scan(&raw, &state, &total, &current)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w: purchase plan %s", ErrNotFound, planID)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to read ramp baseline of plan %s: %w", planID, err)
+	}
+	if total > 1 && !state.allowsSizing(raw, current) {
+		return nil, ErrRampLedgerUntrusted
 	}
 	if raw == nil {
 		return nil, nil
@@ -91,7 +113,7 @@ func (s *PostgresStore) ListPlanCommittedTx(ctx context.Context, tx pgx.Tx, plan
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
 		WHERE plan_id = $1`, planID)
 	if err != nil {

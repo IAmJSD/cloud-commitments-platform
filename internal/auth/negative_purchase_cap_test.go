@@ -49,6 +49,24 @@ func TestMatchPurchaseAmountConstraint_ValidCapsUnchanged(t *testing.T) {
 	}
 }
 
+// A malformed REQUESTED amount (negative, NaN or +/-Inf) is denied whenever a
+// cap applies. reqMax is computed server-side, so this is defense in depth: a
+// NaN in particular compares false against the cap and used to slip under it.
+// With no cap (permMax == 0) the amount dimension is unrestricted, so the
+// request is allowed, consistent with a permission that carries no
+// constraints at all (checkPermissionConstraints never reaches the matcher).
+func TestMatchPurchaseAmountConstraint_MalformedRequestedAmount(t *testing.T) {
+	malformed := []float64{-1, -0.01, -math.MaxFloat64, math.Inf(-1), math.Inf(1), math.NaN()}
+	for _, reqMax := range malformed {
+		assert.False(t, matchPurchaseAmountConstraint(1000, reqMax),
+			"capped permission must deny malformed request %v", reqMax)
+		assert.False(t, matchPurchaseAmountConstraint(math.MaxFloat64, reqMax),
+			"capped permission must deny malformed request %v even at the largest cap", reqMax)
+		assert.True(t, matchPurchaseAmountConstraint(0, reqMax),
+			"uncapped permission leaves the amount dimension unrestricted for %v", reqMax)
+	}
+}
+
 // Through the real service enforcement path a handler calls at purchase and
 // approval time: a group permission stored with a negative cap refuses even a
 // $1 purchase, while a sibling positive cap is enforced exactly as before.

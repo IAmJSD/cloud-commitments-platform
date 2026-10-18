@@ -356,19 +356,21 @@ func (s *Service) generateAndHashRecoveryCodes() (plaintext, hashes []string, er
 }
 
 // validatePendingMFAEnrollment checks that a pending enrollment
-// exists, hasn't expired, and the supplied code matches. It writes
-// nothing: the next setup overwrites an expired pending secret.
-func validatePendingMFAEnrollment(user *User, code string) error {
+// exists, hasn't expired, and the supplied code matches, returning the
+// matched TOTP counter. It writes nothing: the next setup overwrites an
+// expired pending secret.
+func validatePendingMFAEnrollment(user *User, code string) (int64, error) {
 	if user.MFAPendingSecret == "" || user.MFAPendingSecretExpiresAt == nil {
-		return fmt.Errorf("%w", ErrMFANoEnrollmentInProgress)
+		return 0, fmt.Errorf("%w", ErrMFANoEnrollmentInProgress)
 	}
 	if time.Now().After(*user.MFAPendingSecretExpiresAt) {
-		return fmt.Errorf("%w", ErrMFAEnrollmentExpired)
+		return 0, fmt.Errorf("%w", ErrMFAEnrollmentExpired)
 	}
-	if !verifyTOTP(user.MFAPendingSecret, code) {
-		return fmt.Errorf("%w", ErrMFAInvalidCode)
+	counter, ok := matchTOTP(user.MFAPendingSecret, code)
+	if !ok {
+		return 0, fmt.Errorf("%w", ErrMFAInvalidCode)
 	}
-	return nil
+	return counter, nil
 }
 
 // MFAEnable finalizes an MFA enrollment. Validates the supplied TOTP
@@ -398,7 +400,7 @@ func (s *Service) MFAEnable(ctx context.Context, userID, code string) ([]string,
 	if user.MFAEnabled {
 		return nil, fmt.Errorf("%w", ErrMFAAlreadyEnabled)
 	}
-	err = validatePendingMFAEnrollment(user, code)
+	counter, err := validatePendingMFAEnrollment(user, code)
 	if errors.Is(err, ErrMFAInvalidCode) {
 		return nil, s.rejectMFACode(ctx, user, code)
 	}
@@ -410,7 +412,10 @@ func (s *Service) MFAEnable(ctx context.Context, userID, code string) ([]string,
 	if err != nil {
 		return nil, err
 	}
-	if err := s.store.EnableMFA(ctx, user.ID, user.MFAPendingSecret, hashes); err != nil {
+	// EnableMFA records the enrollment code's counter in the same write, so the
+	// code typed to turn MFA on cannot be replayed at Login inside its window
+	// (#442).
+	if err := s.store.EnableMFA(ctx, user.ID, user.MFAPendingSecret, counter, hashes); err != nil {
 		return nil, err
 	}
 	return plaintext, nil

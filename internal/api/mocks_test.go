@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/mocks"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/scheduler"
 	"github.com/stretchr/testify/mock"
 )
@@ -44,28 +46,67 @@ func (m *MockCredentialStore) DecryptPayload(ciphertext string) ([]byte, error) 
 }
 
 // MockPurchaseManager is a mock implementation of purchase.Manager.
+//
+// Expectations match (ctx, execID, actor/token, ...) without the
+// ClaimedRowCheck argument; every check the handler passes is recorded in
+// Checks. When ClaimedRow is set, each execute method first runs the check
+// against a copy of it, emulating the funnel's post-claim re-check (issue
+// #415): a refusal returns that copy marked failed and an error wrapping
+// purchase.ErrClaimedRowRefused, without consuming the expectation (nothing
+// is bought).
 type MockPurchaseManager struct {
 	mock.Mock
+	ClaimedRow *config.PurchaseExecution
+	Checks     []purchase.ClaimedRowCheck
 }
 
-func (m *MockPurchaseManager) ApproveExecution(ctx context.Context, execID, token, actor string) (string, error) {
+// claimedRowRefusal records check and, when ClaimedRow is set, runs it the
+// way transitionApproveAndExecute does after winning the claim.
+func (m *MockPurchaseManager) claimedRowRefusal(ctx context.Context, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, error) {
+	m.Checks = append(m.Checks, check)
+	if m.ClaimedRow == nil || check == nil {
+		return nil, nil
+	}
+	claimed := *m.ClaimedRow
+	claimed.Status = "running"
+	if err := check(ctx, &claimed); err != nil {
+		claimed.Status = "failed"
+		claimed.NoSubmission = true
+		return &claimed, fmt.Errorf("%w: %w", purchase.ErrClaimedRowRefused, err)
+	}
+	return nil, nil
+}
+
+func (m *MockPurchaseManager) ApproveExecution(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (string, error) {
+	if _, err := m.claimedRowRefusal(ctx, check); err != nil {
+		return "", err
+	}
 	args := m.Called(ctx, execID, token, actor)
 	return args.String(0), args.Error(1)
 }
 
-func (m *MockPurchaseManager) ApproveAndExecute(ctx context.Context, execID, actor string, transitionedBy *string) (*config.PurchaseExecution, string, error) {
+func (m *MockPurchaseManager) ApproveAndExecute(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
+	if refused, err := m.claimedRowRefusal(ctx, check); err != nil {
+		return refused, "", err
+	}
 	args := m.Called(ctx, execID, actor, transitionedBy)
 	exec, _ := args.Get(0).(*config.PurchaseExecution)
 	return exec, args.String(1), args.Error(2)
 }
 
-func (m *MockPurchaseManager) DirectExecute(ctx context.Context, execID, actor string, transitionedBy *string) (*config.PurchaseExecution, string, error) {
+func (m *MockPurchaseManager) DirectExecute(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
+	if refused, err := m.claimedRowRefusal(ctx, check); err != nil {
+		return refused, "", err
+	}
 	args := m.Called(ctx, execID, actor, transitionedBy)
 	exec, _ := args.Get(0).(*config.PurchaseExecution)
 	return exec, args.String(1), args.Error(2)
 }
 
-func (m *MockPurchaseManager) RunPlannedPurchaseNow(ctx context.Context, execID, actor string, transitionedBy *string) (*config.PurchaseExecution, string, error) {
+func (m *MockPurchaseManager) RunPlannedPurchaseNow(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
+	if refused, err := m.claimedRowRefusal(ctx, check); err != nil {
+		return refused, "", err
+	}
 	args := m.Called(ctx, execID, actor, transitionedBy)
 	exec, _ := args.Get(0).(*config.PurchaseExecution)
 	return exec, args.String(1), args.Error(2)
@@ -344,6 +385,12 @@ type constraintDecisionFunc func(action, resource string, constraintSets []auth.
 func (m *MockAuthService) GetUserPermissionsAPI(ctx context.Context, userID string) (any, error) {
 	args := m.Called(ctx, userID)
 	return args.Get(0), args.Error(1)
+}
+
+func (m *MockAuthService) GetAPIKeyEffectivePermissionsAPI(ctx context.Context, keyID, userID string) ([]auth.APIPermission, error) {
+	args := m.Called(ctx, keyID, userID)
+	perms, _ := args.Get(0).([]auth.APIPermission)
+	return perms, args.Error(1)
 }
 
 // allowConstraintChecks stubs the SEC-01 execution-time permission

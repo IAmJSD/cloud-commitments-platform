@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"reflect"
 	"regexp"
 	"strings"
 	"text/template"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -100,7 +103,18 @@ func gcpOIDCIssuerURI(source, tenantID string) string {
 }
 
 // renderTemplate renders a named template from the embedded iacfiles.Templates FS.
+// It refuses data holding a line break or other control character; see
+// checkRenderDataSingleLine.
 func renderTemplate(tmplPath string, data federationIaCData) (string, error) {
+	if err := checkRenderDataSingleLine(data); err != nil {
+		return "", fmt.Errorf("render template %s: %w", tmplPath, err)
+	}
+	return executeTemplate(tmplPath, data)
+}
+
+// executeTemplate parses and executes a template with no checks on data.
+// Only renderTemplate calls it outside tests.
+func executeTemplate(tmplPath string, data federationIaCData) (string, error) {
 	tmplBytes, err := iacfiles.Templates.ReadFile(tmplPath)
 	if err != nil {
 		return "", fmt.Errorf("read template %s: %w", tmplPath, err)
@@ -114,6 +128,41 @@ func renderTemplate(tmplPath string, data federationIaCData) (string, error) {
 		return "", fmt.Errorf("render template %s: %w", tmplPath, err)
 	}
 	return buf.String(), nil
+}
+
+// checkRenderDataSingleLine fails closed when any string field of data holds
+// a control character other than a horizontal tab. The shell and tfvars
+// templates print several fields on "#" comment lines, and shellEscape and
+// hclEscape escape quoting metacharacters but not line breaks, so a CR or LF
+// there would end the comment and run the rest of the value as shell or HCL
+// (#970). The generic bundles fill no stored account fields today, and the
+// account write paths reject control characters, so this guard only trips on
+// data that bypassed them (a record stored before that validation, a future
+// caller that fills account fields, or a bad config value); an error is safer
+// than a script that runs something unintended.
+// A tab is allowed because it cannot end a line, and the session email can
+// legitimately hold one in a quoted local part. It walks the struct by
+// reflection so a new field cannot be missed.
+func checkRenderDataSingleLine(data federationIaCData) error {
+	v := reflect.ValueOf(data)
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Field(i)
+		if f.Kind() != reflect.String {
+			continue
+		}
+		if at := strings.IndexFunc(f.String(), isRenderControlChar); at >= 0 {
+			r, _ := utf8.DecodeRuneInString(f.String()[at:])
+			return fmt.Errorf("field %s contains control character %U", v.Type().Field(i).Name, r)
+		}
+	}
+	return nil
+}
+
+// isRenderControlChar reports whether r is a control character that
+// checkRenderDataSingleLine refuses: every C0 and C1 control and DEL except
+// the horizontal tab.
+func isRenderControlChar(r rune) bool {
+	return r != '\t' && unicode.IsControl(r)
 }
 
 // getFederationIaC handles GET /api/federation/iac
@@ -400,6 +449,30 @@ func shellEscape(s string) string {
 	return r.Replace(s)
 }
 
+// hclEscape escapes a string for use inside a double-quoted HCL string. HCL
+// also starts an interpolation at "${" and a template directive at "%{", so
+// both are doubled into their literal "$${" and "%%{" forms (#952). Line
+// breaks are not escaped: renderTemplate refuses any value holding one
+// (checkRenderDataSingleLine, #970).
+func hclEscape(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `"`, `\"`, "${", "$${", "%{", "%%{").Replace(s)
+}
+
+// hclEscapeData returns a copy of data with every string field HCL-escaped,
+// for rendering the bundle's tfvars. Most fields are server-derived, but
+// ContactEmail is the session user's email, which only has to pass
+// mail.ParseAddress and so can carry quotes and "${" in a quoted local part
+// (#952). It walks the struct by reflection so a new field cannot be missed.
+func hclEscapeData(data federationIaCData) federationIaCData {
+	v := reflect.ValueOf(&data).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		if f := v.Field(i); f.Kind() == reflect.String {
+			f.SetString(hclEscape(f.String()))
+		}
+	}
+	return data
+}
+
 // validFederationTargets is the allowlist of valid target cloud providers.
 var validFederationTargets = map[string]bool{"aws": true, "azure": true, "gcp": true}
 
@@ -529,7 +602,10 @@ func writeAzureTemplateFiles(zw *zip.Writer, data federationIaCData, format, tem
 	if err != nil {
 		return fmt.Errorf("azure %s: read template: %w", format, err)
 	}
-	deployScript, err := renderTemplate("templates/azure-wif-bicep-deploy.sh.tmpl", data)
+	// The deploy script embeds the session user's email in a double-quoted
+	// bash string, so render it shell-escaped like the CLI and CFN scripts
+	// (#958). The params JSON interpolates no fields and stays unescaped.
+	deployScript, err := renderTemplate("templates/azure-wif-bicep-deploy.sh.tmpl", shellEscapeData(data))
 	if err != nil {
 		return fmt.Errorf("azure %s: render deploy script: %w", format, err)
 	}
@@ -589,7 +665,7 @@ func addBundleTerraform(zw *zip.Writer, data federationIaCData, target, source, 
 		return fmt.Errorf("bundle: terraform dir: %w", err)
 	}
 	tfvarsTmpl, tfvarsName := bundleTfvarsSpec(target, source, slug)
-	tfvarsContent, err := renderTemplate(tfvarsTmpl, data)
+	tfvarsContent, err := renderTemplate(tfvarsTmpl, hclEscapeData(data))
 	if err != nil {
 		return fmt.Errorf("bundle: %w", err)
 	}

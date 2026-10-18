@@ -3127,6 +3127,7 @@ func buildSessionCancelHandler(exec *config.PurchaseExecution, session *Session,
 
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", mock.Anything, "sess-tok").Return(session, nil)
+	mockAuth.allowConstraintChecks()
 	// cancelPurchaseViaSession enforces CSRF on the session-authed path (issue
 	// #404). sessionCancelReq carries no CSRF header, so ValidateCSRFToken is
 	// called with an empty csrfToken. Tests exercising the session-authed cancel
@@ -5273,6 +5274,8 @@ func buildCancelOwnHandler(userID, creatorID string) (*Handler, *MockConfigStore
 	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "update-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, userID).Return([]string{}, nil).Maybe()
 
+	mockAuth.allowConstraintChecks()
+
 	creator := creatorID
 	exec := &config.PurchaseExecution{ExecutionID: ownExecID, Status: "pending", CreatedByUserID: &creator}
 	mockConfig := new(MockConfigStore)
@@ -5379,9 +5382,13 @@ func TestHandler_deletePlannedPurchase_UserAPIKey_Allowed(t *testing.T) {
 		Return(ownerUserID, keyID, true, nil)
 	mockAuth.On("GetAllowedAccountsAPI", ctx, ownerUserID).Return([]string{}, nil)
 	// authorizePlannedPurchaseCancel falls through to the ownership check
-	// since the owning user holds neither update-any nor cancel-any.
-	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, auth.ActionUpdateAny, auth.ResourcePurchases).Return(false, nil)
-	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, auth.ActionCancelAny, auth.ResourcePurchases).Return(false, nil)
+	// since the key holds neither update-any nor cancel-any (issue #979: the
+	// full-scope verbs are probed on the key, not the owner).
+	// The key holds delete:purchases only: probing its cancel-own is denied.
+	for _, verb := range []string{auth.ActionUpdateAny, auth.ActionCancelAny, auth.ActionCancelOwn} {
+		mockAuth.On("HasAPIKeyPermissionForConstraintsAPI", ctx, keyID, ownerUserID, verb, auth.ResourcePurchases, []auth.PermissionConstraints{{}}).
+			Return(false, nil)
+	}
 
 	creator := ownerUserID
 	execution := &config.PurchaseExecution{ExecutionID: execID, Status: "pending", CreatedByUserID: &creator}
@@ -5956,6 +5963,7 @@ func TestHandler_revokePurchase_SessionAdminCancelAny(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").
 		Return(&Session{UserID: adminUserID, Email: adminEmail}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, adminUserID, "cancel-any", "purchases").Return(true, nil)
+	mockAuth.allowConstraintChecks()
 	// requireExecutionAccess (issue #92) runs before RBAC; unrestricted
 	// here since scope is not under test.
 	mockAuth.On("GetAllowedAccountsAPI", ctx, adminUserID).Return([]string{}, nil)
@@ -6002,6 +6010,7 @@ func TestHandler_revokePurchase_SessionOwnerCancelOwn(t *testing.T) {
 		Return(&Session{UserID: ownerUserID, Email: ownerEmail}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, "cancel-any", "purchases").Return(false, nil)
 	mockAuth.On("HasPermissionAPI", ctx, ownerUserID, "cancel-own", "purchases").Return(true, nil)
+	mockAuth.allowConstraintChecks()
 	// requireExecutionAccess (issue #92) runs before RBAC; unrestricted
 	// here since scope is not under test.
 	mockAuth.On("GetAllowedAccountsAPI", ctx, ownerUserID).Return([]string{}, nil)
@@ -6462,7 +6471,7 @@ func TestRequireDifferentApprover_ModeOff_AllowsSameUser(t *testing.T) {
 	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOff(), nil)
 
 	handler := &Handler{config: mockConfig}
-	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID)
+	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID, false)
 	require.NoError(t, err, "mode off: creator self-approve must be allowed")
 }
 
@@ -6480,7 +6489,7 @@ func TestRequireDifferentApprover_ModeOn_DeniesSameUser(t *testing.T) {
 	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 
 	handler := &Handler{config: mockConfig}
-	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID)
+	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID, false)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -6502,7 +6511,7 @@ func TestRequireDifferentApprover_ModeOn_AllowsDifferentUser(t *testing.T) {
 	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 
 	handler := &Handler{config: mockConfig}
-	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID)
+	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID, false)
 	require.NoError(t, err, "mode on: different user must be allowed")
 }
 
@@ -6520,7 +6529,7 @@ func TestRequireDifferentApprover_ModeOn_DeniesAdminSelfApprove(t *testing.T) {
 	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 
 	handler := &Handler{config: mockConfig}
-	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID)
+	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID, false)
 	require.Error(t, err, "mode on: admin self-approve must be denied")
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -6541,7 +6550,7 @@ func TestRequireDifferentApprover_ModeOn_NullCreatorDenied(t *testing.T) {
 	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 
 	handler := &Handler{config: mockConfig}
-	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID)
+	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID, false)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -6561,7 +6570,7 @@ func TestRequireDifferentApprover_NilAuth_500(t *testing.T) {
 	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 
 	handler := &Handler{config: mockConfig}
-	err := handler.requireDifferentApprover(ctx, nil, exec.ExecutionID, exec.CreatedByUserID)
+	err := handler.requireDifferentApprover(ctx, nil, exec.ExecutionID, exec.CreatedByUserID, false)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -6712,7 +6721,10 @@ func TestHandler_approvePurchaseViaSession_FourEyesOn_DifferentApproverSucceeds(
 	}
 	// The approved row has no plan: a plan step with no recommendations is
 	// refused at execution (#609), and this test is about the 4-eyes check.
-	approved := &config.PurchaseExecution{ExecutionID: execID, Status: "approved"}
+	// It carries the recommendations the approver was checked against: the
+	// funnel re-runs that check on the claimed row (issue #415), and an
+	// empty claimed row fails it closed.
+	approved := &config.PurchaseExecution{ExecutionID: execID, Status: "running", Recommendations: exec.Recommendations}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
 	mockConfig.On("GetGlobalConfig", mock.Anything).Return(fourEyesCfgOn(), nil)
 	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "running", &approverID).Return(approved, nil)
@@ -6758,4 +6770,49 @@ func TestFourEyesActorIdentity(t *testing.T) {
 		session := &Session{UserID: apiKeyAdminUserID, Email: ""}
 		assert.Equal(t, apiKeyAdminUserID, fourEyesActorIdentity(session))
 	})
+}
+
+// TestRequireDifferentApprover_ModeOn_SystemCreated pins the #233 rule matrix
+// for scheduler-minted rows versus unflagged nil-creator rows.
+func TestRequireDifferentApprover_ModeOn_SystemCreated(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	creator := "user-creator"
+	cases := []struct {
+		name    string
+		session *Session
+		creator *string
+		system  bool
+		code    int
+		msg     string
+	}{
+		{"system row, other user", &Session{UserID: "approver"}, nil, true, 0, ""},
+		{"unflagged nil row", &Session{UserID: "approver"}, nil, false, 403, "predates the dual-control feature"},
+		{"flag does not override creator", &Session{UserID: creator}, &creator, true, 403, "different approver"},
+		{"system row, no session", nil, nil, true, 500, "no session"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mockConfig := new(MockConfigStore)
+			mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
+			err := (&Handler{config: mockConfig}).requireDifferentApprover(ctx, tc.session, "exec-1", tc.creator, tc.system)
+			if tc.code == 0 {
+				require.NoError(t, err)
+				return
+			}
+			ce, ok := IsClientError(err)
+			require.True(t, ok)
+			assert.Equal(t, tc.code, ce.code)
+			assert.Contains(t, ce.Error(), tc.msg)
+		})
+	}
+}
+
+// TestNewPendingExecution_NotSystemCreated: only the sweep may set the flag (#233).
+func TestNewPendingExecution_NotSystemCreated(t *testing.T) {
+	t.Parallel()
+	exec, _, err := newPendingExecution(&ExecutePurchaseRequest{CapacityPercent: 100}, 0, 0)
+	require.NoError(t, err)
+	assert.False(t, exec.CreatedBySystem)
 }

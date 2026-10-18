@@ -508,15 +508,16 @@ func seedLadderConfigWithExtID(ctx context.Context, t *testing.T, store *Postgre
 	return saved.ID
 }
 
-// TestPostgresStore_GetInFlightLadderCommitUSDHr tests the in-flight sum
-// query (L5 netting). It verifies:
-//   - zero is returned (not nil) when no scheduled tranches exist.
+// TestPostgresStore_InFlightLadderRows tests the in-flight netting rows
+// (L5 netting), summed to on-demand-equivalent dollars. Seeds have no stored
+// basis, so they use the amend path's assume-on-demand reading. It verifies:
+//   - zero is returned when no scheduled tranches exist.
 //   - scheduled tranches still within LadderFireGrace and fired tranches are
 //     summed; completed (already in ExistingUSDPerHour), failed and canceled
 //     are excluded.
 //   - scheduled tranches past the grace window are excluded (issue #118).
 //   - tranches from a different config are not included.
-func TestPostgresStore_GetInFlightLadderCommitUSDHr(t *testing.T) {
+func TestPostgresStore_InFlightLadderRows(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	store := setupLadderStore(ctx, t)
@@ -545,6 +546,12 @@ func TestPostgresStore_GetInFlightLadderCommitUSDHr(t *testing.T) {
 		}
 		require.NoError(t, store.SaveLadderTranches(ctx, []LadderTrancheDB{tr}))
 	}
+	inFlightOD := func(t *testing.T, cID string) float64 {
+		t.Helper()
+		rows, err := inFlightLadderRows(ctx, store.db, true, cID, asOf)
+		require.NoError(t, err)
+		return mustOnDemand(t, rows)
+	}
 	insertTranche := func(t *testing.T, cID *string, amount float64, status ladder.TrancheStatus) {
 		t.Helper()
 		insertTrancheAt(t, cID, amount, status, fire)
@@ -553,10 +560,7 @@ func TestPostgresStore_GetInFlightLadderCommitUSDHr(t *testing.T) {
 	t.Run("zero when no tranches exist", func(t *testing.T) {
 		// Use the other config which has no tranches yet.
 		otherID := otherConfigID
-		result, err := store.GetInFlightLadderCommitUSDHr(ctx, otherID, asOf)
-		require.NoError(t, err)
-		require.NotNil(t, result, "must return non-nil *float64 even when sum is zero")
-		assert.InDelta(t, 0.0, *result, 1e-6)
+		assert.InDelta(t, 0.0, inFlightOD(t, otherID), 1e-6)
 	})
 
 	// Insert tranches with various statuses for the main config.
@@ -577,21 +581,15 @@ func TestPostgresStore_GetInFlightLadderCommitUSDHr(t *testing.T) {
 	insertTranche(t, &otherID, 99.0, ladder.TrancheStatusScheduled)
 
 	t.Run("sums fireable scheduled and fired", func(t *testing.T) {
-		result, err := store.GetInFlightLadderCommitUSDHr(ctx, configID, asOf)
-		require.NoError(t, err)
-		require.NotNil(t, result)
 		// 3.0 future + 6.0 due-within-grace scheduled + 2.0 fired. Completed is
 		// already counted in ExistingUSDPerHour (netting it would double-subtract);
 		// failed, canceled and past-grace scheduled rows were never bought.
-		assert.InDelta(t, 11.0, *result, 1e-6, "in-flight = fireable scheduled + fired")
+		assert.InDelta(t, 11.0, inFlightOD(t, configID), 1e-6, "in-flight = fireable scheduled + fired")
 	})
 
 	t.Run("other config is not contaminated", func(t *testing.T) {
-		result, err := store.GetInFlightLadderCommitUSDHr(ctx, otherConfigID, asOf)
-		require.NoError(t, err)
-		require.NotNil(t, result)
 		// Only the 99.0 (scheduled) tranche we just inserted for the other config.
-		assert.InDelta(t, 99.0, *result, 1e-6, "other config must see only its own tranches")
+		assert.InDelta(t, 99.0, inFlightOD(t, otherConfigID), 1e-6, "other config must see only its own tranches")
 	})
 }
 
@@ -642,10 +640,9 @@ func TestPostgresStore_SaveLadderRunWithTranches_AppendOnly(t *testing.T) {
 
 	// In-flight sum reflects BOTH generations (append-only accumulation until
 	// tranches fire); netting will cap future runs, not the store.
-	inFlight, err := store.GetInFlightLadderCommitUSDHr(ctx, cfgID, time.Now().UTC())
+	inFlight, err := inFlightLadderRows(ctx, store.db, true, cfgID, time.Now().UTC())
 	require.NoError(t, err)
-	require.NotNil(t, inFlight)
-	assert.InDelta(t, 5.5, *inFlight, 1e-6, "in-flight must sum both live scheduled generations (3.0 + 2.5)")
+	assert.InDelta(t, 5.5, mustOnDemand(t, inFlight), 1e-6, "in-flight must sum both live scheduled generations (3.0 + 2.5)")
 }
 
 // TestPostgresStore_SaveLadderRunWithTranches_CancelsOverdue proves #544: with

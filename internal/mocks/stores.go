@@ -50,6 +50,7 @@ type MockConfigStore struct {
 	GetPlanAccountsFn                   func(ctx context.Context, planID string) ([]config.CloudAccount, error)
 	SaveAccountServiceOverrideFn        func(ctx context.Context, override *config.AccountServiceOverride) error
 	CountPendingExecutionsForAccountFn  func(ctx context.Context, accountID string) (int, error)
+	CountLiveExecutionsForAccountFn     func(ctx context.Context, accountID string) (int, error)
 	ListPendingExecutionIDsForAccountFn func(ctx context.Context, accountID string) ([]string, error)
 	SavePurchaseExecutionFn             func(ctx context.Context, exec *config.PurchaseExecution) error
 	PinExecutionFanOutShapeFn           func(ctx context.Context, lineageKey, shape string) (string, error)
@@ -673,6 +674,20 @@ func (m *MockConfigStore) CountPendingExecutionsForAccount(ctx context.Context, 
 	return args.Int(0), args.Error(1)
 }
 
+// CountLiveExecutionsForAccount mocks the CountLiveExecutionsForAccount operation.
+// Defaults to (0, nil) when no Fn is set and no expectation is registered.
+func (m *MockConfigStore) CountLiveExecutionsForAccount(ctx context.Context, accountID string) (int, error) {
+	m.record("CountLiveExecutionsForAccount", ctx, accountID)
+	if m.CountLiveExecutionsForAccountFn != nil {
+		return m.CountLiveExecutionsForAccountFn(ctx, accountID)
+	}
+	if !isExpected(&m.Mock, "CountLiveExecutionsForAccount") {
+		return 0, nil
+	}
+	args := m.Called(ctx, accountID)
+	return args.Int(0), args.Error(1)
+}
+
 // ListPendingExecutionIDsForAccount mocks the ListPendingExecutionIDsForAccount operation.
 // Defaults to (nil, nil) when no Fn is set and no expectation is registered.
 func (m *MockConfigStore) ListPendingExecutionIDsForAccount(ctx context.Context, accountID string) ([]string, error) {
@@ -1072,8 +1087,8 @@ func (m *MockAuthStore) SetPendingMFASecret(ctx context.Context, userID, secret 
 	return m.Called(ctx, userID, secret, expiresAt).Error(0)
 }
 
-func (m *MockAuthStore) EnableMFA(ctx context.Context, userID, pendingSecret string, recoveryHashes []string) error {
-	return m.Called(ctx, userID, pendingSecret, recoveryHashes).Error(0)
+func (m *MockAuthStore) EnableMFA(ctx context.Context, userID, pendingSecret string, totpCounter int64, recoveryHashes []string) error {
+	return m.Called(ctx, userID, pendingSecret, totpCounter, recoveryHashes).Error(0)
 }
 
 func (m *MockAuthStore) ClearPendingMFASecret(ctx context.Context, userID string) error {
@@ -1598,6 +1613,15 @@ func (m *MockConfigStore) SetRecommendationsCollectionError(ctx context.Context,
 	return args.Error(0)
 }
 
+func (m *MockConfigStore) SetRecommendationsCollectionPartial(ctx context.Context, partial *config.RecommendationsCollectionPartial) error {
+	m.record("SetRecommendationsCollectionPartial", ctx, partial)
+	if !isExpected(&m.Mock, "SetRecommendationsCollectionPartial") {
+		return nil
+	}
+	args := m.Called(ctx, partial)
+	return args.Error(0)
+}
+
 func (m *MockConfigStore) GetRIUtilizationCache(ctx context.Context, region string, lookbackDays int) (*config.RIUtilizationCacheEntry, error) {
 	m.record("GetRIUtilizationCache", ctx, region, lookbackDays)
 	if !isExpected(&m.Mock, "GetRIUtilizationCache") {
@@ -1820,7 +1844,8 @@ func (m *MockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses 
 }
 
 // filterExecutionsLikeStore applies the store contract to canned rows: filter by
-// status, drop clean completed rows, order by ScheduledDate DESC, then cap.
+// status, drop clean completed rows, order by ScheduledDate DESC with future
+// pending rows last and soonest first (issue #680), then cap.
 func filterExecutionsLikeStore(rows []config.PurchaseExecution, statuses []string, limit int) []config.PurchaseExecution {
 	if len(statuses) == 0 {
 		return nil
@@ -1837,11 +1862,27 @@ func filterExecutionsLikeStore(rows []config.PurchaseExecution, statuses []strin
 		}
 		out = append(out, *r)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].ScheduledDate.After(out[j].ScheduledDate) })
+	now := time.Now()
+	sort.SliceStable(out, func(i, j int) bool { return executionSortsBefore(&out[i], &out[j], now) })
 	if len(out) > limit {
 		out = out[:limit]
 	}
 	return out
+}
+
+// executionSortsBefore mirrors GetExecutionsByStatuses' ORDER BY: rows that
+// are not future pending steps first, newest first; future pending steps
+// after them, soonest first.
+func executionSortsBefore(a, b *config.PurchaseExecution, now time.Time) bool {
+	aFuture := a.Status == "pending" && a.ScheduledDate.After(now)
+	bFuture := b.Status == "pending" && b.ScheduledDate.After(now)
+	if aFuture != bFuture {
+		return bFuture
+	}
+	if aFuture {
+		return a.ScheduledDate.Before(b.ScheduledDate)
+	}
+	return a.ScheduledDate.After(b.ScheduledDate)
 }
 
 // CountExecutionsByPlanAndStatus mocks the CountExecutionsByPlanAndStatus operation.
@@ -2023,7 +2064,7 @@ func (m *MockConfigStore) SaveLadderRun(ctx context.Context, run *config.LadderR
 func (m *MockConfigStore) PlanAndSaveLadderRun(ctx context.Context, configID string, asOf time.Time, build config.LadderPlanBuilder) (*config.LadderRunDB, error) {
 	m.record("PlanAndSaveLadderRun", ctx, configID, asOf)
 	if !isExpected(&m.Mock, "PlanAndSaveLadderRun") {
-		run, _, err := build(0)
+		run, _, err := build(nil)
 		return run, err
 	}
 	args := m.Called(ctx, configID, asOf)

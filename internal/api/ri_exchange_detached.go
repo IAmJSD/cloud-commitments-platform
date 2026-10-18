@@ -15,7 +15,9 @@ import (
 // run on contexts that keep the request's values but drop its cancellation,
 // each bounded by its own budget so a hung provider or database cannot pin the
 // goroutine forever. On Lambda the invocation itself is still bounded by the
-// function timeout, which no context can extend.
+// function timeout, which no context can extend, so that timeout must cover
+// the sum of both budgets plus a 30s margin (lambda_timeout >= 300, enforced
+// by Terraform validation and TestLambdaTimeoutCoversRIExchangeBudget, #913).
 //
 // The detaching itself is ctxutil.DetachedWithTimeout, shared with the
 // purchase path (#706 / #789).

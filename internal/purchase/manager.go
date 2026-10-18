@@ -86,14 +86,11 @@ type ProcessResult struct {
 // 15min (matching the RI-exchange stale-sweep threshold in pkg/exchange)
 // leaves a wide safety margin.
 //
-// Note: the purchase.Reaper (reaper.go) uses DefaultReapAfter (10m) to cover
-// both "approved" and "running" rows via an atomic CAS. These two thresholds
-// serve different sweep paths and the 15m vs 10m difference is intentional:
-// the reaper is CAS-protected and can safely reap "running" rows (the real
-// executor wins the CAS race if it is still alive), while this legacy sweep
-// only targets "approved" rows from the cron path and is deliberately
-// conservative (05-N3). A future consolidation should align both under a
-// single env-configurable threshold.
+// Note: the stuck-purchase reaper (reaper.go) fails "running" rows after
+// DefaultReapAfter (10m) but leaves "approved" rows alone until
+// minApprovedReapAfter, which is derived from this constant plus one process
+// sweep interval, so this recovery always gets to re-drive a stranded
+// approval before the reaper fails it (issue #894).
 const staleApprovedThreshold = 15 * time.Minute
 
 // NotificationResult holds the result of sending notifications.
@@ -229,7 +226,11 @@ func isMultiAccountAckable(execErr error) bool {
 }
 
 const (
-	// Combined execution and persistence budgets require lambda_timeout >= 270s.
+	// The two budgets run back to back (270s), and on AWS Lambda the function
+	// timeout ends the invocation whatever these deadlines say, so the Lambda
+	// timeout must cover their sum plus a 30s margin (lambda_timeout >= 300,
+	// enforced by Terraform validation and TestLambdaTimeoutCoversPurchaseBudget,
+	// #913).
 	purchaseExecutionTimeout = 4 * time.Minute
 	terminalSaveTimeout      = 30 * time.Second
 )

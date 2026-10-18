@@ -135,6 +135,7 @@ export {
 export {
   executePurchase,
   getPurchaseDetails,
+  getApprovalDetails,
   cancelPurchase,
   retryPurchase,
   approvePurchase,

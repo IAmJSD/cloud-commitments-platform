@@ -1,0 +1,17 @@
+# Fixture: an authoritative project policy given as a JSON heredoc. The role is
+# heredoc text, and the JSON's own column-0 braces must not end the scan of it.
+# Must exit 1.
+
+resource "google_project_iam_policy" "project" {
+  project     = var.project_id
+  policy_data = <<-EOT
+{
+  "bindings": [
+    {
+      "members": ["serviceAccount:workload@example.iam.gserviceaccount.com"],
+      "role": "roles/secretmanager.secretAccessor"
+    }
+  ]
+}
+  EOT
+}

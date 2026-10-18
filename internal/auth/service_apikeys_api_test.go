@@ -27,7 +27,7 @@ func TestService_CreateAPIKeyAPI(t *testing.T) {
 			GroupIDs:     []string{DefaultAdminGroupID},
 		}
 
-		permissions := []Permission{
+		permissions := []APIPermission{
 			{Action: ActionView, Resource: ResourceRecommendations},
 		}
 
@@ -35,7 +35,7 @@ func TestService_CreateAPIKeyAPI(t *testing.T) {
 		req := APICreateAPIKeyRequest{
 			Name:        "Test API Key",
 			Password:    testAPIKeyPassword,
-			Permissions: permissions,
+			Permissions: []APIPermission{{Action: ActionView, Resource: ResourceRecommendations}},
 			ExpiresAt:   &expiresAt,
 		}
 
@@ -74,7 +74,7 @@ func TestService_CreateAPIKeyAPI(t *testing.T) {
 		req := APICreateAPIKeyRequest{
 			Name:        "Test API Key",
 			Password:    testAPIKeyPassword,
-			Permissions: []Permission{{Action: ActionView, Resource: ResourceRecommendations}},
+			Permissions: []APIPermission{{Action: ActionView, Resource: ResourceRecommendations}},
 			ExpiresAt:   &expiresAt,
 		}
 
@@ -106,7 +106,7 @@ func TestService_CreateAPIKeyAPI(t *testing.T) {
 
 		req := APICreateAPIKeyRequest{
 			Name:        "Test API Key",
-			Permissions: []Permission{},
+			Permissions: []APIPermission{},
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)

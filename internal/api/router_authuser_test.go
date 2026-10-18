@@ -15,7 +15,7 @@ import (
 // These tests cover the defense-in-depth AuthUser enforcement added to
 // Router.Route — see issue #60. Before the fix, AuthUser routes (e.g.
 // /api/auth/logout, /api/api-keys, /api/federation/iac) fell through the
-// router with no auth check; only the validateSecurity middleware
+// router with no auth check; only the validateSecurityContext middleware
 // protected them. These tests pin the router-level enforcement so a
 // future middleware refactor can't silently expose them.
 
@@ -107,7 +107,7 @@ func TestRouterAuthUser_UserAPIKeyPrincipalAvoidsSecondValidation(t *testing.T) 
 	mockAuth := new(MockAuthService)
 	user := &auth.User{ID: "api-key-user", Email: "user@example.com"}
 	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(&auth.UserAPIKey{ID: "key-1"}, user, nil).Once()
-	mockAuth.On("GetUserPermissionsAPI", mock.Anything, "api-key-user").Return([]auth.APIPermission{}, nil).Once()
+	mockAuth.On("GetAPIKeyEffectivePermissionsAPI", mock.Anything, "key-1", "api-key-user").Return([]auth.APIPermission{}, nil).Once()
 	h := &Handler{auth: mockAuth}
 	r := NewRouter(h)
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"X-API-Key": "user-key"}}
@@ -163,7 +163,7 @@ func TestHandleRequest_UserAPIKeyPrincipalValidatedOnce(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	user := &auth.User{ID: "api-key-user", Email: "user@example.com"}
 	mockAuth.On("ValidateUserAPIKeyAPI", ctx, "user-key").Return(&auth.UserAPIKey{ID: "key-1"}, user, nil).Once()
-	mockAuth.On("GetUserPermissionsAPI", mock.Anything, "api-key-user").Return([]auth.APIPermission{}, nil).Once()
+	mockAuth.On("GetAPIKeyEffectivePermissionsAPI", mock.Anything, "key-1", "api-key-user").Return([]auth.APIPermission{}, nil).Once()
 	h := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"X-API-Key": "user-key"},

@@ -53,17 +53,17 @@ for (const width of [1280, 390]) {
       }
     }
     await expect(modal).toBeVisible();
-    await expect(modal.getByLabel('Planning budget (USD/hour)')).toHaveValue('0.500000');
-    await modal.getByLabel('Planning budget (USD/hour)').fill('0.250000');
+    await expect(modal.getByLabel('Planning budget (on-demand-equivalent $/hr)')).toHaveValue('0.500000');
+    await modal.getByLabel('Planning budget (on-demand-equivalent $/hr)').fill('0.250000');
     await expect(modal.locator('#ladder-event-preview')).toContainText('$2.25/hr');
     await modal.getByRole('button', { name: 'Undo draft changes' }).click();
-    await expect(modal.getByLabel('Planning budget (USD/hour)')).toHaveValue('0.500000');
+    await expect(modal.getByLabel('Planning budget (on-demand-equivalent $/hr)')).toHaveValue('0.500000');
     await modal.getByLabel('Scheduled date and time (UTC)').fill('2020-01-01T00:00');
     await modal.getByRole('button', { name: 'Save planned purchase' }).click();
     await expect(modal.locator('[role="alert"]')).toContainText('future');
     expect(saves).toEqual([]);
     await modal.getByLabel('Scheduled date and time (UTC)').fill('2030-01-04T00:00');
-    await modal.getByLabel('Planning budget (USD/hour)').fill('0.250000');
+    await modal.getByLabel('Planning budget (on-demand-equivalent $/hr)').fill('0.250000');
     await modal.getByRole('button', { name: 'Save planned purchase' }).click();
     await expect(modal.getByRole('button', { name: 'Save in progress' })).toBeFocused();
     await page.keyboard.press('Escape'); await page.keyboard.press('Tab'); await page.keyboard.press('Enter');
@@ -79,10 +79,10 @@ for (const width of [1280, 390]) {
     await timeline.locator('[data-event="event-2"]').focus(); await page.keyboard.press('Enter');
     await expect(modal.getByLabel('Scheduled date and time (UTC)')).toBeFocused();
     rejectNextSave = true;
-    await modal.getByLabel('Planning budget (USD/hour)').fill('0.200000');
+    await modal.getByLabel('Planning budget (on-demand-equivalent $/hr)').fill('0.200000');
     await modal.getByRole('button', { name: 'Save planned purchase' }).click();
     await expect(modal.locator('[role="alert"]')).toContainText('draft is retained');
-    await expect(modal.getByLabel('Planning budget (USD/hour)')).toHaveValue('0.200000');
+    await expect(modal.getByLabel('Planning budget (on-demand-equivalent $/hr)')).toHaveValue('0.200000');
     await page.keyboard.press('Escape');
     await expect(modal).toHaveCount(0);
     await expect(timeline.locator('[data-event="event-2"]')).toBeFocused();

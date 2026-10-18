@@ -346,6 +346,8 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 		// authorizePlannedPurchaseCancel also checks cancel-any when update-any
 		// is false (issue #1400); register it so the mock does not panic.
 		mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-any", "purchases").Return(false, nil)
+		// The creator branch asks whether cancel-own is also held (issue #678).
+		mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-own", "purchases").Return(false, nil)
 		creator := userID
 		mockStore := new(MockConfigStore)
 		mockStore.On("GetExecutionByID", ctx, execID).
@@ -397,6 +399,7 @@ func TestDeletePlannedPurchase_PermissionGate(t *testing.T) {
 		mockAuth.On("HasPermissionAPI", ctx, userID, "cancel-own", "purchases").Return(true, nil)
 		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
 		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(false, nil)
+		mockAuth.allowConstraintChecks()
 		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 		creator := userID

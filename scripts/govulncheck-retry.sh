@@ -8,7 +8,8 @@
 # 0 clean, 3 vulnerabilities found, 2 usage error, 1 any other error. A real
 # finding (3) is never retried. Exit 1 is retried only when stderr shows the DB
 # fetch failing on a network error, so a genuine tool or config error fails on
-# the first attempt. Only exit 1 is retried. Stdout of a failed attempt is
+# the first attempt. Only exit 1 is retried. Stderr is buffered in a file and
+# replayed after each attempt. Stdout of a failed attempt is
 # passed through unbuffered, so with -format json/sarif the output of several
 # attempts can be concatenated (CI does not use -format). After MAX_ATTEMPTS the last exit
 # code is returned.
@@ -27,9 +28,10 @@ trap 'rm -f "$errfile"' EXIT
 attempt=1
 while :; do
   rc=0
-  govulncheck "$@" 2> >(tee "$errfile" >&2) || rc=$?
-  # Let the tee process substitution flush before reading its file.
-  wait
+  # stderr goes straight to a file and is replayed afterwards: a tee process
+  # substitution is not reliably flushed before the greps below read the file.
+  govulncheck "$@" 2>"$errfile" || rc=$?
+  cat "$errfile" >&2
   if [[ "$rc" -eq 0 || "$rc" -eq 3 ]]; then
     exit "$rc"
   fi

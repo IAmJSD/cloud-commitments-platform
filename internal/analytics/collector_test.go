@@ -299,6 +299,10 @@ func (m *mockConfigStore) CountPendingExecutionsForAccount(ctx context.Context, 
 	return 0, nil
 }
 
+func (m *mockConfigStore) CountLiveExecutionsForAccount(ctx context.Context, accountID string) (int, error) {
+	return 0, nil
+}
+
 func (m *mockConfigStore) ListPendingExecutionIDsForAccount(ctx context.Context, accountID string) ([]string, error) {
 	return nil, nil
 }
@@ -481,6 +485,9 @@ func (m *mockConfigStore) GetRecommendationsFreshness(_ context.Context) (*confi
 	return &config.RecommendationsFreshness{}, nil
 }
 func (m *mockConfigStore) SetRecommendationsCollectionError(_ context.Context, _ string) error {
+	return nil
+}
+func (m *mockConfigStore) SetRecommendationsCollectionPartial(_ context.Context, _ *config.RecommendationsCollectionPartial) error {
 	return nil
 }
 func (m *mockConfigStore) MarkCollectionStarted(_ context.Context) (string, bool, error) {
@@ -876,7 +883,7 @@ func (m *mockConfigStore) SaveLadderRun(_ context.Context, run *config.LadderRun
 	return run, nil
 }
 func (m *mockConfigStore) PlanAndSaveLadderRun(_ context.Context, _ string, _ time.Time, build config.LadderPlanBuilder) (*config.LadderRunDB, error) {
-	run, _, err := build(0)
+	run, _, err := build(nil)
 	return run, err
 }
 func (m *mockConfigStore) GetLadderRun(_ context.Context, _ string) (*config.LadderRunDB, error) {

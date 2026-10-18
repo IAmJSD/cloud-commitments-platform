@@ -43,8 +43,7 @@ var (
 	validDims = []string{dimTask, dimPass, dimDefault}
 	allEight  = []string{"analytics_collect", "cleanup", "collect_recommendations", "finalize_revocations",
 		"fire_scheduled_purchases", "process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}
-	reapAnalytics = []string{"analytics_collect", "reap_stuck_purchases"}
-	sevenGCP      = []string{"analytics_collect", "cleanup", "finalize_revocations", "fire_scheduled_purchases",
+	sevenGCP = []string{"analytics_collect", "cleanup", "finalize_revocations", "fire_scheduled_purchases",
 		"process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}
 )
 
@@ -53,11 +52,6 @@ var (
 // aws/cleanup-lambda and gcp/cleanup-function run cleanup outside the server
 // task and are not scanned, so cleanup shows as a gap on AWS and GCP.
 var knownGaps = map[string]map[string][]string{
-	"aws-lambda": {
-		dimTask:    {"cleanup", "finalize_revocations", "process_scheduled_purchases", "send_notifications"},
-		dimPass:    reapAnalytics,
-		dimDefault: reapAnalytics,
-	},
 	"aws-fargate": {dimTask: {"analytics_collect", "cleanup", "finalize_revocations",
 		"process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}},
 	"cloudformation": {dimTask: {"analytics_collect", "cleanup", "finalize_revocations",
@@ -135,6 +129,9 @@ var (
 	localRef = regexp.MustCompile(`\blocal\.(\w+)`)
 	// requestAttr is the single-line attribute that carries the request target.
 	requestAttr = regexp.MustCompile(`(?m)^\s*(?:uri|input|args)\s*=.*$`)
+	// sweepKeys matches the task keys of a `sweep_tasks` map: `for_each` targets
+	// carry `action = each.key`, so the literal is the map key.
+	sweepKeyRe = regexp.MustCompile(`(?m)^\s*(\w+)\s*=\s*\{`)
 	// literalRes are the task-name patterns of the contract test (schedulerRefs)
 	// plus the CloudFormation Input JSON.
 	literalRes = func() []*regexp.Regexp {
@@ -217,6 +214,15 @@ func wiredFrom(files map[string]string) (wired map[string]bool, unknown []string
 	}
 	all := strings.Join(stripped, "\n")
 	for _, src := range stripped {
+		for _, body := range blocks(src, `\bsweep_tasks\s*=\s*\{`) {
+			for _, m := range sweepKeyRe.FindAllStringSubmatch(body, -1) {
+				if _, err := server.ParseScheduledTaskType(m[1]); err != nil {
+					unknown = append(unknown, m[1])
+				} else {
+					wired[m[1]] = true
+				}
+			}
+		}
 		for _, scope := range schedulerScopes(src, all) {
 			for _, re := range literalRes {
 				for _, m := range re.FindAllStringSubmatch(scope, -1) {
@@ -372,6 +378,7 @@ func TestCheckerNegatives(t *testing.T) {
 		"job uri resolved through a local":               {aud + job("uri = local.aud"), []string{"collect_recommendations"}, nil},
 		"literal outside a scheduler block":              {"resource \"aws_lambda_permission\" \"p\" {\n" + finalize + "\n}\n", nil, nil},
 		"unknown task in a scheduler block":              {target(`input = jsonencode({ action = "bogus_task" })`), nil, []string{"bogus_task"}},
+		"sweep_tasks keys are wired":                     {"locals {\n  sweep_tasks = {\n    finalize_revocations = { rule = \"finalize\" }\n    bogus_task = { rule = \"x\" }\n  }\n}\n", []string{"finalize_revocations"}, []string{"bogus_task"}},
 		"CloudFormation rule input":                      {cfn("AWS::Events::Rule"), []string{"finalize_revocations"}, nil},
 		"CloudFormation literal outside a rule":          {cfn("AWS::Lambda::Function"), nil, nil},
 	} {

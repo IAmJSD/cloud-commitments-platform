@@ -227,12 +227,11 @@ func (h *Handler) extractBearerToken(req *events.LambdaFunctionURLRequest) strin
 
 // requiresCSRFValidation returns true for state-changing requests that need CSRF protection.
 //
-// The req parameter is used to tighten the CSRF exemption for token-based
-// approve/cancel/reject paths (issue #404): when the caller supplies both an
-// in-URL approval token AND a valid session bearer token, the request is
-// session-authenticated and CSRF protection must apply. When only the
-// in-URL token is present (pure email-link flow, no session), CSRF is skipped.
-func (h *Handler) requiresCSRFValidation(method, path string, req *events.LambdaFunctionURLRequest) bool {
+// It is only consulted for non-public paths: validateSecurityContext returns
+// before calling it whenever isPublicEndpoint(path) is true. AuthPublic routes
+// that read a session therefore enforce CSRF inside their own handlers, and
+// TestAuthPublicMoneyRoutes_SessionWithoutCSRFIsRefused checks that they do.
+func (h *Handler) requiresCSRFValidation(method, path string) bool {
 	// Only POST, PUT, DELETE need CSRF protection
 	if method != "POST" && method != "PUT" && method != "DELETE" {
 		return false
@@ -242,7 +241,7 @@ func (h *Handler) requiresCSRFValidation(method, path string, req *events.Lambda
 	//
 	// Note: /api/purchases/approve/ and /api/purchases/cancel/ are NOT listed
 	// here. Those routes are AuthPublic and listed in isPublicEndpoint(), so
-	// validateSecurity() short-circuits before requiresCSRFValidation() is
+	// validateSecurityContext() short-circuits before requiresCSRFValidation() is
 	// reached on the token-only (email-link) path. For the session-authed path
 	// (approvePurchaseViaSession / cancelPurchaseViaSession), CSRF is enforced
 	// directly inside those functions -- a blanket middleware exemption would
@@ -269,22 +268,6 @@ func (h *Handler) requiresCSRFValidation(method, path string, req *events.Lambda
 		"/api/auth/reset-password",
 		"/api/register": // POST /api/register (public registration, no session)
 		return false
-	}
-
-	// Token-based approve/cancel/reject paths are exempt ONLY when the request
-	// carries no session bearer token. If a session is present, the request is
-	// session-authenticated and standard CSRF protection applies (issue #404).
-	csrfExemptWhenTokenOnly := []string{
-		"/api/purchases/approve/",
-		"/api/purchases/cancel/",
-		"/api/ri-exchange/approve/",
-		"/api/ri-exchange/reject/",
-	}
-	for _, prefix := range csrfExemptWhenTokenOnly {
-		if strings.HasPrefix(path, prefix) {
-			// Only skip CSRF when there is no session token on the request.
-			return h.extractBearerToken(req) != ""
-		}
 	}
 
 	return true
@@ -535,15 +518,18 @@ func (h *Handler) checkRateLimitStrict(ctx context.Context, req *events.LambdaFu
 
 // requireMFASession is requireSession plus the "mfa" bucket applied per IP and
 // then per session user, both fail-closed, so a stolen session cannot reset its
-// guessing budget by rotating IPs (#94).
+// guessing budget by rotating IPs (#94). The session is checked first so
+// requests without a valid session are refused with 401 before they reach
+// either bucket and cannot spend the per-IP budget of users behind the same
+// NAT (#442).
 func (h *Handler) requireMFASession(ctx context.Context, req *events.LambdaFunctionURLRequest) (*Session, error) {
 	const endpoint = "mfa"
-	if err := h.checkRateLimitStrict(ctx, req, endpoint); err != nil {
-		return nil, err
-	}
 	session, err := h.requireSession(ctx, req)
 	if err != nil {
 		return nil, err
+	}
+	if limitErr := h.checkRateLimitStrict(ctx, req, endpoint); limitErr != nil {
+		return nil, limitErr
 	}
 	if h.rateLimiter == nil {
 		return session, nil

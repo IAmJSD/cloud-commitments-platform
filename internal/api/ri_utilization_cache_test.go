@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -328,5 +329,29 @@ func TestRIUtilizationCache_CorruptPayloadFallsThrough(t *testing.T) {
 	var round []recommendations.RIUtilization
 	if err := json.Unmarshal(entry.Payload, &round); err != nil {
 		t.Fatalf("stored payload still corrupt after upsert: %v", err)
+	}
+}
+
+// TestHandler_getRIUtilizationCache_FollowsHandlerLambdaMode guards issue
+// #110: the SWR gate must take the handler's configured Lambda mode
+// (HandlerConfig.IsLambda), not a live read of AWS_LAMBDA_RUNTIME_API. Each
+// case sets the environment to the opposite of the configured mode.
+func TestHandler_getRIUtilizationCache_FollowsHandlerLambdaMode(t *testing.T) {
+	for _, isLambda := range []bool{true, false} {
+		t.Run(fmt.Sprintf("isLambda=%t", isLambda), func(t *testing.T) {
+			env := ""
+			if !isLambda {
+				env = "127.0.0.1:9001"
+			}
+			t.Setenv("AWS_LAMBDA_RUNTIME_API", env)
+
+			h := NewHandler(HandlerConfig{CORSAllowedOrigin: "https://islambda.example.test", IsLambda: isLambda})
+			if got := h.IsLambda(); got != isLambda {
+				t.Fatalf("Handler.IsLambda() = %t, want %t", got, isLambda)
+			}
+			if got := h.getRIUtilizationCache().isLambda; got != isLambda {
+				t.Fatalf("RI utilization cache isLambda = %t, want %t (must follow HandlerConfig.IsLambda)", got, isLambda)
+			}
+		})
 	}
 }

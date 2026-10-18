@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -75,7 +76,11 @@ func (h *Handler) getLadderTimeline(ctx context.Context, req *events.LambdaFunct
 	if err != nil {
 		return nil, err
 	}
-	return scope.store.ListLadderTimeline(ctx, scope.accountID, scope.provider, scope.cursor)
+	page, err := scope.store.ListLadderTimeline(ctx, scope.accountID, scope.provider, scope.cursor)
+	if errors.Is(err, config.ErrLadderTimelineRate) {
+		return nil, NewClientError(500, "Ladder timeline contains a tranche with an unreadable commitment rate")
+	}
+	return page, err
 }
 
 func (h *Handler) getLadderTimelineRuns(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {

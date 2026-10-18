@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -127,4 +128,87 @@ func TestBackgroundCollectionAllowed(t *testing.T) {
 	derived, cancel := context.WithTimeout(WithBackgroundCollection(context.Background()), time.Minute)
 	defer cancel()
 	assert.True(t, BackgroundCollectionAllowed(derived))
+}
+
+// Pins the isLambda guard in maybeKickBackgroundRefresh.
+//
+// maybeKickBackgroundRefresh carries its own isLambda guard, separate from the
+// one in ListRecommendations, so a future caller that skips the outer check
+// still cannot start a refresh goroutine that freezes between Lambda
+// invocations (issue #962). Calling it directly is the only way to reach that
+// guard: through ListRecommendations the outer guard always returns first.
+//
+// The refresh's first store call (GetGlobalConfig inside
+// CollectRecommendations) signals started, then blocks until the test hands
+// it a value on release. The kick claims the collecting flag synchronously,
+// so a wrongly kicked refresh still holds the flag when it is checked.
+func TestMaybeKickBackgroundRefresh_LambdaGuard(t *testing.T) {
+	stale := func() *config.RecommendationsFreshness {
+		old := time.Now().Add(-72 * time.Hour)
+		return &config.RecommendationsFreshness{LastCollectedAt: &old}
+	}
+
+	t.Run("lambda never kicks", func(t *testing.T) {
+		mockStore, started, _ := blockingRefreshStore(t)
+		s := &Scheduler{config: mockStore, isLambda: true}
+
+		s.maybeKickBackgroundRefresh(stale(), time.Nanosecond)
+
+		// The guard returns before the synchronous CAS, so a kick would
+		// already hold the flag here; no wall-clock wait is needed.
+		assert.False(t, s.collecting.Load(), "the collecting flag was claimed on Lambda")
+		select {
+		case <-started:
+			t.Error("a background refresh reached the store on Lambda")
+		default:
+		}
+		mockStore.AssertNotCalled(t, "GetGlobalConfig", mock.Anything)
+	})
+
+	// Positive control on the same harness: the refresh must start, and its
+	// store call must still be blocked on release (flag held) until the test
+	// releases it. If the harness stops blocking, nothing receives on release
+	// and the send below times out, so the control fails every run.
+	t.Run("non-lambda kicks (control)", func(t *testing.T) {
+		mockStore, started, release := blockingRefreshStore(t)
+		s := &Scheduler{config: mockStore, isLambda: false}
+
+		s.maybeKickBackgroundRefresh(stale(), time.Nanosecond)
+
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("expected a background refresh on a non-Lambda runtime")
+		}
+		assert.True(t, s.collecting.Load(), "the refresh must hold the collecting flag while its store call is blocked")
+		select {
+		case release <- struct{}{}:
+		case <-time.After(2 * time.Second):
+			t.Fatal("the refresh's store call did not wait for release; the harness no longer blocks it")
+		}
+		require.Eventually(t, func() bool { return !s.collecting.Load() }, 2*time.Second, time.Millisecond,
+			"the refresh must release the collecting flag once its store call returns")
+	})
+}
+
+// blockingRefreshStore returns a store whose GetGlobalConfig, the refresh's
+// first store call, signals started and then waits for one value on release
+// (or for the test to end) before failing, which ends the refresh.
+func blockingRefreshStore(t *testing.T) (*MockConfigStore, <-chan struct{}, chan<- struct{}) {
+	t.Helper()
+	mockStore := new(MockConfigStore)
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+	mockStore.On("GetGlobalConfig", mock.Anything).
+		Run(func(mock.Arguments) {
+			started <- struct{}{}
+			select {
+			case <-release:
+			case <-done:
+			}
+		}).
+		Return(nil, errors.New("refresh started")).Maybe()
+	return mockStore, started, release
 }

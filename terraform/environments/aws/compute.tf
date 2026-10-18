@@ -84,6 +84,20 @@ module "compute_lambda" {
   enable_fire_scheduled_purchases_schedule = var.enable_fire_scheduled_purchases_schedule
   fire_scheduled_purchases_schedule        = var.fire_scheduled_purchases_schedule
 
+  # Server-task sweeps (process and notifications are opt-in)
+  enable_process_scheduled_purchases_schedule = var.enable_process_scheduled_purchases_schedule
+  process_scheduled_purchases_schedule        = var.process_scheduled_purchases_schedule
+  enable_send_notifications_schedule          = var.enable_send_notifications_schedule
+  send_notifications_schedule                 = var.send_notifications_schedule
+  enable_finalize_revocations_schedule        = var.enable_finalize_revocations_schedule
+  finalize_revocations_schedule               = var.finalize_revocations_schedule
+  enable_reap_stuck_purchases_schedule        = var.enable_reap_stuck_purchases_schedule
+  reap_stuck_purchases_schedule               = var.reap_stuck_purchases_schedule
+  enable_analytics_collect_schedule           = var.enable_analytics_collect_schedule
+  analytics_collect_schedule                  = var.analytics_collect_schedule
+  enable_cleanup_schedule                     = var.enable_cleanup_schedule
+  cleanup_schedule                            = var.cleanup_schedule
+
   # Additional environment variables
   archera_org_id             = var.archera_org_id
   archera_plan_id            = var.archera_plan_id
@@ -185,8 +199,10 @@ module "compute_fargate" {
     : var.fargate_certificate_arn
   )
 
-  # Health checks
-  health_check_path = "/health"
+  # Health checks. The ALB target group check admits traffic, so it uses the
+  # readiness endpoint: /ready answers 503 until the task has initialized
+  # (#647). The container liveness check stays on /health inside the module.
+  health_check_path = "/ready"
 
   # CORS
   allowed_origins = var.lambda_allowed_origins

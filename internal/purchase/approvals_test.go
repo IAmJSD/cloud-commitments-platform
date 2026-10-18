@@ -102,7 +102,7 @@ func TestManager_ApproveExecution_Success(t *testing.T) {
 	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-456")
 
-	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "")
+	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "", nil)
 	require.NoError(t, err)
 	store.AssertExpectations(t)
 	sender.AssertExpectations(t)
@@ -131,7 +131,7 @@ func TestManager_ApproveExecution_StampsApprovedBy(t *testing.T) {
 	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-456")
 
-	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "operator@example.com")
+	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "operator@example.com", nil)
 	require.NoError(t, err)
 
 	// Two SavePurchaseExecution calls land on the same pointer (the
@@ -166,7 +166,7 @@ func TestManager_ApproveExecution_NotifiedStatus(t *testing.T) {
 	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-456")
 
-	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "")
+	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "", nil)
 	require.NoError(t, err)
 	store.AssertExpectations(t)
 	sender.AssertExpectations(t)
@@ -185,7 +185,7 @@ func TestManager_ApproveExecution_InvalidToken(t *testing.T) {
 
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
 
-	_, err := manager.ApproveExecution(ctx, "exec-123", "invalid-token", "")
+	_, err := manager.ApproveExecution(ctx, "exec-123", "invalid-token", "", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid approval token")
 	// Critically: TransitionExecutionStatus and SavePurchaseExecution must
@@ -207,7 +207,7 @@ func TestManager_ApproveExecution_EmptyToken(t *testing.T) {
 	}
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
 
-	_, err := manager.ApproveExecution(ctx, "exec-123", "", "")
+	_, err := manager.ApproveExecution(ctx, "exec-123", "", "", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid approval token")
 	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
@@ -219,7 +219,7 @@ func TestManager_ApproveExecution_NotFound(t *testing.T) {
 
 	store.On("GetExecutionByID", ctx, "exec-123").Return(nil, fmt.Errorf("%w: execution exec-123", config.ErrNotFound))
 
-	_, err := manager.ApproveExecution(ctx, "exec-123", "token", "")
+	_, err := manager.ApproveExecution(ctx, "exec-123", "token", "", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "execution not found")
 	store.AssertExpectations(t)
@@ -231,7 +231,7 @@ func TestManager_ApproveExecution_GetError(t *testing.T) {
 
 	store.On("GetExecutionByID", ctx, "exec-123").Return(nil, errors.New("database error"))
 
-	_, err := manager.ApproveExecution(ctx, "exec-123", "token", "")
+	_, err := manager.ApproveExecution(ctx, "exec-123", "token", "", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to get execution")
 	store.AssertExpectations(t)
@@ -255,7 +255,7 @@ func TestManager_ApproveExecution_TransitionFails(t *testing.T) {
 	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil)).
 		Return(nil, errors.New(`execution exec-123 cannot transition from "canceled" to "approved"`))
 
-	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "")
+	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot transition")
 	// Execute chain must not run after a failed transition.
@@ -286,7 +286,7 @@ func TestManager_ApproveAndExecute_EmptyPlanID(t *testing.T) {
 	sender.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
 	store.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
-	_, _, err := manager.ApproveAndExecute(ctx, "exec-direct-1", "operator@example.com", nil)
+	_, _, err := manager.ApproveAndExecute(ctx, "exec-direct-1", "operator@example.com", nil, nil)
 	require.NoError(t, err)
 
 	// Crucially, the empty PlanID must never reach the UUID-typed store columns.
@@ -330,7 +330,7 @@ func TestManager_ApproveAndExecute_SkipsTokenCheck(t *testing.T) {
 		mock.MatchedBy(func(actor *string) bool { return actor != nil && *actor == actorUUID })).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-789")
 
-	_, _, err := manager.ApproveAndExecute(ctx, "exec-456", "session-user@example.com", &actorUUID)
+	_, _, err := manager.ApproveAndExecute(ctx, "exec-456", "session-user@example.com", &actorUUID, nil)
 	require.NoError(t, err)
 	require.NotNil(t, updated.ApprovedBy)
 	assert.Equal(t, "session-user@example.com", *updated.ApprovedBy)
@@ -363,7 +363,7 @@ func TestManager_RunPlannedPurchaseNow_ExecutesFromPaused(t *testing.T) {
 	store.On("TransitionExecutionStatus", ctx, "exec-run-now", []string{"pending", "notified", "paused"}, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-run-now")
 
-	final, revocationToken, err := manager.RunPlannedPurchaseNow(ctx, "exec-run-now", "operator@example.com", nil)
+	final, revocationToken, err := manager.RunPlannedPurchaseNow(ctx, "exec-run-now", "operator@example.com", nil, nil)
 	require.NoError(t, err)
 	// Run-now shares the execute funnel's revocation-token rotation (#103).
 	require.NotEmpty(t, revocationToken)
@@ -390,7 +390,7 @@ func TestManager_RunPlannedPurchaseNow_LostCASReturnsError(t *testing.T) {
 	store.On("TransitionExecutionStatus", ctx, "exec-race", []string{"pending", "notified", "paused"}, "running", (*string)(nil)).
 		Return(nil, config.ErrExecutionNotInExpectedStatus)
 
-	final, _, err := manager.RunPlannedPurchaseNow(ctx, "exec-race", "operator@example.com", nil)
+	final, _, err := manager.RunPlannedPurchaseNow(ctx, "exec-race", "operator@example.com", nil, nil)
 	require.Error(t, err)
 	assert.Nil(t, final)
 	assert.ErrorIs(t, err, config.ErrExecutionNotInExpectedStatus)
@@ -416,7 +416,7 @@ func TestManager_DirectExecute_StampsAuditFieldsAfterClaim(t *testing.T) {
 		mock.MatchedBy(func(actor *string) bool { return actor != nil && *actor == actorUUID })).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-direct-stamp")
 
-	final, _, err := manager.DirectExecute(ctx, "exec-direct-stamp", "session-user@example.com", &actorUUID)
+	final, _, err := manager.DirectExecute(ctx, "exec-direct-stamp", "session-user@example.com", &actorUUID, nil)
 	require.NoError(t, err)
 	assert.Same(t, updated, final)
 	require.NotNil(t, final.ExecutedAt)
@@ -436,7 +436,7 @@ func TestManager_DirectExecute_RefusedLeavesNoExecutedAt(t *testing.T) {
 	store.On("TransitionExecutionStatus", ctx, "exec-direct-lost", approveFromStatuses, "running", (*string)(nil)).
 		Return(nil, config.ErrExecutionNotInExpectedStatus)
 
-	final, _, err := manager.DirectExecute(ctx, "exec-direct-lost", "operator@example.com", nil)
+	final, _, err := manager.DirectExecute(ctx, "exec-direct-lost", "operator@example.com", nil, nil)
 	require.ErrorIs(t, err, config.ErrExecutionNotInExpectedStatus)
 	assert.Nil(t, final)
 	store.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
@@ -460,7 +460,7 @@ func TestManager_ApproveAndExecute_ReturnsRowOnExecutionFailure(t *testing.T) {
 	store.On("TransitionExecutionStatus", ctx, "exec-fail-after-claim", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	store.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
-	final, token, err := manager.ApproveAndExecute(ctx, "exec-fail-after-claim", "operator@example.com", nil)
+	final, token, err := manager.ApproveAndExecute(ctx, "exec-fail-after-claim", "operator@example.com", nil, nil)
 	require.Error(t, err)
 	assert.Empty(t, token)
 	require.NotNil(t, final)
@@ -516,7 +516,7 @@ func TestManager_ApproveAndExecute_FourEyesOn_DeniesSelfApprove(t *testing.T) {
 	store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOnForManager(), nil)
 	store.On("GetExecutionByID", ctx, "exec-direct-self").Return(execution, nil)
 
-	_, _, err := manager.ApproveAndExecute(ctx, "exec-direct-self", creatorEmail, &creatorID)
+	_, _, err := manager.ApproveAndExecute(ctx, "exec-direct-self", creatorEmail, &creatorID, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "4-eyes mode requires a different approver")
 	store.AssertNotCalled(t, "TransitionExecutionStatus",
@@ -551,7 +551,7 @@ func TestManager_ApproveAndExecute_FourEyesOn_AllowsDifferentApprover(t *testing
 	store.On("TransitionExecutionStatus", ctx, "exec-direct-diff", approveFromStatuses, "running", &approverUUID).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-fourEyes")
 
-	_, _, err := manager.ApproveAndExecute(ctx, "exec-direct-diff", approverEmail, &approverUUID)
+	_, _, err := manager.ApproveAndExecute(ctx, "exec-direct-diff", approverEmail, &approverUUID, nil)
 	require.NoError(t, err)
 	require.NotNil(t, updated.ApprovedBy)
 	assert.Equal(t, approverEmail, *updated.ApprovedBy)
@@ -585,7 +585,7 @@ func TestManager_ApproveAndExecute_FourEyesOn_PerUserAPIKey_DeniesSelfExecute(t 
 	// what internal/api's fourEyesActorIdentity would pass for a per-user API
 	// key session; transitionedBy is the same UUID, populated regardless of
 	// Email by validUUIDPtrOrNil(&session.UserID).
-	_, _, err := manager.ApproveAndExecute(ctx, "exec-apikey-self", creatorID, &creatorID)
+	_, _, err := manager.ApproveAndExecute(ctx, "exec-apikey-self", creatorID, &creatorID, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "4-eyes mode requires a different approver")
 	store.AssertNotCalled(t, "TransitionExecutionStatus",
@@ -606,7 +606,7 @@ func TestManager_ApproveAndExecute_FourEyesOn_NullCreatorDenied(t *testing.T) {
 	store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOnForManager(), nil)
 	store.On("GetExecutionByID", ctx, "exec-legacy").Return(execution, nil)
 
-	_, _, err := manager.ApproveAndExecute(ctx, "exec-legacy", "someone@example.com", nil)
+	_, _, err := manager.ApproveAndExecute(ctx, "exec-legacy", "someone@example.com", nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "predates the dual-control feature")
 	store.AssertExpectations(t)
@@ -624,7 +624,7 @@ func TestManager_ApproveAndExecute_FourEyesOn_EmptyActorDenied(t *testing.T) {
 	store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOnForManager(), nil)
 	store.On("GetExecutionByID", ctx, "exec-no-actor").Return(execution, nil)
 
-	_, _, err := manager.ApproveAndExecute(ctx, "exec-no-actor", "", nil)
+	_, _, err := manager.ApproveAndExecute(ctx, "exec-no-actor", "", nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no approver identity could be determined")
 	store.AssertExpectations(t)
@@ -648,7 +648,7 @@ func TestManager_ApproveAndExecute_FourEyesOff_AllowsSelfApprove(t *testing.T) {
 	store.On("TransitionExecutionStatus", ctx, "exec-mode-off", approveFromStatuses, "running", &creatorID).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-fourEyes")
 
-	_, _, err := manager.ApproveAndExecute(ctx, "exec-mode-off", "creator@example.com", &creatorID)
+	_, _, err := manager.ApproveAndExecute(ctx, "exec-mode-off", "creator@example.com", &creatorID, nil)
 	require.NoError(t, err)
 	store.AssertNotCalled(t, "GetExecutionByID", mock.Anything, mock.Anything)
 	store.AssertNotCalled(t, "GetUserEmailByID", mock.Anything, mock.Anything)
@@ -681,7 +681,7 @@ func TestManager_ApproveExecution_FourEyesOn_SQSActorEqualsCreator_Denied(t *tes
 	store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOnForManager(), nil)
 	store.On("GetUserEmailByID", ctx, creatorID).Return(creatorEmail, nil)
 
-	_, err := manager.ApproveExecution(ctx, "exec-sqs-self", "valid-token", creatorEmail)
+	_, err := manager.ApproveExecution(ctx, "exec-sqs-self", "valid-token", creatorEmail, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "4-eyes mode requires a different approver")
 	store.AssertNotCalled(t, "TransitionExecutionStatus",
@@ -719,7 +719,7 @@ func TestManager_ApproveExecution_FourEyesOn_DifferentActor_Allowed(t *testing.T
 	store.On("TransitionExecutionStatus", ctx, "exec-sqs-diff", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-fourEyes")
 
-	_, err := manager.ApproveExecution(ctx, "exec-sqs-diff", "valid-token", "approver@example.com")
+	_, err := manager.ApproveExecution(ctx, "exec-sqs-diff", "valid-token", "approver@example.com", nil)
 	require.NoError(t, err)
 	require.NotNil(t, updated.ApprovedBy)
 	assert.Equal(t, "approver@example.com", *updated.ApprovedBy)
@@ -760,7 +760,7 @@ func TestManager_ApproveExecution_FourEyesOn_UnresolvableCreator_Denied(t *testi
 		// pgx.ErrNoRows -- a deleted/nonexistent creator user row.
 		store.On("GetUserEmailByID", ctx, creatorID).Return("", nil)
 
-		_, err := manager.ApproveExecution(ctx, "exec-sqs-unresolvable", "valid-token", "approver@example.com")
+		_, err := manager.ApproveExecution(ctx, "exec-sqs-unresolvable", "valid-token", "approver@example.com", nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "creator's account could not be resolved")
 		store.AssertNotCalled(t, "TransitionExecutionStatus",
@@ -777,7 +777,7 @@ func TestManager_ApproveExecution_FourEyesOn_UnresolvableCreator_Denied(t *testi
 		store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOnForManager(), nil)
 		store.On("GetUserEmailByID", ctx, creatorID).Return("", lookupErr)
 
-		_, err := manager.ApproveExecution(ctx, "exec-sqs-unresolvable", "valid-token", "approver@example.com")
+		_, err := manager.ApproveExecution(ctx, "exec-sqs-unresolvable", "valid-token", "approver@example.com", nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to resolve creator identity")
 		store.AssertNotCalled(t, "TransitionExecutionStatus",
@@ -1027,7 +1027,7 @@ func TestManager_ApproveExecution_ExpiredToken(t *testing.T) {
 	}
 	store.On("GetExecutionByID", ctx, "exec-expired").Return(execution, nil)
 
-	_, err := manager.ApproveExecution(ctx, "exec-expired", "valid-token", "")
+	_, err := manager.ApproveExecution(ctx, "exec-expired", "valid-token", "", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expired")
 	// Token validation passes but the expiry check fires — TransitionExecutionStatus
@@ -1062,7 +1062,7 @@ func TestManager_ApproveExecution_ValidTokenWithinTTL(t *testing.T) {
 	store.On("TransitionExecutionStatus", ctx, "exec-live", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-live")
 
-	_, err := manager.ApproveExecution(ctx, "exec-live", "valid-token", "")
+	_, err := manager.ApproveExecution(ctx, "exec-live", "valid-token", "", nil)
 	require.NoError(t, err)
 	store.AssertExpectations(t)
 }
@@ -1093,7 +1093,7 @@ func TestManager_ApproveExecution_NilExpiresAt_LegacyRow(t *testing.T) {
 	store.On("TransitionExecutionStatus", ctx, "exec-legacy", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-legacy")
 
-	_, err := manager.ApproveExecution(ctx, "exec-legacy", "valid-token", "")
+	_, err := manager.ApproveExecution(ctx, "exec-legacy", "valid-token", "", nil)
 	require.NoError(t, err)
 	store.AssertExpectations(t)
 }
@@ -1119,7 +1119,7 @@ func TestManager_ApproveExecution_NonAWSOrphanReturnsError(t *testing.T) {
 	}
 	store.On("GetExecutionByID", ctx, "exec-orphan").Return(execution, nil)
 
-	_, err := manager.ApproveExecution(ctx, "exec-orphan", "valid-token", "")
+	_, err := manager.ApproveExecution(ctx, "exec-orphan", "valid-token", "", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no longer exists")
 	assert.Contains(t, err.Error(), "azure")
@@ -1155,7 +1155,7 @@ func TestManager_ApproveExecution_AWSOrphanFallsThrough(t *testing.T) {
 	store.On("TransitionExecutionStatus", ctx, "exec-aws-ambient", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-aws")
 
-	_, err := manager.ApproveExecution(ctx, "exec-aws-ambient", "valid-token", "")
+	_, err := manager.ApproveExecution(ctx, "exec-aws-ambient", "valid-token", "", nil)
 	require.NoError(t, err)
 	store.AssertExpectations(t)
 	sender.AssertExpectations(t)
@@ -1275,7 +1275,7 @@ func TestApproveExecution_MintsRevocationToken(t *testing.T) {
 	store.On("TransitionExecutionStatus", ctx, "exec-rotate", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-rotate")
 
-	_, err := manager.ApproveExecution(ctx, "exec-rotate", "pre-rotate-token", "")
+	_, err := manager.ApproveExecution(ctx, "exec-rotate", "pre-rotate-token", "", nil)
 	require.NoError(t, err)
 
 	// After approve, rotateApprovalToken must have stamped a fresh token onto
@@ -1354,4 +1354,24 @@ func TestMintRevocationToken_PersistsFreshToken(t *testing.T) {
 	assert.NotEmpty(t, execution.ApprovalToken)
 	assert.NotEqual(t, "old-approval-token", execution.ApprovalToken)
 	assert.NotNil(t, execution.ApprovalTokenExpiresAt)
+}
+
+// TestManager_ApproveAndExecute_FourEyesOn_SystemCreated pins the #233 rule for
+// scheduler-minted rows (identified approver passes, anonymous and creator denied).
+func TestManager_ApproveAndExecute_FourEyesOn_SystemCreated(t *testing.T) {
+	ctx := context.Background()
+	creatorID, approverID := "user-creator", "user-approver"
+	gate := func(creator *string, email string, userID *string) error {
+		manager, store, _ := newApproveManager(t)
+		execution := fourEyesManagerExec("exec-sys", creator)
+		execution.CreatedBySystem = true
+		store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOnForManager(), nil)
+		store.On("GetExecutionByID", ctx, "exec-sys").Return(execution, nil)
+		return manager.enforceFourEyesPolicy(ctx, "exec-sys", email, userID)
+	}
+
+	require.NoError(t, gate(nil, "approver@example.com", nil))
+	require.NoError(t, gate(nil, "", &approverID))
+	require.ErrorIs(t, gate(nil, "  ", nil), ErrFourEyesDenied, "anonymous actor")
+	require.ErrorIs(t, gate(&creatorID, "", &creatorID), ErrFourEyesDenied, "flag must not override a creator")
 }

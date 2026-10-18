@@ -28,12 +28,3 @@ type APIKeyInfo struct { //nolint:revive // exported: doc comment style intentio
 	Permissions []Permission `json:"permissions,omitempty"`
 	IsActive    bool         `json:"is_active"`
 }
-
-// toAPIPermissions returns a copy of perms as a new slice.
-// The parameter is already the concrete type; the copy makes mutation-safe
-// return values for callers that may hold the originating slice.
-func toAPIPermissions(perms []Permission) []Permission {
-	out := make([]Permission, len(perms))
-	copy(out, perms)
-	return out
-}

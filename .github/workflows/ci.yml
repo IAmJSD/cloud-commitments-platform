@@ -55,6 +55,40 @@ jobs:
           version: v2.10.1
           install-only: true
 
+      - name: Verify golangci-lint config against vendored schema
+        # `golangci-lint config verify` downloads its JSON schema from
+        # golangci-lint.run by default, with a hard-coded 2s HTTP timeout, and
+        # that fetch timing out failed this job at random (#977). The schema is
+        # vendored instead and passed through the (hidden) --schema flag, so
+        # the config is still validated on every run, with no network access.
+        #
+        # Vendored file: .github/golangci-lint/golangci.v<major>.<minor>.jsonschema.json
+        #   source:  https://golangci-lint.run/jsonschema/golangci.v2.10.jsonschema.json
+        #            (byte-identical to jsonschema/golangci.next.jsonschema.json
+        #            at golangci-lint tag v2.10.1, the copy this file came from)
+        #   sha256:  GOLANGCI_LINT_SCHEMA_SHA256 below
+        #
+        # When bumping `version:` above to a new minor, this step fails until
+        # the matching schema is vendored. To update: download the URL above
+        # with the new minor, save it under the new file name, delete the old
+        # one, and set GOLANGCI_LINT_SCHEMA_SHA256 to its sha256sum.
+        env:
+          GOLANGCI_LINT_SCHEMA_SHA256: '692e8da79dc1f110a4a4f3bb841b26ed44e461d3503678eaaae90ae8876e3403'
+        run: |
+          set -euo pipefail
+          version=$(golangci-lint version --short)
+          minor="${version#v}"
+          minor="${minor%.*}"
+          schema=".github/golangci-lint/golangci.v${minor}.jsonschema.json"
+          if [ ! -f "$schema" ]; then
+            echo "::error::no vendored schema for golangci-lint ${version}: expected ${schema} (see the update steps in ci.yml)"
+            exit 1
+          fi
+          echo "${GOLANGCI_LINT_SCHEMA_SHA256}  ${schema}" | sha256sum -c -
+          # One check covers both modules: tests/e2e has no config of its own,
+          # and golangci-lint finds the root .golangci.yml from there too.
+          golangci-lint config verify --schema "file://${PWD}/${schema}"
+
       - name: Run golangci-lint
         run: |
           set -uo pipefail
@@ -67,8 +101,7 @@ jobs:
             if [ "$mod" = "tests/e2e" ]; then
               args+=(--build-tags=e2e)
             fi
-            if ! (cd "$mod" && golangci-lint config verify && \
-                  golangci-lint "${args[@]}" ./...); then
+            if ! (cd "$mod" && golangci-lint "${args[@]}" ./...); then
               status=1
             fi
           done
@@ -397,10 +430,10 @@ jobs:
           DB_PASSWORD: test_password  # CI-only throwaway password — not used in any real environment
         run: |
           if [ -d "internal/database/postgres/migrations" ]; then
-            # Percent-encode the password: it may contain @ : / ? # % or spaces.
-            ENCODED_PASSWORD=$(printf '%s' "$DB_PASSWORD" | jq -sRr @uri)
-            migrate -path internal/database/postgres/migrations \
-              -database "pgx5://${DB_USER}:${ENCODED_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=disable" \
+            # The password goes through PGPASSWORD, not the URL, so it needs no
+            # encoding whatever it contains (@ : / ? # % or spaces).
+            PGPASSWORD="$DB_PASSWORD" migrate -path internal/database/postgres/migrations \
+              -database "pgx5://${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=disable" \
               up
           fi
 
@@ -579,6 +612,27 @@ jobs:
             terraform -chdir="$d" fmt -check -recursive
             terraform -chdir="$d" test
           done
+
+      # The post-deploy /health gate and the GCP uptime check must read the
+      # body's top-level "status", not just the 200 (#649).
+      - name: Test /health gate modules
+        if: matrix.cloud == 'gcp'
+        run: |
+          for d in terraform/modules/deployment-checks terraform/modules/monitoring/gcp; do
+            terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
+            terraform -chdir="$d" fmt -check -recursive
+            terraform -chdir="$d" test
+          done
+
+      - name: Test CI/CD trust (immutable ids)
+        # Skips a cloud until it has a tests dir. The lock file is gitignored,
+        # so no -lockfile=readonly.
+        run: |
+          d=terraform/environments/${{ matrix.cloud }}/ci-cd-permissions
+          if [ -d "$d/tests" ]; then
+            terraform -chdir="$d" init -backend=false -input=false
+            terraform -chdir="$d" test
+          fi
 
       - name: Terraform Init
         run: |

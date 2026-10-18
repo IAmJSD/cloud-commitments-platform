@@ -216,9 +216,20 @@ variable "deploy_kubernetes_resources" {
 # ==============================================
 
 variable "health_check_path" {
-  description = "HTTP path for health checks"
+  description = "HTTP path for the liveness probe. /health answers 200 while the process is alive, even before initialization completes, so a slow init does not get the pod restarted."
   type        = string
   default     = "/health"
+}
+
+variable "readiness_probe_path" {
+  description = "HTTP path for the readiness probe (traffic admission). /ready answers 503 until the replica has completed initialization, keeping cold pods out of the Service endpoints (#648)."
+  type        = string
+  default     = "/ready"
+
+  validation {
+    condition     = startswith(var.readiness_probe_path, "/")
+    error_message = "readiness_probe_path must be an absolute HTTP path starting with \"/\"."
+  }
 }
 
 variable "health_check_port" {

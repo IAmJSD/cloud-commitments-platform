@@ -316,19 +316,23 @@ export function computeEffectiveSavingsPct(rec: Recommendation): number | null {
 }
 
 /**
- * Network-fetching wrapper. Fetches `/api/purchases/{id}` + the
+ * Network-fetching wrapper. Fetches `/api/purchases/{id}` (or, with an
+ * approval token, `/api/purchases/approve/{id}/details`) + the
  * accounts list in parallel, builds the rich body, and returns it.
  * Rejects when the purchase details fail to load or carry no
  * recommendations; callers must then refuse to offer Approve.
  */
-export async function buildApprovalDetailsBody(executionId: string): Promise<HTMLElement> {
+export async function buildApprovalDetailsBody(executionId: string, approvalToken?: string): Promise<HTMLElement> {
   // Fetch purchase details, account list, and public info in parallel.
   // listAccounts and getPublicInfo are caught inline so the modal still
   // renders the full details when either endpoint is unreachable; the
   // per-rec table degrades gracefully. console.warn keeps failures
   // traceable rather than silently dropping them.
   const [details, accounts, deploymentInfo] = await Promise.all([
-    api.getPurchaseDetails(executionId),
+    // The email deep link carries a token, so an approver authorized by
+    // the account's contact email can load the details without
+    // view:purchases (issue #529).
+    approvalToken ? api.getApprovalDetails(executionId, approvalToken) : api.getPurchaseDetails(executionId),
     api.listAccounts().catch((err) => {
       console.warn('Failed to load accounts for approval modal — falling back to UUID-prefixed labels:', err);
       return [] as CloudAccount[];
@@ -351,10 +355,10 @@ export async function buildApprovalDetailsBody(executionId: string): Promise<HTM
   return renderApprovalDetailsBody(details, accountsById, hostAWSAccountID);
 }
 
-/** True for a 403/404 on the details fetch: retrying cannot succeed. */
+/** True for a 403/404/410 on the details fetch: retrying cannot succeed. */
 export function isPermanentDetailsError(err: unknown): boolean {
   const status = (err as { status?: number } | null)?.status;
-  return status === 403 || status === 404;
+  return status === 403 || status === 404 || status === 410;
 }
 
 export function approvalDetailsUnavailableMessage(err: unknown): string {
@@ -366,6 +370,9 @@ export function approvalDetailsUnavailableMessage(err: unknown): string {
   }
   if (status === 404) {
     return `${base} The purchase was not found or is outside your account access.`;
+  }
+  if (status === 410) {
+    return `${base} The approval link has expired.`;
   }
   return base;
 }

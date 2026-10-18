@@ -68,11 +68,12 @@ func TestValidateSecurity_UnauthenticatedDeploymentInfoRejectedByMiddleware(t *t
 	handler := &Handler{apiKey: "secret-key"}
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{}}
 
-	resp := handler.validateSecurity(context.Background(), req, "GET", "/api/info/deployment", map[string]string{})
+	_, resp := handler.validateSecurityContext(context.Background(), req, "GET", "/api/info/deployment", map[string]string{})
 	require.NotNil(t, resp, "middleware must refuse /api/info/deployment itself, not rely on Router.Route")
 	assert.Equal(t, 401, resp.StatusCode)
 
-	assert.Nil(t, handler.validateSecurity(context.Background(), req, "GET", "/api/info", map[string]string{}))
+	_, resp = handler.validateSecurityContext(context.Background(), req, "GET", "/api/info", map[string]string{})
+	assert.Nil(t, resp)
 }
 
 func TestHandler_authenticate(t *testing.T) {
@@ -324,7 +325,7 @@ func TestHandler_requiresCSRFValidation_ExactMatch(t *testing.T) {
 	for _, tt := range tests {
 		name := tt.method + " " + tt.path
 		t.Run(name, func(t *testing.T) {
-			result := handler.requiresCSRFValidation(tt.method, tt.path, nil)
+			result := handler.requiresCSRFValidation(tt.method, tt.path)
 			assert.Equal(t, tt.requiresCSRF, result)
 		})
 	}
@@ -624,7 +625,7 @@ func TestApproveRIExchange_CSRFFailureDoesNotFallThroughToToken(t *testing.T) {
 // a fix that also breaks the happy path.
 func TestApproveRIExchangeViaSession_PassesCSRF(t *testing.T) {
 	ctx := context.Background()
-	id := "550e8400-e29b-41d4-a716-446655440021"
+	id := "550e8400-e29b-41d4-a716-446655440022"
 	creatorID := "creator-uuid"
 
 	mockStore := new(MockConfigStore)
@@ -736,61 +737,6 @@ func TestTokenApprove_SessionRequiresCSRF(t *testing.T) {
 	})
 }
 
-// Regression test for #404: pins requiresCSRFValidation's own per-path
-// decision for the approve/cancel/reject paths.
-//
-// IMPORTANT SCOPE LIMIT (issue #1757): this calls requiresCSRFValidation
-// directly, bypassing validateSecurityContext's isPublicEndpoint gate. Every
-// path in tokenPaths below is registered AuthPublic in router.go, so in the
-// real request path isPublicEndpoint short-circuits BEFORE
-// requiresCSRFValidation is ever reached -- this function's return value for
-// these four paths is never actually consulted by the live dispatch. A
-// passing assertion here is NOT proof that CSRF is enforced end-to-end; it
-// was misread as exactly that for approveRIExchangeViaSession, which had no
-// validateCSRF call of its own until this issue. The end-to-end guarantee
-// for a given AuthPublic route comes only from that route's handler calling
-// h.validateCSRF directly (see TestApproveViaSession_RequiresCSRF /
-// TestCancelViaSession_RequiresCSRF / TestApproveRIExchangeViaSession_
-// RequiresCSRF, which drive the real handler.approvePurchase /
-// cancelPurchase / approveRIExchange entry points instead).
-//
-// Kept rather than deleted: requiresCSRFValidation's per-path table is real
-// logic that would matter again if any of these routes ever stopped being
-// AuthPublic, and this is the only test that pins it. Deleting it would
-// trade a mislabeled test for no coverage at all; the comment above is the
-// fix for the mislabeling.
-func TestRequiresCSRFValidation_TokenBasedPathsWithSession(t *testing.T) {
-	h := &Handler{}
-
-	tokenOnlyReq := &events.LambdaFunctionURLRequest{
-		Headers: map[string]string{},
-	}
-	sessionReq := &events.LambdaFunctionURLRequest{
-		Headers: map[string]string{
-			"Authorization": "Bearer some-session-token",
-		},
-	}
-
-	tokenPaths := []string{
-		"/api/purchases/approve/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-		"/api/purchases/cancel/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-		"/api/ri-exchange/approve/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-		"/api/ri-exchange/reject/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
-	}
-
-	for _, path := range tokenPaths {
-		// Token-only (no session): CSRF should NOT be required.
-		if got := h.requiresCSRFValidation("POST", path, tokenOnlyReq); got {
-			t.Errorf("path %s with no session: expected requiresCSRFValidation=false (token-only flow), got true (regression of #404)", path)
-		}
-
-		// Session present: CSRF MUST be required (issue #404).
-		if got := h.requiresCSRFValidation("POST", path, sessionReq); !got {
-			t.Errorf("path %s with session: expected requiresCSRFValidation=true (session flow requires CSRF), got false (regression of #404)", path)
-		}
-	}
-}
-
 // Regression test for #1017: /api/registrations/* admin routes must require CSRF.
 // Previously the csrfExemptAlways list contained "/api/register" matched with
 // strings.HasPrefix, which also matched /api/registrations/<id>/approve|reject|delete.
@@ -798,11 +744,6 @@ func TestRequiresCSRFValidation_TokenBasedPathsWithSession(t *testing.T) {
 // an enabled cloud account and stores attacker-supplied credentials.
 func TestRequiresCSRFValidation_RegistrationsAdminRoutesAreNotExempt(t *testing.T) {
 	h := &Handler{}
-	sessionReq := &events.LambdaFunctionURLRequest{
-		Headers: map[string]string{
-			"Authorization": "Bearer some-session-token",
-		},
-	}
 
 	adminRoutes := []struct {
 		method string
@@ -814,7 +755,7 @@ func TestRequiresCSRFValidation_RegistrationsAdminRoutesAreNotExempt(t *testing.
 	}
 
 	for _, tc := range adminRoutes {
-		got := h.requiresCSRFValidation(tc.method, tc.path, sessionReq)
+		got := h.requiresCSRFValidation(tc.method, tc.path)
 		if !got {
 			t.Errorf("admin route %s %s: expected requiresCSRFValidation=true (must be CSRF-protected, regression of #1017), got false",
 				tc.method, tc.path)
@@ -823,15 +764,10 @@ func TestRequiresCSRFValidation_RegistrationsAdminRoutesAreNotExempt(t *testing.
 }
 
 // Regression guard: unconditionally-exempt paths (login, setup-admin, etc.) must
-// remain exempt regardless of whether a session is present.
+// stay exempt. The predicate no longer looks at the request, so a session
+// cannot change this.
 func TestRequiresCSRFValidation_AlwaysExemptPaths(t *testing.T) {
 	h := &Handler{}
-
-	sessionReq := &events.LambdaFunctionURLRequest{
-		Headers: map[string]string{
-			"Authorization": "Bearer some-session-token",
-		},
-	}
 
 	alwaysExempt := []string{
 		"/api/auth/login",
@@ -842,8 +778,8 @@ func TestRequiresCSRFValidation_AlwaysExemptPaths(t *testing.T) {
 	}
 
 	for _, path := range alwaysExempt {
-		if got := h.requiresCSRFValidation("POST", path, sessionReq); got {
-			t.Errorf("always-exempt path %s: expected requiresCSRFValidation=false even with session, got true", path)
+		if got := h.requiresCSRFValidation("POST", path); got {
+			t.Errorf("always-exempt path %s: expected requiresCSRFValidation=false, got true", path)
 		}
 	}
 }

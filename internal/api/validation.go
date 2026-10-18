@@ -150,6 +150,25 @@ func validateEmailFormat(email string) error {
 	return nil
 }
 
+// namedField pairs a request field's JSON name with its value, for
+// validateNoControlChars.
+type namedField struct{ name, value string }
+
+// validateNoControlChars returns a 400 naming the first field whose value
+// holds a control character (C0 such as CR, LF and tab, DEL, or C1). Account
+// names and external IDs are single-line identifiers that the federation IaC
+// templates print on shell and HCL comment lines, where a line break would
+// end the comment and run the rest as code (#970). They are rejected rather
+// than stripped, so a stored identifier is never silently changed.
+func validateNoControlChars(fields ...namedField) error {
+	for _, f := range fields {
+		if strings.IndexFunc(f.value, unicode.IsControl) >= 0 {
+			return NewClientError(400, f.name+" must not contain control characters such as line breaks or tabs")
+		}
+	}
+	return nil
+}
+
 // credentialPayloadSchema defines the per-credential-type required keys and
 // optional keys. Any payload key outside the union of required+optional is
 // rejected. Required keys must be non-empty strings. The schemas mirror what

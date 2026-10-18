@@ -36,8 +36,8 @@ func TestPostgresStoreDB_PlanAndSaveSettledTerm(t *testing.T) {
 	planned := func() float64 {
 		t.Helper()
 		var got float64
-		_, err := store.PlanAndSaveLadderRun(ctx, cfgID, asOf, func(inFlight float64) (*LadderRunDB, []LadderTrancheDB, error) {
-			got = inFlight
+		_, err := store.PlanAndSaveLadderRun(ctx, cfgID, asOf, func(rows []LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) {
+			got = mustOnDemand(t, rows)
 			return lockTestRunAt(cfgID, asOf), nil, nil
 		})
 		require.NoError(t, err)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/big"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,9 +24,9 @@ const ladderConfigLockPrefix = "cudly:ladder-config:"
 var ladderLockTimeout = 30 * time.Second
 
 // LadderPlanBuilder computes a run and its new tranches from the config's
-// measured on-demand-equivalent total. It runs while the per-config lock is held inside the
+// netted tranches. It runs while the per-config lock is held inside the
 // persist transaction: it must be pure compute (no provider or network I/O).
-type LadderPlanBuilder func(inFlightUSDHr float64) (*LadderRunDB, []LadderTrancheDB, error)
+type LadderPlanBuilder func(inFlight []LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error)
 
 // ErrLadderLockTimeout means the per-config ladder lock was not acquired within
 // ladderLockTimeout (SQLSTATE 55P03). The operation did nothing; retry later.
@@ -100,7 +99,7 @@ func acquireLadderConfigLock(ctx context.Context, tx pgx.Tx, configID string) er
 // runs' windows never overlap.
 const ladderSettleSkewMargin = time.Minute
 
-// ladderSettleAnchor is the anchor every caller passes to settledLadderCommit
+// ladderSettleAnchor is the anchor every caller passes to settledLadderRows
 // for an existing-commitment read taken at or after asOf.
 func ladderSettleAnchor(asOf time.Time) time.Time { return asOf.Add(-ladderSettleSkewMargin) }
 
@@ -123,11 +122,11 @@ func ladderSettleAnchor(asOf time.Time) time.Time { return asOf.Add(-ladderSettl
 func (s *PostgresStore) PlanAndSaveLadderRun(ctx context.Context, configID string, asOf time.Time, build LadderPlanBuilder) (*LadderRunDB, error) {
 	var result LadderRunDB
 	err := s.withLadderConfigLock(ctx, configID, func(tx pgx.Tx) error {
-		inFlight, err := lockedLadderCommit(ctx, tx, configID, asOf)
+		rows, err := lockedLadderCommit(ctx, tx, configID, asOf)
 		if err != nil {
 			return err
 		}
-		run, tranches, err := build(inFlight)
+		run, tranches, err := build(rows)
 		if err != nil {
 			return err
 		}
@@ -158,70 +157,60 @@ func (s *PostgresStore) PlanAndSaveLadderRun(ctx context.Context, configID strin
 	return &result, nil
 }
 
-// lockedLadderCommit is the figure PlanAndSaveLadderRun hands to build:
-// in-flight plus tranches settled after the skew-widened anchor.
+// lockedLadderCommit is the set of rows PlanAndSaveLadderRun hands to build:
+// in-flight plus tranches settled after the skew-widened anchor. Netting these
+// is a deliberate deviation from go's InFlight doc (fired and settled-after-anchor
+// rows are included), which errs toward under-buying.
 //
 // Order is load-bearing: in-flight FIRST, settled SECOND. Each statement takes
 // a fresh READ COMMITTED snapshot, so a tranche fired at the first and
 // completed before the second is counted by both (safe); the reverse order
 // could miss one completing between the two.
-func lockedLadderCommit(ctx context.Context, q dbConn, configID string, asOf time.Time) (float64, error) {
-	inFlight, err := ladderNettingRows(ctx, q,
-		"status = $2 OR (status = $3 AND scheduled_date > $4)",
-		configID, string(ladder.TrancheStatusFired), string(ladder.TrancheStatusScheduled), ladderGraceCutoff(asOf))
+func lockedLadderCommit(ctx context.Context, q dbConn, configID string, asOf time.Time) ([]LadderInFlightRow, error) {
+	inFlight, err := inFlightLadderRows(ctx, q, false, configID, asOf)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	settled, err := ladderNettingRows(ctx, q, "status = 'completed' AND settled_at > $2",
-		configID, ladderSettleAnchor(asOf))
+	settled, err := settledLadderRows(ctx, q, false, configID, ladderSettleAnchor(asOf))
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return nettingFloat(inFlight.Add(inFlight, settled))
+	return append(inFlight, settled...), nil
 }
 
-func ladderNettingRows(ctx context.Context, q dbConn, predicate string, args ...any) (*big.Rat, error) {
+// inFlightLadderRows are the config's tranches that count as committed but
+// unsettled: fired (resolved only by completed or failed) and scheduled rows
+// still within the grace window. assumeOD is for the amend path only.
+func inFlightLadderRows(ctx context.Context, q dbConn, assumeOD bool, configID string, asOf time.Time) ([]LadderInFlightRow, error) {
+	return ladderNettingRows(ctx, q, assumeOD, "status = $2 OR (status = $3 AND scheduled_date > $4)",
+		configID, string(ladder.TrancheStatusFired), string(ladder.TrancheStatusScheduled), ladderGraceCutoff(asOf))
+}
+
+func ladderNettingRows(ctx context.Context, q dbConn, assumeOD bool, predicate string, args ...any) ([]LadderInFlightRow, error) {
 	rows, err := q.Query(ctx, "SELECT id,layer_type,amount_usd_hr::text,amount_basis,commitment_rate FROM ladder_tranches WHERE config_id=$1 AND ("+predicate+")", args...)
 	if err != nil {
 		return nil, fmt.Errorf("read ladder netting rows: %w", err)
 	}
 	defer rows.Close()
-	total := new(big.Rat)
+	var out []LadderInFlightRow
 	for rows.Next() {
 		var tr LadderTrancheDB
 		var amount string
 		if err := rows.Scan(&tr.ID, &tr.LayerType, &amount, &tr.AmountBasis, &tr.CommitmentRate); err != nil {
 			return nil, err
 		}
-		od, err := nettingOnDemand(amount, &tr)
+		trp := &tr
+		if assumeOD {
+			trp = assumeOnDemandIfUnknown(trp)
+		}
+		row, err := newLadderInFlightRow(amount, trp)
 		if err != nil {
 			return nil, fmt.Errorf("net tranche %s (%s): %w", tr.ID, tr.LayerType, err)
 		}
-		total.Add(total, od)
+		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return total, nil
-}
-
-// queryRower is satisfied by pgx.Tx and the pool connection.
-type queryRower interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
-
-// inFlightLadderCommit sums the config's in-flight commitment; see
-// GetInFlightLadderCommitUSDHr for the row classes counted and excluded.
-func inFlightLadderCommit(ctx context.Context, q queryRower, configID string, asOf time.Time) (float64, error) {
-	var total float64
-	err := q.QueryRow(ctx, `
-		SELECT COALESCE(SUM(amount_usd_hr), 0)
-		FROM ladder_tranches
-		WHERE config_id = $1
-		  AND (status = $2 OR (status = $3 AND scheduled_date > $4))
-	`, configID, string(ladder.TrancheStatusFired), string(ladder.TrancheStatusScheduled), ladderGraceCutoff(asOf)).Scan(&total)
-	if err != nil {
-		return 0, fmt.Errorf("in-flight ladder commit config_id=%s: %w", configID, err)
-	}
-	return total, nil
+	return out, nil
 }

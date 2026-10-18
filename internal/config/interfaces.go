@@ -147,7 +147,9 @@ type StoreInterface interface {
 	GetExecutionFanOutShape(ctx context.Context, lineageKey string) (string, error)
 	GetPendingExecutions(ctx context.Context) ([]PurchaseExecution, error)
 	// GetExecutionsByStatuses returns executions in any of the given states,
-	// newest first, capped at `limit`. Used by the History handler to render
+	// newest first, capped at `limit`, except that pending rows dated in the
+	// future (not-yet-due ramp steps) sort last, soonest first, so they cannot
+	// push a due row past the cap (issue #680). Used by the History handler to render
 	// pending + failed + expired alongside completed purchases; the scheduler
 	// keeps using GetPendingExecutions (which is narrower and doesn't share
 	// this method's status filter) to avoid accidental double-processing of
@@ -206,6 +208,13 @@ type StoreInterface interface {
 	// 409 with a count so the frontend can offer Cancel-All-Then-Delete UX
 	// instead of surfacing a raw constraint error. See issue #606.
 	CountPendingExecutionsForAccount(ctx context.Context, accountID string) (int, error)
+	// CountLiveExecutionsForAccount returns the number of purchase_executions
+	// referencing the given cloud account whose status is not in
+	// TerminalExecutionStatuses (pending, notified, approved, running,
+	// scheduled, paused, or any status not yet classified). These are the
+	// rows that block DeleteCloudAccount; terminal rows are detached and kept
+	// as history instead (issue #265).
+	CountLiveExecutionsForAccount(ctx context.Context, accountID string) (int, error)
 	// ListPendingExecutionIDsForAccount returns the execution IDs of all
 	// pending / notified executions referencing this account, used by the
 	// frontend's Cancel-All-Then-Delete flow when the operator opts to
@@ -531,6 +540,10 @@ type StoreInterface interface {
 	ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error)
 	GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error)
 	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error
+	// SetRecommendationsCollectionPartial records (or, with nil, clears) the
+	// most recent collection's incomplete-sweep summary. Upsert/Replace
+	// clear it, so a later complete collection drops the marker.
+	SetRecommendationsCollectionPartial(ctx context.Context, partial *RecommendationsCollectionPartial) error
 	// MarkCollectionStarted atomically sets last_collection_started_at = now
 	// only when no in-flight collection is running (last_collection_started_at IS NULL
 	// OR older than 5 minutes), and stamps a freshly generated owner token

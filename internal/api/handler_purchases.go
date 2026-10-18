@@ -177,9 +177,12 @@ func (h *Handler) authorizeExecutionManagement(ctx context.Context, session *Ses
 		return NewClientError(500, "authentication service not configured")
 	}
 
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionUpdateAny, auth.ResourcePurchases)
+	// Evaluated against the session's effective permissions: for a user API
+	// key that is the key (intersected with its owner), not the owner alone,
+	// so a key without update-any cannot borrow the owner's (issue #979).
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionUpdateAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if hasAny {
 		return nil
@@ -275,6 +278,9 @@ func (h *Handler) requireResumeVetoWindow(ctx context.Context, executionID strin
 	if err != nil {
 		return fmt.Errorf("failed to read plan %s before resuming execution %s: %w", row.PlanID, executionID, err)
 	}
+	if plan.RampSchedule.DatesManaged {
+		return editorReconciliationError()
+	}
 	if vetoErr := plan.RequireVetoWindow(); vetoErr != nil {
 		return NewClientError(409, fmt.Sprintf("execution %s cannot be resumed: %v", executionID, vetoErr))
 	}
@@ -303,6 +309,9 @@ func (h *Handler) pushPastScheduledDate(ctx context.Context, row *config.Purchas
 	// approve landing after the resume must not be overwritten. A lost
 	// condition is a benign no-op (the row is no longer awaiting approval).
 	if _, err := h.config.RescheduleAwaitingExecution(ctx, row.ExecutionID, now.AddDate(0, 0, plan.NotificationDaysBefore)); err != nil {
+		if errors.Is(err, config.ErrEditorReconciliationRequired) {
+			return editorReconciliationError()
+		}
 		return fmt.Errorf("failed to reschedule resumed execution %s: %w", row.ExecutionID, err)
 	}
 	return nil
@@ -357,7 +366,9 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 		return nil, constraintErr
 	}
 
-	final, revocationToken, runErr := h.purchase.RunPlannedPurchaseNow(ctx, executionID, fourEyesActorIdentity(session), resolveCreatorUserID(session))
+	// The check above read a snapshot; the funnel re-runs it on the row its
+	// claim returns, the row it buys (issue #415).
+	final, revocationToken, runErr := h.purchase.RunPlannedPurchaseNow(ctx, executionID, fourEyesActorIdentity(session), resolveCreatorUserID(session), h.runNowClaimCheck(session))
 	if runErr != nil {
 		return nil, executeFailureError(executionID, "started", final, runErr)
 	}
@@ -385,6 +396,8 @@ func executeFailureError(executionID, action string, final *config.PurchaseExecu
 		return fmt.Errorf("execution %s could not be %s: %w", executionID, action, err)
 	case errors.Is(err, config.ErrAuditLoss):
 		return NewClientError(500, fmt.Sprintf("execution %s ran but its final status could not be saved: %v", executionID, err))
+	case errors.Is(err, purchase.ErrClaimedRowRefused):
+		return claimedRowRefusalError(final, err)
 	case errors.Is(err, purchase.ErrStaleAzurePricing):
 		return NewClientError(409, err.Error())
 	default:
@@ -423,9 +436,12 @@ func (h *Handler) requireDeleteOrCancelPurchasePermission(ctx context.Context, r
 //
 // Gate logic:
 //   - stateless admin API key: always permitted.
-//   - update-any:purchases or cancel-any:purchases: permitted without an
-//     owner check (full-scope management and cancel-any operator paths).
-//   - otherwise: fetch the execution and require creator match.
+//   - update-any:purchases: permitted without an owner check or Constraints.
+//   - cancel-any:purchases: permitted without an owner check when its
+//     Constraints cover every recommendation (issue #678); a Constraints
+//     denial falls back to the creator branch.
+//   - otherwise: fetch the execution and require creator match, then apply
+//     cancel-own Constraints if the creator also holds cancel-own.
 //     Legacy rows with a NULL creator are out of reach for non-privileged
 //     users (matching cancel-own / approve-own / retry-own behavior).
 func (h *Handler) authorizePlannedPurchaseCancel(ctx context.Context, session *Session, executionID string) error {
@@ -435,30 +451,93 @@ func (h *Handler) authorizePlannedPurchaseCancel(ctx context.Context, session *S
 	if h.auth == nil {
 		return NewClientError(500, "authentication service not configured")
 	}
-	// update-any and cancel-any both grant full-scope access without an owner check.
-	for _, verb := range []string{auth.ActionUpdateAny, auth.ActionCancelAny} {
-		has, err := h.auth.HasPermissionAPI(ctx, session.UserID, verb, auth.ResourcePurchases)
-		if err != nil {
-			return fmt.Errorf("permission check failed: %w", err)
-		}
-		if has {
-			return nil
+	// update-any grants full-scope access without an owner check or
+	// Constraints (tracked by #961). Both full-scope verbs are evaluated
+	// against the session's effective permissions: the key's for a user API
+	// key, never the owner's alone (issue #979).
+	hasUpdate, err := h.sessionHoldsVerb(ctx, session, auth.ActionUpdateAny)
+	if err != nil {
+		return err
+	}
+	if hasUpdate {
+		return nil
+	}
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionCancelAny)
+	if err != nil {
+		return err
+	}
+	execution, err := h.loadPlannedExecution(ctx, executionID)
+	if err != nil {
+		return err
+	}
+	// cancel-any is bounded by its Constraints (issue #678); a 403 falls back
+	// to the creator branch exactly as authorizeSessionCancel does.
+	var anyErr error
+	if hasAny {
+		// Wrapped for consistency; DELETE planned has no token fall-through.
+		anyErr = wrapConstraintDenied(h.requirePermissionConstraints(ctx, session, auth.ActionCancelAny, auth.ResourcePurchases, revokeExecutionConstraintSets(execution)))
+		if anyErr == nil || !isForbidden(anyErr) {
+			return anyErr
 		}
 	}
+	return h.authorizePlannedCreatorCancel(ctx, session, execution, anyErr)
+}
+
+// loadPlannedExecution fetches the row, mapping a missing one to errNotFound.
+func (h *Handler) loadPlannedExecution(ctx context.Context, executionID string) (*config.PurchaseExecution, error) {
 	execution, err := h.config.GetExecutionByID(ctx, executionID)
 	if errors.Is(err, config.ErrNotFound) {
-		return errNotFound
+		return nil, errNotFound
 	}
 	if err != nil {
-		return fmt.Errorf("failed to get execution: %w", err)
+		return nil, fmt.Errorf("failed to get execution: %w", err)
 	}
+	return execution, nil
+}
+
+// authorizePlannedCreatorCancel is the creator branch of
+// authorizePlannedPurchaseCancel. anyErr is the cancel-any Constraints denial
+// (nil when the session has no cancel-any); it is returned instead of the
+// ownership 403 so a constraint refusal stays terminal.
+func (h *Handler) authorizePlannedCreatorCancel(ctx context.Context, session *Session, execution *config.PurchaseExecution, anyErr error) error {
 	// requireDeleteOrCancelPurchasePermission already validated the session;
-	// UserID is either the API-key sentinel (handled above) or a real user UUID
-	// from ValidateSession. The nil/empty guard here is therefore defensive.
+	// UserID is either the API-key sentinel (handled by the caller) or a real
+	// user UUID from ValidateSession. The nil/empty guard here is defensive.
 	if execution.CreatedByUserID == nil || *execution.CreatedByUserID != session.UserID {
+		if anyErr != nil {
+			return anyErr
+		}
 		return NewClientError(403, "permission denied: cannot cancel another user's scheduled purchase")
 	}
-	return nil
+	// A creator match alone is enough (delete:purchases holders need no
+	// cancel-own, #961); a creator who also holds cancel-own is bounded by it.
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionCancelOwn)
+	if err != nil {
+		return err
+	}
+	if !hasOwn {
+		return nil
+	}
+	return wrapConstraintDenied(h.requirePermissionConstraints(ctx, session, auth.ActionCancelOwn, auth.ResourcePurchases, revokeExecutionConstraintSets(execution)))
+}
+
+// sessionHoldsVerb reports whether the principal that requirePermissionConstraints
+// evaluates holds verb on purchases: the owner for a user session, the KEY's
+// effective permissions for a user-API-key session. The key path probes with an
+// empty, non-strict set, which any held permission satisfies whatever its
+// Constraints, so a denial means the verb is not held.
+func (h *Handler) sessionHoldsVerb(ctx context.Context, session *Session, verb string) (bool, error) {
+	var has bool
+	var err error
+	if session.UserAPIKeyID != "" {
+		has, err = h.auth.HasAPIKeyPermissionForConstraintsAPI(ctx, session.UserAPIKeyID, session.UserID, verb, auth.ResourcePurchases, []auth.PermissionConstraints{{}})
+	} else {
+		has, err = h.auth.HasPermissionAPI(ctx, session.UserID, verb, auth.ResourcePurchases)
+	}
+	if err != nil {
+		return false, fmt.Errorf("permission check failed: %w", err)
+	}
+	return has, nil
 }
 
 func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (*DeletePlannedPurchaseResponse, error) {
@@ -750,6 +829,8 @@ func tokenActionError(err error) error {
 	switch {
 	case errors.Is(err, config.ErrAuditLoss):
 		return err
+	case errors.Is(err, purchase.ErrClaimedRowRefused):
+		return claimedRowRefusalError(nil, err)
 	case errors.Is(err, purchase.ErrStaleAzurePricing):
 		return NewClientError(409, err.Error())
 	case errors.Is(err, purchase.ErrInvalidApprovalToken):
@@ -777,7 +858,7 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	// session; requireDifferentApprover returns 500 when mode is on and no
 	// session is available (fail-closed).
 	tokenSession := h.tryGetSession(ctx, req)
-	if err := h.requireDifferentApprover(ctx, tokenSession, execution.ExecutionID, execution.CreatedByUserID); err != nil {
+	if err := h.requireDifferentApprover(ctx, tokenSession, execution.ExecutionID, execution.CreatedByUserID, execution.CreatedBySystem); err != nil {
 		return nil, err
 	}
 	// SEC-01 follow-up (issue #60 review): the deep-link flow always forces
@@ -825,7 +906,9 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	// sourced from this return value, never from a DB re-read, since
 	// only the token hash is stored and a re-read can only ever yield
 	// the hash.
-	revocationToken, approveErr := h.purchase.ApproveExecution(ctx, execution.ExecutionID, token, actor)
+	// approveConstraintsForSession above read a snapshot; the funnel re-runs
+	// it on the row its claim returns, the row it buys (issue #415).
+	revocationToken, approveErr := h.purchase.ApproveExecution(ctx, execution.ExecutionID, token, actor, h.tokenApproveClaimCheck(tokenSession))
 	if approveErr != nil {
 		return nil, tokenActionError(approveErr)
 	}
@@ -915,7 +998,9 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 	// approval (issue #103); only the token hash is stored, so this
 	// return value is the only place a raw, emailable token exists after
 	// the call returns.
-	final, revocationToken, approveErr := h.purchase.ApproveAndExecute(ctx, execution.ExecutionID, fourEyesActorIdentity(session), actor)
+	// authorizeApproveSession above read a snapshot; the funnel re-runs the
+	// approve-any/approve-own check on the row its claim returns (issue #415).
+	final, revocationToken, approveErr := h.purchase.ApproveAndExecute(ctx, execution.ExecutionID, fourEyesActorIdentity(session), actor, h.sessionApproveClaimCheck(session))
 	if approveErr != nil {
 		logging.Errorf("purchase[%s]: approvePurchaseViaSession failed after %s: %v",
 			execution.ExecutionID, time.Since(t0), approveErr)
@@ -944,7 +1029,7 @@ func (h *Handler) authorizeApproveSession(ctx context.Context, session *Session,
 	// pass the approve-any / approve-own gate reach this check. The admin
 	// wildcard inside authorizeSessionApprove short-circuits RBAC but NOT this
 	// check; admins who created the row must disable the mode first.
-	return h.requireDifferentApprover(ctx, session, execution.ExecutionID, execution.CreatedByUserID)
+	return h.requireDifferentApprover(ctx, session, execution.ExecutionID, execution.CreatedByUserID, execution.CreatedBySystem)
 }
 
 // authorizeScopedSessionApprove runs the account-scope gate (issue #92)
@@ -991,7 +1076,7 @@ func (h *Handler) authorizeScopedSessionApprove(ctx context.Context, session *Se
 func (h *Handler) authorizeSessionApprove(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
 	// The stateless admin API key has full access and no user row to resolve
 	// permissions from. Administrators-group users fall through and pass via
-	// the approve-any HasPermissionAPI check below, since {admin, *} matches
+	// the approve-any check below, since {admin, *} matches
 	// any requested permission.
 	if session.UserID == apiKeyAdminUserID {
 		return nil
@@ -1000,17 +1085,17 @@ func (h *Handler) authorizeSessionApprove(ctx context.Context, session *Session,
 		return NewClientError(500, "authentication service not configured")
 	}
 
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveAny, auth.ResourcePurchases)
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionApproveAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if hasAny {
 		return wrapConstraintDenied(h.enforcePurchaseConstraints(ctx, session, auth.ActionApproveAny, execution.Recommendations))
 	}
 
-	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveOwn, auth.ResourcePurchases)
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionApproveOwn)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if !hasOwn {
 		return NewClientError(403, "permission denied: requires approve-any or approve-own on purchases")
@@ -1049,16 +1134,16 @@ func (h *Handler) approveConstraintsForSession(ctx context.Context, session *Ses
 // session holds (approve-any first, then approve-own). bound is false when no
 // verb applies to this row, so the caller falls back to the plan cap.
 func (h *Handler) enforceHeldApproveConstraints(ctx context.Context, session *Session, execution *config.PurchaseExecution) (bound bool, err error) {
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveAny, auth.ResourcePurchases)
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionApproveAny)
 	if err != nil {
-		return false, fmt.Errorf("permission check failed: %w", err)
+		return false, err
 	}
 	if hasAny {
 		return true, h.enforcePurchaseConstraints(ctx, session, auth.ActionApproveAny, execution.Recommendations)
 	}
-	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionApproveOwn, auth.ResourcePurchases)
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionApproveOwn)
 	if err != nil {
-		return false, fmt.Errorf("permission check failed: %w", err)
+		return false, err
 	}
 	// A plan-step row has no creator (plan_step_attach.go), so its approve-own
 	// holder is bound by their Constraints regardless of it.
@@ -1280,7 +1365,7 @@ func (h *Handler) sendPurchaseScheduledEmail(ctx context.Context, execution *con
 //
 // Admin wildcard is intentionally NOT exempt: an admin who created an execution
 // must disable the mode in Settings before approving their own row.
-func (h *Handler) requireDifferentApprover(ctx context.Context, session *Session, subjectID string, creatorUserID *string) error {
+func (h *Handler) requireDifferentApprover(ctx context.Context, session *Session, subjectID string, creatorUserID *string, systemCreated bool) error {
 	cfg, err := h.config.GetGlobalConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("4-eyes policy check: failed to load global config: %w", err)
@@ -1293,6 +1378,13 @@ func (h *Handler) requireDifferentApprover(ctx context.Context, session *Session
 	if session == nil {
 		logging.Warnf("4-eyes[%s]: mode on but no session available; denying (fail-closed)", subjectID)
 		return NewClientError(500, "4-eyes approval mode is enabled but no session could be resolved; sign in before approving")
+	}
+
+	if creatorUserID == nil && systemCreated {
+		// Scheduler-minted row: no human requester exists, so any identified
+		// approver (session != nil, checked above) is the second pair of eyes.
+		logging.Infof("4-eyes[%s]: mode on; system-created row approved by user %s", subjectID, session.UserID)
+		return nil
 	}
 
 	if creatorUserID == nil {
@@ -1337,7 +1429,7 @@ func (h *Handler) requireDifferentApprover(ctx context.Context, session *Session
 //     component is a 500 as per feedback_fail_closed_middleware.md.
 func (h *Handler) authorizeSessionExecuteDirect(ctx context.Context, session *Session, creatorID string, recs []config.RecommendationRecord) error {
 	// Stateless admin API key: full access, no user row. Administrators-group
-	// users pass via the execute-any HasPermissionAPI check below, since
+	// users pass via the execute-any check below, since
 	// {admin, *} matches any requested permission.
 	if session.UserID == apiKeyAdminUserID {
 		return nil
@@ -1346,17 +1438,21 @@ func (h *Handler) authorizeSessionExecuteDirect(ctx context.Context, session *Se
 		return NewClientError(500, "authentication service not configured")
 	}
 
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionExecuteAny, auth.ResourcePurchases)
+	// Both verbs are probed on the principal enforcePurchaseConstraints
+	// judges: the key (intersected with its owner) for a user API key, so a
+	// key holding execute-own is not routed to its owner's execute-any and
+	// then refused on the key's (issue #1005).
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionExecuteAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if hasAny {
 		return h.enforcePurchaseConstraints(ctx, session, auth.ActionExecuteAny, recs)
 	}
 
-	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionExecuteOwn, auth.ResourcePurchases)
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionExecuteOwn)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if !hasOwn {
 		return NewClientError(403, "permission denied: requires execute-any or execute-own on purchases")
@@ -1399,6 +1495,8 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 	//      action they can perform from the dashboard. The token in
 	//      the URL is informational at that point — the session has
 	//      already authenticated the actor.
+	//      A session whose held cancel verb is denied by its Constraints
+	//      (issue #678) is final: it does not fall through to the token.
 	//   2. token != "" → legacy email-link flow without a qualifying
 	//      session. authorizeApprovalAction enforces the per-account
 	//      contact_email gate from PR #101; the purchase service
@@ -1814,7 +1912,14 @@ func revocationWindowClosesAt(execution *config.PurchaseExecution) string {
 // transitionedBy is the acting user's UUID (resolveCreatorUserID), or nil when
 // the caller has no user row. It must never be an email: transitioned_by is a
 // UUID foreign key. revokedBy is the email shown as the requester.
+//
+// The revocation window is enforced here, not only in validateRevokeToken, so
+// the session-authed branch (tryRevokeViaSession) cannot flip an execution
+// whose window closed long ago to revocation_requested (issue #260).
 func (h *Handler) revokeViaSession(ctx context.Context, execution *config.PurchaseExecution, revokedBy string, transitionedBy *string) (any, error) {
+	if err := checkRevocationWindow(execution); err != nil {
+		return nil, err
+	}
 	updated, err := h.config.TransitionExecutionStatus(
 		ctx, execution.ExecutionID,
 		[]string{"completed", "partially_completed"}, "revocation_requested", transitionedBy)
@@ -1860,10 +1965,16 @@ func (h *Handler) authorizeCancelSession(ctx context.Context, session *Session, 
 
 // authorizeSessionCancel returns nil when the session is permitted to cancel
 // the given execution under the cancel-any / cancel-own RBAC rules added in
-// issue #46. Returns a 403 ClientError otherwise.
+// issue #46, and the Constraints of the permission that grants the verb cover
+// every recommendation of the execution (issue #678, same strict sets as the
+// #404 revoke check). A constrained cancel-any falls back to cancel-own only on
+// a 403; a Constraints denial is terminal for the email-token fall-through (it
+// is wrapped so fallsThroughToToken does not hand it to the contact_email
+// branch). The token branch itself is a separate capability and is not
+// Constraints-checked. Returns a 403 ClientError otherwise.
 func (h *Handler) authorizeSessionCancel(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
 	// Stateless admin API key: full access, no user row. Administrators-group
-	// users pass via the cancel-any HasPermissionAPI check below.
+	// users pass via the cancel-any check below.
 	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}
@@ -1871,26 +1982,42 @@ func (h *Handler) authorizeSessionCancel(ctx context.Context, session *Session, 
 		return NewClientError(500, "authentication service not configured")
 	}
 
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionCancelAny, auth.ResourcePurchases)
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionCancelAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
+	var anyErr error
 	if hasAny {
-		return nil
+		anyErr = wrapConstraintDenied(h.requirePermissionConstraints(ctx, session, auth.ActionCancelAny, auth.ResourcePurchases, revokeExecutionConstraintSets(execution)))
+		if anyErr == nil || !isForbidden(anyErr) {
+			return anyErr
+		}
 	}
+	return h.authorizeCancelOwn(ctx, session, execution, anyErr)
+}
 
-	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionCancelOwn, auth.ResourcePurchases)
+// authorizeCancelOwn requires cancel-own, a matching creator and the cancel-own
+// Constraints. anyErr is the cancel-any Constraints denial (nil when the
+// session has no cancel-any); it is returned instead of the generic denials so
+// a constraint refusal stays terminal.
+func (h *Handler) authorizeCancelOwn(ctx context.Context, session *Session, execution *config.PurchaseExecution, anyErr error) error {
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionCancelOwn)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if !hasOwn {
+		if anyErr != nil {
+			return anyErr
+		}
 		return NewClientError(403, "permission denied: requires cancel-any or cancel-own on purchases")
 	}
-
 	if execution.CreatedByUserID == nil || *execution.CreatedByUserID != session.UserID {
+		if anyErr != nil {
+			return anyErr
+		}
 		return NewClientError(403, "permission denied: cannot cancel another user's pending purchase")
 	}
-	return nil
+	return wrapConstraintDenied(h.requirePermissionConstraints(ctx, session, auth.ActionCancelOwn, auth.ResourcePurchases, revokeExecutionConstraintSets(execution)))
 }
 
 // requireSession validates the request's session token and returns the
@@ -2431,7 +2558,7 @@ var errRetryLadderTrancheSettled = errors.New("ladder tranche is settled")
 // non-admins, same as the cancel path).
 func (h *Handler) authorizeSessionRetry(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
 	// Stateless admin API key: full access, no user row. Administrators-group
-	// users pass via the retry-any HasPermissionAPI check below.
+	// users pass via the retry-any check below.
 	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}
@@ -2439,17 +2566,17 @@ func (h *Handler) authorizeSessionRetry(ctx context.Context, session *Session, e
 		return NewClientError(500, "authentication service not configured")
 	}
 
-	hasAny, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionRetryAny, auth.ResourcePurchases)
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionRetryAny)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if hasAny {
 		return nil
 	}
 
-	hasOwn, err := h.auth.HasPermissionAPI(ctx, session.UserID, auth.ActionRetryOwn, auth.ResourcePurchases)
+	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionRetryOwn)
 	if err != nil {
-		return fmt.Errorf("permission check failed: %w", err)
+		return err
 	}
 	if !hasOwn {
 		return NewClientError(403, "permission denied: requires retry-any or retry-own on purchases")
@@ -3361,7 +3488,9 @@ func (h *Handler) directExecutePurchase(ctx context.Context, req *events.LambdaF
 	// approval (issue #103); only the token hash is stored, so this
 	// return value is the only place a raw, emailable token exists after
 	// the call returns.
-	final, revocationToken, err := h.purchase.DirectExecute(ctx, executionID, fourEyesActorIdentity(session), validUUIDPtrOrNil(&session.UserID))
+	// The direct-execute Constraints ran on the request's recommendations; the
+	// funnel re-runs them on the row its claim returns (issue #415).
+	final, revocationToken, err := h.purchase.DirectExecute(ctx, executionID, fourEyesActorIdentity(session), validUUIDPtrOrNil(&session.UserID), h.directExecuteClaimCheck(session))
 	if err != nil {
 		logging.Errorf("purchase[%s]: directExecutePurchase failed after %s: %v",
 			executionID, time.Since(t0), err)

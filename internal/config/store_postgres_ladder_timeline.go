@@ -10,7 +10,8 @@ const ladderTimelineQuery = `
 WITH scoped AS MATERIALIZED (
  SELECT t.id, t.run_id, t.config_id, t.layer_type, t.term, t.payment_option,
         t.status, r.status AS run_status, t.execution_id, t.revision,
-        t.amount_usd_hr::text AS amount_usd_hr, t.scheduled_date, t.created_at
+        t.amount_usd_hr::text AS amount_usd_hr, t.amount_basis, t.commitment_rate,
+        t.scheduled_date, t.created_at
  FROM ladder_tranches t
  JOIN ladder_configs c ON c.id = t.config_id
  JOIN ladder_runs r ON r.id = t.run_id AND r.config_id = c.id
@@ -22,7 +23,8 @@ WITH scoped AS MATERIALIZED (
  ORDER BY created_at, id LIMIT $5
 )
 SELECT COUNT(*), COALESCE(SUM(amount_usd_hr::numeric), 0::numeric(20,6))::text,
-       COALESCE((SELECT jsonb_agg(to_jsonb(page) ORDER BY created_at, id) FROM page), '[]'::jsonb)
+       COALESCE((SELECT jsonb_agg(to_jsonb(page) ORDER BY created_at, id) FROM page), '[]'::jsonb),
+       COALESCE(jsonb_agg(jsonb_build_array(amount_usd_hr, amount_basis, commitment_rate)), '[]'::jsonb)
 FROM scoped`
 
 const ladderTimelineRunsQuery = `
@@ -58,13 +60,16 @@ func ladderTimelineArgs(accountID, provider string, cursor *LadderTimelineCursor
 
 func (s *PostgresStore) ListLadderTimeline(ctx context.Context, accountID, provider string, cursor *LadderTimelineCursor) (*LadderTimelinePage, error) {
 	page := &LadderTimelinePage{}
-	var raw []byte
+	var raw, scopeRaw []byte
 	if err := s.db.QueryRow(ctx, ladderTimelineQuery, ladderTimelineArgs(accountID, provider, cursor)...).
-		Scan(&page.TotalCount, &page.TotalUSDHr, &raw); err != nil {
+		Scan(&page.TotalCount, &page.TotalUSDHr, &raw, &scopeRaw); err != nil {
 		return nil, fmt.Errorf("list ladder timeline: %w", err)
 	}
 	if err := json.Unmarshal(raw, &page.Events); err != nil {
 		return nil, fmt.Errorf("decode ladder timeline: %w", err)
+	}
+	if err := fillLadderTimelineOnDemand(page, scopeRaw); err != nil {
+		return nil, err
 	}
 	if len(page.Events) > LadderTimelinePageSize {
 		page.Events = page.Events[:LadderTimelinePageSize]

@@ -331,7 +331,7 @@ func (s *PostgresStore) ListExecutionsForPlanStepTx(ctx context.Context, tx pgx.
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission
+		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
 		WHERE plan_id = $1 AND step_number = $2
 		ORDER BY retry_attempt_n, execution_id`, planID, stepNumber)

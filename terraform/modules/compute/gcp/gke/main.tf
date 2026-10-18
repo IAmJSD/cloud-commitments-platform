@@ -301,6 +301,31 @@ resource "google_service_account_iam_member" "workload_identity" {
   depends_on = [google_container_cluster.main]
 }
 
+# Recommendation read access for the workload SA: the GKE deployment runs the
+# same collector as Cloud Run (google_cloud_scheduler_job.recommendations
+# below), and a GCP account in application_default auth mode collects with
+# this SA. Same narrow custom role as compute/gcp/cloud-run: only
+# recommender.usageCommitmentRecommendations.list, never the predefined
+# roles/recommender.viewer (issue #788). The two modules are mutually exclusive
+# per environment (var.compute_platform), so the shared role ID cannot clash.
+# Needs roles/iam.roleAdmin on the deployer SA (ci-cd-permissions).
+resource "google_project_iam_custom_role" "cudly_recommendation_reader" {
+  project     = var.project_id
+  role_id     = "cudlyRecommendationReader"
+  title       = "CUDly Recommendation Reader"
+  description = "Minimum permission for CUDly to list Compute Engine committed use discount recommendations."
+  permissions = [
+    "recommender.usageCommitmentRecommendations.list",
+  ]
+  stage = "GA"
+}
+
+resource "google_project_iam_member" "recommendation_reader" {
+  project = var.project_id
+  role    = google_project_iam_custom_role.cudly_recommendation_reader.id
+  member  = "serviceAccount:${google_service_account.workload.email}"
+}
+
 # ==============================================
 # Kubernetes Resources (CONDITIONAL)
 # ==============================================
@@ -595,9 +620,16 @@ resource "kubernetes_deployment" "app" {
             failure_threshold     = 3
           }
 
+          # Readiness is the traffic-admission signal: /ready answers 503
+          # until this replica has completed database initialization, so a
+          # cold pod stays out of the Service endpoints (and out of the GCE
+          # Ingress NEG, whose health check GKE infers from this probe when
+          # the Ingress is created) (#648, #488). Liveness above stays on
+          # /health, which answers 200 while the process is alive, so a slow
+          # initialization never gets the pod killed.
           readiness_probe {
             http_get {
-              path = var.health_check_path
+              path = var.readiness_probe_path
               port = var.health_check_port
             }
             initial_delay_seconds = var.readiness_probe_initial_delay

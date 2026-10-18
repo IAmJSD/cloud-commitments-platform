@@ -67,7 +67,7 @@ func TestApproveAzurePricingRequiresMigrationAndRecollection(t *testing.T) {
 			saved = &copy
 			return nil
 		}
-		_, _, approveErr := mgr.ApproveAndExecute(ctx, exec.ExecutionID, "operator@example.com", nil)
+		_, _, approveErr := mgr.ApproveAndExecute(ctx, exec.ExecutionID, "operator@example.com", nil, nil)
 		require.Equal(t, purchases, recorder.count())
 		require.NotNil(t, saved)
 		if purchases == 1 {
@@ -103,8 +103,9 @@ func TestApproveAzurePricingRequiresMigrationAndRecollection(t *testing.T) {
 	t.Run("106 invalidated old prices", func(t *testing.T) { approve(t, ErrStaleAzurePricing, 0) })
 	rec.UpfrontCost = 700
 	// The store's upsert needs the availability_zone, platform and tenancy columns and the
-	// 11-column index from migration 000111.
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, rampMigrationsPath(), 111))
+	// 11-column index from migration 000111, and resets
+	// recommendations_state.last_collection_partial, added by migration 000129 (issue #87).
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, rampMigrationsPath(), 129))
 	require.NoError(t, pricing.UpsertRecommendations(ctx, time.Now().Add(time.Minute), []config.RecommendationRecord{rec}, collects))
 	t.Run("recollected prices purchase once", func(t *testing.T) { approve(t, nil, 1) })
 }

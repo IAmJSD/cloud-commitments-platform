@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 )
 
 type LadderAmountBasis string
@@ -84,4 +86,90 @@ func nettingFloat(total *big.Rat) (float64, error) {
 		return 0, fmt.Errorf("netting total exceeds float64")
 	}
 	return value, nil
+}
+
+// LadderInFlightRow is one netted tranche. Rate is rounded down and the
+// commitment up, so CommitmentUSDPerHour/Rate never understates the exact
+// on-demand-equivalent amount. Legacy on-demand rows carry Rate 1.
+type LadderInFlightRow struct {
+	Layer                ladder.LayerType
+	CommitmentUSDPerHour float64
+	Rate                 float64
+	exactOD              *big.Rat // set by the store so legacy totals stay bit-identical to the exact sum
+}
+
+// assumeOnDemandIfUnknown covers only the amend path: rows from before 000121
+// have no basis and #886 deliberately left them unknown, so the amend ceiling
+// ASSUMES on-demand-equivalent (its behavior before the basis existed).
+// Netting never calls this and keeps failing loud on an unknown basis.
+func assumeOnDemandIfUnknown(tr *LadderTrancheDB) *LadderTrancheDB {
+	if tr.AmountBasis != nil || tr.CommitmentRate != nil {
+		return tr
+	}
+	assumed, basis := *tr, LadderAmountOnDemand
+	assumed.AmountBasis = &basis
+	return &assumed
+}
+
+func newLadderInFlightRow(amount string, tr *LadderTrancheDB) (LadderInFlightRow, error) {
+	od, err := nettingOnDemand(amount, tr)
+	if err != nil {
+		return LadderInFlightRow{}, err
+	}
+	canonical, err := trancheCommitmentRate(tr)
+	if err != nil {
+		return LadderInFlightRow{}, err
+	}
+	rate := big.NewRat(1, 1)
+	if canonical != nil {
+		if rate, err = parseStoredCommitmentRate(*canonical); err != nil {
+			return LadderInFlightRow{}, err
+		}
+	}
+	commitment, _ := new(big.Rat).SetString(amount)
+	commitmentUp, err := nettingFloat(commitment)
+	if err != nil {
+		return LadderInFlightRow{}, err
+	}
+	rateDown, _ := rate.Float64()
+	if new(big.Rat).SetFloat64(rateDown).Cmp(rate) > 0 {
+		rateDown = math.Nextafter(rateDown, 0)
+	}
+	rateDown = max(rateDown, math.SmallestNonzeroFloat64)
+	return LadderInFlightRow{Layer: tr.LayerType, CommitmentUSDPerHour: commitmentUp, Rate: rateDown, exactOD: od}, nil
+}
+
+func (r LadderInFlightRow) onDemand() (*big.Rat, error) {
+	if r.exactOD != nil {
+		return r.exactOD, nil
+	}
+	commitment := new(big.Rat).SetFloat64(r.CommitmentUSDPerHour)
+	if commitment == nil || commitment.Sign() < 0 || !(r.Rate > 0 && r.Rate <= 1) {
+		return nil, fmt.Errorf("invalid in-flight row: commitment %v at rate %v", r.CommitmentUSDPerHour, r.Rate)
+	}
+	return commitment.Quo(commitment, new(big.Rat).SetFloat64(r.Rate)), nil
+}
+
+func sumLadderOnDemand(rows ...[]LadderInFlightRow) (*big.Rat, error) {
+	total := new(big.Rat)
+	for _, set := range rows {
+		for _, r := range set {
+			od, err := r.onDemand()
+			if err != nil {
+				return nil, err
+			}
+			total.Add(total, od)
+		}
+	}
+	return total, nil
+}
+
+// LadderInFlightOnDemand is the rows' on-demand-equivalent total, summed
+// exactly and rounded up to the next float only when the float is below it.
+func LadderInFlightOnDemand(rows []LadderInFlightRow) (float64, error) {
+	total, err := sumLadderOnDemand(rows)
+	if err != nil {
+		return 0, err
+	}
+	return nettingFloat(total)
 }

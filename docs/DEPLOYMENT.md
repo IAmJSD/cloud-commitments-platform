@@ -143,7 +143,7 @@ compute_platform = "lambda"
 # Lambda configuration
 lambda_architecture        = "arm64"
 lambda_memory_size         = 512
-lambda_timeout             = 60
+lambda_timeout             = 300 # 300-900: covers the 270s exchange/purchase budget
 
 # Database configuration (Aurora Serverless v2)
 database_engine_version       = "16.4"
@@ -592,13 +592,14 @@ Each cloud provider has lifecycle policies configured via Terraform (`terraform/
 
 ### Database Cleanup Jobs
 
-The server's `cleanup` task deletes expired sessions and old completed or canceled purchase executions. Today only Azure schedules it:
+The server's `cleanup` task deletes expired sessions and, via `CleanupOldExecutions(30)`, purchase executions that are completed with `scheduled_date` older than 30 days, canceled with `updated_at` older than 30 days, or in any status other than failed or canceled with `expires_at` older than 30 days. Failed executions are kept. Azure Container Apps schedules it by default; AWS Lambda can schedule it on request:
 
 - **Azure Container Apps (when `enable_scheduled_tasks` is true):** a Logic App calls `/api/scheduled/cleanup` daily (`terraform/modules/compute/azure/container-apps/scheduled-tasks.tf`)
-- **AWS:** nothing schedules it. The `terraform/modules/compute/aws/cleanup-lambda/` module is not consumed by any environment.
+- **AWS Lambda (opt-in):** set `enable_cleanup_schedule = true` (default false; `cleanup_schedule` defaults to `rate(1 day)`) in `terraform/environments/aws`. The first run deletes the whole backlog older than 30 days, so export any history you want to keep first.
+- **AWS Fargate and CloudFormation:** nothing schedules it yet. The `terraform/modules/compute/aws/cleanup-lambda/` module is not consumed by any environment.
 - **GCP:** nothing schedules it. The `terraform/modules/compute/gcp/cleanup-function/` module is not consumed by any environment.
 
-AKS has no scheduler (#893). Scheduling for AWS (Lambda, Fargate, CloudFormation) and GCP is tracked by #712.
+AKS has no scheduler (#893). Scheduling for AWS Fargate, CloudFormation and GCP is tracked by #712.
 
 Alternatively, use pg_cron for database-native scheduling.
 
@@ -697,17 +698,16 @@ If `DB_AUTO_MIGRATE=true` (the default), migration 000011 runs automatically on 
 > link `lib/pq` (issue #1849). A `postgres://` URL fails with
 > `unknown driver postgres`.
 >
-> The password is percent-encoded with `jq -sRr @uri` because it may contain
-> `@`, `:`, `/`, `%`, `#`, `?` or spaces, which break the URL when left raw.
+> Pass the password in `PGPASSWORD`, not in the URL. Left raw in the URL, a
+> password containing `@`, `:`, `/`, `%`, `#`, `?` or spaces breaks it; through
+> `PGPASSWORD` it needs no encoding, and it stays out of the command line.
 
 ```bash
 DB_PASSWORD=$(aws secretsmanager get-secret-value --secret-id cudly-dev-db-password-* --query SecretString --output text | jq -r .password)
 RDS_ENDPOINT=$(cd terraform/environments/aws && terraform output -raw database_proxy_endpoint)
 
-ENCODED_PASSWORD=$(printf '%s' "$DB_PASSWORD" | jq -sRr @uri)
-
-migrate -path internal/database/postgres/migrations \
-  -database "pgx5://cudly:${ENCODED_PASSWORD}@${RDS_ENDPOINT}:5432/cudly?sslmode=require" up
+PGPASSWORD="$DB_PASSWORD" migrate -path internal/database/postgres/migrations \
+  -database "pgx5://cudly@${RDS_ENDPOINT}:5432/cudly?sslmode=require" up
 ```
 
 ---
@@ -720,10 +720,8 @@ Check: `DB_AUTO_MIGRATE=true`, `DB_MIGRATIONS_PATH=/app/internal/database/postgr
 DB_PASSWORD=$(aws secretsmanager get-secret-value --secret-id cudly-dev-db-password-* --query SecretString --output text | jq -r .password)
 RDS_ENDPOINT=$(cd terraform/environments/aws && terraform output -raw database_proxy_endpoint)
 
-ENCODED_PASSWORD=$(printf '%s' "$DB_PASSWORD" | jq -sRr @uri)
-
-migrate -path internal/database/postgres/migrations \
-  -database "pgx5://cudly:${ENCODED_PASSWORD}@${RDS_ENDPOINT}:5432/cudly?sslmode=require" up
+PGPASSWORD="$DB_PASSWORD" migrate -path internal/database/postgres/migrations \
+  -database "pgx5://cudly@${RDS_ENDPOINT}:5432/cudly?sslmode=require" up
 ```
 
 ### Terraform State Lock

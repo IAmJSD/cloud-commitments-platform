@@ -279,6 +279,29 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
+  /api/recommendations/freshness:
+    get:
+      operationId: getRecommendationsFreshness
+      tags: [Recommendations]
+      summary: Get the recommendations cache freshness and last collection outcome
+      description: >
+        Returns when recommendations were last collected, the most recent
+        collection error, whether a collection is in flight, and whether the
+        last collection was partial (some subscriptions, projects or scopes
+        could not be queried, so the stored recommendations under-state the
+        real opportunity).
+      responses:
+        '200':
+          description: Freshness state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationsFreshness'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
   # ---- Purchase Plans -----------------------------------------------------
   /api/plans:
     get:
@@ -386,11 +409,11 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          description: The plan changed concurrently, or the request changes the ramp schedule of a plan that has already completed a step. Keep the schedule, or create a new plan.
+          description: The plan changed concurrently, the request changes the ramp schedule of a plan that has already completed a step (keep the schedule, or create a new plan), or the plan is managed by the schedule editor and the request changes what only the editor may (code editor_reconciliation_required).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorWithCode'
     patch:
       operationId: patchPlan
       tags: [Plans]
@@ -418,6 +441,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/EditorReconciliationRequired'
     delete:
       operationId: deletePlan
       tags: [Plans]
@@ -437,6 +462,12 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          description: The plan is managed by the schedule editor and still has active or unsettled purchases. Cancel or revoke them first (code managed_plan_has_live_executions).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorWithCode'
 
   /api/plans/{id}/purchases:
     parameters:
@@ -461,7 +492,16 @@ paths:
               schema:
                 $ref: '#/components/schemas/CreatePlannedPurchasesResponse'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: >
+            Invalid request body, count outside 1-52, start_date not in
+            YYYY-MM-DD form, or start_date not in the future
+            ("start_date must be in the future"). start_date is read as
+            midnight UTC, so today's date and earlier are refused; the
+            earliest accepted date is tomorrow in UTC.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -473,11 +513,12 @@ paths:
             The plan is disabled, has unsupported scheduling settings, no target
             accounts or insufficient remaining steps, or the requested steps are
             occupied. Automatic plans also require a valid commitment cap and
-            the global automatic purchasing switch.
+            the global automatic purchasing switch. A plan managed by the
+            schedule editor is refused whole (code editor_reconciliation_required).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorWithCode'
 
   # ---- Purchase Actions ---------------------------------------------------
   /api/purchases/execute:
@@ -935,6 +976,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/EditorReconciliationRequired'
 
   /api/purchases/planned/{id}/run:
     parameters:
@@ -1388,7 +1431,10 @@ paths:
         created, within the deployment account scope. Token mode (email
         link): the approval token in the query string, no session needed
         unless 4-eyes mode is on, in which case a token request with no
-        session fails with 500. A session that holds approve permission wins
+        session fails with 500, including for an exchange with no recorded
+        creator (every scheduler- or ladder-created exchange); such an
+        exchange has no requester to differ from, so under 4-eyes any
+        signed-in approver may approve it. A session that holds approve permission wins
         over a token in the same request (the token is ignored); a session
         that lacks the permission, or holds only approve-own for an exchange
         it did not create, falls through to token mode when a token is
@@ -2369,6 +2415,14 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    EditorReconciliationRequired:
+      description: >
+        The plan is managed by the schedule editor and this legacy change
+        needs the editor (code editor_reconciliation_required).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorWithCode'
     InternalError:
       description: Internal server error
       content:
@@ -2445,6 +2499,16 @@ components:
       properties:
         error:
           type: string
+
+    ErrorWithCode:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+          description: Machine-readable reason, for example editor_reconciliation_required.
 
     StatusResponse:
       type: object
@@ -2746,6 +2810,12 @@ components:
         max_amount:
           type: number
           format: double
+          minimum: 0
+          exclusiveMinimum: true
+          description: >-
+            Spend cap per purchase. Omit for no cap. An explicit 0 is rejected
+            with 400 on group writes (create and update); API-key creation
+            over HTTP does not enforce this yet.
 
     # -- API Keys -----------------------------------------------------------
     CreateAPIKeyRequest:
@@ -3192,6 +3262,75 @@ components:
           items:
             type: string
 
+    RecommendationsFreshness:
+      type: object
+      required: [last_collected_at, last_collection_error, last_collection_started_at, last_collection_partial]
+      properties:
+        last_collected_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When recommendations were last persisted; null on a cold start.
+        last_collection_error:
+          type: string
+          nullable: true
+          description: Error from the most recent collection when a provider failed; null otherwise.
+        last_collection_started_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Set while a collection is in flight.
+        last_collection_partial:
+          nullable: true
+          description: >
+            Non-null when the most recent persisted collection kept rows from
+            at least one incomplete sweep. Cleared by the next collection whose
+            sweeps are all complete. Carries counts and reason categories only.
+          allOf:
+            - $ref: '#/components/schemas/RecommendationsCollectionPartial'
+
+    RecommendationsCollectionPartial:
+      type: object
+      required: [providers]
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: '#/components/schemas/PartialProviderSweep'
+
+    PartialProviderSweep:
+      type: object
+      required: [provider, incomplete_accounts, attempted_scopes, failed_scopes, failed_details, reasons]
+      properties:
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+        incomplete_accounts:
+          type: integer
+          description: Accounts (or the ambient host identity) whose sweep was incomplete.
+        attempted_scopes:
+          type: integer
+          description: >
+            Scopes (Azure subscriptions, GCP projects) the incomplete sweeps
+            were asked to cover; 0 when the provider does not report it (AWS).
+        failed_scopes:
+          type: integer
+          description: Scopes that could not be queried.
+        failed_details:
+          type: integer
+          description: Individual recommendation details rejected inside answering scopes (AWS).
+        reasons:
+          type: object
+          description: >
+            Failure count per reason category. Keys are drawn from a closed
+            set: permission_denied, throttled, timeout, canceled, not_found,
+            provider_unavailable, other.
+          additionalProperties:
+            type: integer
+          example:
+            permission_denied: 2
+            throttled: 1
+
     # -- Plans --------------------------------------------------------------
     PlansResponse:
       type: object
@@ -3381,6 +3520,10 @@ components:
         start_date:
           type: string
           format: date
+          description: >
+            First purchase date (YYYY-MM-DD), interpreted as midnight UTC.
+            Must be after the current time, so the earliest accepted value
+            is tomorrow's date in UTC.
 
     CreatePlannedPurchasesResponse:
       type: object

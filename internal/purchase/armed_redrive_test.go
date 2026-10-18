@@ -144,7 +144,7 @@ func TestApproveAndExecuteRefusesArmedAzureSavingsPlanRetry(t *testing.T) {
 	store.On("GetExecutionByID", mock.Anything, exec.ExecutionID).Return(exec, nil).Maybe()
 	expectClaim(store, exec, []string{"pending", "notified"})
 
-	_, _, err := mgr.ApproveAndExecute(context.Background(), exec.ExecutionID, "operator@example.com", nil)
+	_, _, err := mgr.ApproveAndExecute(context.Background(), exec.ExecutionID, "operator@example.com", nil, nil)
 
 	assert.Equal(t, 0, rec.count(),
 		"approving an armed Azure savings-plans retry successor must buy NOTHING; one call here is a second, non-cancelable savings plan (issue #1718)")

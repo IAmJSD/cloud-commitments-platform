@@ -1,0 +1,18 @@
+# Fixture: issue #149's shape. The role reaches a project-scope IAM resource
+# through a `locals` set and `for_each`, so the literal never appears inside the
+# resource block. Must exit 1.
+
+locals {
+  deploy_roles = toset([
+    "roles/run.admin",
+    "roles/secretmanager.admin",
+  ])
+}
+
+resource "google_project_iam_member" "deploy" {
+  for_each = local.deploy_roles
+
+  project = var.project_id
+  role    = each.key
+  member  = "serviceAccount:${google_service_account.deploy.email}"
+}

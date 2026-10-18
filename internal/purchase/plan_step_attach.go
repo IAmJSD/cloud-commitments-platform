@@ -96,6 +96,12 @@ func (m *Manager) claimFromRows(ctx context.Context, tx pgx.Tx, locked *config.P
 			return claim, nil
 		}
 		if len(root.Recommendations) > 0 {
+			if _, err := m.config.GetPlanRampBaselineTx(ctx, tx, locked.ID); err != nil {
+				if errors.Is(err, config.ErrRampLedgerUntrusted) {
+					return m.failStep(ctx, tx, locked, claim, root, err.Error())
+				}
+				return stepClaim{}, err
+			}
 			if locked.NextExecutionDate.Before(time.Now()) {
 				return stepClaim{}, fmt.Errorf("%w: step %d of plan %s already has a row and the plan date has passed", errExecutionNotNotifiable, claim.number, locked.ID)
 			}
@@ -159,16 +165,14 @@ func (m *Manager) attachStep(ctx context.Context, tx pgx.Tx, locked *config.Purc
 		ids = append(ids, accounts[i].ID)
 	}
 	res, err := m.resolveCumulative(ctx, tx, locked, claim.number, ids)
-	if errors.Is(err, planstep.ErrNoMatch) {
+	switch {
+	case errors.Is(err, planstep.ErrNoMatch):
 		return m.noMatch(ctx, tx, locked, claim, root, res.Skipped)
-	}
-	if errors.Is(err, planstep.ErrTargetMet) {
+	case errors.Is(err, planstep.ErrTargetMet):
 		return m.targetMet(ctx, tx, locked, claim, root, res)
-	}
-	if errors.Is(err, planstep.ErrUnsupportedPlan) {
+	case errors.Is(err, planstep.ErrUnsupportedPlan), errors.Is(err, config.ErrRampLedgerUntrusted):
 		return m.failStep(ctx, tx, locked, claim, root, err.Error())
-	}
-	if err != nil {
+	case err != nil:
 		return stepClaim{}, fmt.Errorf("plan %s step %d: %w", locked.ID, claim.number, err)
 	}
 	if len(res.Skipped) > 0 {
@@ -209,8 +213,12 @@ func (m *Manager) resolveCumulative(ctx context.Context, tx pgx.Tx, locked *conf
 	if step != 1 || baseline != nil || len(res.Baseline) == 0 {
 		return res, err
 	}
-	if _, setErr := m.config.SetPlanRampBaselineTx(ctx, tx, locked.ID, res.Baseline); setErr != nil {
+	wrote, setErr := m.config.SetPlanRampBaselineTx(ctx, tx, locked.ID, res.Baseline)
+	if setErr != nil {
 		return planstep.Result{}, setErr
+	}
+	if !wrote {
+		return planstep.Result{}, config.ErrRampLedgerUntrusted
 	}
 	if errors.Is(err, planstep.ErrNoMatch) {
 		return m.resolver.Resolve(ctx, locked, ids, step, res.Baseline, committed)
@@ -322,6 +330,7 @@ func (m *Manager) writeAttached(ctx context.Context, tx pgx.Tx, locked *config.P
 			PlanID: locked.ID, ExecutionID: uuid.New().String(), Status: "pending", StepNumber: claim.number,
 			ScheduledDate: attachScheduledDate(locked, time.Now()), IdempotencyKey: uuid.New().String(),
 			Recommendations: recs, TotalUpfrontCost: upfront, EstimatedSavings: savings,
+			CreatedBySystem: true, // sweep-minted: no human initiator (issue #233)
 		}
 		if err := m.config.SavePurchaseExecutionTx(ctx, tx, exec); err != nil {
 			return stepClaim{}, fmt.Errorf("failed to record plan step %d of plan %s: %w", claim.number, locked.ID, err)

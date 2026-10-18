@@ -1,0 +1,10 @@
+# Fixture: a waiver covers only the line directly below it. A second Secret
+# Manager role further down is not excused by it. Must exit 1.
+
+locals {
+  deploy_roles = toset([
+    # gcp-secret-scope: allow - deploy SA creates and manages the secrets (fixture)
+    "roles/secretmanager.admin",
+    "roles/secretmanager.secretAccessor",
+  ])
+}

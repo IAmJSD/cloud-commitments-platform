@@ -113,14 +113,6 @@ func TestIsNotFoundError_Nil(t *testing.T) {
 	assert.False(t, IsNotFoundError(nil))
 }
 
-func TestFormatNotFoundError(t *testing.T) {
-	err := formatNotFoundError("GET", "/api/unknown")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "GET")
-	assert.Contains(t, err.Error(), "/api/unknown")
-	assert.Contains(t, err.Error(), "not found")
-}
-
 // Tests for clientError type.
 func TestClientError_Error(t *testing.T) {
 	err := &clientError{message: "bad request", code: 400}

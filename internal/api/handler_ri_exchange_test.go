@@ -716,6 +716,42 @@ func TestApproveRIExchange_FourEyes(t *testing.T) {
 		_, err := h.approveRIExchange(ctx, csrfSessionReq(), id, "")
 		approved(t, store, err)
 	})
+
+	// Issue #518: every production exchange has no creator, so the creator-less
+	// branch is the one that runs. Under 4-eyes it must still demand an
+	// identified approver instead of letting an anonymous token holder through.
+	t.Run("automated exchange: token without session fails closed", func(t *testing.T) {
+		h, store, id, token := fourEyesRIExchangeFixture(t, nil, "approver-uuid", grantRIAdmin, true)
+		_, err := h.approveRIExchange(ctx, &events.LambdaFunctionURLRequest{}, id, token)
+		denied(t, store, err, 500)
+		assert.Contains(t, err.Error(), "no session could be resolved")
+		store.AssertNotCalled(t, "StampRIExchangeApprovedBy", mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	t.Run("automated exchange: token with a resolved session allowed", func(t *testing.T) {
+		h, store, id, token := fourEyesRIExchangeFixture(t, nil, "approver-uuid", grantRINone, true)
+		_, err := h.approveRIExchange(ctx, sessionReq("sess"), id, token)
+		approved(t, store, err)
+	})
+
+	t.Run("automated exchange: mode off, token without session allowed", func(t *testing.T) {
+		h, store, id, token := fourEyesRIExchangeFixture(t, nil, "approver-uuid", grantRIAdmin, false)
+		_, err := h.approveRIExchange(ctx, &events.LambdaFunctionURLRequest{}, id, token)
+		approved(t, store, err)
+	})
+}
+
+// TestRequireDifferentRIExchangeApprover_ConfigLoadFailsClosed (issue #518): a
+// creator-less exchange approved with no session must not be let through when
+// the 4-eyes setting cannot be read.
+func TestRequireDifferentRIExchangeApprover_ConfigLoadFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	store.On("GetGlobalConfig", ctx).Return(nil, errors.New("db down"))
+	h := &Handler{config: store}
+	err := h.requireDifferentRIExchangeApprover(ctx, nil, &config.RIExchangeRecord{ID: "x"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to load global config")
 }
 
 // TestApproveRIExchange_TokenPathAttributesResolvedApprover (issue #518): a token
@@ -1201,14 +1237,21 @@ func TestListExchangeableAzureRIs_ScopedFiltersToOwnSubscription(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := scopedAzureAuth(t, "view", "purchases", []string{"acct-a"})
 	store := &MockConfigStore{}
+	azureListed := false
 	store.ListCloudAccountsFn = func(_ context.Context, filter config.CloudAccountFilter) ([]config.CloudAccount, error) {
-		require.NotNil(t, filter.Provider, "the scope filter must narrow to azure accounts")
-		require.Equal(t, "azure", *filter.Provider)
+		// getAccountScope loads every registered account (no filter) to find
+		// which display names are unique (#433); the handler's own lookup
+		// must narrow to azure.
+		if filter.Provider != nil {
+			require.Equal(t, "azure", *filter.Provider)
+			azureListed = true
+		}
 		return []config.CloudAccount{
 			{ID: "acct-a", Name: "A Team", Provider: "azure", ExternalID: "sub-a"},
 			{ID: "acct-b", Name: "B Team", Provider: "azure", ExternalID: "sub-b"},
 		}, nil
 	}
+	t.Cleanup(func() { assert.True(t, azureListed, "the scope filter must narrow to azure accounts") })
 	stub := &stubAzureExchangeClient{reservations: []azurecompute.ExchangeableReservation{
 		{ReservationID: "res-a", BillingScopeID: "/subscriptions/sub-a", SKU: "Standard_D2s_v3", Quantity: 1, Region: "eastus"},
 		{ReservationID: "res-b", BillingScopeID: "/subscriptions/sub-b", SKU: "Standard_D4s_v3", Quantity: 3, Region: "westeurope"},
@@ -1614,6 +1657,9 @@ func (m *mockAuthForExchange) ValidateUserAPIKeyAPI(_ context.Context, _ string)
 	return nil, nil, nil
 }
 func (m *mockAuthForExchange) RecordAPIKeyUsageAsync(_ string) {}
+func (m *mockAuthForExchange) GetAPIKeyEffectivePermissionsAPI(_ context.Context, _, _ string) ([]auth.APIPermission, error) {
+	return nil, nil
+}
 func (m *mockAuthForExchange) HasAPIKeyPermissionAPI(_ context.Context, _, _, _ string) (string, string, bool, error) {
 	return "admin", "", true, nil
 }

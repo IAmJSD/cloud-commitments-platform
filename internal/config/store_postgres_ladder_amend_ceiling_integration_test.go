@@ -47,7 +47,7 @@ func (f *ceilingFixture) plan(target, existing, baseline *float64, amounts ...fl
 	asOf := time.Now().UTC().Add(-time.Duration(10-f.runs) * time.Minute).Truncate(time.Microsecond)
 	runID := uuid.NewString()
 	var ids []string
-	_, err := f.store.PlanAndSaveLadderRun(f.ctx, f.cfgID, asOf, func(float64) (*LadderRunDB, []LadderTrancheDB, error) {
+	_, err := f.store.PlanAndSaveLadderRun(f.ctx, f.cfgID, asOf, func([]LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) {
 		trs := make([]LadderTrancheDB, len(amounts))
 		for i, a := range amounts {
 			trs[i] = lifecycleTranche(f.cfgID, a, ladder.TrancheStatusScheduled, time.Now().UTC().Add(time.Hour))
@@ -77,9 +77,9 @@ func (f *ceilingFixture) amend(id string, amount float64) error {
 
 func (f *ceilingFixture) inFlight() float64 {
 	f.t.Helper()
-	v, err := inFlightLadderCommit(f.ctx, f.store.db, f.cfgID, time.Now())
+	rows, err := inFlightLadderRows(f.ctx, f.store.db, true, f.cfgID, time.Now())
 	require.NoError(f.t, err)
-	return v
+	return mustOnDemand(f.t, rows)
 }
 
 func (f *ceilingFixture) move(id string, from, to ladder.TrancheStatus) {
@@ -177,10 +177,10 @@ func TestLadderAmendCeiling_WaitsForPlanner(t *testing.T) {
 	asOf := time.Now().UTC().Truncate(time.Microsecond)
 	go func() {
 		runID := uuid.NewString()
-		_, err := f.store.PlanAndSaveLadderRun(f.ctx, f.cfgID, asOf, func(inFlight float64) (*LadderRunDB, []LadderTrancheDB, error) {
+		_, err := f.store.PlanAndSaveLadderRun(f.ctx, f.cfgID, asOf, func(rows []LadderInFlightRow) (*LadderRunDB, []LadderTrancheDB, error) {
 			close(entered)
 			<-gate
-			tr := lifecycleTranche(f.cfgID, 10-inFlight, ladder.TrancheStatusScheduled, time.Now().UTC().Add(time.Hour))
+			tr := lifecycleTranche(f.cfgID, 10-mustOnDemand(f.t, rows), ladder.TrancheStatusScheduled, time.Now().UTC().Add(time.Hour))
 			basis := LadderAmountOnDemand
 			tr.AmountBasis = &basis
 			tr.RunID = &runID

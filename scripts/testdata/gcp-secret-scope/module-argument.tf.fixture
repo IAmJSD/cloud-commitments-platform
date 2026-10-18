@@ -1,0 +1,11 @@
+# Fixture: the role is passed as a module argument, so the IAM resource that
+# binds it lives in another module and only sees `var.*`. Must exit 1.
+
+module "federation" {
+  source = "../../iac/federation/gcp-target/terraform"
+
+  service_account_project_roles = [
+    "roles/compute.viewer",
+    "roles/secretmanager.secretAccessor",
+  ]
+}

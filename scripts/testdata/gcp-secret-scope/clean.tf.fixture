@@ -23,3 +23,67 @@ resource "google_project_iam_member" "cloud_sql_client" {
   role    = "roles/cloudsql.client"
   member  = "serviceAccount:${google_service_account.workload.email}"
 }
+
+# The shapes below are also legitimate and must stay quiet now that the guard
+# looks at every Secret Manager mention in the tree, not only those inside a
+# scope-wide IAM resource:
+#   3. a comment line naming `roles/secretmanager.secretAccessor` (like this one)
+#   4. a variable description, single-line or heredoc, naming the role
+#   5. enabling the Secret Manager API (secretmanager.googleapis.com)
+#   6. a project grant fed by for_each over a local of non-secret roles
+#   7. a regional per-secret binding
+#   8. a custom role referenced by its project-relative path, which is built by
+#      interpolation but is not a predefined `roles/...` name
+
+variable "reader_secret_ids" {
+  description = "Secrets the workload reads; each gets a per-secret roles/secretmanager.secretAccessor binding."
+  type        = map(string)
+  default     = {}
+}
+
+variable "writer_secret_ids" {
+  description = <<-EOT
+    Secrets the workload writes. Each gets a per-secret
+    `roles/secretmanager.secretVersionAdder` binding, never a project grant.
+  EOT
+  type        = map(string)
+  default     = {}
+}
+
+resource "google_project_service" "secretmanager" {
+  project = var.project_id
+  service = "secretmanager.googleapis.com"
+}
+
+locals {
+  read_roles = toset([
+    "roles/compute.viewer",
+    "roles/recommender.viewer",
+  ])
+  custom_role_id = "projects/${var.project_id}/roles/${var.custom_role_id}"
+}
+
+resource "google_project_iam_member" "read_roles" {
+  for_each = local.read_roles
+  project  = var.project_id
+  role     = each.value
+  member   = "serviceAccount:${google_service_account.workload.email}"
+}
+
+resource "google_project_iam_member" "custom" {
+  project = var.project_id
+  role    = local.custom_role_id
+  member  = "serviceAccount:${google_service_account.workload.email}"
+}
+
+resource "google_secret_manager_regional_secret_iam_member" "regional_reader" {
+  project   = var.project_id
+  location  = var.region
+  secret_id = var.regional_secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workload.email}"
+}
+
+output "roles" {
+  value = local.read_roles
+}

@@ -182,16 +182,24 @@ resource "google_cloud_run_v2_service" "main" {
         }
       }
 
-      # Startup probe
+      # Startup probe. Cloud Run admits an instance to traffic once its
+      # startup probe passes, so this is the readiness gate: /ready answers
+      # 503 until the instance has completed database initialization, so a
+      # cold instance is never admitted (#648, #488). A startup probe that
+      # never passes shuts the container down, so the failure budget must
+      # outlast a slow-but-recovering init: 10 s delay + 24 x 10 s = 250 s,
+      # above the 120 s default migration timeout (CUDLY_MIGRATION_TIMEOUT)
+      # plus database connect retries, and inside Cloud Run's 600 s cap on
+      # failure_threshold x period_seconds. Liveness below stays on /health.
       startup_probe {
         http_get {
-          path = "/health"
+          path = "/ready"
           port = 8080
         }
         initial_delay_seconds = 10
         timeout_seconds       = 3
         period_seconds        = 10
-        failure_threshold     = 3
+        failure_threshold     = 24
       }
 
       # Liveness probe
@@ -487,11 +495,35 @@ resource "google_project_iam_member" "compute_commitment_writer" {
   member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
-# Recommender Viewer: read access to the Recommender API (commitment
-# recommendations, cost insights) for surfacing optimization suggestions.
-resource "google_project_iam_member" "recommender_viewer" {
+# Recommendation read access: custom project role cudlyRecommendationReader
+# granting only recommender.usageCommitmentRecommendations.list, the one
+# permission the collector needs to list
+# projects/<id>/locations/<region>/recommenders/
+# google.compute.commitment.UsageCommitmentRecommender (cloud-commitments-go
+# providers/gcp computeengine client). Replaces roles/recommender.viewer, which
+# granted get/list on every recommender and insight type in the project
+# (issue #788). Same role ID and permission as the CLI setup wizard
+# (cloud-commitments-cli#2124). The Cloud SQL / Memorystore Performance
+# recommender calls are not covered; they 403 and are logged as a per-service
+# warning without failing the collection.
+#
+# Like cudlyCommitmentWriter, this needs roles/iam.roleAdmin on the deployer
+# SA (terraform/environments/gcp/ci-cd-permissions); there is deliberately no
+# fallback to the predefined role.
+resource "google_project_iam_custom_role" "cudly_recommendation_reader" {
+  project     = var.project_id
+  role_id     = "cudlyRecommendationReader"
+  title       = "CUDly Recommendation Reader"
+  description = "Minimum permission for CUDly to list Compute Engine committed use discount recommendations."
+  permissions = [
+    "recommender.usageCommitmentRecommendations.list",
+  ]
+  stage = "GA"
+}
+
+resource "google_project_iam_member" "recommendation_reader" {
   project = var.project_id
-  role    = "roles/recommender.viewer"
+  role    = google_project_iam_custom_role.cudly_recommendation_reader.id
   member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 

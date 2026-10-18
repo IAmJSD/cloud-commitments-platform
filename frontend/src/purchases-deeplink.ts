@@ -84,7 +84,7 @@ export async function handlePurchaseDeeplink(): Promise<boolean> {
   let body: string | HTMLElement;
   if (dl.action === 'approve') {
     try {
-      body = await buildApprovalDetailsBody(dl.id);
+      body = await buildApprovalDetailsBody(dl.id, dl.token);
     } catch (err) {
       console.error('Failed to load purchase details for approval:', err);
       showToast({

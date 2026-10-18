@@ -28,19 +28,9 @@ func (h *Handler) getInsuranceComparison(ctx context.Context, req *events.Lambda
 	if err := h.requireInsuranceAccess(ctx, req); err != nil {
 		return nil, err
 	}
-	if h.insurance == nil {
-		return nil, notConfiguredError(archera.Settings{}.Missing())
-	}
-	if st := h.insurance.Status(); !st.Configured {
-		return nil, notConfiguredError(st.Missing)
-	}
-	// The raw client lives in this local only.
-	client, err := h.insurance.Client(ctx)
+	client, err := h.insuranceClient(ctx)
 	if err != nil {
-		if errors.Is(err, archera.ErrNotConfigured) {
-			return nil, notConfiguredError(h.insurance.Status().Missing)
-		}
-		return nil, NewClientError(503, "Archera API key could not be resolved from "+archera.EnvKeySecret)
+		return nil, err
 	}
 	cmp, err := client.Comparison(ctx, insurance.ComparisonRequest{PlanID: h.insurance.PlanID()})
 	if err != nil {
@@ -56,6 +46,25 @@ func (h *Handler) getInsuranceComparison(ctx context.Context, req *events.Lambda
 		return nil, NewClientError(502, "comparison too large to return")
 	}
 	return dto, nil
+}
+
+// insuranceClient resolves the Archera client, or a fixed client error. The raw
+// client lives in the caller's local only.
+func (h *Handler) insuranceClient(ctx context.Context) (insurance.QuoteClient, error) {
+	if h.insurance == nil {
+		return nil, notConfiguredError(archera.Settings{}.Missing())
+	}
+	if st := h.insurance.Status(); !st.Configured {
+		return nil, notConfiguredError(st.Missing)
+	}
+	client, err := h.insurance.Client(ctx)
+	if err != nil {
+		if errors.Is(err, archera.ErrNotConfigured) {
+			return nil, notConfiguredError(h.insurance.Status().Missing)
+		}
+		return nil, NewClientError(503, "Archera API key could not be resolved from "+archera.EnvKeySecret)
+	}
+	return client, nil
 }
 
 func notConfiguredError(missing []string) error {

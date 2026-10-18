@@ -1,0 +1,13 @@
+# Fixture: a `#` inside a string earlier on the line must not be mistaken for a
+# comment that hides the role after it. Must exit 1.
+
+locals {
+  roles = ["roles/viewer#legacy", "roles/secretmanager.admin"]
+}
+
+resource "google_project_iam_member" "roles" {
+  for_each = toset(local.roles)
+  project  = var.project_id
+  role     = each.value
+  member   = "serviceAccount:${google_service_account.workload.email}"
+}

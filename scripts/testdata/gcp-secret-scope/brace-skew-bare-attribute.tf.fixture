@@ -1,0 +1,12 @@
+# Fixture: a skewed brace depth (unbalanced `{` in a string) together with a
+# top-level attribute right after the per-secret block closes. The column-0 `}`
+# must end the exemption even though the count says the block is still open.
+# Must exit 1.
+
+resource "google_secret_manager_secret_iam_member" "skewed" {
+  project   = var.project_id
+  secret_id = "{"
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.workload.email}"
+}
+role = "roles/secretmanager.admin"

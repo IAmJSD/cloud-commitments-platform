@@ -37,6 +37,10 @@ func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLReques
 	}
 	loginReq.Password = decoded
 
+	if limitErr := h.checkLoginMFARateLimit(ctx, loginReq.Email, loginReq.MFACode); limitErr != nil {
+		return nil, limitErr
+	}
+
 	response, err := h.auth.Login(ctx, loginReq)
 	if err != nil {
 		// Map MFA sentinels to machine-readable error codes so the
@@ -101,19 +105,34 @@ func (h *Handler) getCurrentUser(ctx context.Context, req *events.LambdaFunction
 }
 
 // getCurrentUserPermissions handles GET /api/auth/me/permissions.
-// It returns the effective permission set for the authenticated user,
-// derived from the union of all their group permissions. The same path
-// the backend uses for enforcement (GetUserPermissionsAPI -> GetUserPermissions).
+// It returns the effective permission set of the authenticated caller, the
+// same set the backend enforces for that caller:
+//   - bearer-token session: the union of the user's group permissions
+//     (GetUserPermissionsAPI -> GetUserPermissions);
+//   - user API key: the key's permissions intersected with its owner's
+//     (GetAPIKeyEffectivePermissionsAPI), never the owner's full set, so a
+//     view-only key owned by an admin is not advertised as admin (issue #62);
+//   - admin API key: {admin, *}.
+//
+// IsAdmin is derived from that same set.
 //
 // Auth: the route is AuthUser, which admits admin API key, user API
 // key, OR a bearer-token session (see router.go AuthLevel doc). The
-// handler resolves the authenticated user from any of those three
+// handler resolves the authenticated caller from any of those three
 // credentials rather than re-requiring a bearer session — otherwise a
 // caller that authenticated upstream with an API key would still get a
 // 401 here.
 func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.LambdaFunctionURLRequest) (*UserPermissionsResponse, error) {
 	if h.auth == nil {
 		return nil, fmt.Errorf("authentication service not configured")
+	}
+
+	keyID, keyOwnerID, isUserAPIKey, err := h.userAPIKeyCaller(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if isUserAPIKey {
+		return h.userAPIKeyPermissions(ctx, keyID, keyOwnerID)
 	}
 
 	userID, err := h.resolveAuthenticatedUserID(ctx, req)
@@ -147,6 +166,56 @@ func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.Lam
 		logging.Errorf("getCurrentUserPermissions: GetUserPermissionsAPI returned %T, want []auth.APIPermission", raw)
 		return nil, fmt.Errorf("GetUserPermissionsAPI returned unexpected payload type %T", raw)
 	}
+	return permissionsResponse(apiPerms), nil
+}
+
+// userAPIKeyCaller reports whether the request authenticated with a user API
+// key and, if so, returns the key's database ID and its owner's user ID.
+// With a principal in context (every routed request) it reads the principal:
+// a user-API-key principal wins over a bearer session sent alongside it,
+// exactly as requirePermission evaluates it. Without one it validates the
+// x-api-key header itself; a key that does not validate is not a key caller
+// (the bearer session is tried next, as resolveAuthenticatedUserID does), but
+// a key that validates without a usable key/owner record is refused rather
+// than described with its owner's permissions.
+func (h *Handler) userAPIKeyCaller(ctx context.Context, req *events.LambdaFunctionURLRequest) (keyID, userID string, isUserAPIKey bool, err error) {
+	if principal, ok := principalFromContext(ctx); ok {
+		if principal.Kind != PrincipalUserAPIKey {
+			return "", "", false, nil
+		}
+		return principal.APIKeyID, principal.UserID, true, nil
+	}
+	apiKey := extractAPIKey(req)
+	if apiKey == "" || h.checkAdminAPIKey(apiKey) {
+		return "", "", false, nil
+	}
+	keyRaw, userRaw, validateErr := h.auth.ValidateUserAPIKeyAPI(ctx, apiKey)
+	if validateErr != nil {
+		return "", "", false, nil
+	}
+	key, keyOK := keyRaw.(*auth.UserAPIKey)
+	user, userOK := userRaw.(*auth.User)
+	if !keyOK || !userOK || key == nil || user == nil {
+		return "", "", false, NewClientError(401, "API key permission validation failed")
+	}
+	return key.ID, user.ID, true, nil
+}
+
+// userAPIKeyPermissions builds the /me/permissions response for a user API
+// key from the key's effective permissions. Fail closed: a lookup error
+// refuses the request instead of falling back to the owner's permissions.
+func (h *Handler) userAPIKeyPermissions(ctx context.Context, keyID, userID string) (*UserPermissionsResponse, error) {
+	apiPerms, err := h.auth.GetAPIKeyEffectivePermissionsAPI(ctx, keyID, userID)
+	if err != nil {
+		logging.Errorf("getCurrentUserPermissions: resolving API key %s effective permissions: %v", keyID, err)
+		return nil, fmt.Errorf("failed to resolve API key permissions: %w", err)
+	}
+	return permissionsResponse(apiPerms), nil
+}
+
+// permissionsResponse converts an effective permission set to the wire
+// shape, setting IsAdmin when the set holds the {admin, *} wildcard.
+func permissionsResponse(apiPerms []auth.APIPermission) *UserPermissionsResponse {
 	entries := make([]PermissionEntry, len(apiPerms))
 	isAdmin := false
 	for i, p := range apiPerms {
@@ -155,11 +224,10 @@ func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.Lam
 			isAdmin = true
 		}
 	}
-
 	return &UserPermissionsResponse{
 		Permissions: entries,
 		IsAdmin:     isAdmin,
-	}, nil
+	}
 }
 
 // resolveAuthenticatedUserID resolves the calling user's ID from any of

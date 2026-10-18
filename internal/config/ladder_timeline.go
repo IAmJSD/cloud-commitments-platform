@@ -15,26 +15,30 @@ type LadderTimelineCursor struct {
 }
 
 type LadderTimelineEvent struct {
-	CreatedAt     time.Time            `json:"created_at"`
-	ScheduledDate time.Time            `json:"scheduled_date"`
-	ExecutionID   *string              `json:"execution_id,omitempty"`
-	ID            string               `json:"id"`
-	RunID         string               `json:"run_id"`
-	ConfigID      string               `json:"config_id"`
-	AmountUSDHr   string               `json:"amount_usd_hr"`
-	Revision      int64                `json:"revision"`
-	Layer         ladder.LayerType     `json:"layer_type"`
-	Term          ladder.Term          `json:"term"`
-	Payment       ladder.PaymentOption `json:"payment_option"`
-	Status        ladder.TrancheStatus `json:"status"`
-	RunStatus     ladder.RunStatus     `json:"run_status"`
+	CreatedAt      time.Time            `json:"created_at"`
+	ScheduledDate  time.Time            `json:"scheduled_date"`
+	ExecutionID    *string              `json:"execution_id,omitempty"`
+	ID             string               `json:"id"`
+	RunID          string               `json:"run_id"`
+	ConfigID       string               `json:"config_id"`
+	AmountUSDHr    string               `json:"amount_usd_hr"`
+	AmountBasis    *LadderAmountBasis   `json:"amount_basis,omitempty"`
+	CommitmentRate *string              `json:"commitment_rate,omitempty"`
+	ODUSDHr        string               `json:"od_usd_hr"`
+	Revision       int64                `json:"revision"`
+	Layer          ladder.LayerType     `json:"layer_type"`
+	Term           ladder.Term          `json:"term"`
+	Payment        ladder.PaymentOption `json:"payment_option"`
+	Status         ladder.TrancheStatus `json:"status"`
+	RunStatus      ladder.RunStatus     `json:"run_status"`
 }
 
 type LadderTimelinePage struct {
-	Events     []LadderTimelineEvent `json:"events"`
-	NextCursor *LadderTimelineCursor `json:"next_cursor,omitempty"`
-	TotalUSDHr string                `json:"total_usd_hr"`
-	TotalCount int64                 `json:"total_count"`
+	Events       []LadderTimelineEvent `json:"events"`
+	NextCursor   *LadderTimelineCursor `json:"next_cursor,omitempty"`
+	TotalUSDHr   string                `json:"total_usd_hr"`
+	TotalODUSDHr string                `json:"total_od_usd_hr"`
+	TotalCount   int64                 `json:"total_count"`
 }
 
 type LadderTimelineRun struct {

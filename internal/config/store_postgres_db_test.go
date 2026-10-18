@@ -51,14 +51,6 @@ func setupTestContainerDB(t *testing.T) *database.Connection {
 		migrations.RunMigrations(ctx, container.DB.Pool(), getTestMigrationsPath(), "", ""),
 		"migrations failed to apply to a fresh database")
 
-	// The store code uses ON CONFLICT (execution_id) but the migration schema
-	// does not create a UNIQUE constraint on execution_id. Add it for tests.
-	_, err := container.DB.Exec(ctx,
-		"CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_executions_execution_id_unique ON purchase_executions(execution_id)")
-	require.NoError(t, err,
-		"could not add the unique index on execution_id the ON CONFLICT paths need; "+
-			"a migrated schema this DDL cannot be applied to is a failure, not a reason to skip")
-
 	return container.DB
 }
 
@@ -561,26 +553,27 @@ func TestPostgresStoreDB_PurchaseExecutions(t *testing.T) {
 		assert.Equal(t, existingExecID, exec.ExecutionID)
 	})
 
-	// Store a generated exec ID for use in later subtests
-	var generatedExecID string
 	t.Run("GetPendingExecutions", func(t *testing.T) {
 		pending, err := store.GetPendingExecutions(ctx)
 		require.NoError(t, err)
-		assert.NotNil(t, pending)
-		assert.GreaterOrEqual(t, len(pending), 1)
-		// Store the first pending execution ID for later use
-		if len(pending) > 0 {
-			generatedExecID = pending[0].ExecutionID
-		}
+		require.NotEmpty(t, pending, "earlier subtests saved pending executions")
+		require.NotEmpty(t, pending[0].ExecutionID)
 	})
 
 	t.Run("GetExecutionByID success", func(t *testing.T) {
-		if generatedExecID == "" {
-			t.Skip("no execution ID available from prior test")
+		saved := &PurchaseExecution{
+			PlanID:          plan.ID,
+			Status:          "pending",
+			StepNumber:      1,
+			ScheduledDate:   time.Now().Add(96 * time.Hour),
+			Recommendations: []RecommendationRecord{},
 		}
-		exec, err := store.GetExecutionByID(ctx, generatedExecID)
+		require.NoError(t, store.SavePurchaseExecution(ctx, saved))
+		require.NotEmpty(t, saved.ExecutionID)
+
+		exec, err := store.GetExecutionByID(ctx, saved.ExecutionID)
 		require.NoError(t, err)
-		assert.Equal(t, generatedExecID, exec.ExecutionID)
+		assert.Equal(t, saved.ExecutionID, exec.ExecutionID)
 		assert.Equal(t, plan.ID, exec.PlanID)
 	})
 

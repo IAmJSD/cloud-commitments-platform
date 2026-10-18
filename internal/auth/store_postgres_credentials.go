@@ -119,14 +119,18 @@ func (s *PostgresStore) SetPendingMFASecret(ctx context.Context, userID, secret 
 
 // EnableMFA promotes the pending secret the caller verified, only while MFA is
 // still off and that secret is still the pending one and unexpired (issues #227,
-// #527).
-func (s *PostgresStore) EnableMFA(ctx context.Context, userID, pendingSecret string, recoveryHashes []string) error {
+// #527). It also sets the last accepted TOTP counter to the enrollment code's,
+// so that code cannot be spent again at Login (#442). The counter is replaced,
+// not raised: it was recorded for the previous secret, whose codes no longer
+// verify, and keeping a higher one would refuse a fresh code of the new secret.
+func (s *PostgresStore) EnableMFA(ctx context.Context, userID, pendingSecret string, totpCounter int64, recoveryHashes []string) error {
 	result, err := s.db.Exec(ctx, `
 		UPDATE users SET mfa_enabled = true, mfa_secret = $2, mfa_recovery_codes = $3,
+			mfa_last_totp_counter = $4,
 			mfa_pending_secret = '', mfa_pending_secret_expires_at = NULL, updated_at = NOW()
 		WHERE id = $1 AND mfa_enabled = false AND mfa_pending_secret = $2
 			AND mfa_pending_secret_expires_at > NOW()
-	`, userID, pendingSecret, recoveryHashes)
+	`, userID, pendingSecret, recoveryHashes, totpCounter)
 	if err != nil {
 		return fmt.Errorf("failed to enable MFA: %w", err)
 	}
