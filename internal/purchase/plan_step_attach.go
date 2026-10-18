@@ -330,6 +330,7 @@ func (m *Manager) writeAttached(ctx context.Context, tx pgx.Tx, locked *config.P
 			PlanID: locked.ID, ExecutionID: uuid.New().String(), Status: "pending", StepNumber: claim.number,
 			ScheduledDate: attachScheduledDate(locked, time.Now()), IdempotencyKey: uuid.New().String(),
 			Recommendations: recs, TotalUpfrontCost: upfront, EstimatedSavings: savings,
+			CreatedBySystem: true, // sweep-minted: no human initiator (issue #233)
 		}
 		if err := m.config.SavePurchaseExecutionTx(ctx, tx, exec); err != nil {
 			return stepClaim{}, fmt.Errorf("failed to record plan step %d of plan %s: %w", claim.number, locked.ID, err)

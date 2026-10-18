@@ -835,6 +835,7 @@ func TestHandler_createPlannedPurchases_AdminAPIKeyCreatorIsNil(t *testing.T) {
 		Run(func(args mock.Arguments) {
 			exec := args.Get(1).(*config.PurchaseExecution)
 			savedCreators = append(savedCreators, exec.CreatedByUserID)
+			assert.False(t, exec.CreatedBySystem, "an API-key row has a human initiator and must not be system-created (#233)")
 		}).
 		Return(nil).Times(2)
 	mockStore.On("UpdatePurchasePlan", ctx, mock.AnythingOfType("*config.PurchasePlan")).Return(nil)

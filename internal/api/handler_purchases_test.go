@@ -6471,7 +6471,7 @@ func TestRequireDifferentApprover_ModeOff_AllowsSameUser(t *testing.T) {
 	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOff(), nil)
 
 	handler := &Handler{config: mockConfig}
-	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID)
+	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID, false)
 	require.NoError(t, err, "mode off: creator self-approve must be allowed")
 }
 
@@ -6489,7 +6489,7 @@ func TestRequireDifferentApprover_ModeOn_DeniesSameUser(t *testing.T) {
 	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 
 	handler := &Handler{config: mockConfig}
-	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID)
+	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID, false)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -6511,7 +6511,7 @@ func TestRequireDifferentApprover_ModeOn_AllowsDifferentUser(t *testing.T) {
 	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 
 	handler := &Handler{config: mockConfig}
-	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID)
+	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID, false)
 	require.NoError(t, err, "mode on: different user must be allowed")
 }
 
@@ -6529,7 +6529,7 @@ func TestRequireDifferentApprover_ModeOn_DeniesAdminSelfApprove(t *testing.T) {
 	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 
 	handler := &Handler{config: mockConfig}
-	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID)
+	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID, false)
 	require.Error(t, err, "mode on: admin self-approve must be denied")
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -6550,7 +6550,7 @@ func TestRequireDifferentApprover_ModeOn_NullCreatorDenied(t *testing.T) {
 	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 
 	handler := &Handler{config: mockConfig}
-	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID)
+	err := handler.requireDifferentApprover(ctx, session, exec.ExecutionID, exec.CreatedByUserID, false)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -6570,7 +6570,7 @@ func TestRequireDifferentApprover_NilAuth_500(t *testing.T) {
 	mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
 
 	handler := &Handler{config: mockConfig}
-	err := handler.requireDifferentApprover(ctx, nil, exec.ExecutionID, exec.CreatedByUserID)
+	err := handler.requireDifferentApprover(ctx, nil, exec.ExecutionID, exec.CreatedByUserID, false)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
@@ -6767,4 +6767,49 @@ func TestFourEyesActorIdentity(t *testing.T) {
 		session := &Session{UserID: apiKeyAdminUserID, Email: ""}
 		assert.Equal(t, apiKeyAdminUserID, fourEyesActorIdentity(session))
 	})
+}
+
+// TestRequireDifferentApprover_ModeOn_SystemCreated pins the #233 rule matrix
+// for scheduler-minted rows versus unflagged nil-creator rows.
+func TestRequireDifferentApprover_ModeOn_SystemCreated(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	creator := "user-creator"
+	cases := []struct {
+		name    string
+		session *Session
+		creator *string
+		system  bool
+		code    int
+		msg     string
+	}{
+		{"system row, other user", &Session{UserID: "approver"}, nil, true, 0, ""},
+		{"unflagged nil row", &Session{UserID: "approver"}, nil, false, 403, "predates the dual-control feature"},
+		{"flag does not override creator", &Session{UserID: creator}, &creator, true, 403, "different approver"},
+		{"system row, no session", nil, nil, true, 500, "no session"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			mockConfig := new(MockConfigStore)
+			mockConfig.On("GetGlobalConfig", ctx).Return(fourEyesCfgOn(), nil)
+			err := (&Handler{config: mockConfig}).requireDifferentApprover(ctx, tc.session, "exec-1", tc.creator, tc.system)
+			if tc.code == 0 {
+				require.NoError(t, err)
+				return
+			}
+			ce, ok := IsClientError(err)
+			require.True(t, ok)
+			assert.Equal(t, tc.code, ce.code)
+			assert.Contains(t, ce.Error(), tc.msg)
+		})
+	}
+}
+
+// TestNewPendingExecution_NotSystemCreated: only the sweep may set the flag (#233).
+func TestNewPendingExecution_NotSystemCreated(t *testing.T) {
+	t.Parallel()
+	exec, _, err := newPendingExecution(&ExecutePurchaseRequest{CapacityPercent: 100}, 0, 0)
+	require.NoError(t, err)
+	assert.False(t, exec.CreatedBySystem)
 }

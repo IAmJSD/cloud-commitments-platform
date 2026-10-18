@@ -387,6 +387,7 @@ func executionToHistoryRow(exec config.PurchaseExecution, approver, createdByEma
 		PlanID:             exec.PlanID,
 		Status:             exec.Status,
 		CreatedByUserID:    createdBy,
+		CreatedBySystem:    exec.CreatedBySystem,
 		CreatedByUserEmail: createdByEmail,
 		RetryExecutionID:   retryExecID,
 		RetryAttemptN:      exec.RetryAttemptN,

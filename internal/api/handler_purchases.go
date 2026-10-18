@@ -852,7 +852,7 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	// session; requireDifferentApprover returns 500 when mode is on and no
 	// session is available (fail-closed).
 	tokenSession := h.tryGetSession(ctx, req)
-	if err := h.requireDifferentApprover(ctx, tokenSession, execution.ExecutionID, execution.CreatedByUserID); err != nil {
+	if err := h.requireDifferentApprover(ctx, tokenSession, execution.ExecutionID, execution.CreatedByUserID, execution.CreatedBySystem); err != nil {
 		return nil, err
 	}
 	// SEC-01 follow-up (issue #60 review): the deep-link flow always forces
@@ -1019,7 +1019,7 @@ func (h *Handler) authorizeApproveSession(ctx context.Context, session *Session,
 	// pass the approve-any / approve-own gate reach this check. The admin
 	// wildcard inside authorizeSessionApprove short-circuits RBAC but NOT this
 	// check; admins who created the row must disable the mode first.
-	return h.requireDifferentApprover(ctx, session, execution.ExecutionID, execution.CreatedByUserID)
+	return h.requireDifferentApprover(ctx, session, execution.ExecutionID, execution.CreatedByUserID, execution.CreatedBySystem)
 }
 
 // authorizeScopedSessionApprove runs the account-scope gate (issue #92)
@@ -1355,7 +1355,7 @@ func (h *Handler) sendPurchaseScheduledEmail(ctx context.Context, execution *con
 //
 // Admin wildcard is intentionally NOT exempt: an admin who created an execution
 // must disable the mode in Settings before approving their own row.
-func (h *Handler) requireDifferentApprover(ctx context.Context, session *Session, subjectID string, creatorUserID *string) error {
+func (h *Handler) requireDifferentApprover(ctx context.Context, session *Session, subjectID string, creatorUserID *string, systemCreated bool) error {
 	cfg, err := h.config.GetGlobalConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("4-eyes policy check: failed to load global config: %w", err)
@@ -1368,6 +1368,13 @@ func (h *Handler) requireDifferentApprover(ctx context.Context, session *Session
 	if session == nil {
 		logging.Warnf("4-eyes[%s]: mode on but no session available; denying (fail-closed)", subjectID)
 		return NewClientError(500, "4-eyes approval mode is enabled but no session could be resolved; sign in before approving")
+	}
+
+	if creatorUserID == nil && systemCreated {
+		// Scheduler-minted row: no human requester exists, so any identified
+		// approver (session != nil, checked above) is the second pair of eyes.
+		logging.Infof("4-eyes[%s]: mode on; system-created row approved by user %s", subjectID, session.UserID)
+		return nil
 	}
 
 	if creatorUserID == nil {

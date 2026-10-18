@@ -1355,3 +1355,23 @@ func TestMintRevocationToken_PersistsFreshToken(t *testing.T) {
 	assert.NotEqual(t, "old-approval-token", execution.ApprovalToken)
 	assert.NotNil(t, execution.ApprovalTokenExpiresAt)
 }
+
+// TestManager_ApproveAndExecute_FourEyesOn_SystemCreated pins the #233 rule for
+// scheduler-minted rows (identified approver passes, anonymous and creator denied).
+func TestManager_ApproveAndExecute_FourEyesOn_SystemCreated(t *testing.T) {
+	ctx := context.Background()
+	creatorID, approverID := "user-creator", "user-approver"
+	gate := func(creator *string, email string, userID *string) error {
+		manager, store, _ := newApproveManager(t)
+		execution := fourEyesManagerExec("exec-sys", creator)
+		execution.CreatedBySystem = true
+		store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOnForManager(), nil)
+		store.On("GetExecutionByID", ctx, "exec-sys").Return(execution, nil)
+		return manager.enforceFourEyesPolicy(ctx, "exec-sys", email, userID)
+	}
+
+	require.NoError(t, gate(nil, "approver@example.com", nil))
+	require.NoError(t, gate(nil, "", &approverID))
+	require.ErrorIs(t, gate(nil, "  ", nil), ErrFourEyesDenied, "anonymous actor")
+	require.ErrorIs(t, gate(&creatorID, "", &creatorID), ErrFourEyesDenied, "flag must not override a creator")
+}

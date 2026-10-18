@@ -254,10 +254,25 @@ func (m *Manager) loadExecutionForFourEyes(ctx context.Context, executionID stri
 	return execution, nil
 }
 
+// checkSystemCreatedApprover gates a scheduler-minted execution (issue #233):
+// there is no human requester to differ from, so any identified approver
+// passes and an anonymous actor is denied (fail-closed).
+func (m *Manager) checkSystemCreatedApprover(executionID, actorEmail string, actorUserID *string) error {
+	if actorUserID == nil && strings.TrimSpace(actorEmail) == "" {
+		logging.Warnf("purchase[%s]: 4-eyes mode on; system-created row, no actor identity available, denying (fail-closed)", executionID)
+		return fmt.Errorf("%w: 4-eyes approval mode is enabled but no approver identity could be determined; sign in or supply a verified actor before approving", ErrFourEyesDenied)
+	}
+	logging.Infof("purchase[%s]: 4-eyes mode on; system-created row has no human requester, approver accepted", executionID)
+	return nil
+}
+
 // checkDifferentApprover runs the actual identity comparison once mode is
 // confirmed on and the execution is loaded. Extracted from
 // enforceFourEyesPolicy to keep it under the gocyclo threshold.
 func (m *Manager) checkDifferentApprover(ctx context.Context, executionID string, execution *config.PurchaseExecution, actorEmail string, actorUserID *string) error {
+	if execution.CreatedByUserID == nil && execution.CreatedBySystem {
+		return m.checkSystemCreatedApprover(executionID, actorEmail, actorUserID)
+	}
 	if execution.CreatedByUserID == nil {
 		logging.Warnf("purchase[%s]: 4-eyes mode on; NULL creator (legacy row), denying", executionID)
 		return fmt.Errorf("%w: this execution predates the dual-control feature and has no recorded creator; an admin must disable 4-eyes mode to approve", ErrFourEyesDenied)

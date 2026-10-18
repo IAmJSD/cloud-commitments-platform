@@ -2165,3 +2165,27 @@ func TestExecutionToHistoryRow_RedriveUnsafe(t *testing.T) {
 		})
 	}
 }
+
+// TestHandler_getHistory_ProjectsCreatedBySystem: the History UI needs the #233 marker.
+func TestHandler_getHistory_ProjectsCreatedBySystem(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	approverEmail := "ops@example.com"
+	recs := []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1"}}
+	execs := []config.PurchaseExecution{
+		{ExecutionID: "sys", Status: "pending", ScheduledDate: time.Now(), CreatedBySystem: true, Recommendations: recs},
+		{ExecutionID: "human", Status: "pending", ScheduledDate: time.Now(), Recommendations: recs},
+	}
+	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(execs, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
+	mockAuth, req := adminHistoryReq(ctx)
+
+	result, err := (&Handler{auth: mockAuth, config: mockStore}).getHistory(ctx, req, map[string]string{})
+	require.NoError(t, err)
+	got := map[string]bool{}
+	for _, p := range result.(HistoryResponse).Purchases {
+		got[p.PurchaseID] = p.CreatedBySystem
+	}
+	assert.Equal(t, map[string]bool{"sys": true, "human": false}, got)
+}

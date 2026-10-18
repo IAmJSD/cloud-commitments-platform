@@ -360,6 +360,11 @@ type PurchaseExecution struct {
 	// — a non-admin may cancel only executions they themselves created.
 	// NULL is treated as "not the current user".
 	CreatedByUserID *string `json:"created_by_user_id,omitempty" dynamodbav:"created_by_user_id,omitempty"`
+	// CreatedBySystem marks a row the scheduler sweep minted with no human
+	// initiator (issue #233). Server-only and insert-only: never bound from a
+	// request, never rewritten by the upsert. Implies CreatedByUserID == nil
+	// (CHECK in migration 000130).
+	CreatedBySystem bool `json:"-" dynamodbav:"-"`
 	// RetryExecutionID points from a *failed* execution to the new
 	// execution created when the user clicked Retry (issue #47). Set
 	// only on the original failed row; NULL on every other row including
@@ -929,6 +934,8 @@ type PurchaseHistoryRecord struct {
 	// rows (where the action has already completed). Excluded from DB
 	// persistence.
 	CreatedByUserID string `json:"created_by_user_id,omitempty" dynamodbav:"-"`
+	// CreatedBySystem propagates the execution's scheduler-created marker (#233).
+	CreatedBySystem bool `json:"created_by_system,omitempty" dynamodbav:"-"`
 	// RetryExecutionID propagates the originating execution's pointer to
 	// its successor when the user retried it (issue #47). Set only on
 	// the *original* failed row that has been retried; the History UI
