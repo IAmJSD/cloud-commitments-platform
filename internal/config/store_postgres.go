@@ -3930,14 +3930,22 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 	}
 	defer rollbackTx(ctx, tx, "DeleteCloudAccount")
 
-	// Lock the account row before reading which plans target it. A writer
-	// attaching the account to a plan holds a KEY SHARE lock on this row
-	// (the plan_accounts FK check) until it commits, so this waits for it and
-	// the plan disable below sees its rows. Without the lock the DELETE would
-	// still wait for that writer, but only after the plans were picked, and
-	// its cascade would leave that plan enabled with no accounts.
+	// Issue #264 lock order: the plans that target this account, then the
+	// account row, then any plan that gained the account meanwhile. The plan
+	// locks serialize this delete with a concurrent delete of another of the
+	// plan's accounts and with SetPlanAccounts (which reads the plan FOR
+	// SHARE), so the disable below decides on committed plan_accounts rows.
+	// The account lock waits for a writer still attaching the account to a
+	// plan (it holds KEY SHARE on this row through the plan_accounts FK until
+	// it commits); the second plan lock then takes the plans it attached.
+	if err = lockAccountPlansTx(ctx, tx, id); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(ctx, `SELECT 1 FROM cloud_accounts WHERE id = $1 FOR UPDATE`, id); err != nil {
 		return fmt.Errorf("failed to lock cloud account: %w", err)
+	}
+	if err = lockAccountPlansTx(ctx, tx, id); err != nil {
+		return err
 	}
 
 	// Reset any linked approved registration first (explicit NULL so we don't
@@ -3993,6 +4001,21 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 	return nil
 }
 
+// lockAccountPlansTx locks, in id order, every plan with a plan_accounts row
+// for accountID. A fixed order keeps two account deletes that share plans from
+// deadlocking on each other.
+func lockAccountPlansTx(ctx context.Context, tx pgx.Tx, accountID string) error {
+	if _, err := tx.Exec(ctx, `
+		SELECT p.id FROM purchase_plans p
+		 WHERE p.id IN (SELECT pa.plan_id FROM plan_accounts pa WHERE pa.account_id = $1)
+		 ORDER BY p.id
+		   FOR UPDATE OF p
+	`, accountID); err != nil {
+		return fmt.Errorf("failed to lock plans of cloud account: %w", err)
+	}
+	return nil
+}
+
 // disableSoleAccountPlansTx disables every enabled plan whose only
 // plan_accounts row is accountID, and returns their IDs (issue #264). The
 // account delete cascades those rows away, and a plan with no accounts is the
@@ -4000,7 +4023,9 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 // would keep creating executions for it with no account to buy in. Disabling
 // rather than refusing the delete keeps the plan and its history for the
 // admin to re-target and re-enable. Plans already disabled are not rewritten,
-// so their updated_at (the plan edit token) does not move.
+// so their updated_at (the plan edit token) does not move. The caller holds
+// the plan rows locked (lockAccountPlansTx), so plan_accounts cannot change
+// under this statement's decision.
 func disableSoleAccountPlansTx(ctx context.Context, tx pgx.Tx, accountID string) ([]string, error) {
 	rows, err := tx.Query(ctx, `
 		UPDATE purchase_plans p
