@@ -114,7 +114,10 @@ func (h *Handler) getCurrentUser(ctx context.Context, req *events.LambdaFunction
 //     view-only key owned by an admin is not advertised as admin (issue #62);
 //   - admin API key: {admin, *}.
 //
-// IsAdmin is derived from that same set.
+// IsAdmin is derived from that same set. UnrestrictedAccountAccess reports
+// whether the caller passes the account-scope gate that global actions such
+// as POST /api/recommendations/refresh enforce (issue #619), so the frontend
+// can skip an automatic refresh the backend would refuse with 403.
 //
 // Auth: the route is AuthUser, which admits admin API key, user API
 // key, OR a bearer-token session (see router.go AuthLevel doc). The
@@ -132,7 +135,15 @@ func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.Lam
 		return nil, err
 	}
 	if isUserAPIKey {
-		return h.userAPIKeyPermissions(ctx, keyID, keyOwnerID)
+		resp, keyErr := h.userAPIKeyPermissions(ctx, keyID, keyOwnerID)
+		if keyErr != nil {
+			return nil, keyErr
+		}
+		// The refresh gate evaluates a user API key against its owner's
+		// account scope (authorizeAPIKey puts the owner's ID on the session),
+		// so the flag is resolved for the owner too.
+		resp.UnrestrictedAccountAccess = h.unrestrictedAccountAccess(ctx, keyOwnerID)
+		return resp, nil
 	}
 
 	userID, err := h.resolveAuthenticatedUserID(ctx, req)
@@ -146,8 +157,9 @@ func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.Lam
 	// (matches the requireAdmin / requirePermission short-circuit).
 	if userID == apiKeyAdminUserID {
 		return &UserPermissionsResponse{
-			Permissions: []PermissionEntry{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}},
-			IsAdmin:     true,
+			Permissions:               []PermissionEntry{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}},
+			IsAdmin:                   true,
+			UnrestrictedAccountAccess: h.unrestrictedAccountAccess(ctx, userID),
 		}, nil
 	}
 
@@ -166,7 +178,28 @@ func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.Lam
 		logging.Errorf("getCurrentUserPermissions: GetUserPermissionsAPI returned %T, want []auth.APIPermission", raw)
 		return nil, fmt.Errorf("GetUserPermissionsAPI returned unexpected payload type %T", raw)
 	}
-	return permissionsResponse(apiPerms), nil
+	resp := permissionsResponse(apiPerms)
+	resp.UnrestrictedAccountAccess = h.unrestrictedAccountAccess(ctx, userID)
+	return resp, nil
+}
+
+// unrestrictedAccountAccess reports whether userID passes
+// requireUnrestrictedAccountScope, the gate on POST
+// /api/recommendations/refresh, by running that same check rather than a
+// copy of it. A scope lookup failure is logged and reported as false: the flag
+// only steers the UI (false skips an automatic refresh), the refresh endpoint
+// still enforces the scope itself, and failing the whole permissions response
+// would drop the frontend to its coarser group-based gating.
+func (h *Handler) unrestrictedAccountAccess(ctx context.Context, userID string) bool {
+	err := h.requireUnrestrictedAccountScope(ctx, &Session{UserID: userID})
+	if err == nil {
+		return true
+	}
+	if ce, isClient := IsClientError(err); isClient && ce.code == 403 {
+		return false // a restricted scope: the expected refusal
+	}
+	logging.Errorf("getCurrentUserPermissions: resolving account scope for user %s: %v", userID, err)
+	return false
 }
 
 // userAPIKeyCaller reports whether the request authenticated with a user API

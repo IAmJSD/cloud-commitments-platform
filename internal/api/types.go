@@ -552,9 +552,14 @@ type PermissionEntry struct {
 // the user's groups; for a user API key, the key's permissions intersected
 // with its owner's (issue #62); for the admin API key, {admin, *}.
 // IsAdmin mirrors whether that effective set contains the {admin, *} wildcard.
+// UnrestrictedAccountAccess reports whether the caller's account scope covers
+// every account, which global actions such as POST
+// /api/recommendations/refresh require (issue #619). Like the permission
+// entries it is for UX gating only; the backend still enforces the scope.
 type UserPermissionsResponse struct {
-	Permissions []PermissionEntry `json:"permissions"`
-	IsAdmin     bool              `json:"is_admin"`
+	Permissions               []PermissionEntry `json:"permissions"`
+	IsAdmin                   bool              `json:"is_admin"`
+	UnrestrictedAccountAccess bool              `json:"unrestricted_account_access"`
 }
 
 // MFA enrollment + lifecycle DTOs (issue #497). Passwords carried by
