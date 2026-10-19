@@ -1889,6 +1889,13 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 	`
 
 	executions, err := s.queryExecutions(ctx, query, executionID)
+	if isInvalidTextRepresentation(err) {
+		// execution_id is a UUID column, and Postgres rejects an ID it cannot
+		// cast instead of matching no row. No execution can have such an ID,
+		// so it is not found. Callers such as the purchase revoke route look up
+		// IDs that may be an Azure ARM path and fall through on ErrNotFound.
+		return nil, fmt.Errorf("%w: execution %s", ErrNotFound, executionID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1898,6 +1905,18 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 	}
 
 	return &executions[0], nil
+}
+
+// pgInvalidTextRepresentation is the SQLSTATE Postgres raises when a text
+// value cannot be cast to the column type, for example a non-UUID string
+// compared with a uuid column.
+const pgInvalidTextRepresentation = "22P02"
+
+// isInvalidTextRepresentation reports whether err is Postgres refusing a text value
+// for a typed column (SQLSTATE 22P02).
+func isInvalidTextRepresentation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgInvalidTextRepresentation
 }
 
 // GetExecutionByPlanAndDate retrieves execution for a specific plan and date.
