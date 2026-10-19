@@ -714,6 +714,13 @@ jobs:
             cd frontend && npm audit --audit-level=high
           fi
 
+      - name: Run gosec wrapper self-tests
+        # Pins that the pre-commit hook, `make security-scan-go` and the step
+        # below all run gosec through scripts/run-gosec.sh with one rule set
+        # (issue #340). Uses a fake gosec, so it is fast and offline.
+        if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success'
+        run: bash scripts/test-run-gosec.sh
+
       - name: Run gosec Security Scanner
         id: gosec
         # always(): don't let an earlier scanner's failure (e.g. npm audit)
@@ -721,45 +728,33 @@ jobs:
         # Still requires checkout and Go setup to have succeeded.
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success'
         run: |
-          # Install pinned gosec using the job's existing setup-go.
-          # The securego/gosec Docker action bundles its own Go toolchain which
-          # cannot satisfy the module's go directive, causing a toolchain mismatch.
-          go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
-          # Collect SARIF for both platform-owned modules before uploading.
+          # scripts/run-gosec.sh owns the pinned gosec version, toolchain,
+          # module list and rule set, shared with the pre-commit hook and
+          # `make security-scan-go` (issue #340). It installs gosec with the
+          # job's existing setup-go: the securego/gosec Docker action bundles
+          # its own Go toolchain, which cannot satisfy the module's go
+          # directive.
           #
           # gosec exits non-zero both for real findings and for a processing
-          # error. A bare `set -e` loop aborts at the first non-zero module,
-          # skipping the merge below entirely -- the upload step then fails
-          # on a missing file instead of surfacing the actual finding
-          # (issue #1717). Guarding the gosec call in `if ! ( ... )` exempts
-          # it from errexit so every module still gets scanned and merged;
-          # `status` records whether the job should still fail at the end.
-          set -e
+          # error. The script still scans every module after a failure, and
+          # `|| status=1` exempts it from errexit so the merge below always
+          # runs (issue #1717); `status` records whether the job should still
+          # fail at the end.
           status=0
-          for mod in . tests/e2e; do
-            tag=$(echo "$mod" | tr './' '--' | sed 's/^-/root/')
-            out="$RUNNER_TEMP/gosec-${tag}.sarif"
-            echo "==> gosec in $mod"
-            if ! (cd "$mod" && gosec -fmt sarif -out "$out" ./...); then
-              echo "::warning::gosec exited non-zero in $mod (findings or a scan error)"
-              status=1
-            fi
-            if [ ! -f "$out" ]; then
-              echo "::error::gosec produced no SARIF output for $mod"
-              status=1
-              continue
-            fi
+          scripts/run-gosec.sh --sarif-dir "$RUNNER_TEMP" || status=1
+          shopt -s nullglob
+          for out in "$RUNNER_TEMP"/gosec-*.sarif; do
+            tag=$(basename "$out" .sarif)
             # Code scanning rejects a SARIF file whose runs share a category
             # (github.blog changelog 2025-07-21), so give each module's run a
             # unique automationDetails.id before merging.
-            jq --arg id "gosec-${tag}/" '.runs |= map(.automationDetails = {id: $id})' \
+            jq --arg id "${tag}/" '.runs |= map(.automationDetails = {id: $id})' \
               "$out" > "$out.tmp" && mv "$out.tmp" "$out"
           done
           # Merge per-module SARIF runs into one file for the upload step.
           # Only modules that actually produced a file are included; if
           # gosec crashed before writing any of them, fail loud here rather
           # than uploading an empty result silently.
-          shopt -s nullglob
           sarif_files=("$RUNNER_TEMP"/gosec-*.sarif)
           if [ "${#sarif_files[@]}" -eq 0 ]; then
             echo "::error::no gosec SARIF output was produced by any module" >&2
