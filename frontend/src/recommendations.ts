@@ -3578,13 +3578,20 @@ function normalizeBulkPayment(payment: string | undefined): BulkPurchasePayment 
 // compatible iff EVERY rec in it has a supported (provider, service,
 // term, payment) combination. Used by the bulk-buy fan-out path to
 // flag buckets the user has built but won't be allowed to submit.
+// A rec's own supported payment also qualifies: the single-bucket modal seeds
+// from it (resolvePerRecPaymentSeed), so a GCP rec priced monthly must not be
+// forced into fan-out by the all-upfront toolbar default.
 function isBucketPaymentCompatible(
   recs: readonly LocalRecommendation[],
   payment: BulkPurchasePayment,
 ): boolean {
-  return recs.every((r) =>
-    isPaymentSupported(r.provider as CompatProvider, r.service, r.term as 1 | 3, payment),
-  );
+  return recs.every((r) => {
+    const provider = r.provider as CompatProvider;
+    const term = r.term as 1 | 3;
+    const own = normalizeBulkPayment(r.payment);
+    return isPaymentSupported(provider, r.service, term, payment)
+      || (own !== null && isPaymentSupported(provider, r.service, term, own));
+  });
 }
 
 interface BulkPurchaseToolbarState {

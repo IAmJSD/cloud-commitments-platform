@@ -1244,6 +1244,24 @@ describe('users/userActions', () => {
 
       expect(document.querySelector('.toast-error')).toBeTruthy();
     });
+
+    it('deselects only the deleted users, reloads, and names the survivors (#275)', async () => {
+      userState.addSelectedUserId('1');
+      userState.addSelectedUserId('2');
+      userState.addSelectedUserId('3');
+      (api.deleteUser as jest.Mock)
+        .mockResolvedValueOnce({})
+        .mockRejectedValueOnce(new Error('409'))
+        .mockResolvedValueOnce({});
+      (api.listUsers as jest.Mock).mockClear();
+
+      await userActions.bulkDeleteUsers();
+
+      expect(Array.from(userState.selectedUserIds)).toEqual(['2']);
+      expect(api.listUsers).toHaveBeenCalledTimes(1);
+      expect(document.querySelector('.toast-error')?.textContent).toContain('1 of 3');
+      expect(document.querySelector('.toast-success')).toBeNull();
+    });
   });
 
   describe('bulkChangeRole (removed in PR #912)', () => {

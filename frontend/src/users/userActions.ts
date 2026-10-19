@@ -11,7 +11,6 @@ import {
   selectedUserIds,
   setAllUsers,
   setAvailableGroups,
-  clearSelectedUserIds,
   removeSelectedUserId
 } from './state';
 import { showError, showSuccess, validateGroupCombination } from './utils';
@@ -168,18 +167,26 @@ export async function bulkDeleteUsers(): Promise<void> {
   });
   if (!ok) return;
 
-  try {
-    // Delete users in parallel
-    await Promise.all(
-      Array.from(selectedUserIds).map(userId => api.deleteUser(userId))
-    );
+  const ids = Array.from(selectedUserIds);
+  const labels = new Map(allUsers.map(u => [u.id, u.email]));
+  const results = await Promise.allSettled(ids.map(userId => api.deleteUser(userId)));
 
-    clearSelectedUserIds();
-    await loadUsers();
+  const failed: string[] = [];
+  results.forEach((result, i) => {
+    if (result.status === 'fulfilled') {
+      removeSelectedUserId(ids[i]!);
+    } else {
+      console.error('Failed to delete user:', ids[i], result.reason);
+      failed.push(labels.get(ids[i]!) ?? ids[i]!);
+    }
+  });
+
+  await loadUsers();
+
+  if (failed.length > 0) {
+    showError(`Failed to delete ${failed.length} of ${ids.length} user(s): ${failed.join(', ')}`);
+  } else {
     showSuccess(`Successfully deleted ${count} user(s)`);
-  } catch (error) {
-    console.error('Failed to delete users:', error);
-    showError('Failed to delete some users');
   }
 }
 

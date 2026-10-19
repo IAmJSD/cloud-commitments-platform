@@ -7,7 +7,7 @@ import * as state from './state';
 import { showLoginModal, showAdminSetupModal, showResetPasswordModal, updateUserUI } from './auth';
 import { loadDashboard, setupDashboardHandlers } from './dashboard';
 import { setupRecommendationsHandlers, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, getFanOutBuckets, clearFanOutBuckets, getExecuteMode, clearExecuteMode, fanOutBucketAccountLabel, getAccountName, type FanOutBucket } from './recommendations';
-import { switchTab, applyTabFromPath, initRouter, switchSettingsSubTab, canonicalTabPath } from './navigation';
+import { switchTab, setActiveNav, applyTabFromPath, initRouter, switchSettingsSubTab, canonicalTabPath } from './navigation';
 import { savePlan, setupPlanHandlers, closePlanModal, openNewPlanModal, closePurchaseModal } from './plans';
 import { saveGlobalSettings, setupSettingsHandlers, resetSettings } from './settings';
 import { setupUserHandlers } from './users';
@@ -74,6 +74,10 @@ export async function init(): Promise<void> {
     await showResetPasswordModal(resetToken);
     return;
   }
+
+  // The server-rendered markup marks Home active; correct it from the URL
+  // now instead of after the async fetches below.
+  setActiveNav(applyTabFromPath());
 
   if (!api.isAuthenticated()) {
     try {
@@ -853,9 +857,10 @@ export function setupMobileNav(): void {
     sidebar!.removeAttribute('inert');
     if (overlay) overlay.setAttribute('aria-hidden', 'false');
 
-    // Focus the first focusable element in the sidebar
+    // The desktop collapse toggle is display:none below the drawer
+    // breakpoint, where focus() on it is a no-op, so skip it.
     const firstFocusable = sidebar!.querySelector<HTMLElement>(
-      'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      'a[href], button:not([disabled]):not(.app-sidebar-toggle), [tabindex]:not([tabindex="-1"])',
     );
     firstFocusable?.focus();
   }
@@ -943,9 +948,17 @@ export function setupMobileNav(): void {
   const extras = document.getElementById('sidebar-extras');
   extras?.addEventListener('click', (e: MouseEvent) => {
     const target = e.target as HTMLElement | null;
-    if (!target?.closest('#user-info a, #user-info button')) return;
+    if (!target?.closest('#user-info a, #user-info button:not(#user-email-display)')) return;
     if (document.body.classList.contains('sidebar-open')) closeDrawer();
   });
+  // The profile button opens a modal. Close the drawer in the capture phase,
+  // before the button's own handler runs: closing afterwards would pull focus
+  // from the modal back to the hamburger. Closing first lets the handler
+  // record the hamburger, not the now-inert button, as the return-focus trigger.
+  extras?.addEventListener('click', (e: MouseEvent) => {
+    if (!(e.target as HTMLElement | null)?.closest('#user-email-display')) return;
+    if (document.body.classList.contains('sidebar-open')) closeDrawer();
+  }, true);
 
   // Clicking any sidebar link closes the drawer (SPA navigation)
   sidebar.querySelectorAll<HTMLElement>('.tab-btn').forEach(link => {

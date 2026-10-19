@@ -755,11 +755,11 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td class="savings">${savingsCell}</td>
       <td><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span></td>
       <td class="actions">
-        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary" title="Run now">▶</button>` : ''}
-        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause">⏸</button>` : ''}
-        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume">⏵</button>` : ''}
-        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan">✎</button>` : ''}
-        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Cancel this purchase and disable its plan">✕</button>` : ''}
+        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary" title="Run now" aria-label="Run now">▶</button>` : ''}
+        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause" aria-label="Pause">⏸</button>` : ''}
+        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume" aria-label="Resume">⏵</button>` : ''}
+        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan" aria-label="Edit Plan">✎</button>` : ''}
+        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Cancel this purchase and disable its plan" aria-label="Cancel this purchase and disable its plan">✕</button>` : ''}
       </td>
     </tr>
   `;
@@ -1046,18 +1046,6 @@ function extractPlanInfo(plan: BackendPlan): { provider: string | null; service:
   }
   // No services at all: all fields are unknown.
   return { provider: null, service: '—', term: null, coverage: null };
-}
-
-// Format a Date as YYYY-MM-DD in the user's *local* calendar — the format
-// expected by <input type="date"> .value and .min. Built from local
-// year/month/day components so we don't shift by the user's UTC offset
-// (e.g. a US user at 6pm local already crosses into UTC's next day, so
-// toISOString() would return the wrong calendar day for a date-picker).
-function toLocalDateInputValue(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
 }
 
 // Returns true when the plan's next_execution_date is strictly before today.
@@ -2268,7 +2256,7 @@ export async function openAddPurchasesModal(planId: string, planName: string, no
   const startDateInput = document.getElementById('add-purchases-start-date') as HTMLInputElement;
   const now = new Date();
   const validNotice = Number.isInteger(notificationDays) && notificationDays >= 0 && notificationDays <= 30;
-  startDateInput.min = toLocalDateInputValue(now);
+  startDateInput.min = earliestStartDate(now);
   if (validNotice) {
     // The API parses date-only values at UTC midnight. The extra calendar
     // day avoids opening just before the notification/veto overlap ends.
@@ -2336,6 +2324,14 @@ function closeAddPurchasesModal(): void {
 }
 
 /**
+ * First accepted start date. The server parses start_date as midnight UTC and
+ * requires it after now, so tomorrow (UTC) is the earliest (handler_plans.go, #50).
+ */
+function earliestStartDate(now: Date): string {
+  return new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+/**
  * Handle form submission for adding planned purchases
  */
 async function handleAddPurchases(e: Event): Promise<void> {
@@ -2358,6 +2354,13 @@ async function handleAddPurchases(e: Event): Promise<void> {
     }
     const count = rawCount;
     const startDate = (document.getElementById('add-purchases-start-date') as HTMLInputElement).value;
+    if (startDate < earliestStartDate(new Date())) {
+      if (errorDiv) {
+        errorDiv.textContent = 'Start date must be in the future (after today UTC)';
+        errorDiv.classList.remove('hidden');
+      }
+      return;
+    }
 
     await api.createPlannedPurchases(planId, count, startDate);
 

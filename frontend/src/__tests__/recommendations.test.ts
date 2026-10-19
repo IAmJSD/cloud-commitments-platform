@@ -3357,6 +3357,27 @@ describe('Bundle B: term-aware bucketing in the Purchase flow', () => {
     expect(b0.recs.every((r) => r.term === b0.term)).toBe(true);
     expect(b1.recs.every((r) => r.term === b1.term)).toBe(true);
   });
+
+  it('keeps a single monthly GCP rec on the single-bucket modal (#1131)', async () => {
+    const gcp = [
+      { id: 'g', provider: 'gcp', cloud_account_id: 'g1', service: 'gce', resource_type: 'n2-standard-2', region: 'us-central1', count: 1, term: 1, payment: 'monthly', savings: 100, upfront_cost: 0 },
+    ];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: gcp, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(gcp);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(gcp);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['g']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    // GCP no longer supports the all-upfront toolbar default; the rec's own
+    // monthly payment must keep it off the fan-out path.
+    expect(getFanOutBuckets()).toBeNull();
+  });
 });
 
 // Issue #111: per-bucket Payment dropdown in the fan-out modal,

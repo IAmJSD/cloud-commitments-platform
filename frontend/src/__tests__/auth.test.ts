@@ -446,6 +446,21 @@ describe('Auth Module', () => {
       expect((userInfo as HTMLElement).classList.contains('hidden')).toBe(true);
     });
 
+    test('keeps the profile button hidden until a user is set, then shows it', () => {
+      const btn = document.getElementById('user-email-display') as HTMLElement;
+      (state.getCurrentUser as jest.Mock).mockReturnValue(null);
+      updateUserUI();
+      expect(btn.hidden).toBe(true);
+
+      (state.getCurrentUser as jest.Mock).mockReturnValue({ id: 'u', email: 'a@example.com', groups: [] });
+      updateUserUI();
+      expect((document.getElementById('user-email-display') as HTMLElement).hidden).toBe(false);
+
+      (state.getCurrentUser as jest.Mock).mockReturnValue(null);
+      updateUserUI();
+      expect((document.getElementById('user-email-display') as HTMLElement).hidden).toBe(true);
+    });
+
     test('shows admin-only elements for admin users', () => {
       (state.getCurrentUser as jest.Mock).mockReturnValue({
         id: 'admin-1',

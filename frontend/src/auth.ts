@@ -907,6 +907,8 @@ export function updateUserUI(): void {
     // Update the user email display with click-to-edit functionality
     if (userEmailEl) {
       userEmailEl.textContent = currentUser.email;
+      userEmailEl.removeAttribute('aria-label');
+      userEmailEl.hidden = false;
       userEmailEl.title = 'Click to edit your profile';
       userEmailEl.classList.add('cursor-pointer');
       // Replace element to avoid duplicate listeners on repeated calls
@@ -951,6 +953,9 @@ export function updateUserUI(): void {
     }
     if (roleEl) {
       roleEl.classList.add('hidden');
+    }
+    if (userEmailEl) {
+      userEmailEl.hidden = true;
     }
   }
 

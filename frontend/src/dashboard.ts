@@ -189,8 +189,9 @@ export async function loadDashboard(): Promise<void> {
     // match what the Opportunities page does (cast to RecommendationsResponse
     // and read .recommendations). A flat-array result is also accepted so
     // test fixtures that resolve with a plain array continue to work.
-    // #304: apiRequest's catch block returns `null` on a 2xx with empty/non-JSON
-    // body; guard against null / unexpected shapes to avoid "X is not iterable".
+    // #304: apiRequest resolves `null` for a 204 or content-length 0 response
+    // (a malformed 2xx body rejects, #273); guard against null / unexpected
+    // shapes to avoid "X is not iterable".
     const rawRecs = recsResult.status === 'fulfilled' ? recsResult.value : null;
     const recsArray = Array.isArray(rawRecs)
       ? rawRecs
@@ -202,15 +203,18 @@ export async function loadDashboard(): Promise<void> {
     if (summaryResult.status === 'rejected') {
       throw summaryResult.reason as Error;
     }
+    if (summaryData == null) {
+      throw new Error('Dashboard summary response was empty');
+    }
 
     // Build a human-readable filter description for filter-aware empty states
     // on the Home chart. Mirrors the pattern from loadSavingsTrendChart (#747).
     const filterDesc = buildFilterDesc(currentProvider, currentAccountIDs);
 
-    renderDashboardSummary(summaryData!, recs);
+    renderDashboardSummary(summaryData, recs);
     // Single merged per-service chart (#908): potential range from recs +
     // current-savings underlay from the summary's by_service map.
-    renderSavingsByService(recs, summaryData!.by_service || {}, filterDesc);
+    renderSavingsByService(recs, summaryData.by_service || {}, filterDesc);
     renderUpcomingPurchases(upcomingData?.purchases || []);
     // Load the savings-over-time widget independently -- failure shouldn't
     // block the rest of the dashboard (e.g. analytics not configured).
@@ -963,13 +967,15 @@ export function renderSavingsByService(
             label: (ctx) => {
               const svc = ctx.label ?? '';
               const s = stats.get(svc);
-              if (!s) return '';
               // The current-savings dataset gets a focused, single-line
-              // tooltip; the range datasets share the full breakdown.
+              // tooltip; the range datasets share the full breakdown. This
+              // runs before the stats guard: committed services without a
+              // recommendation have no stats but still have a bar.
               if (ctx.dataset?.label === 'Current / Committed') {
                 const current = byService[svc]?.current_savings ?? 0;
                 return `Current / Committed: ${formatCurrency(current)}`;
               }
+              if (!s) return '';
               const current = byService[svc]?.current_savings ?? 0;
               const maxRec = s?.max ?? 0;
               const minRec = s?.min ?? 0;

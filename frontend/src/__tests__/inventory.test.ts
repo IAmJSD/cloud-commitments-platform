@@ -383,6 +383,17 @@ describe('loadActiveCommitments — fetch + render flow', () => {
     expect(api.listActiveCommitments).toHaveBeenCalledTimes(2);
   });
 
+  test('does not repeat the account id when the name already contains it (#179)', async () => {
+    (api.listActiveCommitments as jest.Mock).mockResolvedValue([
+      makeCommitment({ account_name: 'CUDly host (acct-1234)', account_id: 'acct-1234' }),
+    ]);
+
+    await loadActiveCommitments();
+
+    const accountCell = document.querySelector('#active-commitments-list tbody tr td:nth-child(2)');
+    expect(accountCell?.textContent).toBe('CUDly host (acct-1234)');
+  });
+
   test('falls back to monospaced account_id when account_name is missing', async () => {
     (api.listActiveCommitments as jest.Mock).mockResolvedValue([
       makeCommitment({ account_name: undefined, account_id: 'acc-no-name' }),

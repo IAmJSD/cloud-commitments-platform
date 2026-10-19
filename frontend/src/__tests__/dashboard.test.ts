@@ -310,6 +310,17 @@ describe('Dashboard Module', () => {
       expect(summary?.innerHTML).toContain('Failed to load dashboard');
     });
 
+    test('names an empty summary response instead of throwing a TypeError (#280)', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue(null);
+      console.error = jest.fn();
+
+      await loadDashboard();
+
+      const text = document.getElementById('summary')?.textContent ?? '';
+      expect(text).toContain('Dashboard summary response was empty');
+      expect(text).not.toContain('Cannot read properties of null');
+    });
+
     // Issue #344 T3: skeleton lifecycle — skeleton renders synchronously
     // at fetch start, then is replaced by the success render (clean
     // handoff) or torn down on error so it never sits next to a stale
@@ -1638,6 +1649,20 @@ describe('Dashboard Module', () => {
         }).options.plugins.tooltip.callbacks.label({ label: 'ec2' });
         const totalLine = tooltipLabel.find((l) => l.startsWith('Total:'));
         expect(totalLine).toMatch(/\$400/);
+      });
+
+      test('tooltip shows the committed value for a service with a commitment but no recommendation (#752)', () => {
+        buildDOM();
+        renderSavingsByService(
+          [rec('ec2', 100, 1, 'no_upfront')],
+          { sqldb: { potential_savings: 0, current_savings: 250 } },
+        );
+        const chartCtor = Chart as unknown as jest.Mock;
+        const lastCall = chartCtor.mock.calls[chartCtor.mock.calls.length - 1];
+        const label = (lastCall?.[1] as {
+          options: { plugins: { tooltip: { callbacks: { label: (ctx: { label: string; dataset: { label: string } }) => string } } } };
+        }).options.plugins.tooltip.callbacks.label;
+        expect(label({ label: 'sqldb', dataset: { label: 'Current / Committed' } })).toMatch(/Current \/ Committed: \$250/);
       });
 
       // Issue #908: merged chart draws a current-savings bottom layer per service.
