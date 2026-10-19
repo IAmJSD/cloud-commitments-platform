@@ -368,7 +368,18 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PlanRequest'
+              allOf:
+                - $ref: '#/components/schemas/PlanRequest'
+                - type: object
+                  properties:
+                    expected_updated_at:
+                      type: string
+                      nullable: true
+                      description: >-
+                        Optional Update version from the plan's updated_at. Omission,
+                        null or an empty string opts out. A nonempty value must be an
+                        RFC3339 timestamp; malformed values return 400 and a different
+                        instant returns 409 with refresh guidance.
       responses:
         '200':
           description: Updated plan
