@@ -101,6 +101,10 @@ echo "Adding custom secret patterns..."
 # detector is registered with the word characters around it taken in, which
 # always reach a boundary: the registered form fires wherever the detector
 # itself matches.
+#
+# A pattern written as (^|...)...(...|$) spells out its own bounds, so it is
+# registered as is: wrapping it would match the same lines, but the extra
+# leading [A-Za-z0-9_]* makes macOS's regex engine noticeably slower.
 word_chars='[A-Za-z0-9_]*'
 # `git secrets --add` exits 1 when the pattern is already registered, which under
 # `set -e` aborted a re-run at the first custom pattern and skipped the rest.
@@ -109,7 +113,11 @@ word_chars='[A-Za-z0-9_]*'
 # the bare detector registered; drop it, since the wrapped form covers it.
 add_pattern() {
     local pattern="${word_chars}($1)${word_chars}"
-    if git config --local --get-all secrets.patterns | grep -qxF -- "$1"; then
+    case "$1" in
+        '(^|'*'|$)') pattern="$1" ;;
+    esac
+    if [ "${pattern}" != "$1" ] \
+        && git config --local --get-all secrets.patterns | grep -qxF -- "$1"; then
         git config --local --unset-all --fixed-value secrets.patterns "$1"
     fi
     if git config --get-all secrets.patterns | grep -qxF -- "${pattern}"; then
