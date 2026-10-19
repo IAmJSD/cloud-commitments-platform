@@ -41,10 +41,15 @@ fargate_max_capacity  = 20
 # ==============================================
 # Database (RDS PostgreSQL)
 # ==============================================
+# Non-burstable and Multi-AZ (#719): 2 vCPU / 8 GiB with a standby in a second
+# AZ, matching GCP prod (db-custom-2-7680, REGIONAL) and Azure prod
+# (GP_Standard_D2s_v3, ZoneRedundant).
 
 database_name                  = "cudly"
 database_username              = "cudly"
 database_engine_version        = "16"
+database_instance_class        = "db.m7g.large"
+database_multi_az              = true
 database_backup_retention_days = 30
 database_deletion_protection   = true
 database_skip_final_snapshot   = false
