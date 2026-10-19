@@ -2383,13 +2383,24 @@ func (s *PostgresStore) StampOfferingClass(ctx context.Context, purchaseID, offe
 // token, and returns the row's values as of the claim (issue #525): the handler
 // must not trust a row read before the claim. It returns (nil, nil) when the row
 // could not be claimed (active, pending without a token, or absent).
+//
+// Rows saved before migration 000108 can share a purchase_id (#267). The claim
+// then works on the earliest row (created_at, then id), the one
+// GetPurchaseHistoryByPurchaseID returns, and refuses while any duplicate
+// records an active listing, so the returned prior state and listing id belong
+// to one row and a duplicate never reopens a listed RI.
 func (s *PostgresStore) ClaimMarketplaceListingSlot(ctx context.Context, purchaseID, clientToken string, priceSchedule []byte) (*MarketplaceListingClaim, error) {
-	// prev locks the row first, so a claim that races another one waits for it
-	// and then sees its committed token and state instead of a stale snapshot.
+	// prev locks the earliest row first, so a claim that races another one
+	// waits for it and then sees its committed token and state instead of a
+	// stale snapshot. created_at and id never change, so the row prev picks
+	// stays the earliest while it waits.
 	query := `
 		WITH prev AS (
-			SELECT purchase_id, listing_state AS prior_state
-			FROM purchase_history WHERE purchase_id = $2 FOR UPDATE
+			SELECT id, listing_state AS prior_state
+			FROM purchase_history WHERE purchase_id = $2
+			ORDER BY created_at, id
+			LIMIT 1
+			FOR UPDATE
 		)
 		UPDATE purchase_history AS p
 		SET listing_state = $1,
@@ -2397,9 +2408,14 @@ func (s *PostgresStore) ClaimMarketplaceListingSlot(ctx context.Context, purchas
 		    listing_price_schedule = CASE WHEN p.listing_client_token IS NULL
 		                                  THEN $4::jsonb ELSE p.listing_price_schedule END
 		FROM prev
-		WHERE p.purchase_id = prev.purchase_id
+		WHERE p.id = prev.id
 		  AND lower(COALESCE(p.listing_state, '')) <> $5
 		  AND (lower(COALESCE(p.listing_state, '')) <> $1 OR p.listing_client_token IS NOT NULL)
+		  AND NOT EXISTS (
+			SELECT 1 FROM purchase_history AS twin
+			WHERE twin.purchase_id = $2 AND twin.id <> p.id
+			  AND lower(COALESCE(twin.listing_state, '')) = $5
+		  )
 		RETURNING COALESCE(p.listing_id, ''), COALESCE(prev.prior_state, ''),
 		          p.listing_client_token, p.listing_price_schedule::text
 	`
@@ -2828,7 +2844,9 @@ func scanPurchaseHistoryRow(rows pgx.Rows) (PurchaseHistoryRecord, error) {
 // columns so the revoke endpoint can check idempotency without a second round
 // trip (issue #290). The marketplace columns (offering_class, listing_id,
 // listing_state) are read so the marketplace-list handler can validate
-// offering_class and look up the cloud account (issue #292).
+// offering_class and look up the cloud account (issue #292). Rows saved before
+// migration 000108 can share a purchase_id; the earliest one (created_at, then
+// id) is returned, the same row ClaimMarketplaceListingSlot claims (#267).
 func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*PurchaseHistoryRecord, error) {
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
@@ -2838,6 +2856,7 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 		       revocation_in_flight, offering_class, listing_id, listing_state
 		FROM purchase_history
 		WHERE purchase_id = $1
+		ORDER BY created_at, id
 		LIMIT 1
 	`
 	rows, err := s.db.Query(ctx, query, purchaseID)
