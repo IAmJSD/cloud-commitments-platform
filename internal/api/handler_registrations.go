@@ -286,18 +286,8 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 		return nil, err
 	}
 
-	// Atomically transition to "approved" first — prevents double-approval.
-	reg.Status = "approved"
 	h.setReviewMetadata(ctx, reg, httpReq)
-	// reviewed_by may be "admin-api-key" (not a UUID FK); validate before passing as actor.
-	if err := h.config.TransitionRegistrationStatus(ctx, reg, "pending", validUUIDPtrOrNil(reg.ReviewedBy)); err != nil {
-		if errors.Is(err, config.ErrRegistrationConflict) {
-			return nil, NewClientError(409, "registration was already processed by another request")
-		}
-		return nil, fmt.Errorf("registrations: transition: %w", err)
-	}
 
-	// Create the cloud account (only one request reaches here).
 	now := time.Now()
 	account := cloudAccountFromRequest(acctReq)
 	account.ID = uuid.New().String()
@@ -312,19 +302,17 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	account.CreatedAt = now
 	account.UpdatedAt = now
 
-	if err := h.config.CreateCloudAccount(ctx, account); err != nil {
-		return nil, classifyStoreError(err, fmt.Sprintf("an account with external ID %q already exists for %s", acctReq.ExternalID, acctReq.Provider))
+	// Approve, create the account and link them in one transaction, so a
+	// failed account insert leaves the registration pending rather than
+	// approved with no account (issue #1102). The conditional status change
+	// inside it also stops a double approval. reviewed_by may be
+	// "admin-api-key" (not a UUID FK); validate before passing as actor.
+	if err := h.config.ApproveAccountRegistration(ctx, reg, account, validUUIDPtrOrNil(reg.ReviewedBy)); err != nil {
+		return nil, classifyApproveRegistrationError(err, acctReq)
 	}
 
 	// Auto-store credentials if the registration included them.
 	h.storeRegistrationCredentials(ctx, reg, account.ID)
-
-	// Link the cloud account and wipe the credential payload from the registration record.
-	reg.CloudAccountID = &account.ID
-	reg.RegCredentialPayload = "" // Don't keep encrypted credentials longer than needed.
-	if err := h.config.UpdateAccountRegistration(ctx, reg); err != nil {
-		logging.Warnf("registration %s approved but failed to link cloud_account_id: %v", reg.ID, err)
-	}
 
 	h.notifyRegistrant(reg, email.RegistrationDecisionData{
 		AccountName: reg.AccountName, Provider: reg.Provider,
@@ -332,6 +320,19 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	})
 
 	return account, nil
+}
+
+// classifyApproveRegistrationError maps an ApproveAccountRegistration failure
+// to the response: 409 when another request already decided the registration
+// or the account is already registered, 500 otherwise.
+func classifyApproveRegistrationError(err error, acctReq CloudAccountRequest) error {
+	if errors.Is(err, config.ErrRegistrationConflict) {
+		return NewClientError(409, "registration was already processed by another request")
+	}
+	if isDuplicateKeyError(err) {
+		return NewClientError(409, fmt.Sprintf("an account with external ID %q already exists for %s", acctReq.ExternalID, acctReq.Provider))
+	}
+	return fmt.Errorf("registrations: approve: %w", err)
 }
 
 // accountHasCredentialFreePath returns true when the account's auth

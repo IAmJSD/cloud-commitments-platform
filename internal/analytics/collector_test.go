@@ -469,6 +469,9 @@ func (m *mockConfigStore) UpdateAccountRegistration(_ context.Context, _ *config
 func (m *mockConfigStore) TransitionRegistrationStatus(_ context.Context, _ *config.AccountRegistration, _ string, _ *string) error {
 	return nil
 }
+func (m *mockConfigStore) ApproveAccountRegistration(_ context.Context, _ *config.AccountRegistration, _ *config.CloudAccount, _ *string) error {
+	return nil
+}
 func (m *mockConfigStore) DeleteAccountRegistration(_ context.Context, _ string) error {
 	return nil
 }
