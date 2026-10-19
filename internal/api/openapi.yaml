@@ -1071,6 +1071,12 @@ paths:
       operationId: deletePlannedPurchase
       tags: [PlannedPurchases]
       summary: Cancel and delete a planned purchase
+      description: >-
+        Cancels the execution and disables its plan. A caller scoped to some
+        accounts must have access to every account on the plan; otherwise the
+        request is refused with 403 before anything changes. If the plan's
+        accounts change during the request so that the disable is refused
+        after the cancel, the response is 409 and the plan stays enabled.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       responses:
@@ -1086,6 +1092,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   # ---- Generic Purchase Details -------------------------------------------
   /api/purchases/{id}:
@@ -2769,10 +2777,10 @@ components:
         plan_disabled:
           type: boolean
           description: >-
-            Present when the execution belongs to a plan. True when the plan
-            was disabled; false when it was left enabled because it spans
-            accounts outside the caller's scope. Omitted for executions
-            without a plan.
+            Present, and true, when the execution belongs to a plan, which
+            the request disabled. Omitted for executions without a plan. A
+            plan the caller may not disable fails the request instead of
+            returning false.
 
     StatusMessageResponse:
       type: object
