@@ -22,8 +22,8 @@ trap 'rm -rf "$work"' EXIT
 export GOTOOLCHAIN=local GOPROXY=off XDG_CACHE_HOME="$work/cache" HOME="$work/home"
 mkdir -p "$HOME"
 # The pin is read from run-gosec.sh, so a version bump needs no test change.
-gosec_version="$(sed -n 's/^GOSEC_VERSION="\(.*\)"$/\1/p' "$SCRIPT_DIR/run-gosec.sh")"
-[[ -n "$gosec_version" ]] || { echo "FAIL: no GOSEC_VERSION in run-gosec.sh"; exit 1; }
+# A missing pin is reported below; the other cases still run.
+gosec_version="$(sed -n 's/^GOSEC_VERSION="\(.*\)"$/\1/p' "$SCRIPT_DIR/run-gosec.sh" 2>/dev/null || true)"
 fake_dir="$XDG_CACHE_HOME/gosec/${gosec_version}-$(go env GOVERSION)"
 mkdir -p "$fake_dir"
 cat >"$fake_dir/gosec" <<'FAKE'
@@ -45,6 +45,12 @@ export FAKE_LOG="$work/calls.log"
 fail=0
 pass() { echo "PASS: $1"; }
 failed() { echo "FAIL: $1"; fail=1; }
+
+if [[ -n "$gosec_version" ]]; then
+  pass "run-gosec.sh pins GOSEC_VERSION ($gosec_version)"
+else
+  failed "run-gosec.sh pins GOSEC_VERSION"
+fi
 
 # run LABEL WANT_RC CMD... : runs CMD with a fresh log, checks its exit code.
 rc=0
