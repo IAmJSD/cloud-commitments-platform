@@ -487,9 +487,11 @@ func TestAuthorizeSessionRevoke_RevokeAny_AccountScope(t *testing.T) {
 		{name: "empty account", scope: []string{inScope}, accountID: &empty, wantErr: "cannot verify ownership"},
 		// Issue #534: History shows these rows, so revoke must accept them.
 		{name: "external id only, scoped by external id", scope: []string{"111122223333"}, external: "111122223333"},
-		{name: "external id only, scoped by name", scope: []string{"prod"}, external: "111122223333"},
-		{name: "uuid row, scoped by name", scope: []string{"prod"}, accountID: &inScope, external: "111122223333"},
-		{name: "external id only, other account", scope: []string{"dev"}, external: "999999999999", wantErr: "account you do not have access to"},
+		{name: "external id only, scoped by account id", scope: []string{inScope}, external: "111122223333"},
+		// Issue #1034: a display-name entry is not bound to an account.
+		{name: "external id only, name entry", scope: []string{"prod"}, external: "111122223333", wantErr: "account you do not have access to"},
+		{name: "uuid row, name entry", scope: []string{"prod"}, accountID: &inScope, external: "111122223333", wantErr: "account you do not have access to"},
+		{name: "external id only, other account", scope: []string{outOfScope}, external: "999999999999", wantErr: "account you do not have access to"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -544,19 +546,19 @@ func TestAuthorizeSessionRevoke_RevokeAny_ProviderAndUUIDAuthority(t *testing.T)
 		rec      config.PurchaseHistoryRecord
 		wantErr  string
 	}{
-		{name: "same external id, scope names other provider account, aws first", scope: []string{"prod"},
+		{name: "same external id, scope holds other provider account, aws first", scope: []string{"u-az"},
 			accounts: []config.CloudAccount{awsDev, azProd}, rec: config.PurchaseHistoryRecord{Provider: "aws", AccountID: "123"}, wantErr: denied},
-		{name: "same external id, scope names other provider account, azure first", scope: []string{"prod"},
+		{name: "same external id, scope holds other provider account, azure first", scope: []string{"u-az"},
 			accounts: []config.CloudAccount{azProd, awsDev}, rec: config.PurchaseHistoryRecord{Provider: "aws", AccountID: "123"}, wantErr: denied},
-		{name: "same external id, scope names own provider account, aws first", scope: []string{"dev"},
+		{name: "same external id, scope holds own provider account, aws first", scope: []string{"u-aws"},
 			accounts: []config.CloudAccount{awsDev, azProd}, rec: config.PurchaseHistoryRecord{Provider: "aws", AccountID: "123"}},
-		{name: "same external id, scope names own provider account, azure first", scope: []string{"dev"},
+		{name: "same external id, scope holds own provider account, azure first", scope: []string{"u-aws"},
 			accounts: []config.CloudAccount{azProd, awsDev}, rec: config.PurchaseHistoryRecord{Provider: "aws", AccountID: "123"}},
-		{name: "uuid out of scope, in-scope external id", scope: []string{"in"},
+		{name: "uuid out of scope, in-scope external id", scope: []string{"u-in"},
 			accounts: []config.CloudAccount{in, out}, rec: config.PurchaseHistoryRecord{CloudAccountID: str("u-out"), AccountID: "111"}, wantErr: denied},
 		{name: "uuid in scope, out-of-scope external id", scope: []string{"u-in"},
 			accounts: []config.CloudAccount{in, out}, rec: config.PurchaseHistoryRecord{CloudAccountID: str("u-in"), AccountID: "222"}},
-		{name: "resolver error, name scope", scope: []string{"prod"}, listErr: errors.New("db down"),
+		{name: "resolver error", scope: []string{"u-az"}, listErr: errors.New("db down"),
 			rec: config.PurchaseHistoryRecord{AccountID: "123"}, wantErr: denied},
 	}
 	for _, tc := range cases {

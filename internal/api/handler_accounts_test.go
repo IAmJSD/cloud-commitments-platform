@@ -214,7 +214,7 @@ func TestListAccountsMinimal_NoViewRecommendations_403(t *testing.T) {
 func TestListAccountsMinimal_ScopesByAllowedAccounts(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", true, []string{"Production"})
+	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", true, []string{sampleAccount().ID})
 
 	prod := sampleAccount()
 	prod.Name = "Production"
@@ -1954,20 +1954,18 @@ func TestGetAccount_OutOfScope_Returns404(t *testing.T) {
 	assert.True(t, IsNotFoundError(err), "expected 404 not-found, got %v", err)
 }
 
-func TestGetAccount_InScope_ByName(t *testing.T) {
+func TestGetAccount_InScope_ByID(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	// allowed_accounts = ["Production"] matches acct.Name
-	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "view", "accounts", []string{"Production"})
+	// allowed_accounts holds acct.ID; entries match by account ID only (#1034).
+	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "view", "accounts", []string{"11111111-1111-1111-1111-111111111111"})
 
 	acct := sampleAccount()
 	acct.Name = "Production"
 	customStore := &mockConfigStoreAccounts{
 		MockConfigStore: setupAdminMock(ctx),
 		getResult:       &acct,
-		// "Production" is unique among the registered accounts, so it may
-		// match by name (#433).
-		listResult: []config.CloudAccount{acct},
+		listResult:      []config.CloudAccount{acct},
 	}
 
 	handler := &Handler{auth: mockAuth, config: customStore}
@@ -1975,6 +1973,30 @@ func TestGetAccount_InScope_ByName(t *testing.T) {
 	require.NoError(t, err)
 	got := result.(*config.CloudAccount)
 	assert.Equal(t, "Production", got.Name)
+}
+
+// A display-name entry is not bound to an account, so it must not grant the
+// account that currently carries that name, even when the name is unique
+// (#1034): that account may have taken the name after the intended one was
+// deleted or renamed.
+func TestGetAccount_NameEntry_Returns404(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "view", "accounts", []string{"Production"})
+
+	acct := sampleAccount()
+	acct.Name = "Production"
+	customStore := &mockConfigStoreAccounts{
+		MockConfigStore: setupAdminMock(ctx),
+		getResult:       &acct,
+		listResult:      []config.CloudAccount{acct},
+	}
+
+	handler := &Handler{auth: mockAuth, config: customStore}
+	result, err := handler.getAccount(ctx, scopedRequest(""), "11111111-1111-1111-1111-111111111111")
+	assert.Nil(t, result)
+	require.Error(t, err)
+	assert.True(t, IsNotFoundError(err), "expected 404 not-found, got %v", err)
 }
 
 func TestDeleteAccount_OutOfScope_Returns404_NoDelete(t *testing.T) {

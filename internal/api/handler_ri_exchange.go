@@ -2224,7 +2224,7 @@ func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFu
 
 	// RI exchange records carry the 12-digit AWS account id from STS, so
 	// resolve it to its single registered AWS account and match the scope by
-	// that account's UUID or name. An unregistered or ambiguous id matches
+	// that account's UUID. An unregistered or ambiguous id matches
 	// only a literal entry in the allow-list. A lookup failure errors out.
 	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {

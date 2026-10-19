@@ -24,22 +24,31 @@ import "strings"
 // admin API key, or a group carrying the "*" wildcard.
 type AccountScope struct {
 	// Accounts is the explicit allow-list, meaningful only when
-	// Unrestricted is false. Entries match by cloud account ID, or by
-	// display name when that name belongs to exactly one registered account
-	// (see WithRegisteredNames).
+	// Unrestricted is false. Entries are account identifiers (the cloud
+	// account ID, or a provider external ID) and are compared with the
+	// identifier the caller passes, never with a display name (issue #1034).
 	Accounts []string
 
-	// uniqueNames holds the display names carried by exactly one registered
-	// cloud account. Allows matches an entry by name only when the name is in
-	// this set, so a name shared by two accounts grants neither of them by
-	// name (issue #433). nil (the zero value, and every scope built without
-	// WithRegisteredNames) matches by ID only: name matching is opt-in, so
+	// idByUniqueName maps each display name carried by exactly one registered
+	// cloud account to that account's ID. It lets a caller that knows an
+	// account only by name (for example a legacy row keyed by external ID)
+	// identify it: Allows resolves the name to the account carrying it and
+	// then checks that account's ID against Accounts. A name shared by two
+	// accounts resolves to neither (issue #433). nil (the zero value, and every
+	// scope built without WithRegisteredAccounts) disables the lookup, so
 	// forgetting to populate it fails closed.
-	uniqueNames map[string]struct{}
+	idByUniqueName map[string]string
 
 	// Unrestricted grants access to every account. Set it only where
 	// unlimited access has been positively established.
 	Unrestricted bool
+}
+
+// RegisteredAccount is the identity of one registered cloud account, as
+// WithRegisteredAccounts needs it.
+type RegisteredAccount struct {
+	ID   string
+	Name string
 }
 
 // UnrestrictedScope returns a scope granting every account. Use it only at a
@@ -58,7 +67,7 @@ func UnrestrictedScope() AccountScope {
 //   - An empty list grants NOTHING here; under the legacy convention empty
 //     meant "all accounts".
 //   - "*" is a literal identifier here, NOT a wildcard. ScopeForAccounts(["*"])
-//     matches an account whose ID or name is the single character "*" and
+//     matches an account whose ID is the single character "*" and
 //     denies everything else, where ScopeFromLegacyList(["*"]) is unrestricted.
 //
 // The second matters for the obvious future call. Passing a group's stored
@@ -105,40 +114,49 @@ func ScopeFromLegacyList(accounts []string) AccountScope {
 	return ScopeForAccounts(accounts)
 }
 
-// WithRegisteredNames returns a copy of the scope that may match entries by
-// display name. names must hold the display name of EVERY registered cloud
-// account (all providers, enabled or not), one element per account, so that
-// duplicates are visible. Only names that occur exactly once become matchable.
+// WithRegisteredAccounts returns a copy of the scope that can identify an
+// account by its display name. accounts must hold EVERY registered cloud
+// account (all providers, enabled or not), so that a shared name is visible
+// as shared. Only names that exactly one account carries are kept.
 //
-// Display names are not unique. Without this check, a group scoped to the
-// name "prod" was granted every account called "prod", including one added
-// later under another provider or tenant (issue #433). With it, a shared name
-// matches no account by name; the accounts stay reachable through ID entries.
-// Pass a partial list and a name could look unique when it is not, so callers
-// that cannot load the full list must leave the scope ID-only.
-func (s AccountScope) WithRegisteredNames(names []string) AccountScope {
+// This never makes a scope entry match by name. Entries are account IDs, and
+// a stored name could otherwise outlive its account and grant whichever
+// account later takes that name (issue #1034). The name only tells Allows
+// which account the caller means; the scope must still hold that account's
+// ID. Pass a partial list and a name could look unique when it is not, so
+// callers that cannot load the full list must leave the scope without it.
+func (s AccountScope) WithRegisteredAccounts(accounts []RegisteredAccount) AccountScope {
 	if s.Unrestricted {
 		return s
 	}
-	counts := make(map[string]int, len(names))
-	for _, n := range names {
-		if n != "" {
-			counts[n]++
+	counts := make(map[string]int, len(accounts))
+	ids := make(map[string]string, len(accounts))
+	for _, a := range accounts {
+		if a.Name != "" {
+			counts[a.Name]++
+			ids[a.Name] = a.ID
 		}
 	}
-	s.uniqueNames = make(map[string]struct{}, len(counts))
+	s.idByUniqueName = make(map[string]string, len(counts))
 	for n, c := range counts {
-		if c == 1 {
-			s.uniqueNames[n] = struct{}{}
+		if c == 1 && ids[n] != "" {
+			s.idByUniqueName[n] = ids[n]
 		}
 	}
 	return s
 }
 
-// Allows reports whether the scope permits the given cloud account, matched by
-// internal ID, or by display name when the scope was built with
-// WithRegisteredNames and no other registered account has that name. Pass ""
-// for the name when unavailable.
+// Allows reports whether the scope permits the given cloud account. The
+// account matches when accountID is in the allow-list, or when the scope was
+// built with WithRegisteredAccounts, exactly one registered account carries
+// accountName, and THAT account's ID is in the allow-list. Pass "" for the
+// name when unavailable.
+//
+// A display name in the allow-list matches nothing: it is not bound to any
+// account, so it would grant whichever account carries the name today
+// (issue #1034). Group writes store IDs (see the group handlers), and
+// migration 000135 rewrote the name entries that still identified one
+// account.
 //
 // A restricted scope with no accounts allows nothing, which is what makes the
 // zero value deny.
@@ -146,12 +164,23 @@ func (s AccountScope) Allows(accountID, accountName string) bool {
 	if s.Unrestricted {
 		return true
 	}
-	_, nameMatchable := s.uniqueNames[accountName]
+	if s.contains(accountID) {
+		return true
+	}
+	if accountName == "" {
+		return false
+	}
+	namedID, ok := s.idByUniqueName[accountName]
+	return ok && s.contains(namedID)
+}
+
+// contains reports whether id is a non-empty entry of the allow-list.
+func (s AccountScope) contains(id string) bool {
+	if id == "" {
+		return false
+	}
 	for _, a := range s.Accounts {
-		if a == accountID {
-			return true
-		}
-		if nameMatchable && accountName != "" && a == accountName {
+		if a == id {
 			return true
 		}
 	}

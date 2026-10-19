@@ -220,35 +220,6 @@ func IsUnrestrictedAccess(allowed []string) bool {
 	return false
 }
 
-// MatchesAccount returns true if the allowed list matches an account by its
-// internal ID or display name. Exact string match against either field. The
-// name is optional — pass "" when unavailable; the match then falls back to
-// ID-only. Empty allowed list or a "*" entry matches any account.
-func MatchesAccount(allowed []string, accountID, accountName string) bool {
-	if IsUnrestrictedAccess(allowed) {
-		return true
-	}
-	for _, a := range allowed {
-		if a == accountID {
-			return true
-		}
-		if accountName != "" && a == accountName {
-			return true
-		}
-	}
-	return false
-}
-
-// CanAccessAccount checks if the user can access a specific account by its
-// ID or display name. Access is derived from the union of the user's groups'
-// AllowedAccounts via MatchesAccount. Administrators-group members carry the
-// "*" wildcard (seeded with allowed_accounts=['*']) and so match any account;
-// a user with no groups has an empty AllowedAccounts and, combined with the
-// permission check at the call site, is denied (fail closed).
-func (ctx *AuthContext) CanAccessAccount(accountID, accountName string) bool {
-	return MatchesAccount(ctx.AllowedAccounts, accountID, accountName)
-}
-
 // Session represents an active user session.
 type Session struct {
 	Token     string    `json:"token" dynamodbav:"PK"`

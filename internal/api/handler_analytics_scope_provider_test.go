@@ -65,7 +65,7 @@ func TestHandleRequest_Analytics_RawExternalIDSharedAcrossProviders(t *testing.T
 	}
 
 	for order, accounts := range bothOrders {
-		for _, scope := range [][]string{{"dev"}, {"prod"}, {"123"}} {
+		for _, scope := range [][]string{{"u-aws"}, {"u-az"}, {"123"}} {
 			t.Run(scope[0]+" scope, "+order, func(t *testing.T) {
 				t.Parallel()
 				status, uuids, externals := analyticsScopeCall(t, scope, "123", accounts)
@@ -77,33 +77,34 @@ func TestHandleRequest_Analytics_RawExternalIDSharedAcrossProviders(t *testing.T
 
 		t.Run("account UUID resolves to its own provider, "+order, func(t *testing.T) {
 			t.Parallel()
-			status, uuids, externals := analyticsScopeCall(t, []string{"dev"}, "u-aws", accounts)
+			status, uuids, externals := analyticsScopeCall(t, []string{"u-aws"}, "u-aws", accounts)
 			assert.Equal(t, 200, status)
 			assert.Equal(t, []string{"u-aws"}, uuids)
 			assert.Equal(t, map[string][]string{"aws": {"123"}}, externals)
 
-			status, _, _ = analyticsScopeCall(t, []string{"dev"}, "u-az", accounts)
+			status, _, _ = analyticsScopeCall(t, []string{"u-aws"}, "u-az", accounts)
 			assert.Equal(t, 404, status, "the other provider's account stays out of scope")
 		})
 	}
 }
 
 // A raw external id that exactly one account owns still works for a scoped
-// user, by name or by id, and an out-of-scope account stays hidden.
+// user, by account ID or by a raw external-id entry, and an out-of-scope
+// account stays hidden.
 func TestHandleRequest_Analytics_UniqueRawExternalID(t *testing.T) {
 	t.Parallel()
 	in := config.CloudAccount{ID: "u-in", Name: "in", Provider: "aws", ExternalID: "111"}
 	out := config.CloudAccount{ID: "u-out", Name: "out", Provider: "aws", ExternalID: "222"}
 	accounts := []config.CloudAccount{in, out}
 
-	status, _, externals := analyticsScopeCall(t, []string{"in"}, "111", accounts)
+	status, _, externals := analyticsScopeCall(t, []string{"u-in"}, "111", accounts)
 	assert.Equal(t, 200, status)
 	assert.Equal(t, map[string][]string{"": {"111"}}, externals, "legacy raw-id filter shape is unchanged")
 
 	status, _, _ = analyticsScopeCall(t, []string{"111"}, "111", accounts)
 	assert.Equal(t, 200, status)
 
-	status, _, _ = analyticsScopeCall(t, []string{"in"}, "222", accounts)
+	status, _, _ = analyticsScopeCall(t, []string{"u-in"}, "222", accounts)
 	assert.Equal(t, 404, status)
 }
 
@@ -113,7 +114,7 @@ func TestHandleRequest_Analytics_SameProviderAmbiguousRawExternalID(t *testing.T
 	a := config.CloudAccount{ID: "u-a", Name: "dev", Provider: "aws", ExternalID: "123"}
 	b := config.CloudAccount{ID: "u-b", Name: "prod", Provider: "aws", ExternalID: "123"}
 	for _, accounts := range [][]config.CloudAccount{{a, b}, {b, a}} {
-		for _, scope := range []string{"dev", "prod"} {
+		for _, scope := range []string{"u-a", "u-b"} {
 			status, _, externals := analyticsScopeCall(t, []string{scope}, "123", accounts)
 			assert.Equal(t, 404, status, scope)
 			assert.Nil(t, externals)
@@ -142,7 +143,7 @@ func TestHandleRequest_Analytics_UnregisteredRawID(t *testing.T) {
 	status, _, _ := analyticsScopeCall(t, []string{"999"}, "999", accounts)
 	assert.Equal(t, 200, status)
 
-	status, _, _ = analyticsScopeCall(t, []string{"solo"}, "999", accounts)
+	status, _, _ = analyticsScopeCall(t, []string{"u-solo"}, "999", accounts)
 	assert.Equal(t, 404, status)
 }
 

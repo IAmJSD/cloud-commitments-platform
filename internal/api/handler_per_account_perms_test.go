@@ -93,7 +93,7 @@ func scopedReq() *events.LambdaFunctionURLRequest {
 
 // permsAccountList returns a ListCloudAccountsFn-compatible slice containing
 // both test accounts — used so resolveAccountNamesByID can map UUID→name for
-// the account-name branch of MatchesAccount.
+// the display-name lookup of AccountScope.Allows.
 func permsAccountList() []config.CloudAccount {
 	return []config.CloudAccount{
 		{ID: permsAccA, Name: permsAccAName, Provider: "aws"},
@@ -304,7 +304,7 @@ func TestPerAccountPerms_History_ListFilter(t *testing.T) {
 		Return([]config.PurchaseHistoryRecord{rowA, rowB}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 		Return([]config.PurchaseExecution{}, nil)
-	// resolveAccountNamesByID needs ListCloudAccounts so MatchesAccount can
+	// resolveAccountNamesByID needs ListCloudAccounts so AccountScope.Allows can
 	// resolve display names when the AccountID differs from the UUID.
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
@@ -334,10 +334,10 @@ func TestPerAccountPerms_History_ListFilter(t *testing.T) {
 
 // TestPerAccountPerms_HistoryAnalytics_CrossAccountRejected verifies that a
 // scoped user (allowed_accounts: [permsAccA]) gets 404 when they request
-// analytics for account B. validateAnalyticsAccountScope calls MatchesAccount
+// analytics for account B. validateAnalyticsAccountScope calls AccountScope.Allows
 // and returns errNotFound on mismatch.
 //
-// Regression: removing validateAnalyticsAccountScope (or its MatchesAccount
+// Regression: removing validateAnalyticsAccountScope (or its AccountScope.Allows
 // call) allows the analytics query to proceed and returns 200 to the caller.
 func TestPerAccountPerms_HistoryAnalytics_CrossAccountRejected(t *testing.T) {
 	ctx := context.Background()
@@ -593,7 +593,7 @@ func TestPerAccountPerms_DashboardSummary_CommitmentMetricsExcludeOtherAccounts(
 // recommendation tagged to account B gets 403 from validatePurchaseRecommendationScope.
 //
 // Regression: removing validatePurchaseRecommendationScope from executePurchase
-// (or its inner MatchesAccount call) allows the purchase to proceed and the
+// (or its inner AccountScope.Allows call) allows the purchase to proceed and the
 // assertions below fail.
 func TestPerAccountPerms_ExecutePurchase_CrossAccountRejected403(t *testing.T) {
 	ctx := context.Background()
@@ -1114,7 +1114,7 @@ func TestPerAccountPerms_PlannedPurchase_AllowedAccountPlanSucceeds(t *testing.T
 // permsAccB (outside their scope).
 //
 // The handler resolves the deployment CloudAccount ID via reshapeAccountResolver
-// and checks it against the session's allowed_accounts with auth.MatchesAccount.
+// and checks it against the session's allowed_accounts with auth.AccountScope.Allows.
 // When they don't match, no AWS SDK call is made and an empty list is returned.
 //
 // Regression: removing the getAllowedAccounts guard from listConvertibleRIs
@@ -1124,7 +1124,7 @@ func TestPerAccountPerms_ListConvertibleRIs_ScopedOutsideAllowedReturnsEmpty(t *
 	ctx := context.Background()
 
 	mockStore := new(MockConfigStore)
-	// resolveAccountNamesByID calls ListCloudAccounts so MatchesAccount can
+	// resolveAccountNamesByID calls ListCloudAccounts so AccountScope.Allows can
 	// resolve display names. Return both accounts so the name lookup is realistic.
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil

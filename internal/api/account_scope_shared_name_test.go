@@ -17,9 +17,12 @@ import (
 
 // Issue #433: display names are not unique, so a scope entry that names an
 // account must not also grant every other account with the same name (in
-// another provider or tenant, or one registered later). A name entry matches
-// only while exactly one registered account carries it; ID entries are
-// unaffected.
+// another provider or tenant, or one registered later).
+//
+// Issue #1034: a name entry is not bound to any account either, so once the
+// account it was meant for is deleted or renamed it would grant whichever
+// account takes the name next. Scope entries therefore match by account ID
+// only; a name entry grants nothing, unique or not.
 
 var (
 	sharedNameAWS   = config.CloudAccount{ID: "a1a1a1a1-0000-4000-8000-000000000001", Name: "prod", Provider: "aws", ExternalID: "111", Enabled: true}
@@ -120,11 +123,11 @@ func TestHandleRequest_AccountScope_SharedDisplayName(t *testing.T) {
 			},
 		},
 		{
-			name:     "unique name still matches",
+			name:     "a unique name entry grants nothing either",
 			scope:    []string{"solo"},
-			wantList: []string{sharedNameSolo.ID},
+			wantList: []string{},
 			reachable: map[string]bool{
-				sharedNameAWS.ID: false, sharedNameAzure.ID: false, sharedNameSolo.ID: true,
+				sharedNameAWS.ID: false, sharedNameAzure.ID: false, sharedNameSolo.ID: false,
 			},
 		},
 	} {
@@ -144,34 +147,52 @@ func TestHandleRequest_AccountScope_SharedDisplayName(t *testing.T) {
 	}
 }
 
-// The issue's "including future ones" case: a name scope that was fine while
-// the name was unique must not silently extend to a same-named account
-// registered later. It fails closed for both instead.
-func TestHandleRequest_AccountScope_LaterSameNamedAccount(t *testing.T) {
+// Issue #1034: the account a name entry was meant for is deleted, and a new
+// account is registered under the same name. The new account is the only one
+// carrying the name, so a name match would grant it; it must not.
+func TestHandleRequest_AccountScope_NameReusedAfterDelete(t *testing.T) {
 	t.Parallel()
-	before := sharedNameHandler(t, []string{"prod"}, []config.CloudAccount{sharedNameAWS, sharedNameSolo}, nil)
-	assert.Equal(t, 200, sharedNameGET(t, before, "/api/accounts/"+sharedNameAWS.ID).StatusCode)
-	assert.Equal(t, []string{sharedNameAWS.ID}, listedIDs(t, before))
+	reuser := sharedNameAzure // registered after sharedNameAWS ("prod") was deleted
+	h := sharedNameHandler(t, []string{"prod"}, []config.CloudAccount{reuser, sharedNameSolo}, nil)
 
-	after := sharedNameHandler(t, []string{"prod"}, []config.CloudAccount{sharedNameAWS, sharedNameSolo, sharedNameAzure}, nil)
-	assert.Equal(t, 404, sharedNameGET(t, after, "/api/accounts/"+sharedNameAzure.ID).StatusCode,
-		"the newly registered same-named account must not be granted")
-	assert.Equal(t, 404, sharedNameGET(t, after, "/api/accounts/"+sharedNameAWS.ID).StatusCode,
-		"the name is ambiguous now, so it grants no account by name")
-	assert.Empty(t, listedIDs(t, after))
+	assert.Equal(t, 404, sharedNameGET(t, h, "/api/accounts/"+reuser.ID).StatusCode,
+		"an account that took a deleted account's name must not inherit its grant")
+	assert.Empty(t, listedIDs(t, h))
 }
 
-// A disabled row still carries the name, so it still makes the name ambiguous.
+// Issue #1034: the granted account is renamed and another account takes its
+// old name. A grant stored as the account's ID stays with the renamed account
+// and does not move to the newcomer.
+func TestHandleRequest_AccountScope_IDGrantSurvivesRename(t *testing.T) {
+	t.Parallel()
+	renamed := sharedNameAWS
+	renamed.Name = "prod-legacy"
+	newcomer := sharedNameAzure // now the only account called "prod"
+	h := sharedNameHandler(t, []string{sharedNameAWS.ID}, []config.CloudAccount{renamed, newcomer}, nil)
+
+	assert.Equal(t, 200, sharedNameGET(t, h, "/api/accounts/"+renamed.ID).StatusCode)
+	assert.Equal(t, 404, sharedNameGET(t, h, "/api/accounts/"+newcomer.ID).StatusCode)
+	assert.Equal(t, []string{renamed.ID}, listedIDs(t, h))
+}
+
+// A row known only by external ID is identified through the name of the
+// account carrying it. A disabled row still carries its name, so it still
+// makes the name ambiguous (#433) and the row fails closed.
 func TestHandleRequest_AccountScope_DisabledDuplicateCounts(t *testing.T) {
 	t.Parallel()
 	disabled := sharedNameAzure
 	disabled.Enabled = false
-	h := sharedNameHandler(t, []string{"prod"}, []config.CloudAccount{sharedNameAWS, disabled}, nil)
-	assert.Equal(t, 404, sharedNameGET(t, h, "/api/accounts/"+sharedNameAWS.ID).StatusCode)
+	legacy := []config.PurchaseHistoryRecord{{PurchaseID: "legacy", AccountID: sharedNameAWS.ExternalID, Status: "completed"}}
+	scope := []string{sharedNameAWS.ID}
+
+	assert.Equal(t, []string{"legacy"}, historyScopeIDs(t, scope, []config.CloudAccount{sharedNameAWS}, legacy),
+		"control: a unique name identifies the in-scope account")
+	assert.Empty(t, historyScopeIDs(t, scope, []config.CloudAccount{sharedNameAWS, disabled}, legacy),
+		"a disabled same-named account makes the name ambiguous")
 }
 
-// When the account list cannot be loaded, uniqueness cannot be established:
-// name entries match nothing, ID entries keep working.
+// When the account list cannot be loaded, names cannot be resolved. Name
+// entries match nothing in any case, and ID entries keep working.
 func TestGetAccountScope_AccountListFailureIsIDOnly(t *testing.T) {
 	t.Parallel()
 	registered := []config.CloudAccount{sharedNameSolo}

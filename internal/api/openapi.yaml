@@ -2711,6 +2711,11 @@ components:
             $ref: '#/components/schemas/Permission'
         allowed_accounts:
           type: array
+          description: >
+            Cloud accounts the group may reach: account IDs (or provider
+            external IDs), or "*" for all accounts. Entries match by ID only;
+            a display name stored before #1034 that no longer identifies its
+            account matches nothing.
           items:
             type: string
         created_at:
@@ -2734,6 +2739,12 @@ components:
             $ref: '#/components/schemas/Permission'
         allowed_accounts:
           type: array
+          description: >
+            Account IDs, provider external IDs, or "*". A display name is
+            accepted only when exactly one registered account that the caller
+            can access carries it, and is stored as that account's ID, so the
+            grant stays with the account after a rename. Any other entry is
+            rejected with 400.
           items:
             type: string
 
@@ -2750,6 +2761,12 @@ components:
             $ref: '#/components/schemas/Permission'
         allowed_accounts:
           type: array
+          description: >
+            Account IDs, provider external IDs, or "*". A display name is
+            accepted only when exactly one registered account that the caller
+            can access carries it, and is stored as that account's ID, so the
+            grant stays with the account after a rename. Any other entry is
+            rejected with 400.
           items:
             type: string
 

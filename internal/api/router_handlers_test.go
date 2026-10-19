@@ -997,8 +997,9 @@ func TestRouter_rejectRIExchangeHandler_RateLimited(t *testing.T) {
 }
 
 // RI exchange records carry the 12-digit STS account id. A scoped user must
-// see a deployment's own exchanges whether the allow-list names the account by
-// UUID, by name or by that id, and never another account's (issue #541).
+// see a deployment's own exchanges whether the allow-list holds the account's
+// UUID or that id, and never another account's (issue #541). A display-name
+// entry is not bound to an account and matches nothing (issue #1034).
 func TestHandler_getRIExchangeHistory_AccountScope(t *testing.T) {
 	t.Parallel()
 	const stsAccount = "111122223333"
@@ -1014,7 +1015,7 @@ func TestHandler_getRIExchangeHistory_AccountScope(t *testing.T) {
 	}{
 		{name: "unrestricted sees all", scope: nil, want: 1},
 		{name: "scoped by account uuid", scope: []string{"u-prod"}, want: 1},
-		{name: "scoped by account name", scope: []string{"prod"}, want: 1},
+		{name: "a name entry matches nothing", scope: []string{"prod"}, want: 0},
 		{name: "scoped by sts account id", scope: []string{stsAccount}, want: 1},
 		{name: "scoped to a different account", scope: []string{"u-dev"}, want: 0},
 		{name: "scoped to a different account by name", scope: []string{"dev"}, want: 0},

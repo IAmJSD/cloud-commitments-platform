@@ -63,10 +63,12 @@ func TestAccountScope_EmptyExplicitListGrantsNothing(t *testing.T) {
 }
 
 func TestAccountScope_RestrictedAllowsOnlyItsOwn(t *testing.T) {
-	s := ScopeForAccounts([]string{"acct-A", "prod-name"}).WithRegisteredNames([]string{"prod-name", "other-name"})
+	s := ScopeForAccounts([]string{"acct-A", "uuid-prod"}).WithRegisteredAccounts([]RegisteredAccount{
+		{ID: "uuid-prod", Name: "prod-name"}, {ID: "uuid-other", Name: "other-name"},
+	})
 
 	assert.True(t, s.Allows("acct-A", ""), "matches by ID")
-	assert.True(t, s.Allows("some-uuid", "prod-name"), "matches by a unique display name")
+	assert.True(t, s.Allows("ext-123", "prod-name"), "a unique name identifies an account whose ID is in scope")
 	assert.False(t, s.Allows("acct-B", ""), "an account outside the list is denied")
 	assert.False(t, s.Allows("acct-B", "other-name"))
 	assert.False(t, s.AllowsAll())
@@ -113,23 +115,15 @@ func TestAccountScope_ScopedPrincipalStaysLimited(t *testing.T) {
 	assert.Equal(t, []string{"acct-A"}, s.FilterIDs([]string{"acct-A", "acct-C"}))
 }
 
-// Behavioral parity with the helpers it replaces, so the migration cannot
-// silently change who can reach what.
-func TestAccountScope_ParityWithLegacyHelpers(t *testing.T) {
+// AllowsAll agrees with the legacy IsUnrestrictedAccess convention for every
+// resolved list, so the type cannot silently change who is unrestricted.
+func TestAccountScope_AllowsAllParityWithLegacyConvention(t *testing.T) {
 	for _, legacy := range [][]string{
-		nil, {}, {"*"}, {"acct-A"}, {"acct-A", "acct-B"}, {"prod-name"},
+		nil, {}, {"*"}, {"acct-A"}, {"acct-A", "acct-B"}, {"prod-name"}, {"acct-A", "*"},
 	} {
-		// Every probe name is unique among the registered accounts, which is
-		// the only case where the name match is unchanged (issue #433).
-		s := ScopeFromLegacyList(legacy).WithRegisteredNames([]string{"prod-name", "nope"})
+		s := ScopeFromLegacyList(legacy)
 		assert.Equal(t, IsUnrestrictedAccess(legacy), s.AllowsAll(),
 			"AllowsAll must agree with IsUnrestrictedAccess for %v", legacy)
-		for _, probe := range []struct{ id, name string }{
-			{"acct-A", ""}, {"acct-B", ""}, {"some-uuid", "prod-name"}, {"acct-C", "nope"},
-		} {
-			assert.Equal(t, MatchesAccount(legacy, probe.id, probe.name), s.Allows(probe.id, probe.name),
-				"Allows must agree with MatchesAccount for legacy=%v probe=%v", legacy, probe)
-		}
 	}
 }
 
@@ -153,54 +147,104 @@ func TestAccountScope_LegacyConversionIsBorrowedSafety(t *testing.T) {
 	assert.False(t, ScopeForAccounts(nil).Allows("acct-A", ""))
 }
 
-// Issue #433: display names are not unique. A name entry matches only when
-// exactly one registered account carries that name.
-func TestAccountScope_SharedNameMatchesNoAccountByName(t *testing.T) {
-	registered := []string{"prod", "prod", "solo"} // aws "prod", azure "prod", gcp "solo"
-	s := ScopeForAccounts([]string{"prod", "solo"}).WithRegisteredNames(registered)
+// Issue #1034: a scope entry is bound to an account ID. A name entry is not
+// bound to anything, so once the account it was meant for is deleted or
+// renamed it would grant whichever account takes the name next. It must
+// therefore match no account, even when the name is unique.
+func TestAccountScope_NameEntryNeverMatches(t *testing.T) {
+	// The account the grant was meant for is gone; a new account took its name.
+	later := []RegisteredAccount{{ID: "uuid-new", Name: "prod"}}
+	s := ScopeForAccounts([]string{"prod"}).WithRegisteredAccounts(later)
 
-	assert.False(t, s.Allows("uuid-aws-prod", "prod"), "a shared name must not grant the first account")
-	assert.False(t, s.Allows("uuid-az-prod", "prod"), "nor the other account with the same name")
-	assert.True(t, s.Allows("uuid-solo", "solo"), "a unique name still matches")
-	assert.False(t, s.Allows("uuid-other", "other"))
+	assert.False(t, s.Allows("uuid-new", "prod"), "a later account reusing the name must not be granted")
+	assert.False(t, s.Allows("uuid-new", ""))
+	assert.False(t, s.Allows("ext-new", "prod"), "nor when the caller knows it by external ID and name")
+	assert.Empty(t, s.FilterIDs([]string{"uuid-new"}))
 }
 
-func TestAccountScope_IDEntriesIgnoreNameAmbiguity(t *testing.T) {
-	s := ScopeForAccounts([]string{"uuid-aws-prod"}).WithRegisteredNames([]string{"prod", "prod"})
+// The same grant made by ID survives the rename: the renamed account keeps
+// access, the account that takes the old name does not.
+func TestAccountScope_IDEntrySurvivesRenameAndReuse(t *testing.T) {
+	afterRename := []RegisteredAccount{
+		{ID: "uuid-orig", Name: "prod-old"}, // renamed away from "prod"
+		{ID: "uuid-new", Name: "prod"},      // took the old name
+	}
+	s := ScopeForAccounts([]string{"uuid-orig"}).WithRegisteredAccounts(afterRename)
+
+	assert.True(t, s.Allows("uuid-orig", "prod-old"))
+	assert.True(t, s.Allows("ext-orig", "prod-old"), "the renamed account is still identified by its new name")
+	assert.False(t, s.Allows("uuid-new", "prod"), "the account that took the old name is not granted")
+	assert.False(t, s.Allows("ext-new", "prod"))
+}
+
+// Issue #433: display names are not unique. A shared name identifies no
+// account, so it cannot be used to reach either of them.
+func TestAccountScope_SharedNameIdentifiesNoAccount(t *testing.T) {
+	registered := []RegisteredAccount{
+		{ID: "uuid-aws-prod", Name: "prod"}, {ID: "uuid-az-prod", Name: "prod"}, {ID: "uuid-solo", Name: "solo"},
+	}
+	s := ScopeForAccounts([]string{"uuid-aws-prod", "uuid-solo"}).WithRegisteredAccounts(registered)
 
 	assert.True(t, s.Allows("uuid-aws-prod", "prod"), "an ID entry grants its account whatever the name")
-	assert.True(t, s.Allows("uuid-aws-prod", ""))
-	assert.False(t, s.Allows("uuid-az-prod", "prod"))
+	assert.False(t, s.Allows("ext-az", "prod"), "a shared name must not resolve to the in-scope account")
+	assert.False(t, s.Allows("uuid-az-prod", "prod"), "nor grant the other account with that name")
+	assert.True(t, s.Allows("ext-solo", "solo"), "a unique name still identifies its account")
+	assert.False(t, s.Allows("uuid-other", "other"))
 	assert.Equal(t, []string{"uuid-aws-prod"}, s.FilterIDs([]string{"uuid-aws-prod", "uuid-az-prod"}))
+
+	// Whichever copy is in scope, the shared name identifies neither.
+	for _, id := range []string{"uuid-aws-prod", "uuid-az-prod"} {
+		assert.False(t, ScopeForAccounts([]string{id}).WithRegisteredAccounts(registered).Allows("ext", "prod"),
+			"shared name must not resolve to %s", id)
+	}
 }
 
-// Name matching is opt-in: a scope that never learned the registered names
+// A name only identifies the account carrying it. Naming an account after an
+// in-scope account's ID gains that account nothing.
+func TestAccountScope_NameResolvesToTheAccountCarryingIt(t *testing.T) {
+	registered := []RegisteredAccount{
+		{ID: "uuid-in", Name: "in-scope"},
+		{ID: "uuid-attacker", Name: "uuid-in"}, // display name set to the in-scope ID
+	}
+	s := ScopeForAccounts([]string{"uuid-in"}).WithRegisteredAccounts(registered)
+
+	assert.False(t, s.Allows("uuid-attacker", "uuid-in"),
+		"a display name equal to an in-scope ID must not grant the account carrying it")
+	assert.True(t, s.Allows("uuid-in", "in-scope"))
+}
+
+// Name lookup is opt-in: a scope that never learned the registered accounts
 // (or learned an empty list) is ID-only, so forgetting the step fails closed.
-func TestAccountScope_NameMatchRequiresRegisteredNames(t *testing.T) {
-	s := ScopeForAccounts([]string{"acct-A", "prod"})
-	assert.False(t, s.Allows("uuid-prod", "prod"), "no registered names: ID only")
+func TestAccountScope_NameLookupRequiresRegisteredAccounts(t *testing.T) {
+	s := ScopeForAccounts([]string{"acct-A", "uuid-prod"})
+	assert.False(t, s.Allows("ext-prod", "prod"), "no registered accounts: ID only")
 	assert.True(t, s.Allows("acct-A", ""))
 
-	assert.False(t, s.WithRegisteredNames(nil).Allows("uuid-prod", "prod"))
-	assert.False(t, s.WithRegisteredNames([]string{"other"}).Allows("uuid-prod", "prod"),
-		"a name no registered account carries does not match")
+	assert.False(t, s.WithRegisteredAccounts(nil).Allows("ext-prod", "prod"))
+	assert.False(t, s.WithRegisteredAccounts([]RegisteredAccount{{ID: "uuid-x", Name: "other"}}).Allows("ext-prod", "prod"),
+		"a name no registered account carries identifies nothing")
 
 	var zero AccountScope
-	assert.False(t, zero.WithRegisteredNames([]string{"prod"}).Allows("uuid-prod", "prod"),
+	assert.False(t, zero.WithRegisteredAccounts([]RegisteredAccount{{ID: "uuid-prod", Name: "prod"}}).Allows("ext-prod", "prod"),
 		"the zero value still denies")
 }
 
-func TestAccountScope_WithRegisteredNamesEdgeCases(t *testing.T) {
-	assert.True(t, UnrestrictedScope().WithRegisteredNames([]string{"a", "a"}).Allows("x", "a"),
+func TestAccountScope_WithRegisteredAccountsEdgeCases(t *testing.T) {
+	dup := []RegisteredAccount{{ID: "u1", Name: "a"}, {ID: "u2", Name: "a"}}
+	assert.True(t, UnrestrictedScope().WithRegisteredAccounts(dup).Allows("x", "a"),
 		"unrestricted stays unrestricted")
 
-	s := ScopeForAccounts([]string{""}).WithRegisteredNames([]string{""})
-	assert.False(t, s.Allows("uuid", ""), "an empty name never matches")
+	s := ScopeForAccounts([]string{""}).WithRegisteredAccounts([]RegisteredAccount{{ID: "", Name: ""}})
+	assert.False(t, s.Allows("", ""), "an empty entry never matches")
+	assert.False(t, s.Allows("uuid", ""))
 
-	base := ScopeForAccounts([]string{"prod"})
-	_ = base.WithRegisteredNames([]string{"prod"})
-	assert.False(t, base.Allows("uuid", "prod"), "WithRegisteredNames returns a copy")
+	base := ScopeForAccounts([]string{"uuid-prod"})
+	_ = base.WithRegisteredAccounts([]RegisteredAccount{{ID: "uuid-prod", Name: "prod"}})
+	assert.False(t, base.Allows("ext-prod", "prod"), "WithRegisteredAccounts returns a copy")
 
-	assert.True(t, ScopeForAccounts([]string{"Prod"}).WithRegisteredNames([]string{"Prod", "prod"}).Allows("uuid", "Prod"),
-		"names are compared exactly, as entries are")
+	exact := ScopeForAccounts([]string{"uuid-P"}).WithRegisteredAccounts([]RegisteredAccount{
+		{ID: "uuid-P", Name: "Prod"}, {ID: "uuid-p", Name: "prod"},
+	})
+	assert.True(t, exact.Allows("ext", "Prod"), "names are compared exactly")
+	assert.False(t, exact.Allows("ext", "prod"))
 }
