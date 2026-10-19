@@ -1184,6 +1184,27 @@ jobs:
       - name: Run smoke-gate self-test
         run: bash scripts/test-wait-for-healthy.sh
 
+  # Execute database-migration.yml's down-migration gate (#68): the gate script
+  # over adversarial inputs, then the workflow's own validate and migrate-* run
+  # blocks extracted from the YAML with a stub `migrate`, so a request that
+  # amounts to `down -all` (steps=0, or steps at or past the migration count,
+  # which golang-migrate treats as "roll back everything") is proven never to
+  # reach migrate. Fast (shell only), so it always runs.
+  migration-down-gate:
+    name: Database migration down gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run down-migration gate self-tests
+        run: bash scripts/test-migration-down-gate.sh
+
   # Summary job - all checks must pass
   ci-success:
     name: CI Success
@@ -1206,6 +1227,7 @@ jobs:
       - cloud-sql-delete-scope
       - aws-tfstate-platform-key
       - azure-kv-access-policy
+      - migration-down-gate
     if: always()
     permissions:
       contents: read
