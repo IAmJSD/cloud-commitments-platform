@@ -25,7 +25,7 @@ var approveFromStatuses = []string{"pending", "notified"}
 func newApproveManager(t *testing.T) (*Manager, *MockConfigStore, *MockEmailSender) {
 	t.Helper()
 	store := new(MockConfigStore)
-	sender := new(MockEmailSender)
+	sender := allowFailedNotification(new(MockEmailSender))
 
 	// A plan step with no recommendations is refused (#609), so the
 	// approved fixtures carry one recommendation; this factory lets it
@@ -450,7 +450,7 @@ func TestManager_ApproveAndExecute_ReturnsRowOnExecutionFailure(t *testing.T) {
 	store := new(MockConfigStore)
 	factory := new(MockProviderFactory)
 	factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(nil, errors.New("credentials rejected"))
-	manager := &Manager{config: store, email: new(MockEmailSender), providerFactory: factory}
+	manager := &Manager{config: store, email: allowFailedNotification(new(MockEmailSender)), providerFactory: factory}
 
 	updated := &config.PurchaseExecution{
 		ExecutionID:     "exec-fail-after-claim",

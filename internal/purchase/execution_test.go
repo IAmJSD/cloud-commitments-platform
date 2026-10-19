@@ -855,7 +855,7 @@ func TestExecuteForAccount_CredentialFailure_MarksFailed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			mockStore := new(MockConfigStore)
-			mockEmail := new(MockEmailSender)
+			mockEmail := allowFailedNotification(new(MockEmailSender))
 			mockFactory := new(MockProviderFactory)
 			// Credential store returns nothing for every load — this triggers
 			// the "no credentials stored" error path in the resolver for all
@@ -930,7 +930,7 @@ func TestExecuteForAccount_CredentialFailure_MarksFailed(t *testing.T) {
 func TestExecuteForAccount_CredentialFailure_SaveErrorSurfaced(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockEmail := new(MockEmailSender)
+	mockEmail := allowFailedNotification(new(MockEmailSender))
 	mockFactory := new(MockProviderFactory)
 
 	// No credentials stored — credential resolution fails for the account.
@@ -1006,7 +1006,7 @@ func TestExecuteForAccount_CredentialFailure_SaveErrorSurfaced(t *testing.T) {
 func TestExecuteMultiAccount_PartialFailure_IsolatesAccounts(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockEmail := new(MockEmailSender)
+	mockEmail := allowFailedNotification(new(MockEmailSender))
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
@@ -1900,7 +1900,7 @@ func TestManager_ExecuteAndFinalize_EmptyCommitmentID_CompletesWithAuditGap(t *t
 func TestManager_ExecuteAndFinalize_SingleAccount_PartialSuccess(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockEmail := new(MockEmailSender)
+	mockEmail := allowFailedNotification(new(MockEmailSender))
 	mockSTS := new(MockSTSClient)
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
@@ -1975,7 +1975,7 @@ func TestManager_ExecuteAndFinalize_SingleAccount_PartialSuccess(t *testing.T) {
 func TestExecuteForAccount_PartialSuccess(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockEmail := new(MockEmailSender)
+	mockEmail := allowFailedNotification(new(MockEmailSender))
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
