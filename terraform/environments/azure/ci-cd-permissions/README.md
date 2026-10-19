@@ -22,7 +22,8 @@ secrets ever need to be stored.
 > `azurerm_role_definition` requires
 > `Microsoft.Authorization/roleDefinitions/write`, a bootstrap-class permission
 > the runtime CI deploy SP intentionally does not have (it only holds
-> `roleDefinitions/read` + `roleAssignments/{read,write,delete}`). The runtime
+> `roleDefinitions/read`, `roleAssignments/{read,write,delete}` and
+> `locks/{read,write,delete}`). The runtime
 > deploy looks the role up by name via `data.azurerm_role_definition` and creates
 > only the assignment.
 >
@@ -36,6 +37,9 @@ secrets ever need to be stored.
 
 **Control-plane actions** (ARM): VNets, subnets, NSGs, Container Apps, Container Registries,
 Storage accounts, Key Vault management, Log Analytics, DNS zones, and more.
+`Microsoft.Authorization/locks/*` lets the deploy manage the PostgreSQL server's
+CanNotDelete lock (`database_deletion_protection`, on by default); re-apply this
+module before the first deploy that turns it on, or that apply fails with a 403.
 
 **Data-plane actions**: Blob read/write (Terraform state), Key Vault secrets read/write.
 

@@ -35,6 +35,7 @@ database_storage_mb             = 32768
 database_backup_retention_days  = 7
 database_geo_redundant_backup   = false
 database_high_availability_mode = "Disabled"
+database_deletion_protection    = false # Ephemeral CI dev: no delete lock
 auto_migrate                    = true
 
 # ==============================================
