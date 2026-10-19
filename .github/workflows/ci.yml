@@ -627,8 +627,10 @@ jobs:
       # Each database module must default to deletion protection and honor
       # an explicit opt-out (#293). Skips a cloud until it has a tests dir.
       - name: Test database module
+        env:
+          CLOUD: ${{ matrix.cloud }}
         run: |
-          d=terraform/modules/database/${{ matrix.cloud }}
+          d="terraform/modules/database/$CLOUD"
           if [ -d "$d/tests" ]; then
             terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
             terraform -chdir="$d" fmt -check -recursive
