@@ -1360,13 +1360,15 @@ func (s *Scheduler) resolveEffectiveCacheTTL(ctx context.Context) (ttl time.Dura
 	return time.Duration(globalCfg.RecommendationsCacheStaleHours) * time.Hour, false
 }
 
-// suppressionKey is the 6-tuple used to match suppressions to recs.
+// suppressionKey is the 6-tuple used to group suppressions. Within a group,
+// each row's variant (availability zone, platform, tenancy; issue #816)
+// decides whether it applies to a given rec (PurchaseSuppression.AppliesTo).
 type suppressionKey struct {
 	accountID, provider, service, region, resourceType, engine string
 }
 
-// suppressionAgg aggregates all active suppression rows for a single
-// 6-tuple: cumulative count, earliest expiry (drives the badge's
+// suppressionAgg aggregates the active suppression rows that apply to one
+// rec: cumulative count, earliest expiry (drives the badge's
 // "Xd remaining"), and the execution whose suppression contributed
 // the most (drives the badge deep-link).
 type suppressionAgg struct {
@@ -1375,6 +1377,24 @@ type suppressionAgg struct {
 	primaryExecutionID      string
 	suppressedCount         int
 	primaryExecutionContrib int
+}
+
+// add folds one suppression row into the aggregate.
+func (a *suppressionAgg) add(sup *config.PurchaseSuppression) {
+	a.suppressedCount += sup.SuppressedCount
+	if sup.ExpiresAt.Before(a.earliestExpiresAt) {
+		a.earliestExpiresAt = sup.ExpiresAt
+	}
+	// "Most contribution" selects the biggest single suppression
+	// row; ties go to the most-recently-created row so a fresh
+	// cancel of an older peer doesn't leave the badge pointing at
+	// a stale execution.
+	if sup.SuppressedCount > a.primaryExecutionContrib ||
+		(sup.SuppressedCount == a.primaryExecutionContrib && sup.CreatedAt.After(a.primaryExecutionCreated)) {
+		a.primaryExecutionID = sup.ExecutionID
+		a.primaryExecutionCreated = sup.CreatedAt
+		a.primaryExecutionContrib = sup.SuppressedCount
+	}
 }
 
 // applySuppressions subtracts active purchase_suppressions from each
@@ -1394,42 +1414,49 @@ func (s *Scheduler) applySuppressions(ctx context.Context, recs []config.Recomme
 	return applySuppressionIndex(recs, index), nil
 }
 
-// aggregateSuppressions groups a raw suppression list by 6-tuple.
-func aggregateSuppressions(sups []config.PurchaseSuppression) map[suppressionKey]*suppressionAgg {
-	index := make(map[suppressionKey]*suppressionAgg, len(sups))
+// aggregateSuppressions groups a raw suppression list by 6-tuple. The
+// per-rec aggregate is built in applySuppressionIndex, because which rows
+// of a group apply depends on the rec's variant.
+func aggregateSuppressions(sups []config.PurchaseSuppression) map[suppressionKey][]config.PurchaseSuppression {
+	index := make(map[suppressionKey][]config.PurchaseSuppression, len(sups))
 	for i := range sups {
 		sup := sups[i]
 		k := suppressionKey{
 			accountID: sup.AccountID, provider: sup.Provider, service: sup.Service,
 			region: sup.Region, resourceType: sup.ResourceType, engine: sup.Engine,
 		}
-		a, ok := index[k]
-		if !ok {
-			a = &suppressionAgg{earliestExpiresAt: sup.ExpiresAt}
-			index[k] = a
-		}
-		a.suppressedCount += sup.SuppressedCount
-		if sup.ExpiresAt.Before(a.earliestExpiresAt) {
-			a.earliestExpiresAt = sup.ExpiresAt
-		}
-		// "Most contribution" selects the biggest single suppression
-		// row; ties go to the most-recently-created row so a fresh
-		// cancel of an older peer doesn't leave the badge pointing at
-		// a stale execution.
-		if sup.SuppressedCount > a.primaryExecutionContrib ||
-			(sup.SuppressedCount == a.primaryExecutionContrib && sup.CreatedAt.After(a.primaryExecutionCreated)) {
-			a.primaryExecutionID = sup.ExecutionID
-			a.primaryExecutionCreated = sup.CreatedAt
-			a.primaryExecutionContrib = sup.SuppressedCount
-		}
+		index[k] = append(index[k], sup)
 	}
 	return index
 }
 
-// applySuppressionIndex walks recs, subtracts the matching aggregate
-// count from each rec, drops recs that go to 0 or below, and
-// annotates the survivors with the badge fields.
-func applySuppressionIndex(recs []config.RecommendationRecord, index map[suppressionKey]*suppressionAgg) []config.RecommendationRecord {
+// matchingSuppressions aggregates the rows of rec's 6-tuple group that apply
+// to rec's variant: rows for the same availability zone, platform and
+// tenancy, plus legacy rows with no variant (a wildcard over the 6-tuple).
+// A rec whose Details cannot be read matches every row of its group, the
+// pre-#816 behavior. Returns nil when no row applies.
+func matchingSuppressions(rec *config.RecommendationRecord, group []config.PurchaseSuppression) *suppressionAgg {
+	var recVariant *config.SuppressionVariant
+	if v, err := rec.SuppressionVariant(); err == nil {
+		recVariant = &v
+	}
+	var a *suppressionAgg
+	for i := range group {
+		if !group[i].AppliesTo(recVariant) {
+			continue
+		}
+		if a == nil {
+			a = &suppressionAgg{earliestExpiresAt: group[i].ExpiresAt}
+		}
+		a.add(&group[i])
+	}
+	return a
+}
+
+// applySuppressionIndex walks recs, subtracts the count of the
+// suppressions that apply to each rec, drops recs that go to 0 or below,
+// and annotates the survivors with the badge fields.
+func applySuppressionIndex(recs []config.RecommendationRecord, index map[suppressionKey][]config.PurchaseSuppression) []config.RecommendationRecord {
 	// Allocate a fresh backing array so callers that hold a reference to
 	// the original recs slice do not see mutations (05-M1).
 	out := make([]config.RecommendationRecord, 0, len(recs))
@@ -1443,8 +1470,8 @@ func applySuppressionIndex(recs []config.RecommendationRecord, index map[suppres
 			accountID: accountID, provider: rec.Provider, service: rec.Service,
 			region: rec.Region, resourceType: rec.ResourceType, engine: rec.Engine,
 		}
-		a, ok := index[k]
-		if !ok {
+		a := matchingSuppressions(&rec, index[k])
+		if a == nil {
 			out = append(out, rec)
 			continue
 		}
