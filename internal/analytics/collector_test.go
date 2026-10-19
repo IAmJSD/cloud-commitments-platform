@@ -403,6 +403,14 @@ func (m *mockConfigStore) GetStaleProcessingExchanges(ctx context.Context, older
 	return nil, nil
 }
 
+func (m *mockConfigStore) SaveRIExchangeDirectExecution(_ context.Context, _ *config.RIExchangeDirectExecution) error {
+	return nil
+}
+
+func (m *mockConfigStore) FinalizeRIExchangeDirectExecution(_ context.Context, _ string, _ config.RIExchangeDirectOutcome) error {
+	return nil
+}
+
 func (m *mockConfigStore) CreateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
 	return nil
 }
