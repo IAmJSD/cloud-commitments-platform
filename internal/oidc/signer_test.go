@@ -8,10 +8,16 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
+	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -221,5 +227,196 @@ func TestComputeKeyIDChangesOnKeyRotation(t *testing.T) {
 	k2, _ := s2.KeyID(context.Background())
 	if k1 == k2 {
 		t.Errorf("different keys produced the same kid: %s", k1)
+	}
+}
+
+// Audit finding A03-014 (issue #263): each KMS-backed signer resolved its
+// public key inside sync.Once and stored the error with it, so one failed
+// first lookup (a throttle, a network blip, or a caller whose ctx was already
+// canceled) poisoned the process-wide signer until the instance recycled.
+// Only a successful resolution may be cached.
+
+var errTransientKeyLookup = errors.New("transient key lookup failure")
+
+// keyLookupGate makes a fake backend's public-key fetch fail while failures
+// is positive (and whenever the caller's ctx is done), and counts every
+// fetch so a test can tell a retried lookup from a memoized one.
+type keyLookupGate struct {
+	failures atomic.Int32
+	calls    atomic.Int32
+}
+
+func (g *keyLookupGate) enter(ctx context.Context) error {
+	g.calls.Add(1)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if g.failures.Add(-1) >= 0 {
+		return errTransientKeyLookup
+	}
+	return nil
+}
+
+type gatedAWSKMS struct {
+	*fakeKMSClient
+	gate *keyLookupGate
+}
+
+func (c gatedAWSKMS) GetPublicKey(ctx context.Context, in *kms.GetPublicKeyInput, opts ...func(*kms.Options)) (*kms.GetPublicKeyOutput, error) {
+	if err := c.gate.enter(ctx); err != nil {
+		return nil, err
+	}
+	return c.fakeKMSClient.GetPublicKey(ctx, in, opts...)
+}
+
+type gatedAzureKeyVault struct {
+	*fakeAzureKeyVaultClient
+	gate *keyLookupGate
+}
+
+func (c gatedAzureKeyVault) GetKey(ctx context.Context, name, version string, opts *azkeys.GetKeyOptions) (azkeys.GetKeyResponse, error) {
+	if err := c.gate.enter(ctx); err != nil {
+		return azkeys.GetKeyResponse{}, err
+	}
+	return c.fakeAzureKeyVaultClient.GetKey(ctx, name, version, opts)
+}
+
+type gatedGCPKMS struct {
+	*fakeGCPKMSClient
+	gate *keyLookupGate
+}
+
+func (c gatedGCPKMS) GetPublicKey(ctx context.Context, req *kmspb.GetPublicKeyRequest, opts ...interface{}) (*kmspb.PublicKey, error) {
+	if err := c.gate.enter(ctx); err != nil {
+		return nil, err
+	}
+	return c.fakeGCPKMSClient.GetPublicKey(ctx, req, opts...)
+}
+
+type gatedSignerBackend struct {
+	build func(key *ecdsa.PrivateKey, gate *keyLookupGate) Signer
+	name  string
+}
+
+func gatedSignerBackends() []gatedSignerBackend {
+	return []gatedSignerBackend{
+		{name: "aws", build: func(key *ecdsa.PrivateKey, gate *keyLookupGate) Signer {
+			return NewAWSKMSSignerFromClient(gatedAWSKMS{&fakeKMSClient{key: key}, gate}, "alias/test-key")
+		}},
+		{name: "azure", build: func(key *ecdsa.PrivateKey, gate *keyLookupGate) Signer {
+			return NewAzureKeyVaultSignerFromClient(gatedAzureKeyVault{&fakeAzureKeyVaultClient{key: &key.PublicKey}, gate}, "test-key", "")
+		}},
+		{name: "gcp", build: func(key *ecdsa.PrivateKey, gate *keyLookupGate) Signer {
+			return NewGCPKMSSignerFromClient(gatedGCPKMS{&fakeGCPKMSClient{key: key}, gate},
+				"projects/p/locations/global/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1")
+		}},
+	}
+}
+
+func newP256TestKey(t *testing.T) (*ecdsa.PrivateKey, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("gen key: %v", err)
+	}
+	kid, err := ComputeKeyID(&key.PublicKey)
+	if err != nil {
+		t.Fatalf("kid: %v", err)
+	}
+	return key, kid
+}
+
+func TestKMSSignerRetriesFailedKeyLookup(t *testing.T) {
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	firstCalls := []struct {
+		ctx      context.Context
+		wantErr  error
+		name     string
+		failures int32
+	}{
+		{name: "transient error", ctx: context.Background(), failures: 1, wantErr: errTransientKeyLookup},
+		{name: "canceled first caller", ctx: canceled, failures: 0, wantErr: context.Canceled},
+	}
+	for _, backend := range gatedSignerBackends() {
+		for _, first := range firstCalls {
+			t.Run(backend.name+"/"+first.name, func(t *testing.T) {
+				ctx := context.Background()
+				key, wantKid := newP256TestKey(t)
+				gate := &keyLookupGate{}
+				gate.failures.Store(first.failures)
+				signer := backend.build(key, gate)
+
+				if _, err := signer.KeyID(first.ctx); !errors.Is(err, first.wantErr) {
+					t.Fatalf("first KeyID err = %v, want %v", err, first.wantErr)
+				}
+
+				pub, err := signer.PublicKey(ctx)
+				if err != nil {
+					t.Fatalf("PublicKey after a failed first lookup: %v (the failure was cached)", err)
+				}
+				if ecPub, ok := pub.(*ecdsa.PublicKey); !ok || !ecPub.Equal(&key.PublicKey) {
+					t.Fatalf("PublicKey = %v, want the backend key", pub)
+				}
+				kid, err := signer.KeyID(ctx)
+				if err != nil || kid != wantKid {
+					t.Fatalf("KeyID = %q, %v; want %q", kid, err, wantKid)
+				}
+				// One failed fetch, one successful fetch, then the cache.
+				if got := gate.calls.Load(); got != 2 {
+					t.Errorf("key lookups = %d, want 2 (retry once, then memoize success)", got)
+				}
+			})
+		}
+	}
+}
+
+// TestKMSSignerConcurrentFirstResolution races many first callers against a
+// backend whose first fetch fails: only the caller that drew the failure may
+// see it, the rest must get the key, and the success is fetched exactly once.
+func TestKMSSignerConcurrentFirstResolution(t *testing.T) {
+	const callers = 16
+	for _, backend := range gatedSignerBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			ctx := context.Background()
+			key, wantKid := newP256TestKey(t)
+			gate := &keyLookupGate{}
+			gate.failures.Store(1)
+			signer := backend.build(key, gate)
+
+			var (
+				start  sync.WaitGroup
+				done   sync.WaitGroup
+				failed atomic.Int32
+				wrong  atomic.Int32
+			)
+			start.Add(1)
+			for range callers {
+				done.Add(1)
+				go func() {
+					defer done.Done()
+					start.Wait()
+					kid, err := signer.KeyID(ctx)
+					switch {
+					case errors.Is(err, errTransientKeyLookup):
+						failed.Add(1)
+					case err != nil || kid != wantKid:
+						wrong.Add(1)
+					}
+				}()
+			}
+			start.Done()
+			done.Wait()
+
+			if got := failed.Load(); got != 1 {
+				t.Errorf("callers that saw the transient failure = %d, want 1", got)
+			}
+			if got := wrong.Load(); got != 0 {
+				t.Errorf("callers with an unexpected result = %d, want 0", got)
+			}
+			if got := gate.calls.Load(); got != 2 {
+				t.Errorf("key lookups = %d, want 2 (one failure, one memoized success)", got)
+			}
+		})
 	}
 }

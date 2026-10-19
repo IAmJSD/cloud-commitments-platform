@@ -6,7 +6,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"fmt"
-	"sync"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys"
@@ -23,12 +22,9 @@ type AzureKeyVaultClient interface {
 // private half never leaves the vault.
 type AzureKeyVaultSigner struct {
 	client     AzureKeyVaultClient
-	err        error
-	pubKey     *ecdsa.PublicKey
 	keyName    string
 	keyVersion string
-	kid        string
-	once       sync.Once
+	keys       publicKeyCache
 }
 
 // newAzureKeyVaultClient builds the real AzureKeyVaultClient using the
@@ -87,50 +83,37 @@ func (s *AzureKeyVaultSigner) Sign(ctx context.Context, digest []byte) ([]byte, 
 	return resp.Result, nil
 }
 
-// PublicKey fetches the public half of the Key Vault key once and
-// caches it.
+// PublicKey fetches the public half of the Key Vault key and caches it
+// once a fetch succeeds. A failed fetch is returned and retried on the next
+// call.
 func (s *AzureKeyVaultSigner) PublicKey(ctx context.Context) (crypto.PublicKey, error) {
-	s.resolveOnce(ctx)
-	return s.pubKey, s.err
+	return s.keys.publicKey(ctx, s.fetchPublicKey)
 }
 
 // KeyID returns a stable kid derived from the public key point.
 func (s *AzureKeyVaultSigner) KeyID(ctx context.Context) (string, error) {
-	s.resolveOnce(ctx)
-	return s.kid, s.err
+	return s.keys.keyID(ctx, s.fetchPublicKey)
 }
 
-func (s *AzureKeyVaultSigner) resolveOnce(ctx context.Context) {
-	s.once.Do(func() {
-		resp, err := s.client.GetKey(ctx, s.keyName, s.keyVersion, nil)
-		if err != nil {
-			s.err = fmt.Errorf("oidc: azure keyvault GetKey: %w", err)
-			return
-		}
-		if resp.Key == nil || resp.Key.X == nil || resp.Key.Y == nil {
-			s.err = fmt.Errorf("oidc: azure keyvault returned incomplete EC key (missing X or Y)")
-			return
-		}
-		// JWK coordinates may omit leading zeros; right-align each into 32 bytes.
-		if len(resp.Key.X) > 32 || len(resp.Key.Y) > 32 {
-			s.err = fmt.Errorf("oidc: azure keyvault EC key coordinate exceeds 32 bytes")
-			return
-		}
-		var uncompressed [65]byte
-		uncompressed[0] = 0x04
-		copy(uncompressed[1+32-len(resp.Key.X):33], resp.Key.X)
-		copy(uncompressed[33+32-len(resp.Key.Y):65], resp.Key.Y)
-		ecPub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), uncompressed[:])
-		if err != nil {
-			s.err = fmt.Errorf("oidc: azure keyvault parse EC public key: %w", err)
-			return
-		}
-		kid, err := ComputeKeyID(ecPub)
-		if err != nil {
-			s.err = err
-			return
-		}
-		s.pubKey = ecPub
-		s.kid = kid
-	})
+func (s *AzureKeyVaultSigner) fetchPublicKey(ctx context.Context) (*ecdsa.PublicKey, error) {
+	resp, err := s.client.GetKey(ctx, s.keyName, s.keyVersion, nil)
+	if err != nil {
+		return nil, fmt.Errorf("oidc: azure keyvault GetKey: %w", err)
+	}
+	if resp.Key == nil || resp.Key.X == nil || resp.Key.Y == nil {
+		return nil, fmt.Errorf("oidc: azure keyvault returned incomplete EC key (missing X or Y)")
+	}
+	// JWK coordinates may omit leading zeros; right-align each into 32 bytes.
+	if len(resp.Key.X) > 32 || len(resp.Key.Y) > 32 {
+		return nil, fmt.Errorf("oidc: azure keyvault EC key coordinate exceeds 32 bytes")
+	}
+	var uncompressed [65]byte
+	uncompressed[0] = 0x04
+	copy(uncompressed[1+32-len(resp.Key.X):33], resp.Key.X)
+	copy(uncompressed[33+32-len(resp.Key.Y):65], resp.Key.Y)
+	ecPub, err := ecdsa.ParseUncompressedPublicKey(elliptic.P256(), uncompressed[:])
+	if err != nil {
+		return nil, fmt.Errorf("oidc: azure keyvault parse EC public key: %w", err)
+	}
+	return ecPub, nil
 }
