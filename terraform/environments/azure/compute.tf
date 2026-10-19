@@ -200,6 +200,10 @@ module "compute_aks" {
   local_account_disabled  = var.aks_local_account_disabled
   admin_group_object_ids  = var.aks_admin_group_object_ids
 
+  # Scheduled tasks (CronJobs, #893). The other tasks use the module defaults.
+  enable_scheduled_tasks  = var.enable_scheduled_tasks
+  recommendation_schedule = var.recommendation_schedule
+
   tags = local.common_tags
 
   depends_on = [module.networking, module.database, module.secrets]

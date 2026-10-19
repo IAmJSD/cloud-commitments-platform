@@ -23,7 +23,10 @@
   sweep `<stack>-sweep-cleanup` runs the server cleanup task.
 - **Azure Container Apps:** a Logic App calls `/api/scheduled/cleanup` daily
   when `enable_scheduled_tasks` is true. (The `azure/cleanup-function` module
-  is not consumed by any environment, and AKS has no scheduler, #893.)
+  is not consumed by any environment.)
+- **AKS (opt-in):** `enable_cleanup_schedule` / `cleanup_schedule` on the AKS
+  module add a `<project>-task-cleanup` CronJob that runs the server cleanup
+  task (#893), when `deploy_kubernetes_resources` is true.
 
 The `CleanupOldExecutions` Postgres implementation in
 `internal/config/store_postgres.go` runs the expected

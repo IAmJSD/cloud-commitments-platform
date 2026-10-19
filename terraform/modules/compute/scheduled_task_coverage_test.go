@@ -41,9 +41,7 @@ const (
 
 var (
 	validDims = []string{dimTask, dimPass, dimDefault}
-	allEight  = []string{"analytics_collect", "cleanup", "collect_recommendations", "finalize_revocations",
-		"fire_scheduled_purchases", "process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}
-	sevenGCP = []string{"analytics_collect", "cleanup", "finalize_revocations", "fire_scheduled_purchases",
+	sevenGCP  = []string{"analytics_collect", "cleanup", "finalize_revocations", "fire_scheduled_purchases",
 		"process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}
 )
 
@@ -60,15 +58,15 @@ var knownGaps = map[string]map[string][]string{
 	"gcp-gke":       {dimTask: sevenGCP},
 	"azure-container-apps": {dimTask: {"analytics_collect", "finalize_revocations", "fire_scheduled_purchases",
 		"process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}},
-	"azure-aks": {dimTask: allEight}, // no scheduler resources at all: #893
 }
 
 // aws platforms are also checked against terraform/environments/aws: envBlock
 // is the module block in compute.tf, needsPermission whether sweeps.tf must
-// hold an aws_lambda_permission (Lambda only).
+// hold an aws_lambda_permission (Lambda only). cronJob platforms schedule
+// their sweep_tasks through a Kubernetes CronJob in scheduled-tasks.tf.
 type platform struct {
-	name, dir, envBlock  string
-	aws, needsPermission bool
+	name, dir, envBlock           string
+	aws, needsPermission, cronJob bool
 }
 
 var platforms = []platform{
@@ -78,7 +76,7 @@ var platforms = []platform{
 	{name: "gcp-cloud-run", dir: "gcp/cloud-run"},
 	{name: "gcp-gke", dir: "gcp/gke"},
 	{name: "azure-container-apps", dir: "azure/container-apps"},
-	{name: "azure-aks", dir: "azure/aks"},
+	{name: "azure-aks", dir: "azure/aks", cronJob: true},
 }
 
 // Copied from aws/cross_account_sts_discovery_test.go (commentLinePattern):
@@ -332,6 +330,15 @@ func TestRequiredTasksWiredPerPlatform(t *testing.T) {
 			}
 			for _, prob := range sweeps {
 				t.Errorf("%s: sweeps.tf: %s", p.name, prob)
+			}
+		}
+		if p.cronJob {
+			probs, err := cronJobProblems(p.dir)
+			if err != nil {
+				t.Errorf("%s: %v", p.name, err)
+			}
+			for _, prob := range probs {
+				t.Errorf("%s: %s: %s", p.name, cronJobFile, prob)
 			}
 		}
 	}
