@@ -33,6 +33,15 @@ resource "aws_iam_policy" "networking" {
           "ec2:CreateLaunchTemplateVersion",
           "ec2:DeleteLaunchTemplateVersions",
           "ec2:ModifyLaunchTemplate",
+          # The persistent fck-nat ENI the private routes target (#716):
+          # CreateNetworkInterface to create it, ModifyNetworkInterfaceAttribute
+          # because the provider turns source_dest_check off in a second call
+          # after the create, and DetachNetworkInterface because destroying or
+          # replacing it detaches it from the NAT instance first.
+          # DeleteNetworkInterface and DescribeNetworkInterfaces are below.
+          "ec2:CreateNetworkInterface",
+          "ec2:ModifyNetworkInterfaceAttribute",
+          "ec2:DetachNetworkInterface",
           "ec2:CreateRoute",
           "ec2:CreateRouteTable",
           "ec2:CreateSecurityGroup",

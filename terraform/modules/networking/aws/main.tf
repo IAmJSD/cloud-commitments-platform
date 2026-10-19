@@ -209,6 +209,27 @@ resource "aws_iam_instance_profile" "fck_nat" {
   })
 }
 
+# Persistent ENI the private routes target (#716). The route tables must not
+# name an instance's own primary ENI: the ASG replaces the instance (failed
+# health check, AZ event) and the replacement comes up with a new primary ENI,
+# so a route pinned to the old one blackholes IPv4 egress until the next apply.
+# This ENI outlives every instance. Each one the ASG launches attaches it at
+# boot as its second interface (see user_data), so the route target never
+# changes. It lives in the ASG's only subnet because an ENI can only attach to
+# an instance in its own AZ.
+resource "aws_network_interface" "fck_nat" {
+  count = var.enable_nat_gateway ? 1 : 0
+
+  description       = "${var.stack_name} fck-nat persistent ENI (private route target)"
+  subnet_id         = local.public_subnet_ids[0]
+  security_groups   = [aws_security_group.fck_nat[0].id]
+  source_dest_check = false # NAT forwards traffic it is neither source nor destination of
+
+  tags = merge(var.tags, {
+    Name = "${var.stack_name}-fck-nat-eni"
+  })
+}
+
 # Launch template for fck-nat instance
 resource "aws_launch_template" "fck_nat" {
   count = var.enable_nat_gateway ? 1 : 0
@@ -227,15 +248,16 @@ resource "aws_launch_template" "fck_nat" {
     security_groups             = [aws_security_group.fck_nat[0].id]
   }
 
-  # User data to disable source/destination check for NAT functionality
+  # Hand the persistent ENI to the AMI's own fck-nat service. With eni_id set
+  # it disables source/destination checking on the primary ENI, attaches
+  # eni_id as the second interface (retrying until a predecessor that is
+  # still terminating has released it), and NATs traffic arriving on it out
+  # of the primary interface.
   user_data = base64encode(<<-EOF
-    #!/bin/bash
-    # Get instance ID and ENI ID
-    INSTANCE_ID=$(ec2-metadata --instance-id | cut -d " " -f 2)
-    ENI_ID=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --region ${var.region} --query 'Reservations[0].Instances[0].NetworkInterfaces[0].NetworkInterfaceId' --output text)
-
-    # Disable source/destination check
-    aws ec2 modify-network-interface-attribute --network-interface-id $ENI_ID --region ${var.region} --no-source-dest-check
+    #!/bin/sh
+    : > /etc/fck-nat.conf
+    echo "eni_id=${aws_network_interface.fck_nat[0].id}" >> /etc/fck-nat.conf
+    service fck-nat restart
   EOF
   )
 
@@ -272,7 +294,7 @@ resource "aws_autoscaling_group" "fck_nat" {
   desired_capacity    = 1
   min_size            = 1
   max_size            = 1
-  vpc_zone_identifier = [local.public_subnet_ids[0]] # Deploy in first public subnet
+  vpc_zone_identifier = [aws_network_interface.fck_nat[0].subnet_id] # The persistent ENI's subnet (first public subnet)
 
   launch_template {
     id      = aws_launch_template.fck_nat[0].id
@@ -299,6 +321,16 @@ resource "aws_autoscaling_group" "fck_nat" {
 
   lifecycle {
     create_before_destroy = true
+
+    # A running instance never re-reads user data, and the launch template
+    # version is "$Latest", so a user_data change alone would leave the
+    # current instance on the old config. That matters once, on the upgrade
+    # that introduces the persistent ENI: the routes would move to an ENI no
+    # instance has attached. Replacing the ASG (create-before-destroy, so the
+    # new instance is InService before the old one goes) launches one that
+    # attaches it. user_data only changes when the ENI itself is replaced, so
+    # AMI rotations (image_id) still do not cycle the instance.
+    replace_triggered_by = [aws_launch_template.fck_nat[count.index].user_data]
   }
 }
 
@@ -311,49 +343,26 @@ resource "aws_iam_role_policy" "fck_nat_ec2" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "ec2:DescribeInstances",
-        "ec2:ModifyNetworkInterfaceAttribute"
-      ]
-      Resource = "*"
-    }]
+    Statement = [
+      {
+        # Attach the persistent ENI to whichever instance the ASG launched.
+        # AttachNetworkInterface is authorized against both the ENI and the
+        # instance, so both ARNs are needed; the ENI one is what scopes it.
+        Sid      = "AttachPersistentENI"
+        Effect   = "Allow"
+        Action   = ["ec2:AttachNetworkInterface"]
+        Resource = [aws_network_interface.fck_nat[0].arn, "arn:aws:ec2:${var.region}:*:instance/*"]
+      },
+      {
+        # Disable source/destination checking on the instance's own primary
+        # ENI, whose ID is only known at boot.
+        Sid      = "DisableSourceDestCheck"
+        Effect   = "Allow"
+        Action   = ["ec2:ModifyNetworkInterfaceAttribute"]
+        Resource = "*"
+      },
+    ]
   })
-}
-
-# Get the instance from the ASG
-data "aws_instances" "fck_nat" {
-  count = var.enable_nat_gateway ? 1 : 0
-
-  filter {
-    name   = "tag:aws:autoscaling:groupName"
-    values = [aws_autoscaling_group.fck_nat[0].name]
-  }
-
-  filter {
-    name   = "instance-state-name"
-    values = ["running"]
-  }
-
-  depends_on = [aws_autoscaling_group.fck_nat]
-}
-
-# Get the ENI of the fck-nat instance for routing
-data "aws_network_interfaces" "fck_nat" {
-  count = var.enable_nat_gateway ? 1 : 0
-
-  filter {
-    name   = "attachment.instance-id"
-    values = data.aws_instances.fck_nat[0].ids
-  }
-
-  filter {
-    name   = "attachment.device-index"
-    values = ["0"] # Primary network interface
-  }
-
-  depends_on = [data.aws_instances.fck_nat]
 }
 
 # ==============================================
@@ -485,7 +494,12 @@ resource "aws_route" "private_internet_ipv4" {
 
   route_table_id         = aws_route_table.private[count.index].id
   destination_cidr_block = "0.0.0.0/0"
-  network_interface_id   = data.aws_network_interfaces.fck_nat[0].ids[0]
+  network_interface_id   = aws_network_interface.fck_nat[0].id # Persistent, survives instance replacement (#716)
+
+  # Move the route only once an instance that attaches the ENI is InService,
+  # so the upgrade that introduces the ENI does not point egress at an
+  # unattached interface while the replacement ASG is still launching.
+  depends_on = [aws_autoscaling_group.fck_nat]
 }
 
 # Associate private subnets with private route tables

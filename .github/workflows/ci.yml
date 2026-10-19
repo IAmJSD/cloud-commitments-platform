@@ -613,6 +613,16 @@ jobs:
             terraform -chdir="$d" test
           done
 
+      # The fck-nat egress route must target the persistent ENI, not the
+      # current instance's own, so it survives ASG replacement (#716).
+      - name: Test AWS networking module
+        if: matrix.cloud == 'aws'
+        run: |
+          d=terraform/modules/networking/aws
+          terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
+          terraform -chdir="$d" fmt -check -recursive
+          terraform -chdir="$d" test
+
       # The post-deploy /health gate and the GCP uptime check must read the
       # body's top-level "status", not just the 200 (#649).
       - name: Test /health gate modules

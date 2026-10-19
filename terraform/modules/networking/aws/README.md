@@ -114,6 +114,9 @@ The `enable_nat_gateway` option deploys a cost-effective NAT alternative:
 - Provides IPv4 egress for services without IPv6 support (like AWS SES)
 - Automatically deployed in the first public subnet
 - 90% cheaper than AWS NAT Gateway (~$32/month)
+- Private IPv4 routes target a persistent ENI that each instance attaches at
+  boot, so egress survives the ASG replacing the instance. With an existing
+  VPC, route private subnets to the `nat_network_interface_id` output.
 
 ## Security Groups
 
@@ -136,6 +139,8 @@ The module outputs:
 - `database_security_group_id`: Security group for database
 - `lambda_vpc_config`: Convenience object for Lambda module
 - `database_vpc_config`: Convenience object for database module
+- `nat_network_interface_id`: Persistent fck-nat ENI to route IPv4 egress to (if enabled)
+- `nat_autoscaling_group_name`: fck-nat Auto Scaling group name (if enabled)
 
 ## Cost Comparison
 

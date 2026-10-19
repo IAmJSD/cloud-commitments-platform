@@ -98,3 +98,20 @@ output "database_vpc_config" {
     security_group_id     = aws_security_group.database.id
   }
 }
+
+# The persistent fck-nat ENI (#716). The module routes its own private route
+# tables to it; with use_existing_vpc, point the VPC's private 0.0.0.0/0
+# routes here rather than at the fck-nat instance, whose primary ENI changes
+# every time the ASG replaces it.
+output "nat_network_interface_id" {
+  description = "ID of the persistent fck-nat ENI to route private IPv4 egress to (null when enable_nat_gateway is false)"
+  value       = var.enable_nat_gateway ? aws_network_interface.fck_nat[0].id : null
+}
+
+# The fck-nat ASG, for alarms on its instance replacements. It is replaced
+# (new name) when the launch template's user data changes; see the ASG's
+# replace_triggered_by.
+output "nat_autoscaling_group_name" {
+  description = "Name of the fck-nat Auto Scaling group (null when enable_nat_gateway is false)"
+  value       = var.enable_nat_gateway ? aws_autoscaling_group.fck_nat[0].name : null
+}
