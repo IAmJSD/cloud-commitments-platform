@@ -128,9 +128,15 @@ variable "database_engine_version" {
 }
 
 variable "database_instance_class" {
-  description = "RDS instance class"
+  description = "RDS instance class. Burstable db.t* classes throttle once their CPU credits run out under sustained load, so use a non-burstable class for production."
   type        = string
   default     = "db.t4g.micro"
+}
+
+variable "database_multi_az" {
+  description = "Provision the RDS instance as Multi-AZ (standby in a second AZ, automatic failover). Roughly doubles the instance cost, so it is off by default; enable it for production."
+  type        = bool
+  default     = false
 }
 
 variable "database_allocated_storage" {

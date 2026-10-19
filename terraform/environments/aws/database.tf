@@ -20,6 +20,9 @@ module "database" {
   allocated_storage     = var.database_allocated_storage
   max_allocated_storage = var.database_max_allocated_storage
 
+  # High availability
+  multi_az = var.database_multi_az
+
   # Networking
   vpc_id             = module.networking.vpc_id
   vpc_cidr           = var.vpc_cidr

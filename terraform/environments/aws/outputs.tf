@@ -207,6 +207,7 @@ output "deployment_info" {
     nat_enabled       = false # Using IPv6 dual-stack, no NAT Gateway needed
     vpc_endpoints     = false # Not needed with IPv6
     db_instance_class = var.database_instance_class
+    db_multi_az       = var.database_multi_az
     db_storage_gb     = var.database_allocated_storage
   }
 }

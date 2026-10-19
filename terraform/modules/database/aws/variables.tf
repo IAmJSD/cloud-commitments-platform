@@ -61,9 +61,15 @@ variable "engine_version" {
 }
 
 variable "instance_class" {
-  description = "RDS instance class (e.g., db.t4g.micro, db.t4g.small)"
+  description = "RDS instance class (e.g., db.t4g.micro, db.m7g.large). Burstable db.t* classes run on CPU credits and throttle once those are spent under sustained load, so use a non-burstable class for production."
   type        = string
   default     = "db.t4g.micro"
+}
+
+variable "multi_az" {
+  description = "Provision a Multi-AZ standby with automatic failover. Roughly doubles the instance cost; enable for production. The DB subnet group must span at least two AZs."
+  type        = bool
+  default     = false
 }
 
 variable "allocated_storage" {

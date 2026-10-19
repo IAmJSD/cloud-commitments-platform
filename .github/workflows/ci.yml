@@ -613,6 +613,15 @@ jobs:
             terraform -chdir="$d" test
           done
 
+      # multi_az must default off and reach aws_db_instance.main (#719).
+      - name: Test AWS database module
+        if: matrix.cloud == 'aws'
+        run: |
+          d=terraform/modules/database/aws
+          terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
+          terraform -chdir="$d" fmt -check -recursive
+          terraform -chdir="$d" test
+
       # The post-deploy /health gate and the GCP uptime check must read the
       # body's top-level "status", not just the 200 (#649).
       - name: Test /health gate modules

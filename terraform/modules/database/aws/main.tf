@@ -129,6 +129,10 @@ resource "aws_db_instance" "main" {
   auto_minor_version_upgrade = true
   instance_class             = var.instance_class
 
+  # Multi-AZ standby in a second AZ with synchronous replication and automatic
+  # failover (#719). Opt-in: it roughly doubles the instance cost.
+  multi_az = var.multi_az
+
   db_name  = var.database_name
   username = var.master_username
   password = local.db_password
