@@ -380,7 +380,9 @@ func (m *Manager) recordRampAdvanceRefusal(ctx context.Context, exec *config.Pur
 	}
 	logging.Errorf("Failed to update plan progress: %v", cause)
 	exec.Error = appendErrNote(exec.Error, fmt.Sprintf("ramp not advanced: %v", cause))
-	if saveErr := m.config.SavePurchaseExecution(ctx, exec); saveErr != nil {
+	// Guarded on the terminal status this run just wrote, so the full-row
+	// write cannot put back a status another writer set since (issue #835).
+	if saveErr := m.config.SaveExecutionIfStatus(ctx, exec, []string{exec.Status}); saveErr != nil {
 		logging.Errorf("AUDIT LOSS: failed to persist ramp-advance refusal for execution %s: %v",
 			exec.ExecutionID, saveErr)
 	}
@@ -666,7 +668,9 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 		next = "Retry is refused for this purchase because a repeat could buy a second commitment. Verify on the cloud provider whether the commitment was created; if it was not, start a new purchase."
 	}
 	updated.Error = "execution was approved but its purchase run was interrupted before completing and never finalized; failed by the recovery sweep so it is not silently stuck (issue #632). " + next
-	if saveErr := m.config.SavePurchaseExecution(ctx, updated); saveErr != nil {
+	if saveErr := m.config.SaveExecutionIfStatus(ctx, updated, []string{config.StatusFailed}); saveErr != nil {
+		// Guarded on "failed" (issue #835): the stamp lands only while the row
+		// is still in the status this CAS set, never over a later writer's.
 		// The atomic flip to "failed" already landed via TransitionExecutionStatus;
 		// only the explanatory error string failed to persist. Log loudly but
 		// still count the recovery - the row is no longer stranded in "approved".

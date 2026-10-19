@@ -1255,15 +1255,18 @@ func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *conf
 	}
 
 	// Stamp the scheduled time and actor onto the post-CAS row, then persist.
-	// SavePurchaseExecution is a full-row upsert, so we set all extra fields on
-	// the returned (freshly-transitioned) execution to avoid overwriting fields
-	// a concurrent writer may have set between the CAS and here.
+	// The write is a full-row upsert, so the extra fields go on the returned
+	// (freshly-transitioned) execution, and it is guarded on "scheduled": a
+	// revoke that lands between the CAS and here flips the row to canceled,
+	// and an unguarded upsert would put "scheduled" back, so the scheduler
+	// would buy a purchase the user revoked (issue #835). A lost guard returns
+	// ErrExecutionNotInExpectedStatus, which approveWithDelay maps to a 409.
 	scheduledAt := time.Now().Add(delay)
 	updated.ScheduledExecutionAt = &scheduledAt
 	if actor != "" {
 		updated.ApprovedBy = &actor
 	}
-	if err := h.config.SavePurchaseExecution(ctx, updated); err != nil {
+	if err := h.config.SaveExecutionIfStatus(ctx, updated, []string{"scheduled"}); err != nil {
 		return nil, fmt.Errorf("failed to stamp scheduled_execution_at on execution %s: %w", execution.ExecutionID, err)
 	}
 	return updated, nil

@@ -309,8 +309,11 @@ func (m *Manager) failExistingPlanStep(ctx context.Context, exec *config.Purchas
 	stampFailedPlanStep(failed, reason)
 	// The row is failed with NoSubmission, so its suppressions are released as
 	// for any proven not-submitted failure (saveTerminalExecution); a bare row has none.
+	// The save is guarded on "failed", the status this CAS set, so the
+	// full-row write never puts back a status another writer set since
+	// (issue #835); a lost guard rolls the suppression release back too.
 	if err := m.config.WithTx(ctx, func(tx pgx.Tx) error {
-		if err := m.config.SavePurchaseExecutionTx(ctx, tx, failed); err != nil {
+		if err := m.config.SaveExecutionIfStatusTx(ctx, tx, failed, []string{config.StatusFailed}); err != nil {
 			return err
 		}
 		return m.config.DeleteSuppressionsByExecutionTx(ctx, tx, failed.ExecutionID)

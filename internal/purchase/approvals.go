@@ -389,7 +389,8 @@ func (m *Manager) RunPlannedPurchaseNow(ctx context.Context, executionID, actor 
 // rotation lives here, in the one funnel all approve paths share.
 //
 // A non-empty skipReason stamps the executed_* audit fields once the CAS wins.
-// The returned row is nil when the CAS was never won.
+// The returned row is nil when the CAS was never won, or when the audit stamp
+// found the claim already lost (nothing is bought then; issue #835).
 //
 // check runs against the row the CAS returned, which is the row
 // executeAndFinalize buys, before any audit stamp or provider call (issue
@@ -437,11 +438,10 @@ func (m *Manager) transitionApproveAndExecute(ctx context.Context, executionID, 
 		updated.ApprovedBy = &a
 	}
 	if actor != "" || skipReason != "" {
-		if saveErr := m.config.SaveExecutionIfStatus(ctx, updated, executorOwnedStatuses); saveErr != nil {
-			// Attribution is best-effort once the atomic flip has landed --
-			// dropping these audit fields must not stop the purchase from firing.
-			// Log loudly so the audit gap is visible.
-			logging.Errorf("AUDIT GAP: failed to stamp approval audit fields on %s: %v", executionID, saveErr)
+		// Guarded on "running". A store error stays best-effort, but a lost
+		// guard means the claim is gone, so nothing is bought (issue #835).
+		if stampErr := m.stampClaimedAudit(ctx, updated, "approval audit fields"); stampErr != nil {
+			return nil, "", stampErr
 		}
 	}
 
@@ -568,7 +568,10 @@ func (m *Manager) rotateApprovalToken(ctx context.Context, exec *config.Purchase
 	expiry := time.Now().Add(ttl)
 	exec.ApprovalToken = config.HashApprovalToken(tok)
 	exec.ApprovalTokenExpiresAt = &expiry
-	if saveErr := m.config.SavePurchaseExecution(ctx, exec); saveErr != nil {
+	// Guarded on the terminal status the executor just wrote, so this
+	// full-row write cannot put back a status another writer set since
+	// (issue #835).
+	if saveErr := m.config.SaveExecutionIfStatus(ctx, exec, []string{exec.Status}); saveErr != nil {
 		return "", saveErr
 	}
 	return tok, nil
@@ -592,7 +595,10 @@ func (m *Manager) clearApprovalToken(ctx context.Context, executionID string) er
 	}
 	exec.ApprovalToken = ""
 	exec.ApprovalTokenExpiresAt = nil
-	return m.config.SavePurchaseExecution(ctx, exec)
+	// Guarded on "canceled": the row was read after the cancel landed, and
+	// this full-row write must not undo a status change made since (issue
+	// #835).
+	return m.config.SaveExecutionIfStatus(ctx, exec, []string{config.StatusCanceled})
 }
 
 // loadCancelableExecution fetches an execution, validates the approval
