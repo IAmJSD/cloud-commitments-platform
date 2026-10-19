@@ -13,7 +13,7 @@ async function openOpportunities(page: Page): Promise<void> {
 
 async function selectRecommendation(page: Page, id: string): Promise<void> {
   const row = page.locator(`tr.recommendation-row[data-rec-id="${id}"]`);
-  await row.getByRole('checkbox', { name: 'Select recommendation' }).check();
+  await row.getByRole('checkbox', { name: /^Select / }).check();
 }
 
 function callsTo(handle: MockHandle, suffix: string): Array<Record<string, unknown>> {

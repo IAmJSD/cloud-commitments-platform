@@ -438,6 +438,25 @@ describe('Account form submit', () => {
     expect(api.listAccounts).toHaveBeenCalled(); // list refreshed
   });
 
+  test('disables the Save button while the account request is in flight (issue #735)', async () => {
+    const btn = document.createElement('button');
+    btn.type = 'submit';
+    document.getElementById('account-form')!.appendChild(btn);
+    let resolve!: (v: unknown) => void;
+    (api.createAccount as jest.Mock).mockReturnValue(new Promise((r) => { resolve = r; }));
+
+    document.getElementById('add-aws-account-btn')!.click();
+    (document.getElementById('account-name') as HTMLInputElement).value = 'Acct';
+    (document.getElementById('account-external-id') as HTMLInputElement).value = '123456789012';
+    document.getElementById('account-form')!.dispatchEvent(new Event('submit'));
+    await new Promise(r => setTimeout(r, 0));
+    expect(btn.disabled).toBe(true);
+
+    resolve({ id: 'new-id', name: 'Acct', provider: 'aws', external_id: '123456789012', enabled: true });
+    await new Promise(r => setTimeout(r, 0));
+    expect(btn.disabled).toBe(false);
+  });
+
   test('updates existing account when account-id is set', async () => {
     (api.updateAccount as jest.Mock).mockResolvedValue({
       id: 'existing-id', name: 'Updated', provider: 'aws', external_id: '123456789012', enabled: true

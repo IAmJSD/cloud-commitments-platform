@@ -287,6 +287,43 @@ describe('Auth Module', () => {
       expect(sendBtn).toBeTruthy();
     });
 
+    test('submitting the reset form (Enter) sends the reset, not a login error (issue #733)', async () => {
+      (api.requestPasswordReset as jest.Mock).mockResolvedValue({});
+      await showLoginModal();
+      document.getElementById('forgot-password-link')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      (document.getElementById('reset-email') as HTMLInputElement).value = 'test@example.com';
+      document.getElementById('login-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect(api.requestPasswordReset).toHaveBeenCalledWith('test@example.com');
+      expect(api.login).not.toHaveBeenCalled();
+      expect(document.body.textContent).not.toContain('Enter email and password');
+    });
+
+    test('Enter in the reset form never runs the login handler (issue #733)', async () => {
+      await showLoginModal();
+      document.getElementById('forgot-password-link')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      // Both handlers write synchronously and the reset handler writes last,
+      // so a stale login handler is only visible in the mutation records.
+      const writes: string[] = [];
+      const observer = new MutationObserver(records => {
+        for (const r of records) r.addedNodes.forEach(n => writes.push(n.textContent ?? ''));
+      });
+      observer.observe(document.getElementById('login-modal')!, { childList: true, characterData: true, subtree: true });
+      document.getElementById('login-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await new Promise(resolve => setTimeout(resolve, 20));
+      observer.disconnect();
+
+      expect(writes.some(text => /Enter email|Enter password/.test(text))).toBe(false);
+      expect(api.login).not.toHaveBeenCalled();
+    });
+
     test('password reset swaps modal body to confirmation panel (issue #457)', async () => {
       (api.requestPasswordReset as jest.Mock).mockResolvedValue({});
       await showLoginModal();
