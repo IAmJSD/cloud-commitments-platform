@@ -1859,7 +1859,7 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 	}
 	region := cfg.Region
 
-	quote, err := exchange.GetExchangeQuote(ctx, exchange.ExchangeQuoteRequest{
+	quote, err := h.awsExchangeQuoter()(ctx, exchange.ExchangeQuoteRequest{
 		Region:           region,
 		ReservedIDs:      body.RIIDs,
 		Targets:          toExchangeTargets(body.Targets),
