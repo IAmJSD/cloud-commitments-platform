@@ -237,11 +237,10 @@ jobs:
         # file, no per-finding ignore, no only-new-issues. Every medium and
         # high finding the pedantic persona surfaces fails this job, and the
         # injection class this job exists to catch scores high. Below the line
-        # sit 106 findings, none above low: 66 template-injection on values
-        # #1649 already assessed as non-injectable (github.actor, github.sha
-        # and similar), plus undocumented-permissions, concurrency-limits and
-        # anonymous-definition. Clearing those means rewriting the deploy
-        # workflows, so they are left to a follow-up rather than silenced here.
+        # sit 35 findings, none above low: undocumented-permissions and
+        # concurrency-limits. template-injection is at zero since #155 moved
+        # every expression out of run: blocks into env:. The rest are left to
+        # a follow-up rather than silenced here.
         run: |
           set -euo pipefail
           # `pipx run --spec` rather than `pipx install`: it pins the version in
