@@ -591,9 +591,13 @@ function canCancelPendingRow(p: HistoryPurchase): boolean {
 // requireDifferentApprover in internal/api/handler_purchases.go: mode off →
 // always allowed; mode on → allowed only when the row has a recorded,
 // different creator (a NULL/legacy creator is denied, matching the backend's
-// fail-closed 403 for rows that predate dual-control).
+// fail-closed 403 for rows that predate dual-control). Scheduler-created rows
+// (created_by_system, no creator) pass: any identified approver is the second
+// pair of eyes, and rbacAllowsApprove still requires approve-any for them.
 function canApproveUnder4Eyes(row: HistoryPurchase, sessionUserId: string): boolean {
-  return _fourEyesMode === false || (row.created_by_user_id != null && row.created_by_user_id !== sessionUserId);
+  if (_fourEyesMode === false) return true;
+  if (row.created_by_user_id == null) return row.created_by_system === true;
+  return row.created_by_user_id !== sessionUserId;
 }
 
 // rbacAllowsApprove is the approve-permission decision (issue #286 /
