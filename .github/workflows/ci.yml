@@ -613,6 +613,17 @@ jobs:
             terraform -chdir="$d" test
           done
 
+      # With CloudFront in front of a Fargate ALB, the ALB must admit only
+      # CloudFront's origin-facing prefix list (#412).
+      - name: Test AWS ALB ingress guard
+        if: matrix.cloud == 'aws'
+        run: |
+          for d in terraform/modules/networking/aws terraform/environments/aws; do
+            terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
+            terraform -chdir="$d" fmt -check -recursive
+            terraform -chdir="$d" test
+          done
+
       # The post-deploy /health gate and the GCP uptime check must read the
       # body's top-level "status", not just the 200 (#649).
       - name: Test /health gate modules

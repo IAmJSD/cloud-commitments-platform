@@ -53,3 +53,30 @@ check "prod_requires_network_authenticated_ingress" {
     EOT
   }
 }
+
+# ==============================================
+# Fargate ALB must not bypass CloudFront (#412)
+# ==============================================
+#
+# With compute_platform = "fargate" and enable_cdn = true, CloudFront fronts
+# the ALB (frontend.tf), but the ALB is internet-facing: unless its security
+# group admits only CloudFront's origin-facing prefix list, clients can skip
+# the distribution (and any WAF on it) by calling the ALB directly.
+# networking.tf restricts the group in exactly that case; this check asserts
+# the outcome from the group's actual ingress rules
+# (module.networking.alb_ingress_cloudfront_only), so a rule added back that
+# reopens the ALB warns on every plan. Non-blocking `check`, per #128's
+# convention above. Passes today: no environment sets enable_cdn = true.
+
+check "fargate_cdn_requires_cloudfront_only_alb" {
+  assert {
+    condition     = !(var.compute_platform == "fargate" && var.enable_cdn) || module.networking.alb_ingress_cloudfront_only
+    error_message = <<-EOT
+      compute_platform = "fargate" with enable_cdn = true, but the ALB
+      security group admits traffic from sources other than the CloudFront
+      origin-facing managed prefix list: clients can reach the ALB directly
+      and bypass CloudFront (and any WAF attached to it). See #412 and
+      restrict_alb_ingress_to_cloudfront in modules/networking/aws.
+    EOT
+  }
+}

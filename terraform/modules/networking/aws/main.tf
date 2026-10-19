@@ -551,6 +551,40 @@ resource "aws_security_group" "database" {
   }
 }
 
+# ALB ingress (#412). Two mutually exclusive shapes:
+#
+#   restrict_alb_ingress_to_cloudfront = false (default)
+#     HTTP and HTTPS from the whole internet, IPv4 and IPv6. The ALB is the
+#     public endpoint (no CDN in front of it). These four rules are kept
+#     identical to the static rules this group had before #412, so existing
+#     stacks plan no diff.
+#
+#   restrict_alb_ingress_to_cloudfront = true
+#     A single HTTP rule whose source is AWS's CloudFront origin-facing managed
+#     prefix list, and nothing else: requests that do not come from a
+#     CloudFront edge can no longer reach the ALB, so they cannot bypass the
+#     distribution (and any WAF attached to it). Port 80 only, because the
+#     frontend module reaches the Fargate ALB with origin_protocol =
+#     "http-only". One rule only, because a rule that references a managed
+#     prefix list counts against the inbound-rules-per-group quota (default
+#     60) as the list's max-entries weight, which for this list takes most of
+#     that quota: a second rule (e.g. 443) would exceed it and fail the apply.
+locals {
+  alb_public_ingress = [
+    { description = "HTTP from internet (IPv4)", port = 80, cidr_blocks = ["0.0.0.0/0"], ipv6_cidr_blocks = null },
+    { description = "HTTP from internet (IPv6)", port = 80, cidr_blocks = null, ipv6_cidr_blocks = ["::/0"] },
+    { description = "HTTPS from internet (IPv4)", port = 443, cidr_blocks = ["0.0.0.0/0"], ipv6_cidr_blocks = null },
+    { description = "HTTPS from internet (IPv6)", port = 443, cidr_blocks = null, ipv6_cidr_blocks = ["::/0"] },
+  ]
+
+  restrict_alb_to_cloudfront = var.create_alb_security_group && var.restrict_alb_ingress_to_cloudfront
+}
+
+data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing" {
+  count = local.restrict_alb_to_cloudfront ? 1 : 0
+  name  = "com.amazonaws.global.cloudfront.origin-facing"
+}
+
 # Security group for ALB (if using Fargate)
 resource "aws_security_group" "alb" {
   count = var.create_alb_security_group ? 1 : 0
@@ -559,40 +593,29 @@ resource "aws_security_group" "alb" {
   description = "Security group for Application Load Balancer"
   vpc_id      = local.vpc_id
 
-  # HTTP from internet (IPv4)
-  ingress {
-    description = "HTTP from internet (IPv4)"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+  # HTTP/HTTPS from the internet, only when CloudFront does not front the ALB.
+  dynamic "ingress" {
+    for_each = [for r in local.alb_public_ingress : r if !local.restrict_alb_to_cloudfront]
+    content {
+      description      = ingress.value.description
+      from_port        = ingress.value.port
+      to_port          = ingress.value.port
+      protocol         = "tcp"
+      cidr_blocks      = ingress.value.cidr_blocks
+      ipv6_cidr_blocks = ingress.value.ipv6_cidr_blocks
+    }
   }
 
-  # HTTP from internet (IPv6)
-  ingress {
-    description      = "HTTP from internet (IPv6)"
-    from_port        = 80
-    to_port          = 80
-    protocol         = "tcp"
-    ipv6_cidr_blocks = ["::/0"]
-  }
-
-  # HTTPS from internet (IPv4)
-  ingress {
-    description = "HTTPS from internet (IPv4)"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # HTTPS from internet (IPv6)
-  ingress {
-    description      = "HTTPS from internet (IPv6)"
-    from_port        = 443
-    to_port          = 443
-    protocol         = "tcp"
-    ipv6_cidr_blocks = ["::/0"]
+  # HTTP from CloudFront origin-facing servers only.
+  dynamic "ingress" {
+    for_each = data.aws_ec2_managed_prefix_list.cloudfront_origin_facing[*].id
+    content {
+      description     = "HTTP from CloudFront origin-facing servers only"
+      from_port       = 80
+      to_port         = 80
+      protocol        = "tcp"
+      prefix_list_ids = [ingress.value]
+    }
   }
 
   # Allow all outbound (IPv4)

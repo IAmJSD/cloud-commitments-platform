@@ -68,6 +68,13 @@ resource "aws_iam_policy" "networking" {
           "ec2:DescribeInternetGateways",
           "ec2:DescribeLaunchTemplateVersions",
           "ec2:DescribeLaunchTemplates",
+          # data.aws_ec2_managed_prefix_list in modules/networking/aws looks
+          # up CloudFront's origin-facing prefix list (Describe, then
+          # GetEntries) when a Fargate ALB is restricted to CloudFront (#412).
+          # Read-only, and only called for compute_platform = "fargate" with
+          # enable_cdn = true.
+          "ec2:DescribeManagedPrefixLists",
+          "ec2:GetManagedPrefixListEntries",
           "ec2:DescribeNetworkAcls",
           "ec2:DescribeNetworkInterfaces",
           "ec2:DescribePrefixLists",
