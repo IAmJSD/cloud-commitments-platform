@@ -85,6 +85,15 @@ variable "database_username" {
 variable "database_password_secret_arn" {
   description = "ARN of Secrets Manager secret containing database password"
   type        = string
+
+  # The secrets policy grants GetSecretValue on this ARN and "${arn}*". An
+  # empty value would make that the bare "*" (every secret in the account),
+  # and a wildcard anywhere in it widens the grant the same way, so require a
+  # concrete Secrets Manager secret ARN (#291).
+  validation {
+    condition     = can(regex("^arn:aws(-[a-z]+)*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$", var.database_password_secret_arn))
+    error_message = "database_password_secret_arn must be a concrete Secrets Manager secret ARN (arn:<partition>:secretsmanager:<region>:<account-id>:secret:<name>) with no wildcards. An empty value would render the secrets policy resource as \"*\" and grant GetSecretValue on every secret in the account."
+  }
 }
 
 variable "admin_email" {
