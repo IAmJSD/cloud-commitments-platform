@@ -1262,7 +1262,7 @@ func (a *authServiceAdapter) ValidateCSRFToken(ctx context.Context, sessionToken
 }
 
 // API Key management.
-func (a *authServiceAdapter) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error) {
+func (a *authServiceAdapter) CreateAPIKeyAPI(ctx context.Context, userID string, req auth.APICreateAPIKeyRequest) (any, error) {
 	return a.service.CreateAPIKeyAPI(ctx, userID, req)
 }
 

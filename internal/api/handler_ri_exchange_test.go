@@ -1642,7 +1642,7 @@ func (m *mockAuthForExchange) HasPermissionForConstraintsAPI(_ context.Context, 
 func (m *mockAuthForExchange) GetUserPermissionsAPI(_ context.Context, _ string) (any, error) {
 	return nil, nil
 }
-func (m *mockAuthForExchange) CreateAPIKeyAPI(_ context.Context, _ string, _ any) (any, error) {
+func (m *mockAuthForExchange) CreateAPIKeyAPI(_ context.Context, _ string, _ auth.APICreateAPIKeyRequest) (any, error) {
 	return nil, nil
 }
 func (m *mockAuthForExchange) ListUserAPIKeysAPI(_ context.Context, _ string) (any, error) {

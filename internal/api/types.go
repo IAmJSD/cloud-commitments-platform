@@ -245,7 +245,9 @@ type AuthServiceInterface interface {
 	// Account access - returns the union of allowed_accounts from all user groups (empty = all access)
 	GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error)
 	// API Key management
-	CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error)
+	// CreateAPIKeyAPI takes the auth wire type directly: re-encoding a local
+	// copy erased an explicit max_amount of 0 (issue #980).
+	CreateAPIKeyAPI(ctx context.Context, userID string, req auth.APICreateAPIKeyRequest) (any, error)
 	ListUserAPIKeysAPI(ctx context.Context, userID string) (any, error)
 	// GetAPIKeysUsageStatsAPI returns the section-level usage summary
 	// (active count, fixed-window/lifetime request totals, top-3 most
