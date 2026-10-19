@@ -133,6 +133,59 @@ variable "database_instance_class" {
   default     = "db.t4g.micro"
 }
 
+# Connection budget (#718). Every Lambda execution environment and every
+# Fargate task opens its own pgx pool of up to db_max_connections, so the
+# number of those that can run at once, times db_max_connections, must fit in
+# the RDS max_connections, less local.db_reserved_connections (database.tf).
+variable "database_max_connections" {
+  description = <<-EOT
+    The RDS instance's effective max_connections. RDS derives it from the
+    instance class (LEAST(DBInstanceClassMemory/9531392, 5000)); 80 is a
+    conservative figure for the default db.t4g.micro (1 GiB). Update it, after
+    checking SHOW max_connections, whenever database_instance_class changes.
+  EOT
+  type        = number
+  default     = 80
+
+  validation {
+    condition     = var.database_max_connections > local.db_reserved_connections
+    error_message = "database_max_connections must be greater than local.db_reserved_connections (database.tf)."
+  }
+}
+
+variable "db_max_connections" {
+  description = "Per-instance DB pool size (DB_MAX_CONNECTIONS). The total across concurrent Lambda environments or Fargate tasks must fit database_max_connections."
+  type        = number
+  default     = 3
+
+  # A scheduled task pins one pooled connection for its advisory lock
+  # (internal/server/handler.go) and then queries through the same pool, so
+  # a pool of 1 waits on itself until the invocation times out.
+  validation {
+    condition     = var.db_max_connections >= 2
+    error_message = "db_max_connections must be at least 2: a scheduled task holds one connection for its advisory lock while it queries through the pool."
+  }
+
+  # Unreserved Lambda concurrency (-1) has no upper bound to check here; the
+  # lambda_concurrency_bounds_db_connections check (checks.tf) warns about it
+  # and lambda_reserved_concurrency's own validation rejects it in prod.
+  validation {
+    condition     = (var.compute_platform == "lambda" ? max(var.lambda_reserved_concurrency, 0) : var.fargate_max_capacity) * var.db_max_connections <= var.database_max_connections - local.db_reserved_connections
+    error_message = "Concurrent instances (lambda_reserved_concurrency, or fargate_max_capacity) x db_max_connections exceeds database_max_connections - local.db_reserved_connections: under full scale-out new instances cannot connect to RDS (#718). Lower the instance cap or db_max_connections, or move to a larger instance class and raise database_max_connections."
+  }
+}
+
+variable "db_min_connections" {
+  description = "Per-instance idle DB connections kept open (DB_MIN_CONNECTIONS)"
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.db_min_connections >= 0 && var.db_min_connections <= var.db_max_connections
+    error_message = "db_min_connections must be between 0 and db_max_connections."
+  }
+}
+
 variable "database_allocated_storage" {
   description = "Initial allocated storage in GB"
   type        = number
@@ -256,9 +309,17 @@ variable "lambda_allowed_origins" {
 }
 
 variable "lambda_reserved_concurrency" {
-  description = "Reserved concurrent executions (-1 for unreserved)"
+  description = "Reserved concurrent executions (-1 for unreserved). Also the cap on concurrent DB pools (see db_max_connections)."
   type        = number
   default     = -1
+
+  # Unreserved concurrency scales up to the account limit, and every
+  # execution environment holds its own DB pool, so a burst exhausts RDS
+  # connections (#718). Prod must set a cap.
+  validation {
+    condition     = !(var.environment == "prod" && var.compute_platform == "lambda" && var.lambda_reserved_concurrency < 0)
+    error_message = "Prod on Lambda must set lambda_reserved_concurrency (not -1) so concurrent DB pools stay within database_max_connections (#718)."
+  }
 }
 
 variable "lambda_log_retention_days" {
@@ -422,6 +483,11 @@ variable "additional_env_vars" {
   description = "Additional environment variables for Lambda"
   type        = map(string)
   default     = {}
+
+  validation {
+    condition     = !contains(keys(var.additional_env_vars), "DB_MAX_CONNECTIONS") && !contains(keys(var.additional_env_vars), "DB_MIN_CONNECTIONS")
+    error_message = "Set the DB pool with db_max_connections / db_min_connections, not additional_env_vars, so the connection budget check covers it (#718)."
+  }
 }
 
 # ==============================================
