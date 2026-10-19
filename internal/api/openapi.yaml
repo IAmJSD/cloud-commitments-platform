@@ -481,7 +481,16 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >
+            CSRF validation failed, the caller lacks permission or access to
+            the plan, or 4-eyes mode is on and the caller has no attributable
+            user (the admin API key). Rows scheduled that way could never be
+            approved under 4-eyes, so the request is refused; sign in or use a
+            per-user API key instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -522,7 +531,17 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >
+            CSRF validation failed, the caller lacks permission or exceeds its
+            Constraints, 4-eyes mode rejects a direct execute, or 4-eyes mode is
+            on and the caller has no attributable user (the admin API key). An
+            execution created that way could never be approved under 4-eyes,
+            so it is refused before anything is written; sign in or use a
+            per-user API key instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '409':
           description: >
             One of two conflict families. Idempotency: an identical submit
