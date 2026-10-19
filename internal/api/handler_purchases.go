@@ -205,6 +205,51 @@ func (h *Handler) authorizeExecutionManagement(ctx context.Context, session *Ses
 	return nil
 }
 
+// authorizeExecutionPauseResume is authorizeExecutionManagement for pause and
+// resume, with update-any bounded by its Constraints (issue #1098). A session
+// holding update-any is checked against the strict per-recommendation scope of
+// the STORED row (revokeExecutionConstraintSets), mirroring the planned-purchase
+// cancel gates. An in-scope grant is permitted without an owner check. A
+// Constraints denial falls back to the creator match and otherwise stays the
+// refusal; any other error (a probe or constraint-store failure) is returned
+// and never read as a denial, so it cannot fall through to a weaker branch.
+// Sessions without update-any take the unchanged authorizeExecutionManagement
+// path.
+func (h *Handler) authorizeExecutionPauseResume(ctx context.Context, session *Session, executionID string) error {
+	if session.UserID == apiKeyAdminUserID {
+		return nil
+	}
+	if h.auth == nil {
+		return NewClientError(500, "authentication service not configured")
+	}
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionUpdateAny)
+	if err != nil {
+		return err
+	}
+	if !hasAny {
+		return h.authorizeExecutionManagement(ctx, session, executionID)
+	}
+	execution, err := h.loadPlannedExecution(ctx, executionID)
+	if err != nil {
+		return err
+	}
+	anyErr := h.requirePermissionConstraints(ctx, session, auth.ActionUpdateAny, auth.ResourcePurchases, revokeExecutionConstraintSets(execution))
+	if anyErr == nil || !isForbidden(anyErr) {
+		return anyErr
+	}
+	if isExecutionCreator(session, execution) {
+		return nil
+	}
+	return anyErr
+}
+
+// isExecutionCreator requires both IDs to be non-empty and equal, so an
+// empty-string collision (legacy NULL creator, missing session UserID) never
+// matches.
+func isExecutionCreator(session *Session, execution *config.PurchaseExecution) bool {
+	return session.UserID != "" && execution.CreatedByUserID != nil && *execution.CreatedByUserID == session.UserID
+}
+
 func (h *Handler) pausePlannedPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (*StatusResponse, error) {
 	if err := validateUUID(executionID); err != nil {
 		return nil, err
@@ -217,7 +262,7 @@ func (h *Handler) pausePlannedPurchase(ctx context.Context, req *events.LambdaFu
 	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
 		return nil, err
 	}
-	if err := h.authorizeExecutionManagement(ctx, session, executionID); err != nil {
+	if err := h.authorizeExecutionPauseResume(ctx, session, executionID); err != nil {
 		return nil, err
 	}
 
@@ -241,7 +286,7 @@ func (h *Handler) resumePlannedPurchase(ctx context.Context, req *events.LambdaF
 	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
 		return nil, err
 	}
-	if err := h.authorizeExecutionManagement(ctx, session, executionID); err != nil {
+	if err := h.authorizeExecutionPauseResume(ctx, session, executionID); err != nil {
 		return nil, err
 	}
 
