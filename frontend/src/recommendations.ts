@@ -3690,11 +3690,9 @@ const COLUMN_FILTERS_SCHEMA_VERSION = 1;
 
 // Full set of valid column ids, used as an allowlist when loading from
 // localStorage so stale or hand-edited keys are silently dropped.
-const VALID_COLUMN_IDS = new Set<state.RecommendationsColumnId>([
-  'provider', 'account', 'service', 'resource_type', 'region',
-  'count', 'term', 'payment', 'savings', 'upfront_cost',
-  'monthly_cost', 'on_demand_monthly', 'effective_savings_pct',
-]);
+const VALID_COLUMN_IDS = new Set<state.RecommendationsColumnId>(
+  COLUMN_DEFS.filter((c) => c.kind !== 'visual').map((c) => c.key),
+);
 
 interface ColumnFiltersSchema {
   schemaVersion: number;
@@ -4284,6 +4282,16 @@ export function clearExecuteMode(): void {
   currentExecuteMode = '';
 }
 
+// Resets the mode and the submit button label together so the label never
+// promises a different action than the radio (issue #754).
+function resetExecuteModeAndLabel(): void {
+  currentExecuteMode = '';
+  const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
+  if (executeBtn && executeBtn.dataset['submitting'] !== 'true') {
+    executeBtn.textContent = 'Send for Approval';
+  }
+}
+
 // resolveBucketPaymentSeed picks the default Payment value for a
 // bucket per issue #111 sub-option (ii):
 //   - When all recs in the bucket share one non-empty cloud_account_id
@@ -4378,6 +4386,7 @@ async function openFanOutModal(
   toolbar: BulkPurchaseToolbarState,
 ): Promise<void> {
   const openToken = ++purchaseModalOpenToken;
+  resetExecuteModeAndLabel();
   // Pre-fetch service-overrides for every distinct account referenced by
   // any rec in any bucket; overridesByAccount seeds the bucket-level
   // payment (issue #111). One fetch per distinct accountID; cached for the lifetime of this
@@ -4469,6 +4478,7 @@ async function openFanOutModal(
     onClose: () => {
       clearPurchaseModalRecommendations();
       clearFanOutBuckets();
+      resetExecuteModeAndLabel();
     },
   });
 }
@@ -4872,7 +4882,7 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
       // common UX surprise of "I sorted by Account, refreshed, now I'm back
       // at Savings desc".
       writeSortToUrl({ column: col as state.RecommendationsSortColumn, direction });
-      renderRecommendationsList(recommendations);
+      renderRecommendationsList(loadedRecs);
     };
     th.addEventListener('click', onActivate);
     th.addEventListener('keydown', (e) => {
@@ -4913,7 +4923,7 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
         } else {
           state.clearSelectedRecommendations();
         }
-        renderRecommendationsList(recommendations);
+        renderRecommendationsList(loadedRecs);
       });
     }
 
@@ -4949,7 +4959,7 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
         } else {
           state.removeSelectedRecommendation(id);
         }
-        renderRecommendationsList(recommendations);
+        renderRecommendationsList(loadedRecs);
       });
     });
 
@@ -5175,7 +5185,7 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[], 
 
   // Reset the execute mode for this modal session so a prior direct-execute
   // choice does not carry over to a freshly opened modal (issue #289).
-  currentExecuteMode = '';
+  resetExecuteModeAndLabel();
 
   // Execute-mode toggle (issue #289): shown only to sessions with
   // execute-any:purchases or execute-own:purchases. Everyone else sees only
@@ -5340,6 +5350,7 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[], 
       onClose: () => {
         clearPurchaseModalRecommendations();
         clearFanOutBuckets();
+        resetExecuteModeAndLabel();
       },
     });
   }

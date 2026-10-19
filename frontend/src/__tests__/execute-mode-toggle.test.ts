@@ -8,6 +8,7 @@
  */
 
 import { openPurchaseModal, getExecuteMode } from '../recommendations';
+import { closeModal } from '../modal';
 
 jest.mock('../api', () => ({
   getRecommendations: jest.fn().mockResolvedValue({ summary: {}, recommendations: [], regions: [] }),
@@ -186,6 +187,31 @@ describe('Execute-mode toggle (issue #289)', () => {
     expect(getExecuteMode()).toBe('');
 
     const btn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    expect(btn.textContent).toBe('Send for Approval');
+  });
+  test('closing the modal resets execute mode and the button label (closes #754)', async () => {
+    mockUser('admin');
+    const { modal } = setupPurchaseModal();
+    await openPurchaseModal([minimalRec as never]);
+
+    const directRadio = document.getElementById('execute-mode-direct') as HTMLInputElement;
+    directRadio.click();
+    directRadio.dispatchEvent(new Event('change', { bubbles: true }));
+    const btn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    expect(btn.textContent).toBe('Execute Purchase Now');
+
+    closeModal(modal);
+
+    expect(getExecuteMode()).toBe('');
+    expect(btn.textContent).toBe('Send for Approval');
+  });
+
+  test('reopening resets a stale Execute Purchase Now label (closes #754)', async () => {
+    mockUser('admin');
+    setupPurchaseModal();
+    const btn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    btn.textContent = 'Execute Purchase Now';
+    await openPurchaseModal([minimalRec as never]);
     expect(btn.textContent).toBe('Send for Approval');
   });
 });

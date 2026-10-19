@@ -154,6 +154,7 @@ import {
   clearPurchaseModalRecommendations,
   getFanOutBuckets,
   clearFanOutBuckets,
+  getExecuteMode,
   loadRecommendations,
   seedGlobalDefaults,
 } from '../recommendations';
@@ -1111,6 +1112,29 @@ describe('Issue #1904: fan-out modal skips incompatible buckets', () => {
       50,
       undefined,
     );
+  });
+
+  test('fan-out open and close reset the execute button label and mode (#754)', async () => {
+    const rows = buildFanOutRows();
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'no-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['ec2-1', 'rds-3']));
+    await loadRecommendations();
+
+    const btn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    btn.textContent = 'Execute Purchase Now';
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    expect(btn.textContent).toBe('Send for Approval');
+    expect(getExecuteMode()).toBe('');
+
+    btn.textContent = 'Execute Purchase Now';
+    const onClose = (openModal as jest.Mock).mock.calls.slice(-1)[0][1].onClose as () => void;
+    onClose();
+    expect(btn.textContent).toBe('Send for Approval');
+    expect(getExecuteMode()).toBe('');
   });
 
   test('busy fan-out stays disabled while its requests are pending', async () => {

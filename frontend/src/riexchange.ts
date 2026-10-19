@@ -1913,8 +1913,7 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
         max_payment_due_usd: quote.PaymentDueRaw,
         region: quote.Region,
       });
-      void loadConvertibleRIs();
-      void loadExchangeHistory();
+      void loadRIExchange();
       if (!sessionOpen) return;
       setResultText(resultContainer, 'Exchange completed. ID: ' + result.exchange_id, 'success-message');
       executeBtn.classList.add('hidden');
@@ -2357,7 +2356,6 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
       + '<td>' + escapeHtml(formatDateTime(rec.created_at)) + '</td>'
       + '<td>' + escapeHtml(String(rec.source_count)) + 'x ' + escapeHtml(rec.source_instance_type) + '</td>'
       + '<td>' + escapeHtml(String(rec.target_count)) + 'x ' + escapeHtml(rec.target_instance_type) + '</td>'
-      + '<td>' + escapeHtml(String(rec.source_count)) + '</td>'
       + '<td>$' + escapeHtml(rec.payment_due) + '</td>'
       + '<td><span class="' + getStatusBadgeClass(rec.status) + '">' + escapeHtml(rec.status) + '</span></td>'
       + '<td>' + exchangeIdCell + '</td>'
@@ -2367,7 +2365,7 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
 
   const tableHTML = '<table>'
     + '<thead><tr>'
-    + '<th>Date</th><th>Source Type</th><th>Target Type</th><th>Count</th><th>Payment</th><th>Status</th><th>Exchange ID</th><th>Actions</th>'
+    + '<th>Date</th><th>Source Type</th><th>Target Type</th><th>Payment</th><th>Status</th><th>Exchange ID</th><th>Actions</th>'
     + '</tr></thead>'
     + '<tbody>' + rowsHTML + '</tbody>'
     + '</table>';

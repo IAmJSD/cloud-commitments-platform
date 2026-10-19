@@ -424,8 +424,6 @@ export async function handleExecutePurchase(): Promise<void> {
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
   setExecutePurchaseSubmitting(executeBtn, true, 'Sending...');
 
-  const defaultBtnLabel = isDirect ? 'Execute Purchase Now' : 'Send for Approval';
-
   // Confirmation dialog varies by mode:
   //   - Approval path: low-friction, non-destructive.
   //   - Direct-execute path: red destructive dialog with cost callout and
@@ -460,7 +458,7 @@ export async function handleExecutePurchase(): Promise<void> {
       });
 
   if (!ok) {
-    setExecutePurchaseSubmitting(executeBtn, false, defaultBtnLabel);
+    setExecutePurchaseSubmitting(executeBtn, false, getExecuteMode() === 'direct' ? 'Execute Purchase Now' : 'Send for Approval');
     return;
   }
 
@@ -558,7 +556,7 @@ export async function handleExecutePurchase(): Promise<void> {
     const verb = isDirect ? 'execute' : 'send for approval';
     showToast({ message: `Failed to ${verb} purchase: ${err.message}`, kind: 'error' });
   } finally {
-    setExecutePurchaseSubmitting(executeBtn, false, defaultBtnLabel);
+    setExecutePurchaseSubmitting(executeBtn, false, getExecuteMode() === 'direct' ? 'Execute Purchase Now' : 'Send for Approval');
   }
 }
 

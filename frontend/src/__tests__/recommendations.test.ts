@@ -666,6 +666,57 @@ describe('Recommendations Module', () => {
       (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
     });
 
+    test('re-render after a sort click keeps the loaded total in "Showing X of Y" (closes #287)', async () => {
+      const allRecs = [
+        { id: 'r1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront', savings: 100, upfront_cost: 0 },
+        { id: 'r2', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront', savings: 200, upfront_cost: 0 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: allRecs, regions: [] });
+      (state.getRecommendations as jest.Mock).mockReturnValue(allRecs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([allRecs[0]]);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({ service: { kind: 'set', values: ['ec2'] } });
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+
+      await loadRecommendations();
+      const liveText = (): string =>
+        document.querySelector('.recommendations-filter-live')?.textContent ?? '';
+      expect(liveText()).toMatch(/Showing 1 of 2 recommendations$/);
+
+      document.querySelector<HTMLElement>('th.sortable')?.click();
+      expect(liveText()).toMatch(/Showing 1 of 2 recommendations$/);
+
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([]);
+    });
+
+    test.each([
+      ['select-all', '#select-all-recs'],
+      ['row selection', 'input[data-rec-id]'],
+    ])('%s re-render keeps the loaded total in "Showing X of Y" (closes #287)', async (_name, selector) => {
+      const allRecs = [
+        { id: 'r1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront', savings: 100, upfront_cost: 0 },
+        { id: 'r2', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront', savings: 200, upfront_cost: 0 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: allRecs, regions: [] });
+      (state.getRecommendations as jest.Mock).mockReturnValue(allRecs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([allRecs[0]]);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({ service: { kind: 'set', values: ['ec2'] } });
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+
+      await loadRecommendations();
+      const liveText = (): string =>
+        document.querySelector('.recommendations-filter-live')?.textContent ?? '';
+      expect(liveText()).toMatch(/Showing 1 of 2 recommendations$/);
+
+      const box = document.querySelector<HTMLInputElement>(selector)!;
+      box.checked = true;
+      box.dispatchEvent(new Event('change', { bubbles: true }));
+      expect(liveText()).toMatch(/Showing 1 of 2 recommendations$/);
+
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([]);
+    });
+
     test('renders recommendations list', async () => {
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
@@ -7750,6 +7801,17 @@ describe('Column filters localStorage persistence (issue #163)', () => {
       );
       const result = loadColumnFilters();
       expect(Object.keys(result)).toHaveLength(0);
+    });
+
+    test('restores a filter for every filterable column, including capacity, and drops visual columns', () => {
+      const filterable = COLUMN_DEFS.filter((c) => c.kind !== 'visual').map((c) => c.key);
+      const visual = COLUMN_DEFS.find((c) => c.kind === 'visual')!.key;
+      const filters: Record<string, unknown> = {};
+      for (const key of [...filterable, visual]) filters[key] = { kind: 'set', values: ['x'] };
+      localStorageMock.getItem.mockReturnValue(JSON.stringify({ schemaVersion: 1, filters }));
+      const result = loadColumnFilters();
+      expect(Object.keys(result).sort()).toEqual([...filterable].sort());
+      expect(result).not.toHaveProperty(visual);
     });
 
     test('restores a categorical (set) filter correctly', () => {

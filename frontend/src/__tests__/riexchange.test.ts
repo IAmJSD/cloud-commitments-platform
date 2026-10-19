@@ -1058,6 +1058,32 @@ describe('RI Exchange global filter scoping (issue #871)', () => {
     expect(api.listConvertibleRIs).toHaveBeenCalledWith('123456789012');
   });
 
+  it('keeps the account scope and refreshes reshape recs after a successful exchange (closes #285)', async () => {
+    stateMod().getCurrentAccountIDs.mockReturnValue(['uuid-1']);
+    (api.listTargetOfferings as jest.Mock).mockResolvedValue([]);
+    const modal = createModal();
+    (api.getExchangeQuote as jest.Mock).mockResolvedValueOnce({
+      IsValidExchange: true, ValidationFailureReason: '', CurrencyCode: 'USD', PaymentDueRaw: '12.50',
+      SourceHourlyPriceRaw: '', SourceRemainingUpfrontRaw: '', SourceRemainingTotalRaw: '',
+      TargetHourlyPriceRaw: '', TargetRemainingUpfrontRaw: '', TargetRemainingTotalRaw: '', Region: 'us-west-2',
+    });
+    (api.executeExchange as jest.Mock).mockResolvedValueOnce({ exchange_id: 'exch-1', quote: {} });
+    openExchangeModal('ri-abc', 3, 'm5.large', [
+      { instance_type: 'm5.large', offering_id: '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91', effective_monthly_cost: 42.5 },
+    ]);
+    Array.from(modal.querySelectorAll('button')).find((b) => b.textContent === 'Get Quote')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    Array.from(modal.querySelectorAll('button')).find((b) => b.textContent === 'Execute Exchange')?.click();
+    document.querySelector<HTMLButtonElement>('.modal-confirm-actions .btn-destructive')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(api.executeExchange).toHaveBeenCalledTimes(1);
+    expect(api.listConvertibleRIs).toHaveBeenCalledWith('123456789012');
+    expect(api.listConvertibleRIs).not.toHaveBeenCalledWith(undefined);
+    expect(api.getReshapeRecommendations).toHaveBeenCalled();
+  });
+
   it('forwards the Azure subscription GUID (external_id), not the account UUID', async () => {
     stateMod().getCurrentProvider.mockReturnValue('azure');
     stateMod().getCurrentAccountIDs.mockReturnValue(['uuid-az']);
@@ -1244,5 +1270,46 @@ describe('RI Exchange global filter scoping (issue #871)', () => {
     _providerListeners.forEach(cb => cb());
     // Modal is closed synchronously on the chip event.
     expect(modal.classList.contains('hidden')).toBe(true);
+  });
+});
+
+describe('exchange history table counts (issue #286)', () => {
+  beforeEach(() => {
+    for (const id of ['ri-exchange-instances-list', 'ri-exchange-recommendations-list', 'ri-exchange-history-list']) {
+      const el = document.createElement('div');
+      el.id = id;
+      document.body.appendChild(el);
+    }
+    const s = jest.requireMock('../state') as { getCurrentProvider: jest.Mock; getCurrentAccountIDs: jest.Mock; getRiExchangeColumnFilters: jest.Mock; getActiveRiColumnFilters: jest.Mock };
+    s.getCurrentProvider.mockReturnValue('aws');
+    s.getCurrentAccountIDs.mockReturnValue([]);
+    s.getRiExchangeColumnFilters.mockReturnValue({});
+    s.getActiveRiColumnFilters.mockReturnValue({});
+    (api.listConvertibleRIs as jest.Mock).mockResolvedValue([]);
+    (api.getRIUtilization as jest.Mock).mockResolvedValue([]);
+    (api.getReshapeRecommendations as jest.Mock).mockResolvedValue({ recommendations: [], recs_staleness: '', recs_collected_at: null });
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+    jest.clearAllMocks();
+  });
+
+  it('shows each count once, inside the type cells, with no duplicate Count column', async () => {
+    (api.getRIExchangeHistory as jest.Mock).mockResolvedValue([{
+      id: 'h1', account_id: 'a', exchange_id: 'exch-1', region: 'us-east-1', source_ri_ids: ['ri-1'],
+      source_instance_type: 'm5.large', source_count: 4, target_offering_id: 'o', target_instance_type: 'm5.4xlarge',
+      target_count: 1, payment_due: '1.00', status: 'completed', mode: 'manual',
+      created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+    }]);
+    await loadRIExchange();
+    const table = document.querySelector('#ri-exchange-history-list table')!;
+    const headers = Array.from(table.querySelectorAll('th')).map((h) => h.textContent);
+    expect(headers).not.toContain('Count');
+    const cells = Array.from(table.querySelectorAll('tbody tr td')).map((c) => c.textContent);
+    expect(cells).toHaveLength(headers.length);
+    expect(cells).toContain('4x m5.large');
+    expect(cells).toContain('1x m5.4xlarge');
+    expect(cells).not.toContain('4');
   });
 });
