@@ -1124,6 +1124,35 @@ jobs:
       - name: Run Cloud SQL scope self-tests
         run: bash scripts/test-cloud-sql-delete-scope.sh
 
+  # Assert that cleanup-staging.yml's destroy-gcp job deletes the Service
+  # Networking peering on the network its state names (the `network_name`
+  # output, not a hardcoded `cudly-staging-vpc`), and removes the peering from
+  # state only after that delete succeeded, with nothing swallowed (#330). The
+  # step it replaces removed the module-qualified address from state first and
+  # swallowed the delete's failure, which left a live peering no state
+  # tracked. The suite runs scripts/delete-owned-vpc-peering.sh end to end
+  # against stubbed terraform and gcloud, asserts the step order inside
+  # destroy-gcp (Cloud SQL, then peering, then destroy), and sweeps every
+  # workflow plus a recursive glob of scripts/ so the script stays the only
+  # place that runs `gcloud services vpc-peerings delete`.
+  # Fast (shell only), so it always runs.
+  vpc-peering-delete-scope:
+    name: VPC peering delete scope
+    runs-on: ubuntu-latest
+    # Same shape as ecr-delete-selection above: this job checks out the tree and
+    # runs a shell script against it, so `contents: read` is all it needs.
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run VPC peering scope self-tests
+        run: bash scripts/test-vpc-peering-delete-scope.sh
+
   # Assert that every job applying a `compute_platform` writes the Terraform
   # state namespace that platform owns: `compute_platform=lambda` into
   # github-<env>/, `compute_platform=fargate` into github-fargate-<env>/. The
@@ -1204,6 +1233,7 @@ jobs:
       - ecr-delete-selection
       - rds-deletion-protection-scope
       - cloud-sql-delete-scope
+      - vpc-peering-delete-scope
       - aws-tfstate-platform-key
       - azure-kv-access-policy
     if: always()
