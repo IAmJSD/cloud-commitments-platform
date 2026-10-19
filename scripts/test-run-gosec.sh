@@ -154,7 +154,7 @@ fi
 
 # --- Makefile and CI ------------------------------------------------------------
 
-make_cmds="$(make -C "$REPO_ROOT" -n security-scan-go 2>&1)"
+make_cmds="$(make --no-print-directory -C "$REPO_ROOT" -n security-scan-go 2>&1)"
 if [[ "$make_cmds" == "scripts/run-gosec.sh" ]]; then
   pass "make security-scan-go runs only scripts/run-gosec.sh"
 else
