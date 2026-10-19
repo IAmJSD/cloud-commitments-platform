@@ -25,6 +25,10 @@ const skippedCollectionMarkerClearTimeout = 5 * time.Second
 type TaskLocker interface {
 	TryAdvisoryLock(ctx context.Context, lockID int64) (bool, error)
 	ReleaseAdvisoryLock(ctx context.Context, lockID int64)
+	// AdvisoryLockHeldFor reports how long the current holder has held
+	// lockID; found is false when nobody holds it or the age is unknown.
+	// Used to tell a genuinely running task from a stuck lock (issue #394).
+	AdvisoryLockHeldFor(ctx context.Context, lockID int64) (heldFor time.Duration, found bool, err error)
 }
 
 // ScheduledTaskType represents different types of scheduled tasks.
@@ -109,6 +113,9 @@ func (app *Application) HandleScheduledTask(ctx context.Context, taskType Schedu
 		if !acquired {
 			log.Printf("Task %q already running (advisory lock held), skipping", taskType) // #nosec G706 -- taskType is looked up from a known-value map; %q quotes the value to prevent CR/LF log injection
 			app.releaseSkippedCollectionMarker(taskType, params.OwnerToken)
+			if err := stuckTaskLockError(ctx, locker, taskType, lockID); err != nil {
+				return nil, err
+			}
 			return map[string]string{"status": "skipped", "reason": "already_running"}, nil
 		}
 		defer locker.ReleaseAdvisoryLock(ctx, lockID)
