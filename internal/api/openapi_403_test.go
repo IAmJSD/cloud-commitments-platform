@@ -230,7 +230,10 @@ func handlerFuncCallsRequirePermission(srcDir, fnName string) (bool, error) {
 
 			if inTarget {
 				braceDepth += strings.Count(line, "{") - strings.Count(line, "}")
-				if strings.Contains(line, "requirePermission") {
+				// Ignore comments: a body that only mentions requirePermission
+				// in prose does not gate on a permission.
+				code, _, _ := strings.Cut(line, "//")
+				if strings.Contains(code, "requirePermission") {
 					f.Close()
 					return true, nil
 				}
@@ -248,33 +251,29 @@ func handlerFuncCallsRequirePermission(srcDir, fnName string) (bool, error) {
 	return false, nil
 }
 
-// specPathsForRoute returns the set of spec routeKeys that the given router
-// entry could correspond to.
-func specPathsForRoute(entry routeHandlerEntry, specOps map[string]bool) []string {
+// specPathsForRoute returns the spec routeKeys that the router dispatches to
+// entries[idx]. Each spec path is instantiated with a sample value per
+// {param} and matched against all entries in declaration order with the
+// router's own first-match rule, so a broad prefix route (for example
+// GET /api/purchases/) does not claim operations that an earlier, more
+// specific route serves (GET /api/purchases/revoke/{id}).
+func specPathsForRoute(entries []routeHandlerEntry, idx int, specOps map[string]bool) []string {
+	r := &Router{}
 	var matches []string
-
 	for key := range specOps {
-		parts := strings.SplitN(key, " ", 2)
-		if len(parts) != 2 {
+		method, path, ok := strings.Cut(key, " ")
+		if !ok {
 			continue
 		}
-		method, path := parts[0], parts[1]
-
-		if entry.method != "" && method != strings.ToUpper(entry.method) {
-			continue
-		}
-
-		if entry.exactPath != "" {
-			if path == entry.exactPath {
-				matches = append(matches, key)
+		concrete := specPathParam.ReplaceAllString(path, routeCoverageSample)
+		for i, e := range entries {
+			route := Route{ExactPath: e.exactPath, PathPrefix: e.pathPrefix, PathSuffix: e.pathSuffix, Method: e.method}
+			if r.matches(route, method, concrete) {
+				if i == idx {
+					matches = append(matches, key)
+				}
+				break
 			}
-			continue
-		}
-
-		matchesPrefix := entry.pathPrefix == "" || strings.HasPrefix(path, entry.pathPrefix)
-		matchesSuffix := entry.pathSuffix == "" || strings.HasSuffix(path, entry.pathSuffix)
-		if matchesPrefix && matchesSuffix {
-			matches = append(matches, key)
 		}
 	}
 	return matches
@@ -298,10 +297,14 @@ func TestOpenAPI403OnPermissionGatedRoutes(t *testing.T) {
 	routerEntries, err := parseRouterEntries(routerPath)
 	require.NoError(t, err, "failed to parse router.go")
 	require.NotEmpty(t, routerEntries, "parsed zero route entries from router.go")
+	// specPathsForRoute replays first-match dispatch over routerEntries, so
+	// the source parse must see exactly the live route table, in order.
+	require.Len(t, routerEntries, len(newRouteCoverageRouter().routes),
+		"router.go parse and the live route table disagree; is a Route literal split across lines?")
 
 	var failures []string
 
-	for _, entry := range routerEntries {
+	for i, entry := range routerEntries {
 		if entry.delegateFnName == "" {
 			// Could not resolve the delegate; skip rather than false-negative.
 			continue
@@ -318,7 +321,7 @@ func TestOpenAPI403OnPermissionGatedRoutes(t *testing.T) {
 		}
 
 		// Find the spec operations that match this route.
-		matched := specPathsForRoute(entry, specOps)
+		matched := specPathsForRoute(routerEntries, i, specOps)
 		if len(matched) == 0 {
 			// Route not in spec yet — out of scope for this test.
 			continue
