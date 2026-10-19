@@ -431,6 +431,11 @@ paths:
       operationId: updatePlan
       tags: [Plans]
       summary: Replace a purchase plan
+      description: >-
+        A singleton legacy service alias retains its original key, hidden filters,
+        minimum count, service ramp and Enabled value when edited through its canonical
+        service name. Exact-key edits retain their existing Enabled overlay behavior;
+        selecting a genuinely different singleton service still replaces its settings.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
