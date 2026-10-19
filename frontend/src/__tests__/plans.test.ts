@@ -1633,6 +1633,19 @@ describe('Plans Module', () => {
     });
   });
 
+  test.each([openNewPlanModal, openCreatePlanModal])('collapses Advanced per open and removes its native-invalid listener on close (%#)', open => {
+    const form = document.getElementById('plan-form')!, advanced = document.createElement('details');
+    advanced.id = 'plan-advanced-settings'; form.appendChild(advanced);
+    const notify = document.getElementById('plan-notify-days')!; advanced.appendChild(notify);
+    advanced.open = true; open(); expect(advanced.open).toBe(false);
+    document.getElementById('plan-name')!.dispatchEvent(new Event('invalid')); expect(advanced.open).toBe(false);
+    notify.dispatchEvent(new Event('invalid')); expect(advanced.open).toBe(true);
+    closePlanModal(); advanced.open = false;
+    notify.dispatchEvent(new Event('invalid')); expect(advanced.open).toBe(false);
+    advanced.open = true; open(); expect(advanced.open).toBe(false); open(); closePlanModal();
+    advanced.open = false; notify.dispatchEvent(new Event('invalid')); expect(advanced.open).toBe(false);
+  });
+
   describe('openCreatePlanModal', () => {
     test('opens modal with "New Purchase Plan" title when selection is empty (issue #17)', () => {
       (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());

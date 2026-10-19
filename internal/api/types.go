@@ -12,6 +12,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/oidc"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/scheduler"
 )
 
@@ -145,17 +146,23 @@ type BreakdownValue struct {
 // raw revocation token minted on a successful execute (issue #103: only its
 // hash is stored, so callers can no longer recover a raw, emailable token by
 // re-reading the execution from the store). Empty on failure.
+//
+// `check` (every execute entry point) re-runs the caller's permission
+// Constraints against the row the claim CAS returned, the row that is
+// actually bought, before any provider call (issue #415). The handler's own
+// pre-CAS check reads an earlier snapshot, which a repricing or a
+// recommendation attach can change before the CAS.
 type PurchaseManagerInterface interface {
-	ApproveExecution(ctx context.Context, execID, token, actor string) (string, error)
-	ApproveAndExecute(ctx context.Context, execID, actor string, transitionedBy *string) (*config.PurchaseExecution, string, error)
+	ApproveExecution(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (string, error)
+	ApproveAndExecute(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	// DirectExecute is ApproveAndExecute for the direct-execute permission; it
 	// stamps the executed_* audit fields only after the claim is won.
-	DirectExecute(ctx context.Context, execID, actor string, transitionedBy *string) (*config.PurchaseExecution, string, error)
+	DirectExecute(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	// RunPlannedPurchaseNow forces a pending or paused scheduled purchase to
 	// execute immediately (the "Run now" button), sharing ApproveAndExecute's
 	// 4-eyes-gated, CAS-guarded funnel instead of a bare status flip that
 	// nothing else consumes (issue #218).
-	RunPlannedPurchaseNow(ctx context.Context, execID, actor string, transitionedBy *string) (*config.PurchaseExecution, string, error)
+	RunPlannedPurchaseNow(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	CancelExecution(ctx context.Context, execID, token, actor string) error
 }
 

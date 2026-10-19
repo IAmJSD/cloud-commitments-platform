@@ -140,6 +140,7 @@ jobs:
       cancel-in-progress: false
     outputs:
       alb_url: ${{ steps.outputs.outputs.alb_url }}
+      app_url: ${{ steps.outputs.outputs.app_url }}
       service_name: ${{ steps.outputs.outputs.service_name }}
     # Set at job level, not workflow level: workflow-level `env:` is resolved
     # before this job's `environment:` is in scope, so an environment-scoped
@@ -223,8 +224,13 @@ jobs:
         id: outputs
         run: |
           cd terraform/environments/aws
-          echo "alb_url=$(terraform output -raw fargate_alb_dns_name 2>/dev/null | grep -v '::' || echo "")" >> "$GITHUB_OUTPUT"
-          echo "service_name=$(terraform output -raw fargate_service_name 2>/dev/null | grep -v '::' || echo "")" >> "$GITHUB_OUTPUT"
+          {
+            echo "alb_url=$(terraform output -raw fargate_alb_dns_name 2>/dev/null | grep -v '::' || echo "")"
+            # The URL that actually serves the app (https on the api-<env>
+            # alias when HTTPS is enabled), for the test-deployment gates (#647).
+            echo "app_url=$(terraform output -raw fargate_app_url 2>/dev/null | grep -v '::' || echo "")"
+            echo "service_name=$(terraform output -raw fargate_service_name 2>/dev/null | grep -v '::' || echo "")"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Save deployment info
         env:
@@ -265,69 +271,66 @@ jobs:
       contents: read
 
     steps:
-      - name: Get ALB URL
+      # Gate on the URL that serves the app, not the bare ALB DNS name: with
+      # HTTPS enabled the port 80 listener answers 301 on every path, so an
+      # http://<ALB> gate would never reach a task (#647). fargate_app_url is
+      # https on the api-<env> alias then (the name the listener certificate
+      # covers), otherwise http on the ALB DNS name.
+      - name: Get app URL
         id: get-url
+        env:
+          APP_URL: ${{ needs.deploy.outputs.app_url }}
         run: |
-          ALB_URL="${{ needs.deploy.outputs.alb_url }}"
-          if [ -z "$ALB_URL" ]; then
-            echo "Failed to get ALB URL from deploy outputs"
+          if [ -z "$APP_URL" ]; then
+            echo "Failed to get the app URL (fargate_app_url) from deploy outputs"
             exit 1
           fi
-          # Ensure URL has scheme and no trailing slash
-          case "$ALB_URL" in
-            http://*|https://*) ;; # already has scheme
-            *) ALB_URL="http://$ALB_URL" ;;
+          case "$APP_URL" in
+            http://*|https://*) ;;
+            *) echo "fargate_app_url has no scheme: $APP_URL"; exit 1 ;;
           esac
-          ALB_URL="${ALB_URL%/}"
-          echo "url=$ALB_URL" >> "$GITHUB_OUTPUT"
+          APP_URL="${APP_URL%/}"
+          echo "Gating on $APP_URL"
+          echo "url=$APP_URL" >> "$GITHUB_OUTPUT"
 
       - name: Wait for deployment
         run: |
           echo "Waiting 60 seconds for ECS service to stabilize..."
           sleep 60
 
-      - name: Test health endpoint
-        run: |
-          URL="${{ steps.get-url.outputs.url }}"
-          echo "Testing health endpoint: $URL/health"
+      # Needs the repo for scripts/wait-for-healthy.sh, used by both gates below.
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/wait-for-healthy.sh
 
-          for i in {1..10}; do
-            # /health reports but never triggers the lazy DB init on the HTTP
-            # server; any /api/ request does. /health below is the gate.
-            curl -s -o /dev/null --max-time 60 "$URL/api/auth/check-admin" || true
-            # /health returns HTTP 200 even when degraded; the body is the verdict.
-            if RESPONSE=$(curl -fsS --max-time 10 "$URL/health"); then
-              echo "Response: $RESPONSE"
-              if jq -e '.status == "healthy"' > /dev/null <<< "$RESPONSE"; then
-                echo "Health check passed!"
-                exit 0
-              fi
-            fi
-            echo "Attempt $i failed, retrying in 10 seconds..."
-            sleep 10
-          done
+      # Fast fail gate: the server initializes its database in the background
+      # at startup, so no warm-up request is needed to make progress (#488).
+      # /ready answers 503 while the task that answers is still initializing,
+      # which the script counts as a failed attempt (#647). 30 x 10s covers the
+      # 300s ECS health check grace period, so a slow first boot that ECS
+      # still tolerates does not fail this gate.
+      - name: Test readiness endpoint
+        env:
+          APP_URL: ${{ steps.get-url.outputs.url }}
+          HEALTH_REQUIRED_STREAK: "1"
+          HEALTH_MAX_ATTEMPTS: "30"
+          HEALTH_INTERVAL_SECONDS: "10"
+        run: bash scripts/wait-for-healthy.sh "$APP_URL"
 
-          echo "Health check failed after 10 attempts"
-          exit 1
-
+      # Rollout race (#513): during a rolling deploy the ALB can route a probe
+      # to a different task than the previous one, so one not-ready response
+      # must not fail the step. The script requires HEALTH_REQUIRED_STREAK
+      # consecutive ready responses within HEALTH_MAX_ATTEMPTS rounds and
+      # fails with the last body otherwise.
       - name: Run smoke tests
-        run: |
-          URL="${{ steps.get-url.outputs.url }}"
-
-          echo "Running basic smoke tests..."
-
-          for i in {1..3}; do
-            if RESPONSE=$(curl -fsS --max-time 10 "$URL/health") &&
-              jq -e '.status == "healthy"' > /dev/null <<< "$RESPONSE"; then
-              echo "Health check $i: passed"
-            else
-              echo "Health check $i: failed: ${RESPONSE:-no response}"
-              exit 1
-            fi
-            sleep 2
-          done
-
-          echo "All smoke tests passed!"
+        env:
+          APP_URL: ${{ steps.get-url.outputs.url }}
+          HEALTH_REQUIRED_STREAK: "3"
+          HEALTH_MAX_ATTEMPTS: "30"
+          HEALTH_INTERVAL_SECONDS: "5"
+        run: bash scripts/wait-for-healthy.sh "$APP_URL"
 
   # Summary
   summary:

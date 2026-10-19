@@ -34,22 +34,40 @@ locals {
 # have scaled to zero after deployment.  Terraform check-block data sources
 # are evaluated *after* all resources are applied, so this resource warms the
 # container before checks and bash tests run.
+#
+# /health is a liveness endpoint: it answers HTTP 200 even while required
+# initialization is still pending or a dependency is down, and reports the
+# verdict in the body's top-level "status" field ("healthy" / "degraded").
+# Waiting only for a 200 would hand the checks below a replica that is up but
+# not initialized, so warmup waits for "status":"healthy" (#649). Without
+# python3 the body cannot be parsed and warmup falls back to waiting for 200.
 
 resource "terraform_data" "warmup" {
   triggers_replace = [var.api_base_url]
 
   provisioner "local-exec" {
     command = <<-EOT
+      body_file=$(mktemp)
+      trap 'rm -f "$body_file"' EXIT
       for i in 1 2 3 4 5 6 7 8 9 10; do
-        status=$(curl -sk -o /dev/null -w "%%{http_code}" --connect-timeout 10 --max-time 30 "${var.api_base_url}/health" 2>/dev/null) || status="000"
-        if [ "$status" != "000" ] && [ "$status" != "502" ] && [ "$status" != "503" ]; then
-          echo "Warmup: service ready (HTTP $status) after attempt $i"
-          exit 0
+        status=$(curl -sk -o "$body_file" -w "%%{http_code}" --connect-timeout 10 --max-time 30 "${var.api_base_url}/health" 2>/dev/null) || status="000"
+        if [ "$status" = "200" ]; then
+          if ! command -v python3 >/dev/null 2>&1; then
+            echo "Warmup: service answering (HTTP 200) after attempt $i; python3 not found, body status not checked"
+            exit 0
+          fi
+          health=$(python3 -c 'import json,sys; s=json.load(open(sys.argv[1])).get("status"); print(s if isinstance(s,str) else "")' "$body_file" 2>/dev/null) || health=""
+          if [ "$health" = "healthy" ]; then
+            echo "Warmup: service healthy after attempt $i"
+            exit 0
+          fi
+          echo "Warmup: attempt $i got HTTP 200 with status '$health', retrying in 5s..."
+        else
+          echo "Warmup: attempt $i got HTTP $status, retrying in 5s..."
         fi
-        echo "Warmup: attempt $i got HTTP $status, retrying in 5s..."
         sleep 5
       done
-      echo "Warmup: service did not become ready after 10 attempts, continuing anyway"
+      echo "Warmup: service did not report healthy after 10 attempts, continuing anyway"
     EOT
 
     on_failure = continue
@@ -78,6 +96,15 @@ check "health" {
   assert {
     condition     = data.http.health.status_code == 200
     error_message = "Health check failed: ${var.api_base_url}/health returned ${data.http.health.status_code}"
+  }
+
+  # /health answers 200 by design even when every dependency is down (it is
+  # the liveness contract, #488), so the status code alone passes on a fully
+  # degraded deployment. The verdict is the body's top-level "status" field,
+  # which both the server mux and the Lambda API router emit (#649).
+  assert {
+    condition     = try(jsondecode(data.http.health.response_body).status, "") == "healthy"
+    error_message = "Health check failed: ${var.api_base_url}/health reported status \"${try(tostring(jsondecode(data.http.health.response_body).status), "unparseable")}\", expected \"healthy\""
   }
 }
 

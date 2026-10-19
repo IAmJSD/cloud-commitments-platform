@@ -94,7 +94,7 @@ func TestReapStuckExecutions_ApprovedAnnotationUsesApprovedThreshold(t *testing.
 	flipped := row
 	flipped.Status = failedStatus
 	expectStuckLists(ctx, store, DefaultReapAfter, row)
-	store.On("TransitionExecutionStatus", ctx, row.ExecutionID, stuckStatuses, failedStatus, (*string)(nil)).
+	store.On("TransitionExecutionStatus", ctx, row.ExecutionID, []string{"approved"}, failedStatus, (*string)(nil)).
 		Return(&flipped, nil)
 	var saved *config.PurchaseExecution
 	store.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
@@ -120,4 +120,32 @@ func expectStuckLists(ctx context.Context, store *MockConfigStore, reapAfter tim
 	}
 	store.On("ListStuckExecutions", ctx, []string{"running"}, reapAfter).Return(byStatus["running"], nil)
 	store.On("ListStuckExecutions", ctx, []string{"approved"}, approvedReapAfter(reapAfter)).Return(byStatus["approved"], nil)
+}
+
+// RecoverStrandedApprovals can claim a listed approved row (approved -> running)
+// between the reaper's SELECT and its CAS. The CAS must be pinned to the status
+// the row was listed under, or it matches "running" and fails a purchase that is
+// in flight. The fake store models the row as already running.
+func TestReapStuckExecutions_ApprovedRowClaimedBeforeCASIsNotFailed(t *testing.T) {
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	row := stuckExec("exec-claimed", "approved")
+	flipped := row
+	flipped.Status = failedStatus
+	expectStuckLists(ctx, store, DefaultReapAfter, row)
+	store.On("TransitionExecutionStatus", ctx, row.ExecutionID,
+		mock.MatchedBy(func(from []string) bool { return slices.Contains(from, "running") }),
+		failedStatus, (*string)(nil)).Return(&flipped, nil)
+	store.On("TransitionExecutionStatus", ctx, row.ExecutionID,
+		mock.MatchedBy(func(from []string) bool { return !slices.Contains(from, "running") }),
+		failedStatus, (*string)(nil)).
+		Return(nil, fmt.Errorf("%w: from %q", config.ErrExecutionNotInExpectedStatus, "running"))
+
+	result, err := newReaperManager(store).ReapStuckExecutions(ctx, DefaultReapAfter)
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Found)
+	assert.Equal(t, 0, result.Reaped, "an in-flight row must not be failed")
+	assert.Equal(t, 1, result.RaceLost)
+	assert.Zero(t, result.Errored)
+	store.AssertNotCalled(t, "SaveExecutionIfStatus", mock.Anything, mock.Anything, mock.Anything)
 }

@@ -62,3 +62,17 @@ func validateMaxPurchaseAmount(permIndex int, p Permission) error {
 		"%w: entry %d (%s:%s) has an invalid max purchase amount %v; a spend cap must be zero (no cap) or positive",
 		ErrInvalidPermission, permIndex, p.Action, p.Resource, p.Constraints.MaxPurchaseAmount)
 }
+
+// validateExplicitZeroCap refuses a permission whose JSON carried an explicit
+// max_amount of 0 (issue #133). Zero stays "no cap" when the field is absent
+// or null, but typing 0 into a cap field reads as "spend nothing" and silently
+// granting unlimited spend is the opposite. Applied to group writes; the HTTP
+// API-key path erases an explicit 0 before it gets here (#980).
+func validateExplicitZeroCap(permIndex int, p APIPermission) error {
+	if p.Constraints == nil || !p.Constraints.maxAmountSet || p.Constraints.MaxAmount != 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: entry %d (%s:%s) max_amount must be greater than 0; omit it for no limit",
+		ErrInvalidPermission, permIndex, p.Action, p.Resource)
+}

@@ -9,12 +9,21 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/testutil/lambdatimeout"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
+
+// TestLambdaTimeoutCoversPurchaseBudget keeps every shipped AWS Lambda timeout
+// above the detached purchase budget (execution, then the terminal save).
+// Lambda ends the invocation at its timeout whatever the context deadline
+// says, so a shorter timeout cuts a purchase off mid-flight (#913).
+func TestLambdaTimeoutCoversPurchaseBudget(t *testing.T) {
+	lambdatimeout.AssertCovers(t, "../..", purchaseExecutionTimeout+terminalSaveTimeout)
+}
 
 // detachFixture wires a direct single-account AWS purchase (issue #706).
 type detachFixture struct {

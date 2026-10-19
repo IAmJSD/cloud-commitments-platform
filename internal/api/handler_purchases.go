@@ -366,7 +366,9 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 		return nil, constraintErr
 	}
 
-	final, revocationToken, runErr := h.purchase.RunPlannedPurchaseNow(ctx, executionID, fourEyesActorIdentity(session), resolveCreatorUserID(session))
+	// The check above read a snapshot; the funnel re-runs it on the row its
+	// claim returns, the row it buys (issue #415).
+	final, revocationToken, runErr := h.purchase.RunPlannedPurchaseNow(ctx, executionID, fourEyesActorIdentity(session), resolveCreatorUserID(session), h.runNowClaimCheck(session))
 	if runErr != nil {
 		return nil, executeFailureError(executionID, "started", final, runErr)
 	}
@@ -394,6 +396,8 @@ func executeFailureError(executionID, action string, final *config.PurchaseExecu
 		return fmt.Errorf("execution %s could not be %s: %w", executionID, action, err)
 	case errors.Is(err, config.ErrAuditLoss):
 		return NewClientError(500, fmt.Sprintf("execution %s ran but its final status could not be saved: %v", executionID, err))
+	case errors.Is(err, purchase.ErrClaimedRowRefused):
+		return claimedRowRefusalError(final, err)
 	case errors.Is(err, purchase.ErrStaleAzurePricing):
 		return NewClientError(409, err.Error())
 	default:
@@ -825,6 +829,8 @@ func tokenActionError(err error) error {
 	switch {
 	case errors.Is(err, config.ErrAuditLoss):
 		return err
+	case errors.Is(err, purchase.ErrClaimedRowRefused):
+		return claimedRowRefusalError(nil, err)
 	case errors.Is(err, purchase.ErrStaleAzurePricing):
 		return NewClientError(409, err.Error())
 	case errors.Is(err, purchase.ErrInvalidApprovalToken):
@@ -852,7 +858,7 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	// session; requireDifferentApprover returns 500 when mode is on and no
 	// session is available (fail-closed).
 	tokenSession := h.tryGetSession(ctx, req)
-	if err := h.requireDifferentApprover(ctx, tokenSession, execution.ExecutionID, execution.CreatedByUserID); err != nil {
+	if err := h.requireDifferentApprover(ctx, tokenSession, execution.ExecutionID, execution.CreatedByUserID, execution.CreatedBySystem); err != nil {
 		return nil, err
 	}
 	// SEC-01 follow-up (issue #60 review): the deep-link flow always forces
@@ -900,7 +906,9 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	// sourced from this return value, never from a DB re-read, since
 	// only the token hash is stored and a re-read can only ever yield
 	// the hash.
-	revocationToken, approveErr := h.purchase.ApproveExecution(ctx, execution.ExecutionID, token, actor)
+	// approveConstraintsForSession above read a snapshot; the funnel re-runs
+	// it on the row its claim returns, the row it buys (issue #415).
+	revocationToken, approveErr := h.purchase.ApproveExecution(ctx, execution.ExecutionID, token, actor, h.tokenApproveClaimCheck(tokenSession))
 	if approveErr != nil {
 		return nil, tokenActionError(approveErr)
 	}
@@ -990,7 +998,9 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 	// approval (issue #103); only the token hash is stored, so this
 	// return value is the only place a raw, emailable token exists after
 	// the call returns.
-	final, revocationToken, approveErr := h.purchase.ApproveAndExecute(ctx, execution.ExecutionID, fourEyesActorIdentity(session), actor)
+	// authorizeApproveSession above read a snapshot; the funnel re-runs the
+	// approve-any/approve-own check on the row its claim returns (issue #415).
+	final, revocationToken, approveErr := h.purchase.ApproveAndExecute(ctx, execution.ExecutionID, fourEyesActorIdentity(session), actor, h.sessionApproveClaimCheck(session))
 	if approveErr != nil {
 		logging.Errorf("purchase[%s]: approvePurchaseViaSession failed after %s: %v",
 			execution.ExecutionID, time.Since(t0), approveErr)
@@ -1019,7 +1029,7 @@ func (h *Handler) authorizeApproveSession(ctx context.Context, session *Session,
 	// pass the approve-any / approve-own gate reach this check. The admin
 	// wildcard inside authorizeSessionApprove short-circuits RBAC but NOT this
 	// check; admins who created the row must disable the mode first.
-	return h.requireDifferentApprover(ctx, session, execution.ExecutionID, execution.CreatedByUserID)
+	return h.requireDifferentApprover(ctx, session, execution.ExecutionID, execution.CreatedByUserID, execution.CreatedBySystem)
 }
 
 // authorizeScopedSessionApprove runs the account-scope gate (issue #92)
@@ -1355,7 +1365,7 @@ func (h *Handler) sendPurchaseScheduledEmail(ctx context.Context, execution *con
 //
 // Admin wildcard is intentionally NOT exempt: an admin who created an execution
 // must disable the mode in Settings before approving their own row.
-func (h *Handler) requireDifferentApprover(ctx context.Context, session *Session, subjectID string, creatorUserID *string) error {
+func (h *Handler) requireDifferentApprover(ctx context.Context, session *Session, subjectID string, creatorUserID *string, systemCreated bool) error {
 	cfg, err := h.config.GetGlobalConfig(ctx)
 	if err != nil {
 		return fmt.Errorf("4-eyes policy check: failed to load global config: %w", err)
@@ -1368,6 +1378,13 @@ func (h *Handler) requireDifferentApprover(ctx context.Context, session *Session
 	if session == nil {
 		logging.Warnf("4-eyes[%s]: mode on but no session available; denying (fail-closed)", subjectID)
 		return NewClientError(500, "4-eyes approval mode is enabled but no session could be resolved; sign in before approving")
+	}
+
+	if creatorUserID == nil && systemCreated {
+		// Scheduler-minted row: no human requester exists, so any identified
+		// approver (session != nil, checked above) is the second pair of eyes.
+		logging.Infof("4-eyes[%s]: mode on; system-created row approved by user %s", subjectID, session.UserID)
+		return nil
 	}
 
 	if creatorUserID == nil {
@@ -3471,7 +3488,9 @@ func (h *Handler) directExecutePurchase(ctx context.Context, req *events.LambdaF
 	// approval (issue #103); only the token hash is stored, so this
 	// return value is the only place a raw, emailable token exists after
 	// the call returns.
-	final, revocationToken, err := h.purchase.DirectExecute(ctx, executionID, fourEyesActorIdentity(session), validUUIDPtrOrNil(&session.UserID))
+	// The direct-execute Constraints ran on the request's recommendations; the
+	// funnel re-runs them on the row its claim returns (issue #415).
+	final, revocationToken, err := h.purchase.DirectExecute(ctx, executionID, fourEyesActorIdentity(session), validUUIDPtrOrNil(&session.UserID), h.directExecuteClaimCheck(session))
 	if err != nil {
 		logging.Errorf("purchase[%s]: directExecutePurchase failed after %s: %v",
 			executionID, time.Since(t0), err)

@@ -15,7 +15,7 @@ compute_platform = "lambda" # or "fargate"
 # Lambda configuration
 lambda_architecture           = "arm64"
 lambda_memory_size            = 1024 # More memory for production
-lambda_timeout                = 60
+lambda_timeout                = 300 # 300-900: covers the 270s exchange/purchase budget
 lambda_reserved_concurrency   = -1
 lambda_log_retention_days     = 30
 # Function URL auth_type is derived from enable_cdn — see compute.tf local

@@ -226,7 +226,11 @@ func isMultiAccountAckable(execErr error) bool {
 }
 
 const (
-	// Combined execution and persistence budgets require lambda_timeout >= 270s.
+	// The two budgets run back to back (270s), and on AWS Lambda the function
+	// timeout ends the invocation whatever these deadlines say, so the Lambda
+	// timeout must cover their sum plus a 30s margin (lambda_timeout >= 300,
+	// enforced by Terraform validation and TestLambdaTimeoutCoversPurchaseBudget,
+	// #913).
 	purchaseExecutionTimeout = 4 * time.Minute
 	terminalSaveTimeout      = 30 * time.Second
 )

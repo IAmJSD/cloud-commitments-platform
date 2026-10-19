@@ -271,7 +271,7 @@ func TestAWSRecommendationCompletenessPersistence(t *testing.T) {
 			if tc.fallback != nil {
 				globalCfg = &config.GlobalConfig{DefaultTerm: 1, DefaultPayment: "no-upfront", RecommendationsLookbackDays: 30}
 			}
-			recs, ids, err := s.collectAWSRecommendations(ctx, globalCfg)
+			recs, ids, _, err := s.collectAWSRecommendations(ctx, globalCfg)
 			require.NoError(t, err)
 			wantRows := tc.wantRows
 			switch {
@@ -288,7 +288,7 @@ func TestAWSRecommendationCompletenessPersistence(t *testing.T) {
 				require.Empty(t, ids)
 			}
 			require.Len(t, recs, wantRows)
-			s.persistCollection(ctx, recs, expandSuccessfulCollects("aws", ids), nil)
+			s.persistCollection(ctx, recs, expandSuccessfulCollects("aws", ids), nil, nil)
 			rows, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
 			require.NoError(t, err)
 			byID := make(map[string]config.RecommendationRecord, len(rows))

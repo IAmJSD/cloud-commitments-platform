@@ -73,7 +73,10 @@ func TestMigration_NeverStartedLegacyRampsBecomeNew(t *testing.T) {
 		return p.ID
 	}
 	withExec := clone("b-has-execution", 4, 0)
-	require.NoError(t, store.SavePurchaseExecution(ctx, &config.PurchaseExecution{PlanID: withExec, ExecutionID: uuid.NewString(), Status: config.StatusFailed, NoSubmission: true, StepNumber: 1, ScheduledDate: time.Now()}))
+	_, err = pool.Exec(ctx, `INSERT INTO purchase_executions
+		(plan_id, execution_id, status, no_submission, step_number, scheduled_date)
+		VALUES ($1, $2, $3, $4, $5, $6)`, withExec, uuid.NewString(), config.StatusFailed, true, 1, time.Now())
+	require.NoError(t, err)
 	midRamp := clone("c-mid-ramp", 4, 2)
 	singleStep := clone("d-single-step", 1, 0)
 	trusted := clone("e-trusted", 4, 0)

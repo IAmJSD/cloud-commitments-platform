@@ -255,6 +255,29 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
+  /api/recommendations/freshness:
+    get:
+      operationId: getRecommendationsFreshness
+      tags: [Recommendations]
+      summary: Get the recommendations cache freshness and last collection outcome
+      description: >
+        Returns when recommendations were last collected, the most recent
+        collection error, whether a collection is in flight, and whether the
+        last collection was partial (some subscriptions, projects or scopes
+        could not be queried, so the stored recommendations under-state the
+        real opportunity).
+      responses:
+        '200':
+          description: Freshness state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationsFreshness'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
   # ---- Purchase Plans -----------------------------------------------------
   /api/plans:
     get:
@@ -2763,6 +2786,12 @@ components:
         max_amount:
           type: number
           format: double
+          minimum: 0
+          exclusiveMinimum: true
+          description: >-
+            Spend cap per purchase. Omit for no cap. An explicit 0 is rejected
+            with 400 on group writes (create and update); API-key creation
+            over HTTP does not enforce this yet.
 
     # -- API Keys -----------------------------------------------------------
     CreateAPIKeyRequest:
@@ -3189,6 +3218,75 @@ components:
           type: array
           items:
             type: string
+
+    RecommendationsFreshness:
+      type: object
+      required: [last_collected_at, last_collection_error, last_collection_started_at, last_collection_partial]
+      properties:
+        last_collected_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When recommendations were last persisted; null on a cold start.
+        last_collection_error:
+          type: string
+          nullable: true
+          description: Error from the most recent collection when a provider failed; null otherwise.
+        last_collection_started_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Set while a collection is in flight.
+        last_collection_partial:
+          nullable: true
+          description: >
+            Non-null when the most recent persisted collection kept rows from
+            at least one incomplete sweep. Cleared by the next collection whose
+            sweeps are all complete. Carries counts and reason categories only.
+          allOf:
+            - $ref: '#/components/schemas/RecommendationsCollectionPartial'
+
+    RecommendationsCollectionPartial:
+      type: object
+      required: [providers]
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: '#/components/schemas/PartialProviderSweep'
+
+    PartialProviderSweep:
+      type: object
+      required: [provider, incomplete_accounts, attempted_scopes, failed_scopes, failed_details, reasons]
+      properties:
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+        incomplete_accounts:
+          type: integer
+          description: Accounts (or the ambient host identity) whose sweep was incomplete.
+        attempted_scopes:
+          type: integer
+          description: >
+            Scopes (Azure subscriptions, GCP projects) the incomplete sweeps
+            were asked to cover; 0 when the provider does not report it (AWS).
+        failed_scopes:
+          type: integer
+          description: Scopes that could not be queried.
+        failed_details:
+          type: integer
+          description: Individual recommendation details rejected inside answering scopes (AWS).
+        reasons:
+          type: object
+          description: >
+            Failure count per reason category. Keys are drawn from a closed
+            set: permission_denied, throttled, timeout, canceled, not_found,
+            provider_unavailable, other.
+          additionalProperties:
+            type: integer
+          example:
+            permission_denied: 2
+            throttled: 1
 
     # -- Plans --------------------------------------------------------------
     PlansResponse:

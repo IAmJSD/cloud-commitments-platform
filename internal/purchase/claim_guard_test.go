@@ -86,7 +86,7 @@ func TestReapOne_AnnotationLostToRecoveryIsBenign(t *testing.T) {
 	row := stuckExec("exec-R", "running")
 	failed := row
 	failed.Status = failedStatus
-	store.On("TransitionExecutionStatus", ctx, "exec-R", stuckStatuses, failedStatus, (*string)(nil)).Return(&failed, nil)
+	store.On("TransitionExecutionStatus", ctx, "exec-R", []string{"running"}, failedStatus, (*string)(nil)).Return(&failed, nil)
 	store.On("SaveExecutionIfStatus", ctx, mock.Anything, []string{failedStatus}).Return(lostGuard())
 
 	result := &ReapResult{}
@@ -108,7 +108,7 @@ func TestApprove_ClaimsRunningAndStampsGuarded(t *testing.T) {
 	store.On("SaveExecutionIfStatus", ctx, mock.Anything, []string{"running"}).Return(nil).Once()
 	store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{"running"}).Return(nil).Once()
 
-	_, _, err := manager.ApproveAndExecute(ctx, "exec-g", "approver@example.invalid", nil)
+	_, _, err := manager.ApproveAndExecute(ctx, "exec-g", "approver@example.invalid", nil, nil)
 	require.NoError(t, err)
 	store.AssertCalled(t, "TransitionExecutionStatus", ctx, "exec-g", approveFromStatuses, "running", (*string)(nil))
 	// Two guarded writes (audit stamp, terminal save); the only unguarded one is

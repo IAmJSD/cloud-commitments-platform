@@ -216,8 +216,12 @@ func (s *Service) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (
 		}
 	}
 
+	perms, err := apiPermissionsToPermissions(createReq.Permissions)
+	if err != nil {
+		return nil, err
+	}
 	// Create the API key
-	apiKey, keyInfo, err := s.CreateAPIKey(ctx, userID, createReq.Name, createReq.Password, apiPermissionsToPermissions(createReq.Permissions), createReq.ExpiresAt)
+	apiKey, keyInfo, err := s.CreateAPIKey(ctx, userID, createReq.Name, createReq.Password, perms, createReq.ExpiresAt)
 	if err != nil {
 		return nil, err
 	}

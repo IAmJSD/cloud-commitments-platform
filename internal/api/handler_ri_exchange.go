@@ -2582,7 +2582,7 @@ func (h *Handler) requireNoDirectExchangeUnderFourEyes(ctx context.Context) erro
 // any identified approver, but never by an anonymous token holder (issue #518).
 func (h *Handler) requireDifferentRIExchangeApprover(ctx context.Context, session *Session, record *config.RIExchangeRecord) error {
 	if record.CreatedByUserID != nil {
-		return h.requireDifferentApprover(ctx, session, record.ID, record.CreatedByUserID)
+		return h.requireDifferentApprover(ctx, session, record.ID, record.CreatedByUserID, false)
 	}
 	if session != nil {
 		return nil

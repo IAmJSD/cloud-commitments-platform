@@ -509,7 +509,7 @@ func TestScheduler_CollectAWSRecommendations(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	recs, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	recs, _, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
 	require.Error(t, err) // Should error due to mock provider failing
 	assert.Nil(t, recs)
 }
@@ -527,7 +527,7 @@ func TestScheduler_CollectAzureRecommendations_NoAccounts(t *testing.T) {
 
 	scheduler := &Scheduler{config: mockStore}
 
-	recs, _, err := scheduler.collectAzureRecommendations(ctx, globalCfg)
+	recs, _, _, err := scheduler.collectAzureRecommendations(ctx, globalCfg)
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -545,7 +545,7 @@ func TestScheduler_CollectGCPRecommendations_NoAccounts_Alt(t *testing.T) {
 
 	scheduler := &Scheduler{config: mockStore}
 
-	recs, _, err := scheduler.collectGCPRecommendations(ctx, globalCfg)
+	recs, _, _, err := scheduler.collectGCPRecommendations(ctx, globalCfg)
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 }
@@ -583,7 +583,7 @@ func TestScheduler_CollectProviderRecommendations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.provider, func(t *testing.T) {
-			recs, _, err := scheduler.collectProviderRecommendations(ctx, tt.provider, globalCfg)
+			recs, _, _, err := scheduler.collectProviderRecommendations(ctx, tt.provider, globalCfg)
 			if tt.expectError {
 				require.Error(t, err)
 			} else {
@@ -755,14 +755,14 @@ func TestScheduler_FetchAndConvert_KeepsPartialSweepData(t *testing.T) {
 
 	// globalCfg nil so the zero-results fallback branch stays out of the way;
 	// collected is non-empty anyway.
-	recs, complete, err := s.fetchAndConvert(ctx, prov, "azure", nil, "", nil)
+	recs, gap, err := s.fetchAndConvert(ctx, prov, "azure", nil, "", nil)
 
 	require.NoError(t, err,
 		"a partial multi-subscription sweep must not fail the whole collection")
 	require.Len(t, recs, 1,
 		"the subscriptions that succeeded must still be persisted, not discarded")
 	assert.Equal(t, 3, recs[0].Count, "the surviving subscription's recommendation must be intact")
-	assert.False(t, complete,
+	assert.NotNil(t, gap,
 		"a partial sweep must report itself incomplete so the caller withholds stale-row eviction (#1652)")
 }
 
@@ -781,17 +781,16 @@ func TestScheduler_FetchAndConvert_RealErrorStillFailsLoud(t *testing.T) {
 
 	s := &Scheduler{config: new(MockConfigStore)}
 
-	recs, complete, err := s.fetchAndConvert(ctx, prov, "azure", nil, "", nil)
+	recs, _, err := s.fetchAndConvert(ctx, prov, "azure", nil, "", nil)
 
 	require.Error(t, err, "a genuine error must still fail the collection")
 	assert.Contains(t, err.Error(), "credentials expired")
 	assert.Nil(t, recs)
-	assert.False(t, complete, "a failed sweep is never eviction-eligible")
 }
 
 func TestTolerateIncompleteSweep(t *testing.T) {
 	// Swallowing the error is only half the contract. The other half is
-	// reporting complete=false, which is what keeps the account out of the
+	// reporting a non-nil gap, which is what keeps the account out of the
 	// eviction roster; asserting only NoError here would encode the #1652
 	// hazard as intended behavior.
 	t.Run("partial failure is swallowed but reported as incomplete", func(t *testing.T) {
@@ -799,23 +798,25 @@ func TestTolerateIncompleteSweep(t *testing.T) {
 			Attempted: 2, Succeeded: 1,
 			Failed: []azureprovider.SubscriptionFailure{{SubscriptionID: "sub-1", Err: errors.New("boom")}},
 		}
-		complete, err := tolerateIncompleteSweep("azure", partial)
+		gap, err := tolerateIncompleteSweep("azure", partial)
 		assert.NoError(t, err, "the collected subscriptions' data must be kept")
-		assert.False(t, complete,
+		require.NotNil(t, gap,
 			"an incomplete sweep must not authorize stale-row eviction for the account (#1652)")
+		assert.Equal(t, 2, gap.attemptedScopes)
+		assert.Equal(t, 1, gap.failedScopes)
 	})
 
 	t.Run("other errors pass through unchanged", func(t *testing.T) {
 		boom := errors.New("boom")
-		complete, err := tolerateIncompleteSweep("azure", boom)
+		gap, err := tolerateIncompleteSweep("azure", boom)
 		assert.Same(t, boom, err)
-		assert.False(t, complete, "a failed sweep is never eviction-eligible")
+		assert.Nil(t, gap, "a hard failure is an error, not a partial sweep")
 	})
 
 	t.Run("nil stays nil and is complete", func(t *testing.T) {
-		complete, err := tolerateIncompleteSweep("azure", nil)
+		gap, err := tolerateIncompleteSweep("azure", nil)
 		assert.NoError(t, err)
-		assert.True(t, complete,
+		assert.Nil(t, gap,
 			"a clean sweep must stay eviction-eligible, otherwise stale rows accumulate forever")
 	})
 }
@@ -1311,13 +1312,13 @@ func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
 		}
 	}
 
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, bool, error) {
+	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
 		cur := inflight.Add(1)
 		updatePeak(cur)
 		// Small sleep so concurrent workers genuinely overlap.
 		time.Sleep(5 * time.Millisecond)
 		inflight.Add(-1)
-		return []config.RecommendationRecord{{ID: acct.ID}}, true, nil
+		return []config.RecommendationRecord{{ID: acct.ID}}, nil, nil
 	}
 
 	out, outcome := fanOutPerAccount(context.Background(), "Test", accounts, fn)
@@ -1339,8 +1340,8 @@ func TestFanOutPerAccount_AllAccountsFail(t *testing.T) {
 		{ID: "acct-2", Name: "acct-2", ExternalID: "ext-2"},
 		{ID: "acct-3", Name: "acct-3", ExternalID: "ext-3"},
 	}
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, bool, error) {
-		return nil, false, fmt.Errorf("cred error for %s", acct.ID)
+	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
+		return nil, nil, fmt.Errorf("cred error for %s", acct.ID)
 	}
 
 	recs, outcome := fanOutPerAccount(context.Background(), "Test", accounts, fn)
@@ -1363,11 +1364,11 @@ func TestFanOutPerAccount_PartialSuccess(t *testing.T) {
 		{ID: "acct-ok-2", Name: "acct-ok-2", ExternalID: "e2"},
 		{ID: "acct-bad", Name: "acct-bad", ExternalID: "ebad"},
 	}
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, bool, error) {
+	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
 		if acct.ID == "acct-bad" {
-			return nil, false, fmt.Errorf("transient")
+			return nil, nil, fmt.Errorf("transient")
 		}
-		return []config.RecommendationRecord{{ID: acct.ID, Provider: "test"}}, true, nil
+		return []config.RecommendationRecord{{ID: acct.ID, Provider: "test"}}, nil, nil
 	}
 
 	recs, outcome := fanOutPerAccount(context.Background(), "Test", accounts, fn)
@@ -1390,11 +1391,11 @@ func TestFanOutPerAccount_FailedCollectionNotInSucceededAccountIDs(t *testing.T)
 		{ID: "acct-ok", Name: "acct-ok", ExternalID: "e-ok"},
 		{ID: "acct-all-services-failed", Name: "acct-all-services-failed", ExternalID: "e-bad"},
 	}
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, bool, error) {
+	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
 		if acct.ID == "acct-all-services-failed" {
-			return nil, false, errors.New("all 6 Azure recommendation services failed: 429 too many requests")
+			return nil, nil, errors.New("all 6 Azure recommendation services failed: 429 too many requests")
 		}
-		return []config.RecommendationRecord{{ID: acct.ID, Provider: "azure"}}, true, nil
+		return []config.RecommendationRecord{{ID: acct.ID, Provider: "azure"}}, nil, nil
 	}
 
 	_, outcome := fanOutPerAccount(context.Background(), "Azure", accounts, fn)
@@ -1409,9 +1410,9 @@ func TestFanOutPerAccount_FailedCollectionNotInSucceededAccountIDs(t *testing.T)
 // correctly skips the all-failed error path.
 func TestFanOutPerAccount_ZeroAccounts(t *testing.T) {
 	recs, outcome := fanOutPerAccount(context.Background(), "Test", nil,
-		func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, bool, error) {
+		func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
 			t.Fatalf("fn must not be called for zero-accounts input")
-			return nil, false, nil
+			return nil, nil, nil
 		})
 	assert.Empty(t, recs)
 	assert.Zero(t, outcome.SucceededCount)
@@ -1442,7 +1443,7 @@ func TestScheduler_persistCollection_PartialFailure(t *testing.T) {
 		})
 
 	s := &Scheduler{config: mockStore}
-	s.persistCollection(ctx, recs, successful, failed)
+	s.persistCollection(ctx, recs, successful, failed, nil)
 
 	mockStore.AssertExpectations(t)
 }
@@ -1463,7 +1464,7 @@ func TestScheduler_persistCollection_FullSuccess(t *testing.T) {
 	mockStore.On("UpsertRecommendations", ctx, mock.Anything, recs, successful).Return(nil)
 
 	s := &Scheduler{config: mockStore}
-	s.persistCollection(ctx, recs, successful, nil)
+	s.persistCollection(ctx, recs, successful, nil, nil)
 
 	mockStore.AssertExpectations(t)
 	mockStore.AssertNotCalled(t, "SetRecommendationsCollectionError", mock.Anything, mock.Anything)
@@ -1830,7 +1831,7 @@ func TestScheduler_CollectAWSRecommendations_Success(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	recs, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	recs, _, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
 	assert.Equal(t, "ec2", recs[0].Service)
@@ -1856,7 +1857,7 @@ func TestScheduler_CollectAWSRecommendations_RecClientError(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	recs, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	recs, _, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
 	require.Error(t, err)
 	assert.Nil(t, recs)
 }
@@ -1883,7 +1884,7 @@ func TestScheduler_CollectAWSRecommendations_GetRecsError(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	recs, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	recs, _, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
 	require.Error(t, err)
 	assert.Nil(t, recs)
 }
@@ -1928,7 +1929,7 @@ func TestScheduler_CollectAzureRecommendations_AllAccountsFailLoud(t *testing.T)
 		config: mockStore,
 	}
 
-	recs, succeeded, err := scheduler.collectAzureRecommendations(ctx, globalCfg)
+	recs, succeeded, _, err := scheduler.collectAzureRecommendations(ctx, globalCfg)
 	require.Error(t, err, "collectAzureRecommendations must fail loud when the only account has unusable credentials (COR-03)")
 	assert.Contains(t, err.Error(), "Azure: all 1 accounts failed",
 		"the per-account fan-out must surface the all-accounts-failed shape so the scheduler keeps stale rows and records last_collection_error")
@@ -1955,7 +1956,7 @@ func TestScheduler_CollectAzureForAccount_MissingSubscriptionIDFailsLoud(t *test
 	ctx := context.Background()
 	scheduler := &Scheduler{config: new(MockConfigStore)}
 
-	recs, complete, err := scheduler.collectAzureForAccount(ctx, config.CloudAccount{
+	recs, gap, err := scheduler.collectAzureForAccount(ctx, config.CloudAccount{
 		ID:            "az-no-sub",
 		Provider:      "azure",
 		AzureAuthMode: "managed_identity",
@@ -1965,7 +1966,7 @@ func TestScheduler_CollectAzureForAccount_MissingSubscriptionIDFailsLoud(t *test
 
 	require.Error(t, err)
 	assert.Nil(t, recs)
-	assert.False(t, complete, "a rejected account is never eviction-eligible")
+	assert.Nil(t, gap, "a rejected account is an error, not a partial sweep")
 	assert.Contains(t, err.Error(), "no azure_subscription_id configured",
 		"an unpinned Azure account must be rejected by name, not fall through to an unscoped org-wide collection")
 	assert.Contains(t, err.Error(), "az-no-sub", "the error must identify the misconfigured account")
@@ -1987,7 +1988,7 @@ func TestScheduler_CollectAWSForAccount_EmptyRoleARNWrongModeFailsLoud(t *testin
 
 	globalCfg := &config.GlobalConfig{DefaultTerm: 3, DefaultPayment: "all-upfront"}
 
-	recs, complete, err := scheduler.collectAWSForAccount(ctx, globalCfg, config.CloudAccount{
+	recs, gap, err := scheduler.collectAWSForAccount(ctx, globalCfg, config.CloudAccount{
 		ID:         "aws-member-pending-review",
 		Provider:   "aws",
 		ExternalID: "222222222222",
@@ -1999,7 +2000,7 @@ func TestScheduler_CollectAWSForAccount_EmptyRoleARNWrongModeFailsLoud(t *testin
 
 	require.Error(t, err, "an empty aws_auth_mode must fail loud, never fall back to ambient (host) credentials")
 	assert.Contains(t, err.Error(), "unsupported aws_auth_mode")
-	assert.False(t, complete, "a rejected account is never eviction-eligible")
+	assert.Nil(t, gap, "a rejected account is an error, not a partial sweep")
 	assert.Nil(t, recs, "zero recommendation rows must be produced for a rejected account")
 }
 
@@ -2036,7 +2037,7 @@ func TestScheduler_CollectAWSForAccount_SelfAccountRoleARNModeUsesAmbient(t *tes
 		stsClient:       &fakeSTSClient{accountID: "111111111111"},
 	}
 
-	recs, complete, err := scheduler.collectAWSForAccount(ctx, globalCfg, config.CloudAccount{
+	recs, gap, err := scheduler.collectAWSForAccount(ctx, globalCfg, config.CloudAccount{
 		ID:          "aws-self-account",
 		Provider:    "aws",
 		AWSAuthMode: "role_arn",
@@ -2046,7 +2047,7 @@ func TestScheduler_CollectAWSForAccount_SelfAccountRoleARNModeUsesAmbient(t *tes
 	})
 
 	require.NoError(t, err)
-	assert.True(t, complete)
+	assert.Nil(t, gap)
 	require.Len(t, recs, 1)
 	assert.Equal(t, "aws-self-account", *recs[0].CloudAccountID)
 }
@@ -2063,7 +2064,7 @@ func TestScheduler_CollectAWSForAccount_RoleARNWithoutARNOnNonHostFailsClosed(t 
 			mockFactory := new(MockProviderFactory)
 			scheduler := &Scheduler{config: new(MockConfigStore), providerFactory: mockFactory, stsClient: stsClient}
 
-			recs, complete, err := scheduler.collectAWSForAccount(context.Background(), &config.GlobalConfig{}, config.CloudAccount{
+			recs, gap, err := scheduler.collectAWSForAccount(context.Background(), &config.GlobalConfig{}, config.CloudAccount{
 				ID:          "tenant-account",
 				Provider:    "aws",
 				AWSAuthMode: "role_arn",
@@ -2072,7 +2073,7 @@ func TestScheduler_CollectAWSForAccount_RoleARNWithoutARNOnNonHostFailsClosed(t 
 			})
 
 			require.ErrorIs(t, err, credentials.ErrNotHostAccount)
-			assert.False(t, complete)
+			assert.Nil(t, gap)
 			assert.Nil(t, recs)
 			mockFactory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
 		})
@@ -2095,7 +2096,7 @@ func TestScheduler_CollectGCPRecommendations_NoAccounts(t *testing.T) {
 		config: mockStore,
 	}
 
-	recs, _, err := scheduler.collectGCPRecommendations(ctx, globalCfg)
+	recs, _, _, err := scheduler.collectGCPRecommendations(ctx, globalCfg)
 	require.NoError(t, err)
 	assert.Len(t, recs, 0)
 }
@@ -2201,7 +2202,7 @@ func TestScheduler_CollectAWSRecommendations_FallbackToFiltered(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	recs, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	recs, _, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
 	require.NoError(t, err)
 	assert.Len(t, recs, 1)
 	mockRecClient.AssertExpectations(t)
@@ -2242,7 +2243,7 @@ func TestScheduler_CollectAWSRecommendations_FallbackError(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	recs, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	recs, _, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
 	require.Error(t, err, "fallback GetRecommendations failure must propagate, not be swallowed")
 	require.ErrorIs(t, err, fallbackErr)
 	assert.Contains(t, err.Error(), "default term/payment fallback", "error must identify the fallback path")
@@ -2332,7 +2333,7 @@ func TestScheduler_CollectAWSRecommendations_AmbientTagging_HappyPath(t *testing
 		stsClient:       &fakeSTSClient{accountID: "123456789012"},
 	}
 
-	recs, acctIDs, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	recs, acctIDs, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	require.NotNil(t, recs[0].CloudAccountID, "rec must be tagged with registered account UUID, not nil")
@@ -2372,7 +2373,7 @@ func TestScheduler_CollectAWSRecommendations_AmbientTagging_NoRegisteredAccount(
 		stsClient:       &fakeSTSClient{accountID: "999888777666"},
 	}
 
-	recs, acctIDs, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	recs, acctIDs, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Nil(t, recs[0].CloudAccountID, "truly-orphan ambient deployment must keep CloudAccountID = nil")
@@ -2406,7 +2407,7 @@ func TestScheduler_CollectAWSRecommendations_AmbientTagging_STSFailure(t *testin
 		stsClient:       &fakeSTSClient{err: errors.New("sts unreachable")},
 	}
 
-	recs, acctIDs, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
+	recs, acctIDs, _, err := scheduler.collectAWSRecommendations(ctx, globalCfg)
 	require.NoError(t, err, "STS failure must NOT fail the collection")
 	require.Len(t, recs, 1)
 	assert.Nil(t, recs[0].CloudAccountID, "STS failure must leave the pre-fix nil tagging in place")
@@ -2516,7 +2517,7 @@ func TestScheduler_CollectAzureRecommendations_AmbientTagging_HappyPath(t *testi
 		providerFactory: mockFactory,
 	}
 
-	recs, acctIDs, err := sched.collectAzureRecommendations(ctx, nil)
+	recs, acctIDs, _, err := sched.collectAzureRecommendations(ctx, nil)
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	require.NotNil(t, recs[0].CloudAccountID, "rec must be tagged with registered Azure account UUID, not nil")
@@ -2556,7 +2557,7 @@ func TestScheduler_CollectAzureRecommendations_AmbientTagging_NoRegisteredAccoun
 		providerFactory: mockFactory,
 	}
 
-	recs, acctIDs, err := sched.collectAzureRecommendations(ctx, nil)
+	recs, acctIDs, _, err := sched.collectAzureRecommendations(ctx, nil)
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Nil(t, recs[0].CloudAccountID, "truly-orphan Azure deployment must keep CloudAccountID = nil")
@@ -2593,7 +2594,7 @@ func TestScheduler_CollectAzureRecommendations_AmbientTagging_StoreError(t *test
 		providerFactory: mockFactory,
 	}
 
-	recs, acctIDs, err := sched.collectAzureRecommendations(ctx, nil)
+	recs, acctIDs, _, err := sched.collectAzureRecommendations(ctx, nil)
 	require.NoError(t, err, "store error must NOT fail the Azure collection")
 	require.Len(t, recs, 1)
 	assert.Nil(t, recs[0].CloudAccountID, "store error must leave the pre-fix nil tagging in place")
@@ -2617,7 +2618,7 @@ func TestScheduler_CollectAzureRecommendations_NoEnvVar_Skips(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	recs, acctIDs, err := sched.collectAzureRecommendations(ctx, nil)
+	recs, acctIDs, _, err := sched.collectAzureRecommendations(ctx, nil)
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 	assert.Empty(t, acctIDs)
@@ -2669,7 +2670,7 @@ func TestScheduler_CollectGCPRecommendations_AmbientTagging_HappyPath(t *testing
 		providerFactory: mockFactory,
 	}
 
-	recs, acctIDs, err := sched.collectGCPRecommendations(ctx, nil)
+	recs, acctIDs, _, err := sched.collectGCPRecommendations(ctx, nil)
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	require.NotNil(t, recs[0].CloudAccountID, "rec must be tagged with registered GCP account UUID, not nil")
@@ -2707,7 +2708,7 @@ func TestScheduler_CollectGCPRecommendations_AmbientTagging_NoRegisteredAccount(
 		providerFactory: mockFactory,
 	}
 
-	recs, acctIDs, err := sched.collectGCPRecommendations(ctx, nil)
+	recs, acctIDs, _, err := sched.collectGCPRecommendations(ctx, nil)
 	require.NoError(t, err)
 	require.Len(t, recs, 1)
 	assert.Nil(t, recs[0].CloudAccountID, "truly-orphan GCP deployment must keep CloudAccountID = nil")
@@ -2742,7 +2743,7 @@ func TestScheduler_CollectGCPRecommendations_AmbientTagging_StoreError(t *testin
 		providerFactory: mockFactory,
 	}
 
-	recs, acctIDs, err := sched.collectGCPRecommendations(ctx, nil)
+	recs, acctIDs, _, err := sched.collectGCPRecommendations(ctx, nil)
 	require.NoError(t, err, "store error must NOT fail the GCP collection")
 	require.Len(t, recs, 1)
 	assert.Nil(t, recs[0].CloudAccountID, "store error must leave the pre-fix nil tagging in place")
@@ -2765,7 +2766,7 @@ func TestScheduler_CollectGCPRecommendations_NoEnvVar_Skips(t *testing.T) {
 		providerFactory: mockFactory,
 	}
 
-	recs, acctIDs, err := sched.collectGCPRecommendations(ctx, nil)
+	recs, acctIDs, _, err := sched.collectGCPRecommendations(ctx, nil)
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 	assert.Empty(t, acctIDs)

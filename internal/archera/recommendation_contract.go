@@ -27,13 +27,22 @@ func ProjectContract(c *insurance.Comparison, items []insurance.LineItem) ([]Com
 	return rows, identities, nil
 }
 
-// vendorAlternatives drops the entry the vendor flags as the current offer, which is never an alternative.
-func vendorAlternatives(entries []insurance.OfferEntry) []CandidateIdentity {
-	var out []CandidateIdentity
+// vendorEntries drops the entry the vendor flags as the current offer, which is never an alternative.
+func vendorEntries(entries []insurance.OfferEntry) []*insurance.OfferEntry {
+	out := make([]*insurance.OfferEntry, 0, len(entries))
 	for i := range entries {
 		if !entries[i].IsCurrent {
-			out = append(out, contractCandidate(&entries[i]))
+			out = append(out, &entries[i])
 		}
+	}
+	return out
+}
+
+func vendorAlternatives(entries []insurance.OfferEntry) []CandidateIdentity {
+	vendor := vendorEntries(entries)
+	out := make([]CandidateIdentity, 0, len(vendor))
+	for _, e := range vendor {
+		out = append(out, contractCandidate(e))
 	}
 	return out
 }

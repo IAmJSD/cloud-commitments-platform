@@ -43,20 +43,7 @@ jest.mock('../confirmDialog', () => ({ confirmDialog: jest.fn(() => Promise.reso
 
 import * as api from '../api';
 import { showToast } from '../toast';
-
-// Canonical service slugs per provider. Mirrors mapServiceSlug in
-// internal/purchase/execution.go (compute, relational-db, cache, search,
-// data-warehouse, legacy AWS slugs, savings-plans-*) restricted to what each
-// provider actually offers. Keep in sync with that function.
-const CANONICAL_SERVICE_IDS: Record<string, readonly string[]> = {
-  aws: [
-    'ec2', 'rds', 'elasticache', 'opensearch', 'memorydb', 'redshift',
-    'savings-plans-compute', 'savings-plans-ec2instance',
-    'savings-plans-sagemaker', 'savings-plans-database',
-  ],
-  azure: ['compute', 'relational-db', 'cache', 'search'],
-  gcp: ['compute', 'relational-db', 'cache'],
-};
+import { CANONICAL_PLAN_SERVICES } from '../lib/plan-service-ids';
 
 function loadRealIndexBody(): string {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
@@ -84,7 +71,7 @@ describe('plan modal service ids (#608)', () => {
       const values = Array.from(group.querySelectorAll('option')).map(o => o.value);
       expect(values.length).toBeGreaterThan(0);
       for (const v of values) {
-        expect(CANONICAL_SERVICE_IDS[provider]).toContain(v);
+        expect(CANONICAL_PLAN_SERVICES[provider as 'aws']).toContain(v);
       }
     });
     expect(Array.from(seenProviders).sort()).toEqual(['aws', 'azure', 'gcp']);

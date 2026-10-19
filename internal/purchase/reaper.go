@@ -222,7 +222,11 @@ func (m *Manager) reapOne(ctx context.Context, exec *config.PurchaseExecution, r
 		exec.ExecutionID, prevStatus, ageMinutes, now.UTC().Format(time.RFC3339))
 
 	// System-initiated: reaper passes nil so transitioned_by = NULL.
-	transitioned, err := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, stuckStatuses, failedStatus, nil)
+	// The CAS is pinned to the status the row was listed under. Matching both
+	// stuck statuses would let a listed "approved" row that
+	// RecoverStrandedApprovals just claimed (approved -> running) be failed
+	// while its re-drive is in flight.
+	transitioned, err := m.config.TransitionExecutionStatus(ctx, exec.ExecutionID, []string{prevStatus}, failedStatus, nil)
 	if err != nil {
 		// Distinguish CAS race-loss (the real executor finished between
 		// our SELECT and CAS, so the row is no longer in
@@ -231,7 +235,7 @@ func (m *Manager) reapOne(ctx context.Context, exec *config.PurchaseExecution, r
 		// race outcomes in sentinel errors so we can use errors.Is
 		// rather than brittle string matching:
 		//   - ErrExecutionNotInExpectedStatus: row exists but its
-		//     status moved out of approved/running before the CAS
+		//     status moved off the listed one before the CAS
 		//     (the real executor won the race — expected, log INFO).
 		//   - ErrNotFound: row vanished between SELECT and CAS (very
 		//     rare — e.g. a manual DELETE; still a race outcome the

@@ -88,9 +88,9 @@ func mixedAccountRecs(own string) []common.Recommendation {
 	return []common.Recommendation{zonalRec(own, "us-east-1a"), zonalRec("222222222222", "us-east-1b"), memberRegional}
 }
 
-func assertOnlyMemberZonalDropped(t *testing.T, recs []config.RecommendationRecord, complete bool) {
+func assertOnlyMemberZonalDropped(t *testing.T, recs []config.RecommendationRecord, gap *sweepGap) {
 	t.Helper()
-	assert.True(t, complete, "dropping a foreign zonal rec must not mark the collection incomplete")
+	assert.Nil(t, gap, "dropping a foreign zonal rec must not mark the collection incomplete")
 	require.Len(t, recs, 2)
 	azs := []string{recs[0].AvailabilityZone, recs[1].AvailabilityZone}
 	assert.ElementsMatch(t, []string{"us-east-1a", ""}, azs, "own zonal and member regional kept; member zonal dropped")
@@ -106,9 +106,9 @@ func TestFetchAndConvert_DropsForeignZonalEC2_Primary(t *testing.T) {
 	client := new(MockRecommendationsClient)
 	client.On("GetAllRecommendations", mock.Anything).Return(mixedAccountRecs("111111111111"), nil)
 	s := &Scheduler{}
-	recs, complete, err := s.fetchAndConvert(context.Background(), newRecProvider(client), "aws", nil, "111111111111", nil)
+	recs, gap, err := s.fetchAndConvert(context.Background(), newRecProvider(client), "aws", nil, "111111111111", nil)
 	require.NoError(t, err)
-	assertOnlyMemberZonalDropped(t, recs, complete)
+	assertOnlyMemberZonalDropped(t, recs, gap)
 }
 
 func TestFetchAndConvert_DropsForeignZonalEC2_LookbackFallback(t *testing.T) {
@@ -121,10 +121,10 @@ func TestFetchAndConvert_DropsForeignZonalEC2_LookbackFallback(t *testing.T) {
 		return p.Service != common.ServiceEC2
 	})).Return([]common.Recommendation{}, nil)
 	s := &Scheduler{}
-	recs, complete, err := s.fetchAndConvert(context.Background(), newRecProvider(client), "aws", nil, "111111111111",
+	recs, gap, err := s.fetchAndConvert(context.Background(), newRecProvider(client), "aws", nil, "111111111111",
 		&config.GlobalConfig{DefaultTerm: 1, DefaultPayment: "no-upfront", RecommendationsLookbackDays: 30})
 	require.NoError(t, err)
-	assertOnlyMemberZonalDropped(t, recs, complete)
+	assertOnlyMemberZonalDropped(t, recs, gap)
 }
 
 func TestFetchAndConvert_NilExpectedAccountKeepsForeignZonal(t *testing.T) {
@@ -144,9 +144,9 @@ func TestCollectAWSAmbient_PassesHostAccount(t *testing.T) {
 	client.On("GetAllRecommendations", mock.Anything).Return(mixedAccountRecs("111111111111"), nil)
 	factory.On("CreateAndValidateProvider", ctx, "aws", (*provider.ProviderConfig)(nil)).Return(newRecProvider(client), nil)
 	s := &Scheduler{providerFactory: factory, stsClient: &fakeSTSClient{accountID: "111111111111"}}
-	recs, complete, err := s.collectAWSAmbient(ctx, nil)
+	recs, gap, err := s.collectAWSAmbient(ctx, nil)
 	require.NoError(t, err)
-	assertOnlyMemberZonalDropped(t, recs, complete)
+	assertOnlyMemberZonalDropped(t, recs, gap)
 }
 
 // A registered self account must compare against its ExternalID.
@@ -157,11 +157,11 @@ func TestCollectAWSForAccount_SelfAccountPassesExternalID(t *testing.T) {
 	client.On("GetAllRecommendations", mock.Anything).Return(mixedAccountRecs("111111111111"), nil)
 	factory.On("CreateAndValidateProvider", ctx, "aws", (*provider.ProviderConfig)(nil)).Return(newRecProvider(client), nil)
 	s := &Scheduler{config: new(MockConfigStore), providerFactory: factory, stsClient: &fakeSTSClient{accountID: "111111111111"}}
-	recs, complete, err := s.collectAWSForAccount(ctx, nil, config.CloudAccount{
+	recs, gap, err := s.collectAWSForAccount(ctx, nil, config.CloudAccount{
 		ID: "self", Provider: "aws", AWSAuthMode: "role_arn", ExternalID: "111111111111", Enabled: true,
 	})
 	require.NoError(t, err)
-	assertOnlyMemberZonalDropped(t, recs, complete)
+	assertOnlyMemberZonalDropped(t, recs, gap)
 }
 
 // A member account reached through an assumed role must compare against its
@@ -173,12 +173,12 @@ func TestCollectAWSForAccount_AssumedRolePassesExternalID(t *testing.T) {
 	client.On("GetAllRecommendations", mock.Anything).Return(mixedAccountRecs("333333333333"), nil)
 	factory.On("CreateAndValidateProvider", ctx, "aws", mock.AnythingOfType("*provider.ProviderConfig")).Return(newRecProvider(client), nil)
 	s := &Scheduler{config: new(MockConfigStore), providerFactory: factory, stsClient: &fakeSTSClient{accountID: "111111111111"}}
-	recs, complete, err := s.collectAWSForAccount(ctx, nil, config.CloudAccount{
+	recs, gap, err := s.collectAWSForAccount(ctx, nil, config.CloudAccount{
 		ID: "member", Provider: "aws", AWSAuthMode: "role_arn", AWSRoleARN: "arn:aws:iam::333333333333:role/cudly",
 		ExternalID: "333333333333", Enabled: true,
 	})
 	require.NoError(t, err)
-	assert.True(t, complete)
+	assert.Nil(t, gap)
 	require.Len(t, recs, 2)
 	// 333333333333 owns the first zonal rec; the 222222222222 zonal rec is dropped.
 	assert.ElementsMatch(t, []string{"us-east-1a", ""}, []string{recs[0].AvailabilityZone, recs[1].AvailabilityZone})
