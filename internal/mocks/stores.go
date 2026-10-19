@@ -20,6 +20,11 @@ import (
 // implicitly keep getting a non-empty token to thread through.
 const MockOwnerToken = "mock-owner-token"
 
+// MockInvocationToken is the default token MockConfigStore.ClaimCollectionInvocation
+// returns when no expectation is registered. It differs from MockOwnerToken
+// so tests can tell the re-stamped invocation token from the marker token.
+const MockInvocationToken = "mock-invocation-token"
+
 // MockConfigStore is a shared testify-based mock for config.StoreInterface.
 //
 // Most methods dispatch through m.Called only when an expectation has been
@@ -1979,6 +1984,19 @@ func (m *MockConfigStore) ClearCollectionStarted(ctx context.Context, token stri
 		return nil
 	}
 	return m.Called(ctx, token).Error(0)
+}
+
+// ClaimCollectionInvocation mocks the ClaimCollectionInvocation operation.
+// Defaults to (MockInvocationToken, true, nil) when no expectation is
+// registered, so a token-carrying collect run that wins the lock keeps
+// owning the marker under a distinct invocation token.
+func (m *MockConfigStore) ClaimCollectionInvocation(ctx context.Context, markerToken string) (token string, ok bool, err error) {
+	m.record("ClaimCollectionInvocation", ctx, markerToken)
+	if !isExpected(&m.Mock, "ClaimCollectionInvocation") {
+		return MockInvocationToken, true, nil
+	}
+	args := m.Called(ctx, markerToken)
+	return args.String(0), args.Bool(1), args.Error(2)
 }
 
 // StampRIExchangeApprovedBy mocks the StampRIExchangeApprovedBy operation.

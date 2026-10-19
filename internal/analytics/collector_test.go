@@ -496,6 +496,9 @@ func (m *mockConfigStore) MarkCollectionStarted(_ context.Context) (string, bool
 func (m *mockConfigStore) ClearCollectionStarted(_ context.Context, _ string) error {
 	return nil
 }
+func (m *mockConfigStore) ClaimCollectionInvocation(_ context.Context, _ string) (string, bool, error) {
+	return "mock-invocation-token", true, nil
+}
 func (m *mockConfigStore) GetRIUtilizationCache(_ context.Context, _ string, _ int) (*config.RIUtilizationCacheEntry, error) {
 	return nil, nil
 }
