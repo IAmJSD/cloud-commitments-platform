@@ -140,3 +140,9 @@
 ^internal/server/migrations_bounded_real_runner_test\.go:[0-9]+:[[:space:]]*cfg,[[:space:]]+err[[:space:]]+:=[[:space:]]+pgxpool\.ParseConfig\("postgre[s]://u:p@"[[:space:]]+\+[[:space:]]+ln\.Addr\(\)\.String\(\)[[:space:]]+\+[[:space:]]+"/db\?sslmode=disable"\)[[:space:]]*$
 ^scripts/generate-federation-iac_test\.go:[0-9]+:[[:space:]]*`aws_account_id[[:space:]]+=[[:space:]]+"111[1]222[2]333[3]"`,[[:space:]]*$
 ^scripts/generate-federation-iac_test\.go:[0-9]+:[[:space:]]*accountID:[[:space:]]+"000[0]111[1]222[2]",[[:space:]]*$
+
+# The bare AWS secret access key detector (#295) flags this line, which holds no
+# secret: an IAM OIDC thumbprint (a public certificate hash, upper-case hex) in a
+# validation test. Same whole-line anchoring as above. One character in the middle
+# of the flagged run is bracketed, so this file does not match the detector itself.
+^internal/api/handler_federation_test\.go:[0-9]+:[[:space:]]*\{"990F4193972F2BEC[F]12DDEDA5237F9C952F20D9E",[[:space:]]+"uppercase[[:space:]]+hex"\},[[:space:]]*$

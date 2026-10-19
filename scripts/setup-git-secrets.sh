@@ -106,9 +106,62 @@ add_pattern() {
 
 # AWS patterns
 add_pattern 'AKIA[0-9A-Z]{16}'                                    # AWS Access Key ID
-# (No bare 40-character "secret access key" pattern: the former negated-class form
-# matched any run of 41 non-alphanumeric characters, i.e. box-drawing and dash
-# banner lines, never a key. --register-aws above already covers AWS secret keys.)
+
+# AWS Secret Access Key on its own (#295). --register-aws and the "AWS Credentials"
+# pattern below only match a key assigned to an aws/secret-style name, so a bare key
+# (a pasted credential, an unquoted YAML value) needs its own detector.
+#
+# A key is exactly 40 characters from [A-Za-z0-9/+]. Matching just that is too noisy:
+# commit SHAs, long CamelCase test names and paths fill this repo with such runs. A
+# random key almost always has an upper-case letter next to, or one character away
+# from, a digit (about 0.3% of keys do not, and slip through), and those runs rarely
+# do, so a match must contain that pair, inside a 3-character "trio". ERE has no
+# lookahead, so "40 characters that contain a trio" means spelling out where the trio
+# sits. One pattern per possible trio position is slow under BSD grep -w (macOS), so
+# each pattern covers a 5-position window: fixed-length key characters before and
+# after the window, and inside it the trio at each of the window's offsets. Every
+# pattern still matches exactly 40 characters.
+#
+# The run must be bounded by a non-key character or the line edge. "=" may precede
+# it (token=KEY) but not follow it, which keeps padded base64 out; "_" and "(" do not
+# count as bounds, so identifiers such as Test_Name(...) never match. Each pattern
+# also takes in the word around those bounds, because git-secrets greps with -w and
+# would otherwise reject a match whose bound follows a word character (the "=" in
+# token=KEY).
+key_char='[A-Za-z0-9/+]'
+key_pair='([A-Z][0-9]|[0-9][A-Z])'
+key_trio="(${key_char}${key_pair}|${key_pair}${key_char}|[A-Z]${key_char}[0-9]|[0-9]${key_char}[A-Z])"
+key_start='(^|[A-Za-z0-9_]*[^A-Za-z0-9/+_])'
+key_end='([^A-Za-z0-9/+=_(][A-Za-z0-9_]*|$)'
+# key_chars N: exactly N key characters (nothing for 0).
+key_chars() {
+    if [ "$1" -gt 0 ]; then
+        printf '%s{%d}' "${key_char}" "$1"
+    fi
+}
+# The trio starts at offset 0 to 37 of the 40 characters.
+for window_start in 0 5 10 15 20 25 30 35; do
+    window_end=$((window_start + 4))
+    if [ "${window_end}" -gt 37 ]; then
+        window_end=37
+    fi
+    span=$((window_end - window_start))
+    trio_at=''
+    for ((lead = 0; lead <= span; lead++)); do
+        trio_at="${trio_at}|$(key_chars "${lead}")${key_trio}$(key_chars $((span - lead)))"
+    done
+    add_pattern "${key_start}$(key_chars "${window_start}")(${trio_at#|})$(key_chars $((37 - window_end)))${key_end}"
+done
+
+# Clones set up before #813 still carry the old negated-class "secret access key"
+# pattern, which matched runs of 41 non-key characters (box-drawing and dash banner
+# lines) and never a key. Re-running this script removes it from the repo's config,
+# where the old version of this script registered it.
+legacy_secret_key_pattern='[^A-Za-z0-9/+=]{40}[^A-Za-z0-9/+=]'
+if git config --local --get-all secrets.patterns | grep -qxF -- "${legacy_secret_key_pattern}"; then
+    git config --local --unset-all --fixed-value secrets.patterns "${legacy_secret_key_pattern}"
+fi
+
 add_pattern 'aws(.{0,20})?['\''"][0-9a-zA-Z/+]{40}['\''"]'       # AWS Credentials
 
 # GCP patterns
