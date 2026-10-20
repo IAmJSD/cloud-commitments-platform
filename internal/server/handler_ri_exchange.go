@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -304,7 +305,29 @@ func newConfigExchangeStoreAdapter(store config.StoreInterface) *configExchangeS
 	return &configExchangeStoreAdapter{store: store}
 }
 
+// awsAccountIDPattern is the shape of an AWS account ID: exactly 12 ASCII digits
+// (RE2's \d is ASCII-only).
+var awsAccountIDPattern = regexp.MustCompile(`^\d{12}$`)
+
+// requireAWSExchangeAccountID refuses an exchange record whose account ID is not
+// an AWS account ID. Every record this adapter writes comes from the AWS EC2
+// exchange engine, so its account ID must be the 12-digit account STS
+// reported. ri_exchange_history.account_id itself no longer enforces that
+// shape (migration 000137 dropped the AWS-only CHECK so the column can hold
+// Azure and GCP identifiers, issue #144); this check keeps the guarantee for
+// AWS rows at the boundary where the provider is known, including refusing the
+// "unknown" placeholder resolveAccountID falls back to when STS fails.
+func requireAWSExchangeAccountID(accountID string) error {
+	if !awsAccountIDPattern.MatchString(accountID) {
+		return fmt.Errorf("refusing to record RI exchange: account ID %q is not a 12-digit AWS account ID", accountID)
+	}
+	return nil
+}
+
 func (a *configExchangeStoreAdapter) SaveRIExchangeRecord(ctx context.Context, record *exchange.ExchangeRecord) error {
+	if err := requireAWSExchangeAccountID(record.AccountID); err != nil {
+		return err
+	}
 	cfgRecord := exchangeToConfigRecord(record)
 	if err := a.store.SaveRIExchangeRecord(ctx, cfgRecord); err != nil {
 		return err
@@ -314,6 +337,9 @@ func (a *configExchangeStoreAdapter) SaveRIExchangeRecord(ctx context.Context, r
 }
 
 func (a *configExchangeStoreAdapter) ReserveRIExchange(ctx context.Context, record *exchange.ExchangeRecord, dailyCapUSD, perExchangeCapUSD string) (string, error) {
+	if err := requireAWSExchangeAccountID(record.AccountID); err != nil {
+		return "", err
+	}
 	cfgRecord := exchangeToConfigRecord(record)
 	ceiling, err := a.store.ReserveRIExchange(ctx, cfgRecord, dailyCapUSD, perExchangeCapUSD)
 	if err != nil {
