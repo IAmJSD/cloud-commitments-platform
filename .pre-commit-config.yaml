@@ -1,6 +1,7 @@
 # Pre-commit hooks configuration
 # Install: pip install pre-commit
-# Setup: pre-commit install
+# Setup: pre-commit install  (installs both the pre-commit and pre-push
+#        git hooks via default_install_hook_types below)
 
 repos:
   # Go formatting and module checks
@@ -240,12 +241,13 @@ repos:
   #                                     on every PR touching frontend/**;
   #                                     the sentinel re-runs it post-merge.
   #
-  # Moving them to the pre-push stage keeps the local safety net (devs
-  # who run `pre-commit install --hook-type pre-push` still get these
-  # tests on `git push`) while letting the CI pre-commit workflow stay
-  # focused on style/security/syntax. Pre-commit's default stage filter
-  # is `pre-commit`, so the CI workflow's `pre-commit run --all-files`
-  # skips these hooks automatically.
+  # Moving them to the pre-push stage keeps the local safety net (a plain
+  # `pre-commit install` also arms the pre-push git hook, see
+  # default_install_hook_types at the bottom of this file, so devs still
+  # get these tests on `git push`) while letting the CI pre-commit
+  # workflow stay focused on style/security/syntax. Pre-commit's default
+  # stage filter is `pre-commit`, so the CI workflow's
+  # `pre-commit run --all-files` skips these hooks automatically.
   - repo: local
     hooks:
       - id: go-test
@@ -274,4 +276,7 @@ repos:
 
 # Global configuration
 default_stages: [pre-commit, pre-push]
+# Make a plain `pre-commit install` wire both git hooks; without this it
+# only installs the pre-commit hook and the pre-push stage never runs.
+default_install_hook_types: [pre-commit, pre-push]
 fail_fast: false
