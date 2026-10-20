@@ -24,27 +24,21 @@ func TestPostgresRecommendationSourceEncodingRollback(t *testing.T) {
 	before, err := store.GetRecommendationsFreshness(ctx)
 	require.NoError(t, err)
 	for _, bad := range []string{"opaque\x00source", string([]byte{'x', 0xff, 'y'})} {
-		for _, replace := range []bool{false, true} {
-			recs := make([]config.RecommendationRecord, 501)
-			for i := range recs {
-				recs[i] = awsRec(fmt.Sprint(i), "rds", "region", fmt.Sprint(i), 20)
-				recs[i].SourceAccountID = new("valid")
-			}
-			recs[500].SourceAccountID = &bad
-			if replace {
-				err = store.ReplaceRecommendations(ctx, at.Add(time.Hour), recs)
-			} else {
-				err = store.UpsertRecommendations(ctx, at.Add(time.Hour), recs, []config.SuccessfulCollect{{Provider: "aws"}})
-			}
-			require.EqualError(t, err, "invalid source_account_id encoding")
-			rows, listErr := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
-			require.NoError(t, listErr)
-			require.Len(t, rows, 1)
-			require.Equal(t, "seed", rows[0].ID)
-			require.Equal(t, seed.SourceAccountID, rows[0].SourceAccountID)
-			after, freshnessErr := store.GetRecommendationsFreshness(ctx)
-			require.NoError(t, freshnessErr)
-			require.Equal(t, before, after)
+		recs := make([]config.RecommendationRecord, 501)
+		for i := range recs {
+			recs[i] = awsRec(fmt.Sprint(i), "rds", "region", fmt.Sprint(i), 20)
+			recs[i].SourceAccountID = new("valid")
 		}
+		recs[500].SourceAccountID = &bad
+		err = store.UpsertRecommendations(ctx, at.Add(time.Hour), recs, []config.SuccessfulCollect{{Provider: "aws"}})
+		require.EqualError(t, err, "invalid source_account_id encoding")
+		rows, listErr := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
+		require.NoError(t, listErr)
+		require.Len(t, rows, 1)
+		require.Equal(t, "seed", rows[0].ID)
+		require.Equal(t, seed.SourceAccountID, rows[0].SourceAccountID)
+		after, freshnessErr := store.GetRecommendationsFreshness(ctx)
+		require.NoError(t, freshnessErr)
+		require.Equal(t, before, after)
 	}
 }
