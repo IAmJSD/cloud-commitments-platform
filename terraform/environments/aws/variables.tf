@@ -641,7 +641,7 @@ variable "enable_monitoring" {
 }
 
 variable "alert_emails" {
-  description = "Comma-separated email addresses subscribed to the alerts SNS topic. Supplied by the deploy workflow from the ALERT_EMAILS secret; never commit real addresses. Empty means alarms fire with nobody subscribed (the prod check below warns)."
+  description = "Comma-separated email addresses subscribed to the alerts SNS topic. Supplied by the deploy workflow from the ALERT_EMAILS secret; never commit real addresses. Empty means alarms fire with nobody subscribed (the prod_alerts_reach_someone check in monitoring.tf warns)."
   type        = string
   default     = ""
 
