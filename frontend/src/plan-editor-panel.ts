@@ -1,9 +1,9 @@
 import { wirePlanDateInteraction } from './plan-date-interaction';
-import { buildLocalScheduleIntent, PlanSchedulePreviewInput } from './plan-schedule-preview';
+import { buildLocalScheduleIntent, PlanScheduleIntentInput } from './plan-schedule-intent';
 import { createEditorDraft, draftDateChanges, EditorDraft, redistributeEditorBlock, resetEditorDraft, selectDraftStep, setDraftDate } from './lib/plan-editor-draft';
 import { renderSchedulePlot, schedulePlotFrame, updateSchedulePlot, SchedulePlotFrame } from './plan-schedule-plot';
 
-export function readPlanScheduleInput(form: HTMLFormElement): PlanSchedulePreviewInput {
+export function readPlanScheduleInput(form: HTMLFormElement): PlanScheduleIntentInput {
   const value = (id: string): string => form.querySelector<HTMLInputElement | HTMLSelectElement>(`#${id}`)?.value ?? '';
   return { name: value('plan-name'), preset: form.querySelector<HTMLInputElement>('input[name="ramp-schedule"]:checked')?.value ?? '',
     coverage: value('plan-coverage'), stepPercent: value('ramp-step-percent'), intervalDays: value('ramp-interval-days'),
@@ -15,25 +15,31 @@ export interface PlanEditorPanelOptions {
   editableDates?: boolean;
 }
 
-const readOnlyReason = 'Custom step dates can be set once saving them is supported.';
+const readOnlyNotice = 'Hypothetical dates counted from today with the schedule settings. They are not saved or scheduled.';
+const scheduleSettingIds = ['plan-coverage', 'ramp-step-percent', 'ramp-interval-days', 'plan-notify-days'];
 
 export function mountPlanEditorPanel(host: HTMLElement, form: HTMLFormElement, options: PlanEditorPanelOptions = {}): () => void {
   const editable = options.editableDates ?? false;
   host.hidden = false;
   host.closest('.plan-editor-layout')?.classList.add('has-editor-draft');
-  host.innerHTML = `<h3>Proposed purchase dates</h3><p class="editor-draft-notice">${editable ? 'Local draft. These dates are not scheduled. Save Plan does not save date changes.' : readOnlyReason}</p>
-    <div class="schedule-preview-scroll" tabindex="0" aria-label="Proposed purchase calendar"></div>
+  const statusId = `${host.id || 'plan-editor'}-status`;
+  host.innerHTML = `<h3>Proposed purchase dates</h3><p class="editor-draft-notice">${editable ? 'Local draft. These dates are not scheduled. Save Plan does not save date changes.' : readOnlyNotice}</p>
+    ${editable ? '' : `<p class="editor-status" data-editor="summary" id="${statusId}"></p><p class="sr-only" data-editor="status" role="status" aria-live="polite"></p>`}
+    <div class="schedule-preview-scroll" role="region" tabindex="0" aria-label="Proposed purchase calendar"${editable ? '' : ` aria-describedby="${statusId}"`}></div>
     <p class="editor-target help-text"></p>${editable ? `<p class="help-text">Drag a point to change its date, or Start/End to space the dates.</p>
     <details class="editor-help"><summary>Keyboard and touch help</summary>
       <p class="help-text">Drag dates or Start/End handles. Arrow keys select; Alt+Left/Right moves a date. Enter on a handle opens its date input. Escape cancels a drag. Use Step/date inputs when points overlap.</p>
     </details>` : ''}
     <p class="help-text">Amount unavailable. Saved purchases and history are not shown.</p>
+    <div data-editor="controls"${editable ? '' : ' hidden'}>
     <label>Step<select data-editor="step"></select></label><label>Date (UTC)<input data-editor="date" type="date"></label>
     <div class="form-row"><label>Proposed start (UTC)<input data-editor="start" type="date"></label>
     <label data-editor="end-label">Proposed end (UTC)<input data-editor="end" type="date"></label></div>
     <button type="button" data-editor="reset">Reset draft dates</button><button type="button" data-editor="rebuild" hidden>Rebuild proposed dates</button>
-    <p data-editor="error" role="alert"></p><details data-editor="changes"><summary>Local date changes</summary><ul></ul></details>`;
+    <p data-editor="error"${editable ? ' role="alert"' : ''}></p><details data-editor="changes"><summary>Local date changes</summary><ul></ul></details></div>`;
   const field = <T extends HTMLElement>(key: string): T => host.querySelector<T>(`[data-editor="${key}"]`)!;
+  const status = editable ? null : field('status'), summary = editable ? null : field('summary');
+  const plotHost = host.querySelector<HTMLElement>('.schedule-preview-scroll')!, caption = host.querySelector<HTMLElement>('.editor-target')!;
   const step = field<HTMLSelectElement>('step'), date = field<HTMLInputElement>('date');
   const start = field<HTMLInputElement>('start'), end = field<HTMLInputElement>('end');
   const rebuild = field<HTMLButtonElement>('rebuild'), reset = field<HTMLButtonElement>('reset');
@@ -105,13 +111,26 @@ export function mountPlanEditorPanel(host: HTMLElement, form: HTMLFormElement, o
     focusDate: boundary => (boundary === 'start' ? start : end).focus(),
     error: message => error(message || (rebuild.hidden ? '' : rebuildMessage)),
   });
-  const build = (): void => {
+  const build = (announce = true): void => {
     if (gestureFrame) return;
     try {
       const intent = buildLocalScheduleIntent(readPlanScheduleInput(form));
       state = createEditorDraft({ kind: 'create', totalSteps: intent.dates.length, shares: intent.shares, dates: intent.dates });
-      coverage = intent.coverage; dirty = null; rebuild.hidden = true; error(''); paint();
-    } catch (failure) { error((failure as Error).message); paint(); }
+      coverage = intent.coverage; dirty = null; rebuild.hidden = true;
+      if (editable) error('');
+      paint();
+      if (status && summary) {
+        const count = intent.dates.length;
+        const text = `Target ${coverage}% in ${count} ${count === 1 ? 'step' : 'steps'}, ${count === 1 ? intent.dates[0] : `${intent.dates[0]} to ${intent.dates[count - 1]}`} (UTC)`;
+        summary.textContent = text; plotHost.hidden = caption.hidden = false;
+        if (announce) status.textContent = text;
+      }
+    } catch (failure) {
+      if (editable) { error((failure as Error).message); paint(); return; }
+      disposeInteraction?.(); state = null; plotHost.replaceChildren(); plotHost.hidden = caption.hidden = true;
+      summary!.textContent = (failure as Error).message;
+      if (announce) status!.textContent = (failure as Error).message;
+    }
   };
   const commit = (): void => {
     if (!state || gestureFrame) return;
@@ -138,11 +157,12 @@ export function mountPlanEditorPanel(host: HTMLElement, form: HTMLFormElement, o
   const settings = (event: Event): void => {
     if (gestureFrame) return;
     const target = event.target as HTMLInputElement;
-    if (!state) { if (target.id) build(); return; }
+    if (target.name !== 'ramp-schedule' && !scheduleSettingIds.includes(target.id)) return;
+    if (!editable || !state) { build(event.type === 'change'); return; }
     if (target.id === 'plan-coverage') {
       try { coverage = buildLocalScheduleIntent(readPlanScheduleInput(form)).coverage; if (!dirty && rebuild.hidden) error(''); paint(); }
       catch (failure) { error((failure as Error).message); }
-    } else if (target.name === 'ramp-schedule' || ['ramp-step-percent', 'ramp-interval-days', 'plan-notify-days'].includes(target.id)) {
+    } else {
       if (state && (dirty || draftDateChanges(state).length)) { rebuild.hidden = false; error(rebuildMessage); }
       else build();
     }
@@ -151,7 +171,7 @@ export function mountPlanEditorPanel(host: HTMLElement, form: HTMLFormElement, o
     if (editable && event.key === 'Enter' && [date, start, end].includes(event.target as HTMLInputElement)) { event.preventDefault(); commit(); }
   };
   reset.onclick = () => { if (editable && state && !gestureFrame) { state = resetEditorDraft(state); dirty = null; error(rebuild.hidden ? '' : rebuildMessage); paint(); } };
-  rebuild.onclick = build;
+  rebuild.onclick = () => build();
   host.addEventListener('input', input); host.addEventListener('change', change); host.addEventListener('keydown', keydown);
   form.addEventListener('input', settings); form.addEventListener('change', settings);
   const submit = (event: Event): void => {

@@ -46,12 +46,20 @@ for (const width of [1440, 1280, 390, 320]) test.describe(`viewport ${width}px`,
       if (mode === 'Create') {
         await page.locator('#plan-name').fill('Capacity ladder');
         await parent.locator('label.ramp-option').filter({ hasText: 'Weekly 25%' }).click();
-        const panel = parent.locator('#plan-editor-panel'), date = panel.locator('[data-editor="date"]');
-        await expect(panel).toBeVisible(); await expect(panel).toContainText('Custom step dates can be set once saving them is supported');
-        await expect(panel).not.toContainText('does not save date changes');
+        const panel = parent.locator('#plan-editor-panel'), live = panel.locator('[data-editor="summary"]');
+        await expect(panel).toBeVisible(); await expect(panel).toContainText('They are not saved or scheduled');
+        await expect(panel).not.toContainText('Custom step dates can be set once saving them is supported');
+        await expect(live).toHaveText(/^Target \d+% in 4 steps, \d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2} \(UTC\)$/);
         await expect(panel.locator('[data-preview-step]')).toHaveCount(4);
+        await parent.locator('#plan-coverage').fill('');
+        await expect(live).toContainText('Target coverage must be a whole number');
+        await expect(panel.locator('.schedule-preview-scroll')).toBeHidden(); await expect(panel.locator('.editor-target')).toBeHidden();
+        await page.screenshot({ path: testInfo.outputPath('create-invalid.png'), fullPage: true });
+        await parent.locator('#plan-coverage').fill('80');
+        await expect(panel.locator('.schedule-preview-scroll')).toBeVisible(); await expect(panel.locator('.editor-target')).toBeVisible();
         await expect(panel.locator('svg [role="button"]')).toHaveCount(0);
-        for (const key of ['step', 'date', 'start', 'end', 'reset']) await expect(panel.locator(`[data-editor="${key}"]`)).toBeDisabled();
+        await expect(panel.locator('[data-editor="controls"]')).toBeHidden();
+        await expect(panel.locator('.schedule-preview-scroll')).toHaveAttribute('role', 'region');
         await parent.locator('#plan-account-search').fill('AWS');
         await parent.locator('.account-suggestion-item').first().click(); await expect(parent.locator('button[type="submit"]')).toBeEnabled();
         await summary.click();
@@ -71,7 +79,6 @@ for (const width of [1440, 1280, 390, 320]) test.describe(`viewport ${width}px`,
         await page.mouse.move(pointBox.x + pointBox.width / 2 + 60, pointBox.y + pointBox.height / 2); await page.mouse.up();
         expect(await panel.locator('[data-preview-step]').evaluateAll(elements => elements.map(element => element.getAttribute('aria-label')))).toEqual(labels);
         expect(await parent.locator('#plan-form').evaluate(element => element.inert)).toBe(false);
-        await expect(panel.locator('[data-editor="changes"] summary')).toHaveText('Local date changes (0)');
         expect(await parent.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
         await parent.locator('.plan-editor-layout').evaluate(element => { element.scrollTop = 0; });
         await page.screenshot({ path: testInfo.outputPath('create-inline-graph.png'), fullPage: true });
@@ -90,8 +97,8 @@ for (const width of [1440, 1280, 390, 320]) test.describe(`viewport ${width}px`,
         await page.locator('#new-plan-btn').click(); await parent.locator('#plan-name').fill('Capacity ladder');
         await expect(advanced).not.toHaveAttribute('open', '');
         await parent.locator('label.ramp-option').filter({ hasText: 'Weekly 25%' }).click();
-        await expect(panel.locator('[data-editor="changes"] summary')).toHaveText('Local date changes (0)');
-        await expect(panel.locator('[data-editor="date"]')).toBeDisabled();
+        await expect(live).toHaveText(/^Target \d+% in 4 steps, \d{4}-\d{2}-\d{2} to \d{4}-\d{2}-\d{2} \(UTC\)$/);
+        await expect(panel.locator('[data-editor="controls"]')).toBeHidden();
 
       } else {
         await expect(parent.locator('#plan-editor-panel')).toBeHidden();

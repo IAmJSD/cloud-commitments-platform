@@ -295,4 +295,7 @@
 #plan-editor-panel p { line-height: 1.5; margin: 12px 0; }
 #plan-editor-panel .editor-draft-notice { padding: 12px; background: var(--cudly-info-bg); border-radius: 8px; }
 #plan-editor-panel .editor-help { margin-bottom: 16px; }
+#plan-editor-panel .editor-status { font-weight: 600; min-height: 1.5em; }
+#plan-editor-panel .schedule-preview-scroll { min-height: 372px; }
+#plan-editor-panel .schedule-preview-scroll[hidden] { display: none; }
 #plan-editor-panel [data-editor="changes"] { margin-top: 16px; border-top: 1px solid var(--cudly-border); }
