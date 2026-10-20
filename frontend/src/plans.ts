@@ -17,8 +17,7 @@ import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/ske
 import { canAccess } from './permissions';
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 import { suggestedPurchaseStartDate } from './lib/calendar-date';
-import { openPlanSchedulePreview } from './plan-schedule-preview';
-import { mountPlanEditorPanel, readPlanScheduleInput } from './plan-editor-panel';
+import { mountPlanEditorPanel } from './plan-editor-panel';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
 // "Plan from N selected" button-click time. The Plan flow used to re-derive
@@ -2390,14 +2389,6 @@ let _unsubAccount: (() => void) | null = null;
  * the page level.
  */
 export function setupPlanHandlers(): void {
-  const preview = document.getElementById('preview-plan-schedule-btn');
-  if (preview) preview.onclick = () => {
-    const parent = document.getElementById('plan-modal'), form = document.getElementById('plan-form') as HTMLFormElement | null;
-    if (!parent || !form) return;
-    try {
-      openPlanSchedulePreview(readPlanScheduleInput(form), parent);
-    } catch (error) { showToast({ message: (error as Error).message, kind: 'error' }); }
-  };
   // Drop any previous subscriptions before re-registering so we don't
   // accumulate duplicate loadPlans() calls on each invocation.
   _unsubProvider?.();
