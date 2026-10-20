@@ -6,21 +6,20 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"net/url"
-	"os"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 )
 
 // Real-PostgreSQL coverage for #656 (approved exchanges reserve the full ceiling
-// under the shared lock) and #657 (in-flight holds survive UTC rollover). Uses
-// the same dedicated issue41_ database guard as the AUTO reservation test.
+// under the shared lock) and #657 (in-flight holds survive UTC rollover). Each
+// test gets its own PostgreSQL container, like the AUTO reservation test, so it
+// runs in CI instead of skipping on a missing environment variable (#724).
 
 type riExchangeIntegrationEnv struct {
 	ctx            context.Context
@@ -28,15 +27,28 @@ type riExchangeIntegrationEnv struct {
 	storeA, storeB *PostgresStore
 }
 
+// riExchangeContainerDSN starts a PostgreSQL container dedicated to t, applies
+// every migration to it and returns its connection string, so callers can open
+// as many independent pools as the race under test needs. It skips only when
+// Docker is unavailable (RequirePostgresContainer's rule); a container that will
+// not start or a migration that will not apply fails the test (#724, #1597).
+// Setup gets its own deadline so a slow container start does not eat into the
+// test body's.
+func riExchangeContainerDSN(t *testing.T) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	container := testhelpers.RequirePostgresContainer(ctx, t)
+	t.Cleanup(func() { _ = container.Cleanup(context.Background()) })
+	require.NoError(t,
+		migrations.RunMigrations(ctx, container.DB.Pool(), getTestMigrationsPath(), "", ""),
+		"migrations failed to apply to a fresh database")
+	return container.Config.DSN("")
+}
+
 func newRIExchangeIntegrationEnv(t *testing.T) *riExchangeIntegrationEnv {
 	t.Helper()
-	dsn := os.Getenv("RI_EXCHANGE_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("set RI_EXCHANGE_TEST_DATABASE_URL to a dedicated issue41 test database")
-	}
-	parsed, err := url.Parse(dsn)
-	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(strings.TrimPrefix(parsed.Path, "/"), "issue41_"), "database must be dedicated to issue41 verification")
+	dsn := riExchangeContainerDSN(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	t.Cleanup(cancel)
@@ -46,7 +58,6 @@ func newRIExchangeIntegrationEnv(t *testing.T) *riExchangeIntegrationEnv {
 	poolB, err := pgxpool.New(ctx, dsn)
 	require.NoError(t, err)
 	t.Cleanup(poolB.Close)
-	require.NoError(t, migrations.RunMigrations(ctx, poolA, getTestMigrationsPath(), "", ""))
 	return &riExchangeIntegrationEnv{ctx: ctx, poolA: poolA, poolB: poolB,
 		storeA: &PostgresStore{db: poolA}, storeB: &PostgresStore{db: poolB}}
 }
@@ -90,7 +101,7 @@ func (e *riExchangeIntegrationEnv) processing(t *testing.T, mode, account string
 
 // setUpdatedAt back-dates a row. The ri_exchange_updated_at trigger rewrites
 // updated_at on every UPDATE, so it is bypassed for this one statement
-// (session_replication_role needs the superuser the dedicated test DB uses).
+// (session_replication_role needs a superuser, which the container's user is).
 func (e *riExchangeIntegrationEnv) setUpdatedAt(t *testing.T, id string, updatedAt time.Time) {
 	t.Helper()
 	tx, err := e.poolA.Begin(e.ctx)
