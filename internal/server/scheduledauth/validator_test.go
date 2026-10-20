@@ -625,12 +625,12 @@ func TestVerifyRetry_RebuildRateLimited(t *testing.T) {
 		t.Fatalf("lastRebuild must not change on rate-limited token, got %v", rb2)
 	}
 
-	// Sanity: at least two JWKS fetches must have occurred (the lazy initial
-	// fetch and the rebuild retry). The exact count is non-deterministic due
-	// to go-oidc's goroutine scheduling (see comment above), so we only
-	// assert a lower bound.
-	if hits := srv.hits.Load(); hits < 2 {
-		t.Fatalf("expected at least 2 JWKS fetches, got %d", hits)
+	// Exactly one JWKS fetch: token 1's refresh, which started after the
+	// token arrived and lacked kid-X, puts kid-X in the negative kid cache
+	// (issue #75). The rebuild retry and token 2 are then rejected without
+	// reaching go-oidc, so neither fetches.
+	if hits := srv.hits.Load(); hits != 1 {
+		t.Fatalf("expected exactly 1 JWKS fetch, got %d", hits)
 	}
 }
 

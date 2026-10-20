@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	jose "github.com/go-jose/go-jose/v4"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/httpclient"
 )
@@ -68,7 +69,7 @@ type Validator struct {
 	verifier    *oidc.IDTokenVerifier // nil unless mode == ModeOIDC; backed by go-oidc's single-flight RemoteKeySet
 	verMu       sync.RWMutex          // guards verifier and lastRebuild during rotation-recovery rebuilds
 	lastRebuild time.Time             // last verifier rebuild; rate-limits attacker-driven JWKS refetches
-	keySet      *oidc.RemoteKeySet    // nil unless mode == ModeOIDC; powered by go-oidc's single-flight cache
+	kids        *kidGuard             // nil unless mode == ModeOIDC; negative kid cache shared across rebuilds (issue #75)
 	jwksURL     string                // remembered for Warmup and rotation rebuild; empty unless mode == ModeOIDC
 	issuer      string                // OIDC issuer URL; empty unless mode == ModeOIDC; needed to rebuild verifier
 	httpClient  *http.Client          // hardened client for all JWKS fetches; nil unless mode == ModeOIDC
@@ -178,8 +179,19 @@ func configureOIDC(v *Validator, cfg Config) (*Validator, error) {
 	// misconfigured or compromised value must not be able to reach
 	// internal/metadata endpoints via the default transport.
 	v.httpClient = httpclient.New()
-	v.keySet = oidc.NewRemoteKeySet(oidc.ClientContext(context.Background(), v.httpClient), cfg.JWKSURL)
-	v.verifier = oidc.NewVerifier(cfg.Issuer, v.keySet, &oidc.Config{
+	// The kid guard wraps the hardened transport to observe JWKS
+	// responses; it does not replace it.
+	v.kids = newKidGuard(v.httpClient, func() time.Time { return v.now() }, []jose.SignatureAlgorithm{jose.RS256})
+	v.verifier = v.newVerifier()
+	return v, nil
+}
+
+// newVerifier builds a fresh go-oidc RemoteKeySet (empty cache, no
+// inflight fetch) behind the negative kid guard, and the IDTokenVerifier
+// on top of it. Used at startup and by the rotation-recovery rebuild.
+func (v *Validator) newVerifier() *oidc.IDTokenVerifier {
+	ks := oidc.NewRemoteKeySet(oidc.ClientContext(context.Background(), v.httpClient), v.jwksURL)
+	return oidc.NewVerifier(v.issuer, &guardedKeySet{inner: ks, g: v.kids}, &oidc.Config{
 		// Pin to RS256. Google's tokens are RS256; rejecting anything
 		// else closes the alg=none / alg=HS256 confusion family.
 		SupportedSigningAlgs: []string{string(oidc.RS256)},
@@ -189,7 +201,6 @@ func configureOIDC(v *Validator, cfg Config) (*Validator, error) {
 		SkipClientIDCheck: true,
 		SkipExpiryCheck:   true,
 	})
-	return v, nil
 }
 
 func configureBearer(v *Validator, cfg Config) (*Validator, error) {
@@ -402,8 +413,9 @@ func (v *Validator) validateOIDC(ctx context.Context, authz string) error {
 // attacker-driven fetches to ~6/min while a genuine key rotation still
 // recovers within one interval (providers publish the new key well before
 // signing with it, so a >10s outage window here is not a realistic
-// rotation pattern - and go-oidc's own refresh-on-unknown-kid still runs
-// on every request regardless of this limit).
+// rotation pattern). go-oidc's own refresh-on-unknown-kid would still run
+// on every request regardless of this limit; the negative kid cache in
+// kidguard.go bounds that to one fetch per kid per negativeKidTTL.
 const minRebuildInterval = 10 * time.Second
 
 // verifyWithRotationRetry calls Verify on the current verifier. If the call
@@ -450,12 +462,7 @@ func (v *Validator) verifyWithRotationRetry(ctx context.Context, rawToken string
 			return nil, err
 		}
 		log.Printf("scheduledauth: oidc signature verification failed; rebuilding key set for rotation retry")
-		newKS := oidc.NewRemoteKeySet(oidc.ClientContext(context.Background(), v.httpClient), v.jwksURL)
-		v.verifier = oidc.NewVerifier(v.issuer, newKS, &oidc.Config{
-			SupportedSigningAlgs: []string{string(oidc.RS256)},
-			SkipClientIDCheck:    true,
-			SkipExpiryCheck:      true,
-		})
+		v.verifier = v.newVerifier()
 		v.lastRebuild = v.now()
 	}
 	newVer := v.verifier
