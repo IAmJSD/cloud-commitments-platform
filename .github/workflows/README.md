@@ -210,8 +210,13 @@ Deploy CUDly to Azure Container Apps. Serverless container platform with built-i
 
 ### Required Secrets
 
-- `AZURE_CREDENTIALS` (Service Principal JSON)
+- `AZURE_CLIENT_ID` (client ID of the deploy app registration)
+- `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
+
+No client secret or service-principal JSON is stored. `azure/login` swaps the job's GitHub OIDC
+token for a short-lived Azure token through a federated identity credential (see the Azure part of
+the [Setup Guide](#setup-guide)).
 
 ### Required Variables
 
@@ -472,15 +477,43 @@ gh variable set GCP_PROJECT_ID --body "<project-id>"
 
 **Azure:**
 
-```bash
-# Create service principal
-az ad sp create-for-rbac --name cudly-cicd --sdk-auth > azure-credentials.json
+Azure authenticates with OIDC, so no client secret or `--sdk-auth` JSON is created or stored. The
+deploy app registration, its service principal and its federated identity credentials come from the
+bootstrap module `terraform/environments/azure/ci-cd-permissions/`, which a privileged operator
+applies by hand (see its [README](../../terraform/environments/azure/ci-cd-permissions/README.md)).
+Every `azure/login` step reads the same three secrets:
 
-# Set secrets
-gh secret set AZURE_CREDENTIALS < azure-credentials.json
+```bash
+# Run from terraform/environments/azure/ci-cd-permissions/ after it has been applied
+gh secret set AZURE_CLIENT_ID -b"$(terraform output -raw client_id)"
+gh secret set AZURE_TENANT_ID -b"$(terraform output -raw tenant_id)"
 gh secret set AZURE_SUBSCRIPTION_ID -b"<subscription-id>"
 gh secret set DB_PASSWORD_AZURE
 ```
+
+Each federated identity credential on the app registration must use:
+
+| Field | Value |
+| --- | --- |
+| Issuer | `https://token.actions.githubusercontent.com` |
+| Audience | `api://AzureADTokenExchange` |
+| Subject | `repo:LeanerCloud/cloud-commitments-platform:environment:<name>` |
+
+Every job that runs `azure/login` is bound to a GitHub Environment, so its token carries the
+`environment:<name>` subject, not a branch subject, even when it runs on `main`. Azure allows no
+wildcards, so each environment name needs its own credential:
+
+| Environment | Jobs that present it |
+| --- | --- |
+| `dev`, `staging`, `prod` | `deploy-azure.yml` (`build-and-deploy`, `test-deployment`), `rollback.yml` (`rollback-azure`), `cleanup-staging.yml` (`destroy-azure`, `staging` only) |
+| `azure-db-dev`, `azure-db-staging`, `azure-db-prod` | `database-migration.yml` (`migrate-azure`) |
+
+The bootstrap module creates one credential per name in its `github_environments` variable
+(default `dev`, `staging`, `prod`). It does not yet create the `azure-db-*` credentials, so
+`migrate-azure` fails with `AADSTS70021` until those environments exist with protection rules and
+are added to `github_environments`. The module also creates a `ref:refs/heads/main` credential; no
+current Azure job presents that subject. The environment subject does not encode the branch, so
+restrict branches with each environment's deployment branch policy (step 3 below).
 
 **Optional:**
 
