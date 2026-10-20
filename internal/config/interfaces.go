@@ -463,6 +463,7 @@ type StoreInterface interface {
 	// processing (approved) exchange under the shared daily-cap lock, excluding
 	// the row's own amount, and stores the ceiling as its payment_due.
 	ReserveApprovedRIExchange(ctx context.Context, id, dailyCapUSD, perExchangeCapUSD string) (string, error)
+	// GetRIExchangeRecord returns a wrapped ErrNotFound when no record has id.
 	GetRIExchangeRecord(ctx context.Context, id string) (*RIExchangeRecord, error)
 	GetRIExchangeRecordByToken(ctx context.Context, token string) (*RIExchangeRecord, error)
 	GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]RIExchangeRecord, error)

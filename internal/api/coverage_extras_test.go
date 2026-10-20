@@ -318,8 +318,12 @@ func TestHandler_rejectRIExchange_RecordNotFound(t *testing.T) {
 
 	h := &Handler{config: mockStore}
 	_, err := h.rejectRIExchange(ctx, "11111111-1111-1111-1111-111111111111", "tok")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	// A missing record answers like a wrong token (issue #601).
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "want ClientError, got %v", err)
+	assert.Equal(t, 403, ce.code)
+	assert.Equal(t, "invalid rejection token", ce.message)
 }
 
 func TestHandler_rejectRIExchange_WrongToken(t *testing.T) {
