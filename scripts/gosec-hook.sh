@@ -5,13 +5,15 @@
 # files, resolved to their owning module.  Fast by design: never scans the whole
 # repo; each commit triggers at most one gosec invocation per affected module.
 #
-# Version pin: gosec v2.28.0 (matches the CI pin in ci.yml, bumped by #1384).
-# Installed on first use to ~/.cache/pre-commit-gosec/v2.28.0/gosec; never
-# modifies the system-wide gosec binary.
+# Version pin: read from .gosec-version at the repo root, the single source of
+# truth that ci.yml and the Makefile also read (issue #347). Installed on first
+# use to ~/.cache/pre-commit-gosec/<version>/gosec; never modifies the
+# system-wide gosec binary.
 #
 # Called by pre-commit with pass_filenames: true and files: \.go$.
 # Exits 0 when no staged .go files survive filtering (deleted / testdata).
-# Exits 1 on any gosec finding; exits 2 on setup failure.
+# Exits 1 on any gosec finding; exits 2 on setup failure (including a missing
+# or malformed .gosec-version).
 #
 # Exclusion rationale (kept in sync with .pre-commit-config.yaml):
 #   G101 - variable names containing password/secret/token -> false positives
@@ -32,8 +34,9 @@
 
 set -euo pipefail
 
-GOSEC_VERSION="2.28.0"
-GOSEC_BIN="${HOME}/.cache/pre-commit-gosec/v${GOSEC_VERSION}/gosec"
+# GOSEC_VERSION (vMAJOR.MINOR.PATCH) and GOSEC_BIN are set by read_gosec_version.
+GOSEC_VERSION=""
+GOSEC_BIN=""
 
 GOSEC_EXCLUDE="G101,G104,G115,G117,G118,G122,G204,G301,G304,G402,G505,G702,G703,G705,G706"
 
@@ -41,6 +44,23 @@ GOSEC_EXCLUDE="G101,G104,G115,G117,G118,G122,G204,G301,G304,G402,G505,G702,G703,
 MODULE_DIRS="tests/e2e"
 
 # ---- helpers ----------------------------------------------------------------
+
+# Read and validate the pin. A malformed file must stop the hook, not turn into
+# a `go install` of an empty or garbage version, or a cache path outside the
+# per-version directory.
+read_gosec_version() {
+    local file="$1/.gosec-version"
+    if [[ ! -f "$file" ]]; then
+        echo "pre-commit/gosec: $file not found" >&2
+        exit 2
+    fi
+    GOSEC_VERSION="$(cat "$file")"
+    if [[ ! "$GOSEC_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "pre-commit/gosec: $file must be one line like vMAJOR.MINOR.PATCH, got '${GOSEC_VERSION}'" >&2
+        exit 2
+    fi
+    GOSEC_BIN="${HOME}/.cache/pre-commit-gosec/${GOSEC_VERSION}/gosec"
+}
 
 ensure_gosec() {
     local need_install=0
@@ -50,9 +70,9 @@ ensure_gosec() {
         local installed_ver
         installed_ver=$(go version -m "$GOSEC_BIN" 2>/dev/null \
             | awk '$1=="mod" && $2~/gosec/{print $3}')
-        # installed_ver is e.g. "v2.28.0"; compare against "v$GOSEC_VERSION".
-        if [[ "$installed_ver" != "v${GOSEC_VERSION}" ]]; then
-            echo "pre-commit/gosec: cached binary is ${installed_ver:-unknown}, need v${GOSEC_VERSION}; reinstalling" >&2
+        # installed_ver and GOSEC_VERSION both carry the leading "v".
+        if [[ "$installed_ver" != "${GOSEC_VERSION}" ]]; then
+            echo "pre-commit/gosec: cached binary is ${installed_ver:-unknown}, need ${GOSEC_VERSION}; reinstalling" >&2
             need_install=1
         fi
     else
@@ -60,10 +80,10 @@ ensure_gosec() {
     fi
 
     if [[ $need_install -eq 1 ]]; then
-        echo "pre-commit/gosec: installing gosec@v${GOSEC_VERSION} -> $(dirname "$GOSEC_BIN")" >&2
+        echo "pre-commit/gosec: installing gosec@${GOSEC_VERSION} -> $(dirname "$GOSEC_BIN")" >&2
         mkdir -p "$(dirname "$GOSEC_BIN")"
         GOBIN="$(dirname "$GOSEC_BIN")" go install \
-            "github.com/securego/gosec/v2/cmd/gosec@v${GOSEC_VERSION}" || {
+            "github.com/securego/gosec/v2/cmd/gosec@${GOSEC_VERSION}" || {
             echo "pre-commit/gosec: install failed (is Go on PATH?)" >&2
             exit 2
         }
@@ -101,6 +121,7 @@ done
 
 [[ ${#live_files[@]} -eq 0 ]] && exit 0
 
+read_gosec_version "$REPO_ROOT"
 ensure_gosec
 
 # Build "module|package" pairs from the live file list.

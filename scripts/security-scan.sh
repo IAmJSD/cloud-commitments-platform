@@ -47,7 +47,7 @@ if command_exists gosec; then
         OVERALL_STATUS=1
     fi
 else
-    echo -e "${YELLOW}⚠ gosec not installed. Install: go install github.com/securego/gosec/v2/cmd/gosec@latest${NC}"
+    echo -e "${YELLOW}⚠ gosec not installed. Install the pinned version (.gosec-version): make install-dev-tools${NC}"
 fi
 
 # 2. Static Analysis (staticcheck)

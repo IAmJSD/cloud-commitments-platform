@@ -706,6 +706,16 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Assert the gosec version is pinned only in .gosec-version
+        # Issue #347: the version used to be hard-coded in four files, so a
+        # bump that missed one left local scans and this job's SARIF upload on
+        # different gosec rule sets. Fast (git grep only). always(): a finding
+        # here must not skip the scanners below; the job still fails.
+        if: always() && steps.checkout.outcome == 'success'
+        run: |
+          bash scripts/check-gosec-pin.sh
+          bash scripts/test-check-gosec-pin.sh
+
       - name: Run govulncheck CVE scanner (all modules)
         # always(): each scanner step below is independent evidence for the
         # Security tab. Without this, one scanner failing (e.g. a live npm
@@ -749,7 +759,10 @@ jobs:
           # Install pinned gosec using the job's existing setup-go.
           # The securego/gosec Docker action bundles its own Go toolchain which
           # cannot satisfy the module's go directive, causing a toolchain mismatch.
-          go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+          # The version lives only in .gosec-version (issue #347), shared with
+          # the Makefile and scripts/gosec-hook.sh.
+          gosec_version="$(cat .gosec-version)"
+          go install "github.com/securego/gosec/v2/cmd/gosec@${gosec_version}"
           # Collect SARIF for both platform-owned modules before uploading.
           #
           # gosec exits non-zero both for real findings and for a processing

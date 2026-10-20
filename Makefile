@@ -11,9 +11,13 @@ BUILD_TIME?=$(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 GIT_SHA?=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 
 # Dev tool versions - keep in sync with the CI pins in
-# .github/workflows/ci.yml, pre-commit.yml and database-migration.yml
+# .github/workflows/ci.yml and pre-commit.yml
 GOLANGCI_LINT_VERSION?=v2.10.1
-GOSEC_VERSION?=v2.28.0
+# gosec has one source of truth, .gosec-version, also read by ci.yml and
+# scripts/gosec-hook.sh. scripts/check-gosec-pin.sh fails CI if the version
+# is written anywhere else (issue #347).
+GOSEC_VERSION_FILE:=$(dir $(abspath $(lastword $(MAKEFILE_LIST)))).gosec-version
+GOSEC_VERSION?=$(shell cat $(GOSEC_VERSION_FILE))
 GOCYCLO_VERSION?=v0.6.0
 # golang-migrate deliberately has no version variable: it is installed as a
 # package of this module (see install-tools), so its version and its whole
