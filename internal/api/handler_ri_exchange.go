@@ -1311,11 +1311,15 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 
 // mapAzureExchangeError converts an error from an Azure RI exchange
 // client-layer call to a ClientError with the appropriate HTTP status.
-// Azure 4xx client faults (via isAzureClientError) produce a 400 with the
-// Azure error message preserved; any other error produces a 500 using the
-// opMsg fallback -- the same contract mapAWSExchangeError applies to the
-// AWS exchange endpoints.
+// A cloud-commitments-go exchange refusal (exchangeRefusalError) produces a
+// 422 with its message; Azure 4xx client faults (via isAzureClientError)
+// produce a 400 with the Azure error message preserved; any other error
+// produces a 500 using the opMsg fallback -- the same contract
+// mapAWSExchangeError applies to the AWS exchange endpoints.
 func mapAzureExchangeError(opMsg string, err error) error {
+	if refusal := exchangeRefusalError(err); refusal != nil {
+		return refusal
+	}
 	if isAzureClientError(err) {
 		return NewClientError(400, err.Error())
 	}
@@ -2019,10 +2023,14 @@ var awsExchangeClientFaultCodes = map[string]bool{
 
 // mapAWSExchangeError converts an AWS SDK error from an RI exchange
 // operation to a ClientError with the appropriate HTTP status code.
-// AWS 4xx client-fault errors produce a 400 with the original AWS
-// message preserved. Any other error produces a 500 (generic server
-// failure) using the provided opMsg fallback.
+// A cloud-commitments-go exchange refusal (exchangeRefusalError) produces
+// a 422 with its message. AWS 4xx client-fault errors produce a 400 with
+// the original AWS message preserved. Any other error produces a 500
+// (generic server failure) using the provided opMsg fallback.
 func mapAWSExchangeError(opMsg string, err error) error {
+	if refusal := exchangeRefusalError(err); refusal != nil {
+		return refusal
+	}
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) && awsExchangeClientFaultCodes[apiErr.ErrorCode()] {
 		return NewClientError(400, apiErr.ErrorMessage())
