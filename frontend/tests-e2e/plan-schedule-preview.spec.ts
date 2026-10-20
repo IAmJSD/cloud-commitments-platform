@@ -3,11 +3,11 @@ import { test, expect, type Locator } from '@playwright/test';
 test.use({ hasTouch: true });
 import { mockApi, seedAuth } from './fixtures/recs';
 
-for (const width of [1440, 1280, 390, 320]) test.describe(`viewport ${width}px`, () => {
+for (const [width, height] of [[1440, 900], [1280, 900], [1280, 768], [1024, 900], [390, 900], [320, 900]] as const) test.describe(`viewport ${width}x${height}`, () => {
   test.use({ isMobile: width <= 390 });
-  test(`local Create/Edit preview at ${width}px (mock API, no writes)`, async ({ page, isMobile }, testInfo) => {
+  test(`local Create/Edit preview at ${width}x${height} (mock API, no writes)`, async ({ page, isMobile }, testInfo) => {
     test.setTimeout(90_000);
-    await page.setViewportSize({ width, height: 900 });
+    await page.setViewportSize({ width, height });
     const errors: string[] = [], writes: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -85,13 +85,14 @@ for (const width of [1440, 1280, 390, 320]) test.describe(`viewport ${width}px`,
         await panel.locator('.editor-draft-notice').scrollIntoViewIfNeeded(); await page.screenshot({ path: testInfo.outputPath('create-inline-notice.png'), fullPage: true });
         await parent.locator('#close-plan-modal-btn').scrollIntoViewIfNeeded();
         const footer = (await parent.locator('.modal-buttons').boundingBox())!;
-        expect(footer.y + footer.height).toBeLessThanOrEqual(900);
+        expect(footer.y + footer.height).toBeLessThanOrEqual(page.viewportSize()!.height);
         await page.screenshot({ path: testInfo.outputPath('create-inline-actions.png'), fullPage: true });
-        await parent.locator('#preview-plan-schedule-btn').focus(); await page.keyboard.press('Tab');
-        await expect(parent.locator('button[type="submit"]')).toBeFocused(); await page.keyboard.press('Tab');
-        await expect(panel.locator('.schedule-preview-scroll')).toBeFocused();
-        await page.keyboard.press('Shift+Tab'); await expect(parent.locator('button[type="submit"]')).toBeFocused();
-        await page.keyboard.press('Shift+Tab'); await expect(parent.locator('#preview-plan-schedule-btn')).toBeFocused();
+        expect(await panel.evaluate(element => !!(element.previousElementSibling as HTMLElement | null)?.matches('#plan-form'))).toBe(true);
+        await summary.focus(); await page.keyboard.press('Tab');
+        await expect(panel.locator('.schedule-preview-scroll')).toBeFocused(); await page.keyboard.press('Tab');
+        await expect(parent.locator('#close-plan-modal-btn')).toBeFocused();
+        await page.keyboard.press('Shift+Tab'); await expect(panel.locator('.schedule-preview-scroll')).toBeFocused();
+        await page.keyboard.press('Shift+Tab'); await expect(summary).toBeFocused();
         await summary.click(); await expect(advanced).toHaveAttribute('open', '');
         await parent.locator('#close-plan-modal-btn').click(); await expect(parent).toBeHidden();
         await page.locator('#new-plan-btn').click(); await parent.locator('#plan-name').fill('Capacity ladder');
@@ -101,9 +102,34 @@ for (const width of [1440, 1280, 390, 320]) test.describe(`viewport ${width}px`,
         await expect(panel.locator('[data-editor="controls"]')).toBeHidden();
 
       } else {
-        await expect(parent.locator('#plan-editor-panel')).toBeHidden();
-        await expect(parent.locator('#plan-editor-panel')).toBeEmpty();
+        const panel = parent.locator('#plan-editor-panel');
+        await expect(panel).toBeVisible();
+        await expect(panel.locator('[data-preview-step]')).toHaveCount(4);
+        await expect(panel.locator('.editor-draft-notice')).toContainText('restarts from today for a plan already in progress; executed purchases are not shown');
+        await expect(panel.locator('[data-editor="controls"]')).toBeHidden();
+        await page.screenshot({ path: testInfo.outputPath('edit-inline-graph.png'), fullPage: true });
       }
+      const layoutForm = (await parent.locator('#plan-form').boundingBox())!, layoutPanel = (await parent.locator('#plan-editor-panel').boundingBox())!;
+      if (width > 960) {
+        expect(layoutForm.width).toBeGreaterThanOrEqual(360); expect(layoutPanel.x).toBeGreaterThanOrEqual(layoutForm.x + layoutForm.width);
+        expect(layoutPanel.width).toBeGreaterThan(layoutForm.width);
+        expect(await parent.locator('#plan-editor-panel').evaluate(element => getComputedStyle(element).position)).toBe('sticky');
+      } else expect(layoutPanel.y).toBeGreaterThanOrEqual(layoutForm.y + layoutForm.height - 1);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+      if (width > 960) {
+        const reach = await parent.evaluate(() => {
+          const scroller = document.querySelector('.plan-editor-layout')!, sticky = document.getElementById('plan-editor-panel')!;
+          sticky.scrollTop = sticky.scrollHeight;
+          const bounds = scroller.getBoundingClientRect(), last = Array.from(sticky.querySelectorAll('.help-text')).pop()!.getBoundingClientRect(), own = sticky.getBoundingClientRect();
+          return { panelFits: own.height <= bounds.height + 1, lastVisible: last.top >= bounds.top - 1 && last.bottom <= bounds.bottom + 1 };
+        });
+        expect(reach).toEqual({ panelFits: true, lastVisible: true });
+      }
+      await parent.locator('#close-plan-modal-btn').scrollIntoViewIfNeeded();
+      const cancel = (await parent.locator('#close-plan-modal-btn').boundingBox())!;
+      expect(cancel.x).toBeGreaterThanOrEqual(0); expect(cancel.x + cancel.width).toBeLessThanOrEqual(width);
+      const footerBox = (await parent.locator('.modal-buttons').boundingBox())!;
+      expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(page.viewportSize()!.height);
       const before = await parent.locator('input, select, textarea').evaluateAll(elements => elements.map(element => (element as HTMLInputElement).value));
       const trigger = page.locator('#preview-plan-schedule-btn');
       await trigger.click();

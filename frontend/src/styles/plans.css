@@ -284,11 +284,17 @@
 #plan-modal .modal-content { width: min(1280px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); display: flex; flex-direction: column; overflow: hidden; }
 #plan-form { min-width: 0; display: flex; flex-direction: column; min-height: 0; }
 .plan-editor-layout { overflow: auto; min-height: 0; }
-.plan-editor-layout.has-editor-draft { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 24px; }
+.plan-editor-layout.has-editor-draft { display: grid; grid-template-columns: minmax(360px, 440px) minmax(0, 1fr); grid-template-areas: "form panel"; grid-auto-rows: max-content; gap: 24px; align-items: start; }
+.plan-editor-layout.has-editor-draft #plan-form { grid-area: form; }
+#plan-editor-panel { grid-area: panel; position: sticky; top: 0; align-self: start; max-height: calc(100dvh - 230px); overflow: auto; }
 .plan-editor-settings, #plan-editor-panel { min-width: 0; }
 #plan-modal .modal-buttons { flex-shrink: 0; }
 #plan-editor-panel [data-selected] .preview-marker { fill: var(--cudly-primary); stroke: var(--cudly-text); stroke-width: 3; }
-@media (max-width: 800px) { .plan-editor-layout.has-editor-draft { display: block; } }
+@media (max-width: 960px) {
+    .plan-editor-layout.has-editor-draft { grid-template-columns: minmax(0, 1fr); grid-template-areas: "form" "panel"; }
+    #plan-editor-panel { position: static; max-height: none; overflow: visible; }
+}
+@media (max-width: 480px) { #plan-modal .modal-content { padding: 12px; } }
 
 #plan-advanced-settings { border-top: 1px solid var(--cudly-border); margin-top: 16px; padding-top: 16px; }
 #plan-advanced-settings > summary, #plan-editor-panel summary { cursor: pointer; padding: 8px 0; }

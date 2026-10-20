@@ -1256,7 +1256,7 @@ async function togglePlan(planId: string, enabled: boolean): Promise<void> {
 }
 
 let disposePlanEditor: (() => void) | undefined;
-function openPlanForm(modal: HTMLElement, create: boolean): void {
+function openPlanForm(modal: HTMLElement, restartsFromToday = false): void {
   disposePlanEditor?.(); disposePlanEditor = undefined;
   const host = modal.querySelector<HTMLElement>('#plan-editor-panel'), form = modal.querySelector<HTMLFormElement>('#plan-form');
   const advanced = modal.querySelector<HTMLDetailsElement>('#plan-advanced-settings');
@@ -1265,7 +1265,7 @@ function openPlanForm(modal: HTMLElement, create: boolean): void {
     if (advanced?.contains(event.target as Node)) advanced.open = true;
   };
   form?.addEventListener('invalid', revealInvalid, true);
-  const disposePanel = create && host && form ? mountPlanEditorPanel(host, form) : undefined;
+  const disposePanel = host && form ? mountPlanEditorPanel(host, form, { restartsFromToday }) : undefined;
   disposePlanEditor = () => {
     try { disposePanel?.(); }
     finally { form?.removeEventListener('invalid', revealInvalid, true); }
@@ -1364,7 +1364,7 @@ async function editPlan(planId: string): Promise<boolean> {
     // Wire live range validation on all five numeric inputs (#702).
     wirePlanRangeInputs();
     const planModal = document.getElementById('plan-modal');
-    if (planModal) openPlanForm(planModal, false);
+    if (planModal) openPlanForm(planModal, true);
     return true;
   } catch (error) {
     console.error('Failed to load plan:', error);
@@ -1823,7 +1823,7 @@ export function openCreatePlanModal(snapshot?: readonly api.Recommendation[]): v
 
   const planModal = document.getElementById('plan-modal');
   if (planModal) {
-    openPlanForm(planModal, true);
+    openPlanForm(planModal);
   }
 }
 
@@ -1855,7 +1855,7 @@ export function openNewPlanModal(): void {
 
   const planModal = document.getElementById('plan-modal');
   if (planModal) {
-    openPlanForm(planModal, true);
+    openPlanForm(planModal);
   }
 }
 

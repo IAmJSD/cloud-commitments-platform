@@ -13,9 +13,12 @@ export function readPlanScheduleInput(form: HTMLFormElement): PlanScheduleIntent
 export interface PlanEditorPanelOptions {
   // Create Save does not persist step dates yet, so the graph stays display-only until it does.
   editableDates?: boolean;
+  // Edit previews hypothetical dates from today, so say that executed purchases are not part of them.
+  restartsFromToday?: boolean;
 }
 
 const readOnlyNotice = 'Hypothetical dates counted from today with the schedule settings. They are not saved or scheduled.';
+const restartNotice = 'This preview restarts from today for a plan already in progress; executed purchases are not shown. Dates are hypothetical and not saved or scheduled.';
 const scheduleSettingIds = ['plan-coverage', 'ramp-step-percent', 'ramp-interval-days', 'plan-notify-days'];
 
 export function mountPlanEditorPanel(host: HTMLElement, form: HTMLFormElement, options: PlanEditorPanelOptions = {}): () => void {
@@ -23,7 +26,7 @@ export function mountPlanEditorPanel(host: HTMLElement, form: HTMLFormElement, o
   host.hidden = false;
   host.closest('.plan-editor-layout')?.classList.add('has-editor-draft');
   const statusId = `${host.id || 'plan-editor'}-status`;
-  host.innerHTML = `<h3>Proposed purchase dates</h3><p class="editor-draft-notice">${editable ? 'Local draft. These dates are not scheduled. Save Plan does not save date changes.' : readOnlyNotice}</p>
+  host.innerHTML = `<h3>Proposed purchase dates</h3><p class="editor-draft-notice">${editable ? 'Local draft. These dates are not scheduled. Save Plan does not save date changes.' : options.restartsFromToday ? restartNotice : readOnlyNotice}</p>
     ${editable ? '' : `<p class="editor-status" data-editor="summary" id="${statusId}"></p><p class="sr-only" data-editor="status" role="status" aria-live="polite"></p>`}
     <div class="schedule-preview-scroll" role="region" tabindex="0" aria-label="Proposed purchase calendar"${editable ? '' : ` aria-describedby="${statusId}"`}></div>
     <p class="editor-target help-text"></p>${editable ? `<p class="help-text">Drag a point to change its date, or Start/End to space the dates.</p>
