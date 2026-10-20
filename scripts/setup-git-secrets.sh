@@ -93,15 +93,37 @@ git secrets --register-aws
 echo ""
 echo "Adding custom secret patterns..."
 
+# git-secrets scans with a hard-coded `grep -w` (git grep -nwHEI, or grep -nwHEI
+# for file arguments), so a match only counts if it starts and ends on a word
+# boundary. Most detectors below don't on real text: a DSN detector's match ends
+# at the "@", right before the first letter of the host, and "password" in
+# db_password starts after "_". Those lines scanned clean (#328). So each
+# detector is registered with the word characters around it taken in, which
+# always reach a boundary: the registered form fires wherever the detector
+# itself matches.
+#
+# A pattern written as (^|...)...(...|$) spells out its own bounds, so it is
+# registered as is: wrapping it would match the same lines, but the extra
+# leading [A-Za-z0-9_]* makes macOS's regex engine noticeably slower.
+word_chars='[A-Za-z0-9_]*'
 # `git secrets --add` exits 1 when the pattern is already registered, which under
 # `set -e` aborted a re-run at the first custom pattern and skipped the rest.
 # Skip patterns already present so the script is idempotent; a real failure
-# (for example an invalid regex) still stops it.
+# (for example an invalid regex) still stops it. A clone set up before #328 has
+# the bare detector registered; drop it, since the wrapped form covers it.
 add_pattern() {
-    if git config --get-all secrets.patterns | grep -qxF -- "$1"; then
+    local pattern="${word_chars}($1)${word_chars}"
+    case "$1" in
+        '(^|'*'|$)') pattern="$1" ;;
+    esac
+    if [ "${pattern}" != "$1" ] \
+        && git config --local --get-all secrets.patterns | grep -qxF -- "$1"; then
+        git config --local --unset-all --fixed-value secrets.patterns "$1"
+    fi
+    if git config --get-all secrets.patterns | grep -qxF -- "${pattern}"; then
         return 0
     fi
-    git secrets --add "$1"
+    git secrets --add "${pattern}"
 }
 
 # AWS patterns
