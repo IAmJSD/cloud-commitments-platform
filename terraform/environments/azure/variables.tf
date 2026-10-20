@@ -588,3 +588,27 @@ variable "archera_api_key_secret_name" {
   type        = string
   default     = ""
 }
+
+# ==============================================
+# Monitoring and Alerts
+# ==============================================
+
+variable "enable_monitoring" {
+  description = "Create the monitoring module (action group, metric alerts, availability test, log-query failure alerts). Container Apps only."
+  type        = bool
+  default     = false
+}
+
+variable "alert_emails" {
+  description = "Comma-separated email addresses that receive alerts. Supplied by the deploy workflow from the ALERT_EMAILS secret; never commit real addresses."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = alltrue([
+      for e in split(",", var.alert_emails) :
+      trimspace(e) == "" || can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", trimspace(e)))
+    ])
+    error_message = "alert_emails must be a comma-separated list of email addresses."
+  }
+}

@@ -298,7 +298,7 @@ func TestHandleExecutePurchase_GetError(t *testing.T) {
 func TestHandleExecutePurchase_SaveError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockEmail := new(MockEmailSender)
+	mockEmail := allowFailedNotification(new(MockEmailSender))
 	mockFactory := new(MockProviderFactory)
 	mockSTS := new(MockSTSClient)
 
