@@ -34,6 +34,13 @@ var (
 	// permission. Mapped to 403 (issue #907).
 	ErrSelfEscalation = errors.New("cannot escalate your own group membership")
 
+	// ErrContradictoryGroups is returned when a create/update would give a
+	// user a view-only group together with a write-capable group. The
+	// permission model is additive, so the write group silently overrides
+	// the read-only intent of the view-only one. Backend mirror of the
+	// frontend's validateGroupCombination check. Mapped to 400 (issue #78).
+	ErrContradictoryGroups = errors.New("contradictory group combination")
+
 	// ErrPermissionCeiling is returned by a group write that would grant a
 	// permission the acting user does not themselves hold (or holds only at
 	// a narrower constraint scope), and by the fail-closed paths where the
