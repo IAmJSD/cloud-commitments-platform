@@ -315,6 +315,10 @@ func (m *mockConfigStore) TransitionExecutionStatusPinned(ctx context.Context, e
 	return nil, nil
 }
 
+func (m *mockConfigStore) TransitionExecutionStatusPinnedTx(ctx context.Context, tx pgx.Tx, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) TransitionExecutionStatusTokenPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, rawToken string) (*config.PurchaseExecution, error) {
 	return nil, nil
 }

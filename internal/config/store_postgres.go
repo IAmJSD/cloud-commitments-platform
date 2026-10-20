@@ -1242,7 +1242,7 @@ func (s *PostgresStore) RotatePendingApprovalToken(ctx context.Context, executio
 // and the legacy cancelled_by (issue #119), matching what the other cancel paths
 // record and what History reads.
 func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*PurchaseExecution, error) {
-	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, nil, nil)
+	return s.transitionExecutionStatus(ctx, s.db, executionID, fromStatuses, toStatus, actor, nil, nil)
 }
 
 // TransitionExecutionStatusPinned is TransitionExecutionStatus that also
@@ -1251,7 +1251,15 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 // claim makes the pin fail with ErrExecutionNotInExpectedStatus, so a row is
 // never run on a snapshot different from the one that was gated.
 func (s *PostgresStore) TransitionExecutionStatusPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*PurchaseExecution, error) {
-	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, &sawEmptyRecommendations, nil)
+	return s.transitionExecutionStatus(ctx, s.db, executionID, fromStatuses, toStatus, actor, &sawEmptyRecommendations, nil)
+}
+
+// TransitionExecutionStatusPinnedTx is TransitionExecutionStatusPinned inside
+// the caller's transaction. The UPDATE's row lock is held until that
+// transaction ends, so the status change commits or rolls back together with
+// the caller's other writes and no other writer can touch the row in between.
+func (s *PostgresStore) TransitionExecutionStatusPinnedTx(ctx context.Context, tx pgx.Tx, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*PurchaseExecution, error) {
+	return s.transitionExecutionStatus(ctx, tx, executionID, fromStatuses, toStatus, actor, &sawEmptyRecommendations, nil)
 }
 
 // TransitionExecutionStatusTokenPinned is TransitionExecutionStatus that also
@@ -1265,7 +1273,7 @@ func (s *PostgresStore) TransitionExecutionStatusTokenPinned(ctx context.Context
 		return nil, fmt.Errorf("%w: execution %s: no approval token supplied", ErrApprovalTokenChanged, executionID)
 	}
 	tokenHash := HashApprovalToken(rawToken)
-	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, nil, &tokenHash)
+	return s.transitionExecutionStatus(ctx, s.db, executionID, fromStatuses, toStatus, actor, nil, &tokenHash)
 }
 
 // RescheduleAwaitingExecution is a conditional single-column update: the
@@ -1302,7 +1310,7 @@ func (s *PostgresStore) RescheduleAwaitingExecution(ctx context.Context, executi
 	return updated, nil
 }
 
-func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmpty *bool, tokenHash *string) (*PurchaseExecution, error) {
+func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, q executionQuerier, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmpty *bool, tokenHash *string) (*PurchaseExecution, error) {
 	var cancelActor *string
 	if toStatus == StatusCanceled {
 		cancelActor = actor
@@ -1327,25 +1335,26 @@ func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, execution
 		          idempotency_key, scheduled_execution_at, no_submission, created_by_system
 	`
 
-	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses, actor, cancelActor, sawEmpty, tokenHash)
+	records, err := queryExecutionsOn(ctx, q, query, executionID, toStatus, fromStatuses, actor, cancelActor, sawEmpty, tokenHash)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(records) == 0 {
-		return nil, s.transitionRejection(ctx, executionID, fromStatuses, toStatus, tokenHash != nil)
+		return nil, transitionRejection(ctx, q, executionID, fromStatuses, toStatus, tokenHash != nil)
 	}
 
 	return &records[0], nil
 }
 
 // transitionRejection explains a zero-row transitionExecutionStatus by probing
-// the row: gone (ErrNotFound), a hard DB error, a token pin lost on a row still
-// in an allowed status (ErrApprovalTokenChanged), or a status CAS lost
+// the row through q (the caller's transaction for the Tx variant): gone
+// (ErrNotFound), a hard DB error, a token pin lost on a row still in an
+// allowed status (ErrApprovalTokenChanged), or a status CAS lost
 // (ErrExecutionNotInExpectedStatus). Extracted to keep the caller under the
 // gocyclo threshold.
-func (s *PostgresStore) transitionRejection(ctx context.Context, executionID string, fromStatuses []string, toStatus string, tokenPinned bool) error {
-	existing, existErr := s.GetExecutionByID(ctx, executionID)
+func transitionRejection(ctx context.Context, q executionQuerier, executionID string, fromStatuses []string, toStatus string, tokenPinned bool) error {
+	existing, existErr := getExecutionByIDOn(ctx, q, executionID)
 	if errors.Is(existErr, ErrNotFound) {
 		// Wrap ErrNotFound so callers (e.g. the purchase reaper) can
 		// use errors.Is to distinguish "row vanished mid-flight" — a
@@ -1875,6 +1884,11 @@ func (s *PostgresStore) ListRecentSubmitsTx(ctx context.Context, tx pgx.Tx, crea
 // from a real DB failure (any other non-nil error). A nil error guarantees
 // a non-nil execution (fail-loud contract; issues #976, #1339).
 func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string) (*PurchaseExecution, error) {
+	return getExecutionByIDOn(ctx, s.db, executionID)
+}
+
+// getExecutionByIDOn is GetExecutionByID on q, the pool or a transaction.
+func getExecutionByIDOn(ctx context.Context, q executionQuerier, executionID string) (*PurchaseExecution, error) {
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token_hash, recommendations,
@@ -1888,7 +1902,7 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 		WHERE execution_id = $1
 	`
 
-	executions, err := s.queryExecutions(ctx, query, executionID)
+	executions, err := queryExecutionsOn(ctx, q, query, executionID)
 	if err != nil {
 		return nil, err
 	}
@@ -2016,9 +2030,20 @@ func (s *PostgresStore) ListPendingExecutionIDsForAccount(ctx context.Context, a
 	return ids, nil
 }
 
+// executionQuerier is the query method shared by the pool (dbConn) and a
+// pgx.Tx, so the execution read and transition helpers can run on either.
+type executionQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
 // queryExecutions is a helper to query and scan purchase executions.
 func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args ...any) ([]PurchaseExecution, error) {
-	rows, err := s.db.Query(ctx, query, args...)
+	return queryExecutionsOn(ctx, s.db, query, args...)
+}
+
+// queryExecutionsOn is queryExecutions on q, the pool or a transaction.
+func queryExecutionsOn(ctx context.Context, q executionQuerier, query string, args ...any) ([]PurchaseExecution, error) {
+	rows, err := q.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query executions: %w", err)
 	}
