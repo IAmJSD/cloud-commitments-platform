@@ -35,11 +35,17 @@ cp "$REPO_ROOT/scripts/setup-git-secrets.sh" "$tmp/repo/scripts/setup-git-secret
 cp "$REPO_ROOT/.gitallowed" "$tmp/repo/.gitallowed"
 cd "$tmp/repo"
 
+# A clone set up before #813 still has the old negated-class secret-key pattern
+# registered. Seed it, so the check below proves a setup run removes it (#295).
+LEGACY_SECRET_KEY='[^A-Za-z0-9/+=]{40}[^A-Za-z0-9/+=]'
+git config --add secrets.patterns "$LEGACY_SECRET_KEY"
+
 if ! bash scripts/setup-git-secrets.sh > "$tmp/setup.log" 2>&1; then
     echo "scripts/setup-git-secrets.sh failed in the throwaway repo:" >&2
     cat "$tmp/setup.log" >&2
     exit 1
 fi
+legacy_left=$(git config --get-all secrets.patterns | grep -cxF -- "$LEGACY_SECRET_KEY" || true)
 # A second run must succeed and register nothing twice: `git secrets --add`
 # exits 1 on an already-registered pattern, which used to abort a re-run
 # half-configured.
@@ -140,6 +146,47 @@ run_case "secret before an otherwise-allowed truncated PEM, same line" 1 l.go \
     'k := "'"$KEY"'"; PrivateKey: "'"$PEM"'\n...",'
 run_case "secret after an otherwise-allowed truncated PEM, same line" 1 m.go \
     '"private_key": "'"$PEM"'\nMIIEvQIBADANBg...\n'"$KEY"'"'
+
+check_result "setup removes the legacy negated secret-key pattern" 0 "$legacy_left"
+
+# Bare AWS secret access keys (#295): 40 characters with no name in front that
+# --register-aws or the "AWS Credentials" pattern could anchor on. Each key is the
+# filler below with one upper-case/digit pair written over it, so this file never
+# holds a key-shaped literal. The offsets reach every window the detector is
+# split into, including the first and last character a pair can start at.
+FILL=$(head -c 50 /dev/zero | tr '\0' x)
+# key_with LENGTH OFFSET PAIR: LENGTH filler characters with PAIR at OFFSET.
+key_with() {
+    printf '%s%s%s' "${FILL:0:$2}" "$3" "${FILL:0:$(($1 - $2 - ${#3}))}"
+}
+for offset in 0 4 5 9 10 14 15 19 20 24 25 29 30 34 35 38; do
+    run_case "bare key, Q7 pair at offset $offset" 1 bare.txt "$(key_with 40 "$offset" Q7)"
+done
+run_case "bare key, digit then upper-case" 1 bare.txt "$(key_with 40 20 7Q)"
+run_case "bare key, pair one character apart" 1 bare.txt "$(key_with 40 37 Q+7)"
+run_case "bare key, reversed pair one character apart" 1 bare.txt "$(key_with 40 0 7/Q)"
+run_case "unquoted YAML value" 1 creds.yaml "credential: $(key_with 40 12 Q7)"
+run_case "env-style assignment" 1 creds.env "TOKEN=$(key_with 40 12 Q7)"
+run_case "quoted JSON value" 1 creds.json "{\"token\": \"$(key_with 40 12 Q7)\"}"
+run_case "key followed by a comma" 1 keys.go "keys := []string{\"$(key_with 40 30 Q7)\", other}"
+run_case "key followed by a word after a dash" 1 keys.txt "$(key_with 40 30 Q7)-old"
+
+# Key-shaped runs the detector must leave alone: the box-drawing and dash banner
+# lines the legacy pattern flagged, commit SHAs, identifiers, base64 padding, and
+# runs one character too short or too long to be a key.
+SHA="3c0f8ac94048a2c3""6fce5ccddee54e6c4849a5cd"
+run_case "commit SHA" 0 sha.yml "      - uses: actions/checkout@$SHA # v4"
+run_case "box-drawing banner" 0 banner.sh "echo \"$(printf '\342\224\201%.0s' $(seq 41))\""
+run_case "dash banner" 0 banner.txt "$(head -c 41 /dev/zero | tr '\0' -)"
+run_case "long CamelCase test name" 0 names_test.go \
+    "// TestSummarizeRecommendationsWithCoverage checks the summary."
+run_case "key-shaped name after an underscore" 0 fn_test.go \
+    "// TestX_$(key_with 40 12 Q7) checks it."
+run_case "key-shaped function name" 0 fn_test.go "func $(key_with 40 12 Q7)(t *testing.T) {"
+run_case "40-character run followed by base64 padding" 0 go.sum \
+    "example.com/mod v1.0.0 h1:$(key_with 40 14 Q7)="
+run_case "39-character run" 0 short.txt "$(key_with 39 12 Q7)"
+run_case "41-character run" 0 long.txt "$(key_with 41 12 Q7)"
 
 # Negative controls for the setup-script allowlist entries below, each
 # closing one instance of the same class of hole (#1972 reintroduced at
