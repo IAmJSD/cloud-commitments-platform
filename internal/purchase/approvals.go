@@ -98,12 +98,8 @@ func maskActor(actor string) string {
 	if actor == "" {
 		return "<anon>"
 	}
-	if at := len(actor) - 1; at >= 0 {
-		for i, c := range actor {
-			if c == '@' {
-				return "***" + actor[i:]
-			}
-		}
+	if at := strings.Index(actor, "@"); at >= 0 {
+		return "***" + actor[at:]
 	}
 	// Not an email address -- log only the last 4 chars (e.g. a username).
 	if len(actor) > 4 {

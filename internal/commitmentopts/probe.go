@@ -557,42 +557,10 @@ func (p *SavingsPlansProber) probeOnePlanType(
 	if err != nil {
 		return nil, err
 	}
-	raw = dedupeRaw(raw)
-	// Use collect but override the service key to the per-product slug.
-	combos := collectWithService(serviceKey, raw)
-	return combos, nil
-}
-
-// dedupeRaw removes duplicate (durationSeconds, payment) pairs so that
-// collect does not see the same pair multiple times across an SP type's
-// pages. SP offerings differ by ProductType (EC2, Lambda, Fargate ...) but
-// share the same (duration, payment) matrix — we only need unique combos.
-func dedupeRaw(raw []rawOffer) []rawOffer {
-	type key struct {
-		dur     int64
-		payment string
-	}
-	seen := make(map[key]struct{}, len(raw))
-	out := make([]rawOffer, 0, len(raw))
-	for _, r := range raw {
-		k := key{r.durationSeconds, r.payment}
-		if _, dup := seen[k]; dup {
-			continue
-		}
-		seen[k] = struct{}{}
-		out = append(out, r)
-	}
-	return out
-}
-
-// collectWithService is like collect but uses the supplied serviceKey
-// instead of the service embedded in each rawOffer (rawOffer has no
-// service field; collect() uses the `service` argument, which is the
-// per-prober name). Extracted to avoid a second copy of the
-// normalization loop when the service name comes from outside the
-// prober's Service() method (as it does for SP plan types).
-func collectWithService(service string, raw []rawOffer) []Combo {
-	return collect(service, raw)
+	// collect dedupes on the normalized (term, payment) pair, which also
+	// collapses the same matrix repeated across an SP type's ProductTypes
+	// (EC2, Lambda, Fargate ...) and pages.
+	return collect(serviceKey, raw), nil
 }
 
 func (p *SavingsPlansProber) client(cfg aws.Config) SavingsPlansDescribeOfferings {
