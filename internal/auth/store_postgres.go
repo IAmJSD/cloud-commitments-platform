@@ -641,8 +641,8 @@ func (s *PostgresStore) CreateSession(ctx context.Context, session *Session) err
 	query := `
 		INSERT INTO sessions (
 			token, user_id, email, expires_at, created_at,
-			user_agent, ip_address, csrf_token
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			user_agent, ip_address, csrf_token, password_version
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 
 	_, err := s.db.Exec(ctx, query,
@@ -654,6 +654,7 @@ func (s *PostgresStore) CreateSession(ctx context.Context, session *Session) err
 		session.UserAgent,
 		session.IPAddress,
 		session.CSRFToken,
+		session.PasswordVersion,
 	)
 
 	if err != nil {
@@ -667,7 +668,7 @@ func (s *PostgresStore) CreateSession(ctx context.Context, session *Session) err
 func (s *PostgresStore) GetSession(ctx context.Context, token string) (*Session, error) {
 	query := `
 		SELECT token, user_id, email, expires_at, created_at,
-		       user_agent, ip_address, csrf_token
+		       user_agent, ip_address, csrf_token, password_version
 		FROM sessions
 		WHERE token = $1 AND expires_at > NOW()
 	`
@@ -682,6 +683,7 @@ func (s *PostgresStore) GetSession(ctx context.Context, token string) (*Session,
 		&session.UserAgent,
 		&session.IPAddress,
 		&session.CSRFToken,
+		&session.PasswordVersion,
 	)
 
 	if err != nil {

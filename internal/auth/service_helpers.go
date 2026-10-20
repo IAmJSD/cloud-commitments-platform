@@ -94,6 +94,9 @@ func (s *Service) createSession(ctx context.Context, user *User, userAgent, ipAd
 		UserAgent: userAgent,
 		IPAddress: ipAddress,
 		CSRFToken: csrfToken, // MAC stored for diagnostics only; not used in validation
+		// The version of the row whose password this login verified, so a
+		// rotation that commits after that read still revokes the session.
+		PasswordVersion: user.PasswordVersion,
 	}
 
 	if err := s.store.CreateSession(ctx, storedSession); err != nil {

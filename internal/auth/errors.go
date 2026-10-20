@@ -153,4 +153,8 @@ var (
 	// ErrAPIKeyPasswordRotated: the owner's password changed after the key was
 	// minted (issue #402).
 	ErrAPIKeyPasswordRotated = errors.New("API key predates the owner's last password change")
+
+	// ErrSessionPasswordRotated: the user's password changed after the session
+	// was issued (issue #398).
+	ErrSessionPasswordRotated = errors.New("session predates the user's last password change")
 )

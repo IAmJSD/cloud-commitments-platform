@@ -343,14 +343,8 @@ func (s *Service) ValidateSession(ctx context.Context, token string) (*Session, 
 		return nil, fmt.Errorf("session expired")
 	}
 
-	// UpdateUser revokes sessions on deactivation; this rejects any session that
-	// outlives that (a failed delete, or Active flipped another way). Issue #89.
-	user, err := s.loadUser(ctx, session.UserID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load session user: %w", err)
-	}
-	if !user.Active {
-		return nil, fmt.Errorf("session not found")
+	if err := s.checkSessionUser(ctx, session); err != nil {
+		return nil, err
 	}
 
 	// Return a copy of the session with the original token (not the hash) for client use.
@@ -358,6 +352,27 @@ func (s *Service) ValidateSession(ctx context.Context, token string) (*Session, 
 	result := *session
 	result.Token = token
 	return &result, nil
+}
+
+// checkSessionUser rejects a session whose user can no longer use it.
+func (s *Service) checkSessionUser(ctx context.Context, session *Session) error {
+	// UpdateUser revokes sessions on deactivation; this rejects any session that
+	// outlives that (a failed delete, or Active flipped another way). Issue #89.
+	user, err := s.loadUser(ctx, session.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to load session user: %w", err)
+	}
+	if !user.Active {
+		return fmt.Errorf("session not found")
+	}
+	// A password change deletes sessions only best-effort, and a login that
+	// verified the old password can insert its session after that delete.
+	// The version bump in the password write itself is what revokes them
+	// (issue #398).
+	if session.PasswordVersion != user.PasswordVersion {
+		return ErrSessionPasswordRotated
+	}
+	return nil
 }
 
 // ValidateCSRFToken validates the CSRF token for a session.
