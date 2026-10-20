@@ -3387,6 +3387,29 @@ func (s *PostgresStore) GetRIExchangeHistory(ctx context.Context, since time.Tim
 	return s.queryRIExchangeRecords(ctx, query, since, limit)
 }
 
+// GetRIExchangeHistoryForAccounts retrieves RI exchange history records for
+// the given account ids only. The account predicate runs in SQL, before the
+// LIMIT, so a scoped caller gets up to limit of their own records rather
+// than whatever survives a filter applied to the newest limit records of
+// every account (issue #308). An empty or nil accountIDs matches no records:
+// "= ANY('{}')" is false and "= ANY(NULL)" is NULL for every row.
+func (s *PostgresStore) GetRIExchangeHistoryForAccounts(ctx context.Context, since time.Time, limit int, accountIDs []string) ([]RIExchangeRecord, error) {
+	query := `
+		SELECT id, account_id, exchange_id, region, source_ri_ids,
+		       source_instance_type, source_count, target_offering_id,
+		       target_instance_type, target_count, payment_due::text,
+		       status, approval_token_hash, error, mode,
+		       created_at, updated_at, completed_at, expires_at,
+		       created_by_user_id, approved_by, ladder_run_id
+		FROM ri_exchange_history
+		WHERE created_at >= $1 AND account_id = ANY($3::text[])
+		ORDER BY created_at DESC
+		LIMIT $2
+	`
+
+	return s.queryRIExchangeRecords(ctx, query, since, limit, accountIDs)
+}
+
 // TransitionRIExchangeStatus atomically transitions an RI exchange record status.
 // Uses a single UPDATE...WHERE...RETURNING for atomicity, then diagnoses failure
 // only if zero rows are returned.

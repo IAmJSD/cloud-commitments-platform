@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/big"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -2216,32 +2217,9 @@ func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFu
 		return nil, err
 	}
 
-	since := time.Now().AddDate(-1, 0, 0)
-	records, err := h.config.GetRIExchangeHistory(ctx, since, 500)
+	records, err := h.loadRIExchangeHistory(ctx, session)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load exchange history: %w", err)
-	}
-
-	// RI exchange records carry the 12-digit AWS account id from STS, so
-	// resolve it to its single registered AWS account and match the scope by
-	// that account's UUID or name. An unregistered or ambiguous id matches
-	// only a literal entry in the allow-list. A lookup failure errors out.
-	allowed, err := h.getAccountScope(ctx, session)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
-	}
-	if !allowed.AllowsAll() {
-		accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to list cloud accounts for exchange history scope: %w", err)
-		}
-		filtered := records[:0]
-		for i := range records {
-			if exchangeRecordInScope(allowed, accounts, records[i].AccountID) {
-				filtered = append(filtered, records[i])
-			}
-		}
-		records = filtered
+		return nil, err
 	}
 
 	// Strip approval tokens — single-use secrets must not be included in
@@ -2251,6 +2229,79 @@ func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFu
 	}
 
 	return &RIExchangeHistoryResponse{Records: records}, nil
+}
+
+// riExchangeHistoryLimit caps how many exchange records one history request
+// returns. For a scoped caller it applies after the account restriction.
+const riExchangeHistoryLimit = 500
+
+// loadRIExchangeHistory returns the past year of exchange records the session
+// may see, newest first. A scoped caller's account restriction is pushed into
+// the store query so the limit counts only that caller's records: filtering
+// the newest records of every account afterwards could leave a scoped user
+// with a truncated or empty history (issue #308).
+//
+// RI exchange records carry the 12-digit AWS account id from STS, so it is
+// resolved to its single registered AWS account and the scope is matched by
+// that account's UUID or name. An unregistered or ambiguous id matches only a
+// literal entry in the allow-list. A lookup failure errors out.
+func (h *Handler) loadRIExchangeHistory(ctx context.Context, session *Session) ([]config.RIExchangeRecord, error) {
+	allowed, err := h.getAccountScope(ctx, session)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	since := time.Now().AddDate(-1, 0, 0)
+	if allowed.AllowsAll() {
+		records, loadErr := h.config.GetRIExchangeHistory(ctx, since, riExchangeHistoryLimit)
+		if loadErr != nil {
+			return nil, fmt.Errorf("failed to load exchange history: %w", loadErr)
+		}
+		return records, nil
+	}
+
+	accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list cloud accounts for exchange history scope: %w", err)
+	}
+	ids := exchangeAccountIDsInScope(allowed, accounts)
+	records, err := h.config.GetRIExchangeHistoryForAccounts(ctx, since, riExchangeHistoryLimit, ids)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load exchange history: %w", err)
+	}
+	// Defense in depth: re-check every returned row against the scope, so a
+	// store that ignored the account restriction still cannot leak another
+	// account's exchanges.
+	filtered := make([]config.RIExchangeRecord, 0, len(records))
+	for i := range records {
+		if exchangeRecordInScope(allowed, accounts, records[i].AccountID) {
+			filtered = append(filtered, records[i])
+		}
+	}
+	return filtered, nil
+}
+
+// exchangeAccountIDsInScope returns, sorted, every STS account id whose
+// exchange records the scope covers under exchangeRecordInScope. A covered id
+// is either a registered account's external id or a literal allow-list entry,
+// so testing those candidates finds them all. Literal entries that are
+// not STS ids (a UUID or a name) are kept too: they match no stored record,
+// and keeping them makes the set exactly what exchangeRecordInScope accepts.
+func exchangeAccountIDsInScope(allowed auth.AccountScope, accounts []config.CloudAccount) []string {
+	candidates := make(map[string]struct{}, len(allowed.Accounts)+len(accounts))
+	for _, a := range allowed.Accounts {
+		candidates[a] = struct{}{}
+	}
+	for i := range accounts {
+		candidates[accounts[i].ExternalID] = struct{}{}
+	}
+	ids := make([]string, 0, len(candidates))
+	for id := range candidates {
+		if exchangeRecordInScope(allowed, accounts, id) {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // exchangeRecordInScope reports whether the scope covers an exchange record's

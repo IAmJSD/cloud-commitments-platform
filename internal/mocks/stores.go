@@ -938,6 +938,19 @@ func (m *MockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.T
 	return v, args.Error(1)
 }
 
+func (m *MockConfigStore) GetRIExchangeHistoryForAccounts(ctx context.Context, since time.Time, limit int, accountIDs []string) ([]config.RIExchangeRecord, error) {
+	m.record("GetRIExchangeHistoryForAccounts", ctx, since, limit, accountIDs)
+	args := m.Called(ctx, since, limit, accountIDs)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).([]config.RIExchangeRecord)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected []config.RIExchangeRecord, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id, fromStatus, toStatus string, actor *string) (*config.RIExchangeRecord, error) {
 	m.record("TransitionRIExchangeStatus", ctx, id, fromStatus, toStatus, actor)
 	args := m.Called(ctx, id, fromStatus, toStatus, actor)

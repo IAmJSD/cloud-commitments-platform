@@ -225,6 +225,9 @@ func (m *mockConfigStoreForHealth) GetRIExchangeRecordByToken(ctx context.Contex
 func (m *mockConfigStoreForHealth) GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]config.RIExchangeRecord, error) {
 	return nil, nil
 }
+func (m *mockConfigStoreForHealth) GetRIExchangeHistoryForAccounts(ctx context.Context, since time.Time, limit int, accountIDs []string) ([]config.RIExchangeRecord, error) {
+	return nil, nil
+}
 func (m *mockConfigStoreForHealth) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*config.RIExchangeRecord, error) {
 	return nil, nil
 }

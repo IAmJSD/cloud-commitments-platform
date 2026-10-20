@@ -466,6 +466,10 @@ type StoreInterface interface {
 	GetRIExchangeRecord(ctx context.Context, id string) (*RIExchangeRecord, error)
 	GetRIExchangeRecordByToken(ctx context.Context, token string) (*RIExchangeRecord, error)
 	GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]RIExchangeRecord, error)
+	// GetRIExchangeHistoryForAccounts is GetRIExchangeHistory restricted to
+	// records whose account_id is in accountIDs, with the limit applied after
+	// that restriction. An empty accountIDs matches no records.
+	GetRIExchangeHistoryForAccounts(ctx context.Context, since time.Time, limit int, accountIDs []string) ([]RIExchangeRecord, error)
 	// TransitionRIExchangeStatus atomically transitions an RI exchange record status.
 	// actor is the UUID of the user performing the transition (nil for system-initiated paths).
 	TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*RIExchangeRecord, error)
