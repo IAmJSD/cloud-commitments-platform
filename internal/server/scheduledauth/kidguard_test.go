@@ -200,12 +200,20 @@ func TestValidate_OIDC_FailedRefreshDoesNotCacheKid(t *testing.T) {
 	failing.Store(true)
 	bad := signedFor(t, keyX, t0)
 	for i := 0; i < 3; i++ {
+		// go-oidc's keysFromRemote marks the in-flight fetch done before it
+		// clears r.inflight (jwks.go:196-234), so a back-to-back Validate can
+		// reuse the finished fetch without a new request. Retry until one
+		// fetch happens; every call must still fail closed.
 		before := hits.Load()
-		if err := v.Validate(context.Background(), bad); !errors.Is(err, ErrUnauthorized) {
-			t.Fatalf("token %d: expected ErrUnauthorized, got %v", i, err)
-		}
-		if hits.Load() == before {
-			t.Fatalf("token %d: no JWKS fetch although no refresh ever confirmed the kid unknown", i)
+		deadline := time.Now().Add(2 * time.Second)
+		for hits.Load() == before {
+			if err := v.Validate(context.Background(), bad); !errors.Is(err, ErrUnauthorized) {
+				t.Fatalf("token %d: expected ErrUnauthorized, got %v", i, err)
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("token %d: no JWKS fetch within 2s although no refresh ever confirmed the kid unknown", i)
+			}
+			time.Sleep(5 * time.Millisecond)
 		}
 	}
 	if n := negativeKidCount(v); n != 0 {
