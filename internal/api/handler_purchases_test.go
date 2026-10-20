@@ -5896,8 +5896,9 @@ func TestHandler_revokePurchase_NotFound(t *testing.T) {
 }
 
 // TestHandler_revokePurchase_ExpiredToken verifies that a matching token whose
-// ApprovalTokenExpiresAt deadline has passed is rejected with 409, so a stale
-// completed execution cannot be marked revocation_requested via an old link.
+// ApprovalTokenExpiresAt deadline has passed is rejected with 410 (409 before
+// issue #587 aligned revoke with approve and cancel), so a stale completed
+// execution cannot be marked revocation_requested via an old link.
 // Regression test for the revoke-token expiry CR finding (PR #889).
 func TestHandler_revokePurchase_ExpiredToken(t *testing.T) {
 	ctx := context.Background()
@@ -5909,7 +5910,7 @@ func TestHandler_revokePurchase_ExpiredToken(t *testing.T) {
 
 	exec := &config.PurchaseExecution{
 		ExecutionID:            execID,
-		ApprovalToken:          token,
+		ApprovalToken:          config.HashApprovalToken(token), // stored as its digest (issue #103)
 		ApprovalTokenExpiresAt: &past,
 		Status:                 "completed",
 		Recommendations: []config.RecommendationRecord{
@@ -5942,7 +5943,7 @@ func TestHandler_revokePurchase_ExpiredToken(t *testing.T) {
 	require.Error(t, err, "expired revocation token must be rejected")
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a client error")
-	assert.Equal(t, 409, ce.code)
+	assert.Equal(t, 410, ce.code)
 	assert.Contains(t, ce.message, "expired")
 }
 

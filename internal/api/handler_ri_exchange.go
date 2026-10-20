@@ -2334,10 +2334,10 @@ func (h *Handler) approveRIExchangeViaToken(ctx context.Context, req *events.Lam
 
 	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "processing", resolveCreatorUserID(session))
 	if err != nil {
-		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
+		return nil, riExchangeTransitionError(err, riExchangeApproveConflictMsg)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was canceled by a newer analysis run")
+		return nil, NewClientError(409, riExchangeApproveConflictMsg)
 	}
 
 	result, execErr := h.executeApprovedExchange(ctx, id, record)
@@ -2397,10 +2397,10 @@ func (h *Handler) approveRIExchangeViaSession(ctx context.Context, req *events.L
 	// Session-authed approval: stamp the session user as the actor.
 	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "processing", resolveCreatorUserID(session))
 	if err != nil {
-		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
+		return nil, riExchangeTransitionError(err, riExchangeApproveConflictMsg)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was canceled by a newer analysis run")
+		return nil, NewClientError(409, riExchangeApproveConflictMsg)
 	}
 
 	result, execErr := h.executeApprovedExchange(ctx, id, record)
@@ -2615,19 +2615,56 @@ func (h *Handler) validateExchangeApproval(ctx context.Context, id, token string
 		return nil, NewClientError(404, "exchange record not found")
 	}
 
-	if record.ApprovalToken == "" {
-		return nil, NewClientError(403, "this exchange record does not support approval")
+	if err := checkExchangeToken(record, token, "approval"); err != nil {
+		return nil, err
 	}
-
-	// record.ApprovalToken is the SHA-256 hex digest stored at rest
-	// (issue #103); hash the supplied token and compare digests in
-	// constant time, matching config.ApprovalTokenMatches everywhere else
-	// in this codebase that validates one of these tokens.
-	if !config.ApprovalTokenMatches(record.ApprovalToken, token) {
-		return nil, NewClientError(403, "invalid approval token")
-	}
-
 	return record, nil
+}
+
+const (
+	riExchangeApproveConflictMsg = "exchange already processed, expired, or was canceled by a newer analysis run"
+	riExchangeRejectConflictMsg  = "exchange already processed, expired, or was canceled"
+	riExchangeExpiredMsg         = "exchange has expired"
+)
+
+// checkExchangeToken applies the emailed-token status mapping shared with the
+// purchase approve, cancel and revoke links (issue #587): a record without a
+// token, or a token that does not match, is 403, and a matching token on an
+// exchange past its expires_at is 410. The match is checked first, so only
+// the token holder learns that the exchange expired. kind is "approval" or
+// "rejection" and only shapes the 403 text.
+//
+// record.ApprovalToken is the SHA-256 hex digest stored at rest (issue #103);
+// config.ApprovalTokenMatches hashes the supplied token and compares digests
+// in constant time, as everywhere else that validates one of these tokens.
+func checkExchangeToken(record *config.RIExchangeRecord, token, kind string) error {
+	if record.ApprovalToken == "" {
+		return NewClientError(403, "this exchange record does not support "+kind)
+	}
+	if !config.ApprovalTokenMatches(record.ApprovalToken, token) {
+		return NewClientError(403, "invalid "+kind+" token")
+	}
+	if record.ExpiresAt != nil && time.Now().After(*record.ExpiresAt) {
+		return NewClientError(410, riExchangeExpiredMsg)
+	}
+	return nil
+}
+
+// riExchangeTransitionError maps a lost pending -> X transition: the record
+// expired (410) or another writer moved its status first (409), the same
+// codes as an expired or already-handled purchase email link (issue #587).
+// The expiry pre-check in checkExchangeToken cannot close the window alone:
+// the record can expire, or a concurrent approve or reject can win, between
+// that check and the transition. Anything else stays a server error.
+func riExchangeTransitionError(err error, conflictMsg string) error {
+	switch {
+	case errors.Is(err, config.ErrRIExchangeExpired):
+		return NewClientError(410, riExchangeExpiredMsg)
+	case errors.Is(err, config.ErrRIExchangeNotInExpectedStatus):
+		return NewClientError(409, conflictMsg)
+	default:
+		return fmt.Errorf("failed to transition exchange status: %w", err)
+	}
 }
 
 // failExchange marks an exchange as failed, logging if the DB write also fails.
@@ -2783,23 +2820,17 @@ func (h *Handler) rejectRIExchange(ctx context.Context, id, token string) (any, 
 		return nil, NewClientError(404, "exchange record not found")
 	}
 
-	if record.ApprovalToken == "" {
-		return nil, NewClientError(403, "this exchange record does not support rejection")
-	}
-
-	// See validateExchangeApproval: record.ApprovalToken is a SHA-256 hex
-	// digest (issue #103), not the raw secret.
-	if !config.ApprovalTokenMatches(record.ApprovalToken, token) {
-		return nil, NewClientError(403, "invalid rejection token")
+	if tokenErr := checkExchangeToken(record, token, "rejection"); tokenErr != nil {
+		return nil, tokenErr
 	}
 
 	// Token-based rejection: no session user, so transitioned_by = NULL.
 	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", config.StatusCanceled, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
+		return nil, riExchangeTransitionError(err, riExchangeRejectConflictMsg)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was canceled")
+		return nil, NewClientError(409, riExchangeRejectConflictMsg)
 	}
 
 	return map[string]string{"status": config.StatusCanceled}, nil

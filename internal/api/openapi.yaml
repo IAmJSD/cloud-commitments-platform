@@ -945,7 +945,16 @@ paths:
         '409':
           description: >
             The execution status cannot be revoked (still pending or
-            notified, or not completed), or the revocation link has expired.
+            notified, or not completed), or its status changed concurrently.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: >
+            Token mode only, the revocation token matches but has expired.
+            The token is matched first, so a wrong token on an expired link
+            is 403, as on approve and cancel.
           content:
             application/json:
               schema:
@@ -1544,8 +1553,19 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: >
-            The exchange is no longer pending (already processed, expired or
-            canceled by a newer analysis run).
+            The exchange is no longer pending (already processed, or canceled
+            by a newer analysis run), including when a concurrent approve or
+            reject changed it first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: >
+            The exchange has expired (its expires_at has passed). Token mode
+            checks this once the token matches, so a wrong token on an
+            expired exchange is 403; both modes also get 410 when the
+            exchange expires before the atomic transition.
           content:
             application/json:
               schema:
@@ -1598,7 +1618,17 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          description: The exchange is no longer pending (already processed, expired or canceled).
+          description: >
+            The exchange is no longer pending (already processed or canceled),
+            including when a concurrent approve or reject changed it first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: >
+            The rejection token matches but the exchange has expired (its
+            expires_at has passed). A wrong token on an expired exchange is 403.
           content:
             application/json:
               schema:

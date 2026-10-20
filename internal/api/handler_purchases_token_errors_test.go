@@ -17,7 +17,8 @@ import (
 
 // Email-link approve/cancel and the email revoke endpoint are driven through
 // HandleRequest with the real purchase.Manager so the real token and status
-// errors reach the HTTP mapping (issue #564).
+// errors reach the HTTP mapping (issue #564). All three share one mapping:
+// invalid token 403, expired token 410, wrong status 409 (issue #587).
 
 const tokenErrExecID = "12345678-1234-1234-1234-123456789abc"
 const tokenErrRawToken = "raw-secret-token"
@@ -85,6 +86,13 @@ func TestHandleRequest_TokenActions_TokenAndStatusErrorsAre4xx(t *testing.T) {
 		{"cancel invalid token", "cancel", config.PurchaseExecution{Status: "pending", ApprovalToken: hash, ApprovalTokenExpiresAt: &future}, "wrong", 403},
 		{"cancel expired token", "cancel", config.PurchaseExecution{Status: "pending", ApprovalToken: hash, ApprovalTokenExpiresAt: &past}, tokenErrRawToken, 410},
 		{"cancel non-cancelable status", "cancel", config.PurchaseExecution{Status: "completed", ApprovalToken: hash, ApprovalTokenExpiresAt: &future}, tokenErrRawToken, 409},
+		// Issue #587: revoke uses the same mapping as approve and cancel, and
+		// the token is matched before its expiry is read.
+		{"approve wrong token on an expired link", "approve", config.PurchaseExecution{Status: "pending", ApprovalToken: hash, ApprovalTokenExpiresAt: &past}, "wrong", 403},
+		{"revoke invalid token", "revoke", config.PurchaseExecution{Status: "completed", ApprovalToken: hash, ApprovalTokenExpiresAt: &future}, "wrong", 403},
+		{"revoke expired token", "revoke", config.PurchaseExecution{Status: "completed", ApprovalToken: hash, ApprovalTokenExpiresAt: &past}, tokenErrRawToken, 410},
+		{"revoke wrong token on an expired link", "revoke", config.PurchaseExecution{Status: "completed", ApprovalToken: hash, ApprovalTokenExpiresAt: &past}, "wrong", 403},
+		{"revoke non-revocable status", "revoke", config.PurchaseExecution{Status: "pending", ApprovalToken: hash, ApprovalTokenExpiresAt: &future}, tokenErrRawToken, 409},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

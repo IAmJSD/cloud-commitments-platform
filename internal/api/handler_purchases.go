@@ -1872,33 +1872,30 @@ func checkRevokableStatus(execution *config.PurchaseExecution) error {
 	}
 }
 
-// validateRevokeToken checks that the execution carries a non-empty
-// ApprovalToken, that the token has not expired, that the revocation window
-// has not closed (config.RevocationWindow after CompletedAt), and that the
-// token matches using constant-time comparison. Pre-migration rows without an
-// ApprovalTokenExpiresAt pass the expiry check (legacy backward compat).
-// Extracted from revokeViaEmailToken to keep that function under the cyclomatic limit.
+// validateRevokeToken checks the revocation token with the same status
+// mapping as the approve and cancel links (tokenActionError, issue #587): a
+// missing or non-matching token is 403 and a matching but expired token is
+// 410. It shares purchase.ValidateApprovalToken, so the token is matched (in
+// constant time, against the SHA-256 digest stored at rest) before its expiry
+// is read and only the token holder learns that the link expired.
+// Pre-migration rows without an ApprovalTokenExpiresAt pass the expiry check
+// (legacy backward compat). Last, the 24-hour revocation window must still be
+// open (config.RevocationWindow after CompletedAt). Extracted from
+// revokeViaEmailToken to keep that function under the cyclomatic limit.
 func validateRevokeToken(execution *config.PurchaseExecution, token string) error {
-	if execution.ApprovalToken == "" {
+	switch err := purchase.ValidateApprovalToken(execution, token); {
+	case errors.Is(err, purchase.ErrInvalidApprovalToken):
 		return NewClientError(403, "invalid revocation token")
-	}
-	if execution.ApprovalTokenExpiresAt != nil && time.Now().After(*execution.ApprovalTokenExpiresAt) {
-		return NewClientError(409, fmt.Sprintf(
+	case errors.Is(err, purchase.ErrApprovalTokenExpired):
+		return NewClientError(410, fmt.Sprintf(
 			"execution %s cannot be revoked: the revocation link has expired", execution.ExecutionID))
+	case err != nil:
+		return err
 	}
 	// Enforce the 24-hour revocation window (issue #291 Finding #6).
 	// Use CompletedAt as the reference timestamp; fall back to ExecutedAt
 	// for direct-execute rows which may not have a CompletedAt yet.
-	if windowErr := checkRevocationWindow(execution); windowErr != nil {
-		return windowErr
-	}
-	// execution.ApprovalToken is the SHA-256 hex digest stored at rest
-	// (issue #103), not the raw secret; config.ApprovalTokenMatches hashes
-	// the supplied token and compares digests in constant time.
-	if !config.ApprovalTokenMatches(execution.ApprovalToken, token) {
-		return NewClientError(403, "invalid revocation token")
-	}
-	return nil
+	return checkRevocationWindow(execution)
 }
 
 // checkRevocationWindow returns a 403 ClientError when the 24-hour revocation
