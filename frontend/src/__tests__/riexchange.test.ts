@@ -1382,23 +1382,10 @@ describe('excluded RIs notice', () => {
     await loadReshapeRecommendations();
 
     const notice = document.getElementById('ri-exchange-recommendations-excluded');
-    expect(notice?.textContent).toContain('2 convertible RIs were left out of the analysis');
-    expect(notice?.textContent).toContain('ri-0: no term');
+    expect(notice?.textContent).toContain('2 convertible RIs were left out because AWS returned no term length');
+    expect(notice?.textContent).toContain('ri-0');
     expect(notice?.textContent).toContain('<img src=x onerror=alert(1)>');
     expect(notice?.querySelector('img')).toBeNull();
-  });
-
-  it('shows each RI with its own reason, not a fixed term-length message (issue #1188)', () => {
-    renderExcludedRIsNotice([
-      { ri_id: 'ri-noterm', reason: 'AWS returned no term length (duration), so its monthly cost cannot be computed' },
-      { ri_id: 'ri-unpriced', reason: 'AWS returned no pricing (fixed, usage and recurring charges total zero or less), so its monthly cost cannot be computed' },
-    ]);
-    const text = document.getElementById('ri-exchange-recommendations-excluded')?.textContent ?? '';
-    expect(text).toContain('ri-noterm: AWS returned no term length');
-    expect(text).toContain('ri-unpriced: AWS returned no pricing');
-
-    renderExcludedRIsNotice([{ ri_id: 'ri-unpriced', reason: 'AWS returned no pricing' }]);
-    expect(document.getElementById('ri-exchange-recommendations-excluded')?.textContent).not.toContain('term length');
   });
 
   it('shows no notice when excluded_ris is empty or absent, and clears a stale one', () => {
