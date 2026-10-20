@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1288,12 +1289,21 @@ func TestScheduler_ListRecommendations_ColdStart_NonLambda_KicksBackgroundCollec
 	}
 }
 
-// fanOutPerAccount bounds parallel in-flight calls to
-// CUDLY_MAX_ACCOUNT_PARALLELISM. Test with a fake fn that increments an
-// atomic counter on entry and decrements on exit, assert peak stays at
-// or below the limit.
+// fanOutPerAccount runs up to CUDLY_MAX_ACCOUNT_PARALLELISM account calls
+// in parallel, and no more. The fake fn increments an atomic in-flight
+// counter on entry, records the peak and decrements on exit. The first
+// `limit` calls also wait at a one-shot barrier that opens once `limit`
+// calls have arrived, so a correct fan-out deterministically reaches a peak
+// of exactly `limit` regardless of runner load. A serial (or under-limit)
+// fan-out never gets `limit` calls in flight: the first call waits out
+// barrierTimeout alone and the test fails (issue #38, audit A16-011).
+// barrierTimeout only bounds that failure path; a passing run never waits on it.
 func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
-	t.Setenv("CUDLY_MAX_ACCOUNT_PARALLELISM", "3")
+	const (
+		limit          = 3
+		barrierTimeout = 2 * time.Second
+	)
+	t.Setenv("CUDLY_MAX_ACCOUNT_PARALLELISM", fmt.Sprint(limit))
 
 	// 20 accounts to make the bound observable.
 	accounts := make([]config.CloudAccount, 20)
@@ -1312,18 +1322,41 @@ func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
 		}
 	}
 
+	var arrived atomic.Int32
+	var barrierTimeouts atomic.Int32
+	limitReached := make(chan struct{})
+	var openBarrier sync.Once
+	release := func() { openBarrier.Do(func() { close(limitReached) }) }
+
 	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
-		cur := inflight.Add(1)
-		updatePeak(cur)
-		// Small sleep so concurrent workers genuinely overlap.
+		updatePeak(inflight.Add(1))
+		defer inflight.Add(-1)
+		if arrived.Add(1) == limit {
+			release()
+		}
+		select {
+		case <-limitReached:
+		case <-time.After(barrierTimeout):
+			// Record the failure, then open the barrier for every later
+			// call so a serial fan-out fails after one timeout, not twenty.
+			barrierTimeouts.Add(1)
+			release()
+		}
+		// Short hold so a fan-out that ignored the limit would let extra
+		// workers overlap the held ones and push the peak above it.
 		time.Sleep(5 * time.Millisecond)
-		inflight.Add(-1)
 		return []config.RecommendationRecord{{ID: acct.ID}}, nil, nil
 	}
 
 	out, outcome := fanOutPerAccount(context.Background(), "Test", accounts, fn)
 	assert.Len(t, out, len(accounts), "all accounts contribute one record")
-	assert.LessOrEqual(t, peak.Load(), int32(3), "peak in-flight must not exceed CUDLY_MAX_ACCOUNT_PARALLELISM")
+	assert.LessOrEqual(t, peak.Load(), int32(limit), "peak in-flight must not exceed CUDLY_MAX_ACCOUNT_PARALLELISM")
+	assert.Equal(t, int32(limit), peak.Load(),
+		"fanOutPerAccount must run CUDLY_MAX_ACCOUNT_PARALLELISM accounts in parallel: peak in-flight was %d, want %d",
+		peak.Load(), limit)
+	assert.Zero(t, barrierTimeouts.Load(),
+		"%d account call(s) waited %v at the barrier without %d calls in flight: the fan-out ran serially or below the limit",
+		barrierTimeouts.Load(), barrierTimeout, limit)
 	assert.Equal(t, len(accounts), outcome.SucceededCount)
 	assert.Zero(t, outcome.FailedCount)
 }
