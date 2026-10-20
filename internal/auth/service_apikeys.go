@@ -200,6 +200,11 @@ func (s *Service) validateAPIKeyPermissions(ctx context.Context, user *User, per
 }
 
 // ListUserAPIKeys retrieves all API keys for a user.
+//
+// A key minted before the owner's last password change is returned with
+// IsActive=false even when its row is still active: ValidateUserAPIKey
+// already rejects it, and the row only stays active when the best-effort
+// revocation scan after the password change failed (issue #534).
 func (s *Service) ListUserAPIKeys(ctx context.Context, userID string) ([]*UserAPIKey, error) {
 	// Validate user exists
 	user, err := s.store.GetUserByID(ctx, userID)
@@ -218,7 +223,29 @@ func (s *Service) ListUserAPIKeys(ctx context.Context, userID string) ([]*UserAP
 		return nil, fmt.Errorf("failed to list API keys: %w", err)
 	}
 
-	return keys, nil
+	return markPasswordRotatedKeysInactive(keys, user.PasswordVersion), nil
+}
+
+// markPasswordRotatedKeysInactive returns keys with every key minted under a
+// password version older than passwordVersion replaced by an inactive copy,
+// leaving the store's structs untouched.
+//
+// It compares with < rather than the != that ValidateUserAPIKey uses because
+// the user row is read before the keys: a key minted after a rotation that
+// lands between the two reads carries a newer version than this snapshot and
+// is valid. password_version only ever increases (migration 000103's trigger),
+// so a key older than the snapshot is stale whatever happens after the read.
+func markPasswordRotatedKeysInactive(keys []*UserAPIKey, passwordVersion int64) []*UserAPIKey {
+	out := make([]*UserAPIKey, len(keys))
+	for i, key := range keys {
+		out[i] = key
+		if key.PasswordVersion < passwordVersion {
+			stale := *key
+			stale.IsActive = false
+			out[i] = &stale
+		}
+	}
+	return out
 }
 
 // GetAPIKeyByHash retrieves an API key by its hash (for authentication).
