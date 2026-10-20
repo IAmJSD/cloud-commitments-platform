@@ -109,3 +109,54 @@ GCP-0015
 # build artifacts -- including source maps (*.map, produced by hidden-source-map
 # in webpack.config.js) -- are uploaded to any GCS bucket.
 GCP-0001
+
+# ---------------------------------------------------------------------------
+# Go dependency vulnerabilities (trivy fs, gomod analyzer) -- issue #3
+# ---------------------------------------------------------------------------
+# Each entry is one exact advisory ID with no published fix for the module
+# path this repo resolves. The `exp:` date is the review date: once it
+# passes, Trivy stops honoring the entry and the finding reappears, forcing
+# a re-check of whether a fixed version now exists. Last reviewed 2026-10-20
+# against the trivy DB of that day and OSV.
+#
+# Reachability is not only asserted here: CI's govulncheck step (source mode,
+# both modules, via scripts/govulncheck-retry.sh) exits 3 and fails the
+# Security Scanning job if any of these advisories' vulnerable symbols
+# becomes called. So these ignores silence the go.mod-level Trivy report
+# only, never a reachable call.
+
+# github.com/docker/docker v28.5.1+incompatible (go.mod, indirect).
+# Why unreachable: no package of this module is compiled into anything in
+# this repo, not even a test. `go list -deps ./...` and
+# `go list -test -deps ./...` (with and without -tags integration) return
+# no github.com/docker/docker/... package. The requirement exists only in
+# the module graph: golang-migrate's own pgx/v5 test imports
+# github.com/dhui/dktest, which imports docker/docker. Our testcontainers
+# use goes through github.com/moby/moby/client instead. All four advisories
+# are in the Docker daemon (github.com/docker/docker/daemon or the plugin
+# privilege check), which a client-side Go module cannot run.
+# Why no fix: OSV publishes no `fixed` event for the github.com/docker/docker
+# module path (CVE-2026-41567, -41568, -42306 have last_affected=28.5.2; the
+# fixes ship only as github.com/moby/moby/v2 >= 2.0.0-beta.8/-beta.14).
+# Trivy's "fixed in 29.3.1" for CVE-2026-33997 is the Docker Engine release,
+# which has no github.com/docker/docker Go module version (the newest is
+# v28.5.2+incompatible). golang-migrate v4.20.1 still requires
+# docker/docker v28.5.2+incompatible, so a bump cannot remove it either.
+# Review: drop these when golang-migrate/dktest move to github.com/moby/moby.
+CVE-2026-41567 exp:2027-04-20
+CVE-2026-42306 exp:2027-04-20
+CVE-2026-41568 exp:2027-04-20
+CVE-2026-33997 exp:2027-04-20
+
+# golang.org/x/crypto (openpgp subpackages), GO-2026-5932.
+# Why unreachable: the advisory covers only golang.org/x/crypto/openpgp and
+# its subpackages (armor, clearsign, elgamal, errors, packet, s2k). Nothing
+# in this repo imports any of them: `go list -deps` and `go list -test -deps`
+# (with and without -tags integration, both modules) return no
+# golang.org/x/crypto/openpgp package; the x/crypto packages actually built
+# are bcrypt, ssh, pkcs12, hkdf and their internal dependencies.
+# Why no fix: the package is frozen and unmaintained; OSV lists
+# introduced=0 with no fixed event, so no x/crypto version clears it.
+# scripts/scan-shipped-image.sh already tolerates it in /app/cudly for the
+# same reason.
+GO-2026-5932 exp:2027-04-20
