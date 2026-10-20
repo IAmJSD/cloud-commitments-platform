@@ -18,6 +18,10 @@ import (
 // then disables its plan. A single-account child clears requireExecutionAccess
 // on its own account while the plan spans accounts the caller cannot see, so
 // the plan disable needs the every-account check of the plan mutation routes.
+//
+// Issue #623: when that check fails, the whole request is refused with a 403
+// before anything is written, instead of canceling the execution and silently
+// leaving the plan enabled.
 
 const plannedDeleteExecID = "55555555-5555-4555-8555-555555555555"
 
@@ -82,18 +86,30 @@ func (f plannedDeleteFixture) planDisables() int {
 	return n
 }
 
-func TestRouterDispatch_DeletePlannedPurchase_PartiallyScopedKeepsPlanEnabled(t *testing.T) {
+// requireRefusedBeforeCancel asserts the request was refused with a 403 that
+// says why, and that neither the execution nor the plan was touched.
+func (f plannedDeleteFixture) requireRefusedBeforeCancel(t *testing.T, err error) {
+	t.Helper()
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a client error, got %T: %v", err, err)
+	assert.Equal(t, 403, ce.code)
+	assert.Contains(t, err.Error(), "every account on the plan")
+	store := f.store
+	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	assert.Zero(t, f.planDisables(), "a refused request must not disable the plan")
+}
+
+// Issue #623: a caller who cannot disable the plan is refused before the
+// cancel, so the plan is never left enabled behind a 200.
+func TestRouterDispatch_DeletePlannedPurchase_PartiallyScopedRefusedBeforeCancel(t *testing.T) {
 	f := newPlannedDeleteFixture(t, []config.CloudAccount{inScopeAccount(), outOfScopeAccount()}, scopedInAccount)
 	store := f.store
 
 	resp, err := f.delete(t)
 
-	require.NoError(t, err)
-	assert.Equal(t, "canceled", resp.Status)
-	require.NotNil(t, resp.PlanDisabled)
-	assert.False(t, *resp.PlanDisabled)
-	store.AssertNumberOfCalls(t, "TransitionExecutionStatus", 1)
-	assert.Zero(t, f.planDisables(), "a plan spanning an out-of-scope account must stay enabled")
+	assert.Nil(t, resp)
+	f.requireRefusedBeforeCancel(t, err)
 	store.AssertNotCalled(t, "GetPurchasePlan", mock.Anything, mock.Anything)
 }
 
@@ -127,25 +143,21 @@ func TestRouterDispatch_DeletePlannedPurchase_UnrestrictedDisablesPlanWithoutSco
 }
 
 // A plan with no accounts is hidden from scoped callers, so the disable is
-// skipped like the partially scoped case.
-func TestRouterDispatch_DeletePlannedPurchase_ZeroAccountPlanKeepsPlanEnabled(t *testing.T) {
+// refused like the partially scoped case.
+func TestRouterDispatch_DeletePlannedPurchase_ZeroAccountPlanRefusedBeforeCancel(t *testing.T) {
 	f := newPlannedDeleteFixture(t, nil, scopedInAccount)
-	store := f.store
 
-	resp, err := f.delete(t)
+	_, err := f.delete(t)
 
-	require.NoError(t, err)
-	require.NotNil(t, resp.PlanDisabled)
-	assert.False(t, *resp.PlanDisabled)
-	store.AssertNumberOfCalls(t, "TransitionExecutionStatus", 1)
-	assert.Zero(t, f.planDisables())
+	f.requireRefusedBeforeCancel(t, err)
 }
 
 // A store failure while resolving the plan's accounts is not a scope refusal:
-// it surfaces and the plan is not disabled.
-func TestRouterDispatch_DeletePlannedPurchase_PlanAccountLookupFailureSurfaces(t *testing.T) {
+// it surfaces as a server error, and nothing is canceled or disabled.
+func TestRouterDispatch_DeletePlannedPurchase_PlanAccountLookupFailureSurfacesBeforeCancel(t *testing.T) {
 	f := newPlannedDeleteFixture(t, nil, scopedInAccount)
-	f.store.GetPlanAccountsFn = func(context.Context, string) ([]config.CloudAccount, error) {
+	store := f.store
+	store.GetPlanAccountsFn = func(context.Context, string) ([]config.CloudAccount, error) {
 		return nil, errors.New("db down")
 	}
 
@@ -153,7 +165,66 @@ func TestRouterDispatch_DeletePlannedPurchase_PlanAccountLookupFailureSurfaces(t
 
 	require.Error(t, err)
 	assert.False(t, IsNotFoundError(err))
+	_, isClient := IsClientError(err)
+	assert.False(t, isClient, "a store failure must not read as a client refusal: %v", err)
+	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	assert.Zero(t, f.planDisables())
+}
+
+// The plan's accounts can change between the pre-cancel check and the
+// disable (an admin attaches an out-of-scope account mid-request). The
+// disable re-checks and, when it is refused, reports a 409 naming the
+// half-done state instead of a 200 that hides it.
+func TestRouterDispatch_DeletePlannedPurchase_PlanAccountsChangeDuringCancel(t *testing.T) {
+	f := newPlannedDeleteFixture(t, nil, scopedInAccount)
+	lookups := 0
+	f.store.GetPlanAccountsFn = func(context.Context, string) ([]config.CloudAccount, error) {
+		lookups++
+		if lookups == 1 {
+			return []config.CloudAccount{inScopeAccount()}, nil
+		}
+		return []config.CloudAccount{inScopeAccount(), outOfScopeAccount()}, nil
+	}
+
+	resp, err := f.delete(t)
+
+	assert.Nil(t, resp)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a client error, got %T: %v", err, err)
+	assert.Equal(t, 409, ce.code)
+	assert.Contains(t, err.Error(), "was canceled")
+	assert.Contains(t, err.Error(), "not disabled")
+	assert.Equal(t, 2, lookups, "the disable must re-check the plan's accounts after the cancel")
+	f.store.AssertNumberOfCalls(t, "TransitionExecutionStatus", 1)
+	assert.Zero(t, f.planDisables(), "the plan must not be disabled once it spans an out-of-scope account")
+}
+
+// A scoped caller canceling an execution with no plan has nothing to disable,
+// so no plan scope check runs and the cancel succeeds.
+func TestRouterDispatch_DeletePlannedPurchase_ScopedNoPlanCancelsWithoutPlanCheck(t *testing.T) {
+	f := newPlannedDeleteFixture(t, nil, scopedInAccount)
+	store := f.store
+	account := scopedInAccount
+	noPlan := &config.PurchaseExecution{ExecutionID: plannedDeleteExecID, Status: "pending", CloudAccountID: &account}
+	canceled := *noPlan
+	canceled.Status = config.StatusCanceled
+	store.ExpectedCalls = nil
+	store.On("GetExecutionByID", mock.Anything, plannedDeleteExecID).Return(noPlan, nil)
+	store.On("TransitionExecutionStatus", mock.Anything, plannedDeleteExecID, mock.Anything, config.StatusCanceled, mock.Anything).Return(&canceled, nil)
+	lookups := 0
+	store.GetPlanAccountsFn = func(context.Context, string) ([]config.CloudAccount, error) {
+		lookups++
+		return nil, nil
+	}
+
+	resp, err := f.delete(t)
+
+	require.NoError(t, err)
+	assert.Equal(t, "canceled", resp.Status)
+	assert.Nil(t, resp.PlanDisabled)
+	assert.Zero(t, lookups)
+	store.AssertNumberOfCalls(t, "TransitionExecutionStatus", 1)
 }
 
 // The execution gate still comes first: a caller who holds none of the
