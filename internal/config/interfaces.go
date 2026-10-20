@@ -357,6 +357,14 @@ type StoreInterface interface {
 	// provider gate is case-insensitive and a row with an empty (unknown) stored
 	// provider matches on account_id alone (issue #24).
 	GetPurchaseHistoryFiltered(ctx context.Context, filter PurchaseHistoryFilter) ([]PurchaseHistoryRecord, error)
+	// HistorySummaryAggregate returns counts and dollar sums over every row the
+	// History view would list without its row caps: purchase_history rows
+	// matched with GetPurchaseHistoryFiltered's predicate and purchase_executions
+	// rows matched with GetExecutionsByStatuses' predicate (issue #675). Rows are
+	// grouped by the columns the History handler's account-scope check reads, so
+	// the caller applies that check to the groups with the same code it applies
+	// to fetched rows. Both halves are read from one snapshot.
+	HistorySummaryAggregate(ctx context.Context, filter HistorySummaryFilter) (*HistorySummaryGroups, error)
 	// GetPurchaseHistoryByPurchaseID returns the single purchase_history row
 	// whose purchase_id matches (AWS ReservedInstancesId / Azure reservation
 	// ID). Returns (nil, nil) when no row is found. Used by the revoke

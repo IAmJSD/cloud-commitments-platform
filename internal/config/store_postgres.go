@@ -1542,8 +1542,7 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
 		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
-		WHERE status = ANY($1)
-		  AND NOT (status = 'completed' AND COALESCE(error, '') = '')
+		WHERE ` + historyExecutionsPredicate + `
 		ORDER BY (status = 'pending' AND scheduled_date > now()) ASC,
 		         CASE WHEN status = 'pending' AND scheduled_date > now() THEN scheduled_date END ASC,
 		         scheduled_date DESC
@@ -2649,29 +2648,7 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 		limit = MaxListLimit
 	}
 
-	var (
-		conds []string
-		args  []any
-	)
-	add := func(cond string, val any) {
-		conds = append(conds, fmt.Sprintf(cond, len(args)+1))
-		args = append(args, val)
-	}
-	if filter.Provider != "" {
-		add("provider = $%d", filter.Provider)
-	}
-	conds, args = appendAccountPredicate(conds, args, filter.AccountIDs, filter.ExternalIDsByProvider)
-	if filter.Start != nil {
-		add("timestamp >= $%d", *filter.Start)
-	}
-	if filter.End != nil {
-		add("timestamp <= $%d", *filter.End)
-	}
-
-	where := ""
-	if len(conds) > 0 {
-		where = " WHERE " + strings.Join(conds, " AND ")
-	}
+	where, args := purchaseHistoryFilterWhere(filter)
 	args = append(args, limit)
 
 	query := fmt.Sprintf(`
@@ -2686,6 +2663,35 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 	`, where, len(args))
 
 	return s.queryPurchaseHistory(ctx, query, args...)
+}
+
+// purchaseHistoryFilterWhere builds the WHERE clause (with a leading space, or
+// "" for an empty filter) and its bind args for a PurchaseHistoryFilter. It is
+// the single predicate builder shared by GetPurchaseHistoryFiltered (the
+// History row fetch) and HistorySummaryAggregate (the History summary totals),
+// so the totals always count exactly the rows the fetch would return without
+// its LIMIT (issue #675). filter.Limit is not part of the predicate and is
+// ignored here; placeholders are numbered from $1.
+func purchaseHistoryFilterWhere(filter PurchaseHistoryFilter) (where string, args []any) {
+	var conds []string
+	add := func(cond string, val any) {
+		conds = append(conds, fmt.Sprintf(cond, len(args)+1))
+		args = append(args, val)
+	}
+	if filter.Provider != "" {
+		add("provider = $%d", filter.Provider)
+	}
+	conds, args = appendAccountPredicate(conds, args, filter.AccountIDs, filter.ExternalIDsByProvider)
+	if filter.Start != nil {
+		add("timestamp >= $%d", *filter.Start)
+	}
+	if filter.End != nil {
+		add("timestamp <= $%d", *filter.End)
+	}
+	if len(conds) > 0 {
+		where = " WHERE " + strings.Join(conds, " AND ")
+	}
+	return where, args
 }
 
 // queryPurchaseHistory is a helper to query and scan purchase history.
