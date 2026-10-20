@@ -300,20 +300,15 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 	}
 	var capField struct {
 		MaxStepCommitment json.RawMessage `json:"max_step_commitment"`
+		ExpectedUpdatedAt *string         `json:"expected_updated_at"`
 	}
 	if err = json.Unmarshal([]byte(httpReq.Body), &capField); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	// Fetch existing plan to preserve data not sent in request. Do NOT wrap
-	// err with the raw plan UUID: a non-ClientError propagates to the router's
-	// logging.Errorf("API error: %v"), leaking the plan UUID and the raw DB
-	// error string (issue #965, same shape as the createPlan-side fix).
-	existingPlan, err := h.config.GetPurchasePlan(ctx, planID)
+	existingPlan, err := h.loadPlanForUpdate(ctx, planID, capField.ExpectedUpdatedAt)
 	if err != nil {
-		return nil, mapCreatePlanStorageError(err,
-			"plan not found", "failed to load plan",
-			"updatePlan: GetPurchasePlan failed")
+		return nil, err
 	}
 
 	plan, err := mergeUpdatedPlan(existingPlan, &req, planID, capField.MaxStepCommitment != nil)
@@ -329,6 +324,25 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 		return nil, mapCreatePlanStorageError(err, "plan not found", "failed to update plan", "updatePlan: UpdatePurchasePlan failed")
 	}
 
+	return plan, nil
+}
+
+func (h *Handler) loadPlanForUpdate(ctx context.Context, planID string, expectedUpdatedAt *string) (*config.PurchasePlan, error) {
+	plan, err := h.config.GetPurchasePlan(ctx, planID)
+	if err != nil {
+		return nil, mapCreatePlanStorageError(err,
+			"plan not found", "failed to load plan",
+			"updatePlan: GetPurchasePlan failed")
+	}
+	if expectedUpdatedAt != nil && *expectedUpdatedAt != "" {
+		expected, parseErr := time.Parse(time.RFC3339Nano, *expectedUpdatedAt)
+		if parseErr != nil {
+			return nil, NewClientError(400, "expected_updated_at must be an RFC3339 timestamp")
+		}
+		if !plan.UpdatedAt.Equal(expected) {
+			return nil, NewClientError(409, "plan changed; refresh the plan and try again")
+		}
+	}
 	return plan, nil
 }
 

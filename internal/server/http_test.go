@@ -105,6 +105,50 @@ func TestHttpToLambdaRequest(t *testing.T) {
 	}
 }
 
+func TestLambdaResponseToHTTPRetryAfter(t *testing.T) {
+	const body = `{"error":"Too many requests"}`
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "delta seconds", value: "120", want: "120"},
+		{name: "HTTP date", value: "Wed, 21 Oct 2015 07:28:00 GMT", want: "Wed, 21 Oct 2015 07:28:00 GMT"},
+		{name: "CR injection", value: "120\rX-Injected: blocked"},
+		{name: "LF injection", value: "120\nX-Injected: blocked"},
+		{name: "CRLF injection", value: "120\r\nX-Injected: blocked"},
+	}
+	for _, headerName := range []string{"Retry-After", "retry-after", "rEtRy-AfTeR"} {
+		for _, tt := range tests {
+			t.Run(headerName+"/"+tt.name, func(t *testing.T) {
+				w := httptest.NewRecorder()
+				lambdaResponseToHTTP(w, &events.LambdaFunctionURLResponse{
+					StatusCode: http.StatusTooManyRequests,
+					Body:       body,
+					Headers: map[string]string{
+						headerName:     tt.value,
+						"Content-Type": "application/json",
+						"X-Unapproved": "blocked",
+					},
+				})
+
+				testutil.AssertEqual(t, http.StatusTooManyRequests, w.Code)
+				testutil.AssertEqual(t, body, w.Body.String())
+				testutil.AssertEqual(t, "application/json", w.Header().Get("Content-Type"))
+				testutil.AssertEqual(t, tt.want, w.Header().Get("Retry-After"))
+				if tt.want == "" {
+					_, present := w.Header()["Retry-After"]
+					testutil.AssertFalse(t, present, "unsafe Retry-After must be absent")
+				}
+				for _, blocked := range []string{"X-Injected", "X-Unapproved"} {
+					_, present := w.Header()[blocked]
+					testutil.AssertFalse(t, present, blocked+" must be absent")
+				}
+			})
+		}
+	}
+}
+
 func TestLambdaResponseToHTTP(t *testing.T) {
 	tests := []struct {
 		lambdaResp      *events.LambdaFunctionURLResponse

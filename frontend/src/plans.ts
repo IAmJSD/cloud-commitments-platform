@@ -17,8 +17,7 @@ import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/ske
 import { canAccess } from './permissions';
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 import { suggestedPurchaseStartDate } from './lib/calendar-date';
-import { openPlanSchedulePreview } from './plan-schedule-preview';
-import { mountPlanEditorPanel, readPlanScheduleInput } from './plan-editor-panel';
+import { mountPlanEditorPanel } from './plan-editor-panel';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
 // "Plan from N selected" button-click time. The Plan flow used to re-derive
@@ -755,11 +754,11 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td class="savings">${savingsCell}</td>
       <td><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span></td>
       <td class="actions">
-        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary" title="Run now">▶</button>` : ''}
-        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause">⏸</button>` : ''}
-        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume">⏵</button>` : ''}
-        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan">✎</button>` : ''}
-        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Cancel this purchase and disable its plan">✕</button>` : ''}
+        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary" title="Run now" aria-label="Run now">▶</button>` : ''}
+        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause" aria-label="Pause">⏸</button>` : ''}
+        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume" aria-label="Resume">⏵</button>` : ''}
+        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan" aria-label="Edit Plan">✎</button>` : ''}
+        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Cancel this purchase and disable its plan" aria-label="Cancel this purchase and disable its plan">✕</button>` : ''}
       </td>
     </tr>
   `;
@@ -1048,18 +1047,6 @@ function extractPlanInfo(plan: BackendPlan): { provider: string | null; service:
   return { provider: null, service: '—', term: null, coverage: null };
 }
 
-// Format a Date as YYYY-MM-DD in the user's *local* calendar — the format
-// expected by <input type="date"> .value and .min. Built from local
-// year/month/day components so we don't shift by the user's UTC offset
-// (e.g. a US user at 6pm local already crosses into UTC's next day, so
-// toISOString() would return the wrong calendar day for a date-picker).
-function toLocalDateInputValue(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
 // Returns true when the plan's next_execution_date is strictly before today.
 function isPlanOverdue(plan: BackendPlan): boolean {
   if (!plan.next_execution_date) return false;
@@ -1268,7 +1255,7 @@ async function togglePlan(planId: string, enabled: boolean): Promise<void> {
 }
 
 let disposePlanEditor: (() => void) | undefined;
-function openPlanForm(modal: HTMLElement, create: boolean): void {
+function openPlanForm(modal: HTMLElement, restartsFromToday = false): void {
   disposePlanEditor?.(); disposePlanEditor = undefined;
   const host = modal.querySelector<HTMLElement>('#plan-editor-panel'), form = modal.querySelector<HTMLFormElement>('#plan-form');
   const advanced = modal.querySelector<HTMLDetailsElement>('#plan-advanced-settings');
@@ -1277,12 +1264,25 @@ function openPlanForm(modal: HTMLElement, create: boolean): void {
     if (advanced?.contains(event.target as Node)) advanced.open = true;
   };
   form?.addEventListener('invalid', revealInvalid, true);
-  const disposePanel = create && host && form ? mountPlanEditorPanel(host, form) : undefined;
+  const disposePanel = host && form ? mountPlanEditorPanel(host, form, { restartsFromToday }) : undefined;
   disposePlanEditor = () => {
     try { disposePanel?.(); }
     finally { form?.removeEventListener('invalid', revealInvalid, true); }
   };
   openModal(modal, { initialFocus: '#plan-name', onClose: () => { disposePlanEditor?.(); disposePlanEditor = undefined; } });
+}
+
+// Presets mirror config.PresetRampSchedules; any other stored ramp is shown as
+// custom so Edit never rewrites it to a different schedule on Save (#1156).
+const PRESET_RAMPS: ReadonlyArray<{ value: string; type: string; percent: number; intervalDays: number }> = [
+  { value: 'weekly-25pct', type: 'weekly', percent: 25, intervalDays: 7 },
+  { value: 'monthly-10pct', type: 'monthly', percent: 10, intervalDays: 30 },
+];
+
+function rampRadioValue(ramp: { type?: string; percent_per_step?: number; step_interval_days?: number }): string {
+  if (ramp.type === 'immediate') return 'immediate';
+  const preset = PRESET_RAMPS.find(p => p.type === ramp.type && p.percent === ramp.percent_per_step && p.intervalDays === ramp.step_interval_days);
+  return preset ? preset.value : 'custom';
 }
 
 // editPlan loads the plan and opens the edit modal pre-filled. Returns true
@@ -1297,15 +1297,7 @@ async function editPlan(planId: string): Promise<boolean> {
     const info = extractPlanInfo(backendPlan);
     const rampSchedule = backendPlan.ramp_schedule || { type: 'immediate', percent_per_step: 100, step_interval_days: 0 };
 
-    // Map ramp schedule type to frontend value
-    let rampValue = 'immediate';
-    if (rampSchedule.type === 'weekly' && rampSchedule.percent_per_step === 25) {
-      rampValue = 'weekly-25pct';
-    } else if (rampSchedule.type === 'monthly' && rampSchedule.percent_per_step === 10) {
-      rampValue = 'monthly-10pct';
-    } else if (rampSchedule.type === 'custom' || (rampSchedule.type !== 'immediate' && rampSchedule.type !== 'weekly' && rampSchedule.type !== 'monthly')) {
-      rampValue = 'custom';
-    }
+    const rampValue = rampRadioValue(rampSchedule);
 
     // Get payment option from services and normalize for provider.
     // H-5: do not pre-select 'no-upfront' when the payment field is absent.
@@ -1376,7 +1368,7 @@ async function editPlan(planId: string): Promise<boolean> {
     // Wire live range validation on all five numeric inputs (#702).
     wirePlanRangeInputs();
     const planModal = document.getElementById('plan-modal');
-    if (planModal) openPlanForm(planModal, false);
+    if (planModal) openPlanForm(planModal, true);
     return true;
   } catch (error) {
     console.error('Failed to load plan:', error);
@@ -1835,7 +1827,7 @@ export function openCreatePlanModal(snapshot?: readonly api.Recommendation[]): v
 
   const planModal = document.getElementById('plan-modal');
   if (planModal) {
-    openPlanForm(planModal, true);
+    openPlanForm(planModal);
   }
 }
 
@@ -1867,7 +1859,7 @@ export function openNewPlanModal(): void {
 
   const planModal = document.getElementById('plan-modal');
   if (planModal) {
-    openPlanForm(planModal, true);
+    openPlanForm(planModal);
   }
 }
 
@@ -2268,7 +2260,7 @@ export async function openAddPurchasesModal(planId: string, planName: string, no
   const startDateInput = document.getElementById('add-purchases-start-date') as HTMLInputElement;
   const now = new Date();
   const validNotice = Number.isInteger(notificationDays) && notificationDays >= 0 && notificationDays <= 30;
-  startDateInput.min = toLocalDateInputValue(now);
+  startDateInput.min = earliestStartDate(now);
   if (validNotice) {
     // The API parses date-only values at UTC midnight. The extra calendar
     // day avoids opening just before the notification/veto overlap ends.
@@ -2336,6 +2328,14 @@ function closeAddPurchasesModal(): void {
 }
 
 /**
+ * First accepted start date. The server parses start_date as midnight UTC and
+ * requires it after now, so tomorrow (UTC) is the earliest (handler_plans.go, #50).
+ */
+function earliestStartDate(now: Date): string {
+  return new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+/**
  * Handle form submission for adding planned purchases
  */
 async function handleAddPurchases(e: Event): Promise<void> {
@@ -2358,6 +2358,13 @@ async function handleAddPurchases(e: Event): Promise<void> {
     }
     const count = rawCount;
     const startDate = (document.getElementById('add-purchases-start-date') as HTMLInputElement).value;
+    if (startDate < earliestStartDate(new Date())) {
+      if (errorDiv) {
+        errorDiv.textContent = 'Start date must be in the future (after today UTC)';
+        errorDiv.classList.remove('hidden');
+      }
+      return;
+    }
 
     await api.createPlannedPurchases(planId, count, startDate);
 
@@ -2387,14 +2394,6 @@ let _unsubAccount: (() => void) | null = null;
  * the page level.
  */
 export function setupPlanHandlers(): void {
-  const preview = document.getElementById('preview-plan-schedule-btn');
-  if (preview) preview.onclick = () => {
-    const parent = document.getElementById('plan-modal'), form = document.getElementById('plan-form') as HTMLFormElement | null;
-    if (!parent || !form) return;
-    try {
-      openPlanSchedulePreview(readPlanScheduleInput(form), parent);
-    } catch (error) { showToast({ message: (error as Error).message, kind: 'error' }); }
-  };
   // Drop any previous subscriptions before re-registering so we don't
   // accumulate duplicate loadPlans() calls on each invocation.
   _unsubProvider?.();

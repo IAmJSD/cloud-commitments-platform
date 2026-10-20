@@ -35,24 +35,26 @@ describe('isPaymentSupported', () => {
     expect(isPaymentSupported('azure', 'compute', 1, 'partial-upfront')).toBe(false);
   });
 
-  test('GCP only accepts all-upfront / upfront / monthly', () => {
-    expect(isPaymentSupported('gcp', 'computeengine', 1, 'all-upfront')).toBe(true);
+  test('GCP only accepts monthly (#1131)', () => {
+    expect(isPaymentSupported('gcp', 'computeengine', 1, 'monthly')).toBe(true);
     expect(isPaymentSupported('gcp', 'computeengine', 3, 'monthly')).toBe(true);
+    expect(isPaymentSupported('gcp', 'computeengine', 1, 'all-upfront')).toBe(false);
+    expect(isPaymentSupported('gcp', 'computeengine', 1, 'upfront')).toBe(false);
     expect(isPaymentSupported('gcp', 'computeengine', 1, 'no-upfront')).toBe(false);
     expect(isPaymentSupported('gcp', 'computeengine', 1, 'partial-upfront')).toBe(false);
   });
 });
 
 describe('paymentOptionsFor', () => {
-  test('AWS EC2 yields all 4 options', () => {
+  test('AWS EC2 yields the 3 AWS options, never monthly', () => {
     expect(paymentOptionsFor('aws', 'ec2', 1)).toEqual(
-      ['all-upfront', 'partial-upfront', 'no-upfront', 'monthly'],
+      ['all-upfront', 'partial-upfront', 'no-upfront'],
     );
   });
 
   test('AWS RDS 3yr omits no-upfront', () => {
     expect(paymentOptionsFor('aws', 'rds', 3)).toEqual(
-      ['all-upfront', 'partial-upfront', 'monthly'],
+      ['all-upfront', 'partial-upfront'],
     );
   });
 
@@ -60,8 +62,8 @@ describe('paymentOptionsFor', () => {
     expect(paymentOptionsFor('azure', 'compute', 1)).toEqual(['all-upfront', 'monthly']);
   });
 
-  test('GCP omits no-upfront + partial-upfront', () => {
-    expect(paymentOptionsFor('gcp', 'computeengine', 3)).toEqual(['all-upfront', 'monthly']);
+  test('GCP yields only monthly (#1131)', () => {
+    expect(paymentOptionsFor('gcp', 'computeengine', 3)).toEqual(['monthly']);
   });
 });
 

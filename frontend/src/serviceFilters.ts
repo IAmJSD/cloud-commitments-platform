@@ -18,6 +18,7 @@
  */
 
 import type { ServiceConfig } from './api/types';
+import { isSavingsPlanService } from './lib/purchase-compatibility';
 
 /** Identifies a single service card. Subset of a SERVICE_FIELDS entry. */
 export interface ServiceFilterTarget {
@@ -132,7 +133,11 @@ export function injectServiceFilterControls(t: ServiceFilterTarget): boolean {
   panel.appendChild(
     makeLabeledInput(
       filterInputId(t.provider, t.service, MIN_COUNT_KEY),
-      'Min count (0 = no filter)',
+      // Savings Plans are dollar-denominated (Count is always 1), so the
+      // backend exempts them from the floor.
+      isSavingsPlanService(t.service)
+        ? 'Min count (not applied to Savings Plans)'
+        : 'Min count (0 = no filter)',
       'number',
       '',
     ),

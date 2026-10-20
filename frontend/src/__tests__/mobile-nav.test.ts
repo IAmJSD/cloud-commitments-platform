@@ -18,7 +18,7 @@ function buildDOM(): void {
       <div class="app-topbar-brand"><h1>CUDly</h1></div>
       <div id="topbar-filters" class="app-topbar-filters" aria-label="Global filters"></div>
       <div id="user-info">
-        <span id="user-email-display"></span>
+        <button type="button" id="user-email-display">me@example.com</button>
         <span id="user-role-display" class="role-badge"></span>
         <a href="/docs/" target="_blank" class="header-link">API Docs</a>
         <a id="feedback-link" href="#" class="header-link feedback-link">Feedback</a>
@@ -27,6 +27,7 @@ function buildDOM(): void {
     </header>
     <div class="sidebar-overlay" id="sidebar-overlay" aria-hidden="true"></div>
     <aside id="sidebar" aria-label="Primary navigation" aria-hidden="true">
+      <button type="button" class="app-sidebar-toggle" aria-label="Toggle sidebar"></button>
       <a class="tab-btn" href="/home" data-tab="home">Home</a>
       <a class="tab-btn" href="/plans" data-tab="plans">Plans</a>
       <div class="app-sidebar-extras" id="sidebar-extras"></div>
@@ -151,10 +152,8 @@ describe('setupMobileNav', () => {
     setupMobileNav();
     hamburger().click();
     const firstLink = sidebar().querySelector<HTMLElement>('.tab-btn');
-    // jsdom doesn't implement layout so focus() is a no-op, but we can
-    // verify the call was attempted by checking that no error was thrown
-    // and the structure is correct
     expect(firstLink).not.toBeNull();
+    expect(document.activeElement).toBe(firstLink);
   });
 
   test('no-op when hamburger element is missing from DOM', () => {
@@ -222,6 +221,27 @@ describe('syncHeaderPlacement', () => {
     document.getElementById('sidebar-extras')!.remove();
     expect(() => syncHeaderPlacement(true)).not.toThrow();
     expect(projected().every(el => el.parentElement === topbar)).toBe(true);
+  });
+
+  test('opening the profile from the drawer leaves focus in the modal (#715)', () => {
+    setupMobileNav();
+    syncHeaderPlacement(true);
+    const modal = document.createElement('div');
+    modal.innerHTML = '<input id="profile-email-stub">';
+    document.body.appendChild(modal);
+    let trigger: Element | null = null;
+    // Stand-in for openProfileModal -> openModal: record the trigger, focus in.
+    document.getElementById('user-email-display')!.addEventListener('click', () => {
+      trigger = document.activeElement;
+      document.getElementById('profile-email-stub')!.focus();
+    });
+    hamburgerBtn().click();
+    document.getElementById('user-email-display')!.dispatchEvent(
+      new MouseEvent('click', { bubbles: true, button: 0 }),
+    );
+    expect(document.body.classList.contains('sidebar-open')).toBe(false);
+    expect(trigger).toBe(hamburgerBtn());
+    expect(document.activeElement?.id).toBe('profile-email-stub');
   });
 
   test('clicking an account action in the drawer closes it', () => {

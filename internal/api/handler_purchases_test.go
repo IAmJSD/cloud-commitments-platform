@@ -1539,6 +1539,7 @@ func TestHandler_pausePlannedPurchase(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "notified"}, "paused", mock.Anything).Return(paused, nil)
+	mockStore.On("GetExecutionByID", ctx, "11111111-1111-1111-1111-111111111111").Return(paused, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -1566,6 +1567,7 @@ func TestHandler_pausePlannedPurchase_NotFound(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"pending", "notified"}, "paused", mock.Anything).Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
+	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, config.ErrNotFound)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -2129,6 +2131,7 @@ func TestHandler_pausePlannedPurchase_NilExecution(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"pending", "notified"}, "paused", mock.Anything).Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
+	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, config.ErrNotFound)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -2165,6 +2168,7 @@ func TestHandler_pausePlannedPurchase_IneligibleStatus(t *testing.T) {
 
 			mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 			mockAuth.grantAdmin()
+			mockStore.On("GetExecutionByID", ctx, "11111111-1111-1111-1111-111111111111").Return(&config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: status}, nil)
 			mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "notified"}, "paused", mock.Anything).
 				Return(nil, fmt.Errorf("%w: execution 11111111-1111-1111-1111-111111111111 cannot transition from %q to %q",
 					config.ErrExecutionNotInExpectedStatus, status, "paused"))
@@ -2320,6 +2324,7 @@ func TestHandler_pausePlannedPurchase_ActorStamped(t *testing.T) {
 	mockAuth.grantAdmin()
 
 	paused := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "paused"}
+	mockStore.On("GetExecutionByID", ctx, "11111111-1111-1111-1111-111111111111").Return(paused, nil)
 	// Actor must equal the session UserID (pointer value comparison via reflect.DeepEqual).
 	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111",
 		[]string{"pending", "notified"}, "paused",
@@ -5252,6 +5257,10 @@ func buildManageHandler(userID, creatorID string, hasUpdateAny bool) (*Handler, 
 	// panic (issue #1400).
 	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "cancel-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, userID).Return([]string{}, nil).Maybe()
+
+	if hasUpdateAny {
+		mockAuth.allowConstraintChecks()
+	}
 
 	creator := creatorID
 	exec := &config.PurchaseExecution{ExecutionID: ownExecID, Status: "pending", CreatedByUserID: &creator}
