@@ -1422,7 +1422,7 @@ func TestListExchangeableAzureRIs_SubscriptionIDFiltersToOwnRows(t *testing.T) {
 	}
 }
 
-// --- Azure credential-resolution path tests (issue #871) ---
+// --- Azure credential-resolution path tests (issue LeanerCloud/cloud-commitments-cli#932) ---
 //
 // These tests exercise the production path of buildAzureExchangeClient, which
 // was previously hardcoded to azidentity.NewDefaultAzureCredential. The fix
@@ -1440,8 +1440,9 @@ func TestListExchangeableAzureRIs_SubscriptionIDFiltersToOwnRows(t *testing.T) {
 // TestListExchangeableAzureRIs_NoAzureAccountRegistered verifies that when no
 // Azure CloudAccount is registered for the requested subscription, the handler
 // returns an empty reservations list (graceful empty state) rather than a 500.
-// This is the fix for issue #871: Lambda has no ambient Azure identity so the
-// old DefaultAzureCredential call failed, producing an opaque 500.
+// This is the fix for issue LeanerCloud/cloud-commitments-cli#932: Lambda has no
+// ambient Azure identity so the old DefaultAzureCredential call failed,
+// producing an opaque 500.
 func TestListExchangeableAzureRIs_NoAzureAccountRegistered(t *testing.T) {
 	mockStore := &MockConfigStore{}
 	// GetCloudAccountByExternalID returns (nil, nil) — no account for this sub.
