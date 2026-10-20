@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
@@ -27,22 +26,18 @@ type riExchangeIntegrationEnv struct {
 	storeA, storeB *PostgresStore
 }
 
-// riExchangeContainerDSN starts a PostgreSQL container dedicated to t, applies
-// every migration to it and returns its connection string, so callers can open
-// as many independent pools as the race under test needs. It skips only when
-// Docker is unavailable (RequirePostgresContainer's rule); a container that will
-// not start or a migration that will not apply fails the test (#724, #1597).
-// Setup gets its own deadline so a slow container start does not eat into the
-// test body's.
+// riExchangeContainerDSN returns the connection string of a fully migrated
+// PostgreSQL database dedicated to t, copied from the package's shared
+// template (issue #982), so callers can open as many independent pools as the
+// race under test needs. It skips only when Docker is unavailable; a database
+// that cannot be created or migrated fails the test (#724, #1597). Setup gets
+// its own deadline so a slow first container start does not eat into the test
+// body's.
 func riExchangeContainerDSN(t *testing.T) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { _ = container.Cleanup(context.Background()) })
-	require.NoError(t,
-		migrations.RunMigrations(ctx, container.DB.Pool(), getTestMigrationsPath(), "", ""),
-		"migrations failed to apply to a fresh database")
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getTestMigrationsPath())
 	return container.Config.DSN("")
 }
 
