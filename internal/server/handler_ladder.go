@@ -711,15 +711,16 @@ func buildTrancheDBRows(tranches []pkgladder.Tranche, runID string, configID *st
 	rows := make([]config.LadderTrancheDB, 0, len(tranches))
 	for i := range tranches {
 		tr := &tranches[i] // use pointer to avoid copying 152-byte Tranche struct per iteration
-		// AmountUSDHr: parse the RatString back to float64. A missing or
-		// malformed RatString means BuildTranches produced a broken tranche;
-		// that should never happen after Validate() passes, so surface it as
-		// an error instead of writing a $0 row.
+		// AmountUSDHr: parse the RatString and floor it to the stored scale
+		// (never round a planned commitment up; see LadderAmountFloat). A
+		// missing or malformed RatString means BuildTranches produced a broken
+		// tranche; that should never happen after Validate() passes, so
+		// surface it as an error instead of writing a $0 row.
 		r, ok := new(big.Rat).SetString(tr.AmountUSDPerHour)
 		if !ok || r == nil {
 			return nil, fmt.Errorf("tranche %s: malformed amount_usd_per_hour %q (not a parseable rational)", tr.ID, tr.AmountUSDPerHour)
 		}
-		amountUSDHr, _ := r.Float64()
+		amountUSDHr := config.LadderAmountFloat(r)
 		runIDCopy := runID
 		if tr.CommitmentRate == "" {
 			return nil, fmt.Errorf("tranche %s: empty commitment rate", tr.ID)

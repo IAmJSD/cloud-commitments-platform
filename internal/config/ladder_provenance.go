@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"strconv"
+	"strings"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 )
@@ -172,4 +174,43 @@ func LadderInFlightOnDemand(rows []LadderInFlightRow) (float64, error) {
 		return 0, err
 	}
 	return nettingFloat(total)
+}
+
+// ladderAmountScale is the fractional-digit scale of
+// ladder_tranches.amount_usd_hr (NUMERIC(20,6), migration 000081).
+const ladderAmountScale = 6
+
+// LadderAmountFloat converts an exact planned tranche amount to the float64 a
+// tranche row stores, flooring it to the column's six decimal places. The go
+// precision contract (pkg/ladder LadderCapability.PurchaseLayer, go#354)
+// floors provider commitments and forbids callers rounding a *big.Rat up on the
+// way to float64; nearest-float conversion can do exactly that just below a
+// decimal boundary. Flooring at six decimals keeps a provider's five-decimal
+// truncation identical to truncating the exact amount and keeps an amount
+// below a provider minimum below it. The result's shortest decimal form is the
+// floored value itself (at most 15 significant digits below 1e9 USD/hr), so the
+// store writes it without any further rounding.
+func LadderAmountFloat(amount *big.Rat) float64 {
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(ladderAmountScale), nil)
+	floored := new(big.Int).Mul(amount.Num(), scale)
+	floored.Div(floored, amount.Denom()) // Euclidean division: floor for the positive denominator
+	f, _ := new(big.Rat).SetFrac(floored, scale).Float64()
+	return f
+}
+
+// ladderAmountText is the exact decimal insertLadderTranchesTx writes for a
+// tranche amount. Sent as a float, the amount's shortest decimal would be
+// rounded half-up to the column's scale by Postgres, which can carry it across
+// a provider's five-decimal truncation boundary or up to a provider minimum.
+// An amount the column cannot hold exactly is refused instead, so every stored
+// amount reads back as the same float64.
+func ladderAmountText(amount float64) (string, error) {
+	if math.IsNaN(amount) || math.IsInf(amount, 0) {
+		return "", fmt.Errorf("amount_usd_hr must be finite, got %v", amount)
+	}
+	text := strconv.FormatFloat(amount, 'f', -1, 64)
+	if _, fraction, ok := strings.Cut(text, "."); ok && len(fraction) > ladderAmountScale {
+		return "", fmt.Errorf("amount_usd_hr %s has more than %d decimal places and would be rounded by the column; floor it with LadderAmountFloat", text, ladderAmountScale)
+	}
+	return text, nil
 }

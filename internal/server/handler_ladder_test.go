@@ -1119,6 +1119,29 @@ func TestBuildTrancheDBRows_MalformedAmount_Errors(t *testing.T) {
 	assert.Nil(t, rows, "no rows may be returned when any tranche amount is malformed")
 }
 
+// Issue #1182: the planner's exact amount is floored to the six-decimal
+// tranche column, never rounded to the nearest float64 (which can land on or
+// above the next decimal and so above what the plan asked for).
+func TestBuildTrancheDBRows_FloorsAmountToStoredScale(t *testing.T) {
+	cfgID := "cfg-1"
+	for planned, want := range map[string]float64{
+		"12345999999999999/100000000000000000": 0.123459, // nearest float64 is 0.12346
+		"9999999999999/10000000":               999999.999999,
+		"1/3":                                  0.333333,
+		"3/2":                                  1.5,
+	} {
+		rows, err := buildTrancheDBRows([]pkgladder.Tranche{{
+			ID: "tr-1", RunID: "run-1", Layer: pkgladder.LayerComputeSP,
+			Term: pkgladder.Term1Year, PaymentOption: pkgladder.PaymentNoUpfront,
+			Status: pkgladder.TrancheStatusScheduled, AmountUSDPerHour: planned,
+			CommitmentRate: "1", FireAfter: time.Now(),
+		}}, "run-1", &cfgID)
+		require.NoError(t, err, planned)
+		require.Len(t, rows, 1)
+		assert.Equal(t, want, rows[0].AmountUSDHr, planned)
+	}
+}
+
 // ============================================================
 // ratToFloat64Ptr: nil stays nil, non-nil converts correctly
 // ============================================================
