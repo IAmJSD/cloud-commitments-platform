@@ -180,6 +180,51 @@ variable "database_enable_iam_auth" {
   default     = false
 }
 
+# Connection budget (#718). Every app instance opens its own pgx pool of up to
+# db_max_connections, so cloud_run_max_instances x db_max_connections must fit
+# in the Cloud SQL max_connections flag, less local.db_reserved_connections
+# (database.tf) for superuser, Cloud SQL internal and operator sessions.
+variable "database_max_connections" {
+  description = "Cloud SQL max_connections flag. Changing it restarts the instance."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.database_max_connections > local.db_reserved_connections
+    error_message = "database_max_connections must be greater than local.db_reserved_connections (database.tf)."
+  }
+}
+
+variable "db_max_connections" {
+  description = "Per-instance DB pool size (DB_MAX_CONNECTIONS). The total across cloud_run_max_instances must fit database_max_connections."
+  type        = number
+  default     = 6
+
+  # A scheduled task pins one pooled connection for its advisory lock
+  # (internal/server/handler.go) and then queries through the same pool, so
+  # a pool of 1 waits on itself until the request times out.
+  validation {
+    condition     = var.db_max_connections >= 2
+    error_message = "db_max_connections must be at least 2: a scheduled task holds one connection for its advisory lock while it queries through the pool."
+  }
+
+  validation {
+    condition     = var.compute_platform != "cloud-run" || var.cloud_run_max_instances * var.db_max_connections <= var.database_max_connections - local.db_reserved_connections
+    error_message = "cloud_run_max_instances x db_max_connections exceeds database_max_connections - local.db_reserved_connections: under full scale-out new instances cannot connect to Cloud SQL (#718). Lower cloud_run_max_instances or db_max_connections, or raise database_max_connections."
+  }
+}
+
+variable "db_min_connections" {
+  description = "Per-instance idle DB connections kept open (DB_MIN_CONNECTIONS)"
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.db_min_connections >= 0 && var.db_min_connections <= var.db_max_connections
+    error_message = "db_min_connections must be between 0 and db_max_connections."
+  }
+}
+
 variable "admin_email" {
   description = "Administrator email for password reset notifications"
   type        = string
@@ -322,6 +367,11 @@ variable "additional_env_vars" {
   description = "Additional environment variables"
   type        = map(string)
   default     = {}
+
+  validation {
+    condition     = !contains(keys(var.additional_env_vars), "DB_MAX_CONNECTIONS") && !contains(keys(var.additional_env_vars), "DB_MIN_CONNECTIONS")
+    error_message = "Set the DB pool with db_max_connections / db_min_connections, not additional_env_vars, so the connection budget check covers it (#718)."
+  }
 }
 
 variable "credential_encryption_key" {
