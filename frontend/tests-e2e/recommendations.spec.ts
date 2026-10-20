@@ -75,7 +75,7 @@ test('selection updates the sticky action summary and submits the selected purch
   await expect(page.locator('.recommendations-filter-live')).toContainText('1 selected');
   await expect(page.locator('#recommendations-action-summary')).toContainText('across 1 cell');
   await page.getByRole('button', { name: 'Purchase 1 selected' }).click();
-  await expect(page.getByRole('dialog', { name: 'Configure Purchase' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Review Purchase' })).toBeVisible();
   await page.getByRole('button', { name: 'Send for Approval' }).click();
   await page.locator('.modal-confirm-backdrop')
     .getByRole('button', { name: 'Send for approval' })

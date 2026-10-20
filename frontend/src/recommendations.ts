@@ -19,6 +19,7 @@ import {
   type Payment as CompatPayment,
   type Provider as CompatProvider,
 } from './lib/purchase-compatibility';
+import { executeButtonLabel } from './commitmentSummary';
 import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary, GlobalConfig } from './types';
 import { openModal } from './modal';
@@ -4306,7 +4307,7 @@ function resetExecuteModeAndLabel(): void {
   currentExecuteMode = '';
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
   if (executeBtn && executeBtn.dataset['submitting'] !== 'true') {
-    executeBtn.textContent = 'Send for Approval';
+    executeBtn.textContent = executeButtonLabel(false);
   }
 }
 
@@ -5269,8 +5270,7 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[], 
       // Update the submit button label to reflect the selected mode.
       const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
       if (executeBtn) {
-        executeBtn.textContent =
-          currentExecuteMode === 'direct' ? 'Execute Purchase Now' : 'Send for Approval';
+        executeBtn.textContent = executeButtonLabel(currentExecuteMode === 'direct');
       }
     };
 
