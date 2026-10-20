@@ -2524,45 +2524,100 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 // matches zero rows and the tx rolls back (issue #220) instead of both
 // persisting an approvable successor and reverting whatever the other
 // writer changed on the original row.
+//
+// The successor is a web-source pending row for the retrying user, so it
+// also goes through the submit dedupe (issue #760): see writeRetrySuccessorTx.
 func (h *Handler) persistRetrySuccessorTx(ctx context.Context, failedExec, newExecution *config.PurchaseExecution, suppressions []config.PurchaseSuppression) error {
-	var lostRace, settledTranche bool
 	err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
-		if err := h.guardLadderTrancheForRetry(ctx, tx, failedExec.IdempotencyKey); err != nil {
-			settledTranche = errors.Is(err, errRetryLadderTrancheSettled)
-			return err
-		}
-		if err := h.config.SavePurchaseExecutionTx(ctx, tx, newExecution); err != nil {
-			return err
-		}
-		linked, linkErr := h.config.LinkRetryExecutionAtomic(ctx, tx, failedExec.ExecutionID, newExecution.ExecutionID)
-		if linkErr != nil {
-			return linkErr
-		}
-		if !linked {
-			lostRace = true
-			return errRetryLinkRaceLost
-		}
-		for i := range suppressions {
-			if err := h.config.CreateSuppressionTx(ctx, tx, &suppressions[i]); err != nil {
-				return err
-			}
-		}
-		return nil
+		return h.writeRetrySuccessorTx(ctx, tx, failedExec, newExecution, suppressions)
 	})
 	if err == nil {
 		return nil
 	}
-	if settledTranche {
+	var dup *retryDuplicateSubmitError
+	switch {
+	case errors.Is(err, errRetryLadderTrancheSettled):
 		return NewClientErrorWithDetails(409,
 			fmt.Sprintf("execution %s belongs to a ladder tranche that is already settled; retrying it could buy the same commitment twice", failedExec.ExecutionID),
 			map[string]any{})
-	}
-	if lostRace {
+	case errors.Is(err, errRetryLinkRaceLost):
 		return NewClientErrorWithDetails(409,
 			fmt.Sprintf("execution %s was already retried; act on its descendant instead", failedExec.ExecutionID),
 			map[string]any{})
+	case errors.As(err, &dup):
+		return NewClientErrorWithDetails(409,
+			fmt.Sprintf("an identical purchase was submitted moments ago as execution %s; act on it instead of retrying %s", dup.existingID, failedExec.ExecutionID),
+			map[string]any{"duplicate_execution_id": dup.existingID})
 	}
 	return fmt.Errorf("failed to save retry execution: %w", err)
+}
+
+// writeRetrySuccessorTx is persistRetrySuccessorTx's transaction body.
+//
+// Its first statement takes the retrying user's per-creator submit lock
+// (ListRecentSubmitsTx), the same lock at the same point as
+// persistExecutionAndSuppressions, so a retry and an identical fresh submit
+// by that user serialize instead of both inserting a pending row. Taking it
+// before the ladder tranche lock keeps one order everywhere: the submit path
+// takes only this lock, and the reconciler never takes it. The rows read
+// under the lock are checked for a duplicate of the successor only after the
+// link CAS, so a lost retry race still reports "already retried".
+func (h *Handler) writeRetrySuccessorTx(ctx context.Context, tx pgx.Tx, failedExec, newExecution *config.PurchaseExecution, suppressions []config.PurchaseSuppression) error {
+	creatorID := derefStringOrEmpty(newExecution.CreatedByUserID)
+	now := time.Now()
+	recent, listErr := h.config.ListRecentSubmitsTx(ctx, tx, creatorID, now.Add(-purchaseIdempotencyWindow))
+	if listErr != nil {
+		return listErr
+	}
+	if err := h.guardLadderTrancheForRetry(ctx, tx, failedExec.IdempotencyKey); err != nil {
+		return err
+	}
+	if err := h.config.SavePurchaseExecutionTx(ctx, tx, newExecution); err != nil {
+		return err
+	}
+	linked, linkErr := h.config.LinkRetryExecutionAtomic(ctx, tx, failedExec.ExecutionID, newExecution.ExecutionID)
+	if linkErr != nil {
+		return linkErr
+	}
+	if !linked {
+		return errRetryLinkRaceLost
+	}
+	if err := checkRetryDuplicateSubmit(recent, creatorID, newExecution, now); err != nil {
+		return err
+	}
+	for i := range suppressions {
+		if err := h.config.CreateSuppressionTx(ctx, tx, &suppressions[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkRetryDuplicateSubmit returns a *retryDuplicateSubmitError when recent
+// (the creator's live web submits, read under the submit lock) already holds
+// an execution with the successor's submit fingerprint. The successor's own
+// row is not in recent: it was read before the successor was inserted. A
+// fingerprint that cannot be derived fails the retry rather than skipping
+// the check, since a skipped check is a possible double purchase.
+func checkRetryDuplicateSubmit(recent []config.PurchaseExecution, creatorID string, successor *config.PurchaseExecution, now time.Time) error {
+	key, err := purchaseIdempotencyKey(creatorID, successor.Recommendations, successor.CapacityPercent)
+	if err != nil {
+		return fmt.Errorf("derive retry idempotency key: %w", err)
+	}
+	if dup := matchDuplicateInList(recent, creatorID, key, now); dup != nil {
+		return &retryDuplicateSubmitError{existingID: dup.ExecutionID}
+	}
+	return nil
+}
+
+// retryDuplicateSubmitError rolls back persistRetrySuccessorTx's tx when the
+// retrying user already has an identical live submit inside the idempotency
+// window, so the retry would mint a second approvable row for the same
+// purchase. persistRetrySuccessorTx translates it into a 409.
+type retryDuplicateSubmitError struct{ existingID string }
+
+func (e *retryDuplicateSubmitError) Error() string {
+	return "identical purchase already submitted as execution " + e.existingID
 }
 
 // errRetryLinkRaceLost is returned from persistRetrySuccessorTx's tx
@@ -2574,8 +2629,9 @@ func (h *Handler) persistRetrySuccessorTx(ctx context.Context, failedExec, newEx
 var errRetryLinkRaceLost = errors.New("retry link race lost")
 
 // guardLadderTrancheForRetry locks the ladder tranche named by the execution's
-// idempotency key (if any) before anything else in the retry tx, the same order
-// the reconciler uses (tranche, then execution rows), and refuses when the
+// idempotency key (if any) before any execution row in the retry tx (only the
+// per-creator submit advisory lock comes first), the same order the reconciler
+// uses (tranche, then execution rows), and refuses when the
 // tranche is settled. A failed tranche no longer nets, so an approvable
 // successor would buy the same slice a second time.
 func (h *Handler) guardLadderTrancheForRetry(ctx context.Context, tx pgx.Tx, idempotencyKey string) error {
@@ -3276,47 +3332,6 @@ func recDetailsAvailabilityZone(r *config.RecommendationRecord) (string, error) 
 		return strings.TrimSpace(cd.AvailabilityZone), nil
 	}
 	return "", nil
-}
-
-// findDuplicatePendingExecution returns an existing pending/notified execution
-// whose idempotency fingerprint matches key and whose creation falls inside
-// purchaseIdempotencyWindow of now, or (nil, nil) when there is no duplicate.
-// It recomputes each candidate's key from its persisted recs + creator +
-// capacity rather than relying on a stored column, so no schema change is
-// needed. Restricted to web-sourced executions to avoid colliding with
-// scheduler/CLI rows. A lookup error is non-fatal to the caller's decision
-// (returned so the caller can log and proceed with a fresh execution).
-func (h *Handler) findDuplicatePendingExecution(ctx context.Context, creatorID, key string, now time.Time) (*config.PurchaseExecution, error) {
-	pending, err := h.config.GetPendingExecutions(ctx)
-	if err != nil {
-		return nil, err
-	}
-	cutoff := now.Add(-purchaseIdempotencyWindow)
-	for i := range pending {
-		ex := &pending[i]
-		if ex.Source != common.PurchaseSourceWeb {
-			continue
-		}
-		if ex.ScheduledDate.Before(cutoff) {
-			continue
-		}
-		exCreator := ""
-		if ex.CreatedByUserID != nil {
-			exCreator = *ex.CreatedByUserID
-		}
-		if exCreator != creatorID {
-			continue
-		}
-		exKey, err := purchaseIdempotencyKey(exCreator, ex.Recommendations, ex.CapacityPercent)
-		if err != nil {
-			logging.Errorf("purchase idempotency: skipping pending execution %s, cannot derive its key: %v", ex.ExecutionID, err)
-			continue
-		}
-		if exKey == key {
-			return ex, nil
-		}
-	}
-	return nil, nil
 }
 
 // buildDuplicatePurchaseResponse returns the executePurchase response body for

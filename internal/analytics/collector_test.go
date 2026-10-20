@@ -873,9 +873,6 @@ func (m *mockConfigStore) RecoverReapedExecutionTx(ctx context.Context, _ pgx.Tx
 func (m *mockConfigStore) ListRecentSubmitsTx(ctx context.Context, _ pgx.Tx, _ string, _ time.Time) ([]config.PurchaseExecution, error) {
 	return m.GetPendingExecutions(ctx)
 }
-func (m *mockConfigStore) GetPendingExecutionsTx(ctx context.Context, _ pgx.Tx) ([]config.PurchaseExecution, error) {
-	return m.GetPendingExecutions(ctx)
-}
 func (m *mockConfigStore) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error { return fn(nil) }
 
 func (m *mockConfigStore) GetLadderConfigs(_ context.Context) ([]config.LadderConfigDB, error) {

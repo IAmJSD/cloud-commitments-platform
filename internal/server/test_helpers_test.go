@@ -402,9 +402,6 @@ func (m *mockConfigStoreForHealth) RecoverReapedExecutionTx(ctx context.Context,
 func (m *mockConfigStoreForHealth) ListRecentSubmitsTx(ctx context.Context, _ pgx.Tx, _ string, _ time.Time) ([]config.PurchaseExecution, error) {
 	return m.GetPendingExecutions(ctx)
 }
-func (m *mockConfigStoreForHealth) GetPendingExecutionsTx(ctx context.Context, _ pgx.Tx) ([]config.PurchaseExecution, error) {
-	return m.GetPendingExecutions(ctx)
-}
 func (m *mockConfigStoreForHealth) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
 	return fn(nil)
 }

@@ -1791,36 +1791,20 @@ func (m *MockConfigStore) ListActiveSuppressions(ctx context.Context) ([]config.
 }
 
 // ListRecentSubmitsTx mocks the ListRecentSubmitsTx operation. It falls back
-// to GetPendingExecutions when no expectation is registered (as
-// GetPendingExecutionsTx does) so tests that exercise the WithTx path keep
-// receiving the pending list; the caller filters by creator and window.
+// to GetPendingExecutions when no expectation is registered so tests that
+// exercise the WithTx path keep receiving the pending list; the caller
+// filters by creator and window. With neither registered it returns no rows:
+// retry tests (which now pass through the submit dedupe, issue #760) need no
+// stub unless they exercise a duplicate.
 func (m *MockConfigStore) ListRecentSubmitsTx(ctx context.Context, tx pgx.Tx, creatorID string, since time.Time) ([]config.PurchaseExecution, error) {
 	m.record("ListRecentSubmitsTx", ctx, tx, creatorID, since)
 	if !isExpected(&m.Mock, "ListRecentSubmitsTx") {
+		if !isExpected(&m.Mock, "GetPendingExecutions") {
+			return nil, nil
+		}
 		return m.GetPendingExecutions(ctx)
 	}
 	args := m.Called(ctx, tx, creatorID, since)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	v, ok := args.Get(0).([]config.PurchaseExecution)
-	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchaseExecution, got %T", args.Get(0)))
-	}
-	return v, args.Error(1)
-}
-
-// GetPendingExecutionsTx mocks the GetPendingExecutionsTx operation.
-// Falls back to GetPendingExecutions when no explicit expectation is registered
-// (same pattern as SavePurchaseExecutionTx) so existing tests that exercise
-// the WithTx path transparently get the same pending-execution list.
-func (m *MockConfigStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) ([]config.PurchaseExecution, error) {
-	m.record("GetPendingExecutionsTx", ctx, tx)
-	if !isExpected(&m.Mock, "GetPendingExecutionsTx") {
-		// Recorded under both names; see UpdatePurchasePlanTx.
-		return m.GetPendingExecutions(ctx)
-	}
-	args := m.Called(ctx, tx)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
