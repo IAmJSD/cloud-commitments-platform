@@ -1329,6 +1329,20 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  excluded_ris:
+                    type: array
+                    description: >
+                      Convertible RIs left out of cost-based analysis (for
+                      example AWS returned no term length), so they have no
+                      recommendation. Omitted when empty.
+                    items:
+                      type: object
+                      properties:
+                        ri_id:
+                          type: string
+                        reason:
+                          type: string
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
