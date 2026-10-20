@@ -277,7 +277,7 @@ func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangeP
 
 	// Invalidate sessions and API keys only after the new password is
 	// persisted (non-critical, best-effort -- issue #102). Invalidating
-	// first would mean a failed UpdateUser leaves the caller with revoked
+	// first would mean a failed UpdateUserCredentials leaves the caller with revoked
 	// credentials for a password that never actually changed (CodeRabbit
 	// finding on #392).
 	s.invalidateUserCredentialsBestEffort(ctx, userID, "password change")

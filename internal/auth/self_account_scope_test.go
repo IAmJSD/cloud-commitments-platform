@@ -61,7 +61,7 @@ func acctAViewersGroup() *Group {
 
 // stubScopedActor wires the actor's user row and the groups the change touches.
 //
-// Refusal cases add a permissive UpdateUser stub on purpose: without one, a
+// Refusal cases add a permissive UpdateUserAdminFields stub on purpose: without one, a
 // guard removal kills the test by PANICKING on an unstubbed write, and that
 // kill evaporates the moment someone adds a stub while tidying fixtures. With
 // it, the removal is caught by an assertion instead.

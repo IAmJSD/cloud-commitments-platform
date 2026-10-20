@@ -243,7 +243,8 @@ func (s *Service) hashRecoveryCode(code string) (string, error) {
 // consumeRecoveryCode returns true and removes the matching hash from
 // user.MFARecoveryCodes if entered matches any stored hash. The
 // removal is what makes recovery codes single-use; the caller must
-// persist the user afterwards via UpdateUser.
+// persist the shortened slice through its own compare-and-set write
+// (ConsumeMFARecoveryCode on login).
 //
 // Fails closed on empty input: an empty string normalizes to "", which
 // bcrypt.CompareHashAndPassword would compare against every stored hash.

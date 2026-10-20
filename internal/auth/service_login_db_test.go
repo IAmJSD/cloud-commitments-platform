@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,6 +25,37 @@ func (s *loginReadBarrierStore) GetUserByEmail(ctx context.Context, email string
 		err = s.afterRead(ctx, u)
 	}
 	return u, err
+}
+
+// overwriteSecurityColumns stands in for every security change that can land
+// while a login is in flight (credentials, MFA, reset token, password history,
+// membership and active state), all in one statement. No store writer covers
+// them all: the whole-row UpdateUser that did was removed in #583. It writes
+// group_ids and active, so like the store's own writers it takes the
+// admin-invariant lock first (see adminInvariantAdvisoryLockKey).
+func overwriteSecurityColumns(ctx context.Context, store *PostgresStore, u *User) error {
+	return store.withAdminInvariantLock(ctx, "overwrite security columns", func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			UPDATE users SET
+				email = $2, password_hash = $3, salt = $4, group_ids = $5,
+				active = $6, deactivated_at = $7, mfa_enabled = $8, mfa_secret = $9,
+				mfa_pending_secret = $10, mfa_pending_secret_expires_at = $11,
+				mfa_recovery_codes = $12, password_reset_token = $13,
+				password_reset_expiry = $14, password_history = $15, updated_at = NOW()
+			WHERE id = $1`,
+			u.ID, u.Email, u.PasswordHash, u.Salt, u.GroupIDs,
+			u.Active, u.DeactivatedAt, u.MFAEnabled, u.MFASecret,
+			u.MFAPendingSecret, u.MFAPendingSecretExpiresAt,
+			u.MFARecoveryCodes, u.PasswordResetToken,
+			u.PasswordResetExpiry, u.PasswordHistory)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return fmt.Errorf("overwrite security columns: %d rows for user %s", tag.RowsAffected(), u.ID)
+		}
+		return nil
+	})
 }
 
 func TestIntegration_LoginPreservesSecurityChanges(t *testing.T) {
@@ -55,7 +87,7 @@ func TestIntegration_LoginPreservesSecurityChanges(t *testing.T) {
 				current.Active, current.DeactivatedAt = false, &stamp
 				current.PasswordResetToken, current.PasswordResetExpiry = "new-reset-token", &stamp
 				current.PasswordHistory = []string{"new-history"}
-				if updateErr := store.UpdateUser(ctx, current); updateErr != nil {
+				if updateErr := overwriteSecurityColumns(ctx, store, current); updateErr != nil {
 					return updateErr
 				}
 				changed, readErr = store.GetUserByID(ctx, current.ID)

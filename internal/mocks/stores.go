@@ -1069,12 +1069,6 @@ func (m *MockAuthStore) CreateUser(ctx context.Context, user *auth.User) error {
 	return args.Error(0)
 }
 
-// UpdateUser mocks the UpdateUser operation.
-func (m *MockAuthStore) UpdateUser(ctx context.Context, user *auth.User) error {
-	args := m.Called(ctx, user)
-	return args.Error(0)
-}
-
 func (m *MockAuthStore) UpdateUserAdminFields(ctx context.Context, user *auth.User, readEmail string, readGroupIDs []string, readActive bool) error {
 	return m.Called(ctx, user, readEmail, readGroupIDs, readActive).Error(0)
 }
