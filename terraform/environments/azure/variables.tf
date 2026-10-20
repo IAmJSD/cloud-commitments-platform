@@ -279,6 +279,18 @@ variable "database_standby_availability_zone" {
   default     = null
 }
 
+variable "database_deletion_protection" {
+  description = <<-EOT
+    Put a CanNotDelete management lock on the PostgreSQL Flexible Server.
+    Default is true so production cannot be deleted out of band, matching
+    the AWS and GCP environments. Ephemeral dev and staging tfvars override
+    it to false. Creating the lock needs Microsoft.Authorization/locks/*,
+    granted by ci-cd-permissions (re-apply that bootstrap first).
+  EOT
+  type        = bool
+  default     = true
+}
+
 # ==============================================
 # Container Apps (Compute)
 # ==============================================
