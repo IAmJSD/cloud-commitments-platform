@@ -1209,6 +1209,26 @@ jobs:
       - name: Run smoke-gate self-test
         run: bash scripts/test-wait-for-healthy.sh
 
+  # Assert that the files the documented Make targets write at the repo root
+  # (the `bootstrap` Lambda binary, coverage.html, the gosec/trivy/tfsec JSON
+  # reports, complexity-report.txt) are gitignored, and that the patterns stay
+  # root-anchored so same-named files elsewhere remain trackable (#279).
+  # Fast (shell only), so it always runs.
+  gitignore-make-artifacts:
+    name: Gitignore covers Make artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assert Make artifacts are gitignored
+        run: bash scripts/test-gitignore-make-artifacts.sh
+
   # Summary job - all checks must pass
   ci-success:
     name: CI Success
@@ -1231,6 +1251,7 @@ jobs:
       - cloud-sql-delete-scope
       - aws-tfstate-platform-key
       - azure-kv-access-policy
+      - gitignore-make-artifacts
     if: always()
     permissions:
       contents: read
