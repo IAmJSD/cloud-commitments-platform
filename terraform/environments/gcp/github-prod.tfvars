@@ -21,8 +21,18 @@ enable_docker_build = true # Build image via Terraform build module (no separate
 cloud_run_cpu             = "2"
 cloud_run_memory          = "2Gi"
 cloud_run_min_instances   = 2
-cloud_run_max_instances   = 50
+cloud_run_max_instances   = 15
 cloud_run_request_timeout = 300
+
+# DB connection budget (#718): every instance opens its own pool, so
+# cloud_run_max_instances x db_max_connections (15 x 6 = 90) must fit
+# database_max_connections (100) minus the 10 reserved connections. At the
+# previous 50 instances even the 2 idle connections per instance filled
+# Cloud SQL. To scale out further, raise database_max_connections (restarts
+# the instance) rather than shrinking the pool.
+db_max_connections = 6
+db_min_connections = 1
+
 # Prod: enable_cdn = false — LB + Cloud Armor stack not yet provisioned.
 # Override the secure ingress default to keep the *.run.app URL reachable
 # until DNS + cert + LB + Cloud Armor land. When enable_cdn flips to true,

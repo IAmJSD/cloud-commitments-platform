@@ -46,7 +46,7 @@ module "monitoring" {
   function_name = "cudly-prod-api"
 
   # Database configuration
-  db_cluster_id  = module.database.cluster_id
+  db_instance_identifier = module.database.instance_identifier
   log_group_name = "/aws/lambda/cudly-prod-api"
 
   # Alert destinations
@@ -274,6 +274,9 @@ module "monitoring" {
   # Resource IDs
   container_app_id = module.compute.container_app_id
   db_server_id     = module.database.server_id
+
+  # Workspace holding the Container Apps console logs; the failure alerts query it
+  app_log_analytics_workspace_id = module.networking.log_analytics_workspace_id
 
   # Application URL for availability tests
   app_url = module.compute.app_url

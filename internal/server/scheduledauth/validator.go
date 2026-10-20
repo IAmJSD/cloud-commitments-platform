@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -142,7 +143,7 @@ func configureOIDC(v *Validator, cfg Config) (*Validator, error) {
 	if cfg.JWKSURL == "" {
 		cfg.JWKSURL = GoogleJWKSURL
 	}
-	if err := validateAbsoluteURL(cfg.JWKSURL, "SCHEDULED_TASK_OIDC_JWKS_URL"); err != nil {
+	if err := validateHTTPSURL(cfg.JWKSURL, "SCHEDULED_TASK_OIDC_JWKS_URL"); err != nil {
 		return nil, err
 	}
 	if len(cfg.Audiences) == 0 {
@@ -214,7 +215,9 @@ func cleanSet(in []string, label string) (map[string]struct{}, error) {
 	return out, nil
 }
 
-func validateAbsoluteURL(raw, label string) error {
+// validateHTTPSURL requires an absolute https URL. Plain http is allowed only
+// for loopback hosts, which a network attacker cannot sit in front of.
+func validateHTTPSURL(raw, label string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("%w: %s must be an absolute URL: %w", ErrConfigInvalid, label, err)
@@ -222,7 +225,21 @@ func validateAbsoluteURL(raw, label string) error {
 	if u.Scheme == "" || u.Host == "" {
 		return fmt.Errorf("%w: %s must be an absolute URL", ErrConfigInvalid, label)
 	}
-	return nil
+	if u.Scheme == "https" {
+		return nil
+	}
+	if u.Scheme == "http" && isLoopbackHost(u.Hostname()) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s must use https", ErrConfigInvalid, label)
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // Mode returns the validator's auth mode. Useful for /health.

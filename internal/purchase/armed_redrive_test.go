@@ -90,7 +90,7 @@ func armedHarness(t *testing.T, serviceType common.ServiceType) (*Manager, *Mock
 
 	rec := &armedPurchaseRecorder{}
 	store := new(MockConfigStore)
-	email := new(MockEmailSender)
+	email := allowFailedNotification(new(MockEmailSender))
 	factory := new(MockProviderFactory)
 	prov := new(MockProvider)
 	svc := new(MockServiceClient)
