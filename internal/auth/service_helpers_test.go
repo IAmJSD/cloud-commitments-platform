@@ -62,34 +62,39 @@ func TestHelperFunctions(t *testing.T) {
 	})
 }
 
-func TestContainsAny(t *testing.T) {
-	t.Run("returns true when intersection exists", func(t *testing.T) {
+func TestContainsAll(t *testing.T) {
+	t.Run("returns false when only some requested values are allowed", func(t *testing.T) {
 		allowed := []string{"a", "b", "c"}
 		requested := []string{"b", "d"}
-		assert.True(t, containsAny(allowed, requested))
+		assert.False(t, containsAll(allowed, requested))
 	})
 
 	t.Run("returns false when no intersection", func(t *testing.T) {
 		allowed := []string{"a", "b", "c"}
 		requested := []string{"d", "e"}
-		assert.False(t, containsAny(allowed, requested))
+		assert.False(t, containsAll(allowed, requested))
 	})
 
 	t.Run("returns false when allowed is empty", func(t *testing.T) {
 		allowed := []string{}
 		requested := []string{"a", "b"}
-		assert.False(t, containsAny(allowed, requested))
+		assert.False(t, containsAll(allowed, requested))
 	})
 
-	t.Run("returns false when requested is empty", func(t *testing.T) {
+	t.Run("fails closed when requested is empty", func(t *testing.T) {
 		allowed := []string{"a", "b"}
-		requested := []string{}
-		assert.False(t, containsAny(allowed, requested))
+		assert.False(t, containsAll(allowed, []string{}))
+		assert.False(t, containsAll(allowed, nil))
 	})
 
-	t.Run("returns true when all match", func(t *testing.T) {
-		allowed := []string{"a", "b"}
+	t.Run("returns true when every requested value is allowed", func(t *testing.T) {
+		allowed := []string{"a", "b", "c"}
 		requested := []string{"a", "b"}
-		assert.True(t, containsAny(allowed, requested))
+		assert.True(t, containsAll(allowed, requested))
+	})
+
+	t.Run("comparison is exact", func(t *testing.T) {
+		assert.False(t, containsAll([]string{"A"}, []string{"a"}))
+		assert.False(t, containsAll([]string{"a "}, []string{"a"}))
 	})
 }
