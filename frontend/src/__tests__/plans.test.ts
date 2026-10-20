@@ -3463,11 +3463,22 @@ describe('Plans Module', () => {
       expect(api.createPlannedPurchases).not.toHaveBeenCalled();
     });
 
-    test('weekly 20% plan currently prefills as immediate and previews 1 step (#1156)', async () => {
-      // Documents current behaviour of the Edit prefill, which maps weekly != 25% to `immediate`; see #1156.
-      // Invert this expectation (weekly 20% should preview 5 steps) when #1156 is fixed.
-      await openEdit(backendPlan({ type: 'weekly', percent_per_step: 20, step_interval_days: 7 }));
-      expect(points()).toBe(1);
+    const checkedRamp = (): string => document.querySelector<HTMLInputElement>('input[name="ramp-schedule"]:checked')!.value;
+    const customFields = (): string[] => ['ramp-step-percent', 'ramp-interval-days'].map(id => (document.getElementById(id) as HTMLInputElement).value);
+
+    test.each([
+      ['weekly 20% / 7d', { type: 'weekly', percent_per_step: 20, step_interval_days: 7 }, 'custom', ['20', '7'], 5],
+      ['monthly 5% / 30d', { type: 'monthly', percent_per_step: 5, step_interval_days: 30 }, 'custom', ['5', '30'], 20],
+      ['weekly 25% on a 14 day interval', { type: 'weekly', percent_per_step: 25, step_interval_days: 14 }, 'custom', ['25', '14'], 4],
+      ['monthly 10% on a 15 day interval', { type: 'monthly', percent_per_step: 10, step_interval_days: 15 }, 'custom', ['10', '15'], 10],
+      ['weekly 25% / 7d', { type: 'weekly', percent_per_step: 25, step_interval_days: 7 }, 'weekly-25pct', null, 4],
+      ['monthly 10% / 30d', { type: 'monthly', percent_per_step: 10, step_interval_days: 30 }, 'monthly-10pct', null, 10],
+      ['immediate', { type: 'immediate', percent_per_step: 100, step_interval_days: 0 }, 'immediate', null, 1],
+    ])('Edit prefills a stored %s ramp as %s (#1156)', async (_name, ramp, radio, fields, count) => {
+      await openEdit(backendPlan(ramp));
+      expect(checkedRamp()).toBe(radio);
+      if (fields) expect(customFields()).toEqual(fields);
+      expect(points()).toBe(count);
     });
 
     test('Edit with absent coverage shows the validation message and no points', async () => {

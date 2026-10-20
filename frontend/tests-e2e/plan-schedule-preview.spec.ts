@@ -134,6 +134,14 @@ for (const [width, height] of [[1440, 900], [1280, 900], [1280, 768], [1024, 900
       expect(footerBox.y + footerBox.height).toBeLessThanOrEqual(page.viewportSize()!.height);
       await page.locator('#close-plan-modal-btn').click();
     }
+    plan.ramp_schedule = { type: 'weekly', current_step: 0, total_steps: 5, step_interval_days: 7, percent_per_step: 20 };
+    await page.reload();
+    await page.locator('[data-action="edit-plan"][data-id="draft-plan"]').click();
+    await expect(page.locator('input[name="ramp-schedule"][value="custom"]')).toBeChecked();
+    await expect(page.locator('#ramp-step-percent')).toHaveValue('20');
+    await expect(page.locator('#ramp-interval-days')).toHaveValue('7');
+    await expect(page.locator('#plan-editor-panel [data-preview-step]')).toHaveCount(5);
+    await page.locator('#close-plan-modal-btn').click();
     await page.locator('#new-plan-btn').click();
     const dense = page.locator('#plan-editor-panel'), scroll = dense.locator('.schedule-preview-scroll');
     await page.locator('#plan-modal label.ramp-option').filter({ hasText: 'Define your own schedule' }).click();

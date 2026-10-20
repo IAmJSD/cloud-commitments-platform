@@ -1272,6 +1272,19 @@ function openPlanForm(modal: HTMLElement, restartsFromToday = false): void {
   openModal(modal, { initialFocus: '#plan-name', onClose: () => { disposePlanEditor?.(); disposePlanEditor = undefined; } });
 }
 
+// Presets mirror config.PresetRampSchedules; any other stored ramp is shown as
+// custom so Edit never rewrites it to a different schedule on Save (#1156).
+const PRESET_RAMPS: ReadonlyArray<{ value: string; type: string; percent: number; intervalDays: number }> = [
+  { value: 'weekly-25pct', type: 'weekly', percent: 25, intervalDays: 7 },
+  { value: 'monthly-10pct', type: 'monthly', percent: 10, intervalDays: 30 },
+];
+
+function rampRadioValue(ramp: { type?: string; percent_per_step?: number; step_interval_days?: number }): string {
+  if (ramp.type === 'immediate') return 'immediate';
+  const preset = PRESET_RAMPS.find(p => p.type === ramp.type && p.percent === ramp.percent_per_step && p.intervalDays === ramp.step_interval_days);
+  return preset ? preset.value : 'custom';
+}
+
 // editPlan loads the plan and opens the edit modal pre-filled. Returns true
 // when the modal opened, false when the plan could not be loaded (e.g. it was
 // deleted or is no longer accessible). Callers that render the plan in a list
@@ -1284,15 +1297,7 @@ async function editPlan(planId: string): Promise<boolean> {
     const info = extractPlanInfo(backendPlan);
     const rampSchedule = backendPlan.ramp_schedule || { type: 'immediate', percent_per_step: 100, step_interval_days: 0 };
 
-    // Map ramp schedule type to frontend value
-    let rampValue = 'immediate';
-    if (rampSchedule.type === 'weekly' && rampSchedule.percent_per_step === 25) {
-      rampValue = 'weekly-25pct';
-    } else if (rampSchedule.type === 'monthly' && rampSchedule.percent_per_step === 10) {
-      rampValue = 'monthly-10pct';
-    } else if (rampSchedule.type === 'custom' || (rampSchedule.type !== 'immediate' && rampSchedule.type !== 'weekly' && rampSchedule.type !== 'monthly')) {
-      rampValue = 'custom';
-    }
+    const rampValue = rampRadioValue(rampSchedule);
 
     // Get payment option from services and normalize for provider.
     // H-5: do not pre-select 'no-upfront' when the payment field is absent.
