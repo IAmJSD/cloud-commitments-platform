@@ -15,26 +15,6 @@
 # and enable_monitoring = true in the environment's tfvars. GKE is not wired:
 # the module's metrics and filters are Cloud Run specific.
 
-variable "enable_monitoring" {
-  description = "Create the monitoring module (notification channels, alert policies, uptime check, log-based failure alerts). Cloud Run only."
-  type        = bool
-  default     = false
-}
-
-variable "alert_emails" {
-  description = "Comma-separated email addresses that receive alerts. Supplied by the deploy workflow from the ALERT_EMAILS secret; never commit real addresses."
-  type        = string
-  default     = ""
-
-  validation {
-    condition = alltrue([
-      for e in split(",", var.alert_emails) :
-      trimspace(e) == "" || can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", trimspace(e)))
-    ])
-    error_message = "alert_emails must be a comma-separated list of email addresses."
-  }
-}
-
 locals {
   alert_email_addresses = compact([for e in split(",", var.alert_emails) : trimspace(e)])
 }

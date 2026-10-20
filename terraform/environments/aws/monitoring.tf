@@ -18,26 +18,6 @@
 #   3. set enable_monitoring = true in the environment's tfvars.
 # Each address must confirm the SNS subscription email before alerts arrive.
 
-variable "enable_monitoring" {
-  description = "Create the monitoring module (SNS alerts topic, alarms, dashboard, log metric filters). Requires the ci-cd-permissions bootstrap to have been re-applied with the #714 grants; see monitoring.tf."
-  type        = bool
-  default     = false
-}
-
-variable "alert_emails" {
-  description = "Comma-separated email addresses subscribed to the alerts SNS topic. Supplied by the deploy workflow from the ALERT_EMAILS secret; never commit real addresses. Empty means alarms fire with nobody subscribed (the prod check below warns)."
-  type        = string
-  default     = ""
-
-  validation {
-    condition = alltrue([
-      for e in split(",", var.alert_emails) :
-      trimspace(e) == "" || can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", trimspace(e)))
-    ])
-    error_message = "alert_emails must be a comma-separated list of email addresses."
-  }
-}
-
 locals {
   alert_email_addresses = compact([for e in split(",", var.alert_emails) : trimspace(e)])
 }
@@ -72,9 +52,4 @@ check "prod_alerts_reach_someone" {
     condition     = !(var.environment == "prod" && (!var.enable_monitoring || length(local.alert_email_addresses) == 0))
     error_message = "environment = \"prod\" has no alert recipient: set enable_monitoring = true and the ALERT_EMAILS secret (issue #714)."
   }
-}
-
-output "alerts_sns_topic_arn" {
-  description = "SNS topic the monitoring alarms notify (null when enable_monitoring is false)"
-  value       = one(module.monitoring[*].sns_topic_arn)
 }
