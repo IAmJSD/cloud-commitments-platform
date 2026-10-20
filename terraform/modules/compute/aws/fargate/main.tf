@@ -299,8 +299,6 @@ resource "aws_iam_role_policy" "org_discovery" {
         Effect = "Allow"
         Action = [
           "organizations:ListAccounts",
-          "organizations:DescribeAccount",
-          "organizations:DescribeOrganization",
         ]
         Resource = "*"
       }
