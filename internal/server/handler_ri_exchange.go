@@ -244,8 +244,11 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 //
 //	monthly = (FixedPrice / hours_per_term + UsagePrice + recurring_hourly) × 730
 //
-// Returns an error when Duration is non-positive: a zero cost would read
-// as a free RI and skip the pricing gate, so callers must exclude the RI.
+// Returns an error when Duration is non-positive or when the computed cost
+// is not positive (for example FixedPrice, UsagePrice and
+// RecurringHourlyAmount all zero, which means AWS returned no pricing, not a
+// free RI): a zero cost would read as a free RI and skip the pricing gate,
+// so callers must exclude the RI.
 //
 // Used to populate exchange.RIInfo.MonthlyCost so the cross-family
 // dollar-units pre-filter compares apples-to-apples against per-target
@@ -255,7 +258,13 @@ func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
 		return 0, fmt.Errorf("convertible RI %s has non-positive duration %d: monthly cost is not computable", ri.ReservedInstanceID, ri.Duration)
 	}
 	hoursPerTerm := float64(ri.Duration) / 3600
-	return ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730, nil
+	cost := ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730
+	// !(cost > 0) also rejects NaN, which is no usable price either.
+	if !(cost > 0) {
+		return 0, fmt.Errorf("convertible RI %s has no positive price (fixed %v, usage %v, recurring hourly %v): monthly cost is not computable",
+			ri.ReservedInstanceID, ri.FixedPrice, ri.UsagePrice, ri.RecurringHourlyAmount)
+	}
+	return cost, nil
 }
 
 // convertForAutoExchange converts provider-specific types to exchange package types,

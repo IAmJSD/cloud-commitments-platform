@@ -74,7 +74,7 @@ func TestRIExchangeAutoWorkers_ConcreteStoreAndFixtureClient(t *testing.T) {
 	}
 	ri := func(id string) []ec2svc.ConvertibleRI {
 		return []ec2svc.ConvertibleRI{{ReservedInstanceID: id, InstanceType: "c5.xlarge", InstanceCount: 1, NormalizationFactor: 8,
-			ProductDescription: "Linux/UNIX", InstanceTenancy: "default", Scope: "Region", Duration: 31536000}}
+			ProductDescription: "Linux/UNIX", InstanceTenancy: "default", Scope: "Region", Duration: 31536000, FixedPrice: 876}}
 	}
 	util := func(id string) []recommendations.RIUtilization {
 		return []recommendations.RIUtilization{{ReservedInstanceID: id, UtilizationPercent: 30}}

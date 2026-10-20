@@ -569,7 +569,9 @@ export function renderExcludedRIsNotice(excluded: ExcludedRI[] | undefined): voi
   }
   const n = excluded.length;
   notice.className = 'freshness-banner warning';
-  notice.textContent = `${n} convertible RI${n === 1 ? ' was' : 's were'} left out because AWS returned no term length: ${excluded.map((e) => e.ri_id).join(', ')}`;
+  // The backend names why each RI was left out (no term length, no pricing),
+  // so show its reason rather than assuming one cause for all of them.
+  notice.textContent = `${n} convertible RI${n === 1 ? ' was' : 's were'} left out of the analysis. ${excluded.map((e) => `${e.ri_id}: ${e.reason}`).join('; ')}`;
 }
 
 /**

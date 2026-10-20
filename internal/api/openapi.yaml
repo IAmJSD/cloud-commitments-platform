@@ -1333,9 +1333,12 @@ paths:
                   excluded_ris:
                     type: array
                     description: >
-                      Convertible RIs left out of cost-based analysis (for
-                      example AWS returned no term length), so they have no
-                      recommendation. Omitted when empty.
+                      Convertible RIs left out of cost-based analysis
+                      because their monthly cost cannot be computed (AWS
+                      returned no term length, or no pricing: fixed, usage
+                      and recurring charges total zero or less), so they have
+                      no recommendation. reason says which. Omitted when
+                      empty.
                     items:
                       type: object
                       properties:

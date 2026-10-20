@@ -1599,18 +1599,43 @@ func parseThresholdParam(params map[string]string) (float64, error) {
 //	monthly = (FixedPrice / hours_per_term + UsagePrice + recurring_hourly) × 730
 //
 // 730 is AWS's canonical hours-per-month constant. Returns an error when
-// Duration is non-positive: a zero cost would read as a free RI and skip
-// reshape's dollar-units pricing gate, so callers must exclude the RI.
+// Duration is non-positive or when the computed cost is not positive (for
+// example FixedPrice, UsagePrice and RecurringHourlyAmount all zero, which
+// means AWS returned no pricing, not a free RI): a zero cost would read as a
+// free RI and skip reshape's dollar-units pricing gate, so callers must
+// exclude the RI. The error wraps errRINonPositiveDuration or errRINoPricing.
 //
 // Used to populate exchange.RIInfo.MonthlyCost so the cross-family
 // dollar-units pre-filter can compare against per-target offering
 // costs computed with the same formula.
 func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
 	if ri.Duration <= 0 {
-		return 0, fmt.Errorf("convertible RI %s has non-positive duration %d: monthly cost is not computable", ri.ReservedInstanceID, ri.Duration)
+		return 0, fmt.Errorf("convertible RI %s has %w %d: monthly cost is not computable", ri.ReservedInstanceID, errRINonPositiveDuration, ri.Duration)
 	}
 	hoursPerTerm := float64(ri.Duration) / 3600
-	return ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730, nil
+	cost := ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730
+	// !(cost > 0) also rejects NaN, which is no usable price either.
+	if !(cost > 0) {
+		return 0, fmt.Errorf("convertible RI %s has %w (fixed %v, usage %v, recurring hourly %v): monthly cost is not computable",
+			ri.ReservedInstanceID, errRINoPricing, ri.FixedPrice, ri.UsagePrice, ri.RecurringHourlyAmount)
+	}
+	return cost, nil
+}
+
+// Sentinel causes for monthlyCostFromConvertibleRI, used to pick the reason
+// shown for an RI excluded from reshape analysis.
+var (
+	errRINonPositiveDuration = errors.New("non-positive duration")
+	errRINoPricing           = errors.New("no positive price")
+)
+
+// excludedRIReason is the user-facing reason for an RI left out of reshape
+// analysis because monthlyCostFromConvertibleRI returned err.
+func excludedRIReason(err error) string {
+	if errors.Is(err, errRINoPricing) {
+		return "AWS returned no pricing (fixed, usage and recurring charges total zero or less), so its monthly cost cannot be computed"
+	}
+	return "AWS returned no term length (duration), so its monthly cost cannot be computed"
 }
 
 // convertToExchangeTypes converts provider-specific types to the exchange package types.
@@ -1624,7 +1649,7 @@ func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recomme
 		monthlyCost, err := monthlyCostFromConvertibleRI(inst)
 		if err != nil {
 			logging.Warnf("convertToExchangeTypes: excluding RI from reshape: %v", err)
-			excluded = append(excluded, ExcludedRI{RIID: inst.ReservedInstanceID, Reason: "AWS returned no term length (duration), so its monthly cost cannot be computed"})
+			excluded = append(excluded, ExcludedRI{RIID: inst.ReservedInstanceID, Reason: excludedRIReason(err)})
 			continue
 		}
 		riInfos = append(riInfos, exchange.RIInfo{

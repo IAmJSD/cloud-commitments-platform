@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"strings"
 	"testing"
@@ -140,6 +141,7 @@ func TestConvertForAutoExchange(t *testing.T) {
 			ProductDescription:  "Linux/UNIX",
 			InstanceTenancy:     "default",
 			Scope:               "Region",
+			FixedPrice:          876,
 			Duration:            31536000,
 		},
 		{
@@ -150,6 +152,7 @@ func TestConvertForAutoExchange(t *testing.T) {
 			ProductDescription:  "Windows",
 			InstanceTenancy:     "dedicated",
 			Scope:               "Availability Zone",
+			FixedPrice:          876,
 			Duration:            94608000,
 		},
 	}
@@ -568,6 +571,7 @@ func TestExecuteRIExchangeReshape_ManualMode(t *testing.T) {
 					ProductDescription:  "Linux/UNIX",
 					InstanceTenancy:     "default",
 					Scope:               "Region",
+					FixedPrice:          876,
 					Duration:            31536000,
 				},
 			}, nil
@@ -675,6 +679,7 @@ func TestExecuteRIExchangeReshape_AutoMode(t *testing.T) {
 					ProductDescription:  "Linux/UNIX",
 					InstanceTenancy:     "default",
 					Scope:               "Region",
+					FixedPrice:          876,
 					Duration:            31536000,
 				},
 			}, nil
@@ -783,6 +788,7 @@ func TestExecuteRIExchangeReshape_DailyCapHitMidRun(t *testing.T) {
 					ProductDescription:  "Linux/UNIX",
 					InstanceTenancy:     "default",
 					Scope:               "Region",
+					FixedPrice:          876,
 					Duration:            31536000,
 				},
 				{
@@ -793,6 +799,7 @@ func TestExecuteRIExchangeReshape_DailyCapHitMidRun(t *testing.T) {
 					ProductDescription:  "Linux/UNIX",
 					InstanceTenancy:     "default",
 					Scope:               "Region",
+					FixedPrice:          876,
 					Duration:            31536000,
 				},
 			}, nil
@@ -1104,5 +1111,47 @@ func TestMonthlyCostFromConvertibleRI_NonPositiveDurationErrors(t *testing.T) {
 	cost, err := monthlyCostFromConvertibleRI(ec2svc.ConvertibleRI{FixedPrice: 8760, Duration: 31536000})
 	if err != nil || cost < 730-1e-6 || cost > 730+1e-6 {
 		t.Fatalf("valid RI: cost=%v err=%v", cost, err)
+	}
+}
+
+// A convertible RI whose FixedPrice, UsagePrice and RecurringHourlyAmount are
+// all zero has no pricing data; it is not free. It must be excluded like a
+// non-positive duration (issue #1188), while a No Upfront RI (FixedPrice 0
+// with an hourly charge) is real pricing and must be kept.
+func TestConvertForAutoExchange_ExcludesRIWithoutPricing(t *testing.T) {
+	const oneYear = 31536000
+	instances := []ec2svc.ConvertibleRI{
+		{ReservedInstanceID: "ri-unpriced", InstanceType: "m5.large", InstanceCount: 1, Duration: oneYear},
+		{ReservedInstanceID: "ri-no-upfront", InstanceType: "m5.large", InstanceCount: 1, RecurringHourlyAmount: 0.05, Duration: oneYear},
+		{ReservedInstanceID: "ri-negative", InstanceType: "c5.large", InstanceCount: 1, FixedPrice: -876, Duration: oneYear},
+	}
+
+	riInfos, _, meta := convertForAutoExchange(instances, nil)
+
+	if len(riInfos) != 1 || riInfos[0].ID != "ri-no-upfront" {
+		t.Fatalf("want only ri-no-upfront, got %+v", riInfos)
+	}
+	if want := 0.05 * 730; riInfos[0].MonthlyCost < want-1e-6 || riInfos[0].MonthlyCost > want+1e-6 {
+		t.Fatalf("MonthlyCost = %v, want %v", riInfos[0].MonthlyCost, want)
+	}
+	if _, ok := meta["ri-no-upfront"]; !ok || len(meta) != 1 {
+		t.Fatalf("metadata must cover only ri-no-upfront, got %+v", meta)
+	}
+}
+
+func TestMonthlyCostFromConvertibleRI_NoPositivePriceErrors(t *testing.T) {
+	for name, ri := range map[string]ec2svc.ConvertibleRI{
+		"all zero":     {ReservedInstanceID: "ri-x", Duration: 31536000},
+		"negative sum": {ReservedInstanceID: "ri-x", FixedPrice: -876, Duration: 31536000},
+		"NaN":          {ReservedInstanceID: "ri-x", UsagePrice: math.NaN(), Duration: 31536000},
+	} {
+		cost, err := monthlyCostFromConvertibleRI(ri)
+		if err == nil || cost != 0 || !strings.Contains(err.Error(), "ri-x") || !strings.Contains(err.Error(), "no positive price") {
+			t.Fatalf("%s: want error naming ri-x and the missing price, got cost=%v err=%v", name, cost, err)
+		}
+	}
+	cost, err := monthlyCostFromConvertibleRI(ec2svc.ConvertibleRI{RecurringHourlyAmount: 0.05, Duration: 31536000})
+	if err != nil || cost < 36.5-1e-6 || cost > 36.5+1e-6 {
+		t.Fatalf("No Upfront RI: cost=%v err=%v", cost, err)
 	}
 }
