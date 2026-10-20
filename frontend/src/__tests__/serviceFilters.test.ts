@@ -72,6 +72,19 @@ describe('injectServiceFilterControls', () => {
     expect(minEl.min).toBe('0');
   });
 
+  it('labels min-count as not applied for Savings Plans services only', () => {
+    const labelOf = (t: ServiceFilterTarget): string =>
+      document.getElementById(`${t.provider}-${t.service}-min-count`)!.closest('label')!.textContent ?? '';
+    document.body.innerHTML = `
+      <div class="service-default-card"><select id="aws-savings-plans-compute-term"></select></div>
+      <div class="service-default-card"><select id="aws-rds-term"></select></div>`;
+    const sp = { provider: 'aws', service: 'savings-plans-compute', termId: 'aws-savings-plans-compute-term' };
+    injectServiceFilterControls(sp);
+    injectServiceFilterControls(target);
+    expect(labelOf(sp)).toContain('not applied to Savings Plans');
+    expect(labelOf(target)).not.toContain('Savings Plans');
+  });
+
   it('is idempotent (no duplicate panel on re-run)', () => {
     expect(injectServiceFilterControls(target)).toBe(true);
     expect(injectServiceFilterControls(target)).toBe(false);
