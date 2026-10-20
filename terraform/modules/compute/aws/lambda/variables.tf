@@ -123,8 +123,10 @@ variable "function_url_auth_type" {
     unreachable without a valid AWS identity.
     Use "NONE" only in environments where direct access without CloudFront is
     acceptable (e.g. local dev, or environments not yet provisioned with CloudFront).
-    Pair with cloudfront_distribution_arn when switching to AWS_IAM so the module can
-    create the necessary resource-based policy granting CloudFront invocation rights.
+    This module only creates the public lambda:InvokeFunctionUrl permission for "NONE".
+    With "AWS_IAM" the caller must grant invocation itself, e.g. an
+    aws_lambda_permission for principal cloudfront.amazonaws.com scoped to the
+    distribution ARN (see environments/aws/compute.tf).
   EOT
   type        = string
   default     = "AWS_IAM"

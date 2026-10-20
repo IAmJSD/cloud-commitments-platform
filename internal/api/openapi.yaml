@@ -3505,16 +3505,15 @@ components:
           nullable: true
           description: Set while a collection is in flight.
         last_collection_partial:
-          nullable: true
-          description: >
-            Non-null when the most recent persisted collection kept rows from
-            at least one incomplete sweep. Cleared by the next collection whose
-            sweeps are all complete. Carries counts and reason categories only.
-          allOf:
-            - $ref: '#/components/schemas/RecommendationsCollectionPartial'
+          $ref: '#/components/schemas/RecommendationsCollectionPartial'
 
     RecommendationsCollectionPartial:
       type: object
+      nullable: true
+      description: >
+        Non-null when the most recent persisted collection kept rows from
+        at least one incomplete sweep. Cleared by the next collection whose
+        sweeps are all complete. Carries counts and reason categories only.
       required: [providers]
       properties:
         providers:
@@ -3581,7 +3580,8 @@ components:
         max_step_commitment:
           type: number
           nullable: true
-          exclusiveMinimum: 0
+          minimum: 0
+          exclusiveMinimum: true
           description: >-
             Ceiling on the total commitment (upfront + monthly * term) one ramp
             step may auto-purchase. Omit on create for no cap (auto-purchase of
