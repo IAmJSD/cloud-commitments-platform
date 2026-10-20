@@ -89,11 +89,16 @@ Deploy CUDly to AWS Lambda with Function URL. Serverless, event-driven platform.
 
 ### Required Secrets
 
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
+- `ADMIN_EMAIL`
+- `TF_BACKEND_AWS`
+- `ALERT_EMAILS`, `FROM_EMAIL`, `DASHBOARD_URL` (optional)
+
+No AWS access keys are stored. `configure-aws-credentials` assumes `AWS_ROLE_TO_ASSUME` with the
+job's GitHub OIDC token (see the AWS part of the [Setup Guide](#setup-guide)).
 
 ### Required Variables
 
+- `AWS_ROLE_TO_ASSUME` (ARN of the deploy role)
 - `AWS_REGION` (default: us-east-1)
 - `AWS_ACCOUNT_ID`
 - `ECR_REPOSITORY` (default: cudly)
@@ -169,10 +174,17 @@ Deploy CUDly to GCP Cloud Run. Serverless container platform.
 
 ### Required Secrets
 
-- `GCP_SA_KEY` (Service Account JSON with permissions)
+- `ADMIN_EMAIL`
+- `TF_BACKEND_GCP`
+- `ALERT_EMAILS` (optional)
+
+No service-account key is stored. `google-github-actions/auth` exchanges the job's GitHub OIDC
+token through Workload Identity Federation (see the GCP part of the [Setup Guide](#setup-guide)).
 
 ### Required Variables
 
+- `GCP_WORKLOAD_IDENTITY_PROVIDER` (full resource name of the Workload Identity provider)
+- `GCP_SERVICE_ACCOUNT` (email of the deploy service account)
 - `GCP_PROJECT_ID`
 - `GCP_REGION` (default: us-central1)
 - `ARTIFACT_REGISTRY_REPO` (default: cudly)
@@ -205,6 +217,7 @@ Deploy CUDly to Azure Container Apps. Serverless container platform with built-i
 
 ### Triggers
 
+- Push to `main` (deploys to dev)
 - Manual dispatch
 - Called by deploy-all.yml
 
@@ -213,6 +226,9 @@ Deploy CUDly to Azure Container Apps. Serverless container platform with built-i
 - `AZURE_CLIENT_ID` (client ID of the deploy app registration)
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
+- `ADMIN_EMAIL`
+- `TF_BACKEND_AZURE`
+- `ALERT_EMAILS` (optional)
 
 No client secret or service-principal JSON is stored. `azure/login` swaps the job's GitHub OIDC
 token for a short-lived Azure token through a federated identity credential (see the Azure part of
@@ -220,7 +236,7 @@ the [Setup Guide](#setup-guide)).
 
 ### Required Variables
 
-- `AZURE_LOCATION` (default: eastus)
+- `AZURE_LOCATION` (default: westus2)
 - `ACR_NAME` (default: cudlyacr)
 
 ### Example
@@ -443,37 +459,78 @@ az acr repository show-tags --name cudlyacr --repository cudly
 
 ### 1. Configure GitHub Secrets
 
+No cloud uses a long-lived key. Each workflow exchanges the job's GitHub OIDC token (issuer
+`https://token.actions.githubusercontent.com`) for short-lived cloud credentials. The cloud-side
+trust and deploy identities come from the bootstrap modules in
+`terraform/environments/{aws,gcp,azure}/ci-cd-permissions/`, which a privileged operator applies by
+hand; no workflow applies them.
+
+This repository has GitHub's immutable OIDC subject enabled, so every `sub` claim starts with
+`repo:LeanerCloud@86753534/cloud-commitments-platform@1391259743`, not
+`repo:LeanerCloud/cloud-commitments-platform`. Check the current prefix with
+`gh api repos/LeanerCloud/cloud-commitments-platform/actions/oidc/customization/sub`. The AWS and
+Azure modules build each subject as `repo:<github_repo>:...`, so their `github_repo` input must be
+that `owner@id/repo@id` form; the plain-name default produces subjects no token presents. GCP does
+not match on `sub` and is unaffected.
+
 **AWS:**
 
+The bootstrap module creates the GitHub OIDC provider and the `cudly-terraform-deploy` role. Every
+`aws-actions/configure-aws-credentials` step reads the role ARN from a repository variable:
+
 ```bash
-# Create secrets
-gh secret set AWS_ACCESS_KEY_ID
-gh secret set AWS_SECRET_ACCESS_KEY
+# Run from terraform/environments/aws/ci-cd-permissions/ after it has been applied
+gh variable set AWS_ROLE_TO_ASSUME -b"$(terraform output -raw role_arn)"
 gh secret set DB_PASSWORD_AWS
 ```
 
+The role's trust policy accepts:
+
+| Field | Value |
+| --- | --- |
+| Issuer (OIDC provider URL) | `https://token.actions.githubusercontent.com` |
+| Audience (`aud`) | `sts.amazonaws.com` |
+| Subject (`sub`) | exact match (`StringEquals`) against the literal list in `role.tf` |
+
+Every job that assumes the role is bound to a GitHub Environment, so it presents an
+`environment:<name>` subject:
+
+| Environment | Jobs that present it |
+| --- | --- |
+| `dev`, `staging`, `prod` | `deploy-aws-lambda.yml` (`build-and-deploy`, `test-deployment`), `rollback.yml` (`rollback-aws-lambda`), `cleanup-staging.yml` (`destroy-aws-lambda`, `destroy-aws-fargate`, `staging` only), `destroy-fargate-dev.yml` (`destroy`, `dev` only) |
+| `aws-fargate-dev`, `aws-fargate-staging`, `aws-fargate-prod` | `deploy-aws-fargate.yml` (`deploy`), `rollback.yml` (`rollback-aws-fargate`) |
+| `aws-db-dev`, `aws-db-staging`, `aws-db-prod` | `database-migration.yml` (`migrate-aws`) |
+
+`role.tf` lists all of these, plus `ref:refs/heads/main`, which no current AWS job presents.
+
 **GCP:**
 
+The bootstrap module creates the `cudly-terraform-deploy` service account, a Workload Identity pool
+and provider, and the `roles/iam.workloadIdentityUser` binding that lets this repository's tokens
+impersonate the service account. Every `google-github-actions/auth` step reads two repository
+variables:
+
 ```bash
-# Create service account and download JSON
-gcloud iam service-accounts create cudly-cicd --project=<project-id>
-
-# Grant permissions
-gcloud projects add-iam-policy-binding <project-id> \
-  --member="serviceAccount:cudly-cicd@<project-id>.iam.gserviceaccount.com" \
-  --role="roles/run.admin"
-
-# Create and download key
-gcloud iam service-accounts keys create key.json \
-  --iam-account=cudly-cicd@<project-id>.iam.gserviceaccount.com
-
-# Set secrets
-gh secret set GCP_SA_KEY < key.json
+# Run from terraform/environments/gcp/ci-cd-permissions/ after it has been applied
+gh variable set GCP_WORKLOAD_IDENTITY_PROVIDER -b"$(terraform output -raw workload_identity_provider)"
+gh variable set GCP_SERVICE_ACCOUNT -b"$(terraform output -raw service_account_email)"
+gh variable set GCP_PROJECT_ID -b"<project-id>"
 gh secret set DB_PASSWORD_GCP
-
-# Set variables
-gh variable set GCP_PROJECT_ID --body "<project-id>"
 ```
+
+| Field | Value |
+| --- | --- |
+| Issuer | `https://token.actions.githubusercontent.com` |
+| Audience | the provider's default (no `allowed_audiences` set), which `google-github-actions/auth` requests by default |
+| Attribute condition | `repository_owner_id` and `repository_id` equal the module's `github_owner_id` / `github_repo_id`, and `ref` equals `deploy_ref` (default `refs/heads/main`) |
+
+The condition ignores `sub`, so the GCP jobs (`deploy-gcp.yml` `build-and-deploy`, `rollback.yml`
+`rollback-gcp`, `cleanup-staging.yml` `destroy-gcp`, `database-migration.yml` `migrate-gcp`)
+authenticate only when the run's ref is `deploy_ref`, whatever environment they bind.
+
+The deploy service account's project roles, `roles/run.admin` among them, are the
+`local.deploy_roles` list in the module's `service_account.tf` (`terraform output roles` prints
+them). Change that list and re-apply the module instead of granting roles by hand.
 
 **Azure:**
 
@@ -497,7 +554,7 @@ Each federated identity credential on the app registration must use:
 | --- | --- |
 | Issuer | `https://token.actions.githubusercontent.com` |
 | Audience | `api://AzureADTokenExchange` |
-| Subject | `repo:LeanerCloud/cloud-commitments-platform:environment:<name>` |
+| Subject | `repo:LeanerCloud@86753534/cloud-commitments-platform@1391259743:environment:<name>` (see the immutable-subject note above) |
 
 Every job that runs `azure/login` is bound to a GitHub Environment, so its token carries the
 `environment:<name>` subject, not a branch subject, even when it runs on `main`. Azure allows no
@@ -635,12 +692,11 @@ docker push <account>.dkr.ecr.us-east-1.amazonaws.com/cudly:latest
 ```bash
 # Check service account permissions
 gcloud projects get-iam-policy <project-id>
-
-# Grant missing roles
-gcloud projects add-iam-policy-binding <project-id> \
-  --member="serviceAccount:<sa>@<project>.iam.gserviceaccount.com" \
-  --role="roles/run.admin"
 ```
+
+The deploy service account's roles come from `local.deploy_roles` in
+`terraform/environments/gcp/ci-cd-permissions/service_account.tf`. If a role is missing, add it
+there and re-apply that bootstrap module rather than granting it by hand.
 
 **Azure - Resource not found:**
 
