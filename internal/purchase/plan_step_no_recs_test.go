@@ -93,6 +93,10 @@ func scheduledBarePlanStepFails(t *testing.T, notificationDaysBefore int) {
 	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{exec}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil)
+	// The purchase-failed notice (#714) reads the recipient on a detached
+	// context and goes out once, for the root row only.
+	mockStore.On("GetGlobalConfig", mock.Anything).Return(autoPurchaseOnCfg(), nil)
+	mockEmail.On("SendPurchaseFailedNotification", mock.Anything, mock.Anything).Return(nil).Once()
 	mockStore.On("GetPurchasePlan", mock.Anything, bareStepPlanID).Return(plan, nil)
 	mockStore.On("TransitionExecutionStatus", ctx, bareStepExecID,
 		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&claimed, nil)

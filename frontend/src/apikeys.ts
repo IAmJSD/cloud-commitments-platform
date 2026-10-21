@@ -348,8 +348,11 @@ export async function createApiKey(name: string, password: string, expiresAt: Da
 /**
  * Handle create API key form submission
  */
+let createInFlight = false;
+
 export async function handleCreateApiKey(e: Event): Promise<void> {
   e.preventDefault();
+  if (createInFlight) return;
 
   const errorEl = document.getElementById('create-apikey-error');
   if (errorEl) errorEl.classList.add('hidden');
@@ -387,6 +390,9 @@ export async function handleCreateApiKey(e: Event): Promise<void> {
     return;
   }
 
+  createInFlight = true;
+  const submitBtn = document.getElementById('create-apikey-submit-btn') as HTMLButtonElement | null;
+  if (submitBtn) submitBtn.disabled = true;
   try {
     const response = await createApiKey(name, password, expiresAt, permissions);
     closeCreateKeyModal();
@@ -395,6 +401,9 @@ export async function handleCreateApiKey(e: Event): Promise<void> {
   } catch (error) {
     const err = error as Error;
     showError(`Failed to create API key: ${err.message}`);
+  } finally {
+    createInFlight = false;
+    updateCreateKeySubmitState();
   }
 }
 
@@ -408,6 +417,7 @@ export function showKeyCreatedModal(apiKey: string): void {
   const modal = document.createElement('div');
   modal.id = 'apikey-created-modal';
   modal.className = 'modal';
+  modal.dataset.requireAck = 'true';
   modal.innerHTML = `
     <div class="modal-content">
       <h2>API Key Created Successfully</h2>
@@ -459,6 +469,7 @@ export function showKeyCreatedModal(apiKey: string): void {
   const closeBtn = document.getElementById('close-apikey-created-btn');
   if (closeBtn) {
     closeBtn.addEventListener('click', () => {
+      delete modal.dataset.requireAck;
       closeModal(modal);
       modal.remove();
     });
@@ -555,7 +566,8 @@ export function initApiKeys(): void {
  */
 function showError(message: string): void {
   const errorEl = document.getElementById('create-apikey-error');
-  if (errorEl) {
+  const createModalOpen = !document.getElementById('create-apikey-modal')?.classList.contains('hidden');
+  if (errorEl && createModalOpen) {
     errorEl.textContent = message;
     errorEl.classList.remove('hidden');
   } else {
