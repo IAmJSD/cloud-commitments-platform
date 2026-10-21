@@ -182,6 +182,13 @@ func (s *Service) validateCreateAPIKeyRequest(user *User, password, name string,
 // user's permissions. Administrators-group members hold {admin, *}, so the
 // per-permission HasPermission check below already passes for every requested
 // permission; no role-based short-circuit is needed.
+//
+// Only action and resource are checked here. A key permission's Constraints
+// are not compared with the owner's at creation; they are enforced at check
+// time, where HasAPIKeyPermissionForConstraintsAPI requires every request to
+// pass both the key's constraints and the owner's. That holds for an
+// {admin, *} key permission too: permissionsAllow applies its Constraints on
+// every check, not only under StrictScope (issue #956).
 func (s *Service) validateAPIKeyPermissions(ctx context.Context, user *User, permissions []Permission) error {
 	// Get user's auth context to check their permissions
 	authCtx, err := s.GetAuthContext(ctx, user.ID)

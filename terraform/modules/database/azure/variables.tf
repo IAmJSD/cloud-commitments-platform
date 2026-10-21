@@ -147,6 +147,17 @@ variable "log_analytics_workspace_id" {
   default     = null
 }
 
+variable "deletion_protection" {
+  description = <<-EOT
+    Put a CanNotDelete management lock on the server so Azure refuses to
+    delete it outside this state's own destroy plan. Defaults to true to
+    match the AWS and GCP database modules; ephemeral dev and staging
+    environments opt out explicitly.
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "tags" {
   description = "Tags to apply to resources"
   type        = map(string)
