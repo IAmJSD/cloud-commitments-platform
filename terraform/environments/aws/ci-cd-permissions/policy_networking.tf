@@ -74,7 +74,6 @@ resource "aws_iam_policy" "networking" {
           # Read-only, and only called for compute_platform = "fargate" with
           # enable_cdn = true.
           "ec2:DescribeManagedPrefixLists",
-          "ec2:GetManagedPrefixListEntries",
           "ec2:DescribeNetworkAcls",
           "ec2:DescribeNetworkInterfaces",
           "ec2:DescribePrefixLists",
@@ -86,6 +85,9 @@ resource "aws_iam_policy" "networking" {
           "ec2:DescribeVpcs",
           "ec2:DetachInternetGateway",
           "ec2:DisassociateRouteTable",
+          # Second half of the #412 prefix-list lookup (see
+          # ec2:DescribeManagedPrefixLists above).
+          "ec2:GetManagedPrefixListEntries",
           "ec2:ModifySubnetAttribute",
           "ec2:ModifyVpcAttribute",
           "ec2:ModifyVpcEndpoint",

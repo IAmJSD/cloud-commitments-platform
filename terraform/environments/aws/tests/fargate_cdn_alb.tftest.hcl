@@ -124,9 +124,14 @@ run "fargate_without_cdn_keeps_alb_public" {
 run "lambda_with_cdn_does_not_trip_the_fargate_check" {
   command = plan
 
+  # A positive lambda_reserved_concurrency keeps check
+  # "lambda_concurrency_bounds_db_connections" (#718) quiet: its default of -1
+  # trips that check, and a failed check fails the run. 20 x the default
+  # db_max_connections (3) fits database_max_connections (80) minus 10 reserved.
   variables {
-    compute_platform = "lambda"
-    enable_cdn       = true
+    compute_platform            = "lambda"
+    enable_cdn                  = true
+    lambda_reserved_concurrency = 20
   }
 
   assert {

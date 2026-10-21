@@ -57,3 +57,33 @@ func TestAWSFargateCDNGuardPresent(t *testing.T) {
 		t.Error(`networking.tf: module "networking" must set restrict_alb_ingress_to_cloudfront = var.compute_platform == "fargate" && var.enable_cdn`)
 	}
 }
+
+// The per-rule predicate in modules/networking/aws's alb_ingress_cloudfront_only
+// output is what the #412 check above trusts. terraform test cannot drive it
+// false (configured nested-block attributes cannot be overridden, and the
+// module has no input that adds a rule while restricted), so a clause dropped
+// or replaced with `true` would pass every tftest. This pins each clause.
+func TestAWSALBIngressOutputPredicatePinned(t *testing.T) {
+	const outputsFile = "../../modules/networking/aws/outputs.tf"
+	data, err := os.ReadFile(outputsFile)
+	if err != nil {
+		t.Fatalf("reading %s: %v", outputsFile, err)
+	}
+	m := regexp.MustCompile(`(?s)output "alb_ingress_cloudfront_only" \{.*?\n\}`).Find(data)
+	if m == nil {
+		t.Fatalf(`%s missing output "alb_ingress_cloudfront_only" (#412)`, outputsFile)
+	}
+	body := strings.Join(strings.Fields(string(m)), " ")
+	for _, clause := range []string{
+		`for r in aws_security_group.alb[0].ingress :`,
+		`length(r.cidr_blocks == null ? [] : r.cidr_blocks) == 0 &&`,
+		`length(r.ipv6_cidr_blocks == null ? [] : r.ipv6_cidr_blocks) == 0 &&`,
+		`length(r.security_groups == null ? [] : r.security_groups) == 0 &&`,
+		`!(r.self == true) &&`,
+		`toset(r.prefix_list_ids == null ? [] : r.prefix_list_ids) == toset([data.aws_ec2_managed_prefix_list.cloudfront_origin_facing[0].id])`,
+	} {
+		if !strings.Contains(body, clause) {
+			t.Errorf("%s: alb_ingress_cloudfront_only must keep the per-rule clause %q, or an ingress rule from another source would leave it true and silence the #412 check", outputsFile, clause)
+		}
+	}
+}
