@@ -328,6 +328,31 @@ variable "cleanup_schedule" {
   default     = "0 3 * * *"
 }
 
+variable "enable_ri_exchange_schedule" {
+  description = "Schedule the ri_exchange_reshape task (RI exchange automation). Opt-in: default false, as on the other platforms."
+  type        = bool
+  default     = false
+}
+
+variable "ri_exchange_schedule" {
+  # Standard 5-field cron: 0 */6 * * * runs at 00:00, 06:00, 12:00, 18:00 UTC.
+  description = "Cron schedule for ri_exchange_reshape."
+  type        = string
+  default     = "0 */6 * * *"
+}
+
+variable "enable_ladder_run_schedule" {
+  description = "Schedule the ladder_run task (commitment-ladder planning run). Opt-in: default false until laddering is promoted to GA, as on AWS."
+  type        = bool
+  default     = false
+}
+
+variable "ladder_run_schedule" {
+  description = "Cron schedule for ladder_run."
+  type        = string
+  default     = "0 2 * * *"
+}
+
 variable "task_timeout" {
   description = "Seconds a scheduled task may run (TASK_TIMEOUT). The Job is killed 300 seconds after that."
   type        = number

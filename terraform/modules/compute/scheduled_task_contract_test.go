@@ -30,7 +30,7 @@ var schedulerRefs = []struct {
 	{"aws/fargate/main.tf", regexp.MustCompile(`"--task",\s*"([^"]+)"`), 4},
 	// AKS CronJobs run `--task each.key` over the sweep_tasks map, so the
 	// task names are the map keys (#893).
-	{"azure/aks/scheduled-tasks.tf", regexp.MustCompile(`(?m)^\s*(\w+)\s*=\s*\{\s*job\s*=`), 8},
+	{"azure/aks/scheduled-tasks.tf", regexp.MustCompile(`(?m)^\s*(\w+)\s*=\s*\{\s*job\s*=`), 10},
 }
 
 func TestSchedulerTargetsNameKnownServerTasks(t *testing.T) {

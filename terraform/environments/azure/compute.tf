@@ -201,8 +201,10 @@ module "compute_aks" {
   admin_group_object_ids  = var.aks_admin_group_object_ids
 
   # Scheduled tasks (CronJobs, #893). The other tasks use the module defaults.
-  enable_scheduled_tasks  = var.enable_scheduled_tasks
-  recommendation_schedule = var.recommendation_schedule
+  enable_scheduled_tasks      = var.enable_scheduled_tasks
+  recommendation_schedule     = var.recommendation_schedule
+  enable_ri_exchange_schedule = var.enable_ri_exchange_schedule
+  ri_exchange_schedule        = var.ri_exchange_schedule
 
   tags = local.common_tags
 

@@ -50,7 +50,7 @@ run "defaults" {
   command = plan
 
   plan_options {
-    target = [kubernetes_deployment.app, kubernetes_service.app, kubernetes_cron_job_v1.sweep]
+    target = [kubernetes_deployment.app, kubernetes_service.app, kubernetes_secret.database, kubernetes_cron_job_v1.sweep]
   }
 
   assert {
@@ -113,6 +113,24 @@ run "defaults" {
     error_message = "Task pods must carry every environment variable of the API container, secret references included."
   }
   assert {
+    condition = [
+      for e in kubernetes_deployment.app[0].spec[0].template[0].spec[0].container[0].env :
+      e.value_from[0].secret_key_ref[0].key if e.name == "DB_PASSWORD_SECRET"
+    ] == ["password_secret_name"]
+    error_message = "DB_PASSWORD_SECRET must read the database Secret's password_secret_name key (#1115); a key the Secret lacks fails the API and task pods with CreateContainerConfigError."
+  }
+  assert {
+    condition = alltrue(flatten([
+      for env in concat(
+        [kubernetes_deployment.app[0].spec[0].template[0].spec[0].container[0].env],
+        [for j in kubernetes_cron_job_v1.sweep : j.spec[0].job_template[0].spec[0].template[0].spec[0].container[0].env],
+        ) : [
+        for e in env : contains(keys(kubernetes_secret.database[0].data), e.value_from[0].secret_key_ref[0].key) if length(e.value_from) > 0
+      ]
+    ]))
+    error_message = "Every secret_key_ref of the API and task pods must name a key the database-credentials Secret defines."
+  }
+  assert {
     condition = alltrue([
       for j in kubernetes_cron_job_v1.sweep :
       length(j.spec[0].job_template[0].spec[0].template[0].spec[0].container[0].env) == length(kubernetes_deployment.app[0].spec[0].template[0].spec[0].container[0].env) + 1 &&
@@ -137,6 +155,8 @@ run "opt_in" {
     enable_process_scheduled_purchases_schedule = true
     enable_send_notifications_schedule          = true
     enable_cleanup_schedule                     = true
+    enable_ri_exchange_schedule                 = true
+    enable_ladder_run_schedule                  = true
   }
 
   plan_options {
@@ -144,8 +164,8 @@ run "opt_in" {
   }
 
   assert {
-    condition     = toset(keys(kubernetes_cron_job_v1.sweep)) == toset(["analytics_collect", "cleanup", "collect_recommendations", "finalize_revocations", "fire_scheduled_purchases", "process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"])
-    error_message = "Opting in must schedule all eight required tasks."
+    condition     = toset(keys(kubernetes_cron_job_v1.sweep)) == toset(["analytics_collect", "cleanup", "collect_recommendations", "finalize_revocations", "fire_scheduled_purchases", "ladder_run", "process_scheduled_purchases", "reap_stuck_purchases", "ri_exchange_reshape", "send_notifications"])
+    error_message = "Opting in must schedule the eight required tasks plus the opt-in ri_exchange_reshape and ladder_run."
   }
   assert {
     condition = alltrue([
@@ -157,12 +177,12 @@ run "opt_in" {
   assert {
     condition = alltrue([
       for k, j in kubernetes_cron_job_v1.sweep :
-      j.spec[0].schedule == { collect_recommendations = var.recommendation_schedule, reap_stuck_purchases = var.reap_stuck_purchases_schedule, analytics_collect = var.analytics_collect_schedule, fire_scheduled_purchases = var.fire_scheduled_purchases_schedule, process_scheduled_purchases = var.process_scheduled_purchases_schedule, send_notifications = var.send_notifications_schedule, finalize_revocations = var.finalize_revocations_schedule, cleanup = var.cleanup_schedule }[k]
+      j.spec[0].schedule == { collect_recommendations = var.recommendation_schedule, reap_stuck_purchases = var.reap_stuck_purchases_schedule, analytics_collect = var.analytics_collect_schedule, fire_scheduled_purchases = var.fire_scheduled_purchases_schedule, process_scheduled_purchases = var.process_scheduled_purchases_schedule, send_notifications = var.send_notifications_schedule, finalize_revocations = var.finalize_revocations_schedule, cleanup = var.cleanup_schedule, ri_exchange_reshape = var.ri_exchange_schedule, ladder_run = var.ladder_run_schedule }[k]
     ])
     error_message = "Each schedule must come from its variable."
   }
   assert {
-    condition     = length(distinct([for j in kubernetes_cron_job_v1.sweep : j.metadata[0].name])) == 8
+    condition     = length(distinct([for j in kubernetes_cron_job_v1.sweep : j.metadata[0].name])) == 10
     error_message = "CronJob names must be distinct."
   }
 }

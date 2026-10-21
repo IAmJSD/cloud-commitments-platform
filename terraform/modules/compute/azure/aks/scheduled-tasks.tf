@@ -17,7 +17,9 @@ locals {
   # Keyed by server task name. `job` is the CronJob name suffix. Default-on
   # tasks match the other platforms; fire_scheduled_purchases,
   # process_scheduled_purchases, send_notifications and cleanup are opt-in
-  # (default off, as decided for #712).
+  # (default off, as decided for #712). ri_exchange_reshape (as on Container
+  # Apps, Cloud Run and Fargate) and ladder_run (as on Fargate and Lambda) are
+  # opt-in features, off by default.
   sweep_tasks = {
     collect_recommendations     = { job = "collect", enabled = var.enable_scheduled_tasks, schedule = var.recommendation_schedule }
     reap_stuck_purchases        = { job = "reap", enabled = var.enable_reap_stuck_purchases_schedule, schedule = var.reap_stuck_purchases_schedule }
@@ -27,6 +29,8 @@ locals {
     send_notifications          = { job = "notify", enabled = var.enable_send_notifications_schedule, schedule = var.send_notifications_schedule }
     finalize_revocations        = { job = "finalize", enabled = var.enable_finalize_revocations_schedule, schedule = var.finalize_revocations_schedule }
     cleanup                     = { job = "cleanup", enabled = var.enable_cleanup_schedule, schedule = var.cleanup_schedule }
+    ri_exchange_reshape         = { job = "ri-exchange", enabled = var.enable_ri_exchange_schedule, schedule = var.ri_exchange_schedule }
+    ladder_run                  = { job = "ladder", enabled = var.enable_ladder_run_schedule, schedule = var.ladder_run_schedule }
   }
   active_sweeps = var.deploy_kubernetes_resources ? { for k, v in local.sweep_tasks : k => v if v.enabled } : {}
 
