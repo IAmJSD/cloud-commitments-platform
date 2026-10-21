@@ -42,6 +42,11 @@ variables {
   enable_nat_gateway       = true
 }
 
+# Not covered here: the routes' depends_on on the ASG, which keeps the
+# one-time upgrade from moving egress to the new ENI before an instance that
+# attaches it is InService, and the ASG's depends_on on the instance role
+# policy. Mock providers expose no apply ordering, so deleting either one
+# leaves every run below green; check them by hand when editing main.tf.
 run "routes_target_persistent_eni" {
   command = apply
 

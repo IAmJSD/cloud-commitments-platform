@@ -304,6 +304,11 @@ resource "aws_autoscaling_group" "fck_nat" {
   health_check_type         = "EC2"
   health_check_grace_period = 60
 
+  # Grant the attach permission before an instance can boot and ask for it.
+  # fck-nat retries the attach, but its one-shot source/dest-check call on
+  # the primary ENI does not, so make the order explicit.
+  depends_on = [aws_iam_role_policy.fck_nat_ec2]
+
   tag {
     key                 = "Name"
     value               = "${var.stack_name}-fck-nat-asg"
