@@ -105,20 +105,48 @@ func TestGetRecommendations_PaginationBoundsResponse(t *testing.T) {
 // in the order the scheduler gave them, with no next_cursor.
 func TestGetRecommendations_UnpaginatedShapeUnchanged(t *testing.T) {
 	recs := pageTestRecs(5)
+	// Copy the expected order before the call: the mock hands the handler
+	// this same backing array, so an in-place sort would also reorder recs.
+	wantIDs := make([]string, len(recs))
+	for i := range recs {
+		wantIDs[i] = recs[i].ID
+	}
 	h := pageTestHandler(t, recs)
 
 	resp, err := h.getRecommendations(context.Background(), pageTestReq(), map[string]string{})
 	require.NoError(t, err)
 	require.Len(t, resp.Recommendations, 5)
-	for i := range recs {
-		assert.Equal(t, recs[i].ID, resp.Recommendations[i].ID)
+	gotIDs := make([]string, len(resp.Recommendations))
+	for i := range resp.Recommendations {
+		gotIDs[i] = resp.Recommendations[i].ID
 	}
+	assert.Equal(t, wantIDs, gotIDs, "legacy mode must keep the scheduler's order")
 	assert.Empty(t, resp.NextCursor)
 	assert.Equal(t, 5, resp.Summary.TotalCount)
 
 	body, err := json.Marshal(resp)
 	require.NoError(t, err)
 	assert.NotContains(t, string(body), "next_cursor")
+}
+
+// TestGetRecommendations_PaginationRejectsDuplicateIDs pins the total-order
+// guard: two rows sharing an ID would let the strict "after" comparison skip
+// one of them at a page boundary (a,b,b,c with limit=2 used to return only
+// three rows), so a paginated request fails instead of walking short. Legacy
+// mode does not sort or page and still returns every row.
+func TestGetRecommendations_PaginationRejectsDuplicateIDs(t *testing.T) {
+	recs := pageTestRecs(4)
+	recs[1].ID = recs[2].ID
+	h := pageTestHandler(t, recs)
+	ctx := context.Background()
+
+	_, err := h.getRecommendations(ctx, pageTestReq(), map[string]string{"limit": "2"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate recommendation ID")
+
+	legacy, err := h.getRecommendations(ctx, pageTestReq(), map[string]string{})
+	require.NoError(t, err)
+	assert.Len(t, legacy.Recommendations, 4)
 }
 
 func TestGetRecommendations_PaginationPages(t *testing.T) {

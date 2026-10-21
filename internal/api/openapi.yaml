@@ -325,6 +325,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RecommendationsResponse'
+        '400':
+          description: >
+            Invalid query parameter: a limit that is empty, not an integer or
+            outside 1-1000; a cursor that is empty, longer than 1024
+            characters or not a cursor this endpoint issued; or an invalid
+            provider, service, region, account_ids, min_savings_usd or
+            min_savings_pct filter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -3479,7 +3490,10 @@ components:
           type: string
           description: >-
             Present only on a paginated request that has more rows; pass it as
-            the cursor query parameter to fetch the next page.
+            the cursor query parameter to fetch the next page. Its absence is
+            the only end-of-list signal: a page with fewer rows than limit is
+            not necessarily the last one, because each page is also capped by
+            serialized size.
 
     RecommendationRecord:
       type: object
