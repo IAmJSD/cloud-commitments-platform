@@ -113,7 +113,8 @@ module "compute_lambda" {
       CUDLY_MAX_ACCOUNT_PARALLELISM        = tostring(var.max_account_parallelism)
       CUDLY_SOURCE_CLOUD                   = "aws"
     },
-    var.additional_env_vars
+    var.additional_env_vars,
+    local.db_pool_env
   )
 
   # Multi-account IAM capabilities. cross_account_role_name_prefix scopes the
@@ -242,7 +243,8 @@ module "compute_fargate" {
       CUDLY_MAX_ACCOUNT_PARALLELISM        = tostring(var.max_account_parallelism)
       CUDLY_SOURCE_CLOUD                   = "aws"
     },
-    var.additional_env_vars
+    var.additional_env_vars,
+    local.db_pool_env
   )
 
   # Multi-account IAM capabilities — kept at parity with the Lambda branch.

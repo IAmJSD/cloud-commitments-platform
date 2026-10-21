@@ -21,7 +21,7 @@ for (const sample of [
     await page.goto('/opportunities');
     const selected = page.locator(`tr.recommendation-row[data-rec-id="${row.id}"]`);
     await expect(selected).toBeVisible();
-    await selected.getByRole('checkbox', { name: 'Select recommendation' }).check();
+    await selected.getByRole('checkbox', { name: /^Select / }).check();
     await page.locator('#bulk-purchase-btn').click();
     await expect(page.locator('#purchase-details')).toContainText(row.resource_type);
     const warning = page.locator('#purchase-details .direct-execute-warning');
@@ -65,7 +65,7 @@ test('mixed providers use fan-out without cancellation reassurance', async ({ pa
   await page.goto('/opportunities');
   for (const id of ['r01', 'r12']) {
     await page.locator(`tr.recommendation-row[data-rec-id="${id}"]`)
-      .getByRole('checkbox', { name: 'Select recommendation' }).check();
+      .getByRole('checkbox', { name: /^Select / }).check();
   }
   await page.locator('#bulk-purchase-btn').click();
   await expect(page.locator('#fanout-summary')).toBeVisible();

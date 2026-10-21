@@ -35,6 +35,7 @@ database_storage_mb             = 131072
 database_backup_retention_days  = 35
 database_geo_redundant_backup   = true
 database_high_availability_mode = "ZoneRedundant"
+database_deletion_protection    = true  # CanNotDelete lock (needs locks/* from ci-cd-permissions)
 auto_migrate                    = false # Manual migrations in production
 
 # ==============================================

@@ -7,7 +7,7 @@ import * as state from './state';
 import { showLoginModal, showAdminSetupModal, showResetPasswordModal, updateUserUI } from './auth';
 import { loadDashboard, setupDashboardHandlers } from './dashboard';
 import { setupRecommendationsHandlers, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, getFanOutBuckets, clearFanOutBuckets, getExecuteMode, clearExecuteMode, fanOutBucketAccountLabel, getAccountName, type FanOutBucket } from './recommendations';
-import { switchTab, applyTabFromPath, initRouter, switchSettingsSubTab, canonicalTabPath } from './navigation';
+import { switchTab, setActiveNav, applyTabFromPath, initRouter, switchSettingsSubTab, canonicalTabPath } from './navigation';
 import { savePlan, setupPlanHandlers, closePlanModal, openNewPlanModal, closePurchaseModal } from './plans';
 import { saveGlobalSettings, setupSettingsHandlers, resetSettings } from './settings';
 import { setupUserHandlers } from './users';
@@ -18,7 +18,7 @@ import { setupRIExchangeHandlers, saveAutomationSettings } from './riexchange';
 import { showToast } from './toast';
 import { formatPaymentAdjustmentNotice } from './commitmentOptions';
 import { confirmDialog } from './confirmDialog';
-import { buildCommitmentSummary, withIntro } from './commitmentSummary';
+import { buildCommitmentSummary, commitmentTotals, executeButtonLabel, executeConfirmLabel, withIntro } from './commitmentSummary';
 import { handlePurchaseDeeplink } from './purchases-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
@@ -74,6 +74,10 @@ export async function init(): Promise<void> {
     await showResetPasswordModal(resetToken);
     return;
   }
+
+  // The server-rendered markup marks Home active; correct it from the URL
+  // now instead of after the async fetches below.
+  setActiveNav(applyTabFromPath());
 
   if (!api.isAuthenticated()) {
     try {
@@ -428,8 +432,7 @@ export async function handleExecutePurchase(): Promise<void> {
   //   - Approval path: low-friction, non-destructive.
   //   - Direct-execute path: red destructive dialog with cost callout and
   //     immediate-charge callout; no cancellation promise (issue #251).
-  const summary = buildCommitmentSummary(
-    recsWithPayment.map((r) => ({
+  const summaryLines = recsWithPayment.map((r) => ({
       service: r.service,
       provider: r.provider,
       region: r.region,
@@ -440,25 +443,28 @@ export async function handleExecutePurchase(): Promise<void> {
       upfront: r.upfront_cost,
       monthly: r.monthly_cost ?? null,
       ...(r.cloud_account_id ? { account: getAccountName(r.cloud_account_id) } : {}),
-    })),
+  }));
+  const totals = commitmentTotals(summaryLines);
+  const summary = buildCommitmentSummary(
+    summaryLines,
     isDirect ? {} : { upfrontLabel: 'Upfront on approval' },
   );
   const ok = isDirect
     ? await confirmDialog({
         title: `Execute ${localRecs.length} purchase${localRecs.length === 1 ? '' : 's'} now?`,
         body: withIntro('This charges the amount shown under "Charged today" immediately and bypasses the approval step. The monthly amount, if any, is billed for the whole term.', summary),
-        confirmLabel: 'Execute Purchase Now',
+        confirmLabel: executeConfirmLabel(true, totals.upfront),
         destructive: true,
       })
     : await confirmDialog({
         title: `Send ${localRecs.length} purchase${localRecs.length === 1 ? '' : 's'} for approval?`,
         body: withIntro('This emails an approval request to the configured approver. Nothing is charged until the approver clicks the link in that email.', summary),
-        confirmLabel: 'Send for approval',
+        confirmLabel: executeConfirmLabel(false, totals.upfront),
         destructive: false,
       });
 
   if (!ok) {
-    setExecutePurchaseSubmitting(executeBtn, false, getExecuteMode() === 'direct' ? 'Execute Purchase Now' : 'Send for Approval');
+    setExecutePurchaseSubmitting(executeBtn, false, executeButtonLabel(getExecuteMode() === 'direct'));
     return;
   }
 
@@ -556,7 +562,7 @@ export async function handleExecutePurchase(): Promise<void> {
     const verb = isDirect ? 'execute' : 'send for approval';
     showToast({ message: `Failed to ${verb} purchase: ${err.message}`, kind: 'error' });
   } finally {
-    setExecutePurchaseSubmitting(executeBtn, false, getExecuteMode() === 'direct' ? 'Execute Purchase Now' : 'Send for Approval');
+    setExecutePurchaseSubmitting(executeBtn, false, executeButtonLabel(getExecuteMode() === 'direct'));
   }
 }
 
@@ -600,14 +606,14 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
     destructive: false,
   });
   if (!ok) {
-    setExecutePurchaseSubmitting(executeBtn, false, 'Send for Approval');
+    setExecutePurchaseSubmitting(executeBtn, false, executeButtonLabel(false));
     return;
   }
 
   try {
     await submitFanOutBuckets(buckets);
   } finally {
-    setExecutePurchaseSubmitting(executeBtn, false, 'Send for Approval');
+    setExecutePurchaseSubmitting(executeBtn, false, executeButtonLabel(false));
   }
 }
 
@@ -853,9 +859,10 @@ export function setupMobileNav(): void {
     sidebar!.removeAttribute('inert');
     if (overlay) overlay.setAttribute('aria-hidden', 'false');
 
-    // Focus the first focusable element in the sidebar
+    // The desktop collapse toggle is display:none below the drawer
+    // breakpoint, where focus() on it is a no-op, so skip it.
     const firstFocusable = sidebar!.querySelector<HTMLElement>(
-      'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      'a[href], button:not([disabled]):not(.app-sidebar-toggle), [tabindex]:not([tabindex="-1"])',
     );
     firstFocusable?.focus();
   }
@@ -943,9 +950,17 @@ export function setupMobileNav(): void {
   const extras = document.getElementById('sidebar-extras');
   extras?.addEventListener('click', (e: MouseEvent) => {
     const target = e.target as HTMLElement | null;
-    if (!target?.closest('#user-info a, #user-info button')) return;
+    if (!target?.closest('#user-info a, #user-info button:not(#user-email-display)')) return;
     if (document.body.classList.contains('sidebar-open')) closeDrawer();
   });
+  // The profile button opens a modal. Close the drawer in the capture phase,
+  // before the button's own handler runs: closing afterwards would pull focus
+  // from the modal back to the hamburger. Closing first lets the handler
+  // record the hamburger, not the now-inert button, as the return-focus trigger.
+  extras?.addEventListener('click', (e: MouseEvent) => {
+    if (!(e.target as HTMLElement | null)?.closest('#user-email-display')) return;
+    if (document.body.classList.contains('sidebar-open')) closeDrawer();
+  }, true);
 
   // Clicking any sidebar link closes the drawer (SPA navigation)
   sidebar.querySelectorAll<HTMLElement>('.tab-btn').forEach(link => {

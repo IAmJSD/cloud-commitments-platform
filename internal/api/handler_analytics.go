@@ -39,10 +39,12 @@ func (h *Handler) getAnalyticsTrends(ctx context.Context, req *events.LambdaFunc
 		return nil, NewClientError(503, "analytics snapshots not configured")
 	}
 
-	accountID := params["account_id"]
-	// Enforce allowed_accounts scope BEFORE resolving filter ids so a scoped
-	// user can never widen to "all" (empty filters mean all-accessible).
-	err = h.validateAnalyticsAccountScope(ctx, session, accountID)
+	// Enforce allowed_accounts scope and resolve the requested account (top-bar
+	// chip UUID, raw external id, or "" for all-accessible for an unrestricted
+	// session) into the dual-column filter inputs so rows carrying only the
+	// external account_id (cloud_account_id NULL) are matched. A scoped user can
+	// never widen to "all" (empty filters mean all-accessible).
+	accountUUIDs, accountExternalIDsByProvider, err := h.resolveAnalyticsAccountFilter(ctx, session, params["account_id"])
 	if err != nil {
 		return nil, err
 	}
@@ -53,11 +55,6 @@ func (h *Handler) getAnalyticsTrends(ctx context.Context, req *events.LambdaFunc
 	}
 
 	months := monthsBetween(start, end)
-
-	// Resolve the requested account (top-bar chip UUID, or "" for all-accessible
-	// for an unrestricted session) into the dual-column filter inputs so rows
-	// carrying only the external account_id (cloud_account_id NULL) are matched.
-	accountUUIDs, accountExternalIDsByProvider := h.resolveSingleAccountFilterIDs(ctx, accountID)
 
 	monthly, err := h.analyticsSnapshots.QueryMonthlyTotals(ctx, accountUUIDs, accountExternalIDsByProvider, months)
 	if err != nil {
@@ -130,7 +127,6 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 	}
 
 	// Parse parameters
-	accountID := params["account_id"]
 	interval, err := analyticsInterval(params["interval"])
 	if err != nil {
 		return nil, err
@@ -152,8 +148,11 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 	// For scoped users we require account_id and validate it's in their scope.
 	// We don't (yet) support analytics across a subset — the underlying
 	// aggregate takes a single account_id. An unrestricted/admin session
-	// can pass "" to mean "all accessible accounts".
-	err = h.validateAnalyticsAccountScope(ctx, session, accountID)
+	// can pass "" to mean "all accessible accounts". The requested account (a
+	// top-bar chip UUID, a raw external id, or "" for all) resolves to the
+	// dual-column filter inputs so rows that carry only the external account_id
+	// (cloud_account_id NULL) are aggregated (issue #701/#498/#866).
+	accountUUIDs, accountExternalIDsByProvider, err := h.resolveAnalyticsAccountFilter(ctx, session, params["account_id"])
 	if err != nil {
 		return nil, err
 	}
@@ -163,11 +162,6 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 	if err != nil {
 		return nil, err
 	}
-
-	// Resolve the requested account (a top-bar chip UUID, or "" for all) to the
-	// dual-column filter inputs so rows that carry only the external account_id
-	// (cloud_account_id NULL) are aggregated (issue #701/#498/#866).
-	accountUUIDs, accountExternalIDsByProvider := h.resolveSingleAccountFilterIDs(ctx, accountID)
 
 	// Aggregate history from the analytics client (Postgres-backed).
 	dataPoints, summary, err := h.analyticsClient.QueryHistory(ctx, accountUUIDs, accountExternalIDsByProvider, provider, start, end, interval)
@@ -196,13 +190,13 @@ func (h *Handler) getHistoryBreakdown(ctx context.Context, req *events.LambdaFun
 		return nil, NewClientError(503, "analytics not configured")
 	}
 
-	accountID := params["account_id"]
 	dimension, err := analyticsDimension(params["dimension"])
 	if err != nil {
 		return nil, err
 	}
 
-	err = h.validateAnalyticsAccountScope(ctx, session, accountID)
+	// Scope check plus account -> dual-column inputs; see getHistoryAnalytics.
+	accountUUIDs, accountExternalIDsByProvider, err := h.resolveAnalyticsAccountFilter(ctx, session, params["account_id"])
 	if err != nil {
 		return nil, err
 	}
@@ -211,9 +205,6 @@ func (h *Handler) getHistoryBreakdown(ctx context.Context, req *events.LambdaFun
 	if err != nil {
 		return nil, err
 	}
-
-	// Resolve account UUID -> dual-column inputs; see getHistoryAnalytics.
-	accountUUIDs, accountExternalIDsByProvider := h.resolveSingleAccountFilterIDs(ctx, accountID)
 
 	// Fetch the breakdown from the analytics client (Postgres-backed).
 	data, err := h.analyticsClient.QueryBreakdown(ctx, accountUUIDs, accountExternalIDsByProvider, start, end, dimension)
@@ -255,56 +246,109 @@ func analyticsDimension(raw string) (string, error) {
 	return raw, nil
 }
 
-// validateAnalyticsAccountScope rejects scoped users who request analytics
-// without account_id or for an account outside their allowed_accounts list.
-// Admin/unrestricted sessions pass through (account_id may be empty).
-func (h *Handler) validateAnalyticsAccountScope(ctx context.Context, session *Session, accountID string) error {
+// resolveAnalyticsAccountFilter enforces the session's allowed_accounts scope
+// on the requested account_id and returns the dual-column filter the analytics
+// queries run with. Scoped users must name an account that their scope allows;
+// admin/unrestricted sessions pass through (account_id may be empty, meaning
+// all accounts) with the filter from resolveSingleAccountFilterIDs.
+//
+// For a scoped session the scope decision and the filter come from the same
+// cloud_accounts snapshot, so the filter always describes the account the
+// decision allowed, even if another account is registered concurrently.
+func (h *Handler) resolveAnalyticsAccountFilter(ctx context.Context, session *Session, accountID string) (uuids []string, externalIDsByProvider map[string][]string, err error) {
 	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
-		return fmt.Errorf("failed to get allowed accounts: %w", err)
+		return nil, nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
 	if allowed.AllowsAll() {
-		return nil
+		uuids, externalIDsByProvider = h.resolveSingleAccountFilterIDs(ctx, accountID)
+		return uuids, externalIDsByProvider, nil
 	}
 	if accountID == "" {
-		return NewClientError(400, "account_id is required for scoped users")
+		return nil, nil, NewClientError(400, "account_id is required for scoped users")
 	}
-	accounts, listErr := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
-	if listErr != nil {
-		return fmt.Errorf("failed to list cloud accounts: %w", listErr)
+	accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to list cloud accounts: %w", err)
 	}
-	if !analyticsAccountAllowed(allowed, accounts, accountID) {
-		return errNotFound
+	uuids, externalIDsByProvider, ok := scopedAnalyticsAccountFilter(allowed, accounts, accountID)
+	if !ok {
+		return nil, nil, errNotFound
 	}
-	return nil
+	return uuids, externalIDsByProvider, nil
 }
 
-// analyticsAccountAllowed reports whether the scope allows the requested
-// account_id. A registered account UUID is authoritative. Otherwise the value
-// is a raw external id, which is unique only per provider, so it is attributed
-// to an account only when exactly one registered account has it; an id shared
-// across providers (or within one) cannot be attributed and is refused, rather
-// than read through a name that depends on account list order.
-func analyticsAccountAllowed(allowed auth.AccountScope, accounts []config.CloudAccount, accountID string) bool {
+// scopedAnalyticsAccountFilter reports whether a restricted scope allows the
+// requested account_id and, when it does, returns the filter for it:
+//
+//   - A registered account UUID is authoritative: the UUID plus the account's
+//     external id under its own provider.
+//   - Otherwise the value is a raw external id, which is unique only per
+//     provider. When exactly one registered account has it, the id is
+//     attributed to that account and the filter is scoped to the account's
+//     provider, so an unregistered account of another provider that shares
+//     the number (an AWS account id and a GCP project number, say) adds no
+//     rows (issue #624). Legacy rows with an empty provider are not matched
+//     either: nothing ties them to this account rather than to another
+//     provider's, and the dashboard and inventory scope intersection
+//     (intersectDualColumnScope) leaves them out the same way.
+//   - An id that two or more registered accounts share cannot be attributed
+//     and is refused, rather than read through a name that depends on account
+//     list order (issue #520).
+//   - An id no registered account has is judged on the literal allow-list
+//     entry alone. There is no provider to pin it to, so it keeps the
+//     unconstrained "" bucket: the grant itself names the bare id.
+func scopedAnalyticsAccountFilter(allowed auth.AccountScope, accounts []config.CloudAccount, accountID string) (uuids []string, externalIDsByProvider map[string][]string, ok bool) {
 	for i := range accounts {
 		if accounts[i].ID == accountID {
-			return allowed.Allows(accountID, accounts[i].Name)
+			a := &accounts[i]
+			if !allowed.Allows(a.ID, a.Name) {
+				return nil, nil, false
+			}
+			return []string{a.ID}, providerScopedExternalID(a.Provider, a.ExternalID), true
 		}
 	}
-	var match *config.CloudAccount
+	match, ambiguous := externalIDOwner(accounts, accountID)
+	switch {
+	case ambiguous:
+		return nil, nil, false
+	case match == nil:
+		if !allowed.Allows(accountID, "") {
+			return nil, nil, false
+		}
+		return nil, map[string][]string{"": {accountID}}, true
+	case match.Provider == "" || !allowed.Allows(accountID, match.Name):
+		// Out of scope, or a registered account with no provider (which the
+		// cloud_accounts CHECK rules out on Postgres): its id could not be
+		// scoped to a provider, so fail closed.
+		return nil, nil, false
+	}
+	return nil, providerScopedExternalID(match.Provider, accountID), true
+}
+
+// externalIDOwner returns the one registered account whose external id is id,
+// nil when none has it, or ambiguous when more than one does.
+func externalIDOwner(accounts []config.CloudAccount, id string) (match *config.CloudAccount, ambiguous bool) {
 	for i := range accounts {
-		if accounts[i].ExternalID != accountID {
+		if accounts[i].ExternalID != id {
 			continue
 		}
 		if match != nil {
-			return false
+			return nil, true
 		}
 		match = &accounts[i]
 	}
-	if match == nil {
-		return allowed.Allows(accountID, "")
+	return match, false
+}
+
+// providerScopedExternalID returns the external-id half of the filter for an
+// id under its provider, or nil when either is empty: an id with no provider
+// would land in the unconstrained "" bucket and match every provider's rows.
+func providerScopedExternalID(provider, externalID string) map[string][]string {
+	if provider == "" || externalID == "" {
+		return nil
 	}
-	return allowed.Allows(accountID, match.Name)
+	return map[string][]string{provider: {externalID}}
 }
 
 // triggerAnalyticsCollection handles POST /analytics/collect (admin only)

@@ -1008,6 +1008,30 @@ func (m *MockConfigStore) GetStaleProcessingExchanges(ctx context.Context, older
 	return v, args.Error(1)
 }
 
+// SaveRIExchangeDirectExecution mocks the direct-execute audit insert (issue
+// #82). With no registered expectation it succeeds, so the many execute-path
+// tests whose subject is a gate or the provider call keep reaching it; tests
+// whose subject IS the audit trail register an expectation or record the row.
+func (m *MockConfigStore) SaveRIExchangeDirectExecution(ctx context.Context, record *config.RIExchangeDirectExecution) error {
+	m.record("SaveRIExchangeDirectExecution", ctx, record)
+	if !isExpected(&m.Mock, "SaveRIExchangeDirectExecution") {
+		return nil
+	}
+	args := m.Called(ctx, record)
+	return args.Error(0)
+}
+
+// FinalizeRIExchangeDirectExecution mocks recording the direct-execute
+// outcome (issue #82). Defaults to success like SaveRIExchangeDirectExecution.
+func (m *MockConfigStore) FinalizeRIExchangeDirectExecution(ctx context.Context, id string, outcome config.RIExchangeDirectOutcome) error {
+	m.record("FinalizeRIExchangeDirectExecution", ctx, id, outcome)
+	if !isExpected(&m.Mock, "FinalizeRIExchangeDirectExecution") {
+		return nil
+	}
+	args := m.Called(ctx, id, outcome)
+	return args.Error(0)
+}
+
 // MockAuthStore is a mock implementation of auth.Store.
 type MockAuthStore struct {
 	mock.Mock

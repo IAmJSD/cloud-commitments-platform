@@ -378,25 +378,32 @@ describe('API Requests', () => {
       }
     });
 
-    // Q3: defence-in-depth — even if Q1 somehow misses a nil-body case,
-    // the frontend tolerates empty / malformed 2xx bodies without
-    // crashing with SyntaxError.
-    test('tolerates empty 2xx body and resolves to null', async () => {
+    test('resolves a 204 No Content response to null', async () => {
       fetchMock.mockResolvedValue({
         ok: true,
-        status: 200,
+        status: 204,
         json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
       });
       await expect(apiRequest('/test')).resolves.toBeNull();
     });
 
-    test('tolerates malformed 2xx body and resolves to null', async () => {
+    test('resolves a content-length 0 response to null', async () => {
+      fetchMock.mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-length': '0' }),
+        json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
+      });
+      await expect(apiRequest('/test')).resolves.toBeNull();
+    });
+
+    test('rejects a malformed 2xx body instead of resolving null (#273)', async () => {
       fetchMock.mockResolvedValue({
         ok: true,
         status: 200,
         json: () => Promise.reject(new SyntaxError('Unexpected token in JSON at position 0')),
       });
-      await expect(apiRequest('/test')).resolves.toBeNull();
+      await expect(apiRequest('/test')).rejects.toThrow(SyntaxError);
     });
 
     test('surfaces a timeout error when the backend hangs past timeoutMs (issue #20)', async () => {

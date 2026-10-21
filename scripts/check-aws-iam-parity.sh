@@ -63,8 +63,10 @@ ACTION_PREFIXES='ce|ec2|rds|elasticache|es|redshift|memorydb|savingsplans|organi
 # --- extraction ---------------------------------------------------------------
 # Pull every token shaped like <prefix>:<CamelCaseAction> out of a file,
 # regardless of whether it is YAML, HCL, or an embedded JSON heredoc. IAM
-# actions always start with an uppercase letter after the colon, which keeps
-# ARNs (region segments are lowercase) out of the match.
+# actions always start with an uppercase letter or a "*" after the colon, which
+# keeps ARNs (region segments are lowercase) out of the match. Wildcards
+# (<prefix>:*, <prefix>:Describe*, and a single-line Action "*") are extracted
+# as their own tokens so widening one side of a pair is reported as drift.
 
 extract_actions() {
   local file="$1"
@@ -76,10 +78,17 @@ extract_actions() {
   fi
 
   local actions
-  actions=$(grep -vE '^[[:space:]]*(#|//)' "$file" \
-    | grep -oE "(^|[^A-Za-z])(${ACTION_PREFIXES}):[A-Z][A-Za-z]+" \
-    | sed 's/^[^a-zA-Z]//' \
-    | sort -u)
+  local stripped
+  stripped=$(grep -vE '^[[:space:]]*(#|//)' "$file" || true)
+  actions=$({
+    printf '%s\n' "$stripped" \
+      | grep -oE "(^|[^A-Za-z:])(${ACTION_PREFIXES}):([A-Z][A-Za-z]*\*?|\*)" \
+      | sed 's/^[^a-zA-Z]//' || true
+    # A bare "*" action (single-line Action/Actions key); Resource "*" is not matched.
+    if printf '%s\n' "$stripped" | grep -qiE "\"?actions?\"?[[:space:]]*[:=][[:space:]]*\[?[[:space:]]*[\"']\*[\"']"; then
+      echo '*'
+    fi
+  } | sort -u)
 
   if [[ "$exclude_orgs" == "no-orgs" ]]; then
     actions=$(printf '%s\n' "$actions" | grep -v '^organizations:' || true)
