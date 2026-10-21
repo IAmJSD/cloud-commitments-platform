@@ -183,6 +183,7 @@ jobs:
       environment: ${{ needs.determine-deployment.outputs.environment }}
     secrets:
       ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      ALERT_EMAILS: ${{ secrets.ALERT_EMAILS }}
       DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
       FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
       TF_BACKEND_AWS: ${{ secrets.TF_BACKEND_AWS }}
@@ -200,6 +201,7 @@ jobs:
       environment: ${{ needs.determine-deployment.outputs.environment }}
     secrets:
       ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      ALERT_EMAILS: ${{ secrets.ALERT_EMAILS }}
       TF_BACKEND_AWS: ${{ secrets.TF_BACKEND_AWS }}
 
   # Deploy to GCP Cloud Run
@@ -215,6 +217,7 @@ jobs:
       environment: ${{ needs.determine-deployment.outputs.environment }}
     secrets:
       ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      ALERT_EMAILS: ${{ secrets.ALERT_EMAILS }}
       TF_BACKEND_GCP: ${{ secrets.TF_BACKEND_GCP }}
 
   # Deploy to Azure Container Apps
@@ -243,6 +246,7 @@ jobs:
       environment: ${{ needs.determine-deployment.outputs.environment }}
     secrets:
       ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      ALERT_EMAILS: ${{ secrets.ALERT_EMAILS }}
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -337,25 +341,23 @@ jobs:
         run: |
           FAILED=false
 
-          # determine-deployment is checked for anything other than success, not
-          # just "failure". When it stops the run the four deploy jobs are
-          # SKIPPED rather than failed, so testing only those would report "all
-          # deployments completed successfully" for a run that deployed nothing.
-          #
-          # The four deploy jobs are deliberately still tested for "failure"
-          # only. A CANCELLED run leaves them `cancelled` and reaches the
-          # success line, which is the same false report. That predates this
-          # change, so it is tracked in #1810 rather than fixed here.
-          #
-          # Note this step is the only success-by-default check in the repo. All
-          # four per-cloud `summary` jobs allowlist on `== "success"` instead,
-          # so an unenumerated result falls to their failure branch and errs
-          # safe. This denylist is the outlier, not the pattern.
-          if [[ "$DETERMINE_DEPLOYMENT_RESULT" != "success" ]] || \
-             [[ "$DEPLOY_AWS_LAMBDA_RESULT" == "failure" ]] || \
-             [[ "$DEPLOY_AWS_FARGATE_RESULT" == "failure" ]] || \
-             [[ "$DEPLOY_GCP_RESULT" == "failure" ]] || \
-             [[ "$DEPLOY_AZURE_RESULT" == "failure" ]]; then
+          # Allowlist, not denylist: determine-deployment must be "success". A
+          # selected deploy job must be "success"; "skipped" is only ok for a
+          # job that was not selected. Anything else, including "cancelled",
+          # counts as a failed run.
+          check_job() {
+            local selected="$1" result="$2"
+            if [[ "$selected" == "true" ]]; then
+              [[ "$result" == "success" ]]
+            else
+              [[ "$result" == "skipped" || "$result" == "success" ]]
+            fi
+          }
+          check_job "$DEPLOY_AWS_LAMBDA" "$DEPLOY_AWS_LAMBDA_RESULT" || FAILED=true
+          check_job "$DEPLOY_AWS_FARGATE" "$DEPLOY_AWS_FARGATE_RESULT" || FAILED=true
+          check_job "$DEPLOY_GCP" "$DEPLOY_GCP_RESULT" || FAILED=true
+          check_job "$DEPLOY_AZURE" "$DEPLOY_AZURE_RESULT" || FAILED=true
+          if [[ "$DETERMINE_DEPLOYMENT_RESULT" != "success" ]]; then
             FAILED=true
           fi
 

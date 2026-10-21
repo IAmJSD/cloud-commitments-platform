@@ -254,6 +254,14 @@ func (m *mockConfigStoreForHealth) GetStaleProcessingExchanges(ctx context.Conte
 	return nil, nil
 }
 
+func (m *mockConfigStoreForHealth) SaveRIExchangeDirectExecution(_ context.Context, _ *config.RIExchangeDirectExecution) error {
+	return nil
+}
+
+func (m *mockConfigStoreForHealth) FinalizeRIExchangeDirectExecution(_ context.Context, _ string, _ config.RIExchangeDirectOutcome) error {
+	return nil
+}
+
 func (m *mockConfigStoreForHealth) CreateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
 	return nil
 }

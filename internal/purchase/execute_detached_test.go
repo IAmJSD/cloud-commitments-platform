@@ -69,7 +69,7 @@ func newDetachFixture(t *testing.T) *detachFixture {
 			f.historyRemaining = time.Until(deadline)
 		}
 	}).Return(nil)
-	email := new(MockEmailSender)
+	email := allowFailedNotification(new(MockEmailSender))
 	email.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
 	stsMock.On("GetCallerIdentity", mock.Anything, mock.Anything).Return(&stsOut, nil)
 	factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(prov, nil)

@@ -19,6 +19,7 @@ import {
   type Payment as CompatPayment,
   type Provider as CompatProvider,
 } from './lib/purchase-compatibility';
+import { executeButtonLabel } from './commitmentSummary';
 import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary, GlobalConfig } from './types';
 import { openModal } from './modal';
@@ -3194,8 +3195,19 @@ function buildVariantRowMarkup(
   const planBtnHtml = canAccess('create', 'plans')
     ? `<button type="button" class="btn btn-small rec-plan-btn" data-rec-id="${recId}" data-action="plan" aria-label="Create plan for this recommendation" title="Create a purchase plan from this recommendation">Plan</button>`
     : '';
+  const selectLabel = escapeHtml(
+    [
+      'Select',
+      rec.service,
+      rec.engine ? `${rec.resource_type} (${rec.engine})` : rec.resource_type,
+      rec.region,
+      accountName,
+      formatTerm(rec.term),
+      PAYMENT_DISPLAY_LABELS[rec.payment ?? ''] ?? '',
+    ].filter(part => part).join(' '),
+  );
   const checkboxCell = showCheckboxes
-    ? `<td class="checkbox-col"><input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="Select recommendation">${planBtnHtml}</td>`
+    ? `<td class="checkbox-col"><input type="checkbox" data-rec-id="${recId}" ${isSelected ? 'checked' : ''} aria-label="${selectLabel}">${planBtnHtml}</td>`
     : `<td class="checkbox-col"></td>`;
   return `
   <tr class="recommendation-row${nestedClass} ${savingsClass} ${isSelected ? 'selected' : ''}" data-rec-id="${recId}">
@@ -3578,13 +3590,20 @@ function normalizeBulkPayment(payment: string | undefined): BulkPurchasePayment 
 // compatible iff EVERY rec in it has a supported (provider, service,
 // term, payment) combination. Used by the bulk-buy fan-out path to
 // flag buckets the user has built but won't be allowed to submit.
+// A rec's own supported payment also qualifies: the single-bucket modal seeds
+// from it (resolvePerRecPaymentSeed), so a GCP rec priced monthly must not be
+// forced into fan-out by the all-upfront toolbar default.
 function isBucketPaymentCompatible(
   recs: readonly LocalRecommendation[],
   payment: BulkPurchasePayment,
 ): boolean {
-  return recs.every((r) =>
-    isPaymentSupported(r.provider as CompatProvider, r.service, r.term as 1 | 3, payment),
-  );
+  return recs.every((r) => {
+    const provider = r.provider as CompatProvider;
+    const term = r.term as 1 | 3;
+    const own = normalizeBulkPayment(r.payment);
+    return isPaymentSupported(provider, r.service, term, payment)
+      || (own !== null && isPaymentSupported(provider, r.service, term, own));
+  });
 }
 
 interface BulkPurchaseToolbarState {
@@ -4288,7 +4307,7 @@ function resetExecuteModeAndLabel(): void {
   currentExecuteMode = '';
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
   if (executeBtn && executeBtn.dataset['submitting'] !== 'true') {
-    executeBtn.textContent = 'Send for Approval';
+    executeBtn.textContent = executeButtonLabel(false);
   }
 }
 
@@ -5251,8 +5270,7 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[], 
       // Update the submit button label to reflect the selected mode.
       const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
       if (executeBtn) {
-        executeBtn.textContent =
-          currentExecuteMode === 'direct' ? 'Execute Purchase Now' : 'Send for Approval';
+        executeBtn.textContent = executeButtonLabel(currentExecuteMode === 'direct');
       }
     };
 

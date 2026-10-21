@@ -35,6 +35,7 @@ jest.mock('../dashboard', () => ({
 
 jest.mock('../navigation', () => ({
   switchTab: jest.fn(),
+  setActiveNav: jest.fn(),
   applyTabFromPath: jest.fn().mockReturnValue('dashboard'),
   initRouter: jest.fn(),
   switchSettingsSubTab: jest.fn(),
@@ -111,6 +112,17 @@ describe('App Module', () => {
       expect(navigation.applyTabFromPath).toHaveBeenCalled();
       expect(navigation.switchTab).toHaveBeenCalledWith('dashboard', { push: false });
       expect(auth.updateUserUI).toHaveBeenCalled();
+    });
+
+    test('highlights the nav from the URL before any async fetch resolves (#187)', async () => {
+      (api.isAuthenticated as jest.Mock).mockReturnValue(true);
+      (api.getCurrentUser as jest.Mock).mockReturnValue(new Promise(() => {}));
+      (navigation.applyTabFromPath as jest.Mock).mockReturnValue('opportunities');
+
+      void init();
+      await Promise.resolve();
+
+      expect(navigation.setActiveNav).toHaveBeenCalledWith('opportunities');
     });
 
     test('seeds the URL from canonicalTabPath before routing', async () => {

@@ -1100,11 +1100,12 @@ func (s *Scheduler) fetchAndConvert(ctx context.Context, prov provider.Provider,
 		if lookbackDays == 0 {
 			lookbackDays = config.DefaultRecommendationsLookbackDays
 		}
+		payment := awsRecommendationPayment(globalCfg.DefaultPayment)
 		for _, service := range []common.ServiceType{common.ServiceEC2, common.ServiceRDS, common.ServiceElastiCache, common.ServiceOpenSearch, common.ServiceRedshift, common.ServiceSavingsPlansAll} {
 			params := common.RecommendationParams{
 				Service:        service,
 				Term:           fmt.Sprintf("%dyr", globalCfg.DefaultTerm),
-				PaymentOption:  globalCfg.DefaultPayment,
+				PaymentOption:  payment,
 				LookbackPeriod: fmt.Sprintf("%dd", lookbackDays),
 			}
 			fallbackRecs, recErr := recClient.GetRecommendations(ctx, &params)

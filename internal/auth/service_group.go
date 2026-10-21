@@ -323,6 +323,14 @@ func (s *Service) HasPermission(ctx context.Context, userID, action, resource st
 // adminCarvedOuts (separation of duties, issue #923). For those, admin falls
 // through to the explicit-permission check below instead of short-circuiting.
 //
+// An admin:* permission that carries Constraints is narrowed by them on every
+// check, strict or not, exactly like any other permission (issue #956). It
+// used to apply them only under StrictScope, so a key created as {admin, *}
+// with accounts=[A] or a max_amount passed a non-strict check for account B
+// or for any amount: the scoping its creator asked for was silently ignored.
+// An unconstrained admin:* (the seeded Administrators group) is unaffected,
+// since checkPermissionConstraints passes a permission with no Constraints.
+//
 // A package function rather than a Service method: the decision reads nothing
 // off the receiver, and PermissionsAllowForConstraintSets exposes it to
 // callers that hold an already-resolved permission set but no Service.
@@ -332,7 +340,7 @@ func permissionsAllow(permissions []Permission, action, resource string, constra
 			if coversCarvedOut(Permission{Action: action, Resource: resource}) {
 				continue
 			}
-			if constraints != nil && constraints.StrictScope && !checkPermissionConstraints(perm, constraints) {
+			if !checkPermissionConstraints(perm, constraints) {
 				continue
 			}
 			return true

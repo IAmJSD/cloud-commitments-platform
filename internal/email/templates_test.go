@@ -694,3 +694,34 @@ func TestSender_SendRegistrationReceivedNotification_SubjectHeaderInjection(t *t
 	assert.NotContains(t, capturedSubject, "\nBcc:")
 	assert.NotContains(t, capturedSubject, "\nX-Injected:")
 }
+
+// Issue #714: with a recipient the purchase-failed email is a targeted SES
+// send, not the SNS broadcast (which is a no-op when no topic is configured).
+func TestSender_SendPurchaseFailedNotification_RecipientUsesSES(t *testing.T) {
+	mockSNS := new(MockSNSClient)
+	mockSES := new(MockSESClient)
+	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
+		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
+	var to []string
+	mockSES.On("SendEmail", mock.Anything, mock.AnythingOfType("*sesv2.SendEmailInput")).
+		Run(func(args mock.Arguments) {
+			to = args.Get(1).(*sesv2.SendEmailInput).Destination.ToAddresses
+		}).
+		Return(&sesv2.SendEmailOutput{MessageId: aws.String("msg-714")}, nil)
+	mockSNS.On("Publish", mock.Anything, mock.Anything).Return(&sns.PublishOutput{}, nil)
+
+	sender := NewSenderWithClients(mockSNS, mockSES, SenderConfig{
+		FromEmail: "noreply@example.com",
+		TopicARN:  "arn:aws:sns:us-east-1:123456789012:topic",
+	})
+	err := sender.SendPurchaseFailedNotification(context.Background(), NotificationData{
+		RecipientEmail: "ops@example.com",
+		Recommendations: []RecommendationSummary{
+			{Service: "rds", ResourceType: "db.r5.large", Region: "us-east-1", Count: 1},
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ops@example.com"}, to)
+	mockSNS.AssertNotCalled(t, "Publish", mock.Anything, mock.Anything)
+}

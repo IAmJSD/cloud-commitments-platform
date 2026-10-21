@@ -8,6 +8,7 @@
 #   - AZURE_TENANT_ID: Azure AD tenant ID for OIDC keyless auth
 #   - AZURE_SUBSCRIPTION_ID: Azure subscription ID
 #   - ADMIN_EMAIL: Admin email for notifications
+#   - ALERT_EMAILS: Optional, comma-separated addresses that receive monitoring alerts (#714)
 #
 # Required GitHub Variables:
 #   - AZURE_LOCATION: Azure region (e.g., eastus)
@@ -50,6 +51,8 @@ on:
     secrets:
       ADMIN_EMAIL:
         required: true
+      ALERT_EMAILS:
+        required: false
       AZURE_CLIENT_ID:
         required: true
       AZURE_SUBSCRIPTION_ID:
@@ -212,6 +215,7 @@ jobs:
       - name: Terraform Plan
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_alert_emails: ${{ secrets.ALERT_EMAILS }}
           TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           TARGET_ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
         run: |
@@ -274,6 +278,7 @@ jobs:
         id: deploy
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_alert_emails: ${{ secrets.ALERT_EMAILS }}
           TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
           # pipefail is required: the default shell is `bash -e`, where a pipeline
