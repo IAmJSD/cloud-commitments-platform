@@ -182,8 +182,12 @@ assert_scan "every Azure and GCP state writer carries the group derived from its
 # of passing an unmodified tree.
 mutate_real() {
   local name="$1" file="$2" from="$3" to="$4"
+  local src=()
   mkdir -p "${FIXTURE_DIR}/real-${name}"
-  cp "${WORKFLOW_DIR}"/*.yml "${FIXTURE_DIR}/real-${name}/"
+  shopt -s nullglob
+  src=("${WORKFLOW_DIR}"/*.yml "${WORKFLOW_DIR}"/*.yaml)
+  shopt -u nullglob
+  cp "${src[@]}" "${FIXTURE_DIR}/real-${name}/"
   FROM="$from" TO="$to" awk '{ i = index($0, ENVIRON["FROM"]); if (i) $0 = substr($0, 1, i - 1) ENVIRON["TO"] substr($0, i + length(ENVIRON["FROM"])); print }' \
     "${WORKFLOW_DIR}/${file}" >"${FIXTURE_DIR}/real-${name}/${file}"
   if cmp -s "${WORKFLOW_DIR}/${file}" "${FIXTURE_DIR}/real-${name}/${file}"; then

@@ -67,22 +67,70 @@ TF_WRITE_FUNCS='
 '
 
 # mutating_scripts DIR prints " a.sh lib/b.sh " -- every *.sh under DIR, as a
-# path relative to DIR, that runs a state-writing terraform command. A workflow
-# job that calls one of them is a writer even with no terraform line of its own.
+# path relative to DIR, that runs a state-writing terraform command, directly
+# or through another script under DIR at any depth. A workflow job that calls
+# one of them is a writer even with no terraform line of its own.
+#
+# A script calling another is matched by the callee's file name at a word
+# boundary (`"${SCRIPT_DIR}/lib/b.sh"`, `./b.sh`, `bash b.sh`), not by
+# resolving the path, so two scripts sharing a file name both count. That errs
+# towards calling a job a writer, the fail-closed direction. Repeated until no
+# script is added, which takes one pass per level of nesting.
 mutating_scripts() {
   local dir="$1"
+  local found prev
   build_swept_scripts "$dir"
   if [[ ${#SWEPT_SCRIPTS[@]} -eq 0 ]]; then
     echo " "
     return
   fi
-  awk -v SQ="'" -v root="${dir}/" "${AWK_CODE_FUNCS}${TF_WRITE_FUNCS}"'
+  found="$(awk -v SQ="'" -v root="${dir}/" "${AWK_CODE_FUNCS}${TF_WRITE_FUNCS}"'
     BEGIN { printf " " }
     !(FILENAME in seen) && tf_write_cmd($0) != "" {
       seen[FILENAME] = 1
       printf "%s ", substr(FILENAME, length(root) + 1)
     }
-  ' "${SWEPT_SCRIPTS[@]}"
+  ' "${SWEPT_SCRIPTS[@]}")"
+  prev=""
+  while [[ "$found" != "$prev" ]]; do
+    prev="$found"
+    found="$(awk -v SQ="'" -v root="${dir}/" -v known="$found" "${AWK_CODE_FUNCS}"'
+      # Positions are kept absolute in the padded line, so the character before
+      # a match always exists (substr from 0 differs between awks).
+      function calls(line,   name, off, k, pos, before, after) {
+        line = " " code_of(line) " "
+        for (name in callee) {
+          off = 1
+          while ((k = index(substr(line, off), name)) > 0) {
+            pos = off + k - 1
+            before = substr(line, pos - 1, 1)
+            after = substr(line, pos + length(name), 1)
+            if (before !~ /[A-Za-z0-9_.-]/ && after !~ /[A-Za-z0-9_.-]/) return 1
+            off = pos + 1
+          }
+        }
+        return 0
+      }
+      BEGIN {
+        n = split(known, rel, " ")
+        for (i = 1; i <= n; i++) {
+          is_known[rel[i]] = 1
+          b = rel[i]
+          sub(/^.*\//, "", b)
+          callee[b] = 1
+        }
+        printf "%s", known
+      }
+      {
+        f = substr(FILENAME, length(root) + 1)
+        if (!(f in is_known) && calls($0)) {
+          is_known[f] = 1
+          printf "%s ", f
+        }
+      }
+    ' "${SWEPT_SCRIPTS[@]}")"
+  done
+  echo "$found"
 }
 
 # --- The scanner -------------------------------------------------------------
@@ -90,7 +138,7 @@ mutating_scripts() {
 # scan_state_groups MODE WORKFLOW_DIR SCRIPTS_DIR
 #
 # Sites are top-level YAML jobs (a line at exactly two spaces of indent holding
-# an identifier and nothing else), the same delimiter the AWS guard uses: the
+# a bare or quoted identifier and nothing else), as in the AWS guard: the
 # key, the terraform call and the concurrency group live in different steps or
 # at job level, and a job is the smallest unit holding all three.
 #
@@ -182,7 +230,7 @@ scan_state_groups() {
     }
 
     # The word that fills a key whose environment is a printf `%s`: the
-    # argument at the position of that `%s` in the format.
+    # argument at the position of that conversion in the format.
     function printf_arg(code,   rest, q, k, fmt, idx, n, args, i) {
       if (!match(code, /printf[[:space:]]+/)) return "?"
       rest = substr(code, RSTART + RLENGTH)
@@ -195,8 +243,12 @@ scan_state_groups() {
       rest = substr(rest, k + 1)
       k = index(fmt, "github-%s")
       if (k == 0) return "?"
+      # Every conversion before the key takes an argument, not only %s; %% takes
+      # none, and a * width or precision takes one more, so it is not traced.
       fmt = substr(fmt, 1, k - 1)
-      idx = gsub(/%s/, "", fmt) + 1
+      gsub(/%%/, "", fmt)
+      if (fmt ~ /%[^A-Za-z]*[*]/) return "?"
+      idx = gsub(/%[-+ #0-9.]*[A-Za-z]/, "", fmt) + 1
       n = split(rest, args, /[[:space:]]+/)
       k = 0
       for (i = 1; i <= n; i++) {
@@ -265,7 +317,7 @@ scan_state_groups() {
         }
       }
       fam = ""; kenv = ""; wcmd = ""; grp = ""; gfam = ""; gsuf = ""; jcancel = ""
-      in_env = 0; in_conc = 0; npending = 0
+      in_env = 0; in_conc = 0; npending = 0; want_step = 0; step_ind = -1
       split("", jobenv); split("", stepenv)
     }
 
@@ -290,7 +342,11 @@ scan_state_groups() {
     }
 
     BEGIN {
+      step_ind = -1
       AZKEY = "github-[^\"" SQ "/[:space:]]*[.]terraform[.]tfstate"
+      # A job id, bare or quoted: a quoted one is still a job, and missing it
+      # would merge its lines into the job before it, group included.
+      JOBRE = "^  ([A-Za-z0-9_.-]+|\"[A-Za-z0-9_.-]+\"|" SQ "[A-Za-z0-9_.-]+" SQ "):[[:space:]]*$"
     }
 
     FNR == 1 { if (NR > 1) finish(); site_file = FILENAME; site = ""; wcancel = ""; in_wconc = 0 }
@@ -302,26 +358,38 @@ scan_state_groups() {
 
       # The job boundary is tested on the comment-stripped line so a header
       # carrying a trailing comment still ends the previous job.
-      if (code ~ /^  [A-Za-z0-9_.-]+:[[:space:]]*$/) {
+      if (code ~ JOBRE) {
         finish()
         site = code
         sub(/^[[:space:]]*/, "", site)
         sub(/:[[:space:]]*$/, "", site)
+        site = unquote(site)
         next
       }
 
       if (in_env && ind <= env_ind) in_env = 0
       if (in_conc && ind <= 4) in_conc = 0
       if (in_wconc && ind == 0) in_wconc = 0
-      if (code ~ /^      - /) flush_step()
+      # A step starts at a `- ` at the indent of the first item under `steps:`,
+      # which is 6 here but may be 4 in another YAML style. Missing a boundary
+      # would let the env: of one step reach the key of the next.
+      if (code ~ /^    steps:[[:space:]]*$/) want_step = 1
+      else if (want_step && code ~ /^[[:space:]]*- /) { step_ind = ind; want_step = 0 }
+      if (ind == step_ind && code ~ /^[[:space:]]*- /) flush_step()
 
       if (in_env && code ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*:/) {
         k = code; sub(/^[[:space:]]*/, "", k); sub(/:.*$/, "", k)
         v = code; sub(/^[^:]*:[[:space:]]*/, "", v); sub(/[[:space:]]*$/, "", v)
-        if (env_ind == 4) jobenv[k] = v
+        if (env_job) jobenv[k] = v
         else stepenv[k] = v
       }
-      if (code ~ /^[[:space:]]*(- )?env:[[:space:]]*$/) { in_env = 1; env_ind = ind }
+      # env_ind is the indent of the env: key itself, past any `- `, so the
+      # step key after it (run:, at the same indent) ends the block.
+      if (code ~ /^[[:space:]]*(- )?env:[[:space:]]*$/) {
+        in_env = 1
+        env_job = (code ~ /^    env:/)
+        env_ind = ind + ((code ~ /^[[:space:]]*- /) ? 2 : 0)
+      }
 
       if (code ~ /^    concurrency:[[:space:]]*$/) in_conc = 1
       else if (code ~ /^    concurrency:[[:space:]]*[^[:space:]]/) {
