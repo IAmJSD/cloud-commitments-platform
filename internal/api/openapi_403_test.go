@@ -230,10 +230,12 @@ func handlerFuncCallsRequirePermission(srcDir, fnName string) (bool, error) {
 
 			if inTarget {
 				braceDepth += strings.Count(line, "{") - strings.Count(line, "}")
-				// Ignore comments: a body that only mentions requirePermission
-				// in prose does not gate on a permission.
-				code, _, _ := strings.Cut(line, "//")
-				if strings.Contains(code, "requirePermission") {
+				// Ignore whole-line comments: a body that only mentions
+				// requirePermission in prose does not gate on a permission.
+				// Only whole lines are skipped, so a "//" inside a string
+				// literal (a URL) cannot hide a real call on the same line.
+				isComment := strings.HasPrefix(strings.TrimSpace(line), "//")
+				if !isComment && strings.Contains(line, "requirePermission") {
 					f.Close()
 					return true, nil
 				}

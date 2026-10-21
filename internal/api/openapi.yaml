@@ -2853,6 +2853,9 @@ paths:
       operationId: getCurrentUserPermissions
       tags: [Auth]
       summary: Get the caller's effective permissions
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
       description: >
         For a session, the union of the user's group permissions. For a user
         API key, the key's permissions intersected with its owner's. For the
@@ -6634,9 +6637,28 @@ components:
 
     HistorySummary:
       type: object
+      description: >-
+        total_purchases counts every row (completed and all other states); the
+        total_* counters break it down. Dollar totals count completed,
+        non-revoked rows only.
       properties:
         total_purchases:
           type: integer
+        total_completed:
+          type: integer
+        total_pending:
+          type: integer
+          description: Rows with status pending, notified or scheduled.
+        total_in_progress:
+          type: integer
+          description: Rows with status approved, running or paused.
+        total_failed:
+          type: integer
+        total_expired:
+          type: integer
+        total_revoked:
+          type: integer
+          description: Revoked commitments; excluded from total_completed.
         total_upfront:
           type: number
           format: double
@@ -6650,11 +6672,16 @@ components:
 
     PurchaseHistoryRecord:
       type: object
+      description: >-
+        One completed purchase_history row or one synthesized execution row
+        (pending, failed, expired, ...). Fields marked as execution-only are
+        computed at read time and absent from completed rows.
       properties:
         account_id:
           type: string
         purchase_id:
           type: string
+          description: Provider purchase ID, or the execution ID on execution rows.
         timestamp:
           type: string
           format: date-time
@@ -6679,6 +6706,10 @@ components:
         monthly_cost:
           type: number
           format: double
+          nullable: true
+          description: >-
+            Null when the provider returned no monthly recurring breakdown.
+            Aggregations skip nulls rather than counting them as 0.
         estimated_savings:
           type: number
           format: double
@@ -6688,6 +6719,77 @@ components:
           type: string
         ramp_step:
           type: integer
+        cloud_account_id:
+          type: string
+        status:
+          type: string
+          description: >-
+            "completed" for purchase_history rows. Execution rows carry the
+            execution status: pending, notified, scheduled, approved,
+            running, paused, completed, partially_completed, failed, expired
+            or canceled (legacy rows may say "cancelled").
+        approver:
+          type: string
+          description: Approval recipient email; pending and notified rows only.
+        source:
+          type: string
+        status_description:
+          type: string
+          description: Short explanation for non-completed rows.
+        created_by_user_id:
+          type: string
+          description: Execution-only.
+        created_by_system:
+          type: boolean
+          description: Execution-only. True for scheduler-created executions.
+        retry_execution_id:
+          type: string
+          description: Execution-only. Successor execution when this row was retried.
+        retry_attempt_n:
+          type: integer
+          description: Execution-only. Position in the retry chain (0 for the original).
+        ops_hint:
+          type: string
+          description: Execution-only. Operator hint shown instead of Retry on failed rows.
+        redrive_unsafe:
+          type: boolean
+          description: Execution-only. True when ops_hint is a permanent re-drive refusal.
+        is_audit_gap:
+          type: boolean
+          description: >-
+            Execution-only. A completed purchase whose history write failed;
+            its dollars are excluded from the summary totals.
+        created_by_user_email:
+          type: string
+          description: Execution-only. Email of the user who created the execution.
+        revocation_window_closes_at:
+          type: string
+          format: date-time
+          description: End of the provider's free-cancel window, when it has one.
+        revoked_at:
+          type: string
+          format: date-time
+        revoked_via:
+          type: string
+          description: direct-api or support-case.
+        support_case_id:
+          type: string
+        calc_refund_amount:
+          type: number
+          format: double
+          description: Refund amount quoted when the revoke was calculated.
+        calc_refund_currency:
+          type: string
+        revocation_in_flight:
+          type: boolean
+        offering_class:
+          type: string
+          description: standard or convertible (AWS RIs).
+        listing_id:
+          type: string
+        listing_state:
+          type: string
+          description: Marketplace listing state (active, pending, cancelled or closed).
 
     AnalyticsResponse:
       type: object

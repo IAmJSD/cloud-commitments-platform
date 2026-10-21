@@ -25,6 +25,17 @@ import (
 // instantiated with a sample value per path parameter and handed to the same
 // first-match logic Router.Route uses, so prefix/suffix ordering and
 // multi-segment parameters behave exactly as they do in production.
+//
+// Scope and limits:
+//
+//   - Only routes from Router.registerRoutes are walked. Paths the server mux
+//     handles before the API router (internal/server/http.go, such as /oidc/*
+//     and /api/scheduled/*) are outside this guard.
+//   - Parameter names and segment counts under a prefix route are not
+//     checked. Every {param} becomes the same sample value and a prefix route
+//     accepts any remainder, so renaming {provider}/{service} to {service}
+//     still reaches the same route. The guard catches missing, extra and
+//     wrong-method operations, not misnamed parameters.
 
 // routeCoverageSample stands in for every {param} segment of a spec path.
 const routeCoverageSample = "x"
