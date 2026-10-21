@@ -139,10 +139,10 @@ func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.Lam
 		if keyErr != nil {
 			return nil, keyErr
 		}
-		// The refresh gate evaluates a user API key against its owner's
-		// account scope (authorizeAPIKey puts the owner's ID on the session),
-		// so the flag is resolved for the owner too.
-		resp.UnrestrictedAccountAccess = h.unrestrictedAccountAccess(ctx, keyOwnerID)
+		// Resolve the flag for the same session the refresh gate sees for
+		// this key: authorizeAPIKey puts the owner's ID and the key's ID on
+		// it, so the two stay in step if getAccountScope ever reads the key.
+		resp.UnrestrictedAccountAccess = h.unrestrictedAccountAccess(ctx, &Session{UserID: keyOwnerID, UserAPIKeyID: keyID})
 		return resp, nil
 	}
 
@@ -159,7 +159,7 @@ func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.Lam
 		return &UserPermissionsResponse{
 			Permissions:               []PermissionEntry{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}},
 			IsAdmin:                   true,
-			UnrestrictedAccountAccess: h.unrestrictedAccountAccess(ctx, userID),
+			UnrestrictedAccountAccess: h.unrestrictedAccountAccess(ctx, &Session{UserID: userID}),
 		}, nil
 	}
 
@@ -179,26 +179,26 @@ func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.Lam
 		return nil, fmt.Errorf("GetUserPermissionsAPI returned unexpected payload type %T", raw)
 	}
 	resp := permissionsResponse(apiPerms)
-	resp.UnrestrictedAccountAccess = h.unrestrictedAccountAccess(ctx, userID)
+	resp.UnrestrictedAccountAccess = h.unrestrictedAccountAccess(ctx, &Session{UserID: userID})
 	return resp, nil
 }
 
-// unrestrictedAccountAccess reports whether userID passes
+// unrestrictedAccountAccess reports whether session passes
 // requireUnrestrictedAccountScope, the gate on POST
 // /api/recommendations/refresh, by running that same check rather than a
 // copy of it. A scope lookup failure is logged and reported as false: the flag
 // only steers the UI (false skips an automatic refresh), the refresh endpoint
 // still enforces the scope itself, and failing the whole permissions response
 // would drop the frontend to its coarser group-based gating.
-func (h *Handler) unrestrictedAccountAccess(ctx context.Context, userID string) bool {
-	err := h.requireUnrestrictedAccountScope(ctx, &Session{UserID: userID})
+func (h *Handler) unrestrictedAccountAccess(ctx context.Context, session *Session) bool {
+	err := h.requireUnrestrictedAccountScope(ctx, session)
 	if err == nil {
 		return true
 	}
 	if ce, isClient := IsClientError(err); isClient && ce.code == 403 {
 		return false // a restricted scope: the expected refusal
 	}
-	logging.Errorf("getCurrentUserPermissions: resolving account scope for user %s: %v", userID, err)
+	logging.Errorf("getCurrentUserPermissions: resolving account scope for user %s: %v", session.UserID, err)
 	return false
 }
 

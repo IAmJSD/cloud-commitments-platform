@@ -175,3 +175,42 @@ func TestGetCurrentUserPermissions_FlagMatchesRefreshGate(t *testing.T) {
 		})
 	}
 }
+
+// The same parity for a user API key: /me/permissions and the refresh both see
+// the key's session (owner ID plus key ID), so the flag agrees with what the
+// refresh does when the same key calls it.
+func TestGetCurrentUserPermissions_UserAPIKey_FlagMatchesRefreshGate(t *testing.T) {
+	t.Setenv("SCHEDULER_LAMBDA_ARN", "")
+	for name, accounts := range map[string][]string{
+		"scoped owner":       {scopedInAccount},
+		"unrestricted owner": nil,
+		"wildcard owner":     {"*"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := new(MockAuthService)
+			m.On("ValidateUserAPIKeyAPI", mock.Anything, meScopeRawKey).
+				Return(&auth.UserAPIKey{ID: meScopeKeyID}, &auth.User{ID: meScopeKeyOwnerID}, nil).Maybe()
+			m.On("GetAPIKeyEffectivePermissionsAPI", mock.Anything, meScopeKeyID, meScopeKeyOwnerID).
+				Return([]auth.APIPermission{{Action: auth.ActionView, Resource: auth.ResourceRecommendations}}, nil).Maybe()
+			m.On("HasAPIKeyPermissionAPI", mock.Anything, meScopeRawKey, auth.ActionView, auth.ResourceRecommendations).
+				Return(meScopeKeyOwnerID, meScopeKeyID, true, nil).Maybe()
+			m.On("GetAllowedAccountsAPI", mock.Anything, meScopeKeyOwnerID).Return(accounts, nil).Maybe()
+			f := newRefreshFixtureWithAuth(t, m)
+			keyRequest := func() *events.LambdaFunctionURLRequest {
+				return &events.LambdaFunctionURLRequest{Headers: map[string]string{"X-API-Key": meScopeRawKey}}
+			}
+
+			got := routeMePermissions(t, f.handler, keyRequest())
+			res, refreshErr := f.refresh(keyRequest())
+
+			m.AssertCalled(t, "HasAPIKeyPermissionAPI", mock.Anything, meScopeRawKey, auth.ActionView, auth.ResourceRecommendations)
+			if got.UnrestrictedAccountAccess {
+				require.NoError(t, refreshErr, "flag says unrestricted, so the refresh must pass the gate")
+				assert.IsType(t, &RefreshResponse{}, res)
+				return
+			}
+			requireForbiddenUnrestricted(t, res, refreshErr)
+			f.assertNothingStarted(t)
+		})
+	}
+}
