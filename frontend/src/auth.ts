@@ -780,6 +780,10 @@ function showMFACodeStep(): void {
 // same Function — arrow IIFEs would create a new function each time.
 const handleLoginSubmitListener = (e: Event): void => { void handleLogin(e); };
 const handleMFACodeSubmitListener = (e: Event): void => { void handleMFACodeSubmit(e); };
+const handlePasswordResetSubmitListener = (e: Event): void => {
+  e.preventDefault();
+  void handlePasswordReset();
+};
 
 async function handleMFACodeSubmit(e: Event): Promise<void> {
   e.preventDefault();
@@ -823,11 +827,14 @@ function showForgotPasswordForm(modal: HTMLElement): void {
     </label>
     <p class="help-text">We'll send you a link to reset your password.</p>
     <div id="login-error" class="error-message hidden"></div>
-    <button type="button" id="send-reset-btn" class="primary">Send Reset Link</button>
+    <button type="submit" id="send-reset-btn" class="primary">Send Reset Link</button>
     <p><a href="#" id="back-to-login-link">Back to login</a></p>
   `;
 
-  document.getElementById('send-reset-btn')?.addEventListener('click', () => void handlePasswordReset());
+  // Keep the inline "enter your email" message instead of the native bubble.
+  (form as HTMLFormElement).noValidate = true;
+  form.removeEventListener('submit', handleLoginSubmitListener);
+  form.addEventListener('submit', handlePasswordResetSubmitListener);
   document.getElementById('back-to-login-link')?.addEventListener('click', (e) => {
     e.preventDefault();
     reloadPage();
@@ -850,6 +857,8 @@ async function handlePasswordReset(): Promise<void> {
     return;
   }
 
+  const sendBtn = document.getElementById('send-reset-btn') as HTMLButtonElement | null;
+  if (sendBtn) sendBtn.disabled = true;
   try {
     await api.requestPasswordReset(email);
     // Issue #457: previously this surfaced as an alert() that, when
@@ -864,6 +873,7 @@ async function handlePasswordReset(): Promise<void> {
       errorDiv.textContent = 'Failed to send reset email. Please try again.';
       errorDiv.classList.remove('hidden');
     }
+    if (sendBtn) sendBtn.disabled = false;
   }
 }
 
@@ -1088,6 +1098,7 @@ async function openProfileModal(): Promise<void> {
   // (Re-)render the MFA section so its state reflects whatever the
   // user's mfa_enabled flag is right now (could have flipped since
   // the modal was last opened). See renderMFASection below.
+  setProfileSecretPending(false);
   renderMFASection();
 
   // Reset live indicators and any stale error so the previous open
@@ -1303,6 +1314,18 @@ async function handleMFAEnrollVerify(): Promise<void> {
   }
 }
 
+function setProfileSecretPending(pending: boolean): void {
+  const modal = document.getElementById('profile-modal');
+  if (modal) {
+    if (pending) modal.dataset.requireAck = 'true';
+    else delete modal.dataset.requireAck;
+  }
+  const cancel = document.getElementById('profile-cancel') as HTMLButtonElement | null;
+  if (cancel) cancel.disabled = pending;
+  const save = document.querySelector<HTMLButtonElement>('#profile-form button[type="submit"]');
+  if (save) save.disabled = pending;
+}
+
 /**
  * Step 3 of enrollment: display the plaintext recovery codes. Shown
  * exactly once; backend stores only bcrypt hashes. Offers a download
@@ -1326,10 +1349,12 @@ function renderMFAEnrollCodesStep(codes: string[]): void {
       </div>
     </div>
   `;
+  setProfileSecretPending(true);
   document.getElementById('mfa-codes-download')?.addEventListener('click', () => downloadRecoveryCodes(codes));
   document.getElementById('mfa-codes-done')?.addEventListener('click', () => {
     // Acknowledged — re-render the section so it now shows the
     // Enabled view (Disable / Regenerate buttons).
+    setProfileSecretPending(false);
     renderMFASection();
   });
 }
@@ -1461,6 +1486,7 @@ async function handleMFARegenerateSubmit(): Promise<void> {
  */
 async function saveProfile(e: Event): Promise<void> {
   e.preventDefault();
+  if (document.getElementById('profile-modal')?.dataset.requireAck === 'true') return;
 
   const email = (document.getElementById('profile-email') as HTMLInputElement).value;
   const currentPassword = (document.getElementById('profile-current-password') as HTMLInputElement).value;

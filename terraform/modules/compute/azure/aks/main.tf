@@ -398,7 +398,7 @@ resource "kubernetes_deployment" "app" {
             value_from {
               secret_key_ref {
                 name = kubernetes_secret.database[0].metadata[0].name
-                key  = "password"
+                key  = "password_secret_name"
               }
             }
           }

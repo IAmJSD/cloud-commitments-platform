@@ -31,8 +31,8 @@ let savingsByServiceChart: Chart | null = null;
 // Maximum number of services to show in the bar chart before truncating.
 const SAVINGS_BY_SERVICE_MAX = 10;
 
-// Default palette for per-service bars. Cycles if there are more services
-// than colours; alpha variant is computed inline so the array stays short.
+// Palette for per-service bars. A service's colour is fixed by its name (see
+// serviceBarColor), never by its rank, so it survives data refreshes (#700).
 const SERVICE_BAR_COLORS = [
   '#1a73e8', // blue
   '#34a853', // green
@@ -43,8 +43,44 @@ const SERVICE_BAR_COLORS = [
   '#ff5722', // deep-orange
   '#607d8b', // blue-grey
   '#795548', // brown
-  '#4caf50', // light-green
+  '#e91e63', // pink
 ];
+
+// One palette slot per service family, keyed on the slugs the app emits
+// (purchase mapServiceSlug, plan-service-ids.ts). A canonical slug and its
+// legacy twin share a slot, so the same service is one colour whichever
+// spelling a provider returns. Slots 0-6 are reserved for these families.
+const KNOWN_SERVICE_COLOR_INDEX: Readonly<Record<string, number>> = {
+  compute: 0, ec2: 0, vm: 0,
+  'relational-db': 1, rds: 1, sql: 1, cloudsql: 1,
+  cache: 2, elasticache: 2, redis: 2, memorystore: 2,
+  savingsplans: 3, 'savings-plans': 3, 'savings-plans-compute': 3,
+  'savings-plans-ec2instance': 3, 'savings-plans-sagemaker': 3, 'savings-plans-database': 3,
+  search: 4, opensearch: 4,
+  'data-warehouse': 5, redshift: 5,
+  memorydb: 6,
+};
+const KNOWN_SERVICE_SLOTS = 7;
+
+/** Stable colour for a service name: identical on every render, regardless of rank. */
+export function serviceBarColor(service: string): string {
+  const key = service.toLowerCase();
+  let idx = KNOWN_SERVICE_COLOR_INDEX[key];
+  if (idx === undefined) {
+    // Unknown slugs hash into the spare slots; two unknown slugs may collide.
+    let h = 0;
+    for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+    idx = KNOWN_SERVICE_SLOTS + (h % (SERVICE_BAR_COLORS.length - KNOWN_SERVICE_SLOTS));
+  }
+  return SERVICE_BAR_COLORS[idx] ?? '#1a73e8';
+}
+
+// The legend names the three stacked layers, which every service shares, so
+// its swatches are neutral tones that mirror the bar shading (dark / solid /
+// 35% alpha) instead of the first bar's service colour.
+const LEGEND_SWATCH_COLORS = ['#37474f', '#78909c', 'rgba(120,144,156,0.35)'];
+// Border keeps the pale Upside swatch at >= 3:1 against the white card.
+const LEGEND_SWATCH_BORDER = '#546e7a';
 
 /**
  * Parse a #rrggbb hex string into its r/g/b components. Falls back to the
@@ -215,7 +251,12 @@ export async function loadDashboard(): Promise<void> {
     // Single merged per-service chart (#908): potential range from recs +
     // current-savings underlay from the summary's by_service map.
     renderSavingsByService(recs, summaryData.by_service || {}, filterDesc);
-    renderUpcomingPurchases(upcomingData?.purchases || []);
+    if (upcomingResult.status === 'rejected') {
+      console.error('Failed to load upcoming purchases:', upcomingResult.reason);
+      renderUpcomingError();
+    } else {
+      renderUpcomingPurchases(upcomingData?.purchases || []);
+    }
     // Load the savings-over-time widget independently -- failure shouldn't
     // block the rest of the dashboard (e.g. analytics not configured).
     void loadSavingsTrendChart();
@@ -426,6 +467,43 @@ export function canCancelUpcomingPurchase(purchase: UpcomingPurchase): boolean {
   if (!purchase.created_by_user_id) return false;
   if (purchase.created_by_user_id !== user.id) return false;
   return canAccess('delete', 'purchases') || canAccess('cancel-own', 'purchases');
+}
+
+// A failed fetch must not read as "nothing scheduled" (#713): show an inline
+// error with a Retry that refetches only this widget.
+function renderUpcomingError(): void {
+  const container = document.getElementById('upcoming-list');
+  if (!container) return;
+  teardownSkeleton(container);
+  container.textContent = '';
+  const msg = document.createElement('p');
+  msg.className = 'error';
+  msg.setAttribute('role', 'alert');
+  msg.textContent = 'Failed to load upcoming purchases.';
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.className = 'btn btn-secondary';
+  retry.dataset['action'] = 'retry-upcoming';
+  retry.textContent = 'Retry';
+  retry.addEventListener('click', () => { void retryUpcomingPurchases(); });
+  container.append(msg, retry);
+}
+
+async function retryUpcomingPurchases(): Promise<void> {
+  const container = document.getElementById('upcoming-list');
+  if (container) {
+    // The Retry button is about to be replaced; keep focus in the widget.
+    container.tabIndex = -1;
+    container.focus();
+    showSkeletonBlock(container, '100%', '6rem');
+  }
+  try {
+    const data = (await api.getUpcomingPurchases()) as { purchases?: UpcomingPurchase[] } | null;
+    renderUpcomingPurchases(data?.purchases || []);
+  } catch (error) {
+    console.error('Failed to load upcoming purchases:', error);
+    renderUpcomingError();
+  }
 }
 
 function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
@@ -907,8 +985,8 @@ export function renderSavingsByService(
 
   const totalSavings = positive.reduce((acc, e) => acc + e.visibleTotal, 0);
 
-  // Colour palette: one base colour per service, then derive lighter/darker shades.
-  const bgColors = visible.map((_, i) => SERVICE_BAR_COLORS[i % SERVICE_BAR_COLORS.length] ?? '#1a73e8');
+  // Colour: one stable base colour per service name, then derive lighter/darker shades.
+  const bgColors = visible.map(e => serviceBarColor(e.svc));
 
   // Current / Committed: darkest shade (30% darker than base).
   const currentColors = bgColors.map(c => darkenHexColor(c));
@@ -960,7 +1038,17 @@ export function renderSavingsByService(
         legend: {
           display: true,
           position: 'top',
-          labels: { boxWidth: 12 },
+          labels: {
+            boxWidth: 12,
+            generateLabels: (chart) => chart.data.datasets.map((ds, i) => ({
+              text: ds.label ?? '',
+              fillStyle: LEGEND_SWATCH_COLORS[i] ?? LEGEND_SWATCH_COLORS[1] ?? '#78909c',
+              strokeStyle: LEGEND_SWATCH_BORDER,
+              lineWidth: 1,
+              hidden: !chart.isDatasetVisible(i),
+              datasetIndex: i,
+            })),
+          },
         },
         tooltip: {
           callbacks: {
@@ -1001,6 +1089,8 @@ export function renderSavingsByService(
         x: {
           stacked: true,
           title: { display: true, text: 'Service' },
+          // Keep every service label on narrow screens (rotate instead of skipping).
+          ticks: { autoSkip: false, maxRotation: 60 },
         },
         y: {
           stacked: true,

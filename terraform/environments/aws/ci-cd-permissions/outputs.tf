@@ -14,6 +14,7 @@ output "policy_arns" {
     networking = aws_iam_policy.networking.arn
     compute    = aws_iam_policy.compute.arn
     data       = aws_iam_policy.data.arn
+    monitoring = aws_iam_policy.monitoring.arn
   }
 }
 
