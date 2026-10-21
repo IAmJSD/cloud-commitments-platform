@@ -14,8 +14,8 @@ package api
 //   1.  GET /recommendations          (filterRecommendationsByAllowedAccounts)
 //   2.  GET /recommendations/:id      (getRecommendationDetail — cross-account rejection)
 //   3.  GET /history                  (filterPurchaseHistoryByAllowedAccounts)
-//   4.  GET /history/analytics        (validateAnalyticsAccountScope — cross-account rejection)
-//   5.  GET /history/breakdown        (validateAnalyticsAccountScope — cross-account rejection)
+//   4.  GET /history/analytics        (resolveAnalyticsAccountFilter — cross-account rejection)
+//   5.  GET /history/breakdown        (resolveAnalyticsAccountFilter — cross-account rejection)
 //   6.  GET /dashboard/summary        (filterDashboardRecommendations — aggregate subset)
 //   7.  POST /purchases/execute       (validatePurchaseRecommendationScope — 403)
 //   8.  GET /purchases/planned list   (requireExecutionAccess / requirePlanAccess — 404)
@@ -334,10 +334,10 @@ func TestPerAccountPerms_History_ListFilter(t *testing.T) {
 
 // TestPerAccountPerms_HistoryAnalytics_CrossAccountRejected verifies that a
 // scoped user (allowed_accounts: [permsAccA]) gets 404 when they request
-// analytics for account B. validateAnalyticsAccountScope calls MatchesAccount
+// analytics for account B. resolveAnalyticsAccountFilter calls MatchesAccount
 // and returns errNotFound on mismatch.
 //
-// Regression: removing validateAnalyticsAccountScope (or its MatchesAccount
+// Regression: removing resolveAnalyticsAccountFilter (or its MatchesAccount
 // call) allows the analytics query to proceed and returns 200 to the caller.
 func TestPerAccountPerms_HistoryAnalytics_CrossAccountRejected(t *testing.T) {
 	ctx := context.Background()
@@ -440,7 +440,7 @@ func TestPerAccountPerms_HistoryBreakdown_AllowedAccountSucceeds(t *testing.T) {
 
 // TestPerAccountPerms_HistoryBreakdown_CrossAccountRejected mirrors the
 // analytics test for the breakdown endpoint which shares the same
-// validateAnalyticsAccountScope guard.
+// resolveAnalyticsAccountFilter guard.
 func TestPerAccountPerms_HistoryBreakdown_CrossAccountRejected(t *testing.T) {
 	ctx := context.Background()
 
