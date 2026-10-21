@@ -117,7 +117,8 @@ module "compute_cloud_run" {
       CUDLY_MAX_ACCOUNT_PARALLELISM       = tostring(var.max_account_parallelism)
       CUDLY_SOURCE_CLOUD                  = "gcp"
     },
-    var.additional_env_vars
+    var.additional_env_vars,
+    local.db_pool_env
   )
 
   labels = local.common_labels
@@ -202,7 +203,8 @@ module "compute_gke" {
       CUDLY_MAX_ACCOUNT_PARALLELISM       = tostring(var.max_account_parallelism)
       CUDLY_SOURCE_CLOUD                  = "gcp"
     },
-    var.additional_env_vars
+    var.additional_env_vars,
+    local.db_pool_env
   )
 
   labels = local.common_labels

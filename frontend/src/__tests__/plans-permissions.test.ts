@@ -132,6 +132,9 @@ describe('Plans page permission gating (issue #365)', () => {
       expect(html).toContain('data-action="pause"');
       expect(html).toContain('data-action="edit"');
       expect(html).toContain('data-action="disable"');
+      const buttons = Array.from(pp.querySelectorAll('td.actions button'));
+      expect(buttons.length).toBeGreaterThanOrEqual(4);
+      for (const b of buttons) expect(b.getAttribute('aria-label')).toBeTruthy();
     });
   });
 

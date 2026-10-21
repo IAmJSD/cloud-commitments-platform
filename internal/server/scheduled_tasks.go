@@ -106,3 +106,27 @@ func (t *scheduledTaskTracker) stop(ctx context.Context) bool {
 		return false
 	}
 }
+
+// ScheduledTaskFailedLogMarker is the stable token logged whenever a scheduled
+// task returns an error, including a partial failure (issue #714). The
+// per-cloud monitoring modules alert on any occurrence, so it is a contract
+// with terraform/modules/monitoring/{aws,gcp,azure}: rename it only together
+// with those filters (TestMonitoringLogMarkersMatchGo guards the pairing).
+const ScheduledTaskFailedLogMarker = "scheduled_task_failed"
+
+// ErrScheduledPurchasesFailed marks a process_scheduled_purchases run in which
+// at least one execution failed. The run returns it instead of success so the
+// scheduler (EventBridge/Lambda, Cloud Scheduler, Logic Apps) records a failed
+// invocation and the HTTP path answers 500 rather than 200 (issue #714).
+var ErrScheduledPurchasesFailed = errors.New("scheduled purchases failed")
+
+// HandleScheduledTask processes a scheduled task by type and logs
+// ScheduledTaskFailedLogMarker when it fails, whichever entry point (Lambda
+// event, /api/scheduled/ HTTP, CLI) invoked it.
+func (app *Application) HandleScheduledTask(ctx context.Context, taskType ScheduledTaskType, params ScheduledTaskParams) (any, error) {
+	result, err := app.runScheduledTask(ctx, taskType, params)
+	if err != nil {
+		log.Printf("%s task=%q error=%q", ScheduledTaskFailedLogMarker, taskType, err.Error()) // #nosec G706 -- taskType comes from a known-value map and both values are %q-quoted, which escapes CR/LF
+	}
+	return result, err
+}

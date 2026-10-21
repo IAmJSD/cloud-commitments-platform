@@ -295,9 +295,10 @@ func TestPausePlannedPurchase_PermissionGate(t *testing.T) {
 		mockAuth := authForUserWith(ctx, t, userID, "update", "purchases", true)
 		mockAuth.On("GetAllowedAccountsAPI", ctx, userID).Return([]string{}, nil)
 		mockAuth.On("HasPermissionAPI", ctx, userID, "update-any", "purchases").Return(true, nil)
+		mockAuth.allowConstraintChecks()
 		mockStore := new(MockConfigStore)
-		// update-any short-circuits the ownership fetch in
-		// authorizeExecutionManagement; only requireExecutionAccess fetches.
+		// update-any skips the ownership check but its Constraints are
+		// evaluated against the stored row (issue #1098).
 		mockStore.On("GetExecutionByID", ctx, execID).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending"}, nil)
 		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "paused", mock.Anything).
@@ -321,6 +322,7 @@ func TestPausePlannedPurchase_PermissionGate(t *testing.T) {
 		// immediately without calling GetAllowedAccountsAPI or GetExecutionByID).
 		mockAuth := authForAdmin(ctx, t)
 		mockStore := new(MockConfigStore)
+		mockStore.On("GetExecutionByID", ctx, execID).Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending"}, nil)
 		mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "paused", mock.Anything).
 			Return(&config.PurchaseExecution{ExecutionID: execID, Status: "paused"}, nil)
 

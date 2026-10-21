@@ -25,7 +25,7 @@ var approveFromStatuses = []string{"pending", "notified"}
 func newApproveManager(t *testing.T) (*Manager, *MockConfigStore, *MockEmailSender) {
 	t.Helper()
 	store := new(MockConfigStore)
-	sender := new(MockEmailSender)
+	sender := allowFailedNotification(new(MockEmailSender))
 
 	// A plan step with no recommendations is refused (#609), so the
 	// approved fixtures carry one recommendation; this factory lets it
@@ -450,7 +450,7 @@ func TestManager_ApproveAndExecute_ReturnsRowOnExecutionFailure(t *testing.T) {
 	store := new(MockConfigStore)
 	factory := new(MockProviderFactory)
 	factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(nil, errors.New("credentials rejected"))
-	manager := &Manager{config: store, email: new(MockEmailSender), providerFactory: factory}
+	manager := &Manager{config: store, email: allowFailedNotification(new(MockEmailSender)), providerFactory: factory}
 
 	updated := &config.PurchaseExecution{
 		ExecutionID:     "exec-fail-after-claim",
@@ -663,30 +663,51 @@ func TestManager_ApproveAndExecute_FourEyesOff_AllowsSelfApprove(t *testing.T) {
 // awareness of 4-eyes mode at all, so a replayed or forwarded token+actor
 // matching the creator's own email would approve the row despite mode being
 // on.
+//
+// The case-differing rows (issue #307) pin the case-insensitive comparison:
+// email addresses are matched case-insensitively everywhere else in the
+// approval flow, so a creator whose stored email differs from the actor's
+// only in letter case is the same person and must still be denied. A
+// regression that swaps strings.EqualFold for == fails those rows.
 func TestManager_ApproveExecution_FourEyesOn_SQSActorEqualsCreator_Denied(t *testing.T) {
-	ctx := context.Background()
-	manager, store, _ := newApproveManager(t)
-
-	creatorID := "user-creator"
-	creatorEmail := "creator@example.com"
-	execution := &config.PurchaseExecution{
-		ExecutionID:     "exec-sqs-self",
-		PlanID:          "plan-fourEyes",
-		Status:          "pending",
-		ApprovalToken:   config.HashApprovalToken("valid-token"),
-		CreatedByUserID: &creatorID,
+	cases := []struct {
+		name         string
+		creatorEmail string
+		actorEmail   string
+	}{
+		{name: "byte-identical emails", creatorEmail: "creator@example.com", actorEmail: "creator@example.com"},
+		{name: "creator stored mixed case", creatorEmail: "Creator@Example.COM", actorEmail: "creator@example.com"},
+		{name: "actor mixed case", creatorEmail: "creator@example.com", actorEmail: "CREATOR@Example.com"},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			manager, store, _ := newApproveManager(t)
+			// Fail this row on an unexpected call instead of panicking, so
+			// one regressed row doesn't abort the remaining rows.
+			store.Test(t)
 
-	store.On("GetExecutionByID", ctx, "exec-sqs-self").Return(execution, nil)
-	store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOnForManager(), nil)
-	store.On("GetUserEmailByID", ctx, creatorID).Return(creatorEmail, nil)
+			creatorID := "user-creator"
+			execution := &config.PurchaseExecution{
+				ExecutionID:     "exec-sqs-self",
+				PlanID:          "plan-fourEyes",
+				Status:          "pending",
+				ApprovalToken:   config.HashApprovalToken("valid-token"),
+				CreatedByUserID: &creatorID,
+			}
 
-	_, err := manager.ApproveExecution(ctx, "exec-sqs-self", "valid-token", creatorEmail, nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "4-eyes mode requires a different approver")
-	store.AssertNotCalled(t, "TransitionExecutionStatus",
-		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-	store.AssertExpectations(t)
+			store.On("GetExecutionByID", ctx, "exec-sqs-self").Return(execution, nil)
+			store.On("GetGlobalConfig", ctx).Return(fourEyesCfgOnForManager(), nil)
+			store.On("GetUserEmailByID", ctx, creatorID).Return(tc.creatorEmail, nil)
+
+			_, err := manager.ApproveExecution(ctx, "exec-sqs-self", "valid-token", tc.actorEmail, nil)
+			require.ErrorIs(t, err, ErrFourEyesDenied)
+			assert.Contains(t, err.Error(), "4-eyes mode requires a different approver")
+			store.AssertNotCalled(t, "TransitionExecutionStatus",
+				mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			store.AssertExpectations(t)
+		})
+	}
 }
 
 // TestManager_ApproveExecution_FourEyesOn_DifferentActor_Allowed is the

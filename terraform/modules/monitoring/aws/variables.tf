@@ -32,8 +32,8 @@ variable "function_name" {
   default     = ""
 }
 
-variable "db_cluster_id" {
-  description = "RDS cluster identifier"
+variable "db_instance_identifier" {
+  description = "RDS instance identifier (modules/database/aws runs a provisioned aws_db_instance, not an Aurora cluster)"
   type        = string
 }
 
