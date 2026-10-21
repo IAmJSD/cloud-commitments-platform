@@ -1614,6 +1614,10 @@ func parseThresholdParam(params map[string]string) (float64, error) {
 // Used to populate exchange.RIInfo.MonthlyCost so the cross-family
 // dollar-units pre-filter can compare against per-target offering
 // costs computed with the same formula.
+//
+// Keep in sync with the copy in internal/server/handler_ri_exchange.go
+// (auto-exchange and ladder path), which applies the same checks but does
+// not wrap the sentinels.
 func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
 	if ri.Duration <= 0 {
 		return 0, fmt.Errorf("convertible RI %s has %w %d: monthly cost is not computable", ri.ReservedInstanceID, errRINonPositiveDuration, ri.Duration)

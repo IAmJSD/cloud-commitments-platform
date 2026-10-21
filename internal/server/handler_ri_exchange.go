@@ -253,6 +253,11 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 // Used to populate exchange.RIInfo.MonthlyCost so the cross-family
 // dollar-units pre-filter compares apples-to-apples against per-target
 // offering costs.
+//
+// Keep in sync with the copy in internal/api/handler_ri_exchange.go. That
+// copy also wraps errRINonPositiveDuration / errRINoPricing so the API can
+// report a per-RI reason; this one does not, because the callers here only
+// log and drop the RI.
 func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
 	if ri.Duration <= 0 {
 		return 0, fmt.Errorf("convertible RI %s has non-positive duration %d: monthly cost is not computable", ri.ReservedInstanceID, ri.Duration)
@@ -268,7 +273,9 @@ func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
 }
 
 // convertForAutoExchange converts provider-specific types to exchange package types,
-// including RI metadata needed for offering lookup.
+// including RI metadata needed for offering lookup. It serves both the
+// auto-exchange run and the ladder write path (ladder_write.go); an RI whose
+// monthly cost is not computable is logged and dropped on both.
 func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recommendations.RIUtilization) ([]exchange.RIInfo, []exchange.UtilizationInfo, map[string]exchange.RIMetadataInfo) {
 	riInfos := make([]exchange.RIInfo, 0, len(instances))
 	riMetadata := make(map[string]exchange.RIMetadataInfo, len(instances))
@@ -277,7 +284,7 @@ func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recomme
 		inst := instances[i]
 		monthlyCost, err := monthlyCostFromConvertibleRI(inst)
 		if err != nil {
-			logging.Warnf("convertForAutoExchange: excluding RI from auto-exchange: %v", err)
+			logging.Warnf("convertForAutoExchange: excluding RI from auto-exchange and ladder reshaping: %v", err)
 			continue
 		}
 		riInfos = append(riInfos, exchange.RIInfo{
