@@ -680,9 +680,32 @@ func sumTrancheRowAmounts(rows []config.LadderTrancheDB) float64 {
 	return sum
 }
 
+// storedTrancheAmount is the amount a tranche row persists: the planned exact
+// amount floored to the column's six decimals (never rounded up; see
+// config.LadderAmountFloor). It fails loud on a malformed or non-positive
+// planned amount: BuildTranches never emits one, so it means a broken tranche,
+// and writing it would be a $0 (or negative) row. stored=false means the
+// positive amount is below 0.000001 USD/hr and floors to zero; the caller
+// drops that tranche instead of persisting a $0 row. Such an amount is far
+// below the provider minimum (0.001 USD/hr), so it could never be purchased.
+func storedTrancheAmount(tr *pkgladder.Tranche) (amount *big.Rat, stored bool, err error) {
+	r, ok := new(big.Rat).SetString(tr.AmountUSDPerHour)
+	if !ok || r == nil {
+		return nil, false, fmt.Errorf("tranche %s: malformed amount_usd_per_hour %q (not a parseable rational)", tr.ID, tr.AmountUSDPerHour)
+	}
+	if r.Sign() <= 0 {
+		return nil, false, fmt.Errorf("tranche %s: non-positive amount_usd_per_hour %q", tr.ID, tr.AmountUSDPerHour)
+	}
+	floored := config.LadderAmountFloor(r)
+	return floored, floored.Sign() > 0, nil
+}
+
 // immediateTrancheAmounts sums, per layer, the tranches that fire at the run
-// start (FireAfter <= now: the AfterDays==0 ramp step). It fails loud on a
-// malformed amount, like buildTrancheDBRows.
+// start (FireAfter <= now: the AfterDays==0 ramp step). It sums the stored
+// (floored) amounts, so the display plan never shows more than the persisted
+// rows, and skips the tranches buildTrancheDBRows drops; a layer whose
+// immediate tranches all floor to zero has no entry. It fails loud on a
+// malformed or non-positive amount, like buildTrancheDBRows.
 func immediateTrancheAmounts(tranches []pkgladder.Tranche, now time.Time) (map[pkgladder.LayerType]*big.Rat, error) {
 	sums := make(map[pkgladder.LayerType]*big.Rat)
 	for i := range tranches {
@@ -690,9 +713,12 @@ func immediateTrancheAmounts(tranches []pkgladder.Tranche, now time.Time) (map[p
 		if tr.FireAfter.After(now) {
 			continue
 		}
-		r, ok := new(big.Rat).SetString(tr.AmountUSDPerHour)
-		if !ok {
-			return nil, fmt.Errorf("tranche %s: malformed amount_usd_per_hour %q (not a parseable rational)", tr.ID, tr.AmountUSDPerHour)
+		r, stored, err := storedTrancheAmount(tr)
+		if err != nil {
+			return nil, err
+		}
+		if !stored {
+			continue
 		}
 		if sums[tr.Layer] == nil {
 			sums[tr.Layer] = new(big.Rat)
@@ -703,24 +729,29 @@ func immediateTrancheAmounts(tranches []pkgladder.Tranche, now time.Time) (map[p
 }
 
 // buildTrancheDBRows converts pkg/ladder Tranche rows to config.LadderTrancheDB
-// rows ready for SaveLadderTranches. It fails loud on a malformed
-// AmountUSDPerHour (money path): rather than persist a silently 0-coerced
-// $0 tranche, it returns an error so the whole run is counted Errored and
-// nothing partial is written.
+// rows ready for SaveLadderTranches. It fails loud on a malformed or
+// non-positive AmountUSDPerHour (money path): rather than persist a silently
+// 0-coerced $0 tranche, it returns an error so the whole run is counted
+// Errored and nothing partial is written. A positive amount below 0.000001
+// USD/hr, which the six-decimal column would store as 0, is dropped with a log
+// line instead (see storedTrancheAmount): it is a planner remainder no provider
+// can buy, and refusing it would fail the same run again on every rerun.
 func buildTrancheDBRows(tranches []pkgladder.Tranche, runID string, configID *string) ([]config.LadderTrancheDB, error) {
 	rows := make([]config.LadderTrancheDB, 0, len(tranches))
 	for i := range tranches {
 		tr := &tranches[i] // use pointer to avoid copying 152-byte Tranche struct per iteration
 		// AmountUSDHr: parse the RatString and floor it to the stored scale
-		// (never round a planned commitment up; see LadderAmountFloat). A
-		// missing or malformed RatString means BuildTranches produced a broken
-		// tranche; that should never happen after Validate() passes, so
-		// surface it as an error instead of writing a $0 row.
-		r, ok := new(big.Rat).SetString(tr.AmountUSDPerHour)
-		if !ok || r == nil {
-			return nil, fmt.Errorf("tranche %s: malformed amount_usd_per_hour %q (not a parseable rational)", tr.ID, tr.AmountUSDPerHour)
+		// (never round a planned commitment up; see config.LadderAmountFloor).
+		r, stored, err := storedTrancheAmount(tr)
+		if err != nil {
+			return nil, err
 		}
-		amountUSDHr := config.LadderAmountFloat(r)
+		if !stored {
+			log.Printf("ladder_run: run %s: dropping tranche %s (layer %s): amount_usd_per_hour %s floors to 0 at the stored six-decimal scale",
+				runID, tr.ID, tr.Layer, tr.AmountUSDPerHour)
+			continue
+		}
+		amountUSDHr, _ := r.Float64()
 		runIDCopy := runID
 		if tr.CommitmentRate == "" {
 			return nil, fmt.Errorf("tranche %s: empty commitment rate", tr.ID)

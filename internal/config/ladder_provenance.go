@@ -180,21 +180,34 @@ func LadderInFlightOnDemand(rows []LadderInFlightRow) (float64, error) {
 // ladder_tranches.amount_usd_hr (NUMERIC(20,6), migration 000081).
 const ladderAmountScale = 6
 
-// LadderAmountFloat converts an exact planned tranche amount to the float64 a
-// tranche row stores, flooring it to the column's six decimal places. The go
-// precision contract (pkg/ladder LadderCapability.PurchaseLayer, go#354)
-// floors provider commitments and forbids callers rounding a *big.Rat up on the
-// way to float64; nearest-float conversion can do exactly that just below a
-// decimal boundary. Flooring at six decimals keeps a provider's five-decimal
-// truncation identical to truncating the exact amount and keeps an amount
-// below a provider minimum below it. The result's shortest decimal form is the
-// floored value itself (at most 15 significant digits below 1e9 USD/hr), so the
-// store writes it without any further rounding.
-func LadderAmountFloat(amount *big.Rat) float64 {
+// LadderAmountFloor floors an exact planned tranche amount to the six decimal
+// places ladder_tranches.amount_usd_hr stores, returning the exact floored
+// decimal. A positive amount below 0.000001 floors to zero; callers must not
+// persist that as a $0 tranche.
+func LadderAmountFloor(amount *big.Rat) *big.Rat {
 	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(ladderAmountScale), nil)
 	floored := new(big.Int).Mul(amount.Num(), scale)
 	floored.Div(floored, amount.Denom()) // Euclidean division: floor for the positive denominator
-	f, _ := new(big.Rat).SetFrac(floored, scale).Float64()
+	return new(big.Rat).SetFrac(floored, scale)
+}
+
+// LadderAmountFloat converts an exact planned tranche amount to the float64 a
+// tranche row stores, flooring it to the column's six decimal places (see
+// LadderAmountFloor). The go precision contract (pkg/ladder
+// LadderCapability.PurchaseLayer, go#354) floors provider commitments and
+// forbids callers rounding a *big.Rat up on the way to float64; nearest-float
+// conversion can do exactly that just below a decimal boundary. Flooring at six
+// decimals keeps a provider's five-decimal truncation identical to truncating
+// the exact amount and keeps an amount below a provider minimum below it.
+//
+// Below 1e9 USD/hr the floored value has at most 15 significant digits, so the
+// result's shortest decimal form is the floored value itself and the store
+// writes it without any further rounding. Above about 1e9 USD/hr the nearest
+// float64 of the floored decimal can round it up by less than one float64 ulp,
+// and nothing here refuses that; it is unreachable under the provider's 1e6
+// USD/hr cap.
+func LadderAmountFloat(amount *big.Rat) float64 {
+	f, _ := LadderAmountFloor(amount).Float64()
 	return f
 }
 
