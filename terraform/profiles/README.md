@@ -119,9 +119,10 @@ Terraform in (`terraform/environments/<provider>`), not by a
 variable.
 
 `enable_docker_build` is the only build switch a profile can set.
-With `true` (the default), `terraform apply` builds the container
-image and pushes it to the registry. With `false`, nothing is
-built and the deployment uses the pre-built image in `image_uri`.
+With `true` (the AWS default; Azure and GCP default to `false`),
+`terraform apply` builds the container image and pushes it to the
+registry. With `false`, nothing is built and the deployment uses
+the pre-built image in `image_uri`.
 There is no option to build without pushing, and no separate
 frontend build switch: the frontend is compiled into the same
 container image by the Dockerfile's `frontend-builder` stage.
@@ -138,6 +139,7 @@ environment                    = "dev"
 lambda_memory_size             = 512   # Minimum resources
 az_count                       = 2
 enable_flow_logs               = false # Less auditing
+enable_monitoring              = false # No alarms
 database_deletion_protection   = false
 database_skip_final_snapshot   = true
 database_backup_retention_days = 7
@@ -154,6 +156,7 @@ environment                    = "staging"
 lambda_memory_size             = 1024 # More resources
 az_count                       = 2
 enable_flow_logs               = true # Full auditing
+enable_monitoring              = true # Alarms and alert emails
 database_deletion_protection   = false
 database_skip_final_snapshot   = false
 database_backup_retention_days = 7
@@ -168,10 +171,22 @@ lambda_memory_size             = 1024 # More resources
 az_count                       = 3    # More AZs
 enable_flow_logs               = true
 database_performance_insights  = true
+enable_monitoring              = true # prod warns without it; see below
 database_deletion_protection   = true
 database_skip_final_snapshot   = false
 database_backup_retention_days = 30
 ```
+
+`enable_monitoring` (default `false` on all three providers)
+creates the monitoring module: alarms and alert notifications
+(on Azure only for Container Apps, on GCP only for Cloud Run).
+Alerts go to `alert_emails`, a comma-separated list. Don't commit
+real addresses in a profile: the deploy workflow passes them from
+the `ALERT_EMAILS` secret, and for a local run you can
+`export TF_VAR_alert_emails="ops@example.com"`. With
+`environment = "prod"`, each root prints a
+`prod_alerts_reach_someone` warning if monitoring is off or no
+address is set.
 
 ## Multi-Cloud Profiles
 
