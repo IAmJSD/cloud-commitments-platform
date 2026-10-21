@@ -13,7 +13,7 @@ async function openOpportunities(page: Page): Promise<void> {
 
 async function selectRecommendation(page: Page, id: string): Promise<void> {
   const row = page.locator(`tr.recommendation-row[data-rec-id="${id}"]`);
-  await row.getByRole('checkbox', { name: 'Select recommendation' }).check();
+  await row.getByRole('checkbox', { name: /^Select / }).check();
 }
 
 function callsTo(handle: MockHandle, suffix: string): Array<Record<string, unknown>> {
@@ -75,7 +75,7 @@ test('selection updates the sticky action summary and submits the selected purch
   await expect(page.locator('.recommendations-filter-live')).toContainText('1 selected');
   await expect(page.locator('#recommendations-action-summary')).toContainText('across 1 cell');
   await page.getByRole('button', { name: 'Purchase 1 selected' }).click();
-  await expect(page.getByRole('dialog', { name: 'Configure Purchase' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Review Purchase' })).toBeVisible();
   await page.getByRole('button', { name: 'Send for Approval' }).click();
   await page.locator('.modal-confirm-backdrop')
     .getByRole('button', { name: 'Send for approval' })

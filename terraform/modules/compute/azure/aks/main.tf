@@ -742,7 +742,7 @@ locals {
       { name = "DB_PORT", value = "5432", secret_ref = null },
       { name = "DB_NAME", value = null, secret_ref = "name" },
       { name = "DB_USER", value = null, secret_ref = "username" },
-      { name = "DB_PASSWORD_SECRET", value = null, secret_ref = "password" },
+      { name = "DB_PASSWORD_SECRET", value = null, secret_ref = "password_secret_name" },
       { name = "DB_SSL_MODE", value = "require", secret_ref = null },
       { name = "DB_CONNECT_TIMEOUT", value = "8s", secret_ref = null },
       { name = "DB_AUTO_MIGRATE", value = tostring(var.auto_migrate), secret_ref = null },

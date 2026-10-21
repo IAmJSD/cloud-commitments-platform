@@ -11,6 +11,10 @@
  *   openModal(modalEl, { onClose: () => discardCallerState() }); // runs on EVERY close path (issue #331)
  *   closeModal(modalEl);         // hides + releases trap + restores focus + runs onClose
  *
+ * A modal holding a one-time secret sets `data-require-ack="true"` so
+ * Escape does not dismiss it; the caller removes the attribute once the user
+ * acknowledges; until then closeModal is a no-op.
+ *
  * The helper toggles the existing `.hidden` CSS class so it slots into the
  * established show/hide convention without touching the stylesheet.
  */
@@ -157,6 +161,7 @@ export function openModal(
  * legacy code paths that call closeModal directly from a callback safe.
  */
 export function closeModal(el: HTMLElement): void {
+  if (el.dataset.requireAck === 'true') return;
   const state = openModals.get(el);
   teardown(el);
   el.classList.add('hidden');

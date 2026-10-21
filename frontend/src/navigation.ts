@@ -134,6 +134,15 @@ function confirmLeaveSettings(): Promise<boolean> {
   });
 }
 
+/** Mark the sidebar item for tabName active, without loading the tab. */
+export function setActiveNav(tabName: string): void {
+  document.querySelectorAll<HTMLElement>('.tab-btn').forEach(btn => {
+    const isActive = btn.dataset['tab'] === tabName;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+}
+
 export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
   if (!isKnownKey(TABS, tabName)) tabName = 'home';
 
@@ -151,11 +160,7 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
     return;
   }
 
-  document.querySelectorAll<HTMLButtonElement>('.tab-btn').forEach(btn => {
-    const isActive = btn.dataset['tab'] === tabName;
-    btn.classList.toggle('active', isActive);
-    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
-  });
+  setActiveNav(tabName);
 
   document.querySelectorAll<HTMLElement>('.tab-content').forEach(content => {
     content.classList.toggle('active', content.id === `${tabName}-tab`);

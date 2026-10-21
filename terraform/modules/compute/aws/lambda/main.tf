@@ -252,9 +252,14 @@ resource "aws_iam_role_policy" "secrets_access" {
         Action = [
           "secretsmanager:GetSecretValue"
         ]
+        # Every "${arn}*" entry is guarded: an empty ARN would otherwise render
+        # the bare "*", which compact() keeps, granting GetSecretValue on every
+        # secret in the account (#291). var.database_password_secret_arn is
+        # also validated non-empty; the guard keeps this fail-closed if that
+        # input is ever made optional.
         Resource = compact([
           var.database_password_secret_arn,
-          "${var.database_password_secret_arn}*",
+          var.database_password_secret_arn != "" ? "${var.database_password_secret_arn}*" : "",
           var.admin_password_secret_arn,
           var.admin_password_secret_arn != "" ? "${var.admin_password_secret_arn}*" : "",
           var.credential_encryption_key_secret_arn,

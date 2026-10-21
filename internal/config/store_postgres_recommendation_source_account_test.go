@@ -14,8 +14,7 @@ import (
 
 func TestPostgresRecommendationSourceEncodingRollback(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRecommendationsStore(ctx, t)
-	defer cleanup()
+	store := setupRecommendationsStore(ctx, t)
 	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	seed := awsRec("seed", "rds", "region", "seed", 10)
 	seed.SourceAccountID = new(" SourceAbC/é\t")

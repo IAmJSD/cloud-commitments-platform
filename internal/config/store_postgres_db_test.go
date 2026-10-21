@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -29,29 +28,17 @@ func getTestMigrationsPath() string {
 	return filepath.Join(filepath.Dir(filename), "..", "database", "postgres", "migrations")
 }
 
-// setupTestContainerDB starts a PostgreSQL container via testcontainers,
-// runs migrations, and adds a UNIQUE constraint on execution_id for ON CONFLICT support.
-// Returns the database.Connection or skips the test.
+// setupTestContainerDB returns a freshly migrated database of the test's own
+// on the package's shared PostgreSQL container (issue #982). It skips only
+// when this environment has no usable Docker provider; a migration that will
+// not apply fails it (issue #1597).
 func setupTestContainerDB(t *testing.T) *database.Connection {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() {
-		container.Cleanup(context.Background())
-	})
-
-	// Migrating is the thing under test here, not a precondition of it: a
-	// migration that will not apply is a broken schema, and skipping on it would
-	// report the whole suite green on exactly the defect it exists to catch
-	// (issue #1597).
-	require.NoError(t,
-		migrations.RunMigrations(ctx, container.DB.Pool(), getTestMigrationsPath(), "", ""),
-		"migrations failed to apply to a fresh database")
-
-	return container.DB
+	return testhelpers.RequireMigratedDatabase(ctx, t, getTestMigrationsPath()).DB
 }
 
 // cleanupTestData deletes all data from test tables.

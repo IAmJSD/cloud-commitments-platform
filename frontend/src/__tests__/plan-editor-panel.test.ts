@@ -89,15 +89,72 @@ test('actual Create pointer ownership guards submission, cancels on geometry cha
 });
 
 describe('display-only default (Create dates are not saved yet)', () => {
-  beforeEach(() => { dispose(); dispose = mountPlanEditorPanel(host, form); });
-  test('shows the graph and dates but disables every date control with a reason', () => {
+  const status = (): HTMLElement => host.querySelector('[data-editor="status"]')!;
+  const setting = (id: string, value: string, events: string[] = ['input', 'change']): void => {
+    const input = form.querySelector<HTMLInputElement>(`#${id}`)!; input.value = value;
+    for (const type of events) input.dispatchEvent(new Event(type, { bubbles: true }));
+  };
+  const remount = (): void => { dispose(); dispose = mountPlanEditorPanel(host, form); };
+  beforeEach(() => {
+    form.insertAdjacentHTML('beforeend', '<input name="ramp-schedule" type="radio" value="weekly-25pct">'); remount();
+  });
+  test('shows the graph and dates read-only with the controls hidden', () => {
     expect(host.querySelectorAll('[data-preview-step]')).toHaveLength(3);
     expect(host.querySelectorAll('svg [role=button]')).toHaveLength(0);
     expect(host.querySelector('.preview-hit, [data-preview-boundary]')).toBeNull();
-    for (const key of ['step', 'date', 'start', 'end', 'reset']) expect(field(key).disabled).toBe(true);
-    expect(field('date').value).toBe('2026-10-20');
-    expect(host.textContent).toContain('Custom step dates can be set once saving them is supported');
+    const controls = host.querySelector<HTMLElement>('[data-editor="controls"]')!;
+    expect(controls.hidden).toBe(true); expect(controls.contains(field('date'))).toBe(true);
+    expect(host.textContent).not.toContain('Custom step dates can be set once saving them is supported');
     expect(host.textContent).not.toContain('does not save date changes');
+  });
+  const summary = (): HTMLElement => host.querySelector('[data-editor="summary"]')!;
+  const caption = (): HTMLElement => host.querySelector('.editor-target')!;
+  const region = (): HTMLElement => host.querySelector('.schedule-preview-scroll')!;
+  test('invalid input clears the plot, caption and region and shows the message; input alone recovers', () => {
+    setting('plan-coverage', '', ['input']);
+    expect(host.querySelectorAll('[data-preview-step]')).toHaveLength(0);
+    expect(summary().textContent).toContain('Target coverage must be a whole number');
+    expect(caption().hidden).toBe(true); expect(region().hidden).toBe(true);
+    expect(status().textContent).toBe('Target 80% in 3 steps, 2026-10-20 to 2026-11-03 (UTC)');
+    setting('plan-coverage', '150', ['input']); expect(host.querySelectorAll('[data-preview-step]')).toHaveLength(0);
+    setting('plan-coverage', '70', ['input']);
+    expect(host.querySelectorAll('[data-preview-step]')).toHaveLength(3);
+    expect(host.querySelector('[data-preview-step="2"]')?.getAttribute('aria-label')).toContain('target 69.3%');
+    expect(summary().textContent).toBe('Target 70% in 3 steps, 2026-10-20 to 2026-11-03 (UTC)');
+    expect(caption().hidden).toBe(false); expect(region().hidden).toBe(false);
+  });
+  test('a ramp radio change rebuilds after an invalid start', () => {
+    form.querySelector<HTMLInputElement>('input[value="custom"]')!.checked = false; remount();
+    expect(host.querySelectorAll('[data-preview-step]')).toHaveLength(0);
+    const weekly = form.querySelector<HTMLInputElement>('input[value="weekly-25pct"]')!; weekly.checked = true;
+    weekly.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(host.querySelectorAll('[data-preview-step]')).toHaveLength(4);
+  });
+  test('settings that do not affect the schedule never rebuild; schedule settings do', () => {
+    const svg = host.querySelector('svg'), text = summary().textContent;
+    form.querySelector<HTMLInputElement>('#plan-coverage')!.value = '60';
+    for (const id of ['plan-term', 'plan-payment', 'plan-name']) {
+      setting(id, 'x', ['input', 'change']);
+      expect(host.querySelector('svg')).toBe(svg); expect(summary().textContent).toBe(text);
+    }
+    setting('plan-coverage', '60', ['input']);
+    expect(summary().textContent).toContain('Target 60%');
+    form.querySelector<HTMLInputElement>('#plan-coverage')!.value = '';
+    setting('plan-name', 'y'); expect(summary().textContent).toContain('Target 60%');
+  });
+  test('visible summary follows every input; the hidden live region follows change only', () => {
+    expect(status().getAttribute('role')).toBe('status'); expect(status().getAttribute('aria-live')).toBe('polite');
+    expect(host.querySelectorAll('[role=status], [aria-live]')).toHaveLength(1);
+    expect(summary().getAttribute('aria-live')).toBeNull(); expect(status().classList.contains('sr-only')).toBe(true);
+    const initial = 'Target 80% in 3 steps, 2026-10-20 to 2026-11-03 (UTC)';
+    expect(summary().textContent).toBe(initial); expect(status().textContent).toBe(initial);
+    expect(host.querySelector('[data-editor="error"]')?.getAttribute('role')).toBeNull();
+    expect(region().getAttribute('role')).toBe('region'); expect(region().getAttribute('aria-describedby')).toBe(summary().id);
+    setting('plan-coverage', '60', ['input']);
+    expect(host.querySelector('[data-preview-step="2"]')?.getAttribute('aria-label')).toContain('target 59.4%');
+    expect(summary().textContent).toContain('Target 60%'); expect(status().textContent).toBe(initial);
+    form.querySelector('#plan-coverage')!.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(status().textContent).toContain('Target 60%');
   });
   test('dragging a point is inert and typed input changes nothing', () => {
     const point = host.querySelector('[data-preview-step="0"]')!, label = point.getAttribute('aria-label');
@@ -110,5 +167,95 @@ describe('display-only default (Create dates are not saved yet)', () => {
     change('date', '2026-10-30');
     expect(host.querySelector('[data-preview-step="0"]')!.getAttribute('aria-label')).toBe(label);
     expect(host.querySelector('[data-editor="changes"] summary')!.textContent).toBe('Local date changes (0)');
+  });
+});
+
+describe('editable date gestures', () => {
+  const step = (index: number): SVGGElement => host.querySelector(`[data-preview-step="${index}"]`)!;
+  const harness = () => {
+    const svg = host.querySelector<SVGSVGElement>('svg')!;
+    let captured = false;
+    const release = jest.fn(() => { captured = false; });
+    Object.assign(svg, { getScreenCTM: () => ({ inverse: () => ({}) }),
+      createSVGPoint: () => ({ x: 0, y: 0, matrixTransform() { return { x: this.x }; } }),
+      setPointerCapture: () => { captured = true; }, hasPointerCapture: () => captured, releasePointerCapture: release });
+    const send = (type: string, target: Element, x: number, id = 1, primary = true): void => {
+      target.dispatchEvent(Object.assign(new Event(type, { bubbles: true, cancelable: true }),
+        { pointerId: id, isPrimary: primary, button: 0, clientX: x, clientY: 0 }));
+    };
+    return { svg, send, release, day: 544 / 22, x: (index: number): number => Number(step(index).querySelector('circle')!.getAttribute('cx')) };
+  };
+  const changes = (): string => host.querySelector('[data-editor="changes"] summary')!.textContent!;
+
+  test.each(['pointercancel', 'lostpointercapture', 'Escape'])('rolls back a captured draft on %s', reason => {
+    const { svg, send, release, day, x } = harness();
+    send('pointerdown', step(1), x(1)); send('pointermove', svg, x(1) + day);
+    expect(field('date').value).toBe('2026-10-28'); expect(changes()).toContain('(1)');
+    const key = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    const parentKey = jest.fn(); host.closest('.modal')!.addEventListener('keydown', parentKey);
+    if (reason === 'Escape') step(1).dispatchEvent(key); else send(reason, svg, x(1) + day);
+    expect(field('date').value).toBe('2026-10-27'); expect(changes()).toContain('(0)');
+    expect(release).toHaveBeenCalled(); expect(form.inert).toBeFalsy();
+    if (reason === 'Escape') { expect(key.defaultPrevented).toBe(true); expect(parentKey).not.toHaveBeenCalled(); }
+    const later = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    step(1).dispatchEvent(later); expect(later.defaultPrevented).toBe(false);
+  });
+
+  test('redistributes endpoint gestures, focuses the handle before inerting inputs and activates by keyboard', () => {
+    const { svg, send, day } = harness();
+    const handle = host.querySelector<SVGGElement>('[data-preview-boundary="end"]')!;
+    const origin = Number(handle.querySelector('.preview-handle-marker')!.getAttribute('x')) + 6;
+    field('end').focus(); send('pointerdown', handle, origin);
+    expect(document.activeElement).toBe(handle); expect(field('end').disabled).toBe(true);
+    send('pointermove', svg, origin + day * 3);
+    expect(field('end').value).toBe('2026-11-06'); expect(step(1).getAttribute('aria-label')).toContain('2026-10-29');
+    handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    expect(field('end').value).toBe('2026-11-06');
+    send('pointerup', svg, origin + day * 3); expect(field('end').disabled).toBe(false);
+    handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    expect(field('end').value).toBe('2026-11-07');
+    handle.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }));
+    expect(document.activeElement).toBe(field('end'));
+  });
+
+  test('rejects collisions and outside release, and ignores other pointers', () => {
+    const { svg, send, day, x } = harness();
+    send('pointerdown', svg, 100); expect(form.inert).toBeFalsy();
+    send('pointerdown', step(1), x(1), 2, false); expect(form.inert).toBeFalsy();
+    send('pointerdown', step(1), x(1)); expect(form.inert).toBe(true);
+    send('pointermove', svg, x(1) + day, 2); expect(field('date').value).toBe('2026-10-27');
+    send('pointermove', svg, x(1) + day * 7);
+    expect(field('date').value).toBe('2026-10-27'); expect(field('error').textContent).toMatch(/order/);
+    send('pointerup', svg, 1000);
+    expect(field('error').textContent).toMatch(/plot/i); expect(field('date').value).toBe('2026-10-27'); expect(form.inert).toBeFalsy();
+  });
+
+  test('selects points by click and arrow keys', () => {
+    step(2).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(field('step').value).toBe('2'); expect(field('date').value).toBe('2026-11-03');
+    step(2).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    expect(field('step').value).toBe('1'); expect(document.activeElement).toBe(step(1));
+    step(1).dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    expect(field('step').value).toBe('2'); expect(field('date').value).toBe('2026-11-03');
+  });
+
+  test('rechecks midnight on release and rolls back exactly with a reopen warning', () => {
+    const { svg, send, day, x } = harness();
+    send('pointerdown', step(1), x(1)); send('pointermove', svg, x(1) + day);
+    expect(field('date').value).toBe('2026-10-28');
+    jest.setSystemTime(new Date('2026-10-20T00:00:00Z'));
+    send('pointerup', svg, x(1) + day);
+    expect(field('date').value).toBe('2026-10-27'); expect(field('error').textContent).toMatch(/reopen/i);
+    expect(field('date').disabled).toBe(false); expect(form.inert).toBeFalsy();
+  });
+
+  test('reports capture failure and leaves dates and date-input access intact', () => {
+    const { svg, send, x } = harness();
+    Object.assign(svg, { setPointerCapture: () => { throw new Error('Capture unavailable'); } });
+    const hit = step(1).querySelector<HTMLElement>('.preview-touch-target')!;
+    expect(hit.namespaceURI).toBe('http://www.w3.org/1999/xhtml'); expect(hit.tabIndex).toBe(-1);
+    send('pointerdown', hit, x(1));
+    expect(field('date').value).toBe('2026-10-27'); expect(field('date').disabled).toBe(false);
+    expect(form.inert).toBeFalsy(); expect(field('error').textContent).toContain('Use date inputs');
   });
 });

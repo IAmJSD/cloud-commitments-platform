@@ -5,27 +5,17 @@ package config
 import (
 	"context"
 	"math/big"
-	"net/url"
-	"os"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 )
 
 func TestPostgresStoreDB_ReserveRIExchange_SerializesIndependentStores(t *testing.T) {
-	dsn := os.Getenv("RI_EXCHANGE_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("set RI_EXCHANGE_TEST_DATABASE_URL to a dedicated issue41 test database")
-	}
-	parsed, err := url.Parse(dsn)
-	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(strings.TrimPrefix(parsed.Path, "/"), "issue41_"), "database must be dedicated to issue41 verification")
+	dsn := riExchangeContainerDSN(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -46,7 +36,6 @@ func TestPostgresStoreDB_ReserveRIExchange_SerializesIndependentStores(t *testin
 	poolB, err := newPool()
 	require.NoError(t, err)
 	defer poolB.Close()
-	require.NoError(t, migrations.RunMigrations(ctx, poolA, getTestMigrationsPath(), "", ""))
 	storeA := &PostgresStore{db: poolA}
 	storeB := &PostgresStore{db: poolB}
 	beforeBoundaryRow, err := storeA.GetRIExchangeDailySpend(ctx, time.Now().UTC())

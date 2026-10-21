@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,13 +26,7 @@ func TestPostgresStore_GlobalConfig(t *testing.T) {
 	ctx := context.Background()
 
 	// Setup test container
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
-
-	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 
 	// Create store
 	store := config.NewPostgresStore(container.DB)
@@ -78,13 +71,7 @@ func TestPostgresStore_ServiceConfig(t *testing.T) {
 	ctx := context.Background()
 
 	// Setup test container
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
-
-	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 
 	// Create store
 	store := config.NewPostgresStore(container.DB)
@@ -139,13 +126,7 @@ func TestPostgresStore_PurchasePlans(t *testing.T) {
 	ctx := context.Background()
 
 	// Setup test container
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
-
-	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 
 	// Create store
 	store := config.NewPostgresStore(container.DB)
@@ -275,13 +256,7 @@ func TestPostgresStore_PurchaseExecutions(t *testing.T) {
 	ctx := context.Background()
 
 	// Setup test container
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
-
-	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 
 	// Create store
 	store := config.NewPostgresStore(container.DB)
@@ -295,7 +270,7 @@ func TestPostgresStore_PurchaseExecutions(t *testing.T) {
 		Services:               map[string]config.ServiceConfig{},
 		RampSchedule:           config.PresetRampSchedules["immediate"],
 	}
-	err = store.CreatePurchasePlan(ctx, plan)
+	err := store.CreatePurchasePlan(ctx, plan)
 	require.NoError(t, err)
 
 	t.Run("Get pending executions returns empty when none exist", func(t *testing.T) {
@@ -325,13 +300,7 @@ func TestPostgresStore_PurchaseHistory(t *testing.T) {
 	ctx := context.Background()
 
 	// Setup test container
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
-
-	// Run migrations
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 
 	// Create store
 	store := config.NewPostgresStore(container.DB)

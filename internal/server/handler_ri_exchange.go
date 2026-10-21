@@ -12,6 +12,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/exchange"
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	awsprovider "github.com/LeanerCloud/cloud-commitments-go/providers/aws"
 	"github.com/LeanerCloud/cloud-commitments-go/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
@@ -243,37 +244,42 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 //
 //	monthly = (FixedPrice / hours_per_term + UsagePrice + recurring_hourly) × 730
 //
+// Returns an error when Duration is non-positive: a zero cost would read
+// as a free RI and skip the pricing gate, so callers must exclude the RI.
+//
 // Used to populate exchange.RIInfo.MonthlyCost so the cross-family
 // dollar-units pre-filter compares apples-to-apples against per-target
 // offering costs.
-func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 {
+func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
 	if ri.Duration <= 0 {
-		return 0
+		return 0, fmt.Errorf("convertible RI %s has non-positive duration %d: monthly cost is not computable", ri.ReservedInstanceID, ri.Duration)
 	}
 	hoursPerTerm := float64(ri.Duration) / 3600
-	if hoursPerTerm <= 0 {
-		return 0
-	}
-	return ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730
+	return ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730, nil
 }
 
 // convertForAutoExchange converts provider-specific types to exchange package types,
 // including RI metadata needed for offering lookup.
 func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recommendations.RIUtilization) ([]exchange.RIInfo, []exchange.UtilizationInfo, map[string]exchange.RIMetadataInfo) {
-	riInfos := make([]exchange.RIInfo, len(instances))
+	riInfos := make([]exchange.RIInfo, 0, len(instances))
 	riMetadata := make(map[string]exchange.RIMetadataInfo, len(instances))
 
 	for i := range instances {
 		inst := instances[i]
-		riInfos[i] = exchange.RIInfo{
+		monthlyCost, err := monthlyCostFromConvertibleRI(inst)
+		if err != nil {
+			logging.Warnf("convertForAutoExchange: excluding RI from auto-exchange: %v", err)
+			continue
+		}
+		riInfos = append(riInfos, exchange.RIInfo{
 			ID:                  inst.ReservedInstanceID,
 			InstanceType:        inst.InstanceType,
 			InstanceCount:       inst.InstanceCount,
 			OfferingClass:       "convertible",
 			NormalizationFactor: inst.NormalizationFactor,
-			MonthlyCost:         monthlyCostFromConvertibleRI(inst),
+			MonthlyCost:         monthlyCost,
 			CurrencyCode:        inst.CurrencyCode,
-		}
+		})
 		riMetadata[inst.ReservedInstanceID] = exchange.RIMetadataInfo{
 			ProductDescription: inst.ProductDescription,
 			InstanceTenancy:    inst.InstanceTenancy,
