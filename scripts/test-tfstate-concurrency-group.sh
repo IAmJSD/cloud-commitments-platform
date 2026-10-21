@@ -25,9 +25,10 @@
 # What counts as a writer. A job belongs to a state when it builds that state's
 # key (anywhere in the job, not only in a `key =` line) or names its root
 # directory, terraform/environments/{azure,gcp}. It WRITES that state when it
-# runs any terraform subcommand outside a read-only allowlist (init, plan,
-# output, show, validate, state list/show/pull, ...), or runs a script under
-# scripts/ that does. Unknown subcommands count as writes, so the check fails
+# runs any terraform subcommand outside a read-only allowlist (init without
+# -migrate-state/-force-copy, plan, output, show, validate, state
+# list/show/pull, ...), or runs a script under scripts/ that does. Unknown
+# subcommands count as writes, so the check fails
 # closed: a job that only reads state (database-migration.yml's `terraform
 # output`) needs no group, and one that does anything else needs the right one.
 #
@@ -37,6 +38,10 @@
 # (or a shell assignment in the same step). The group suffix must be that same
 # literal or expression, compared with whitespace removed. Anything the trace
 # cannot resolve is reported rather than passed.
+#
+# A writer's group must not cancel a run in progress either: cancel-in-progress
+# on its job-level group (and on a workflow-level group, if any) must be absent
+# or `false`, or a newer queued run would cancel a terraform write mid-run.
 #
 # Both directions are asserted, and the positive one first: a scan that
 # recognizes no writer has no violations either, and would pass while every
@@ -113,20 +118,21 @@ mkdir -p "${FIXTURE_DIR}/no-scripts"
 # --- Positive direction FIRST: the real writers are seen and are right --------
 #
 # Every job that touches the Azure or GCP state today, with the environment its
-# key resolves to and the group it carries. Named explicitly and asserted BEFORE
+# key resolves to, the group it carries and that group's cancel-in-progress
+# (pinned as read, so an unparsed `false` cannot pass as an absent one). Named explicitly and asserted BEFORE
 # any absence: if the scanner stops recognizing these, the sweep below reports a
 # clean result for a repository it no longer understands. The two readers are
 # pinned too, so the read/write split is asserted rather than assumed.
 EXPECTED_SITES=$(
   cat <<'EOF'
-deploy-azure.yml|build-and-deploy|azure|expr:needs.prepare.outputs.target_environment|writes|azure-tfstate-${{needs.prepare.outputs.target_environment}}
-cleanup-staging.yml|destroy-azure|azure|lit:staging|writes|azure-tfstate-staging
-rollback.yml|rollback-azure|azure|expr:inputs.environment|writes|azure-tfstate-${{inputs.environment}}
-deploy-gcp.yml|build-and-deploy|gcp|expr:needs.prepare.outputs.target_environment|writes|gcp-tfstate-${{needs.prepare.outputs.target_environment}}
-cleanup-staging.yml|destroy-gcp|gcp|lit:staging|writes|gcp-tfstate-staging
-rollback.yml|rollback-gcp|gcp|expr:inputs.environment|writes|gcp-tfstate-${{inputs.environment}}
-database-migration.yml|migrate-azure|azure|expr:inputs.environment|reads|db-migrate-azure-${{inputs.environment||'unset'}}
-database-migration.yml|migrate-gcp|gcp|expr:inputs.environment|reads|db-migrate-gcp-${{inputs.environment||'unset'}}
+deploy-azure.yml|build-and-deploy|azure|expr:needs.prepare.outputs.target_environment|writes|azure-tfstate-${{needs.prepare.outputs.target_environment}}|false
+cleanup-staging.yml|destroy-azure|azure|lit:staging|writes|azure-tfstate-staging|false
+rollback.yml|rollback-azure|azure|expr:inputs.environment|writes|azure-tfstate-${{inputs.environment}}|false
+deploy-gcp.yml|build-and-deploy|gcp|expr:needs.prepare.outputs.target_environment|writes|gcp-tfstate-${{needs.prepare.outputs.target_environment}}|false
+cleanup-staging.yml|destroy-gcp|gcp|lit:staging|writes|gcp-tfstate-staging|false
+rollback.yml|rollback-gcp|gcp|expr:inputs.environment|writes|gcp-tfstate-${{inputs.environment}}|false
+database-migration.yml|migrate-azure|azure|expr:inputs.environment|reads|db-migrate-azure-${{inputs.environment||'unset'}}|false
+database-migration.yml|migrate-gcp|gcp|expr:inputs.environment|reads|db-migrate-gcp-${{inputs.environment||'unset'}}|false
 EOF
 )
 
@@ -134,7 +140,7 @@ CENSUS="$(scan_state_groups census "$WORKFLOW_DIR" "$SCRIPT_DIR")"
 
 # Counted by the census shape rather than by line, so the scanner's own error
 # lines ("no workflow files found under ...") are not counted as jobs.
-CENSUS_WRITERS=$(printf '%s\n' "$CENSUS" | grep -cE '^[^|]+\|[^|]*\|[^|]+\|[^|]+\|writes\|[^|]+$' || true)
+CENSUS_WRITERS=$(printf '%s\n' "$CENSUS" | grep -cE '^[^|]+\|[^|]*\|[^|]+\|[^|]+\|writes\|[^|]+\|[^|]+$' || true)
 
 if [[ "$CENSUS_WRITERS" -eq 0 ]]; then
   note_fail "the scan recognizes no Azure or GCP state writer under ${WORKFLOW_DIR}"
@@ -150,7 +156,7 @@ while IFS= read -r expected_site; do
     note_pass "${expected_site} is recognized as expected"
   else
     note_fail "expected site not found: ${expected_site}"
-    echo "      format is file|job|state|key-environment|reads-or-writes|concurrency-group;"
+    echo "      format is file|job|state|key-environment|reads-or-writes|concurrency-group|cancel-in-progress;"
     echo "      the census holds:"
     if [[ -z "$CENSUS" ]]; then
       echo "        (nothing)"
@@ -188,6 +194,7 @@ mutate_real() {
 mutate_real nogroup rollback.yml 'group: azure-tfstate-${{ inputs.environment }}' '# group removed'
 mutate_real typo deploy-azure.yml 'group: azure-tfstate-' 'group: azure-tfsate-'
 mutate_real suffix cleanup-staging.yml 'group: gcp-tfstate-staging' 'group: gcp-tfstate-${{ inputs.environment }}'
+mutate_real cancel rollback.yml 'cancel-in-progress: false' 'cancel-in-progress: true'
 
 assert_scan "the real rollback-azure without its group is flagged" \
   'rollback.yml: job "rollback-azure": runs terraform apply against the azure Terraform state with no concurrency group' \
@@ -200,6 +207,10 @@ assert_scan "a typo in the real deploy-azure group prefix is flagged" \
 assert_scan "a real destroy-gcp group suffix not derived from its key is flagged" \
   'cleanup-staging.yml: job "destroy-gcp": runs scripts/delete-owned-cloud-sql-instance.sh against the gcp Terraform state, but its concurrency group gcp-tfstate-${{inputs.environment}} is not derived from the same value as the state key (lit:staging)' \
   "${FIXTURE_DIR}/real-suffix" "$SCRIPT_DIR"
+
+assert_scan "the real rollback-azure group set to cancel-in-progress: true is flagged" \
+  'rollback.yml: job "rollback-azure": runs terraform apply against the azure Terraform state, but its concurrency group sets cancel-in-progress: true' \
+  "${FIXTURE_DIR}/real-cancel" "$SCRIPT_DIR"
 
 # --- The scanner itself, over fixtures ----------------------------------------
 mkdir -p "${FIXTURE_DIR}/ok" "${FIXTURE_DIR}/fourth" "${FIXTURE_DIR}/family" \
@@ -459,6 +470,11 @@ assert_scan "a directory holding no writer says so rather than passing" \
 
 assert_scan "a directory that does not exist is reported, not passed" \
   'no workflow files found under' "${FIXTURE_DIR}/does-not-exist"
+
+# Fixtures for the cases review raised (#1149), kept in their own file so each
+# file stays under the 500-line limit. It uses assert_scan and FIXTURE_DIR.
+# shellcheck source=scripts/lib/tfstate-group-edge-cases.sh
+. "${SCRIPT_DIR}/lib/tfstate-group-edge-cases.sh"
 
 echo
 echo "passed: ${pass}, failed: ${fail}"

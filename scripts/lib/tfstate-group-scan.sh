@@ -27,7 +27,22 @@ TF_WRITE_FUNCS='
     if (a == "workspace") return (b == "list" || b == "show")
     return (a ~ /^(init|output|plan|show|validate|fmt|version|providers|graph|get|test|console|metadata)$/)
   }
-  function tf_write_cmd(line,   n, i, toks, a, b) {
+  # init reads unless it migrates the state to the backend it configures:
+  # -migrate-state copies it, and -force-copy answers that copy with yes. Flags
+  # continued onto the next line cannot be read, so init then counts as a write.
+  function tf_init_write(toks, n, i,   j, f) {
+    for (j = i + 1; j <= n; j++) {
+      if (toks[j] == "\\") return "terraform init (unparsed)"
+      if (toks[j] ~ /^-(migrate-state|force-copy)(=true)?$/) {
+        f = toks[j]
+        sub(/=.*$/, "", f)
+        return ("terraform init " f)
+      }
+      if (toks[j] !~ /^-/) break
+    }
+    return ""
+  }
+  function tf_write_cmd(line,   n, i, toks, a, b, f) {
     line = code_of(line)
     gsub(/"/, "", line)
     gsub(SQ, "", line)
@@ -40,6 +55,11 @@ TF_WRITE_FUNCS='
       if (a == "state" || a == "workspace")
         while (++i <= n) if (toks[i] !~ /^-/) { b = toks[i]; break }
       if (a == "" || a == "\\") return "terraform (unparsed)"
+      if (a == "init") {
+        f = tf_init_write(toks, n, i)
+        if (f != "") return f
+        continue
+      }
       if (!tf_readonly(a, b)) return ("terraform " a ((b == "") ? "" : (" " b)))
     }
     return ""
@@ -78,8 +98,15 @@ mutating_scripts() {
 # family, or not derived from its key, plus a line of its own when the scanned
 # set holds no writer at all. No output means the scanned set is clean.
 #
-# MODE=census prints `file|job|state|key-env|reads-or-writes|group` for every
-# job that touches Azure or GCP state, whatever the verdict. It is what the
+# A writer's group must also not cancel a run in progress: `cancel-in-progress`
+# on its job-level group, and on a workflow-level group if the file has one,
+# must be absent or `false`. A newer run queued on the group would otherwise
+# cancel a terraform write mid-run and leave a held lease or half-applied
+# state. An expression counts as not false, since it can evaluate to true.
+#
+# MODE=census prints `file|job|state|key-env|reads-or-writes|group|cancel` for
+# every job that touches Azure or GCP state, whatever the verdict (cancel is the
+# job-level cancel-in-progress value, or UNSET). It is what the
 # positive assertions read, so "clean" cannot mean "recognized nothing".
 #
 # A site is reported from site_file rather than FILENAME: a site running to the
@@ -195,6 +222,8 @@ scan_state_groups() {
       split("", stepenv)
     }
 
+    function cancel_ok(v) { v = unquote(v); return (v == "" || v == "false") }
+
     function note_group(v,   s) {
       grp = unquote(v)
       gfam = "other"; gsuf = ""
@@ -228,14 +257,14 @@ scan_state_groups() {
         total++
         if (wcmd != "") writers++
         if (mode == "census") {
-          printf "%s|%s|%s|%s|%s|%s\n", basename(site_file), site, fam, ((kenv == "") ? "NONE" : kenv), ((wcmd == "") ? "reads" : "writes"), ((grp == "") ? "NONE" : grp)
+          printf "%s|%s|%s|%s|%s|%s|%s\n", basename(site_file), site, fam, ((kenv == "") ? "NONE" : kenv), ((wcmd == "") ? "reads" : "writes"), ((grp == "") ? "NONE" : grp), ((jcancel == "") ? "UNSET" : jcancel)
         } else if (fam == "MIXED") {
           printf "%s: %s: touches both the Azure and the GCP Terraform state; one job can carry only one concurrency group\n", basename(site_file), label()
         } else if (wcmd != "") {
           report()
         }
       }
-      fam = ""; kenv = ""; wcmd = ""; grp = ""; gfam = ""; gsuf = ""
+      fam = ""; kenv = ""; wcmd = ""; grp = ""; gfam = ""; gsuf = ""; jcancel = ""
       in_env = 0; in_conc = 0; npending = 0
       split("", jobenv); split("", stepenv)
     }
@@ -254,13 +283,17 @@ scan_state_groups() {
         printf "%s, and the environment in its state key cannot be traced to a literal or a ${{ }} expression\n", where
       else if (gsuf != kenv)
         printf "%s, but its concurrency group %s is not derived from the same value as the state key (%s)\n", where, grp, kenv
+      if (grp != "" && !cancel_ok(jcancel))
+        printf "%s, but its concurrency group sets cancel-in-progress: %s; a newer run queued on the group would cancel the write mid-run (expected false or absent)\n", where, jcancel
+      if (!cancel_ok(wcancel))
+        printf "%s, but the workflow-level concurrency sets cancel-in-progress: %s; a newer run of the workflow would cancel the write mid-run (expected false or absent)\n", where, wcancel
     }
 
     BEGIN {
       AZKEY = "github-[^\"" SQ "/[:space:]]*[.]terraform[.]tfstate"
     }
 
-    FNR == 1 { if (NR > 1) finish(); site_file = FILENAME; site = "" }
+    FNR == 1 { if (NR > 1) finish(); site_file = FILENAME; site = ""; wcancel = ""; in_wconc = 0 }
 
     {
       code = squeeze_exprs(code_of($0))
@@ -279,6 +312,7 @@ scan_state_groups() {
 
       if (in_env && ind <= env_ind) in_env = 0
       if (in_conc && ind <= 4) in_conc = 0
+      if (in_wconc && ind == 0) in_wconc = 0
       if (code ~ /^      - /) flush_step()
 
       if (in_env && code ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*:/) {
@@ -297,6 +331,13 @@ scan_state_groups() {
       if (in_conc && code ~ /^[[:space:]]+group:/) {
         v = code; sub(/^[[:space:]]*group:[[:space:]]*/, "", v); sub(/[[:space:]]*$/, "", v)
         note_group(v)
+      }
+      # cancel-in-progress, for the job-level group and the workflow-level one.
+      if (code ~ /^concurrency:[[:space:]]*$/) in_wconc = 1
+      if ((in_conc || in_wconc) && code ~ /^[[:space:]]+cancel-in-progress:/) {
+        v = code; sub(/^[[:space:]]*cancel-in-progress:[[:space:]]*/, "", v); sub(/[[:space:]]*$/, "", v)
+        if (in_conc) jcancel = v
+        else wcancel = v
       }
 
       # A shell assignment in a run block, scoped to its step like env: is.
