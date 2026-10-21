@@ -22,7 +22,8 @@ secrets ever need to be stored.
 > `azurerm_role_definition` requires
 > `Microsoft.Authorization/roleDefinitions/write`, a bootstrap-class permission
 > the runtime CI deploy SP intentionally does not have (it only holds
-> `roleDefinitions/read` + `roleAssignments/{read,write,delete}`). The runtime
+> `roleDefinitions/read`, `roleAssignments/{read,write,delete}` and
+> `locks/{read,write,delete}`). The runtime
 > deploy looks the role up by name via `data.azurerm_role_definition` and creates
 > only the assignment.
 >
@@ -36,6 +37,9 @@ secrets ever need to be stored.
 
 **Control-plane actions** (ARM): VNets, subnets, NSGs, Container Apps, Container Registries,
 Storage accounts, Key Vault management, Log Analytics, DNS zones, and more.
+`Microsoft.Authorization/locks/*` lets the deploy manage the PostgreSQL server's
+CanNotDelete lock (`database_deletion_protection`, on by default); re-apply this
+module before the first deploy that turns it on, or that apply fails with a 403.
 
 **Data-plane actions**: Blob read/write (Terraform state), Key Vault secrets read/write.
 
@@ -183,6 +187,9 @@ obtain the deploy service principal. Restrict the branch via the environment's
 `workflow_dispatch` runs the workflow file as it exists on the dispatched ref, so the
 check can be removed on that branch.
 
-To allow a new deployment environment, add its name to `var.github_environments`. To
-deploy from a different branch or repo, add a further
-`azuread_application_federated_identity_credential` resource to `sp.tf`.
+To allow a new deployment environment, first create it with a deployment branch
+policy that admits only `main`, then add its name to `var.github_environments`
+(see the gating rule in that variable's description; the default `dev`,
+`staging` and `prod` all meet it). To deploy from a different branch or repo,
+add a further `azuread_application_federated_identity_credential` resource to
+`sp.tf`.

@@ -59,7 +59,7 @@ function withCurrentUser(users: api.APIUser[]): api.APIUser[] {
     id: 'current',
     email: current.email,
     groups: Array.isArray(current.groups) ? current.groups : [],
-    mfa_enabled: false,
+    mfa_enabled: current.mfa_enabled === true,
   };
   return [synthetic, ...users];
 }

@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"log"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
@@ -90,9 +91,9 @@ var scheduledEventActions = map[string]ScheduledTaskType{
 	"ladder_run":                  TaskLadderRun,
 }
 
-// HandleScheduledTask processes a scheduled task by type.
+// runScheduledTask runs a scheduled task by type.
 // It acquires a PostgreSQL advisory lock to prevent concurrent execution of the same task.
-func (app *Application) HandleScheduledTask(ctx context.Context, taskType ScheduledTaskType, params ScheduledTaskParams) (any, error) {
+func (app *Application) runScheduledTask(ctx context.Context, taskType ScheduledTaskType, params ScheduledTaskParams) (any, error) {
 	log.Printf("Handling scheduled task: %q", taskType) // #nosec G706 -- taskType is looked up from a known-value map; %q quotes the value to prevent CR/LF log injection
 
 	if err := app.ensureDB(ctx); err != nil {
@@ -248,7 +249,13 @@ func (app *Application) handleProcessScheduledPurchases(ctx context.Context) (*p
 		log.Printf("Failed to process scheduled purchases: %v", err)
 		return nil, err
 	}
-	log.Printf("Purchases processed: %d processed, %d executed, %d stranded-approvals recovered", result.Processed, result.Executed, result.Recovered)
+	log.Printf("Purchases processed: %d processed, %d executed, %d failed, %d stranded-approvals recovered", result.Processed, result.Executed, result.Failed, result.Recovered)
+	if result.Failed > 0 {
+		// A partial failure must not read as success to the scheduler (#714).
+		// The result still goes back for callers that want the counts.
+		return result, fmt.Errorf("%w: %d failed (%d processed, %d executed): %s",
+			ErrScheduledPurchasesFailed, result.Failed, result.Processed, result.Executed, strings.Join(result.Errors, "; "))
+	}
 	return result, nil
 }
 
