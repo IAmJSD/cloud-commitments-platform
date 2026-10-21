@@ -826,6 +826,12 @@ jobs:
           # save working files in the repository root).
           output: '${{ runner.temp }}/trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
+          # Purl-scoped ignores for unreachable, unfixed Go dependency
+          # advisories (issue #3). With a single YAML file the action sets
+          # TRIVY_IGNOREFILE to it, so this step does not read .trivyignore;
+          # that file holds only config-scan IDs, which the default fs
+          # scanners (vuln, secret) never report.
+          trivyignores: '.trivyignore.yaml'
           # Pin the Trivy binary independently of the action SHA. v0.36.0 is
           # the latest trivy-action release but bundles Trivy v0.70.0, which
           # panics in adaptDefaultTags on terraform/environments/aws/main.tf
