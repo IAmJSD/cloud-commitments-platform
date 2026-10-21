@@ -227,6 +227,8 @@ func NewHandler(cfg HandlerConfig) *Handler {
 	// not under production load.
 	assertRateLimitKeysKnown(
 		"login",
+		"forgot_password",
+		"forgot_password_ip",
 		"setup_admin",
 		"reset_password",
 		"change_password",

@@ -23,7 +23,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -33,13 +32,7 @@ import (
 
 func setupRampStepStore(ctx context.Context, t *testing.T) *PostgresStore {
 	t.Helper()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { container.Cleanup(context.Background()) })
-
-	require.NoError(t,
-		migrations.RunMigrations(ctx, container.DB.Pool(), getTestMigrationsPath(), "", ""),
-		"migrations failed to apply to a fresh database")
-	return NewPostgresStore(container.DB)
+	return NewPostgresStore(testhelpers.RequireMigratedDatabase(ctx, t, getTestMigrationsPath()).DB)
 }
 
 // rampFixture is a plan on step 2 of 4 with a set of attached cloud accounts.
