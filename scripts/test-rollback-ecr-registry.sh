@@ -6,12 +6,20 @@
 # out of the workflow and executed against a stubbed `aws` on PATH, so what is
 # tested is the text that ships, not a copy of it.
 #
-# The validate job builds IMAGE_URI from the AWS_ACCOUNT_ID repository
-# variable, and Terraform then deploys that URI with the role in
-# AWS_ROLE_TO_ASSUME. Before #142 the verify step asked ECR with no
-# --registry-id, so it checked the assumed role's registry, which equals
-# AWS_ACCOUNT_ID's only by convention. When the two diverged, the step
-# reported "Image exists in ECR" for a registry Terraform does not pull from.
+# The validate job builds IMAGE_URI from the AWS_ACCOUNT_ID variable, and
+# Terraform then deploys that URI with the role in AWS_ROLE_TO_ASSUME. Before
+# #142 the verify step asked ECR with no --registry-id, so it checked the
+# assumed role's registry, which equals AWS_ACCOUNT_ID's only by convention.
+# When the two diverged, the step reported "Image exists in ECR" for a
+# registry Terraform does not pull from.
+#
+# The rollback jobs bind `environment:` and the validate job does not, so
+# vars.* can resolve to different values in the two. The verify step therefore
+# parses account, region and repository out of the IMAGE_URI the validate job
+# emitted (the string Terraform deploys) instead of re-reading vars. Every
+# case runs with AWS_ACCOUNT_ID, ECR_REPOSITORY, AWS_REGION and IMAGE_TAG set
+# to environment-scoped decoys that disagree with IMAGE_URI, so a step that
+# reads them instead of IMAGE_URI fails.
 #
 # The stub models the real CLI's defaults: `describe-images` without
 # --registry-id resolves against the caller's account, and
@@ -51,9 +59,20 @@ note_fail() {
 
 ACCT_URI="111111""111111"
 ACCT_ROLE="222222""222222"
-REGION="us-east-1"
+REGION="eu-central-1"
 REPO="cudly"
 TAG="sha-abc1234"
+# Environment-scoped values a rollback job could see for the same variable
+# names, all different from what IMAGE_URI names.
+ENV_ACCOUNT="$ACCT_ROLE"
+ENV_REPO="cudly-env"
+ENV_REGION="us-east-1"
+ENV_TAG="sha-env0000"
+
+# uri ACCOUNT REPOSITORY TAG prints the ECR image URI the validate job builds.
+uri() {
+  printf '%s.dkr.ecr.%s.amazonaws.com/%s:%s' "$1" "$REGION" "$2" "$3"
+}
 JOBS="rollback-aws-lambda rollback-aws-fargate"
 
 # --- Step extraction ---------------------------------------------------------
@@ -134,10 +153,12 @@ exit 2
 STUB
 chmod +x "$WORK/bin/aws"
 
-# run_step JOB AWS_ACCOUNT_ID CALLER_ACCOUNT IMAGES STS_FAIL ECR_REPOSITORY
+# run_step JOB IMAGE_URI CALLER_ACCOUNT IMAGES STS_FAIL
 #
 # Runs JOB's verify step the way the runner does (bash -e -o pipefail with the
-# step's env), with only the stub reachable. Sets STEP_RC, STEP_OUT, STEP_LOG.
+# step's env), with only the stub reachable. IMAGES entries are
+# <registry>/<region>/<repository>:<tag>. The ENV_* decoys are exported under
+# the variable names the pre-fix step read. Sets STEP_RC, STEP_OUT, STEP_LOG.
 run_step() {
   local job="$1"
   local script="$WORK/step-${job}.sh"
@@ -154,10 +175,11 @@ run_step() {
     STUB_CALLER_ACCOUNT="$3" \
     STUB_IMAGES="$4" \
     STUB_STS_FAIL="$5" \
-    IMAGE_TAG="$TAG" \
-    ECR_REPOSITORY="$6" \
-    AWS_ACCOUNT_ID="$2" \
-    AWS_REGION="$REGION" \
+    IMAGE_URI="$2" \
+    IMAGE_TAG="$ENV_TAG" \
+    ECR_REPOSITORY="$ENV_REPO" \
+    AWS_ACCOUNT_ID="$ENV_ACCOUNT" \
+    AWS_REGION="$ENV_REGION" \
     bash --noprofile --norc -eo pipefail "$script" 2>&1)"
   STEP_RC=$?
   set -e
@@ -186,11 +208,12 @@ expect() {
   fi
 }
 
-# expect_log LABEL (has|lacks) TEXT
+# expect_log LABEL (has|lacks|empty) [TEXT]
 expect_log() {
-  local label="$1" want="$2" text="$3"
+  local label="$1" want="$2" text="${3:-}"
   if { [[ "$want" == has ]] && grep -Fq -- "$text" "$STEP_LOG"; } ||
-    { [[ "$want" == lacks ]] && ! grep -Fq -- "$text" "$STEP_LOG"; }; then
+    { [[ "$want" == lacks ]] && ! grep -Fq -- "$text" "$STEP_LOG"; } ||
+    { [[ "$want" == empty ]] && [[ ! -s "$STEP_LOG" ]]; }; then
     note_pass "$label"
   else
     note_fail "$label"
@@ -199,17 +222,12 @@ expect_log() {
   fi
 }
 
-# --- The steps exist and read the same variables as IMAGE_URI ----------------
+# --- The steps exist and read the IMAGE_URI Terraform deploys ---------------
 #
 # Asserted first: an extractor that finds nothing would make every behavioral
 # case below fail for the wrong reason, or a future rename pass unnoticed.
-validate_env="$(extract_block env validate "Validate inputs")"
-if [[ "$validate_env" == *"AWS_ACCOUNT_ID:"* ]]; then
-  note_pass "validate job's Validate inputs step is found"
-else
-  note_fail "validate job's Validate inputs step env not found in ${WORKFLOW}"
-fi
-
+# shellcheck disable=SC2016 # a literal GitHub expression, not shell
+IMAGE_URI_LINE='IMAGE_URI: ${{ needs.validate.outputs.image_uri }}'
 for job in $JOBS; do
   run_block="$(extract_block run "$job" "Verify image exists")"
   if [[ "$run_block" == *"aws ecr describe-images"* ]]; then
@@ -219,58 +237,73 @@ for job in $JOBS; do
     continue
   fi
 
-  # The verified registry must come from the same expressions IMAGE_URI is
-  # built from, or the step can check one registry while deploying another.
-  verify_env="$(extract_block env "$job" "Verify image exists")"
-  for key in AWS_ACCOUNT_ID ECR_REPOSITORY AWS_REGION IMAGE_TAG; do
-    want_line="$(printf '%s\n' "$validate_env" | grep -E "^${key}:" || true)"
-    got_line="$(printf '%s\n' "$verify_env" | grep -E "^${key}:" || true)"
-    if [[ -n "$want_line" && "$got_line" == "$want_line" ]]; then
-      note_pass "${job}: ${key} comes from the same expression as IMAGE_URI"
+  # The verify step must read the same job output the Terraform step applies;
+  # the behavioral cases below then show it checks what that string names.
+  for step in "Verify image exists" "Rollback with Terraform"; do
+    if extract_block env "$job" "$step" | grep -Fqx -- "$IMAGE_URI_LINE"; then
+      note_pass "${job}: ${step} reads IMAGE_URI from the validate job output"
     else
-      note_fail "${job}: ${key} differs from the IMAGE_URI source"
-      echo "      validate: ${want_line:-<missing>}"
-      echo "      verify:   ${got_line:-<missing>}"
+      note_fail "${job}: ${step} env lacks '${IMAGE_URI_LINE}'"
     fi
   done
 done
 
 # --- Behavior ----------------------------------------------------------------
+GOOD_URI="$(uri "$ACCT_URI" "$REPO" "$TAG")"
 for job in $JOBS; do
   # Positive case first: a step that always fails would pass every refusal.
-  run_step "$job" "$ACCT_URI" "$ACCT_URI" "${ACCT_URI}/${REGION}/${REPO}:${TAG}" 0 "$REPO"
+  run_step "$job" "$GOOD_URI" "$ACCT_URI" "${ACCT_URI}/${REGION}/${REPO}:${TAG}" 0
   expect "${job}: matching accounts with the image present pass" pass "Image exists in ECR"
-  expect_log "${job}: describe-images is pinned to the IMAGE_URI registry" has \
-    "ecr describe-images --registry-id ${ACCT_URI} --repository-name ${REPO}"
+  expect_log "${job}: describe-images is pinned to the account, repository, tag and region IMAGE_URI names" has \
+    "ecr describe-images --registry-id ${ACCT_URI} --repository-name ${REPO} --image-ids imageTag=${TAG} --region ${REGION}"
 
-  # #142: the image exists only in the assumed role's registry. The pre-fix
-  # step checked that registry and passed.
-  run_step "$job" "$ACCT_URI" "$ACCT_ROLE" "${ACCT_ROLE}/${REGION}/${REPO}:${TAG}" 0 "$REPO"
-  expect "${job}: AWS_ACCOUNT_ID diverging from the assumed role is refused" fail \
+  # A namespaced repository keeps its slash.
+  run_step "$job" "$(uri "$ACCT_URI" "team/${REPO}" "$TAG")" "$ACCT_URI" \
+    "${ACCT_URI}/${REGION}/team/${REPO}:${TAG}" 0
+  expect "${job}: a namespaced repository is parsed whole" pass "Image exists in ECR"
+
+  # #142, and the environment-scope variant: the assumed role (and the
+  # environment's AWS_ACCOUNT_ID decoy) is the other account, and the image
+  # exists only there. The pre-fix steps checked that registry and passed.
+  run_step "$job" "$GOOD_URI" "$ACCT_ROLE" "${ACCT_ROLE}/${ENV_REGION}/${ENV_REPO}:${ENV_TAG} ${ACCT_ROLE}/${REGION}/${REPO}:${TAG}" 0
+  expect "${job}: an IMAGE_URI account diverging from the assumed role is refused" fail \
     "does not match the assumed role's account"
 
   # Image present in both registries: the verify alone would now be
   # self-consistent, but Terraform still applies with the other account's
   # role, so the divergence itself must fail the step.
-  run_step "$job" "$ACCT_URI" "$ACCT_ROLE" \
-    "${ACCT_URI}/${REGION}/${REPO}:${TAG} ${ACCT_ROLE}/${REGION}/${REPO}:${TAG}" 0 "$REPO"
+  run_step "$job" "$GOOD_URI" "$ACCT_ROLE" \
+    "${ACCT_URI}/${REGION}/${REPO}:${TAG} ${ACCT_ROLE}/${REGION}/${REPO}:${TAG}" 0
   expect "${job}: divergence is refused even when both registries hold the tag" fail \
     "does not match the assumed role's account"
   expect_log "${job}: no image lookup runs once the accounts disagree" lacks "ecr describe-images"
 
-  run_step "$job" "" "$ACCT_ROLE" "${ACCT_ROLE}/${REGION}/${REPO}:${TAG}" 0 "$REPO"
-  expect "${job}: an unset AWS_ACCOUNT_ID is refused" fail "AWS_ACCOUNT_ID repository variable is not set"
-
-  run_step "$job" "$ACCT_URI" "$ACCT_URI" "${ACCT_URI}/${REGION}/${REPO}:${TAG}" 1 "$REPO"
+  run_step "$job" "$GOOD_URI" "$ACCT_URI" "${ACCT_URI}/${REGION}/${REPO}:${TAG}" 1
   expect "${job}: an unreadable caller identity is refused" fail \
     "Could not determine the assumed role's AWS account"
   expect_log "${job}: no image lookup runs without a caller identity" lacks "ecr describe-images"
 
-  run_step "$job" "$ACCT_URI" "$ACCT_URI" "${ACCT_URI}/${REGION}/${REPO}:sha-other" 0 "$REPO"
+  run_step "$job" "$(uri "$ACCT_URI" "$REPO" sha-other)" "$ACCT_URI" "${ACCT_URI}/${REGION}/${REPO}:${TAG}" 0
   expect "${job}: a missing tag in the IMAGE_URI registry is refused" fail "Image not found in ECR"
 
-  run_step "$job" "$ACCT_URI" "$ACCT_URI" "${ACCT_URI}/${REGION}/${REPO}:${TAG}" 0 ""
-  expect "${job}: an unset ECR_REPOSITORY is refused" fail "ECR_REPOSITORY repository variable is not set"
+  # Malformed or empty IMAGE_URI fails closed, before any AWS call.
+  while IFS='|' read -r label bad; do
+    run_step "$job" "$bad" "$ACCT_URI" "${ACCT_URI}/${REGION}/${REPO}:${TAG}" 0
+    expect "${job}: ${label} is refused" fail "is not an ECR image URI"
+    expect_log "${job}: no AWS call runs for ${label}" empty
+  done <<ROWS
+an empty IMAGE_URI|
+an IMAGE_URI with no tag|${ACCT_URI}.dkr.ecr.${REGION}.amazonaws.com/${REPO}
+an IMAGE_URI with an 11-digit account|${ACCT_URI%1}.dkr.ecr.${REGION}.amazonaws.com/${REPO}:${TAG}
+an IMAGE_URI on a non-ECR host|${ACCT_URI}.dkr.ecr.${REGION}.amazonaws.com.example.net/${REPO}:${TAG}
+a GCP Artifact Registry URI|${REGION}-docker.pkg.dev/proj/${REPO}/cudly:${TAG}
+an IMAGE_URI with trailing text|${GOOD_URI} extra
+ROWS
+
+  # A newline cannot smuggle a second line past the anchors.
+  run_step "$job" "${GOOD_URI}"$'\n'"${GOOD_URI}" "$ACCT_URI" "${ACCT_URI}/${REGION}/${REPO}:${TAG}" 0
+  expect "${job}: a multi-line IMAGE_URI is refused" fail "is not an ECR image URI"
+  expect_log "${job}: no AWS call runs for a multi-line IMAGE_URI" empty
 done
 
 echo

@@ -1185,9 +1185,10 @@ jobs:
   # Run the AWS rollback jobs' "Verify image exists" step, lifted out of
   # rollback.yml, against a stubbed aws CLI (#142). IMAGE_URI names the
   # AWS_ACCOUNT_ID registry while the step runs as AWS_ROLE_TO_ASSUME, so the
-  # step must refuse when the two accounts differ and must look the tag up in
-  # the registry IMAGE_URI names. A rollback run cannot show this without real
-  # credentials, so it is asserted here. Fast (shell only), so it always runs.
+  # step must parse the registry out of the IMAGE_URI Terraform deploys, refuse
+  # when its account differs from the role's, and look the tag up there. A
+  # rollback run cannot show this without real credentials, so it is asserted
+  # here. Fast (shell only), so it always runs.
   rollback-ecr-registry:
     name: Rollback ECR registry check
     runs-on: ubuntu-latest

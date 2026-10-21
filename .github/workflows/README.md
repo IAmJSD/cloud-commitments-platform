@@ -415,9 +415,9 @@ gh workflow run rollback.yml \
 ### Safety Features
 
 - **Image Verification** - Confirms image exists before deploying. For AWS,
-  the lookup is pinned to the `AWS_ACCOUNT_ID` registry the image URI names,
-  and the rollback refuses to run if `AWS_ACCOUNT_ID` is not the account of
-  `AWS_ROLE_TO_ASSUME`
+  the check parses the account, region and repository out of the exact image
+  URI Terraform deploys, refuses to run if that account is not the account of
+  `AWS_ROLE_TO_ASSUME`, and pins the lookup to that registry
 - **Audit Trail** - Records all rollbacks (365 day retention)
 - **Reason Tracking** - Requires reason for accountability
 - **Manual Only** - Cannot be triggered automatically
