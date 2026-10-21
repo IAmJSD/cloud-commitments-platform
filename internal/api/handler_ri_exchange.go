@@ -1029,7 +1029,7 @@ const azureMaxPurchaseAmountCurrency = "USD"
 //     It also sharpens exchangeRegions: every source reaching it is
 //     known-owned, so unknownRegionConstraint means only "owned, but Azure
 //     reported no region" rather than doubling as "not yours" or "not real".
-func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *Session, body AzureExecuteExchangeRequestBody, maxRat *big.Rat) (azureExchangeClient, []azurecompute.ExchangeableReservation, error) {
+func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *Session, body AzureExecuteExchangeRequestBody, maxRat *big.Rat) (azureExchangeClient, []azurecompute.ExchangeableReservation, string, error) {
 	// Scope check MUST precede building the client (mirrors
 	// getAzureCompatibleOfferings): otherwise an unregistered subscription
 	// (distinguishable 404: "no Azure account registered...") and a
@@ -1038,35 +1038,35 @@ func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *
 	// and credentials for an out-of-scope account could be resolved before
 	// the denial.
 	if scopeErr := h.requireAzureSubscriptionScope(ctx, session, body.SubscriptionID); scopeErr != nil {
-		return nil, nil, scopeErr
+		return nil, nil, "", scopeErr
 	}
 
 	client, err := h.buildAzureExchangeClient(ctx, body.SubscriptionID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to build Azure exchange client: %w", err)
+		return nil, nil, "", fmt.Errorf("failed to build Azure exchange client: %w", err)
 	}
 	if client == nil {
-		return nil, nil, NewClientError(404, fmt.Sprintf("no Azure account registered for subscription %q", body.SubscriptionID))
+		return nil, nil, "", NewClientError(404, fmt.Sprintf("no Azure account registered for subscription %q", body.SubscriptionID))
 	}
 
 	owned, err := listOwnedAzureReservations(ctx, client)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 
 	if ownErr := requireAzureSourceOwnership(owned, body.Sources, body.SubscriptionID); ownErr != nil {
-		return nil, nil, ownErr
+		return nil, nil, "", ownErr
 	}
 
 	accountID, err := h.resolveAzureExchangeAccountID(ctx, body.SubscriptionID)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 
 	if err := h.checkAzureExecuteConstraints(ctx, session, body, accountID, maxRat, exchangeRegions(body.Targets, body.Sources, owned)); err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
-	return client, toAzureExchangeSources(body.Sources, owned), nil
+	return client, toAzureExchangeSources(body.Sources, owned), accountID, nil
 }
 
 // resolveAzureExchangeAccountID looks up the CloudAccount registered for
@@ -1236,7 +1236,7 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 	// authorizeAzureExchangeExecution applies every gate: allowed_accounts
 	// scope, source ownership (issue #1527) and the execute:ri-exchange
 	// Constraints, all before the pricing call below.
-	client, sources, err := h.authorizeAzureExchangeExecution(ctx, session, body, maxRat)
+	client, sources, accountID, err := h.authorizeAzureExchangeExecution(ctx, session, body, maxRat)
 	if err != nil {
 		return nil, err
 	}
@@ -1262,13 +1262,16 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 		return nil, err
 	}
 
-	// Submit-time idempotency (#1642). The re-quote above mints a FRESH
-	// session on every request, so Azure's own session-level replay
-	// protection cannot see two POSTs of one logical exchange as duplicates:
-	// without this claim a client that times out mid-LRO and retries commits
-	// the exchange twice, each half individually under the cap. Taken here,
-	// last, so no gate rejection ever leaves a claim behind.
-	err = h.claimExchangeSubmit(ctx, azureExchangeIdempotencyKey(body))
+	// Audit trail (#82), then submit-time idempotency (#1642). The re-quote
+	// above mints a FRESH session on every request, so Azure's own
+	// session-level replay protection cannot see two POSTs of one logical
+	// exchange as duplicates: without the claim a client that times out
+	// mid-LRO and retries commits the exchange twice, each half individually
+	// under the cap. Taken here, last, so no gate rejection ever leaves a
+	// claim behind.
+	auditID, err := h.beginDirectExchange(ctx,
+		azureDirectExchangeAudit(session, accountID, body, maxRat, preview),
+		azureExchangeIdempotencyKey(body))
 	if err != nil {
 		return nil, err
 	}
@@ -1285,11 +1288,14 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 		// budget mid-poll looks identical to a call that never reached Azure
 		// (a request cancel no longer reaches execCtx). Say so rather than
 		// reporting a flat failure that invites the retry this claim now
-		// refuses (#1642).
-		return nil, mapAzureExchangeError(
+		// refuses (#1642). The audit row records the same ambiguity.
+		mapped := mapAzureExchangeError(
 			"exchange execution failed and may already have been submitted to Azure; "+
 				"verify the reservation state in the Azure portal before retrying", err)
+		h.finalizeDirectExchange(ctx, auditID, azureDirectExchangeOutcome(nil, err, mapped))
+		return nil, mapped
 	}
+	h.finalizeDirectExchange(ctx, auditID, azureDirectExchangeOutcome(result, nil, nil))
 
 	logging.Infof("azure ri-exchange executed: subscription=%s session=%s status=%s", body.SubscriptionID, result.SessionID, result.Status)
 
@@ -1959,12 +1965,15 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 		return nil, err
 	}
 
-	// Submit-time idempotency (#1642). AcceptReservedInstancesExchangeQuote
-	// carries no ClientToken, so AWS will happily accept the same exchange
-	// twice; a client that times out and retries otherwise double-spends with
-	// each half individually under the cap. Taken last, after every gate, so
-	// no rejected request leaves a claim behind.
-	err = h.claimExchangeSubmit(ctx, awsExchangeIdempotencyKey(cloudAccountID, body))
+	// Audit trail (#82), then submit-time idempotency (#1642).
+	// AcceptReservedInstancesExchangeQuote carries no ClientToken, so AWS will
+	// happily accept the same exchange twice; a client that times out and
+	// retries otherwise double-spends with each half individually under the
+	// cap. Taken last, after every gate, so no rejected request leaves a
+	// claim behind.
+	auditID, err := h.beginDirectExchange(ctx,
+		awsDirectExchangeAudit(session, cloudAccountID, body, maxRat),
+		awsExchangeIdempotencyKey(cloudAccountID, body))
 	if err != nil {
 		return nil, err
 	}
@@ -1983,8 +1992,11 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 	})
 	if err != nil {
 		logging.Errorf("exchange execution failed: %v", err)
-		return nil, mapAWSExchangeError("exchange execution failed", err)
+		mapped := mapAWSExchangeError("exchange execution failed", err)
+		h.finalizeDirectExchange(ctx, auditID, awsDirectExchangeOutcome(exchangeID, quote, err, mapped))
+		return nil, mapped
 	}
+	h.finalizeDirectExchange(ctx, auditID, awsDirectExchangeOutcome(exchangeID, quote, nil, nil))
 
 	return &ExchangeExecuteResponse{
 		ExchangeID: exchangeID,

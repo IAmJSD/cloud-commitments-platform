@@ -295,6 +295,9 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	recs := make([]config.RecommendationRecord, len(baseExec.Recommendations))
 	copy(recs, baseExec.Recommendations)
 	acctExec.Recommendations = recs
+	// Runs on every return path below, once the row's terminal status is
+	// stamped; a no-op unless it ended failed or partially_completed (#714).
+	defer m.notifyExecutionFailure(ctx, &acctExec)
 
 	provCfg, err := m.resolveAccountProvider(ctx, account)
 	if err != nil {
