@@ -365,12 +365,23 @@ func (h *Handler) forgotPassword(ctx context.Context, req *events.LambdaFunction
 		return nil, fmt.Errorf("authentication service not configured")
 	}
 
+	// Per-IP cap: 10 attempts per IP per 15 minutes, checked before the body
+	// is parsed so malformed requests spend the budget too. Without it one
+	// client could walk any number of addresses, one request each, past the
+	// per-email bucket below (#13). The client IP is the request's SourceIP,
+	// the same key every other per-IP bucket uses. Fail-open like the
+	// per-email bucket (02-M1); the 429 depends only on this caller's own
+	// request count, never on whether an account exists.
+	if err := h.checkRateLimit(ctx, req, "forgot_password_ip"); err != nil {
+		return nil, err
+	}
+
 	var pwdReq PasswordResetRequest
 	if err := json.Unmarshal([]byte(req.Body), &pwdReq); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	// Rate limiting: 10 attempts per email per 5 minutes to prevent enumeration attacks.
+	// Per-email cap: 10 attempts per email per 5 minutes to prevent enumeration attacks.
 	// On rate-limiter error: emit a high-severity alert (02-M1) but continue with the
 	// request. Failing closed here would reveal infrastructure state (503 vs 200) to
 	// an enumerating attacker and harm legitimate users more than the enumeration risk.

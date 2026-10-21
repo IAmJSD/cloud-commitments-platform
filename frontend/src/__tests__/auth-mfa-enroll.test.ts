@@ -49,6 +49,7 @@ import * as state from '../state';
 // trigger it indirectly by clicking the user-email element after
 // updateUserUI mounts it.
 import { updateUserUI } from '../auth';
+import { closeModal } from '../modal';
 
 beforeEach(() => {
   document.body.innerHTML = `
@@ -199,5 +200,46 @@ describe('MFA regenerate-recovery-codes flow', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(api.regenerateMFARecoveryCodes).toHaveBeenCalledWith('123456');
     expect(document.body.textContent).toContain('NEW1-XXXX');
+  });
+
+  test('Escape and Cancel cannot discard recovery codes until acknowledged (issue #732)', async () => {
+    (api.regenerateMFARecoveryCodes as jest.Mock).mockResolvedValue({ recovery_codes: ['NEW1-XXXX'] });
+    await openProfile();
+    document.getElementById('mfa-regenerate-btn')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    (document.getElementById('mfa-regen-code') as HTMLInputElement).value = '123456';
+    document.getElementById('mfa-regen-submit')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 10));
+
+    const modal = document.getElementById('profile-modal')!;
+    modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(modal.classList.contains('hidden')).toBe(false);
+    expect((document.getElementById('profile-cancel') as HTMLButtonElement).disabled).toBe(true);
+
+    document.getElementById('mfa-codes-done')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(modal.classList.contains('hidden')).toBe(true);
+  });
+
+  test('Save Changes and Enter cannot close the profile modal while codes are pending (issue #732)', async () => {
+    (api.regenerateMFARecoveryCodes as jest.Mock).mockResolvedValue({ recovery_codes: ['NEW1-XXXX'] });
+    await openProfile();
+    document.getElementById('mfa-regenerate-btn')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    (document.getElementById('mfa-regen-code') as HTMLInputElement).value = '123456';
+    document.getElementById('mfa-regen-submit')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 10));
+
+    const modal = document.getElementById('profile-modal')!;
+    const save = modal.querySelector<HTMLButtonElement>('#profile-form button[type="submit"]')!;
+    expect(save.disabled).toBe(true);
+    document.getElementById('profile-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(modal.classList.contains('hidden')).toBe(false);
+    closeModal(modal);
+    expect(modal.classList.contains('hidden')).toBe(false);
+
+    document.getElementById('mfa-codes-done')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(save.disabled).toBe(false);
+    closeModal(modal);
+    expect(modal.classList.contains('hidden')).toBe(true);
   });
 });

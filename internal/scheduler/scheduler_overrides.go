@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 )
 
@@ -76,7 +77,7 @@ func filterRecsByResolvedConfigs(
 		if !inListRule(rec.ResourceType, cfg.IncludeTypes, cfg.ExcludeTypes) {
 			continue
 		}
-		if !meetsMinCount(rec.Count, cfg) {
+		if !common.IsSavingsPlan(common.ServiceType(rec.Service)) && !meetsMinCount(rec.Count, cfg) {
 			continue
 		}
 		out = append(out, rec)
@@ -89,7 +90,9 @@ func filterRecsByResolvedConfigs(
 // of 0 (the default) disables the filter, matching the CLI flag's
 // 0-no-floor semantics. count is the persisted RecommendationRecord.Count
 // (already grace-suppression-adjusted by the time this runs, so the floor
-// applies to the net count the user would actually see).
+// applies to the net count the user would actually see). Callers skip it
+// for Savings Plans: their Count is always 1 (dollar-denominated), not an
+// instance count.
 func meetsMinCount(count int, cfg *config.ServiceConfig) bool {
 	if cfg.MinCount <= 0 {
 		return true

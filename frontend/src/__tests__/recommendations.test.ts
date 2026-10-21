@@ -533,6 +533,83 @@ describe('Recommendations Module', () => {
       expect(cardValue(/Recommendations/)).toBe('1');
     });
 
+    test('row checkboxes carry distinct accessible names (issue #746)', async () => {
+      const recs = [
+        { id: 'rec-a', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'no-upfront', savings: 150, upfront_cost: 1000 },
+        { id: 'rec-b', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3', region: 'eu-west-1', count: 1, term: 3, payment: 'all-upfront', savings: 200, upfront_cost: 0 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 2, total_monthly_savings: 350, total_upfront_cost: 1000, avg_payback_months: 1 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      await loadRecommendations();
+
+      const label = (id: string) =>
+        document.querySelector<HTMLInputElement>(`input[data-rec-id="${id}"]`)?.getAttribute('aria-label') ?? '';
+      expect(label('rec-a')).toContain('ec2');
+      expect(label('rec-a')).toContain('t3.medium');
+      expect(label('rec-a')).toContain('us-east-1');
+      expect(label('rec-b')).toContain('rds');
+      expect(label('rec-a')).not.toBe(label('rec-b'));
+    });
+
+    test('variants differing only by payment get distinct checkbox names (issue #746)', async () => {
+      const base = { provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 150, upfront_cost: 1000 };
+      const recs = [
+        { ...base, id: 'rec-np', payment: 'no-upfront' },
+        { ...base, id: 'rec-au', payment: 'all-upfront' },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 2, total_monthly_savings: 300, total_upfront_cost: 2000, avg_payback_months: 1 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      await loadRecommendations();
+      document.querySelector<HTMLButtonElement>('.rec-cell-chevron')!.click();
+
+      const label = (id: string) =>
+        document.querySelector<HTMLInputElement>(`input[data-rec-id="${id}"]`)?.getAttribute('aria-label') ?? '';
+      expect(label('rec-np')).toContain('No Upfront');
+      expect(label('rec-au')).toContain('All Upfront');
+      expect(label('rec-np')).not.toBe(label('rec-au'));
+    });
+
+    test('engine-only rows get distinct and unmapped-payment rows get clean checkbox names (issue #746)', async () => {
+      const base = { provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.r5.large', region: 'us-east-1', count: 1, term: 1, savings: 150, upfront_cost: 0 };
+      const recs = [
+        { ...base, id: 'rec-my', engine: 'mysql', payment: 'no-upfront' },
+        { ...base, id: 'rec-pg', engine: 'postgresql', payment: 'no-upfront' },
+        { ...base, id: 'rec-x', payment: 'weird-option' },
+        { ...base, id: 'rec-none', resource_type: 'db.r5.xlarge' },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 4, total_monthly_savings: 600, total_upfront_cost: 0, avg_payback_months: 1 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      await loadRecommendations();
+      document.querySelectorAll<HTMLButtonElement>('.rec-cell-chevron').forEach(b => b.click());
+
+      const label = (id: string) =>
+        document.querySelector<HTMLInputElement>(`input[data-rec-id="${id}"]`)?.getAttribute('aria-label') ?? '';
+      expect(label('rec-my')).toContain('db.r5.large (mysql)');
+      expect(label('rec-my')).not.toBe(label('rec-pg'));
+      expect(label('rec-x')).not.toContain('weird-option');
+      for (const id of ['rec-my', 'rec-pg', 'rec-x', 'rec-none']) {
+        expect(label(id)).not.toMatch(/\s{2,}|\s$/);
+      }
+    });
+
     test('select-all change event updates summary cards in place (PR #283 CR pass-2)', async () => {
       // Verifies the select-all checkbox event path: after checking select-all,
       // summary cards reflect the picked-best-per-cell selection WITHOUT a

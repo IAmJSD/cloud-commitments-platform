@@ -23,6 +23,7 @@ import type {
   OfferingOption,
   TargetOffering,
   ReshapeRecommendationsResponse,
+  ExcludedRI,
   Provider,
 } from './api';
 import { openModal, closeModal } from './modal';
@@ -115,6 +116,7 @@ export async function loadRIExchange(): Promise<void> {
       if (el) renderEmptyState(el, message);
     }
     renderReshapeStalenessBanner('', null);
+    renderExcludedRIsNotice(undefined);
     const container = document.getElementById('ri-exchange-instances-list');
     if (container) {
       container.innerHTML = `<p class="error">Failed to resolve the selected account: ${escapeHtml((error as Error).message)}</p>`;
@@ -167,6 +169,7 @@ function renderGCPEmptyStates(): void {
   if (history) renderEmptyState(history, "RI Exchange isn't available for GCP.");
 
   renderReshapeStalenessBanner('', null);
+  renderExcludedRIsNotice(undefined);
 }
 
 /**
@@ -181,6 +184,7 @@ function renderReshapeNotApplicable(provider: string): void {
     renderEmptyState(container, `Reshape recommendations are not available for ${providerLabel(provider)}.`);
   }
   renderReshapeStalenessBanner('', null);
+  renderExcludedRIsNotice(undefined);
 }
 
 /**
@@ -533,12 +537,39 @@ export async function loadReshapeRecommendations(generation: number = scopeGener
     currentRecommendations = resp.recommendations ?? [];
     renderRecommendations(container);
     renderReshapeStalenessBanner(resp.recs_staleness, resp.recs_collected_at);
+    renderExcludedRIsNotice(resp.excluded_ris);
   } catch (error) {
     if (generation !== scopeGeneration) return;
     teardownSkeleton(container);
+    renderExcludedRIsNotice(undefined);
     const err = error as Error;
     container.innerHTML = `<p class="error">Failed to load recommendations: ${escapeHtml(err.message)}</p>`;
   }
+}
+
+/**
+ * Render (or clear) the notice listing RIs the backend left out of the
+ * reshape analysis. Sits in a sibling slot before the recommendations list;
+ * ids are inserted as text, never HTML.
+ */
+export function renderExcludedRIsNotice(excluded: ExcludedRI[] | undefined): void {
+  const NOTICE_ID = 'ri-exchange-recommendations-excluded';
+  let notice = document.getElementById(NOTICE_ID);
+  if (!notice) {
+    const listEl = document.getElementById('ri-exchange-recommendations-list');
+    if (!listEl || !listEl.parentElement) return;
+    notice = document.createElement('div');
+    notice.id = NOTICE_ID;
+    listEl.parentElement.insertBefore(notice, listEl);
+  }
+  if (!excluded || excluded.length === 0) {
+    notice.textContent = '';
+    notice.className = '';
+    return;
+  }
+  const n = excluded.length;
+  notice.className = 'freshness-banner warning';
+  notice.textContent = `${n} convertible RI${n === 1 ? ' was' : 's were'} left out because AWS returned no term length: ${excluded.map((e) => e.ri_id).join(', ')}`;
 }
 
 /**

@@ -18,7 +18,7 @@ import { setupRIExchangeHandlers, saveAutomationSettings } from './riexchange';
 import { showToast } from './toast';
 import { formatPaymentAdjustmentNotice } from './commitmentOptions';
 import { confirmDialog } from './confirmDialog';
-import { buildCommitmentSummary, withIntro } from './commitmentSummary';
+import { buildCommitmentSummary, commitmentTotals, executeButtonLabel, executeConfirmLabel, withIntro } from './commitmentSummary';
 import { handlePurchaseDeeplink } from './purchases-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
@@ -432,8 +432,7 @@ export async function handleExecutePurchase(): Promise<void> {
   //   - Approval path: low-friction, non-destructive.
   //   - Direct-execute path: red destructive dialog with cost callout and
   //     immediate-charge callout; no cancellation promise (issue #251).
-  const summary = buildCommitmentSummary(
-    recsWithPayment.map((r) => ({
+  const summaryLines = recsWithPayment.map((r) => ({
       service: r.service,
       provider: r.provider,
       region: r.region,
@@ -444,25 +443,28 @@ export async function handleExecutePurchase(): Promise<void> {
       upfront: r.upfront_cost,
       monthly: r.monthly_cost ?? null,
       ...(r.cloud_account_id ? { account: getAccountName(r.cloud_account_id) } : {}),
-    })),
+  }));
+  const totals = commitmentTotals(summaryLines);
+  const summary = buildCommitmentSummary(
+    summaryLines,
     isDirect ? {} : { upfrontLabel: 'Upfront on approval' },
   );
   const ok = isDirect
     ? await confirmDialog({
         title: `Execute ${localRecs.length} purchase${localRecs.length === 1 ? '' : 's'} now?`,
         body: withIntro('This charges the amount shown under "Charged today" immediately and bypasses the approval step. The monthly amount, if any, is billed for the whole term.', summary),
-        confirmLabel: 'Execute Purchase Now',
+        confirmLabel: executeConfirmLabel(true, totals.upfront),
         destructive: true,
       })
     : await confirmDialog({
         title: `Send ${localRecs.length} purchase${localRecs.length === 1 ? '' : 's'} for approval?`,
         body: withIntro('This emails an approval request to the configured approver. Nothing is charged until the approver clicks the link in that email.', summary),
-        confirmLabel: 'Send for approval',
+        confirmLabel: executeConfirmLabel(false, totals.upfront),
         destructive: false,
       });
 
   if (!ok) {
-    setExecutePurchaseSubmitting(executeBtn, false, getExecuteMode() === 'direct' ? 'Execute Purchase Now' : 'Send for Approval');
+    setExecutePurchaseSubmitting(executeBtn, false, executeButtonLabel(getExecuteMode() === 'direct'));
     return;
   }
 
@@ -560,7 +562,7 @@ export async function handleExecutePurchase(): Promise<void> {
     const verb = isDirect ? 'execute' : 'send for approval';
     showToast({ message: `Failed to ${verb} purchase: ${err.message}`, kind: 'error' });
   } finally {
-    setExecutePurchaseSubmitting(executeBtn, false, getExecuteMode() === 'direct' ? 'Execute Purchase Now' : 'Send for Approval');
+    setExecutePurchaseSubmitting(executeBtn, false, executeButtonLabel(getExecuteMode() === 'direct'));
   }
 }
 
@@ -604,14 +606,14 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
     destructive: false,
   });
   if (!ok) {
-    setExecutePurchaseSubmitting(executeBtn, false, 'Send for Approval');
+    setExecutePurchaseSubmitting(executeBtn, false, executeButtonLabel(false));
     return;
   }
 
   try {
     await submitFanOutBuckets(buckets);
   } finally {
-    setExecutePurchaseSubmitting(executeBtn, false, 'Send for Approval');
+    setExecutePurchaseSubmitting(executeBtn, false, executeButtonLabel(false));
   }
 }
 
