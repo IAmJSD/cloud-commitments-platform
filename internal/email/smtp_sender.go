@@ -464,14 +464,20 @@ func (s *SMTPSender) SendPurchaseConfirmation(ctx context.Context, data Notifica
 	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
-// SendPurchaseFailedNotification sends a notification when a purchase fails.
+// SendPurchaseFailedNotification sends a notification when a purchase fails,
+// to data.RecipientEmail (the global notification address) when set and to
+// the static notify address otherwise (issue #714).
 func (s *SMTPSender) SendPurchaseFailedNotification(ctx context.Context, data NotificationData) error {
 	subject := "CUDly Purchase Failed"
 	body, err := RenderPurchaseFailedEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render purchase failed email: %w", err)
 	}
-	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
+	to := data.RecipientEmail
+	if to == "" {
+		to = s.notifyEmail
+	}
+	return s.SendToEmailWithCC(ctx, to, data.CCEmails, subject, body)
 }
 
 // SendRIExchangePendingApproval sends an RI exchange approval email via SMTP

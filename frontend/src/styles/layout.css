@@ -227,6 +227,15 @@ header h1 {
     opacity: 1;
 }
 
+#user-email-display {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+}
+
 #logout-btn {
     padding: var(--cudly-sp-2) var(--cudly-sp-3);
     border-radius: var(--cudly-r-sm);

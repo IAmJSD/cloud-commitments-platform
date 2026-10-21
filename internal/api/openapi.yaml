@@ -35,11 +35,81 @@ tags:
   - name: Health
   - name: Info
   - name: Docs
+  - name: Insurance
+    description: Read-only configuration status and configured plan comparison.
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 paths:
+  /api/insurance/status:
+    get:
+      operationId: getInsuranceStatus
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
+      tags: [Insurance]
+      summary: Check insurance comparison configuration
+      description: >
+        Requires view:recommendations and unrestricted account scope; scoped
+        sessions receive 404. Reports setting presence only, without resolving
+        secrets or contacting Archera. Missing contains setting names, never values.
+      responses:
+        '200':
+          description: Configuration presence; an unwired provider is unconfigured.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/InsuranceStatus'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+
+  /api/insurance/comparison:
+    get:
+      operationId: getInsuranceComparison
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
+      tags: [Insurance]
+      summary: Read the configured plan's insurance comparison
+      description: >
+        Requires view:recommendations and unrestricted account scope; scoped
+        sessions receive 404. Disabled until ARCHERA_ORG_ID, ARCHERA_PLAN_ID and
+        ARCHERA_API_KEY_SECRET are present. Resolves the key lazily and requests
+        the configured plan without recommendation filters. This read-only result
+        does not purchase, bind insurance or change recommendation eligibility.
+        Vendor errors are mapped to fixed client messages, without implicit retries.
+      responses:
+        '200':
+          description: Plan-wide comparison with exact decimal strings and disclosures.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ArcheraComparison'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '429':
+          description: Vendor rate limit; Retry-After is present only for a positive vendor delay, rounded up to seconds.
+          headers:
+            Retry-After:
+              description: Seconds before retrying; no automatic retry is performed.
+              schema: {type: integer, minimum: 1}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '502':
+          description: >
+            Vendor authentication, missing organization/plan, service or transport
+            failure (including timeout), an inexact decimal, or a response over 5 MiB.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '503':
+          description: Missing configuration or the configured key could not be resolved.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+
   # ---- Dashboard ----------------------------------------------------------
   /api/dashboard/summary:
     get:
@@ -361,6 +431,11 @@ paths:
       operationId: updatePlan
       tags: [Plans]
       summary: Replace a purchase plan
+      description: >-
+        A singleton legacy service alias retains its original key, hidden filters,
+        minimum count, service ramp and Enabled value when edited through its canonical
+        service name. Exact-key edits retain their existing Enabled overlay behavior;
+        selecting a genuinely different singleton service still replaces its settings.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -368,7 +443,18 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/PlanRequest'
+              allOf:
+                - $ref: '#/components/schemas/PlanRequest'
+                - type: object
+                  properties:
+                    expected_updated_at:
+                      type: string
+                      nullable: true
+                      description: >-
+                        Optional Update version from the plan's updated_at. Omission,
+                        null or an empty string opts out. A nonempty value must be an
+                        RFC3339 timestamp; malformed values return 400 and a different
+                        instant returns 409 with refresh guidance.
       responses:
         '200':
           description: Updated plan
@@ -985,6 +1071,12 @@ paths:
       operationId: deletePlannedPurchase
       tags: [PlannedPurchases]
       summary: Cancel and delete a planned purchase
+      description: >-
+        Cancels the execution and disables its plan. A caller scoped to some
+        accounts must have access to every account on the plan; otherwise the
+        request is refused with 403 before anything changes. If the plan's
+        accounts change during the request so that the disable is refused
+        after the cancel, the response is 409 and the plan stays enabled.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       responses:
@@ -1000,6 +1092,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   # ---- Generic Purchase Details -------------------------------------------
   /api/purchases/{id}:
@@ -1243,6 +1337,20 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  excluded_ris:
+                    type: array
+                    description: >
+                      Convertible RIs left out of cost-based analysis (for
+                      example AWS returned no term length), so they have no
+                      recommendation. Omitted when empty.
+                    items:
+                      type: object
+                      properties:
+                        ri_id:
+                          type: string
+                        reason:
+                          type: string
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -2414,6 +2522,187 @@ components:
 
   # ---- Schemas ------------------------------------------------------------
   schemas:
+    InsuranceStatus:
+      type: object
+      required: [missing, configured]
+      properties:
+        missing:
+          type: array
+          items: {type: string, enum: [ARCHERA_API_KEY_SECRET, ARCHERA_ORG_ID, ARCHERA_PLAN_ID]}
+        configured: {type: boolean}
+
+    ArcheraDecimal:
+      type: string
+      nullable: true
+      pattern: '^-?[0-9]+(?:\.[0-9]+)?$'
+      description: Exact finite decimal, without rounding; null means unknown and differs from zero.
+
+    ArcheraFinancials:
+      type: object
+      description: Monthly rates use a 730-hour basis; Archera premium is included in total commitment cost.
+      required: [monthly_730h_commitment_cost_total, monthly_730h_cloud_provider_cost, monthly_730h_archera_premium, monthly_730h_gross_savings, monthly_730h_net_savings, monthly_730h_covered_on_demand_cost]
+      properties:
+        monthly_730h_commitment_cost_total: {$ref: '#/components/schemas/ArcheraDecimal'}
+        monthly_730h_cloud_provider_cost: {$ref: '#/components/schemas/ArcheraDecimal'}
+        monthly_730h_archera_premium: {$ref: '#/components/schemas/ArcheraDecimal'}
+        monthly_730h_gross_savings: {$ref: '#/components/schemas/ArcheraDecimal'}
+        monthly_730h_net_savings: {$ref: '#/components/schemas/ArcheraDecimal'}
+        monthly_730h_covered_on_demand_cost: {$ref: '#/components/schemas/ArcheraDecimal'}
+
+    ArcheraTotals:
+      allOf:
+        - {$ref: '#/components/schemas/ArcheraFinancials'}
+        - type: object
+          required: [upfront_one_time_cost]
+          properties:
+            upfront_one_time_cost: {$ref: '#/components/schemas/ArcheraDecimal'}
+      description: Flat monthly financial fields plus a separate one-time upfront amount.
+
+    ArcheraProductSupport:
+      type: object
+      required: [status, underwriting_allowance, customer_eligibility]
+      properties:
+        status: {type: string}
+        source: {type: string}
+        evidence: {type: string}
+        underwriting_allowance: {type: string}
+        customer_eligibility: {type: string}
+
+    ArcheraDelta:
+      type: object
+      required: [monthly_730h_net_savings, upfront_one_time_cost, discount_rate, breakeven_days]
+      properties:
+        monthly_730h_net_savings: {$ref: '#/components/schemas/ArcheraDecimal'}
+        upfront_one_time_cost: {$ref: '#/components/schemas/ArcheraDecimal'}
+        discount_rate: {$ref: '#/components/schemas/ArcheraDecimal'}
+        breakeven_days: {$ref: '#/components/schemas/ArcheraDecimal'}
+
+    ArcheraHypotheticalDelta:
+      type: object
+      required: [monthly_730h_net_savings, monthly_730h_commitment_cost, upfront_one_time_cost]
+      properties:
+        monthly_730h_net_savings: {$ref: '#/components/schemas/ArcheraDecimal'}
+        monthly_730h_commitment_cost: {$ref: '#/components/schemas/ArcheraDecimal'}
+        upfront_one_time_cost: {$ref: '#/components/schemas/ArcheraDecimal'}
+
+    ArcheraLineItem:
+      type: object
+      required: [line_item_id, reason, actual_term, actual_payment_option, actual_commitment_type]
+      properties:
+        line_item_id: {type: string}
+        reason: {type: string}
+        actual_term: {type: string, nullable: true}
+        actual_payment_option: {type: string, nullable: true}
+        actual_commitment_type: {type: string, nullable: true}
+
+    ArcheraHypothetical:
+      type: object
+      required: [contract_term, payment_option, totals, delta_vs_current, line_items]
+      properties:
+        contract_term: {type: string, nullable: true}
+        payment_option: {type: string}
+        totals: {$ref: '#/components/schemas/ArcheraTotals'}
+        delta_vs_current: {$ref: '#/components/schemas/ArcheraHypotheticalDelta'}
+        line_items: {type: array, items: {$ref: '#/components/schemas/ArcheraLineItem'}}
+
+    ArcheraOffer:
+      type: object
+      required: [offer_id, is_current, provider, commitment_type, region, contract_term, payment_option, lease_attached, lease_menu_item_id, archera_product_support, discount_rate, breakeven_days, monthly, upfront_one_time_cost, delta_vs_current]
+      properties:
+        offer_id: {type: string}
+        is_current: {type: boolean}
+        provider: {type: string}
+        commitment_type: {type: string}
+        region: {type: string, nullable: true}
+        contract_term: {type: string, nullable: true}
+        payment_option: {type: string, nullable: true}
+        lease_attached: {type: boolean}
+        lease_menu_item_id: {type: string, nullable: true}
+        archera_offer_name: {type: string, nullable: true}
+        archera_offer_name_note: {type: string}
+        archera_product_support: {$ref: '#/components/schemas/ArcheraProductSupport'}
+        discount_rate: {$ref: '#/components/schemas/ArcheraDecimal'}
+        breakeven_days: {$ref: '#/components/schemas/ArcheraDecimal'}
+        monthly: {$ref: '#/components/schemas/ArcheraFinancials'}
+        upfront_one_time_cost: {$ref: '#/components/schemas/ArcheraDecimal'}
+        delta_vs_current: {$ref: '#/components/schemas/ArcheraDelta'}
+
+    ArcheraRow:
+      type: object
+      required: [line_item_id, current, candidates]
+      properties:
+        line_item_id: {type: string}
+        current: {$ref: '#/components/schemas/ArcheraOffer'}
+        candidates: {type: array, items: {$ref: '#/components/schemas/ArcheraOffer'}}
+
+    ArcheraComparison:
+      type: object
+      required: [title, plan_id, fetched_at, currency, currency_note, premium_included, basis_note, delta_basis_note, current, hypotheticals, rows, non_gating_disclosure, sponsorship_disclosure]
+      properties:
+        title: {type: string}
+        plan_id: {type: string}
+        fetched_at: {type: string, format: date-time}
+        currency: {type: string, nullable: true, enum: [null]}
+        currency_note: {type: string}
+        premium_included: {type: boolean}
+        basis_note: {type: string}
+        delta_basis_note: {type: string}
+        current: {$ref: '#/components/schemas/ArcheraTotals'}
+        hypotheticals: {type: array, items: {$ref: '#/components/schemas/ArcheraHypothetical'}}
+        rows: {type: array, items: {$ref: '#/components/schemas/ArcheraRow'}}
+        non_gating_disclosure: {type: string}
+        sponsorship_disclosure: {type: string}
+
+    ArcheraRecommendationComparison:
+      type: object
+      description: Existing internal recommendation DTO contract; no HTTP operation is advertised here. Resource association does not establish comparable economics.
+      required: [recommendation_id, status, reason, amount_provenance, economic_status, fetched_at, currency, currency_note, comparable_delta, premium_included, current, candidates, non_gating_disclosure, sponsorship_disclosure]
+      properties:
+        recommendation_id: {type: string}
+        status: {type: string}
+        reason: {type: string}
+        amount_provenance: {type: string}
+        economic_status: {type: string}
+        fetched_at: {type: string, format: date-time}
+        currency: {type: string, nullable: true, enum: [null]}
+        currency_note: {type: string}
+        comparable_delta: {type: string, nullable: true, enum: [null]}
+        premium_included: {type: boolean}
+        current: {$ref: '#/components/schemas/ArcheraRecommendationOffer'}
+        candidates: {type: array, items: {$ref: '#/components/schemas/ArcheraRecommendationAlternative'}}
+        non_gating_disclosure: {type: string}
+        sponsorship_disclosure: {type: string}
+
+    ArcheraRecommendationOffer:
+      type: object
+      nullable: true
+      description: Existing internal offer DTO; native duration is seconds. Candidate native identity stays null rather than inheriting current identity. Upfront cost is one-time; currency is not inferred.
+      required: [offer_id, provider, commitment_type, hourly_selected_commitment, native_duration_seconds, native_plan_type, native_instance_family, effective_contract_term, payment_option, lease_attached, monthly, upfront_one_time_cost]
+      properties:
+        offer_id: {type: string}
+        provider: {type: string}
+        commitment_type: {type: string}
+        hourly_selected_commitment: {$ref: '#/components/schemas/ArcheraDecimal'}
+        native_duration_seconds: {$ref: '#/components/schemas/ArcheraDecimal'}
+        native_plan_type: {type: string, nullable: true}
+        native_instance_family: {type: string, nullable: true}
+        effective_contract_term: {type: string, nullable: true}
+        payment_option: {type: string, nullable: true}
+        lease_attached: {type: boolean}
+        monthly: {$ref: '#/components/schemas/ArcheraFinancials'}
+        upfront_one_time_cost: {$ref: '#/components/schemas/ArcheraDecimal'}
+
+    ArcheraRecommendationAlternative:
+      type: object
+      description: Existing internal candidate DTO; a candidate can have null figures when its basis is unproven.
+      required: [offer_id, status, reason, native_identity_status, figures]
+      properties:
+        offer_id: {type: string}
+        status: {type: string}
+        reason: {type: string}
+        native_identity_status: {type: string}
+        figures: {$ref: '#/components/schemas/ArcheraRecommendationOffer'}
+
     # -- Azure RI exchange --------------------------------------------------
     AzureExchangeSource:
       type: object
@@ -2502,10 +2791,10 @@ components:
         plan_disabled:
           type: boolean
           description: >-
-            Present when the execution belongs to a plan. True when the plan
-            was disabled; false when it was left enabled because it spans
-            accounts outside the caller's scope. Omitted for executions
-            without a plan.
+            Present, and true, when the execution belongs to a plan, which
+            the request disabled. Omitted for executions without a plan. A
+            plan the caller may not disable fails the request instead of
+            returning false.
 
     StatusMessageResponse:
       type: object
@@ -3238,16 +3527,15 @@ components:
           nullable: true
           description: Set while a collection is in flight.
         last_collection_partial:
-          nullable: true
-          description: >
-            Non-null when the most recent persisted collection kept rows from
-            at least one incomplete sweep. Cleared by the next collection whose
-            sweeps are all complete. Carries counts and reason categories only.
-          allOf:
-            - $ref: '#/components/schemas/RecommendationsCollectionPartial'
+          $ref: '#/components/schemas/RecommendationsCollectionPartial'
 
     RecommendationsCollectionPartial:
       type: object
+      nullable: true
+      description: >
+        Non-null when the most recent persisted collection kept rows from
+        at least one incomplete sweep. Cleared by the next collection whose
+        sweeps are all complete. Carries counts and reason categories only.
       required: [providers]
       properties:
         providers:
@@ -3314,7 +3602,8 @@ components:
         max_step_commitment:
           type: number
           nullable: true
-          exclusiveMinimum: 0
+          minimum: 0
+          exclusiveMinimum: true
           description: >-
             Ceiling on the total commitment (upfront + monthly * term) one ramp
             step may auto-purchase. Omit on create for no cap (auto-purchase of

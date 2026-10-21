@@ -29,7 +29,9 @@ func newPinManager(ctx context.Context, store *MockConfigStore, factory *MockPro
 	store.On("GetPurchasePlan", ctx, exec.PlanID).Return(gatePlan, nil).Once()
 	store.On("GetPurchasePlan", ctx, exec.PlanID).Return(claimPlan, nil)
 	store.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil)
-	return &Manager{config: store, email: new(MockEmailSender), providerFactory: factory}
+	// The purchase-failed notice (#714) reads the recipient on a detached context.
+	store.On("GetGlobalConfig", mock.Anything).Return(autoPurchaseOnCfg(), nil).Maybe()
+	return &Manager{config: store, email: allowFailedNotification(new(MockEmailSender)), providerFactory: factory}
 }
 
 func autoPlan(c *float64) *config.PurchasePlan {
@@ -165,7 +167,7 @@ func TestClaimPin_ApprovedRowSkipsCapRecheck(t *testing.T) {
 	claimed.Status = "running"
 	store.On("TransitionExecutionStatusPinned", ctx, exec.ExecutionID, mock.Anything, "running", (*string)(nil), false).Return(&claimed, nil)
 	store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
-	manager := &Manager{config: store, email: new(MockEmailSender), providerFactory: new(MockProviderFactory)}
+	manager := &Manager{config: store, email: allowFailedNotification(new(MockEmailSender)), providerFactory: new(MockProviderFactory)}
 
 	didClaim, err := manager.claimAndExecute(ctx, &exec)
 	require.True(t, didClaim)

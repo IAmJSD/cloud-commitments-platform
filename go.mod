@@ -5,7 +5,7 @@ go 1.26.9
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.29.12
-	github.com/aws/aws-sdk-go-v2/service/costexplorer v1.61.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/costexplorer v1.61.0
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.251.2
 	github.com/aws/aws-sdk-go-v2/service/elasticache v1.50.3
 	github.com/aws/aws-sdk-go-v2/service/memorydb v1.31.4
@@ -84,8 +84,8 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations v1.1.0
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys v1.4.0
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets v1.4.0
-	github.com/LeanerCloud/cloud-commitments-go/pkg v0.0.0-20261017134002-3def3f898617
-	github.com/LeanerCloud/cloud-commitments-go/providers/aws v0.0.0-20261017134002-3def3f898617
+	github.com/LeanerCloud/cloud-commitments-go/pkg v0.0.0-20261018003623-541e05e5fd29
+	github.com/LeanerCloud/cloud-commitments-go/providers/aws v0.0.0-20261019192600-aeb8a6f7ff51
 	github.com/LeanerCloud/cloud-commitments-go/providers/azure v0.0.0-20261017134002-3def3f898617
 	github.com/LeanerCloud/cloud-commitments-go/providers/gcp v0.0.0-20261017134002-3def3f898617
 	github.com/aws/aws-lambda-go v1.47.0

@@ -783,5 +783,13 @@ describe('HTML Structure', () => {
       // Link target must be the AWS console role-creation wizard.
       expect(link?.getAttribute('href')).toBe('https://console.aws.amazon.com/iam/home#/roles$new');
     });
+
+    test('profile entry point is a keyboard-focusable button (#715)', () => {
+      const el = document.getElementById('user-email-display');
+      expect(el?.tagName.toLowerCase()).toBe('button');
+      expect(el?.getAttribute('type')).toBe('button');
+      // Inert until updateUserUI shows it with the signed-in email.
+      expect(el?.hasAttribute('hidden')).toBe(true);
+    });
   });
 });

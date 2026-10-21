@@ -493,6 +493,16 @@ type StoreInterface interface {
 	CancelPendingExchangesByOrigin(ctx context.Context, origin common.ExchangeOrigin) (int64, error)
 	GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]RIExchangeRecord, error)
 
+	// RI exchange direct-execute audit trail (issue #82). Exchanges executed
+	// directly through the API, not through the approval flow above, are
+	// recorded in their own table: SaveRIExchangeDirectExecution inserts the
+	// row as "submitted" before the provider call, and
+	// FinalizeRIExchangeDirectExecution records the outcome on it exactly
+	// once (ErrRIExchangeDirectExecutionNotSubmitted when the row is absent or
+	// already finalized). Neither touches the approval flow's spend ledger.
+	SaveRIExchangeDirectExecution(ctx context.Context, record *RIExchangeDirectExecution) error
+	FinalizeRIExchangeDirectExecution(ctx context.Context, id string, outcome RIExchangeDirectOutcome) error
+
 	// Cloud accounts
 	CreateCloudAccount(ctx context.Context, account *CloudAccount) error
 	GetCloudAccount(ctx context.Context, id string) (*CloudAccount, error)

@@ -285,6 +285,58 @@ describe('Dashboard Module', () => {
       expect(upcomingList?.innerHTML).toContain('Step 1 of 4');
     });
 
+    test('shows an inline error with Retry, not the empty state, when the upcoming fetch fails (#713)', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({
+        potential_monthly_savings: 1000,
+        by_service: {}
+      });
+      (api.getUpcomingPurchases as jest.Mock).mockRejectedValueOnce(new Error('API error: 503 Service Unavailable'));
+
+      await loadDashboard();
+
+      const upcomingList = document.getElementById('upcoming-list');
+      expect(upcomingList?.textContent).not.toContain('No upcoming scheduled purchases');
+      expect(upcomingList?.querySelector('.error')?.textContent).toContain('Failed to load upcoming purchases');
+      // The summary is unaffected by the upcoming failure.
+      expect(document.getElementById('summary')?.querySelector('.error')).toBeNull();
+
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValueOnce({
+        purchases: [{
+          execution_id: 'exec-1', plan_id: 'plan-1', plan_name: 'Retry Plan',
+          scheduled_date: '2025-01-15', provider: 'aws', service: 'ec2',
+          step_number: 1, total_steps: 2, estimated_savings: 120,
+        }]
+      });
+      const retry = upcomingList?.querySelector('button[data-action="retry-upcoming"]') as HTMLButtonElement;
+      expect(retry).not.toBeNull();
+      retry.click();
+      await new Promise(r => setTimeout(r, 0));
+
+      expect(api.getUpcomingPurchases).toHaveBeenCalledTimes(2);
+      expect(api.getDashboardSummary).toHaveBeenCalledTimes(1);
+      expect(upcomingList?.innerHTML).toContain('Retry Plan');
+      expect(upcomingList?.querySelector('.error')).toBeNull();
+    });
+
+    test('upcoming error is announced and Retry keeps keyboard focus in the widget (#713)', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({ potential_monthly_savings: 1000, by_service: {} });
+      (api.getUpcomingPurchases as jest.Mock).mockRejectedValueOnce(new Error('API error: 503'));
+      await loadDashboard();
+
+      const upcomingList = document.getElementById('upcoming-list') as HTMLElement;
+      expect(upcomingList.querySelector('.error')?.getAttribute('role')).toBe('alert');
+
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValueOnce({ purchases: [] });
+      const retry = upcomingList.querySelector('button[data-action="retry-upcoming"]') as HTMLButtonElement;
+      retry.focus();
+      retry.click();
+      // Retry replaces its own button; focus must land on the container, not <body>.
+      expect(upcomingList.getAttribute('tabindex')).toBe('-1');
+      expect(document.activeElement).toBe(upcomingList);
+      await new Promise(r => setTimeout(r, 0));
+      expect(document.activeElement).toBe(upcomingList);
+    });
+
     test('shows empty message when no upcoming purchases', async () => {
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
         potential_monthly_savings: 1000,
@@ -308,6 +360,17 @@ describe('Dashboard Module', () => {
 
       const summary = document.getElementById('summary');
       expect(summary?.innerHTML).toContain('Failed to load dashboard');
+    });
+
+    test('names an empty summary response instead of throwing a TypeError (#280)', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue(null);
+      console.error = jest.fn();
+
+      await loadDashboard();
+
+      const text = document.getElementById('summary')?.textContent ?? '';
+      expect(text).toContain('Dashboard summary response was empty');
+      expect(text).not.toContain('Cannot read properties of null');
     });
 
     // Issue #344 T3: skeleton lifecycle — skeleton renders synchronously
@@ -1638,6 +1701,115 @@ describe('Dashboard Module', () => {
         }).options.plugins.tooltip.callbacks.label({ label: 'ec2' });
         const totalLine = tooltipLabel.find((l) => l.startsWith('Total:'));
         expect(totalLine).toMatch(/\$400/);
+      });
+
+      describe('stable per-service colours and matching legend (#700)', () => {
+        type ChartCfg = {
+          data: { labels: string[]; datasets: { label: string; backgroundColor: string[] }[] };
+          options: { plugins: { legend: { labels: { generateLabels?: (c: unknown) => { text: string; fillStyle: string }[] } } } };
+        };
+        const lastCfg = (): ChartCfg => {
+          const calls = (Chart as unknown as jest.Mock).mock.calls;
+          return calls[calls.length - 1]?.[1] as ChartCfg;
+        };
+        const colourOf = (cfg: ChartCfg, svc: string): string => {
+          const ds = cfg.data.datasets.find((d) => d.label === 'Lowest option');
+          return ds?.backgroundColor[cfg.data.labels.indexOf(svc)] ?? '';
+        };
+
+        test('a service keeps its colour when its rank changes between renders', () => {
+          buildDOM();
+          renderSavingsByService([rec('ec2', 500), rec('rds', 300), rec('elasticache', 100)]);
+          const before = lastCfg();
+          expect(before.data.labels[0]).toBe('ec2');
+          const ec2Before = colourOf(before, 'ec2');
+          const rdsBefore = colourOf(before, 'rds');
+          const cacheBefore = colourOf(before, 'elasticache');
+
+          // Data refresh: rds overtakes ec2, elasticache jumps to rank 2.
+          renderSavingsByService([rec('ec2', 120), rec('rds', 900), rec('elasticache', 400)]);
+          const after = lastCfg();
+          expect(after.data.labels[0]).toBe('rds');
+          expect(colourOf(after, 'ec2')).toBe(ec2Before);
+          expect(colourOf(after, 'rds')).toBe(rdsBefore);
+          expect(colourOf(after, 'elasticache')).toBe(cacheBefore);
+          expect(new Set([ec2Before, rdsBefore, cacheBefore]).size).toBe(3);
+        });
+
+        test('every known service slug has a distinct colour per family, twins share one', () => {
+          const { serviceBarColor } = require('../dashboard') as { serviceBarColor: (s: string) => string };
+          const families: string[][] = [
+            ['compute', 'ec2', 'vm'],
+            ['relational-db', 'rds', 'sql', 'cloudsql'],
+            ['cache', 'elasticache', 'redis', 'memorystore'],
+            ['savingsplans', 'savings-plans', 'savings-plans-compute', 'savings-plans-ec2instance', 'savings-plans-sagemaker', 'savings-plans-database'],
+            ['search', 'opensearch'],
+            ['data-warehouse', 'redshift'],
+            ['memorydb'],
+          ];
+          const colours = families.map((slugs) => {
+            const set = new Set(slugs.map((x) => serviceBarColor(x)));
+            expect([...set]).toHaveLength(1);
+            return [...set][0];
+          });
+          expect(new Set(colours).size).toBe(families.length);
+        });
+
+        test('unknown slugs never reuse a known family colour', () => {
+          const { serviceBarColor } = require('../dashboard') as { serviceBarColor: (s: string) => string };
+          // Fallback colours must not reuse a known family's colour.
+          const known = new Set(['compute', 'relational-db', 'cache', 'savingsplans', 'search', 'data-warehouse', 'memorydb'].map((x) => serviceBarColor(x)));
+          for (const unknown of ['alpha', 'zeta-service', 'nosuch', 'x1', 'foo-bar']) {
+            expect(known.has(serviceBarColor(unknown))).toBe(false);
+          }
+        });
+
+        test('an unknown slug gets a deterministic colour from the name hash', () => {
+          const { serviceBarColor } = require('../dashboard') as { serviceBarColor: (s: string) => string };
+          expect(serviceBarColor('mystery-service')).toBe(serviceBarColor('mystery-service'));
+          expect(serviceBarColor('Mystery-Service')).toBe(serviceBarColor('mystery-service'));
+          // The hash must actually vary: a fixed slot for every unknown slug is a bug.
+          const seen = new Set(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((x) => serviceBarColor(`svc-${x}`)));
+          expect(seen.size).toBeGreaterThan(1);
+        });
+
+        test('legend swatches carry a border so the pale Upside swatch stays visible', () => {
+          buildDOM();
+          renderSavingsByService([rec('ec2', 500)]);
+          const cfg = lastCfg();
+          const items = cfg.options.plugins.legend.labels.generateLabels?.({ data: { datasets: cfg.data.datasets }, isDatasetVisible: () => true }) as unknown as { strokeStyle: string; lineWidth: number }[];
+          for (const item of items) {
+            expect(item.lineWidth).toBeGreaterThanOrEqual(1);
+            expect(item.strokeStyle).toBe('#546e7a');
+          }
+        });
+
+        test('legend swatches use neutral tones matching the three bar layers, not the first bar colour', () => {
+          buildDOM();
+          renderSavingsByService([rec('ec2', 500), rec('rds', 300)]);
+          const cfg = lastCfg();
+          const gen = cfg.options.plugins.legend.labels.generateLabels;
+          expect(typeof gen).toBe('function');
+          const items = gen?.({ data: { datasets: cfg.data.datasets }, isDatasetVisible: () => true }) ?? [];
+          expect(items.map((i) => i.text)).toEqual(['Current / Committed', 'Lowest option', 'Upside']);
+          const barColours = cfg.data.datasets.flatMap((d) => d.backgroundColor);
+          for (const item of items) expect(barColours).not.toContain(item.fillStyle);
+          expect(new Set(items.map((i) => i.fillStyle)).size).toBe(3);
+        });
+      });
+
+      test('tooltip shows the committed value for a service with a commitment but no recommendation (#752)', () => {
+        buildDOM();
+        renderSavingsByService(
+          [rec('ec2', 100, 1, 'no_upfront')],
+          { sqldb: { potential_savings: 0, current_savings: 250 } },
+        );
+        const chartCtor = Chart as unknown as jest.Mock;
+        const lastCall = chartCtor.mock.calls[chartCtor.mock.calls.length - 1];
+        const label = (lastCall?.[1] as {
+          options: { plugins: { tooltip: { callbacks: { label: (ctx: { label: string; dataset: { label: string } }) => string } } } };
+        }).options.plugins.tooltip.callbacks.label;
+        expect(label({ label: 'sqldb', dataset: { label: 'Current / Committed' } })).toMatch(/Current \/ Committed: \$250/);
       });
 
       // Issue #908: merged chart draws a current-savings bottom layer per service.

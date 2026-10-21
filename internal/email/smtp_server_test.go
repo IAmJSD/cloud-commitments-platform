@@ -630,3 +630,34 @@ func TestSendMailTLS_DataFail(t *testing.T) {
 	err := sender.sendMailTLS(addr, nil, "from@test.com", []string{"to@test.com"}, []byte("test"))
 	require.Error(t, err)
 }
+
+// Issue #714: the purchase-failed email goes to data.RecipientEmail (the
+// global notification address) when set, and to the static notify address
+// otherwise.
+func TestSMTPSender_SendPurchaseFailedNotification_Recipient(t *testing.T) {
+	for _, tc := range []struct {
+		name, recipient, wantTo string
+	}{
+		{name: "recipient set", recipient: "ops@example.com", wantTo: "ops@example.com"},
+		{name: "fallback to notify address", recipient: "", wantTo: "static-notify@example.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newMockSMTPServer(t, false)
+			server.start(t)
+			sender := &SMTPSender{
+				host:        "127.0.0.1",
+				port:        server.port,
+				fromEmail:   "notifications@example.com",
+				fromName:    "CUDly",
+				notifyEmail: "static-notify@example.com",
+			}
+			err := sender.SendPurchaseFailedNotification(context.Background(), NotificationData{RecipientEmail: tc.recipient})
+			require.NoError(t, err)
+			server.stop()
+			server.mu.Lock()
+			msg := server.receivedMsg
+			server.mu.Unlock()
+			assert.Contains(t, msg, "To: "+tc.wantTo)
+		})
+	}
+}

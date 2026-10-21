@@ -102,6 +102,14 @@ export async function saveGroup(e: Event): Promise<void> {
     return;
   }
 
+  const badAmounts = maxAmountInputErrors();
+  if (badAmounts.length > 0) {
+    showError(
+      `Max Amount must be greater than 0; leave it blank for no limit (${badAmounts.join(', ')}).`
+    );
+    return;
+  }
+
   const name = (document.getElementById('group-name') as HTMLInputElement).value;
   const description = (document.getElementById('group-description') as HTMLTextAreaElement).value;
   const permissions = collectPermissions();
@@ -282,7 +290,7 @@ export function addPermission(permission?: Permission): void {
           <input type="text" class="perm-regions" value="${escapeHtml(permission?.constraints?.regions?.join(', ') || '')}" placeholder="us-east-1, us-west-2">
         </label>
         <label>Max Amount ($):
-          <input type="number" class="perm-max-amount" value="${escapeHtml(String(permission?.constraints?.max_amount || ''))}" placeholder="10000" min="0">
+          <input type="number" class="perm-max-amount" value="${escapeHtml(String(permission?.constraints?.max_amount ?? ''))}" placeholder="10000" min="0">
         </label>
       </div>
     </div>
@@ -401,6 +409,29 @@ function unrepresentablePermissionErrors(): string[] {
   return errors;
 }
 
+// Max Amount is typed by the admin, unlike the stored-value problems above, so
+// its message tells them how to fix the field instead of pointing at the API.
+// 0 would read as "no cap" at enforcement, so it is refused rather than sent.
+function maxAmountInputErrors(): string[] {
+  const errors: string[] = [];
+  document.querySelectorAll('#permissions-list .permission-item').forEach((item, index) => {
+    const input = item.querySelector('.perm-max-amount') as HTMLInputElement | null;
+    // A number input reports unparsable text ("abc", "1e") as value "", which
+    // would read as blank and save with no cap; badInput is the only signal.
+    if (input?.validity?.badInput) {
+      errors.push(`permission ${index}`);
+      return;
+    }
+    const raw = input?.value ?? '';
+    if (raw.trim() === '') return;
+    const amount = Number(raw);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      errors.push(`permission ${index}`);
+    }
+  });
+  return errors;
+}
+
 /**
  * Render permissions list
  */
@@ -463,17 +494,7 @@ function collectPermissions(): Permission[] {
       if (providersList.length > 0) permission.constraints.providers = providersList;
       if (servicesList.length > 0) permission.constraints.services = servicesList;
       if (regionsList.length > 0) permission.constraints.regions = regionsList;
-      if (maxAmount) {
-        const parsed = parseFloat(maxAmount);
-        // Reject non-finite or negative values (feedback_nullable_not_zero).
-        // A malformed entry is silently skipped so the rest of the constraints
-        // still reach the API; the input's type="number" min="0" already
-        // prevents browser submission of non-numeric values, but the JS
-        // path must guard too.
-        if (Number.isFinite(parsed) && parsed >= 0) {
-          permission.constraints.max_amount = parsed;
-        }
-      }
+      if ((maxAmount ?? '').trim() !== '') permission.constraints.max_amount = Number(maxAmount);
       // Nothing survived: the permission carries no restriction, so send no
       // constraints object rather than an empty one.
       if (Object.keys(permission.constraints).length === 0) {
