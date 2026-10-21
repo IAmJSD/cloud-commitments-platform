@@ -322,7 +322,9 @@ function mountInventoryAmortizeCheckbox(): void {
 
 function buildAccountCell(c: api.InventoryCommitment): HTMLTableCellElement {
   const td = document.createElement('td');
-  if (c.account_name) {
+  if (c.account_name && c.account_name.includes(c.account_id)) {
+    td.textContent = c.account_name;
+  } else if (c.account_name) {
     td.appendChild(document.createTextNode(c.account_name + ' '));
     const id = document.createElement('span');
     id.className = 'monospace';

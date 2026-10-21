@@ -263,6 +263,12 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 	}
 	saveCtx, cancelSave := ctxutil.DetachedWithTimeout(ctx, terminalSaveTimeout)
 	defer cancelSave()
+	// Operators hear about every failed or partial row (issue #714), even
+	// when the terminal save below fails. A fan-out root is skipped: each
+	// per-account row notified for itself in executeForAccount.
+	if !isFanOutOutcome(execErr) {
+		defer m.notifyExecutionFailure(saveCtx, exec)
+	}
 	if err := m.saveOrRecoverTerminal(saveCtx, exec, execErr); err != nil {
 		logging.Errorf("AUDIT LOSS: failed to save execution status: %v", err)
 		// Wrap with ErrAuditLoss regardless of whether executePurchase itself

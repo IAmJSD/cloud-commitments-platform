@@ -3,6 +3,8 @@ package commitmentopts
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/billingbenefits/armbillingbenefits"
@@ -26,6 +28,11 @@ const azureProbeSubscriptionID = "00000000-0000-0000-0000-000000000000"
 // structural validation (the API checks term + payment shape, not the dollar
 // amount), but zero is rejected server-side so we use the documented minimum.
 const azureProbeHourlyCommitment float64 = 0.001
+
+// azureCurrencyCodePattern matches a 3-letter ISO 4217 currency code. It
+// mirrors the check the cloud-commitments-go Azure Savings Plans provider
+// applies to SavingsPlanDetails.Currency before purchase or validation.
+var azureCurrencyCodePattern = regexp.MustCompile(`^[A-Za-z]{3}$`)
 
 // azureCandidateCombos lists every (term, billingPlan) pair that the Azure
 // Savings Plans API publishes. The probe calls ValidatePurchase for each one
@@ -101,10 +108,23 @@ func (p *AzureSPProber) Service() string { return azureSpService }
 // ProbeAzure probes the Azure ValidatePurchase endpoint for each candidate
 // (term, billingPlan) combo and returns Combos for those the API accepts.
 //
+// currencyCode is the billing currency of the account the probe runs
+// against (a 3-letter ISO 4217 code such as "USD" or "EUR"). Azure
+// evaluates a ValidatePurchase request against the billing account's
+// currency, so a probe sent in any other currency yields a verdict about a
+// commitment the account could never buy. The caller must resolve the
+// account's real currency; there is no USD default. An empty or malformed
+// code fails closed before any client is built or any request is sent.
+//
 // The method signature differs from the AWS Prober interface because Azure
 // authentication uses azcore.TokenCredential rather than aws.Config. Callers
 // use this method directly; Service.probeAndPersistAzure wires it up.
-func (p *AzureSPProber) ProbeAzure(ctx context.Context, cred azcore.TokenCredential) ([]Combo, error) {
+func (p *AzureSPProber) ProbeAzure(ctx context.Context, cred azcore.TokenCredential, currencyCode string) ([]Combo, error) {
+	currency, err := azureProbeCurrency(currencyCode)
+	if err != nil {
+		return nil, err
+	}
+
 	client, err := p.client(cred)
 	if err != nil {
 		return nil, fmt.Errorf("savingsplans: create validate client: %w", err)
@@ -112,7 +132,7 @@ func (p *AzureSPProber) ProbeAzure(ctx context.Context, cred azcore.TokenCredent
 
 	var combos []Combo
 	for _, c := range azureCandidateCombos {
-		ok, err := p.probeCombo(ctx, client, c.azureTerm, c.azurePlan)
+		ok, err := p.probeCombo(ctx, client, c.azureTerm, c.azurePlan, currency)
 		if err != nil {
 			// Treat non-validation errors (auth, network, 5xx) as probe
 			// failures — they prevent us from knowing whether the combo
@@ -131,6 +151,15 @@ func (p *AzureSPProber) ProbeAzure(ctx context.Context, cred azcore.TokenCredent
 	return combos, nil
 }
 
+// azureProbeCurrency validates and upper-cases the caller-supplied billing
+// currency. It never substitutes a default: an unknown currency is an error.
+func azureProbeCurrency(code string) (string, error) {
+	if !azureCurrencyCodePattern.MatchString(code) {
+		return "", fmt.Errorf("savingsplans: probe currency %q is not a 3-letter currency code; the billing account's currency must be resolved before probing", code)
+	}
+	return strings.ToUpper(code), nil
+}
+
 // probeCombo calls ValidatePurchase for a single (term, billingPlan) pair and
 // returns true if the API considers it a valid offering.
 //
@@ -142,6 +171,7 @@ func (p *AzureSPProber) probeCombo(
 	client AzureSPValidateAPI,
 	term armbillingbenefits.Term,
 	billingPlan *armbillingbenefits.BillingPlan,
+	currencyCode string,
 ) (bool, error) {
 	subscriptionID := azureProbeSubscriptionID
 	billingScopeID := fmt.Sprintf("/subscriptions/%s", subscriptionID)
@@ -149,7 +179,6 @@ func (p *AzureSPProber) probeCombo(
 	appliedScope := armbillingbenefits.AppliedScopeTypeShared
 	hourlyAmount := azureProbeHourlyCommitment
 	displayName := "cudly-probe"
-	currencyCode := "USD"
 	planType := "Compute"
 
 	props := &armbillingbenefits.SavingsPlanOrderAliasProperties{

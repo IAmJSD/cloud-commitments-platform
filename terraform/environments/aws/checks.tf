@@ -80,3 +80,25 @@ check "fargate_cdn_requires_cloudfront_only_alb" {
     EOT
   }
 }
+
+# ==============================================
+# DB Connection Budget (#718)
+# ==============================================
+#
+# A warning, not a failure: with lambda_reserved_concurrency = -1 nothing caps
+# how many execution environments, each holding its own DB pool, run at once,
+# so a burst can exhaust RDS connections. Reserving concurrency can fail on
+# accounts with a low concurrency quota, so dev and staging keep -1 and get
+# this warning; lambda_reserved_concurrency's validation makes prod set a cap.
+check "lambda_concurrency_bounds_db_connections" {
+  assert {
+    condition     = !(var.compute_platform == "lambda" && var.lambda_reserved_concurrency < 0)
+    error_message = <<-EOT
+      lambda_reserved_concurrency = -1: Lambda concurrency is unbounded, so
+      concurrent execution environments x db_max_connections can exceed the
+      RDS max_connections (database_max_connections) under a burst. Set
+      lambda_reserved_concurrency so that it x db_max_connections stays
+      within database_max_connections minus the reserved connections.
+    EOT
+  }
+}

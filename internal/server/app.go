@@ -88,6 +88,14 @@ type Application struct {
 	migrationsTimeout time.Duration
 	migrationMu       sync.Mutex
 
+	// lifeCtx outlives any request; Close cancels it. rlCleanupStop stops the
+	// previous cleanup worker when a retried reinitializeAfterConnect starts
+	// a new one, so at most one worker runs.
+	lifeMu        sync.Mutex
+	lifeCtx       context.Context
+	lifeCancel    context.CancelFunc
+	rlCleanupStop context.CancelFunc
+
 	// initRetryDelay is the pause between background database-initialization
 	// attempts (see startBackgroundInit). Zero means backgroundInitRetryDelay.
 	// Only tests set it.
@@ -763,6 +771,27 @@ func (app *Application) initAuthService(authStore *auth.PostgresStore, encKey []
 	return svc, nil
 }
 
+type cleanupWorkerStarter interface {
+	StartCleanupWorker(ctx context.Context)
+}
+
+// startRateLimiterCleanup runs the limiter's scheduled cleanup on the
+// process-lifetime context (canceled by Close), not the request context that
+// triggered the lazy DB connect.
+func (app *Application) startRateLimiterCleanup(rl cleanupWorkerStarter) {
+	app.lifeMu.Lock()
+	defer app.lifeMu.Unlock()
+	if app.lifeCtx == nil {
+		app.lifeCtx, app.lifeCancel = context.WithCancel(context.Background())
+	}
+	if app.rlCleanupStop != nil {
+		app.rlCleanupStop()
+	}
+	var workerCtx context.Context
+	workerCtx, app.rlCleanupStop = context.WithCancel(app.lifeCtx)
+	rl.StartCleanupWorker(workerCtx)
+}
+
 // reinitializeAfterConnect re-creates all stores and services that depend on the
 // database connection. This is called after the lazy DB connect succeeds.
 // Returns an error if any store or service initialization fails.
@@ -804,7 +833,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 
 	dbRL := api.NewDBRateLimiter(dbConn.Pool())
 	// Periodic cleanup also evicts expired keys with no subsequent allowed request.
-	dbRL.StartCleanupWorker(ctx)
+	app.startRateLimiterCleanup(dbRL)
 	app.RateLimiter = dbRL
 	log.Println("Initialized database-backed rate limiter with shared replica counters")
 
@@ -972,6 +1001,12 @@ func buildAdminPasswordSyncCallback(store auth.StoreInterface, resolver secrets.
 // Close gracefully shuts down the application.
 func (app *Application) Close() error {
 	log.Println("Shutting down CUDly Server...")
+
+	app.lifeMu.Lock()
+	if app.lifeCancel != nil {
+		app.lifeCancel()
+	}
+	app.lifeMu.Unlock()
 
 	// Close database connection if using PostgreSQL
 	if app.DB != nil {

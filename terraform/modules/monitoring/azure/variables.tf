@@ -113,3 +113,8 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "app_log_analytics_workspace_id" {
+  description = "Resource ID of the Log Analytics workspace that receives the Container Apps environment's console logs (ContainerAppConsoleLogs_CL). The failure alerts (#714) query it; the module's own workspace only backs Application Insights, which the app does not write to."
+  type        = string
+}
