@@ -26,7 +26,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -37,16 +36,10 @@ func TestPostgresStoreDB_ListPurchasePlans_UnassignedBucket(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { container.Cleanup(context.Background()) })
-
 	// A migration that will not apply is a broken schema, not a missing
-	// container runtime: fail rather than report the suite green (issue #1597).
-	require.NoError(t,
-		migrations.RunMigrations(ctx, container.DB.Pool(), getTestMigrationsPath(), "", ""),
-		"migrations failed to apply to a fresh database")
-
-	conn := container.DB
+	// container runtime: RequireMigratedDatabase fails rather than report the
+	// suite green (issue #1597).
+	conn := testhelpers.RequireMigratedDatabase(ctx, t, getTestMigrationsPath()).DB
 	store := NewPostgresStore(conn)
 
 	// ---- Seed cloud_accounts ----

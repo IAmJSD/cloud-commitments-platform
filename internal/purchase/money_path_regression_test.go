@@ -369,7 +369,7 @@ func TestSQSRedeliveryDoesNotDoubleExecute(t *testing.T) {
 func TestMultiAccountPartialSuccessIsAcked(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockEmail := new(MockEmailSender)
+	mockEmail := allowFailedNotification(new(MockEmailSender))
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
@@ -472,7 +472,7 @@ func TestMultiAccountPartialSuccessIsAcked(t *testing.T) {
 func TestExecuteForAccount_CommittedButUnsavedIsAcked(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockEmail := new(MockEmailSender)
+	mockEmail := allowFailedNotification(new(MockEmailSender))
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)

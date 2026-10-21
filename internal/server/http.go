@@ -465,6 +465,7 @@ var safeHeaderNames = map[string]bool{
 	"cache-control": true,
 	"etag":          true,
 	"last-modified": true,
+	"retry-after":   true,
 	// Request tracking headers
 	"x-request-id":     true,
 	"x-correlation-id": true,

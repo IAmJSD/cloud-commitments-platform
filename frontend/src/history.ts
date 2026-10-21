@@ -33,8 +33,10 @@ const VALID_PROVIDERS: api.Provider[] = ['aws', 'azure', 'gcp'];
 const AWS_MARKETPLACE_FEE_PERCENT = 12;
 // awsMarketplaceNetFactor: fraction of list price the seller receives after the fee.
 const AWS_MARKETPLACE_NET_FACTOR = 1 - AWS_MARKETPLACE_FEE_PERCENT / 100;
-// awsMarketplaceBuyerDiscountFactor: applied to residual RI value to compute the default list price.
-const AWS_MARKETPLACE_BUYER_DISCOUNT = 0.95;
+// Discount off residual RI value for the default list price; 1 - 5/100 mirrors
+// awsMarketplaceBuyerDiscountFactor (0.95) in internal/api/handler_marketplace.go.
+const AWS_MARKETPLACE_BUYER_DISCOUNT_PERCENT = 5;
+const AWS_MARKETPLACE_BUYER_DISCOUNT = 1 - AWS_MARKETPLACE_BUYER_DISCOUNT_PERCENT / 100;
 
 type StatusFilter = 'all' | 'pending' | 'completed' | 'failed' | 'expired' | 'cancelled';
 
@@ -591,9 +593,13 @@ function canCancelPendingRow(p: HistoryPurchase): boolean {
 // requireDifferentApprover in internal/api/handler_purchases.go: mode off →
 // always allowed; mode on → allowed only when the row has a recorded,
 // different creator (a NULL/legacy creator is denied, matching the backend's
-// fail-closed 403 for rows that predate dual-control).
+// fail-closed 403 for rows that predate dual-control). Scheduler-created rows
+// (created_by_system, no creator) pass: any identified approver is the second
+// pair of eyes, and rbacAllowsApprove still requires approve-any for them.
 function canApproveUnder4Eyes(row: HistoryPurchase, sessionUserId: string): boolean {
-  return _fourEyesMode === false || (row.created_by_user_id != null && row.created_by_user_id !== sessionUserId);
+  if (_fourEyesMode === false) return true;
+  if (row.created_by_user_id == null) return row.created_by_system === true;
+  return row.created_by_user_id !== sessionUserId;
 }
 
 // rbacAllowsApprove is the approve-permission decision (issue #286 /
@@ -1186,6 +1192,8 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
 
   if (!purchases || purchases.length === 0) {
     container.innerHTML = '<p class="empty">No purchase history found for the selected period.</p>';
+    mountAmortizeCheckbox('history-controls', 'history-amortize-checkbox');
+    applyExecutionDeepLink();
     return;
   }
 
@@ -1591,7 +1599,7 @@ function wireRowActionHandlers(container: HTMLElement): void {
 
         const noteEl = document.createElement('p');
         noteEl.className = 'marketplace-pricing-note';
-        noteEl.textContent = `AWS charges a ${AWS_MARKETPLACE_FEE_PERCENT}% transaction fee on proceeds. The default schedule prices the listing at ${(1 - AWS_MARKETPLACE_BUYER_DISCOUNT) * 100}% below remaining value. You can adjust pricing by contacting your administrator or modifying the schedule via the API. This action cannot be undone without cancelling the listing.`;
+        noteEl.textContent = `AWS charges a ${AWS_MARKETPLACE_FEE_PERCENT}% transaction fee on proceeds. The default schedule prices the listing at ${AWS_MARKETPLACE_BUYER_DISCOUNT_PERCENT}% below remaining value. You can adjust pricing by contacting your administrator or modifying the schedule via the API. This action cannot be undone without cancelling the listing.`;
         bodyEl.appendChild(noteEl);
 
         const ok = await confirmDialog({

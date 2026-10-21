@@ -35,11 +35,17 @@ cp "$REPO_ROOT/scripts/setup-git-secrets.sh" "$tmp/repo/scripts/setup-git-secret
 cp "$REPO_ROOT/.gitallowed" "$tmp/repo/.gitallowed"
 cd "$tmp/repo"
 
+# A clone set up before #813 still has the old negated-class secret-key pattern
+# registered. Seed it, so the check below proves a setup run removes it (#295).
+LEGACY_SECRET_KEY='[^A-Za-z0-9/+=]{40}[^A-Za-z0-9/+=]'
+git config --add secrets.patterns "$LEGACY_SECRET_KEY"
+
 if ! bash scripts/setup-git-secrets.sh > "$tmp/setup.log" 2>&1; then
     echo "scripts/setup-git-secrets.sh failed in the throwaway repo:" >&2
     cat "$tmp/setup.log" >&2
     exit 1
 fi
+legacy_left=$(git config --get-all secrets.patterns | grep -cxF -- "$LEGACY_SECRET_KEY" || true)
 # A second run must succeed and register nothing twice: `git secrets --add`
 # exits 1 on an already-registered pattern, which used to abort a re-run
 # half-configured.
@@ -52,6 +58,23 @@ fi
 patterns_after=$(git config --get-all secrets.patterns | wc -l)
 if [ "$patterns_before" -ne "$patterns_after" ]; then
     echo "second setup run changed the pattern count: $patterns_before -> $patterns_after" >&2
+    exit 1
+fi
+# A clone set up before #328 has the bare detectors registered. A re-run must
+# replace them with the word-wrapped form, not keep both.
+BARE_AKIA='AKIA[0-9A-Z]{16}'
+git config --add secrets.patterns "$BARE_AKIA"
+if ! bash scripts/setup-git-secrets.sh > "$tmp/setup3.log" 2>&1; then
+    echo "scripts/setup-git-secrets.sh failed with a pre-#328 bare detector registered:" >&2
+    cat "$tmp/setup3.log" >&2
+    exit 1
+fi
+if git config --get-all secrets.patterns | grep -qxF -- "$BARE_AKIA"; then
+    echo "setup run left the pre-#328 bare detector registered: $BARE_AKIA" >&2
+    exit 1
+fi
+if [ "$(git config --get-all secrets.patterns | wc -l)" -ne "$patterns_after" ]; then
+    echo "setup run over a pre-#328 bare detector changed the pattern count" >&2
     exit 1
 fi
 # Same HOME-isolation reason: drop the provider before any further scan.
@@ -141,6 +164,47 @@ run_case "secret before an otherwise-allowed truncated PEM, same line" 1 l.go \
 run_case "secret after an otherwise-allowed truncated PEM, same line" 1 m.go \
     '"private_key": "'"$PEM"'\nMIIEvQIBADANBg...\n'"$KEY"'"'
 
+check_result "setup removes the legacy negated secret-key pattern" 0 "$legacy_left"
+
+# Bare AWS secret access keys (#295): 40 characters with no name in front that
+# --register-aws or the "AWS Credentials" pattern could anchor on. Each key is the
+# filler below with one upper-case/digit pair written over it, so this file never
+# holds a key-shaped literal. The offsets reach every window the detector is
+# split into, including the first and last character a pair can start at.
+FILL=$(head -c 50 /dev/zero | tr '\0' x)
+# key_with LENGTH OFFSET PAIR: LENGTH filler characters with PAIR at OFFSET.
+key_with() {
+    printf '%s%s%s' "${FILL:0:$2}" "$3" "${FILL:0:$(($1 - $2 - ${#3}))}"
+}
+for offset in 0 4 5 9 10 14 15 19 20 24 25 29 30 34 35 38; do
+    run_case "bare key, Q7 pair at offset $offset" 1 bare.txt "$(key_with 40 "$offset" Q7)"
+done
+run_case "bare key, digit then upper-case" 1 bare.txt "$(key_with 40 20 7Q)"
+run_case "bare key, pair one character apart" 1 bare.txt "$(key_with 40 37 Q+7)"
+run_case "bare key, reversed pair one character apart" 1 bare.txt "$(key_with 40 0 7/Q)"
+run_case "unquoted YAML value" 1 creds.yaml "credential: $(key_with 40 12 Q7)"
+run_case "env-style assignment" 1 creds.env "TOKEN=$(key_with 40 12 Q7)"
+run_case "quoted JSON value" 1 creds.json "{\"token\": \"$(key_with 40 12 Q7)\"}"
+run_case "key followed by a comma" 1 keys.go "keys := []string{\"$(key_with 40 30 Q7)\", other}"
+run_case "key followed by a word after a dash" 1 keys.txt "$(key_with 40 30 Q7)-old"
+
+# Key-shaped runs the detector must leave alone: the box-drawing and dash banner
+# lines the legacy pattern flagged, commit SHAs, identifiers, base64 padding, and
+# runs one character too short or too long to be a key.
+SHA="3c0f8ac94048a2c3""6fce5ccddee54e6c4849a5cd"
+run_case "commit SHA" 0 sha.yml "      - uses: actions/checkout@$SHA # v4"
+run_case "box-drawing banner" 0 banner.sh "echo \"$(printf '\342\224\201%.0s' $(seq 41))\""
+run_case "dash banner" 0 banner.txt "$(head -c 41 /dev/zero | tr '\0' -)"
+run_case "long CamelCase test name" 0 names_test.go \
+    "// TestSummarizeRecommendationsWithCoverage checks the summary."
+run_case "key-shaped name after an underscore" 0 fn_test.go \
+    "// TestX_$(key_with 40 12 Q7) checks it."
+run_case "key-shaped function name" 0 fn_test.go "func $(key_with 40 12 Q7)(t *testing.T) {"
+run_case "40-character run followed by base64 padding" 0 go.sum \
+    "example.com/mod v1.0.0 h1:$(key_with 40 14 Q7)="
+run_case "39-character run" 0 short.txt "$(key_with 39 12 Q7)"
+run_case "41-character run" 0 long.txt "$(key_with 41 12 Q7)"
+
 # Negative controls for the setup-script allowlist entries below, each
 # closing one instance of the same class of hole (#1972 reintroduced at
 # the scale of one file) that a narrower-but-still-wrong anchor leaves
@@ -201,6 +265,42 @@ run_case "account-id placeholder with a key on the same line" 1 o.go \
     'accountId := "'"$ACCT"'"; k := "'"$KEY"'"'
 run_case "UUID placeholder with a password on the same line" 1 p.go \
     'id := "11111111-1111-1111-1111-111111111111"; '"$PW"
+
+# git-secrets greps with -w, so a detector whose match starts or ends inside a
+# word never fired (#328): a DSN's match ends right before its host name, and
+# a key or keyword glued to other word characters does not start on a
+# boundary. Each case below scanned clean before #328.
+DSN_PW="hunter2""hunter2"
+PG="postg""res://"
+run_case "postgres DSN followed by its host" 1 q.env \
+    "DATABASE_URL=${PG}app:${DSN_PW}@db.example.com:5432/app"
+run_case "quoted postgres DSN with a bare host" 1 r.go \
+    "dsn := \"${PG}app:${DSN_PW}@db\""
+run_case "mysql DSN followed by its host" 1 s.txt \
+    "mys""ql://root:${DSN_PW}@localhost/app"
+run_case "mongodb DSN followed by its host" 1 t.txt \
+    "mongo""db://app:${DSN_PW}@mongo.example.net:27017/app"
+run_case "mongodb+srv DSN followed by its host" 1 u.txt \
+    "mongo""db+srv://app:${DSN_PW}@cluster0.example.net/app"
+run_case "password keyword after an underscore" 1 v.tf \
+    "db_pass""word = \"${DSN_PW}\""
+run_case "api key keyword after an underscore" 1 w.yaml \
+    "openai_api""_key: \"${DSN_PW}\""
+run_case "secret key keyword after an underscore" 1 x.py \
+    "aws_secret""_key = '${DSN_PW}'"
+run_case "access key glued between word characters" 1 y.txt \
+    "x${KEY}x"
+run_case "access key glued to an Azure connection string" 1 z.txt \
+    "DefaultEndpoints""Protocol=https${KEY}"
+run_case "GCP API key after a word character" 1 aa.txt \
+    "x${AIZA}"
+# Widening the match must not turn credential-less text into a finding.
+run_case "postgres DSN with no password" 0 ab.env \
+    "DATABASE_URL=${PG}app@db.example.com:5432/app"
+run_case "postgres DSN with no user info" 0 ac.env \
+    "DATABASE_URL=${PG}db.example.com:5432/app"
+run_case "password variable reference, no literal" 0 ad.tf \
+    "db_pass""word = var.db_password"
 
 # CI-equivalent check: the pre-commit framework hands git-secrets explicit
 # file names (plain grep), unlike a no-argument scan (git grep), which

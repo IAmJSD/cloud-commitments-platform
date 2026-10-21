@@ -50,6 +50,20 @@ export function commitmentTotals(lines: readonly CommitmentLine[]): CommitmentTo
   return { upfront, monthly, termTotal };
 }
 
+/** Label of the purchase modal's primary button; one source for every place that sets it. */
+export function executeButtonLabel(direct: boolean): string {
+  return direct ? 'Execute Purchase Now' : 'Send for Approval';
+}
+
+/**
+ * Confirm-dialog button: the same verb as the modal button plus the upfront
+ * amount, so the highest-stakes click states the money involved.
+ */
+export function executeConfirmLabel(direct: boolean, upfront: number): string {
+  const amount = formatCurrency(upfront, '$', 2);
+  return `${executeButtonLabel(direct)} (${amount} ${direct ? 'charged today' : 'upfront on approval'})`;
+}
+
 export function paymentLabel(payment: string): string {
   switch (payment.replace(/_/g, '-')) {
     case 'upfront': // Azure spelling of all-upfront
