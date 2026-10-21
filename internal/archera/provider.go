@@ -133,12 +133,12 @@ func (p *Provider) Client(ctx context.Context) (insurance.QuoteClient, error) {
 	}
 	key, err := p.resolver.GetSecret(ctx, p.settings.KeySecretRef)
 	if err != nil {
-		logging.Warnf("archera: resolving %s failed: %v", EnvKeySecret, err)
+		logging.Warn("archera: credential resolution failed")
 		return nil, ErrKeyUnavailable
 	}
 	c, err := insurance.NewClient(insurance.Config{APIKey: insurance.NewSecret(strings.TrimSpace(key)), OrgID: p.settings.OrgID}, p.hc)
 	if err != nil {
-		logging.Warnf("archera: building client failed: %v", err)
+		logging.Warn("archera: client initialization failed")
 		return nil, ErrKeyUnavailable
 	}
 	p.client.Store(c)

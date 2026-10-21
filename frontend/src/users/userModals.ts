@@ -105,7 +105,16 @@ export function closeUserModal(): void {
  */
 export async function saveUser(e: Event): Promise<void> {
   e.preventDefault();
+  const submitBtn = document.querySelector<HTMLButtonElement>('#user-form button[type="submit"]');
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    await submitUserForm();
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
 
+async function submitUserForm(): Promise<void> {
   const email = (document.getElementById('user-email') as HTMLInputElement).value;
   const password = (document.getElementById('user-password') as HTMLInputElement).value;
   // role selector removed: PR #912 drops the role column.

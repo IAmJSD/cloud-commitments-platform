@@ -135,7 +135,8 @@ func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 
 	ec2Fake := &fakeReshapeEC2{
 		instances: []ec2svc.ConvertibleRI{
-			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1},
+			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, Duration: 31536000},
+			{ReservedInstanceID: "ri-noterm", InstanceType: "m5.xlarge", InstanceCount: 1},
 		},
 	}
 	recsFake := &fakeReshapeRecs{
@@ -153,6 +154,8 @@ func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 	rec := body.Recommendations[0]
 	require.Equal(t, "ri-1", rec.SourceRIID)
 	require.Equal(t, "m5.large", rec.TargetInstanceType)
+	require.Len(t, body.ExcludedRIs, 1, "an RI with no term length must be reported, not silently skipped")
+	require.Equal(t, "ri-noterm", body.ExcludedRIs[0].RIID)
 
 	// Same-family m5 stripped; c5 + r5 surface ascending by cost.
 	require.Len(t, rec.AlternativeTargets, 2,
@@ -197,7 +200,7 @@ func TestReshapeRecommendations_Integration_SecondCallHitsCache(t *testing.T) {
 
 	ec2Fake := &fakeReshapeEC2{
 		instances: []ec2svc.ConvertibleRI{
-			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1},
+			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, Duration: 31536000},
 		},
 	}
 	recsFake := &fakeReshapeRecs{
@@ -233,7 +236,7 @@ func TestReshapeRecommendations_Integration_NoCachedRecsReturnsPrimaryOnly(t *te
 
 	ec2Fake := &fakeReshapeEC2{
 		instances: []ec2svc.ConvertibleRI{
-			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1},
+			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, Duration: 31536000},
 		},
 	}
 	recsFake := &fakeReshapeRecs{
@@ -334,7 +337,7 @@ func TestReshapeRecommendations_Integration_ScopedAccount_FiltersToAccount(t *te
 
 	ec2Fake := &fakeReshapeEC2{
 		instances: []ec2svc.ConvertibleRI{
-			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1},
+			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, Duration: 31536000},
 		},
 	}
 	recsFake := &fakeReshapeRecs{

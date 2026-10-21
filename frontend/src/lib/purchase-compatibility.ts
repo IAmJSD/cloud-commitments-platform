@@ -28,6 +28,12 @@ export function isPaymentSupported(
   payment: Payment,
 ): boolean {
   if (provider === 'aws') {
+    // The backend accepts only these three tokens for AWS
+    // (config.ValidPaymentOptionsByProvider); 'monthly' and 'upfront'
+    // are Azure/GCP tokens and would be rejected with a 400.
+    if (payment !== 'all-upfront' && payment !== 'partial-upfront' && payment !== 'no-upfront') {
+      return false;
+    }
     // AWS RDS 3-year RIs don't support no-upfront — only all-upfront
     // and partial-upfront are offered by the provider. Surfacing
     // no-upfront here would produce zero recommendations for the
@@ -45,10 +51,11 @@ export function isPaymentSupported(
     return payment === 'all-upfront' || payment === 'upfront' || payment === 'monthly';
   }
 
-  // GCP CUDs accept the same three options as Azure per
-  // providers/gcp/services/computeengine/client.go:554.
+  // GCP CUDs are billed monthly only: the backend accepts just 'monthly' and
+  // rewrites every other token to it (config.ValidPaymentOptionsByProvider,
+  // internal/config/validation.go), so offering an upfront option misleads.
   if (provider === 'gcp') {
-    return payment === 'all-upfront' || payment === 'upfront' || payment === 'monthly';
+    return payment === 'monthly';
   }
 
   return true;

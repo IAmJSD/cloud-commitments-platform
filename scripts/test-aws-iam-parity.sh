@@ -154,6 +154,28 @@ grep -v 'savingsplans:DescribeSavingsPlansOfferings$\|ec2:GetReservedInstancesEx
   > "$FIX12/cloudformation/stacks/CUDly-CrossAccount/template.yaml"
 run_case "CrossAccount stack missing SP offerings and exchange-quote reads exits 1" 1 --root "$FIX12"
 
+# Case 13 (#302): widening one side of a pair to a service wildcard while the
+# other keeps its explicit list must fail parity.
+FIX13="$TMP_BASE/wildcard-service"
+seed_fixture "$FIX13"
+cp "$REPO_ROOT/terraform/modules/compute/aws/lambda/main.tf" "$FIX13/terraform/modules/compute/aws/lambda/main.tf"
+printf '%s\n' '      "ec2:*",' >> "$FIX13/terraform/modules/compute/aws/lambda/main.tf"
+run_case "wildcard drift (TF lambda grants ec2:*) exits 1" 1 --root "$FIX13"
+
+# Case 14 (#302): same for a bare "*" Action.
+FIX14="$TMP_BASE/wildcard-bare"
+seed_fixture "$FIX14"
+cp "$REPO_ROOT/terraform/modules/compute/aws/lambda/main.tf" "$FIX14/terraform/modules/compute/aws/lambda/main.tf"
+printf '%s\n' '    "Action": "*",' >> "$FIX14/terraform/modules/compute/aws/lambda/main.tf"
+run_case "wildcard drift (TF lambda grants Action \"*\") exits 1" 1 --root "$FIX14"
+
+# Case 15 (#302): a Resource "*" is not an action wildcard; the real repo stays in parity.
+FIX15="$TMP_BASE/resource-star"
+seed_fixture "$FIX15"
+cp "$REPO_ROOT/terraform/modules/compute/aws/lambda/main.tf" "$FIX15/terraform/modules/compute/aws/lambda/main.tf"
+printf '%s\n' '    "Resource": "*",' >> "$FIX15/terraform/modules/compute/aws/lambda/main.tf"
+run_case "Resource \"*\" is not treated as an action wildcard" 0 --root "$FIX15"
+
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."
 [[ "$fail" -eq 0 ]]

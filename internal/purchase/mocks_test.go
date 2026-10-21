@@ -196,6 +196,15 @@ func (m *MockEmailSender) SendPurchaseFailedNotification(ctx context.Context, da
 	return args.Error(0)
 }
 
+// allowFailedNotification lets a test whose execution ends failed or
+// partially_completed receive the purchase-failed email that outcome now sends
+// (issue #714) without asserting on it. Tests that pin the notification itself
+// register their own expectation instead (failure_notify_test.go).
+func allowFailedNotification(s *MockEmailSender) *MockEmailSender {
+	s.On("SendPurchaseFailedNotification", mock.Anything, mock.Anything).Return(nil).Maybe()
+	return s
+}
+
 func (m *MockEmailSender) SendPasswordResetEmail(ctx context.Context, emailAddr, resetURL string) error {
 	args := m.Called(ctx, emailAddr, resetURL)
 	return args.Error(0)

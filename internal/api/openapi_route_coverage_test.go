@@ -38,10 +38,8 @@ var specOnlyOperations = map[string]string{
 // undocumentedRoutes are registered routes whose documentation lands
 // elsewhere. Keys use routeCoveragePattern. Each entry needs a reason, and an
 // entry fails the test once the route is documented, so it cannot go stale.
-var undocumentedRoutes = map[string]string{
-	"GET /api/insurance/comparison": "documented by PR #1080",
-	"GET /api/insurance/status":     "documented by PR #1080",
-}
+// It is empty: every registered route is documented.
+var undocumentedRoutes = map[string]string{}
 
 var specPathParam = regexp.MustCompile(`\{[^/{}]+\}`)
 

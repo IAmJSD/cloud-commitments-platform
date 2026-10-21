@@ -297,7 +297,7 @@ func TestManager_ProcessScheduledPurchases_CancelledExecution(t *testing.T) {
 func TestManager_ProcessScheduledPurchases_ExecutionFails(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockEmail := new(MockEmailSender)
+	mockEmail := allowFailedNotification(new(MockEmailSender))
 
 	pastDate := time.Now().Add(-1 * time.Hour)
 	executions := []config.PurchaseExecution{
@@ -1173,7 +1173,7 @@ func TestManager_RecoverStrandedApprovals_AWSRedrive_PersistenceFailurePropagate
 func TestManager_RecoverStrandedApprovals_AWSRedrive_ExecAndPersistBothFail(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockEmail := new(MockEmailSender)
+	mockEmail := allowFailedNotification(new(MockEmailSender))
 
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	t.Cleanup(func() { mockEmail.AssertExpectations(t) })
