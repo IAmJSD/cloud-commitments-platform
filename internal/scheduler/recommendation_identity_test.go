@@ -188,3 +188,37 @@ func TestRecommendationID_MalformedDetailsErrorsAndTagAccountDrops(t *testing.T)
 	s := &Scheduler{}
 	assert.Empty(t, s.tagAccount([]config.RecommendationRecord{bad}, "acct"))
 }
+
+func rdsAZConfigRec(azConfig string) common.Recommendation {
+	return common.Recommendation{
+		Provider: common.ProviderAWS, Service: common.ServiceRDS, Region: "us-east-1", ResourceType: "db.r5.large", Count: 1, Term: "1yr", PaymentOption: "all-upfront",
+		Details: &common.DatabaseDetails{Engine: "mysql", AZConfig: azConfig, InstanceClass: "db.r5.large"},
+	}
+}
+
+// Two RDS recs for the same class, engine and term that differ only by
+// Single-AZ vs Multi-AZ must get distinct IDs (issue #408); before, both got
+// "aws||rds|us-east-1|db.r5.large|mysql|1|all-upfront". A database rec without
+// az_config keeps its pre-#408 ID.
+func TestConvertRecommendations_RDSAZConfigInID(t *testing.T) {
+	s := &Scheduler{}
+	records := s.convertRecommendations([]common.Recommendation{rdsAZConfigRec("single-az"), rdsAZConfigRec("multi-az"), rdsAZConfigRec("")}, "aws")
+	require.Len(t, records, 3)
+	assert.Equal(t, "aws||rds|us-east-1|db.r5.large|mysql|1|all-upfront|single-az", records[0].ID)
+	assert.Equal(t, "aws||rds|us-east-1|db.r5.large|mysql|1|all-upfront|multi-az", records[1].ID)
+	assert.Equal(t, "aws||rds|us-east-1|db.r5.large|mysql|1|all-upfront", records[2].ID)
+
+	tagged := s.tagAccount(records[1:2], "acct")
+	require.Len(t, tagged, 1)
+	assert.Equal(t, "aws|acct|rds|us-east-1|db.r5.large|mysql|1|all-upfront|multi-az", tagged[0].ID)
+}
+
+// An unreadable az_config is dropped loudly, never emitted with an ID that
+// collides with its sibling.
+func TestRecommendationID_MalformedAZConfigErrors(t *testing.T) {
+	bad := config.RecommendationRecord{Provider: "aws", Service: "rds", Details: []byte(`{"az_config":5}`)}
+	_, err := recommendationID(bad)
+	require.Error(t, err)
+	s := &Scheduler{}
+	assert.Empty(t, s.tagAccount([]config.RecommendationRecord{bad}, "acct"))
+}

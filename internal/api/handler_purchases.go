@@ -3288,11 +3288,17 @@ func purchaseIdempotencyKey(creatorID string, recs []config.RecommendationRecord
 		if err != nil {
 			return "", err
 		}
-		tuples = append(tuples, fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%d|%s|%s|%s|%s",
+		// Single-AZ and Multi-AZ RDS buys of the same class are different
+		// purchases and must not dedupe into one (issue #408).
+		azConfig, err := r.DetailsAZConfig()
+		if err != nil {
+			return "", err
+		}
+		tuples = append(tuples, fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%d|%s|%s|%s|%s|%s",
 			strings.ToLower(strings.TrimSpace(r.Provider)),
 			r.Service, r.Region, r.ResourceType, r.Engine, acct,
 			r.Count, r.Term, strings.ToLower(strings.TrimSpace(r.Payment)), az,
-			ci.Platform, ci.Tenancy))
+			ci.Platform, ci.Tenancy, azConfig))
 	}
 	sort.Strings(tuples)
 	h := sha256.New()

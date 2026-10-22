@@ -363,5 +363,8 @@ func describeRec(rec *config.RecommendationRecord) string {
 	if ci, err := rec.ComputeIdentity(); err == nil && !ci.IsZero() {
 		desc += fmt.Sprintf(" platform=%q tenancy=%q", ci.Platform, ci.Tenancy)
 	}
+	if azConfig, err := rec.DetailsAZConfig(); err == nil && azConfig != "" {
+		desc += fmt.Sprintf(" az_config=%q", azConfig)
+	}
 	return desc
 }
