@@ -1228,6 +1228,9 @@ type CloudAccount struct {
 	CredentialsConfigured bool   `json:"credentials_configured"`
 	BastionAccountName    string `json:"bastion_account_name,omitempty"`
 	IsSelf                bool   `json:"is_self,omitempty"`
+	// Notices are warnings the API derives for the response, such as the
+	// aws-cn Savings Plans limitation (issue #1194).
+	Notices []AccountNotice `json:"notices,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

@@ -1147,25 +1147,5 @@ func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string,
 // attacker-controlled tokens into a JSON snippet the operator copy-
 // pastes into IAM.
 func parseArnPartition(arn string) string {
-	const prefix = "arn:"
-	if len(arn) <= len(prefix) || arn[:len(prefix)] != prefix {
-		return ""
-	}
-	rest := arn[len(prefix):]
-	end := -1
-	for i := 0; i < len(rest); i++ {
-		if rest[i] == ':' {
-			end = i
-			break
-		}
-	}
-	if end <= 0 {
-		return ""
-	}
-	switch rest[:end] {
-	case "aws", "aws-cn", "aws-us-gov":
-		return rest[:end]
-	default:
-		return ""
-	}
+	return config.AWSPartitionFromARN(arn)
 }
