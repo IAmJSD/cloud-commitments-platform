@@ -1197,14 +1197,9 @@ func recommendationID(rec config.RecommendationRecord) (string, error) {
 func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	logging.Info("Reading recommendations from cache...")
 
-	freshness, err := s.config.GetRecommendationsFreshness(ctx)
+	freshness, err := s.startCacheRead(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read recommendations freshness: %w", err)
-	}
-
-	mayCollect := BackgroundCollectionAllowed(ctx)
-	if mayCollect && freshness.LastCollectedAt == nil {
-		s.kickColdStartCollection(ctx)
+		return nil, err
 	}
 
 	recs, err := s.config.ListStoredRecommendations(ctx, filter)
@@ -1229,17 +1224,38 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 		logging.Errorf("failed to apply account overrides; returning un-filtered recs: %v", err)
 	}
 
-	// Background refresh is only attempted on non-Lambda runtimes; skip
-	// the DB config read entirely on Lambda so GetGlobalConfig is not called
-	// on the hot read path (Lambda has no persistent goroutines).
-	if mayCollect && !s.isLambda {
-		ttl, disabled := s.resolveEffectiveCacheTTL(ctx)
-		if disabled {
-			return recs, nil
-		}
-		s.maybeKickBackgroundRefresh(freshness, ttl)
-	}
+	s.finishCacheRead(ctx, freshness)
 	return recs, nil
+}
+
+// startCacheRead is steps 1 and 2 of ListRecommendations (and of
+// ScanRecommendations): read freshness and, for a caller allowed to trigger
+// collection, kick the cold-start collection.
+func (s *Scheduler) startCacheRead(ctx context.Context) (*config.RecommendationsFreshness, error) {
+	freshness, err := s.config.GetRecommendationsFreshness(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read recommendations freshness: %w", err)
+	}
+	if BackgroundCollectionAllowed(ctx) && freshness.LastCollectedAt == nil {
+		s.kickColdStartCollection(ctx)
+	}
+	return freshness, nil
+}
+
+// finishCacheRead is step 4 of ListRecommendations (and of
+// ScanRecommendations): the stale-while-revalidate kick. Background refresh is
+// only attempted on non-Lambda runtimes; the DB config read is skipped
+// entirely on Lambda so GetGlobalConfig is not called on the hot read path
+// (Lambda has no persistent goroutines).
+func (s *Scheduler) finishCacheRead(ctx context.Context, freshness *config.RecommendationsFreshness) {
+	if !BackgroundCollectionAllowed(ctx) || s.isLambda {
+		return
+	}
+	ttl, disabled := s.resolveEffectiveCacheTTL(ctx)
+	if disabled {
+		return
+	}
+	s.maybeKickBackgroundRefresh(freshness, ttl)
 }
 
 // ListRecommendationsStrict is ListRecommendations for the money path: the
