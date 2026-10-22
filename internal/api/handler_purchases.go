@@ -2599,8 +2599,10 @@ func (h *Handler) persistRetrySuccessorTx(ctx context.Context, failedExec, newEx
 			map[string]any{})
 	}
 	if lostRace {
+		// Zero rows linked: a concurrent retry won, or an operator settled the
+		// row (issue #999), which retires it from retry for good.
 		return NewClientErrorWithDetails(409,
-			fmt.Sprintf("execution %s was already retried; act on its descendant instead", failedExec.ExecutionID),
+			fmt.Sprintf("execution %s was already retried or settled; reload it", failedExec.ExecutionID),
 			map[string]any{})
 	}
 	return fmt.Errorf("failed to save retry execution: %w", err)

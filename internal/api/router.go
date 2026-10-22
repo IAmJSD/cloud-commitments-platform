@@ -186,6 +186,10 @@ func (r *Router) registerRoutes() {
 		// AuthUser: router-level gate; per-handler requirePermission is the
 		// real security boundary.
 		{PathPrefix: "/api/purchases/", PathSuffix: "/revoke", Method: "POST", Handler: r.revokePurchaseHandler, Auth: AuthUser},
+		// Settle a failed plan execution whose outcome is unknown (issue #999),
+		// so it stops blocking the delete of its editor-managed plan. The
+		// handler enforces execute:purchases, account access and constraints.
+		{PathPrefix: "/api/purchases/", PathSuffix: "/settle", Method: "POST", Handler: r.settleExecutionHandler, Auth: AuthUser},
 		// GET /api/purchases/{id}/revoke/calculate: returns the Azure refund quote
 		// (amount + currency) for the two-step quote-then-confirm revoke UX
 		// (issue #290 Finding #4). No state mutation; result used to populate
@@ -622,6 +626,10 @@ func (r *Router) cancelPurchaseHandler(ctx context.Context, req *events.LambdaFu
 	}
 	token := resolveApprovalToken(req)
 	return r.h.cancelPurchase(ctx, req, params["id"], token)
+}
+
+func (r *Router) settleExecutionHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.settleExecution(ctx, req, params["id"])
 }
 
 func (r *Router) retryPurchaseHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
