@@ -453,6 +453,7 @@ func TestExecuteRIExchangeReshape_NoConvertibleRIs(t *testing.T) {
 	}
 
 	clients := riExchangeClients{
+		offeredInstanceTypes: noOfferedCatalog,
 		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
 			return nil, nil // no RIs
 		},
@@ -486,6 +487,7 @@ func TestExecuteRIExchangeReshape_ListRIsFailure(t *testing.T) {
 	}
 
 	clients := riExchangeClients{
+		offeredInstanceTypes: noOfferedCatalog,
 		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
 			return nil, errors.New("EC2 API throttled")
 		},
@@ -511,6 +513,7 @@ func TestExecuteRIExchangeReshape_UtilizationFailure(t *testing.T) {
 	}
 
 	clients := riExchangeClients{
+		offeredInstanceTypes: noOfferedCatalog,
 		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
 			return []ec2svc.ConvertibleRI{{ReservedInstanceID: "ri-1"}}, nil
 		},
@@ -558,6 +561,7 @@ func TestExecuteRIExchangeReshape_ManualMode(t *testing.T) {
 	}
 
 	clients := riExchangeClients{
+		offeredInstanceTypes: noOfferedCatalog,
 		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
 			return []ec2svc.ConvertibleRI{
 				{
@@ -665,6 +669,7 @@ func TestExecuteRIExchangeReshape_AutoMode(t *testing.T) {
 	}
 
 	clients := riExchangeClients{
+		offeredInstanceTypes: noOfferedCatalog,
 		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
 			return []ec2svc.ConvertibleRI{
 				{
@@ -773,6 +778,7 @@ func TestExecuteRIExchangeReshape_DailyCapHitMidRun(t *testing.T) {
 	}
 
 	clients := riExchangeClients{
+		offeredInstanceTypes: noOfferedCatalog,
 		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
 			return []ec2svc.ConvertibleRI{
 				{

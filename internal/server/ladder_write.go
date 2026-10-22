@@ -11,6 +11,7 @@ import (
 	pkgladder "github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 	awsprovider "github.com/LeanerCloud/cloud-commitments-go/providers/aws"
 	awsladder "github.com/LeanerCloud/cloud-commitments-go/providers/aws/ladder"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/api"
 )
 
 // exchangeRunnerAdapter bridges internal/server wiring (exchange store, EC2 exchange
@@ -44,14 +45,24 @@ func (a *exchangeRunnerAdapter) RunAutoExchange(ctx context.Context, cfg exchang
 		return nil, fmt.Errorf("exchangeRunnerAdapter: load AWS config: %w", err)
 	}
 
-	ec2Client := awsprovider.NewEC2ClientDirect(awsCfg)
-	recsClient := awsprovider.NewRecommendationsClientDirect(awsCfg)
+	clients := newRIExchangeClients(
+		awsprovider.NewEC2ClientDirect(awsCfg),
+		awsprovider.NewRecommendationsClientDirect(awsCfg),
+		exchange.NewExchangeClient(awsCfg),
+		a.region,
+		a.accountID,
+	)
+	return a.runWithClients(ctx, cfg, ladderRunID, dryRun, clients)
+}
 
-	instances, err := ec2Client.ListConvertibleReservedInstances(ctx)
+// runWithClients is RunAutoExchange after client construction, split out so
+// tests can drive it with fakes.
+func (a *exchangeRunnerAdapter) runWithClients(ctx context.Context, cfg exchange.RIExchangeConfig, ladderRunID *string, dryRun bool, clients riExchangeClients) (*exchange.AutoExchangeResult, error) {
+	instances, err := clients.listConvertibleRIs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("exchangeRunnerAdapter: list convertible RIs: %w", err)
 	}
-	utilData, err := recsClient.GetRIUtilization(ctx, cfg.LookbackDays, a.region)
+	utilData, err := clients.getRIUtilization(ctx, cfg.LookbackDays)
 	if err != nil {
 		return nil, fmt.Errorf("exchangeRunnerAdapter: get RI utilization: %w", err)
 	}
@@ -60,18 +71,19 @@ func (a *exchangeRunnerAdapter) RunAutoExchange(ctx context.Context, cfg exchang
 	store := newConfigExchangeStoreAdapter(a.app.Config)
 
 	return exchange.RunAutoExchange(ctx, exchange.RunAutoExchangeParams{
-		Store:          store,
-		ExchangeClient: exchange.NewExchangeClient(awsCfg),
-		LookupOffering: newConvertibleOfferingLookup(ec2Client),
-		RIs:            riInfos,
-		Utilization:    utilInfos,
-		Config:         cfg,
-		AccountID:      a.accountID,
-		Region:         a.region,
-		DashboardURL:   a.app.appConfig.DashboardURL,
-		RIMetadata:     riMetadata,
-		LadderRunID:    ladderRunID,
-		DryRun:         dryRun,
+		Store:                store,
+		ExchangeClient:       clients.exchangeClient,
+		LookupOffering:       clients.lookupOffering,
+		RIs:                  riInfos,
+		Utilization:          utilInfos,
+		OfferedInstanceTypes: api.OfferedInstanceTypes(ctx, clients.region, clients.offeredInstanceTypes),
+		Config:               cfg,
+		AccountID:            clients.accountID,
+		Region:               clients.region,
+		DashboardURL:         a.app.appConfig.DashboardURL,
+		RIMetadata:           riMetadata,
+		LadderRunID:          ladderRunID,
+		DryRun:               dryRun,
 	})
 }
 
