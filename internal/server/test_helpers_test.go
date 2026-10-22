@@ -340,6 +340,9 @@ func (m *mockConfigStoreForHealth) UpsertRecommendations(_ context.Context, _ ti
 func (m *mockConfigStoreForHealth) ListStoredRecommendations(_ context.Context, _ config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	return nil, nil
 }
+func (m *mockConfigStoreForHealth) ListStoredRecommendationsChunk(_ context.Context, _ config.RecommendationFilter, _ *config.RecommendationScanKey, _ int) (config.RecommendationChunk, error) {
+	return config.RecommendationChunk{Done: true}, nil
+}
 func (m *mockConfigStoreForHealth) GetRecommendationsFreshness(_ context.Context) (*config.RecommendationsFreshness, error) {
 	return &config.RecommendationsFreshness{}, nil
 }

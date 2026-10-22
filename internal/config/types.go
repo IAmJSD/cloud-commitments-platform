@@ -764,6 +764,26 @@ type RecommendationFilter struct {
 	ID                           string   // "" = all ids; non-empty = exact match on the id column
 }
 
+// RecommendationScanKey is a stored recommendation's position in the keyset
+// scan order of ListStoredRecommendationsChunk (issue #981): the application
+// recommendation ID compared byte-wise, then the cache table's UUID primary
+// key (RowID), which keeps rows that share an ID in a total order.
+type RecommendationScanKey struct {
+	ID    string
+	RowID string
+}
+
+// RecommendationChunk is one keyset read of the recommendations cache.
+// Recs holds the rows that passed the filter, in scan order. Last is the
+// position of the last row read (nil when no row was read) and is where the
+// next chunk resumes. Done is true when fewer rows than the limit were read,
+// so nothing matches after Last.
+type RecommendationChunk struct {
+	Recs []RecommendationRecord
+	Last *RecommendationScanKey
+	Done bool
+}
+
 // PurchasePlanFilter parameterises ListPurchasePlans. Zero-value means "no
 // filter" (all plans are returned). Non-empty AccountIDs restricts the result
 // to plans that reference at least one of the given account IDs via the

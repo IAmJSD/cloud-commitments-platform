@@ -548,6 +548,10 @@ type StoreInterface interface {
 	ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord) error
 	UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect) error
 	ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error)
+	// ListStoredRecommendationsChunk is ListStoredRecommendations for a
+	// keyset walk: at most limit rows after the position after, in
+	// byte-wise ID order then primary-key order (issue #981).
+	ListStoredRecommendationsChunk(ctx context.Context, filter RecommendationFilter, after *RecommendationScanKey, limit int) (RecommendationChunk, error)
 	GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error)
 	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error
 	// SetRecommendationsCollectionPartial records (or, with nil, clears) the

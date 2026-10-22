@@ -1612,6 +1612,19 @@ func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter 
 	return v, args.Error(1)
 }
 
+func (m *MockConfigStore) ListStoredRecommendationsChunk(ctx context.Context, filter config.RecommendationFilter, after *config.RecommendationScanKey, limit int) (config.RecommendationChunk, error) {
+	m.record("ListStoredRecommendationsChunk", ctx, filter, after, limit)
+	if !isExpected(&m.Mock, "ListStoredRecommendationsChunk") {
+		return config.RecommendationChunk{Done: true}, nil
+	}
+	args := m.Called(ctx, filter, after, limit)
+	v, ok := args.Get(0).(config.RecommendationChunk)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected config.RecommendationChunk, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 func (m *MockConfigStore) GetRecommendationsFreshness(ctx context.Context) (*config.RecommendationsFreshness, error) {
 	m.record("GetRecommendationsFreshness", ctx)
 	if !isExpected(&m.Mock, "GetRecommendationsFreshness") {
