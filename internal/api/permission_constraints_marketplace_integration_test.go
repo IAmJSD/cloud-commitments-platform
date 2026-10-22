@@ -156,6 +156,7 @@ func TestMarketplacePermissionConstraintsHTTP(t *testing.T) {
 			{name: "missing-verb", action: auth.ActionView, want: 403},
 			{name: "key-missing-verb", key: &auth.Permission{Action: auth.ActionView, Resource: auth.ResourcePurchases}, want: 403},
 			{name: "missing-account", missing: "account", constraints: matching, want: 403},
+			{name: "resolved-account", missing: "account-resolved", constraints: matching, allowed: []string{account}, want: 200},
 			{name: "missing-provider", missing: "provider", constraints: matching, want: 403},
 			{name: "missing-service", missing: "service", constraints: matching, want: 403},
 			{name: "missing-region", missing: "region", constraints: matching, want: 403},
@@ -192,9 +193,11 @@ func TestMarketplacePermissionConstraintsHTTP(t *testing.T) {
 				row := standardRow()
 				row.PurchaseID, row.CloudAccountID, row.Provider, row.Service = uuid.NewString(), &account, "aws", "ec2"
 				switch tc.missing {
-				case "account":
+				case "account", "account-resolved":
 					// A row with no cloud account is signed with the host's
 					// credentials only when it belongs to the host account (#261).
+					// The save resolves the registered host account (#1235);
+					// "account" clears it again to keep a legacy unlinked row.
 					row.CloudAccountID, row.AccountID = nil, marketplaceHostAccount
 				case "provider":
 					row.Provider = " "
@@ -204,6 +207,10 @@ func TestMarketplacePermissionConstraintsHTTP(t *testing.T) {
 					row.Region = ""
 				}
 				require.NoError(t, store.SavePurchaseHistory(ctx, row))
+				if tc.missing == "account" {
+					_, err := pg.DB.Pool().Exec(ctx, `UPDATE purchase_history SET cloud_account_id = NULL WHERE purchase_id = $1`, row.PurchaseID)
+					require.NoError(t, err)
+				}
 				if route == "marketplace-cancel" {
 					require.NoError(t, store.UpdatePurchaseHistoryListing(ctx, row.PurchaseID, "ril-existing", config.ListingStateActive))
 				}
