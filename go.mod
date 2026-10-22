@@ -84,7 +84,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations v1.1.0
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys v1.4.0
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets v1.4.0
-	github.com/LeanerCloud/cloud-commitments-go/pkg v0.0.0-20261018003623-541e05e5fd29
+	github.com/LeanerCloud/cloud-commitments-go/pkg v0.0.0-20261020134525-e237996e45b4
 	github.com/LeanerCloud/cloud-commitments-go/providers/aws v0.0.0-20261019192600-aeb8a6f7ff51
 	github.com/LeanerCloud/cloud-commitments-go/providers/azure v0.0.0-20261017134002-3def3f898617
 	github.com/LeanerCloud/cloud-commitments-go/providers/gcp v0.0.0-20261017134002-3def3f898617
