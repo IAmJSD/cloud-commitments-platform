@@ -35,6 +35,11 @@ func (f *fakeReshapeEC2) ListConvertibleReservedInstances(_ context.Context) ([]
 	return f.instances, nil
 }
 
+// GetValidResourceTypes returns no catalog, so reshape keeps the legacy ladder.
+func (f *fakeReshapeEC2) GetValidResourceTypes(_ context.Context) ([]string, error) {
+	return nil, nil
+}
+
 // fakeReshapeRecs is a stub for reshapeRecsClient. Counts calls so the
 // test can assert cache-hit behavior on the second request.
 type fakeReshapeRecs struct {

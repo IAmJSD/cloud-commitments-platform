@@ -41,9 +41,12 @@ import (
 // Cross-family alternatives no longer flow through here — they're
 // sourced from the cached AWS Cost Explorer purchase recommendations
 // in Postgres via purchaseRecLookupFromStore (see exchange_lookup.go),
-// so the EC2 client only needs to enumerate convertible RIs.
+// so the EC2 client only needs to enumerate convertible RIs and the
+// region's offered instance types (DescribeInstanceTypeOfferings), which
+// limit reshape targets to sizes the region actually sells.
 type reshapeEC2Client interface {
 	ListConvertibleReservedInstances(ctx context.Context) ([]ec2svc.ConvertibleRI, error)
+	GetValidResourceTypes(ctx context.Context) ([]string, error)
 }
 
 // reshapeRecsClient is the narrow slice of the recommendations
@@ -1753,7 +1756,9 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	}
 	currencyCode := firstNonEmptyCurrency(instances)
 	lookup := purchaseRecLookupFromStore(h.config, cloudAccountID)
-	recs := exchange.AnalyzeReshapingWithRecs(ctx, riInfos, utilInfos, p.threshold, p.region, currencyCode, lookup)
+	offered := OfferedInstanceTypes(ctx, p.region, ec2Client.GetValidResourceTypes)
+	recs := exchange.AnalyzeReshapingWithRecs(ctx, riInfos, utilInfos, p.threshold, p.region, currencyCode, lookup,
+		exchange.WithOfferedInstanceTypes(offered))
 
 	resp := &ReshapeRecommendationsResponse{Recommendations: recs, ExcludedRIs: excluded}
 	h.attachReshapeStaleness(ctx, resp)
