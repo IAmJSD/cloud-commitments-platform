@@ -207,8 +207,9 @@ const (
 //
 // Known limit, stated so nobody reads more into it: the CLI subtest pins the
 // build as configured, with migrateCLIBuildTag. It asserts that build stays
-// lib/pq-free; it cannot notice someone changing the tag back to `postgres` in
-// the Dockerfile, which is a build-configuration change no Go test observes.
+// lib/pq-free; it does not notice someone changing the tag back to `postgres` in
+// the Dockerfile. TestMigrateCLI_BuiltFromModuleWithPgx5 covers that by reading
+// each file that builds the CLI.
 func TestLibPqDriverNotRegistered(t *testing.T) {
 	t.Run("driver not registered", func(t *testing.T) {
 		for _, scheme := range []string{"postgres", "postgresql"} {
