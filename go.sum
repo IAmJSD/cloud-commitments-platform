@@ -92,10 +92,10 @@ github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/cloudmock v0
 github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/cloudmock v0.54.0/go.mod h1:vB2GH9GAYYJTO3mEn8oYwzEdhlayZIdQz6zdzgUIRvA=
 github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.54.0 h1:s0WlVbf9qpvkh1c/uDAPElam0WrL7fHRIidgZJ7UqZI=
 github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.54.0/go.mod h1:Mf6O40IAyB9zR/1J8nGDDPirZQQPbYJni8Yisy7NTMc=
-github.com/LeanerCloud/cloud-commitments-go/pkg v0.0.0-20261018003623-541e05e5fd29 h1:QJkoZBHkwjvMGplDb1TcuBy3HdYPxlZ+AyR/7QEU8Hc=
-github.com/LeanerCloud/cloud-commitments-go/pkg v0.0.0-20261018003623-541e05e5fd29/go.mod h1:SCDEgHG6evjPh0RsoXof+J3aMmGXNFMrwbJIle7rMpQ=
-github.com/LeanerCloud/cloud-commitments-go/providers/aws v0.0.0-20261019192600-aeb8a6f7ff51 h1:fr8mS6aF7/y69cJ5UlF9MEvP15mSlH/4yKg25Cvk/YM=
-github.com/LeanerCloud/cloud-commitments-go/providers/aws v0.0.0-20261019192600-aeb8a6f7ff51/go.mod h1:p6TrYRa4+lvcdsPCAJ+sa0tI0sRfGQ/0YT1Af3fZk3w=
+github.com/LeanerCloud/cloud-commitments-go/pkg v0.0.0-20261020053130-ff6225d5ff04 h1:D595qtoMszl7dkETbmVFzn+WPECQ7HuiKnsMlFI7bLA=
+github.com/LeanerCloud/cloud-commitments-go/pkg v0.0.0-20261020053130-ff6225d5ff04/go.mod h1:SCDEgHG6evjPh0RsoXof+J3aMmGXNFMrwbJIle7rMpQ=
+github.com/LeanerCloud/cloud-commitments-go/providers/aws v0.0.0-20261020071945-92722e673741 h1:AlfTl8EpfcRIWjU1FIx/XN+4ZgJjktjP/gPlRylPoF8=
+github.com/LeanerCloud/cloud-commitments-go/providers/aws v0.0.0-20261020071945-92722e673741/go.mod h1:cx+GF1J6RKy0CTOs2qhy+DM9rwFbKf3g0JIhYwqWz9k=
 github.com/LeanerCloud/cloud-commitments-go/providers/azure v0.0.0-20261017134002-3def3f898617 h1:K9wBX9ac1QwhkjW7BvDt0gl2Kt9fGdDytJyndoPRcBU=
 github.com/LeanerCloud/cloud-commitments-go/providers/azure v0.0.0-20261017134002-3def3f898617/go.mod h1:iOwl8e9EKGb3VQ4u/YjiqVzglhD6/GX1ABC3tBkqu0A=
 github.com/LeanerCloud/cloud-commitments-go/providers/gcp v0.0.0-20261017134002-3def3f898617 h1:VYVbQyoR+tIcPoXhkviclexKuU5H+A21hSXudB+kZag=
