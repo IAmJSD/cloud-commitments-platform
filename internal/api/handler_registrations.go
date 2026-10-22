@@ -221,6 +221,11 @@ func (h *Handler) getPendingRegistration(ctx context.Context, id string) (*confi
 }
 
 // setReviewMetadata populates reviewer info from the current admin session.
+// reviewed_by is a UUID foreign key to users, so only a real user ID is
+// stored. The admin API key session carries the non-UUID sentinel
+// apiKeyAdminUserID; writing it would fail the UPDATE with SQLSTATE 22P02
+// (issue #1234), so reviewed_by stays NULL and the log line below keeps
+// the audit trail.
 func (h *Handler) setReviewMetadata(ctx context.Context, reg *config.AccountRegistration, httpReq *events.LambdaFunctionURLRequest) {
 	reviewedAt := time.Now()
 	reg.ReviewedAt = &reviewedAt
@@ -228,8 +233,12 @@ func (h *Handler) setReviewMetadata(ctx context.Context, reg *config.AccountRegi
 	if err != nil {
 		logging.Warnf("setReviewMetadata: could not resolve admin session, reviewer ID will be unset: %v", err)
 	}
-	if session != nil {
-		reg.ReviewedBy = &session.UserID
+	if session == nil {
+		return
+	}
+	reg.ReviewedBy = validUUIDPtrOrNil(&session.UserID)
+	if reg.ReviewedBy == nil {
+		logging.Infof("registration %s: %s by non-user principal %q; reviewed_by left NULL", reg.ID, reg.Status, session.UserID)
 	}
 }
 
