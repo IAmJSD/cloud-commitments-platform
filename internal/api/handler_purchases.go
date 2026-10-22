@@ -909,8 +909,10 @@ func concealExecutionDenial(err error) error {
 
 // tokenActionError maps the email-link approve/cancel failures that are the
 // caller's fault to a 4xx: a wrong token is 403 (as on the RI exchange
-// approve path), an expired token is 410, and an execution
-// whose status no longer allows the action is 409. Anything else stays a server error.
+// approve path), as is a token rotated or expired between the snapshot check
+// and the status CAS (config.ErrApprovalTokenChanged, issue #1190), an expired
+// token is 410, and an execution whose status no longer allows the action is
+// 409. Anything else stays a server error.
 func tokenActionError(err error) error {
 	switch {
 	case errors.Is(err, config.ErrAuditLoss):
@@ -919,7 +921,7 @@ func tokenActionError(err error) error {
 		return claimedRowRefusalError(nil, err)
 	case errors.Is(err, purchase.ErrStaleAzurePricing):
 		return NewClientError(409, err.Error())
-	case errors.Is(err, purchase.ErrInvalidApprovalToken):
+	case errors.Is(err, purchase.ErrInvalidApprovalToken), errors.Is(err, config.ErrApprovalTokenChanged):
 		return NewClientError(403, "invalid approval token")
 	case errors.Is(err, purchase.ErrApprovalTokenExpired):
 		return NewClientError(410, "approval token has expired")

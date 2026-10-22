@@ -200,6 +200,7 @@ func cancelRouteHandler(exec *config.PurchaseExecution, perms ...auth.Permission
 	store.On("GetExecutionByID", mock.Anything, cancelExecID).Return(exec, nil)
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil).Maybe()
 	store.On("CancelExecutionAtomic", mock.Anything, mock.Anything, cancelExecID, mock.Anything).Return(true, "canceled", nil).Maybe()
+	store.On("CancelExecutionAtomicTokenPinned", mock.Anything, mock.Anything, cancelExecID, mock.Anything, mock.Anything).Return(true, "canceled", nil).Maybe()
 	store.On("DeleteSuppressionsByExecutionTx", mock.Anything, mock.Anything, cancelExecID).Return(nil).Maybe()
 	store.On("TransitionExecutionStatus", mock.Anything, cancelExecID, mock.Anything, mock.Anything, mock.Anything).
 		Return(&config.PurchaseExecution{ExecutionID: cancelExecID, Status: "canceled"}, nil).Maybe()
@@ -226,6 +227,7 @@ func TestCancelPurchase_ConstrainedCancelAnyIsDeniedWithAndWithoutToken(t *testi
 			_, err := h.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, token)
 			requireRevokeForbidden(t, err, constraintDenied)
 			store.AssertNotCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			store.AssertNotCalled(t, "CancelExecutionAtomicTokenPinned", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		})
 	}
 }
@@ -236,7 +238,7 @@ func TestCancelPurchase_ContactApproverWithoutCancelVerbStillUsesToken(t *testin
 	res, err := h.cancelPurchase(context.Background(), sessionCancelReq(), cancelExecID, tokenErrRawToken)
 	require.NoError(t, err)
 	assert.Equal(t, "canceled", res.(map[string]string)["status"])
-	store.AssertCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, cancelExecID, mock.Anything)
+	store.AssertCalled(t, "CancelExecutionAtomicTokenPinned", mock.Anything, mock.Anything, cancelExecID, mock.Anything, tokenErrRawToken)
 }
 
 func TestCancelPurchase_InScopeCancelAnyStillCancels(t *testing.T) {
