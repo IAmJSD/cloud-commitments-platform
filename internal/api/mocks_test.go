@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
@@ -136,6 +137,26 @@ func (m *MockScheduler) ListRecommendations(ctx context.Context, filter config.R
 		return nil, args.Error(1)
 	}
 	return args.Get(0).([]config.RecommendationRecord), args.Error(1)
+}
+
+// ScanRecommendations replays the []config.RecommendationRecord registered
+// for it the way the store-backed scan does: sorted by ID (a stable sort, so
+// duplicate IDs keep their relative order), chunkSize rows per call to fn,
+// stopping at fn's first error. The second return value is the scan's own
+// error.
+func (m *MockScheduler) ScanRecommendations(ctx context.Context, filter config.RecommendationFilter, chunkSize int, fn func([]config.RecommendationRecord) error) error {
+	args := m.Called(ctx, filter, chunkSize, fn)
+	if recs, ok := args.Get(0).([]config.RecommendationRecord); ok {
+		sorted := append([]config.RecommendationRecord(nil), recs...)
+		sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+		for start := 0; start < len(sorted); start += chunkSize {
+			end := min(start+chunkSize, len(sorted))
+			if err := fn(sorted[start:end]); err != nil {
+				return err
+			}
+		}
+	}
+	return args.Error(1)
 }
 
 func (m *MockScheduler) GetRecommendationByID(ctx context.Context, id string) (*config.RecommendationRecord, []string, error) {

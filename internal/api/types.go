@@ -170,6 +170,10 @@ type PurchaseManagerInterface interface {
 type SchedulerInterface interface {
 	CollectRecommendations(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error)
 	ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
+	// ScanRecommendations walks the same rows as ListRecommendations in
+	// byte-wise ID order, chunkSize store rows at a time, calling fn with
+	// each chunk's survivors (issue #981).
+	ScanRecommendations(ctx context.Context, filter config.RecommendationFilter, chunkSize int, fn func([]config.RecommendationRecord) error) error
 	// GetRecommendationByID fetches a single rec by its application-level id,
 	// bypassing account-override filtering so deep-linked URLs to override-
 	// hidden recs resolve. hiddenBy is non-nil when the rec would be dropped by
