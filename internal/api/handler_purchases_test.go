@@ -5908,8 +5908,10 @@ func TestHandler_revokePurchase_ExpiredToken(t *testing.T) {
 	past := time.Now().Add(-1 * time.Hour)
 
 	exec := &config.PurchaseExecution{
-		ExecutionID:            execID,
-		ApprovalToken:          token,
+		ExecutionID: execID,
+		// Stored at rest as the hash (issue #103), so the token really matches
+		// and the expiry is what rejects it (the hash is compared first, issue #1190).
+		ApprovalToken:          config.HashApprovalToken(token),
 		ApprovalTokenExpiresAt: &past,
 		Status:                 "completed",
 		Recommendations: []config.RecommendationRecord{

@@ -166,3 +166,40 @@ func TestHandleRequest_TokenActions_TokenRotatedBeforeCASIs403(t *testing.T) {
 		})
 	}
 }
+
+// Issue #1190: the revoke endpoint compares the token before the link's expiry
+// and the revocation window, as approve does, so a wrong token gets the same
+// 403 "invalid revocation token" whether the row's link is live, expired or
+// past its window; only the right token learns that the link has lapsed.
+func TestHandleRequest_RevokeViaEmail_WrongTokenOnLapsedRowIsInvalid(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	future := time.Now().Add(time.Hour)
+	longAgo := time.Now().Add(-2 * config.RevocationWindow)
+	hash := config.HashApprovalToken(tokenErrRawToken)
+	cases := []struct {
+		name      string
+		exec      config.PurchaseExecution
+		token     string
+		want      int
+		wantInMsg string
+	}{
+		{"wrong token on an expired link", config.PurchaseExecution{Status: "completed", ApprovalToken: hash, ApprovalTokenExpiresAt: &past}, "wrong", 403, "invalid revocation token"},
+		{"wrong token past the revocation window", config.PurchaseExecution{Status: "completed", ApprovalToken: hash, ApprovalTokenExpiresAt: &future, CompletedAt: &longAgo}, "wrong", 403, "invalid revocation token"},
+		{"right token on an expired link", config.PurchaseExecution{Status: "completed", ApprovalToken: hash, ApprovalTokenExpiresAt: &past}, tokenErrRawToken, 409, "expired"},
+		{"right token past the revocation window", config.PurchaseExecution{Status: "completed", ApprovalToken: hash, ApprovalTokenExpiresAt: &future, CompletedAt: &longAgo}, tokenErrRawToken, 403, "revocation window has closed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := tc.exec
+			h := tokenErrHandler(t, &exec, nil)
+			resp, err := h.HandleRequest(context.Background(), tokenErrRequest("revoke", tc.token))
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, resp.StatusCode, resp.Body)
+			assert.Contains(t, resp.Body, tc.wantInMsg)
+			if tc.token != tokenErrRawToken {
+				assert.NotContains(t, resp.Body, "expired")
+				assert.NotContains(t, resp.Body, "window")
+			}
+		})
+	}
+}
