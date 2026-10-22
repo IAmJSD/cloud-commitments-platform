@@ -3089,17 +3089,44 @@ func validateExecutePurchaseRecommendations(recs []config.RecommendationRecord) 
 // response should carry. Returns the original "pending" when email_sent is
 // true or when the failed-state write itself fails (best-effort — the UI
 // still gets email_sent=false and can point the user at History).
+//
+// The write is guarded on the row still being "pending" (issue #1232). A
+// session approve, cancel or pause can land while the email is being sent;
+// an unguarded write would then stamp "failed" over a row that was already
+// approved and bought, which makes it eligible for retry and a second
+// purchase. A lost guard is a no-op: the row keeps the status the other
+// writer gave it, and that status is what the response carries.
 func (h *Handler) finalizePurchaseStatus(ctx context.Context, execution *config.PurchaseExecution, emailSent bool, emailReason string) string {
 	if emailSent {
 		return "pending"
 	}
-	execution.Status = "failed"
-	execution.Error = emailReason
-	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
+	failed := *execution
+	failed.Status = "failed"
+	failed.Error = emailReason
+	err := h.config.SaveExecutionIfStatus(ctx, &failed, []string{"pending"})
+	switch {
+	case err == nil:
+		execution.Status, execution.Error = failed.Status, failed.Error
+		return "failed"
+	case errors.Is(err, config.ErrExecutionNotInExpectedStatus):
+		logging.Warnf("execution %s left pending while its approval email was being sent; not marking it failed: %v", execution.ExecutionID, err)
+		return h.currentExecutionStatus(ctx, execution.ExecutionID)
+	default:
 		logging.Errorf("failed to mark execution %s as failed after email send error: %v", execution.ExecutionID, err)
 		return "pending"
 	}
-	return "failed"
+}
+
+// currentExecutionStatus re-reads an execution's stored status for a response
+// whose in-memory copy went stale. Falls back to "pending" (the status the row
+// was created with) when the read fails.
+func (h *Handler) currentExecutionStatus(ctx context.Context, executionID string) string {
+	row, err := h.config.GetExecutionByID(ctx, executionID)
+	if err != nil || row == nil {
+		logging.Errorf("failed to re-read execution %s status: %v", executionID, err)
+		return "pending"
+	}
+	return row.Status
 }
 
 // validateAndTotalRecommendations validates each recommendation and returns
