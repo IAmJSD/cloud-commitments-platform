@@ -278,8 +278,10 @@ func (app *Application) processOneLadderConfig(
 // have not yet been bought. Tranches completed after `now` are counted too (see
 // below): a safe under-buy, and a deliberate deviation from go's InFlight doc.
 //
-// Units: Allocate sizes the gap in on-demand-equivalent dollars and emits
-// tranches in commitment dollars with the rate they were sized with. Rows are
+// Units: the provider's existing and expiring coverage arrive in commitment
+// dollars and are first converted to on-demand-equivalent dollars with the
+// same rates (ladderLayerStatesOnDemand). Allocate sizes the gap in
+// on-demand-equivalent dollars and emits tranches in commitment dollars with the rate they were sized with. Rows are
 // stored as basis=commitment plus that rate; the store nets each row back to
 // on-demand-equivalent dollars by its own rate.
 //
@@ -327,6 +329,13 @@ func (app *Application) executeLadderRun(
 	rates, err := rater.GetCommitmentRates(ctx, scope, term, paymentOpt)
 	if err != nil {
 		return fmt.Errorf("GetCommitmentRates: %w", err)
+	}
+
+	// Providers report existing coverage in commitment dollars; Allocate and
+	// the plan snapshot compare it with an on-demand-equivalent target (#946).
+	layerStates, err = ladderLayerStatesOnDemand(layerStates, rates)
+	if err != nil {
+		return fmt.Errorf("existing coverage: %w", err)
 	}
 
 	// L5 netting runs inside the persist transaction (PlanAndSaveLadderRun):
@@ -553,7 +562,8 @@ func ladderConfigToEngine(dbCfg *config.LadderConfigDB, accountID string) (pkgla
 // The monetary snapshot is derived to stay consistent with the authoritative
 // allocation rather than recomputed independently:
 //   - target = baseline low-water * targetCoveragePct/100 (the coverage goal),
-//   - existing = sum of per-layer ExistingUSDPerHour,
+//   - existing = sum of per-layer ExistingUSDPerHour, already converted to
+//     on-demand-equivalent dollars by ladderLayerStatesOnDemand,
 //   - gap = sum of the planned allocations' on-demand-equivalent gaps (the unit
 //     of target and existing), NOT target - existing.
 //
@@ -597,7 +607,8 @@ func assembleLadderPlan(
 	// Holds are informational; append last.
 	actions = append(actions, allocResult.Holds...)
 
-	// existing = sum of per-layer existing commitment (always reportable).
+	// existing = sum of per-layer on-demand-equivalent existing coverage
+	// (always reportable).
 	var existingTotal float64
 	for _, ls := range layerStates {
 		if ls.ExistingUSDPerHour != nil {
