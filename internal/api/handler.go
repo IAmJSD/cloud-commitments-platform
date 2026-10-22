@@ -575,11 +575,15 @@ func riExchangeArmStateOf(cfg *config.GlobalConfig) riExchangeArmState {
 // The predicate mirrors the CONSUMER exactly. pkg/exchange/auto.go's
 // processRecommendation routes to processManualExchange only on the literal
 // "manual" and sends every other value -- including "", "Auto" and any typo --
-// to processAutoExchange. Defining "armed" as mode == "auto" would therefore
-// leave the gate below open on precisely the route that matters: PUT /api/config
-// unmarshals onto GlobalConfig wholesale and GlobalConfig.Validate never
-// constrains RIExchangeMode, so any non-"manual" string reaches the scheduler.
-// Both axes of the guard must see what the scheduler sees.
+// to processAutoExchange.
+//
+// Both write routes now accept only "manual" or "auto" when a caller sets the
+// mode (issue #1196), but rows stored before that check may still hold "",
+// "Auto" or a typo, and a partial PUT /api/config that omits ri_exchange_mode
+// preserves them. Defining "armed" as mode == "auto" would leave the gate below
+// open for such a row: flipping ri_exchange_enabled on would arm it unseen. So
+// armed() stays fail-safe and treats every non-"manual" value as auto. Both
+// axes of the guard must see what the scheduler sees.
 func (s riExchangeArmState) armed() bool {
 	return s.enabled && s.mode != "manual"
 }

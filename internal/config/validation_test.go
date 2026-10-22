@@ -1145,3 +1145,18 @@ func TestPurchasePlan_CheckNoMultiStepSavingsPlans(t *testing.T) {
 		})
 	}
 }
+
+func TestIsValidRIExchangeMode(t *testing.T) {
+	for mode, want := range map[string]bool{
+		"manual":    true,
+		"auto":      true,
+		"":          false,
+		"Auto":      false,
+		"MANUAL":    false,
+		"automatic": false,
+		" auto":     false,
+		"manual ":   false,
+	} {
+		assert.Equal(t, want, IsValidRIExchangeMode(mode), "mode %q", mode)
+	}
+}

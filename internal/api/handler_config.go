@@ -79,6 +79,7 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, NewClientError(400, "invalid request body")
 	}
 	_, gracePresent := present["grace_period_days"]
+	modeSent := riExchangeModeSent(present)
 	if err := h.requireGlobalConfigScope(ctx, session); err != nil {
 		return nil, err
 	}
@@ -116,8 +117,8 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		if uErr := json.Unmarshal([]byte(req.Body), existing); uErr != nil {
 			return NewClientError(400, "invalid request body")
 		}
-		if vErr := existing.Validate(); vErr != nil {
-			return NewClientError(400, fmt.Sprintf("validation error: %s", vErr))
+		if vErr := validateGlobalConfigWrite(existing, modeSent); vErr != nil {
+			return vErr
 		}
 		if gErr := h.requireRIExchangeAutoModeGrant(ctx, req, before, riExchangeArmStateOf(existing)); gErr != nil {
 			return gErr
@@ -131,6 +132,32 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 	logLadderExecutionSwitchChange(ctx, session, ladderBefore, merged)
 
 	return &StatusResponse{Status: "updated"}, nil
+}
+
+// riExchangeModeSent reports whether the body writes ri_exchange_mode. A JSON
+// null does not: json.Unmarshal leaves the stored value in place for it.
+func riExchangeModeSent(present map[string]json.RawMessage) bool {
+	raw, ok := present["ri_exchange_mode"]
+	return ok && string(raw) != "null"
+}
+
+// validateGlobalConfigWrite validates the merged config as a 400.
+//
+// ri_exchange_mode is checked only when the body sets it (issue #1196), with
+// the same manual|auto rule PUT /api/ri-exchange/config applies. Checking the
+// merged value instead would refuse every partial save, including the
+// laddering kill-switch toggle, on a row stored before this check with a mode
+// such as "Auto". Such a row keeps its value until a caller sends a valid one,
+// and armed() keeps treating it as auto. Runs before the arming gates so a
+// malformed write never reveals grant state.
+func validateGlobalConfigWrite(cfg *config.GlobalConfig, modeSent bool) error {
+	if modeSent && !config.IsValidRIExchangeMode(cfg.RIExchangeMode) {
+		return NewClientError(400, "ri_exchange_mode must be 'manual' or 'auto'")
+	}
+	if err := cfg.Validate(); err != nil {
+		return NewClientError(400, fmt.Sprintf("validation error: %s", err))
+	}
+	return nil
 }
 
 // requireSwitchGrants chains the arming gates of the two money-spending
