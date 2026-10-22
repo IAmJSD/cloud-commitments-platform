@@ -1193,7 +1193,8 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 //
 // Returns (true, nil) when this call won the race and wrote the linkage,
 // (false, nil) when zero rows were affected because a concurrent retry
-// already claimed the row (or it is no longer 'failed'), and (false, err)
+// already claimed the row (or it is no longer 'failed', or an operator
+// settled it: SettleFailedExecution, issue #999), and (false, err)
 // on a real DB error. Must be called inside the same tx that inserts the
 // successor row, after that insert, so the FK on retry_execution_id is
 // satisfied.
@@ -1205,6 +1206,7 @@ func (s *PostgresStore) LinkRetryExecutionAtomic(ctx context.Context, tx pgx.Tx,
 		 WHERE execution_id = $1
 		   AND status = 'failed'
 		   AND retry_execution_id IS NULL
+		   AND outcome_settled_at IS NULL
 	`
 	tag, err := tx.Exec(ctx, q, executionID, retryExecutionID)
 	if err != nil {

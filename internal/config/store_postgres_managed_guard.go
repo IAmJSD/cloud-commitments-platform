@@ -123,21 +123,37 @@ func sameAccountSet(a, b []string) bool {
 // hold or buy capacity: the FK would detach it (ON DELETE SET NULL) and it
 // would then buy with no plan. Judged under the caller's plan lock, so a root
 // inserted by a command that committed first is seen. Settled history
-// (completed, canceled, expired, failed without submission) does not block.
+// (completed, canceled, expired, failed without submission) does not block,
+// and neither does a failed row with an unknown outcome that an operator
+// settled (SettleFailedExecution): it can no longer be retried and keeps its
+// failed status, so detaching it hides nothing.
 func requireManagedDeleteTx(ctx context.Context, tx pgx.Tx, planID string) error {
-	rows, err := tx.Query(ctx, `SELECT status, no_submission FROM purchase_executions WHERE plan_id = $1`, planID)
+	rows, err := tx.Query(ctx, `SELECT status, no_submission, outcome_settled_at IS NOT NULL FROM purchase_executions WHERE plan_id = $1`, planID)
 	if err != nil {
 		return fmt.Errorf("failed to read plan executions: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var e PurchaseExecution
-		if err := rows.Scan(&e.Status, &e.NoSubmission); err != nil {
+		var settled bool
+		if err := rows.Scan(&e.Status, &e.NoSubmission, &settled); err != nil {
 			return fmt.Errorf("failed to scan plan execution: %w", err)
 		}
-		if holdsCapacity(&e) && e.Status != StatusCompleted && e.Status != StatusPartiallyCompleted {
+		if blocksManagedDelete(&e, settled) {
 			return fmt.Errorf("%w: plan %s", ErrManagedPlanLiveExecutions, planID)
 		}
 	}
 	return rows.Err()
+}
+
+// blocksManagedDelete reports whether a row of a managed plan may still hold
+// or buy capacity that no operator has accounted for.
+func blocksManagedDelete(e *PurchaseExecution, settled bool) bool {
+	switch {
+	case !holdsCapacity(e), e.Status == StatusCompleted, e.Status == StatusPartiallyCompleted:
+		return false
+	case e.Status == StatusFailed:
+		return !settled
+	}
+	return true
 }
