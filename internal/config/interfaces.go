@@ -291,6 +291,14 @@ type StoreInterface interface {
 	// inside a WithTx block so the suppression cleanup and the status flip
 	// commit atomically.
 	CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (canceled bool, currentStatus string, err error)
+	// CancelExecutionAtomicTokenPinned is CancelExecutionAtomic that also
+	// requires the row's stored approval token hash to match rawToken and to
+	// be unexpired, in the same statement as the status change, so a token
+	// rotated or expired after the email-link cancel validated it cannot
+	// cancel the row (issue #1190). A lost token pin on a row still
+	// pending/notified returns an error wrapping ErrApprovalTokenChanged; a
+	// lost status CAS returns (false, currentStatus, nil) as usual.
+	CancelExecutionAtomicTokenPinned(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string, rawToken string) (canceled bool, currentStatus string, err error)
 	// CancelScheduledExecutionAtomic atomically flips status from 'scheduled' to
 	// 'canceled' (canonical US spelling), setting canceled_by. Used by the
 	// Gmail-style pre-fire delay revoke path (issue #291 wave-2) to cancel a

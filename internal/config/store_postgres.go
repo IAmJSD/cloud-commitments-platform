@@ -1405,6 +1405,30 @@ func (s *PostgresStore) SetCancelledBy(ctx context.Context, executionID, cancell
 // status guard is inside the UPDATE rather than checked optimistically
 // before entering the tx.
 func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (canceled bool, currentStatus string, err error) {
+	return s.cancelExecutionAtomic(ctx, tx, executionID, cancelledBy, nil)
+}
+
+// CancelExecutionAtomicTokenPinned is CancelExecutionAtomic that also requires
+// approval_token_hash to equal the hash of rawToken and the token to be
+// unexpired, checked in the same UPDATE as the status change. The email-link
+// cancel validated the token against a snapshot; a re-notification that
+// rotates the token between that read and this write would otherwise still
+// let the old, revoked token cancel the row (issue #1190, the cancel side of
+// #590). A lost token pin on a row still pending/notified returns an error
+// wrapping ErrApprovalTokenChanged; a lost status CAS returns (false,
+// currentStatus, nil) as CancelExecutionAtomic does. An empty rawToken never
+// matches.
+func (s *PostgresStore) CancelExecutionAtomicTokenPinned(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string, rawToken string) (canceled bool, currentStatus string, err error) {
+	if rawToken == "" {
+		return false, "", fmt.Errorf("%w: execution %s: no approval token supplied", ErrApprovalTokenChanged, executionID)
+	}
+	tokenHash := HashApprovalToken(rawToken)
+	return s.cancelExecutionAtomic(ctx, tx, executionID, cancelledBy, &tokenHash)
+}
+
+// cancelExecutionAtomic is the shared body of CancelExecutionAtomic and
+// CancelExecutionAtomicTokenPinned; a nil tokenHash skips the token pin.
+func (s *PostgresStore) cancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy, tokenHash *string) (canceled bool, currentStatus string, err error) {
 	// StatusCanceled is the canonical US-spelling value; see types.go.
 	q := `
 		UPDATE purchase_executions
@@ -1413,9 +1437,11 @@ func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, ex
 		       updated_at   = NOW()
 		 WHERE execution_id = $1
 		   AND status IN ('pending', 'notified')
+		   AND ($4::text IS NULL OR (approval_token_hash = $4
+		        AND (approval_token_expires_at IS NULL OR approval_token_expires_at > NOW())))
 		RETURNING status
 	`
-	rows, err := tx.Query(ctx, q, executionID, cancelledBy, StatusCanceled)
+	rows, err := tx.Query(ctx, q, executionID, cancelledBy, StatusCanceled, tokenHash)
 	if err != nil {
 		return false, "", fmt.Errorf("failed to cancel execution: %w", err)
 	}
@@ -1435,14 +1461,27 @@ func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, ex
 		return false, "", fmt.Errorf("failed to iterate cancel result: %w", rowsErr)
 	}
 
-	// Zero rows affected: execution either does not exist or has already
-	// transitioned out of pending/notified. Surface the current status so
-	// callers can return a meaningful 409 body.
+	// Zero rows affected: execution either does not exist, has already
+	// transitioned out of pending/notified, or (pinned) no longer carries the
+	// caller's token. Surface the current status so callers can return a
+	// meaningful 409 body.
+	currentStatus, err = s.cancelRejection(ctx, executionID, tokenHash != nil)
+	return false, currentStatus, err
+}
+
+// cancelRejection explains a zero-row cancelExecutionAtomic by probing the
+// row's current status. A row still pending/notified under a token pin lost
+// the pin, not the status race, so that case returns ErrApprovalTokenChanged.
+// Extracted to keep the caller under the gocyclo threshold.
+func (s *PostgresStore) cancelRejection(ctx context.Context, executionID string, tokenPinned bool) (currentStatus string, err error) {
 	existing, existErr := s.GetExecutionByID(ctx, executionID)
 	if existErr != nil {
-		return false, "", fmt.Errorf("execution not found or db error: %w", existErr)
+		return "", fmt.Errorf("execution not found or db error: %w", existErr)
 	}
-	return false, existing.Status, nil
+	if tokenPinned && (existing.Status == "pending" || existing.Status == "notified") {
+		return existing.Status, fmt.Errorf("%w: execution %s", ErrApprovalTokenChanged, executionID)
+	}
+	return existing.Status, nil
 }
 
 // CancelScheduledExecutionAtomic atomically transitions an execution from

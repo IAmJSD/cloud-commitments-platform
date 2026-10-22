@@ -347,6 +347,10 @@ func (m *mockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, 
 	return false, "", nil
 }
 
+func (m *mockConfigStore) CancelExecutionAtomicTokenPinned(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string, rawToken string) (bool, string, error) {
+	return false, "", nil
+}
+
 func (m *mockConfigStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
 	return false, "", nil
 }

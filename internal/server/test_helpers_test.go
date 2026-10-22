@@ -198,6 +198,10 @@ func (m *mockConfigStoreForHealth) CancelExecutionAtomic(ctx context.Context, tx
 	return false, "", nil
 }
 
+func (m *mockConfigStoreForHealth) CancelExecutionAtomicTokenPinned(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string, rawToken string) (bool, string, error) {
+	return false, "", nil
+}
+
 func (m *mockConfigStoreForHealth) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
 	return false, "", nil
 }
