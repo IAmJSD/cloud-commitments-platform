@@ -664,6 +664,8 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 		}
 		return false, fmt.Errorf("failed to transition stranded execution %s to failed: %w", exec.ExecutionID, txErr)
 	}
+	// This sweep won the CAS, so it is the one writer that notifies (#1195).
+	defer m.notifyExecutionFailure(ctx, updated)
 
 	next := "Verify on the cloud provider that no commitment was created, then Retry."
 	if RedriveRefusalReason(exec) != "" {
