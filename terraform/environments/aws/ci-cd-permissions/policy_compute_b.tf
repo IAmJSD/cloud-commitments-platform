@@ -130,6 +130,21 @@ resource "aws_iam_policy" "compute_b" {
         Resource = "*"
       },
       {
+        # Writers for aws_lambda_function's reserved_concurrent_executions
+        # (lambda_reserved_concurrency, set in prod to cap concurrent DB
+        # pools, #718): Put sets a cap, Delete returns it to -1. GetFunction,
+        # already granted, reads it back. Same function ARN scope as
+        # policy_compute.tf's Lambda statement; it lives here only because
+        # policy_compute.tf is at the 6144-char ceiling.
+        Sid    = "LambdaReservedConcurrency"
+        Effect = "Allow"
+        Action = [
+          "lambda:DeleteFunctionConcurrency",
+          "lambda:PutFunctionConcurrency",
+        ]
+        Resource = "arn:aws:lambda:*:*:function:cudly-*"
+      },
+      {
         Sid    = "KMSAliasMutate"
         Effect = "Allow"
         Action = [

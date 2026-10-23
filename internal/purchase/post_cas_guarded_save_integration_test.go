@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -170,28 +169,16 @@ func TestPostCASSave_ClaimLostBeforeStampBuysNothing(t *testing.T) {
 	})
 }
 
-// No production writer moves a failed plan-step row or a canceled row today,
-// so the concurrent write here is simulated (a status CAS to expired). The
-// guard is defense in depth: the full-row save must not resurrect the status
-// its own CAS set once another writer has moved the row on.
+// No production writer moves a canceled row today, so the concurrent write
+// here is simulated (a status CAS to expired). The guard is defense in depth:
+// the full-row save must not resurrect the status its own CAS set once another
+// writer has moved the row on. failExistingPlanStep is not replayed here: its
+// CAS, save and release share one transaction (issue #1052), so no other
+// writer can land between them; plan_step_fail_atomic_integration_test.go
+// covers its concurrent writers.
 func TestPostCASSave_SimulatedWriterSurvives(t *testing.T) {
 	ctx := context.Background()
 	f := newRampStepFixture(ctx, t)
-
-	t.Run("failExistingPlanStep", func(t *testing.T) {
-		row := &config.PurchaseExecution{
-			PlanID: f.plan.ID, ExecutionID: uuid.New().String(), Status: "notified", StepNumber: 3, ScheduledDate: time.Now(),
-		}
-		require.NoError(t, f.store.SavePurchaseExecution(ctx, row))
-		f.interleave(t, func() {
-			mustTransition(ctx, t, f, row.ExecutionID, []string{config.StatusFailed}, config.StatusExpired)
-		})
-
-		err := f.manager.failExistingPlanStep(ctx, rowStatusCopy(row), "no recommendations")
-
-		assert.Equal(t, config.StatusExpired, rowStatus(ctx, t, f, row.ExecutionID).Status)
-		assert.ErrorIs(t, err, config.ErrExecutionNotInExpectedStatus)
-	})
 
 	t.Run("clearApprovalToken", func(t *testing.T) {
 		row := claimRaceRow(ctx, t, f, config.StatusCanceled)

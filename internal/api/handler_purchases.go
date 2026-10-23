@@ -152,7 +152,9 @@ func buildPlannedPurchase(plan *config.PurchasePlan, exec *config.PurchaseExecut
 // closing the authz hole in issue #950 where any holder of update:purchases
 // could act on another user's scheduled purchase. It runs AFTER the
 // per-handler verb check (update / execute / delete) and the account-scope
-// check (requireExecutionAccess); those still apply unchanged.
+// check (requireExecutionAccess); those still apply unchanged. Pause, resume
+// and run reach it through authorizeBoundedExecutionManagement, which bounds
+// update-any by its Constraints first (issues #1098, #1129).
 //
 // Gate logic (mirrors authorizeSessionCancel / authorizeSessionApprove):
 //   - stateless admin API key: always permitted (apiKeyAdminUserID sentinel).
@@ -205,6 +207,78 @@ func (h *Handler) authorizeExecutionManagement(ctx context.Context, session *Ses
 	return nil
 }
 
+// authorizeBoundedExecutionManagement is authorizeExecutionManagement with
+// update-any bounded by its Constraints, used by pause, resume (issue #1098)
+// and run (issue #1129). Sessions without update-any take the unchanged
+// authorizeExecutionManagement path; a session holding update-any is checked
+// against the stored row by authorizeUpdateAnyOnRow.
+func (h *Handler) authorizeBoundedExecutionManagement(ctx context.Context, session *Session, executionID string) error {
+	if session.UserID == apiKeyAdminUserID {
+		return nil
+	}
+	if h.auth == nil {
+		return NewClientError(500, "authentication service not configured")
+	}
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionUpdateAny)
+	if err != nil {
+		return err
+	}
+	if !hasAny {
+		return h.authorizeExecutionManagement(ctx, session, executionID)
+	}
+	execution, err := h.loadPlannedExecution(ctx, executionID)
+	if err != nil {
+		return err
+	}
+	return h.authorizeUpdateAnyOnRow(ctx, session, execution)
+}
+
+// authorizeUpdateAnyOnRow checks a session holding update-any against the
+// strict per-recommendation scope of the STORED row
+// (revokeExecutionConstraintSets), mirroring the planned-purchase cancel
+// gates. An in-scope grant is permitted without an owner check. A Constraints
+// denial falls back to the creator match and otherwise stays the refusal; any
+// other error (a probe or constraint-store failure) is returned and never read
+// as a denial, so it cannot fall through to a weaker branch.
+func (h *Handler) authorizeUpdateAnyOnRow(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
+	anyErr := h.requirePermissionConstraints(ctx, session, auth.ActionUpdateAny, auth.ResourcePurchases, revokeExecutionConstraintSets(execution))
+	if anyErr == nil || !isForbidden(anyErr) {
+		return anyErr
+	}
+	if isExecutionCreator(session, execution) {
+		return nil
+	}
+	return anyErr
+}
+
+// authorizeClaimedRowManagement re-runs authorizeBoundedExecutionManagement's
+// decision on a row already in hand: the row run's claim CAS returned
+// (issue #415), so an edit landing between the pre-claim read and the claim
+// cannot carry the row out of a bounded update-any's scope.
+func (h *Handler) authorizeClaimedRowManagement(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
+	if session.UserID == apiKeyAdminUserID {
+		return nil
+	}
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionUpdateAny)
+	if err != nil {
+		return err
+	}
+	if hasAny {
+		return h.authorizeUpdateAnyOnRow(ctx, session, execution)
+	}
+	if !isExecutionCreator(session, execution) {
+		return NewClientError(403, "permission denied: cannot manage another user's scheduled purchase")
+	}
+	return nil
+}
+
+// isExecutionCreator requires both IDs to be non-empty and equal, so an
+// empty-string collision (legacy NULL creator, missing session UserID) never
+// matches.
+func isExecutionCreator(session *Session, execution *config.PurchaseExecution) bool {
+	return session.UserID != "" && execution.CreatedByUserID != nil && *execution.CreatedByUserID == session.UserID
+}
+
 func (h *Handler) pausePlannedPurchase(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string) (*StatusResponse, error) {
 	if err := validateUUID(executionID); err != nil {
 		return nil, err
@@ -217,7 +291,7 @@ func (h *Handler) pausePlannedPurchase(ctx context.Context, req *events.LambdaFu
 	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
 		return nil, err
 	}
-	if err := h.authorizeExecutionManagement(ctx, session, executionID); err != nil {
+	if err := h.authorizeBoundedExecutionManagement(ctx, session, executionID); err != nil {
 		return nil, err
 	}
 
@@ -241,7 +315,7 @@ func (h *Handler) resumePlannedPurchase(ctx context.Context, req *events.LambdaF
 	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
 		return nil, err
 	}
-	if err := h.authorizeExecutionManagement(ctx, session, executionID); err != nil {
+	if err := h.authorizeBoundedExecutionManagement(ctx, session, executionID); err != nil {
 		return nil, err
 	}
 
@@ -338,7 +412,9 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
 		return nil, err
 	}
-	if err := h.authorizeExecutionManagement(ctx, session, executionID); err != nil {
+	// update-any lets a non-creator run the row only within its Constraints
+	// (issue #1129).
+	if err := h.authorizeBoundedExecutionManagement(ctx, session, executionID); err != nil {
 		return nil, err
 	}
 
@@ -346,8 +422,8 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 	// execute:purchases Constraints against them before RunPlannedPurchaseNow
 	// fires the purchase (issue #60). requirePermission above only checked
 	// the bare execute:purchases verb: a session running a plan via
-	// update-any:purchases (which authorizeExecutionManagement lets bypass
-	// the creator check) would otherwise bypass any MaxPurchaseAmount/
+	// update-any:purchases (which lets a non-creator past the creator check
+	// within its own Constraints) would otherwise bypass any MaxPurchaseAmount/
 	// Providers/Services/Regions/AccountIDs cap configured on their own
 	// execute:purchases permission, exactly the fail-open class the web
 	// execute path (validateExecutePurchaseRequest) already closed for
@@ -436,14 +512,14 @@ func (h *Handler) requireDeleteOrCancelPurchasePermission(ctx context.Context, r
 //
 // Gate logic:
 //   - stateless admin API key: always permitted.
-//   - update-any:purchases: permitted without an owner check or Constraints.
-//   - cancel-any:purchases: permitted without an owner check when its
-//     Constraints cover every recommendation (issue #678); a Constraints
-//     denial falls back to the creator branch.
-//   - otherwise: fetch the execution and require creator match, then apply
-//     cancel-own Constraints if the creator also holds cancel-own.
-//     Legacy rows with a NULL creator are out of reach for non-privileged
-//     users (matching cancel-own / approve-own / retry-own behavior).
+//   - update-any:purchases, then cancel-any:purchases: each is permitted
+//     without an owner check when its Constraints cover every recommendation
+//     (issues #961 and #678). A Constraints denial falls through to the next
+//     full-scope verb and then to the creator branch.
+//   - otherwise: require creator match, then apply cancel-own Constraints if
+//     the creator also holds cancel-own. Legacy rows with a NULL creator are
+//     out of reach for non-privileged users (matching cancel-own /
+//     approve-own / retry-own behavior).
 func (h *Handler) authorizePlannedPurchaseCancel(ctx context.Context, session *Session, executionID string) error {
 	if session.UserID == apiKeyAdminUserID {
 		return nil
@@ -451,36 +527,52 @@ func (h *Handler) authorizePlannedPurchaseCancel(ctx context.Context, session *S
 	if h.auth == nil {
 		return NewClientError(500, "authentication service not configured")
 	}
-	// update-any grants full-scope access without an owner check or
-	// Constraints (tracked by #961). Both full-scope verbs are evaluated
-	// against the session's effective permissions: the key's for a user API
-	// key, never the owner's alone (issue #979).
-	hasUpdate, err := h.sessionHoldsVerb(ctx, session, auth.ActionUpdateAny)
-	if err != nil {
-		return err
-	}
-	if hasUpdate {
-		return nil
-	}
-	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionCancelAny)
-	if err != nil {
-		return err
-	}
 	execution, err := h.loadPlannedExecution(ctx, executionID)
 	if err != nil {
 		return err
 	}
-	// cancel-any is bounded by its Constraints (issue #678); a 403 falls back
-	// to the creator branch exactly as authorizeSessionCancel does.
-	var anyErr error
-	if hasAny {
-		// Wrapped for consistency; DELETE planned has no token fall-through.
-		anyErr = wrapConstraintDenied(h.requirePermissionConstraints(ctx, session, auth.ActionCancelAny, auth.ResourcePurchases, revokeExecutionConstraintSets(execution)))
-		if anyErr == nil || !isForbidden(anyErr) {
-			return anyErr
-		}
+	granted, denied, err := h.authorizePlannedFullScope(ctx, session, execution)
+	if err != nil || granted {
+		return err
 	}
-	return h.authorizePlannedCreatorCancel(ctx, session, execution, anyErr)
+	return h.authorizePlannedCreatorCancel(ctx, session, execution, denied)
+}
+
+// plannedFullScopeVerbs are the verbs that let DELETE planned act on another
+// user's row, in the order they are tried.
+var plannedFullScopeVerbs = []string{auth.ActionUpdateAny, auth.ActionCancelAny}
+
+// authorizePlannedFullScope tries each full-scope verb the session holds
+// against the strict per-recommendation Constraints of the STORED row
+// (revokeExecutionConstraintSets), never the request. granted reports that one
+// of them covers the row. denied is the last Constraints 403, returned to a
+// non-creator in place of the ownership 403 so the refusal stays terminal; it
+// is nil when the session holds neither verb. Any other error (a probe or
+// constraint-store failure) is returned as err and never read as a denial, so
+// it cannot fall through to a weaker branch. Both verbs are evaluated against
+// the session's effective permissions: the key's for a user API key, never the
+// owner's alone (issue #979).
+func (h *Handler) authorizePlannedFullScope(ctx context.Context, session *Session, execution *config.PurchaseExecution) (granted bool, denied, err error) {
+	sets := revokeExecutionConstraintSets(execution)
+	for _, verb := range plannedFullScopeVerbs {
+		held, probeErr := h.sessionHoldsVerb(ctx, session, verb)
+		if probeErr != nil {
+			return false, nil, probeErr
+		}
+		if !held {
+			continue
+		}
+		// Wrapped for consistency; DELETE planned has no token fall-through.
+		verbErr := wrapConstraintDenied(h.requirePermissionConstraints(ctx, session, verb, auth.ResourcePurchases, sets))
+		if verbErr == nil {
+			return true, nil, nil
+		}
+		if !isForbidden(verbErr) {
+			return false, nil, verbErr
+		}
+		denied = verbErr
+	}
+	return false, denied, nil
 }
 
 // loadPlannedExecution fetches the row, mapping a missing one to errNotFound.
@@ -496,9 +588,9 @@ func (h *Handler) loadPlannedExecution(ctx context.Context, executionID string) 
 }
 
 // authorizePlannedCreatorCancel is the creator branch of
-// authorizePlannedPurchaseCancel. anyErr is the cancel-any Constraints denial
-// (nil when the session has no cancel-any); it is returned instead of the
-// ownership 403 so a constraint refusal stays terminal.
+// authorizePlannedPurchaseCancel. anyErr is the update-any or cancel-any
+// Constraints denial (nil when the session holds neither); it is returned
+// instead of the ownership 403 so a constraint refusal stays terminal.
 func (h *Handler) authorizePlannedCreatorCancel(ctx context.Context, session *Session, execution *config.PurchaseExecution, anyErr error) error {
 	// requireDeleteOrCancelPurchasePermission already validated the session;
 	// UserID is either the API-key sentinel (handled by the caller) or a real
@@ -560,6 +652,10 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 	if err != nil {
 		return nil, err
 	}
+	err = h.requirePlannedCancelPlanScope(ctx, session, executionID)
+	if err != nil {
+		return nil, err
+	}
 
 	canceled, err := h.cancelOrRecoverExecution(ctx, executionID, resolveCreatorUserID(session))
 	if err != nil {
@@ -570,38 +666,75 @@ func (h *Handler) deletePlannedPurchase(ctx context.Context, req *events.LambdaF
 	// reflects the disable action immediately. Issue #774: previously the
 	// execution was canceled but plan.enabled was left true, causing
 	// inconsistent state between the Scheduled Purchases and Plans views.
-	//
-	// A single-account child passes requireExecutionAccess on its own account
-	// while its plan may span accounts outside the caller's scope (issue #520).
-	// Disabling the plan changes those accounts too, so it needs the same
-	// every-account check as the plan mutation routes. Without it the
-	// execution is still canceled and the plan is left enabled.
 	resp := &DeletePlannedPurchaseResponse{Status: "canceled"}
 	if canceled.PlanID != "" {
-		disabled, err := h.disablePlanIfInScope(ctx, session, canceled.PlanID)
-		if err != nil {
+		if err := h.disablePlanAfterCancel(ctx, session, canceled.PlanID); err != nil {
 			return nil, err
 		}
+		disabled := true
 		resp.PlanDisabled = &disabled
 	}
 
 	return resp, nil
 }
 
-// disablePlanIfInScope disables the plan only when the session may mutate
-// every plan account, and reports whether it did. A scope refusal is not an
-// error: the caller's cancel stands and the plan is left enabled.
-func (h *Handler) disablePlanIfInScope(ctx context.Context, session *Session, planID string) (bool, error) {
-	if err := h.requirePlanMutationAccess(ctx, session, planID); err != nil {
-		if IsNotFoundError(err) {
-			return false, nil
-		}
-		return false, err
+// errPlannedCancelPlanOutOfScope refuses a planned purchase cancel whose plan
+// disable the caller may not perform. The caller can already see the
+// execution and its plan, so the 403 confirms nothing new except that the
+// plan reaches accounts it cannot act on, which it needs to know.
+var errPlannedCancelPlanOutOfScope = NewClientError(403,
+	"permission denied: canceling this scheduled purchase also disables its plan, "+
+		"which requires access to every account on the plan; nothing was changed. "+
+		"Ask an administrator with access to all of the plan's accounts to disable it")
+
+// requirePlannedCancelPlanScope runs before anything is written. Canceling a
+// planned purchase also disables its plan, and a single-account child passes
+// requireExecutionAccess on its own account while its plan may span accounts
+// outside the caller's scope (issue #520). Disabling the plan changes those
+// accounts too, so it needs the every-account check of the plan mutation
+// routes. When that check fails the whole request is refused (issue #623):
+// canceling and silently leaving the plan enabled would keep the scheduler
+// buying on every plan account while the caller believes it stopped.
+// Unrestricted sessions return before any store read.
+func (h *Handler) requirePlannedCancelPlanScope(ctx context.Context, session *Session, executionID string) error {
+	scope, err := h.getAccountScope(ctx, session)
+	if err != nil {
+		return fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if err := h.disablePlan(ctx, planID); err != nil {
-		return false, err
+	if scope.AllowsAll() {
+		return nil
 	}
-	return true, nil
+	execution, err := h.loadPlannedExecution(ctx, executionID)
+	if err != nil {
+		return err
+	}
+	if execution.PlanID == "" {
+		return nil
+	}
+	err = h.requirePlanMutationAccess(ctx, session, execution.PlanID)
+	if IsNotFoundError(err) {
+		return errPlannedCancelPlanOutOfScope
+	}
+	return err
+}
+
+// disablePlanAfterCancel re-runs the every-account check and disables the
+// plan. requirePlannedCancelPlanScope already passed, but the plan's accounts
+// can change before this point (an out-of-scope account attached while the
+// request is in flight). That refusal comes after the cancel, so it is a 409
+// that says so rather than a 200 that hides the plan staying enabled.
+func (h *Handler) disablePlanAfterCancel(ctx context.Context, session *Session, planID string) error {
+	err := h.requirePlanMutationAccess(ctx, session, planID)
+	if IsNotFoundError(err) {
+		return NewClientError(409,
+			"this scheduled purchase was canceled, but its plan was not disabled: "+
+				"the plan changed during the request and now requires access to accounts outside yours. "+
+				"Ask an administrator with access to all of the plan's accounts to disable it")
+	}
+	if err != nil {
+		return err
+	}
+	return h.disablePlan(ctx, planID)
 }
 
 // cancelOrRecoverExecution transitions the execution to "canceled" if it is

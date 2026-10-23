@@ -20,7 +20,9 @@ import (
 //     wrote): that entry is updated under its existing key, keeping the
 //     per-service filters the legacy form cannot express, and every other
 //     entry is kept.
-//   - The plan has at most one service and the request names another: the
+//   - A singleton legacy alias or canonical value under an unusual key keeps
+//     its original key, hidden settings and Enabled state.
+//   - The plan has at most one service and the request names a genuinely different one: the
 //     request replaces it, which is how the single-service form switches
 //     service.
 //   - The plan has several services and the request names none of them: the
@@ -41,6 +43,19 @@ func mergeRequestedServices(existing, requested map[string]config.ServiceConfig)
 		merged[key] = overlayServiceConfig(existing[key], reqSvc)
 		return merged, nil
 	}
+	if len(existing) == 1 {
+		for key := range existing {
+			stored := existing[key]
+			if stored.Provider != reqSvc.Provider || legacyServiceAlias(stored.Provider, stored.Service) != reqSvc.Service {
+				continue
+			}
+			merged := maps.Clone(existing)
+			updated := overlayServiceConfig(stored, reqSvc)
+			updated.Enabled = stored.Enabled
+			merged[key] = updated
+			return merged, nil
+		}
+	}
 	if len(existing) <= 1 {
 		return requested, nil
 	}
@@ -48,6 +63,20 @@ func mergeRequestedServices(existing, requested map[string]config.ServiceConfig)
 		"plan has %d services (%s) and the request names %s, which is not one of them; "+
 			"pick one of the plan's services to edit it, or use the plan editor to change the service set",
 		len(existing), strings.Join(sortedServiceKeys(existing), ", "), reqKey))
+}
+
+// Mirrors the legacy Edit aliases in frontend/src/plans.ts:997-1001.
+func legacyServiceAlias(provider, service string) string {
+	switch provider + "/" + service {
+	case "azure/vm":
+		return "compute"
+	case "azure/sql", "gcp/cloudsql":
+		return "relational-db"
+	case "azure/redis", "gcp/memorystore":
+		return "cache"
+	default:
+		return service
+	}
 }
 
 // findServiceKey returns the key of the stored entry for provider/service,

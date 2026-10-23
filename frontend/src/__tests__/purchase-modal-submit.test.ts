@@ -154,6 +154,7 @@ import {
   clearPurchaseModalRecommendations,
   getFanOutBuckets,
   clearFanOutBuckets,
+  getExecuteMode,
   loadRecommendations,
   seedGlobalDefaults,
 } from '../recommendations';
@@ -311,6 +312,38 @@ describe('Issue #251: Execute Now makes no cancellation promise', () => {
     expect(text).toContain('Nothing is charged until the approver');
     expect(text).toContain(`Upfront on approval${formatCurrency(rec.upfront_cost, '$', 2)}`);
     expect(text).not.toContain('Charged today');
+  });
+
+  test('confirm button names the action and the upfront amount in both modes (#701)', async () => {
+    const rec: LocalRecommendation = { ...buildRows()[0]!, provider: 'aws', service: 'ec2', term: 1 };
+    (state.getRecommendations as jest.Mock).mockReturnValue([rec]);
+    const amount = formatCurrency(rec.upfront_cost, '$', 2);
+    const confirmButtonLabel = (): string =>
+      ((confirmDialog as jest.Mock).mock.calls[0]![0] as { confirmLabel: string }).confirmLabel;
+
+    (confirmDialog as jest.Mock).mockClear();
+    await openPurchaseModal([rec]);
+    const modalBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    const approvalVerb = modalBtn.textContent;
+    modalBtn.click();
+    await flush();
+    expect(confirmButtonLabel()).toBe(`${approvalVerb} (${amount} upfront on approval)`);
+
+    (confirmDialog as jest.Mock).mockClear();
+    (document.getElementById('close-purchase-modal-btn') as HTMLButtonElement).click();
+    await openPurchaseModal([rec]);
+    (document.getElementById('execute-mode-direct') as HTMLInputElement).click();
+    const directVerb = (document.getElementById('execute-purchase-btn') as HTMLButtonElement).textContent;
+    (document.getElementById('execute-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    expect(confirmButtonLabel()).toBe(`${directVerb} (${amount} charged today)`);
+  });
+
+  test('the purchase modal title is not the generic "Configure Purchase" (#701)', () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const html = (require('fs') as typeof import('fs')).readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
+    const title = /<h2 id="purchase-modal-title">([^<]*)<\/h2>/.exec(html)?.[1];
+    expect(title).toBe('Review Purchase');
   });
 
   test('direct-execute confirm dialog makes no cancellation promise', async () => {
@@ -1111,6 +1144,29 @@ describe('Issue #1904: fan-out modal skips incompatible buckets', () => {
       50,
       undefined,
     );
+  });
+
+  test('fan-out open and close reset the execute button label and mode (#754)', async () => {
+    const rows = buildFanOutRows();
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'no-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['ec2-1', 'rds-3']));
+    await loadRecommendations();
+
+    const btn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    btn.textContent = 'Execute Purchase Now';
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    expect(btn.textContent).toBe('Send for Approval');
+    expect(getExecuteMode()).toBe('');
+
+    btn.textContent = 'Execute Purchase Now';
+    const onClose = (openModal as jest.Mock).mock.calls.slice(-1)[0][1].onClose as () => void;
+    onClose();
+    expect(btn.textContent).toBe('Send for Approval');
+    expect(getExecuteMode()).toBe('');
   });
 
   test('busy fan-out stays disabled while its requests are pending', async () => {

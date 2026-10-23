@@ -265,6 +265,9 @@ export interface HistoryPurchase {
   // (issue #46) is visible — non-admins only see it on rows they
   // themselves created.
   created_by_user_id?: string;
+  // created_by_system marks a scheduler-minted row (no human creator). Under
+  // 4-eyes any identified approve-any holder may approve it (issue #233).
+  created_by_system?: boolean;
   // RetryExecutionID: pointer from a *failed* row to the successor
   // execution created when the user clicked Retry (issue #47). Set
   // only on the original failed row; absent on every other row

@@ -5,6 +5,7 @@
 #
 # Required GitHub Secrets:
 #   - ADMIN_EMAIL: Admin email for notifications
+#   - ALERT_EMAILS: Optional, comma-separated addresses that receive monitoring alerts (#714)
 #   - FROM_EMAIL: SES-verified FROM address used for outbound approval emails.
 #                 Required for purchase-approval emails on deployments that
 #                 don't set subdomain_zone_name (bare Lambda Function URL).
@@ -76,6 +77,8 @@ on:
     secrets:
       ADMIN_EMAIL:
         required: true
+      ALERT_EMAILS:
+        required: false
       DASHBOARD_URL:
         required: false
       FROM_EMAIL:
@@ -272,6 +275,7 @@ jobs:
         id: plan
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_alert_emails: ${{ secrets.ALERT_EMAILS }}
           TF_VAR_from_email: ${{ secrets.FROM_EMAIL }}
           # DASHBOARD_URL is the customer-facing dashboard origin used in
           # email links (invite, password reset, welcome). For Lambda-
@@ -292,6 +296,7 @@ jobs:
       - name: Terraform Apply
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_alert_emails: ${{ secrets.ALERT_EMAILS }}
           TF_VAR_from_email: ${{ secrets.FROM_EMAIL }}
           # DASHBOARD_URL is the customer-facing dashboard origin used in
           # email links (invite, password reset, welcome). For Lambda-

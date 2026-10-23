@@ -63,8 +63,10 @@ ACTION_PREFIXES='ce|ec2|rds|elasticache|es|redshift|memorydb|savingsplans|organi
 # --- extraction ---------------------------------------------------------------
 # Pull every token shaped like <prefix>:<CamelCaseAction> out of a file,
 # regardless of whether it is YAML, HCL, or an embedded JSON heredoc. IAM
-# actions always start with an uppercase letter after the colon, which keeps
-# ARNs (region segments are lowercase) out of the match.
+# actions always start with an uppercase letter or a "*" after the colon, which
+# keeps ARNs (region segments are lowercase) out of the match. Wildcards
+# (<prefix>:*, <prefix>:Describe*, and a single-line Action "*") are extracted
+# as their own tokens so widening one side of a pair is reported as drift.
 
 extract_actions() {
   local file="$1"
@@ -76,10 +78,17 @@ extract_actions() {
   fi
 
   local actions
-  actions=$(grep -vE '^[[:space:]]*(#|//)' "$file" \
-    | grep -oE "(^|[^A-Za-z])(${ACTION_PREFIXES}):[A-Z][A-Za-z]+" \
-    | sed 's/^[^a-zA-Z]//' \
-    | sort -u)
+  local stripped
+  stripped=$(grep -vE '^[[:space:]]*(#|//)' "$file" || true)
+  actions=$({
+    printf '%s\n' "$stripped" \
+      | grep -oE "(^|[^A-Za-z:])(${ACTION_PREFIXES}):([A-Z][A-Za-z]*\*?|\*)" \
+      | sed 's/^[^a-zA-Z]//' || true
+    # A bare "*" action (single-line Action/Actions key); Resource "*" is not matched.
+    if printf '%s\n' "$stripped" | grep -qiE "\"?actions?\"?[[:space:]]*[:=][[:space:]]*\[?[[:space:]]*[\"']\*[\"']"; then
+      echo '*'
+    fi
+  } | sort -u)
 
   if [[ "$exclude_orgs" == "no-orgs" ]]; then
     actions=$(printf '%s\n' "$actions" | grep -v '^organizations:' || true)
@@ -175,6 +184,24 @@ for f in "$FED_XACC_CFN" "$FED_XACC_TF" "$FED_WIF_CFN" "$FED_WIF_TF" "$FED_XACC_
       FAILURES=$((FAILURES + 1))
     fi
   done
+done
+
+# --- 5. runtime organizations grants -------------------------------------------
+# Parity only proves the runtime trio agree, so an unused organizations action
+# added to all three (#69: DescribeAccount, DescribeOrganization) passes it.
+# The runtime calls only ListAccounts (internal/accounts/org_discovery.go and
+# the cloud-commitments-go AWS provider), so that is the only organizations
+# action it may grant. Wire up a new call before adding its action here.
+
+ALLOWED_RUNTIME_ORG_ACTIONS=(organizations:ListAccounts)
+
+for f in "$CFN_STACK" "$TF_LAMBDA" "$TF_FARGATE"; do
+  while IFS= read -r a; do
+    if [[ " ${ALLOWED_RUNTIME_ORG_ACTIONS[*]} " != *" $a "* ]]; then
+      echo "ERROR [runtime organizations actions]: $f grants $a, which the runtime never calls" >&2
+      FAILURES=$((FAILURES + 1))
+    fi
+  done < <(extract_actions "$f" | grep '^organizations:' || true)
 done
 
 # --- result --------------------------------------------------------------------

@@ -263,6 +263,12 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 	}
 	saveCtx, cancelSave := ctxutil.DetachedWithTimeout(ctx, terminalSaveTimeout)
 	defer cancelSave()
+	// Operators hear about every failed or partial row (issue #714), even
+	// when the terminal save below fails. A fan-out root is skipped: each
+	// per-account row notified for itself in executeForAccount.
+	if !isFanOutOutcome(execErr) {
+		defer m.notifyExecutionFailure(saveCtx, exec)
+	}
 	if err := m.saveOrRecoverTerminal(saveCtx, exec, execErr); err != nil {
 		logging.Errorf("AUDIT LOSS: failed to save execution status: %v", err)
 		// Wrap with ErrAuditLoss regardless of whether executePurchase itself
@@ -565,13 +571,24 @@ func awsPurchaseHasNoDuplicateGuard(service string) bool {
 // executeAndFinalize. It is extracted from RecoverStrandedApprovals to keep that
 // function's cyclomatic complexity within the gocyclo:10 limit.
 //
+// It re-drives the row the claim returned, never the caller's pre-claim
+// snapshot (issue #1037). The sweep chose the re-drive path from a SELECT, and
+// an edit or a concurrent writer can change the row's recommendations, amount
+// or account before the claim lands. The re-drive gate (redrivable) is therefore
+// re-run on the claimed row; when the claimed row no longer qualifies it is
+// failed exactly as safeFail would have failed it had the sweep read it in
+// that state (failClaimedRedrive), and nothing is bought.
+//
 // Returns (true, nil) when the claim was won and the re-drive completed (row is
-// now in a terminal state). A re-drive error is not fatal -- executeAndFinalize
-// already stamped a terminal status -- so it returns (false, nil) on drive
-// failure too (the failed row is still visible in History).
+// now in a terminal state), or when the claimed row was failed because it no
+// longer qualifies for a re-drive. A re-drive error is not fatal --
+// executeAndFinalize already stamped a terminal status -- so it returns
+// (false, nil) on drive failure too (the failed row is still visible in
+// History).
 // Returns (false, nil) when the CAS claim is lost to a concurrent sweep or the
 // row vanishes mid-flight (both are benign races).
-// Returns (false, err) only on a genuine DB error during the claim step.
+// Returns (false, err) on a genuine DB error during the claim step, or when a
+// terminal status could not be persisted (ErrAuditLoss).
 func (m *Manager) claimAndRedrive(ctx context.Context, exec *config.PurchaseExecution) (bool, error) {
 	// Atomically claim ownership before re-driving to prevent two concurrent
 	// sweeps (or a late original completion) from both calling executeAndFinalize
@@ -589,9 +606,13 @@ func (m *Manager) claimAndRedrive(ctx context.Context, exec *config.PurchaseExec
 		}
 		return false, fmt.Errorf("failed to claim execution %s for re-drive: %w", exec.ExecutionID, claimErr)
 	}
-	// Update the local struct to reflect the committed DB state so
-	// finalizeExecution starts from "running" rather than "approved".
-	exec.Status = claimed.Status
+	// Carry the whole committed row, not just its status: the purchase below
+	// must buy exactly the row this claim owns. The snapshot the sweep listed
+	// may predate an edit that landed before the CAS (issue #1037).
+	*exec = *claimed
+	if !redrivable(exec) {
+		return m.failClaimedRedrive(ctx, exec)
+	}
 	logging.Infof("Recovering stranded execution %s via idempotent re-drive (issue #639)", exec.ExecutionID)
 	if driveErr := m.executeAndFinalize(ctx, exec); driveErr != nil {
 		logging.Errorf("Re-drive of stranded execution %s failed: %v", exec.ExecutionID, driveErr)
@@ -663,11 +684,7 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 		return false, fmt.Errorf("failed to transition stranded execution %s to failed: %w", exec.ExecutionID, txErr)
 	}
 
-	next := "Verify on the cloud provider that no commitment was created, then Retry."
-	if RedriveRefusalReason(exec) != "" {
-		next = "Retry is refused for this purchase because a repeat could buy a second commitment. Verify on the cloud provider whether the commitment was created; if it was not, start a new purchase."
-	}
-	updated.Error = "execution was approved but its purchase run was interrupted before completing and never finalized; failed by the recovery sweep so it is not silently stuck (issue #632). " + next
+	updated.Error = strandedRecoveryError(exec)
 	if saveErr := m.config.SaveExecutionIfStatus(ctx, updated, []string{config.StatusFailed}); saveErr != nil {
 		// Guarded on "failed" (issue #835): the stamp lands only while the row
 		// is still in the status this CAS set, never over a later writer's.
@@ -726,7 +743,7 @@ func (m *Manager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
 		// provider side. The ExecutionID must be non-empty so the lineage key
 		// (or its ExecutionID fallback for legacy rows) is unique; an empty ID
 		// would map every legacy row to the same token set.
-		if allRecsSafeToRedrive(exec) && exec.ExecutionID != "" {
+		if redrivable(exec) {
 			counted, driveErr := m.claimAndRedrive(ctx, exec)
 			if driveErr != nil {
 				return recovered, driveErr
