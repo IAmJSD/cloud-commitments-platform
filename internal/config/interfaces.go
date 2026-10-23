@@ -234,6 +234,10 @@ type StoreInterface interface {
 	// row whose recommendations were attached after the caller's gate check. A
 	// lost pin returns ErrExecutionNotInExpectedStatus like any lost CAS.
 	TransitionExecutionStatusPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*PurchaseExecution, error)
+	// TransitionExecutionStatusPinnedTx is TransitionExecutionStatusPinned
+	// inside a caller-owned transaction, so the status change commits or
+	// rolls back with the caller's other writes (issue #1052).
+	TransitionExecutionStatusPinnedTx(ctx context.Context, tx pgx.Tx, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*PurchaseExecution, error)
 	// TransitionExecutionStatusTokenPinned is TransitionExecutionStatus that
 	// also requires the row's stored approval token hash to match rawToken and
 	// to be unexpired, in the same statement as the status change, so a token
@@ -466,6 +470,10 @@ type StoreInterface interface {
 	GetRIExchangeRecord(ctx context.Context, id string) (*RIExchangeRecord, error)
 	GetRIExchangeRecordByToken(ctx context.Context, token string) (*RIExchangeRecord, error)
 	GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]RIExchangeRecord, error)
+	// GetRIExchangeHistoryForAccounts is GetRIExchangeHistory restricted to
+	// records whose account_id is in accountIDs, with the limit applied after
+	// that restriction. An empty accountIDs matches no records.
+	GetRIExchangeHistoryForAccounts(ctx context.Context, since time.Time, limit int, accountIDs []string) ([]RIExchangeRecord, error)
 	// TransitionRIExchangeStatus atomically transitions an RI exchange record status.
 	// actor is the UUID of the user performing the transition (nil for system-initiated paths).
 	TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*RIExchangeRecord, error)

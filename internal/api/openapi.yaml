@@ -1071,6 +1071,12 @@ paths:
       operationId: deletePlannedPurchase
       tags: [PlannedPurchases]
       summary: Cancel and delete a planned purchase
+      description: >-
+        Cancels the execution and disables its plan. A caller scoped to some
+        accounts must have access to every account on the plan; otherwise the
+        request is refused with 403 before anything changes. If the plan's
+        accounts change during the request so that the disable is refused
+        after the cancel, the response is 409 and the plan stays enabled.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       responses:
@@ -1086,6 +1092,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
 
   # ---- Generic Purchase Details -------------------------------------------
   /api/purchases/{id}:
@@ -1115,11 +1123,19 @@ paths:
       operationId: listConvertibleRIs
       tags: [RIExchange]
       summary: List convertible Reserved Instances eligible for exchange
+      description: >
+        Requires `view:purchases` permission. Lists the convertible RIs of the
+        deployment's own AWS account. When that account is outside the
+        session's allowed accounts, the response is a 200 with an empty
+        `instances` list rather than a 403 or 404. An `account_id` that names
+        a different account also yields an empty list.
       parameters:
         - $ref: '#/components/parameters/AccountID'
       responses:
         '200':
-          description: Convertible RI list
+          description: >
+            Convertible RI list. Empty when the deployment's AWS account is
+            outside the session's allowed accounts.
           content:
             application/json:
               schema:
@@ -1286,8 +1302,27 @@ paths:
       operationId: listTargetOfferings
       tags: [RIExchange]
       summary: List available RI offerings to exchange into
+      description: >
+        Requires `view:purchases` permission. Looks up the source RI in the
+        deployment's own AWS account. When that account is outside the
+        session's allowed accounts the response is 404, the same as for an
+        unknown `source_ri_id`, so a scoped caller cannot tell which RIs
+        exist. That check runs before `source_ri_id` is validated, so such a
+        caller gets 404 even with no `source_ri_id`.
       parameters:
         - $ref: '#/components/parameters/AccountID'
+        - name: source_ri_id
+          in: query
+          required: true
+          description: ID of the convertible RI to exchange from.
+          schema:
+            type: string
+        - name: region
+          in: query
+          required: false
+          description: AWS region of the source RI. Defaults to the region the deployment's AWS SDK chain resolves.
+          schema:
+            type: string
       responses:
         '200':
           description: Target offering list
@@ -1295,19 +1330,50 @@ paths:
             application/json:
               schema:
                 type: object
+        '400':
+          description: '`source_ri_id` is missing.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          description: >
+            The deployment's AWS account is outside the session's allowed
+            accounts, or no convertible RI with `source_ri_id` exists in the
+            region. The two cases are indistinguishable to a scoped caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: >
+            The source RI's scope and availability zone disagree (a zonal RI
+            with no availability zone, or a regional RI that names one), so no
+            offering lookup is made.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /api/ri-exchange/utilization:
     get:
       operationId: getRIUtilization
       tags: [RIExchange]
       summary: Get utilization metrics for Reserved Instances
+      description: >
+        Requires `view:purchases` permission. Reads the deployment's own AWS
+        account. When that account is outside the session's allowed accounts,
+        the response is a 200 with an empty `utilization` list rather than a
+        403 or 404.
       responses:
         '200':
-          description: RI utilization data
+          description: >
+            RI utilization data. Empty when the deployment's AWS account is
+            outside the session's allowed accounts.
           content:
             application/json:
               schema:
@@ -1322,9 +1388,16 @@ paths:
       operationId: getReshapeRecommendations
       tags: [RIExchange]
       summary: Get reshape recommendations for convertible RIs
+      description: >
+        Requires `view:purchases` permission. Reads the deployment's own AWS
+        account. When that account is outside the session's allowed accounts,
+        the response is a 200 with an empty `recommendations` list rather
+        than a 403 or 404.
       responses:
         '200':
-          description: Reshape recommendation list
+          description: >
+            Reshape recommendation list. Empty when the deployment's AWS
+            account is outside the session's allowed accounts.
           content:
             application/json:
               schema:
@@ -1355,7 +1428,9 @@ paths:
       summary: Get a quote for an RI exchange before executing
       description: >
         Requires `view:purchases` permission. Returns the exchange valuation
-        without committing any financial transaction.
+        without committing any financial transaction. The quote reads the
+        deployment's own AWS account, so a session whose allowed accounts do
+        not cover that account gets 403.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -1376,7 +1451,14 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >
+            CSRF validation failed, the session lacks `view:purchases`, or the
+            deployment's AWS account is outside the session's allowed
+            accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /api/ri-exchange/execute:
     post:
@@ -1396,6 +1478,8 @@ paths:
         not part of that fingerprint: raising the cap does not make it a
         different purchase. See the 409 response: it does not assert that the
         earlier submit succeeded, only that it claimed the window.
+        The exchange runs in the deployment's own AWS account, so a session
+        whose allowed accounts do not cover that account gets 403.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -1429,7 +1513,15 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >
+            CSRF validation failed, the session lacks `execute:ri-exchange` or
+            fails its constraints, 4-eyes approval mode is on (direct execution
+            is disabled), or the deployment's AWS account is outside the
+            session's allowed accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '409':
           $ref: '#/components/responses/Conflict'
 
@@ -2783,10 +2875,10 @@ components:
         plan_disabled:
           type: boolean
           description: >-
-            Present when the execution belongs to a plan. True when the plan
-            was disabled; false when it was left enabled because it spans
-            accounts outside the caller's scope. Omitted for executions
-            without a plan.
+            Present, and true, when the execution belongs to a plan, which
+            the request disabled. Omitted for executions without a plan. A
+            plan the caller may not disable fails the request instead of
+            returning false.
 
     StatusMessageResponse:
       type: object
