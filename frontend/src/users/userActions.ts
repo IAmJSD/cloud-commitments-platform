@@ -19,6 +19,7 @@ import { applyFilters } from './filters';
 import { renderUsers, renderUserStats, populateBulkGroupSelect } from './userList';
 import { renderGroups } from '../groups/groupList';
 import { renderPermissionMatrix } from './permissionMatrix';
+import { clearUserSectionsStatus, renderUserSectionsError, showUserSectionsLoading } from './loadStatus';
 
 /**
  * Defence-in-depth normaliser for the API contract. The backend's TS-typed
@@ -68,6 +69,9 @@ function withCurrentUser(users: api.APIUser[]): api.APIUser[] {
  * Load and display users and groups
  */
 export async function loadUsers(): Promise<void> {
+  // Issue #182: skeletons while the lists load, so an empty box is never
+  // mistaken for "no users" (no-op where a list is already on screen).
+  showUserSectionsLoading();
   try {
     const [usersResponse, groupsResponse] = await Promise.all([
       api.listUsers(),
@@ -83,6 +87,7 @@ export async function loadUsers(): Promise<void> {
 
     setAvailableGroups(groups);
     setAllUsers(withCurrentUser(users));
+    clearUserSectionsStatus();
 
     // Apply current filters
     applyFilters();
@@ -124,6 +129,10 @@ export async function loadUsers(): Promise<void> {
   } catch (error) {
     console.error('Failed to load users/groups:', error);
     showError('Failed to load users and groups');
+    // Issue #182: the toast fades; leave an inline error with a Retry in
+    // each section that has nothing else to show.
+    const detail = error instanceof Error ? error.message : '';
+    renderUserSectionsError(detail, () => { void loadUsers(); });
   }
 }
 

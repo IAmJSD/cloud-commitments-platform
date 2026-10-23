@@ -75,7 +75,8 @@ export function renderUsers(users: APIUser[]): void {
   if (!container) return;
 
   if (users.length === 0) {
-    container.innerHTML = '<div class="empty">No users found matching your filters</div>';
+    container.innerHTML = `<div class="empty">${allUsers.length === 0 // #182: no users at all vs filtered out
+      ? 'No users yet. Use Create User to give someone access.' : 'No users found matching your filters'}</div>`;
     return;
   }
 

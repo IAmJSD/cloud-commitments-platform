@@ -113,7 +113,7 @@ describe('groups/groupList', () => {
       groupList.renderGroups([]);
 
       const container = document.getElementById('groups-list');
-      expect(container?.innerHTML).toContain('No groups found');
+      expect(container?.innerHTML).toContain('No groups yet');
       expect(container?.querySelector('.empty')).toBeTruthy();
     });
 
