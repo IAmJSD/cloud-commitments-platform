@@ -1430,6 +1430,78 @@ func TestSetPlanAccounts_EmptyServicesSkipsValidation(t *testing.T) {
 	assert.Equal(t, []string{azureAcct1}, capturedIDs, "empty services map → validation skipped → write proceeds")
 }
 
+// TestSetPlanAccounts_ColonKeyedPlanStillChecksProvider: migration 000040
+// wrote "aws:savings-plans-<type>" keys. DerivePlanProviders used to skip
+// them, so a plan keyed only that way had an empty provider set and accepted
+// an Azure account (issue #316, A04-012).
+func TestSetPlanAccounts_ColonKeyedPlanStillChecksProvider(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	setCalled := false
+	store := setupAdminMock(ctx)
+	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+		return &config.PurchasePlan{ID: planID209, Name: "sp-plan", Services: map[string]config.ServiceConfig{
+			"aws:savings-plans-compute":     {Provider: "aws", Service: "savings-plans"},
+			"aws:savings-plans-ec2instance": {Provider: "aws", Service: "savings-plans"},
+		}}, nil
+	}
+	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, Name: "prod-azure", Provider: "azure"}, nil
+	}
+	store.SetPlanAccountsFn = func(_ context.Context, _ string, _ []string) error {
+		setCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"account_ids":["` + azureAcct1 + `"]}`
+	_, err := handler.setPlanAccounts(ctx, adminRequest(body), planID209)
+	require.Error(t, err, "an Azure account must not be assignable to an AWS-only plan")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError, got %T", err)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.Error(), "prod-azure")
+	assert.False(t, setCalled, "SetPlanAccounts must NOT be called when validation fails")
+}
+
+// TestSetPlanAccounts_UnparseableServiceKeyFailsClosed: stored keys that name
+// no provider used to be skipped silently; when no key named one, the
+// provider set came out empty and any account was accepted. It now fails the
+// request instead (issue #316, A04-012).
+func TestSetPlanAccounts_UnparseableServiceKeyFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	setCalled := false
+	store := setupAdminMock(ctx)
+	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+		return &config.PurchasePlan{ID: planID209, Name: "bad-key", Services: map[string]config.ServiceConfig{
+			"ec2":    {Provider: "aws", Service: "ec2"},
+			"future": {},
+		}}, nil
+	}
+	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, Name: "prod-azure", Provider: "azure"}, nil
+	}
+	store.SetPlanAccountsFn = func(_ context.Context, _ string, _ []string) error {
+		setCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"account_ids":["` + azureAcct1 + `"]}`
+	_, err := handler.setPlanAccounts(ctx, adminRequest(body), planID209)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError, got %T", err)
+	assert.Equal(t, 500, ce.code)
+	assert.NotContains(t, ce.Error(), planID209, "the plan UUID must not leak into the response")
+	assert.False(t, setCalled, "SetPlanAccounts must NOT be called when the plan's providers cannot be derived")
+}
+
 // TestSetPlanAccounts_RejectsEmpty verifies the universal-plans fix:
 // PUT /api/plans/:id/accounts with an empty account_ids returns HTTP 400
 // and never reaches the store. Eliminates the back-door for re-creating a

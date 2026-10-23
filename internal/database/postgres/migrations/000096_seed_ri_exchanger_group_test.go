@@ -140,3 +140,39 @@ func TestMigration_SeedRIExchangerGroup(t *testing.T) {
 		assert.Equal(t, 1, count, "RI Exchanger must appear exactly once in group_ids")
 	})
 }
+
+// TestMigration_SeedRIExchangerGroup_Down covers the 000096 half of issue #316
+// (A04-010): the rollback strips RI Exchanger from every user, and a user
+// whose only group it is would be left with none. users_min_one_group made
+// that abort with a bare CHECK violation; the rollback now refuses up front
+// and says which migration and group are in the way.
+func TestMigration_SeedRIExchangerGroup_Down(t *testing.T) {
+	ctx := context.Background()
+	below := previousMigrationVersion(t, 96)
+
+	t.Run("members with another group are detached and the group dropped", func(t *testing.T) {
+		const admin = "admin-096-down@test.example"
+		pool := pinBeforeDown(ctx, t, 96, map[string][]string{
+			admin: {adminGroupIDForPurchaserTest, riExchangerGroupIDTest},
+		})
+
+		require.NoError(t, migrations.MigrateToVersion(ctx, pool, getMigrationsPath(), below))
+
+		_, ok := groupName(ctx, t, pool, riExchangerGroupIDTest)
+		assert.False(t, ok, "RI Exchanger must be dropped")
+		assert.ElementsMatch(t, []string{adminGroupIDForPurchaserTest}, queryGroupIDsByEmail(t, ctx, pool, admin))
+	})
+
+	t.Run("an RI-Exchanger-only user stops the rollback with a clear error", func(t *testing.T) {
+		const only = "only-riexchanger-096@test.example"
+		pool := pinBeforeDown(ctx, t, 96, map[string][]string{only: {riExchangerGroupIDTest}})
+
+		err := migrations.MigrateToVersion(ctx, pool, getMigrationsPath(), below)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "migration 000096 down")
+
+		_, ok := groupName(ctx, t, pool, riExchangerGroupIDTest)
+		assert.True(t, ok, "nothing is removed when the rollback refuses")
+		assert.ElementsMatch(t, []string{riExchangerGroupIDTest}, queryGroupIDsByEmail(t, ctx, pool, only))
+	})
+}

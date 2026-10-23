@@ -1262,9 +1262,12 @@ func (h *Handler) deleteAccountServiceOverride(ctx context.Context, req *events.
 //   - 400 ClientError listing every provider mismatch in one message
 //     (so clients fix everything in one round-trip rather than
 //     resubmitting to discover the next)
-//   - nil when all accounts match (or when the plan has no parseable
-//     services — defensive skip; production plans always carry at least
-//     one service, frontend enforces this)
+//   - 500 ClientError when a stored service key names no provider (fail
+//     closed: skipping the key could leave the provider set empty, which
+//     would accept an account of any provider, issue #316)
+//   - nil when all accounts match (or when the plan has no services at
+//     all — production plans always carry at least one service, frontend
+//     enforces this)
 //
 // Pulled out of setPlanAccounts to keep that function under the gocyclo
 // budget (limit 10). No business logic lives here that isn't otherwise
@@ -1275,7 +1278,13 @@ func (h *Handler) validatePlanAccountProviders(ctx context.Context, planID strin
 		return err
 	}
 
-	expected := config.DerivePlanProviders(plan)
+	expected, err := config.DerivePlanProviders(plan)
+	if err != nil {
+		// The key is stored data, not the caller's input; log it and keep
+		// the plan UUID out of the response, as the 500s above do.
+		logging.Errorf("validatePlanAccountProviders: %v", err)
+		return NewClientError(500, "failed to validate plan accounts")
+	}
 	if len(expected) == 0 {
 		return nil
 	}
