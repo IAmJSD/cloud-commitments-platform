@@ -14,6 +14,7 @@ export type {
   LoginResponse,
   DashboardSummary,
   UpcomingPurchase,
+  UpcomingPurchasesResponse,
   Recommendation,
   RecommendationFilters,
   Plan,

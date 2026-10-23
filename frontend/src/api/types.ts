@@ -120,6 +120,13 @@ export interface UpcomingPurchase {
   created_by_user_id?: string;
 }
 
+// GET /api/dashboard/upcoming wraps the rows in an object (#1189). The Go
+// handler builds the slice with `var upcoming []UpcomingPurchase`, so an
+// empty result serializes as `purchases: null`, not `[]`.
+export interface UpcomingPurchasesResponse {
+  purchases: UpcomingPurchase[] | null;
+}
+
 // Recommendation types
 export interface Recommendation {
   id: string;
