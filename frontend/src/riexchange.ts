@@ -8,10 +8,7 @@ import * as state from './state';
 import { formatDate, formatDateTime, escapeHtml, formatCurrency } from './utils';
 import { switchTab, switchSettingsSubTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
-import {
-  parseNumericFilter,
-  applyColumnFilters as applyColumnFiltersLib,
-} from './lib/column-filters';
+import { applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 import {
   openColumnFilterPopover,
   rebindColumnFilterPopover,
@@ -858,270 +855,33 @@ function activeRiOpenPopoverFor(column: state.ActiveRiColumnId, anchor: HTMLElem
 
 // ── Reshape recommendations popover ──────────────────────────────────────
 
-interface RiexPopoverState {
-  column: state.RiExchangeColumnId;
-  el: HTMLDivElement;
-  checkboxes: Map<string, HTMLInputElement>;
-  input: HTMLInputElement | null;
-  errorEl: HTMLElement | null;
-}
-
-let riexOpenPopover: RiexPopoverState | null = null;
-let riexOutsideHandler: ((e: MouseEvent) => void) | null = null;
-let riexEscHandler: ((e: KeyboardEvent) => void) | null = null;
+const RIEX_POPOVER_SCOPE = 'riex';
 
 function riexLabelFor(col: state.RiExchangeColumnId): string {
   return RIEX_COLUMN_DEFS.find((c) => c.key === col)?.label ?? col;
 }
 
-function riexDistinctValues(
-  recs: readonly import('./api').ReshapeRecommendation[],
-  col: state.RiExchangeColumnId,
-): string[] {
-  const seen = new Set<string>();
-  for (const r of recs) seen.add(riexCategoricalCellValue(r, col));
-  return Array.from(seen).sort((a, b) => {
-    if (a === '' && b !== '') return -1;
-    if (a !== '' && b === '') return 1;
-    return a.localeCompare(b);
-  });
-}
-
-function riexPositionPopover(popover: HTMLElement, anchor: HTMLElement): void {
-  const rect = anchor.getBoundingClientRect();
-  popover.style.display = 'block';
-  const popRect = popover.getBoundingClientRect();
-  const margin = 8;
-  let top = rect.bottom + 4;
-  if (top + popRect.height > window.innerHeight - margin) {
-    top = Math.max(margin, rect.top - popRect.height - 4);
-  }
-  let left = rect.left;
-  if (left + popRect.width > window.innerWidth - margin) {
-    left = Math.max(margin, window.innerWidth - margin - popRect.width);
-  }
-  popover.style.position = 'absolute';
-  popover.style.top = `${top + window.scrollY}px`;
-  popover.style.left = `${left + window.scrollX}px`;
-}
-
-function riexBuildPopover(
-  column: state.RiExchangeColumnId,
-  recs: readonly import('./api').ReshapeRecommendation[],
-): RiexPopoverState {
-  const popover = document.createElement('div');
-  popover.className = 'column-filter-popover';
-  popover.setAttribute('role', 'dialog');
-  popover.setAttribute('aria-modal', 'false');
-
-  const headingId = `riex-column-filter-heading-${column}`;
-  popover.setAttribute('aria-labelledby', headingId);
-
-  const heading = document.createElement('h3');
-  heading.id = headingId;
-  heading.className = 'column-filter-heading';
-  heading.textContent = `Filter ${riexLabelFor(column)}`;
-  popover.appendChild(heading);
-
-  const checkboxes = new Map<string, HTMLInputElement>();
-  let input: HTMLInputElement | null = null;
-  let errorEl: HTMLElement | null = null;
-  let commitAllRef: ((target: boolean) => void) | null = null;
-
-  if (RIEX_NUMERIC_COLUMNS.has(column)) {
-    const label = document.createElement('label');
-    label.className = 'column-filter-numeric-label';
-    label.textContent = 'Expression';
-    input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'column-filter-numeric-input';
-    input.placeholder = 'e.g. >50, 70..95, 1';
-    input.setAttribute('aria-describedby', `riex-column-filter-error-${column}`);
-    const current = state.getRiExchangeColumnFilters()[column];
-    if (current && current.kind === 'expr') input.value = current.expr;
-    label.appendChild(input);
-    popover.appendChild(label);
-
-    errorEl = document.createElement('div');
-    errorEl.id = `riex-column-filter-error-${column}`;
-    errorEl.className = 'column-filter-error';
-    errorEl.setAttribute('role', 'status');
-    popover.appendChild(errorEl);
-
-    const commit = (): void => {
-      const expr = input!.value.trim();
-      if (expr === '') {
-        state.setRiExchangeColumnFilter(column, null);
-        errorEl!.textContent = '';
-        rerenderReshape();
-        return;
-      }
-      const parsed = parseNumericFilter(expr);
-      if (!parsed.ok) {
-        errorEl!.textContent = parsed.error;
-        return;
-      }
-      errorEl!.textContent = '';
-      state.setRiExchangeColumnFilter(column, { kind: 'expr', expr });
-      rerenderReshape();
-    };
-    input.addEventListener('blur', commit);
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        commit();
-      }
-    });
-  } else {
-    const distinct = riexDistinctValues(recs, column);
-    const current = state.getRiExchangeColumnFilters()[column];
-    const activeSet: ReadonlySet<string> | null =
-      current && current.kind === 'set' ? new Set(current.values) : null;
-
-    const allLabel = document.createElement('label');
-    allLabel.className = 'column-filter-all';
-    const allBox = document.createElement('input');
-    allBox.type = 'checkbox';
-    allBox.dataset['role'] = 'all';
-    allLabel.appendChild(allBox);
-    const allText = document.createElement('span');
-    allText.textContent = '(All)';
-    allLabel.appendChild(allText);
-    popover.appendChild(allLabel);
-
-    const list = document.createElement('div');
-    list.className = 'column-filter-list';
-    for (const value of distinct) {
-      const itemLabel = document.createElement('label');
-      itemLabel.className = 'column-filter-item';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.dataset['value'] = value;
-      cb.checked = activeSet === null ? true : activeSet.has(value);
-      itemLabel.appendChild(cb);
-      const text = document.createElement('span');
-      text.textContent = value === '' ? '(empty)' : value;
-      itemLabel.appendChild(text);
-      list.appendChild(itemLabel);
-      checkboxes.set(value, cb);
-    }
-    popover.appendChild(list);
-
-    const updateAllTriState = (): void => {
-      const total = checkboxes.size;
-      let checked = 0;
-      checkboxes.forEach((cb) => { if (cb.checked) checked++; });
-      allBox.indeterminate = checked > 0 && checked < total;
-      allBox.checked = checked === total && total > 0;
-    };
-    updateAllTriState();
-
-    const commit = (): void => {
-      const selected: string[] = [];
-      checkboxes.forEach((cb, value) => { if (cb.checked) selected.push(value); });
-      if (selected.length === checkboxes.size) {
-        state.setRiExchangeColumnFilter(column, null);
-      } else {
-        state.setRiExchangeColumnFilter(column, { kind: 'set', values: selected });
-      }
-      updateAllTriState();
-      rerenderReshape();
-    };
-
-    const commitAll = (target: boolean): void => {
-      checkboxes.forEach((cb) => { cb.checked = target; });
-      if (target) {
-        state.setRiExchangeColumnFilter(column, null);
-      } else {
-        state.setRiExchangeColumnFilter(column, { kind: 'set', values: [] });
-      }
-      updateAllTriState();
-      rerenderReshape();
-    };
-    commitAllRef = commitAll;
-
-    checkboxes.forEach((cb) => { cb.addEventListener('change', commit); });
-    allBox.addEventListener('change', () => { commitAll(allBox.checked); });
-  }
-
-  const footer = document.createElement('div');
-  footer.className = 'column-filter-footer';
-  const clearBtn = document.createElement('button');
-  clearBtn.type = 'button';
-  clearBtn.className = 'column-filter-clear';
-  clearBtn.textContent = 'Clear';
-  clearBtn.addEventListener('click', () => {
-    if (input) {
-      state.setRiExchangeColumnFilter(column, null);
-      input.value = '';
-      if (errorEl) errorEl.textContent = '';
-      rerenderReshape();
-    } else {
-      commitAllRef?.(false);
-    }
-  });
-  footer.appendChild(clearBtn);
-  popover.appendChild(footer);
-
-  return { column, el: popover, checkboxes, input, errorEl };
-}
-
-function riexCloseOpenPopover(): void {
-  if (!riexOpenPopover) return;
-  const { column, el } = riexOpenPopover;
-  el.remove();
-  riexOpenPopover = null;
-  if (riexOutsideHandler) {
-    document.removeEventListener('mousedown', riexOutsideHandler);
-    riexOutsideHandler = null;
-  }
-  if (riexEscHandler) {
-    document.removeEventListener('keydown', riexEscHandler);
-    riexEscHandler = null;
-  }
-  const trigger = document.querySelector<HTMLButtonElement>(
+function riexTrigger(column: state.RiExchangeColumnId): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>(
     `#ri-exchange-recommendations-list .column-filter-btn[data-column="${column}"]`,
   );
-  if (trigger) trigger.setAttribute('aria-expanded', 'false');
 }
 
 function riexOpenPopoverFor(column: state.RiExchangeColumnId, anchor: HTMLElement): void {
-  if (riexOpenPopover && !riexOpenPopover.el.isConnected) {
-    riexCloseOpenPopover();
-  }
-  if (riexOpenPopover && riexOpenPopover.column === column) {
-    riexCloseOpenPopover();
-    return;
-  }
-  if (riexOpenPopover) riexCloseOpenPopover();
-
-  const built = riexBuildPopover(column, currentRecommendations);
-  document.body.appendChild(built.el);
-  riexOpenPopover = built;
-  riexPositionPopover(built.el, anchor);
-  anchor.setAttribute('aria-expanded', 'true');
-
-  if (!riexOutsideHandler) {
-    riexOutsideHandler = (e: MouseEvent): void => {
-      if (!riexOpenPopover) return;
-      const target = e.target as Node | null;
-      if (!target) return;
-      if (riexOpenPopover.el.contains(target)) return;
-      if (target instanceof Element && target.closest('.column-filter-btn')) return;
-      riexCloseOpenPopover();
-    };
-    document.addEventListener('mousedown', riexOutsideHandler);
-  }
-  if (!riexEscHandler) {
-    riexEscHandler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') riexCloseOpenPopover();
-    };
-    document.addEventListener('keydown', riexEscHandler);
-  }
-
-  const firstFocusable = built.input
-    ?? built.el.querySelector<HTMLInputElement>('input[type="checkbox"]');
-  firstFocusable?.focus();
+  openColumnFilterPopover({
+    scope: RIEX_POPOVER_SCOPE,
+    column,
+    label: riexLabelFor(column),
+    kind: RIEX_NUMERIC_COLUMNS.has(column) ? 'numeric' : 'categorical',
+    placeholder: 'e.g. >50, 70..95, 1',
+    distinctValues: sortedDistinctValues(currentRecommendations, (r) => riexCategoricalCellValue(r, column)),
+    getFilter: () => state.getRiExchangeColumnFilters()[column],
+    onCommit: (filter) => {
+      state.setRiExchangeColumnFilter(column, filter);
+      rerenderReshape();
+    },
+    findTrigger: () => riexTrigger(column),
+  }, anchor);
 }
 
 function rerenderReshape(): void {
@@ -1213,6 +973,8 @@ function renderRecommendations(container: HTMLElement): void {
       riexOpenPopoverFor(column, btn);
     });
   });
+  // Keep an open filter popover attached to the re-rendered trigger.
+  rebindColumnFilterPopover(RIEX_POPOVER_SCOPE);
 
   // Attach "Exchange" handlers. Same as renderRIsTable: for non-admin
   // sessions the selector matches zero elements and this loop is a no-op.
