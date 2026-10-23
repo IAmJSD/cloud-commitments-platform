@@ -303,6 +303,7 @@ func TestSQSRedeliveryDoesNotDoubleExecute(t *testing.T) {
 	newPending := func() *config.PurchaseExecution {
 		return &config.PurchaseExecution{
 			ExecutionID:    "exec-dup",
+			PlanID:         "plan-dup", // a plan-less row is never auto-executed
 			IdempotencyKey: "lineage-dup",
 			Status:         "notified",
 			Recommendations: []config.RecommendationRecord{

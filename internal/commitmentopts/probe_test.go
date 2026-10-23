@@ -664,3 +664,59 @@ func TestDefaultProbers_IncludesSavingsPlans(t *testing.T) {
 	}
 	assert.True(t, found, "DefaultProbers must include SavingsPlansProber")
 }
+
+// ---------------------------------------------------------------------------
+// Page cap on the client-side-filtered probers (issue #243)
+// ---------------------------------------------------------------------------
+
+func TestWalkPaginatedCapped_ReportsWhyTheWalkStopped(t *testing.T) {
+	_, capped, err := walkPaginatedCapped(context.Background(), "test", func(context.Context, *string) ([]rawOffer, *string, error) {
+		return nil, aws.String("more"), nil
+	})
+	require.NoError(t, err)
+	assert.True(t, capped, "pages left when the cap fired")
+
+	_, capped, err = walkPaginatedCapped(context.Background(), "test", func(context.Context, *string) ([]rawOffer, *string, error) {
+		return nil, nil, nil
+	})
+	require.NoError(t, err)
+	assert.False(t, capped, "pagination ran out")
+}
+
+// OpenSearch and Redshift page through every instance type and filter for the
+// probe target client-side, so a walk the cap cut short holds only part of the
+// target's matrix. It must yield no combos (Validate then stays permissive for
+// the service) rather than a partial list that rejects combos AWS does sell.
+func TestFilteredProbers_PageCapYieldsNoCombos(t *testing.T) {
+	osFake := &fakeOpenSearch{fn: func(*opensearch.DescribeReservedInstanceOfferingsInput) (*opensearch.DescribeReservedInstanceOfferingsOutput, error) {
+		return &opensearch.DescribeReservedInstanceOfferingsOutput{
+			ReservedInstanceOfferings: []opensearchtypes.ReservedInstanceOffering{{
+				InstanceType:  opensearchtypes.OpenSearchPartitionInstanceType(probeTargetOpenSearch),
+				Duration:      31536000,
+				PaymentOption: opensearchtypes.ReservedInstancePaymentOptionNoUpfront,
+			}},
+			NextToken: aws.String("more"),
+		}, nil
+	}}
+	rsFake := &fakeRedshift{fn: func(*redshift.DescribeReservedNodeOfferingsInput) (*redshift.DescribeReservedNodeOfferingsOutput, error) {
+		return &redshift.DescribeReservedNodeOfferingsOutput{
+			ReservedNodeOfferings: []redshifttypes.ReservedNodeOffering{{
+				NodeType:     aws.String(probeTargetRedshift),
+				Duration:     aws.Int32(31536000),
+				OfferingType: aws.String("No Upfront"),
+			}},
+			Marker: aws.String("more"),
+		}, nil
+	}}
+	probers := []Prober{
+		&OpenSearchProber{NewClient: func(aws.Config) OpenSearchDescribeOfferings { return osFake }},
+		&RedshiftProber{NewClient: func(aws.Config) RedshiftDescribeOfferings { return rsFake }},
+	}
+	for _, p := range probers {
+		t.Run(p.Service(), func(t *testing.T) {
+			got, err := p.Probe(context.Background(), aws.Config{})
+			require.NoError(t, err)
+			assert.Empty(t, got, "a capped walk must not record a partial matrix")
+		})
+	}
+}
