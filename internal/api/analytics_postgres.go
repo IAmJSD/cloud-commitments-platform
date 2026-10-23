@@ -258,11 +258,14 @@ func (c *PostgresAnalyticsClient) QueryHistory(
 
 // QueryBreakdown groups purchase_history by dimension (service, provider,
 // region, account) and returns totals + percentage-of-total-savings per
-// bucket.
+// bucket. A non-empty provider restricts to rows of that provider, as in
+// QueryHistory; "" means all providers. The percentages are of the filtered
+// total.
 func (c *PostgresAnalyticsClient) QueryBreakdown(
 	ctx context.Context,
 	accountUUIDs []string,
 	accountExternalIDsByProvider map[string][]string,
+	provider string,
 	start, end time.Time,
 	dimension string,
 ) (map[string]BreakdownValue, error) {
@@ -272,8 +275,14 @@ func (c *PostgresAnalyticsClient) QueryBreakdown(
 	}
 
 	// Dual-column account predicate: see accountFilterClause / QueryHistory for
-	// rationale (issue #701/#498/#866).
+	// rationale (issue #701/#498/#866). The provider predicate is the same
+	// parameter-bound clause QueryHistory uses (issue #25).
 	accountClause, args := accountFilterClause(accountUUIDs, accountExternalIDsByProvider, []any{start, end})
+	providerClause := ""
+	if provider != "" {
+		args = append(args, provider)
+		providerClause = fmt.Sprintf(" AND provider = $%d", len(args))
+	}
 	query := fmt.Sprintf(`
 		SELECT %s AS bucket,
 		       SUM(estimated_savings)::float8 AS savings,
@@ -282,10 +291,10 @@ func (c *PostgresAnalyticsClient) QueryBreakdown(
 		FROM purchase_history
 		WHERE timestamp >= $1
 		  AND timestamp <= $2
-		  AND %s
+		  AND %s%s
 		GROUP BY bucket
 		ORDER BY savings DESC
-	`, column, accountClause)
+	`, column, accountClause, providerClause)
 
 	rows, err := c.db.Query(ctx, query, args...)
 	if err != nil {

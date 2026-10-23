@@ -80,7 +80,7 @@ func TestNullablePurchaseCostPostgres(t *testing.T) {
 			assert.Equal(t, tc.want, summary.TotalUpfront)
 			assert.Equal(t, len(tc.costs), summary.TotalPurchases)
 			assert.Equal(t, float64(len(tc.costs))*10, summary.TotalMonthlySavings)
-			breakdown, breakdownErr := client.QueryBreakdown(ctx, nil, scope, now.Add(-time.Hour), now.Add(time.Hour), "service")
+			breakdown, breakdownErr := client.QueryBreakdown(ctx, nil, scope, "", now.Add(-time.Hour), now.Add(time.Hour), "service")
 			require.NoError(t, breakdownErr)
 			if len(tc.costs) > 0 {
 				require.Len(t, points, 1)

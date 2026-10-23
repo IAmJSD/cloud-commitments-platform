@@ -415,7 +415,7 @@ func TestPerAccountPerms_HistoryBreakdown_AllowedAccountSucceeds(t *testing.T) {
 		"ec2": {PurchaseCount: 3, TotalSavings: 150.0},
 	}
 	mockClient := new(MockAnalyticsClient)
-	mockClient.On("QueryBreakdown", ctx, []string{permsAccA}, map[string][]string(nil), mock.Anything, mock.Anything, mock.Anything).
+	mockClient.On("QueryBreakdown", ctx, []string{permsAccA}, map[string][]string(nil), "", mock.Anything, mock.Anything, mock.Anything).
 		Return(expectedData, nil)
 
 	mockStore := new(MockConfigStore)
@@ -435,7 +435,7 @@ func TestPerAccountPerms_HistoryBreakdown_AllowedAccountSucceeds(t *testing.T) {
 	})
 	require.NoError(t, err, "scoped user must be able to query breakdown for account-A")
 	require.NotNil(t, result)
-	mockClient.AssertCalled(t, "QueryBreakdown", ctx, []string{permsAccA}, map[string][]string(nil), mock.Anything, mock.Anything, mock.Anything)
+	mockClient.AssertCalled(t, "QueryBreakdown", ctx, []string{permsAccA}, map[string][]string(nil), "", mock.Anything, mock.Anything, mock.Anything)
 }
 
 // TestPerAccountPerms_HistoryBreakdown_CrossAccountRejected mirrors the
@@ -463,7 +463,7 @@ func TestPerAccountPerms_HistoryBreakdown_CrossAccountRejected(t *testing.T) {
 	assert.True(t, IsNotFoundError(err),
 		"cross-account breakdown must return 404; got: %v", err)
 
-	mockClient.AssertNotCalled(t, "QueryBreakdown", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockClient.AssertNotCalled(t, "QueryBreakdown", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 // ─── 6. GET /dashboard/summary ───────────────────────────────────────────────

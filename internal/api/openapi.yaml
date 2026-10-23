@@ -1750,6 +1750,14 @@ paths:
         - $ref: '#/components/parameters/AccountID'
         - $ref: '#/components/parameters/StartDate'
         - $ref: '#/components/parameters/EndDate'
+        - name: provider
+          in: query
+          description: >-
+            Filter by cloud provider. `all` or omitting the parameter means
+            every provider; any other value is a 400.
+          schema:
+            type: string
+            enum: [aws, azure, gcp, all]
       responses:
         '200':
           description: Analytics data
@@ -1757,6 +1765,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AnalyticsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1777,6 +1787,14 @@ paths:
             type: string
             enum: [service, provider, region]
             default: service
+        - name: provider
+          in: query
+          description: >-
+            Filter by cloud provider. `all` or omitting the parameter means
+            every provider; any other value is a 400.
+          schema:
+            type: string
+            enum: [aws, azure, gcp, all]
       responses:
         '200':
           description: Breakdown data
@@ -1784,6 +1802,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BreakdownResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':

@@ -128,7 +128,7 @@ func TestQueryBreakdown_Success(t *testing.T) {
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	out, err := client.QueryBreakdown(context.Background(), nil, nil,
+	out, err := client.QueryBreakdown(context.Background(), nil, nil, "",
 		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC),
 		"service")
@@ -149,7 +149,7 @@ func TestQueryBreakdown_Success(t *testing.T) {
 
 func TestQueryBreakdown_BadDimension(t *testing.T) {
 	client, _ := newMockAnalyticsClient(t)
-	_, err := client.QueryBreakdown(context.Background(), nil, nil, time.Now(), time.Now(), "team")
+	_, err := client.QueryBreakdown(context.Background(), nil, nil, "", time.Now(), time.Now(), "team")
 	assert.Error(t, err)
 }
 
@@ -162,7 +162,7 @@ func TestQueryBreakdown_ZeroTotalYieldsZeroPct(t *testing.T) {
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
-	out, err := client.QueryBreakdown(context.Background(), nil, nil, time.Now(), time.Now(), "service")
+	out, err := client.QueryBreakdown(context.Background(), nil, nil, "", time.Now(), time.Now(), "service")
 	require.NoError(t, err)
 	assert.Equal(t, 0.0, out["ec2"].Percentage, "percentage must be 0 when total savings is 0")
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -215,7 +215,7 @@ func TestQueryBreakdown_DualColumnFilter(t *testing.T) {
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), []string{uuid}, "aws", []string{external}).
 		WillReturnRows(rows)
 
-	out, err := client.QueryBreakdown(ctx, []string{uuid}, map[string][]string{"aws": {external}},
+	out, err := client.QueryBreakdown(ctx, []string{uuid}, map[string][]string{"aws": {external}}, "",
 		time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
 		"service")

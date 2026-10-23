@@ -82,7 +82,7 @@ type CommitmentOptsInterface interface {
 // providers cannot leak the wrong rows (issue #701/#498/#866).
 type AnalyticsClientInterface interface {
 	QueryHistory(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, provider string, start, end time.Time, interval string) ([]HistoryDataPoint, *HistorySummary, error)
-	QueryBreakdown(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, start, end time.Time, dimension string) (map[string]BreakdownValue, error)
+	QueryBreakdown(ctx context.Context, accountUUIDs []string, accountExternalIDsByProvider map[string][]string, provider string, start, end time.Time, dimension string) (map[string]BreakdownValue, error)
 }
 
 // AnalyticsCollectorInterface defines the interface for analytics collection.

@@ -35,7 +35,7 @@ func analyticsScopeCallPath(t *testing.T, path string, scope []string, accountID
 	client := new(MockAnalyticsClient)
 	client.On("QueryHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return([]HistoryDataPoint{}, &HistorySummary{}, nil)
-	client.On("QueryBreakdown", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	client.On("QueryBreakdown", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(map[string]BreakdownValue{}, nil)
 	snaps := new(MockAnalyticsSnapshotStore)
 	snaps.On("QueryMonthlyTotals", mock.Anything, mock.Anything, mock.Anything, mock.Anything).

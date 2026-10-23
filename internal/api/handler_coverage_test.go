@@ -708,7 +708,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 			return map[string]BreakdownValue{"ec2": {TotalSavings: 50, PurchaseCount: 1, Percentage: 100}}
 		}
 		// No dimension param: the handler defaults to "service".
-		mockClient.On("QueryBreakdown", ctx, []string(nil), map[string][]string(nil), mock.Anything, mock.Anything, "service").
+		mockClient.On("QueryBreakdown", ctx, []string(nil), map[string][]string(nil), "", mock.Anything, mock.Anything, "service").
 			Return(data(), nil)
 
 		h := &Handler{auth: mockAuth, analyticsClient: mockClient}
@@ -722,8 +722,8 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		assert.Equal(t, data(), resp.Data)
 		require.Len(t, mockClient.Calls, 1)
 		args := mockClient.Calls[0].Arguments
-		assert.Equal(t, args.Get(3).(time.Time).Format(time.RFC3339), resp.Start)
-		assert.Equal(t, args.Get(4).(time.Time).Format(time.RFC3339), resp.End)
+		assert.Equal(t, args.Get(4).(time.Time).Format(time.RFC3339), resp.Start)
+		assert.Equal(t, args.Get(5).(time.Time).Format(time.RFC3339), resp.End)
 	})
 
 	t.Run("triggerAnalyticsCollectionHandler", func(t *testing.T) {

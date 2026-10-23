@@ -206,8 +206,20 @@ func (h *Handler) getHistoryBreakdown(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
+	// The global-filter provider chip, normalized and validated exactly as in
+	// getHistoryAnalytics: "all" and "" mean every provider, anything else
+	// must be a known provider (issue #25).
+	provider := params["provider"]
+	if provider == "all" {
+		provider = ""
+	}
+	err = validateProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+
 	// Fetch the breakdown from the analytics client (Postgres-backed).
-	data, err := h.analyticsClient.QueryBreakdown(ctx, accountUUIDs, accountExternalIDsByProvider, start, end, dimension)
+	data, err := h.analyticsClient.QueryBreakdown(ctx, accountUUIDs, accountExternalIDsByProvider, provider, start, end, dimension)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query breakdown: %w", err)
 	}
