@@ -60,6 +60,21 @@ func strandedWriterCases() []writerCase {
 			require.NoError(t, err)
 			assert.False(t, counted)
 		}},
+		// claimAndRedrive won the approved -> running claim but the claimed row
+		// no longer qualifies for a re-drive (#1037): the claim holder alerts,
+		// even when its terminal save fails.
+		{name: "claimed redrive row failed", alerts: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
+			store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{"running"}).Return(nil)
+			counted, err := m.failClaimedRedrive(context.Background(), writerRow("running"))
+			require.NoError(t, err)
+			assert.True(t, counted)
+		}},
+		{name: "claimed redrive row failed, terminal save failed", alerts: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
+			store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{"running"}).Return(errors.New("db down"))
+			counted, err := m.failClaimedRedrive(context.Background(), writerRow("running"))
+			require.ErrorIs(t, err, config.ErrAuditLoss)
+			assert.False(t, counted)
+		}},
 		{name: "reaper won CAS", alerts: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
 			failedRowFromCAS(store, "TransitionExecutionStatus", mock.Anything, "exec-w", []string{"running"}, failedStatus, (*string)(nil))
 			store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{failedStatus}).Return(nil)
@@ -102,9 +117,19 @@ func planStepWriterCases() []writerCase {
 			err := m.failExistingPlanStep(context.Background(), writerRow("notified"), "refused")
 			assert.ErrorIs(t, err, errExecutionNotNotifiable)
 		}},
-		{name: "plan step won CAS, reason save failed", alerts: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
+		// The CAS, reason write and suppression release share one transaction
+		// (#1052), so a later error rolls the CAS back: the row stays pending
+		// for the next tick and nothing alerts.
+		{name: "plan step won CAS, reason save rolled back", run: func(t *testing.T, m *Manager, store *MockConfigStore) {
 			failedRowFromCAS(store, "TransitionExecutionStatusPinned", pinned...)
 			store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(errors.New("db down"))
+			err := m.failExistingPlanStep(context.Background(), writerRow("notified"), "refused")
+			assert.ErrorContains(t, err, "db down")
+		}},
+		{name: "plan step won CAS, suppression release rolled back", run: func(t *testing.T, m *Manager, store *MockConfigStore) {
+			failedRowFromCAS(store, "TransitionExecutionStatusPinned", pinned...)
+			store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
+			store.On("DeleteSuppressionsByExecutionTx", mock.Anything, mock.Anything, "exec-w").Return(errors.New("db down"))
 			err := m.failExistingPlanStep(context.Background(), writerRow("notified"), "refused")
 			assert.ErrorContains(t, err, "db down")
 		}},
