@@ -63,6 +63,9 @@ type MockConfigStore struct {
 	// fanOutShapes backs PinExecutionFanOutShape's default: first writer wins
 	// per lineage key, like the real table.
 	fanOutShapes fanOutShapePins
+	// reporter fails the registered test on a mistyped .Return value. See
+	// report.go.
+	reporter testReporter
 }
 
 // GetGlobalConfig mocks the GetGlobalConfig operation. Returns an empty
@@ -79,7 +82,7 @@ func (m *MockConfigStore) GetGlobalConfig(ctx context.Context) (*config.GlobalCo
 	}
 	v, ok := args.Get(0).(*config.GlobalConfig)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.GlobalConfig, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetGlobalConfig", "*config.GlobalConfig", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -105,7 +108,7 @@ func (m *MockConfigStore) UpdateGlobalConfigAtomic(ctx context.Context, apply fu
 		}
 		v, ok := args.Get(0).(*config.GlobalConfig)
 		if !ok {
-			panic(fmt.Sprintf("mock: expected *config.GlobalConfig, got %T", args.Get(0)))
+			m.reporter.wrongReturnType("UpdateGlobalConfigAtomic", "*config.GlobalConfig", args.Get(0))
 		}
 		return v, args.Error(1)
 	}
@@ -136,7 +139,7 @@ func (m *MockConfigStore) GetServiceConfig(ctx context.Context, provider, servic
 	}
 	v, ok := args.Get(0).(*config.ServiceConfig)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.ServiceConfig, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetServiceConfig", "*config.ServiceConfig", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -157,7 +160,7 @@ func (m *MockConfigStore) ListServiceConfigs(ctx context.Context) ([]config.Serv
 	}
 	v, ok := args.Get(0).([]config.ServiceConfig)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.ServiceConfig, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListServiceConfigs", "[]config.ServiceConfig", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -187,7 +190,7 @@ func (m *MockConfigStore) GetPurchasePlan(ctx context.Context, planID string) (*
 	}
 	v, ok := args.Get(0).(*config.PurchasePlan)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.PurchasePlan, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetPurchasePlan", "*config.PurchasePlan", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -226,7 +229,7 @@ func (m *MockConfigStore) GetStuckRampSteps(ctx context.Context) (map[string]con
 	}
 	v, ok := args.Get(0).(map[string]config.RampStepBlock)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected map[string]config.RampStepBlock, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetStuckRampSteps", "map[string]config.RampStepBlock", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -247,7 +250,7 @@ func (m *MockConfigStore) LockPurchasePlanTx(ctx context.Context, tx pgx.Tx, pla
 	}
 	v, ok := args.Get(0).(*config.PurchasePlan)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.PurchasePlan, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("LockPurchasePlanTx", "*config.PurchasePlan", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -279,7 +282,7 @@ func (m *MockConfigStore) ListExecutionsForPlanStepTx(ctx context.Context, tx pg
 	}
 	v, ok := args.Get(0).([]config.PurchaseExecution)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchaseExecution, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListExecutionsForPlanStepTx", "[]config.PurchaseExecution", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -306,7 +309,7 @@ func (m *MockConfigStore) GetPlanRampBaselineTx(ctx context.Context, tx pgx.Tx, 
 	}
 	v, ok := args.Get(0).(config.PlanRampBaseline)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected config.PlanRampBaseline, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetPlanRampBaselineTx", "config.PlanRampBaseline", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -322,7 +325,7 @@ func (m *MockConfigStore) ListPlanCommittedTx(ctx context.Context, tx pgx.Tx, pl
 	}
 	v, ok := args.Get(0).(map[string]config.PlanRampQuantity)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected map[string]config.PlanRampQuantity, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListPlanCommittedTx", "map[string]config.PlanRampQuantity", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -355,7 +358,7 @@ func (m *MockConfigStore) OccupiedRampStepsInRangeTx(ctx context.Context, tx pgx
 	}
 	v, ok := args.Get(0).([]int)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []int, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("OccupiedRampStepsInRangeTx", "[]int", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -392,7 +395,7 @@ func (m *MockConfigStore) ListPurchasePlans(ctx context.Context, filter config.P
 	}
 	v, ok := args.Get(0).([]config.PurchasePlan)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchasePlan, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListPurchasePlans", "[]config.PurchasePlan", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -459,7 +462,7 @@ func (m *MockConfigStore) TransitionExecutionStatus(ctx context.Context, executi
 	}
 	v, ok := args.Get(0).(*config.PurchaseExecution)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.PurchaseExecution, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("TransitionExecutionStatus", "*config.PurchaseExecution", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -479,7 +482,7 @@ func (m *MockConfigStore) TransitionExecutionStatusPinned(ctx context.Context, e
 	}
 	v, ok := args.Get(0).(*config.PurchaseExecution)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.PurchaseExecution, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("TransitionExecutionStatusPinned", "*config.PurchaseExecution", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -499,7 +502,7 @@ func (m *MockConfigStore) TransitionExecutionStatusPinnedTx(ctx context.Context,
 	}
 	v, ok := args.Get(0).(*config.PurchaseExecution)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.PurchaseExecution, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("TransitionExecutionStatusPinnedTx", "*config.PurchaseExecution", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -516,7 +519,7 @@ func (m *MockConfigStore) TransitionExecutionStatusTokenPinned(ctx context.Conte
 	}
 	v, ok := args.Get(0).(*config.PurchaseExecution)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.PurchaseExecution, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("TransitionExecutionStatusTokenPinned", "*config.PurchaseExecution", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -569,7 +572,7 @@ func (m *MockConfigStore) LockLadderTrancheForRetryTx(ctx context.Context, tx pg
 	args := m.Called(ctx, tx, idempotencyKey)
 	status, ok := args.Get(0).(ladder.TrancheStatus)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected ladder.TrancheStatus, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("LockLadderTrancheForRetryTx", "ladder.TrancheStatus", args.Get(0))
 	}
 	return status, args.Bool(1), args.Error(2)
 }
@@ -587,7 +590,7 @@ func (m *MockConfigStore) GetLadderExecutionGate(ctx context.Context, idempotenc
 	}
 	gate, ok := args.Get(0).(*config.LadderExecutionGate)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.LadderExecutionGate, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetLadderExecutionGate", "*config.LadderExecutionGate", args.Get(0))
 	}
 	return gate, args.Error(1)
 }
@@ -631,7 +634,7 @@ func (m *MockConfigStore) GetPendingExecutions(ctx context.Context) ([]config.Pu
 	}
 	v, ok := args.Get(0).([]config.PurchaseExecution)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchaseExecution, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetPendingExecutions", "[]config.PurchaseExecution", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -645,7 +648,7 @@ func (m *MockConfigStore) GetExecutionByID(ctx context.Context, executionID stri
 	}
 	v, ok := args.Get(0).(*config.PurchaseExecution)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.PurchaseExecution, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetExecutionByID", "*config.PurchaseExecution", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -659,7 +662,7 @@ func (m *MockConfigStore) GetExecutionByPlanAndDate(ctx context.Context, planID 
 	}
 	v, ok := args.Get(0).(*config.PurchaseExecution)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.PurchaseExecution, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetExecutionByPlanAndDate", "*config.PurchaseExecution", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -724,7 +727,7 @@ func (m *MockConfigStore) ListPendingExecutionIDsForAccount(ctx context.Context,
 	}
 	v, ok := args.Get(0).([]string)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []string, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListPendingExecutionIDsForAccount", "[]string", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -745,7 +748,7 @@ func (m *MockConfigStore) GetPurchaseHistory(ctx context.Context, accountID stri
 	}
 	v, ok := args.Get(0).([]config.PurchaseHistoryRecord)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchaseHistoryRecord, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetPurchaseHistory", "[]config.PurchaseHistoryRecord", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -759,7 +762,7 @@ func (m *MockConfigStore) GetAllPurchaseHistory(ctx context.Context, limit int) 
 	}
 	v, ok := args.Get(0).([]config.PurchaseHistoryRecord)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchaseHistoryRecord, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetAllPurchaseHistory", "[]config.PurchaseHistoryRecord", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -773,7 +776,7 @@ func (m *MockConfigStore) GetActivePurchaseHistory(ctx context.Context, asOf tim
 	}
 	v, ok := args.Get(0).([]config.PurchaseHistoryRecord)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchaseHistoryRecord, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetActivePurchaseHistory", "[]config.PurchaseHistoryRecord", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -787,7 +790,7 @@ func (m *MockConfigStore) GetPurchaseHistoryFiltered(ctx context.Context, filter
 	}
 	v, ok := args.Get(0).([]config.PurchaseHistoryRecord)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchaseHistoryRecord, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetPurchaseHistoryFiltered", "[]config.PurchaseHistoryRecord", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -801,7 +804,7 @@ func (m *MockConfigStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, pu
 	}
 	v, ok := args.Get(0).(*config.PurchaseHistoryRecord)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.PurchaseHistoryRecord, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetPurchaseHistoryByPurchaseID", "*config.PurchaseHistoryRecord", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -846,7 +849,7 @@ func (m *MockConfigStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*co
 	}
 	v, ok := args.Get(0).([]*config.PurchaseHistoryRecord)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []*config.PurchaseHistoryRecord, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetPurchaseHistoryInFlight", "[]*config.PurchaseHistoryRecord", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -873,7 +876,7 @@ func (m *MockConfigStore) ClaimMarketplaceListingSlot(ctx context.Context, purch
 	if v := args.Get(0); v != nil {
 		c, ok := v.(*config.MarketplaceListingClaim)
 		if !ok {
-			panic(fmt.Sprintf("mock: expected *config.MarketplaceListingClaim, got %T", v))
+			m.reporter.wrongReturnType("ClaimMarketplaceListingSlot", "*config.MarketplaceListingClaim", v)
 		}
 		claim = c
 	}
@@ -927,7 +930,7 @@ func (m *MockConfigStore) GetRIExchangeRecord(ctx context.Context, id string) (*
 	}
 	v, ok := args.Get(0).(*config.RIExchangeRecord)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.RIExchangeRecord, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetRIExchangeRecord", "*config.RIExchangeRecord", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -940,7 +943,7 @@ func (m *MockConfigStore) GetRIExchangeRecordByToken(ctx context.Context, token 
 	}
 	v, ok := args.Get(0).(*config.RIExchangeRecord)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.RIExchangeRecord, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetRIExchangeRecordByToken", "*config.RIExchangeRecord", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -953,7 +956,7 @@ func (m *MockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.T
 	}
 	v, ok := args.Get(0).([]config.RIExchangeRecord)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.RIExchangeRecord, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetRIExchangeHistory", "[]config.RIExchangeRecord", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -966,7 +969,7 @@ func (m *MockConfigStore) GetRIExchangeHistoryForAccounts(ctx context.Context, s
 	}
 	v, ok := args.Get(0).([]config.RIExchangeRecord)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.RIExchangeRecord, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetRIExchangeHistoryForAccounts", "[]config.RIExchangeRecord", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -979,7 +982,7 @@ func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id, fr
 	}
 	v, ok := args.Get(0).(*config.RIExchangeRecord)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.RIExchangeRecord, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("TransitionRIExchangeStatus", "*config.RIExchangeRecord", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1013,7 +1016,7 @@ func (m *MockConfigStore) CancelAllPendingExchanges(ctx context.Context) (int64,
 	args := m.Called(ctx)
 	v, ok := args.Get(0).(int64)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected int64, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("CancelAllPendingExchanges", "int64", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1023,7 +1026,7 @@ func (m *MockConfigStore) CancelPendingExchangesByOrigin(ctx context.Context, or
 	args := m.Called(ctx, origin)
 	v, ok := args.Get(0).(int64)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected int64, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("CancelPendingExchangesByOrigin", "int64", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1036,7 +1039,7 @@ func (m *MockConfigStore) GetStaleProcessingExchanges(ctx context.Context, older
 	}
 	v, ok := args.Get(0).([]config.RIExchangeRecord)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.RIExchangeRecord, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetStaleProcessingExchanges", "[]config.RIExchangeRecord", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1068,6 +1071,9 @@ func (m *MockConfigStore) FinalizeRIExchangeDirectExecution(ctx context.Context,
 // MockAuthStore is a mock implementation of auth.Store.
 type MockAuthStore struct {
 	mock.Mock
+	// reporter fails the registered test on a mistyped .Return value. See
+	// report.go.
+	reporter testReporter
 }
 
 // GetUserByID mocks the GetUserByID operation.
@@ -1078,7 +1084,7 @@ func (m *MockAuthStore) GetUserByID(ctx context.Context, userID string) (*auth.U
 	}
 	v, ok := args.Get(0).(*auth.User)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *auth.User, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetUserByID", "*auth.User", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1091,7 +1097,7 @@ func (m *MockAuthStore) GetUserByEmail(ctx context.Context, email string) (*auth
 	}
 	v, ok := args.Get(0).(*auth.User)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *auth.User, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetUserByEmail", "*auth.User", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1179,7 +1185,7 @@ func (m *MockAuthStore) ListUsers(ctx context.Context) ([]auth.User, error) {
 	}
 	v, ok := args.Get(0).([]auth.User)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []auth.User, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListUsers", "[]auth.User", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1192,7 +1198,7 @@ func (m *MockAuthStore) GetUserByResetToken(ctx context.Context, token string) (
 	}
 	v, ok := args.Get(0).(*auth.User)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *auth.User, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetUserByResetToken", "*auth.User", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1217,7 +1223,7 @@ func (m *MockAuthStore) GetGroup(ctx context.Context, groupID string) (*auth.Gro
 	}
 	v, ok := args.Get(0).(*auth.Group)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *auth.Group, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetGroup", "*auth.Group", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1248,7 +1254,7 @@ func (m *MockAuthStore) ListGroups(ctx context.Context) ([]auth.Group, error) {
 	}
 	v, ok := args.Get(0).([]auth.Group)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []auth.Group, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListGroups", "[]auth.Group", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1273,7 +1279,7 @@ func (m *MockAuthStore) GetSession(ctx context.Context, token string) (*auth.Ses
 	}
 	v, ok := args.Get(0).(*auth.Session)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *auth.Session, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetSession", "*auth.Session", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1312,7 +1318,7 @@ func (m *MockAuthStore) GetAPIKeyByID(ctx context.Context, keyID string) (*auth.
 	}
 	v, ok := args.Get(0).(*auth.UserAPIKey)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *auth.UserAPIKey, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetAPIKeyByID", "*auth.UserAPIKey", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1325,7 +1331,7 @@ func (m *MockAuthStore) GetAPIKeyByHash(ctx context.Context, keyHash string) (*a
 	}
 	v, ok := args.Get(0).(*auth.UserAPIKey)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *auth.UserAPIKey, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetAPIKeyByHash", "*auth.UserAPIKey", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1338,7 +1344,7 @@ func (m *MockAuthStore) ListAPIKeysByUser(ctx context.Context, userID string) ([
 	}
 	v, ok := args.Get(0).([]*auth.UserAPIKey)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []*auth.UserAPIKey, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListAPIKeysByUser", "[]*auth.UserAPIKey", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1404,7 +1410,7 @@ func (m *MockConfigStore) GetCloudAccount(ctx context.Context, id string) (*conf
 	}
 	v, ok := args.Get(0).(*config.CloudAccount)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.CloudAccount, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetCloudAccount", "*config.CloudAccount", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1423,7 +1429,7 @@ func (m *MockConfigStore) GetCloudAccountByExternalID(ctx context.Context, provi
 	}
 	v, ok := args.Get(0).(*config.CloudAccount)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.CloudAccount, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetCloudAccountByExternalID", "*config.CloudAccount", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1463,7 +1469,7 @@ func (m *MockConfigStore) ListCloudAccounts(ctx context.Context, filter config.C
 	}
 	v, ok := args.Get(0).([]config.CloudAccount)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.CloudAccount, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListCloudAccounts", "[]config.CloudAccount", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1519,7 +1525,7 @@ func (m *MockConfigStore) GetAccountServiceOverride(ctx context.Context, account
 	}
 	v, ok := args.Get(0).(*config.AccountServiceOverride)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.AccountServiceOverride, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetAccountServiceOverride", "*config.AccountServiceOverride", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1556,7 +1562,7 @@ func (m *MockConfigStore) ListAccountServiceOverrides(ctx context.Context, accou
 	}
 	v, ok := args.Get(0).([]config.AccountServiceOverride)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.AccountServiceOverride, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListAccountServiceOverrides", "[]config.AccountServiceOverride", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1589,7 +1595,7 @@ func (m *MockConfigStore) GetPlanAccounts(ctx context.Context, planID string) ([
 	}
 	v, ok := args.Get(0).([]config.CloudAccount)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.CloudAccount, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetPlanAccounts", "[]config.CloudAccount", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1600,7 +1606,7 @@ func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDay
 	args := m.Called(ctx, retentionDays)
 	v, ok := args.Get(0).(int64)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected int64, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("CleanupOldExecutions", "int64", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1640,7 +1646,7 @@ func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter 
 	}
 	v, ok := args.Get(0).([]config.RecommendationRecord)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.RecommendationRecord, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListStoredRecommendations", "[]config.RecommendationRecord", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1656,7 +1662,7 @@ func (m *MockConfigStore) GetRecommendationsFreshness(ctx context.Context) (*con
 	}
 	v, ok := args.Get(0).(*config.RecommendationsFreshness)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.RecommendationsFreshness, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetRecommendationsFreshness", "*config.RecommendationsFreshness", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1690,7 +1696,7 @@ func (m *MockConfigStore) GetRIUtilizationCache(ctx context.Context, region stri
 	}
 	v, ok := args.Get(0).(*config.RIUtilizationCacheEntry)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.RIUtilizationCacheEntry, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetRIUtilizationCache", "*config.RIUtilizationCacheEntry", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1718,7 +1724,7 @@ func (m *MockConfigStore) GetAccountRegistration(ctx context.Context, id string)
 	}
 	v, ok := args.Get(0).(*config.AccountRegistration)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.AccountRegistration, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetAccountRegistration", "*config.AccountRegistration", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1731,7 +1737,7 @@ func (m *MockConfigStore) GetAccountRegistrationByToken(ctx context.Context, tok
 	}
 	v, ok := args.Get(0).(*config.AccountRegistration)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.AccountRegistration, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetAccountRegistrationByToken", "*config.AccountRegistration", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1744,7 +1750,7 @@ func (m *MockConfigStore) ListAccountRegistrations(ctx context.Context, filter c
 	}
 	v, ok := args.Get(0).([]config.AccountRegistration)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.AccountRegistration, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListAccountRegistrations", "[]config.AccountRegistration", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1818,7 +1824,7 @@ func (m *MockConfigStore) ListActiveSuppressions(ctx context.Context) ([]config.
 	}
 	v, ok := args.Get(0).([]config.PurchaseSuppression)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchaseSuppression, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListActiveSuppressions", "[]config.PurchaseSuppression", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1838,7 +1844,7 @@ func (m *MockConfigStore) ListRecentSubmitsTx(ctx context.Context, tx pgx.Tx, cr
 	}
 	v, ok := args.Get(0).([]config.PurchaseExecution)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchaseExecution, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListRecentSubmitsTx", "[]config.PurchaseExecution", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1895,7 +1901,7 @@ func (m *MockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses 
 	}
 	v, ok := args.Get(0).([]config.PurchaseExecution)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchaseExecution, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetExecutionsByStatuses", "[]config.PurchaseExecution", args.Get(0))
 	}
 	return filterExecutionsLikeStore(v, statuses, limit), args.Error(1)
 }
@@ -1951,7 +1957,7 @@ func (m *MockConfigStore) CountExecutionsByPlanAndStatus(ctx context.Context, st
 	}
 	v, ok := args.Get(0).(map[string]config.ExecutionStatusCounts)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected map[string]config.ExecutionStatusCounts, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("CountExecutionsByPlanAndStatus", "map[string]config.ExecutionStatusCounts", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1965,7 +1971,7 @@ func (m *MockConfigStore) GetPlannedExecutions(ctx context.Context, statuses []s
 	}
 	v, ok := args.Get(0).([]config.PurchaseExecution)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchaseExecution, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetPlannedExecutions", "[]config.PurchaseExecution", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1979,7 +1985,7 @@ func (m *MockConfigStore) GetStaleApprovedExecutions(ctx context.Context, olderT
 	}
 	v, ok := args.Get(0).([]config.PurchaseExecution)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchaseExecution, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetStaleApprovedExecutions", "[]config.PurchaseExecution", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1993,7 +1999,7 @@ func (m *MockConfigStore) ListStuckExecutions(ctx context.Context, statuses []st
 	}
 	v, ok := args.Get(0).([]config.PurchaseExecution)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchaseExecution, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListStuckExecutions", "[]config.PurchaseExecution", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -2012,7 +2018,7 @@ func (m *MockConfigStore) GetScheduledExecutionsDue(ctx context.Context) ([]conf
 	}
 	v, ok := args.Get(0).([]config.PurchaseExecution)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchaseExecution, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetScheduledExecutionsDue", "[]config.PurchaseExecution", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -2059,7 +2065,7 @@ func (m *MockConfigStore) GetLadderConfigs(ctx context.Context) ([]config.Ladder
 	}
 	v, ok := args.Get(0).([]config.LadderConfigDB)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.LadderConfigDB, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetLadderConfigs", "[]config.LadderConfigDB", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -2077,7 +2083,7 @@ func (m *MockConfigStore) GetLadderConfig(ctx context.Context, cloudAccountID, p
 	}
 	v, ok := args.Get(0).(*config.LadderConfigDB)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.LadderConfigDB, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetLadderConfig", "*config.LadderConfigDB", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -2091,7 +2097,7 @@ func (m *MockConfigStore) UpsertLadderConfig(ctx context.Context, cfg *config.La
 	}
 	v, ok := args.Get(0).(*config.LadderConfigDB)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.LadderConfigDB, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("UpsertLadderConfig", "*config.LadderConfigDB", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -2109,7 +2115,7 @@ func (m *MockConfigStore) SaveLadderRun(ctx context.Context, run *config.LadderR
 	}
 	v, ok := args.Get(0).(*config.LadderRunDB)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.LadderRunDB, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("SaveLadderRun", "*config.LadderRunDB", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -2130,7 +2136,7 @@ func (m *MockConfigStore) PlanAndSaveLadderRun(ctx context.Context, configID str
 	}
 	v, ok := args.Get(0).(*config.LadderRunDB)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.LadderRunDB, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("PlanAndSaveLadderRun", "*config.LadderRunDB", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -2148,7 +2154,7 @@ func (m *MockConfigStore) GetLadderRun(ctx context.Context, id string) (*config.
 	}
 	v, ok := args.Get(0).(*config.LadderRunDB)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.LadderRunDB, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetLadderRun", "*config.LadderRunDB", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -2176,7 +2182,7 @@ func (m *MockConfigStore) LatestLadderRunStartedAt(ctx context.Context, configID
 	}
 	v, ok := args.Get(0).(*time.Time)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *time.Time, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("LatestLadderRunStartedAt", "*time.Time", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -2194,7 +2200,7 @@ func (m *MockConfigStore) CancelLadderRun(ctx context.Context, id string, fromSt
 	}
 	v, ok := args.Get(0).(*config.LadderRunDB)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.LadderRunDB, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("CancelLadderRun", "*config.LadderRunDB", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -2212,7 +2218,7 @@ func (m *MockConfigStore) TransitionLadderRunStatus(ctx context.Context, id stri
 	}
 	v, ok := args.Get(0).(*config.LadderRunDB)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.LadderRunDB, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("TransitionLadderRunStatus", "*config.LadderRunDB", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -2246,6 +2252,14 @@ func isExpected(m *mock.Mock, method string) bool {
 		}
 	}
 	return false
+}
+
+// wrongReturnType reports that method's registered .Return value got is not of
+// type want. It fails the test registered through the mock's Test method, or
+// panics when there is none. See report.go.
+func (r *testReporter) wrongReturnType(method, want string, got interface{}) {
+	r.fail(fmt.Sprintf("mock: %s returned %T from its .Return(...), but the method returns %s; "+
+		"fix the value passed to .Return for this expectation", method, got, want))
 }
 
 // Compile-time interface compliance checks.
