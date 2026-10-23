@@ -320,6 +320,33 @@ describe('Marketplace consent modal residual proration (issue #808 follow-up)', 
     expect(text).not.toContain('$0');
   });
 
+  test('consent note prints the discount as an integer percent (closes #283)', async () => {
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({
+          purchase_id: 'ri-note',
+          offering_class: 'standard',
+          term: 3,
+          timestamp: SIX_MONTHS_AGO,
+          upfront_cost: 3600,
+          monthly_cost: 0,
+        }),
+      ],
+    });
+    await loadHistory();
+    document
+      .getElementById('history-list')!
+      .querySelector<HTMLButtonElement>('.history-marketplace-sell-btn[data-marketplace-sell-id="ri-note"]')!
+      .click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const arg = (confirmDialog as jest.Mock).mock.calls[0][0] as { body: HTMLElement };
+    const note = arg.body.querySelector('.marketplace-pricing-note')?.textContent ?? '';
+    expect(note).toContain('prices the listing at 5% below remaining value');
+  });
+
   // Regression for the consent-modal math bug (PR follow-up to #808): the
   // modal used to compute totalValue = upfrontRemaining + monthly *
   // remainingMonths on the ROW TOTAL, which both (a) includes recurring cost

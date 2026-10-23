@@ -276,17 +276,13 @@ export async function apiRequest<T>(endpoint: string, options: RequestOptions = 
     throw error;
   }
 
-  // Q3: handlers that intentionally produce no body (e.g. DELETE
-  // /accounts/:id) used to crash the caller with SyntaxError from
-  // response.json() on an empty body. Q1 fixed this at the backend by
-  // emitting "{}" instead, but keep a defensive catch here for any
-  // upstream proxy that strips the body, 204 No Content responses, or
-  // future handlers that might miss the convention.
-  try {
-    return await response.json() as T;
-  } catch {
+  // A 204 or an explicitly empty body has nothing to parse. Any other
+  // body that fails to parse (truncated, proxy error page) must reject:
+  // resolving null would read as "no data" instead of a failure.
+  if (response.status === 204 || response.headers?.get('content-length') === '0') {
     return null as T;
   }
+  return await response.json() as T;
 }
 
 /**

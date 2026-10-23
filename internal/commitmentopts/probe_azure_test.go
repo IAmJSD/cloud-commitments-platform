@@ -82,7 +82,7 @@ func TestAzureSPProber_AllValid(t *testing.T) {
 		return validTrue(), nil
 	})
 
-	got, err := p.ProbeAzure(context.Background(), nil)
+	got, err := p.ProbeAzure(context.Background(), nil, "USD")
 	require.NoError(t, err)
 	assert.Len(t, got, 6)
 
@@ -110,7 +110,7 @@ func TestAzureSPProber_SomeValid(t *testing.T) {
 		return validTrue(), nil
 	})
 
-	got, err := p.ProbeAzure(context.Background(), nil)
+	got, err := p.ProbeAzure(context.Background(), nil, "USD")
 	require.NoError(t, err)
 	// 2 terms x 2 payment plans = 4 combos (P5Y x2 dropped)
 	assert.Len(t, got, 4)
@@ -130,7 +130,7 @@ func TestAzureSPProber_NoneValid(t *testing.T) {
 		return validFalse("not available"), nil
 	})
 
-	got, err := p.ProbeAzure(context.Background(), nil)
+	got, err := p.ProbeAzure(context.Background(), nil, "USD")
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
@@ -142,7 +142,7 @@ func TestAzureSPProber_EmptyBenefitsSlice(t *testing.T) {
 		return armbillingbenefits.RPClientValidatePurchaseResponse{}, nil
 	})
 
-	got, err := p.ProbeAzure(context.Background(), nil)
+	got, err := p.ProbeAzure(context.Background(), nil, "USD")
 	require.NoError(t, err)
 	assert.Len(t, got, 6, "empty benefits slice treated as valid")
 }
@@ -159,7 +159,7 @@ func TestAzureSPProber_NilValidFlag(t *testing.T) {
 		}, nil
 	})
 
-	got, err := p.ProbeAzure(context.Background(), nil)
+	got, err := p.ProbeAzure(context.Background(), nil, "USD")
 	require.NoError(t, err)
 	assert.Len(t, got, 6, "nil Valid flag treated as valid")
 }
@@ -177,7 +177,7 @@ func TestAzureSPProber_APIError_Propagates(t *testing.T) {
 		return armbillingbenefits.RPClientValidatePurchaseResponse{}, boom
 	})
 
-	_, err := p.ProbeAzure(context.Background(), nil)
+	_, err := p.ProbeAzure(context.Background(), nil, "USD")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, boom)
 }
@@ -192,7 +192,7 @@ func TestAzureSPProber_APIError_FirstComboFails(t *testing.T) {
 		return armbillingbenefits.RPClientValidatePurchaseResponse{}, boom
 	})
 
-	_, err := p.ProbeAzure(context.Background(), nil)
+	_, err := p.ProbeAzure(context.Background(), nil, "USD")
 	require.Error(t, err)
 	assert.Equal(t, 1, calls, "prober must stop after first error")
 }
@@ -207,7 +207,7 @@ func TestAzureSPProber_ClientBuildError(t *testing.T) {
 		},
 	}
 
-	_, err := p.ProbeAzure(context.Background(), nil)
+	_, err := p.ProbeAzure(context.Background(), nil, "USD")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, buildErr)
 }
@@ -223,7 +223,7 @@ func TestAzureSPProber_ComboFields(t *testing.T) {
 		return validTrue(), nil
 	})
 
-	got, err := p.ProbeAzure(context.Background(), nil)
+	got, err := p.ProbeAzure(context.Background(), nil, "USD")
 	require.NoError(t, err)
 
 	sort.Slice(got, func(i, j int) bool {
@@ -256,7 +256,7 @@ func TestAzureSPProber_RequestContainsTerm(t *testing.T) {
 		return validTrue(), nil
 	})
 
-	_, err := p.ProbeAzure(context.Background(), nil)
+	_, err := p.ProbeAzure(context.Background(), nil, "USD")
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, seenTerms[armbillingbenefits.TermP1Y], "P1Y must appear twice (upfront + monthly)")
@@ -284,12 +284,78 @@ func TestAzureSPProber_RequestBillingPlan(t *testing.T) {
 		return validTrue(), nil
 	})
 
-	_, err := p.ProbeAzure(context.Background(), nil)
+	_, err := p.ProbeAzure(context.Background(), nil, "USD")
 	require.NoError(t, err)
 
 	for _, term := range []armbillingbenefits.Term{armbillingbenefits.TermP1Y, armbillingbenefits.TermP3Y, armbillingbenefits.TermP5Y} {
 		assert.Equal(t, 1, seen[planKey{term, "nil"}], "upfront combo must have nil BillingPlan for %s", term)
 		assert.Equal(t, 1, seen[planKey{term, "P1M"}], "monthly combo must have P1M BillingPlan for %s", term)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Billing currency (issue #814)
+// ---------------------------------------------------------------------------
+
+func TestAzureSPProber_RequestUsesCallerCurrency(t *testing.T) {
+	// The probe must validate in the billing account's currency, not a
+	// hardcoded USD. Lowercase input is normalized to upper case, matching
+	// the cloud-commitments-go Azure provider.
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"EUR", "EUR"},
+		{"gbp", "GBP"},
+		{"USD", "USD"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			var seen []string
+			p := newFakeProber(func(body armbillingbenefits.SavingsPlanPurchaseValidateRequest) (armbillingbenefits.RPClientValidatePurchaseResponse, error) {
+				require.Len(t, body.Benefits, 1)
+				require.NotNil(t, body.Benefits[0].Properties)
+				require.NotNil(t, body.Benefits[0].Properties.Commitment)
+				require.NotNil(t, body.Benefits[0].Properties.Commitment.CurrencyCode)
+				seen = append(seen, *body.Benefits[0].Properties.Commitment.CurrencyCode)
+				return validTrue(), nil
+			})
+
+			_, err := p.ProbeAzure(context.Background(), nil, tc.in)
+			require.NoError(t, err)
+
+			require.Len(t, seen, len(azureCandidateCombos), "every candidate combo must be probed")
+			for _, got := range seen {
+				assert.Equal(t, tc.want, got)
+			}
+		})
+	}
+}
+
+func TestAzureSPProber_UnknownCurrency_FailsClosed(t *testing.T) {
+	// With no resolvable billing currency the probe must refuse to run
+	// rather than assume USD: no client is built and no request is sent.
+	for _, in := range []string{"", "US", "EURO", "U$D", "12A", " usd"} {
+		t.Run(in, func(t *testing.T) {
+			clientBuilt := false
+			validateCalls := 0
+			p := &AzureSPProber{
+				NewClient: func(_ azcore.TokenCredential) (AzureSPValidateAPI, error) {
+					clientBuilt = true
+					return &fakeAzureSPValidate{fn: func(_ armbillingbenefits.SavingsPlanPurchaseValidateRequest) (armbillingbenefits.RPClientValidatePurchaseResponse, error) {
+						validateCalls++
+						return validTrue(), nil
+					}}, nil
+				},
+			}
+
+			got, err := p.ProbeAzure(context.Background(), nil, in)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "currency")
+			assert.Nil(t, got)
+			assert.False(t, clientBuilt, "client must not be built without a valid currency")
+			assert.Zero(t, validateCalls, "ValidatePurchase must not be called without a valid currency")
+		})
 	}
 }
 

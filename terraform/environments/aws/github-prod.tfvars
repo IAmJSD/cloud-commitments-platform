@@ -18,9 +18,14 @@ compute_platform    = "lambda"
 enable_docker_build = true # Build image via Terraform build module (no separate CI build step)
 
 # Lambda Configuration
+# lambda_reserved_concurrency caps concurrent execution environments, each of
+# which holds its own DB pool (#718): 20 x db_max_connections (3) = 60 fits
+# database_max_connections (80, db.t4g.micro) minus the 10 reserved
+# connections. Reserving 20 needs an account concurrency quota of at least 120
+# (Lambda keeps 100 unreserved).
 lambda_memory_size          = 1024
 lambda_timeout              = 300
-lambda_reserved_concurrency = -1
+lambda_reserved_concurrency = 20
 lambda_log_retention_days   = 30
 # Function URL auth_type is derived from enable_cdn (local in compute.tf):
 #   enable_cdn = false -> NONE  (direct browser hits, app-layer auth)
@@ -37,6 +42,10 @@ fargate_memory        = 2048
 fargate_desired_count = 3
 fargate_min_capacity  = 2
 fargate_max_capacity  = 20
+
+# Per-instance DB pool (#718). Lambda: 20 x 3 = 60; Fargate: 20 x 3 = 60.
+db_max_connections = 3
+db_min_connections = 1
 
 # ==============================================
 # Database (RDS PostgreSQL)

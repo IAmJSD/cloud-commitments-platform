@@ -489,6 +489,26 @@ func (m *MockConfigStore) TransitionExecutionStatusPinned(ctx context.Context, e
 	return v, args.Error(1)
 }
 
+// TransitionExecutionStatusPinnedTx mocks the tx variant of the pinned claim.
+// With no expectation registered it delegates to TransitionExecutionStatusPinned
+// (and from there to TransitionExecutionStatus), so tests that mock the
+// non-tx transition keep working.
+func (m *MockConfigStore) TransitionExecutionStatusPinnedTx(ctx context.Context, tx pgx.Tx, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*config.PurchaseExecution, error) {
+	m.record("TransitionExecutionStatusPinnedTx", ctx, tx, executionID, fromStatuses, toStatus, actor, sawEmptyRecommendations)
+	if !isExpected(&m.Mock, "TransitionExecutionStatusPinnedTx") {
+		return m.TransitionExecutionStatusPinned(ctx, executionID, fromStatuses, toStatus, actor, sawEmptyRecommendations)
+	}
+	args := m.Called(ctx, tx, executionID, fromStatuses, toStatus, actor, sawEmptyRecommendations)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.PurchaseExecution)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.PurchaseExecution, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 // TransitionExecutionStatusTokenPinned mocks the token-pinned transition
 // (issue #590). It does not delegate to TransitionExecutionStatus: a caller
 // that must pin the approval token is expected to call this method, so a test
@@ -943,6 +963,19 @@ func (m *MockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.T
 	return v, args.Error(1)
 }
 
+func (m *MockConfigStore) GetRIExchangeHistoryForAccounts(ctx context.Context, since time.Time, limit int, accountIDs []string) ([]config.RIExchangeRecord, error) {
+	m.record("GetRIExchangeHistoryForAccounts", ctx, since, limit, accountIDs)
+	args := m.Called(ctx, since, limit, accountIDs)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).([]config.RIExchangeRecord)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected []config.RIExchangeRecord, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id, fromStatus, toStatus string, actor *string) (*config.RIExchangeRecord, error) {
 	m.record("TransitionRIExchangeStatus", ctx, id, fromStatus, toStatus, actor)
 	args := m.Called(ctx, id, fromStatus, toStatus, actor)
@@ -1011,6 +1044,30 @@ func (m *MockConfigStore) GetStaleProcessingExchanges(ctx context.Context, older
 		panic(fmt.Sprintf("mock: expected []config.RIExchangeRecord, got %T", args.Get(0)))
 	}
 	return v, args.Error(1)
+}
+
+// SaveRIExchangeDirectExecution mocks the direct-execute audit insert (issue
+// #82). With no registered expectation it succeeds, so the many execute-path
+// tests whose subject is a gate or the provider call keep reaching it; tests
+// whose subject IS the audit trail register an expectation or record the row.
+func (m *MockConfigStore) SaveRIExchangeDirectExecution(ctx context.Context, record *config.RIExchangeDirectExecution) error {
+	m.record("SaveRIExchangeDirectExecution", ctx, record)
+	if !isExpected(&m.Mock, "SaveRIExchangeDirectExecution") {
+		return nil
+	}
+	args := m.Called(ctx, record)
+	return args.Error(0)
+}
+
+// FinalizeRIExchangeDirectExecution mocks recording the direct-execute
+// outcome (issue #82). Defaults to success like SaveRIExchangeDirectExecution.
+func (m *MockConfigStore) FinalizeRIExchangeDirectExecution(ctx context.Context, id string, outcome config.RIExchangeDirectOutcome) error {
+	m.record("FinalizeRIExchangeDirectExecution", ctx, id, outcome)
+	if !isExpected(&m.Mock, "FinalizeRIExchangeDirectExecution") {
+		return nil
+	}
+	args := m.Called(ctx, id, outcome)
+	return args.Error(0)
 }
 
 // MockAuthStore is a mock implementation of auth.Store.

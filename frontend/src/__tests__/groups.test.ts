@@ -1260,38 +1260,6 @@ describe('groups/groupModals — duplicate', () => {
 describe('11-M3 max_amount validation in collectPermissions', () => {
   // Access collectPermissions indirectly via saveGroup and observe API call.
 
-  it('rejects Infinity max_amount (does not forward it to API)', async () => {
-    const modal = document.createElement('div');
-    modal.id = 'group-modal';
-    modal.innerHTML = `
-      <input id="group-id" value="">
-      <input id="group-name" value="Test">
-      <textarea id="group-description"></textarea>
-      <div id="permissions-list">
-        <div class="permission-item">
-          <select class="perm-action"><option value="view" selected>View</option></select>
-          <select class="perm-resource"><option value="plans" selected>Plans</option></select>
-          <input class="perm-providers" value="">
-          <input class="perm-services" value="">
-          <input class="perm-regions" value="">
-          <input class="perm-max-amount" type="number" min="0" value="Infinity">
-        </div>
-      </div>
-    `;
-    document.body.appendChild(modal);
-
-    (api.createGroup as jest.Mock).mockResolvedValue({ id: 'new-id', name: 'Test', description: '', permissions: [] });
-
-    const event = new Event('submit', { cancelable: true });
-    await groupModals.saveGroup(event);
-
-    expect(api.createGroup).toHaveBeenCalled();
-    const call = (api.createGroup as jest.Mock).mock.calls[0][0] as { permissions: Array<{ constraints?: { max_amount?: number } }> };
-    // max_amount must not be Infinity (non-finite rejected).
-    const maxAmount = call.permissions[0]?.constraints?.max_amount;
-    expect(maxAmount).toBeUndefined();
-  });
-
   it('accepts a valid positive max_amount', async () => {
     document.body.innerHTML = '';
     const modal = document.createElement('div');
@@ -1348,8 +1316,58 @@ describe('11-M3 max_amount validation in collectPermissions', () => {
     const event = new Event('submit', { cancelable: true });
     await groupModals.saveGroup(event);
 
-    const call = (api.createGroup as jest.Mock).mock.calls[0][0] as { permissions: Array<{ constraints?: { max_amount?: number } }> };
-    // Negative value must be silently skipped.
-    expect(call.permissions[0]?.constraints?.max_amount).toBeUndefined();
+    // Negative value must be refused, not silently dropped (#133).
+    expect(api.createGroup).not.toHaveBeenCalled();
+    expect(document.querySelector('.toast-error')?.textContent).toContain(
+      'Max Amount must be greater than 0; leave it blank for no limit (permission 0).'
+    );
+    expect(document.querySelector('.toast-error')?.textContent).not.toContain('Repair');
+  });
+
+  const maxAmountForm = (attrs: string): string => `
+      <input id="group-id" value="">
+      <input id="group-name" value="Test">
+      <textarea id="group-description"></textarea>
+      <div id="permissions-list">
+        <div class="permission-item">
+          <select class="perm-action"><option value="view" selected>View</option></select>
+          <select class="perm-resource"><option value="plans" selected>Plans</option></select>
+          <input class="perm-max-amount" type="number" min="0" ${attrs}>
+        </div>
+      </div>
+    `;
+  const MAX_AMOUNT_MESSAGE = 'Max Amount must be greater than 0; leave it blank for no limit (permission 0).';
+
+  it.each(['0', '-100'])('refuses max_amount %s instead of saving without the cap (#133)', async raw => {
+    document.body.innerHTML = maxAmountForm(`value="${raw}"`);
+    await groupModals.saveGroup(new Event('submit', { cancelable: true }));
+    expect(api.createGroup).not.toHaveBeenCalled();
+    expect(document.querySelector('.toast-error')?.textContent).toContain(MAX_AMOUNT_MESSAGE);
+    expect(document.querySelector('.toast-error')?.textContent).not.toContain('Repair');
+  });
+
+  // Browsers report unparsable text ("abc", "1e", "1e999") as value "" with
+  // validity.badInput set; without that check the cap would be silently dropped.
+  it('refuses unparsable number-input text (badInput) instead of saving without the cap (#133)', async () => {
+    document.body.innerHTML = maxAmountForm('');
+    const input = document.querySelector('.perm-max-amount') as HTMLInputElement;
+    Object.defineProperty(input, 'validity', { value: { badInput: true } });
+    expect(input.value).toBe('');
+    await groupModals.saveGroup(new Event('submit', { cancelable: true }));
+    expect(api.createGroup).not.toHaveBeenCalled();
+    expect(document.querySelector('.toast-error')?.textContent).toContain(MAX_AMOUNT_MESSAGE);
+  });
+
+  it('still saves a blank max_amount as no cap', async () => {
+    document.body.innerHTML = maxAmountForm('');
+    (api.createGroup as jest.Mock).mockResolvedValue({ id: 'x', name: 'Test', description: '', permissions: [] });
+    await groupModals.saveGroup(new Event('submit', { cancelable: true }));
+    expect(api.createGroup).toHaveBeenCalled();
+  });
+
+  it('shows a stored max_amount of 0 in the edit form (#133)', () => {
+    document.body.innerHTML = '<div id="permissions-list"></div>';
+    groupModals.addPermission({ action: 'execute', resource: 'purchases', constraints: { max_amount: 0 } });
+    expect((document.querySelector('.perm-max-amount') as HTMLInputElement).value).toBe('0');
   });
 });

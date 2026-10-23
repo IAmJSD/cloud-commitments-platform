@@ -111,6 +111,10 @@ func (s *AzureKeyVaultSigner) resolveOnce(ctx context.Context) {
 			s.err = fmt.Errorf("oidc: azure keyvault returned incomplete EC key (missing X or Y)")
 			return
 		}
+		if typeErr := validateES256KeyType(resp.Key); typeErr != nil {
+			s.err = fmt.Errorf("oidc: azure keyvault key %q: %w", s.keyName, typeErr)
+			return
+		}
 		// JWK coordinates may omit leading zeros; right-align each into 32 bytes.
 		if len(resp.Key.X) > 32 || len(resp.Key.Y) > 32 {
 			s.err = fmt.Errorf("oidc: azure keyvault EC key coordinate exceeds 32 bytes")
@@ -133,4 +137,29 @@ func (s *AzureKeyVaultSigner) resolveOnce(ctx context.Context) {
 		s.pubKey = ecPub
 		s.kid = kid
 	})
+}
+
+// validateES256KeyType checks the key type and curve Key Vault reports for
+// the key. Sign always requests ES256, so only an EC (software) or EC-HSM key
+// on P-256 is usable. Checking the reported curve matters even when the
+// coordinates parse as a P-256 point: a P-256K (secp256k1) key also has
+// 32-byte coordinates, and without this check it would be published in the
+// JWKS labeled as P-256.
+func validateES256KeyType(key *azkeys.JSONWebKey) error {
+	ktyOK := key.Kty != nil && (*key.Kty == azkeys.KeyTypeEC || *key.Kty == azkeys.KeyTypeECHSM)
+	crvOK := key.Crv != nil && *key.Crv == azkeys.CurveNameP256
+	if ktyOK && crvOK {
+		return nil
+	}
+	return fmt.Errorf("must be an EC or EC-HSM key on curve P-256 for ES256, got kty=%s crv=%s",
+		quotedOrMissing(key.Kty), quotedOrMissing(key.Crv))
+}
+
+// quotedOrMissing formats an optional Key Vault enum field for an error
+// message, distinguishing an absent field from an empty one.
+func quotedOrMissing[T ~string](v *T) string {
+	if v == nil {
+		return "<missing>"
+	}
+	return fmt.Sprintf("%q", string(*v))
 }
