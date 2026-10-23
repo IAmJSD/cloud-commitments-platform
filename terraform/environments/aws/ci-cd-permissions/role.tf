@@ -172,3 +172,8 @@ resource "aws_iam_role_policy_attachment" "iam" {
   role       = aws_iam_role.cudly_deploy.name
   policy_arn = aws_iam_policy.iam.arn
 }
+
+resource "aws_iam_role_policy_attachment" "monitoring" {
+  role       = aws_iam_role.cudly_deploy.name
+  policy_arn = aws_iam_policy.monitoring.arn
+}

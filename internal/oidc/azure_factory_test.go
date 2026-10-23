@@ -21,7 +21,15 @@ type fakeAzureKeyVaultClient struct {
 	// responses from the Key Vault API.
 	xBytes []byte
 	yBytes []byte
-	nilKey bool // if true, return a KeyBundle with Key==nil
+	// kty and crv override the key type and curve the fake reports. Empty
+	// means "derive from key": EC plus the key's curve name, which is what
+	// Key Vault returns for a software-protected EC key. omitKty and omitCrv
+	// report the field as absent (nil).
+	kty     azkeys.KeyType
+	crv     azkeys.CurveName
+	omitKty bool
+	omitCrv bool
+	nilKey  bool // if true, return a KeyBundle with Key==nil
 }
 
 func (f *fakeAzureKeyVaultClient) Sign(_ context.Context, _, _ string, _ azkeys.SignParameters, _ *azkeys.SignOptions) (azkeys.SignResponse, error) {
@@ -63,12 +71,36 @@ func (f *fakeAzureKeyVaultClient) GetKey(_ context.Context, _, _ string, _ *azke
 		jwkY = yBytes
 	}
 	keyBundle := azkeys.JSONWebKey{
-		X: jwkX,
-		Y: jwkY,
+		Kty: f.jwkKty(),
+		Crv: f.jwkCrv(),
+		X:   jwkX,
+		Y:   jwkY,
 	}
 	return azkeys.GetKeyResponse{
 		KeyBundle: azkeys.KeyBundle{Key: &keyBundle},
 	}, nil
+}
+
+func (f *fakeAzureKeyVaultClient) jwkKty() *azkeys.KeyType {
+	if f.omitKty {
+		return nil
+	}
+	kty := f.kty
+	if kty == "" {
+		kty = azkeys.KeyTypeEC
+	}
+	return &kty
+}
+
+func (f *fakeAzureKeyVaultClient) jwkCrv() *azkeys.CurveName {
+	if f.omitCrv {
+		return nil
+	}
+	crv := f.crv
+	if crv == "" {
+		crv = azkeys.CurveName(f.key.Curve.Params().Name)
+	}
+	return &crv
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +152,96 @@ func TestAzureSigner_ECKeyCompleteness(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// #46 -- Azure EC key type and curve guard
+// ---------------------------------------------------------------------------
+
+// TestAzureSigner_RejectsNonP256Key verifies that the signer checks the key
+// type and curve Key Vault reports before building the public key. Sign
+// always requests ES256, so only an EC (or EC-HSM) P-256 key is usable.
+// Without the check a P-256K (secp256k1) key whose 32-byte coordinates also
+// parse on P-256 was accepted and later published in the JWKS labeled as
+// P-256, and a P-384 key failed with an opaque coordinate-length error that
+// did not name the misconfigured curve.
+func TestAzureSigner_RejectsNonP256Key(t *testing.T) {
+	p256, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	p384, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	require.NoError(t, err)
+
+	cases := []struct {
+		client    *fakeAzureKeyVaultClient
+		name      string
+		errSubstr []string
+	}{
+		{
+			name:   "EC P-256 accepted",
+			client: &fakeAzureKeyVaultClient{key: &p256.PublicKey},
+		},
+		{
+			name:   "EC-HSM P-256 accepted",
+			client: &fakeAzureKeyVaultClient{key: &p256.PublicKey, kty: azkeys.KeyTypeECHSM},
+		},
+		{
+			name:      "P-384 key rejected naming the curve",
+			client:    &fakeAzureKeyVaultClient{key: &p384.PublicKey},
+			errSubstr: []string{`crv="P-384"`, `kty="EC"`},
+		},
+		{
+			name:      "P-521 curve rejected",
+			client:    &fakeAzureKeyVaultClient{key: &p256.PublicKey, crv: azkeys.CurveNameP521},
+			errSubstr: []string{`crv="P-521"`},
+		},
+		{
+			// The coordinates are a valid P-256 point, so only the
+			// reported curve shows the key is not usable for ES256.
+			name:      "P-256K curve with P-256-valid coordinates rejected",
+			client:    &fakeAzureKeyVaultClient{key: &p256.PublicKey, crv: azkeys.CurveNameP256K},
+			errSubstr: []string{`crv="P-256K"`},
+		},
+		{
+			name:      "missing curve rejected",
+			client:    &fakeAzureKeyVaultClient{key: &p256.PublicKey, omitCrv: true},
+			errSubstr: []string{"crv=<missing>"},
+		},
+		{
+			name:      "RSA key type rejected",
+			client:    &fakeAzureKeyVaultClient{key: &p256.PublicKey, kty: azkeys.KeyTypeRSA},
+			errSubstr: []string{`kty="RSA"`, `crv="P-256"`},
+		},
+		{
+			name:      "missing key type rejected",
+			client:    &fakeAzureKeyVaultClient{key: &p256.PublicKey, omitKty: true},
+			errSubstr: []string{"kty=<missing>"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			signer := NewAzureKeyVaultSignerFromClient(tc.client, "test-key", "")
+			ctx := context.Background()
+
+			pub, pubErr := signer.PublicKey(ctx)
+			kid, kidErr := signer.KeyID(ctx)
+			if len(tc.errSubstr) == 0 {
+				require.NoError(t, pubErr)
+				require.NoError(t, kidErr)
+				assert.NotNil(t, pub)
+				assert.NotEmpty(t, kid)
+				return
+			}
+			require.Error(t, pubErr)
+			assert.Nil(t, pub, "a rejected key must not be returned")
+			require.Error(t, kidErr, "KeyID must report the same rejection")
+			assert.Empty(t, kid)
+			for _, want := range tc.errSubstr {
+				assert.Contains(t, pubErr.Error(), want)
+			}
+			assert.Contains(t, pubErr.Error(), "test-key", "error must name the misconfigured key")
 		})
 	}
 }

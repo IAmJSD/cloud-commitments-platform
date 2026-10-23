@@ -13,5 +13,10 @@ locals {
     "Microsoft.Authorization/roleAssignments/write",
     "Microsoft.Authorization/roleAssignments/delete",
     "Microsoft.Authorization/roleDefinitions/read",
+    # CanNotDelete lock on the PostgreSQL server (database_deletion_protection);
+    # delete lets this state's own destroy remove it before the server.
+    "Microsoft.Authorization/locks/read",
+    "Microsoft.Authorization/locks/write",
+    "Microsoft.Authorization/locks/delete",
   ]
 }
