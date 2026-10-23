@@ -33,8 +33,8 @@ func markDirty(ctx context.Context, t *testing.T, container *testhelpers.Postgre
 //     and the CloudWatch alarm fires. Operators inspect the actual schema to
 //     choose the correct force target.
 //   - With CUDLY_MIGRATION_AUTOHEAL=false, auto-heal is bypassed and a dirty DB
-//     surfaces the generic Up() error ("migration: N is dirty") without recovery
-//     guidance.
+//     surfaces golang-migrate's generic ErrDirty from Up() ("Dirty database
+//     version N. Fix and force version.") without recovery guidance.
 //
 // WHY THE BEHAVIOR CHANGED FROM "AUTO-CLEAR" TO "FAIL-LOUD": golang-migrate
 // sets dirty=true BEFORE running migration N's SQL. If the migration is
@@ -120,8 +120,9 @@ func TestMigrations_AutoHealDirty(t *testing.T) {
 		markDirty(ctx, t, container, headVersion)
 
 		// Escape hatch: bypasses the descriptive auto-heal error; the dirty state
-		// surfaces via the generic Up() path ("failed to run migrations: migration:
-		// N is dirty"). The caller fail-opens on it; the app still starts.
+		// surfaces via the generic Up() path ("failed to run migrations: Dirty
+		// database version N. Fix and force version."). The caller fail-opens on
+		// it; the app still starts.
 		t.Setenv("CUDLY_MIGRATION_AUTOHEAL", "false")
 		err = migrations.RunMigrations(ctx, pool, migrationsPath, "", "")
 		require.Error(t, err, "CUDLY_MIGRATION_AUTOHEAL=false must bypass auto-heal so a dirty DB still errors")
