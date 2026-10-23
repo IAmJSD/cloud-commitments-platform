@@ -1838,11 +1838,19 @@ func expectDetachTerminalExecutions(mock pgxmock.PgxPoolIface) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
 }
 
-// expectLockDeletedAccount expects DeleteCloudAccount's first statement: the
-// account row lock taken before the plans are picked (issue #264).
+// expectLockDeletedAccount expects DeleteCloudAccount's lock sequence
+// (issue #1072): the account's plans in id order, the account row, then the
+// account's plans again for any plan that gained the account meanwhile.
 func expectLockDeletedAccount(mock pgxmock.PgxPoolIface) {
+	expectLockAccountPlans(mock)
 	mock.ExpectExec(`SELECT 1 FROM cloud_accounts WHERE id = \$1 FOR UPDATE`).WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	expectLockAccountPlans(mock)
+}
+
+func expectLockAccountPlans(mock pgxmock.PgxPoolIface) {
+	mock.ExpectExec(`SELECT p.id FROM purchase_plans p\s+WHERE p.id IN \(SELECT pa.plan_id FROM plan_accounts pa WHERE pa.account_id = \$1\)\s+ORDER BY p.id\s+FOR UPDATE OF p`).
+		WithArgs(pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("SELECT", 1))
 }
 
 // expectDisableSoleAccountPlans expects the issue #264 disable of enabled
@@ -1858,12 +1866,35 @@ func TestPGXMock_DeleteCloudAccount_LockFailsRollsBack(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectBegin()
+	expectLockAccountPlans(mock)
 	mock.ExpectExec("SELECT 1 FROM cloud_accounts").WithArgs("acct-id").WillReturnError(errors.New("boom"))
 	mock.ExpectRollback()
 
 	err := store.DeleteCloudAccount(ctx, "acct-id")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to lock cloud account")
+}
+
+func TestPGXMock_DeleteCloudAccount_PlanLockFailsRollsBack(t *testing.T) {
+	for _, second := range []bool{false, true} {
+		mock := newMock(t)
+		store := storeWith(mock)
+		ctx := context.Background()
+
+		mock.ExpectBegin()
+		if second {
+			expectLockAccountPlans(mock)
+			mock.ExpectExec("SELECT 1 FROM cloud_accounts").WithArgs("acct-id").
+				WillReturnResult(pgxmock.NewResult("SELECT", 1))
+		}
+		mock.ExpectExec("SELECT p.id FROM purchase_plans").WithArgs("acct-id").WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		err := store.DeleteCloudAccount(ctx, "acct-id")
+		require.Error(t, err, "second lock: %v", second)
+		assert.Contains(t, err.Error(), "failed to lock plans of cloud account")
+		require.NoError(t, mock.ExpectationsWereMet(), "second lock: %v", second)
+	}
 }
 
 func TestPGXMock_DeleteCloudAccount_DisablePlansFailsRollsBack(t *testing.T) {
