@@ -56,6 +56,10 @@ describe('Savings History Module', () => {
         <option value="monthly" selected>Monthly</option>
         <option value="yearly">Yearly</option>
       </select>
+      <select id="savings-series">
+        <option value="period" selected>Savings per period</option>
+        <option value="cumulative">Cumulative savings</option>
+      </select>
       <button id="refresh-savings-btn">Refresh</button>
       <div id="savings-history-container">
         <canvas id="savings-history-chart"></canvas>
@@ -293,7 +297,7 @@ describe('Savings History Module', () => {
       const avgSavingsEl = document.getElementById('avg-hourly-savings');
       const peakSavingsEl = document.getElementById('peak-savings');
 
-      expect(periodSavingsEl?.textContent).toContain('$1.50K');
+      expect(periodSavingsEl?.textContent).toContain('$1,500.00');
       expect(avgSavingsEl?.textContent).toContain('$75.00/mo');
       expect(peakSavingsEl?.textContent).toContain('$200.00/mo');
     });
@@ -337,7 +341,7 @@ describe('Savings History Module', () => {
       expect(mockChartInstance.destroy).toHaveBeenCalled();
     });
 
-    test('formats currency values over 1000 with K suffix', async () => {
+    test('formats currency values over 1000 with the shared formatter (#749)', async () => {
       const mockData = {
         summary: {
           total_period_savings: 5000,
@@ -353,7 +357,7 @@ describe('Savings History Module', () => {
       await loadSavingsHistory();
 
       const periodSavingsEl = document.getElementById('period-savings');
-      expect(periodSavingsEl?.textContent).toBe('$5.00K');
+      expect(periodSavingsEl?.textContent).toBe('$5,000.00');
     });
 
     test('formats currency values under 1000 without suffix', async () => {
@@ -428,19 +432,18 @@ describe('Savings History Module', () => {
 
       await loadSavingsHistory();
 
+      // Issue #749: one series (period savings as bars) on one y-axis.
       expect(Chart).toHaveBeenCalledWith(
         expect.any(HTMLCanvasElement),
         expect.objectContaining({
-          type: 'line',
+          type: 'bar',
           data: expect.objectContaining({
-            datasets: expect.arrayContaining([
+            datasets: [
               expect.objectContaining({
+                type: 'bar',
                 label: 'Period Savings'
-              }),
-              expect.objectContaining({
-                label: 'Cumulative Savings'
               })
-            ])
+            ]
           }),
           options: expect.objectContaining({
             responsive: true,
@@ -746,6 +749,7 @@ describe('Savings History Module', () => {
       (getSavingsAnalytics as jest.Mock).mockResolvedValue({
         data_points: manyDataPoints
       });
+      (document.getElementById('savings-series') as HTMLSelectElement).value = 'cumulative';
 
       await loadSavingsHistory();
 
@@ -764,6 +768,7 @@ describe('Savings History Module', () => {
       (getSavingsAnalytics as jest.Mock).mockResolvedValue({
         data_points: fewDataPoints
       });
+      (document.getElementById('savings-series') as HTMLSelectElement).value = 'cumulative';
 
       await loadSavingsHistory();
 
@@ -795,9 +800,11 @@ describe('Savings History Module', () => {
       const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
       const yAxisCallback = chartCall[1].options.scales.y.ticks.callback;
 
-      // Test with number value
-      expect(yAxisCallback(50)).toBe('$50.00');
+      // Compact shared formatter, not `$${x.toFixed(2)}` (issue #749)
+      expect(yAxisCallback(50)).toBe('$50');
       expect(yAxisCallback(123.456)).toBe('$123.46');
+      expect(yAxisCallback(1500)).toBe('$1.5K');
+      expect(yAxisCallback(12500)).toBe('$12.5K');
     });
 
     test('y-axis tick callback formats currency for string values', async () => {
@@ -814,64 +821,9 @@ describe('Savings History Module', () => {
       const yAxisCallback = chartCall[1].options.scales.y.ticks.callback;
 
       // Test with string value
-      expect(yAxisCallback('75.5')).toBe('$75.50');
-      expect(yAxisCallback('100')).toBe('$100.00');
-    });
-
-    test('y1-axis tick callback formats large values with K suffix', async () => {
-      const mockData = {
-        data_points: [
-          { timestamp: '2024-01-01T00:00:00Z', total_savings: 10, cumulative_savings: 10, total_upfront: 100, purchase_count: 1 }
-        ]
-      };
-      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
-
-      await loadSavingsHistory();
-
-      const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
-      const y1AxisCallback = chartCall[1].options.scales.y1.ticks.callback;
-
-      // Test with large number values (>= 1000)
-      expect(y1AxisCallback(1000)).toBe('$1.0K');
-      expect(y1AxisCallback(5000)).toBe('$5.0K');
-      expect(y1AxisCallback(12500)).toBe('$12.5K');
-    });
-
-    test('y1-axis tick callback formats small values without K suffix', async () => {
-      const mockData = {
-        data_points: [
-          { timestamp: '2024-01-01T00:00:00Z', total_savings: 10, cumulative_savings: 10, total_upfront: 100, purchase_count: 1 }
-        ]
-      };
-      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
-
-      await loadSavingsHistory();
-
-      const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
-      const y1AxisCallback = chartCall[1].options.scales.y1.ticks.callback;
-
-      // Test with small number values (< 1000)
-      expect(y1AxisCallback(50)).toBe('$50');
-      expect(y1AxisCallback(999)).toBe('$999');
-      expect(y1AxisCallback(0)).toBe('$0');
-    });
-
-    test('y1-axis tick callback handles string values', async () => {
-      const mockData = {
-        data_points: [
-          { timestamp: '2024-01-01T00:00:00Z', total_savings: 10, cumulative_savings: 10, total_upfront: 100, purchase_count: 1 }
-        ]
-      };
-      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
-
-      await loadSavingsHistory();
-
-      const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
-      const y1AxisCallback = chartCall[1].options.scales.y1.ticks.callback;
-
-      // Test with string values
-      expect(y1AxisCallback('2500')).toBe('$2.5K');
-      expect(y1AxisCallback('500')).toBe('$500');
+      expect(yAxisCallback('75.5')).toBe('$75.5');
+      expect(yAxisCallback('100')).toBe('$100');
+      expect(yAxisCallback('2500')).toBe('$2.5K');
     });
 
     test('tooltip label callback formats period savings with unit suffix (default monthly)', async () => {
@@ -903,19 +855,19 @@ describe('Savings History Module', () => {
         ]
       };
       (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+      (document.getElementById('savings-series') as HTMLSelectElement).value = 'cumulative';
 
       await loadSavingsHistory();
 
       const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
       const tooltipLabelCallback = chartCall[1].options.plugins.tooltip.callbacks.label;
 
-      // Test cumulative savings (datasetIndex 1)
       const cumulativeContext = {
         raw: 1234.56,
-        datasetIndex: 1,
+        datasetIndex: 0,
         dataset: { label: 'Cumulative Savings' }
       };
-      expect(tooltipLabelCallback(cumulativeContext)).toBe('Cumulative Savings: $1234.56');
+      expect(tooltipLabelCallback(cumulativeContext)).toBe('Cumulative Savings: $1,234.56');
     });
 
     test('tooltip label callback handles null/undefined raw value', async () => {
@@ -941,10 +893,10 @@ describe('Savings History Module', () => {
 
       const undefinedContext = {
         raw: undefined,
-        datasetIndex: 1,
-        dataset: { label: 'Cumulative Savings' }
+        datasetIndex: 0,
+        dataset: { label: 'Period Savings' }
       };
-      expect(tooltipLabelCallback(undefinedContext)).toBe('Cumulative Savings: $0.00');
+      expect(tooltipLabelCallback(undefinedContext)).toBe('Period Savings: $0.00/mo');
     });
 
     // Regression tests for QA 2.2 / 2.3 / 2.4 (do not remove)
@@ -1012,7 +964,7 @@ describe('Savings History Module', () => {
       expect(chartCall[1].data.labels).toBeUndefined();
     });
 
-    test('QA 2.4: y and y1 axes both have maxTicksLimit to prevent tick instability', async () => {
+    test('QA 2.4: the y-axis has maxTicksLimit to prevent tick instability', async () => {
       const mockData = {
         data_points: [
           { timestamp: '2024-01-01T00:00:00Z', total_savings: 10, cumulative_savings: 10, total_upfront: 100, purchase_count: 1 }
@@ -1024,15 +976,12 @@ describe('Savings History Module', () => {
 
       const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
       const yTicks = chartCall[1].options.scales.y.ticks;
-      const y1Ticks = chartCall[1].options.scales.y1.ticks;
 
       expect(typeof yTicks.maxTicksLimit).toBe('number');
       expect(yTicks.maxTicksLimit).toBeGreaterThan(0);
-      expect(typeof y1Ticks.maxTicksLimit).toBe('number');
-      expect(y1Ticks.maxTicksLimit).toBeGreaterThan(0);
     });
 
-    test('QA 2.5: y1-axis formatter does not collapse distinct floats to the same integer label', async () => {
+    test('QA 2.5: the y-axis formatter does not collapse distinct floats to the same integer label', async () => {
       const mockData = {
         data_points: [
           { timestamp: '2024-01-01T00:00:00Z', total_savings: 10, cumulative_savings: 10, total_upfront: 100, purchase_count: 1 }
@@ -1043,7 +992,7 @@ describe('Savings History Module', () => {
       await loadSavingsHistory();
 
       const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
-      const y1Cb = chartCall[1].options.scales.y1.ticks.callback;
+      const y1Cb = chartCall[1].options.scales.y.ticks.callback;
 
       // Two floats that differ in decimal but share the same integer part must
       // produce distinct labels (QA 2.5).
@@ -1403,8 +1352,8 @@ describe('Savings History Module', () => {
 
       const avgEl = document.getElementById('avg-hourly-savings');
       expect(avgEl?.textContent).toContain('/yr');
-      // 730 * 12 = $8760.00 -> formatted as $8.76K
-      expect(avgEl?.textContent).toContain('$8.76K');
+      // 730 * 12 = $8,760.00
+      expect(avgEl?.textContent).toContain('$8,760.00');
     });
 
     test('avg-savings-label heading changes to reflect selected unit', async () => {
@@ -1469,10 +1418,10 @@ describe('Savings History Module', () => {
       expect(document.getElementById('period-savings')?.textContent).toBe('$1.00');
       expect(document.getElementById('period-savings-unit')?.textContent).toContain('hourly');
 
-      // Yearly: 730 * 12 = 8760 -> $8.76K; sub-line updates to 'yearly'
+      // Yearly: 730 * 12 = 8760 -> $8,760.00; sub-line updates to 'yearly'
       unitSelect.value = 'yearly';
       await loadSavingsHistory();
-      expect(document.getElementById('period-savings')?.textContent).toBe('$8.76K');
+      expect(document.getElementById('period-savings')?.textContent).toBe('$8,760.00');
       expect(document.getElementById('period-savings-unit')?.textContent).toContain('yearly');
     });
 
@@ -1486,6 +1435,53 @@ describe('Savings History Module', () => {
       const tooltipCb = chartCall[1].options.plugins.tooltip.callbacks.label;
       const ctx = { raw: 1.0, datasetIndex: 0, dataset: { label: 'Period Savings' } };
       expect(tooltipCb(ctx)).toContain('/hr');
+    });
+  });
+
+  describe('one series on one axis (issue #749)', () => {
+    const mockData = {
+      data_points: [
+        { timestamp: '2024-01-01T00:00:00Z', total_savings: 100, cumulative_savings: 100, total_upfront: 0, purchase_count: 1 },
+        { timestamp: '2024-01-02T00:00:00Z', total_savings: 300, cumulative_savings: 400, total_upfront: 0, purchase_count: 1 },
+      ],
+    };
+
+    test('period view draws bars on a single y-axis', async () => {
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+      await loadSavingsHistory();
+      const config = (Chart as unknown as jest.Mock).mock.calls[0][1];
+      expect(Object.keys(config.options.scales)).toEqual(['x', 'y']);
+      expect(config.data.datasets).toHaveLength(1);
+      expect(config.data.datasets[0].type).toBe('bar');
+      expect(config.data.datasets[0].data.map((d: { y: number }) => d.y)).toEqual([100, 300]);
+      expect(config.options.scales.y.title.text).toBe('Savings per period (Monthly)');
+    });
+
+    test('cumulative view plots the running total alone, without a rate suffix', async () => {
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+      (document.getElementById('savings-series') as HTMLSelectElement).value = 'cumulative';
+      await loadSavingsHistory();
+      const config = (Chart as unknown as jest.Mock).mock.calls[0][1];
+      expect(Object.keys(config.options.scales)).toEqual(['x', 'y']);
+      expect(config.type).toBe('line');
+      expect(config.data.datasets).toHaveLength(1);
+      expect(config.data.datasets[0].label).toBe('Cumulative Savings');
+      expect(config.data.datasets[0].data.map((d: { y: number }) => d.y)).toEqual([100, 400]);
+      expect(config.options.scales.y.title.text).toBe('Cumulative savings');
+      const tooltip = config.options.plugins.tooltip.callbacks.label;
+      expect(tooltip({ raw: { x: 0, y: 400 }, dataset: { label: 'Cumulative Savings' } })).toBe('Cumulative Savings: $400.00');
+    });
+
+    test('changing the series reloads the chart once, even after a second init', async () => {
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+      initSavingsHistory();
+      initSavingsHistory();
+      (getSavingsAnalytics as jest.Mock).mockClear();
+      const series = document.getElementById('savings-series') as HTMLSelectElement;
+      series.value = 'cumulative';
+      series.dispatchEvent(new Event('change'));
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(getSavingsAnalytics).toHaveBeenCalledTimes(1);
     });
   });
 });
