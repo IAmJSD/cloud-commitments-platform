@@ -966,8 +966,8 @@ tr.recommendation-row:hover {
  * of duties). Reuses the accent border pattern from .self-account-banner
  * in settings.css. */
 .info-banner {
-    border-left: 3px solid var(--accent, #4a9eff);
-    background: var(--cudly-info-bg, #eaf4ff);
+    border-left: 3px solid var(--cudly-info);
+    background: var(--cudly-info-bg);
     padding: 0.5rem 0.75rem;
     margin-bottom: 0.75rem;
     border-radius: 0 4px 4px 0;
@@ -1122,7 +1122,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
     gap: 0.5rem 1rem;
     padding: 0.75rem 1rem;
-    background: var(--cudly-surface-2, #f6f8fa);
+    background: var(--cudly-surface-muted);
     border: 1px solid var(--cudly-border, #e1e4e8);
     border-radius: 6px;
 }
@@ -1170,7 +1170,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 .approval-details-table thead th {
     position: sticky;
     top: 0;
-    background: var(--cudly-surface-2, #f6f8fa);
+    background: var(--cudly-surface-muted);
     font-weight: 600;
     color: var(--cudly-text-muted, #444);
     font-size: 0.78rem;
@@ -1260,7 +1260,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     background: #f0f2f5;
     color: var(--cudly-text);
     font-size: 0.78rem;
-    font-family: var(--mono-font, ui-monospace, monospace);
+    font-family: var(--cudly-font-mono);
 }
 
 /* Running total under the modal's target rows. Muted emphasis — this
@@ -1720,7 +1720,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     padding: var(--cudly-sp-3);
     border-radius: var(--cudly-r-md);
     border: 1px solid var(--cudly-border);
-    background: var(--cudly-bg-elevated, white);
+    background: var(--cudly-surface);
 }
 
 .apikeys-usage-tile-label {
