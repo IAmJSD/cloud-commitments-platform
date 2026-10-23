@@ -64,10 +64,13 @@ func (s *Scheduler) ScanRecommendations(ctx context.Context, filter config.Recom
 	return nil
 }
 
-// loadSuppressionIndex reads the active suppressions once for a whole scan.
+// loadSuppressionIndex reads the active suppressions once for a whole scan and
+// groups them by 6-tuple, as applySuppressions does. Which rows of a group
+// apply to a rec depends only on that rec's variant (issue #816), so applying
+// the index chunk by chunk suppresses exactly what ListRecommendations does.
 // A read failure is logged and yields no index, so the scan over-shows like
 // ListRecommendations does.
-func (s *Scheduler) loadSuppressionIndex(ctx context.Context) map[suppressionKey]*suppressionAgg {
+func (s *Scheduler) loadSuppressionIndex(ctx context.Context) map[suppressionKey][]config.PurchaseSuppression {
 	sups, err := s.config.ListActiveSuppressions(ctx)
 	if err != nil {
 		logging.Errorf("failed to apply suppressions; returning un-suppressed recs: %v", err)

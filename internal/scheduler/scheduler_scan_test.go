@@ -148,6 +148,98 @@ func TestScanRecommendations_MatchesListRecommendations(t *testing.T) {
 	}
 }
 
+// variantScanFixture is an EC2 cache exercising the variant-aware suppression
+// rules of issue #816: a purchase of one variant (AZ, platform, tenancy) must
+// reduce only that variant, a purchase covering a variant fully hides it, a
+// legacy row with no variant is a wildcard over its 6-tuple, and a rec whose
+// Details cannot be read matches every row of its 6-tuple.
+func variantScanFixture(t *testing.T) *scanStore {
+	t.Helper()
+	bought := ec2VariantRec("ec2|bought", "us-east-1a", "Linux/UNIX", "default")
+	covered := ec2VariantRec("ec2|covered", "us-east-1c", "Linux/UNIX", "default")
+	unreadable := ec2VariantRec("ec2|unreadable", "us-east-1b", "Windows", "default")
+	unreadable.Details = []byte(`{"platform":42}`)
+	unreadable.Count = 10
+	legacyA := ec2VariantRec("ec2|legacy-a", "us-east-1a", "Linux/UNIX", "default")
+	legacyA.ResourceType = "m5.xlarge"
+	legacyB := ec2VariantRec("ec2|legacy-b", "us-east-1b", "Windows", "dedicated")
+	legacyB.ResourceType = "m5.xlarge"
+	recs := []config.RecommendationRecord{
+		legacyB,
+		ec2VariantRec("ec2|sib-windows", "us-east-1a", "Windows", "default"),
+		unreadable,
+		ec2VariantRec("ec2|sib-other-az", "us-east-1b", "Linux/UNIX", "default"),
+		covered,
+		ec2VariantRec("ec2|sib-dedicated", "us-east-1a", "Linux/UNIX", "dedicated"),
+		bought,
+		ec2VariantRec("ec2|sib-regional", "", "Linux/UNIX", "default"),
+		legacyA,
+	}
+
+	boughtPurchase := bought
+	boughtPurchase.Count = 3
+	coveredPurchase := covered // the full count of 5
+	sups := config.BuildSuppressions([]config.RecommendationRecord{boughtPurchase, coveredPurchase}, "e-variant",
+		&config.GlobalConfig{GracePeriodDays: map[string]int{"aws": 7}}, time.Now())
+	require.Len(t, sups, 2)
+	for i := range sups {
+		require.NotNil(t, sups[i].Variant, "BuildSuppressions must write variant rows")
+	}
+	sups = append(sups, config.PurchaseSuppression{ExecutionID: "e-legacy", AccountID: "acct-1", Provider: "aws",
+		Service: "ec2", Region: "us-east-1", ResourceType: "m5.xlarge", SuppressedCount: 1,
+		ExpiresAt: time.Now().Add(time.Hour)})
+
+	return &scanStore{
+		mockOverrideStore: mockOverrideStore{
+			recs: recs,
+			globals: map[string]*config.ServiceConfig{
+				"aws|ec2": {Provider: "aws", Service: "ec2", Enabled: true},
+			},
+		},
+		sups: sups,
+	}
+}
+
+// TestScanRecommendations_VariantSuppressionsMatchListRecommendations pins
+// the scan to ListRecommendations under issue #816's variant-aware
+// suppressions, at every chunk size, and checks the expected per-variant
+// result so the equality is not vacuous.
+func TestScanRecommendations_VariantSuppressionsMatchListRecommendations(t *testing.T) {
+	store := variantScanFixture(t)
+	s := &Scheduler{config: store}
+
+	want, err := s.ListRecommendations(context.Background(), config.RecommendationFilter{})
+	require.NoError(t, err)
+	sort.Slice(want, func(i, j int) bool { return want[i].ID < want[j].ID })
+
+	for chunkSize := 1; chunkSize <= len(store.recs)+1; chunkSize++ {
+		t.Run(fmt.Sprintf("chunk=%d", chunkSize), func(t *testing.T) {
+			got, _ := collectScan(t, s, chunkSize)
+			assert.Equal(t, want, got)
+
+			byID := map[string]config.RecommendationRecord{}
+			for _, r := range got {
+				byID[r.ID] = r
+			}
+			require.Len(t, byID, 8, "only the fully covered variant is hidden")
+			assert.NotContains(t, byID, "ec2|covered")
+			assert.Equal(t, 2, byID["ec2|bought"].Count, "5 - 3 on the purchased variant")
+			assert.Equal(t, 3, byID["ec2|bought"].SuppressedCount)
+			for _, id := range []string{"ec2|sib-windows", "ec2|sib-other-az", "ec2|sib-dedicated", "ec2|sib-regional"} {
+				assert.Equal(t, 5, byID[id].Count, "%s: a sibling variant keeps its full count", id)
+				assert.Zero(t, byID[id].SuppressedCount, id)
+				assert.Nil(t, byID[id].PrimarySuppressionExecutionID, id)
+			}
+			assert.Equal(t, 2, byID["ec2|unreadable"].Count, "10 - 3 - 5: unreadable Details match every row")
+			for _, id := range []string{"ec2|legacy-a", "ec2|legacy-b"} {
+				assert.Equal(t, 4, byID[id].Count, "%s: the legacy row is a wildcard over its 6-tuple", id)
+				require.NotNil(t, byID[id].PrimarySuppressionExecutionID, id)
+				assert.Equal(t, "e-legacy", *byID[id].PrimarySuppressionExecutionID, id)
+			}
+		})
+	}
+}
+
 // TestScanRecommendations_SkipsEmptyChunks checks that a chunk whose rows are
 // all filtered away is not passed to fn, and that the walk still continues
 // past it.
