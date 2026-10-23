@@ -489,6 +489,18 @@ func (m *mockConfigStoreForHealth) ReleaseMarketplaceListingClaim(_ context.Cont
 	return nil
 }
 
+func (m *mockConfigStoreForHealth) ListMarketplaceListingsToPoll(_ context.Context) ([]config.PurchaseHistoryRecord, error) {
+	return nil, nil
+}
+
+func (m *mockConfigStoreForHealth) RecordMarketplaceListingActive(_ context.Context, _, _ string, _ time.Time) (bool, error) {
+	return false, nil
+}
+
+func (m *mockConfigStoreForHealth) SettleMarketplaceListing(_ context.Context, _ config.MarketplaceListingSettlement) (bool, error) {
+	return false, nil
+}
+
 func (m *mockConfigStoreForHealth) ClaimRIExchangeIdempotencyKey(_ context.Context, _ string, _ time.Duration) (bool, error) {
 	return true, nil
 }

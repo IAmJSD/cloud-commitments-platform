@@ -440,6 +440,23 @@ type StoreInterface interface {
 	// they are cleared because AWS created nothing reusable.
 	ReleaseMarketplaceListingClaim(ctx context.Context, purchaseID, clientToken, priorState string, keepAttempt bool) error
 
+	// ListMarketplaceListingsToPoll returns the AWS rows whose listing the
+	// marketplace status poller reads (issue #27): active listings, and
+	// closed/canceled ones it has seen whose proceeds are not recorded yet.
+	ListMarketplaceListingsToPoll(ctx context.Context) ([]PurchaseHistoryRecord, error)
+
+	// RecordMarketplaceListingActive stamps listed_at on a row whose listing
+	// AWS still reports active. It writes only while the row holds listingID
+	// in the active state and never writes listing_state. Reports whether the
+	// row changed.
+	RecordMarketplaceListingActive(ctx context.Context, purchaseID, listingID string, listedAt time.Time) (bool, error)
+
+	// SettleMarketplaceListing records a listing that closed or was canceled
+	// on AWS, with its proceeds and AWS fee when known. It applies once per
+	// listing, only while the row still holds it and is active or already in
+	// the same terminal state. Reports whether the row was written.
+	SettleMarketplaceListing(ctx context.Context, settlement MarketplaceListingSettlement) (bool, error)
+
 	// ClaimRIExchangeIdempotencyKey atomically claims key for an RI exchange
 	// submit, so a client that retries a timed-out execute request cannot
 	// commit the same exchange twice (issue #1642). key is a fingerprint of

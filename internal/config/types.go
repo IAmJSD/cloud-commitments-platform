@@ -1144,6 +1144,25 @@ type MarketplaceListingClaim struct {
 	Resumed bool
 }
 
+// MarketplaceListingSettlement is what the marketplace status poller records
+// when a listing reaches a terminal state on AWS (issue #27).
+type MarketplaceListingSettlement struct {
+	// PurchaseID and ListingID identify the row and the listing it must still
+	// record; a row that moved on to another listing is left alone.
+	PurchaseID string
+	ListingID  string
+	// State is the terminal AWS state: ListingStateClosed or
+	// ListingStateCancelled.
+	State string
+	// ListedAt is the listing's AWS CreateDate; nil keeps the stored value.
+	ListedAt *time.Time
+	// ProceedsReceived is the USD the seller receives for the sold instances,
+	// net of the AWS fee, and FeePaid that fee. Both nil when the sale price
+	// could not be determined; the row is then polled again.
+	ProceedsReceived *float64
+	FeePaid          *float64
+}
+
 // AWS EC2 ReservedInstancesListing status values, mirroring the
 // ec2types.ListingStatus enum. Stored verbatim in purchase_history.listing_state
 // so the strings must match AWS exactly. ListingStatePending is additionally
