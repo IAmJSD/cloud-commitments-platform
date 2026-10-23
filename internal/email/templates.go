@@ -404,10 +404,28 @@ const riExchangePendingApprovalHTMLTemplate = `<!DOCTYPE html>
 
 const riExchangeCompletedTemplate = `CUDly - RI Exchanges Completed
 ==============================
+{{with .ReconciliationExchanges}}
+NEEDS RECONCILIATION - verify in AWS before acting
+--------------------------------------------------
 
+CUDly sent the exchange(s) below to AWS but got no definite answer, so AWS
+may or may not have executed them. They are not failures: do not retry them
+until they are reconciled. The run stopped at the first one, and each one
+keeps counting against the daily exchange cap until it is resolved. Check the
+source RI in the AWS console, then record what happened with the resolve
+request shown for each exchange (the API accepts it once the record has been
+unchanged for a few hours).
+{{range .}}
+- Source: {{.SourceRIID}} ({{.SourceInstanceType}})
+  Target: {{.TargetInstanceType}} x{{.TargetCount}}
+  Quoted payment: ${{.PaymentDue}}
+  Record: {{.RecordID}}
+  Resolve: POST /api/ri-exchange/resolve/{{.RecordID}}
+  Detail: {{.Error}}
+{{end}}{{end}}
 The following RI exchanges have been {{if eq .Mode "auto"}}automatically {{end}}completed:
 
-{{range .Exchanges}}{{if eq .Error ""}}
+{{range .Exchanges}}{{if and (eq .Error "") (not .OutcomeUnknown)}}
 - Source: {{.SourceRIID}} ({{.SourceInstanceType}})
   Target: {{.TargetInstanceType}} x{{.TargetCount}}
   Payment: ${{.PaymentDue}}
@@ -591,8 +609,7 @@ func (s *Sender) SendRIExchangeCompleted(ctx context.Context, data RIExchangeNot
 		return fmt.Errorf("failed to render ri exchange completed email: %w", err)
 	}
 
-	subject := fmt.Sprintf("CUDly - RI Exchanges Completed (%d exchanges)", len(data.Exchanges))
-	return s.SendNotification(ctx, subject, body)
+	return s.SendNotification(ctx, riExchangeCompletedSubject(data), body)
 }
 
 const purchaseApprovalRequestTemplate = `CUDly - Purchase Approval Required

@@ -257,6 +257,7 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 			ExchangeID:         o.ExchangeID,
 			UtilizationPct:     o.UtilizationPct,
 			Error:              o.Error,
+			OutcomeUnknown:     o.OutcomeUnknown,
 		})
 	}
 

@@ -669,6 +669,12 @@ type RIExchangeItem struct {
 	Error              string
 	TargetCount        int
 	UtilizationPct     float64
+	// OutcomeUnknown marks an exchange whose accept was sent but whose
+	// response was lost, so AWS may or may not have executed it. Such an
+	// exchange is neither completed nor failed: the completed email lists it
+	// in its own reconciliation group so the operator verifies it in AWS
+	// before retrying. Mirrors exchange.ExchangeOutcome.OutcomeUnknown.
+	OutcomeUnknown bool
 }
 
 // SkippedExchange represents an exchange that was skipped.
