@@ -146,5 +146,4 @@ docker-skip: ## Deploy without building the Docker image (uses pre-built image_u
 # Frontend operations
 frontend-only: ## Deploy frontend only
 	@echo "🎨 Deploying frontend..."
-	@cd terraform/environments/$(PROVIDER)/$(PROFILE) && \
-		terraform apply -var-file="../../../profiles/$(PROVIDER)/$(PROFILE).tfvars" -target=module.frontend
+	@./scripts/tf-deploy.sh $(PROVIDER) $(PROFILE) apply -target=module.frontend
