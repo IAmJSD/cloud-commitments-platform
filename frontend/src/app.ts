@@ -22,6 +22,7 @@ import { buildCommitmentSummary, commitmentTotals, executeButtonLabel, executeCo
 import { handlePurchaseDeeplink } from './purchases-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
+import { renderInitError } from './init-error';
 
 /**
  * describeDuplicateSubmit words the outcome of a submit the backend collapsed
@@ -142,7 +143,11 @@ export async function init(): Promise<void> {
     const err = error as { status?: number; message?: string };
     if (err.status === 401 || err.message?.includes('Unauthorized')) {
       await showLoginModal();
+      return;
     }
+    // Anything else would leave the pre-rendered Home markup on screen with
+    // no listeners bound, under whatever URL was requested (#206).
+    renderInitError(error);
   }
 }
 

@@ -172,6 +172,52 @@ describe('App Module', () => {
       expect(console.error).toHaveBeenCalledWith('Init error:', expect.any(Error));
       expect(auth.showLoginModal).not.toHaveBeenCalled();
     });
+
+    describe('non-auth failures surface an error state (#206)', () => {
+      beforeEach(() => {
+        document.body.innerHTML = `
+          <main id="main-content">
+            <div id="home-tab" class="tab-content active"></div>
+            <div id="plans-tab" class="tab-content"></div>
+          </main>`;
+        (api.isAuthenticated as jest.Mock).mockReturnValue(true);
+        console.error = jest.fn();
+      });
+
+      test('a failed user fetch replaces the pre-rendered Home panel', async () => {
+        (api.getCurrentUser as jest.Mock).mockRejectedValue(
+          Object.assign(new Error('HTTP 503'), { status: 503 }),
+        );
+
+        await init();
+
+        expect(document.querySelector('.tab-content.active')).toBeNull();
+        expect(document.getElementById('init-error')).not.toBeNull();
+        expect(document.getElementById('init-error')!.textContent).toContain('HTTP 503');
+      });
+
+      test('a throw during routing also surfaces the error state', async () => {
+        (api.getCurrentUser as jest.Mock).mockResolvedValue({ id: 'user-1', email: 'test@example.com' });
+        (navigation.switchTab as jest.Mock).mockImplementationOnce(() => {
+          throw new Error('routing exploded');
+        });
+
+        await init();
+
+        expect(document.getElementById('init-error')!.textContent).toContain('routing exploded');
+        expect(document.querySelector('.tab-content.active')).toBeNull();
+      });
+
+      test('a 401 shows the login modal and no error state', async () => {
+        (api.getCurrentUser as jest.Mock).mockRejectedValue({ status: 401 });
+
+        await init();
+
+        expect(auth.showLoginModal).toHaveBeenCalled();
+        expect(document.getElementById('init-error')).toBeNull();
+        expect(document.getElementById('home-tab')!.classList.contains('active')).toBe(true);
+      });
+    });
   });
 
   describe('setupEventListeners', () => {
