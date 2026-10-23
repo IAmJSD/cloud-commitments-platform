@@ -4,12 +4,13 @@
 # Fails when the gosec version is written anywhere other than .gosec-version.
 #
 # .gosec-version (repo root, one line such as `v2.28.0`) is the single source of
-# truth for the gosec version. ci.yml's Security Scanning job, the Makefile's
-# install-dev-tools target and the pre-commit hook (scripts/gosec-hook.sh) all
-# read it. Before issue #347 the same version was hard-coded in four places
-# (ci.yml, pre-commit.yml, the Makefile and gosec-hook.sh) plus comments that
-# restated it, so a bump only had to miss one of them for local scans and the
-# CI scan that uploads to GitHub Security to run different rule sets.
+# truth for the gosec version. scripts/run-gosec.sh (which ci.yml's Security
+# Scanning job, `make security-scan-go` and the pre-commit hook all call) and
+# the Makefile's install-dev-tools target read it. Before issue #347 the same
+# version was hard-coded in four places (ci.yml, pre-commit.yml, the Makefile
+# and gosec-hook.sh) plus comments that restated it, so a bump only had to miss
+# one of them for local scans and the CI scan that uploads to GitHub Security
+# to run different rule sets.
 #
 # Every tracked text file is scanned (git grep), not a list of known pin sites,
 # so a new workflow or script that hard-codes the version is caught without

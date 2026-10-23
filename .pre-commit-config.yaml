@@ -168,11 +168,9 @@ repos:
         # their owning module (root or tests/e2e).
         # Fast: never whole-repo, always per-changed-package.
         #
-        # The gosec version in .gosec-version is auto-installed to
-        # ~/.cache/pre-commit-gosec/<version>/gosec on first use.
-        #
-        # Exclusion rationale and flag list live in scripts/gosec-hook.sh.
-        # Keep in sync with the exclude= flags there.
+        # Toolchain and rule set (no excludes) live in scripts/run-gosec.sh,
+        # shared with `make security-scan-go` and CI; it installs the gosec
+        # version in .gosec-version.
         entry: bash scripts/gosec-hook.sh
         language: system
         pass_filenames: true

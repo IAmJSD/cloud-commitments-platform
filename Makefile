@@ -13,9 +13,10 @@ GIT_SHA?=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 # Dev tool versions - keep in sync with the CI pins in
 # .github/workflows/ci.yml and pre-commit.yml
 GOLANGCI_LINT_VERSION?=v2.10.1
-# gosec has one source of truth, .gosec-version, also read by ci.yml and
-# scripts/gosec-hook.sh. scripts/check-gosec-pin.sh fails CI if the version
-# is written anywhere else (issue #347).
+# gosec has one source of truth, .gosec-version, also read by
+# scripts/run-gosec.sh (the pre-commit hook, security-scan-go and CI).
+# scripts/check-gosec-pin.sh fails CI if the version is written anywhere else
+# (issue #347).
 GOSEC_VERSION_FILE:=$(dir $(abspath $(lastword $(MAKEFILE_LIST)))).gosec-version
 GOSEC_VERSION?=$(shell cat $(GOSEC_VERSION_FILE))
 GOCYCLO_VERSION?=v0.6.0
@@ -163,14 +164,11 @@ complexity-report:
 # Security scanning
 security-scan: security-scan-go security-scan-docker security-scan-terraform
 
+# scripts/run-gosec.sh owns the module list and rule set and installs the
+# gosec version in .gosec-version, shared with the pre-commit hook and the CI
+# gosec step (issues #340, #347).
 security-scan-go:
-	@echo "Running gosec..."
-	@if command -v gosec > /dev/null; then \
-		gosec -fmt=json -out=gosec-report.json -exclude=G101,G104,G115,G204,G301,G304,G402,G505 ./...; \
-		echo "✓ Go security scan complete: gosec-report.json"; \
-	else \
-		echo "gosec not installed. Install: make install-dev-tools"; \
-	fi
+	@scripts/run-gosec.sh
 
 security-scan-docker:
 	@echo "Running trivy..."

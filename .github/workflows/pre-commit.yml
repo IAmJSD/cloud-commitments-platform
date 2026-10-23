@@ -132,9 +132,9 @@ jobs:
       #
       # gosec is deliberately NOT installed here (issue #347): the `gosec`
       # hook is SKIPped in this job (see the pre-commit step below), and
-      # the hook installs its own copy under ~/.cache/pre-commit-gosec
-      # anyway, so a ~/go/bin/gosec was never run. ci.yml's Security
-      # Scanning job is the gosec gate.
+      # the hook (via scripts/run-gosec.sh) installs its own copy under
+      # ~/.cache/gosec anyway, so a ~/go/bin/gosec was never run. ci.yml's
+      # Security Scanning job is the gosec gate.
       - name: Cache Go-installed tools (gocyclo)
         id: cache-go-tools
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0

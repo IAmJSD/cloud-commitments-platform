@@ -298,34 +298,68 @@ func adoptableRootRow(rows []config.PurchaseExecution) (*config.PurchaseExecutio
 // is no longer awaiting approval and the tick skips it, instead of an upsert
 // from the stale read overwriting the approval. A won CAS returns the fresh
 // row, which is the one the error text is written onto.
+//
+// The CAS, the Error/NoSubmission stamp and the suppression release commit in
+// one transaction (issue #1052). A failed root is never adopted again, so a
+// CAS committed on its own could strand the row failed with no reason and its
+// suppressions still held; an error before commit now leaves the row pending
+// for the next tick.
 func (m *Manager) failExistingPlanStep(ctx context.Context, exec *config.PurchaseExecution, reason string) error {
-	failed, err := m.config.TransitionExecutionStatusPinned(ctx, exec.ExecutionID, []string{"pending", "notified"}, "failed", nil, len(exec.Recommendations) == 0)
-	if errors.Is(err, config.ErrNotFound) || errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
-		return fmt.Errorf("%w: %s changed state before it could be failed", errExecutionNotNotifiable, exec.ExecutionID)
+	var failed *config.PurchaseExecution
+	err := m.config.WithTx(ctx, func(tx pgx.Tx) error {
+		var txErr error
+		failed, txErr = m.failPlanStepTx(ctx, tx, exec, reason)
+		return txErr
+	})
+	if errors.Is(err, errExecutionNotNotifiable) {
+		return err
 	}
 	if err != nil {
 		return fmt.Errorf("failed to fail plan step %d of plan %s: %w", exec.StepNumber, exec.PlanID, err)
 	}
-	stampFailedPlanStep(failed, reason)
+	logFailedPlanStep(failed)
+	return bareStepFailure(failed.PlanID, failed.StepNumber, reason)
+}
+
+// failPlanStepTx is failExistingPlanStep's transaction: the pinned CAS, then
+// the stamp and the suppression release on the row it returned. Only a lost
+// CAS is the quiet changed-state skip; any later error is a failed write.
+func (m *Manager) failPlanStepTx(ctx context.Context, tx pgx.Tx, exec *config.PurchaseExecution, reason string) (*config.PurchaseExecution, error) {
+	failed, err := m.config.TransitionExecutionStatusPinnedTx(ctx, tx, exec.ExecutionID, []string{"pending", "notified"}, "failed", nil, len(exec.Recommendations) == 0)
+	if errors.Is(err, config.ErrNotFound) || errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
+		return nil, fmt.Errorf("%w: %s changed state before it could be failed", errExecutionNotNotifiable, exec.ExecutionID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	markFailedPlanStep(failed, reason)
+	if err := m.config.SavePurchaseExecutionTx(ctx, tx, failed); err != nil {
+		return nil, fmt.Errorf("failed to record plan step %d of plan %s as failed: %w", failed.StepNumber, failed.PlanID, err)
+	}
 	// The row is failed with NoSubmission, so its suppressions are released as
 	// for any proven not-submitted failure (saveTerminalExecution); a bare row has none.
-	if err := m.config.WithTx(ctx, func(tx pgx.Tx) error {
-		if err := m.config.SavePurchaseExecutionTx(ctx, tx, failed); err != nil {
-			return err
-		}
-		return m.config.DeleteSuppressionsByExecutionTx(ctx, tx, failed.ExecutionID)
-	}); err != nil {
-		return fmt.Errorf("failed to record plan step %d of plan %s as failed: %w", failed.StepNumber, failed.PlanID, err)
+	if err := m.config.DeleteSuppressionsByExecutionTx(ctx, tx, failed.ExecutionID); err != nil {
+		return nil, err
 	}
-	return bareStepFailure(failed.PlanID, failed.StepNumber, reason)
+	return failed, nil
 }
 
 // stampFailedPlanStep marks exec failed with reason and logs it once.
 func stampFailedPlanStep(exec *config.PurchaseExecution, reason string) {
+	markFailedPlanStep(exec, reason)
+	logFailedPlanStep(exec)
+}
+
+// markFailedPlanStep sets the failed status, NoSubmission and reason on exec.
+func markFailedPlanStep(exec *config.PurchaseExecution, reason string) {
 	exec.Status = "failed"
 	exec.NoSubmission = true // a pending/notified step never reaches the executor
 	exec.Error = reason
-	logging.Errorf("purchase[%s]: plan %s step %d was marked failed: %s", exec.ExecutionID, exec.PlanID, exec.StepNumber, reason)
+}
+
+// logFailedPlanStep logs a plan step that was marked failed.
+func logFailedPlanStep(exec *config.PurchaseExecution) {
+	logging.Errorf("purchase[%s]: plan %s step %d was marked failed: %s", exec.ExecutionID, exec.PlanID, exec.StepNumber, exec.Error)
 }
 
 // stampFailedBarePlanStep marks exec failed with the no-recommendations reason.

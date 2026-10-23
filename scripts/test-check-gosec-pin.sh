@@ -6,9 +6,10 @@
 # must fail. A guard that only ever returns "clean" is indistinguishable from a
 # broken one, so the failing cases are the ones that give this check its value.
 #
-# It also asserts that the Makefile and scripts/gosec-hook.sh really read
-# .gosec-version (a changed file changes what they install, and a malformed one
-# stops the hook), so the readers cannot quietly go back to a literal.
+# It also asserts that the Makefile and scripts/run-gosec.sh (called by the
+# pre-commit hook, `make security-scan-go` and CI) really read .gosec-version (a
+# changed file changes what they install, and a malformed one stops them), so
+# the readers cannot quietly go back to a literal.
 #
 # Fixtures are throwaway git repos under a temp dir; nothing touches the real
 # tree. This file is exempt from the guard because it spells out the patterns.
@@ -215,63 +216,82 @@ else
   (( fail++ )) || true
 fi
 
-# The pre-commit hook: a missing or malformed file must stop it (exit 2) before
-# it installs or runs anything. HOME is redirected so no real cache is touched,
-# and `go` is a stub that only records how it was called, so a hook that
-# ignores the file fails here quickly instead of downloading gosec.
-hook_n=0
-# hook_fixture CONTENT: build a fixture repo for the hook; sets HOOK_DIR.
-hook_fixture() {
+# scripts/run-gosec.sh, which the pre-commit hook, `make security-scan-go` and
+# CI all call: a missing or malformed file must stop it (exit 2) before it runs
+# Go or touches its cache. HOME is redirected so no real cache is touched, and
+# `go` is a stub that only records how it was called (it answers
+# `go env GOVERSION` and fails everything else), so a script that ignores the
+# file fails here quickly instead of downloading gosec.
+reader_n=0
+# reader_fixture CONTENT: build a fixture repo; sets READER_DIR.
+reader_fixture() {
   local content="$1"
-  hook_n=$((hook_n + 1))
-  local dir="${WORK}/hook-${hook_n}"
+  reader_n=$((reader_n + 1))
+  local dir="${WORK}/reader-${reader_n}"
   mkdir -p "${dir}/scripts" "${dir}/home" "${dir}/bin"
   git -C "$dir" init -q >/dev/null 2>&1
-  cp "${SCRIPT_DIR}/gosec-hook.sh" "${dir}/scripts/gosec-hook.sh"
+  cp "${SCRIPT_DIR}/run-gosec.sh" "${SCRIPT_DIR}/gosec-hook.sh" "${dir}/scripts/"
   printf 'package main\n' > "${dir}/main.go"
   if [[ "$content" != "<missing>" ]]; then
     printf '%s\n' "$content" > "${dir}/.gosec-version"
   fi
-  printf '#!/bin/sh\necho "GOBIN=$GOBIN $*" >> "%s"\nexit 1\n' "${dir}/go-calls" > "${dir}/bin/go"
+  printf '#!/bin/sh\necho "GOBIN=$GOBIN $*" >> "%s"\n[ "$1 $2" = "env GOVERSION" ] && { echo go1.26.9; exit 0; }\nexit 1\n' \
+    "${dir}/go-calls" > "${dir}/bin/go"
   chmod +x "${dir}/bin/go"
-  HOOK_DIR="$dir"
+  READER_DIR="$dir"
 }
 
-# run_hook: run the copied hook on main.go; sets HOOK_EXIT.
-run_hook() {
-  HOOK_EXIT=0
-  (cd "$HOOK_DIR" && HOME="${HOOK_DIR}/home" PATH="${HOOK_DIR}/bin:${PATH}" \
-      bash scripts/gosec-hook.sh main.go >/dev/null 2>&1) || HOOK_EXIT=$?
+# run_reader SCRIPT ARGS...: run a copied script in the fixture; sets READER_EXIT.
+run_reader() {
+  READER_EXIT=0
+  (cd "$READER_DIR" && env -u XDG_CACHE_HOME HOME="${READER_DIR}/home" \
+      PATH="${READER_DIR}/bin:${PATH}" GOTOOLCHAIN=local \
+      bash "$@" >/dev/null 2>&1) || READER_EXIT=$?
 }
 
-hook_case() {
+# reader_reject_case LABEL CONTENT SCRIPT ARGS...
+reader_reject_case() {
   local label="$1" content="$2"
-  hook_fixture "$content"
-  run_hook
-  local dir="$HOOK_DIR" actual="$HOOK_EXIT"
+  shift 2
+  reader_fixture "$content"
+  run_reader "$@"
+  local dir="$READER_DIR" actual="$READER_EXIT"
   if [[ -e "${dir}/go-calls" || -e "${dir}/home/.cache" ]]; then
-    echo "FAIL: $label (the hook ran go or created its cache before validating the version)"
+    echo "FAIL: $label (go ran or the cache was created before the version was validated)"
     (( fail++ )) || true
     return
   fi
   record "$label" 2 "$actual"
 }
-hook_case "the hook stops with exit 2 when .gosec-version is missing" "<missing>"
-hook_case "the hook stops with exit 2 on an unprefixed version (2.28.0)" "2.28.0"
-hook_case "the hook stops with exit 2 on a non-version (latest)" "latest"
+reader_reject_case "run-gosec.sh stops with exit 2 when .gosec-version is missing" \
+  "<missing>" scripts/run-gosec.sh
+reader_reject_case "run-gosec.sh stops with exit 2 on an unprefixed version (2.28.0)" \
+  "2.28.0" scripts/run-gosec.sh
+reader_reject_case "run-gosec.sh stops with exit 2 on a non-version (latest)" \
+  "latest" scripts/run-gosec.sh
+reader_reject_case "the pre-commit hook stops with exit 2 when .gosec-version is missing" \
+  "<missing>" scripts/gosec-hook.sh main.go
 
-# With a valid file the hook must install exactly that version, into the
-# per-version cache directory. The stub `go` fails the install, so the hook
-# then exits 2; what matters is the recorded call.
-hook_fixture "v9.8.7"
-run_hook
-want="GOBIN=${HOOK_DIR}/home/.cache/pre-commit-gosec/v9.8.7 install github.com/securego/gosec/v2/cmd/gosec@v9.8.7"
-if [[ -f "${HOOK_DIR}/go-calls" ]] && grep -q -x -F "$want" "${HOOK_DIR}/go-calls"; then
-  record "the hook installs the version in .gosec-version" 0 0
-else
-  echo "FAIL: the hook installs the version in .gosec-version (go calls: $(cat "${HOOK_DIR}/go-calls" 2>/dev/null || echo none))"
-  (( fail++ )) || true
-fi
+# reader_install_case LABEL SCRIPT ARGS...: with a valid file the script must
+# install exactly that version, into a private dir under the gosec cache. The
+# stub `go` fails the install, so the script then exits 2; what matters is the
+# recorded call.
+reader_install_case() {
+  local label="$1"
+  shift
+  reader_fixture "v9.8.7"
+  run_reader "$@"
+  local want_re="^GOBIN=${READER_DIR}/home/\.cache/gosec/\.install\.[^ /]+ install github\.com/securego/gosec/v2/cmd/gosec@v9\.8\.7\$"
+  if [[ -f "${READER_DIR}/go-calls" ]] && grep -q -E "$want_re" "${READER_DIR}/go-calls"; then
+    record "$label" 0 0
+  else
+    echo "FAIL: $label (go calls: $(cat "${READER_DIR}/go-calls" 2>/dev/null || echo none))"
+    (( fail++ )) || true
+  fi
+}
+reader_install_case "run-gosec.sh installs the version in .gosec-version" scripts/run-gosec.sh
+reader_install_case "the pre-commit hook installs the version in .gosec-version" \
+  scripts/gosec-hook.sh main.go
 
 # ---- the real tree ----------------------------------------------------------
 
