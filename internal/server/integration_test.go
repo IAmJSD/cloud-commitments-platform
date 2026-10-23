@@ -7,8 +7,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/scheduler"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/testutil"
@@ -81,11 +81,13 @@ func TestScheduledTaskIntegration(t *testing.T) {
 
 	ctx := testutil.TestContext(t)
 
-	// Create application with mock dependencies
+	// Create application with mock dependencies. The task runs synchronously,
+	// so counting calls replaces the old 100ms "simulate actual work" sleep,
+	// which slowed the test without checking anything (issue #36).
+	var collects atomic.Int32
 	mockScheduler := &testutil.MockScheduler{
 		CollectRecommendationsFunc: func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
-			// Simulate actual work
-			time.Sleep(100 * time.Millisecond)
+			collects.Add(1)
 			return &scheduler.CollectResult{}, nil
 		},
 	}
@@ -98,6 +100,7 @@ func TestScheduledTaskIntegration(t *testing.T) {
 	result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations, ScheduledTaskParams{})
 	testutil.AssertNoError(t, err)
 	testutil.AssertTrue(t, result != nil, "Result should not be nil")
+	testutil.AssertEqual(t, int32(1), collects.Load())
 
 	t.Logf("Scheduled task completed successfully")
 }

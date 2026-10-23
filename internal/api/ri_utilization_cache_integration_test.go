@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -105,7 +106,9 @@ func TestRIUtilizationCache_Integration_FreshHitNoFetch(t *testing.T) {
 
 // TestRIUtilizationCache_Integration_StaleNonLambdaServesStaleAndRefreshes
 // verifies SWR end-to-end: stale row served synchronously, background
-// refresh fires, Postgres row is updated within a short window.
+// refresh fires, Postgres row is updated. The fetcher blocks until the test
+// releases it, so getOrFetch returning proves the stale read did not wait for
+// the refresh, without an elapsed-time bound (issue #36).
 func TestRIUtilizationCache_Integration_StaleNonLambdaServesStaleAndRefreshes(t *testing.T) {
 	ctx := context.Background()
 	store, cleanup := setupRICacheIntegration(ctx, t)
@@ -120,30 +123,33 @@ func TestRIUtilizationCache_Integration_StaleNonLambdaServesStaleAndRefreshes(t 
 	require.NoError(t, store.UpsertRIUtilizationCache(ctx, "us-east-1", 30, stalePayload, time.Now().Add(-200*time.Millisecond)))
 
 	cache := newRIUtilizationCache(store, false) // non-Lambda
-	fetch := func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseFetch := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseFetch)
+	//nolint:unparam // fetcher signature is fixed by getOrFetch; this refresh path never errors
+	fetch := func(_ context.Context, _ int) ([]recommendations.RIUtilization, error) {
+		<-release
 		return freshData, nil
 	}
 
-	start := time.Now()
-	got, err := cache.getOrFetch(ctx, "us-east-1", 30, 50*time.Millisecond, time.Hour, fetch)
-	require.NoError(t, err)
-	require.Less(t, time.Since(start), 100*time.Millisecond, "stale-read must return synchronously, not wait for background fetch")
+	got := getOrFetchWithin(t, 10*time.Second, func() ([]recommendations.RIUtilization, error) {
+		return cache.getOrFetch(ctx, "us-east-1", 30, 50*time.Millisecond, time.Hour, fetch)
+	}, "stale-read must return synchronously, not wait for background fetch")
+	require.Len(t, got, 1)
 	require.Equal(t, "ri-stale", got[0].ReservedInstanceID, "first call must return the stale copy")
 
-	// Wait for the background refresh to land the fresh data.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	// Let the background refresh finish and wait for it to land the fresh data.
+	releaseFetch()
+	require.Eventually(t, func() bool {
 		entry, err := store.GetRIUtilizationCache(ctx, "us-east-1", 30)
-		if err == nil && entry != nil {
-			var round []recommendations.RIUtilization
-			_ = json.Unmarshal(entry.Payload, &round)
-			if len(round) == 1 && round[0].ReservedInstanceID == "ri-fresh" {
-				return
-			}
+		if err != nil || entry == nil {
+			return false
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("background refresh did not update the ri_utilization_cache row within 2s")
+		var round []recommendations.RIUtilization
+		_ = json.Unmarshal(entry.Payload, &round)
+		return len(round) == 1 && round[0].ReservedInstanceID == "ri-fresh"
+	}, 10*time.Second, 20*time.Millisecond, "background refresh did not update the ri_utilization_cache row")
 }
 
 // TestRIUtilizationCache_Integration_HardExpiredSyncRefetch verifies
