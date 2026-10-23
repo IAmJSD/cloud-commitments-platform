@@ -1294,7 +1294,7 @@ type AccountServiceOverride struct {
 // of the federation IaC, then approved or rejected by a CUDly admin.
 type AccountRegistration struct {
 	ID                   string     `json:"id"`
-	ReferenceToken       string     `json:"reference_token"`
+	ReferenceToken       string     `json:"-"`      // registrant's status credential; only submitRegistration returns it (#310)
 	Status               string     `json:"status"` // pending, approved, rejected
 	Provider             string     `json:"provider"`
 	ExternalID           string     `json:"external_id"`

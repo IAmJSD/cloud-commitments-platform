@@ -669,6 +669,7 @@ Resources:
           - GET
           - POST
           - PUT
+          - PATCH
           - DELETE
         AllowHeaders:
           - Content-Type
