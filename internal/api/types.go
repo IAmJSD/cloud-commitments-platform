@@ -498,7 +498,7 @@ type RecommendationDetailResponse struct {
 	ProvenanceNote   string       `json:"provenance_note"`
 	// HiddenBy is non-nil when the rec is filtered out by an account-service
 	// override (issue #214). Each element names one failing dimension:
-	// "enabled=false", "engine", "region", or "resource_type". The frontend
+	// "enabled=false", "engine", "region", "resource_type" or "min_count". The frontend
 	// renders a "hidden by your override" banner when this field is present.
 	// Absent (null) means the rec is fully visible.
 	HiddenBy []string `json:"hidden_by,omitempty"`

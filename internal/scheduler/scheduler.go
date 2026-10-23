@@ -1275,7 +1275,8 @@ func (s *Scheduler) ListRecommendationsStrict(ctx context.Context, filter config
 // hiddenBy is non-nil (one or more reason strings) when the rec exists and
 // passes the suppression check, but would be dropped by the account-override
 // filter. Possible reasons: "enabled=false", "engine", "region",
-// "resource_type".  The caller renders a "hidden by your override" banner.
+// "resource_type", "min_count" (overrideDimensions). The caller renders a
+// "hidden by your override" banner.
 //
 // Returns (nil, nil, nil) when the rec is genuinely absent or fully suppressed.
 func (s *Scheduler) GetRecommendationByID(ctx context.Context, id string) (rec *config.RecommendationRecord, hiddenBy []string, err error) {
@@ -1318,25 +1319,6 @@ func (s *Scheduler) GetRecommendationByID(ctx context.Context, id string) (rec *
 	}
 
 	return found, hiddenBy, nil
-}
-
-// overrideHiddenReasons returns a non-empty slice when rec would be dropped by
-// the given resolved ServiceConfig, naming each failing dimension.
-func overrideHiddenReasons(rec *config.RecommendationRecord, cfg *config.ServiceConfig) []string {
-	var reasons []string
-	if !cfg.Enabled {
-		reasons = append(reasons, "enabled=false")
-	}
-	if !engineMatches(rec.Engine, cfg) {
-		reasons = append(reasons, "engine")
-	}
-	if !inListRule(rec.Region, cfg.IncludeRegions, cfg.ExcludeRegions) {
-		reasons = append(reasons, "region")
-	}
-	if !inListRule(rec.ResourceType, cfg.IncludeTypes, cfg.ExcludeTypes) {
-		reasons = append(reasons, "resource_type")
-	}
-	return reasons
 }
 
 // resolveEffectiveCacheTTL returns the effective stale-while-revalidate TTL
