@@ -420,3 +420,25 @@ func TestKMSSignerConcurrentFirstResolution(t *testing.T) {
 		})
 	}
 }
+
+// TestKMSSignerPublicKeyErrorIsUntypedNil pins that a failed lookup returns a
+// nil crypto.PublicKey interface, not one wrapping a typed-nil
+// *ecdsa.PublicKey, so a caller's `pub == nil` check stays meaningful.
+func TestKMSSignerPublicKeyErrorIsUntypedNil(t *testing.T) {
+	for _, backend := range gatedSignerBackends() {
+		t.Run(backend.name, func(t *testing.T) {
+			key, _ := newP256TestKey(t)
+			gate := &keyLookupGate{}
+			gate.failures.Store(1)
+			signer := backend.build(key, gate)
+
+			pub, err := signer.PublicKey(context.Background())
+			if !errors.Is(err, errTransientKeyLookup) {
+				t.Fatalf("PublicKey err = %v, want %v", err, errTransientKeyLookup)
+			}
+			if pub != nil {
+				t.Errorf("PublicKey on error = %#v, want an untyped nil", pub)
+			}
+		})
+	}
+}

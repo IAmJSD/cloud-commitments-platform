@@ -91,6 +91,9 @@ func TestResetRecentlyIssued(t *testing.T) {
 		{"invite token just issued", PasswordSetupExpiry, 5 * time.Second, true},
 		{"invite token past the limit", PasswordSetupExpiry, PasswordResetRateLimit + 5*time.Second, false},
 		{"invite token a day old", PasswordSetupExpiry, 24 * time.Hour, false},
+		// Just over PasswordResetExpiry left is still an invite (aged ~7d), not a
+		// reset token issued in the future, so it is not limited.
+		{"invite token about to expire", PasswordSetupExpiry, PasswordSetupExpiry - PasswordResetExpiry - 30*time.Second, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
