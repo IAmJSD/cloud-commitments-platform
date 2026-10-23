@@ -54,9 +54,8 @@ var (
 var knownGaps = map[string]map[string][]string{
 	"aws-fargate": {dimTask: {"analytics_collect", "cleanup", "finalize_revocations",
 		"process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}},
-	"cloudformation": {dimTask: {"cleanup"}},
-	"gcp-cloud-run":  {dimTask: sevenGCP},
-	"gcp-gke":        {dimTask: sevenGCP},
+	"gcp-cloud-run": {dimTask: sevenGCP},
+	"gcp-gke":       {dimTask: sevenGCP},
 	"azure-container-apps": {dimTask: {"analytics_collect", "finalize_revocations", "fire_scheduled_purchases",
 		"process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}},
 	"azure-aks": {dimTask: allEight}, // no scheduler resources at all: #893

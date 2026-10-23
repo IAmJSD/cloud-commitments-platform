@@ -50,6 +50,8 @@ Metadata:
           - FireScheduledPurchasesSchedule
           - EnableSendNotificationsSchedule
           - SendNotificationsSchedule
+          - EnableCleanupSchedule
+          - CleanupSchedule
 
     ParameterLabels:
       EmailAddress:
@@ -232,6 +234,25 @@ Parameters:
     Default: "rate(1 day)"
     Description: EventBridge schedule expression for send_notifications
 
+  EnableCleanupSchedule:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: >-
+      Run the server cleanup task on a schedule. Opt-in. It deletes expired
+      sessions and, via CleanupOldExecutions(30), purchase executions that are
+      completed with scheduled_date older than 30 days, canceled with
+      updated_at older than 30 days, or in a status outside failed/canceled
+      with expires_at older than 30 days. The first run deletes the whole
+      backlog, so export any history you want to keep first.
+
+  CleanupSchedule:
+    Type: String
+    Default: "rate(1 day)"
+    Description: EventBridge schedule expression for cleanup
+
   CrossAccountTargetAccountIds:
     Type: CommaDelimitedList
     Default: ""
@@ -305,6 +326,11 @@ Conditions:
   ScheduleSendNotifications:
     Fn::Equals:
       - Ref: EnableSendNotificationsSchedule
+      - "true"
+
+  ScheduleCleanup:
+    Fn::Equals:
+      - Ref: EnableCleanupSchedule
       - "true"
 
 Resources:
@@ -965,6 +991,28 @@ Resources:
       FunctionName: !Ref LambdaFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt SendNotificationsRule.Arn
+
+  CleanupRule:
+    Type: AWS::Events::Rule
+    Condition: ScheduleCleanup
+    Properties:
+      Name: !Sub "${AWS::StackName}-Cleanup"
+      Description: Scheduled cleanup task
+      ScheduleExpression: !Ref CleanupSchedule
+      State: ENABLED
+      Targets:
+        - Id: LambdaTarget
+          Arn: !GetAtt LambdaFunction.Arn
+          Input: '{"action": "cleanup"}'
+
+  CleanupPermission:
+    Type: AWS::Lambda::Permission
+    Condition: ScheduleCleanup
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LambdaFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CleanupRule.Arn
 
   # =============================================================================
   # SNS Topic for Notifications
