@@ -1448,6 +1448,26 @@ func TestPGXMock_GetRIExchangeHistory_Success(t *testing.T) {
 	assert.Len(t, records, 2)
 }
 
+// The account predicate must be in the WHERE clause, ahead of the LIMIT, and
+// receive the caller's ids (issue #308).
+func TestPGXMock_GetRIExchangeHistoryForAccounts_PushesAccountPredicate(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	now := time.Now().Truncate(time.Second)
+	since := now.Add(-24 * time.Hour)
+	ids := []string{"111122223333", "222233334444"}
+	rows := pgxmock.NewRows(riExchangeCols).AddRow(riExchangeRow(now)...)
+	mock.ExpectQuery(`(?s)WHERE created_at >= \$1 AND account_id = ANY\(\$3::text\[\]\)\s+ORDER BY created_at DESC\s+LIMIT \$2`).
+		WithArgs(since, 10, ids).WillReturnRows(rows)
+
+	records, err := store.GetRIExchangeHistoryForAccounts(ctx, since, 10, ids)
+	require.NoError(t, err)
+	assert.Len(t, records, 1)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // ─── TransitionRIExchangeStatus ───────────────────────────────────────────────
 
 func TestPGXMock_TransitionRIExchangeStatus_WrongStatus(t *testing.T) {
