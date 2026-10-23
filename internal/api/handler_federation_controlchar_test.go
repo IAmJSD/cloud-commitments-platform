@@ -76,7 +76,6 @@ func benignFederationData() federationIaCData {
 		Source:              "azure",
 		SourceAccountID:     "000000000000",
 		OIDCIssuerURL:       "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000002/v2.0",
-		OIDCIssuerHost:      "login.microsoftonline.com/00000000-0000-0000-0000-000000000002/v2.0",
 		OIDCAudience:        "api://AzureADTokenExchange",
 		OIDCSubjectClaim:    "00000000-0000-0000-0000-000000000003",
 		SubscriptionID:      "00000000-0000-0000-0000-000000000001",

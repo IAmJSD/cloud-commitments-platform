@@ -359,6 +359,12 @@ variable "auto_migrate" {
   default     = true
 }
 
+variable "signing_key_destroy_scheduled_duration" {
+  description = "Cloud Run only: how long the OIDC signing key's versions stay restorable (DESTROY_SCHEDULED) before Cloud KMS destroys them, as \"<seconds>s\", 1 to 120 days. Applied only when the key is created: on a deployed key a different value plans a key replacement, which fails on the key-name collision without touching the live key. The default keeps every existing key unchanged (#324)."
+  type        = string
+  default     = "86400s"
+}
+
 # ==============================================
 # Additional Configuration
 # ==============================================

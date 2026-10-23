@@ -723,6 +723,19 @@ jobs:
             terraform -chdir="$d" test
           fi
 
+      # The Cloud Run OIDC signing key's create-time retention input must keep
+      # deployed keys unchanged and reject values Cloud KMS refuses (#324).
+      - name: Test GCP compute modules
+        if: matrix.cloud == 'gcp'
+        run: |
+          for t in terraform/modules/compute/gcp/*/tests; do
+            [ -d "$t" ] || continue
+            d=$(dirname "$t")
+            terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
+            terraform -chdir="$d" fmt -check -recursive
+            terraform -chdir="$d" test
+          done
+
       - name: Test CI/CD trust (immutable ids)
         # Skips a cloud until it has a tests dir. The lock file is gitignored,
         # so no -lockfile=readonly.
@@ -1250,6 +1263,12 @@ jobs:
 
       - name: Run state namespace self-tests
         run: bash scripts/test-aws-tfstate-platform-key.sh
+
+      # The Lambda deploy and rollback read the Function URL back from state
+      # for its CORS origin (#324); the reader must reject anything that is
+      # not a Function URL. terraform is stubbed, so nothing reads real state.
+      - name: Run Function URL reader self-tests
+        run: bash scripts/test-read-lambda-function-url.sh
 
   # Assert that no Terraform file declares an azurerm_key_vault_access_policy
   # resource. This project's only Key Vault sets enable_rbac_authorization =

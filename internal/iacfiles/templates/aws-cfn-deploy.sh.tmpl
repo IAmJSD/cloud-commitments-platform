@@ -33,7 +33,6 @@ aws cloudformation deploy \
   --stack-name "$STACK_NAME" \
   --parameter-overrides \
     "OIDCIssuerURL={{.OIDCIssuerURL}}" \
-    "OIDCIssuerHost={{.OIDCIssuerHost}}" \
     "OIDCAudience={{.OIDCAudience}}" \
     "OIDCSubjectClaim={{.OIDCSubjectClaim}}" \
     "RoleName=CUDly-{{.AccountSlug}}" \

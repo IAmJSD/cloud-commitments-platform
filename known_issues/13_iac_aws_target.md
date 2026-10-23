@@ -228,6 +228,7 @@ other control on this trust policy.
 - Terraform now derives `local.oidc_issuer_url_normalized` (`trimsuffix(..., "/")`) and `local.oidc_condition_host` (`trimsuffix(trimprefix(..., "https://"), "/")`) once and uses them for both the OIDC provider URL and the trust-policy condition keys, so trailing slashes are handled consistently.
 - The `oidc_issuer_url` variable now has a strict regex validation rejecting trailing slashes and non-https URLs.
 - `OIDCIssuerURL` and `OIDCIssuerHost` parameters in CloudFormation now have explicit `AllowedPattern` + `ConstraintDescription` forbidding trailing slashes; the description calls out that the operator must keep the two values in sync.
+- #324 then removed the `OIDCIssuerHost` parameter: the CloudFormation trust policy derives the condition-key host from `OIDCIssuerURL` (`!Select [1, !Split ["https://", ...]]`), the same value as Terraform's `local.oidc_condition_host`, and the bundle no longer passes the parameter.
 
 ### Original implementation plan
 
