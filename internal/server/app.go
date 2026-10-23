@@ -105,6 +105,11 @@ type Application struct {
 	// shutdown can cancel and wait for them (#784).
 	scheduledTasks scheduledTaskTracker
 
+	// marketplacePoller polls RI Marketplace listings during the
+	// finalize_revocations sweep (issue #27). Nil means the API handler; only
+	// tests set it.
+	marketplacePoller marketplaceListingPoller
+
 	// encKeySource is the env var name that resolved the credential encryption
 	// key (e.g. "CREDENTIAL_ENCRYPTION_KEY_SECRET_NAME"). Set during
 	// reinitializeAfterConnect. /health reports only a generic degraded state
