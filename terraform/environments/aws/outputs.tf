@@ -253,6 +253,15 @@ output "subdomain_zone_id" {
 }
 
 # ==============================================
+# Monitoring Outputs
+# ==============================================
+
+output "alerts_sns_topic_arn" {
+  description = "SNS topic the monitoring alarms notify (null when enable_monitoring is false)"
+  value       = one(module.monitoring[*].sns_topic_arn)
+}
+
+# ==============================================
 # Quick Start Commands
 # ==============================================
 

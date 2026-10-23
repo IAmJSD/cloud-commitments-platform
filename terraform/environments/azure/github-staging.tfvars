@@ -35,6 +35,7 @@ database_storage_mb             = 65536
 database_backup_retention_days  = 14
 database_geo_redundant_backup   = false
 database_high_availability_mode = "Disabled"
+database_deletion_protection    = false # Torn down by cleanup-staging.yml, like AWS staging
 auto_migrate                    = true
 
 # ==============================================

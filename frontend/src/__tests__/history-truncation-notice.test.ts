@@ -43,6 +43,7 @@ jest.mock('../state', () => ({
 jest.mock('../recommendations', () => ({ getAccountName: jest.fn((id: string) => id) }));
 
 import * as api from '../api';
+import { showToast } from '../toast';
 
 function setupDOM(): void {
   while (document.body.firstChild) document.body.removeChild(document.body.firstChild);
@@ -108,5 +109,32 @@ describe('History truncation banner (issue #248)', () => {
     for (const id of ['purchases-truncation-notice', 'history-truncation-notice']) {
       expect(document.getElementById(id)!.hidden).toBe(true);
     }
+  });
+});
+
+describe('History empty window (issue #282)', () => {
+  beforeEach(() => {
+    setupDOM();
+    const controls = document.createElement('div');
+    controls.id = 'history-controls';
+    document.body.appendChild(controls);
+    jest.clearAllMocks();
+  });
+  afterEach(() => {
+    window.history.replaceState({}, '', window.location.pathname);
+  });
+
+  test('mounts the amortize checkbox even when the list is empty', async () => {
+    (api.getHistory as jest.Mock).mockResolvedValue({ summary: {}, purchases: [] });
+    await loadHistory();
+    expect(document.getElementById('history-amortize-checkbox')).not.toBeNull();
+  });
+
+  test('toasts and clears the deep link when the execution is outside an empty window', async () => {
+    window.history.replaceState({}, '', '/purchases#history?execution=exec-123');
+    (api.getHistory as jest.Mock).mockResolvedValue({ summary: {}, purchases: [] });
+    await loadHistory();
+    expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("isn't in the current view") }));
+    expect(window.location.hash).not.toContain('execution=');
   });
 });

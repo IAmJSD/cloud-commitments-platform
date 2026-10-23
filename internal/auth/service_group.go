@@ -323,6 +323,14 @@ func (s *Service) HasPermission(ctx context.Context, userID, action, resource st
 // adminCarvedOuts (separation of duties, issue #923). For those, admin falls
 // through to the explicit-permission check below instead of short-circuiting.
 //
+// An admin:* permission that carries Constraints is narrowed by them on every
+// check, strict or not, exactly like any other permission (issue #956). It
+// used to apply them only under StrictScope, so a key created as {admin, *}
+// with accounts=[A] or a max_amount passed a non-strict check for account B
+// or for any amount: the scoping its creator asked for was silently ignored.
+// An unconstrained admin:* (the seeded Administrators group) is unaffected,
+// since checkPermissionConstraints passes a permission with no Constraints.
+//
 // A package function rather than a Service method: the decision reads nothing
 // off the receiver, and PermissionsAllowForConstraintSets exposes it to
 // callers that hold an already-resolved permission set but no Service.
@@ -332,7 +340,7 @@ func permissionsAllow(permissions []Permission, action, resource string, constra
 			if coversCarvedOut(Permission{Action: action, Resource: resource}) {
 				continue
 			}
-			if constraints != nil && constraints.StrictScope && !checkPermissionConstraints(perm, constraints) {
+			if !checkPermissionConstraints(perm, constraints) {
 				continue
 			}
 			return true
@@ -408,7 +416,17 @@ func matchConstraints(permConstraints, reqConstraints *PermissionConstraints) bo
 		matchPurchaseAmountConstraint(permConstraints.MaxPurchaseAmount, reqConstraints.MaxPurchaseAmount)
 }
 
-// matchStringListConstraints checks if two string lists have any overlap.
+// matchStringListConstraints is the matcher for the AccountIDs, Providers and
+// Services dimensions: EVERY requested value must be permitted, not merely
+// one of them (issue #138).
+//
+// It used to be any-match (containsAny), which was safe only because every
+// caller happens to pass a single-value request list; nothing enforced that.
+// The first caller to submit, say, AccountIDs [A, B] would have been allowed
+// by a permission scoped to A alone -- the same bypass the Regions dimension
+// had to close with matchAllRegionsConstraint. All-match is identical to
+// any-match for a single-value request, so no current caller changes
+// behavior.
 //
 // Semantics (03-L6): if either list is empty the constraint is treated as
 // satisfied ("no constraint specified = no restriction"). Concretely:
@@ -416,14 +434,15 @@ func matchConstraints(permConstraints, reqConstraints *PermissionConstraints) bo
 //   - empty reqList: the request does not specify this dimension
 //
 // Both cases return true (match). Only when both lists are non-empty is
-// containsAny used to require at least one common element.
+// containsAll used, and it requires every requested value to be in permList.
+// Comparison is exact (case-sensitive); listCovers relies on that.
 //
 // Callers that need "a constrained permission must only match an explicit
-// request value" should verify reqList is non-empty before calling, or add
-// a separate dimension-specific check.
+// request value" should verify reqList is non-empty before calling, or set
+// StrictScope so matchConstraints uses listCovers instead.
 func matchStringListConstraints(permList, reqList []string) bool {
 	if len(permList) > 0 && len(reqList) > 0 {
-		return containsAny(permList, reqList)
+		return containsAll(permList, reqList)
 	}
 	return true
 }
@@ -434,15 +453,16 @@ func matchStringListConstraints(permList, reqList []string) bool {
 // Regions is the one dimension where a single request legitimately spans
 // several values: an Azure RI exchange takes a list of targets, and
 // handler_ri_exchange.go's targetLocations feeds all of their locations in
-// at once. Under the generic containsAny rule that made the region
-// constraint bypassable -- a caller permitted only in eastus could attach a
-// westus target, containsAny would find eastus in the permitted set, return
-// true, and the exchange would execute for BOTH regions. "Regions limits to
-// specific regions" (types.go) cannot mean "limits to requests that mention
-// at least one permitted region".
+// at once. Under the any-match rule the dimensions once shared, that made the
+// region constraint bypassable -- a caller permitted only in eastus could
+// attach a westus target, any-match would find eastus in the permitted set,
+// return true, and the exchange would execute for BOTH regions. "Regions
+// limits to specific regions" (types.go) cannot mean "limits to requests that
+// mention at least one permitted region".
 //
-// Every other dimension keeps containsAny: a request names one provider,
-// one service, one account, so for them any-match and all-match coincide.
+// The other list dimensions are all-match too (matchStringListConstraints,
+// issue #138); Regions keeps its own matcher only for the case-insensitive,
+// trimmed comparison below.
 //
 // Comparison is case-insensitive so a permission stored as "EastUS" still
 // matches the canonical lower-case form callers are normalized to; the

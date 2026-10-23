@@ -29,6 +29,7 @@ func notifiedAdminHandler(ctx context.Context) (*Handler, *MockConfigStore, *eve
 func TestPausePlannedPurchase_AcceptsNotifiedRow(t *testing.T) {
 	ctx := context.Background()
 	handler, store, req := notifiedAdminHandler(ctx)
+	store.On("GetExecutionByID", ctx, notifiedExecID).Return(&config.PurchaseExecution{ExecutionID: notifiedExecID, Status: "notified"}, nil)
 	store.On("TransitionExecutionStatus", ctx, notifiedExecID, []string{"pending", "notified"}, "paused", mock.Anything).
 		Return(&config.PurchaseExecution{ExecutionID: notifiedExecID, Status: "paused"}, nil)
 

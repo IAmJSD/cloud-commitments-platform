@@ -1068,3 +1068,41 @@ func (m *mockConfigStoreForExchange) ClearRevocationInFlight(_ context.Context, 
 func (m *mockConfigStoreForExchange) GetPurchaseHistoryInFlight(_ context.Context) ([]*config.PurchaseHistoryRecord, error) {
 	return nil, nil
 }
+
+// A convertible RI with a non-positive Duration has no computable monthly
+// cost. Converting it to MonthlyCost=0 would make reshape's pricing gate
+// treat it as free and skip the dollar-units check, so it must be excluded.
+func TestConvertForAutoExchange_ExcludesNonPositiveDuration(t *testing.T) {
+	instances := []ec2svc.ConvertibleRI{
+		{ReservedInstanceID: "ri-zero", InstanceType: "m5.large", InstanceCount: 1, FixedPrice: 8760, Duration: 0},
+		{
+			ReservedInstanceID: "ri-valid", InstanceType: "m5.large", InstanceCount: 2,
+			NormalizationFactor: 4, FixedPrice: 8760, UsagePrice: 0.01, Duration: 31536000, CurrencyCode: "USD",
+		},
+		{ReservedInstanceID: "ri-neg", InstanceType: "c5.large", InstanceCount: 1, FixedPrice: 8760, Duration: -1},
+	}
+
+	riInfos, _, meta := convertForAutoExchange(instances, nil)
+
+	if len(riInfos) != 1 || riInfos[0].ID != "ri-valid" {
+		t.Fatalf("want only ri-valid, got %+v", riInfos)
+	}
+	if want := (8760.0/8760 + 0.01) * 730; riInfos[0].MonthlyCost < want-1e-6 || riInfos[0].MonthlyCost > want+1e-6 {
+		t.Fatalf("MonthlyCost = %v, want %v", riInfos[0].MonthlyCost, want)
+	}
+	if _, ok := meta["ri-zero"]; ok || len(meta) != 1 {
+		t.Fatalf("metadata must cover only ri-valid, got %+v", meta)
+	}
+}
+
+func TestMonthlyCostFromConvertibleRI_NonPositiveDurationErrors(t *testing.T) {
+	for _, d := range []int64{0, -1} {
+		if _, err := monthlyCostFromConvertibleRI(ec2svc.ConvertibleRI{ReservedInstanceID: "ri-x", FixedPrice: 100, Duration: d}); err == nil || !strings.Contains(err.Error(), "ri-x") {
+			t.Fatalf("duration %d: want error naming ri-x, got %v", d, err)
+		}
+	}
+	cost, err := monthlyCostFromConvertibleRI(ec2svc.ConvertibleRI{FixedPrice: 8760, Duration: 31536000})
+	if err != nil || cost < 730-1e-6 || cost > 730+1e-6 {
+		t.Fatalf("valid RI: cost=%v err=%v", cost, err)
+	}
+}

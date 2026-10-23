@@ -315,6 +315,10 @@ func (m *mockConfigStore) TransitionExecutionStatusPinned(ctx context.Context, e
 	return nil, nil
 }
 
+func (m *mockConfigStore) TransitionExecutionStatusPinnedTx(ctx context.Context, tx pgx.Tx, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) TransitionExecutionStatusTokenPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, rawToken string) (*config.PurchaseExecution, error) {
 	return nil, nil
 }
@@ -374,6 +378,9 @@ func (m *mockConfigStore) GetRIExchangeRecordByToken(ctx context.Context, token 
 func (m *mockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]config.RIExchangeRecord, error) {
 	return nil, nil
 }
+func (m *mockConfigStore) GetRIExchangeHistoryForAccounts(ctx context.Context, since time.Time, limit int, accountIDs []string) ([]config.RIExchangeRecord, error) {
+	return nil, nil
+}
 func (m *mockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*config.RIExchangeRecord, error) {
 	return nil, nil
 }
@@ -401,6 +408,14 @@ func (m *mockConfigStore) CancelPendingExchangesByOrigin(_ context.Context, _ co
 }
 func (m *mockConfigStore) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]config.RIExchangeRecord, error) {
 	return nil, nil
+}
+
+func (m *mockConfigStore) SaveRIExchangeDirectExecution(_ context.Context, _ *config.RIExchangeDirectExecution) error {
+	return nil
+}
+
+func (m *mockConfigStore) FinalizeRIExchangeDirectExecution(_ context.Context, _ string, _ config.RIExchangeDirectOutcome) error {
+	return nil
 }
 
 func (m *mockConfigStore) CreateCloudAccount(ctx context.Context, account *config.CloudAccount) error {

@@ -252,6 +252,42 @@ func TestService_ListUserAPIKeysAPI(t *testing.T) {
 		assert.Empty(t, resp.APIKeys[0].Permissions)
 	})
 
+	// Regression for issue #534: ValidateUserAPIKey rejects a key minted
+	// under an older password_version, but when the best-effort revocation
+	// scan after a password change failed the row kept is_active=true and
+	// the listing still showed it as active.
+	t.Run("lists keys from before a password rotation as inactive", func(t *testing.T) {
+		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		service := &Service{store: mockStore}
+
+		staleKey := &UserAPIKey{ID: "stale", UserID: "user-123", IsActive: true, PasswordVersion: 1}
+		keys := []*UserAPIKey{
+			staleKey,
+			{ID: "current", UserID: "user-123", IsActive: true, PasswordVersion: 2},
+			// Minted after this listing read the user row, by a rotation that
+			// raced the listing: newer than the snapshot, so not stale.
+			{ID: "newer", UserID: "user-123", IsActive: true, PasswordVersion: 3},
+			{ID: "revoked", UserID: "user-123", IsActive: false, PasswordVersion: 2},
+		}
+		user := &User{ID: "user-123", Email: "test@example.com", Active: true, PasswordVersion: 2}
+		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("ListAPIKeysByUser", ctx, "user-123").Return(keys, nil)
+
+		result, err := service.ListUserAPIKeysAPI(ctx, "user-123")
+		require.NoError(t, err)
+
+		resp, ok := result.(*APIListAPIKeysResponse)
+		require.True(t, ok)
+		require.Len(t, resp.APIKeys, 4)
+		active := map[string]bool{}
+		for _, k := range resp.APIKeys {
+			active[k.ID] = k.IsActive
+		}
+		assert.Equal(t, map[string]bool{"stale": false, "current": true, "newer": true, "revoked": false}, active)
+		assert.True(t, staleKey.IsActive, "the store's key must not be mutated")
+	})
+
 	// Regression: the per-row "Requests (window)" cell must not show a count
 	// left over from a window that has already closed. The stored column
 	// keeps its value until the key's next request, so the read path is what
@@ -699,6 +735,29 @@ func TestService_GetAPIKeysUsageStatsAPI(t *testing.T) {
 		assert.Equal(t, int64(0), resp.TotalRequestsWindow)
 		assert.Equal(t, int64(7), resp.TotalRequestsLifetime)
 		assert.Empty(t, resp.TopKeys)
+	})
+
+	// Issue #534: a key the authentication path rejects for predating the
+	// owner's last password change is not counted as active.
+	t.Run("does not count keys from before a password rotation as active", func(t *testing.T) {
+		mockStore := new(MockStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		service := &Service{store: mockStore}
+
+		user := &User{ID: "user-123", Email: "test@example.com", Active: true, PasswordVersion: 4}
+		keys := []*UserAPIKey{
+			{ID: "stale", IsActive: true, PasswordVersion: 3},
+			{ID: "current", IsActive: true, PasswordVersion: 4},
+		}
+		mockStore.On("GetUserByID", ctx, "user-123").Return(user, nil)
+		mockStore.On("ListAPIKeysByUser", ctx, "user-123").Return(keys, nil)
+
+		result, err := service.GetAPIKeysUsageStatsAPI(ctx, "user-123")
+		require.NoError(t, err)
+
+		resp, ok := result.(*APIKeysUsageStatsResponse)
+		require.True(t, ok)
+		assert.Equal(t, 1, resp.TotalActive)
 	})
 
 	// Regression: the window counter on an api_keys row is only rewritten by

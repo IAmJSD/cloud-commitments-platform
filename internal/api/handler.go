@@ -140,6 +140,13 @@ type Handler struct {
 	// can be exercised end-to-end without live AWS credentials or a real RI.
 	executeExchangeFn func(ctx context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error)
 
+	// exchangeQuoteFn is the RI exchange quote function injected by tests.
+	// When nil (the production default), awsExchangeQuoter returns
+	// exchange.GetExchangeQuote, which builds its own EC2/STS clients from the
+	// ambient AWS SDK chain. Tests inject a stub so getExchangeQuote never
+	// resolves credentials, probes IMDS or calls EC2 (#855).
+	exchangeQuoteFn func(ctx context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error)
+
 	// encryptionKeySource is the env var name that resolved the credential
 	// encryption key. Empty when no credStore is configured. Read only by the
 	// /health credential_store check, which keeps it out of the public body
@@ -227,6 +234,8 @@ func NewHandler(cfg HandlerConfig) *Handler {
 	// not under production load.
 	assertRateLimitKeysKnown(
 		"login",
+		"forgot_password",
+		"forgot_password_ip",
 		"setup_admin",
 		"reset_password",
 		"change_password",

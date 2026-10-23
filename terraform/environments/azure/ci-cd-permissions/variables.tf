@@ -23,6 +23,24 @@ variable "github_environments" {
     deployment_branch_policy — an in-workflow ref check does not bind, because
     workflow_dispatch runs the file as it exists on the dispatched ref.
 
+    Gating rule: add a name only once its GitHub environment exists with a
+    deployment branch policy that admits only `main`. This service principal
+    already trusts repo:<github_repo>:ref:refs/heads/main (sp.tf, github_main),
+    and only a run on `main` can enter such an environment, so its credential
+    adds no reach. A credential for an environment that does not exist widens
+    access: GitHub creates a referenced environment on first use with no
+    protection, so any branch could bind it and obtain this service principal.
+    Environments are repository settings, not managed here; check with
+    `gh api repos/<github_repo>/environments/<name>/deployment-branch-policies`.
+
+    The default meets the rule, `prod` included: `dev`, `staging` and `prod`
+    each exist with a `main`-only branch policy (applied 2026-10-04, see #141
+    and #2), and `prod` uses the same service principal as the other two, so it
+    is not an exception. None has required reviewers, so the branch policy
+    (plus main's ruleset) is the only gate. Widening a policy past `main`, for
+    example a `v*` tag policy for release-triggered `prod` deploys, widens this
+    credential's reach to those refs and needs the same review.
+
     This list is NOT a complete enumeration of the environment subjects this repo
     presents to Azure. It covers the destroy jobs bound by cleanup-staging.yml
     (`staging`) and destroy-fargate-dev.yml (`dev`), deploy-azure.yml's
@@ -34,10 +52,11 @@ variable "github_environments" {
     environment name and therefore still fails with AADSTS70021:
       - database-migration.yml -> azure-db-{dev,staging,prod}
 
-    They are excluded here rather than fixed because each needs its environment
-    created and gated first; minting a credential for an ungated environment that
-    does not yet exist would widen access without adding a control. Do not read
-    the absence of a name as "no job uses it".
+    They were excluded because their environments did not exist yet. Those
+    environments now exist with a `main`-only branch policy (2026-10-04), so
+    they meet the gating rule; adding them is left to #1648 because it mints
+    three new credentials and needs a bootstrap re-apply. Do not read the
+    absence of a name as "no job uses it".
   EOT
   type        = list(string)
   default     = ["dev", "staging", "prod"]
