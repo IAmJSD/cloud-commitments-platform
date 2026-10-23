@@ -387,11 +387,15 @@ resource "azurerm_monitor_metric_alert" "service_unavailable" {
 
 # Workbook for dashboard
 resource "azurerm_application_insights_workbook" "main" {
-  name                = "${var.app_name}-dashboard"
+  # The provider requires a UUID name; derive a stable one from the app name
+  # (a plain "<app>-dashboard" fails validation at plan time, #714).
+  name                = uuidv5("url", "cudly:${var.app_name}-dashboard")
   resource_group_name = var.resource_group_name
   location            = var.location
   display_name        = "${var.app_name} - ${var.environment}"
-  source_id           = azurerm_application_insights.main.id
+  # The provider rejects uppercase here; Azure resource IDs carry it
+  # ("resourceGroups", "Microsoft.Insights"), so lower-case it (#714).
+  source_id = lower(azurerm_application_insights.main.id)
 
   data_json = jsonencode({
     version = "Notebook/1.0"

@@ -5,7 +5,7 @@ go 1.26.9
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.29.12
-	github.com/aws/aws-sdk-go-v2/service/costexplorer v1.61.0 // indirect
+	github.com/aws/aws-sdk-go-v2/service/costexplorer v1.61.0
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.251.2
 	github.com/aws/aws-sdk-go-v2/service/elasticache v1.50.3
 	github.com/aws/aws-sdk-go-v2/service/memorydb v1.31.4

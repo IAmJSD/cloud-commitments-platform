@@ -17,8 +17,7 @@ import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/ske
 import { canAccess } from './permissions';
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 import { suggestedPurchaseStartDate } from './lib/calendar-date';
-import { openPlanSchedulePreview } from './plan-schedule-preview';
-import { mountPlanEditorPanel, readPlanScheduleInput } from './plan-editor-panel';
+import { mountPlanEditorPanel } from './plan-editor-panel';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
 // "Plan from N selected" button-click time. The Plan flow used to re-derive
@@ -1256,7 +1255,7 @@ async function togglePlan(planId: string, enabled: boolean): Promise<void> {
 }
 
 let disposePlanEditor: (() => void) | undefined;
-function openPlanForm(modal: HTMLElement, create: boolean): void {
+function openPlanForm(modal: HTMLElement, restartsFromToday = false): void {
   disposePlanEditor?.(); disposePlanEditor = undefined;
   const host = modal.querySelector<HTMLElement>('#plan-editor-panel'), form = modal.querySelector<HTMLFormElement>('#plan-form');
   const advanced = modal.querySelector<HTMLDetailsElement>('#plan-advanced-settings');
@@ -1265,12 +1264,25 @@ function openPlanForm(modal: HTMLElement, create: boolean): void {
     if (advanced?.contains(event.target as Node)) advanced.open = true;
   };
   form?.addEventListener('invalid', revealInvalid, true);
-  const disposePanel = create && host && form ? mountPlanEditorPanel(host, form) : undefined;
+  const disposePanel = host && form ? mountPlanEditorPanel(host, form, { restartsFromToday }) : undefined;
   disposePlanEditor = () => {
     try { disposePanel?.(); }
     finally { form?.removeEventListener('invalid', revealInvalid, true); }
   };
   openModal(modal, { initialFocus: '#plan-name', onClose: () => { disposePlanEditor?.(); disposePlanEditor = undefined; } });
+}
+
+// Presets mirror config.PresetRampSchedules; any other stored ramp is shown as
+// custom so Edit never rewrites it to a different schedule on Save (#1156).
+const PRESET_RAMPS: ReadonlyArray<{ value: string; type: string; percent: number; intervalDays: number }> = [
+  { value: 'weekly-25pct', type: 'weekly', percent: 25, intervalDays: 7 },
+  { value: 'monthly-10pct', type: 'monthly', percent: 10, intervalDays: 30 },
+];
+
+function rampRadioValue(ramp: { type?: string; percent_per_step?: number; step_interval_days?: number }): string {
+  if (ramp.type === 'immediate') return 'immediate';
+  const preset = PRESET_RAMPS.find(p => p.type === ramp.type && p.percent === ramp.percent_per_step && p.intervalDays === ramp.step_interval_days);
+  return preset ? preset.value : 'custom';
 }
 
 // editPlan loads the plan and opens the edit modal pre-filled. Returns true
@@ -1285,15 +1297,7 @@ async function editPlan(planId: string): Promise<boolean> {
     const info = extractPlanInfo(backendPlan);
     const rampSchedule = backendPlan.ramp_schedule || { type: 'immediate', percent_per_step: 100, step_interval_days: 0 };
 
-    // Map ramp schedule type to frontend value
-    let rampValue = 'immediate';
-    if (rampSchedule.type === 'weekly' && rampSchedule.percent_per_step === 25) {
-      rampValue = 'weekly-25pct';
-    } else if (rampSchedule.type === 'monthly' && rampSchedule.percent_per_step === 10) {
-      rampValue = 'monthly-10pct';
-    } else if (rampSchedule.type === 'custom' || (rampSchedule.type !== 'immediate' && rampSchedule.type !== 'weekly' && rampSchedule.type !== 'monthly')) {
-      rampValue = 'custom';
-    }
+    const rampValue = rampRadioValue(rampSchedule);
 
     // Get payment option from services and normalize for provider.
     // H-5: do not pre-select 'no-upfront' when the payment field is absent.
@@ -1364,7 +1368,7 @@ async function editPlan(planId: string): Promise<boolean> {
     // Wire live range validation on all five numeric inputs (#702).
     wirePlanRangeInputs();
     const planModal = document.getElementById('plan-modal');
-    if (planModal) openPlanForm(planModal, false);
+    if (planModal) openPlanForm(planModal, true);
     return true;
   } catch (error) {
     console.error('Failed to load plan:', error);
@@ -1823,7 +1827,7 @@ export function openCreatePlanModal(snapshot?: readonly api.Recommendation[]): v
 
   const planModal = document.getElementById('plan-modal');
   if (planModal) {
-    openPlanForm(planModal, true);
+    openPlanForm(planModal);
   }
 }
 
@@ -1855,7 +1859,7 @@ export function openNewPlanModal(): void {
 
   const planModal = document.getElementById('plan-modal');
   if (planModal) {
-    openPlanForm(planModal, true);
+    openPlanForm(planModal);
   }
 }
 
@@ -2390,14 +2394,6 @@ let _unsubAccount: (() => void) | null = null;
  * the page level.
  */
 export function setupPlanHandlers(): void {
-  const preview = document.getElementById('preview-plan-schedule-btn');
-  if (preview) preview.onclick = () => {
-    const parent = document.getElementById('plan-modal'), form = document.getElementById('plan-form') as HTMLFormElement | null;
-    if (!parent || !form) return;
-    try {
-      openPlanSchedulePreview(readPlanScheduleInput(form), parent);
-    } catch (error) { showToast({ message: (error as Error).message, kind: 'error' }); }
-  };
   // Drop any previous subscriptions before re-registering so we don't
   // accumulate duplicate loadPlans() calls on each invocation.
   _unsubProvider?.();

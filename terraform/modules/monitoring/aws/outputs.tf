@@ -57,9 +57,9 @@ output "db_connections_alarm_arn" {
   value       = aws_cloudwatch_metric_alarm.db_connections.arn
 }
 
-output "db_capacity_alarm_arn" {
-  description = "ARN of the database capacity alarm"
-  value       = aws_cloudwatch_metric_alarm.db_capacity.arn
+output "failure_alarm_arns" {
+  description = "ARNs of the purchase-failed and scheduled-task-failed alarms, keyed purchase_failed / scheduled_task_failed (#714)"
+  value       = { for k, a in aws_cloudwatch_metric_alarm.failure_marker : k => a.arn }
 }
 
 # Application alarms

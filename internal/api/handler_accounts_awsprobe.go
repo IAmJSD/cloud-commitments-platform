@@ -54,6 +54,40 @@ func (h *Handler) awsResolverCredResult(ctx context.Context, acct *config.CloudA
 	return probeAWSCallerIdentity(ctx, base, provider, acct)
 }
 
+// roleARNNotHostMessage is the fixed 400 for an AWS role_arn account saved
+// with no role ARN whose external_id is not confirmed as the CUDly host
+// account. It names neither the host account nor the STS failure (#531).
+const roleARNNotHostMessage = "aws_role_arn is empty but this account is not confirmed as the CUDly host account; set aws_role_arn"
+
+// requireHostForEmptyRoleARN rejects an AWS role_arn account with an empty
+// role ARN on create, update and registration approval unless external_id is
+// the AWS account CUDly's own credentials belong to. That shape resolves to
+// the host's ambient credentials, and the credential resolver refuses it for
+// any other account; this check runs the same credentials.VerifyHostAccount
+// so a bad row is rejected when it is saved instead of at collection or
+// purchase time. It fails closed: a host AWS config that does not load, or
+// any STS failure, rejects the request. accountID is used only in logs.
+func (h *Handler) requireHostForEmptyRoleARN(ctx context.Context, accountID string, req *CloudAccountRequest) error {
+	if req.Provider != "aws" || req.AWSAuthMode != "role_arn" || req.AWSRoleARN != "" {
+		return nil
+	}
+	base, err := h.getBaseAWSConfig(ctx)
+	if err != nil {
+		logging.Warnf("host identity check for account %s: load host AWS config: %v", accountID, err)
+		return NewClientError(400, roleARNNotHostMessage)
+	}
+	if base.Region == "" {
+		// Same fallback as awsResolverCredResult: STS answers
+		// GetCallerIdentity from any region.
+		base.Region = "us-east-1"
+	}
+	acct := &config.CloudAccount{ID: accountID, ExternalID: req.ExternalID}
+	if err := credentials.VerifyHostAccount(ctx, acct, sts.NewFromConfig(base)); err != nil {
+		return NewClientError(400, roleARNNotHostMessage)
+	}
+	return nil
+}
+
 // classifyAWSResolveError maps a resolver error to a fixed, tenant-safe message.
 func classifyAWSResolveError(err error) string {
 	if errors.Is(err, credentials.ErrNotHostAccount) {

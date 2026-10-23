@@ -2,6 +2,18 @@
 # Database
 # ==============================================
 
+locals {
+  # Connections kept out of the app's budget: Postgres
+  # superuser_reserved_connections (3), the rdsadmin session, and an operator
+  # or migration session (#718).
+  db_reserved_connections = 10
+
+  db_pool_env = {
+    DB_MAX_CONNECTIONS = tostring(var.db_max_connections)
+    DB_MIN_CONNECTIONS = tostring(var.db_min_connections)
+  }
+}
+
 module "database" {
   source = "../../modules/database/aws"
 

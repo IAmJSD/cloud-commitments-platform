@@ -820,7 +820,6 @@
             <div class="modal-content modal-wide">
                 <h2 id="plan-modal-title">Create Purchase Plan</h2>
                 <div class="plan-editor-layout">
-                    <section id="plan-editor-panel" aria-label="Proposed purchase dates" hidden></section>
                     <form id="plan-form">
                         <input type="hidden" id="plan-id">
                         <div class="plan-editor-settings">
@@ -976,11 +975,11 @@
 
                         </div>
                     </form>
+                    <section id="plan-editor-panel" aria-label="Proposed purchase dates" hidden></section>
                 </div>
 
                 <div class="modal-buttons">
                     <button type="button" id="close-plan-modal-btn">Cancel</button>
-                    <button type="button" id="preview-plan-schedule-btn">Preview schedule</button>
                     <button type="submit" form="plan-form" class="primary">Save Plan</button>
                 </div>
             </div>
@@ -996,7 +995,7 @@
         <!-- Purchase Detail Modal -->
         <div id="purchase-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="purchase-modal-title">
             <div class="modal-content modal-wide">
-                <h2 id="purchase-modal-title">Configure Purchase</h2>
+                <h2 id="purchase-modal-title">Review Purchase</h2>
                 <div id="purchase-details"></div>
                 <div class="modal-buttons">
                     <button type="button" id="close-purchase-modal-btn">Cancel</button>
