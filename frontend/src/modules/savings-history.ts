@@ -305,7 +305,7 @@ function renderSavingsStats(data: SavingsAnalyticsResponse, start: Date, end: Da
     if (periodSavingsEl) {
         // Period Savings is the cumulative total over the selected date range
         // (no per-unit rate suffix -- it is already a dollar total).
-        periodSavingsEl.textContent = formatCurrency(displayTotal);
+        periodSavingsEl.textContent = formatAbbreviatedCurrency(displayTotal);
     }
     if (periodSavingsLabelEl) {
         periodSavingsLabelEl.textContent = 'Period Savings';
@@ -317,22 +317,28 @@ function renderSavingsStats(data: SavingsAnalyticsResponse, start: Date, end: Da
         avgLabelEl.textContent = `Avg ${adjective} Savings`;
     }
     if (avgSavingsEl) {
-        avgSavingsEl.textContent = `${formatCurrency(displayAvg)}${suffix}`;
+        avgSavingsEl.textContent = `${formatAbbreviatedCurrency(displayAvg)}${suffix}`;
     }
     if (peakSavingsEl) {
-        peakSavingsEl.textContent = `${formatCurrency(displayPeak)}${suffix}`;
+        peakSavingsEl.textContent = `${formatAbbreviatedCurrency(displayPeak)}${suffix}`;
     }
 }
 
 /**
- * Format currency value for chart contexts (abbreviated K for >= $1000).
+ * Format a currency value for the savings stat cards, abbreviated with K
+ * for >= $1000 ("$1.50K") and two decimals below that.
+ *
+ * Deliberately not named formatCurrency (issue #171): utils.ts exports the
+ * shared formatCurrency (whole dollars, thousands separators) and a local
+ * function with the same name hid that this module formats money its own
+ * way, so a fix to the shared helper would silently not apply here.
  *
  * M-7: add a null/non-finite guard so a future API change that introduces
  * null on total_savings or cumulative_savings doesn't crash the chart with
  * a TypeError on .toFixed(). Returns '--' for absent/non-finite values,
  * matching the shared formatCurrency sentinel in utils.ts.
  */
-function formatCurrency(value: number | null | undefined): string {
+function formatAbbreviatedCurrency(value: number | null | undefined): string {
     if (value == null || !Number.isFinite(value)) {
         return '--';
     }
