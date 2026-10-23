@@ -1466,10 +1466,60 @@ func TestSetPlanAccounts_ColonKeyedPlanStillChecksProvider(t *testing.T) {
 	assert.False(t, setCalled, "SetPlanAccounts must NOT be called when validation fails")
 }
 
-// TestSetPlanAccounts_UnparseableServiceKeyFailsClosed: stored keys that name
-// no provider used to be skipped silently; when no key named one, the
-// provider set came out empty and any account was accepted. It now fails the
-// request instead (issue #316, A04-012).
+// TestSetPlanAccounts_LegacyKeyedPlanUsesProviderField: a legacy alias kept
+// under its original key (#1123) has no provider prefix, but its Provider
+// field names one. A matching account is accepted and a mismatched one is
+// refused, instead of the plan accepting every provider (main) or none (the
+// first #316 commit).
+func TestSetPlanAccounts_LegacyKeyedPlanUsesProviderField(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, accountProvider string
+		wantCode              int
+	}{
+		{"matching provider accepted", "azure", 0},
+		{"mismatched provider refused", "aws", 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mockAuth := new(MockAuthService)
+			setupAdminAuth(ctx, mockAuth)
+			setCalled := false
+			store := setupAdminMock(ctx)
+			store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+				return &config.PurchasePlan{ID: planID209, Name: "alias plan", Services: map[string]config.ServiceConfig{
+					"original-key": {Provider: "azure", Service: "vm", Enabled: true},
+				}}, nil
+			}
+			store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+				return &config.CloudAccount{ID: id, Name: "acct-" + tc.accountProvider, Provider: tc.accountProvider}, nil
+			}
+			store.SetPlanAccountsFn = func(_ context.Context, _ string, _ []string) error {
+				setCalled = true
+				return nil
+			}
+			handler := &Handler{auth: mockAuth, config: store}
+
+			body := `{"account_ids":["` + azureAcct1 + `"]}`
+			_, err := handler.setPlanAccounts(ctx, adminRequest(body), planID209)
+			if tc.wantCode == 0 {
+				require.NoError(t, err)
+				assert.True(t, setCalled)
+				return
+			}
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "expected a clientError, got %T", err)
+			assert.Equal(t, tc.wantCode, ce.code)
+			assert.False(t, setCalled)
+		})
+	}
+}
+
+// TestSetPlanAccounts_UnparseableServiceKeyFailsClosed: stored entries that
+// identify no provider (no prefix in the key, empty Provider field) used to be
+// skipped silently; when none identified one, the provider set came out empty
+// and any account was accepted. It now fails the request instead (issue #316,
+// A04-012).
 func TestSetPlanAccounts_UnparseableServiceKeyFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
@@ -1479,7 +1529,7 @@ func TestSetPlanAccounts_UnparseableServiceKeyFailsClosed(t *testing.T) {
 	store := setupAdminMock(ctx)
 	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
 		return &config.PurchasePlan{ID: planID209, Name: "bad-key", Services: map[string]config.ServiceConfig{
-			"ec2":    {Provider: "aws", Service: "ec2"},
+			"ec2":    {Service: "ec2"},
 			"future": {},
 		}}, nil
 	}

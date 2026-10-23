@@ -123,8 +123,8 @@ func TestMarkPurchaseRevoked_ClearsRevocationInFlight(t *testing.T) {
 
 // TestSetPlanAccounts_ProviderCheckFailsClosed covers the store-side guard of
 // A04-012. DerivePlanProviders skipped "provider:service" keys (the form
-// migration 000040 wrote) and keys with no provider at all, and an empty
-// provider set meant "accept an account of any provider".
+// migration 000040 wrote) and legacy keys with no provider prefix, and an
+// empty provider set meant "accept an account of any provider".
 func TestSetPlanAccounts_ProviderCheckFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	store := setupRampStepStore(ctx, t)
@@ -146,9 +146,14 @@ func TestSetPlanAccounts_ProviderCheckFailsClosed(t *testing.T) {
 			wantErr: "plan provider mismatch:",
 		},
 		{
-			name:     "plan whose only key names no provider rejects every account",
-			services: map[string]ServiceConfig{"ec2": {Provider: "aws", Service: "ec2", Enabled: true}},
-			wantErr:  "names a provider",
+			name:     "legacy-keyed AWS plan rejects an Azure account by its provider field",
+			services: map[string]ServiceConfig{"original-key": {Provider: "aws", Service: "ec2", Enabled: true}},
+			wantErr:  "plan provider mismatch:",
+		},
+		{
+			name:     "plan with no identifiable provider rejects every account",
+			services: map[string]ServiceConfig{"ec2": {Service: "ec2", Enabled: true}},
+			wantErr:  "identifies a provider",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -163,4 +168,20 @@ func TestSetPlanAccounts_ProviderCheckFailsClosed(t *testing.T) {
 			assert.Empty(t, accounts, "the Azure account must not be attached")
 		})
 	}
+
+	// A legacy alias kept under its original key (#1123's singleton-alias
+	// edit path) is a supported plan shape: its provider field identifies it,
+	// so a matching account is still accepted.
+	t.Run("legacy-keyed Azure plan accepts an Azure account", func(t *testing.T) {
+		plan := &PurchasePlan{Name: "legacy alias plan", Services: map[string]ServiceConfig{
+			"original-key": {Provider: "azure", Service: "vm", Enabled: true},
+		}}
+		require.NoError(t, store.CreatePurchasePlan(ctx, plan))
+		require.NoError(t, store.SetPlanAccounts(ctx, plan.ID, []string{azure.ID}))
+
+		accounts, err := store.GetPlanAccounts(ctx, plan.ID)
+		require.NoError(t, err)
+		require.Len(t, accounts, 1)
+		assert.Equal(t, azure.ID, accounts[0].ID)
+	})
 }
