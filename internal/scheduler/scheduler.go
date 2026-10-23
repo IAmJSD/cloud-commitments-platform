@@ -25,6 +25,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/execution"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/oidc"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/providerfactory"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"golang.org/x/sync/errgroup"
@@ -909,11 +910,10 @@ func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.Clou
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve credentials: %w", err)
 	}
-	azProv, err := azureprovider.NewAzureProvider(&provider.ProviderConfig{Profile: acct.AzureSubscriptionID})
+	azProv, err := providerfactory.NewAzure(acct.AzureSubscriptionID, azCred)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create provider: %w", err)
 	}
-	azProv.SetCredential(azCred)
 
 	recClient, err := azProv.GetRecommendationsClient(ctx)
 	if err != nil {
@@ -977,7 +977,11 @@ func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudA
 
 	var prov provider.Provider
 	if gcpTS != nil {
-		prov = gcpprovider.NewProviderWithCredentials(ctx, acct.GCPProjectID, gcpTS)
+		created, createErr := providerfactory.NewGCP(acct.GCPProjectID, gcpTS)
+		if createErr != nil {
+			return nil, nil, fmt.Errorf("create provider: %w", createErr)
+		}
+		prov = created
 	} else {
 		// ADC mode (application_default): use ambient credentials
 		created, createErr := s.providerFactory.CreateAndValidateProvider(ctx, "gcp", nil)
