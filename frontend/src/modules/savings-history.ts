@@ -6,12 +6,15 @@ import { Chart, registerables } from 'chart.js';
 import { getSavingsAnalytics, type SavingsAnalyticsResponse, type SavingsDataPoint } from '../api';
 import * as state from '../state';
 import { formatTrendAxisTick } from './chart-utils';
+import { setChartSummary, renderChartTable, removeChartTable } from '../lib/chart-a11y';
 
 // Register Chart.js components
 Chart.register(...registerables);
 
 // Chart instance
 let savingsChart: Chart | null = null;
+// Id of the chart's "View as table" text alternative (#744).
+const SAVINGS_HISTORY_TABLE_ID = 'savings-history-table';
 
 // Canonical unit the API returns for per-bucket and summary values.
 // estimated_savings in purchase_history is the monthly savings figure
@@ -143,6 +146,7 @@ function showEmptyState(
     filterDesc: string = '',
 ): void {
     if (chartContainer) chartContainer.classList.add('hidden');
+    removeChartTable(SAVINGS_HISTORY_TABLE_ID);
     if (emptyEl) {
         emptyEl.classList.remove('hidden');
         // Update the copy inside the empty-state element so the message
@@ -184,6 +188,7 @@ function showErrorState(
     message: string,
 ): void {
     if (chartContainer) chartContainer.classList.add('hidden');
+    removeChartTable(SAVINGS_HISTORY_TABLE_ID);
     if (statsEl) statsEl.classList.add('hidden');
     if (emptyEl) {
         emptyEl.classList.remove('hidden');
@@ -400,6 +405,23 @@ function renderSavingsChart(
     if (savingsChart) {
         savingsChart.destroy();
     }
+
+    // #744: a value summary for the role="img" canvas plus every point as a
+    // table. The table goes after the sizing container, not inside it.
+    const latest = dataPoints[dataPoints.length - 1];
+    setChartSummary(ctx,
+        `Line chart of savings over time: ${dataPoints.length} data point${dataPoints.length === 1 ? '' : 's'}, `
+        + `cumulative savings ${formatCurrency(latest?.cumulative_savings ?? 0)} at the latest point. `
+        + 'Values are in the table below the chart.');
+    renderChartTable(ctx.parentElement ?? ctx, SAVINGS_HISTORY_TABLE_ID, {
+        caption: 'Savings history',
+        columns: ['Date', `Period savings (${suffix})`, 'Cumulative savings'],
+        rows: periodSavingsData.map((p, i) => [
+            formatTrendAxisTick(p.x, tickIntervalHint),
+            formatCurrency(p.y),
+            formatCurrency(cumulativeSavingsData[i]?.y),
+        ]),
+    });
 
     savingsChart = new Chart(ctx, {
         type: 'line',

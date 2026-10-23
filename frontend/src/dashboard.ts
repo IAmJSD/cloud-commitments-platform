@@ -14,6 +14,7 @@ import { canAccess } from './permissions';
 import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale } from './recommendations';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
 import { formatTrendAxisTick } from './modules/chart-utils';
+import { setChartSummary, renderChartTable, removeChartTable } from './lib/chart-a11y';
 // Re-export for backward compatibility (tests and other callers import from dashboard.ts).
 export { formatTrendAxisTick } from './modules/chart-utils';
 
@@ -30,6 +31,14 @@ let savingsByServiceChart: Chart | null = null;
 
 // Maximum number of services to show in the bar chart before truncating.
 const SAVINGS_BY_SERVICE_MAX = 10;
+
+// #744: a 2px card-coloured gap on top of every stacked segment, so adjacent
+// layers are separated by more than their shade difference.
+const SEGMENT_GAP = { borderColor: '#ffffff', borderWidth: { top: 2, right: 0, bottom: 0, left: 0 } } as const;
+
+// Ids of the "View as table" text alternatives for the Home charts (#744).
+const SAVINGS_BY_SERVICE_TABLE_ID = 'savings-by-service-table';
+const SAVINGS_TREND_TABLE_ID = 'savings-trend-table';
 
 // Palette for per-service bars. A service's colour is fixed by its name (see
 // serviceBarColor), never by its rank, so it survives data refreshes (#700).
@@ -947,6 +956,7 @@ export function renderSavingsByService(
   if (positive.length === 0) {
     if (heading) heading.textContent = 'Potential savings range per service';
     canvas.classList.add('hidden');
+    removeChartTable(SAVINGS_BY_SERVICE_TABLE_ID);
     if (emptyEl) {
       // When a filter is active and excluded all results, surface it so the
       // user understands why the chart is blank (mirrors #747 pattern).
@@ -985,6 +995,21 @@ export function renderSavingsByService(
 
   const totalSavings = positive.reduce((acc, e) => acc + e.visibleTotal, 0);
 
+  // #744: the canvas is role="img", so its label and a table are the only
+  // way a screen-reader user can read these values. Every service is listed,
+  // including any beyond the SAVINGS_BY_SERVICE_MAX bars drawn.
+  const top = positive[0]!;
+  setChartSummary(canvas,
+    `Stacked bar chart of monthly savings for ${positive.length} service${positive.length === 1 ? '' : 's'}, `
+    + `${formatCurrency(totalSavings)} in total. Largest: ${top.svc} at ${formatCurrency(top.visibleTotal)}. `
+    + 'Layers: Current / Committed, Lowest option, Upside. Values are in the table below the chart.');
+  renderChartTable(canvas, SAVINGS_BY_SERVICE_TABLE_ID, {
+    caption: 'Potential savings range per service (monthly)',
+    columns: ['Service', 'Current / Committed', 'Lowest option', 'Upside', 'Total'],
+    rows: positive.map(e => [e.svc, formatCurrency(e.current), formatCurrency(e.lowestOption),
+      formatCurrency(e.upside), formatCurrency(e.visibleTotal)]),
+  });
+
   // Colour: one stable base colour per service name, then derive lighter/darker shades.
   const bgColors = visible.map(e => serviceBarColor(e.svc));
 
@@ -1013,6 +1038,7 @@ export function renderSavingsByService(
           data: currentData,
           backgroundColor: currentColors,
           borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 4, bottomRight: 4 },
+          ...SEGMENT_GAP,
           stack: 'savings',
         },
         {
@@ -1020,6 +1046,7 @@ export function renderSavingsByService(
           data: lowestOptionData,
           backgroundColor: lowestOptionColors,
           borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 0, bottomRight: 0 },
+          ...SEGMENT_GAP,
           stack: 'savings',
         },
         {
@@ -1027,6 +1054,7 @@ export function renderSavingsByService(
           data: upsideData,
           backgroundColor: upsideColors,
           borderRadius: { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 },
+          ...SEGMENT_GAP,
           stack: 'savings',
         },
       ],
@@ -1198,6 +1226,7 @@ export async function loadSavingsTrendChart(): Promise<void> {
         empty.classList.remove('hidden');
       }
       if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
+      removeChartTable(SAVINGS_TREND_TABLE_ID);
       attachSparkline('ytd', []);
       return;
     }
@@ -1205,6 +1234,19 @@ export async function loadSavingsTrendChart(): Promise<void> {
     empty?.classList.add('hidden');
 
     if (savingsTrendChart) savingsTrendChart.destroy();
+
+    // #744: summarize the plotted series and list every point as text.
+    const rangeText = isAllRange ? 'the last year' : `the last ${days} days`;
+    const latest = chartData[chartData.length - 1]!;
+    setChartSummary(canvas,
+      `Line chart of cumulative savings over ${rangeText}: ${formatCurrency(latest.y)} `
+      + `as of ${formatTrendAxisTick(latest.x, interval)}, ${chartData.length} data point${chartData.length === 1 ? '' : 's'}. `
+      + 'Values are in the table below the chart.');
+    renderChartTable(canvas, SAVINGS_TREND_TABLE_ID, {
+      caption: `Cumulative savings over ${rangeText}`,
+      columns: ['Date', 'Cumulative savings'],
+      rows: chartData.map(p => [formatTrendAxisTick(p.x, interval), formatCurrency(p.y)]),
+    });
 
     savingsTrendChart = new Chart(canvas, {
       type: 'line',
@@ -1260,6 +1302,7 @@ export async function loadSavingsTrendChart(): Promise<void> {
     // the dashboard — hide the widget and fall back to a neutral message.
     console.warn('Savings trend chart unavailable:', err);
     if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
+    removeChartTable(SAVINGS_TREND_TABLE_ID);
     attachSparkline('ytd', []);
     canvas.classList.add('hidden');
     if (empty) {
