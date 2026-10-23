@@ -72,6 +72,7 @@ jest.mock('../api', () => ({
   getRecommendations: jest.fn().mockResolvedValue([]),
 }));
 import { loadSavingsTrendChart, setupSavingsTrendHandlers, setupDashboardHandlers, formatTrendAxisTick } from '../dashboard';
+import { formatTrendTooltipTitle } from '../modules/chart-utils';
 
 // Mock state module
 jest.mock('../state', () => ({
@@ -1126,6 +1127,32 @@ describe('Dashboard Module', () => {
       expect(result).not.toMatch(/^\d{13}$/);
       // Must contain recognizable date text (month abbreviation).
       expect(result).toMatch(/Jun\s+\d+/);
+      // Must carry the year so points a year apart are distinguishable (#53).
+      expect(result).toMatch(/2024/);
+    });
+  });
+
+  // Issue #53: the tooltip title includes the year; the axis tick stays compact.
+  describe('formatTrendTooltipTitle (issue #53)', () => {
+    test.each(['daily', 'weekly'] as const)('%s titles include the year', (interval) => {
+      const ts = new Date('2024-06-15T12:00:00Z').getTime();
+      expect(formatTrendTooltipTitle(ts, interval)).toMatch(/^Jun 1[45], 2024$/);
+    });
+
+    test('hourly titles include the year and the time', () => {
+      const label = formatTrendTooltipTitle(new Date('2024-03-15T14:30:00Z').getTime(), 'hourly');
+      expect(label).toMatch(/Mar\s+1[45], 2024/);
+      expect(label).toMatch(/\d{2}:30/);
+    });
+
+    test('the same calendar day in different years produces different titles', () => {
+      const a = formatTrendTooltipTitle(new Date('2024-06-15T12:00:00Z').getTime(), 'weekly');
+      const b = formatTrendTooltipTitle(new Date('2025-06-15T12:00:00Z').getTime(), 'weekly');
+      expect(a).not.toBe(b);
+      // The compact axis tick for the same pair is identical, which is why the
+      // tooltip cannot reuse it.
+      expect(formatTrendAxisTick(new Date('2024-06-15T12:00:00Z').getTime(), 'weekly'))
+        .toBe(formatTrendAxisTick(new Date('2025-06-15T12:00:00Z').getTime(), 'weekly'));
     });
   });
 

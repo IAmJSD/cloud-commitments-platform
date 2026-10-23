@@ -13,7 +13,7 @@ import { confirmDialog } from './confirmDialog';
 import { canAccess } from './permissions';
 import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale } from './recommendations';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
-import { formatTrendAxisTick } from './modules/chart-utils';
+import { formatTrendAxisTick, formatTrendTooltipTitle } from './modules/chart-utils';
 // Re-export for backward compatibility (tests and other callers import from dashboard.ts).
 export { formatTrendAxisTick } from './modules/chart-utils';
 
@@ -1228,10 +1228,11 @@ export async function loadSavingsTrendChart(): Promise<void> {
             callbacks: {
               // Format the x timestamp as a human-readable date so the tooltip
               // header shows a date string rather than the raw 13-digit
-              // millisecond value (QA 3.2).
+              // millisecond value (QA 3.2). Unlike the compact axis ticks it
+              // includes the year, so points a year apart don't read the same (#53).
               title: (items) => {
                 const raw = items[0]?.raw as { x: number; y: number } | undefined;
-                return raw?.x != null ? formatTrendAxisTick(raw.x, interval) : '';
+                return raw?.x != null ? formatTrendTooltipTitle(raw.x, interval) : '';
               },
               label: (ctx) => `Cumulative savings: ${formatCurrency((ctx.raw as { x: number; y: number }).y)}`,
             },
