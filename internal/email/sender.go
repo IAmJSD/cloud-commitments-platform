@@ -602,6 +602,10 @@ type NotificationData struct {
 	// the purchase). Used in the post-execution notification body.
 	// Empty omits the field.
 	ExecutedBy string
+	// PartialPurchase marks a post-execution notification for a
+	// partially_completed run (issue #532): the template says some
+	// commitments were not purchased instead of claiming all of them were.
+	PartialPurchase bool
 }
 
 // RecommendationSummary is a simplified recommendation for email display.

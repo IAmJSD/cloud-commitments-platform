@@ -446,7 +446,7 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 	// claim returns, the row it buys (issue #415).
 	final, revocationToken, runErr := h.purchase.RunPlannedPurchaseNow(ctx, executionID, fourEyesActorIdentity(session), resolveCreatorUserID(session), h.runNowClaimCheck(session))
 	if runErr != nil {
-		return nil, executeFailureError(executionID, "started", final, runErr)
+		return nil, h.executeFailure(ctx, req, executionID, "started", final, revocationToken, session.Email, runErr)
 	}
 
 	// The shared execute funnel rotated the row's token into a revocation
@@ -459,6 +459,18 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 		"status":       final.Status,
 		"message":      "Purchase executed",
 	}, nil
+}
+
+// executeFailure answers a failed run-now, session approve or direct execute.
+// A partially_completed run bought part of its commitments, so it gets the
+// executed email with the revocation token the funnel minted for it, as a
+// completed run does, before the 502 (issue #532). final is the row the
+// funnel returned, carrying the per-rec outcome and completed_at.
+func (h *Handler) executeFailure(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID, action string, final *config.PurchaseExecution, revocationToken, executedBy string, err error) error {
+	if purchase.IsCommittedPartialRun(final, err) {
+		h.sendPurchaseExecutedEmail(ctx, req, final, revocationToken, executedBy)
+	}
+	return executeFailureError(executionID, action, final, err)
 }
 
 // Stale Azure prices are refused before purchase, even after a successful claim.
@@ -476,6 +488,9 @@ func executeFailureError(executionID, action string, final *config.PurchaseExecu
 		return claimedRowRefusalError(final, err)
 	case errors.Is(err, purchase.ErrStaleAzurePricing):
 		return NewClientError(409, err.Error())
+	case purchase.IsCommittedPartialRun(final, err):
+		return NewClientErrorWithDetails(502, fmt.Sprintf("execution %s partially completed: some commitments were purchased and can be revoked, others failed: %v", executionID, err),
+			map[string]any{"execution_id": executionID, "status": final.Status})
 	default:
 		return NewClientErrorWithDetails(502, fmt.Sprintf("execution %s failed: %v", executionID, err),
 			map[string]any{"execution_id": executionID, "status": final.Status})
@@ -1042,26 +1057,36 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	// approveConstraintsForSession above read a snapshot; the funnel re-runs
 	// it on the row its claim returns, the row it buys (issue #415).
 	revocationToken, approveErr := h.purchase.ApproveExecution(ctx, execution.ExecutionID, token, actor, h.tokenApproveClaimCheck(tokenSession))
+	// A token returned with an error is a partially_completed run: part of it
+	// committed and is revocable, so it is emailed like a completed run
+	// (issue #532). Any other error has nothing to email.
+	if approveErr != nil && revocationToken == "" {
+		return nil, tokenActionError(approveErr)
+	}
+	h.emailTokenApproveOutcome(ctx, req, execution, revocationToken, actor)
 	if approveErr != nil {
 		return nil, tokenActionError(approveErr)
 	}
-	// Re-fetch the execution to pick up the FINAL state (status,
-	// completed_at, per-rec purchase results) ApproveAndExecute wrote --
-	// the pre-approve `execution` struct is stale on those fields. Falling
-	// back to the stale struct on a re-fetch failure is a cosmetic
-	// degradation of the email content only: revocationToken above is
-	// already in hand either way, so the Revoke link is always valid.
+	return map[string]string{"status": "completed"}, nil
+}
+
+// emailTokenApproveOutcome sends the executed email for a token approve that
+// committed, in full or in part. It re-fetches the execution to pick up the
+// FINAL state (status, completed_at, per-rec purchase results)
+// ApproveAndExecute wrote -- the pre-approve `execution` struct is stale on
+// those fields. Falling back to the stale struct on a re-fetch failure is a
+// cosmetic degradation of the email content only: revocationToken is already
+// in hand either way, so the Revoke link is always valid. Best-effort (issue
+// #291): errors are logged inside sendPurchaseExecutedEmail and never
+// propagate, since the purchase is already done.
+func (h *Handler) emailTokenApproveOutcome(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, revocationToken, actor string) {
 	emailExec, fetchErr := h.config.GetExecutionByID(ctx, execution.ExecutionID)
 	if fetchErr != nil || emailExec == nil {
 		logging.Warnf("approveViaToken[%s]: re-fetch for email failed (%v); using pre-approve snapshot",
 			execution.ExecutionID, fetchErr)
 		emailExec = execution
 	}
-	// Best-effort post-execution notification email (issue #291). Mirrors
-	// the session-authed path; errors are logged inside sendPurchaseExecutedEmail
-	// and never propagate — the purchase is already done at this point.
 	h.sendPurchaseExecutedEmail(ctx, req, emailExec, revocationToken, actor)
-	return map[string]string{"status": "completed"}, nil
 }
 
 // approvePurchaseViaSession is the session-authed branch of approvePurchase.
@@ -1137,7 +1162,7 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 	if approveErr != nil {
 		logging.Errorf("purchase[%s]: approvePurchaseViaSession failed after %s: %v",
 			execution.ExecutionID, time.Since(t0), approveErr)
-		return nil, executeFailureError(execution.ExecutionID, "approved", final, approveErr)
+		return nil, h.executeFailure(ctx, req, execution.ExecutionID, "approved", final, revocationToken, session.Email, approveErr)
 	}
 
 	logging.Infof("purchase[%s]: approvePurchaseViaSession completed in %s (auth=session)",
@@ -3627,7 +3652,7 @@ func (h *Handler) directExecutePurchase(ctx context.Context, req *events.LambdaF
 	if err != nil {
 		logging.Errorf("purchase[%s]: directExecutePurchase failed after %s: %v",
 			executionID, time.Since(t0), err)
-		return nil, executeFailureError(executionID, "direct-executed", final, err)
+		return nil, h.executeFailure(ctx, req, executionID, "direct-executed", final, revocationToken, session.Email, err)
 	}
 
 	logging.Infof("purchase[%s]: directExecutePurchase completed in %s", executionID, time.Since(t0))
@@ -3814,29 +3839,16 @@ func (h *Handler) sendPurchaseExecutedEmail(ctx context.Context, req *events.Lam
 		return
 	}
 
-	summaries := make([]email.RecommendationSummary, 0, len(execution.Recommendations))
-	for i := range execution.Recommendations {
-		rec := &execution.Recommendations[i]
-		summaries = append(summaries, email.RecommendationSummary{
-			Service:        rec.Service,
-			ResourceType:   rec.ResourceType,
-			Engine:         rec.Engine,
-			Region:         rec.Region,
-			Count:          rec.Count,
-			MonthlySavings: rec.Savings,
-			Term:           rec.Term,
-			Payment:        rec.Payment,
-			UpfrontCost:    rec.UpfrontCost,
-		})
-	}
+	summaries, totalUpfront, totalSavings := executedEmailCommitments(execution)
 
 	dashboardBase := h.resolveDashboardURL(req)
 	data := email.NotificationData{
 		DashboardURL:     dashboardBase,
 		ExecutionID:      execution.ExecutionID,
-		TotalSavings:     execution.EstimatedSavings,
-		TotalUpfrontCost: execution.TotalUpfrontCost,
+		TotalSavings:     totalSavings,
+		TotalUpfrontCost: totalUpfront,
 		Recommendations:  summaries,
+		PartialPurchase:  execution.Status == config.StatusPartiallyCompleted,
 		RecipientEmail:   to,
 		CCEmails:         cc,
 		// A fresh, dedicated revocation token minted by
@@ -3862,6 +3874,52 @@ func (h *Handler) sendPurchaseExecutedEmail(ctx context.Context, req *events.Lam
 	if sendErr := h.emailNotifier.SendPurchaseExecutedNotification(ctx, data); sendErr != nil {
 		logging.Errorf("sendPurchaseExecutedEmail: send failed for execution %s: %v", execution.ExecutionID, sendErr)
 	}
+}
+
+// executedEmailCommitments lists the commitments the executed email reports,
+// with their totals. A partially_completed row lists only the recs it bought
+// when it records them per rec (issue #532), so the email does not present a
+// failed rec as purchased. A multi-account root has no per-rec Purchased
+// flags (its per-account rows do), so it lists every rec and the template's
+// partial notice says some did not go through.
+func executedEmailCommitments(execution *config.PurchaseExecution) (summaries []email.RecommendationSummary, upfront, savings float64) {
+	onlyPurchased := execution.Status == config.StatusPartiallyCompleted && anyPurchased(execution.Recommendations)
+	if !onlyPurchased {
+		upfront, savings = execution.TotalUpfrontCost, execution.EstimatedSavings
+	}
+	summaries = make([]email.RecommendationSummary, 0, len(execution.Recommendations))
+	for i := range execution.Recommendations {
+		rec := &execution.Recommendations[i]
+		if onlyPurchased && !rec.Purchased {
+			continue
+		}
+		if onlyPurchased {
+			upfront += rec.UpfrontCost
+			savings += rec.Savings
+		}
+		summaries = append(summaries, email.RecommendationSummary{
+			Service:        rec.Service,
+			ResourceType:   rec.ResourceType,
+			Engine:         rec.Engine,
+			Region:         rec.Region,
+			Count:          rec.Count,
+			MonthlySavings: rec.Savings,
+			Term:           rec.Term,
+			Payment:        rec.Payment,
+			UpfrontCost:    rec.UpfrontCost,
+		})
+	}
+	return summaries, upfront, savings
+}
+
+// anyPurchased reports whether any rec records a committed purchase.
+func anyPurchased(recs []config.RecommendationRecord) bool {
+	for i := range recs {
+		if recs[i].Purchased {
+			return true
+		}
+	}
+	return false
 }
 
 // globalNotifyEmail returns the trimmed notification email from a GlobalConfig,
