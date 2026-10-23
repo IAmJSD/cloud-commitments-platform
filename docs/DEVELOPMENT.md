@@ -86,6 +86,10 @@ needs none of this: Docker Desktop remaps bind-mount ownership, so the
 defaults work for any account. If you change `USER` in `Dockerfile.dev`, keep
 it driven by these args, because the bind mount is the constraint.
 
+The dev image also sets `GOWORK=off`, so `go` commands run in the container
+build the root module alone from the module cache baked into the image. To
+work on the separate `tests/e2e` module there, `cd tests/e2e` first.
+
 ### Database Migrations
 
 ```bash

@@ -41,6 +41,16 @@ COPY go.mod go.sum ./
 # Download dependencies
 RUN go mod download
 
+# Build in single-module mode. `go mod download` above runs before go.work is
+# copied in, so it fills the module cache for the root module only. With the
+# repo's go.work in /app, `go build` would switch to workspace mode, which loads
+# the module graph differently and asks for modules that download did not fetch
+# (e.g. github.com/envoyproxy/go-control-plane). The cache is root-owned (and
+# so is the go_modules volume seeded from it), so the non-root dev user cannot
+# fetch them and Air's build fails before compiling. tests/e2e is a separate
+# stdlib-only module; work on it from its own directory.
+ENV GOWORK=off
+
 # Copy source code
 COPY . .
 
