@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
@@ -26,12 +25,12 @@ import (
 
 func TestPurchaseHistoryLegacyDuplicates_Postgres(t *testing.T) {
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { assert.NoError(t, container.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, container.DB.Pool(), getTestMigrationsPath(), "", ""))
+	// A migrated database of this test's own on the package's shared
+	// container (issue #982); it is dropped when the test ends.
+	conn := testhelpers.RequireMigratedDatabase(ctx, t, getTestMigrationsPath()).DB
 
-	store := NewPostgresStore(container.DB)
-	pool := container.DB.Pool()
+	store := NewPostgresStore(conn)
+	pool := conn.Pool()
 	t.Run("LookupReturnsEarliestRow", func(t *testing.T) {
 		checkLookupReturnsEarliestDuplicate(ctx, t, store, pool)
 	})
