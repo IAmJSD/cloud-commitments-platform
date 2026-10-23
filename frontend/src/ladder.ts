@@ -14,11 +14,13 @@
  */
 
 import * as api from './api';
-import { escapeHtml, formatDate } from './utils';
 import { showToast } from './toast';
+import { confirmDialog } from './confirmDialog';
 import { canAccess } from './permissions';
 import { initLadderTimeline } from './ladder-timeline';
 import { initLadderAccountSelector } from './ladder-account-selector';
+import { renderLadderConfigTable } from './ladder-config-table';
+import { listAccountsMinimal, type AccountSummary } from './api/accounts';
 
 // ==========================================
 // MODULE STATE
@@ -32,6 +34,9 @@ let configModalSaveInFlight = false;
 
 // Cached configs from the last successful load.
 let cachedConfigs: api.LadderConfig[] = [];
+// Registered accounts used to label table rows; empty when the list could not
+// be loaded, in which case rows fall back to the stored account ID.
+let tableAccounts: AccountSummary[] = [];
 let selectedAccount: ReturnType<typeof initLadderAccountSelector> | undefined;
 
 // ==========================================
@@ -59,7 +64,12 @@ export async function initLadderingSettings(globalEnabled: boolean): Promise<voi
   wireModalCloseButtons();
 
   try {
-    cachedConfigs = await api.getLadderConfigs();
+    const [configs, accounts] = await Promise.all([
+      api.getLadderConfigs(),
+      listAccountsMinimal().catch((): AccountSummary[] => []),
+    ]);
+    cachedConfigs = configs;
+    tableAccounts = accounts;
     renderConfigTable(cachedConfigs);
     const timeline = document.getElementById('ladder-purchase-timeline');
     if (timeline) await initLadderTimeline(timeline, cachedConfigs, globalEnabled);
@@ -169,6 +179,11 @@ function renderLadderingSection(globalEnabled: boolean): string {
             <option value="auto_approve">Auto Approve</option>
           </select>
         </div>
+        <p id="ladder-cfg-mode-warning" class="warning-message" role="status" hidden>
+          <strong>Warning:</strong> Auto Approve skips human approval. Ladder purchases for
+          this account will run without an approval email, and commitments are long-term
+          and usually cannot be cancelled once bought.
+        </p>
 
         <div class="form-row">
           <label for="ladder-cfg-cadence">Cadence</label>
@@ -251,57 +266,10 @@ function renderLadderingSection(globalEnabled: boolean): string {
 export function renderConfigTable(configs: api.LadderConfig[]): void {
   const container = document.getElementById('ladder-configs-table-container');
   if (!container) return;
-
-  if (configs.length === 0) {
-    container.innerHTML = '<p class="settings-help">No per-account configurations yet. Click <strong>Add Account Config</strong> to create one.</p>';
-    return;
-  }
-
-  const canEdit = canAccess('update', 'config');
-  const rows = configs.map(cfg => `
-    <tr>
-      <td>${escapeHtml(cfg.cloud_account_id)}</td>
-      <td>${escapeHtml(cfg.provider.toUpperCase())}</td>
-      <td>${cfg.enabled ? 'Yes' : 'No'}</td>
-      <td>${escapeHtml(cfg.mode === 'email_approval' ? 'Email Approval' : 'Auto Approve')}</td>
-      <td>${escapeHtml(cfg.cadence === 'daily' ? 'Daily' : 'Weekly')}</td>
-      <td>${cfg.target_coverage.toFixed(1)}%</td>
-      <td>${cfg.updated_at ? escapeHtml(formatDate(cfg.updated_at)) : 'N/A'}</td>
-      ${canEdit
-        ? `<td><button type="button" class="btn btn-sm btn-secondary ladder-edit-btn"
-                       data-account-id="${escapeHtml(cfg.cloud_account_id)}"
-                       data-provider="${escapeHtml(cfg.provider)}">Edit</button></td>`
-        : '<td></td>'}
-    </tr>
-  `).join('');
-
-  container.innerHTML = `
-    <table class="data-table" aria-label="Per-account ladder configurations">
-      <thead>
-        <tr>
-          <th>Account ID</th>
-          <th>Provider</th>
-          <th>Enabled</th>
-          <th>Mode</th>
-          <th>Cadence</th>
-          <th>Target Coverage</th>
-          <th>Updated</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
-
-  // Wire edit buttons via querySelectorAll so no user data is ever injected
-  // into a JS string context (data-* attributes are HTML-attribute-context only).
-  container.querySelectorAll<HTMLButtonElement>('.ladder-edit-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const accountID = btn.dataset['accountId'] ?? '';
-      const provider = btn.dataset['provider'] ?? '';
-      const cfg = cachedConfigs.find(c => c.cloud_account_id === accountID && c.provider === provider);
-      if (cfg) openLadderConfigModal(cfg);
-    });
+  renderLadderConfigTable(container, configs, {
+    accounts: tableAccounts,
+    canEdit: canAccess('update', 'config'),
+    onEdit: cfg => openLadderConfigModal(cfg),
   });
 }
 
@@ -377,6 +345,7 @@ function openLadderConfigModal(existing?: api.LadderConfig): void {
     // Cancel is inside the cloned form; the outside Close button keeps its listener.
     newForm.querySelector('#ladder-modal-cancel-btn')
       ?.addEventListener('click', closeLadderModal);
+    newForm.querySelector('#ladder-cfg-mode')?.addEventListener('change', syncAutoApproveWarning);
   }
 
   // Populate modal fields.
@@ -384,6 +353,7 @@ function openLadderConfigModal(existing?: api.LadderConfig): void {
   setSelectValue('ladder-cfg-provider', existing?.provider ?? 'aws');
   setChecked('ladder-cfg-enabled', existing?.enabled ?? false);
   setSelectValue('ladder-cfg-mode', existing?.mode ?? 'email_approval');
+  syncAutoApproveWarning();
   setSelectValue('ladder-cfg-cadence', existing?.cadence ?? 'daily');
   setValue('ladder-cfg-target-coverage', String(existing?.target_coverage ?? 100));
   setValue('ladder-cfg-buffer-fraction', String(existing?.buffer_fraction ?? 0.10));
@@ -449,6 +419,7 @@ export async function saveLadderConfig(): Promise<void> {
   if (saveBtn) saveBtn.disabled = true;
 
   try {
+    if (activatesAutoApprove(cfg) && !(await confirmAutoApprove())) return;
     const saved = await api.upsertLadderConfig(cfg);
 
     // Update the in-memory cache and re-render the table.
@@ -465,12 +436,42 @@ export async function saveLadderConfig(): Promise<void> {
     closeLadderModal();
     showToast({ message: 'Ladder config saved.', kind: 'success' });
   } catch (err) {
-    showToast({ message: 'Failed to save ladder config. Check inputs and try again.', kind: 'error' });
+    // Surface the server's validation text (apiRequest copies the response's
+    // `error` field into err.message) instead of a generic failure.
+    const detail = err instanceof Error && err.message ? err.message : 'Check inputs and try again.';
+    showToast({ message: `Failed to save ladder config: ${detail}`, kind: 'error' });
     console.error('saveLadderConfig:', err);
   } finally {
     configModalSaveInFlight = false;
     if (saveBtn) saveBtn.disabled = false;
   }
+}
+
+// ==========================================
+// AUTO-APPROVE SAFEGUARDS
+// ==========================================
+
+function syncAutoApproveWarning(): void {
+  const mode = document.getElementById('ladder-cfg-mode') as HTMLSelectElement | null;
+  const warning = document.getElementById('ladder-cfg-mode-warning');
+  if (warning) warning.hidden = mode?.value !== 'auto_approve';
+}
+
+// True when this save turns on unattended purchasing for the account: the
+// saved config would be enabled with Auto Approve and the stored one was not.
+function activatesAutoApprove(cfg: api.LadderConfig): boolean {
+  const unattended = (c?: api.LadderConfig): boolean => !!c && c.enabled && c.mode === 'auto_approve';
+  const previous = cachedConfigs.find(c => c.cloud_account_id === cfg.cloud_account_id && c.provider === cfg.provider);
+  return unattended(cfg) && !unattended(previous);
+}
+
+function confirmAutoApprove(): Promise<boolean> {
+  return confirmDialog({
+    title: 'Enable Auto Approve?',
+    body: 'Ladder purchases for this account will run without human approval. Commitments are long-term and usually cannot be cancelled once bought. Check the target coverage and per-run caps before continuing.',
+    confirmLabel: 'Enable Auto Approve',
+    destructive: true,
+  });
 }
 
 // ==========================================

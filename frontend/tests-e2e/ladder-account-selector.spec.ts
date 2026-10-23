@@ -131,3 +131,36 @@ test('provider changes during loading and stale reopened responses keep the curr
   expect(errors).toEqual([]);
   expect(failures).toEqual([]);
 });
+
+test('table names the account, Auto Approve warns and confirms, and save errors keep the server text', async ({ page }) => {
+  const { saves, errors } = await setup(page);
+  await page.route('**/api/accounts/list', route => route.fulfill({ json: [...accounts, { id: 'unavailable-saved-account', name: 'Azure saved', external_id: 'sub-saved', provider: 'azure' }] }));
+  await page.reload();
+  const firstCell = page.locator('#ladder-configs-table-container tbody td').first();
+  await expect(firstCell).toHaveText('Azure saved (sub-saved)');
+  await expect(firstCell).toHaveAttribute('title', 'unavailable-saved-account');
+
+  await page.locator('#ladder-add-config-btn').click();
+  const warning = page.locator('#ladder-cfg-mode-warning');
+  await expect(warning).toBeHidden();
+  await page.locator('#ladder-cfg-account').selectOption('registered-aws');
+  await page.locator('#ladder-cfg-mode').selectOption('auto_approve');
+  await expect(warning).toBeVisible();
+  await expect(warning).toContainText('skips human approval');
+  await page.locator('#ladder-cfg-enabled').check();
+  await page.locator('#ladder-config-save-btn').click();
+  const confirm = page.getByRole('dialog', { name: 'Enable Auto Approve?' });
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole('button', { name: 'Cancel' }).click();
+  await expect(confirm).toBeHidden();
+  await expect(page.locator('#ladder-config-modal')).toBeVisible();
+  expect(saves).toEqual([]);
+
+  await page.route('**/api/ladder/configs', route => route.fulfill({ status: 400, json: { error: 'max_actions_per_run must be between 1 and 50' } }));
+  await page.locator('#ladder-config-save-btn').click();
+  await confirm.getByRole('button', { name: 'Enable Auto Approve' }).click();
+  await expect(page.getByText('Failed to save ladder config: max_actions_per_run must be between 1 and 50')).toBeVisible();
+  await expect(page.locator('#ladder-config-modal')).toBeVisible();
+  // The rejected PUT logs its 400 and the handler's console.error; nothing else may fail.
+  expect(errors.filter(error => !error.includes('400') && !error.startsWith('saveLadderConfig:'))).toEqual([]);
+});
