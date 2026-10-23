@@ -204,3 +204,17 @@ tr.history-row-highlight:hover {
     color: var(--cudly-text-subtle);
     font-size: var(--cudly-fs-xs);
 }
+
+/* Status + Overdue badges side by side, and the next-action hint under an
+ * overdue planned purchase's status (#181). */
+.planned-purchase-row .status-badges {
+    display: inline-flex;
+    gap: 0.25rem;
+    white-space: nowrap;
+}
+
+.planned-purchase-row .overdue-hint {
+    margin-top: 0.25rem;
+    font-size: 0.8rem;
+    color: var(--cudly-text-muted);
+}

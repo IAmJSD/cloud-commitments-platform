@@ -17,6 +17,7 @@ import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/ske
 import { canAccess } from './permissions';
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 import { suggestedPurchaseStartDate } from './lib/calendar-date';
+import { isPastScheduledDate } from './lib/purchase-row-guards';
 import { mountPlanEditorPanel } from './plan-editor-panel';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
@@ -738,6 +739,15 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
     canAccess('cancel-own', 'purchases')
   );
 
+  // #181: a pending step whose date has passed did not run; "pending" alone
+  // reads as on schedule. Flag it and name the next action the user can take.
+  const overdue = isPending && isPastScheduledDate(purchase.scheduled_date);
+  const overdueHint = canRunPurchase ? 'Not run on its date. Run now or pause.' : 'Not run on its date.';
+  const overdueBadge = overdue
+    ? '<span class="status-badge badge-danger" title="Scheduled date has passed">Overdue</span>'
+    : '';
+  const overdueHintHtml = overdue ? `<div class="overdue-hint">${overdueHint}</div>` : '';
+
   return `
     <tr class="planned-purchase-row ${statusClass}">
       <td>
@@ -752,7 +762,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td>${termCell}</td>
       <td>${upfrontShown}</td>
       <td class="savings">${savingsCell}</td>
-      <td><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span></td>
+      <td><span class="status-badges"><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span>${overdueBadge}</span>${overdueHintHtml}</td>
       <td class="actions">
         ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary" title="Run now" aria-label="Run now">▶</button>` : ''}
         ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause" aria-label="Pause">⏸</button>` : ''}
