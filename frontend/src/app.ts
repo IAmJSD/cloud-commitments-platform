@@ -18,7 +18,8 @@ import { setupRIExchangeHandlers, saveAutomationSettings } from './riexchange';
 import { showToast } from './toast';
 import { formatPaymentAdjustmentNotice } from './commitmentOptions';
 import { confirmDialog } from './confirmDialog';
-import { buildCommitmentSummary, commitmentTotals, executeButtonLabel, executeConfirmLabel, withIntro } from './commitmentSummary';
+import type { LocalRecommendation } from './types';
+import { buildCommitmentSummary, commitmentTotals, executeButtonLabel, executeConfirmLabel, withIntro, type CommitmentLine } from './commitmentSummary';
 import { handlePurchaseDeeplink } from './purchases-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
@@ -432,18 +433,7 @@ export async function handleExecutePurchase(): Promise<void> {
   //   - Approval path: low-friction, non-destructive.
   //   - Direct-execute path: red destructive dialog with cost callout and
   //     immediate-charge callout; no cancellation promise (issue #251).
-  const summaryLines = recsWithPayment.map((r) => ({
-      service: r.service,
-      provider: r.provider,
-      region: r.region,
-      resourceType: r.resource_type,
-      count: r.count,
-      term: r.term,
-      payment: r.payment,
-      upfront: r.upfront_cost,
-      monthly: r.monthly_cost ?? null,
-      ...(r.cloud_account_id ? { account: getAccountName(r.cloud_account_id) } : {}),
-  }));
+  const summaryLines = recsWithPayment.map((r) => toCommitmentLine(r, r.payment));
   const totals = commitmentTotals(summaryLines);
   const summary = buildCommitmentSummary(
     summaryLines,
@@ -566,6 +556,22 @@ export async function handleExecutePurchase(): Promise<void> {
   }
 }
 
+/** One confirm-summary line for a rec bought with the given payment option. */
+function toCommitmentLine(r: LocalRecommendation, payment: string): CommitmentLine {
+  return {
+    service: r.service,
+    provider: r.provider,
+    region: r.region,
+    resourceType: r.resource_type,
+    count: r.count,
+    term: r.term,
+    payment,
+    upfront: r.upfront_cost,
+    monthly: r.monthly_cost ?? null,
+    ...(r.cloud_account_id ? { account: getAccountName(r.cloud_account_id) } : {}),
+  };
+}
+
 /**
  * fanOutBucketLabel renders a short human identifier for a fan-out bucket so a
  * partial-failure toast can name which buckets created pending executions
@@ -598,11 +604,19 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
 
   // Same approval-required default as the single-purchase path: each
   // bucket POSTs a request that triggers an approval email; the actual
-  // charges fire when each approver clicks the link in their email.
+  // charges fire when each approver clicks the link in their email. The
+  // confirm states the combined amounts across every bucket (#707). A
+  // submittable bucket's recs already carry the bucket's payment option, so
+  // their upfront and monthly costs are the ones that will be approved.
+  const summaryLines = buckets.flatMap((b) => b.recs.map((r) => toCommitmentLine(r, b.payment)));
+  const totals = commitmentTotals(summaryLines);
   const ok = await confirmDialog({
     title: `Send ${buckets.length} bulk purchase${buckets.length === 1 ? '' : 's'} for approval?`,
-    body: `This will submit ${buckets.length} separate purchase request${buckets.length === 1 ? '' : 's'} and email ${buckets.length} approval request${buckets.length === 1 ? '' : 's'}. Each must be approved individually before its commitments are charged.`,
-    confirmLabel: 'Send all for approval',
+    body: withIntro(
+      `This will submit ${buckets.length} separate purchase request${buckets.length === 1 ? '' : 's'} and email ${buckets.length} approval request${buckets.length === 1 ? '' : 's'}. Each must be approved individually before its commitments are charged. Totals below are across all requests.`,
+      buildCommitmentSummary(summaryLines, { upfrontLabel: 'Upfront on approval' }),
+    ),
+    confirmLabel: executeConfirmLabel(false, totals.upfront),
     destructive: false,
   });
   if (!ok) {

@@ -1345,6 +1345,58 @@ describe('Issue #1904: fan-out modal skips incompatible buckets', () => {
     ]);
   });
 
+  test('bulk approval confirm states the totals across all buckets (#707)', async () => {
+    const rows: LocalRecommendation[] = [
+      {
+        id: 'ec2-1-all', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+        region: 'us-east-1', resource_type: 'm5.large', term: 1, payment: 'all-upfront',
+        count: 4, upfront_cost: 4000, monthly_cost: 0, savings: 1000,
+      },
+      {
+        id: 'ec2-1-partial', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+        region: 'us-east-1', resource_type: 'm5.large', term: 1, payment: 'partial-upfront',
+        count: 4, upfront_cost: 2000, monthly_cost: 100, savings: 900,
+      },
+      {
+        id: 'rds-3-all', provider: 'aws', cloud_account_id: 'a1', service: 'rds',
+        region: 'us-east-1', resource_type: 'db.r5.large', term: 3, payment: 'all-upfront',
+        count: 2, upfront_cost: 6000, monthly_cost: 0, savings: 1000,
+      },
+    ];
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'all-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['ec2-1-all', 'rds-3-all']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    const ec2Section = Array.from(document.querySelectorAll<HTMLElement>('.fanout-bucket'))
+      .find((section) => section.textContent?.includes('ec2'))!;
+    const paymentSelect = ec2Section.querySelector<HTMLSelectElement>('.fanout-bucket-payment')!;
+    paymentSelect.value = 'partial-upfront';
+    paymentSelect.dispatchEvent(new Event('change'));
+
+    (confirmDialog as jest.Mock).mockClear();
+    (document.getElementById('execute-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    expect(confirmDialog).toHaveBeenCalledTimes(1);
+    const opts = (confirmDialog as jest.Mock).mock.calls[0]![0] as { title: string; body: HTMLElement; confirmLabel: string };
+    expect(opts.title).toBe('Send 2 bulk purchases for approval?');
+    const text = opts.body.textContent ?? '';
+    // ec2 partial: $2,000 upfront + $100/mo for 12 months; rds all-upfront: $6,000.
+    expect(text).toContain(`Upfront on approval${formatCurrency(8000, '$', 2)}`);
+    expect(text).toContain(`Monthly${formatCurrency(100, '$', 2)}`);
+    expect(text).toContain(`Total over term${formatCurrency(9200, '$', 2)}`);
+    expect(text).toContain('4 × ec2 m5.large');
+    expect(text).toContain('Partial upfront');
+    expect(text).toContain('2 × rds db.r5.large');
+    expect(text).not.toContain('Charged today');
+    expect(opts.confirmLabel).toContain(`(${formatCurrency(8000, '$', 2)} upfront on approval)`);
+  });
+
   test('fan-out resolves a saved payment override to its priced sibling on open', async () => {
     const rows: LocalRecommendation[] = [
       {
