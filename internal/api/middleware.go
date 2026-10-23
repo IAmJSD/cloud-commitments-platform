@@ -232,8 +232,12 @@ func (h *Handler) extractBearerToken(req *events.LambdaFunctionURLRequest) strin
 // that read a session therefore enforce CSRF inside their own handlers, and
 // TestAuthPublicMoneyRoutes_SessionWithoutCSRFIsRefused checks that they do.
 func (h *Handler) requiresCSRFValidation(method, path string) bool {
-	// Only POST, PUT, DELETE need CSRF protection
-	if method != "POST" && method != "PUT" && method != "DELETE" {
+	// Every method except the safe ones (RFC 9110 section 9.2.1) can change
+	// state, so it needs CSRF protection. Listing the safe methods rather than
+	// the unsafe ones keeps PATCH, and any verb a route adds later, covered
+	// (issue #1101).
+	switch method {
+	case "GET", "HEAD", "OPTIONS":
 		return false
 	}
 

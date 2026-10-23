@@ -344,8 +344,10 @@ const advisoryLockReleaseTimeout = 5 * time.Second
 
 // ReleaseAdvisoryLock releases a previously acquired advisory lock.
 // It reuses the same pinned connection used by TryAdvisoryLock to ensure
-// the unlock targets the correct PostgreSQL session.
-func (c *Connection) ReleaseAdvisoryLock(ctx context.Context, lockID int64) {
+// the unlock targets the correct PostgreSQL session. The context parameter
+// is deliberately unused (see below); it stays in the signature so the
+// method keeps satisfying the server.TaskLocker interface.
+func (c *Connection) ReleaseAdvisoryLock(_ context.Context, lockID int64) {
 	val, ok := c.lockedConns.LoadAndDelete(lockID)
 	if !ok {
 		logging.Warnf("ReleaseAdvisoryLock called for lock %d but no pinned connection found", lockID)
@@ -358,7 +360,7 @@ func (c *Connection) ReleaseAdvisoryLock(ctx context.Context, lockID int64) {
 	}
 	defer conn.Release()
 
-	// The caller's ctx is typically a deferred call sited right after
+	// The caller's context is typically a deferred call sited right after
 	// TryAdvisoryLock (server/handler.go's HandleScheduledTask) and can
 	// already be canceled or past its deadline by the time this runs -- a
 	// long-running task whose Lambda invocation context (or HTTP request

@@ -484,6 +484,26 @@ func (m *MockConfigStore) TransitionExecutionStatusPinned(ctx context.Context, e
 	return v, args.Error(1)
 }
 
+// TransitionExecutionStatusPinnedTx mocks the tx variant of the pinned claim.
+// With no expectation registered it delegates to TransitionExecutionStatusPinned
+// (and from there to TransitionExecutionStatus), so tests that mock the
+// non-tx transition keep working.
+func (m *MockConfigStore) TransitionExecutionStatusPinnedTx(ctx context.Context, tx pgx.Tx, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*config.PurchaseExecution, error) {
+	m.record("TransitionExecutionStatusPinnedTx", ctx, tx, executionID, fromStatuses, toStatus, actor, sawEmptyRecommendations)
+	if !isExpected(&m.Mock, "TransitionExecutionStatusPinnedTx") {
+		return m.TransitionExecutionStatusPinned(ctx, executionID, fromStatuses, toStatus, actor, sawEmptyRecommendations)
+	}
+	args := m.Called(ctx, tx, executionID, fromStatuses, toStatus, actor, sawEmptyRecommendations)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.PurchaseExecution)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.PurchaseExecution, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 // TransitionExecutionStatusTokenPinned mocks the token-pinned transition
 // (issue #590). It does not delegate to TransitionExecutionStatus: a caller
 // that must pin the approval token is expected to call this method, so a test
@@ -928,6 +948,19 @@ func (m *MockConfigStore) GetRIExchangeRecordByToken(ctx context.Context, token 
 func (m *MockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]config.RIExchangeRecord, error) {
 	m.record("GetRIExchangeHistory", ctx, since, limit)
 	args := m.Called(ctx, since, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).([]config.RIExchangeRecord)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected []config.RIExchangeRecord, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
+func (m *MockConfigStore) GetRIExchangeHistoryForAccounts(ctx context.Context, since time.Time, limit int, accountIDs []string) ([]config.RIExchangeRecord, error) {
+	m.record("GetRIExchangeHistoryForAccounts", ctx, since, limit, accountIDs)
+	args := m.Called(ctx, since, limit, accountIDs)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}

@@ -1234,11 +1234,11 @@ func TestPerAccountPerms_GetRIUtilization_ScopedOutsideAllowedReturnsEmpty(t *te
 // TestPerAccountPerms_GetRIUtilization_ScopedWithinAllowedProceedsToAWS
 // confirms that a scoped user whose allowed_accounts DOES include the
 // deployment CloudAccount UUID is not blocked by the scope check. The handler
-// will then proceed to the AWS SDK (and fail without credentials), but the
-// scope filter itself must be transparent for an in-scope user.
+// then proceeds to the (stubbed) Cost Explorer and EC2 clients; the stubs keep
+// the test off the network and prove the scope filter was transparent (#855).
 //
 // Regression: an overly-broad scope check that blocks ALL scoped users
-// (not just out-of-scope ones) would cause this test to return empty prematurely.
+// (not just out-of-scope ones) would return empty before reaching the stubs.
 func TestPerAccountPerms_GetRIUtilization_ScopedWithinAllowedProceedsToAWS(t *testing.T) {
 	ctx := context.Background()
 
@@ -1247,6 +1247,8 @@ func TestPerAccountPerms_GetRIUtilization_ScopedWithinAllowedProceedsToAWS(t *te
 		return permsAccountList(), nil
 	}
 
+	recs := &countingUtilRecs{rows: []recommendations.RIUtilization{{ReservedInstanceID: "ri-own", UtilizationPercent: 40}}}
+	ec2Stub := &countingUtilEC2{instances: []ec2svc.ConvertibleRI{{ReservedInstanceID: "ri-own"}}}
 	handler := &Handler{
 		auth:   scopedAuthMock(ctx),
 		config: mockStore,
@@ -1254,18 +1256,18 @@ func TestPerAccountPerms_GetRIUtilization_ScopedWithinAllowedProceedsToAWS(t *te
 		reshapeAccountResolver: func(_ context.Context) (string, error) {
 			return permsAccA, nil
 		},
+		reshapeRecsFactory: func(_ aws.Config) reshapeRecsClient { return recs },
+		reshapeEC2Factory:  func(_ aws.Config) reshapeEC2Client { return ec2Stub },
 	}
-	// Pre-seal awsCfgOnce so the handler doesn't stall on AWS SDK load.
-	handler.awsCfgOnce.Do(func() {})
+	// Pre-seal awsCfgOnce so the handler never runs LoadDefaultConfig.
+	handler.awsCfgOnce.Do(func() { handler.awsCfg = aws.Config{Region: "us-east-1"} })
 
-	_, err := handler.getRIUtilization(ctx, scopedReq())
-	// The scope check passes; any error from here is AWS-level, not scope-level.
-	if err != nil {
-		assert.NotContains(t, err.Error(), "allowed accounts",
-			"in-scope user must not be blocked by allowed_accounts check")
-		assert.NotContains(t, err.Error(), "cloud account scope",
-			"in-scope user must not be blocked by cloud account scope check")
-	}
+	resp, err := handler.getRIUtilization(ctx, scopedReq())
+	require.NoError(t, err, "in-scope user must not be blocked by the allowed_accounts check")
+	typed, ok := resp.(*RIUtilizationResponse)
+	require.True(t, ok, "expected *RIUtilizationResponse, got %T", resp)
+	assert.Equal(t, 1, recs.calls, "in-scope user must reach the Cost Explorer utilization fetch")
+	assert.Equal(t, []recommendations.RIUtilization{{ReservedInstanceID: "ri-own", UtilizationPercent: 40}}, typed.Utilization)
 }
 
 // ─── 12. GET /ri-exchange/reshape-recommendations ────────────────────────────
