@@ -51,8 +51,15 @@ type pollerFixture struct {
 
 func newPollerFixture(t *testing.T, rows ...config.PurchaseHistoryRecord) *pollerFixture {
 	t.Helper()
+	return newPollerFixtureWithStore(t, &MockConfigStore{}, rows...)
+}
+
+// newPollerFixtureWithStore lets a test keep its own handle on the store, so
+// its AssertNotCalled checks go through MockConfigStore's call log.
+func newPollerFixtureWithStore(t *testing.T, store *MockConfigStore, rows ...config.PurchaseHistoryRecord) *pollerFixture {
+	t.Helper()
 	f := &pollerFixture{
-		store: &MockConfigStore{},
+		store: store,
 		aws:   &fakeListingStatusReader{statuses: map[string]marketplaceListingStatus{}, errs: map[string]error{}},
 	}
 	f.store.On("ListMarketplaceListingsToPoll", mock.Anything).Return(rows, nil).Maybe()
@@ -136,7 +143,8 @@ func TestPollMarketplaceListings_SignsAsThePurchaseAccount(t *testing.T) {
 }
 
 func TestPollMarketplaceListings_ActiveStampsListedAtOnly(t *testing.T) {
-	f := newPollerFixture(t, listedRow("ri-1", "ril-1"))
+	store := &MockConfigStore{}
+	f := newPollerFixtureWithStore(t, store, listedRow("ri-1", "ril-1"))
 	f.aws.statuses["ril-1"] = marketplaceListingStatus{ListingID: "ril-1", State: config.ListingStateActive,
 		CreatedAt: pollerCreateDate, SoldCount: 1, UnitPrice: 10, PriceKnown: true}
 	f.store.On("RecordMarketplaceListingActive", mock.Anything, "ri-1", "ril-1", pollerCreateDate).Return(true, nil).Once()
@@ -145,8 +153,8 @@ func TestPollMarketplaceListings_ActiveStampsListedAtOnly(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, MarketplacePollResult{Found: 1, Active: 1}, *res)
-	f.store.AssertExpectations(t)
-	f.store.AssertNotCalled(t, "SettleMarketplaceListing", mock.Anything, mock.Anything)
+	store.AssertExpectations(t)
+	store.AssertNotCalled(t, "SettleMarketplaceListing")
 }
 
 func TestPollMarketplaceListings_CanceledAfterPartialSale(t *testing.T) {
@@ -215,15 +223,16 @@ func TestPollMarketplaceListings_GuardedWriteLostIsSkipped(t *testing.T) {
 }
 
 func TestPollMarketplaceListings_AWSPendingNeedsNoWrite(t *testing.T) {
-	f := newPollerFixture(t, listedRow("ri-1", "ril-1"))
+	store := &MockConfigStore{}
+	f := newPollerFixtureWithStore(t, store, listedRow("ri-1", "ril-1"))
 	f.aws.statuses["ril-1"] = marketplaceListingStatus{ListingID: "ril-1", State: "pending", CreatedAt: pollerCreateDate}
 
 	res, err := f.h.PollMarketplaceListings(context.Background())
 
 	require.NoError(t, err)
 	assert.Equal(t, MarketplacePollResult{Found: 1, Skipped: 1}, *res)
-	f.store.AssertNotCalled(t, "SettleMarketplaceListing", mock.Anything, mock.Anything)
-	f.store.AssertNotCalled(t, "RecordMarketplaceListingActive", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "SettleMarketplaceListing")
+	store.AssertNotCalled(t, "RecordMarketplaceListingActive")
 }
 
 // One listing failing (AWS or store) does not stop the others.
