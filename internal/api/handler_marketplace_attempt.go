@@ -25,9 +25,12 @@ import (
 
 // marketplaceListingFinder looks up a listing created by an earlier attempt
 // through DescribeReservedInstancesListings. The ec2 service wrapper has no
-// lookup by ClientToken, so this is a separate narrow interface.
+// lookup by ClientToken, so this is a separate narrow interface. The status
+// poller reads a listing's sale details through it too (issue #27), because
+// the wrapper's DescribeMarketplaceListing returns only the state.
 type marketplaceListingFinder interface {
 	FindMarketplaceListingByToken(ctx context.Context, reservedInstancesID, clientToken string) (ec2svc.MarketplaceListingResult, bool, error)
+	DescribeMarketplaceListingStatus(ctx context.Context, listingID string) (marketplaceListingStatus, error)
 }
 
 type describeListingsAPI interface {
