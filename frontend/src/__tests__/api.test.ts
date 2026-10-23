@@ -403,7 +403,12 @@ describe('API Requests', () => {
         status: 200,
         json: () => Promise.reject(new SyntaxError('Unexpected token in JSON at position 0')),
       });
-      await expect(apiRequest('/test')).rejects.toThrow(SyntaxError);
+      // Issue #748: rejects with friendly text, not "Unexpected token ...".
+      await expect(apiRequest('/test')).rejects.toMatchObject({
+        message: 'CUDly sent an unexpected response. Try again in a moment.',
+        status: 200,
+        detail: expect.stringContaining('Unexpected token in JSON'),
+      });
     });
 
     test('surfaces a timeout error when the backend hangs past timeoutMs (issue #20)', async () => {
@@ -418,7 +423,56 @@ describe('API Requests', () => {
         });
       }));
 
-      await expect(apiRequest('/test', { timeoutMs: 10 })).rejects.toThrow(/timed out after 10ms/);
+      // Issue #748: the user sees a sentence; the raw timing stays on detail.
+      await expect(apiRequest('/test', { timeoutMs: 10 })).rejects.toMatchObject({
+        message: 'CUDly took too long to respond. Try again in a moment.',
+        status: 0,
+        detail: 'Request to /test timed out after 10ms',
+      });
+    });
+
+    describe('friendly transport errors (issue #748)', () => {
+      test('a network failure becomes "Can\'t reach CUDly" with status 0', async () => {
+        fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+        await expect(apiRequest('/test')).rejects.toMatchObject({
+          message: "Can't reach CUDly. Check your connection and try again.",
+          status: 0,
+          detail: 'Request to /test failed: Failed to fetch',
+        });
+      });
+
+      test('a caller abort is rethrown untouched', async () => {
+        const controller = new AbortController();
+        fetchMock.mockImplementation(() => {
+          controller.abort();
+          const err = new Error('The operation was aborted.');
+          err.name = 'AbortError';
+          return Promise.reject(err);
+        });
+        await expect(apiRequest('/test', { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+      });
+
+      test.each([
+        [502, 'CUDly is temporarily unavailable. Try again in a moment.'],
+        [503, 'CUDly is temporarily unavailable. Try again in a moment.'],
+        [504, 'CUDly took too long to respond. Try again in a moment.'],
+        [500, 'CUDly hit an unexpected error. Try again in a moment.'],
+        [403, "You don't have permission to do that."],
+        [418, 'The request could not be completed (error 418).'],
+      ])('HTTP %i with an HTML body says what it means, not "HTTP %i"', async (status, message) => {
+        fetchMock.mockResolvedValue({ ok: false, status, json: () => Promise.reject(new SyntaxError("Unexpected token '<'")) });
+        await expect(apiRequest('/test')).rejects.toMatchObject({ message, status, detail: `HTTP ${status} from /test` });
+      });
+
+      test('the backend catch-all "Internal server error" gets the friendly 500 text', async () => {
+        fetchMock.mockResolvedValue({ ok: false, status: 500, json: () => Promise.resolve({ error: 'Internal server error' }) });
+        await expect(apiRequest('/test')).rejects.toThrow('CUDly hit an unexpected error. Try again in a moment.');
+      });
+
+      test('a specific server message still wins over the status text', async () => {
+        fetchMock.mockResolvedValue({ ok: false, status: 503, json: () => Promise.resolve({ error: 'maintenance until 10:00 UTC' }) });
+        await expect(apiRequest('/test')).rejects.toThrow('maintenance until 10:00 UTC');
+      });
     });
 
     test('passes the caller-provided signal through alongside the timeout controller', async () => {
@@ -659,6 +713,25 @@ describe('API Requests', () => {
       // Issue #462: tokens are persisted to localStorage so a second
       // tab on the same origin inherits the session.
       expect(localStorageMock.setItem).toHaveBeenCalledWith('authToken', 'admin-token');
+    });
+
+    // Issue #748: a proxy 502 with an HTML body used to surface as
+    // "Unexpected token '<'" because the error body was parsed uncaught.
+    test('a 502 HTML error page fails with friendly text, not a JSON parse error', async () => {
+      fetchMock.mockResolvedValue({ ok: false, status: 502, json: () => Promise.reject(new SyntaxError("Unexpected token '<'")) });
+      await expect(setupAdmin('api-key', 'admin@example.com', 'password'))
+        .rejects.toMatchObject({ message: 'CUDly is temporarily unavailable. Try again in a moment.', status: 502 });
+    });
+
+    test('a 400 keeps the server reason', async () => {
+      fetchMock.mockResolvedValue({ ok: false, status: 400, json: () => Promise.resolve({ error: 'admin already exists' }) });
+      await expect(setupAdmin('api-key', 'admin@example.com', 'password')).rejects.toThrow('admin already exists');
+    });
+
+    test('a network failure says the server cannot be reached', async () => {
+      fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+      await expect(setupAdmin('api-key', 'admin@example.com', 'password'))
+        .rejects.toThrow("Can't reach CUDly. Check your connection and try again.");
     });
   });
 });
