@@ -186,6 +186,24 @@ for f in "$FED_XACC_CFN" "$FED_XACC_TF" "$FED_WIF_CFN" "$FED_WIF_TF" "$FED_XACC_
   done
 done
 
+# --- 5. runtime organizations grants -------------------------------------------
+# Parity only proves the runtime trio agree, so an unused organizations action
+# added to all three (#69: DescribeAccount, DescribeOrganization) passes it.
+# The runtime calls only ListAccounts (internal/accounts/org_discovery.go and
+# the cloud-commitments-go AWS provider), so that is the only organizations
+# action it may grant. Wire up a new call before adding its action here.
+
+ALLOWED_RUNTIME_ORG_ACTIONS=(organizations:ListAccounts)
+
+for f in "$CFN_STACK" "$TF_LAMBDA" "$TF_FARGATE"; do
+  while IFS= read -r a; do
+    if [[ " ${ALLOWED_RUNTIME_ORG_ACTIONS[*]} " != *" $a "* ]]; then
+      echo "ERROR [runtime organizations actions]: $f grants $a, which the runtime never calls" >&2
+      FAILURES=$((FAILURES + 1))
+    fi
+  done < <(extract_actions "$f" | grep '^organizations:' || true)
+done
+
 # --- result --------------------------------------------------------------------
 
 if [[ "$FAILURES" -gt 0 ]]; then
