@@ -146,12 +146,12 @@ describe('History action ownership and refresh recovery (#249)', () => {
     (api.getHistory as jest.Mock).mockResolvedValue({ ...data, purchases: [...data.purchases, makeRow({ purchase_id: 'other' })] });
     (confirmDialog as jest.Mock).mockResolvedValue(false);
     await loadHistory();
-    const btn = document.querySelector<HTMLButtonElement>('#history-list [data-approve-id="guarded"]')!;
+    const btn = document.querySelector<HTMLButtonElement>('#purchases-approval-queue [data-approve-id="guarded"]')!;
     btn.click();
     btn.dispatchEvent(new MouseEvent('click'));
-    document.querySelector<HTMLButtonElement>('#history-list [data-cancel-id="guarded"]')!.click();
+    document.querySelector<HTMLButtonElement>('#purchases-approval-queue [data-cancel-id="guarded"]')!.click();
     document.querySelector<HTMLButtonElement>('#purchases-approval-queue [data-approve-id="guarded"]')!.click();
-    document.querySelector<HTMLButtonElement>('#history-list [data-approve-id="other"]')!.click();
+    document.querySelector<HTMLButtonElement>('#purchases-approval-queue [data-approve-id="other"]')!.click();
     const disabled = btn.disabled;
     details.resolve(DETAILS);
     await settleActions();
@@ -170,7 +170,7 @@ describe('History action ownership and refresh recovery (#249)', () => {
     arrange();
     console.error = jest.fn();
     await loadHistory();
-    const btn = document.querySelector<HTMLButtonElement>('#history-list .history-approve-btn')!;
+    const btn = document.querySelector<HTMLButtonElement>('#purchases-approval-queue .history-approve-btn')!;
     btn.click();
     await settleActions();
     expect(confirmDialog).not.toHaveBeenCalled();
@@ -184,7 +184,7 @@ describe('History action ownership and refresh recovery (#249)', () => {
 
   test.each(['cancel', 'reject', 'throw', 'api-error'] as const)('%s releases ownership for a later explicit attempt', async outcome => {
     await loadHistory();
-    const btn = document.querySelector<HTMLButtonElement>('#history-list .history-approve-btn')!;
+    const btn = document.querySelector<HTMLButtonElement>('#purchases-approval-queue .history-approve-btn')!;
     if (outcome === 'cancel') (confirmDialog as jest.Mock).mockResolvedValueOnce(false);
     if (outcome === 'reject') (confirmDialog as jest.Mock).mockRejectedValueOnce(new Error('dialog failed'));
     if (outcome === 'throw') (confirmDialog as jest.Mock).mockImplementationOnce(() => { throw new Error('dialog failed'); });
@@ -204,12 +204,12 @@ describe('History action ownership and refresh recovery (#249)', () => {
     (api.approvePurchase as jest.Mock).mockReturnValue(mutation.promise);
     setupHistoryHandlers();
     await loadHistory();
-    const btn = document.querySelector<HTMLButtonElement>('#history-list .history-approve-btn')!;
+    const btn = document.querySelector<HTMLButtonElement>('#purchases-approval-queue .history-approve-btn')!;
     btn.click();
     await settleActions();
     const redraw = (subscribeAmortizeUpfront as jest.Mock).mock.calls[0]![0] as () => void;
     redraw();
-    document.querySelector<HTMLButtonElement>('#history-list .history-approve-btn')!.click();
+    document.querySelector<HTMLButtonElement>('#purchases-approval-queue .history-approve-btn')!.click();
     document.querySelector<HTMLButtonElement>('#purchases-approval-queue .history-cancel-btn')!.click();
     btn.dispatchEvent(new MouseEvent('click'));
     mutation.resolve();
@@ -223,7 +223,7 @@ describe('History action ownership and refresh recovery (#249)', () => {
     await loadHistory();
     (api.getHistory as jest.Mock).mockRejectedValueOnce(new Error('refresh failed'));
     if (toastThrows) (showToast as jest.Mock).mockImplementationOnce(() => { throw new Error('toast failed'); });
-    document.querySelector<HTMLButtonElement>('#history-list .history-approve-btn')!.click();
+    document.querySelector<HTMLButtonElement>('#purchases-approval-queue .history-approve-btn')!.click();
     await settleActions();
     const redraw = (subscribeAmortizeUpfront as jest.Mock).mock.calls[0]![0] as () => void;
     redraw();
@@ -232,7 +232,7 @@ describe('History action ownership and refresh recovery (#249)', () => {
     expect(api.getHistory).toHaveBeenCalledTimes(2);
     expect((showToast as jest.Mock).mock.calls.some(([opts]) => opts.message?.startsWith('Failed to approve'))).toBe(false);
     await loadHistory();
-    expect(document.querySelectorAll('[data-approve-id="guarded"]')).toHaveLength(2);
+    expect(document.querySelectorAll('[data-approve-id="guarded"]')).toHaveLength(1);
   });
 
   test.each(['history', 'plan'] as const)('%s loader cannot publish responses started before a successful mutation', async loader => {
@@ -244,14 +244,14 @@ describe('History action ownership and refresh recovery (#249)', () => {
     const redraw = (subscribeAmortizeUpfront as jest.Mock).mock.calls[0]![0] as () => void;
     redraw();
     (api.getHistory as jest.Mock).mockRejectedValueOnce(new Error('refresh failed'));
-    document.querySelector<HTMLButtonElement>('#history-list .history-approve-btn')!.click();
+    document.querySelector<HTMLButtonElement>('#purchases-approval-queue .history-approve-btn')!.click();
     await settleActions();
     old.resolve(data);
     await oldLoad;
     redraw();
     expect(document.querySelectorAll('[data-approve-id="guarded"]')).toHaveLength(0);
     await loadHistory();
-    expect(document.querySelectorAll('[data-approve-id="guarded"]')).toHaveLength(2);
+    expect(document.querySelectorAll('[data-approve-id="guarded"]')).toHaveLength(1);
   });
 
   test.each(['history', 'plan'] as const)('%s loader ignores old errors after a successful mutation refresh', async loader => {
@@ -261,11 +261,11 @@ describe('History action ownership and refresh recovery (#249)', () => {
     (api.getHistory as jest.Mock).mockReturnValueOnce(old.promise);
     const oldLoad = loader === 'history' ? loadHistory() : viewPlanHistory('plan-1');
     ((subscribeAmortizeUpfront as jest.Mock).mock.calls[0]![0] as () => void)();
-    document.querySelector<HTMLButtonElement>('#history-list .history-approve-btn')!.click();
+    document.querySelector<HTMLButtonElement>('#purchases-approval-queue .history-approve-btn')!.click();
     await settleActions();
     old.reject(new Error('old failure'));
     await oldLoad;
-    expect(document.querySelectorAll('[data-approve-id="guarded"]')).toHaveLength(2);
+    expect(document.querySelectorAll('[data-approve-id="guarded"]')).toHaveLength(1);
     expect(document.getElementById('history-list')!.textContent).not.toContain('old failure');
   });
 });
@@ -344,10 +344,8 @@ describe('History inline Approve button (issue #286)', () => {
 
     await loadHistory();
 
-    // Scope to the Purchase History table only. The Approval queue
-    // card (issue #340 sub-task) ALSO renders Approve buttons for
-    // pending rows, so a document-wide query would double-count.
-    const list = document.getElementById('history-list')!;
+    // The Approval queue card is the only approval surface (issue #183).
+    const list = document.getElementById('purchases-approval-queue')!;
     const buttons = list.querySelectorAll<HTMLButtonElement>('.history-approve-btn');
     const ids = Array.from(buttons).map((b) => b.dataset['approveId']);
     expect(ids).toEqual(expect.arrayContaining(['exec-mine', 'exec-other', 'exec-legacy']));
@@ -367,10 +365,8 @@ describe('History inline Approve button (issue #286)', () => {
 
     await loadHistory();
 
-    // Scope to the Purchase History table only. The Approval queue
-    // card (issue #340 sub-task) ALSO renders Approve buttons for
-    // pending rows, so a document-wide query would double-count.
-    const list = document.getElementById('history-list')!;
+    // The Approval queue card is the only approval surface (issue #183).
+    const list = document.getElementById('purchases-approval-queue')!;
     const buttons = list.querySelectorAll<HTMLButtonElement>('.history-approve-btn');
     const ids = Array.from(buttons).map((b) => b.dataset['approveId']);
     expect(ids).toEqual(['exec-mine']);
@@ -403,9 +399,8 @@ describe('History inline Approve button (issue #286)', () => {
 
     await loadHistory();
 
-    // Scope to history-list. The queue card also paints the same
-    // notified row, but this test is about the table-side filter.
-    const list = document.getElementById('history-list')!;
+    // The Approval queue card is the only approval surface (issue #183).
+    const list = document.getElementById('purchases-approval-queue')!;
     const ids = Array.from(list.querySelectorAll<HTMLButtonElement>('.history-approve-btn'))
       .map((b) => b.dataset['approveId']);
     expect(ids).toEqual(['exec-notified']);
@@ -420,8 +415,8 @@ describe('History inline Approve button (issue #286)', () => {
 
     await loadHistory();
 
-    // Scope to history-list. The queue card also renders the pair.
-    const list = document.getElementById('history-list')!;
+    // The Approval queue card is the only approval surface (issue #183).
+    const list = document.getElementById('purchases-approval-queue')!;
     const approveBtns = list.querySelectorAll<HTMLButtonElement>('.history-approve-btn[data-approve-id]');
     const cancelBtns = list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn[data-cancel-id]');
     expect(approveBtns).toHaveLength(1);
@@ -505,11 +500,11 @@ describe('History inline Approve button (issue #286)', () => {
     });
 
     await loadHistory();
-    // Scope to history-list for the disable assertion. The click
+    // Scope to the queue for the disable assertion. The click
     // handler scopes its disable to the clicked button's containing
     // <td> (sameRowActions), so we need both buttons from the SAME row
     // of the SAME view to verify the pair-disable behaviour.
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     const approveBtn = list.querySelector<HTMLButtonElement>('.history-approve-btn');
     const cancelBtn = list.querySelector<HTMLButtonElement>('.history-cancel-btn');
     expect(approveBtn).not.toBeNull();
@@ -588,8 +583,8 @@ describe('History inline Approve button (issue #286)', () => {
 
     await loadHistory();
 
-    // Scope to the history list (not the approval queue card).
-    const list = document.getElementById('history-list')!;
+    // The Approval queue card is the only approval surface (issue #183).
+    const list = document.getElementById('purchases-approval-queue')!;
     const buttons = list.querySelectorAll<HTMLButtonElement>('.history-approve-btn');
     // No Approve buttons must appear for any row when the session has no
     // approve-own or approve-any permission.
@@ -616,8 +611,8 @@ describe('History inline Approve button (issue #286)', () => {
 
     await loadHistory();
 
-    // Scope to the history list (not the approval queue card).
-    const list = document.getElementById('history-list')!;
+    // The Approval queue card is the only approval surface (issue #183).
+    const list = document.getElementById('purchases-approval-queue')!;
     const buttons = list.querySelectorAll<HTMLButtonElement>('.history-approve-btn');
     const ids = Array.from(buttons).map((b) => b.dataset['approveId']);
     // Approve renders only via the approve-own fallback (matching
