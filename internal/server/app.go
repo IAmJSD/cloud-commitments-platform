@@ -1158,7 +1158,7 @@ func (a *authServiceAdapter) GetUser(ctx context.Context, userID string) (*api.U
 		return nil, err
 	}
 	if user == nil {
-		return nil, fmt.Errorf("user not found")
+		return nil, auth.ErrUserNotFound
 	}
 	return &api.User{
 		ID:         user.ID,

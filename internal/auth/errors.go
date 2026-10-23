@@ -97,6 +97,19 @@ var (
 	// caller read it (issue #474). Mapped to 409.
 	ErrUserChanged = errors.New("account changed concurrently; reload and retry")
 
+	// Lookup sentinels for the admin read and key-management endpoints
+	// (issue #312). Mapped to 404, as openapi.yaml documents, instead of
+	// surfacing the store's raw pgx.ErrNoRows as a 500. ErrUserNotFound and
+	// ErrGroupNotFound wrap pgx.ErrNoRows when the store returned it, so
+	// errors.Is(err, pgx.ErrNoRows) still holds for existing callers.
+	// ErrAPIKeyNotOwned: a non-admin acting on another user's key; the
+	// handler answers it with the same 404 as a missing key so the response
+	// does not confirm that the key exists.
+	ErrUserNotFound   = errors.New("user not found")
+	ErrGroupNotFound  = errors.New("group not found")
+	ErrAPIKeyNotFound = errors.New("API key not found")
+	ErrAPIKeyNotOwned = errors.New("unauthorized")
+
 	// MFA login-gate sentinels — used by the login API handler to map
 	// to machine-readable response codes (mfa_required /
 	// invalid_mfa_code) so the frontend can branch on the error class
