@@ -157,7 +157,11 @@ label {
     border-radius: 4px;
 }
 
+/* Block, not the inline <small> default: inline it sat on the 16px body
+ * line box, so with the 1.5 body line-height its wrapped lines were 24px
+ * apart, and its margin-top had no effect. */
 .form-help {
+    display: block;
     font-size: 0.8rem;
     color: var(--cudly-text-muted);
     margin-top: 0.25rem;
