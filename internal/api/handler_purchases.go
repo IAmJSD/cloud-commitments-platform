@@ -2039,8 +2039,9 @@ func revocationWindowClosesAt(execution *config.PurchaseExecution) string {
 // UPDATE WHERE status IN ('completed','partially_completed'). This guards
 // against lost-update races: if the row changed between the GetExecutionByID
 // read and this write (e.g. a concurrent transition), zero rows are affected
-// and we return a 409 rather than blindly overwriting. CancelledBy is stamped
-// in a follow-up SavePurchaseExecution on the freshly-returned row.
+// and we return a 409 rather than blindly overwriting. CancelledBy is then
+// stamped by a narrow SetCancelledBy UPDATE keyed on the execution ID, so the
+// row TransitionExecutionStatus returns is not used.
 //
 // transitionedBy is the acting user's UUID (resolveCreatorUserID), or nil when
 // the caller has no user row. It must never be an email: transitioned_by is a
@@ -2049,11 +2050,17 @@ func revocationWindowClosesAt(execution *config.PurchaseExecution) string {
 // The revocation window is enforced here, not only in validateRevokeToken, so
 // the session-authed branch (tryRevokeViaSession) cannot flip an execution
 // whose window closed long ago to revocation_requested (issue #260).
+//
+// Neither revoke path (this one or the token path in revokePurchase) applies
+// the 4-eyes RequireDifferentApprover policy: that policy gates approvals
+// only, and a revocation records a request that an operator completes with
+// AWS Support. Whether revocation should also need a second person is an
+// open owner decision (issue #311).
 func (h *Handler) revokeViaSession(ctx context.Context, execution *config.PurchaseExecution, revokedBy string, transitionedBy *string) (any, error) {
 	if err := checkRevocationWindow(execution); err != nil {
 		return nil, err
 	}
-	updated, err := h.config.TransitionExecutionStatus(
+	_, err := h.config.TransitionExecutionStatus(
 		ctx, execution.ExecutionID,
 		[]string{"completed", "partially_completed"}, "revocation_requested", transitionedBy)
 	if err != nil {
@@ -2076,7 +2083,6 @@ func (h *Handler) revokeViaSession(ctx context.Context, execution *config.Purcha
 		if err := h.config.SetCancelledBy(ctx, execution.ExecutionID, revokedBy); err != nil {
 			return nil, fmt.Errorf("failed to record revocation requester for execution %s: %w", execution.ExecutionID, err)
 		}
-		_ = updated // kept for future use; CancelledBy is now persisted atomically
 	}
 	logging.Infof("Revocation requested for execution %s by %s", execution.ExecutionID, redactEmail(revokedBy))
 	return map[string]string{

@@ -6363,12 +6363,6 @@ func TestRevoke_NoTimestamp_Allowed(t *testing.T) {
 	require.NoError(t, err, "legacy rows without timestamp must not be blocked by window check")
 }
 
-// TestRevoke_4EyesMode_TODO is a placeholder to surface the 4-eyes-mode
-// interaction once issue #1005 lands.
-func TestRevoke_4EyesMode_TODO(t *testing.T) {
-	t.Skip("placeholder until #1005 lands: verify that 4-eyes-mode approval flows interact correctly with the revocation window")
-}
-
 // TestRevokePurchase_GETRendersConfirmationPage_NoMutation verifies that a GET
 // to the revoke handler returns 200 HTML containing a confirmation form and
 // does NOT call TransitionExecutionStatus (no mutation).

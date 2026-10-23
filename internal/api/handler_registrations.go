@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -461,10 +462,33 @@ func validateRegistrationRequest(req *RegistrationRequest) error {
 	if req.ContactEmail == "" {
 		return NewClientError(400, "contact_email is required")
 	}
-	if !strings.Contains(req.ContactEmail, "@") || len(req.ContactEmail) < 5 {
-		return NewClientError(400, "contact_email must be a valid email address")
+	contactEmail, err := registrationContactEmail(req.ContactEmail)
+	if err != nil {
+		return err
 	}
+	req.ContactEmail = contactEmail
 	return nil
+}
+
+// registrationContactEmail returns the bare address in a registrant's
+// contact_email, the form that is stored and later handed to the notifier,
+// or a 400. It applies validateEmailFormat, the check the rest of the
+// package uses (issue #311), so a value with a line break or a second
+// address after it, or a host with no TLD, is refused rather than stored.
+// A display-name form ("Jane <jane@example.com>") is accepted and reduced
+// to its address. The check runs on that bare address, so one that would
+// not parse again on its own (a quoted local part such as "a b"@example.com
+// unquotes to a b@example.com) is refused too.
+func registrationContactEmail(raw string) (string, error) {
+	invalid := NewClientError(400, "contact_email must be a valid email address")
+	addr, err := mail.ParseAddress(raw)
+	if err != nil {
+		return "", invalid
+	}
+	if validateEmailFormat(addr.Address) != nil {
+		return "", invalid
+	}
+	return addr.Address, nil
 }
 
 func buildRegistrationFilter(params map[string]string) config.AccountRegistrationFilter {

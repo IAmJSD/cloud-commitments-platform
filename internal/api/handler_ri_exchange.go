@@ -258,6 +258,18 @@ func (h *Handler) buildAzureExchangeClient(ctx context.Context, subscriptionID s
 	if err != nil {
 		return nil, fmt.Errorf("azure: look up account for subscription %q: %w", subscriptionID, err)
 	}
+	return h.azureExchangeClientForAccount(ctx, subscriptionID, account)
+}
+
+// azureExchangeClientForAccount is buildAzureExchangeClient for a caller that
+// has already resolved the CloudAccount registered for subscriptionID (nil
+// when none is), so the same row is not fetched again (issue #311). The
+// injected factory still wins, and a nil account still yields the graceful
+// (nil, nil) empty state.
+func (h *Handler) azureExchangeClientForAccount(ctx context.Context, subscriptionID string, account *config.CloudAccount) (azureExchangeClient, error) {
+	if h.azureExchangeFactory != nil {
+		return h.azureExchangeFactory(subscriptionID), nil
+	}
 	if account == nil {
 		// No Azure account registered for this subscription.
 		// Return nil client so the caller emits a graceful empty state.
@@ -849,14 +861,44 @@ func (h *Handler) requireAzureSubscriptionScope(ctx context.Context, session *Se
 	if allowed.AllowsAll() {
 		return nil
 	}
-	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
+	account, err := h.lookupAzureAccount(ctx, subscriptionID)
 	if err != nil {
-		return fmt.Errorf("failed to resolve cloud account scope: %w", err)
+		return err
 	}
+	return azureAccountInScope(allowed, account)
+}
+
+// requireAzureAccountScope is requireAzureSubscriptionScope for a caller
+// that has already resolved the subscription's CloudAccount (nil when none
+// is registered), with the same errNotFound denials.
+func (h *Handler) requireAzureAccountScope(ctx context.Context, session *Session, account *config.CloudAccount) error {
+	allowed, err := h.getAccountScope(ctx, session)
+	if err != nil {
+		return fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if allowed.AllowsAll() {
+		return nil
+	}
+	return azureAccountInScope(allowed, account)
+}
+
+// azureAccountInScope refuses, with errNotFound, an unregistered account and
+// one outside the session's scope alike, so the two are indistinguishable.
+func azureAccountInScope(allowed auth.AccountScope, account *config.CloudAccount) error {
 	if account == nil || !allowed.Allows(account.ID, account.Name) {
 		return errNotFound
 	}
 	return nil
+}
+
+// lookupAzureAccount returns the CloudAccount registered for subscriptionID,
+// or nil when none is.
+func (h *Handler) lookupAzureAccount(ctx context.Context, subscriptionID string) (*config.CloudAccount, error) {
+	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve cloud account scope: %w", err)
+	}
+	return account, nil
 }
 
 // requireAzureSourceOwnership refuses any source reservation that is not
@@ -1031,6 +1073,14 @@ const azureMaxPurchaseAmountCurrency = "USD"
 //     known-owned, so unknownRegionConstraint means only "owned, but Azure
 //     reported no region" rather than doubling as "not yours" or "not real".
 func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *Session, body AzureExecuteExchangeRequestBody, maxRat *big.Rat) (azureExchangeClient, []azurecompute.ExchangeableReservation, string, error) {
+	// The subscription's CloudAccount is resolved once and that one row
+	// feeds the scope check, the client's credentials and the constraint
+	// AccountIDs (issue #311), so the three cannot see different rows.
+	account, err := h.lookupAzureAccount(ctx, body.SubscriptionID)
+	if err != nil {
+		return nil, nil, "", err
+	}
+
 	// Scope check MUST precede building the client (mirrors
 	// getAzureCompatibleOfferings): otherwise an unregistered subscription
 	// (distinguishable 404: "no Azure account registered...") and a
@@ -1038,11 +1088,11 @@ func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *
 	// enumeration signal to a scoped caller about which subscriptions exist,
 	// and credentials for an out-of-scope account could be resolved before
 	// the denial.
-	if scopeErr := h.requireAzureSubscriptionScope(ctx, session, body.SubscriptionID); scopeErr != nil {
+	if scopeErr := h.requireAzureAccountScope(ctx, session, account); scopeErr != nil {
 		return nil, nil, "", scopeErr
 	}
 
-	client, err := h.buildAzureExchangeClient(ctx, body.SubscriptionID)
+	client, err := h.azureExchangeClientForAccount(ctx, body.SubscriptionID, account)
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("failed to build Azure exchange client: %w", err)
 	}
@@ -1059,32 +1109,23 @@ func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *
 		return nil, nil, "", ownErr
 	}
 
-	accountID, err := h.resolveAzureExchangeAccountID(ctx, body.SubscriptionID)
-	if err != nil {
-		return nil, nil, "", err
-	}
-
+	accountID := azureExchangeAccountID(account)
 	if err := h.checkAzureExecuteConstraints(ctx, session, body, accountID, maxRat, exchangeRegions(body.Targets, body.Sources, owned)); err != nil {
 		return nil, nil, "", err
 	}
 	return client, toAzureExchangeSources(body.Sources, owned), accountID, nil
 }
 
-// resolveAzureExchangeAccountID looks up the CloudAccount registered for
-// subscriptionID and returns its ID, or unattributedAccountConstraint when
-// no account is registered (so an AccountIDs-constrained permission still
-// fails closed against an unattributed request). Extracted from
-// authorizeAzureExchangeExecution to keep that function under the gocyclo
-// limit.
-func (h *Handler) resolveAzureExchangeAccountID(ctx context.Context, subscriptionID string) (string, error) {
-	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve cloud account scope: %w", err)
-	}
+// azureExchangeAccountID returns the resolved CloudAccount's ID, or
+// unattributedAccountConstraint when no account is registered (so an
+// AccountIDs-constrained permission still fails closed against an
+// unattributed request). Only the injected azureExchangeFactory path gets
+// this far with a nil account: production refuses it with a 404 earlier.
+func azureExchangeAccountID(account *config.CloudAccount) string {
 	if account != nil {
-		return account.ID, nil
+		return account.ID
 	}
-	return unattributedAccountConstraint, nil
+	return unattributedAccountConstraint
 }
 
 // checkAzureExecuteConstraints enforces the execute:ri-exchange permission
