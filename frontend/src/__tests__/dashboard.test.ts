@@ -673,6 +673,66 @@ describe('Dashboard Module', () => {
       }));
     });
 
+    // #731: the details dialog goes through openModal and shares the card's
+    // cancel path (same confirm copy, one DELETE per step at a time).
+    describe('upcoming purchase details dialog (#731)', () => {
+      const upcoming = {
+        execution_id: 'exec-731', plan_id: 'plan-731', plan_name: 'Test Plan', provider: 'aws',
+        service: 'ec2', step_number: 1, total_steps: 4, estimated_savings: 100, scheduled_date: '2024-02-15',
+      };
+
+      async function openDetails(): Promise<{ viewBtn: HTMLButtonElement; modal: HTMLElement }> {
+        (api.getDashboardSummary as jest.Mock).mockResolvedValue({ potential_monthly_savings: 0, by_service: {} });
+        (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [upcoming] });
+        await loadDashboard();
+        const viewBtn = document.querySelector('[data-action="view-purchase"]') as HTMLButtonElement;
+        viewBtn.focus();
+        viewBtn.click();
+        return { viewBtn, modal: document.getElementById('purchase-details-modal') as HTMLElement };
+      }
+
+      test('is a named dialog that takes focus, closes on Escape and restores focus', async () => {
+        const { viewBtn, modal } = await openDetails();
+        expect(modal.getAttribute('role')).toBe('dialog');
+        expect(modal.getAttribute('aria-modal')).toBe('true');
+        const titleId = modal.getAttribute('aria-labelledby') ?? '';
+        expect(document.getElementById(titleId)?.textContent).toBe('Upcoming Purchase Details');
+        expect(modal.contains(document.activeElement)).toBe(true);
+
+        modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        expect(document.getElementById('purchase-details-modal')).toBeNull();
+        expect(document.activeElement).toBe(viewBtn);
+      });
+
+      test('Cancel Purchase uses the card confirm copy and sends one DELETE while in flight', async () => {
+        const { modal } = await openDetails();
+        let finishDelete: () => void = () => {};
+        (api.deletePlannedPurchase as jest.Mock).mockReturnValue(new Promise<void>(r => { finishDelete = r; }));
+        mockConfirmDialog.mockClear();
+
+        const cancelBtn = modal.querySelector('#cancel-purchase-detail-btn') as HTMLButtonElement;
+        cancelBtn.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(cancelBtn.disabled).toBe(true);
+        cancelBtn.disabled = false; // force a second click through
+        cancelBtn.click();
+        (document.querySelector('[data-action="cancel-purchase"]') as HTMLButtonElement).click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
+        const body = (mockConfirmDialog.mock.calls[0]![0] as { body: string }).body;
+        expect(body).toContain('removes this upcoming step from the plan');
+        expect(body).not.toContain('refunded');
+        expect(api.deletePlannedPurchase).toHaveBeenCalledTimes(1);
+
+        (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+        finishDelete();
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(document.getElementById('purchase-details-modal')).toBeNull();
+        expect(api.deletePlannedPurchase).toHaveBeenCalledWith('exec-731');
+      });
+    });
+
     // #293: Potential Monthly Savings card renders per-cell range, not
     // the flat summary.potential_monthly_savings value.
     test('Potential Monthly Savings card renders per-cell range (#293)', async () => {
