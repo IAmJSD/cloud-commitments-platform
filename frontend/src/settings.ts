@@ -1154,23 +1154,30 @@ function openAccountOverridesModal(account: api.CloudAccount): void {
   }
   const body = document.getElementById('account-overrides-modal-body');
   if (!body) return;
-  modal.classList.remove('hidden');
+  // openModal moves focus inside, traps Tab and closes on Escape (#731).
+  // onClose runs on every close path, Escape included.
+  openModal(modal, { onClose: resetAccountOverridesModal });
   void loadOverridesPanel(account.id, body, account.provider);
 }
 
 function closeAccountOverridesModal(): void {
   const modal = document.getElementById('account-overrides-modal');
-  modal?.classList.add('hidden');
+  if (modal) closeModal(modal);
+  // Idempotent; covers a close of a modal that was never opened via openModal.
+  resetAccountOverridesModal();
+}
+
+function resetAccountOverridesModal(): void {
+  // Close the inner create modal too if it's still open. The user can't
+  // visually reach the outer's close affordances while the inner is up
+  // (inner backdrop covers them), but a programmatic close should leave a
+  // clean slate, not an orphaned inner modal whose Save would target a
+  // hidden parent.
+  closeOverrideModal();
   // Drop the body content so the next open doesn't briefly flash stale
   // data from a previous account before loadOverridesPanel populates it.
   const body = document.getElementById('account-overrides-modal-body');
   if (body) body.replaceChildren();
-  // Close the inner create modal too if it's still open. The user can't
-  // visually reach the outer's close affordances while the inner is up
-  // (inner backdrop covers them), but a programmatic close — or a future
-  // ESC-to-close from issue #115 — should leave a clean slate, not an
-  // orphaned inner modal whose Save would target a hidden parent.
-  closeOverrideModal();
 }
 
 export async function loadOverridesPanel(accountId: string, panel: HTMLElement, provider: AccountProvider): Promise<void> {
@@ -1675,7 +1682,9 @@ export function openOverrideModal(
     { signal: overridePaymentOptionsController.signal },
   );
 
-  modal.classList.remove('hidden');
+  // Focus moves into the dialog and Escape closes it (#731). When this opens
+  // on top of the account overrides modal, closing it hands focus back there.
+  openModal(modal, { onClose: resetOverrideModalState });
 }
 
 /**
@@ -1843,7 +1852,12 @@ function syncOverridePaymentOptions(provider: string): void {
 
 function closeOverrideModal(): void {
   const modal = document.getElementById('override-modal');
-  modal?.classList.add('hidden');
+  if (modal) closeModal(modal);
+  // Idempotent; covers a close of a modal that was never opened via openModal.
+  resetOverrideModalState();
+}
+
+function resetOverrideModalState(): void {
   overrideModalContext = null;
   overridePaymentOptionsController?.abort();
   overridePaymentOptionsController = null;
