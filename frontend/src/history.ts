@@ -1111,6 +1111,12 @@ function purchaseHistoryDisplayLabel(
   return value;
 }
 
+// Per-table namespaces for the shared filter popover (issue #281): both
+// tables render buttons with the same bare column ids, so the popover keys
+// and resolves its anchor by (scope, column).
+const PURCHASE_HISTORY_FILTER_SCOPE = 'history';
+const APPROVAL_QUEUE_FILTER_SCOPE = 'queue';
+
 function wirePurchaseHistoryFilterButtons(
   container: HTMLElement,
   // The pre-column-filter slice — popover lists distinct values from
@@ -1127,6 +1133,7 @@ function wirePurchaseHistoryFilterButtons(
       const isNumeric = PURCHASE_HISTORY_NUMERIC_COLUMNS.has(column);
       const filters = state.getPurchaseHistoryColumnFilters();
       openHistoryColumnPopover<PurchaseHistoryColumnId>({
+        scope: PURCHASE_HISTORY_FILTER_SCOPE,
         column,
         anchor: btn,
         currentFilter: filters[column],
@@ -1258,7 +1265,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   const amortize = state.getAmortizeUpfront();
   const monthlyColHeader = amortize ? 'Monthly Cost (amortized)' : 'Monthly Cost';
   const fbtn = (col: PurchaseHistoryColumnId): string => renderHistoryFilterButton(
-    col, PURCHASE_HISTORY_LABELS[col], colFilters[col] != null,
+    col, PURCHASE_HISTORY_LABELS[col], colFilters[col] != null, PURCHASE_HISTORY_FILTER_SCOPE,
   );
   const markup = `
     ${buildStatusChipRowHTML(purchases, activeStatusFilter)}
@@ -1802,6 +1809,7 @@ function wireApprovalQueueFilterButtons(
       const isNumeric = APPROVAL_QUEUE_NUMERIC_COLUMNS.has(column);
       const filters = state.getApprovalQueueColumnFilters();
       openHistoryColumnPopover<ApprovalQueueColumnId>({
+        scope: APPROVAL_QUEUE_FILTER_SCOPE,
         column,
         anchor: btn,
         currentFilter: filters[column],
@@ -1884,7 +1892,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
   // monthlyColHeader is a hardcoded constant string (no user data), so
   // interpolating it directly into the template is safe.
   const fbtn = (col: ApprovalQueueColumnId): string => renderHistoryFilterButton(
-    col, APPROVAL_QUEUE_LABELS[col], colFilters[col] != null,
+    col, APPROVAL_QUEUE_LABELS[col], colFilters[col] != null, APPROVAL_QUEUE_FILTER_SCOPE,
   );
   container.innerHTML = `
     <table class="approval-queue-table">
