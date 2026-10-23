@@ -323,7 +323,9 @@ func TestPostgresAnalyticsStore_QueryByProvider_DB(t *testing.T) {
 	t.Run("query by provider aggregates correctly", func(t *testing.T) {
 		breakdowns, err := store.QueryByProvider(ctx, nil, map[string][]string{"aws": {"123456789012"}, "gcp": {"123456789012"}}, now.Add(-24*time.Hour), now)
 		require.NoError(t, err)
-		assert.NotEmpty(t, breakdowns)
+		// One bucket per provider: the gcp row shares the account number and
+		// is matched through the "gcp" key, the aws rows through "aws".
+		require.Len(t, breakdowns, 2)
 
 		// Find aws/rds breakdown
 		var found bool
@@ -338,6 +340,15 @@ func TestPostgresAnalyticsStore_QueryByProvider_DB(t *testing.T) {
 			}
 		}
 		assert.True(t, found, "aws/rds breakdown not found")
+
+		var gcpFound bool
+		for _, b := range breakdowns {
+			if b.Provider == "gcp" && b.Service == "cloudsql" {
+				gcpFound = true
+				assert.InDelta(t, 150.00, b.TotalSavings, 0.01)
+			}
+		}
+		assert.True(t, gcpFound, "gcp/cloudsql breakdown not found")
 	})
 }
 
@@ -389,7 +400,7 @@ func TestPostgresAnalyticsStore_QueryByService_DB(t *testing.T) {
 	}
 
 	t.Run("query by service groups by region", func(t *testing.T) {
-		breakdowns, err := store.QueryByService(ctx, nil, map[string][]string{"aws": {"123456789012"}, "gcp": {"123456789012"}}, "aws", now.Add(-24*time.Hour), now)
+		breakdowns, err := store.QueryByService(ctx, nil, map[string][]string{"aws": {"123456789012"}}, "aws", now.Add(-24*time.Hour), now)
 		require.NoError(t, err)
 		assert.Len(t, breakdowns, 2) // Two regions
 
@@ -453,7 +464,7 @@ func TestPostgresAnalyticsStore_BulkInsertSnapshots_DB(t *testing.T) {
 
 		// Verify data was inserted
 		req := analytics.QueryRequest{
-			AccountExternalIDsByProvider: map[string][]string{"aws": {"123456789012"}, "gcp": {"123456789012"}},
+			AccountExternalIDsByProvider: map[string][]string{"aws": {"123456789012"}},
 			StartDate:                    now.Add(-24 * time.Hour),
 			EndDate:                      now,
 		}
@@ -550,10 +561,19 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals_DB(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("query monthly totals from materialized view", func(t *testing.T) {
-		summaries, err := store.QueryMonthlyTotals(ctx, nil, map[string][]string{"aws": {"123456789012"}, "gcp": {"123456789012"}}, 6)
+		summaries, err := store.QueryMonthlyTotals(ctx, nil, map[string][]string{"aws": {"123456789012"}}, 6)
 		require.NoError(t, err)
-		// May be empty if materialized view refresh happens before data is visible
-		assert.NotNil(t, summaries)
+		// RefreshMaterializedViews above is synchronous, so the seeded aws/rds
+		// row is in the view. It carries no cloud_account_id, so it can only be
+		// matched through the provider-scoped external account_id (#32).
+		require.Len(t, summaries, 1)
+		s := summaries[0]
+		assert.Equal(t, "123456789012", s.AccountID)
+		assert.Nil(t, s.CloudAccountID)
+		assert.Equal(t, "aws", s.Provider)
+		assert.Equal(t, "rds", s.Service)
+		assert.InDelta(t, 200.00, s.TotalSavings, 0.01)
+		assert.Equal(t, 1, s.SnapshotCount)
 	})
 
 	t.Run("query monthly totals for non-existent account", func(t *testing.T) {
