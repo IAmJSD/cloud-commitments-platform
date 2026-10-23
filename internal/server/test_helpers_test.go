@@ -481,6 +481,12 @@ func (m *mockConfigStoreForHealth) UpdateGlobalConfigAtomic(_ context.Context, a
 func (m *mockConfigStoreForHealth) UpdatePurchaseHistoryListing(_ context.Context, _, _, _ string) error {
 	return nil
 }
+func (m *mockConfigStoreForHealth) GetMarketplaceListingAttempt(_ context.Context, _ string) (*config.MarketplaceListingAttempt, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) ResolveMarketplaceListingAttempt(_ context.Context, _ string, _ config.MarketplaceListingAttempt, _, _ string) (bool, error) {
+	return false, nil
+}
 func (m *mockConfigStoreForHealth) ClaimMarketplaceListingSlot(_ context.Context, _, _ string, _ []byte) (*config.MarketplaceListingClaim, error) {
 	return &config.MarketplaceListingClaim{}, nil
 }

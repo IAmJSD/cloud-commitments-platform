@@ -406,8 +406,22 @@ type StoreInterface interface {
 	// CreateReservedInstancesListing succeeds (listing_state="active") and
 	// on subsequent poll/cancel transitions (issue #292). Recording a listing
 	// resolves the attempt, so it also clears the persisted client token and
-	// price schedule (issue #525).
+	// price schedule (issue #525). It never marks a listing the row records as
+	// canceled or closed live again; that write returns
+	// ErrMarketplaceListingEnded.
 	UpdatePurchaseHistoryListing(ctx context.Context, purchaseID, listingID, listingState string) error
+
+	// GetMarketplaceListingAttempt returns the listing id, state and the token
+	// of an unresolved list attempt of the row for purchaseID, or (nil, nil)
+	// when there is none. The cancel endpoint uses it to recover a pending row
+	// (issue #525).
+	GetMarketplaceListingAttempt(ctx context.Context, purchaseID string) (*MarketplaceListingAttempt, error)
+
+	// ResolveMarketplaceListingAttempt records listingID in an ended (or, to
+	// clear a stuck pending row without a listing, empty) state and drops the
+	// attempt token, only while the row still matches seen or already holds
+	// listingID. It reports whether the row was written (issue #525).
+	ResolveMarketplaceListingAttempt(ctx context.Context, purchaseID string, seen MarketplaceListingAttempt, listingID, state string) (bool, error)
 
 	// StampOfferingClass writes the offering_class value to a purchase_history
 	// row identified by purchase_id. Called by the marketplace-list handler

@@ -5,7 +5,8 @@ package api
 //
 // Endpoints:
 //   POST /api/purchases/{id}/marketplace-list    create a listing
-//   POST /api/purchases/{id}/marketplace-cancel  cancel an active listing
+//   POST /api/purchases/{id}/marketplace-cancel  cancel an active listing or
+//                                                recover a pending one
 //
 // Both endpoints require the caller to hold sell-any:purchases (admin or a
 // custom operator group) or sell-own:purchases for rows they purchased
@@ -315,6 +316,9 @@ func (h *Handler) keepUncanceledListing(ctx context.Context, purchaseID string, 
 	}
 	msg := fmt.Sprintf("marketplace listing %s was created but could not be saved, and canceling it failed (%s); the listing may still be active on AWS", listing.ListingID, cancelDetail)
 	if err := h.config.UpdatePurchaseHistoryListing(ctx, purchaseID, listing.ListingID, state); err != nil {
+		if isListingEndedConflict(err) {
+			return listingCanceledConcurrently(listing.ListingID)
+		}
 		logging.Errorf("marketplace: failed to record uncanceled listing %s for purchase %s (row stays %q): %v", listing.ListingID, purchaseID, config.ListingStatePending, err)
 		return NewClientError(502, msg+"; the RI stays locked as pending until an operator reconciles the listing")
 	}
@@ -345,59 +349,6 @@ func (h *Handler) populateOfferingClass(ctx context.Context, purchaseID string, 
 		logging.Errorf("marketplace: failed to persist offering_class %q for purchase %s: %v", class, purchaseID, stampErr)
 	}
 	return class, nil
-}
-
-// marketplaceCancel handles POST /api/purchases/{id}/marketplace-cancel.
-func (h *Handler) marketplaceCancel(ctx context.Context, req *events.LambdaFunctionURLRequest, purchaseID string) (any, error) {
-	session, action, err := h.requireSessionPurchaseAction(ctx, req, auth.ActionSellAny, auth.ActionSellOwn)
-	if err != nil {
-		return nil, err
-	}
-
-	err = validateUUID(purchaseID)
-	if err != nil {
-		return nil, err
-	}
-
-	row, err := h.config.GetPurchaseHistoryByPurchaseID(ctx, purchaseID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to look up purchase: %w", err)
-	}
-	if row == nil {
-		return nil, NewClientError(404, "purchase not found")
-	}
-
-	err = h.authorizeSessionSell(ctx, session, action, row)
-	if err != nil {
-		return nil, err
-	}
-
-	if !strings.EqualFold(row.ListingState, config.ListingStateActive) {
-		return nil, NewClientError(409, "no active listing found for this RI; current state: "+row.ListingState)
-	}
-
-	cfg, err := h.loadMarketplaceAWSConfig(ctx, row)
-	if err != nil {
-		return nil, err
-	}
-
-	ec2Client := h.buildMarketplaceEC2Client(cfg)
-
-	result, err := ec2Client.CancelMarketplaceListing(ctx, row.ListingID)
-	if err != nil {
-		logging.Warnf("marketplace: CancelReservedInstancesListing for listing %s failed: %v", row.ListingID, err)
-		return nil, mapAWSMarketplaceError("AWS cancel listing failed", err)
-	}
-
-	// The listing is already canceled in AWS; there is no compensating rollback
-	// available if the DB write fails. Return an internal error so the caller
-	// knows the state is out of sync and can retry or contact an administrator.
-	if dbErr := h.config.UpdatePurchaseHistoryListing(ctx, purchaseID, result.ListingID, result.State); dbErr != nil {
-		logging.Errorf("marketplace: listing canceled in AWS (%s) but DB update failed: %v; state is out of sync", result.ListingID, dbErr)
-		return nil, fmt.Errorf("listing canceled in AWS but could not be persisted: %w", dbErr)
-	}
-
-	return map[string]string{"listing_id": result.ListingID, "listing_state": result.State}, nil
 }
 
 // sell-own uses account access rather than creator identity for purchase-history rows.

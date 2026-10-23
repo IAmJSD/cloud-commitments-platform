@@ -858,6 +858,28 @@ func (m *MockConfigStore) UpdatePurchaseHistoryListing(ctx context.Context, purc
 	return args.Error(0)
 }
 
+// GetMarketplaceListingAttempt mocks reading a row's listing attempt (issue #525).
+func (m *MockConfigStore) GetMarketplaceListingAttempt(ctx context.Context, purchaseID string) (*config.MarketplaceListingAttempt, error) {
+	m.record("GetMarketplaceListingAttempt", ctx, purchaseID)
+	args := m.Called(ctx, purchaseID)
+	var attempt *config.MarketplaceListingAttempt
+	if v := args.Get(0); v != nil {
+		a, ok := v.(*config.MarketplaceListingAttempt)
+		if !ok {
+			panic(fmt.Sprintf("mock: expected *config.MarketplaceListingAttempt, got %T", v))
+		}
+		attempt = a
+	}
+	return attempt, args.Error(1)
+}
+
+// ResolveMarketplaceListingAttempt mocks the fenced recovery write of the cancel endpoint (issue #525).
+func (m *MockConfigStore) ResolveMarketplaceListingAttempt(ctx context.Context, purchaseID string, seen config.MarketplaceListingAttempt, listingID, state string) (bool, error) {
+	m.record("ResolveMarketplaceListingAttempt", ctx, purchaseID, seen, listingID, state)
+	args := m.Called(ctx, purchaseID, seen, listingID, state)
+	return args.Bool(0), args.Error(1)
+}
+
 // StampOfferingClass mocks persisting the offering_class fetched from AWS (issue #292).
 func (m *MockConfigStore) StampOfferingClass(ctx context.Context, purchaseID, offeringClass string) error {
 	m.record("StampOfferingClass", ctx, purchaseID, offeringClass)

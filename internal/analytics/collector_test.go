@@ -528,6 +528,14 @@ func (m *mockConfigStore) UpdatePurchaseHistoryListing(_ context.Context, _, _, 
 	return nil
 }
 
+func (m *mockConfigStore) GetMarketplaceListingAttempt(_ context.Context, _ string) (*config.MarketplaceListingAttempt, error) {
+	return nil, nil
+}
+
+func (m *mockConfigStore) ResolveMarketplaceListingAttempt(_ context.Context, _ string, _ config.MarketplaceListingAttempt, _, _ string) (bool, error) {
+	return false, nil
+}
+
 func (m *mockConfigStore) ClaimMarketplaceListingSlot(_ context.Context, _, _ string, _ []byte) (*config.MarketplaceListingClaim, error) {
 	return &config.MarketplaceListingClaim{}, nil
 }

@@ -2369,18 +2369,24 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 // succeeds (listing_id + listing_state="active") and by the status-poll path on
 // the later closed/canceled transitions.
 func (s *PostgresStore) UpdatePurchaseHistoryListing(ctx context.Context, purchaseID, listingID, listingState string) error {
+	// A listing recorded as canceled or closed is never marked live again
+	// (issue #525): a list request that lost a race with the cancel endpoint
+	// gets ErrMarketplaceListingEnded instead of reviving the canceled listing.
 	query := `
 		UPDATE purchase_history
 		SET listing_id = $1, listing_state = $2,
 		    listing_client_token = NULL, listing_price_schedule = NULL
 		WHERE purchase_id = $3
+		  AND NOT (COALESCE(listing_id, '') = $1
+		           AND lower(COALESCE(listing_state, '')) IN ($4, $5)
+		           AND lower($2) NOT IN ($4, $5))
 	`
-	tag, err := s.db.Exec(ctx, query, listingID, listingState, purchaseID)
+	tag, err := s.db.Exec(ctx, query, listingID, listingState, purchaseID, ListingStateCancelled, ListingStateClosed)
 	if err != nil {
 		return fmt.Errorf("failed to update listing state for purchase %s: %w", purchaseID, err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("purchase %s not found in history", purchaseID)
+		return s.listingEndedOrMissing(ctx, purchaseID)
 	}
 	return nil
 }
