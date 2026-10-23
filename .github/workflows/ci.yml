@@ -676,6 +676,20 @@ jobs:
           terraform -chdir=iac/federation/azure-target/terraform fmt -check -recursive
           terraform -chdir=iac/federation/azure-target/terraform test
 
+      # The runtime identity's admin-password write grant must cover exactly
+      # the one secret the app writes, and exist only when the sync is armed
+      # (#199).
+      - name: Test Azure compute modules
+        if: matrix.cloud == 'azure'
+        run: |
+          for t in terraform/modules/compute/azure/*/tests; do
+            [ -d "$t" ] || continue
+            d=$(dirname "$t")
+            terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
+            terraform -chdir="$d" fmt -check -recursive
+            terraform -chdir="$d" test
+          done
+
       - name: Test AWS compute modules
         if: matrix.cloud == 'aws'
         run: |
