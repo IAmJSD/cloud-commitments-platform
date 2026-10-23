@@ -157,6 +157,13 @@ label {
     border-radius: 4px;
 }
 
+/* The rule above outranks the global [aria-invalid] border (base.css), so
+   repeat it here or a field flagged by showFieldError (#727) only turns
+   red while focused. */
+.form-group [aria-invalid="true"] {
+    border-color: var(--cudly-error);
+}
+
 .form-help {
     font-size: 0.8rem;
     color: var(--cudly-text-muted);
