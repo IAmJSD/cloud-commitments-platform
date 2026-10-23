@@ -129,7 +129,7 @@ vet:
 complexity:
 	@echo "Checking cyclomatic complexity (threshold: 10)..."
 	@if command -v gocyclo > /dev/null; then \
-		COMPLEXITY_ISSUES=$$(gocyclo -over 10 . 2>&1 || true); \
+		COMPLEXITY_ISSUES=$$(gocyclo -over 10 -ignore '(^|/)(node_modules|vendor)/' . 2>&1 || true); \
 		if [ -n "$$COMPLEXITY_ISSUES" ]; then \
 			echo "❌ Found functions with cyclomatic complexity over 10:"; \
 			echo "$$COMPLEXITY_ISSUES"; \
@@ -149,7 +149,7 @@ complexity:
 complexity-report:
 	@echo "Generating cyclomatic complexity report..."
 	@if command -v gocyclo > /dev/null; then \
-		gocyclo -top 20 . | tee complexity-report.txt; \
+		gocyclo -top 20 -ignore '(^|/)(node_modules|vendor)/' . | tee complexity-report.txt; \
 		echo ""; \
 		echo "📊 Top 20 most complex functions saved to: complexity-report.txt"; \
 	else \
