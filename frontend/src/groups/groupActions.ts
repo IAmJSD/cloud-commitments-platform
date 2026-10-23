@@ -7,6 +7,7 @@ import { availableGroups } from '../users/state';
 import { showError, showSuccess } from '../users/utils';
 import { loadUsers } from '../users/userActions';
 import { confirmDialog } from '../confirmDialog';
+import { friendlyError } from '../api/errors';
 
 /**
  * Delete group
@@ -29,7 +30,7 @@ export async function deleteGroup(groupId: string): Promise<void> {
     showSuccess('Group deleted successfully');
   } catch (error) {
     console.error('Failed to delete group:', error);
-    showError('Failed to delete group');
+    showError(`Failed to delete group: ${friendlyError(error)}`);
   }
 }
 

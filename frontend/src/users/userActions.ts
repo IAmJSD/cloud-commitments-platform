@@ -15,6 +15,7 @@ import {
 } from './state';
 import { showError, showSuccess, validateGroupCombination } from './utils';
 import { confirmDialog } from '../confirmDialog';
+import { friendlyError } from '../api/errors';
 import { applyFilters } from './filters';
 import { renderUsers, renderUserStats, populateBulkGroupSelect } from './userList';
 import { renderGroups } from '../groups/groupList';
@@ -148,7 +149,7 @@ export async function deleteUser(userId: string): Promise<void> {
     showSuccess('User deleted successfully');
   } catch (error) {
     console.error('Failed to delete user:', error);
-    showError('Failed to delete user');
+    showError(`Failed to delete user: ${friendlyError(error)}`);
   }
 }
 

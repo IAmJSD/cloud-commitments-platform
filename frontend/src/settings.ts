@@ -7,6 +7,7 @@ import type { ConfigResponse } from './types';
 import { fetchAndPopulateCommitmentOptions } from './commitmentOptions';
 import { initFederationPanel } from './federation';
 import { confirmDialog } from './confirmDialog';
+import { friendlyError } from './api/errors';
 import { reflectDirtyState } from './settings-subnav';
 import { showToast } from './toast';
 import { isValidCombination, getValidPaymentOptions, getValidTermOptions, getPaymentLabel, getCommitmentConfig, normalizePaymentValue } from './commitmentOptions';
@@ -1995,7 +1996,10 @@ async function submitBulkOverrideForm(
   } else if (succeeded === 0) {
     if (submitBtn) submitBtn.disabled = false;
     if (errEl) {
-      errEl.textContent = `All ${failed.length} save${failed.length !== 1 ? 's' : ''} failed. Check your connection and try again.`;
+      // Show the server's reason (e.g. a validation error) instead of
+      // always blaming the connection (issue #748).
+      const firstFailure = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+      errEl.textContent = `All ${failed.length} save${failed.length !== 1 ? 's' : ''} failed: ${friendlyError(firstFailure?.reason)}`;
     }
   } else {
     // Partial success: close and reload, surface the failures in a toast.

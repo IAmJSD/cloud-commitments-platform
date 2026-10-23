@@ -1135,6 +1135,13 @@ describe('users/userActions', () => {
       );
     });
 
+    it('shows the server reason when the delete fails (issue #748)', async () => {
+      (api.deleteUser as jest.Mock).mockRejectedValueOnce(new Error('cannot delete the last administrator'));
+      await userActions.deleteUser('1');
+
+      expect(document.querySelector('.toast-error')?.textContent).toContain('Failed to delete user: cannot delete the last administrator');
+    });
+
     it('should reload users after deletion', async () => {
       await userActions.deleteUser('1');
 
