@@ -85,6 +85,15 @@ variable "database_username" {
 variable "database_password_secret_arn" {
   description = "ARN of Secrets Manager secret containing database password"
   type        = string
+
+  # The secrets policy grants GetSecretValue on this ARN and "${arn}*". An
+  # empty value would make that the bare "*" (every secret in the account),
+  # and a wildcard anywhere in it widens the grant the same way, so require a
+  # concrete Secrets Manager secret ARN (#291).
+  validation {
+    condition     = can(regex("^arn:aws(-[a-z]+)*:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@-]+$", var.database_password_secret_arn))
+    error_message = "database_password_secret_arn must be a concrete Secrets Manager secret ARN (arn:<partition>:secretsmanager:<region>:<account-id>:secret:<name>) with no wildcards. An empty value would render the secrets policy resource as \"*\" and grant GetSecretValue on every secret in the account."
+  }
 }
 
 variable "admin_email" {
@@ -123,8 +132,10 @@ variable "function_url_auth_type" {
     unreachable without a valid AWS identity.
     Use "NONE" only in environments where direct access without CloudFront is
     acceptable (e.g. local dev, or environments not yet provisioned with CloudFront).
-    Pair with cloudfront_distribution_arn when switching to AWS_IAM so the module can
-    create the necessary resource-based policy granting CloudFront invocation rights.
+    This module only creates the public lambda:InvokeFunctionUrl permission for "NONE".
+    With "AWS_IAM" the caller must grant invocation itself, e.g. an
+    aws_lambda_permission for principal cloudfront.amazonaws.com scoped to the
+    distribution ARN (see environments/aws/compute.tf).
   EOT
   type        = string
   default     = "AWS_IAM"

@@ -345,11 +345,11 @@ func TestDeletePlannedPurchase_CancelConstraints(t *testing.T) {
 		requireRevokeForbidden(t, err, "another user's scheduled purchase")
 		notTransitioned(t, store)
 	})
-	t.Run("update-any is unchanged and unconstrained", func(t *testing.T) {
+	t.Run("update-any out of scope is denied (#961)", func(t *testing.T) {
 		t.Parallel()
-		resp, _, err := run(nil, revokePerm(auth.ActionUpdateAny, &auth.PermissionConstraints{Providers: []string{"aws"}}))
-		require.NoError(t, err)
-		assert.Equal(t, "canceled", resp.Status)
+		_, store, err := run(nil, awsOnly(auth.ActionUpdateAny))
+		requireRevokeForbidden(t, err, constraintDenied)
+		notTransitioned(t, store)
 	})
 }
 

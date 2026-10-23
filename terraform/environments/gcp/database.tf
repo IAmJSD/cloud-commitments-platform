@@ -2,6 +2,18 @@
 # Database
 # ==============================================
 
+locals {
+  # Connections kept out of the app's budget: Postgres
+  # superuser_reserved_connections (3), Cloud SQL's own cloudsqladmin
+  # sessions, and an operator or migration session (#718).
+  db_reserved_connections = 10
+
+  db_pool_env = {
+    DB_MAX_CONNECTIONS = tostring(var.db_max_connections)
+    DB_MIN_CONNECTIONS = tostring(var.db_min_connections)
+  }
+}
+
 module "database" {
   source = "../../modules/database/gcp"
 
@@ -22,6 +34,12 @@ module "database" {
   high_availability = var.database_high_availability
   disk_size         = var.database_disk_size
   disk_autoresize   = var.database_disk_autoresize
+  database_flags = [
+    {
+      name  = "max_connections"
+      value = tostring(var.database_max_connections)
+    }
+  ]
 
   # Networking (private IP via VPC peering)
   vpc_network_id   = module.networking.network_id

@@ -514,3 +514,34 @@ func TestGetRecommendationByID_AbsentRec(t *testing.T) {
 	assert.Nil(t, got, "absent rec must return nil")
 	assert.Nil(t, hiddenBy)
 }
+
+func TestFilterRecsByResolvedConfigs_MinCount_ExemptsSavingsPlans(t *testing.T) {
+	// An SP rec's Count is always 1 (not an instance count), so the min-count
+	// floor must not drop it; non-SP recs with the same Count still drop (#1146).
+	a := "acct-A"
+	cases := []struct {
+		provider, service string
+		keep              bool
+	}{
+		{"aws", "savingsplans", true},
+		{"aws", "savings-plans-compute", true},
+		{"aws", "savings-plans-ec2instance", true},
+		{"aws", "savings-plans-sagemaker", true},
+		{"aws", "savings-plans-database", true},
+		{"azure", "savingsplans", true},
+		{"aws", "ec2", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.provider+"/"+tc.service, func(t *testing.T) {
+			rec := config.RecommendationRecord{
+				ID: "r", Provider: tc.provider, Service: tc.service, Region: "us-east-1",
+				ResourceType: "x", Count: 1, CloudAccountID: &a,
+			}
+			resolved := map[string]*config.ServiceConfig{
+				config.AccountConfigKey(a, tc.provider, tc.service): {Provider: tc.provider, Service: tc.service, Enabled: true, MinCount: 5},
+			}
+			out := filterRecsByResolvedConfigs([]config.RecommendationRecord{rec}, resolved)
+			assert.Equal(t, tc.keep, len(out) == 1)
+		})
+	}
+}
