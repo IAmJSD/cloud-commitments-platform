@@ -229,15 +229,9 @@ func (s *Service) invalidateUserCredentialsBestEffort(ctx context.Context, userI
 
 // ChangePassword allows a user to change their password.
 func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangePasswordRequest) error {
-	user, err := s.store.GetUserByID(ctx, userID)
+	user, err := s.loadUser(ctx, userID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("user not found")
-		}
 		return err
-	}
-	if user == nil {
-		return fmt.Errorf("user not found")
 	}
 
 	// Verify current password
@@ -491,7 +485,10 @@ func (s *Service) ResetTokenStatus(ctx context.Context, token string) (ResetToke
 		return ResetTokenStateUsed, ResetTokenFlowReset, nil
 	}
 
-	// Constant-time comparison after fetch to close the SQL-equality timing oracle.
+	// Store-integrity check, not a timing defense (issue #313): the row was
+	// selected by `WHERE password_reset_token = $1` on tokenHash, so this only
+	// fails if the store returned a row for a different token. See the note
+	// in ValidateSession on why the lookup's equality timing is harmless.
 	if subtle.ConstantTimeCompare([]byte(user.PasswordResetToken), []byte(tokenHash)) != 1 {
 		return ResetTokenStateUsed, ResetTokenFlowReset, nil
 	}
@@ -524,7 +521,10 @@ func (s *Service) validateResetToken(ctx context.Context, token string) (*User, 
 		return nil, ErrInvalidResetToken
 	}
 
-	// Constant-time comparison after fetch to close the SQL-equality timing oracle.
+	// Store-integrity check, not a timing defense (issue #313): the row was
+	// selected by `WHERE password_reset_token = $1` on tokenHash, so this only
+	// fails if the store returned a row for a different token. See the note
+	// in ValidateSession on why the lookup's equality timing is harmless.
 	if subtle.ConstantTimeCompare([]byte(user.PasswordResetToken), []byte(tokenHash)) != 1 {
 		return nil, ErrInvalidResetToken
 	}

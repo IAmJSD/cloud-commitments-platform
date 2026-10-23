@@ -206,18 +206,26 @@ func resolveRoleARNProvider(
 		return ambient, nil
 	}
 
-	sessionSuffix := account.ID
-	if len(sessionSuffix) > 8 {
-		sessionSuffix = sessionSuffix[:8]
-	}
-
 	provider := stscreds.NewAssumeRoleProvider(stsClient, account.AWSRoleARN, func(o *stscreds.AssumeRoleOptions) {
-		o.RoleSessionName = "cudly-" + sessionSuffix
+		o.RoleSessionName = roleSessionName(account.ID)
 		if account.AWSExternalID != "" {
 			o.ExternalID = aws.String(account.AWSExternalID)
 		}
 	})
 	return provider, nil
+}
+
+// roleSessionName is the STS RoleSessionName CUDly uses when it assumes a role
+// for accountID: "cudly-" plus at most the first 8 bytes of the ID, so the
+// session is attributable in CloudTrail while staying well inside STS's
+// 64-character limit. AssumeRole and AssumeRoleWithWebIdentity share it so the
+// two paths cannot drift (issue #313).
+func roleSessionName(accountID string) string {
+	suffix := accountID
+	if len(suffix) > 8 {
+		suffix = suffix[:8]
+	}
+	return "cudly-" + suffix
 }
 
 // resolveBastionProvider implements the bastion auth mode: target account is
@@ -290,14 +298,10 @@ func resolveWebIdentityProvider(account *config.CloudAccount, stsClient STSClien
 	if strings.Contains(tokenFile, "..") || !filepath.IsAbs(tokenFile) {
 		return nil, awsConfigErrorf("aws_web_identity_token_file", "must be an absolute path without '..'", "credentials: aws_web_identity_token_file must be an absolute path without '..' (account %s)", account.ID)
 	}
-	sessionSuffix := account.ID
-	if len(sessionSuffix) > 8 {
-		sessionSuffix = sessionSuffix[:8]
-	}
 	return stscreds.NewWebIdentityRoleProvider(stsClient, account.AWSRoleARN,
 		stscreds.IdentityTokenFile(tokenFile),
 		func(o *stscreds.WebIdentityRoleOptions) {
-			o.RoleSessionName = "cudly-" + sessionSuffix
+			o.RoleSessionName = roleSessionName(account.ID)
 			// Note: WebIdentityRoleOptions does not have ExternalID;
 			// OIDC identity is verified by the token subject claim instead.
 		}), nil
@@ -323,18 +327,6 @@ func ResolveAzureCredentials(ctx context.Context, account *config.CloudAccount, 
 		return nil, fmt.Errorf("credentials: client_secret is empty in stored payload for account %s", account.ID)
 	}
 	return &AzureCredentials{ClientSecret: payload.ClientSecret}, nil
-}
-
-// ResolveGCPCredentials decrypts and returns the GCP service account JSON for the account.
-func ResolveGCPCredentials(ctx context.Context, account *config.CloudAccount, store CredentialStore) ([]byte, error) {
-	raw, err := store.LoadRaw(ctx, account.ID, CredTypeGCPServiceAccount)
-	if err != nil {
-		return nil, fmt.Errorf("credentials: load gcp service account for account %s: %w", account.ID, err)
-	}
-	if raw == nil {
-		return nil, fmt.Errorf("credentials: no service account stored for account %s", account.ID)
-	}
-	return raw, nil
 }
 
 // ResolveAzureTokenCredential is a convenience wrapper that passes
