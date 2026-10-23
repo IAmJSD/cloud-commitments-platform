@@ -335,6 +335,11 @@ describe('Recommendations Module', () => {
       };
       expect(cardValue()).toContain('$300');
       expect(cardValue()).toContain('$400');
+      // #180: unfiltered, the card covers every loaded row (same scope as
+      // Home), so it carries no "Filtered" scope line.
+      const scopeLine = (): string | null =>
+        document.querySelector('#recommendations-summary [data-testid="savings-scope"]')?.textContent ?? null;
+      expect(scopeLine()).toBeNull();
 
       // Apply a real column filter restricting to service=ec2 (cell1
       // only). renderRecommendationsList re-runs applyColumnFilters
@@ -352,6 +357,9 @@ describe('Recommendations Module', () => {
       expect(cardValue()).toContain('$150');
       expect(cardValue()).not.toContain('$300');
       expect(cardValue()).not.toContain('$400');
+      // #180: the narrowed scope is labeled so it can't be mistaken for
+      // Home's all-recommendations figure.
+      expect(scopeLine()).toBe('Filtered: 2 of 4 recommendations');
 
       // Restore the filter mock to empty so the leaked return value
       // doesn't bleed into subsequent tests in this file. jest.clearAllMocks

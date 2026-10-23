@@ -13,6 +13,7 @@ import { confirmDialog } from './confirmDialog';
 import { canAccess } from './permissions';
 import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale } from './recommendations';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
+import { filterByEnabledProviders } from './lib/enabled-providers';
 import { formatTrendAxisTick } from './modules/chart-utils';
 // Re-export for backward compatibility (tests and other callers import from dashboard.ts).
 export { formatTrendAxisTick } from './modules/chart-utils';
@@ -208,10 +209,11 @@ export async function loadDashboard(): Promise<void> {
     // move the range computation server-side if needed.
     // Promise.allSettled ensures the dashboard still renders if any individual
     // fetch fails -- each card falls back gracefully.
-    const [summaryResult, upcomingResult, recsResult] = await Promise.allSettled([
+    const [summaryResult, upcomingResult, recsResult, enabledProviders] = await Promise.allSettled([
       api.getDashboardSummary(currentProvider, currentAccountIDs),
       api.getUpcomingPurchases(),
       api.getRecommendations({ provider: currentProvider, account_ids: currentAccountIDs }),
+      loadEnabledProviders(),
     ]);
 
     const summaryData = summaryResult.status === 'fulfilled' ? (summaryResult.value as DashboardSummary) : null;
@@ -234,7 +236,15 @@ export async function loadDashboard(): Promise<void> {
       : (rawRecs != null && typeof rawRecs === 'object' && Array.isArray((rawRecs as { recommendations?: unknown }).recommendations))
         ? (rawRecs as { recommendations: unknown[] }).recommendations
         : [];
-    const recs: readonly LocalRecommendation[] = recsArray as unknown as LocalRecommendation[];
+    // #180: apply the same Settings -> Enabled Providers filter as the
+    // Opportunities page, so the two Potential Monthly Savings cards are
+    // computed from the same rows. A failed recs fetch stays distinguishable
+    // (null) so the tile can fall back to the backend count.
+    const recs: readonly LocalRecommendation[] = filterByEnabledProviders(
+      recsArray as unknown as LocalRecommendation[],
+      enabledProviders.status === 'fulfilled' ? enabledProviders.value : null,
+    );
+    const recsCount = recsResult.status === 'fulfilled' ? recs.length : null;
 
     if (summaryResult.status === 'rejected') {
       throw summaryResult.reason as Error;
@@ -247,7 +257,7 @@ export async function loadDashboard(): Promise<void> {
     // on the Home chart. Mirrors the pattern from loadSavingsTrendChart (#747).
     const filterDesc = buildFilterDesc(currentProvider, currentAccountIDs);
 
-    renderDashboardSummary(summaryData, recs);
+    renderDashboardSummary(summaryData, recs, recsCount);
     // Single merged per-service chart (#908): potential range from recs +
     // current-savings underlay from the summary's by_service map.
     renderSavingsByService(recs, summaryData.by_service || {}, filterDesc);
@@ -289,7 +299,25 @@ export async function loadDashboard(): Promise<void> {
   }
 }
 
-function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalRecommendation[]): void {
+/**
+ * Settings -> Enabled Providers, or null when the config can't be read (a
+ * missing permission or network error must not block Home; null means "no
+ * filter", the same permissive fallback the Opportunities page uses).
+ */
+async function loadEnabledProviders(): Promise<readonly string[] | null> {
+  try {
+    const cfg = await api.getConfig();
+    return cfg?.global?.enabled_providers ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function renderDashboardSummary(
+  data: DashboardSummary,
+  recs: readonly LocalRecommendation[],
+  recsCount: number | null,
+): void {
   const summary = document.getElementById('summary');
   if (!summary) return;
 
@@ -346,7 +374,9 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
     detail: string;
   }> = [
     { kpi: 'savings',     title: 'Potential Monthly Savings', value: savingsDisplay, valueSavings: true,
-      detail: `${data.total_recommendations ?? '--'} recommendations` },
+      // #180: count the same rows the range sums (and the Opportunities page
+      // counts); the backend total ignores the Enabled Providers setting.
+      detail: `${recsCount ?? data.total_recommendations ?? '--'} recommendations` },
     { kpi: 'commitments', title: 'Active Commitments', value: data.active_commitments != null ? String(data.active_commitments) : '--',
       detail: `${formatCurrency(data.committed_monthly)}/mo committed` },
     { kpi: 'coverage',    title: 'Current Coverage', value: coverageValue, detail: coverageDetail },

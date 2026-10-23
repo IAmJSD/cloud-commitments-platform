@@ -6,6 +6,7 @@ import * as api from './api';
 import * as state from './state';
 import type { CostPeriod } from './state';
 import { formatCurrency, formatTerm, escapeHtml, CURRENCY_DEFAULT_DIGITS } from './utils';
+import { filterByEnabledProviders } from './lib/enabled-providers';
 import { getRecommendationsFreshness, refreshRecommendations as refreshRecommendationsAPI } from './api/recommendations';
 import type { RecommendationsFreshness } from './api/recommendations';
 import { showToast } from './toast';
@@ -641,9 +642,8 @@ export async function loadRecommendations(): Promise<void> {
     // permissive default on the checkboxes (line ~2510).
     const enabledProviders = cfgResponse?.global?.enabled_providers;
     const rawRecs = (data.recommendations || []) as unknown as api.Recommendation[];
-    const visibleByPreference: api.Recommendation[] = enabledProviders && enabledProviders.length > 0
-      ? rawRecs.filter(r => enabledProviders.includes(r.provider as api.Provider))
-      : rawRecs;
+    // Shared with Home's savings card (#180) so both screens sum the same rows.
+    const visibleByPreference = filterByEnabledProviders(rawRecs, enabledProviders);
 
     state.setRecommendations(visibleByPreference);
     state.clearSelectedRecommendations();
@@ -832,6 +832,7 @@ async function onLookbackChange(rawValue: string): Promise<void> {
 function renderRecommendationsSummary(
   _summary: RecommendationsSummary | null,
   recommendations: readonly LocalRecommendation[],
+  loadedCount: number = recommendations.length,
 ): void {
   const container = document.getElementById('recommendations-summary');
   if (!container) return;
@@ -901,6 +902,13 @@ function renderRecommendationsSummary(
     const sfx = periodSuffix(period);
     return isSelectionView ? `Selected Savings ${sfx}` : `Potential Savings ${sfx}`;
   })();
+  // #180: Home's Potential Monthly Savings always covers every loaded
+  // recommendation, so when column filters narrow this page the card must say
+  // so; otherwise the two same-named KPIs disagree with no visible reason.
+  const isFilteredView = !isSelectionView && variantCount < loadedCount;
+  const savingsScopeDetail = isFilteredView
+    ? `<p class="detail" data-testid="savings-scope">Filtered: ${variantCount} of ${loadedCount} recommendations</p>`
+    : '';
   const upfrontLabel = isSelectionView ? 'Selected Upfront Cost' : 'Total Upfront Cost';
   const paybackLabel = 'Payback Period';
 
@@ -911,7 +919,7 @@ function renderRecommendationsSummary(
     </div>
     <div class="card">
       <h3>${savingsLabel}</h3>
-      <p class="value savings">${savingsText}</p>
+      <p class="value savings">${savingsText}</p>${savingsScopeDetail}
     </div>
     <div class="card">
       <h3>${upfrontLabel}</h3>
@@ -4802,7 +4810,7 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // total_upfront_cost, avg_payback_months); the savings figure itself is
   // recomputed from `recommendations` inside renderRecommendationsSummary
   // via the same pageLevelRange the banner uses.
-  renderRecommendationsSummary(lastRecommendationsSummary, recommendations);
+  renderRecommendationsSummary(lastRecommendationsSummary, recommendations, loadedRecs?.length ?? 0);
 
   // Mount once; update is per-render below.
   mountBottomActionBox();
