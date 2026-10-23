@@ -2,6 +2,7 @@
  * Unit tests for utility functions
  */
 import {
+  formatCompactCurrency,
   formatCurrency,
   formatDate,
   formatDateTime,
@@ -640,6 +641,26 @@ describe('jsonClone (explicit JSON-serialisation variant)', () => {
 // ---------------------------------------------------------------------------
 // Regression tests for finding 11-N2: formatCurrency distinguishes absent from $0.
 // ---------------------------------------------------------------------------
+describe('formatCompactCurrency (issue #749)', () => {
+  test('abbreviates thousands and millions like a chart axis', () => {
+    expect(formatCompactCurrency(0)).toBe('$0');
+    expect(formatCompactCurrency(950)).toBe('$950');
+    expect(formatCompactCurrency(1500)).toBe('$1.5K');
+    expect(formatCompactCurrency(12345)).toBe('$12.35K');
+    expect(formatCompactCurrency(1234567)).toBe('$1.23M');
+    expect(formatCompactCurrency(12345, 1)).toBe('$12.3K');
+  });
+
+  test('keeps close fractional ticks distinct', () => {
+    expect(formatCompactCurrency(0.1)).not.toBe(formatCompactCurrency(0.2));
+  });
+
+  test('uses the same absent marker as formatCurrency', () => {
+    expect(formatCompactCurrency(null)).toBe(formatCurrency(null));
+    expect(formatCompactCurrency(NaN)).toBe(formatCurrency(NaN));
+  });
+});
+
 describe('formatCurrency (11-N2: absent vs real zero)', () => {
   test('null returns -- not $0', () => {
     expect(formatCurrency(null as unknown as number)).toBe('--');
