@@ -1449,17 +1449,32 @@ function renderRecommendations(container: HTMLElement): void {
   });
 }
 
+// currencyPrefix is the prefix formatCurrency puts before an amount in
+// `code`. USD keeps the app-wide "$"; any other ISO-4217 code is shown
+// as "EUR " so a non-USD price is never read as dollars (issue #284). An
+// absent code keeps "$": exchanges are USD-only end to end (the backend
+// refuses non-USD quotes), so a missing code is a USD offering.
+export function currencyPrefix(code: string | undefined): string {
+  const c = code?.trim().toUpperCase();
+  return !c || c === 'USD' ? '$' : `${c} `;
+}
+
+// formatOfferingCost renders an offering's monthly cost in its own currency.
+function formatOfferingCost(alt: OfferingOption, cost: number = alt.effective_monthly_cost): string {
+  return formatCurrency(cost, currencyPrefix(alt.currency_code), 2);
+}
+
 // renderAlternativesCell formats the cross-family alternative targets
 // as a comma-separated list of "<instance_type> $X.XX/mo" chips inside
 // a single table cell. Each instance_type is escapeHtml'd; cost values
-// go through the shared formatCurrency helper (digits: 2) so there's
-// no HTML injection vector through this helper.
+// go through the shared formatCurrency helper (digits: 2) and the
+// currency prefix is escaped too, so there's no HTML injection vector.
 function renderAlternativesCell(alternatives: OfferingOption[] | undefined): string {
   if (!alternatives || alternatives.length === 0) {
     return '—';
   }
   return alternatives
-    .map((alt) => `<span class="cost-chip">${escapeHtml(alt.instance_type)} ${formatCurrency(alt.effective_monthly_cost, '$', 2)}/mo</span>`)
+    .map((alt) => `<span class="cost-chip">${escapeHtml(alt.instance_type)} ${escapeHtml(formatOfferingCost(alt))}/mo</span>`)
     .join(' ');
 }
 
@@ -1596,7 +1611,7 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
       for (const alt of alternativeTargets) {
         const opt = document.createElement('option');
         opt.value = alt.offering_id;
-        const costStr = formatCurrency(alt.effective_monthly_cost, '$', 2);
+        const costStr = formatOfferingCost(alt);
         opt.textContent = escapeHtml(alt.instance_type) + ' -- ' + costStr + '/mo';
         if (initialOfferingId && alt.offering_id === initialOfferingId) {
           opt.selected = true;
@@ -1699,17 +1714,16 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     updateRowChip(offeringInput.value, chipEl);
   };
 
-  // lookupCECost returns the per-instance monthly cost for an offering_id
-  // that appears in alternativeTargets, or undefined when absent.
-  function lookupCECost(offeringId: string): number | undefined {
+  // lookupCEAlt returns the alternativeTargets entry (cost and currency)
+  // for an offering_id, or undefined when absent.
+  function lookupCEAlt(offeringId: string): OfferingOption | undefined {
     if (!alternativeTargets || !offeringId) return undefined;
-    const hit = alternativeTargets.find((a) => a.offering_id === offeringId);
-    return hit?.effective_monthly_cost;
+    return alternativeTargets.find((a) => a.offering_id === offeringId);
   }
 
   function updateRowChip(offeringId: string, chip: HTMLSpanElement): void {
-    const cost = lookupCECost(offeringId);
-    chip.textContent = cost !== undefined ? `${formatCurrency(cost, '$', 2)}/mo each` : '—';
+    const alt = lookupCEAlt(offeringId);
+    chip.textContent = alt ? `${formatOfferingCost(alt)}/mo each` : '—';
   }
 
   // Seed the modal with one row, optionally pre-selecting by offering_id.
@@ -1755,18 +1769,26 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     }
     let total = 0;
     let anyMissing = false;
+    const prefixes = new Set<string>();
     for (const row of targetRows) {
-      const cost = lookupCECost(row.offeringInput.value);
+      const alt = lookupCEAlt(row.offeringInput.value);
       const rawCount = parseInt(row.countInput.value, 10);
       const cnt = isNaN(rawCount) || rawCount < 1 ? 1 : rawCount;
-      if (cost === undefined) {
+      if (!alt) {
         anyMissing = true;
         continue;
       }
-      total += cost * cnt;
+      prefixes.add(currencyPrefix(alt.currency_code));
+      total += alt.effective_monthly_cost * cnt;
     }
+    if (prefixes.size > 1) {
+      // Adding amounts in different currencies would print a meaningless sum.
+      runningTotalEl.textContent = 'Estimated monthly cost for the quoted target set: not totaled -- targets are priced in different currencies';
+      return;
+    }
+    const [prefix = '$'] = prefixes;
     const suffix = anyMissing ? ' (incomplete -- some targets have no pricing data)' : '';
-    runningTotalEl.textContent = `Estimated monthly cost for the quoted target set: ${formatCurrency(total, '$', 2)}/mo${suffix}`;
+    runningTotalEl.textContent = `Estimated monthly cost for the quoted target set: ${formatCurrency(total, prefix, 2)}/mo${suffix}`;
   }
   updateRunningTotal();
 
@@ -2387,7 +2409,9 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
       + '<td>' + escapeHtml(formatDateTime(rec.created_at)) + '</td>'
       + '<td>' + escapeHtml(String(rec.source_count)) + 'x ' + escapeHtml(rec.source_instance_type) + '</td>'
       + '<td>' + escapeHtml(String(rec.target_count)) + 'x ' + escapeHtml(rec.target_instance_type) + '</td>'
-      + '<td>$' + escapeHtml(rec.payment_due) + '</td>'
+      // payment_due is USD (the execute cap is max_payment_due_usd); an
+      // empty amount renders as a dash, not a lone "$" (issue #284).
+      + '<td>' + (rec.payment_due ? '$' + escapeHtml(rec.payment_due) : '&mdash;') + '</td>'
       + '<td><span class="' + getStatusBadgeClass(rec.status) + '">' + escapeHtml(rec.status) + '</span></td>'
       + '<td>' + exchangeIdCell + '</td>'
       + '<td>' + approveBtn + '</td>'
