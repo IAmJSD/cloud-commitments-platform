@@ -3,11 +3,11 @@
 #
 # Asserts that the Makefile's local gates fail when they should (issue #349):
 #
-#   1. lint, security-scan-docker and security-scan-snyk exit non-zero when
-#      their tool is missing, and when the tool itself exits non-zero. Each
-#      used to end its `then` branch with a success echo, so the target passed
-#      either way.
-#   2. security-scan no longer depends on the retired tfsec target.
+#   1. lint, security-scan-docker, security-scan-terraform and
+#      security-scan-snyk exit non-zero when their tool is missing, and when
+#      the tool itself exits non-zero. Each used to end its `then` branch with
+#      a success echo, so the target passed either way.
+#   2. security-scan no longer runs the deprecated tfsec target.
 #   3. terraform-validate runs `terraform init` + `validate` in every flat
 #      terraform/environments/<cloud> root and fails when one fails. It used to
 #      loop over terraform/environments/*/dev, which does not exist.
@@ -80,7 +80,7 @@ expect_status() {
 mkdir -p "$WORK/empty"
 
 # 1. Scanner targets.
-for pair in lint:golangci-lint security-scan-docker:trivy security-scan-snyk:snyk; do
+for pair in lint:golangci-lint security-scan-docker:trivy security-scan-terraform:tfsec security-scan-snyk:snyk; do
   target="${pair%%:*}"
   tool="${pair#*:}"
   expect_status 1 "$target fails when $tool is missing" \

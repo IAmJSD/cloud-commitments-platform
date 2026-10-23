@@ -1,7 +1,7 @@
 .PHONY: build clean test deploy help all build-server build-lambda test-unit test-integration test-compile-integration \
         test-coverage full-test security-scan terraform-validate docker-build \
         fmt vet lint complexity complexity-report security-scan-go security-scan-docker \
-        terraform-fmt terraform-fmt-check iac-arm docker-test pre-commit \
+        security-scan-terraform terraform-fmt terraform-fmt-check iac-arm docker-test pre-commit \
         setup-git-secrets security-scan-snyk security-scan-all ci docker-compose-test \
         install-dev-tools tidy-check
 
@@ -156,8 +156,8 @@ complexity-report:
 	fi
 
 # Security scanning. Terraform is covered by trivy's misconfig scanner in
-# security-scan-docker. There is no tfsec target: CI replaced tfsec with Trivy,
-# and tfsec is deprecated upstream (#349).
+# security-scan-docker, so the tfsec target is no longer part of this chain:
+# CI replaced tfsec with Trivy, and tfsec is deprecated upstream (#349).
 security-scan: security-scan-go security-scan-docker
 
 # scripts/run-gosec.sh owns the gosec pin, module list and rule set, shared
@@ -172,6 +172,13 @@ security-scan-docker:
 	@command -v trivy > /dev/null || { echo "trivy not installed. Install: https://aquasecurity.github.io/trivy/" >&2; exit 1; }
 	trivy fs --scanners vuln,misconfig . --format json --output trivy-report.json
 	@echo "✓ Container security scan complete: trivy-report.json"
+
+# Deprecated (see security-scan above); kept only for anyone still calling it.
+security-scan-terraform:
+	@echo "Running tfsec..."
+	@command -v tfsec > /dev/null || { echo "tfsec not installed. Install: https://aquasecurity.github.io/tfsec/" >&2; exit 1; }
+	tfsec terraform/ --format json --out tfsec-report.json
+	@echo "✓ Terraform security scan complete: tfsec-report.json"
 
 # Terraform validation. Each terraform/environments/<cloud> is one flat root
 # (no per-profile subdirectories), the same roots CI's terraform-validate job
@@ -258,6 +265,7 @@ install-dev-tools:
 	@echo ""
 	@echo "Additional tools to install manually:"
 	@echo "  - trivy: https://aquasecurity.github.io/trivy/"
+	@echo "  - tfsec (deprecated, only for security-scan-terraform): https://aquasecurity.github.io/tfsec/"
 	@echo "  - git-secrets: https://github.com/awslabs/git-secrets"
 	@echo "  - snyk: npm install -g snyk"
 	@echo "  - pre-commit: pip install pre-commit"
