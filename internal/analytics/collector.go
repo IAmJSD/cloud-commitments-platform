@@ -158,7 +158,7 @@ func aggregatePurchases(ctx context.Context, purchases []config.PurchaseHistoryR
 		}
 		activePurchases++
 
-		commitmentType := commitmentTypeFor(p.Service)
+		commitmentType := commitmentTypeFor(p.Provider, p.Service)
 		key := aggKey(p, commitmentType)
 
 		agg := serviceMap[key]
@@ -196,15 +196,6 @@ func aggregatePurchases(ctx context.Context, purchases []config.PurchaseHistoryR
 	}
 
 	return serviceMap, activePurchases, skippedBadTerm, nil
-}
-
-// commitmentTypeFor maps a service to its commitment_type. SavingsPlans is the
-// only Savings Plan service today; everything else is a Reserved Instance.
-func commitmentTypeFor(service string) string {
-	if service == "SavingsPlans" {
-		return "SavingsPlan"
-	}
-	return "RI"
 }
 
 // buildSnapshots converts the aggregation map into snapshot rows. total_usage is
