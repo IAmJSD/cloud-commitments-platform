@@ -445,9 +445,9 @@ func TestCheckMigrations_Failed(t *testing.T) {
 	app.recordMigrationResult(errors.New("dirty at 27"))
 	got := app.checkMigrations()
 	testutil.AssertEqual(t, "failed", got.Status)
-	if got.Message == "" || got.Message != "dirty at 27" {
-		t.Fatalf("expected message to contain the error; got %q", got.Message)
-	}
+	// The raw error stays in the server log; /health is public (#111).
+	testutil.AssertEqual(t, "Database migrations failed", got.Message)
+	testutil.AssertEqual(t, healthReasonMigrationFailed, got.Reason)
 }
 
 func TestCheckMigrations_Healthy(t *testing.T) {

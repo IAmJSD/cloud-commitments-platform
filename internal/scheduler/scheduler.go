@@ -465,6 +465,12 @@ func joinProviderErrors(failed map[string]string) string {
 // CloudAccountID. The *sweepGap is non-nil when some account's sweep was
 // incomplete (its rows are kept; see tolerateIncompleteSweep). Provider-level
 // errors propagate unchanged.
+//
+// A name that is not one of the known providers (e.g. "AWS" or "azure " left
+// in EnabledProviders) is an error, so the merge records it as a failed
+// provider and persistCollection writes last_collection_error. Returning nil
+// here reported a provider that was never contacted as a clean, successful
+// collection of zero recommendations (issue #111).
 func (s *Scheduler) collectProviderRecommendations(ctx context.Context, providerName string, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, []string, *sweepGap, error) {
 	switch providerName {
 	case "aws":
@@ -474,8 +480,7 @@ func (s *Scheduler) collectProviderRecommendations(ctx context.Context, provider
 	case "gcp":
 		return s.collectGCPRecommendations(ctx, globalCfg)
 	default:
-		logging.Warnf("Unknown provider: %s", providerName)
-		return nil, nil, nil, nil
+		return nil, nil, nil, fmt.Errorf("unknown provider %q (valid: aws, azure, gcp)", providerName)
 	}
 }
 

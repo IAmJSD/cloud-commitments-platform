@@ -100,6 +100,13 @@ var scheduledEventActions = map[string]ScheduledTaskType{
 func (app *Application) runScheduledTask(ctx context.Context, taskType ScheduledTaskType, params ScheduledTaskParams) (any, error) {
 	log.Printf("Handling scheduled task: %q", taskType) // #nosec G706 -- taskType is looked up from a known-value map; %q quotes the value to prevent CR/LF log injection
 
+	// Reject an unknown task before connecting or taking an advisory lock
+	// keyed on its name. The Lambda and HTTP transports already validate at
+	// their boundary; this covers the --task CLI and any future caller (#111).
+	if _, err := ParseScheduledTaskType(string(taskType)); err != nil {
+		return nil, err
+	}
+
 	if err := app.ensureDB(ctx); err != nil {
 		return nil, fmt.Errorf("database connection failed: %w", err)
 	}
