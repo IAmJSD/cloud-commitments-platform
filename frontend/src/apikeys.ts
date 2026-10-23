@@ -431,6 +431,7 @@ export function showKeyCreatedModal(apiKey: string): void {
           <code id="apikey-value" class="apikey-value">${escapeHtml(apiKey)}</code>
           <button type="button" id="copy-apikey-btn" class="btn-small primary">Copy</button>
         </div>
+        <p id="apikey-copy-error" class="field-error hidden" role="alert"></p>
       </div>
       <div class="modal-info">
         <p>Use this key in the <code>X-API-Key</code> header when making API requests:</p>
@@ -450,6 +451,7 @@ export function showKeyCreatedModal(apiKey: string): void {
   if (copyBtn) {
     copyBtn.addEventListener('click', () => {
       navigator.clipboard.writeText(apiKey).then(() => {
+        document.getElementById('apikey-copy-error')?.classList.add('hidden');
         copyBtn.textContent = 'Copied!';
         copyBtn.classList.add('copied');
         setTimeout(() => {
@@ -458,7 +460,15 @@ export function showKeyCreatedModal(apiKey: string): void {
         }, 2000);
       }).catch(err => {
         console.error('Failed to copy:', err);
-        alert('Failed to copy to clipboard. Please copy manually.');
+        // Inline message instead of a native alert() (#705): select the key so
+        // Ctrl+C / Cmd+C copies it without leaving the modal.
+        const valueEl = document.getElementById('apikey-value');
+        if (valueEl) window.getSelection()?.selectAllChildren(valueEl);
+        const copyError = document.getElementById('apikey-copy-error');
+        if (copyError) {
+          copyError.textContent = 'Could not copy automatically. The key is selected: press Ctrl+C (Cmd+C on Mac) to copy it.';
+          copyError.classList.remove('hidden');
+        }
       });
     });
   }

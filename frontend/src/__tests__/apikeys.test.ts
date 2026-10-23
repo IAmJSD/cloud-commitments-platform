@@ -874,7 +874,7 @@ describe('API Keys Module', () => {
       jest.useRealTimers();
     });
 
-    test('copy button shows alert on clipboard error', async () => {
+    test('copy failure shows an inline error and selects the key, not a native alert (#705)', async () => {
       const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
       const writeTextMock = jest.fn().mockRejectedValue(new Error('Clipboard error'));
       Object.defineProperty(navigator, 'clipboard', {
@@ -885,12 +885,24 @@ describe('API Keys Module', () => {
 
       showKeyCreatedModal('test-api-key');
 
-      const copyBtn = document.getElementById('copy-apikey-btn');
-      copyBtn?.click();
+      const copyError = document.getElementById('apikey-copy-error') as HTMLElement;
+      expect(copyError.getAttribute('role')).toBe('alert');
+      expect(copyError.classList.contains('hidden')).toBe(true);
+
+      document.getElementById('copy-apikey-btn')?.click();
 
       await new Promise(resolve => setTimeout(resolve, 0));
 
-      expect(window.alert).toHaveBeenCalledWith('Failed to copy to clipboard. Please copy manually.');
+      expect(window.alert).not.toHaveBeenCalled();
+      expect(copyError.classList.contains('hidden')).toBe(false);
+      expect(copyError.textContent).toContain('The key is selected');
+      expect(window.getSelection()?.toString()).toBe('test-api-key');
+
+      // A later successful copy clears the error again.
+      writeTextMock.mockResolvedValueOnce(undefined);
+      document.getElementById('copy-apikey-btn')?.click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(copyError.classList.contains('hidden')).toBe(true);
       consoleError.mockRestore();
     });
 
