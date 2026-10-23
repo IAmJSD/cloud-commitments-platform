@@ -123,6 +123,29 @@ describe('setupMobileNav', () => {
     expect(document.body.classList.contains('sidebar-open')).toBe(false);
   });
 
+  test('closing via a sidebar link keeps focus on the new page heading (#730)', () => {
+    document.body.insertAdjacentHTML('beforeend', '<main><h2 id="page-h" tabindex="-1">Plans</h2></main>');
+    const pageHeading = document.getElementById('page-h') as HTMLElement;
+    const link = sidebar().querySelectorAll<HTMLElement>('.tab-btn')[1]!;
+    // Stands in for app.ts's tab handler, registered before the drawer's:
+    // switchTab(..., { focusContent: true }) has moved focus by now.
+    link.addEventListener('click', () => pageHeading.focus());
+    setupMobileNav();
+    hamburger().click(); // open
+    link.dispatchEvent(new MouseEvent('click', { button: 0, bubbles: true }));
+    expect(document.body.classList.contains('sidebar-open')).toBe(false);
+    expect(document.activeElement).toBe(pageHeading);
+  });
+
+  test('closing via a sidebar link rescues focus left inside the drawer', () => {
+    setupMobileNav();
+    hamburger().click(); // open
+    const link = sidebar().querySelector<HTMLElement>('.tab-btn')!;
+    link.focus();
+    link.dispatchEvent(new MouseEvent('click', { button: 0, bubbles: true }));
+    expect(document.activeElement).toBe(hamburger());
+  });
+
   test('modifier-key click on sidebar link does not close the drawer', () => {
     setupMobileNav();
     hamburger().click(); // open

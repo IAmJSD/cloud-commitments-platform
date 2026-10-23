@@ -22,6 +22,7 @@ import { buildCommitmentSummary, commitmentTotals, executeButtonLabel, executeCo
 import { handlePurchaseDeeplink } from './purchases-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
+import { wireTablistKeyboard } from './lib/tablist';
 
 /**
  * describeDuplicateSubmit words the outcome of a submit the backend collapsed
@@ -172,10 +173,16 @@ export function setupEventListeners(): void {
       const tab = btn.dataset['tab'];
       if (tab) {
         e.preventDefault();
-        switchTab(tab);
+        switchTab(tab, { focusContent: true });
       }
     });
   });
+
+  // In-page sub-tab lists (Inventory & Coverage, Admin): arrow/Home/End
+  // focus movement and a roving tabindex, the keyboard model their
+  // role="tablist" promises (issue #730).
+  document.querySelectorAll<HTMLElement>('.inventory-subnav[role="tablist"], .settings-tabs[role="tablist"]')
+    .forEach(wireTablistKeyboard);
 
   // Settings sub-tab switching
   document.querySelectorAll<HTMLButtonElement>('.sub-tab-btn').forEach(btn => {
@@ -867,13 +874,21 @@ export function setupMobileNav(): void {
     firstFocusable?.focus();
   }
 
-  function closeDrawer(): void {
+  /**
+   * `returnFocus: 'if-inside'` returns focus to the hamburger only when it is
+   * still inside the drawer. A sidebar link click has by then moved it to the
+   * new page's heading (issue #730), or a dirty-guard dialog holds it, and
+   * pulling it back to the hamburger would undo either.
+   */
+  function closeDrawer(returnFocus: 'always' | 'if-inside' = 'always'): void {
+    const focusInside = sidebar!.contains(document.activeElement);
     document.body.classList.remove('sidebar-open');
     hamburger!.setAttribute('aria-expanded', 'false');
     sidebar!.setAttribute('aria-hidden', 'true');
+    // Before inert lands, which does not blur focus in Chromium.
+    if (returnFocus === 'always' || focusInside) hamburger!.focus();
     sidebar!.setAttribute('inert', '');
     if (overlay) overlay.setAttribute('aria-hidden', 'true');
-    hamburger!.focus();
   }
 
   /**
@@ -976,7 +991,7 @@ export function setupMobileNav(): void {
         return;
       }
       if (document.body.classList.contains('sidebar-open')) {
-        closeDrawer();
+        closeDrawer('if-inside');
       }
     });
   });

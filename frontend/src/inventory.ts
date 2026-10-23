@@ -17,6 +17,7 @@ import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { formatCurrency, formatDate, amortizedMonthly } from './utils';
 import * as state from './state';
 import { switchInventorySubTab } from './navigation';
+import { syncTabStops } from './lib/tablist';
 
 type InventorySubSection = 'active-commitments' | 'coverage' | 'ri-exchange';
 
@@ -64,6 +65,7 @@ export function switchInventorySubSection(name: string): InventorySubSection {
     btn.classList.toggle('active', isActive);
     btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
   });
+  syncTabStops(document.querySelector('#inventory-tab [role="tablist"]'));
 
   for (const key of Object.keys(SUB_SECTION_IDS) as InventorySubSection[]) {
     const el = document.getElementById(SUB_SECTION_IDS[key]);
