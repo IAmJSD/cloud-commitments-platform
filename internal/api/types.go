@@ -645,9 +645,11 @@ type DashboardSummaryResponse struct {
 	TotalRecommendations    int                       `json:"total_recommendations"`
 	ActiveCommitments       int                       `json:"active_commitments"`
 	CommittedMonthly        float64                   `json:"committed_monthly"`
-	CurrentCoverage         float64                   `json:"current_coverage"`
-	TargetCoverage          float64                   `json:"target_coverage"`
-	YTDSavings              float64                   `json:"ytd_savings"`
+	// CurrentCoverage is null when there is neither committed nor potential
+	// savings to measure (0/0), instead of a fabricated 100% (issue #72).
+	CurrentCoverage *float64 `json:"current_coverage"`
+	TargetCoverage  float64  `json:"target_coverage"`
+	YTDSavings      float64  `json:"ytd_savings"`
 }
 
 // ServiceSavings holds savings data for a service.
