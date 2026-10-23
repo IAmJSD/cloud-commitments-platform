@@ -15,10 +15,12 @@
 AVD-AWS-0011
 
 # CloudFront minimum TLS protocol version.
-# Justification: pre-existing default (TLS 1.0) was tightened in a
-# prior PR; the trivy ID still trips when the value is inherited
-# rather than set explicitly. Tracked as a follow-up to pin
-# TLSv1.2_2021 explicitly in modules/frontend/aws.
+# The finding is real, not a scanner artifact: modules/frontend/aws/main.tf
+# sets minimum_protocol_version = "TLSv1" explicitly whenever no ACM
+# certificate is given (the default-certificate branch).
+# Justification: no environment deploys the distribution today; it is only
+# created with enable_cdn = true, and every shipped tfvars sets
+# enable_cdn = false. Revisit before the enable_cdn = true cutover.
 AVD-AWS-0013
 
 # ALB drop_invalid_header_fields.
@@ -93,9 +95,9 @@ AZU-0047
 # GCP Cloud SQL instance does not require TLS.
 # ID: GCP-0015 (surfaced by trivy v0.70.0; v0.69.3 did not report this ID).
 # Justification: the database module (terraform/modules/database/gcp/main.tf)
-# exposes require_ssl as a variable. TLS is enforced at the application layer
-# via Go's pgx driver TLS config. Tracked as a hardening follow-up to set
-# require_ssl = true in the module default.
+# has no require_ssl variable. Both ip_configuration blocks hardcode
+# ssl_mode = "ENCRYPTED_ONLY", which rejects non-TLS connections, so the
+# entry looks stale. Drop it once a Trivy config scan without it is clean.
 GCP-0015
 
 # GCP Cloud Storage bucket: cleanup Cloud Function source bucket.

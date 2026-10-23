@@ -1,7 +1,7 @@
 .PHONY: build clean test deploy help all build-server build-lambda test-unit test-integration test-compile-integration \
         test-coverage full-test security-scan terraform-validate docker-build \
         fmt vet lint complexity complexity-report security-scan-go security-scan-docker \
-        security-scan-terraform terraform-fmt terraform-fmt-check iac-arm docker-test pre-commit \
+        terraform-fmt terraform-fmt-check iac-arm docker-test pre-commit \
         setup-git-secrets security-scan-snyk security-scan-all ci docker-compose-test \
         install-dev-tools tidy-check
 
@@ -38,7 +38,7 @@ help: ## Display available targets
 	@echo "  lint               - Run golangci-lint"
 	@echo "  complexity         - Check cyclomatic complexity"
 	@echo "  complexity-report  - Generate detailed complexity report"
-	@echo "  security-scan      - Run security scanners (gosec, trivy, tfsec)"
+	@echo "  security-scan      - Run security scanners (gosec, trivy)"
 	@echo "  security-scan-all  - Run all security scanners including Snyk"
 	@echo "  setup-git-secrets  - Set up git-secrets for preventing credential leaks"
 	@echo "  terraform-validate - Validate Terraform configurations"
@@ -112,14 +112,13 @@ tidy-check:
 		(cd "$$mod" && GOTOOLCHAIN="go$$version" GOWORK=off go mod tidy -diff) || { echo "go mod tidy check failed for module $$mod" >&2; exit 1; }; \
 	done
 
-# Lint code
+# Lint code. The scanner targets below share this shape: a missing tool fails
+# the target, and the tool runs as its own recipe line so make stops on its
+# exit status instead of a trailing echo's (issue #349).
 lint:
 	@echo "Running golangci-lint..."
-	@if command -v golangci-lint > /dev/null; then \
-		golangci-lint run --timeout=5m; \
-	else \
-		echo "golangci-lint not installed. Install: make install-dev-tools"; \
-	fi
+	@command -v golangci-lint > /dev/null || { echo "golangci-lint not installed. Install: make install-dev-tools" >&2; exit 1; }
+	golangci-lint run --timeout=5m
 
 # Go vet
 vet:
@@ -156,39 +155,37 @@ complexity-report:
 		echo "gocyclo not installed. Install: make install-dev-tools"; \
 	fi
 
-# Security scanning
-security-scan: security-scan-go security-scan-docker security-scan-terraform
+# Security scanning. Terraform is covered by trivy's misconfig scanner in
+# security-scan-docker. There is no tfsec target: CI replaced tfsec with Trivy,
+# and tfsec is deprecated upstream (#349).
+security-scan: security-scan-go security-scan-docker
 
 # scripts/run-gosec.sh owns the gosec pin, module list and rule set, shared
 # with the pre-commit hook and the CI gosec step (issue #340).
 security-scan-go:
 	@scripts/run-gosec.sh
 
+# Like CI's Trivy fs step, this reports findings without failing on them (no
+# --exit-code); a scan error or a missing trivy does fail it.
 security-scan-docker:
 	@echo "Running trivy..."
-	@if command -v trivy > /dev/null; then \
-		trivy fs --security-checks vuln,config . --format json --output trivy-report.json; \
-		echo "✓ Container security scan complete: trivy-report.json"; \
-	else \
-		echo "trivy not installed. Install: https://aquasecurity.github.io/trivy/"; \
-	fi
+	@command -v trivy > /dev/null || { echo "trivy not installed. Install: https://aquasecurity.github.io/trivy/" >&2; exit 1; }
+	trivy fs --scanners vuln,misconfig . --format json --output trivy-report.json
+	@echo "✓ Container security scan complete: trivy-report.json"
 
-security-scan-terraform:
-	@echo "Running tfsec..."
-	@if command -v tfsec > /dev/null; then \
-		tfsec terraform/ --format json --out tfsec-report.json; \
-		echo "✓ Terraform security scan complete: tfsec-report.json"; \
-	else \
-		echo "tfsec not installed. Install: https://aquasecurity.github.io/tfsec/"; \
-	fi
-
-# Terraform validation
+# Terraform validation. Each terraform/environments/<cloud> is one flat root
+# (no per-profile subdirectories), the same roots CI's terraform-validate job
+# validates.
 terraform-validate:
 	@echo "Validating Terraform configurations..."
-	@for dir in terraform/environments/*/dev; do \
+	@n=0; \
+	for dir in terraform/environments/*/; do \
+		[ -d "$$dir" ] || continue; \
 		echo "Validating $$dir..."; \
-		(cd $$dir && terraform init -backend=false && terraform validate) || exit 1; \
-	done
+		(cd "$$dir" && terraform init -backend=false -input=false && terraform validate) || exit 1; \
+		n=$$((n + 1)); \
+	done; \
+	[ "$$n" -gt 0 ] || { echo "no Terraform roots found under terraform/environments" >&2; exit 1; }
 	@echo "✓ Terraform validation complete"
 
 terraform-fmt:
@@ -230,12 +227,9 @@ setup-git-secrets:
 # Snyk security scanning
 security-scan-snyk:
 	@echo "Running Snyk security scan..."
-	@if command -v snyk > /dev/null; then \
-		snyk test --severity-threshold=high; \
-		echo "✓ Snyk scan complete"; \
-	else \
-		echo "snyk not installed. Install: npm install -g snyk"; \
-	fi
+	@command -v snyk > /dev/null || { echo "snyk not installed. Install: npm install -g snyk" >&2; exit 1; }
+	snyk test --severity-threshold=high
+	@echo "✓ Snyk scan complete"
 
 # Run all security scanners including Snyk
 security-scan-all: security-scan security-scan-snyk
@@ -264,7 +258,6 @@ install-dev-tools:
 	@echo ""
 	@echo "Additional tools to install manually:"
 	@echo "  - trivy: https://aquasecurity.github.io/trivy/"
-	@echo "  - tfsec: https://aquasecurity.github.io/tfsec/"
 	@echo "  - git-secrets: https://github.com/awslabs/git-secrets"
 	@echo "  - snyk: npm install -g snyk"
 	@echo "  - pre-commit: pip install pre-commit"

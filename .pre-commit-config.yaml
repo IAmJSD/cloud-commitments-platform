@@ -29,8 +29,14 @@ repos:
         files: \.go$
 
   # Terraform formatting
+  #
+  # Third-party hook repos are pinned to full commit SHAs with the release tag
+  # as a trailing comment, the same convention as the SHA-pinned Actions: a tag
+  # can be moved upstream, and these hooks run arbitrary code in the CI job
+  # (issue #349). To bump one: `git ls-remote <repo> refs/tags/<tag>`, or
+  # `pre-commit autoupdate --freeze`.
   - repo: https://github.com/antonbabenko/pre-commit-terraform
-    rev: v1.105.0
+    rev: d0e12caebb2ab0ee8bf98181c8bfe9702bca103d  # frozen: v1.105.0
     hooks:
       - id: terraform_fmt
         name: Terraform format
@@ -43,7 +49,7 @@ repos:
 
   # General file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
     hooks:
       - id: trailing-whitespace
         name: Trim trailing whitespace
@@ -51,7 +57,9 @@ repos:
         name: Fix end of files
       - id: check-yaml
         name: Check YAML syntax
-        exclude: '^(docker-compose.*\.yml|\.github/workflows/.*|cloudformation/.*|iac/.*/cloudformation/.*)$'
+        # Workflows are checked too (issue #349): a workflow GitHub cannot
+        # parse is not run at all, with no failing check to show for it.
+        exclude: '^(docker-compose.*\.yml|cloudformation/.*|iac/.*/cloudformation/.*)$'
       - id: check-json
         name: Check JSON syntax
       - id: check-added-large-files
@@ -137,7 +145,7 @@ repos:
 
   # Markdown linting
   - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.47.0
+    rev: 76b3d32d3f4b965e1d6425253c59407420ae2c43  # frozen: v0.47.0
     hooks:
       - id: markdownlint
         name: Lint Markdown files

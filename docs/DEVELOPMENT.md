@@ -317,8 +317,7 @@ make security-scan
 
 # Individual scans
 make security-scan-go          # gosec
-make security-scan-docker      # trivy (container + filesystem)
-make security-scan-terraform   # tfsec
+make security-scan-docker      # trivy (dependencies + Terraform/Dockerfile misconfig)
 ```
 
 ### Terraform & Docker Testing
