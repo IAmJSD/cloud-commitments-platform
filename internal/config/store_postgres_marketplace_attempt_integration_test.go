@@ -138,13 +138,14 @@ func checkResolveIsFenced(ctx context.Context, t *testing.T, store *PostgresStor
 	assert.Equal(t, MarketplaceListingAttempt{}, listingOf(ctx, t, store, legacy))
 }
 
-// cancelWriteSQL is the row change the cancel endpoint makes when it records
-// the attempt's listing canceled, run inside a held transaction.
-const cancelWriteSQL = `UPDATE purchase_history SET listing_id = $2, listing_state = $3,
+// attemptCancelWriteSQL is the row change the cancel endpoint makes when it
+// records the attempt's listing canceled, run inside a held transaction.
+const attemptCancelWriteSQL = `UPDATE purchase_history SET listing_id = $2, listing_state = $3,
 	listing_client_token = NULL, listing_price_schedule = NULL WHERE purchase_id = $1`
 
-// listWriteSQL is the row change of the list request recording its listing.
-const listWriteSQL = `UPDATE purchase_history SET listing_id = $2, listing_state = $3,
+// attemptListWriteSQL is the row change of the list request recording its
+// listing.
+const attemptListWriteSQL = `UPDATE purchase_history SET listing_id = $2, listing_state = $3,
 	listing_client_token = NULL, listing_price_schedule = NULL WHERE purchase_id = $1`
 
 // The cancel's write commits while the list request's record is queued on
@@ -156,7 +157,7 @@ func checkLateListRecordLoses(ctx context.Context, t *testing.T, store *Postgres
 	tx, err := pool.Begin(ctx)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback(ctx) }()
-	_, err = tx.Exec(ctx, cancelWriteSQL, id, "ril-L", ListingStateCancelled)
+	_, err = tx.Exec(ctx, attemptCancelWriteSQL, id, "ril-L", ListingStateCancelled)
 	require.NoError(t, err)
 
 	done := make(chan error, 1)
@@ -178,7 +179,7 @@ func checkLateCancelStillWins(ctx context.Context, t *testing.T, store *Postgres
 	tx, err := pool.Begin(ctx)
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback(ctx) }()
-	_, err = tx.Exec(ctx, listWriteSQL, id, "ril-C", ListingStateActive)
+	_, err = tx.Exec(ctx, attemptListWriteSQL, id, "ril-C", ListingStateActive)
 	require.NoError(t, err)
 
 	type result struct {
