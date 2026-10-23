@@ -24,9 +24,11 @@
 #      file.
 #
 # Half 1 needs bash >= 4, because the script under test uses `declare -A`
-# (the bash 3.2 abort is tracked separately). On an older bash those cases are
-# reported as SKIP locally and as FAIL under CI, so CI can never pass them by
-# not running them.
+# (the bash 3.2 abort is tracked separately). The script under test runs under
+# the same bash as this test ("$BASH"), not whichever `bash` comes first on the
+# stub PATH, so the version check below is about the bash that actually runs
+# it. On an older bash those cases are reported as SKIP locally and as FAIL
+# under CI, so CI can never pass them by not running them.
 #
 # Exits 0 when all cases pass; exits 1 on any failure.
 
@@ -131,7 +133,7 @@ run_target() {
     STUB_CALLS="$CALLS" \
     STUB_CAPTURED_BACKEND="$CAPTURED_BACKEND" \
     "$@" \
-    bash "$TARGET" >"${WORK}/out" 2>"${WORK}/err" || RUN_EXIT=$?
+    "$BASH" "$TARGET" >"${WORK}/out" 2>"${WORK}/err" || RUN_EXIT=$?
   RUN_ERR="$(cat "${WORK}/err")"
 }
 
@@ -180,14 +182,25 @@ assert_targets() {
     ko "$label: no gcloud call names another project" "seen: $projects_named"
   fi
 
-  bad="$(grep '^terraform .* import ' "$CALLS" | grep -v -- "${project}" || true)"
-  local id_projects
-  id_projects="$(grep '^terraform .* import ' "$CALLS" | grep -o 'projects/[^/ ]*' | sort -u | tr '\n' ' ')"
-  if [ -z "$bad" ] && [ "$id_projects" = "projects/${project} " ]; then
+  # Check the import ID alone: the stub's log prefix carries TF_VAR_project_id,
+  # so matching the whole line would always find the project. Strip
+  # "terraform TF_VAR_project_id=... import <address> " (addresses have no
+  # spaces; IAM member IDs do). Every ID must lead with the project, either as
+  # projects/<project>/... or bare (<project>/region/... for the router and
+  # NAT, "<project> roles/..." for project IAM members).
+  local ids id_projects sa_projects
+  ids="$(grep '^terraform .* import ' "$CALLS" |
+    sed -E 's/^terraform TF_VAR_project_id=[^ ]* import [^ ]+ //' || true)"
+  bad="$(printf '%s\n' "$ids" | grep -Ev -- "^(projects/)?${project}[/ ]" || true)"
+  id_projects="$(printf '%s\n' "$ids" | grep -o 'projects/[^/ ]*' | sort -u | tr '\n' ' ')"
+  sa_projects="$(printf '%s\n' "$ids" | grep -o '@[^ ]*\.iam\.gserviceaccount\.com' | sort -u | tr '\n' ' ')"
+  if [ -z "$bad" ] && [ "$id_projects" = "projects/${project} " ] &&
+    [ "$sa_projects" = "@${project}.iam.gserviceaccount.com " ]; then
     ok "$label: every import ID names ${project} and no other project"
   else
     ko "$label: every import ID names ${project} and no other project" \
-      "imports without it: $bad" "projects/ prefixes seen: $id_projects"
+      "IDs not led by it: $bad" "projects/ prefixes seen: $id_projects" \
+      "service account projects seen: $sa_projects"
   fi
 
   bad="$(grep '^terraform ' "$CALLS" | grep -v "^terraform TF_VAR_project_id=${project} " || true)"
