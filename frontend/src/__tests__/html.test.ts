@@ -356,6 +356,14 @@ describe('HTML Structure', () => {
         expect(href).toBeTruthy();
       });
     });
+
+    // Issue #729 (UX-36): aria-label on a role-less div is ignored by
+    // assistive tech (axe: aria-allowed-attr / aria-prohibited-attr).
+    test('the global filter container is a labelled group', () => {
+      const filters = document.getElementById('topbar-filters');
+      expect(filters?.getAttribute('role')).toBe('group');
+      expect(filters?.getAttribute('aria-label')).toBe('Global filters');
+    });
   });
 
   describe('Select Options', () => {

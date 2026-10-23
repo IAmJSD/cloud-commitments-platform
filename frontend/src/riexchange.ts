@@ -863,7 +863,12 @@ function rerenderRIs(): void {
   if (container) renderRIsTable(container, currentRIAccountID);
 }
 
-function activeRiCloseOpenPopover(): void {
+/**
+ * Close the Active RIs filter popover. Escape passes `restoreFocus` so the
+ * keyboard user lands back on the column's filter button instead of <body>
+ * (issue #729, matching history-filter-popover.ts).
+ */
+function activeRiCloseOpenPopover(restoreFocus = false): void {
   if (!activeRiOpenPopover) return;
   const { column, el } = activeRiOpenPopover;
   el.remove();
@@ -880,6 +885,7 @@ function activeRiCloseOpenPopover(): void {
     `#ri-exchange-instances-list .column-filter-btn[data-column="${column}"]`,
   );
   if (trigger) trigger.setAttribute('aria-expanded', 'false');
+  if (restoreFocus) trigger?.focus();
 }
 
 function activeRiBuildPopover(column: state.ActiveRiColumnId): ActiveRiPopoverState {
@@ -1070,7 +1076,10 @@ function activeRiOpenPopoverFor(column: state.ActiveRiColumnId, anchor: HTMLElem
   }
   if (!activeRiEscHandler) {
     activeRiEscHandler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') activeRiCloseOpenPopover();
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        activeRiCloseOpenPopover(true);
+      }
     };
     document.addEventListener('keydown', activeRiEscHandler);
   }
@@ -1290,7 +1299,8 @@ function riexBuildPopover(
   return { column, el: popover, checkboxes, input, errorEl };
 }
 
-function riexCloseOpenPopover(): void {
+/** Close the reshape filter popover; see activeRiCloseOpenPopover for `restoreFocus`. */
+function riexCloseOpenPopover(restoreFocus = false): void {
   if (!riexOpenPopover) return;
   const { column, el } = riexOpenPopover;
   el.remove();
@@ -1307,6 +1317,7 @@ function riexCloseOpenPopover(): void {
     `#ri-exchange-recommendations-list .column-filter-btn[data-column="${column}"]`,
   );
   if (trigger) trigger.setAttribute('aria-expanded', 'false');
+  if (restoreFocus) trigger?.focus();
 }
 
 function riexOpenPopoverFor(column: state.RiExchangeColumnId, anchor: HTMLElement): void {
@@ -1338,7 +1349,10 @@ function riexOpenPopoverFor(column: state.RiExchangeColumnId, anchor: HTMLElemen
   }
   if (!riexEscHandler) {
     riexEscHandler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') riexCloseOpenPopover();
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        riexCloseOpenPopover(true);
+      }
     };
     document.addEventListener('keydown', riexEscHandler);
   }
