@@ -58,6 +58,11 @@ Terraform automatically handles: Docker image build/push (via build module), fro
 - Terraform >= 1.6.0
 - Go 1.26.9+
 - Cloud CLI configured: `aws`, `az`, or `gcloud`
+- PostgreSQL 15 or later. The migrations use PostgreSQL 15 features
+  (`UNIQUE NULLS NOT DISTINCT`), so each environment's version input rejects
+  an older major at plan time: `database_engine_version` (AWS, `"15"` or
+  later), `postgres_version` (Azure, `"15"` or `"16"`) and `database_version`
+  (GCP, `POSTGRES_15` or `POSTGRES_16`). Every shipped tfvars file pins 16.
 
 ---
 

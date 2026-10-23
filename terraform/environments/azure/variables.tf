@@ -206,13 +206,13 @@ variable "credential_encryption_key" {
 # ==============================================
 
 variable "postgres_version" {
-  description = "PostgreSQL version"
+  description = "PostgreSQL major version. The migrations need 15 or later (UNIQUE NULLS NOT DISTINCT, #1233)."
   type        = string
   default     = "16"
 
   validation {
-    condition     = contains(["11", "12", "13", "14", "15", "16"], var.postgres_version)
-    error_message = "PostgreSQL version must be 11, 12, 13, 14, 15, or 16."
+    condition     = contains(["15", "16"], var.postgres_version)
+    error_message = "PostgreSQL version must be 15 or 16: the migrations use PostgreSQL 15+ features (UNIQUE NULLS NOT DISTINCT)."
   }
 }
 
