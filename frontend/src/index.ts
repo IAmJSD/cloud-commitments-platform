@@ -15,6 +15,7 @@ import { logout } from './auth';
 import { openCreateUserModal, closeUserModal } from './users/userModals';
 import { openCreateGroupModal, closeGroupModal, addPermission, closeDuplicateGroupModal, saveDuplicateGroup } from './groups/groupModals';
 import { initTopbarFilters } from './topbar-filters';
+import { initTableScroll } from './lib/table-scroll';
 
 // Re-export for external use
 export { api, utils };
@@ -71,6 +72,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // used to carry; sections subscribe to state.subscribeProvider /
   // subscribeAccount and reload themselves when the filter changes.
   initTopbarFilters();
+
+  // Edge fades and the Opportunities scrollbar strip for wide tables (#185).
+  initTableScroll();
 });
 
 // Initialize on page load

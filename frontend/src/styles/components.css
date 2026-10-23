@@ -863,7 +863,7 @@ th .column-filter-btn.active {
     gap: 0.4rem;
     font-size: 0.9em;
 }
-#recommendations-list { padding-bottom: var(--action-box-height); }
+#recommendations-list { padding-bottom: var(--action-box-offset, var(--action-box-height)); }
 
 tr.recommendation-row {
     cursor: pointer;
