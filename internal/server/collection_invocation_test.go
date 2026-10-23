@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/mocks"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/scheduler"
@@ -20,7 +21,7 @@ import (
 // stale; this fake never goes stale), so the server-level tests can observe
 // whether the marker is still set while a collect run is in progress. The
 // real SQL is pinned against Postgres in
-// internal/config/store_postgres_recommendations_test.go.
+// internal/config/store_postgres_collection_invocation_test.go.
 type markerStore struct {
 	*mocks.MockConfigStore
 	mu    sync.Mutex
@@ -109,6 +110,15 @@ func (l *sharedTaskLocker) ReleaseAdvisoryLock(_ context.Context, lockID int64) 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.held, lockID)
+}
+
+// AdvisoryLockHeldFor reports a held lock as freshly taken, so a lock-skipped
+// invocation takes the normal "already_running" path rather than the
+// stuck-lock error (issue #394), which these tests do not exercise.
+func (l *sharedTaskLocker) AdvisoryLockHeldFor(_ context.Context, lockID int64) (time.Duration, bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return 0, l.held[lockID], nil
 }
 
 // blockingCollector stands in for scheduler.CollectRecommendations: it

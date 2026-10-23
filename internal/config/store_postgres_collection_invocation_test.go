@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -63,12 +62,9 @@ func markCollection(ctx context.Context, t *testing.T, store *config.PostgresSto
 // matches it.
 func TestPostgresStore_ClaimCollectionInvocation(t *testing.T) {
 	ctx := context.Background()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
-	pool := container.DB.Pool()
-	require.NoError(t, migrations.RunMigrations(ctx, pool, getMigrationsPath(), "", ""))
-	store := config.NewPostgresStore(container.DB)
+	db := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath()).DB
+	pool := db.Pool()
+	store := config.NewPostgresStore(db)
 
 	t.Run("owned marker is re-stamped and the duplicate's clear no longer matches", func(t *testing.T) {
 		resetCollectionMarker(ctx, t, pool)
@@ -166,12 +162,9 @@ func TestPostgresStore_ClaimCollectionInvocation(t *testing.T) {
 // re-evaluates its WHERE clause against the winner's committed row.
 func TestPostgresStore_ClaimCollectionInvocation_Races(t *testing.T) {
 	ctx := context.Background()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
-	pool := container.DB.Pool()
-	require.NoError(t, migrations.RunMigrations(ctx, pool, getMigrationsPath(), "", ""))
-	store := config.NewPostgresStore(container.DB)
+	db := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath()).DB
+	pool := db.Pool()
+	store := config.NewPostgresStore(db)
 
 	// The lock winner's claim races the lock-skipped duplicate's clear, both
 	// with the shared marker token. Whichever commits first, the winner must

@@ -9,6 +9,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/mocks"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -363,7 +364,7 @@ func (m *mockConfigStoreForHealth) ClearCollectionStarted(_ context.Context, _ s
 	return nil
 }
 func (m *mockConfigStoreForHealth) ClaimCollectionInvocation(_ context.Context, _ string) (string, bool, error) {
-	return "mock-invocation-token", true, nil
+	return mocks.MockInvocationToken, true, nil
 }
 func (m *mockConfigStoreForHealth) GetRIUtilizationCache(_ context.Context, _ string, _ int) (*config.RIUtilizationCacheEntry, error) {
 	return nil, nil

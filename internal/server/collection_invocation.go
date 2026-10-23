@@ -6,7 +6,7 @@ import (
 )
 
 // claimCollectionInvocation runs once a token-carrying collect run holds the
-// advisory lock (see HandleScheduledTask), and swaps the marker token it was
+// advisory lock (see runScheduledTask), and swaps the marker token it was
 // invoked with for a fresh invocation-scoped one (issue #84). The marker
 // token MarkCollectionStarted handed the refresh handler is shared by every
 // delivery of the same async event, and Lambda async delivery is
@@ -29,7 +29,9 @@ func (app *Application) claimCollectionInvocation(ctx context.Context, taskType 
 	}
 	if !ok {
 		log.Println("Collection marker is held by another run; collecting without an owner token")
-		return ScheduledTaskParams{}
+		params.OwnerToken = ""
+		return params
 	}
-	return ScheduledTaskParams{OwnerToken: token}
+	params.OwnerToken = token
+	return params
 }
