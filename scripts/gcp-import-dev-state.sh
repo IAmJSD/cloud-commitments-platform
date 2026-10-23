@@ -340,10 +340,6 @@ if [ -n "$SA_CLOUDRUN_EXISTS" ]; then
     "${PROJECT} roles/secretmanager.secretAccessor ${SA_MEMBER}"
 
   import_if_missing \
-    "module.compute_cloud_run[0].google_project_iam_member.compute_viewer" \
-    "${PROJECT} roles/compute.viewer ${SA_MEMBER}"
-
-  import_if_missing \
     "module.compute_cloud_run[0].google_project_iam_member.compute_commitment_admin" \
     "${PROJECT} roles/compute.admin ${SA_MEMBER}"
 fi
