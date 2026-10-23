@@ -15,9 +15,12 @@
 #     stay anchored to the root and cannot hide a tracked file or fixture of
 #     the same name elsewhere in the tree.
 #
-# Each artifact name must also still appear in the Makefile. If a target is
-# renamed to write a different file, this fails rather than passing on a
-# pattern that no longer guards anything.
+# Each artifact name must also still appear in the Makefile outside an `rm`
+# line. If a target is renamed or stops writing the file, this fails rather
+# than passing on a pattern that no longer guards anything; the `make clean`
+# rm lines are skipped because they can outlive the target that wrote the file
+# (as gosec-report.json did once `make security-scan-go` moved to
+# scripts/run-gosec.sh, #340).
 #
 # Exits 0 when all cases pass; exits 1 on any failure.
 
@@ -30,7 +33,6 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 ARTIFACTS=(
   "bootstrap:build-lambda"
   "coverage.html:test-coverage"
-  "gosec-report.json:security-scan-go"
   "trivy-report.json:security-scan-docker"
   "tfsec-report.json:security-scan-terraform"
   "complexity-report.txt:complexity-report"
@@ -60,14 +62,17 @@ gitignore_rule_for() {
   fi
 }
 
+# Makefile lines that can write an artifact: everything except `rm` lines.
+makefile_writers="$(grep -vE '^[[:space:]]*@?rm[[:space:]]' "${REPO_ROOT}/Makefile")"
+
 for entry in "${ARTIFACTS[@]}"; do
   name="${entry%%:*}"
   target="${entry#*:}"
 
-  if grep -qF -- "$name" "${REPO_ROOT}/Makefile"; then
+  if grep -qF -- "$name" <<<"$makefile_writers"; then
     ok "Makefile still writes ${name} (make ${target})"
   else
-    not_ok "Makefile no longer mentions ${name}; update this test and .gitignore together"
+    not_ok "Makefile no longer writes ${name} (only rm lines, if any, mention it); update this test and .gitignore together"
   fi
 
   rule="$(gitignore_rule_for "$name")"

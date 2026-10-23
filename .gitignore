@@ -89,7 +89,6 @@ sanity_report*.json
 # scripts/test-gitignore-make-artifacts.sh asserts both directions.
 /bootstrap
 /coverage.html
-/gosec-report.json
 /trivy-report.json
 /tfsec-report.json
 /complexity-report.txt

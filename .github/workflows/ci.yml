@@ -1300,8 +1300,8 @@ jobs:
         run: bash scripts/test-migration-down-gate.sh
 
   # Assert that the files the documented Make targets write at the repo root
-  # (the `bootstrap` Lambda binary, coverage.html, the gosec/trivy/tfsec JSON
-  # reports, complexity-report.txt) are gitignored, and that the patterns stay
+  # (the `bootstrap` Lambda binary, coverage.html, the trivy/tfsec JSON reports,
+  # complexity-report.txt) are gitignored, and that the patterns stay
   # root-anchored so same-named files elsewhere remain trackable (#279).
   # Fast (shell only), so it always runs.
   gitignore-make-artifacts:
