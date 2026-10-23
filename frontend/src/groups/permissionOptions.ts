@@ -1,11 +1,12 @@
 /**
  * <option> lists for the group form's permission rows, moved out of
- * groupModals.ts (which is well past the 500-line rule) unchanged.
+ * groupModals.ts (which is well past the 500-line rule).
  */
 
 import { ALL_ACTIONS, ALL_RESOURCES } from '../permissions';
 import type { Action, Resource } from '../permissions';
 import { escapeHtml } from '../users/utils';
+import { isBlankPermissionValue } from './groupFormValidation';
 
 // Human-readable <option> labels for the action/resource vocabulary.
 // Falls back to a generic title-case of the raw value ("cancel-own" ->
@@ -59,8 +60,15 @@ function resourceOptionLabel(resource: string): string {
 // to a different one. The select then still represents -- and
 // round-trips unchanged through collectPermissions() -- the real stored
 // permission rather than corrupting it.
+//
+// A stored value that is blank after trimming (issue #213) is not an
+// unknown value: it renders as the placeholder, explicitly `selected` (a
+// disabled or unselected placeholder lets the browser fall through to the
+// next option, which on the resource list is the `*` wildcard), and
+// saveGroup refuses the row until the admin picks a value or removes it.
 export function buildActionOptions(currentValue: string | undefined): string {
-  const options = ['<option value="">Select Action</option>'];
+  if (isBlankPermissionValue(currentValue)) currentValue = undefined;
+  const options = [`<option value=""${currentValue ? '' : ' selected'}>Select Action</option>`];
   for (const action of ALL_ACTIONS) {
     const selected = currentValue === action ? ' selected' : '';
     options.push(`<option value="${escapeHtml(action)}"${selected}>${escapeHtml(actionOptionLabel(action))}</option>`);
@@ -73,8 +81,14 @@ export function buildActionOptions(currentValue: string | undefined): string {
 
 export function buildResourceOptions(currentValue: string | undefined): string {
   const options: string[] = [];
+  const storedBlank = isBlankPermissionValue(currentValue);
+  if (storedBlank) {
+    currentValue = undefined;
+    options.push('<option value="" selected>Select Resource</option>');
+  }
   for (const resource of ALL_RESOURCES) {
-    const isDefault = !currentValue && resource === '*';
+    // Only a brand-new row defaults to All (*); a stored blank must not.
+    const isDefault = !currentValue && !storedBlank && resource === '*';
     const selected = currentValue === resource || isDefault ? ' selected' : '';
     options.push(`<option value="${escapeHtml(resource)}"${selected}>${escapeHtml(resourceOptionLabel(resource))}</option>`);
   }

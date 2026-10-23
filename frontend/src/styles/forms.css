@@ -235,6 +235,12 @@ input:checked + .slider:before {
     flex: 1;
 }
 
+/* Group form refusal notes (issue #213): sit under the offending row,
+   with room before the "Constraints" heading that follows. */
+.group-form-note {
+    margin-bottom: var(--cudly-sp-2);
+}
+
 /* Date range picker */
 .date-range-picker {
     display: flex;

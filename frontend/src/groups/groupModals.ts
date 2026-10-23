@@ -9,6 +9,7 @@ import { availableGroups } from '../users/state';
 import { escapeHtml, showError, showSuccess } from '../users/utils';
 import { loadUsers } from '../users/userActions';
 import { openModal, closeModal } from '../modal';
+import { clearGroupFormValidation, validateGroupForm } from './groupFormValidation';
 import { buildActionOptions, buildResourceOptions } from './permissionOptions';
 
 // Module-level state for the duplicate modal — holds the source group so
@@ -28,6 +29,7 @@ export function openCreateGroupModal(): void {
 
   title.textContent = 'Create Group';
   form.reset();
+  clearGroupFormValidation();
   (document.getElementById('group-id') as HTMLInputElement).value = '';
 
   // Clear permissions list
@@ -54,6 +56,7 @@ export async function openEditGroupModal(groupId: string): Promise<void> {
     if (!modal || !title || !form) return;
 
     title.textContent = 'Edit Group';
+    clearGroupFormValidation();
     (document.getElementById('group-id') as HTMLInputElement).value = group.id;
     (document.getElementById('group-name') as HTMLInputElement).value = group.name;
     (document.getElementById('group-description') as HTMLTextAreaElement).value = group.description || '';
@@ -85,6 +88,11 @@ export function closeGroupModal(): void {
 export async function saveGroup(e: Event): Promise<void> {
   e.preventDefault();
 
+  // Issue #213: a blank name or a row with no action/resource is refused
+  // with a note under the field, never dropped or widened (#group-form is
+  // novalidate, so this is the only gate).
+  if (validateGroupForm()) return;
+
   // Refuse rather than widen. A stored constraint value this form cannot
   // carry unchanged is flagged when the row is rendered; saving anyway would
   // re-submit a materially different permission set than the one loaded, and
@@ -113,10 +121,9 @@ export async function saveGroup(e: Event): Promise<void> {
   const description = (document.getElementById('group-description') as HTMLTextAreaElement).value;
   const permissions = collectPermissions();
 
-  // Refuse an empty permission list rather than submit it. collectPermissions
-  // silently drops any row left on the "Select Action"/"Select Resource"
-  // placeholder, so removing every real row (or leaving only a placeholder
-  // row) collects as []. The update API treats an empty list as "not sent"
+  // Refuse an empty permission list rather than submit it. Rows left on a
+  // placeholder are refused above, so this is reached by removing every
+  // row. The update API treats an empty list as "not sent"
   // and leaves the group's stored permissions untouched (issue #237), so
   // submitting would show "Group updated successfully" while silently
   // keeping the group's old privileges -- there is no way for this form to
