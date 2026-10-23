@@ -17,7 +17,7 @@ th, td {
 
 th {
     background: var(--cudly-surface-muted);
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
 }
 
 tr:hover {
@@ -99,7 +99,7 @@ tr.history-row-highlight:hover {
 
 .planned-purchases-table th {
     background: var(--cudly-surface-muted);
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     font-size: 0.85rem;
     color: var(--cudly-text-muted);
 }
@@ -109,7 +109,7 @@ tr.history-row-highlight:hover {
 }
 
 .planned-purchase-row .plan-name {
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
     display: block;
 }
 
@@ -147,7 +147,7 @@ tr.history-row-highlight:hover {
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
     font-size: 0.8rem;
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
     text-transform: capitalize;
 }
 

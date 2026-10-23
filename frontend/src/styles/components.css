@@ -87,13 +87,13 @@
 
 .card h3 {
     color: var(--cudly-text-muted);
-    font-size: 0.875rem;
+    font-size: var(--cudly-fs-sm);
     margin-bottom: 0.5rem;
 }
 
 .card .value {
-    font-size: 1.75rem;
-    font-weight: bold;
+    font-size: var(--cudly-fs-2xl);
+    font-weight: var(--cudly-fw-bold);
 }
 
 .card .monthly {
@@ -123,7 +123,7 @@ button {
     background: var(--cudly-surface);
     color: var(--cudly-text);
     cursor: pointer;
-    font-size: 0.875rem;
+    font-size: var(--cudly-fs-sm);
     transition: background 0.2s, border-color 0.2s;
 }
 
@@ -195,7 +195,7 @@ button.secondary:hover {
     background: var(--cudly-surface);
     color: var(--cudly-text);
     cursor: pointer;
-    font-size: 0.875rem;
+    font-size: var(--cudly-fs-sm);
     transition: background 0.2s, border-color 0.2s;
 }
 
@@ -389,7 +389,7 @@ button.secondary:hover {
 .toast--error   { border-left-color: var(--cudly-error-fg); }
 
 .toast-icon {
-    font-weight: bold;
+    font-weight: var(--cudly-fw-bold);
     font-size: 1.1rem;
     line-height: 1.2;
 }
@@ -454,7 +454,7 @@ button.secondary:hover {
 
 .btn-download .download-icon {
     margin-right: 0.4rem;
-    font-weight: bold;
+    font-weight: var(--cudly-fw-bold);
     color: var(--cudly-primary);
 }
 
@@ -559,7 +559,7 @@ button.secondary:hover {
 
 .accounts-overview-chip-count {
     font-size: 1.4rem;
-    font-weight: 700;
+    font-weight: var(--cudly-fw-bold);
     color: var(--cudly-primary);
 }
 
@@ -598,7 +598,7 @@ button.secondary:hover {
     background: var(--cudly-info-bg);
     border-color: #4a90e2;
     color: #1a56c4;
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
 }
 
 /* Per-provider accounts table (P3). Replaces the prior inline-row
@@ -622,7 +622,7 @@ button.secondary:hover {
 .accounts-table th {
     font-size: 0.85rem;
     color: var(--cudly-text-muted);
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
     background: #fafafa;
 }
 
@@ -688,7 +688,7 @@ th .column-filter-btn:hover {
 }
 th .column-filter-btn.active {
     color: var(--cudly-primary);
-    font-weight: 700;
+    font-weight: var(--cudly-fw-bold);
 }
 
 /* Detached popover (lives in document.body, positioned absolutely). */
@@ -707,7 +707,7 @@ th .column-filter-btn.active {
 .column-filter-popover .column-filter-heading {
     margin: 0 0 0.5rem 0;
     font-size: 0.9rem;
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
 }
 .column-filter-popover .column-filter-all {
     display: flex;
@@ -716,7 +716,7 @@ th .column-filter-btn.active {
     padding: 0.25rem 0;
     border-bottom: 1px solid var(--cudly-border);
     margin-bottom: 0.5rem;
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
 }
 .column-filter-popover .column-filter-list {
     max-height: 240px;
@@ -933,7 +933,7 @@ tr.recommendation-row:hover {
 .column-visibility-popover .column-visibility-title {
     margin: 0 0 0.4rem;
     font-size: 0.8em;
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     color: #444;
     text-transform: uppercase;
     letter-spacing: 0.04em;
@@ -1017,7 +1017,7 @@ tr.rec-cell-summary-row:hover {
     box-shadow: var(--cudly-focus-ring);
 }
 .rec-cell-identity {
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
     font-size: 0.9em;
 }
 .rec-cell-range {
@@ -1141,8 +1141,8 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .approval-details-stat-value {
-    font-size: 1rem;
-    font-weight: 600;
+    font-size: var(--cudly-fs-md);
+    font-weight: var(--cudly-fw-semibold);
     color: #222;
 }
 
@@ -1171,7 +1171,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     position: sticky;
     top: 0;
     background: var(--cudly-surface-2, #f6f8fa);
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     color: var(--cudly-text-muted, #444);
     font-size: 0.78rem;
     text-transform: uppercase;
@@ -1193,8 +1193,8 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     display: inline-block;
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
+    font-size: var(--cudly-fs-xs);
+    font-weight: var(--cudly-fw-semibold);
     /* No text-transform: let the HTML control casing. Acronyms (AWS,
      * GCP) render as-written; brand names (Azure) keep their native
      * title case rather than being SHOUT-CASED by CSS. */
@@ -1220,7 +1220,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     display: inline-block;
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
-    font-size: 0.75rem;
+    font-size: var(--cudly-fs-xs);
     background: var(--cudly-info-bg);
     color: var(--cudly-primary);
 }
@@ -1230,7 +1230,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     padding: 0.25rem 0.75rem;
     border-radius: 12px;
     font-size: 0.8rem;
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
 }
 
 .status-badge.active {
@@ -1343,8 +1343,8 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 
 /* Role badge */
 .role-badge {
-    font-size: 0.75rem;
-    font-weight: 600;
+    font-size: var(--cudly-fs-xs);
+    font-weight: var(--cudly-fw-semibold);
     padding: 0.15rem 0.5rem;
     margin-left: 0.4rem;
     border-radius: 999px;
@@ -1358,7 +1358,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 .badge-admin {
     display: inline-block;
     font-size: 0.8rem;
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
     background: var(--cudly-info-bg);
@@ -1368,7 +1368,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 .badge-user {
     display: inline-block;
     font-size: 0.8rem;
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
     background: var(--cudly-border);
@@ -1378,7 +1378,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 .badge-readonly {
     display: inline-block;
     font-size: 0.8rem;
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
     background: var(--cudly-bg);
@@ -1393,7 +1393,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 .badge {
     display: inline-block;
     font-size: 0.8rem;
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     padding: 0.2rem 0.55rem;
     border-radius: 999px;
     letter-spacing: 0.01em;
@@ -1437,7 +1437,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 
 .history-approver strong {
     color: var(--cudly-text);
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
 }
 
 /* Purchase detail status badges */
@@ -1476,7 +1476,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .copy-btn .copy-icon {
-    font-size: 1rem;
+    font-size: var(--cudly-fs-md);
 }
 
 .copy-btn.copied {

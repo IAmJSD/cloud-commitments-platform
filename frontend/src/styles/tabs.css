@@ -14,7 +14,7 @@
     border: none;
     border-bottom: 3px solid transparent;
     color: var(--cudly-text-muted);
-    font-size: 1rem;
+    font-size: var(--cudly-fs-md);
     cursor: pointer;
     border-radius: 0;
 }
@@ -27,7 +27,7 @@
 .tab-btn.active {
     color: var(--cudly-primary);
     border-bottom-color: var(--cudly-primary);
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
 }
 
 .tab-content {

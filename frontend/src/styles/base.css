@@ -246,7 +246,7 @@ textarea {
 /* Help text */
 .help-text {
     color: var(--cudly-text-muted);
-    font-size: 0.875rem;
+    font-size: var(--cudly-fs-sm);
     margin-bottom: 0.75rem;
 }
 
