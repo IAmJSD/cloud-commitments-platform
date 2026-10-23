@@ -4027,7 +4027,9 @@ components:
             pending approvals) may be missing from purchases and summary. May
             be a false positive when exactly `limit` or `executions_limit` rows exist.
             Also true when the actionable executions class (pending, approved,
-            running, ...) reached its own cap of 1000 rows.
+            running, ...) reached its own cap (`actionable_executions_limit`),
+            and when listing either execution class failed, so its rows are
+            missing.
         limit:
           type: integer
           description: Row cap on completed purchase history rows for this request.
@@ -4035,8 +4037,14 @@ components:
           type: integer
           description: >-
             Row cap on terminal executions (failed, expired, canceled, ...),
-            fixed and ignoring the limit parameter. Actionable executions use a
-            separate cap of 1000.
+            fixed and ignoring the limit parameter. Actionable executions use
+            the separate `actionable_executions_limit` cap.
+        actionable_executions_limit:
+          type: integer
+          description: >-
+            Row cap on actionable executions (pending, notified, scheduled,
+            approved, running, paused), fixed at 1000 and ignoring the limit
+            parameter.
 
     HistorySummary:
       type: object

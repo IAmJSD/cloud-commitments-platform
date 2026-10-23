@@ -85,11 +85,12 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 	// filters) because the cap drops rows before they run. It is a single
 	// boolean: a count would reveal other tenants' row volume to a scoped user.
 	return HistoryResponse{
-		Summary:         summarizePurchaseHistory(all),
-		Purchases:       all,
-		Truncated:       len(completed) >= filters.Limit || executionsCapped,
-		Limit:           filters.Limit,
-		ExecutionsLimit: config.DefaultListLimit,
+		Summary:                   summarizePurchaseHistory(all),
+		Purchases:                 all,
+		Truncated:                 len(completed) >= filters.Limit || executionsCapped,
+		Limit:                     filters.Limit,
+		ExecutionsLimit:           config.DefaultListLimit,
+		ActionableExecutionsLimit: config.MaxListLimit,
 	}, nil
 }
 
@@ -161,17 +162,14 @@ const approvalExpiryWindow = 7 * 24 * time.Hour
 // provider via the recs' collapsed provider, account via CloudAccountID,
 // date via ScheduledDate.
 //
-// The third return value reports that either class reached its cap (actionable
-// at MaxListLimit, terminal at DefaultListLimit), so older executions may have
-// been dropped before the filters ran.
+// The third return value reports that executions may be missing: either class
+// reached its cap (actionable at MaxListLimit, terminal at DefaultListLimit) so
+// older executions may have been dropped before the filters ran, or a class
+// listing failed (issue #686).
 func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyFilters) ([]config.PurchaseHistoryRecord, []config.PurchaseExecution, bool) {
-	actionable := h.fetchExecutionsByClass(ctx, actionableExecutionStatuses, config.MaxListLimit)
-	terminal := h.fetchExecutionsByClass(ctx, terminalExecutionStatuses, config.DefaultListLimit)
-	executions := make([]config.PurchaseExecution, 0, len(actionable)+len(terminal))
-	executions = append(executions, actionable...)
-	executions = append(executions, terminal...)
+	executions, incomplete := h.fetchExecutionClasses(ctx)
 	if len(executions) == 0 {
-		return nil, nil, false
+		return nil, nil, incomplete
 	}
 	approver := h.resolvePendingApproverEmail(ctx)
 	userEmailCache := h.resolveUserEmails(ctx, executions)
@@ -208,19 +206,36 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyF
 		}
 		out = append(out, executionToHistoryRow(exec, approver, createdByEmail))
 	}
-	capped := len(actionable) >= config.MaxListLimit || terminalSurfaced >= config.DefaultListLimit
+	capped := incomplete || terminalSurfaced >= config.DefaultListLimit
 	return out, staleExecs, capped
 }
 
+// fetchExecutionClasses lists the actionable and terminal classes, each with
+// its own cap, and returns them concatenated (actionable first). incomplete
+// reports that rows may be missing before the filters run: a class listing
+// failed, or the actionable class reached its MaxListLimit cap. The terminal
+// cap is judged by the caller on the rows it actually surfaces.
+func (h *Handler) fetchExecutionClasses(ctx context.Context) ([]config.PurchaseExecution, bool) {
+	actionable, actionableOK := h.fetchExecutionsByClass(ctx, actionableExecutionStatuses, config.MaxListLimit)
+	terminal, terminalOK := h.fetchExecutionsByClass(ctx, terminalExecutionStatuses, config.DefaultListLimit)
+	executions := make([]config.PurchaseExecution, 0, len(actionable)+len(terminal))
+	executions = append(executions, actionable...)
+	executions = append(executions, terminal...)
+	incomplete := !actionableOK || !terminalOK || len(actionable) >= config.MaxListLimit
+	return executions, incomplete
+}
+
 // fetchExecutionsByClass lists one status class. A listing error is logged and
-// the class skipped so the other class and completed history still render.
-func (h *Handler) fetchExecutionsByClass(ctx context.Context, statuses []string, limit int) []config.PurchaseExecution {
+// the class skipped (ok=false) so the other class and completed history still
+// render; the caller flags the response as incomplete so the hidden rows are
+// not silent (issue #686).
+func (h *Handler) fetchExecutionsByClass(ctx context.Context, statuses []string, limit int) ([]config.PurchaseExecution, bool) {
 	rows, err := h.config.GetExecutionsByStatuses(ctx, statuses, limit)
 	if err != nil {
 		logging.Warnf("history: failed to load executions with statuses %v: %v", statuses, err)
-		return nil
+		return nil, false
 	}
-	return rows
+	return rows, true
 }
 
 func isTerminalExecutionStatus(status string) bool {

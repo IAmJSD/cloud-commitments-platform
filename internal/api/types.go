@@ -959,15 +959,20 @@ type HistoryResponse struct {
 	Summary   HistorySummary                 `json:"summary"`
 	// Truncated is true when a fetch reached its row cap, so older rows (and
 	// possibly pending approvals) may be missing from Purchases and Summary.
-	// It also fires when the actionable execution class hits its MaxListLimit cap.
+	// It also fires when the actionable execution class hits its MaxListLimit cap,
+	// and when an execution class listing failed, so its rows are missing.
 	// It can be a false positive when exactly a cap's worth of rows exist.
 	Truncated bool `json:"truncated"`
 	// Limit is the row cap on completed purchase_history rows for this request.
 	Limit int `json:"limit"`
 	// ExecutionsLimit is the row cap on terminal executions (failed, expired,
 	// canceled, ...), fixed regardless of the request's limit parameter.
-	// Actionable executions (pending, approved, ...) use config.MaxListLimit.
+	// Actionable executions (pending, approved, ...) use ActionableExecutionsLimit.
 	ExecutionsLimit int `json:"executions_limit"`
+	// ActionableExecutionsLimit is the row cap on actionable executions
+	// (pending, notified, scheduled, approved, running, paused), fixed at
+	// config.MaxListLimit regardless of the request's limit parameter.
+	ActionableExecutionsLimit int `json:"actionable_executions_limit"`
 }
 
 // HistorySummary provides aggregate statistics for purchase history.
