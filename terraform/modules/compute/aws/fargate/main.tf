@@ -943,6 +943,11 @@ resource "aws_iam_role_policy" "eventbridge" {
           "ecs:RunTask"
         ]
         Resource = aws_ecs_task_definition.main.arn
+        Condition = {
+          ArnEquals = {
+            "ecs:cluster" = aws_ecs_cluster.main.arn
+          }
+        }
       },
       {
         Effect = "Allow"
@@ -953,6 +958,11 @@ resource "aws_iam_role_policy" "eventbridge" {
           aws_iam_role.task_execution.arn,
           aws_iam_role.task.arn
         ]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "ecs-tasks.amazonaws.com"
+          }
+        }
       }
     ]
   })
@@ -1044,6 +1054,11 @@ resource "aws_iam_role_policy" "eventbridge_ri_exchange" {
           "ecs:RunTask"
         ]
         Resource = aws_ecs_task_definition.main.arn
+        Condition = {
+          ArnEquals = {
+            "ecs:cluster" = aws_ecs_cluster.main.arn
+          }
+        }
       },
       {
         Effect = "Allow"
@@ -1054,6 +1069,11 @@ resource "aws_iam_role_policy" "eventbridge_ri_exchange" {
           aws_iam_role.task_execution.arn,
           aws_iam_role.task.arn
         ]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "ecs-tasks.amazonaws.com"
+          }
+        }
       }
     ]
   })
