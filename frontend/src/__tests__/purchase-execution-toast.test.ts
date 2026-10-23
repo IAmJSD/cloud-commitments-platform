@@ -562,10 +562,56 @@ describe('handleFanOutExecute — fan-out path', () => {
     // The orphaned-but-actionable pending execution must be surfaced by name so
     // the user knows which request is live (issue #642).
     expect(msg).toContain('Submitted (awaiting approval)');
-    expect(msg).toContain('AWS svc-a@100%');
+    expect(msg).toContain('AWS / Unattributed / svc-a@100%');
     // The failed bucket must NOT be listed as submitted.
     expect(msg).not.toContain('svc-b');
     expect(lastToastKind()).toBe('warning');
+  });
+
+  test('#434: the awaiting-approval note names each bucket\'s account on a multi-account split', async () => {
+    // Same provider/service/capacity in two accounts: without the account the
+    // note read "AWS svc-x@100%, AWS svc-x@100%".
+    const inAccount = (accountId: string | undefined) => ({
+      ...buildBucket('x'),
+      recs: [{ ...buildMinimalRec(), cloud_account_id: accountId }],
+    });
+    (recs.getFanOutBuckets as jest.Mock).mockReturnValue([
+      inAccount('acct-a'),
+      inAccount('acct-b'),
+      inAccount(undefined),
+      inAccount('acct-c'),
+    ]);
+    (api.executePurchase as jest.Mock)
+      .mockResolvedValueOnce({ execution_id: 'exec-a', status: 'queued', email_sent: true })
+      .mockResolvedValueOnce({ execution_id: 'exec-b', status: 'queued', email_sent: true })
+      .mockResolvedValueOnce({ execution_id: 'exec-u', status: 'queued', email_sent: true })
+      .mockRejectedValueOnce(new Error('network down'));
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const msg = lastToastMessage();
+    expect(msg).toContain(
+      'Submitted (awaiting approval): AWS / acct-a / svc-x@100%, AWS / acct-b / svc-x@100%, AWS / Unattributed / svc-x@100%.',
+    );
+    expect(msg).not.toContain('AWS / acct-c / svc-x');
+  });
+
+  test('#434: a joined bucket names its account alongside the existing execution', async () => {
+    (recs.getFanOutBuckets as jest.Mock).mockReturnValue([
+      { ...buildBucket('a'), recs: [{ ...buildMinimalRec(), cloud_account_id: 'acct-a' }] },
+      { ...buildBucket('b'), recs: [{ ...buildMinimalRec(), cloud_account_id: 'acct-b' }] },
+    ]);
+    (api.executePurchase as jest.Mock)
+      .mockResolvedValueOnce({ execution_id: 'abcd1234-0000', status: 'pending', email_sent: true, duplicate: true })
+      .mockRejectedValueOnce(new Error('network down'));
+
+    const btn = setup();
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(lastToastMessage()).toContain('Joined existing: AWS / acct-a / svc-a@100% (existing abcd1234: ');
   });
 
   test('#333: partial fan-out failure prefixes each failure with its bucket account', async () => {
