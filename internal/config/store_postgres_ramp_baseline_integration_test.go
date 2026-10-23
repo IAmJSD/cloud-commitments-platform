@@ -71,9 +71,8 @@ func TestListPlanCommittedTx_RealRowShapes(t *testing.T) {
 	require.NoError(t, f.store.SavePurchaseExecution(ctx, retry))
 	f.rowWithRecs(ctx, t, 2, a2, StatusCompleted, false, r2)
 
-	// Step 3: canceled, legacy-canceled and a failed row proven unsubmitted hold nothing.
+	// Step 3: canceled and a failed row proven unsubmitted hold nothing.
 	f.rowWithRecs(ctx, t, 3, a1, StatusCanceled, false, r1)
-	f.rowWithRecs(ctx, t, 3, a1, LegacyStatusCanceled, false, r1)
 	f.rowWithRecs(ctx, t, 3, a2, StatusFailed, true, r2)
 
 	got := f.committed(ctx, t)

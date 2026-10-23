@@ -61,7 +61,7 @@ type LadderResolveResult struct {
 // still move money, so it blocks the resolve.
 func ladderResolvableNodeStatus(status string) bool {
 	switch status {
-	case StatusFailed, StatusCanceled, LegacyStatusCanceled, StatusExpired, StatusCompleted, StatusPartiallyCompleted:
+	case StatusFailed, StatusCanceled, StatusExpired, StatusCompleted, StatusPartiallyCompleted:
 		return true
 	}
 	return false
@@ -71,7 +71,7 @@ func ladderResolvableNodeStatus(status string) bool {
 // the provider.
 func ladderNodeProvenUnsent(n LadderChainNode) bool {
 	switch n.Status {
-	case StatusCanceled, LegacyStatusCanceled, StatusExpired:
+	case StatusCanceled, StatusExpired:
 		return true
 	case StatusFailed:
 		return n.NoSubmission

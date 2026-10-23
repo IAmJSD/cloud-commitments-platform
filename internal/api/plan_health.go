@@ -222,11 +222,9 @@ func failedExecutionsFactor(counts config.ExecutionStatusCounts) (PlanHealthFact
 }
 
 // canceledExecutionsFactor: -5 per canceled execution in the last
-// planHealthLookbackDays, capped at 4 (-20 max). Counts both spellings of
-// "canceled" (config.StatusCanceled and the legacy
-// config.LegacyStatusCanceled) so pre-#1278 rows aren't invisible to scoring.
+// planHealthLookbackDays, capped at 4 (-20 max).
 func canceledExecutionsFactor(counts config.ExecutionStatusCounts) (PlanHealthFactor, bool) {
-	count := counts[config.StatusCanceled] + counts[config.LegacyStatusCanceled]
+	count := counts[config.StatusCanceled]
 	if count == 0 {
 		return PlanHealthFactor{}, false
 	}

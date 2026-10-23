@@ -41,7 +41,7 @@ func TestSumPlanCommitted_StatusSet(t *testing.T) {
 		assert.Equal(t, 20, got[key].Count, "status %q holds capacity", status)
 	}
 
-	for _, status := range []string{StatusCanceled, LegacyStatusCanceled, StatusExpired} {
+	for _, status := range []string{StatusCanceled, StatusExpired} {
 		got, err := sumPlanCommitted([]PurchaseExecution{baselineExec("e", 1, status, rec)})
 		require.NoError(t, err)
 		assert.Empty(t, got, "status %q holds nothing", status)

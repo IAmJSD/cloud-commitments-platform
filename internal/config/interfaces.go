@@ -251,11 +251,10 @@ type StoreInterface interface {
 	// (and writes nothing) when the row has left those statuses, so a cancel or
 	// approve that lands first is never overwritten.
 	RescheduleAwaitingExecution(ctx context.Context, executionID string, scheduledDate time.Time) (bool, error)
-	// SetCancelledBy stamps canceled_by and the legacy cancelled_by column on
-	// an execution without overwriting any other columns. Used after
-	// TransitionExecutionStatus to fold the actor attribution into the same
-	// logical write without the full-row SavePurchaseExecution clobber risk
-	// (Finding #5 / PR #889).
+	// SetCancelledBy stamps canceled_by on an execution without overwriting
+	// any other columns. Used after TransitionExecutionStatus to fold the actor
+	// attribution into the same logical write without the full-row
+	// SavePurchaseExecution clobber risk (Finding #5 / PR #889).
 	SetCancelledBy(ctx context.Context, executionID string, cancelledBy string) error
 	// LinkRetryExecutionAtomic stamps retry_execution_id on a failed
 	// execution row without a full-row overwrite, conditional on

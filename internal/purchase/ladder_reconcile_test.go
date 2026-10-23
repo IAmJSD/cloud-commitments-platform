@@ -33,7 +33,6 @@ func TestDecideFiredTranche(t *testing.T) {
 		{"first attempt reaped, later attempts proven", []config.LadderChainNode{chainNode("e1", "failed", false), chainNode("e2", "failed", true), chainNode("e3", "failed", true)}, visibleAlways, "", ""},
 		{"every attempt proven", []config.LadderChainNode{chainNode("e1", "failed", true), chainNode("e2", "failed", true)}, visibleAlways, ladder.TrancheStatusFailed, "no_submission"},
 		{"canceled tail", []config.LadderChainNode{chainNode("e1", "canceled", false)}, visibleAlways, ladder.TrancheStatusFailed, "approval_canceled"},
-		{"legacy spelling tail", []config.LadderChainNode{chainNode("e1", config.LegacyStatusCanceled, false)}, visibleAlways, ladder.TrancheStatusFailed, "approval_canceled"},
 		{"expired tail after unproven attempt", []config.LadderChainNode{chainNode("e1", "failed", false), chainNode("e2", "expired", false)}, visibleAlways, "", ""},
 		{"proof flag ignored on a non-failed row", []config.LadderChainNode{chainNode("e1", "running", true)}, visibleAlways, "", ""},
 		{"partially completed", []config.LadderChainNode{chainNode("e1", "partially_completed", false)}, visibleAlways, "", ""},

@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
@@ -30,7 +29,7 @@ var (
 	cleanupDeletable = []string{"completed", "partially_completed", "expired", "revocation_requested"}
 	// Live (an executor, scheduler or reaper may still act on it), or counted
 	// by the health score and left to CleanupOldExecutions: always kept.
-	cleanupKept = []string{"pending", "notified", "approved", "running", "scheduled", "paused", "failed", "canceled", config.LegacyStatusCanceled}
+	cleanupKept = []string{"pending", "notified", "approved", "running", "scheduled", "paused", "failed", "canceled"}
 )
 
 func cleanupTestDB(ctx context.Context, t *testing.T) *database.Connection {

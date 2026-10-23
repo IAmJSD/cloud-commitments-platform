@@ -882,51 +882,29 @@ func TestPGXMock_GetPlannedExecutions_ProjectsAllScanColumns(t *testing.T) {
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestPGXMock_GetExecutionByID_ProjectsCoalescedCancelledBy guards the #1277 /
-// #1453 read-side follow-up: CancelExecutionAtomic and
-// CancelScheduledExecutionAtomic write the canceling actor to the NEW
-// canceled_by column, but migration 000089's expand-contract contract states
-// every SELECT must read back COALESCE(canceled_by, cancelled_by) so a row
-// written by either the old or the new column is attributed correctly. Before
-// this fix GetExecutionByID selected the bare legacy cancelled_by, so an
-// actor written only to canceled_by (the atomic-cancel paths) scanned back as
-// NULL and the History page lost the attribution.
-//
-// The mock uses regexp query matching, so ExpectQuery requires the issued
-// SELECT to contain the COALESCE expression; a bare `cancelled_by` projection
-// (the pre-fix query) does not match, the mock returns no rows, and
-// GetExecutionByID surfaces ErrNotFound instead of the expected execution --
-// that is how this test fails against the pre-fix code and passes once the
-// projection is fixed.
-func TestPGXMock_GetExecutionByID_ProjectsCoalescedCancelledBy(t *testing.T) {
-	mock := newMock(t)
-	store := storeWith(mock)
-	ctx := context.Background()
+// executionRowCols is the scan shape of every purchase_executions read.
+var executionRowCols = []string{
+	"plan_id", "execution_id", "status", "step_number", "scheduled_date",
+	"notification_sent", "approval_token", "recommendations",
+	"total_upfront_cost", "estimated_savings", "completed_at", "error", "expires_at",
+	"cloud_account_id", "source", "approved_by", "canceled_by", "capacity_percent",
+	"created_by_user_id", "retry_execution_id", "retry_attempt_n",
+	"approval_token_expires_at",
+	"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
+	"idempotency_key",
+	"scheduled_execution_at",
+	"no_submission", "created_by_system",
+}
 
-	recsJSON, _ := json.Marshal([]RecommendationRecord{})
-	now := time.Now().Truncate(time.Second)
-	cols := []string{
-		"plan_id", "execution_id", "status", "step_number", "scheduled_date",
-		"notification_sent", "approval_token", "recommendations",
-		"total_upfront_cost", "estimated_savings", "completed_at", "error", "expires_at",
-		"cloud_account_id", "source", "approved_by", "cancelled_by", "capacity_percent",
-		"created_by_user_id", "retry_execution_id", "retry_attempt_n",
-		"approval_token_expires_at",
-		"executed_by_user_id", "executed_at", "pre_approval_skip_reason",
-		"idempotency_key",
-		"scheduled_execution_at",
-		"no_submission", "created_by_system",
-	}
-	// Simulates the exact row shape the atomic-cancel paths produce: the
-	// actor lives only in canceled_by (legacy cancelled_by is NULL). What
-	// Postgres would actually return for COALESCE(canceled_by, cancelled_by)
-	// is the canceled_by value, so the mocked "cancelled_by" scan slot below
-	// carries that same value to stand in for the server-side COALESCE result.
-	rows := pgxmock.NewRows(cols).AddRow(
-		"plan-1", "exec-1", "canceled", 1, now,
+func canceledExecutionRow(t *testing.T, actor string) *pgxmock.Rows {
+	t.Helper()
+	recsJSON, err := json.Marshal([]RecommendationRecord{})
+	require.NoError(t, err)
+	return pgxmock.NewRows(executionRowCols).AddRow(
+		"plan-1", "exec-1", StatusCanceled, 1, time.Now().Truncate(time.Second),
 		sql.NullTime{}, "tok-123", recsJSON,
 		100.0, 200.0, sql.NullTime{}, "", sql.NullTime{},
-		nil, "", nil, strPtr("cancelling-actor@example.com"), 100,
+		nil, "", nil, strPtr(actor), 100,
 		nil, nil, 0,
 		sql.NullTime{},
 		nil, sql.NullTime{}, nil,
@@ -934,14 +912,63 @@ func TestPGXMock_GetExecutionByID_ProjectsCoalescedCancelledBy(t *testing.T) {
 		sql.NullTime{},
 		false, false,
 	)
-	mock.ExpectQuery(`COALESCE\(canceled_by,\s*cancelled_by\)`).
-		WithArgs(pgxmock.AnyArg()).
-		WillReturnRows(rows)
+}
 
+// TestPGXMock_ExecutionCancelActorUsesOnlyCanceledBy pins the code half of
+// the 000089 contract (issue #47): reads, cancel transitions, SetCancelledBy
+// and the full-row save use canceled_by alone and never name the legacy
+// double-l column, so the follow-up migration can drop that column without
+// breaking a build that runs this code. The matcher rejects any statement that
+// mentions the legacy column, so each call fails against the pre-#47 queries
+// (COALESCE projections, dual writes, the save writing only the legacy column).
+//
+// The save keeps an actor already on the row (COALESCE(existing, $17)): reads
+// used COALESCE(canceled_by, cancelled_by) and the save wrote only the legacy
+// column, so a save from a stale copy could never erase canceled_by. Writing
+// $17 straight into canceled_by would let it.
+func TestPGXMock_ExecutionCancelActorUsesOnlyCanceledBy(t *testing.T) {
+	legacyColumn := "cancel" + "led_by"
+	mock, err := pgxmock.NewPool(pgxmock.QueryMatcherOption(pgxmock.QueryMatcherFunc(func(expected, actual string) error {
+		if strings.Contains(actual, legacyColumn) {
+			return errors.New("statement still references the legacy cancel actor column: " + actual)
+		}
+		return pgxmock.QueryMatcherRegexp.Match(expected, actual)
+	})))
+	require.NoError(t, err)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectQuery(`approved_by, canceled_by, capacity_percent`).
+		WithArgs("exec-1").
+		WillReturnRows(canceledExecutionRow(t, "reader@example.com"))
 	exec, err := store.GetExecutionByID(ctx, "exec-1")
 	require.NoError(t, err)
-	require.NotNil(t, exec.CancelledBy, "actor written to canceled_by must round-trip via the COALESCE read projection")
-	assert.Equal(t, "cancelling-actor@example.com", *exec.CancelledBy)
+	require.NotNil(t, exec.CancelledBy)
+	assert.Equal(t, "reader@example.com", *exec.CancelledBy)
+
+	actor := "11111111-1111-1111-1111-111111111111"
+	mock.ExpectQuery(`(?s)SET status = \$2.*canceled_by = COALESCE\(\(SELECT email FROM users WHERE id = \$5\), canceled_by\)\s+WHERE`).
+		WithArgs(anyArgsCfg(7)...).
+		WillReturnRows(canceledExecutionRow(t, "canceler@example.com"))
+	returned, err := store.TransitionExecutionStatus(ctx, "exec-1", []string{"pending"}, StatusCanceled, &actor)
+	require.NoError(t, err)
+	require.NotNil(t, returned.CancelledBy)
+	assert.Equal(t, "canceler@example.com", *returned.CancelledBy)
+
+	mock.ExpectExec(`SET canceled_by = \$2, updated_at = NOW\(\)`).
+		WithArgs("exec-1", "revoker@example.com").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	require.NoError(t, store.SetCancelledBy(ctx, "exec-1", "revoker@example.com"))
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`(?s)approved_by, canceled_by, capacity_percent.*canceled_by = COALESCE\(purchase_executions\.canceled_by, \$17\)`).
+		WithArgs(anyArgsCfg(29)...).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+	require.NoError(t, store.SavePurchaseExecution(ctx, &PurchaseExecution{
+		ExecutionID: "exec-1", PlanID: "plan-1", Status: StatusCanceled, ScheduledDate: time.Now(),
+	}))
+
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -3180,18 +3207,17 @@ func TestPGXMock_CancelPendingExchangesByOrigin_Ladder_WritesCanonicalStatus(t *
 }
 
 // TestPGXMock_CleanupOldExecutions_IncludesCanonicalStatus verifies that the
-// cleanup DELETE includes 'canceled' (canonical) in the terminal-status filter,
-// so Plans-canceled rows written by new code are not missed.
-// Regression guard for the #1277 follow-up Defect 2 fix.
+// cleanup DELETE includes 'canceled' in the terminal-status filter, so
+// Plans-canceled rows are not missed. Regression guard for the #1277
+// follow-up Defect 2 fix.
 func TestPGXMock_CleanupOldExecutions_IncludesCanonicalStatus(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	// The regex pins on both 'cancelled' (legacy) and 'canceled' (canonical)
-	// appearing together in the SQL. If either is missing the mock won't
-	// match, causing an "unexpected query" error from ExpectationsWereMet.
-	mock.ExpectExec(`'cancelled'.*'canceled'`).
+	// If 'canceled' is missing the mock won't match, causing an
+	// "unexpected query" error from ExpectationsWereMet.
+	mock.ExpectExec(`status = 'canceled'`).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 4))
 
@@ -3213,7 +3239,7 @@ func TestPGXMock_CleanupOldExecutions_IncludesCanonicalStatus(t *testing.T) {
 // regressed instead of just "the SQL changed".
 func TestPGXMock_CleanupOldExecutions_RetainsCanceledOnUpdatedAt(t *testing.T) {
 	anchors := map[string]string{
-		"canceled branch retains on updated_at":      `(?s)status IN \('cancelled', 'canceled'\)\s+AND updated_at`,
+		"canceled branch retains on updated_at":      `(?s)status = 'canceled'\s+AND updated_at`,
 		"completed branch retains on scheduled_date": `(?s)status = 'completed'\s+AND scheduled_date`,
 		"expires_at branch skips scored statuses":    `(?s)status <> ALL\(\$2\)\s+AND expires_at IS NOT NULL`,
 	}
@@ -3259,7 +3285,7 @@ func TestPGXMock_CleanupOldExecutions_ExcludesEveryHealthScoredStatus(t *testing
 	assert.NoError(t, mock.ExpectationsWereMet())
 	// Guards the slice's contents independently of how the query uses it.
 	assert.ElementsMatch(t,
-		[]string{StatusFailed, StatusCanceled, LegacyStatusCanceled},
+		[]string{StatusFailed, StatusCanceled},
 		HealthScoredExecutionStatuses)
 }
 
@@ -3282,13 +3308,13 @@ func TestPGXMock_CountExecutionsByPlanAndStatus_AggregatesInSQL(t *testing.T) {
 	rows := pgxmock.NewRows([]string{"plan_id", "status", "count"}).
 		AddRow("plan-a", "failed", 7).
 		AddRow("plan-a", StatusCanceled, 2).
-		AddRow("plan-b", LegacyStatusCanceled, 1)
+		AddRow("plan-b", StatusCanceled, 1)
 	mock.ExpectQuery(`(?s)SELECT plan_id, status, COUNT\(\*\).*FROM purchase_executions.*status = ANY\(\$1\).*plan_id IS NOT NULL.*updated_at >= \$2.*GROUP BY plan_id, status`).
 		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnRows(rows)
 
 	counts, err := store.CountExecutionsByPlanAndStatus(ctx,
-		[]string{"failed", StatusCanceled, LegacyStatusCanceled},
+		[]string{"failed", StatusCanceled},
 		time.Now().AddDate(0, 0, -90))
 	require.NoError(t, err)
 
@@ -3296,7 +3322,7 @@ func TestPGXMock_CountExecutionsByPlanAndStatus_AggregatesInSQL(t *testing.T) {
 	// though DefaultListLimit-style paging would be the temptation here.
 	assert.Equal(t, 7, counts["plan-a"]["failed"])
 	assert.Equal(t, 2, counts["plan-a"][StatusCanceled])
-	assert.Equal(t, 1, counts["plan-b"][LegacyStatusCanceled])
+	assert.Equal(t, 1, counts["plan-b"][StatusCanceled])
 	// Absent statuses read as a zero count rather than needing a guard.
 	assert.Equal(t, 0, counts["plan-b"]["failed"])
 	assert.Equal(t, 0, counts["plan-missing"]["failed"])

@@ -1290,17 +1290,6 @@ func TestPostgresStoreDB_CleanupOldExecutions_RetainsCanceledInsideHealthWindow(
 			why:           "expires_at branch must not purge what the canceled branch retains",
 		},
 		{
-			// Deliberately the LegacyStatusCanceled constant, i.e. the
-			// pre-migration-000089 double-l DB value. The label avoids
-			// spelling it out only to keep the misspell linter quiet.
-			name:          "legacy-spelling-canceled-today-old-scheduled-date",
-			status:        LegacyStatusCanceled,
-			scheduledDays: -40,
-			updatedDays:   0,
-			shouldSurvive: true,
-			why:           "the legacy spelling is retained on updated_at too",
-		},
-		{
 			// The `failed` counterpart of the canceled case above, and the
 			// reason branch 3's exclusion is sourced from
 			// HealthScoredExecutionStatuses rather than a canceled-only

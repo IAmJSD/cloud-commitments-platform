@@ -439,17 +439,11 @@ type PurchaseExecution struct {
 	NoSubmission bool `json:"no_submission,omitempty" dynamodbav:"no_submission,omitempty"`
 }
 
-// StatusCanceled is the canonical US-spelling status value new code writes.
+// StatusCanceled is the only canceled status value. Migration 000144 (the
+// contract half of the 000089 rename) normalized every legacy British-spelled
+// row to it and narrowed the status CHECK constraints so no other spelling can
+// be stored.
 const StatusCanceled = "canceled"
-
-// LegacyStatusCanceled is the British-spelling status value old code writes
-// during the expand-contract rename (migration 000089). It is constructed by
-// concatenation rather than a single literal so the US-locale misspell linter
-// does not flag it -- this lets the dual-spelling read paths reference the
-// legacy value without a //nolint:misspell directive. The CONTRACT migration
-// (#1278) normalizes all rows to StatusCanceled once old code is gone, after
-// which every reference to this constant can be deleted.
-const LegacyStatusCanceled = "cancel" + "led"
 
 // StatusFailed is the terminal status written when an execution's purchase
 // attempt errors out, and by the stuck-purchase reaper (internal/purchase/
@@ -487,8 +481,6 @@ const StatusExpired = "expired"
 // Canceled counts as settled but neither succeeded nor stuck: to cancel a
 // step's row is an operator deciding that unit will not buy, and that decision
 // is what releases a ramp an unrecoverable account would otherwise freeze.
-// Both spellings are listed for the duration of the expand-contract rename
-// (migration 000089, contract in #1278), same as HealthScoredExecutionStatuses.
 //
 // RampStepSucceededStatuses is the same predicate migration 000098 spells out
 // inline as status IN ('completed','partially_completed') when it decides which
@@ -498,7 +490,7 @@ const StatusExpired = "expired"
 // "bought" means.
 var (
 	RampStepSucceededStatuses = []string{StatusCompleted, StatusPartiallyCompleted}
-	RampStepSettledStatuses   = []string{StatusCompleted, StatusPartiallyCompleted, StatusCanceled, LegacyStatusCanceled}
+	RampStepSettledStatuses   = []string{StatusCompleted, StatusPartiallyCompleted, StatusCanceled}
 	RampStepStuckStatuses     = []string{StatusFailed, StatusExpired}
 )
 
@@ -532,13 +524,9 @@ type RampStepBlock struct {
 // Keeping one exported slice rather than a literal list on each side is what
 // makes that agreement structural: adding a status to the score
 // automatically extends the sweep's exclusion, so the two cannot drift.
-//
-// Both spellings of canceled are present for the duration of the
-// expand-contract rename (migration 000089, contract in #1278).
 var HealthScoredExecutionStatuses = []string{
 	StatusFailed,
 	StatusCanceled,
-	LegacyStatusCanceled,
 }
 
 // StatusRevocationRequested records that an operator asked for a completed
@@ -568,7 +556,6 @@ var TerminalExecutionStatuses = []string{
 	StatusPartiallyCompleted,
 	StatusFailed,
 	StatusCanceled,
-	LegacyStatusCanceled,
 	StatusExpired,
 	StatusRevocationRequested,
 }

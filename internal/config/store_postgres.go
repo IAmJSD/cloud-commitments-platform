@@ -1083,12 +1083,16 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 		capacityPercent = 100
 	}
 
+	// canceled_by keeps an actor already on the row: a save from a copy read
+	// before a concurrent cancel must not erase that cancel's attribution.
+	// This is the value reads saw before migration 000144, when the save wrote
+	// the legacy column and reads took COALESCE(canceled_by, cancelled_by).
 	query := `
 		INSERT INTO purchase_executions (
 			plan_id, execution_id, status, step_number, scheduled_date,
 			notification_sent, approval_token_hash, recommendations,
 			total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-			cloud_account_id, source, approved_by, cancelled_by, capacity_percent,
+			cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 			created_by_user_id, retry_execution_id, retry_attempt_n,
 			approval_token_expires_at,
 			executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1107,7 +1111,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 			cloud_account_id = $14,
 			source = $15,
 			approved_by = $16,
-			cancelled_by = $17,
+			canceled_by = COALESCE(purchase_executions.canceled_by, $17),
 			capacity_percent = $18,
 			approval_token_expires_at = $22,
 			executed_by_user_id = $23,
@@ -1239,8 +1243,8 @@ func (s *PostgresStore) RotatePendingApprovalToken(ctx context.Context, executio
 // actor is the UUID of the user performing the transition (nil for system-initiated paths);
 // it is stamped onto transitioned_by and transitioned_at is always set to NOW().
 // A transition to StatusCanceled also stamps the actor's email onto canceled_by
-// and the legacy cancelled_by (issue #119), matching what the other cancel paths
-// record and what History reads.
+// (issue #119), matching what the other cancel paths record and what History
+// reads.
 func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*PurchaseExecution, error) {
 	return s.transitionExecutionStatus(ctx, s.db, executionID, fromStatuses, toStatus, actor, nil, nil)
 }
@@ -1319,8 +1323,7 @@ func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, q executi
 		UPDATE purchase_executions
 		SET status = $2, updated_at = NOW(),
 		    transitioned_by = $4, transitioned_at = NOW(),
-		    canceled_by = COALESCE((SELECT email FROM users WHERE id = $5), canceled_by),
-		    cancelled_by = COALESCE((SELECT email FROM users WHERE id = $5), cancelled_by)
+		    canceled_by = COALESCE((SELECT email FROM users WHERE id = $5), canceled_by)
 		WHERE execution_id = $1 AND status = ANY($3)
 		  AND ($6::boolean IS NULL OR (recommendations IN ('[]'::jsonb, 'null'::jsonb)) = $6)
 		  AND ($7::text IS NULL OR (approval_token_hash = $7
@@ -1328,7 +1331,7 @@ func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, q executi
 		RETURNING plan_id, execution_id, status, step_number, scheduled_date,
 		          notification_sent, approval_token_hash, recommendations,
 		          total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		          cloud_account_id, source, approved_by, COALESCE(canceled_by, cancelled_by) AS cancelled_by, capacity_percent,
+		          cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		          created_by_user_id, retry_execution_id, retry_attempt_n,
 		          approval_token_expires_at,
 		          executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1377,16 +1380,13 @@ func transitionRejection(ctx context.Context, q executionQuerier, executionID st
 	return fmt.Errorf("%w: execution %s cannot transition from %q to %q", ErrExecutionNotInExpectedStatus, executionID, existing.Status, toStatus)
 }
 
-// SetCancelledBy stamps both the canceled_by and legacy cancelled_by columns
-// for a single execution without touching any other column. This avoids the
-// full-row overwrite that a SavePurchaseExecution follow-up would perform,
-// eliminating the lost-update window between TransitionExecutionStatus and
-// the attribution write (Finding #5). Writing both columns keeps this path
-// symmetric with CancelExecutionAtomic/CancelScheduledExecutionAtomic (which
-// write canceled_by only) so revoke-attribution keeps working unchanged if a
-// future contract migration (#1278) drops the legacy column.
+// SetCancelledBy stamps canceled_by for a single execution without touching
+// any other column. This avoids the full-row overwrite that a
+// SavePurchaseExecution follow-up would perform, eliminating the lost-update
+// window between TransitionExecutionStatus and the attribution write
+// (Finding #5).
 func (s *PostgresStore) SetCancelledBy(ctx context.Context, executionID, cancelledBy string) error {
-	q := `UPDATE purchase_executions SET canceled_by = $2, cancelled_by = $2, updated_at = NOW()
+	q := `UPDATE purchase_executions SET canceled_by = $2, updated_at = NOW()
 	       WHERE execution_id = $1`
 	_, err := s.db.Exec(ctx, q, executionID, cancelledBy)
 	return err
@@ -1545,7 +1545,7 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token_hash, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, COALESCE(canceled_by, cancelled_by) AS cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1659,7 +1659,7 @@ func (s *PostgresStore) GetPlannedExecutions(ctx context.Context, statuses []str
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token_hash, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, COALESCE(canceled_by, cancelled_by) AS cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1684,7 +1684,7 @@ func (s *PostgresStore) GetStaleApprovedExecutions(ctx context.Context, olderTha
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token_hash, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, COALESCE(canceled_by, cancelled_by) AS cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1726,7 +1726,7 @@ func (s *PostgresStore) ListStuckExecutions(ctx context.Context, statuses []stri
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token_hash, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, COALESCE(canceled_by, cancelled_by) AS cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1747,7 +1747,7 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token_hash, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, COALESCE(canceled_by, cancelled_by) AS cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1771,7 +1771,7 @@ func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) (
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token_hash, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, COALESCE(canceled_by, cancelled_by) AS cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1858,7 +1858,7 @@ func (s *PostgresStore) ListRecentSubmitsTx(ctx context.Context, tx pgx.Tx, crea
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token_hash, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, COALESCE(canceled_by, cancelled_by) AS cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1893,7 +1893,7 @@ func getExecutionByIDOn(ctx context.Context, q executionQuerier, executionID str
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token_hash, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, COALESCE(canceled_by, cancelled_by) AS cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -1920,7 +1920,7 @@ func (s *PostgresStore) GetExecutionByPlanAndDate(ctx context.Context, planID st
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token_hash, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, COALESCE(canceled_by, cancelled_by) AS cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -2161,7 +2161,7 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token_hash, recommendations,
 		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, COALESCE(canceled_by, cancelled_by) AS cancelled_by, capacity_percent,
+		       cloud_account_id, source, approved_by, canceled_by, capacity_percent,
 		       created_by_user_id, retry_execution_id, retry_attempt_n,
 		       approval_token_expires_at,
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
@@ -2192,10 +2192,8 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 //     clock here because a completed row executed on (or very near) the day
 //     it was scheduled for.
 //
-//  2. Canceled-state cleanup: `status IN ('cancelled', 'canceled') AND
-//     updated_at < NOW() - retention`. Both spellings are included to cover
-//     legacy rows ('cancelled') and new code rows ('canceled', canonical US
-//     spelling per StatusCanceled / migration 000089).
+//  2. Canceled-state cleanup: `status = 'canceled' AND updated_at < NOW() -
+//     retention`.
 //
 //     This branch retains on `updated_at`, NOT `scheduled_date`, and must
 //     stay that way: CountExecutionsByPlanAndStatus windows the plan health
@@ -2266,11 +2264,6 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 // are safe from expiry-based cleanup -- which, per the reachability note
 // above, is every row current code writes.
 func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
-	// Branch 2 lists both spellings: 'cancelled' (legacy, pre-migration
-	// 000089 rows) and 'canceled' (canonical, written by new code after the
-	// follow-up to #1277). #1278 will drop 'cancelled' once all rows are
-	// normalized.
-	//
 	// Branch 3's exclusion is parameterized from
 	// HealthScoredExecutionStatuses instead of repeating a literal list, so
 	// a status added to the plan health score extends this exclusion
@@ -2283,7 +2276,7 @@ func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays 
 		    AND scheduled_date < NOW() - INTERVAL '1 day' * $1
 		      )
 		   OR (
-		        status IN ('cancelled', 'canceled')
+		        status = 'canceled'
 		    AND updated_at     < NOW() - INTERVAL '1 day' * $1
 		      )
 		   OR (

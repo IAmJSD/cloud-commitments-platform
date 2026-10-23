@@ -127,7 +127,6 @@ func TestReconcileLadderTranches_Mappings(t *testing.T) {
 		{"failed without proof (reaper / outcome unknown) keeps netting", "failed", false, true, "fired", ""},
 		{"proof flag on a running row is ignored", "running", true, true, "fired", ""},
 		{"canceled approval", "canceled", false, true, "failed", "approval_canceled"},
-		{"legacy canceled spelling", config.LegacyStatusCanceled, false, true, "failed", "approval_canceled"},
 		{"expired approval", "expired", false, true, "failed", "approval_expired"},
 		{"partially completed stays fired", "partially_completed", false, true, "fired", ""},
 		{"completed and visible", "completed", false, true, "completed", "commitment_visible"},

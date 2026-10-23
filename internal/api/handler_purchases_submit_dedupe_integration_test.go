@@ -122,7 +122,7 @@ func TestPersistExecution_RetryAfterRowLeftPending(t *testing.T) {
 	}{
 		{"pending", true}, {"notified", true}, {"approved", true}, {"running", true},
 		{"completed", true}, {"partially_completed", true},
-		{config.StatusFailed, false}, {config.StatusCanceled, false}, {config.LegacyStatusCanceled, false}, {config.StatusExpired, false},
+		{config.StatusFailed, false}, {config.StatusCanceled, false}, {config.StatusExpired, false},
 	} {
 		t.Run(tc.status, func(t *testing.T) {
 			recs, key := submitFixture(t)

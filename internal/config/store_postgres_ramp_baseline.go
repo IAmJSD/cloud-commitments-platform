@@ -131,7 +131,7 @@ func (s *PostgresStore) ListPlanCommittedTx(ctx context.Context, tx pgx.Tx, plan
 // capacity. See ListPlanCommittedTx for the rule.
 func holdsCapacity(e *PurchaseExecution) bool {
 	switch e.Status {
-	case StatusCanceled, LegacyStatusCanceled, StatusExpired:
+	case StatusCanceled, StatusExpired:
 		return false
 	case StatusFailed:
 		return !e.NoSubmission

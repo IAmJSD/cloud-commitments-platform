@@ -770,26 +770,10 @@ func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID stri
 	if getErr != nil {
 		return nil, fmt.Errorf("disable plan: failed to get execution %s after conflict: %w", executionID, getErr)
 	}
-	// Accept both spellings: during the expand-contract rename (migration
-	// 000089) a concurrent legacy cancel may have written the legacy value
-	// before the rolling deploy completes. The contract migration (#1278)
-	// normalizes the data, after which LegacyStatusCanceled can be removed.
-	if existing.Status != config.StatusCanceled && existing.Status != config.LegacyStatusCanceled {
+	if existing.Status != config.StatusCanceled {
 		return nil, NewClientError(409, fmt.Sprintf(
 			"execution %s cannot be canceled (status=%s)",
 			executionID, existing.Status))
-	}
-	// Normalize the response Status so the idempotent recovery path returns the
-	// canonical US spelling even when the DB row still carries the legacy value.
-	// Without this, a caller that received an in-flight 200 from this branch
-	// would see status="canceled" while a caller that hit the happy-path
-	// transition above would see status="canceled" for the same execution_id
-	// during the rolling deploy. The legacy value is preserved in storage --
-	// only the in-memory copy returned to the handler is normalized -- so the
-	// contract migration's authoritative status backfill still observes every
-	// legacy row.
-	if existing.Status == config.LegacyStatusCanceled {
-		existing.Status = config.StatusCanceled
 	}
 	if delErr := h.config.DeleteSuppressionsByExecution(ctx, executionID); delErr != nil {
 		return nil, fmt.Errorf("cancel execution %s: failed to release suppressions: %w", executionID, delErr)
