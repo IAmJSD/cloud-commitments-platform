@@ -8,6 +8,7 @@ import * as state from './state';
 import { formatDate, formatDateTime, escapeHtml, formatCurrency } from './utils';
 import { switchTab, switchSettingsSubTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
+import { buildApproveConfirmBody, buildExchangeConfirmBody, hourlyPriceDelta } from './riexchange-confirm';
 import {
   parseNumericFilter,
   applyColumnFilters as applyColumnFiltersLib,
@@ -1966,45 +1967,6 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
   }
 }
 
-interface ExchangeConfirmParts {
-  quote: ExchangeQuoteSummary;
-  sources: string[];
-  targets: string[];
-}
-
-// Hours in an average month; only used for the approximate monthly delta.
-const HOURS_PER_MONTH = 730;
-
-function buildExchangeConfirmBody({ quote, sources, targets }: ExchangeConfirmParts): HTMLElement {
-  const root = document.createElement('div');
-  const line = (label: string, value: string): void => {
-    const p = document.createElement('p');
-    const strong = document.createElement('strong');
-    strong.textContent = value;
-    p.append(`${label}: `, strong);
-    root.appendChild(p);
-  };
-  line('Pay now', `${quote.CurrencyCode} ${quote.PaymentDueRaw}`);
-  line('Exchange', sources.join(', '));
-  line('For', targets.join(', '));
-  line('Region', quote.Region ?? '');
-  const src = Number(quote.SourceHourlyPriceRaw);
-  const tgt = Number(quote.TargetHourlyPriceRaw);
-  if (quote.SourceHourlyPriceRaw && quote.TargetHourlyPriceRaw && Number.isFinite(src) && Number.isFinite(tgt)) {
-    const delta = tgt - src;
-    const sign = delta >= 0 ? '+' : '-';
-    const abs = Math.abs(delta);
-    line(
-      'Hourly price change',
-      `${quote.CurrencyCode} ${src.toFixed(4)} \u2192 ${tgt.toFixed(4)} (${sign}${abs.toFixed(4)} ${quote.CurrencyCode}/hr, about ${sign}${(abs * HOURS_PER_MONTH).toFixed(2)} ${quote.CurrencyCode}/month)`,
-    );
-  }
-  const warn = document.createElement('p');
-  warn.textContent = 'This exchange executes immediately and cannot be reversed.';
-  root.appendChild(warn);
-  return root;
-}
-
 function setResultText(container: HTMLElement, message: string, cls: string): void {
   container.textContent = '';
   const p = document.createElement('p');
@@ -2036,6 +1998,8 @@ function renderModalQuoteResult(container: HTMLElement, quote: ExchangeQuoteSumm
     ['Source Hourly Price', quote.SourceHourlyPriceRaw],
     ['Target Hourly Price', quote.TargetHourlyPriceRaw],
   ];
+  const delta = hourlyPriceDelta(quote);
+  if (delta) rows.push(['Hourly Price Change', delta]);
   if (quote.OutputReservedInstancesExp) {
     rows.push(['New RI Expiry', quote.OutputReservedInstancesExp]);
   }
@@ -2425,11 +2389,7 @@ async function handleRIExchangeApproveClick(btn: HTMLButtonElement, record: RIEx
   btn.disabled = true;
   const confirmed = await confirmDialog({
     title: 'Approve RI Exchange',
-    body: `Previously quoted payment: USD ${record.payment_due}. `
-      + `Source RIs: ${record.source_ri_ids.join(', ')}. Region: ${record.region}. `
-      + `Target: ${record.target_count} × ${record.target_offering_id} (${record.target_instance_type}). `
-      + 'Approving executes immediately using a fresh quote, within the configured per-exchange '
-      + 'and remaining daily spending limits. This exchange cannot be reversed.',
+    body: buildApproveConfirmBody(record),
     confirmLabel: 'Approve',
     destructive: true,
   });

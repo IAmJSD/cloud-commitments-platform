@@ -85,6 +85,7 @@ async function openQuote(page: Page) {
   await page.locator('.modal-exchange-target-select').selectOption(offering);
   await page.getByRole('button', { name: 'Get Quote', exact: true }).click();
   await expect(page.locator('#modal-exchange-result')).toContainText('Valid Exchange');
+  await expect(page.locator('#modal-exchange-result')).toContainText('Hourly Price Change:-0.0200 USD/hr, about -14.60 USD/month');
 }
 
 const execute = (page: Page) => page.locator('#ri-exchange-modal').getByRole('button', { name: 'Execute Exchange', exact: true });
@@ -134,7 +135,8 @@ for (const action of ['Execute', 'Approve']) {
       if (action === 'Approve') {
         await expect(dialog(page)).toContainText('Previously quoted payment: USD 123.456789');
         await expect(dialog(page)).toContainText('fresh quote');
-        await expect(dialog(page)).toContainText(`1 × ${offering}`);
+        await expect(dialog(page)).toContainText(`2 × m5.large (${ri})`);
+        await expect(dialog(page)).toContainText(`1 × m5.xlarge (offering ${offering})`);
       }
       if (dismissal === 'Escape') await page.keyboard.press('Escape');
       else if (dismissal === 'backdrop') await dialog(page).click({ position: { x: 2, y: 2 } });
