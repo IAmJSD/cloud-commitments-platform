@@ -234,6 +234,10 @@ type StoreInterface interface {
 	// row whose recommendations were attached after the caller's gate check. A
 	// lost pin returns ErrExecutionNotInExpectedStatus like any lost CAS.
 	TransitionExecutionStatusPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*PurchaseExecution, error)
+	// TransitionExecutionStatusPinnedTx is TransitionExecutionStatusPinned
+	// inside a caller-owned transaction, so the status change commits or
+	// rolls back with the caller's other writes (issue #1052).
+	TransitionExecutionStatusPinnedTx(ctx context.Context, tx pgx.Tx, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*PurchaseExecution, error)
 	// TransitionExecutionStatusTokenPinned is TransitionExecutionStatus that
 	// also requires the row's stored approval token hash to match rawToken and
 	// to be unexpired, in the same statement as the status change, so a token
