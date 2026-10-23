@@ -285,6 +285,10 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	if err := validateCloudAccountRequest(acctReq); err != nil {
 		return nil, err
 	}
+	// Before the transition, so a rejected config leaves the registration pending.
+	if err := h.requireHostForEmptyRoleARN(ctx, "(registration "+reg.ID+")", &acctReq); err != nil {
+		return nil, err
+	}
 
 	h.setReviewMetadata(ctx, reg, httpReq)
 

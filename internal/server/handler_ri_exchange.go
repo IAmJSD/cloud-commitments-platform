@@ -40,6 +40,9 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
+	// Before the enabled check: a stranded hold from an earlier run still
+	// blocks approvals of pending exchanges while automation is off.
+	app.alarmStaleRIExchanges(ctx)
 	if !cfg.RIExchangeEnabled {
 		log.Println("RI exchange automation is disabled, skipping")
 		return nil, nil
@@ -66,6 +69,36 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 	}
 
 	return app.executeRIExchangeReshape(ctx, cfg, clients)
+}
+
+// riExchangeStaleAlarmAfter is how long a processing RI exchange may go
+// unchanged before the scheduled run raises an operator alarm (#692). Every
+// writer settles its row well inside this (4m30s on the API path, the task
+// timeout on the scheduled path), so a row this old was most likely stranded
+// by a crash between the provider call and the ledger write.
+const riExchangeStaleAlarmAfter = time.Hour
+
+// alarmStaleRIExchanges logs an ERROR, which feeds the application error
+// alarm, for every processing RI exchange older than riExchangeStaleAlarmAfter.
+// Such a row keeps its reserved ceiling counted against the daily cap on every
+// later day, and whether the exchange happened at AWS is unknown, so it is
+// never settled or released here: an operator verifies it at AWS and resolves
+// it via POST /api/ri-exchange/resolve/{id}. It returns how many it reported.
+func (app *Application) alarmStaleRIExchanges(ctx context.Context) int {
+	stale, err := app.Config.GetStaleProcessingExchanges(ctx, riExchangeStaleAlarmAfter)
+	if err != nil {
+		logging.Errorf("RI exchange reconciliation: failed to list stale processing exchanges: %v", err)
+		return 0
+	}
+	for i := range stale {
+		r := &stale[i]
+		logging.Errorf("RI exchange reconciliation needed: record_id=%s account_id=%s region=%s source_ri_ids=%v held_usd=%s processing_since=%s: "+
+			"the exchange outcome at AWS is unknown and the row keeps holding daily-cap headroom; check the source RIs in AWS, "+
+			"then resolve it with POST /api/ri-exchange/resolve/%s (allowed once unchanged for %s)",
+			r.ID, r.AccountID, r.Region, r.SourceRIIDs, r.PaymentDue, r.UpdatedAt.UTC().Format(time.RFC3339),
+			r.ID, config.RIExchangeResolveStaleAfter)
+	}
+	return len(stale)
 }
 
 // convertibleOfferingFinder is the slice of the EC2 client the offering
