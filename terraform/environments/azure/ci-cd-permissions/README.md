@@ -187,6 +187,9 @@ obtain the deploy service principal. Restrict the branch via the environment's
 `workflow_dispatch` runs the workflow file as it exists on the dispatched ref, so the
 check can be removed on that branch.
 
-To allow a new deployment environment, add its name to `var.github_environments`. To
-deploy from a different branch or repo, add a further
-`azuread_application_federated_identity_credential` resource to `sp.tf`.
+To allow a new deployment environment, first create it with a deployment branch
+policy that admits only `main`, then add its name to `var.github_environments`
+(see the gating rule in that variable's description; the default `dev`,
+`staging` and `prod` all meet it). To deploy from a different branch or repo,
+add a further `azuread_application_federated_identity_credential` resource to
+`sp.tf`.

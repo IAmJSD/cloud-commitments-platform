@@ -71,6 +71,14 @@ func TestIntegration_APIKeyRejectedAfterPasswordRotation(t *testing.T) {
 
 		_, _, err = svc.ValidateUserAPIKey(ctx, apiKey)
 		require.ErrorIs(t, err, ErrAPIKeyPasswordRotated)
+
+		// The row is still is_active=true, but the listing must not show a
+		// key the authentication path rejects as active (issue #534).
+		listed, err := svc.ListUserAPIKeysAPI(ctx, user.ID)
+		require.NoError(t, err)
+		keys := listed.(*APIListAPIKeysResponse).APIKeys
+		require.Len(t, keys, 1)
+		assert.False(t, keys[0].IsActive, "a key rejected for predating the password change must not list as active")
 	})
 
 	t.Run("key-minted-across-rotation", func(t *testing.T) {
@@ -83,6 +91,28 @@ func TestIntegration_APIKeyRejectedAfterPasswordRotation(t *testing.T) {
 
 		_, _, err = svc.ValidateUserAPIKey(ctx, apiKey)
 		require.ErrorIs(t, err, ErrAPIKeyPasswordRotated)
+	})
+
+	// The listing reads the user row before the keys. A rotation plus a fresh
+	// mint landing between the two reads gives a key newer than the listing's
+	// user snapshot; it is valid and must not be shown as stale (issue #534).
+	t.Run("key-minted-while-listing", func(t *testing.T) {
+		user := createRotationUser(t, svc, store, "rotation-list-race@example.com")
+		_, _, err := svc.CreateAPIKey(ctx, user.ID, "old", rotationPassword, perms, &expiry)
+		require.NoError(t, err)
+		racing := &userReadHook{PostgresStore: store, onRead: func() {
+			require.NoError(t, svc.ChangePassword(ctx, user.ID, change))
+			_, _, mintErr := svc.CreateAPIKey(ctx, user.ID, "new", rotationNewPassword, perms, &expiry)
+			require.NoError(t, mintErr)
+		}}
+
+		listed, err := newRotationService(racing).ListUserAPIKeysAPI(ctx, user.ID)
+		require.NoError(t, err)
+		active := map[string]bool{}
+		for _, k := range listed.(*APIListAPIKeysResponse).APIKeys {
+			active[k.Name] = k.IsActive
+		}
+		assert.Equal(t, map[string]bool{"old": false, "new": true}, active)
 	})
 
 	t.Run("key-minted-after-rotation", func(t *testing.T) {
