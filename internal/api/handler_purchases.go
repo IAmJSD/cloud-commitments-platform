@@ -152,7 +152,9 @@ func buildPlannedPurchase(plan *config.PurchasePlan, exec *config.PurchaseExecut
 // closing the authz hole in issue #950 where any holder of update:purchases
 // could act on another user's scheduled purchase. It runs AFTER the
 // per-handler verb check (update / execute / delete) and the account-scope
-// check (requireExecutionAccess); those still apply unchanged.
+// check (requireExecutionAccess); those still apply unchanged. Pause, resume
+// and run reach it through authorizeBoundedExecutionManagement, which bounds
+// update-any by its Constraints first (issues #1098, #1129).
 //
 // Gate logic (mirrors authorizeSessionCancel / authorizeSessionApprove):
 //   - stateless admin API key: always permitted (apiKeyAdminUserID sentinel).
@@ -205,17 +207,12 @@ func (h *Handler) authorizeExecutionManagement(ctx context.Context, session *Ses
 	return nil
 }
 
-// authorizeExecutionPauseResume is authorizeExecutionManagement for pause and
-// resume, with update-any bounded by its Constraints (issue #1098). A session
-// holding update-any is checked against the strict per-recommendation scope of
-// the STORED row (revokeExecutionConstraintSets), mirroring the planned-purchase
-// cancel gates. An in-scope grant is permitted without an owner check. A
-// Constraints denial falls back to the creator match and otherwise stays the
-// refusal; any other error (a probe or constraint-store failure) is returned
-// and never read as a denial, so it cannot fall through to a weaker branch.
-// Sessions without update-any take the unchanged authorizeExecutionManagement
-// path.
-func (h *Handler) authorizeExecutionPauseResume(ctx context.Context, session *Session, executionID string) error {
+// authorizeBoundedExecutionManagement is authorizeExecutionManagement with
+// update-any bounded by its Constraints, used by pause, resume (issue #1098)
+// and run (issue #1129). Sessions without update-any take the unchanged
+// authorizeExecutionManagement path; a session holding update-any is checked
+// against the stored row by authorizeUpdateAnyOnRow.
+func (h *Handler) authorizeBoundedExecutionManagement(ctx context.Context, session *Session, executionID string) error {
 	if session.UserID == apiKeyAdminUserID {
 		return nil
 	}
@@ -233,6 +230,17 @@ func (h *Handler) authorizeExecutionPauseResume(ctx context.Context, session *Se
 	if err != nil {
 		return err
 	}
+	return h.authorizeUpdateAnyOnRow(ctx, session, execution)
+}
+
+// authorizeUpdateAnyOnRow checks a session holding update-any against the
+// strict per-recommendation scope of the STORED row
+// (revokeExecutionConstraintSets), mirroring the planned-purchase cancel
+// gates. An in-scope grant is permitted without an owner check. A Constraints
+// denial falls back to the creator match and otherwise stays the refusal; any
+// other error (a probe or constraint-store failure) is returned and never read
+// as a denial, so it cannot fall through to a weaker branch.
+func (h *Handler) authorizeUpdateAnyOnRow(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
 	anyErr := h.requirePermissionConstraints(ctx, session, auth.ActionUpdateAny, auth.ResourcePurchases, revokeExecutionConstraintSets(execution))
 	if anyErr == nil || !isForbidden(anyErr) {
 		return anyErr
@@ -241,6 +249,27 @@ func (h *Handler) authorizeExecutionPauseResume(ctx context.Context, session *Se
 		return nil
 	}
 	return anyErr
+}
+
+// authorizeClaimedRowManagement re-runs authorizeBoundedExecutionManagement's
+// decision on a row already in hand: the row run's claim CAS returned
+// (issue #415), so an edit landing between the pre-claim read and the claim
+// cannot carry the row out of a bounded update-any's scope.
+func (h *Handler) authorizeClaimedRowManagement(ctx context.Context, session *Session, execution *config.PurchaseExecution) error {
+	if session.UserID == apiKeyAdminUserID {
+		return nil
+	}
+	hasAny, err := h.sessionHoldsVerb(ctx, session, auth.ActionUpdateAny)
+	if err != nil {
+		return err
+	}
+	if hasAny {
+		return h.authorizeUpdateAnyOnRow(ctx, session, execution)
+	}
+	if !isExecutionCreator(session, execution) {
+		return NewClientError(403, "permission denied: cannot manage another user's scheduled purchase")
+	}
+	return nil
 }
 
 // isExecutionCreator requires both IDs to be non-empty and equal, so an
@@ -262,7 +291,7 @@ func (h *Handler) pausePlannedPurchase(ctx context.Context, req *events.LambdaFu
 	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
 		return nil, err
 	}
-	if err := h.authorizeExecutionPauseResume(ctx, session, executionID); err != nil {
+	if err := h.authorizeBoundedExecutionManagement(ctx, session, executionID); err != nil {
 		return nil, err
 	}
 
@@ -286,7 +315,7 @@ func (h *Handler) resumePlannedPurchase(ctx context.Context, req *events.LambdaF
 	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
 		return nil, err
 	}
-	if err := h.authorizeExecutionPauseResume(ctx, session, executionID); err != nil {
+	if err := h.authorizeBoundedExecutionManagement(ctx, session, executionID); err != nil {
 		return nil, err
 	}
 
@@ -383,7 +412,9 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 	if err := h.requireExecutionAccess(ctx, session, executionID); err != nil {
 		return nil, err
 	}
-	if err := h.authorizeExecutionManagement(ctx, session, executionID); err != nil {
+	// update-any lets a non-creator run the row only within its Constraints
+	// (issue #1129).
+	if err := h.authorizeBoundedExecutionManagement(ctx, session, executionID); err != nil {
 		return nil, err
 	}
 
@@ -391,8 +422,8 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 	// execute:purchases Constraints against them before RunPlannedPurchaseNow
 	// fires the purchase (issue #60). requirePermission above only checked
 	// the bare execute:purchases verb: a session running a plan via
-	// update-any:purchases (which authorizeExecutionManagement lets bypass
-	// the creator check) would otherwise bypass any MaxPurchaseAmount/
+	// update-any:purchases (which lets a non-creator past the creator check
+	// within its own Constraints) would otherwise bypass any MaxPurchaseAmount/
 	// Providers/Services/Regions/AccountIDs cap configured on their own
 	// execute:purchases permission, exactly the fail-open class the web
 	// execute path (validateExecutePurchaseRequest) already closed for
