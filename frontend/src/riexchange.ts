@@ -1563,7 +1563,11 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     const placeholder = document.createElement('option');
     placeholder.value = '';
     if (offeringsError) {
-      placeholder.textContent = 'Could not load offerings -- type a UUID';
+      // The AWS list failed; CE recommendations (if any) stay selectable,
+      // and the Retry button below the targets reloads the AWS list.
+      placeholder.textContent = alternativeTargets && alternativeTargets.length > 0
+        ? 'AWS offerings unavailable -- pick a recommendation or retry'
+        : 'Could not load offerings';
     } else if (!offeringsLoaded) {
       placeholder.textContent = 'Loading offerings...';
     } else {
@@ -1607,21 +1611,49 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     }
   };
 
-  // populateAwsOfferings loads target offerings from the backend and
-  // refreshes all existing pickers.
-  const populateAwsOfferings = async (): Promise<void> => {
-    try {
-      awsOfferings = await api.listTargetOfferings(riId);
-      offeringsLoaded = true;
-    } catch {
-      offeringsLoaded = true;
-      offeringsError = true;
-    }
-    // Refresh all existing row pickers with the loaded offerings.
+  const refreshPickers = (): void => {
     for (const row of targetRows) {
       buildPickerOptions(row.pickerSelect, row.offeringInput.value || undefined);
     }
   };
+
+  // populateAwsOfferings loads target offerings from the backend and
+  // refreshes all existing pickers. On failure it shows an error with a
+  // Retry button instead of leaving the user at a dead end (issue #740).
+  const populateAwsOfferings = async (): Promise<void> => {
+    offeringsLoaded = false;
+    offeringsError = false;
+    offeringsErrorRow.classList.add('hidden');
+    refreshPickers();
+    try {
+      awsOfferings = await api.listTargetOfferings(riId);
+    } catch (error) {
+      awsOfferings = [];
+      offeringsError = true;
+      const reason = error instanceof Error && error.message ? `: ${error.message}` : '.';
+      offeringsErrorText.textContent = `Could not load target offerings${reason}`;
+      offeringsErrorRow.classList.remove('hidden');
+    }
+    offeringsLoaded = true;
+    refreshPickers();
+  };
+
+  // Error state for a failed offerings load: the message is an alert so
+  // screen readers hear it, and Retry reloads the list in place.
+  const offeringsErrorRow = document.createElement('div');
+  offeringsErrorRow.className = 'setting-row exchange-offerings-error hidden';
+  const offeringsErrorText = document.createElement('p');
+  offeringsErrorText.className = 'error';
+  offeringsErrorText.setAttribute('role', 'alert');
+  const retryOfferingsBtn = document.createElement('button');
+  retryOfferingsBtn.type = 'button';
+  retryOfferingsBtn.className = 'btn';
+  retryOfferingsBtn.textContent = 'Retry';
+  retryOfferingsBtn.addEventListener('click', () => {
+    void populateAwsOfferings();
+  });
+  offeringsErrorRow.append(offeringsErrorText, retryOfferingsBtn);
+  content.appendChild(offeringsErrorRow);
 
   const addTargetRow = (initialOfferingId?: string, initialCount?: number): void => {
     const rowIndex = targetRows.length;
