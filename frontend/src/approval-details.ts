@@ -91,8 +91,8 @@ function renderApprovalDetailsHeader(details: PurchaseDetails, recs: Recommendat
   }
   const totalAnnual = totalMonthly * 12;
 
-  // M-3: show '--' for absent total_upfront_cost rather than $0, which would
-  // falsely imply no upfront charge applies. formatCurrency handles null -> '--'.
+  // M-3: show NO_VALUE for absent total_upfront_cost rather than $0, which would
+  // falsely imply no upfront charge applies. formatCurrency handles null -> NO_VALUE.
   const upfront = details.total_upfront_cost ?? null;
   // estimated_savings on the response is monthly; aggregating the
   // per-rec savings field above is identical math but lets the

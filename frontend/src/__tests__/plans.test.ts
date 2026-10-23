@@ -102,6 +102,7 @@ jest.mock('../confirmDialog', () => ({
 
 // Mock utils
 jest.mock('../utils', () => ({
+  NO_VALUE: '\u2014',
   formatDate: jest.fn((val) => val ? new Date(val).toLocaleDateString() : ''),
   formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   formatRampSchedule: jest.fn((val) => val || 'Unknown'),
@@ -3081,7 +3082,7 @@ describe('Plans Module', () => {
       ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 },
     };
 
-    test('absent provider in services renders -- not aws in plan card', async () => {
+    test('absent provider in services renders an em dash, not aws in plan card', async () => {
       const mockBadge = (jest.requireMock('../utils') as { providerBadgeHtml: jest.Mock }).providerBadgeHtml;
       mockBadge.mockClear();
 
@@ -3098,7 +3099,7 @@ describe('Plans Module', () => {
       expect(mockBadge).toHaveBeenCalledWith(null);
     });
 
-    test('absent term in services renders -- not 3yr in plan card', async () => {
+    test('absent term in services renders an em dash, not 3yr in plan card', async () => {
       (api.getPlans as jest.Mock).mockResolvedValue({
         plans: [{ ...planBase, services: { ec2: { provider: 'aws', service: 'ec2', coverage: 80 } } }]
       });
@@ -3107,12 +3108,12 @@ describe('Plans Module', () => {
       await loadPlans();
 
       const list = document.getElementById('plans-list');
-      // Pre-fix rendered '3 Years' for a missing term; post-fix renders '--'
+      // Pre-fix rendered '3 Years' for a missing term; post-fix renders '—'
       expect(list?.textContent).not.toContain('3 Years');
-      expect(list?.textContent).toContain('--');
+      expect(list?.textContent).toContain('—');
     });
 
-    test('absent coverage in services renders -- not 80% in plan card', async () => {
+    test('absent coverage in services renders an em dash, not 80% in plan card', async () => {
       (api.getPlans as jest.Mock).mockResolvedValue({
         plans: [{ ...planBase, services: { ec2: { provider: 'aws', service: 'ec2', term: 1 } } }]
       });
@@ -3121,12 +3122,12 @@ describe('Plans Module', () => {
       await loadPlans();
 
       const list = document.getElementById('plans-list');
-      // Pre-fix rendered '80%' for a missing coverage; post-fix renders '--'
+      // Pre-fix rendered '80%' for a missing coverage; post-fix renders '—'
       expect(list?.textContent).not.toContain('80%');
-      expect(list?.textContent).toContain('--');
+      expect(list?.textContent).toContain('—');
     });
 
-    test('empty services object renders all -- fields in plan card', async () => {
+    test('empty services object renders all em-dash fields in plan card', async () => {
       (api.getPlans as jest.Mock).mockResolvedValue({
         plans: [{ ...planBase, services: {} }]
       });
@@ -3136,7 +3137,7 @@ describe('Plans Module', () => {
 
       const list = document.getElementById('plans-list');
       // Pre-fix: all-zero fallback { provider:'aws', term:3, coverage:80 }
-      // Post-fix: all '--' for missing data
+      // Post-fix: all '—' for missing data
       expect(list?.textContent).not.toContain('80%');
       expect(list?.textContent).not.toContain('3 Years');
     });

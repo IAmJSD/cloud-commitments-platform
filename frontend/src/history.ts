@@ -4,7 +4,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, formatDate, formatTerm, escapeHtml, escapeHtmlAttr, amortizedMonthly } from './utils';
+import { formatCurrency, formatDate, formatTerm, escapeHtml, escapeHtmlAttr, amortizedMonthly, NO_VALUE } from './utils';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import type { RevokeQuote } from './api';
 import { switchTab } from './navigation';
@@ -417,19 +417,19 @@ function renderHistorySummary(summary: HistorySummary | null): void {
     container.innerHTML = `
       <div class="card">
         <h3>Total Purchases</h3>
-        <p class="value">--</p>
+        <p class="value">${NO_VALUE}</p>
       </div>
       <div class="card">
         <h3>Total Upfront Spent</h3>
-        <p class="value">--</p>
+        <p class="value">${NO_VALUE}</p>
       </div>
       <div class="card">
         <h3>Monthly Savings</h3>
-        <p class="value savings">--</p>
+        <p class="value">${NO_VALUE}</p>
       </div>
       <div class="card">
         <h3>Annual Savings</h3>
-        <p class="value savings">--</p>
+        <p class="value">${NO_VALUE}</p>
       </div>
     `;
     return;
@@ -439,7 +439,7 @@ function renderHistorySummary(summary: HistorySummary | null): void {
   // summary renders sensibly against an older API deploy that hasn't shipped
   // the new counters yet.
   const total = summary.total_purchases ?? null;
-  const totalDisplay = total !== null ? String(total) : '--';
+  const totalDisplay = total !== null ? String(total) : NO_VALUE;
   const completed = summary.total_completed ?? total;
   const pending = summary.total_pending ?? 0;
   const detail = (total !== null && pending > 0)
@@ -1236,7 +1236,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
       : rawMonthly;
     const monthlyCostCell = displayMonthly != null
       ? formatCurrency(displayMonthly)
-      : '<span class="muted">-</span>';
+      : `<span class="muted">${NO_VALUE}</span>`;
     return `
       <tr${execIdAttr}>
         <td>${statusCell}</td>
@@ -1245,11 +1245,11 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
         <td>${escapeHtml(p.service)}</td>
         <td>${escapeHtml(p.resource_type)}</td>
         <td>${escapeHtml(p.region)}</td>
-        <td>${p.count}</td>
+        <td class="num">${p.count}</td>
         <td>${formatTerm(p.term)}</td>
-        <td>${formatCurrency(p.upfront_cost)}</td>
-        <td>${monthlyCostCell}</td>
-        <td class="savings">${formatCurrency(p.estimated_savings)}</td>
+        <td class="num">${formatCurrency(p.upfront_cost)}</td>
+        <td class="num">${monthlyCostCell}</td>
+        <td class="num savings">${formatCurrency(p.estimated_savings)}</td>
         <td>${planCellContent}</td>
       </tr>
     `;
@@ -1271,11 +1271,11 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
           <th><span>Service</span>${fbtn('service')}</th>
           <th><span>Type</span>${fbtn('resource_type')}</th>
           <th><span>Region</span>${fbtn('region')}</th>
-          <th><span>Count</span>${fbtn('count')}</th>
+          <th class="num"><span>Count</span>${fbtn('count')}</th>
           <th><span>Term</span>${fbtn('term')}</th>
-          <th><span>Upfront Cost</span>${fbtn('upfront_cost')}</th>
-          <th>${escapeHtml(monthlyColHeader)}</th>
-          <th><span>Monthly Savings</span>${fbtn('savings')}</th>
+          <th class="num"><span>Upfront Cost</span>${fbtn('upfront_cost')}</th>
+          <th class="num">${escapeHtml(monthlyColHeader)}</th>
+          <th class="num"><span>Monthly Savings</span>${fbtn('savings')}</th>
           <th>Plan</th>
         </tr>
       </thead>
@@ -1839,19 +1839,19 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
 
   const rows = visible.map(p => {
     const actions = renderPendingActionButtons(p);
-    const actionsCell = actions || '<span class="muted">-</span>';
+    const actionsCell = actions || `<span class="muted">${NO_VALUE}</span>`;
     // Show email when resolved; fall back to UUID so the cancel-own gate still
     // has something human-readable to show. Fall back to "-" for scheduler rows.
     const createdBy = p.created_by_user_email
       ? escapeHtml(p.created_by_user_email)
       : p.created_by_user_id
         ? escapeHtml(p.created_by_user_id)
-        : '<span class="muted">-</span>';
+        : `<span class="muted">${NO_VALUE}</span>`;
     const accountCell = p.account_id
       ? escapeHtml(getAccountName(p.account_id))
-      : '<span class="muted">-</span>';
-    const termCell = p.term ? escapeHtml(formatTerm(p.term)) : '<span class="muted">-</span>';
-    const paymentCell = p.payment ? escapeHtml(p.payment) : '<span class="muted">-</span>';
+      : `<span class="muted">${NO_VALUE}</span>`;
+    const termCell = p.term ? escapeHtml(formatTerm(p.term)) : `<span class="muted">${NO_VALUE}</span>`;
+    const paymentCell = p.payment ? escapeHtml(p.payment) : `<span class="muted">${NO_VALUE}</span>`;
     const amortize = state.getAmortizeUpfront();
     const rawMonthly = p.monthly_cost != null ? p.monthly_cost : null;
     const displayMonthly = (rawMonthly != null && amortize)
@@ -1859,7 +1859,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
       : rawMonthly;
     const monthlyCostCell = displayMonthly != null
       ? formatCurrency(displayMonthly)
-      : '<span class="muted">-</span>';
+      : `<span class="muted">${NO_VALUE}</span>`;
     const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtmlAttr(p.purchase_id)}"` : '';
     return `
       <tr${execIdAttr}>
@@ -1867,12 +1867,12 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
         <td>${accountCell}</td>
         <td>${providerCell(p)}</td>
         <td>${escapeHtml(p.service)}</td>
-        <td>${p.count}</td>
+        <td class="num">${p.count}</td>
         <td>${termCell}</td>
         <td>${paymentCell}</td>
-        <td>${monthlyCostCell}</td>
-        <td>${formatCurrency(p.upfront_cost)}</td>
-        <td class="savings">${formatCurrency(p.estimated_savings)}</td>
+        <td class="num">${monthlyCostCell}</td>
+        <td class="num">${formatCurrency(p.upfront_cost)}</td>
+        <td class="num savings">${formatCurrency(p.estimated_savings)}</td>
         <td>${createdBy}</td>
         <td>${actionsCell}</td>
       </tr>
@@ -1894,12 +1894,12 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
           <th><span>Account</span>${fbtn('account')}</th>
           <th><span>Provider</span>${fbtn('provider')}</th>
           <th><span>Service</span>${fbtn('service')}</th>
-          <th><span>Count</span>${fbtn('count')}</th>
+          <th class="num"><span>Count</span>${fbtn('count')}</th>
           <th><span>Term</span>${fbtn('term')}</th>
           <th><span>Payment</span>${fbtn('payment')}</th>
-          <th><span>${monthlyColHeader}</span>${fbtn('monthly_cost')}</th>
-          <th><span>Upfront Cost</span>${fbtn('upfront_cost')}</th>
-          <th><span>Monthly Savings</span>${fbtn('savings')}</th>
+          <th class="num"><span>${monthlyColHeader}</span>${fbtn('monthly_cost')}</th>
+          <th class="num"><span>Upfront Cost</span>${fbtn('upfront_cost')}</th>
+          <th class="num"><span>Monthly Savings</span>${fbtn('savings')}</th>
           <th><span>Created by</span>${fbtn('created_by')}</th>
           <th>Actions</th>
         </tr>

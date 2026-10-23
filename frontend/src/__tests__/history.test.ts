@@ -21,8 +21,9 @@ jest.mock('../permissions', () => ({
 }));
 
 jest.mock('../utils', () => ({
-  // Mirrors the real formatCurrency behaviour: null/undefined/NaN -> '--', numbers -> '$<val>'
-  formatCurrency: jest.fn((val) => (val === null || val === undefined || isNaN(val)) ? '--' : `$${val}`),
+  NO_VALUE: '\u2014',
+  // Mirrors the real formatCurrency behaviour: null/undefined/NaN -> '—', numbers -> '$<val>'
+  formatCurrency: jest.fn((val) => (val === null || val === undefined || isNaN(val)) ? '—' : `$${val}`),
   formatDate: jest.fn((val) => val ? new Date(val).toLocaleDateString() : ''),
   formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   escapeHtml: jest.fn((str) => str || ''),
@@ -99,10 +100,15 @@ describe('History Module', () => {
     await loadHistory();
     const history = document.querySelector('#history-list tr[data-execution-id="complete"]');
     const queue = document.querySelector('#purchases-approval-queue tr[data-execution-id="pending"]');
-    expect(history?.querySelectorAll('td')[8]?.textContent).toBe('--');
-    expect(history?.querySelectorAll('td')[9]?.textContent).toBe(amortize ? '-' : '$50');
-    expect(queue?.querySelectorAll('td')[7]?.textContent).toBe(amortize ? '-' : '$50');
-    expect(queue?.querySelectorAll('td')[8]?.textContent).toBe('--');
+    expect(history?.querySelectorAll('td')[8]?.textContent).toBe('—');
+    expect(history?.querySelectorAll('td')[9]?.textContent).toBe(amortize ? '—' : '$50');
+    expect(queue?.querySelectorAll('td')[7]?.textContent).toBe(amortize ? '—' : '$50');
+    expect(queue?.querySelectorAll('td')[8]?.textContent).toBe('—');
+    // Count and money columns right-align (issue #739).
+    const numCols = (row: Element | null): number[] => Array.from(row?.querySelectorAll('td') ?? [])
+      .flatMap((td, i) => (td.classList.contains('num') ? [i] : []));
+    expect(numCols(history)).toEqual([6, 8, 9, 10]);
+    expect(numCols(queue)).toEqual([4, 7, 8, 9]);
   });
 
   describe('initHistoryDateRange', () => {
@@ -616,12 +622,12 @@ describe('History Module', () => {
     });
   });
 
-  // H-2 regression: absent API summary must render '--' on KPI cards, not '$0'.
+  // H-2 regression: absent API summary must render '—' on KPI cards, not '$0'.
   // Pre-fix: `data.summary || {}` passed an empty HistorySummary to
   // renderHistorySummary, and `?? 0` coercions made money fields render as
   // '$0' (or the mock's '$0'). These tests must FAIL on the pre-fix code.
-  describe('H-2: absent summary renders -- sentinel on KPI cards', () => {
-    test('renderHistorySummary: absent summary (undefined) shows -- on all money cards (loadHistory)', async () => {
+  describe('H-2: absent summary renders the em-dash sentinel on KPI cards', () => {
+    test('renderHistorySummary: absent summary (undefined) shows an em dash on all money cards (loadHistory)', async () => {
       (api.getHistory as jest.Mock).mockResolvedValue({
         // summary field deliberately absent
         purchases: []
@@ -634,14 +640,14 @@ describe('History Module', () => {
       expect(summary?.innerHTML).toContain('Monthly Savings');
       expect(summary?.innerHTML).toContain('Annual Savings');
       // Must show the absent sentinel, not a fabricated '$0'
-      expect(summary?.innerHTML).toContain('--');
-      // The mock formatCurrency returns '$0' for 0 and '--' for null;
+      expect(summary?.innerHTML).toContain('—');
+      // The mock formatCurrency returns '$0' for 0 and an em dash for null;
       // verify no '$0' slips through for the money cards.
       expect(summary?.textContent).not.toMatch(/Total Upfront Spent.*\$0/s);
       expect(summary?.textContent).not.toMatch(/Monthly Savings.*\$0/s);
     });
 
-    test('renderHistorySummary: absent total_upfront renders -- not $0 (viewPlanHistory)', async () => {
+    test('renderHistorySummary: absent total_upfront renders an em dash, not $0 (viewPlanHistory)', async () => {
       (api.getHistory as jest.Mock).mockResolvedValue({
         summary: {
           total_purchases: 3,
@@ -655,16 +661,16 @@ describe('History Module', () => {
       await viewPlanHistory('plan-abc');
 
       const summary = document.getElementById('history-summary');
-      // total_purchases is present; money fields that are absent must be '--'
+      // total_purchases is present; money fields that are absent must be an em dash
       expect(summary?.textContent).toContain('3');
       // formatCurrency must be called with null for the absent total_upfront
-      // field and must produce '--', not '$0'. This assertion fails if the
+      // field and must produce an em dash, not '$0'. This assertion fails if the
       // production code regresses to passing 0 or a fabricated value.
       const { formatCurrency } = jest.requireMock('../utils') as { formatCurrency: jest.Mock };
       expect(formatCurrency).toHaveBeenCalledWith(null);
-      // The rendered card must show '--', not a dollar amount.
+      // The rendered card must show an em dash, not a dollar amount.
       expect(summary?.innerHTML).toContain('Total Upfront Spent');
-      expect(summary?.innerHTML).toContain('<p class="value">--</p>');
+      expect(summary?.innerHTML).toContain('<p class="value">—</p>');
       expect(summary?.innerHTML).not.toContain('<p class="value">$0</p>');
     });
 
@@ -713,14 +719,16 @@ describe('History Module', () => {
       await loadHistory();
 
       const summary = document.getElementById('history-summary');
-      // All four cards must still render (just with '--' values).
+      // All four cards must still render (just with em-dash values).
       expect(summary?.innerHTML).toContain('Total Purchases');
       expect(summary?.innerHTML).toContain('Total Upfront Spent');
       expect(summary?.innerHTML).toContain('Monthly Savings');
       expect(summary?.innerHTML).toContain('Annual Savings');
-      // The unknown-state banner always shows '--' for every value.
-      const allDashes = (summary?.innerHTML.match(/--/g) || []).length;
+      // The unknown-state banner shows the em dash for every value, and an
+      // absent figure is not styled as a saving (issue #739).
+      const allDashes = (summary?.innerHTML.match(/—/g) || []).length;
       expect(allDashes).toBeGreaterThanOrEqual(4);
+      expect(summary?.querySelector('.value.savings')).toBeNull();
     });
   });
 });
