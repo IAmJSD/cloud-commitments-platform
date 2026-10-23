@@ -1539,6 +1539,7 @@ func TestHandler_pausePlannedPurchase(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "notified"}, "paused", mock.Anything).Return(paused, nil)
+	mockStore.On("GetExecutionByID", ctx, "11111111-1111-1111-1111-111111111111").Return(paused, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -1566,6 +1567,7 @@ func TestHandler_pausePlannedPurchase_NotFound(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"pending", "notified"}, "paused", mock.Anything).Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
+	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, config.ErrNotFound)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -1746,6 +1748,8 @@ func TestHandler_deletePlannedPurchase(t *testing.T) {
 	canceled := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "canceled"}
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
+	// authorizePlannedPurchaseCancel reads the row to bound update-any by its Constraints (#961).
+	mockStore.On("GetExecutionByID", ctx, "11111111-1111-1111-1111-111111111111").Return(&config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "pending"}, nil).Once()
 	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "notified", "paused"}, "canceled", mock.Anything).Return(canceled, nil)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -1791,6 +1795,8 @@ func TestHandler_deletePlannedPurchase_DisablesPlan(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
+	// authorizePlannedPurchaseCancel reads the row to bound update-any by its Constraints (#961).
+	mockStore.On("GetExecutionByID", ctx, execID).Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending"}, nil).Once()
 	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified", "paused"}, "canceled", mock.Anything).Return(canceled, nil)
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
 	// Assert that UpdatePurchasePlan is called with enabled=false.
@@ -1843,6 +1849,8 @@ func TestHandler_deletePlannedPurchase_AlreadyDisabledPlan(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
+	// authorizePlannedPurchaseCancel reads the row to bound update-any by its Constraints (#961).
+	mockStore.On("GetExecutionByID", ctx, execID).Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending"}, nil).Once()
 	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified", "paused"}, "canceled", mock.Anything).Return(canceled, nil)
 	mockStore.On("GetPurchasePlan", ctx, planID).Return(plan, nil)
 
@@ -2098,9 +2106,12 @@ func TestHandler_deletePlannedPurchase_BackendErrorReturns5xx(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
+	// authorizePlannedPurchaseCancel reads the row to bound update-any by its Constraints (#961).
+	mockStore.On("GetExecutionByID", ctx, execID).Return(&config.PurchaseExecution{ExecutionID: execID, Status: "pending"}, nil).Once()
 	mockStore.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified", "paused"}, "canceled", mock.Anything).Return(nil, dbErr)
 	// On a real backend error we must NOT fall into the recovery path:
-	// GetExecutionByID must not be called. AssertExpectations verifies this.
+	// GetExecutionByID must not be called a second time. The .Once() above
+	// makes a recovery-path read fail the test.
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -2129,6 +2140,7 @@ func TestHandler_pausePlannedPurchase_NilExecution(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
 	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"pending", "notified"}, "paused", mock.Anything).Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
+	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").Return(nil, config.ErrNotFound)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
 
@@ -2165,6 +2177,7 @@ func TestHandler_pausePlannedPurchase_IneligibleStatus(t *testing.T) {
 
 			mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 			mockAuth.grantAdmin()
+			mockStore.On("GetExecutionByID", ctx, "11111111-1111-1111-1111-111111111111").Return(&config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: status}, nil)
 			mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111", []string{"pending", "notified"}, "paused", mock.Anything).
 				Return(nil, fmt.Errorf("%w: execution 11111111-1111-1111-1111-111111111111 cannot transition from %q to %q",
 					config.ErrExecutionNotInExpectedStatus, status, "paused"))
@@ -2289,6 +2302,8 @@ func TestHandler_deletePlannedPurchase_NilExecution(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
+	// authorizePlannedPurchaseCancel reads the row to bound update-any by its Constraints (#961).
+	mockStore.On("GetExecutionByID", ctx, "99999999-9999-9999-9999-999999999999").Return(&config.PurchaseExecution{ExecutionID: "99999999-9999-9999-9999-999999999999", Status: "pending"}, nil).Once()
 	mockStore.On("TransitionExecutionStatus", ctx, "99999999-9999-9999-9999-999999999999", []string{"pending", "notified", "paused"}, "canceled", mock.Anything).Return(nil, fmt.Errorf("execution not found: 99999999-9999-9999-9999-999999999999"))
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -2320,6 +2335,7 @@ func TestHandler_pausePlannedPurchase_ActorStamped(t *testing.T) {
 	mockAuth.grantAdmin()
 
 	paused := &config.PurchaseExecution{ExecutionID: "11111111-1111-1111-1111-111111111111", Status: "paused"}
+	mockStore.On("GetExecutionByID", ctx, "11111111-1111-1111-1111-111111111111").Return(paused, nil)
 	// Actor must equal the session UserID (pointer value comparison via reflect.DeepEqual).
 	mockStore.On("TransitionExecutionStatus", ctx, "11111111-1111-1111-1111-111111111111",
 		[]string{"pending", "notified"}, "paused",
@@ -5252,6 +5268,10 @@ func buildManageHandler(userID, creatorID string, hasUpdateAny bool) (*Handler, 
 	// panic (issue #1400).
 	mockAuth.On("HasPermissionAPI", mock.Anything, userID, "cancel-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, userID).Return([]string{}, nil).Maybe()
+
+	if hasUpdateAny {
+		mockAuth.allowConstraintChecks()
+	}
 
 	creator := creatorID
 	exec := &config.PurchaseExecution{ExecutionID: ownExecID, Status: "pending", CreatedByUserID: &creator}

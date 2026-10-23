@@ -516,8 +516,6 @@ Resources:
             Action:
               - sts:GetCallerIdentity
               - organizations:ListAccounts
-              - organizations:DescribeAccount
-              - organizations:DescribeOrganization
             Resource: "*"
 
           # Cross-account role assumption for multi-account plans.

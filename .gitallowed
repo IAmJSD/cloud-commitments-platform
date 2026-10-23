@@ -75,6 +75,26 @@
 # else on the line, in a test file only.
 ^[^:]+(_test\.go|\.test\.ts):[0-9]+:[[:space:]]*(password|api_key):[[:space:]]*["'][^"']{0,40}["'],?$
 
+# Placeholder credentials that only the word-bounded detectors (#328) flag:
+# a detector glued to a word, e.g. the "password" of db_password or a DSN
+# followed by its host name, used to be dropped by git-secrets' grep -w. Each
+# line is a test DSN with a dummy user and password, a commented-out example
+# value, a docs example, or a Terraform fallback that is literally
+# PLACEHOLDER_... text, never a real credential. Same whole-line anchoring and
+# bracketing as the block below.
+^docs/audits/codebase-audit-2026-09-02\.md:[0-9]+:[[:space:]]*secret_data[[:space:]]+=[[:space:]]+var\.sendgrid_api_ke[y][[:space:]]+!=[[:space:]]+null[[:space:]]+\?[[:space:]]+var\.sendgrid_api_ke[y][[:space:]]+:[[:space:]]+"PLACEHOLDER_REPLACE_ME"[[:space:]]*$
+^internal/database/connection_test\.go:[0-9]+:[[:space:]]*poolConfig,[[:space:]]+err[[:space:]]+:=[[:space:]]+pgxpool\.ParseConfig\("postgre[s]://user:pass@127\.0\.0\.1:1/db\?sslmode=disable"\)[[:space:]]*$
+^internal/database/postgres/migrations/migrate_dsn_encoding_test\.go:[0-9]+:[[:space:]]*poolCfg,[[:space:]]+err[[:space:]]+:=[[:space:]]+pgxpool\.ParseConfig\("postgre[s]://x:y@db\.example\.com:5433/cudly\?sslmode=require"\)[[:space:]]*$
+^internal/database/postgres/migrations/migrate_security_test\.go:[0-9]+:[[:space:]]*rawDSN[[:space:]]+:=[[:space:]]+fmt\.Sprintf\("postgre[s]://user:%s@localhost:5432/db\?sslmode=disable",[[:space:]]+sentinelPassword\)[[:space:]]*$
+^internal/database/postgres/migrations/migrate_security_test\.go:[0-9]+:[[:space:]]*rawDSN[[:space:]]+:=[[:space:]]+fmt\.Sprintf\("postgre[s]://user:pass@localhost:5432/db\?sslmode=%s",[[:space:]]+mode\)[[:space:]]*$
+^internal/database/postgres/migrations/migrate_security_test\.go:[0-9]+:[[:space:]]*poolCfg,[[:space:]]+err[[:space:]]+:=[[:space:]]+pgxpool\.ParseConfig\("postgre[s]://user:pass@localhost:5432/db\?sslmode=require"\)[[:space:]]*$
+^internal/database/postgres/migrations/migrate_security_test\.go:[0-9]+:[[:space:]]*cfg,[[:space:]]+err[[:space:]]+:=[[:space:]]+pgxpool\.ParseConfig\("postgre[s]://user:pass@127\.0\.0\.1:1/db\?sslmode=disable"\)[[:space:]]*$
+^terraform/environments/(aws|azure|gcp)/dev\.tfvars\.example:[0-9]+:[[:space:]]*#[[:space:]]+admin_passwor[d][[:space:]]+=[[:space:]]+"YourSecurePassword123!"[[:space:]]*$
+^terraform/modules/secrets/azure/main\.tf:[0-9]+:[[:space:]]*value[[:space:]]+=[[:space:]]+var\.smtp_passwor[d][[:space:]]+!=[[:space:]]+null[[:space:]]+\?[[:space:]]+var\.smtp_passwor[d][[:space:]]+:[[:space:]]+"PLACEHOLDER_GENERATE_IN_AZURE_PORTAL"[[:space:]]*$
+^terraform/modules/secrets/gcp/main\.tf:[0-9]+:[[:space:]]*secret_data[[:space:]]+=[[:space:]]+var\.sendgrid_api_ke[y][[:space:]]+!=[[:space:]]+null[[:space:]]+\?[[:space:]]+var\.sendgrid_api_ke[y][[:space:]]+:[[:space:]]+"PLACEHOLDER_REPLACE_ME"[[:space:]]*$
+^terraform/profiles/README\.md:[0-9]+:[[:space:]]*export[[:space:]]+TF_VAR_database_passwor[d]="secret123"[[:space:]]*$
+^terraform/profiles/README\.md:[0-9]+:[[:space:]]*database_passwor[d][[:space:]]+=[[:space:]]+"secret123"[[:space:]]*$
+
 # One-off fixture lines a real scan flags (a synthetic placeholder account ID,
 # a throwaway test password, a credential-less test DSN). Each entry pins the
 # file, any line number, and the WHOLE line with a trailing $, so appending a
@@ -140,3 +160,9 @@
 ^internal/server/migrations_bounded_real_runner_test\.go:[0-9]+:[[:space:]]*cfg,[[:space:]]+err[[:space:]]+:=[[:space:]]+pgxpool\.ParseConfig\("postgre[s]://u:p@"[[:space:]]+\+[[:space:]]+ln\.Addr\(\)\.String\(\)[[:space:]]+\+[[:space:]]+"/db\?sslmode=disable"\)[[:space:]]*$
 ^scripts/generate-federation-iac_test\.go:[0-9]+:[[:space:]]*`aws_account_id[[:space:]]+=[[:space:]]+"111[1]222[2]333[3]"`,[[:space:]]*$
 ^scripts/generate-federation-iac_test\.go:[0-9]+:[[:space:]]*accountID:[[:space:]]+"000[0]111[1]222[2]",[[:space:]]*$
+
+# The bare AWS secret access key detector (#295) flags this line, which holds no
+# secret: an IAM OIDC thumbprint (a public certificate hash, upper-case hex) in a
+# validation test. Same whole-line anchoring as above. One character in the middle
+# of the flagged run is bracketed, so this file does not match the detector itself.
+^internal/api/handler_federation_test\.go:[0-9]+:[[:space:]]*\{"990F4193972F2BEC[F]12DDEDA5237F9C952F20D9E",[[:space:]]+"uppercase[[:space:]]+hex"\},[[:space:]]*$

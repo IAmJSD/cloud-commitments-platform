@@ -86,6 +86,20 @@ describe('submit toast', () => {
     expect(all).not.toMatch(/Approval request sent/);
   });
 
+  it('restores the button label from the execute mode at settle time, not submit time (#754)', async () => {
+    executeMode = 'direct';
+    let resolvePost: (v: unknown) => void = () => undefined;
+    (api.executePurchase as jest.Mock).mockReturnValue(new Promise((r) => { resolvePost = r; }));
+    const pending = handleExecutePurchase();
+    await Promise.resolve();
+    await Promise.resolve();
+    // Modal closed (mode reset) and reopened while the POST is in flight.
+    executeMode = '';
+    resolvePost({ execution_id: execId, status: 'pending', email_sent: true });
+    await pending;
+    expect(document.getElementById('execute-purchase-btn')?.textContent).toBe('Send for Approval');
+  });
+
   it('non-duplicate direct keeps the executed-immediately message', async () => {
     executeMode = 'direct';
     submit({ status: 'completed' });

@@ -36,6 +36,11 @@ func getDefaultRateLimits() map[string]RateLimitConfig {
 		"api_general":           NewRateLimitConfig(300, 60),   // 300 requests / minute / IP
 		"admin":                 NewRateLimitConfig(30, 60),    // 30 / minute / user
 		"approve_cancel_public": NewRateLimitConfig(30, 60),    // 30 / minute / IP for public approve/cancel/reject
+		// forgot_password_ip caps one client's total volume across addresses:
+		// the per-email forgot_password bucket lets a caller walk many
+		// addresses, one request each (#13). Same budget as reset_password,
+		// the next step of the same flow.
+		"forgot_password_ip": NewRateLimitConfig(10, 15*60), // 10 attempts / 15 minutes / IP (#13)
 		// setup_admin should fire at most once per deployment. Issue #411 specifies
 		// 5 attempts per 15 minutes so a cold-start burst cannot brute-force the
 		// first-run endpoint before the DB-backed limiter is available.

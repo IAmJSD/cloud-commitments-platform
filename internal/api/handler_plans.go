@@ -300,20 +300,15 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 	}
 	var capField struct {
 		MaxStepCommitment json.RawMessage `json:"max_step_commitment"`
+		ExpectedUpdatedAt *string         `json:"expected_updated_at"`
 	}
 	if err = json.Unmarshal([]byte(httpReq.Body), &capField); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	// Fetch existing plan to preserve data not sent in request. Do NOT wrap
-	// err with the raw plan UUID: a non-ClientError propagates to the router's
-	// logging.Errorf("API error: %v"), leaking the plan UUID and the raw DB
-	// error string (issue #965, same shape as the createPlan-side fix).
-	existingPlan, err := h.config.GetPurchasePlan(ctx, planID)
+	existingPlan, err := h.loadPlanForUpdate(ctx, planID, capField.ExpectedUpdatedAt)
 	if err != nil {
-		return nil, mapCreatePlanStorageError(err,
-			"plan not found", "failed to load plan",
-			"updatePlan: GetPurchasePlan failed")
+		return nil, err
 	}
 
 	plan, err := mergeUpdatedPlan(existingPlan, &req, planID, capField.MaxStepCommitment != nil)
@@ -329,6 +324,25 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 		return nil, mapCreatePlanStorageError(err, "plan not found", "failed to update plan", "updatePlan: UpdatePurchasePlan failed")
 	}
 
+	return plan, nil
+}
+
+func (h *Handler) loadPlanForUpdate(ctx context.Context, planID string, expectedUpdatedAt *string) (*config.PurchasePlan, error) {
+	plan, err := h.config.GetPurchasePlan(ctx, planID)
+	if err != nil {
+		return nil, mapCreatePlanStorageError(err,
+			"plan not found", "failed to load plan",
+			"updatePlan: GetPurchasePlan failed")
+	}
+	if expectedUpdatedAt != nil && *expectedUpdatedAt != "" {
+		expected, parseErr := time.Parse(time.RFC3339Nano, *expectedUpdatedAt)
+		if parseErr != nil {
+			return nil, NewClientError(400, "expected_updated_at must be an RFC3339 timestamp")
+		}
+		if !plan.UpdatedAt.Equal(expected) {
+			return nil, NewClientError(409, "plan changed; refresh the plan and try again")
+		}
+	}
 	return plan, nil
 }
 
@@ -381,9 +395,11 @@ func mergeUpdatedPlan(existingPlan *config.PurchasePlan, req *PlanRequest, planI
 // carried over; a rebuild has no way to know either and would otherwise
 // wipe them. CurrentStep, StartDate, and NextExecutionDate are carried
 // over when the requested ramp schedule has the same shape as the existing
-// one (same type/percent/interval/step-count): an unrelated field edit
-// (rename, target coverage, ...) resubmits the same schedule and must not
-// restart it. A different shape is refused once a step has completed,
+// one (see rampScheduleShapeUnchanged): an unrelated field edit (rename,
+// target coverage, ...) resubmits the same schedule and must not restart it.
+// The stored type label is kept too, so resubmitting a non-preset weekly or
+// monthly ramp as the equal custom one leaves the plan as it was (issue
+// #1184). A different shape is refused once a step has completed,
 // because the rebuilt schedule would restart at step zero and forget the
 // percentage already bought (issue #386); before the first step it is a
 // plain schedule change.
@@ -392,6 +408,7 @@ func preserveRampProgress(existingPlan, plan *config.PurchasePlan) error {
 	plan.LastNotificationSent = existingPlan.LastNotificationSent
 
 	if rampScheduleShapeUnchanged(existingPlan.RampSchedule, plan.RampSchedule) {
+		plan.RampSchedule.Type = existingPlan.RampSchedule.Type
 		plan.RampSchedule.CurrentStep = existingPlan.RampSchedule.CurrentStep
 		plan.RampSchedule.StartDate = existingPlan.RampSchedule.StartDate
 		// Editor-owned markers the request cannot express; dropping them hands
@@ -414,11 +431,31 @@ func preserveRampProgress(existingPlan, plan *config.PurchasePlan) error {
 // excluding the progress fields CurrentStep and StartDate, to tell apart
 // "the update resubmitted the same schedule" from "the update picked a
 // genuinely different one".
+//
+// The type must match, except that weekly, monthly and custom are only labels
+// for the same step-based behavior (nothing downstream branches on them; only
+// "immediate" is special). The UI can send just the presets or "custom", so a
+// stored weekly 20%/7d ramp comes back as custom 20%/7d, and treating that as
+// a change refused every edit of such a plan once a step had run (issue #1184).
 func rampScheduleShapeUnchanged(a, b config.RampSchedule) bool {
-	return a.Type == b.Type &&
+	return rampTypesEquivalent(a.Type, b.Type) &&
 		a.PercentPerStep == b.PercentPerStep &&
 		a.StepIntervalDays == b.StepIntervalDays &&
 		a.TotalSteps == b.TotalSteps
+}
+
+// rampTypesEquivalent reports whether two ramp type labels describe the same
+// behavior: identical labels, or two of the step-based weekly/monthly/custom.
+// "immediate" and any unrecognized label must match exactly.
+func rampTypesEquivalent(a, b string) bool {
+	if a == b {
+		return true
+	}
+	return isStepBasedRampType(a) && isStepBasedRampType(b)
+}
+
+func isStepBasedRampType(t string) bool {
+	return t == "weekly" || t == "monthly" || t == "custom"
 }
 
 func (h *Handler) deletePlan(ctx context.Context, req *events.LambdaFunctionURLRequest, planID string) (any, error) {

@@ -2572,6 +2572,16 @@ async function saveAccountCredentialsIfFilled(accountId: string, provider: Accou
  */
 async function handleAccountFormSubmit(e: Event): Promise<void> {
   e.preventDefault();
+  const submitBtn = document.querySelector<HTMLButtonElement>('#account-form button[type="submit"]');
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    await submitAccountForm();
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+async function submitAccountForm(): Promise<void> {
   const provider = accountModalProvider;
   const req = buildAccountRequest(provider);
 

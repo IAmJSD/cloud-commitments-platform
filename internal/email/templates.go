@@ -468,6 +468,9 @@ func (s *Sender) SendPurchaseConfirmation(ctx context.Context, data Notification
 }
 
 // SendPurchaseFailedNotification sends a notification when purchases fail.
+// A non-empty data.RecipientEmail (the global notification address) gets a
+// targeted SES send; otherwise the body is broadcast through the SNS topic,
+// which is a no-op when no topic is configured (issue #714).
 func (s *Sender) SendPurchaseFailedNotification(ctx context.Context, data NotificationData) error {
 	body, err := RenderPurchaseFailedEmail(data)
 	if err != nil {
@@ -475,6 +478,9 @@ func (s *Sender) SendPurchaseFailedNotification(ctx context.Context, data Notifi
 	}
 
 	subject := "CUDly - Purchase Failed - Action Required"
+	if data.RecipientEmail != "" {
+		return s.SendToEmailWithCC(ctx, data.RecipientEmail, data.CCEmails, subject, body)
+	}
 	return s.SendNotification(ctx, subject, body)
 }
 

@@ -197,9 +197,13 @@ variable "record_client_address" {
 }
 
 variable "deletion_protection" {
-  description = "Enable deletion protection"
+  description = <<-EOT
+    Enable deletion protection. Defaults to true to match the AWS and Azure
+    database modules, so a caller that omits it gets a protected instance;
+    ephemeral dev environments opt out explicitly.
+  EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "enable_iam_authentication" {

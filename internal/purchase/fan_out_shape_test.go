@@ -42,7 +42,7 @@ var (
 func newLineageRig(t *testing.T) *lineageRig {
 	t.Helper()
 	r := &lineageRig{t: t, store: new(MockConfigStore)}
-	mockEmail := new(MockEmailSender)
+	mockEmail := allowFailedNotification(new(MockEmailSender))
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)

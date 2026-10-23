@@ -4,11 +4,12 @@
 package config
 
 // Real-DB integration tests for the ladder_runs / ladder_tranches store
-// methods added in PR-2 (migrations 000080/000081). They run against a
-// throwaway PostgreSQL container (testhelpers.SetupPostgresContainer), the
-// same harness the other *_db_test.go / *_unassigned_test.go integration
-// tests use, and are gated behind the `integration` build tag so the default
-// `go test ./...` run stays hermetic.
+// methods added in PR-2 (migrations 000080/000081). Each runs against a
+// throwaway, freshly migrated database on the package's shared PostgreSQL
+// container (testhelpers.RequireMigratedDatabase), the same harness the other
+// *_db_test.go / *_unassigned_test.go integration tests use, and they are gated
+// behind the `integration` build tag so the default `go test ./...` run stays
+// hermetic.
 //
 // Coverage:
 //   - SaveLadderRun round-trips a run with all NULL monetary columns preserved
@@ -28,7 +29,6 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -111,20 +111,15 @@ func TestLadderTrancheProvenance_InsertClaimAndReconcile(t *testing.T) {
 	}
 }
 
-// setupLadderStore starts a container, runs migrations, and returns a store.
-// It skips (not fails) only when this environment has no usable Docker daemon,
-// so the suite degrades gracefully without a container runtime. A migration that
-// will not apply is a broken schema, not a missing runtime, and fails loudly
-// (issue #1597).
+// setupLadderStore returns a store on a freshly migrated database of the test's
+// own, cloned on the package's shared container (issue #982). It skips (not
+// fails) only when this environment has no usable Docker daemon, so the suite
+// degrades gracefully without a container runtime. A migration that will not
+// apply is a broken schema, not a missing runtime, and fails loudly (issue
+// #1597).
 func setupLadderStore(ctx context.Context, t *testing.T) *PostgresStore {
 	t.Helper()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { container.Cleanup(context.Background()) })
-
-	require.NoError(t,
-		migrations.RunMigrations(ctx, container.DB.Pool(), getTestMigrationsPath(), "", ""),
-		"migrations failed to apply to a fresh database")
-	return NewPostgresStore(container.DB)
+	return NewPostgresStore(testhelpers.RequireMigratedDatabase(ctx, t, getTestMigrationsPath()).DB)
 }
 
 // seedLadderConfig inserts a cloud_account and a ladder_config, returning the

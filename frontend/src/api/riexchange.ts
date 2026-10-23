@@ -61,8 +61,15 @@ export async function getRIUtilization(lookbackDays?: number): Promise<RIUtiliza
  * recs_collected_at carries the raw ISO-8601 timestamp so the banner
  * can display a relative-time label ("last collected 23h ago").
  */
+export interface ExcludedRI {
+  ri_id: string;
+  reason: string;
+}
+
 export interface ReshapeRecommendationsResponse {
   recommendations: ReshapeRecommendation[];
+  /** RIs left out of cost-based analysis (no recommendation); omitted when none. */
+  excluded_ris?: ExcludedRI[];
   recs_staleness?: string;
   recs_collected_at?: string | null;
 }

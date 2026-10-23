@@ -193,7 +193,7 @@ export {
 } from './inventory';
 
 // Re-export RI exchange functions
-export type { ReshapeRecommendationsResponse } from './riexchange';
+export type { ReshapeRecommendationsResponse, ExcludedRI } from './riexchange';
 export {
   listConvertibleRIs,
   listExchangeableAzureRIs,

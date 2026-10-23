@@ -533,6 +533,83 @@ describe('Recommendations Module', () => {
       expect(cardValue(/Recommendations/)).toBe('1');
     });
 
+    test('row checkboxes carry distinct accessible names (issue #746)', async () => {
+      const recs = [
+        { id: 'rec-a', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'no-upfront', savings: 150, upfront_cost: 1000 },
+        { id: 'rec-b', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3', region: 'eu-west-1', count: 1, term: 3, payment: 'all-upfront', savings: 200, upfront_cost: 0 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 2, total_monthly_savings: 350, total_upfront_cost: 1000, avg_payback_months: 1 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      await loadRecommendations();
+
+      const label = (id: string) =>
+        document.querySelector<HTMLInputElement>(`input[data-rec-id="${id}"]`)?.getAttribute('aria-label') ?? '';
+      expect(label('rec-a')).toContain('ec2');
+      expect(label('rec-a')).toContain('t3.medium');
+      expect(label('rec-a')).toContain('us-east-1');
+      expect(label('rec-b')).toContain('rds');
+      expect(label('rec-a')).not.toBe(label('rec-b'));
+    });
+
+    test('variants differing only by payment get distinct checkbox names (issue #746)', async () => {
+      const base = { provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 150, upfront_cost: 1000 };
+      const recs = [
+        { ...base, id: 'rec-np', payment: 'no-upfront' },
+        { ...base, id: 'rec-au', payment: 'all-upfront' },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 2, total_monthly_savings: 300, total_upfront_cost: 2000, avg_payback_months: 1 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      await loadRecommendations();
+      document.querySelector<HTMLButtonElement>('.rec-cell-chevron')!.click();
+
+      const label = (id: string) =>
+        document.querySelector<HTMLInputElement>(`input[data-rec-id="${id}"]`)?.getAttribute('aria-label') ?? '';
+      expect(label('rec-np')).toContain('No Upfront');
+      expect(label('rec-au')).toContain('All Upfront');
+      expect(label('rec-np')).not.toBe(label('rec-au'));
+    });
+
+    test('engine-only rows get distinct and unmapped-payment rows get clean checkbox names (issue #746)', async () => {
+      const base = { provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.r5.large', region: 'us-east-1', count: 1, term: 1, savings: 150, upfront_cost: 0 };
+      const recs = [
+        { ...base, id: 'rec-my', engine: 'mysql', payment: 'no-upfront' },
+        { ...base, id: 'rec-pg', engine: 'postgresql', payment: 'no-upfront' },
+        { ...base, id: 'rec-x', payment: 'weird-option' },
+        { ...base, id: 'rec-none', resource_type: 'db.r5.xlarge' },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 4, total_monthly_savings: 600, total_upfront_cost: 0, avg_payback_months: 1 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      await loadRecommendations();
+      document.querySelectorAll<HTMLButtonElement>('.rec-cell-chevron').forEach(b => b.click());
+
+      const label = (id: string) =>
+        document.querySelector<HTMLInputElement>(`input[data-rec-id="${id}"]`)?.getAttribute('aria-label') ?? '';
+      expect(label('rec-my')).toContain('db.r5.large (mysql)');
+      expect(label('rec-my')).not.toBe(label('rec-pg'));
+      expect(label('rec-x')).not.toContain('weird-option');
+      for (const id of ['rec-my', 'rec-pg', 'rec-x', 'rec-none']) {
+        expect(label(id)).not.toMatch(/\s{2,}|\s$/);
+      }
+    });
+
     test('select-all change event updates summary cards in place (PR #283 CR pass-2)', async () => {
       // Verifies the select-all checkbox event path: after checking select-all,
       // summary cards reflect the picked-best-per-cell selection WITHOUT a
@@ -664,6 +741,57 @@ describe('Recommendations Module', () => {
       (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
       (state.getVisibleRecommendations as jest.Mock).mockReturnValue([]);
       (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+    });
+
+    test('re-render after a sort click keeps the loaded total in "Showing X of Y" (closes #287)', async () => {
+      const allRecs = [
+        { id: 'r1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront', savings: 100, upfront_cost: 0 },
+        { id: 'r2', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront', savings: 200, upfront_cost: 0 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: allRecs, regions: [] });
+      (state.getRecommendations as jest.Mock).mockReturnValue(allRecs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([allRecs[0]]);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({ service: { kind: 'set', values: ['ec2'] } });
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+
+      await loadRecommendations();
+      const liveText = (): string =>
+        document.querySelector('.recommendations-filter-live')?.textContent ?? '';
+      expect(liveText()).toMatch(/Showing 1 of 2 recommendations$/);
+
+      document.querySelector<HTMLElement>('th.sortable')?.click();
+      expect(liveText()).toMatch(/Showing 1 of 2 recommendations$/);
+
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([]);
+    });
+
+    test.each([
+      ['select-all', '#select-all-recs'],
+      ['row selection', 'input[data-rec-id]'],
+    ])('%s re-render keeps the loaded total in "Showing X of Y" (closes #287)', async (_name, selector) => {
+      const allRecs = [
+        { id: 'r1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront', savings: 100, upfront_cost: 0 },
+        { id: 'r2', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront', savings: 200, upfront_cost: 0 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: allRecs, regions: [] });
+      (state.getRecommendations as jest.Mock).mockReturnValue(allRecs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([allRecs[0]]);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({ service: { kind: 'set', values: ['ec2'] } });
+      (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set());
+
+      await loadRecommendations();
+      const liveText = (): string =>
+        document.querySelector('.recommendations-filter-live')?.textContent ?? '';
+      expect(liveText()).toMatch(/Showing 1 of 2 recommendations$/);
+
+      const box = document.querySelector<HTMLInputElement>(selector)!;
+      box.checked = true;
+      box.dispatchEvent(new Event('change', { bubbles: true }));
+      expect(liveText()).toMatch(/Showing 1 of 2 recommendations$/);
+
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue([]);
     });
 
     test('renders recommendations list', async () => {
@@ -3305,6 +3433,27 @@ describe('Bundle B: term-aware bucketing in the Purchase flow', () => {
     const b1 = buckets![1]!;
     expect(b0.recs.every((r) => r.term === b0.term)).toBe(true);
     expect(b1.recs.every((r) => r.term === b1.term)).toBe(true);
+  });
+
+  it('keeps a single monthly GCP rec on the single-bucket modal (#1131)', async () => {
+    const gcp = [
+      { id: 'g', provider: 'gcp', cloud_account_id: 'g1', service: 'gce', resource_type: 'n2-standard-2', region: 'us-central1', count: 1, term: 1, payment: 'monthly', savings: 100, upfront_cost: 0 },
+    ];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: gcp, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(gcp);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(gcp);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['g']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    // GCP no longer supports the all-upfront toolbar default; the rec's own
+    // monthly payment must keep it off the fan-out path.
+    expect(getFanOutBuckets()).toBeNull();
   });
 });
 
@@ -7750,6 +7899,17 @@ describe('Column filters localStorage persistence (issue #163)', () => {
       );
       const result = loadColumnFilters();
       expect(Object.keys(result)).toHaveLength(0);
+    });
+
+    test('restores a filter for every filterable column, including capacity, and drops visual columns', () => {
+      const filterable = COLUMN_DEFS.filter((c) => c.kind !== 'visual').map((c) => c.key);
+      const visual = COLUMN_DEFS.find((c) => c.kind === 'visual')!.key;
+      const filters: Record<string, unknown> = {};
+      for (const key of [...filterable, visual]) filters[key] = { kind: 'set', values: ['x'] };
+      localStorageMock.getItem.mockReturnValue(JSON.stringify({ schemaVersion: 1, filters }));
+      const result = loadColumnFilters();
+      expect(Object.keys(result).sort()).toEqual([...filterable].sort());
+      expect(result).not.toHaveProperty(visual);
     });
 
     test('restores a categorical (set) filter correctly', () => {
