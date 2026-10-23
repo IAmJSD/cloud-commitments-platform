@@ -11,6 +11,7 @@ import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
 import { approvalDetailsUnavailableMessage, buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
+import { renderApprovalQueueLink, wireApprovalQueueLinks } from './history-queue-link';
 import { getCurrentUser } from './state';
 import { canAccess } from './permissions';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
@@ -921,19 +922,20 @@ function renderPendingActionButtons(p: HistoryPurchase): string {
 // existing column keeps table width unchanged.
 //
 // Decision tree (status-driven, mutually exclusive):
-//   * pending|notified + canCancel  → Cancel button (issue #46)
+//   * pending|notified + any action → "Review in approval queue" link (issue
+//                                     #183; Approve / Cancel live in the queue)
 //   * failed + ops_hint set         → ⚠ ops-hint badge (issue #47, Q3 — no retry)
 //   * failed + threshold reached    → "Retried 5× — confirm to override" Retry button (Q2)
 //   * failed + canRetry             → standard ↻ Retry button
 //   * any row with retry lineage    → inline ↻ Retried as / ↻ Retry of link
 //   * else                          → plan_name or "-"
 function renderActionCell(p: HistoryPurchase): string {
-  // Pending → render Approve + Cancel side-by-side when the session
-  // qualifies for both (the typical case after issue #286 — the same
-  // approve-own / cancel-own grant lives in DefaultUserPermissions).
-  const pendingButtons = renderPendingActionButtons(p);
-  if (pendingButtons) {
-    return pendingButtons;
+  // Pending → the Approval queue card is the one place to approve or cancel
+  // (issue #183). Where the session has a pending action (or a 4-eyes reason
+  // it can't), the table used to repeat the queue's controls; it now links
+  // to the row's queue entry instead.
+  if (p.purchase_id && renderPendingActionButtons(p)) {
+    return renderApprovalQueueLink(p.purchase_id);
   }
 
   // Failed → either ops-hint (no retry possible), Retry (with optional
@@ -1300,6 +1302,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   });
 
   wireRowActionHandlers(container);
+  wireApprovalQueueLinks(container);
 
   // Scroll + flash the deep-link target if the URL hash carries a
   // ?execution=<id>. The suppression badge on the Recommendations
