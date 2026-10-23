@@ -107,7 +107,9 @@
                             <button type="button" class="btn btn-small trend-range" data-range="7">7d</button>
                             <button type="button" class="btn btn-small trend-range" data-range="30">30d</button>
                             <button type="button" class="btn btn-small trend-range active" data-range="90">90d</button>
-                            <button type="button" class="btn btn-small trend-range" data-range="all">All</button>
+                            <!-- data-range="all" is the longest window the analytics API allows
+                                 (366-day cap), so the button says 1y, not All (#52). -->
+                            <button type="button" class="btn btn-small trend-range" data-range="all" title="Last 365 days">1y</button>
                         </div>
                     </div>
                     <canvas id="savings-trend-chart" role="img" aria-label="Line chart showing cumulative savings over time"></canvas>

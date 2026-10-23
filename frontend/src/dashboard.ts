@@ -1126,9 +1126,10 @@ export async function loadSavingsTrendChart(): Promise<void> {
   // For 'all', use a rolling ~365-day window — the maximum history the
   // analytics API allows (~366-day cap in handler_analytics.go). Sending a
   // 1970 epoch sentinel caused HTTP 400 "date range too large" which the
-  // catch block rendered as an empty-state error (QA 3.1). The axisMinMs
-  // anchor-to-earliest-point logic below still applies so sparse data fills
-  // the full chart width correctly.
+  // catch block rendered as an empty-state error (QA 3.1). Because it is
+  // capped, the button is labeled "1y" ("Last 365 days"), not "All" (#52).
+  // The axisMinMs anchor-to-earliest-point logic below still applies so
+  // sparse data fills the full chart width correctly.
   const windowStartMs = isAllRange ? nowMs - 365 * 86400_000 : nowMs - (days as number) * 86400_000;
   const intervalDays = isAllRange ? 365 : (days as number);
   const interval: 'hourly' | 'daily' | 'weekly' = intervalDays <= 7 ? 'hourly' : intervalDays <= 90 ? 'daily' : 'weekly';
