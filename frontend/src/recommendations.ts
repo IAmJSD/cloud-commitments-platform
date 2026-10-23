@@ -2433,7 +2433,8 @@ function buildPopoverContent(
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
   clearBtn.className = 'column-filter-clear';
-  clearBtn.textContent = 'Clear';
+  // Categorical: selects nothing (hides every row), so not "Clear" (#727).
+  clearBtn.textContent = input ? 'Clear' : 'Select none';
   clearBtn.addEventListener('click', () => {
     if (input) {
       // Numeric column: Clear drops the expression entirely (no filter).

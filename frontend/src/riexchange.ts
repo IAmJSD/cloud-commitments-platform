@@ -1024,7 +1024,8 @@ function activeRiBuildPopover(column: state.ActiveRiColumnId): ActiveRiPopoverSt
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
   clearBtn.className = 'column-filter-clear';
-  clearBtn.textContent = 'Clear';
+  // Categorical: selects nothing (hides every row), so not "Clear" (#727).
+  clearBtn.textContent = input ? 'Clear' : 'Select none';
   clearBtn.addEventListener('click', () => {
     if (input) {
       state.setActiveRiColumnFilter(column, null);
@@ -1273,7 +1274,8 @@ function riexBuildPopover(
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
   clearBtn.className = 'column-filter-clear';
-  clearBtn.textContent = 'Clear';
+  // Categorical: selects nothing (hides every row), so not "Clear" (#727).
+  clearBtn.textContent = input ? 'Clear' : 'Select none';
   clearBtn.addEventListener('click', () => {
     if (input) {
       state.setRiExchangeColumnFilter(column, null);
