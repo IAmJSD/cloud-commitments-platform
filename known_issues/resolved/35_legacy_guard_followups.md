@@ -1,8 +1,8 @@
 # Known Issues: follow-ups from the legacy-writer guards (#631)
 
-> **Audit status (2026-10-22):** `1 needs triage · 1 resolved`
+> **Audit status (2026-10-23):** `0 needs triage · 2 resolved`
 
-## LOW: cleanup lambda deletes by expires_at with no status predicate
+## ~~LOW: cleanup lambda deletes by expires_at with no status predicate~~ — RESOLVED
 
 **Files:** `cmd/cleanup-lambda/main.go` (`deleteExpired`)
 
@@ -12,7 +12,9 @@
 
 **Issue:** #998 (follow-up of #631)
 
-**Status:** Needs triage.
+**Status:** ✔️ Resolved
+
+**Resolved by:** `deleteExpired` and `dryRunCount` now share `expiredExecutionsWhere`: a lapsed `expires_at` deletes a row only when its status is in `TerminalExecutionStatuses` and not in `HealthScoredExecutionStatuses`, so live rows survive and failed or canceled rows stay with `CleanupOldExecutions`. Covered by the real-Postgres tests in `cmd/cleanup-lambda/main_integration_test.go`, including a writer that turns a settled row live while the DELETE waits for its lock.
 
 ## ~~MEDIUM: a failed-with-submission row blocks deleting a managed plan forever~~ — RESOLVED
 

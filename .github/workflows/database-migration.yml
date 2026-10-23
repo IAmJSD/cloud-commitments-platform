@@ -51,12 +51,12 @@ on:
         options: [up, down]
         default: up
       steps:
-        description: 'Number of migrations to apply/rollback (0 = all; for direction=down an explicit positive value is required)'
+        description: 'Number of migrations to apply/rollback (0 = all; for direction=down a positive value smaller than the number of migrations is required)'
         required: false
         type: number
         default: 0
       confirm:
-        description: 'Type "rollback-prod" to confirm a down migration on prod (ignored otherwise)'
+        description: 'Type "rollback-prod-<steps>" (e.g. rollback-prod-1) to confirm a down migration on prod (ignored otherwise)'
         required: false
         type: string
         default: ''
@@ -179,24 +179,14 @@ jobs:
             IS_SAFE=false
           fi
 
-          # Down migrations must specify an explicit positive step count.
-          # steps=0 (the default) would run 'migrate down -all' and drop the
-          # entire schema, so it is rejected here for direction=down.
+          # Down migrations go through the shared gate: an explicit positive
+          # step count smaller than the number of migrations in the tree
+          # (golang-migrate turns `down N` with N at or past what is applied
+          # into `down -all`, #68), plus `confirm=rollback-prod-<steps>` on
+          # prod. Each migrate-* job runs the same gate again before migrate.
           if [[ "$DIRECTION" == "down" ]]; then
-            if ! [[ "$STEPS" =~ ^[1-9][0-9]*$ ]]; then
-              echo "❌ direction=down requires an explicit positive 'steps' value (got '$STEPS')."
-              echo "Rolling back ALL migrations at once is not supported by this workflow."
+            if ! bash scripts/check-migration-down-request.sh "$ENVIRONMENT" "$STEPS" "$CONFIRM" "$MIGRATIONS_PATH"; then
               IS_SAFE=false
-            fi
-
-            # Production down migrations additionally require typed confirmation.
-            if [[ "$ENVIRONMENT" == "prod" ]]; then
-              echo "⚠️ WARNING: Attempting to rollback migrations on PRODUCTION"
-              echo "This operation is destructive and may cause data loss!"
-              if [[ "$CONFIRM" != "rollback-prod" ]]; then
-                echo "❌ Production rollback requires typing 'rollback-prod' in the 'confirm' input."
-                IS_SAFE=false
-              fi
             fi
           fi
 
@@ -370,6 +360,8 @@ jobs:
           DB_ENDPOINT: ${{ steps.get-endpoint.outputs.endpoint }}
           DIRECTION: ${{ inputs.direction }}
           STEPS: ${{ inputs.steps }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          CONFIRM: ${{ inputs.confirm }}
         run: |
           set -uo pipefail
           # pgx5://, not postgresql://: migrate is installed with -tags 'pgx5'
@@ -395,8 +387,8 @@ jobs:
               migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" up "$STEPS"
             fi
           else
-            if ! [[ "$STEPS" =~ ^[1-9][0-9]*$ ]]; then
-              echo "❌ Refusing to roll back without an explicit positive 'steps' value."
+            if ! bash scripts/check-migration-down-request.sh "$ENVIRONMENT" "$STEPS" "$CONFIRM" "$MIGRATIONS_PATH"; then
+              echo "❌ Refusing to roll back: the down-migration gate rejected this request."
               exit 1
             fi
             echo "Rolling back $STEPS migration(s)..."
@@ -501,6 +493,8 @@ jobs:
           DB_ENDPOINT: ${{ steps.get-endpoint.outputs.endpoint }}
           DIRECTION: ${{ inputs.direction }}
           STEPS: ${{ inputs.steps }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          CONFIRM: ${{ inputs.confirm }}
         run: |
           set -uo pipefail
           # pgx5://, not postgresql://: migrate is installed with -tags 'pgx5'
@@ -520,8 +514,8 @@ jobs:
               migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" up "$STEPS"
             fi
           else
-            if ! [[ "$STEPS" =~ ^[1-9][0-9]*$ ]]; then
-              echo "❌ Refusing to roll back without an explicit positive 'steps' value."
+            if ! bash scripts/check-migration-down-request.sh "$ENVIRONMENT" "$STEPS" "$CONFIRM" "$MIGRATIONS_PATH"; then
+              echo "❌ Refusing to roll back: the down-migration gate rejected this request."
               exit 1
             fi
             migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" down "$STEPS"
@@ -608,6 +602,8 @@ jobs:
           DB_ENDPOINT: ${{ steps.get-endpoint.outputs.endpoint }}
           DIRECTION: ${{ inputs.direction }}
           STEPS: ${{ inputs.steps }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          CONFIRM: ${{ inputs.confirm }}
         run: |
           set -uo pipefail
           # pgx5://, not postgresql://: migrate is installed with -tags 'pgx5'
@@ -627,8 +623,8 @@ jobs:
               migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" up "$STEPS"
             fi
           else
-            if ! [[ "$STEPS" =~ ^[1-9][0-9]*$ ]]; then
-              echo "❌ Refusing to roll back without an explicit positive 'steps' value."
+            if ! bash scripts/check-migration-down-request.sh "$ENVIRONMENT" "$STEPS" "$CONFIRM" "$MIGRATIONS_PATH"; then
+              echo "❌ Refusing to roll back: the down-migration gate rejected this request."
               exit 1
             fi
             migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" down "$STEPS"
