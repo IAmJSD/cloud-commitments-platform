@@ -51,6 +51,7 @@ func planStepExecution(t *testing.T) (*config.PurchaseExecution, float64) {
 		ID: "azure|acct-step|compute|westeurope|Standard_D2s_v3||1|monthly", Provider: "azure", Service: "compute",
 		Region: "westeurope", ResourceType: "Standard_D2s_v3", Term: 1, Payment: "monthly",
 		Count: 20, UpfrontCost: 0, MonthlyCost: &monthly, CloudAccountID: &acct,
+		CommitmentCurrency: "USD",
 	}
 	plan := &config.PurchasePlan{
 		ID:           stepPlanID,

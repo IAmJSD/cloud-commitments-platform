@@ -1748,6 +1748,11 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 			Selected:          true,                              // Default to selected
 			Purchased:         false,
 		}
+		// Keep the currency the provider parser proved for the commitment
+		// legs; empty stays empty (unknown), never a defaulted "USD". The
+		// purchase spend-cap check refuses a capped purchase of a rec that
+		// is not provably USD (issue #361).
+		record.CommitmentCurrency = rec.CommitmentCurrency
 		id, err := recommendationID(record)
 		if err != nil {
 			logging.Errorf("convertRecommendations: dropping %s rec (account=%s service=%s sku=%s region=%s): %v",

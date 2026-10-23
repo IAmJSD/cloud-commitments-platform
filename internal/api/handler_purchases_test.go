@@ -454,7 +454,7 @@ func TestHandler_approvePurchase_SessionApproveAny_PermissionConstraintsDenied(t
 		Status:          "pending",
 		CreatedByUserID: &otherCreator,
 		Recommendations: []config.RecommendationRecord{
-			{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000},
+			{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CommitmentCurrency: "USD"},
 		},
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
@@ -528,7 +528,7 @@ func TestHandler_approvePurchase_SessionApproveAny_TokenPresent_ConstraintsDenie
 		Status:          "pending",
 		CreatedByUserID: &otherCreator,
 		Recommendations: []config.RecommendationRecord{
-			{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CloudAccountID: &accountID},
+			{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CloudAccountID: &accountID, CommitmentCurrency: "USD"},
 		},
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
@@ -581,7 +581,7 @@ func TestHandler_authorizeSessionApprove_ApproveOwn_ConstraintsDenied(t *testing
 		ExecutionID:     "exec-1",
 		CreatedByUserID: &userID,
 		Recommendations: []config.RecommendationRecord{
-			{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000},
+			{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CommitmentCurrency: "USD"},
 		},
 	}
 
@@ -677,7 +677,7 @@ func TestHandler_approveViaToken_SessionApproveAny_ConstraintsDenied(t *testing.
 		ApprovalToken: "valid-token",
 		Status:        "pending",
 		Recommendations: []config.RecommendationRecord{
-			{ID: "r1", Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CloudAccountID: &accountID},
+			{ID: "r1", Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CloudAccountID: &accountID, CommitmentCurrency: "USD"},
 		},
 	}
 	// capped's own email is the account's registered contact_email, so
@@ -1711,7 +1711,7 @@ func TestHandler_runPlannedPurchase_ConstraintDenied(t *testing.T) {
 			Resource:    auth.ResourcePurchases,
 			Constraints: &auth.PermissionConstraints{MaxPurchaseAmount: 100},
 		},
-		[]config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000}},
+		[]config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CommitmentCurrency: "USD"}},
 	)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
@@ -4257,7 +4257,7 @@ func TestHandler_retryPurchase_PermissionConstraintsDenied(t *testing.T) {
 		Error:           "send failed: transient SES throttle",
 		CreatedByUserID: &creator,
 		Recommendations: []config.RecommendationRecord{
-			{Provider: "aws", Service: "rds", Region: "us-east-1", Term: 1, UpfrontCost: 5000},
+			{Provider: "aws", Service: "rds", Region: "us-east-1", Term: 1, UpfrontCost: 5000, CommitmentCurrency: "USD"},
 		},
 	}
 	session := &Session{UserID: retryCallerID, Email: "capped@example.com"}
@@ -4485,6 +4485,7 @@ func setupDirectExecMocks(ctx context.Context, store *MockConfigStore) {
 	// #1905: directExecRecBody's rec-1 is now priced from the stored set.
 	expectStoredRecs(store, config.RecommendationRecord{
 		ID: "rec-1", Provider: "aws", Service: "ec2", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 500, Savings: 100,
+		CommitmentCurrency: "USD",
 	})
 }
 
@@ -4581,8 +4582,8 @@ func TestHandler_executePurchase_PermissionConstraintsDenied(t *testing.T) {
 		})).Return(false, nil)
 	// #1905: constraint sets are now built from the stored costs.
 	expectStoredRecs(mockStore,
-		config.RecommendationRecord{Provider: "aws", Service: "ec2", Region: "us-east-1", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 3000, Savings: 50},
-		config.RecommendationRecord{Provider: "aws", Service: "ec2", Region: "eu-west-1", Count: 2, Term: 1, Payment: "all-upfront", UpfrontCost: 2500, Savings: 100},
+		config.RecommendationRecord{Provider: "aws", Service: "ec2", Region: "us-east-1", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 3000, Savings: 50, CommitmentCurrency: "USD"},
+		config.RecommendationRecord{Provider: "aws", Service: "ec2", Region: "eu-west-1", Count: 2, Term: 1, Payment: "all-upfront", UpfrontCost: 2500, Savings: 100, CommitmentCurrency: "USD"},
 	)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -4645,6 +4646,7 @@ func TestHandler_executePurchase_NoUpfrontBatch_TotalCommitmentEnforced(t *testi
 	expectStoredRecs(mockStore, config.RecommendationRecord{
 		Provider: "aws", Service: "ec2", Region: "us-east-1", Count: 1, Term: 3, Payment: "no-upfront",
 		UpfrontCost: 0, MonthlyCost: float64Ptr(600), Savings: 50,
+		CommitmentCurrency: "USD",
 	})
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -4707,6 +4709,7 @@ func TestHandler_executePurchase_UserAPIKeyConstraintsDenied(t *testing.T) {
 	// #1905: the constraint set is now built from the stored cost.
 	expectStoredRecs(mockStore, config.RecommendationRecord{
 		Provider: "aws", Service: "ec2", Region: "us-east-1", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 500, Savings: 50,
+		CommitmentCurrency: "USD",
 	})
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -5130,7 +5133,7 @@ func TestHandler_authorizeSessionExecuteDirect_AdminGroupViaExecuteAny(t *testin
 	adminUserID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	creatorID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 	session := &Session{UserID: adminUserID}
-	recs := []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 500}}
+	recs := []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 500, CommitmentCurrency: "USD"}}
 
 	// Administrators-group wildcard {admin,*} covers execute-any.
 	mockAuth.On("HasPermissionAPI", ctx, adminUserID, "execute-any", "purchases").Return(true, nil)
@@ -5157,7 +5160,7 @@ func TestHandler_authorizeSessionExecuteDirect_ExecuteAny_ConstraintsDenied(t *t
 	userID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	creatorID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 	session := &Session{UserID: userID}
-	recs := []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000}}
+	recs := []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CommitmentCurrency: "USD"}}
 
 	mockAuth.On("HasPermissionAPI", ctx, userID, "execute-any", "purchases").Return(true, nil)
 	mockAuth.On("HasPermissionForConstraintsAPI", ctx, userID, "execute-any", "purchases",
@@ -5183,7 +5186,7 @@ func TestHandler_authorizeSessionExecuteDirect_ExecuteOwn_ConstraintsDenied(t *t
 
 	userID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
 	session := &Session{UserID: userID}
-	recs := []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000}}
+	recs := []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CommitmentCurrency: "USD"}}
 
 	mockAuth.On("HasPermissionAPI", ctx, userID, "execute-any", "purchases").Return(false, nil)
 	mockAuth.On("HasPermissionAPI", ctx, userID, "execute-own", "purchases").Return(true, nil)

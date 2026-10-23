@@ -1699,6 +1699,26 @@ func TestScheduler_ConvertRecommendations_SavingsPercentage(t *testing.T) {
 		"SavingsPercentage=0 from the provider must round-trip as nil, not as a pointer to 0.0")
 }
 
+// TestScheduler_ConvertRecommendations_CommitmentCurrency: the currency the
+// provider parser proved for the commitment legs is kept on the record, and
+// an unknown one stays empty rather than being defaulted to USD. The purchase
+// spend cap refuses a capped purchase of a rec that is not provably USD
+// (issue #361), so dropping it here would refuse every capped purchase.
+func TestScheduler_ConvertRecommendations_CommitmentCurrency(t *testing.T) {
+	scheduler := &Scheduler{}
+	rec := func(currency string) common.Recommendation {
+		return common.Recommendation{
+			Provider: common.ProviderAWS, Service: common.ServiceEC2, Region: "cn-north-1", ResourceType: "m5.large",
+			Count: 1, Term: "1yr", PaymentOption: "all-upfront", CommitmentCost: 5000, CommitmentCurrency: currency,
+		}
+	}
+	records := scheduler.convertRecommendations([]common.Recommendation{rec("CNY"), rec("USD"), rec("")}, "aws")
+	require.Len(t, records, 3)
+	assert.Equal(t, "CNY", records[0].CommitmentCurrency)
+	assert.Equal(t, "USD", records[1].CommitmentCurrency)
+	assert.Empty(t, records[2].CommitmentCurrency)
+}
+
 // TestScheduler_ConvertRecommendations_IDUniqueness pins issue #187 +
 // #188: the rec ID must include term and engine, not just
 // (provider, service, region, resource_type, payment) — otherwise

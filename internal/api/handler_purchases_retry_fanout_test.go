@@ -59,6 +59,7 @@ func fanoutRecs() []config.RecommendationRecord {
 			Provider: "aws", Service: "rds", ResourceType: "db.r5.large",
 			Region: "us-east-1", Count: 1, Term: 1,
 			UpfrontCost: 300, Selected: true,
+			CommitmentCurrency: "USD",
 		},
 	}
 }
