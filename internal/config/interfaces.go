@@ -531,6 +531,8 @@ type StoreInterface interface {
 
 	// Account credentials (encrypted blobs; never returned via API)
 	SaveAccountCredential(ctx context.Context, accountID, credentialType, encryptedBlob string) error
+	// GetAccountCredential returns ErrNotFound when the account has no
+	// credential of credentialType.
 	GetAccountCredential(ctx context.Context, accountID, credentialType string) (string, error)
 	DeleteAccountCredentials(ctx context.Context, accountID string) error
 	HasAccountCredentials(ctx context.Context, accountID string) (bool, error)

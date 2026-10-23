@@ -4201,6 +4201,9 @@ func (s *PostgresStore) SaveAccountCredential(ctx context.Context, accountID, cr
 }
 
 // GetAccountCredential returns the encrypted blob for an account credential.
+// A missing row returns ErrNotFound, never ("", nil): that is what an empty
+// stored blob returns, and a caller that read an empty result as "no
+// credential, use the ambient identity" would act in the wrong account (#120).
 func (s *PostgresStore) GetAccountCredential(ctx context.Context, accountID, credentialType string) (string, error) {
 	var blob string
 	err := s.db.QueryRow(ctx,
@@ -4209,7 +4212,7 @@ func (s *PostgresStore) GetAccountCredential(ctx context.Context, accountID, cre
 	).Scan(&blob)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", nil
+			return "", ErrNotFound
 		}
 		return "", fmt.Errorf("failed to get account credential: %w", err)
 	}
