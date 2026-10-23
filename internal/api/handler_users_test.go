@@ -80,11 +80,11 @@ func TestHandler_createUser_Success(t *testing.T) {
 		Email:  "admin@example.com",
 	}
 
-	createdUser := &auth.APIUser{
+	createdUser := &auth.APICreateUserResponse{APIUser: &auth.APIUser{
 		ID:     "33333333-3333-3333-3333-333333333333",
 		Email:  "newuser@example.com",
 		Groups: []string{"00000000-0000-5000-8000-000000000005"},
-	}
+	}}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
 	mockAuth.grantAdmin()
@@ -148,10 +148,10 @@ func TestHandler_updateUser_Success(t *testing.T) {
 		Email:  "admin@example.com",
 	}
 
-	updatedUser := map[string]interface{}{
-		"id":     "11111111-1111-1111-1111-111111111111",
-		"email":  "user@example.com",
-		"groups": []string{"00000000-0000-5000-8000-000000000001"},
+	updatedUser := &auth.APIUser{
+		ID:     "11111111-1111-1111-1111-111111111111",
+		Email:  "user@example.com",
+		Groups: []string{"00000000-0000-5000-8000-000000000001"},
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
@@ -189,10 +189,10 @@ func TestHandler_updateUser_Deactivate(t *testing.T) {
 		Email:  "admin@example.com",
 	}
 
-	updatedUser := map[string]interface{}{
-		"id":     "11111111-1111-1111-1111-111111111111",
-		"email":  "user@example.com",
-		"active": false,
+	updatedUser := &auth.APIUser{
+		ID:     "11111111-1111-1111-1111-111111111111",
+		Email:  "user@example.com",
+		Active: false,
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)

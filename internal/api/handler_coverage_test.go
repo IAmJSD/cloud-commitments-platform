@@ -482,7 +482,9 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
 		mockAuth.grantAdmin()
 		const groupID = "00000000-0000-5000-8000-000000000005"
-		created := func() map[string]string { return map[string]string{"id": "new-user"} }
+		created := func() *auth.APICreateUserResponse {
+			return &auth.APICreateUserResponse{APIUser: &auth.APIUser{ID: "new-user"}}
+		}
 		// The actor is the session user (grant ceiling, #226) and the password
 		// arrives decoded.
 		mockAuth.On("CreateUserAPI", ctx, "admin", auth.APICreateUserRequest{
@@ -528,7 +530,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
 		mockAuth.grantAdmin()
-		updated := func() map[string]string { return map[string]string{"id": testID, "email": "updated@example.com"} }
+		updated := func() *auth.APIUser { return &auth.APIUser{ID: testID, Email: "updated@example.com"} }
 		mockAuth.On("UpdateUserAPI", ctx, "admin", testID, auth.APIUpdateUserRequest{Email: "updated@example.com"}).Return(updated(), nil)
 
 		h := &Handler{auth: mockAuth}
@@ -568,7 +570,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
 		mockAuth.grantAdmin()
-		created := func() map[string]string { return map[string]string{"id": "new-group"} }
+		created := func() *auth.APIGroup { return &auth.APIGroup{ID: "new-group"} }
 		mockAuth.On("CreateGroupAPI", ctx, "admin", auth.APICreateGroupRequest{Name: "New Group"}).Return(created(), nil)
 
 		h := &Handler{auth: mockAuth}
@@ -608,7 +610,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
 		mockAuth.grantAdmin()
-		updated := func() map[string]string { return map[string]string{"id": testID, "name": "Updated Group"} }
+		updated := func() *auth.APIGroup { return &auth.APIGroup{ID: testID, Name: "Updated Group"} }
 		mockAuth.On("UpdateGroupAPI", ctx, "admin", testID, auth.APIUpdateGroupRequest{Name: "Updated Group"}).Return(updated(), nil)
 
 		h := &Handler{auth: mockAuth}

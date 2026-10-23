@@ -24,7 +24,7 @@ type adminUserUpdateAuth struct {
 	marketplaceAuthFixture
 }
 
-func (a *adminUserUpdateAuth) UpdateUserAPI(ctx context.Context, actorUserID, userID string, req any) (any, error) {
+func (a *adminUserUpdateAuth) UpdateUserAPI(ctx context.Context, actorUserID, userID string, req auth.APIUpdateUserRequest) (*auth.APIUser, error) {
 	return a.service.UpdateUserAPI(ctx, actorUserID, userID, req)
 }
 
