@@ -1720,6 +1720,16 @@ paths:
       operationId: getHistory
       tags: [History]
       summary: Get purchase history
+      description: >-
+        Lists completed purchases and terminal executions (failed, expired,
+        canceled, ...) newest first, `limit` rows per page, plus the actionable
+        executions (pending approvals and in-flight purchases). Actionable
+        executions are not paged: the first page lists all of them, up to
+        `actionable_executions_limit`, and pages fetched with `cursor` leave
+        them out. To fetch the next page, repeat the request with the same
+        filters and `cursor` set to the previous response's `next_cursor`.
+        Rows written after the first page was loaded never shift, repeat or
+        skip a row on a later page.
       parameters:
         - $ref: '#/components/parameters/AccountID'
         - $ref: '#/components/parameters/StartDate'
@@ -1729,6 +1739,25 @@ paths:
           schema:
             type: string
             enum: [hourly, daily, weekly, monthly]
+        - name: limit
+          in: query
+          description: >-
+            Page size for completed purchases and terminal executions together.
+            Values below 1 use the default; values above 1000 are capped at 1000.
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+        - name: cursor
+          in: query
+          description: >-
+            Opaque position to continue from: the `next_cursor` value of the
+            previous page, passed unchanged. Omit it for the first page. Any
+            other value is rejected with 400. There is no `offset` parameter;
+            sending one is rejected with 400.
+          schema:
+            type: string
+            maxLength: 256
       responses:
         '200':
           description: Purchase history with summary
@@ -4032,19 +4061,37 @@ components:
             missing.
         limit:
           type: integer
-          description: Row cap on completed purchase history rows for this request.
+          description: >-
+            Page size: the most completed purchases and terminal executions
+            together that this response lists.
         executions_limit:
           type: integer
           description: >-
-            Row cap on terminal executions (failed, expired, canceled, ...),
-            fixed and ignoring the limit parameter. Actionable executions use
-            the separate `actionable_executions_limit` cap.
+            Row cap on terminal executions (failed, expired, canceled, ...).
+            They share the page with completed purchases, so it equals
+            `limit`. Actionable executions use the separate
+            `actionable_executions_limit` cap.
         actionable_executions_limit:
           type: integer
           description: >-
             Row cap on actionable executions (pending, notified, scheduled,
             approved, running, paused), fixed at 1000 and ignoring the limit
-            parameter.
+            parameter. Actionable executions are listed on the first page only.
+        has_more:
+          type: boolean
+          description: >-
+            True when more completed purchases or terminal executions the
+            caller may see follow this page; fetch them with `next_cursor`.
+            `truncated` is also true then. When `truncated` is true and
+            `has_more` is false, the missing rows cannot be paged to: the
+            actionable executions reached their cap, or an execution listing
+            failed.
+        next_cursor:
+          type: string
+          description: >-
+            Opaque position after the last paged row of this response; pass it
+            as the `cursor` parameter to fetch the next page. Present only when
+            `has_more` is true.
 
     HistorySummary:
       type: object

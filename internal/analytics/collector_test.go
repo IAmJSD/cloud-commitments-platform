@@ -216,6 +216,14 @@ func (m *mockConfigStore) GetPlannedExecutions(ctx context.Context, statuses []s
 	return nil, nil
 }
 
+func (m *mockConfigStore) ListHistoryExecutionsPage(ctx context.Context, q config.HistoryExecutionsPageQuery) ([]config.PurchaseExecution, error) {
+	return nil, nil
+}
+
+func (m *mockConfigStore) ListPurchaseHistoryPage(ctx context.Context, filter config.PurchaseHistoryFilter, after *config.HistoryPageKey) ([]config.PurchaseHistoryPageRow, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) GetStaleApprovedExecutions(ctx context.Context, olderThan time.Duration) ([]config.PurchaseExecution, error) {
 	return nil, nil
 }
