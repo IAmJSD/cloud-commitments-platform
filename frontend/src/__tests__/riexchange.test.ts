@@ -87,6 +87,9 @@ describe('openExchangeModal', () => {
 
   beforeEach(() => {
     modal = createModal();
+    // Other describes call jest.resetAllMocks(), which wipes the default
+    // listTargetOfferings resolution; restore it so test order does not matter.
+    (api.listTargetOfferings as jest.Mock).mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -627,6 +630,76 @@ describe('openExchangeModal', () => {
     const result = modal.querySelector('#modal-exchange-result');
     expect(result?.textContent).toContain('t3.medium');
   });
+
+  describe('exchange result announcement and receipt (issue #738)', () => {
+    const offeringUUID = '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91';
+    const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+    const button = (label: string): HTMLButtonElement | undefined =>
+      Array.from(modal.querySelectorAll('button')).find((b) => b.textContent === label);
+
+    async function executeExchange(): Promise<void> {
+      (api.getExchangeQuote as jest.Mock).mockResolvedValueOnce({
+        IsValidExchange: true, ValidationFailureReason: '', CurrencyCode: 'USD', PaymentDueRaw: '12.50',
+        SourceHourlyPriceRaw: '', SourceRemainingUpfrontRaw: '', SourceRemainingTotalRaw: '',
+        TargetHourlyPriceRaw: '', TargetRemainingUpfrontRaw: '', TargetRemainingTotalRaw: '', Region: 'us-west-2',
+      });
+      (api.executeExchange as jest.Mock).mockResolvedValueOnce({ exchange_id: 'exch-42', quote: {} });
+      openExchangeModal('ri-abc', 1, 'm5.large', [
+        { instance_type: 'm5.large', offering_id: offeringUUID, effective_monthly_cost: 42.5 },
+      ]);
+      button('Get Quote')?.click();
+      await flush();
+      button('Execute Exchange')?.click();
+      document.querySelector<HTMLButtonElement>('.modal-confirm-actions .btn-destructive')?.click();
+      await flush();
+      await flush();
+    }
+
+    it('makes the result area a polite live region and announces errors as alerts', async () => {
+      (api.getExchangeQuote as jest.Mock).mockRejectedValueOnce(new Error('throttled'));
+      openExchangeModal('ri-abc', 1, 'm5.large', [
+        { instance_type: 'm5.large', offering_id: offeringUUID, effective_monthly_cost: 42.5 },
+      ]);
+      const result = modal.querySelector('#modal-exchange-result');
+      expect(result?.getAttribute('role')).toBe('status');
+      expect(result?.getAttribute('aria-live')).toBe('polite');
+      button('Get Quote')?.click();
+      await flush();
+      const alert = result?.querySelector('[role="alert"]');
+      expect(alert?.textContent).toBe('Quote failed: throttled');
+    });
+
+    it('keeps the exchange ID on screen until the user closes the modal', async () => {
+      await executeExchange();
+      await new Promise((resolve) => setTimeout(resolve, 2100));
+      expect(modal.classList.contains('hidden')).toBe(false);
+      expect(modal.querySelector('#modal-exchange-result')?.textContent).toBe('Exchange completed. ID: exch-42');
+      // The form is frozen so an edit cannot wipe the receipt, and only Close remains.
+      expect(button('Get Quote')?.classList.contains('hidden')).toBe(true);
+      expect(modal.querySelector<HTMLSelectElement>('.modal-exchange-target-select')?.disabled).toBe(true);
+      const close = button('Close');
+      expect(document.activeElement).toBe(close);
+      close?.click();
+      expect(modal.classList.contains('hidden')).toBe(true);
+    });
+
+    it('shows a success toast with the exchange ID and a link to the history', async () => {
+      const section = document.createElement('section');
+      const list = document.createElement('div');
+      list.id = 'ri-exchange-history-list';
+      section.appendChild(list);
+      section.scrollIntoView = jest.fn();
+      document.body.appendChild(section);
+
+      await executeExchange();
+      const toast = document.querySelector('.toast--success');
+      expect(toast?.querySelector('.toast-message')?.textContent).toBe('RI exchange completed. Exchange ID: exch-42');
+      Array.from(toast?.querySelectorAll('button') ?? []).find((b) => b.textContent === 'View history')?.click();
+      expect(modal.classList.contains('hidden')).toBe(true);
+      expect(section.scrollIntoView).toHaveBeenCalled();
+      expect(document.activeElement).toBe(list);
+    });
+  });
 });
 
 describe('fillQuoteFromRI', () => {
@@ -634,6 +707,7 @@ describe('fillQuoteFromRI', () => {
 
   beforeEach(() => {
     modal = createModal();
+    (api.listTargetOfferings as jest.Mock).mockResolvedValue([]);
   });
 
   afterEach(() => {
