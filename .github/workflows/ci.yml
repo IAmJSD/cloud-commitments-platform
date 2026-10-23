@@ -499,12 +499,40 @@ jobs:
           path: ${{ runner.temp }}/coverage-integration.out
           retention-days: 30
 
-  # Docker image build test
+  # Docker image build test, once per architecture the image ships for.
+  #
+  # The AWS deploys (deploy-aws-lambda.yml, deploy-aws-fargate.yml) build
+  # linux/arm64 natively on ubuntu-24.04-arm for Graviton; GCP and Azure build
+  # linux/amd64 on ubuntu-latest. This job used to build amd64 only, so the
+  # arm64 image AWS actually runs was first built by a deploy (#56). Each leg
+  # builds natively on the same runner its deploy uses, so the Dockerfile's
+  # $BUILDPLATFORM stages run on the same images and architecture as in
+  # production, with no QEMU. `needs: docker-build` waits for every leg, so
+  # ci-success fails if either architecture does.
   docker-build:
-    name: Build Docker Image
-    runs-on: ubuntu-latest
+    name: Build Docker Image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
+    strategy:
+      # One architecture failing must not cancel the other: its result is the
+      # thing this matrix exists to report.
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            cache-from: type=gha
+            cache-to: type=gha,mode=max
+          # No GHA cache on this leg. The repository's Actions cache is
+          # already at its 10 GB limit, mostly buildkit blobs from the amd64
+          # leg, and a second mode=max scope would evict other jobs' caches.
+          # A cold native arm64 build takes about 2 minutes (measured in
+          # deploy-aws-lambda.yml), and this job is not on the critical path.
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            cache-from: ''
+            cache-to: ''
     steps:
       - name: Checkout code
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
@@ -519,34 +547,80 @@ jobs:
         with:
           context: .
           push: false
+          # Stated rather than left to the builder's default, so the image's
+          # architecture is the matrix's and not whatever the runner is.
+          platforms: linux/${{ matrix.arch }}
           # Export the built image into the local docker image store so the
-          # scan step below inspects the artifact this job just produced,
+          # steps below inspect the artifact this job just produced,
           # rather than rebuilding one and hoping it is the same.
           load: true
           tags: cudly:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: ${{ matrix.cache-from }}
+          cache-to: ${{ matrix.cache-to }}
           build-args: |
             VERSION=${{ github.sha }}
 
-      - name: Test Docker image
+      # Go is needed by both the architecture check and the image scan below.
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # Replaces a step that rebuilt the image with plain `docker build` (2m18s
+      # on amd64) and ran `/app/cudly --version || true`, which asserted
+      # nothing: cudly has no --version flag, and `|| true` hid every failure.
+      # The plain `docker build` path is still covered by the e2e-tests job,
+      # whose compose file builds this Dockerfile.
+      - name: Verify image architecture and binaries
+        env:
+          IMAGE: cudly:${{ github.sha }}
+          ARCH: ${{ matrix.arch }}
         run: |
-          docker build -t cudly:test .
-          docker run --rm cudly:test /app/cudly --version || true
-          docker run --rm cudly:test /app/cudly --help || true
+          set -euo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+
+          # Native, not emulated: the runner's own architecture is the target.
+          case "$RUNNER_ARCH" in
+            X64) runner_arch=amd64 ;;
+            ARM64) runner_arch=arm64 ;;
+            *) runner_arch="$RUNNER_ARCH" ;;
+          esac
+          [ "$runner_arch" = "$ARCH" ] ||
+            fail "runner is $RUNNER_ARCH, expected a native $ARCH runner"
+
+          platform="$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE")"
+          [ "$platform" = "linux/$ARCH" ] ||
+            fail "image $IMAGE is $platform, expected linux/$ARCH"
+
+          # The image metadata alone does not prove what was compiled into it:
+          # read GOOS/GOARCH from each Go binary's embedded build info.
+          bins="$(mktemp -d "$RUNNER_TEMP/image-bins.XXXXXX")"
+          cid="$(docker create "$IMAGE")"
+          trap 'docker rm -f "$cid" >/dev/null' EXIT
+          for bin in /app/cudly /usr/local/bin/migrate; do
+            out="$bins/$(basename "$bin")"
+            docker cp "$cid:$bin" "$out"
+            info="$(go version -m "$out")"
+            if ! grep -qxF "$(printf '\tbuild\tGOOS=linux')" <<<"$info" ||
+               ! grep -qxF "$(printf '\tbuild\tGOARCH=%s' "$ARCH")" <<<"$info"; then
+              fail "$bin is not a linux/$ARCH Go binary: $(awk '$1 == "build" && $2 ~ /^GO(OS|ARCH)=/ { printf "%s ", $2 }' <<<"$info")"
+            fi
+            echo "$bin: linux/$ARCH"
+          done
+
+          # And both execute. cudly runs through the real entrypoint, which
+          # appends --mode/--port; -h stops flag parsing there and exits 0.
+          timeout 60 docker run --rm "$IMAGE" /app/cudly -h
+          timeout 60 docker run --rm --entrypoint /usr/local/bin/migrate "$IMAGE" -version
 
       # Nothing else in the pipeline looks at the artifact: govulncheck runs in
       # source mode, and Trivy runs with scan-type fs and config, all against
       # the repository. A vulnerable binary baked into the image was invisible
       # by construction, which is how #1833 shipped twice (issue #1836). These
       # steps live in this job rather than a new one so the image is scanned
-      # without being built a third time; docker-build is already in
-      # ci-success's needs, so the gate is wired.
-      - name: Set up Go
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
+      # without being built again; docker-build is already in ci-success's
+      # needs, so the gate is wired. They run on both legs: the arm64 image is
+      # the one the AWS deploys ship.
       - name: Install govulncheck
         run: |
           # Same pin as the security-scan job: a govulncheck release with new
@@ -739,6 +813,13 @@ jobs:
             cd frontend && npm audit --audit-level=high
           fi
 
+      - name: Run gosec wrapper self-tests
+        # Pins that the pre-commit hook, `make security-scan-go` and the step
+        # below all run gosec through scripts/run-gosec.sh with one rule set
+        # (issue #340). Uses a fake gosec, so it is fast and offline.
+        if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success'
+        run: bash scripts/test-run-gosec.sh
+
       - name: Run gosec Security Scanner
         id: gosec
         # always(): don't let an earlier scanner's failure (e.g. npm audit)
@@ -746,45 +827,33 @@ jobs:
         # Still requires checkout and Go setup to have succeeded.
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success'
         run: |
-          # Install pinned gosec using the job's existing setup-go.
-          # The securego/gosec Docker action bundles its own Go toolchain which
-          # cannot satisfy the module's go directive, causing a toolchain mismatch.
-          go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
-          # Collect SARIF for both platform-owned modules before uploading.
+          # scripts/run-gosec.sh owns the pinned gosec version, toolchain,
+          # module list and rule set, shared with the pre-commit hook and
+          # `make security-scan-go` (issue #340). It installs gosec with the
+          # job's existing setup-go: the securego/gosec Docker action bundles
+          # its own Go toolchain, which cannot satisfy the module's go
+          # directive.
           #
           # gosec exits non-zero both for real findings and for a processing
-          # error. A bare `set -e` loop aborts at the first non-zero module,
-          # skipping the merge below entirely -- the upload step then fails
-          # on a missing file instead of surfacing the actual finding
-          # (issue #1717). Guarding the gosec call in `if ! ( ... )` exempts
-          # it from errexit so every module still gets scanned and merged;
-          # `status` records whether the job should still fail at the end.
-          set -e
+          # error. The script still scans every module after a failure, and
+          # `|| status=1` exempts it from errexit so the merge below always
+          # runs (issue #1717); `status` records whether the job should still
+          # fail at the end.
           status=0
-          for mod in . tests/e2e; do
-            tag=$(echo "$mod" | tr './' '--' | sed 's/^-/root/')
-            out="$RUNNER_TEMP/gosec-${tag}.sarif"
-            echo "==> gosec in $mod"
-            if ! (cd "$mod" && gosec -fmt sarif -out "$out" ./...); then
-              echo "::warning::gosec exited non-zero in $mod (findings or a scan error)"
-              status=1
-            fi
-            if [ ! -f "$out" ]; then
-              echo "::error::gosec produced no SARIF output for $mod"
-              status=1
-              continue
-            fi
+          scripts/run-gosec.sh --sarif-dir "$RUNNER_TEMP" || status=1
+          shopt -s nullglob
+          for out in "$RUNNER_TEMP"/gosec-*.sarif; do
+            tag=$(basename "$out" .sarif)
             # Code scanning rejects a SARIF file whose runs share a category
             # (github.blog changelog 2025-07-21), so give each module's run a
             # unique automationDetails.id before merging.
-            jq --arg id "gosec-${tag}/" '.runs |= map(.automationDetails = {id: $id})' \
+            jq --arg id "${tag}/" '.runs |= map(.automationDetails = {id: $id})' \
               "$out" > "$out.tmp" && mv "$out.tmp" "$out"
           done
           # Merge per-module SARIF runs into one file for the upload step.
           # Only modules that actually produced a file are included; if
           # gosec crashed before writing any of them, fail loud here rather
           # than uploading an empty result silently.
-          shopt -s nullglob
           sarif_files=("$RUNNER_TEMP"/gosec-*.sarif)
           if [ "${#sarif_files[@]}" -eq 0 ]; then
             echo "::error::no gosec SARIF output was produced by any module" >&2
@@ -1209,6 +1278,27 @@ jobs:
       - name: Run smoke-gate self-test
         run: bash scripts/test-wait-for-healthy.sh
 
+  # Execute database-migration.yml's down-migration gate (#68): the gate script
+  # over adversarial inputs, then the workflow's own validate and migrate-* run
+  # blocks extracted from the YAML with a stub `migrate`, so a request that
+  # amounts to `down -all` (steps=0, or steps at or past the migration count,
+  # which golang-migrate treats as "roll back everything") is proven never to
+  # reach migrate. Fast (shell only), so it always runs.
+  migration-down-gate:
+    name: Database migration down gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run down-migration gate self-tests
+        run: bash scripts/test-migration-down-gate.sh
+
   # Assert that the files the documented Make targets write at the repo root
   # (the `bootstrap` Lambda binary, coverage.html, the gosec/trivy/tfsec JSON
   # reports, complexity-report.txt) are gitignored, and that the patterns stay
@@ -1251,6 +1341,7 @@ jobs:
       - cloud-sql-delete-scope
       - aws-tfstate-platform-key
       - azure-kv-access-policy
+      - migration-down-gate
       - gitignore-make-artifacts
     if: always()
     permissions:
