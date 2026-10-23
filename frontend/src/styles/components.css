@@ -1119,7 +1119,9 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 
 .approval-details-header {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    /* At most four stats per row, so the eight stats sit in two even rows
+       instead of seven plus an orphan; fewer per row on narrow screens. */
+    grid-template-columns: repeat(auto-fit, minmax(max(120px, calc(25% - 1rem)), 1fr));
     gap: 0.5rem 1rem;
     padding: 0.75rem 1rem;
     background: var(--cudly-surface-2, #f6f8fa);

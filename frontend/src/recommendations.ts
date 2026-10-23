@@ -19,7 +19,7 @@ import {
   type Payment as CompatPayment,
   type Provider as CompatProvider,
 } from './lib/purchase-compatibility';
-import { executeButtonLabel } from './commitmentSummary';
+import { billsMonthly, buildCommitmentBand, commitmentLine, commitmentTotals, executeButtonLabel, formatCommitmentTotals, type CommitmentLine } from './commitmentSummary';
 import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary, GlobalConfig } from './types';
 import { openModal } from './modal';
@@ -4540,6 +4540,12 @@ function renderFanOutSummary(summary: HTMLElement, buckets: FanOutBucket[]): voi
   const fanOutPeriod = state.getCostPeriod();
   summary.appendChild(totalLine('Total commitments', String(totals.totalCount)));
   summary.appendChild(totalLine('Total upfront', formatCurrency(totals.totalUpfront)));
+  // Issue #711: upfront alone reads $0 for no-upfront buckets that bill
+  // monthly for one or three years, so state the recurring charge and the
+  // total over the term next to it.
+  const termText = formatCommitmentTotals(submittable.flatMap(bucketCommitmentLines), CURRENCY_DEFAULT_DIGITS);
+  summary.appendChild(totalLine('Monthly recurring', termText.monthly));
+  summary.appendChild(totalLine('Total over term', termText.termTotal));
   summary.appendChild(totalLine(`Total savings ${periodSuffix(fanOutPeriod)}`, formatCostForPeriod(totals.totalSavings, fanOutPeriod), 'savings'));
 
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
@@ -4561,6 +4567,10 @@ function refreshFanOutSummary(): void {
   const summary = document.getElementById('fanout-summary');
   if (!summary) return;
   renderFanOutSummary(summary, currentFanOutBuckets);
+}
+
+function bucketCommitmentLines(b: FanOutBucket): CommitmentLine[] {
+  return b.recs.map((r) => commitmentLine(r, { payment: b.payment }));
 }
 
 function computeFanOutTotals(buckets: FanOutBucket[]): { totalCount: number; totalUpfront: number; totalSavings: number } {
@@ -4703,7 +4713,9 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   const bPeriod = state.getCostPeriod();
   const totals = document.createElement('p');
   totals.className = 'fanout-bucket-totals';
-  totals.textContent = `${bucketTotal.count} commitments · ${formatCurrency(bucketTotal.upfront)} upfront · ${formatCostForPeriod(bucketTotal.savings, bPeriod)} savings ${periodSuffix(bPeriod)}`;
+  const bucketMonthly = commitmentTotals(bucketCommitmentLines(b)).monthly;
+  const monthlyPart = bucketMonthly === null ? 'monthly cost not reported' : `${formatCurrency(bucketMonthly)}/mo recurring`;
+  totals.textContent = `${bucketTotal.count} commitments · ${formatCurrency(bucketTotal.upfront)} upfront · ${monthlyPart} · ${formatCostForPeriod(bucketTotal.savings, bPeriod)} savings ${periodSuffix(bPeriod)}`;
   section.appendChild(totals);
 
   // Issue #249: for mixed-SP buckets with 2+ distinct plan types, render
@@ -5102,22 +5114,36 @@ function resolvePerRecPaymentSeed(
 // follow both a checkbox toggle (updatePurchaseModalTotals, pre-existing
 // gap) and a Term/Payment re-price, not only the radio's own change event.
 // No-ops when the callout isn't in the DOM (no direct-execute permission).
+function checkedPurchaseLines(): CommitmentLine[] {
+  const lines: CommitmentLine[] = [];
+  for (const idx of checkedPurchaseIndices) {
+    const r = currentPurchaseRecommendations[idx];
+    if (r) lines.push(commitmentLine(r));
+  }
+  return lines;
+}
+
 function renderDirectExecuteWarning(): void {
   const directWarning = document.querySelector<HTMLElement>('#purchase-details .direct-execute-warning');
   if (!directWarning) return;
   directWarning.hidden = currentExecuteMode !== 'direct';
   if (currentExecuteMode !== 'direct') return;
-  let totalUpfront = 0;
-  for (const idx of checkedPurchaseIndices) {
-    const r = currentPurchaseRecommendations[idx];
-    if (r) totalUpfront += r.upfront_cost;
+  const lines = checkedPurchaseLines();
+  const totals = commitmentTotals(lines);
+  const shown = formatCommitmentTotals(lines);
+  // Issue #711: a no-upfront purchase would otherwise read "charge $0.00".
+  let recurring = '';
+  if (totals.monthly === null) {
+    recurring = billsMonthly(lines) ? ', plus monthly fees the provider did not report' : '';
+  } else if (totals.monthly > 0) {
+    recurring = `, then ${shown.monthly} a month for the term (${shown.termTotal} in total)`;
   }
   while (directWarning.firstChild) directWarning.removeChild(directWarning.firstChild);
   const icon = document.createElement('strong');
   icon.textContent = 'Warning: ';
   directWarning.appendChild(icon);
   const text = document.createTextNode(
-    `This will charge ${formatCurrency(totalUpfront, '$', 2)} upfront immediately. ` +
+    `This will charge ${shown.upfront} upfront immediately${recurring}. ` +
     'This bypasses the approval step.',
   );
   directWarning.appendChild(text);
@@ -5335,6 +5361,11 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[], 
   tfoot.appendChild(totalsRow);
 
   commitsSection.appendChild(table);
+  // Upfront / Monthly / Total over term for the checked rows (issue #711);
+  // refilled by updatePurchaseModalTotals.
+  const band = document.createElement('div');
+  band.id = 'purchase-modal-commitment-band';
+  commitsSection.appendChild(band);
   container.appendChild(commitsSection);
 
   // Wire the select-all checkbox (must happen after tbody rows are in DOM
@@ -5530,6 +5561,9 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
     selectAllCb.checked = false;
     selectAllCb.indeterminate = true;
   }
+
+  const band = document.getElementById('purchase-modal-commitment-band');
+  if (band) band.replaceChildren(buildCommitmentBand(checkedPurchaseLines(), { upfrontLabel: 'Upfront' }));
 
   // Issue #1903: the direct-execute warning's dollar total is derived from
   // checkedPurchaseIndices too, so it must refresh on every checkbox toggle,

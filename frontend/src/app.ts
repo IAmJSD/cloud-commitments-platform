@@ -18,7 +18,7 @@ import { setupRIExchangeHandlers, saveAutomationSettings } from './riexchange';
 import { showToast } from './toast';
 import { formatPaymentAdjustmentNotice } from './commitmentOptions';
 import { confirmDialog } from './confirmDialog';
-import { buildCommitmentSummary, commitmentTotals, executeButtonLabel, executeConfirmLabel, withIntro } from './commitmentSummary';
+import { buildCommitmentSummary, commitmentLine, commitmentTotals, executeButtonLabel, executeConfirmLabel, withIntro } from './commitmentSummary';
 import { handlePurchaseDeeplink } from './purchases-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
@@ -432,18 +432,10 @@ export async function handleExecutePurchase(): Promise<void> {
   //   - Approval path: low-friction, non-destructive.
   //   - Direct-execute path: red destructive dialog with cost callout and
   //     immediate-charge callout; no cancellation promise (issue #251).
-  const summaryLines = recsWithPayment.map((r) => ({
-      service: r.service,
-      provider: r.provider,
-      region: r.region,
-      resourceType: r.resource_type,
-      count: r.count,
-      term: r.term,
-      payment: r.payment,
-      upfront: r.upfront_cost,
-      monthly: r.monthly_cost ?? null,
-      ...(r.cloud_account_id ? { account: getAccountName(r.cloud_account_id) } : {}),
-  }));
+  const summaryLines = recsWithPayment.map((r) => commitmentLine(
+    r,
+    r.cloud_account_id ? { account: getAccountName(r.cloud_account_id) } : {},
+  ));
   const totals = commitmentTotals(summaryLines);
   const summary = buildCommitmentSummary(
     summaryLines,
@@ -599,9 +591,19 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
   // Same approval-required default as the single-purchase path: each
   // bucket POSTs a request that triggers an approval email; the actual
   // charges fire when each approver clicks the link in their email.
+  // State the monthly charge and the term total too (issue #711): for
+  // no-upfront and partial-upfront buckets the upfront alone reads $0
+  // while the account is billed monthly for one or three years.
+  const summary = buildCommitmentSummary(
+    buckets.flatMap((b) => b.recs.map((r) => commitmentLine(
+      r,
+      { payment: b.payment, ...(r.cloud_account_id ? { account: getAccountName(r.cloud_account_id) } : {}) },
+    ))),
+    { upfrontLabel: 'Upfront on approval' },
+  );
   const ok = await confirmDialog({
     title: `Send ${buckets.length} bulk purchase${buckets.length === 1 ? '' : 's'} for approval?`,
-    body: `This will submit ${buckets.length} separate purchase request${buckets.length === 1 ? '' : 's'} and email ${buckets.length} approval request${buckets.length === 1 ? '' : 's'}. Each must be approved individually before its commitments are charged.`,
+    body: withIntro(`This will submit ${buckets.length} separate purchase request${buckets.length === 1 ? '' : 's'} and email ${buckets.length} approval request${buckets.length === 1 ? '' : 's'}. Each must be approved individually before its commitments are charged.`, summary),
     confirmLabel: 'Send all for approval',
     destructive: false,
   });

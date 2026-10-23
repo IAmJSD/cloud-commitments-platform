@@ -2007,3 +2007,77 @@ describe('Issue #333: bulk purchase buckets never span more than one cloud accou
     expect(unattributedBucket.recs).toHaveLength(1);
   });
 });
+
+describe('Issue #711: purchase screens state the monthly charge and the term total', () => {
+  // v-1-no: 1 year, no upfront, $800 a month, so the term costs $9,600.
+  const noUpfront = (): LocalRecommendation => buildRows()[3]!;
+
+  test('the single purchase modal shows upfront, monthly and total over term for the checked rows', async () => {
+    await openPurchaseModal([noUpfront()]);
+    const band = document.getElementById('purchase-modal-commitment-band')!;
+    expect(band.textContent).toBe('Upfront$0.00Monthly$800.00Total over term$9,600.00');
+
+    (document.querySelector('.purchase-modal-row-include') as HTMLInputElement).click();
+    expect(band.textContent).toBe('Upfront$0.00Monthly$0.00Total over term$0.00');
+  });
+
+  test('the Execute Now warning names the monthly charge of a no-upfront purchase', async () => {
+    await openPurchaseModal([noUpfront()]);
+    (document.getElementById('execute-mode-direct') as HTMLInputElement).click();
+    expect(document.querySelector<HTMLElement>('.direct-execute-warning')!.textContent).toBe(
+      'Warning: This will charge $0.00 upfront immediately, then $800.00 a month for the term ($9,600.00 in total). This bypasses the approval step.',
+    );
+  });
+
+  test('the Execute Now warning says monthly fees apply when the provider did not report them', async () => {
+    await openPurchaseModal([{ ...noUpfront(), monthly_cost: null }]);
+    (document.getElementById('execute-mode-direct') as HTMLInputElement).click();
+    expect(document.querySelector<HTMLElement>('.direct-execute-warning')!.textContent).toContain(
+      'upfront immediately, plus monthly fees the provider did not report.',
+    );
+  });
+
+  test('the bulk summary, bucket totals and confirm state the monthly charge and term total', async () => {
+    const rows: LocalRecommendation[] = [
+      {
+        id: 'ec2-no', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+        region: 'us-east-1', resource_type: 'm5.large', term: 1, payment: 'no-upfront',
+        count: 1, upfront_cost: 0, monthly_cost: 100, savings: 50,
+      },
+      {
+        id: 'rds-no', provider: 'aws', cloud_account_id: 'a1', service: 'rds',
+        region: 'us-east-1', resource_type: 'db.r5.large', term: 1, payment: 'no-upfront',
+        count: 1, upfront_cost: 0, monthly_cost: 200, savings: 80,
+      },
+    ];
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'no-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['ec2-no', 'rds-no']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    const line = (label: string): string | null | undefined => Array.from(document.querySelectorAll('#fanout-summary p'))
+      .find((p) => p.textContent?.startsWith(label))?.querySelector('strong')?.textContent;
+    expect(line('Total upfront')).toBe('$0');
+    expect(line('Monthly recurring')).toBe('$300');
+    expect(line('Total over term')).toBe('$3,600');
+    const bucketTotals = Array.from(document.querySelectorAll('.fanout-bucket-totals')).map((p) => p.textContent);
+    expect(bucketTotals).toEqual(expect.arrayContaining([
+      expect.stringContaining('$0 upfront · $100/mo recurring'),
+      expect.stringContaining('$0 upfront · $200/mo recurring'),
+    ]));
+
+    (confirmDialog as jest.Mock).mockClear();
+    (document.getElementById('execute-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    const opts = (confirmDialog as jest.Mock).mock.calls[0]![0] as { body: HTMLElement };
+    const text = opts.body.textContent ?? '';
+    expect(text).toContain('Upfront on approval$0.00');
+    expect(text).toContain('Monthly$300.00');
+    expect(text).toContain('Total over term$3,600.00');
+  });
+});
