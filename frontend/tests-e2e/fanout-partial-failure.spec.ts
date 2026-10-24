@@ -18,7 +18,9 @@ async function openFanOut(page: Page): Promise<void> {
 
 async function send(page: Page, label: RegExp | string): Promise<void> {
   await page.locator('#execute-purchase-btn').filter({ hasText: label }).click();
-  await page.locator('.modal-confirm-backdrop').getByRole('button', { name: 'Send all for approval' }).click();
+  // The confirm button names the combined upfront of the buckets being sent (#707).
+  await page.locator('.modal-confirm-backdrop')
+    .getByRole('button', { name: /^Send for Approval \(\$[\d,.]+ upfront on approval\)$/ }).click();
 }
 
 test('partial failure keeps the modal open and retries only the failed bucket', async ({ page }) => {
