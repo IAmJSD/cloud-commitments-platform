@@ -14,7 +14,7 @@ import { canAccess } from './permissions';
 import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale } from './recommendations';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
 import { scopeUpcomingToProvider, upcomingEmptyMessage, UPCOMING_ACCOUNT_SCOPE_NOTE } from './lib/upcoming-scope';
-import { formatTrendAxisTick } from './modules/chart-utils';
+import { formatTrendAxisTick, formatTrendTooltipTitle } from './modules/chart-utils';
 // Re-export for backward compatibility (tests and other callers import from dashboard.ts).
 export { formatTrendAxisTick } from './modules/chart-utils';
 
@@ -32,88 +32,17 @@ let savingsByServiceChart: Chart | null = null;
 // Maximum number of services to show in the bar chart before truncating.
 const SAVINGS_BY_SERVICE_MAX = 10;
 
-// Palette for per-service bars. A service's colour is fixed by its name (see
-// serviceBarColor), never by its rank, so it survives data refreshes (#700).
-const SERVICE_BAR_COLORS = [
-  '#1a73e8', // blue
-  '#34a853', // green
-  '#fbbc04', // yellow
-  '#ea4335', // red
-  '#9c27b0', // purple
-  '#00bcd4', // cyan
-  '#ff5722', // deep-orange
-  '#607d8b', // blue-grey
-  '#795548', // brown
-  '#e91e63', // pink
-];
-
-// One palette slot per service family, keyed on the slugs the app emits
-// (purchase mapServiceSlug, plan-service-ids.ts). A canonical slug and its
-// legacy twin share a slot, so the same service is one colour whichever
-// spelling a provider returns. Slots 0-6 are reserved for these families.
-const KNOWN_SERVICE_COLOR_INDEX: Readonly<Record<string, number>> = {
-  compute: 0, ec2: 0, vm: 0,
-  'relational-db': 1, rds: 1, sql: 1, cloudsql: 1,
-  cache: 2, elasticache: 2, redis: 2, memorystore: 2,
-  savingsplans: 3, 'savings-plans': 3, 'savings-plans-compute': 3,
-  'savings-plans-ec2instance': 3, 'savings-plans-sagemaker': 3, 'savings-plans-database': 3,
-  search: 4, opensearch: 4,
-  'data-warehouse': 5, redshift: 5,
-  memorydb: 6,
-};
-const KNOWN_SERVICE_SLOTS = 7;
-
-/** Stable colour for a service name: identical on every render, regardless of rank. */
-export function serviceBarColor(service: string): string {
-  const key = service.toLowerCase();
-  let idx = KNOWN_SERVICE_COLOR_INDEX[key];
-  if (idx === undefined) {
-    // Unknown slugs hash into the spare slots; two unknown slugs may collide.
-    let h = 0;
-    for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
-    idx = KNOWN_SERVICE_SLOTS + (h % (SERVICE_BAR_COLORS.length - KNOWN_SERVICE_SLOTS));
-  }
-  return SERVICE_BAR_COLORS[idx] ?? '#1a73e8';
-}
-
-// The legend names the three stacked layers, which every service shares, so
-// its swatches are neutral tones that mirror the bar shading (dark / solid /
-// 35% alpha) instead of the first bar's service colour.
-const LEGEND_SWATCH_COLORS = ['#37474f', '#78909c', 'rgba(120,144,156,0.35)'];
-// Border keeps the pale Upside swatch at >= 3:1 against the white card.
-const LEGEND_SWATCH_BORDER = '#546e7a';
-
-/**
- * Parse a #rrggbb hex string into its r/g/b components. Falls back to the
- * default service bar blue (#1a73e8) for malformed input so the chart never
- * renders a NaN colour. Exported for unit testing.
- */
-export function parseHexColor(hex: string): { r: number; g: number; b: number } {
-  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
-  const clean = m ? m[1]! : '1a73e8';
-  return {
-    r: parseInt(clean.substring(0, 2), 16),
-    g: parseInt(clean.substring(2, 4), 16),
-    b: parseInt(clean.substring(4, 6), 16),
-  };
-}
-
-/**
- * Derive a darker shade of a base #rrggbb colour by reducing its perceived
- * lightness. Used for the current-savings underlay so it reads as the
- * "already-realized" portion beneath the lighter potential-range bar of the
- * same hue (issue #908). The factor (default 0.7 → ~30% darker) is applied
- * multiplicatively per channel so the hue is preserved; the result is
- * programmatic, not hardcoded per service. Exported for unit testing.
- */
-export function darkenHexColor(hex: string, factor = 0.7): string {
-  const { r, g, b } = parseHexColor(hex);
-  const scale = (c: number): string => {
-    const v = Math.max(0, Math.min(255, Math.round(c * factor)));
-    return v.toString(16).padStart(2, '0');
-  };
-  return `#${scale(r)}${scale(g)}${scale(b)}`;
-}
+// One colour per stacked layer, the same on every bar, so the legend swatches
+// are exactly the colours drawn (#189). The x axis already names each service,
+// so hue encodes the layer, not the service: no colour can change with rank
+// (#700) and the layers differ by hue rather than by shades of one (#744).
+// Slots 1-3 of the validated categorical palette, CVD-distinct in every pair.
+// Upside (aqua) sits below 3:1 on white; the tooltip carries its value.
+export const SAVINGS_LAYER_COLORS = {
+  current: '#2a78d6',      // blue
+  lowestOption: '#eb6834', // orange
+  upside: '#1baf7a',       // aqua
+} as const;
 
 // In-memory index of the currently-rendered upcoming purchases, keyed by
 // execution_id. The "View Details" affordance renders from this — the
@@ -610,7 +539,10 @@ function renderUpcomingPurchases(allPurchases: UpcomingPurchase[]): void {
       const cancelBtn = document.createElement('button');
       cancelBtn.dataset['action'] = 'cancel-purchase';
       cancelBtn.dataset['id'] = String(p.execution_id);
-      cancelBtn.className = 'danger';
+      // Outlined destructive (issue #695): the filled red `danger` style made
+      // Cancel the loudest element on every row. It still reads as
+      // destructive and fills on hover; the confirm dialog guards the action.
+      cancelBtn.className = 'btn-danger';
       cancelBtn.textContent = 'Cancel';
       actions.appendChild(cancelBtn);
     }
@@ -1001,21 +933,6 @@ export function renderSavingsByService(
 
   const totalSavings = positive.reduce((acc, e) => acc + e.visibleTotal, 0);
 
-  // Colour: one stable base colour per service name, then derive lighter/darker shades.
-  const bgColors = visible.map(e => serviceBarColor(e.svc));
-
-  // Current / Committed: darkest shade (30% darker than base).
-  const currentColors = bgColors.map(c => darkenHexColor(c));
-
-  // Lowest option: the base (solid) colour.
-  const lowestOptionColors = bgColors;
-
-  // Upside: same hue at 35% opacity for the variability band.
-  const upsideColors = bgColors.map(c => {
-    const { r, g, b } = parseHexColor(c);
-    return `rgba(${r},${g},${b},0.35)`;
-  });
-
   savingsByServiceChart = new Chart(canvas, {
     type: 'bar',
     data: {
@@ -1027,21 +944,21 @@ export function renderSavingsByService(
         {
           label: 'Current / Committed',
           data: currentData,
-          backgroundColor: currentColors,
+          backgroundColor: SAVINGS_LAYER_COLORS.current,
           borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 4, bottomRight: 4 },
           stack: 'savings',
         },
         {
           label: 'Lowest option',
           data: lowestOptionData,
-          backgroundColor: lowestOptionColors,
+          backgroundColor: SAVINGS_LAYER_COLORS.lowestOption,
           borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 0, bottomRight: 0 },
           stack: 'savings',
         },
         {
           label: 'Upside',
           data: upsideData,
-          backgroundColor: upsideColors,
+          backgroundColor: SAVINGS_LAYER_COLORS.upside,
           borderRadius: { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 },
           stack: 'savings',
         },
@@ -1054,17 +971,8 @@ export function renderSavingsByService(
         legend: {
           display: true,
           position: 'top',
-          labels: {
-            boxWidth: 12,
-            generateLabels: (chart) => chart.data.datasets.map((ds, i) => ({
-              text: ds.label ?? '',
-              fillStyle: LEGEND_SWATCH_COLORS[i] ?? LEGEND_SWATCH_COLORS[1] ?? '#78909c',
-              strokeStyle: LEGEND_SWATCH_BORDER,
-              lineWidth: 1,
-              hidden: !chart.isDatasetVisible(i),
-              datasetIndex: i,
-            })),
-          },
+          // Default swatches: each one is its dataset's single bar colour.
+          labels: { boxWidth: 12 },
         },
         tooltip: {
           callbacks: {
@@ -1104,7 +1012,7 @@ export function renderSavingsByService(
       scales: {
         x: {
           stacked: true,
-          title: { display: true, text: 'Service' },
+          // No axis title: the tick labels are the service names (#189).
           // Keep every service label on narrow screens (rotate instead of skipping).
           ticks: { autoSkip: false, maxRotation: 60 },
         },
@@ -1142,9 +1050,10 @@ export async function loadSavingsTrendChart(): Promise<void> {
   // For 'all', use a rolling ~365-day window — the maximum history the
   // analytics API allows (~366-day cap in handler_analytics.go). Sending a
   // 1970 epoch sentinel caused HTTP 400 "date range too large" which the
-  // catch block rendered as an empty-state error (QA 3.1). The axisMinMs
-  // anchor-to-earliest-point logic below still applies so sparse data fills
-  // the full chart width correctly.
+  // catch block rendered as an empty-state error (QA 3.1). Because it is
+  // capped, the button is labeled "1y" ("Last 365 days"), not "All" (#52).
+  // The axisMinMs anchor-to-earliest-point logic below still applies so
+  // sparse data fills the full chart width correctly.
   const windowStartMs = isAllRange ? nowMs - 365 * 86400_000 : nowMs - (days as number) * 86400_000;
   const intervalDays = isAllRange ? 365 : (days as number);
   const interval: 'hourly' | 'daily' | 'weekly' = intervalDays <= 7 ? 'hourly' : intervalDays <= 90 ? 'daily' : 'weekly';
@@ -1244,10 +1153,11 @@ export async function loadSavingsTrendChart(): Promise<void> {
             callbacks: {
               // Format the x timestamp as a human-readable date so the tooltip
               // header shows a date string rather than the raw 13-digit
-              // millisecond value (QA 3.2).
+              // millisecond value (QA 3.2). Unlike the compact axis ticks it
+              // includes the year, so points a year apart don't read the same (#53).
               title: (items) => {
                 const raw = items[0]?.raw as { x: number; y: number } | undefined;
-                return raw?.x != null ? formatTrendAxisTick(raw.x, interval) : '';
+                return raw?.x != null ? formatTrendTooltipTitle(raw.x, interval) : '';
               },
               label: (ctx) => `Cumulative savings: ${formatCurrency((ctx.raw as { x: number; y: number }).y)}`,
             },
