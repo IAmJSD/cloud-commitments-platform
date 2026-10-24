@@ -699,7 +699,11 @@ function canRetryFailedRow(p: HistoryPurchase): boolean {
 // Conditions:
 //   * status must be "completed", "" (legacy blank), or "scheduled"
 //     (pre-fire delay: the cloud SDK has not been called yet -- free cancel);
-//   * provider must be "azure" (AWS and GCP have no direct cancel API);
+//   * completed (and legacy blank) rows must be provider "azure": only Azure
+//     reservations can be returned after purchase, AWS and GCP have no direct
+//     cancel API. Scheduled rows are allowed for every provider because the
+//     backend cancels them via CancelScheduledExecutionAtomic before any
+//     cloud call (issue #924);
 //   * revocation_window_closes_at must be in the future;
 //     for "scheduled" rows this field is populated with scheduled_execution_at
 //     by the backend (issue #290, second-wave CR Finding E);
@@ -712,7 +716,7 @@ function canRetryFailedRow(p: HistoryPurchase): boolean {
 function canRevokeCompletedRow(p: HistoryPurchase): boolean {
   const status = (p.status || '').toLowerCase();
   if (status !== 'completed' && status !== '' && status !== 'scheduled') return false;
-  if ((p.provider || '').toLowerCase() !== 'azure') return false;
+  if (status !== 'scheduled' && (p.provider || '').toLowerCase() !== 'azure') return false;
   if (p.revoked_at) return false; // already revoked
   if (!p.revocation_window_closes_at) return false;
   if (new Date(p.revocation_window_closes_at) <= new Date()) return false;
@@ -977,15 +981,16 @@ function renderActionCell(p: HistoryPurchase): string {
   // Cancel button, or be an Azure row still inside its revoke window.
   const trailingActions: string[] = [];
   if (p.purchase_id) {
-    // Completed Azure row within revocation window: Revoke button (issue
-    // #290). Only Azure supports direct in-app revocation; AWS and GCP have
-    // no cancel API so the button is suppressed for those providers.
+    // Revoke button (issue #290): completed Azure rows within the refund
+    // window, and scheduled rows on any provider before they fire (#924).
+    // Completed AWS and GCP rows have no cancel API, so they get no button.
     if (canRevokeCompletedRow(p)) {
       trailingActions.push(`<button type="button" class="btn-link history-revoke-btn" data-revoke-id="${escapeHtml(p.purchase_id)}" data-revoke-scheduled="${(p.status || '').toLowerCase() === 'scheduled'}">Revoke</button>`);
     }
     // Completed Standard RI rows (AWS): Cancel listing / Sell on Marketplace
-    // (issue #292). Mutually exclusive with revoke in practice (revoke is
-    // Azure-only, marketplace is AWS Standard-RI-only).
+    // (issue #292). Mutually exclusive with revoke in practice (revoke on a
+    // completed row is Azure-only, marketplace is AWS Standard-RI-only and
+    // never applies to a scheduled row).
     if (canCancelMarketplaceListing(p)) {
       trailingActions.push(`<button type="button" class="btn-link history-marketplace-cancel-btn" data-marketplace-cancel-id="${escapeHtml(p.purchase_id)}">Cancel listing ${escapeHtml(p.listing_id || '')}</button>`);
     } else if (canSellOnMarketplace(p)) {
@@ -1461,7 +1466,8 @@ function wireRowActionHandlers(container: HTMLElement): void {
   });
 
   // Wire the inline Revoke button on completed Azure rows within the
-  // free-cancel window (issue #290). quote -> confirmDialog -> POST -> reload.
+  // free-cancel window (issue #290) and on scheduled rows of any provider
+  // (#924). quote -> confirmDialog -> POST -> reload.
   // Completed rows fetch the Azure refund quote first so the user consents to
   // a concrete amount, which the backend re-checks before issuing the refund.
   // The backend is the security boundary; canRevokeCompletedRow is a
@@ -1482,12 +1488,14 @@ function wireRowActionHandlers(container: HTMLElement): void {
           return;
         }
       }
-      const refundLine = quote
-        ? `Azure will refund ${quote.refund_amount.toFixed(2)} ${quote.refund_currency}.`
-        : 'The scheduled purchase has not been submitted yet, so nothing will be charged.';
+      // A scheduled row has not reached any cloud yet, so its copy must not
+      // promise an Azure return: it may be an AWS or GCP purchase (#924).
+      const body = quote
+        ? `This will request an Azure reservation return. Azure will refund ${quote.refund_amount.toFixed(2)} ${quote.refund_currency}.`
+        : 'This will cancel the scheduled purchase. It has not been submitted yet, so nothing will be charged.';
       const ok = await confirmDialog({
         title: 'Revoke this purchase within the free-cancel window?',
-        body: `This will request an Azure reservation return. ${refundLine} This action cannot be undone.`,
+        body: `${body} This action cannot be undone.`,
         confirmLabel: 'Revoke purchase',
         destructive: true,
       });
