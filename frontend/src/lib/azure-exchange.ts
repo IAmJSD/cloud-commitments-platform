@@ -134,7 +134,10 @@ export function describeAzureExchangeError(error: unknown, phase: 'preview' | 'e
   const err = (error ?? {}) as ApiErrorLike;
   const msg = err.message || 'Unknown error';
   if (phase === 'execute' && isAzureExchangeOutcomeUnknown(error)) {
-    return `The exchange may have been submitted to Azure. Check the RI exchange history (or the Azure portal) before trying again. Details: ${msg}`;
+    // Point only at the Azure portal, as the backend's own 500 text does:
+    // direct Azure executions are audited in ri_exchange_direct_executions,
+    // which nothing serves, so the tab's history can never show them.
+    return `The exchange may have been submitted to Azure. Verify the reservation state in the Azure portal (the reservation order's history) before trying again; the RI exchange history here does not list Azure exchanges. Details: ${msg}`;
   }
   const what = phase === 'preview' ? 'Could not preview the exchange' : 'Exchange not executed';
   switch (err.status) {

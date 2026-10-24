@@ -12,6 +12,7 @@ jest.mock('../toast', () => ({ showToast: jest.fn() }));
 import * as api from '../api';
 import { canAccess, isRIExchanger } from '../permissions';
 import { confirmDialog } from '../confirmDialog';
+import { showToast } from '../toast';
 import { attachAzureExchangeToolbar, buildAzureSelectCell, canPreviewAzureExchange } from '../riexchange-azure';
 import { openAzureExchangeModal } from '../riexchange-azure-modal';
 import type { ExchangeableAzureRI } from '../api/types';
@@ -251,7 +252,7 @@ describe('openAzureExchangeModal', () => {
     executeBtn().click();
     await flush();
     await flush();
-    expect(statusText()).toBe(`The exchange may have been submitted to Azure. Check the RI exchange history (or the Azure portal) before trying again. Details: ${detail}`);
+    expect(statusText()).toBe(`The exchange may have been submitted to Azure. Verify the reservation state in the Azure portal (the reservation order's history) before trying again; the RI exchange history here does not list Azure exchanges. Details: ${detail}`);
     expect(onExecuted).toHaveBeenCalledTimes(1);
     expect(executeBtn().classList.contains('hidden')).toBe(true);
     expect($('.azure-exchange-guardrails').classList.contains('hidden')).toBe(true);
@@ -259,6 +260,66 @@ describe('openAzureExchangeModal', () => {
     executeBtn().click();
     await flush();
     expect(api.executeAzureExchange).toHaveBeenCalledTimes(1);
+  });
+
+  describe('when the modal is closed while execute is in flight', () => {
+    // Starts execute, closes the modal while the request is pending, then
+    // settles the request.
+    async function executeThenClose(settle: (resolve: (v: unknown) => void, reject: (e: unknown) => void) => void): Promise<void> {
+      let resolve!: (v: unknown) => void;
+      let reject!: (e: unknown) => void;
+      (api.executeAzureExchange as jest.Mock).mockReturnValue(new Promise((res, rej) => { resolve = res; reject = rej; }));
+      await openAndPreview();
+      setValue($<HTMLInputElement>('#azure-exchange-max-payment'), '150');
+      setValue($<HTMLInputElement>('#azure-exchange-currency'), 'USD');
+      executeBtn().click();
+      await flush();
+      expect(api.executeAzureExchange).toHaveBeenCalledTimes(1);
+      Array.from(document.querySelectorAll<HTMLButtonElement>('.modal-buttons button')).find(b => b.textContent === 'Cancel')!.click();
+      expect($('#ri-exchange-modal').classList.contains('hidden')).toBe(true);
+      expect(showToast).not.toHaveBeenCalled();
+      settle(resolve, reject);
+      await flush();
+      await flush();
+    }
+
+    it('shows a success as a toast', async () => {
+      await executeThenClose(ok => ok({ session_id: 's2', status: 'Succeeded', net_payable: 118, net_payable_currency: 'USD', refunds_total: 780.25, purchases_total: 898.25 }));
+      expect(onExecuted).toHaveBeenCalledTimes(1);
+      expect(showToast).toHaveBeenCalledTimes(1);
+      expect(showToast).toHaveBeenCalledWith({ message: expect.stringMatching(/^Exchange Succeeded\. Net payable USD 118\.00.*Session s2\.$/), kind: 'success' });
+    });
+
+    it('shows a 4xx refusal as an error toast', async () => {
+      await executeThenClose((_ok, fail) => fail(Object.assign(new Error('quoted net payable 160.00 USD exceeds max_payment_due 150.00 USD'), { status: 422 })));
+      expect(onExecuted).not.toHaveBeenCalled();
+      expect(showToast).toHaveBeenCalledWith({
+        message: 'Exchange blocked by a safety check: quoted net payable 160.00 USD exceeds max_payment_due 150.00 USD. Raise the maximum payment or change the targets, then preview again.',
+        kind: 'error',
+      });
+    });
+
+    it('shows an unknown outcome as a sticky warning toast', async () => {
+      await executeThenClose((_ok, fail) => fail(Object.assign(new Error('HTTP 504'), { status: 504 })));
+      expect(onExecuted).toHaveBeenCalledTimes(1);
+      expect(showToast).toHaveBeenCalledWith({
+        message: expect.stringMatching(/^The exchange may have been submitted to Azure\. Verify the reservation state in the Azure portal.*Details: HTTP 504$/),
+        kind: 'warning',
+        timeout: null,
+      });
+    });
+  });
+
+  it('does not toast the outcome while the modal is open', async () => {
+    (api.executeAzureExchange as jest.Mock).mockRejectedValue(Object.assign(new Error('HTTP 504'), { status: 504 }));
+    await openAndPreview();
+    setValue($<HTMLInputElement>('#azure-exchange-max-payment'), '150');
+    setValue($<HTMLInputElement>('#azure-exchange-currency'), 'USD');
+    executeBtn().click();
+    await flush();
+    await flush();
+    expect(statusText()).toMatch(/^The exchange may have been submitted/);
+    expect(showToast).not.toHaveBeenCalled();
   });
 
   it('previews but hides Execute without execute:ri-exchange', async () => {

@@ -111,7 +111,7 @@ describe('describeAzureExchangeError', () => {
   // The backend records any non-4xx execute failure as outcome unknown
   // (directExchangeFailureStatus): Azure may already have the exchange.
   const unknownOutcome = (detail: string) =>
-    `The exchange may have been submitted to Azure. Check the RI exchange history (or the Azure portal) before trying again. Details: ${detail}`;
+    `The exchange may have been submitted to Azure. Verify the reservation state in the Azure portal (the reservation order's history) before trying again; the RI exchange history here does not list Azure exchanges. Details: ${detail}`;
   it.each([
     ['a 500', e(500, 'exchange execution failed and may already have been submitted to Azure; verify the reservation state in the Azure portal before retrying'),
       'exchange execution failed and may already have been submitted to Azure; verify the reservation state in the Azure portal before retrying'],

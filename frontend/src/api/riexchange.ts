@@ -60,6 +60,14 @@ export async function getAzureCompatibleOfferings(req: AzureCompatibleOfferingsR
 }
 
 /**
+ * Client timeout for executeAzureExchange. The backend runs the submit and
+ * its long-running-operation poll on a detached 4-minute budget
+ * (riExchangeExecutionTimeout), so the default 90s timeout would report many
+ * slow but successful exchanges as an unknown outcome.
+ */
+const AZURE_EXCHANGE_EXECUTE_TIMEOUT_MS = 5 * 60_000;
+
+/**
  * Execute an Azure RI exchange (issue #81). The backend re-quotes and refuses
  * with a 422 when the fresh quote has policy errors, no net payable, another
  * currency, or a net payable above max_payment_due.
@@ -68,6 +76,7 @@ export async function executeAzureExchange(req: AzureExecuteExchangeRequest): Pr
   return apiRequest<AzureExecuteExchangeResponse>('/ri-exchange/azure-instances/exchange', {
     method: 'POST',
     body: JSON.stringify(req),
+    timeoutMs: AZURE_EXCHANGE_EXECUTE_TIMEOUT_MS,
   });
 }
 

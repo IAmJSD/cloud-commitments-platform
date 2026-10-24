@@ -13,6 +13,7 @@ import * as api from './api';
 import type { AzureCompatibleOfferingsResponse, AzureExecuteExchangeRequest, ExchangeableAzureRI } from './api';
 import { openModal, closeModal } from './modal';
 import { confirmDialog } from './confirmDialog';
+import { showToast } from './toast';
 import { isRIExchanger } from './permissions';
 import {
   AZURE_EXCHANGE_TERMS, MAX_AZURE_EXCHANGE_ITEMS, azureTermLabel, describeAzureExchangeError, formatAzureAmount,
@@ -343,16 +344,26 @@ export function openAzureExchangeModal(sources: readonly ExchangeableAzureRI[], 
       setMessage(statusBox, 'Executing exchange...', 'loading');
       const result = await api.executeAzureExchange(req);
       onExecuted();
-      if (!sessionOpen) return;
-      setMessage(statusBox, `Exchange ${result.status || 'submitted'}. Net payable ${formatAzureAmount(result.net_payable, result.net_payable_currency)}; refunds ${formatAzureAmount(result.refunds_total, result.net_payable_currency)}; purchases ${formatAzureAmount(result.purchases_total, result.net_payable_currency)}. Session ${result.session_id}.`, 'success-message');
+      const done = `Exchange ${result.status || 'submitted'}. Net payable ${formatAzureAmount(result.net_payable, result.net_payable_currency)}; refunds ${formatAzureAmount(result.refunds_total, result.net_payable_currency)}; purchases ${formatAzureAmount(result.purchases_total, result.net_payable_currency)}. Session ${result.session_id}.`;
+      // Closed mid-execute: the outcome still has to reach the user.
+      if (!sessionOpen) {
+        showToast({ message: done, kind: 'success' });
+        return;
+      }
+      setMessage(statusBox, done, 'success-message');
       retirePreview();
     } catch (error) {
       // An unknown outcome may still commit at Azure: refresh the list and
       // history, and retire this preview so a retry needs a fresh one.
       const unknown = isAzureExchangeOutcomeUnknown(error);
       if (unknown) onExecuted();
-      if (!sessionOpen) return;
-      setMessage(statusBox, describeAzureExchangeError(error, 'execute'), 'error');
+      const text = describeAzureExchangeError(error, 'execute');
+      if (!sessionOpen) {
+        // An unknown outcome stays until dismissed: it may mean money moved.
+        showToast(unknown ? { message: text, kind: 'warning', timeout: null } : { message: text, kind: 'error' });
+        return;
+      }
+      setMessage(statusBox, text, 'error');
       if (unknown) retirePreview();
     } finally {
       executeBtn.disabled = false;
