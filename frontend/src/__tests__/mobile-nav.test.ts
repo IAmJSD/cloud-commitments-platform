@@ -5,7 +5,7 @@
  * aria-expanded toggle, focus management, body scroll-lock class.
  */
 
-import { setupMobileNav, syncHeaderPlacement } from '../app';
+import { setupMobileNav, syncHeaderPlacement } from '../nav/mobile-nav';
 
 function buildDOM(): void {
   document.body.innerHTML = `
@@ -187,6 +187,29 @@ describe('setupMobileNav', () => {
   test('no-op when sidebar element is missing from DOM', () => {
     document.getElementById('sidebar')!.remove();
     expect(() => setupMobileNav()).not.toThrow();
+  });
+
+  test('returns null when there is nothing to wire', () => {
+    document.getElementById('hamburger-btn')!.remove();
+    expect(setupMobileNav()).toBeNull();
+  });
+
+  test('returned handle drives the same open/close transitions as the hamburger', () => {
+    const nav = setupMobileNav();
+    expect(nav).not.toBeNull();
+    expect(nav!.isOpen()).toBe(false);
+
+    nav!.open();
+    expect(nav!.isOpen()).toBe(true);
+    expect(hamburger().getAttribute('aria-expanded')).toBe('true');
+    expect(sidebar().hasAttribute('inert')).toBe(false);
+    expect(document.activeElement).toBe(sidebar().querySelector('.tab-btn'));
+
+    nav!.close();
+    expect(nav!.isOpen()).toBe(false);
+    expect(hamburger().getAttribute('aria-expanded')).toBe('false');
+    expect(sidebar().hasAttribute('inert')).toBe(true);
+    expect(document.activeElement).toBe(hamburger());
   });
 });
 
