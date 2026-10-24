@@ -21,6 +21,7 @@ import {
   isServiceFilterError,
 } from './serviceFilters';
 import { initLadderingSettings } from './ladder';
+import { canonicalizeServiceConfigs, legacySettingsServiceTarget } from './lib/settings-service-ids';
 import { buildLastUpdatedStamp } from './lib/last-updated';
 
 /**
@@ -134,14 +135,16 @@ const SERVICE_FIELDS = [
   { provider: 'aws', service: 'savings-plans-ec2instance', termId: 'aws-savings-plans-ec2instance-term', paymentId: 'aws-savings-plans-ec2instance-payment', coverageId: 'aws-savings-plans-ec2instance-coverage', enabledId: 'aws-savings-plans-ec2instance-enabled' },
   { provider: 'aws', service: 'savings-plans-sagemaker',   termId: 'aws-savings-plans-sagemaker-term',   paymentId: 'aws-savings-plans-sagemaker-payment',   coverageId: 'aws-savings-plans-sagemaker-coverage',   enabledId: 'aws-savings-plans-sagemaker-enabled' },
   { provider: 'aws', service: 'savings-plans-database',    termId: 'aws-savings-plans-database-term',    paymentId: 'aws-savings-plans-database-payment',    coverageId: 'aws-savings-plans-database-coverage',    enabledId: 'aws-savings-plans-database-enabled' },
-  { provider: 'azure', service: 'vm',         termId: 'azure-vm-term',         paymentId: 'azure-vm-payment' },
-  { provider: 'azure', service: 'sql',        termId: 'azure-sql-term',        paymentId: 'azure-sql-payment' },
-  { provider: 'azure', service: 'cosmosdb',   termId: 'azure-cosmosdb-term',   paymentId: 'azure-cosmosdb-payment' },
-  { provider: 'azure', service: 'redis',      termId: 'azure-redis-term',      paymentId: 'azure-redis-payment' },
-  { provider: 'azure', service: 'search',     termId: 'azure-search-term',     paymentId: 'azure-search-payment' },
-  { provider: 'gcp',   service: 'compute',    termId: 'gcp-compute-term',      paymentId: null },
-  { provider: 'gcp',   service: 'sql',        termId: 'gcp-sql-term',          paymentId: null },
-  { provider: 'gcp',   service: 'memorystore',termId: 'gcp-memorystore-term',  paymentId: null },
+  // Issue #613: Azure/GCP rows use the service ids recommendations carry
+  // (lib/settings-service-ids.ts); the card DOM ids keep their old names.
+  { provider: 'azure', service: 'compute',       termId: 'azure-vm-term',         paymentId: 'azure-vm-payment' },
+  { provider: 'azure', service: 'relational-db', termId: 'azure-sql-term',        paymentId: 'azure-sql-payment' },
+  { provider: 'azure', service: 'nosql',         termId: 'azure-cosmosdb-term',   paymentId: 'azure-cosmosdb-payment' },
+  { provider: 'azure', service: 'cache',         termId: 'azure-redis-term',      paymentId: 'azure-redis-payment' },
+  { provider: 'azure', service: 'search',        termId: 'azure-search-term',     paymentId: 'azure-search-payment' },
+  { provider: 'gcp',   service: 'compute',       termId: 'gcp-compute-term',      paymentId: null },
+  { provider: 'gcp',   service: 'relational-db', termId: 'gcp-sql-term',          paymentId: null },
+  { provider: 'gcp',   service: 'cache',         termId: 'gcp-memorystore-term',  paymentId: null },
 ] as const;
 
 // Fields that are persisted to the backend via saveGlobalSettings.
@@ -699,18 +702,20 @@ const AWS_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
 
 // Human-readable labels for Azure and GCP services used in the override
 // service dropdown. AWS labels are carried by AWS_OVERRIDE_SERVICES above.
+// Values are the service ids recommendations carry (issue #613), the same
+// ones SERVICE_FIELDS writes.
 const AZURE_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'vm',        label: 'Virtual Machines' },
-  { value: 'sql',       label: 'SQL Database' },
-  { value: 'cosmosdb',  label: 'Cosmos DB' },
-  { value: 'redis',     label: 'Cache for Redis' },
-  { value: 'search',    label: 'AI Search' },
+  { value: 'compute',       label: 'Virtual Machines' },
+  { value: 'relational-db', label: 'SQL Database' },
+  { value: 'nosql',         label: 'Cosmos DB' },
+  { value: 'cache',         label: 'Cache for Redis' },
+  { value: 'search',        label: 'AI Search' },
 ];
 
 const GCP_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'compute',     label: 'Compute Engine' },
-  { value: 'sql',         label: 'Cloud SQL' },
-  { value: 'memorystore', label: 'Memorystore' },
+  { value: 'compute',       label: 'Compute Engine' },
+  { value: 'relational-db', label: 'Cloud SQL' },
+  { value: 'cache',         label: 'Memorystore' },
 ];
 
 /** Return the service list for the given provider's override modal. */
@@ -1192,6 +1197,17 @@ function closeAccountOverridesModal(): void {
   closeOverrideModal();
 }
 
+// Issue #613: overrides saved under an old Azure/GCP service id never match a
+// recommendation. Say so on the row and name the id to re-create it under.
+function appendLegacyOverrideHint(cell: HTMLElement, o: api.AccountServiceOverride): void {
+  const target = legacySettingsServiceTarget(o.provider, o.service);
+  if (target === null) return;
+  const hint = document.createElement('div');
+  hint.className = 'help-text override-legacy-hint';
+  hint.textContent = `Old service id: never applied. Re-create it as ${o.provider}/${target}, then delete this row.`;
+  cell.appendChild(hint);
+}
+
 export async function loadOverridesPanel(accountId: string, panel: HTMLElement, provider: AccountProvider): Promise<void> {
   panel.textContent = 'Loading\u2026';
   try {
@@ -1263,6 +1279,8 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
       // the column order users learned (#110) stays put.
       const stamp = buildLastUpdatedStamp(o.updated_at);
       if (stamp) serviceTd.append(stamp);
+      // Old Azure/GCP service id (#613): warn below the stamp.
+      appendLegacyOverrideHint(serviceTd, o);
 
       // Term cell: editable <select> for all providers (issue #109 extends
       // the AWS-only #110 inline editing to Azure/GCP).
@@ -2860,16 +2878,16 @@ const SERVICE_DISPLAY_NAMES: Record<string, Record<string, string>> = {
     'savings-plans-database': 'Database Savings Plans',
   },
   azure: {
-    'vm': 'Virtual Machine Reservations',
-    'sql': 'SQL Database Reservations',
-    'cosmosdb': 'CosmosDB Reservations',
-    'redis': 'Redis Cache Reservations',
+    'compute': 'Virtual Machine Reservations',
+    'relational-db': 'SQL Database Reservations',
+    'nosql': 'CosmosDB Reservations',
+    'cache': 'Redis Cache Reservations',
     'search': 'Cognitive Search Reservations',
   },
   gcp: {
     'compute': 'Compute Engine CUDs',
-    'sql': 'Cloud SQL CUDs',
-    'memorystore': 'Memorystore CUDs',
+    'relational-db': 'Cloud SQL CUDs',
+    'cache': 'Memorystore CUDs',
   },
 };
 
@@ -3126,13 +3144,19 @@ export async function loadGlobalSettings(): Promise<void> {
       void initLadderingSettings(data.global.laddering_enabled ?? false);
     }
 
-    const services = data.services ?? [];
+    // Issue #613: rows saved under the old Azure/GCP ids (azure/vm, gcp/sql,
+    // ...) are shown on their card and re-saved under the current id, which
+    // is the only one the scheduler and purchase flow match. The card DOM ids
+    // still use the old names, so look them up through SERVICE_FIELDS rather
+    // than deriving them from the row's service id.
+    const services = canonicalizeServiceConfigs(data.services ?? []);
     loadedServiceConfigs = services;
     for (const svc of services) {
-      const key = `${svc.provider}-${svc.service}`;
-      const termEl = document.getElementById(`${key}-term`) as HTMLSelectElement | null;
+      const field = SERVICE_FIELDS.find(f => f.provider === svc.provider && f.service === svc.service);
+      if (!field) continue;
+      const termEl = document.getElementById(field.termId) as HTMLSelectElement | null;
       if (termEl) termEl.value = String(svc.term);
-      const paymentEl = document.getElementById(`${key}-payment`) as HTMLSelectElement | null;
+      const paymentEl = field.paymentId ? document.getElementById(field.paymentId) as HTMLSelectElement | null : null;
       if (paymentEl) paymentEl.value = normalizePaymentValue(svc.payment, svc.provider);
     }
 
