@@ -13,8 +13,10 @@ import {
   showSkeletonTiles,
   showSkeletonRows,
   showSkeletonBlock,
+  showSkeletonText,
   teardownSkeleton,
   isSkeletonActive,
+  SKELETON_SLOW_MS,
 } from '../lib/skeleton';
 
 describe('skeleton primitives', () => {
@@ -171,5 +173,83 @@ describe('skeleton show / teardown lifecycle', () => {
 
     expect(container.querySelector('canvas')).toBeNull();
     expect(container.querySelectorAll('.skeleton')).toHaveLength(1);
+  });
+});
+
+describe('consistent loading pattern + slow fallback (issue #186)', () => {
+  let container: HTMLElement;
+  beforeEach(() => {
+    jest.useFakeTimers();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+  });
+  afterEach(() => {
+    jest.useRealTimers();
+    container.remove();
+  });
+
+  const slowNote = (): HTMLElement | null => container.querySelector('.skeleton-slow-note');
+
+  test('showSkeletonText renders N shimmer lines and marks active', () => {
+    showSkeletonText(container, 4);
+    expect(container.querySelectorAll('.skeleton-group .skeleton')).toHaveLength(4);
+    expect(isSkeletonActive(container)).toBe(true);
+  });
+
+  test.each([
+    ['tiles', (c: HTMLElement) => showSkeletonTiles(c, 2)],
+    ['rows', (c: HTMLElement) => showSkeletonRows(c, 2, 2)],
+    ['block', (c: HTMLElement) => showSkeletonBlock(c, '1px', '1px')],
+    ['text', (c: HTMLElement) => showSkeletonText(c, 2)],
+  ])('%s skeleton carries one screen-reader "Loading…" status', (_name, show) => {
+    show(container);
+    show(container);
+    const status = container.querySelectorAll('.skeleton-status');
+    expect(status).toHaveLength(1);
+    expect(status[0]!.getAttribute('role')).toBe('status');
+    expect(status[0]!.classList.contains('sr-only')).toBe(true);
+    expect(status[0]!.textContent).toBe('Loading…');
+  });
+
+  test('a skeleton still showing after the threshold gets a "Still loading" note', () => {
+    showSkeletonRows(container, 3, 3);
+    jest.advanceTimersByTime(SKELETON_SLOW_MS - 1);
+    expect(slowNote()).toBeNull();
+    jest.advanceTimersByTime(1);
+    expect(slowNote()!.textContent).toBe('Still loading. This is taking longer than usual.');
+    expect(slowNote()!.getAttribute('role')).toBe('status');
+    // The shimmer stays; the note is added, not swapped in.
+    expect(container.querySelectorAll('tr.skeleton-row')).toHaveLength(3);
+  });
+
+  test('no note when the real content replaced the skeleton (innerHTML handoff)', () => {
+    showSkeletonRows(container, 3, 3);
+    container.innerHTML = '<table><tbody><tr><td>real</td></tr></tbody></table>';
+    jest.advanceTimersByTime(SKELETON_SLOW_MS);
+    expect(slowNote()).toBeNull();
+  });
+
+  test('no note after teardownSkeleton (error path)', () => {
+    showSkeletonText(container, 2);
+    teardownSkeleton(container);
+    jest.advanceTimersByTime(SKELETON_SLOW_MS);
+    expect(slowNote()).toBeNull();
+  });
+
+  test('no note for a skeleton inside a hidden panel', () => {
+    container.classList.add('hidden');
+    showSkeletonText(container, 2);
+    jest.advanceTimersByTime(SKELETON_SLOW_MS);
+    expect(slowNote()).toBeNull();
+  });
+
+  test('re-showing restarts the clock and never stacks notes', () => {
+    showSkeletonTiles(container, 2);
+    jest.advanceTimersByTime(SKELETON_SLOW_MS - 1000);
+    showSkeletonTiles(container, 2);
+    jest.advanceTimersByTime(SKELETON_SLOW_MS - 1000);
+    expect(slowNote()).toBeNull();
+    jest.advanceTimersByTime(1000);
+    expect(container.querySelectorAll('.skeleton-slow-note')).toHaveLength(1);
   });
 });

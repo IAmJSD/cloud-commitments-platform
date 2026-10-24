@@ -147,3 +147,18 @@ describe('loadAutomationSettings: graceful degradation on permission errors (iss
     },
   );
 });
+
+describe('loadAutomationSettings loading state (issue #186)', () => {
+  test('shows the shared skeleton, not a "Loading settings..." paragraph', async () => {
+    setupContainer();
+    let resolve: (v: unknown) => void = () => undefined;
+    (api.getRIExchangeConfig as jest.Mock).mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+    const pending = loadAutomationSettings();
+    const container = document.getElementById('ri-exchange-automation-settings')!;
+    expect(container.querySelector('.skeleton')).not.toBeNull();
+    expect(container.querySelector('p.loading')).toBeNull();
+    expect(container.textContent).not.toContain('Loading settings...');
+    resolve(null);
+    await pending.catch(() => undefined);
+  });
+});
