@@ -19,6 +19,7 @@ import { openEditUserModal, deleteUser, refreshCurrentUserAccess } from './userA
 import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 import { confirmDialog } from '../confirmDialog';
 import { getCurrentUser } from '../state';
+import { createIcon, iconSvg } from '../icons';
 
 // Placeholder row id withCurrentUser prepends when the API omits the caller.
 const SYNTHETIC_USER_ID = 'current';
@@ -104,7 +105,7 @@ export function renderUsers(users: APIUser[]): void {
               <input type="checkbox" class="user-checkbox" data-user-id="${escapeHtml(user.id)}" aria-label="Select ${escapeHtml(user.email)}" ${selectedUserIds.has(user.id) ? 'checked' : ''} ${user.id === SYNTHETIC_USER_ID ? 'disabled' : ''}>
             </td>
             <td>
-              <button class="btn-small btn-icon user-expand-btn" data-user-id="${escapeHtml(user.id)}" title="Expand" aria-label="Expand user ${escapeHtml(user.email)}" aria-expanded="false">&#x25B8;</button>
+              <button class="btn-small btn-icon user-expand-btn" data-user-id="${escapeHtml(user.id)}" title="Expand" aria-label="Expand user ${escapeHtml(user.email)}" aria-expanded="false">${iconSvg('chevron-right')}</button>
             </td>
             <td>
               <div class="user-email">
@@ -125,9 +126,9 @@ export function renderUsers(users: APIUser[]): void {
             <td><span class="text-muted">${user.created_at ? formatDate(user.created_at) : '-'}</span></td>
             <td><span class="text-muted">${user.last_login ? formatRelativeTime(user.last_login) : 'Never'}</span></td>
             <td>
-              <div class="action-buttons">
-                <button class="btn-small edit-user-btn" data-user-id="${escapeHtml(user.id)}" ${user.id === SYNTHETIC_USER_ID ? 'disabled' : ''} aria-label="Edit user ${escapeHtml(user.email)}">Edit</button>
-                <button class="btn-small btn-danger delete-user-btn" data-user-id="${escapeHtml(user.id)}" ${user.id === SYNTHETIC_USER_ID ? 'disabled' : ''} aria-label="Delete user ${escapeHtml(user.email)}">Delete</button>
+              <div class="action-buttons row-actions">
+                <button class="btn-small icon-btn edit-user-btn" data-user-id="${escapeHtml(user.id)}" ${user.id === SYNTHETIC_USER_ID ? 'disabled' : ''} aria-label="Edit user ${escapeHtml(user.email)}" title="Edit user">${iconSvg('edit')}</button>
+                <button class="btn-small btn-danger icon-btn delete-user-btn" data-user-id="${escapeHtml(user.id)}" ${user.id === SYNTHETIC_USER_ID ? 'disabled' : ''} aria-label="Delete user ${escapeHtml(user.email)}" title="Delete user">${iconSvg('trash-2')}</button>
               </div>
             </td>
           </tr>
@@ -439,11 +440,11 @@ function setupUserTableListeners(): void {
         if (user) panel.innerHTML = renderUserExpandPanel(user);
         expandRow.classList.remove('hidden');
         btn.setAttribute('aria-expanded', 'true');
-        btn.textContent = '\u25BE'; // ▾ down-pointing triangle
+        btn.replaceChildren(createIcon('chevron-down'));
       } else {
         expandRow.classList.add('hidden');
         btn.setAttribute('aria-expanded', 'false');
-        btn.textContent = '\u25B8'; // ▸ right-pointing triangle
+        btn.replaceChildren(createIcon('chevron-right'));
       }
     });
   });

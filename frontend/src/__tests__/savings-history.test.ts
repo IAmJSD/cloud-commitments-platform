@@ -171,6 +171,42 @@ describe('Savings History Module', () => {
       expect(Chart).toHaveBeenCalled();
     });
 
+    // #744: the canvas gets a value summary and a "View as table" disclosure
+    // placed after (not inside) the chart's sizing container.
+    test('adds a summary label and a data table for the plotted points (#744)', async () => {
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue({
+        summary: { total_period_savings: 25, total_upfront_spent: 0, purchase_count: 2, average_savings_per_period: 12.5, peak_savings: 15 },
+        data_points: [
+          { timestamp: '2024-01-01T00:00:00Z', total_savings: 10, cumulative_savings: 10, total_upfront: 0, purchase_count: 1 },
+          { timestamp: '2024-01-02T00:00:00Z', total_savings: 15, cumulative_savings: 25, total_upfront: 0, purchase_count: 1 },
+        ],
+      });
+
+      await loadSavingsHistory();
+
+      const canvas = document.getElementById('savings-history-chart');
+      expect(canvas?.getAttribute('aria-label')).toContain('2 data points');
+      expect(canvas?.getAttribute('aria-label')).toContain('$25.00');
+      const table = document.getElementById('savings-history-table');
+      expect(document.getElementById('savings-history-container')?.nextElementSibling).toBe(table);
+      const headers = Array.from(table?.querySelectorAll('thead th') ?? []).map((th) => th.textContent);
+      expect(headers).toEqual(['Date', 'Period savings (/mo)', 'Cumulative savings']);
+      const last = Array.from(table?.querySelectorAll('tbody tr') ?? []).pop();
+      expect(Array.from(last?.querySelectorAll('td') ?? []).map((td) => td.textContent)).toEqual(['$15.00', '$25.00']);
+    });
+
+    test('removes the data table when the chart is replaced by the empty state (#744)', async () => {
+      (getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({
+        data_points: [{ timestamp: '2024-01-01T00:00:00Z', total_savings: 10, cumulative_savings: 10, total_upfront: 0, purchase_count: 1 }],
+      });
+      await loadSavingsHistory();
+      expect(document.getElementById('savings-history-table')).not.toBeNull();
+
+      (getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: [] });
+      await loadSavingsHistory();
+      expect(document.getElementById('savings-history-table')).toBeNull();
+    });
+
     test('shows empty state when no data points', async () => {
       (getSavingsAnalytics as jest.Mock).mockResolvedValue({
         data_points: []

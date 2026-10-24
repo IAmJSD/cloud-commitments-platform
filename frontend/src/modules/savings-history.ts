@@ -7,12 +7,15 @@ import { getSavingsAnalytics, type SavingsAnalyticsResponse, type SavingsDataPoi
 import * as state from '../state';
 import { formatTrendAxisTick } from './chart-utils';
 import { formatCompactCurrency, formatCurrency } from '../utils';
+import { setChartSummary, renderChartTable, removeChartTable } from '../lib/chart-a11y';
 
 // Register Chart.js components
 Chart.register(...registerables);
 
 // Chart instance
 let savingsChart: Chart | null = null;
+// Id of the chart's "View as table" text alternative (#744).
+const SAVINGS_HISTORY_TABLE_ID = 'savings-history-table';
 
 // Canonical unit the API returns for per-bucket and summary values.
 // estimated_savings in purchase_history is the monthly savings figure
@@ -156,6 +159,7 @@ function showEmptyState(
     filterDesc: string = '',
 ): void {
     if (chartContainer) chartContainer.classList.add('hidden');
+    removeChartTable(SAVINGS_HISTORY_TABLE_ID);
     if (emptyEl) {
         emptyEl.classList.remove('hidden');
         // Update the copy inside the empty-state element so the message
@@ -197,6 +201,7 @@ function showErrorState(
     message: string,
 ): void {
     if (chartContainer) chartContainer.classList.add('hidden');
+    removeChartTable(SAVINGS_HISTORY_TABLE_ID);
     if (statsEl) statsEl.classList.add('hidden');
     if (emptyEl) {
         emptyEl.classList.remove('hidden');
@@ -422,6 +427,27 @@ function renderSavingsChart(
             borderWidth: 1,
             maxBarThickness: 24,
         };
+
+    // #744: a value summary for the role="img" canvas plus every point as a
+    // table. The table goes after the sizing container, not inside it.
+    // Merged with #749: the summary names the series currently drawn, and the
+    // table keeps both columns (period in the chosen unit, running total)
+    // whichever series the chart shows, so no value is hidden by the toggle.
+    const latest = dataPoints[dataPoints.length - 1];
+    setChartSummary(ctx,
+        `${cumulative ? 'Line chart of cumulative savings' : 'Bar chart of savings per period'}: `
+        + `${dataPoints.length} data point${dataPoints.length === 1 ? '' : 's'}, `
+        + `cumulative savings ${formatCurrency(latest?.cumulative_savings ?? 0, '$', 2)} at the latest point. `
+        + 'Values are in the table below the chart.');
+    renderChartTable(ctx.parentElement ?? ctx, SAVINGS_HISTORY_TABLE_ID, {
+        caption: 'Savings history',
+        columns: ['Date', `Period savings (${unitSuffix(unit)})`, 'Cumulative savings'],
+        rows: dataPoints.map((dp) => [
+            formatTrendAxisTick(new Date(dp.timestamp).getTime(), tickIntervalHint),
+            formatCurrency(convertFromMonthly(dp.total_savings ?? 0, unit), '$', 2),
+            formatCurrency(dp.cumulative_savings ?? 0, '$', 2),
+        ]),
+    });
 
     savingsChart = new Chart(ctx, {
         type: cumulative ? 'line' : 'bar',
