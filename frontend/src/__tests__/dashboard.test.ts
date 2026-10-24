@@ -997,7 +997,7 @@ describe('Dashboard Module', () => {
       const bAll = document.createElement('button');
       bAll.className = 'trend-range';
       bAll.dataset['range'] = 'all';
-      bAll.textContent = 'All';
+      bAll.textContent = '1y'; // labeled 1y since #52; data-range stays 'all'
       document.body.appendChild(bAll);
       setupSavingsTrendHandlers();
       // Override the beforeEach default of empty data_points so the chart
