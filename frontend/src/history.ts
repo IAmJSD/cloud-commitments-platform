@@ -11,6 +11,12 @@ import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
 import { approvalDetailsUnavailableMessage, buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
+import {
+  historyTruncationMessage,
+  mergeHistoryPages,
+  nextHistoryCursor,
+  renderLoadMoreControl,
+} from './history-paging';
 import { renderApprovalQueueLink, wireApprovalQueueLinks } from './history-queue-link';
 import { getCurrentUser } from './state';
 import { canAccess } from './permissions';
@@ -49,6 +55,15 @@ let lastPurchases: HistoryPurchase[] = [];
 const busyHistoryExecutions = new Set<string>();
 let historyMutationEpoch = 0;
 let activeStatusFilter: StatusFilter = 'all';
+
+// Load more paging (issue #676). historyLoadGeneration is bumped by every
+// first-page load, so a Load more response that lands after the user changed
+// a filter (or after a mutation reload) is dropped instead of being appended
+// to the new result set. historyPaging holds the filters of the first page and
+// the cursor of the last page loaded; null when there is nothing more to load.
+let historyLoadGeneration = 0;
+let historyPaging: { filters: api.HistoryFilters; cursor: string } | null = null;
+let loadMoreInFlight = false;
 
 // _fourEyesMode mirrors GlobalConfig.require_different_approver (issue #1005).
 // Gates the inline Approve button so a creator can't approve their own pending
@@ -172,6 +187,7 @@ export function applyExecutionDeepLink(): boolean {
  * + Load History button — those stay here.
  */
 export function setupHistoryHandlers(): void {
+  document.getElementById('history-load-more-btn')?.addEventListener('click', () => void loadMoreHistory());
   state.subscribeProvider(() => void loadHistory());
   state.subscribeAccount(() => void loadHistory());
   // Re-render both tables when the amortize toggle flips (issue #1112).
@@ -262,6 +278,7 @@ export function initHistoryDateRange(): void {
  */
 export async function viewPlanHistory(planId: string): Promise<void> {
   const requestEpoch = historyMutationEpoch;
+  resetHistoryPaging();
   // skipDefaultLoad: the tab's own unscoped 7-day fetch would land after the
   // plan-scoped one below and overwrite it, and its date-range seeding is
   // exactly what the doc comment above says not to do here.
@@ -271,8 +288,10 @@ export async function viewPlanHistory(planId: string): Promise<void> {
   if (!canAccess('view', 'purchases')) return;
 
   try {
+    const filters: api.HistoryFilters = { planId };
+    const generation = historyLoadGeneration;
     const [data] = await Promise.all([
-      api.getHistory({ planId }) as unknown as Promise<HistoryResponse>,
+      api.getHistory(filters) as unknown as Promise<HistoryResponse>,
       refreshFourEyesMode(),
     ]);
     if (requestEpoch !== historyMutationEpoch) return;
@@ -282,6 +301,7 @@ export async function viewPlanHistory(planId: string): Promise<void> {
     renderApprovalQueue(purchases);
     renderHistoryList(purchases);
     snapDateInputsToPurchases(purchases);
+    updateHistoryPaging(generation, filters, data);
   } catch (error) {
     if (requestEpoch !== historyMutationEpoch) return;
     console.error('Failed to load plan history:', error);
@@ -327,6 +347,8 @@ function snapDateInputsToPurchases(purchases: HistoryPurchase[]): void {
  */
 export async function loadHistory(): Promise<void> {
   const requestEpoch = historyMutationEpoch;
+  resetHistoryPaging();
+  const generation = historyLoadGeneration;
   // Issue #344 T3: skeleton rows for the purchase-history table. 8
   // rows matches the typical first-page row count so the skeleton
   // doesn't shrink dramatically when real data arrives. Column count
@@ -385,6 +407,7 @@ export async function loadHistory(): Promise<void> {
     const purchases = data.purchases || [];
     renderApprovalQueue(purchases);
     renderHistoryList(purchases);
+    updateHistoryPaging(generation, filters, data);
   } catch (error) {
     if (requestEpoch !== historyMutationEpoch) return;
     console.error('Failed to load history:', error);
@@ -404,19 +427,75 @@ export async function loadHistory(): Promise<void> {
 }
 
 /**
+ * Forget the previous result set's cursor and hide Load more. Called at the
+ * start of every first-page load; bumping the generation also invalidates a
+ * Load more request still in flight for the previous result set.
+ */
+function resetHistoryPaging(): void {
+  historyLoadGeneration++;
+  historyPaging = null;
+  renderLoadMoreControl(false);
+}
+
+/** Remember where the next page starts and show Load more when there is one. */
+function updateHistoryPaging(generation: number, filters: api.HistoryFilters, data: HistoryResponse): void {
+  if (generation !== historyLoadGeneration) return;
+  const cursor = nextHistoryCursor(data);
+  historyPaging = cursor ? { filters, cursor } : null;
+  renderLoadMoreControl(historyPaging !== null);
+}
+
+/**
+ * Fetch the page after the last one loaded, with the first page's filters,
+ * and append it (issue #676). Both tables re-render from every loaded row, so
+ * the Approval Queue is built from all loaded pages. The summary cards keep
+ * the first page's totals: a later page's summary covers only that page on
+ * servers without whole-scope totals (#675).
+ */
+export async function loadMoreHistory(): Promise<void> {
+  const paging = historyPaging;
+  if (!paging || loadMoreInFlight) return;
+  const generation = historyLoadGeneration;
+  const requestEpoch = historyMutationEpoch;
+  loadMoreInFlight = true;
+  renderLoadMoreControl(true, true);
+  try {
+    const data = await (api.getHistory({ ...paging.filters, cursor: paging.cursor }) as unknown as Promise<HistoryResponse>);
+    if (generation !== historyLoadGeneration) return;
+    // A mutation landed mid-flight and its reload will replace the rows; keep
+    // the cursor so the button still works if that reload has not started.
+    if (requestEpoch !== historyMutationEpoch) {
+      renderLoadMoreControl(true);
+      return;
+    }
+    const purchases = mergeHistoryPages(lastPurchases, data.purchases || []);
+    renderTruncationNotices(data);
+    renderApprovalQueue(purchases);
+    renderHistoryList(purchases);
+    updateHistoryPaging(generation, paging.filters, data);
+  } catch (error) {
+    if (generation !== historyLoadGeneration) return;
+    console.error('Failed to load more history:', error);
+    showToast({ message: `Failed to load more history: ${(error as Error).message}`, kind: 'error' });
+    renderLoadMoreControl(true);
+  } finally {
+    loadMoreInFlight = false;
+  }
+}
+
+/**
  * Show or hide the "results capped" banner above the approval queue and the
  * history table. The API sets `truncated` when a fetch hit its row cap, in
- * which case pending approvals and the summary totals can under-report.
+ * which case pending approvals and the summary totals can under-report. When
+ * the API can page (#674), Load more replaces the banner for rows it can reach.
  */
 function renderTruncationNotices(data: HistoryResponse): void {
-  const message = data.truncated
-    ? `Results are capped at the most recent ${data.limit ?? '?'} completed purchases and ${data.executions_limit ?? '?'} pending, failed or other non-completed executions. Older rows are not shown, so pending approvals and totals may be incomplete. Narrow the date range or filters to see them.`
-    : '';
+  const message = historyTruncationMessage(data);
   for (const id of ['purchases-truncation-notice', 'history-truncation-notice']) {
     const el = document.getElementById(id);
     if (!el) continue;
     el.textContent = message;
-    el.hidden = !data.truncated;
+    el.hidden = message === '';
   }
 }
 

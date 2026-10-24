@@ -79,6 +79,17 @@ tr.history-row-highlight:hover {
     margin-bottom: 1.5rem;
 }
 
+/* Load more under the Purchase History table (issue #676) */
+.history-load-more {
+    display: flex;
+    justify-content: center;
+    margin-top: 1rem;
+}
+
+.history-load-more[hidden] {
+    display: none;
+}
+
 /* Planned Purchases Section */
 #planned-purchases-header {
     margin-top: 2rem;

@@ -294,6 +294,8 @@ export interface HistoryFilters {
   provider?: Provider;
   planId?: string;
   account_ids?: string[];
+  /** next_cursor from the previous page, to fetch the rows after it. */
+  cursor?: string;
 }
 
 // Config types

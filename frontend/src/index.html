@@ -256,6 +256,10 @@
                     <p id="history-truncation-notice" class="warning-message" role="status" hidden></p>
                     <section id="history-summary"></section>
                     <section id="history-list"></section>
+                    <!-- Load more (issue #676): shown only when the API reports has_more. -->
+                    <div id="history-load-more" class="history-load-more" hidden>
+                        <button type="button" id="history-load-more-btn" class="btn-secondary" aria-busy="false">Load more</button>
+                    </div>
                 </section>
             </div>
 

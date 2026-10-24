@@ -204,6 +204,18 @@ export interface HistoryResponse {
   limit?: number;
   /** Fixed row cap on non-completed executions. */
   executions_limit?: number;
+  /**
+   * Row cap on actionable executions (pending, approved, running, ...).
+   * They are not paged: the first page lists them all, up to this cap.
+   */
+  actionable_executions_limit?: number;
+  /**
+   * True when older rows follow this page (issue #674). Absent on servers
+   * that predate paging, which the UI treats as "cannot page".
+   */
+  has_more?: boolean;
+  /** Opaque position to pass back as `cursor`; set only with has_more. */
+  next_cursor?: string;
 }
 
 export interface HistorySummary {
