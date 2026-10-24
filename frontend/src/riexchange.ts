@@ -1167,8 +1167,8 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
         const opt = document.createElement('option');
         opt.value = o.offering_id;
         // Display: "m5.large -- No Upfront" (no HTML injection: all fields from API)
-        const label = escapeHtml(o.instance_type) + (o.offering_type ? ' -- ' + escapeHtml(o.offering_type) : '');
-        opt.textContent = label;
+        // textContent escapes on its own; pre-escaping would show "&amp;".
+        opt.textContent = o.instance_type + (o.offering_type ? ' -- ' + o.offering_type : '');
         if (initialOfferingId && o.offering_id === initialOfferingId) {
           opt.selected = true;
         }
@@ -1185,7 +1185,7 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
         const opt = document.createElement('option');
         opt.value = alt.offering_id;
         const costStr = formatOfferingCost(alt);
-        opt.textContent = escapeHtml(alt.instance_type) + ' -- ' + costStr + '/mo';
+        opt.textContent = alt.instance_type + ' -- ' + costStr + '/mo';
         if (initialOfferingId && alt.offering_id === initialOfferingId) {
           opt.selected = true;
         }
@@ -2063,6 +2063,11 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
     const exchangeIdCell = rec.exchange_id
       ? '<span class="monospace">' + escapeHtml(rec.exchange_id) + '</span>'
       : '&mdash;';
+    // A failed exchange carries the AWS reason in rec.error; show it under the
+    // badge so the operator can see why without reading backend logs.
+    const errorLine = rec.error
+      ? '<div class="status-detail">' + escapeHtml(rec.error) + '</div>'
+      : '';
     const approveBtn = canApproveRIExchangeRow(rec)
       ? '<button type="button" class="btn-link riexchange-approve-btn" data-approve-id="' + escapeHtml(rec.id) + '">Approve</button>'
       : '';
@@ -2073,7 +2078,7 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
       // payment_due is USD (the execute cap is max_payment_due_usd); an
       // empty amount renders as a dash, not a lone "$" (issue #284).
       + '<td>' + (rec.payment_due ? '$' + escapeHtml(rec.payment_due) : '&mdash;') + '</td>'
-      + '<td><span class="' + getStatusBadgeClass(rec.status) + '">' + escapeHtml(rec.status) + '</span></td>'
+      + '<td><span class="' + getStatusBadgeClass(rec.status) + '">' + escapeHtml(rec.status) + '</span>' + errorLine + '</td>'
       + '<td>' + exchangeIdCell + '</td>'
       + '<td>' + approveBtn + '</td>'
       + '</tr>';
