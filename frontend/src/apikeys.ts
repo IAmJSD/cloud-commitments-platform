@@ -11,7 +11,7 @@ import { friendlyError } from './api/errors';
 import { showToast } from './toast';
 import { iconSvg } from './icons';
 import { openModal, closeModal } from './modal';
-import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { showSkeletonRows, showSkeletonText, teardownSkeleton } from './lib/skeleton';
 import { parseLocalDateInputValue, toLocalDateInputValue } from './lib/local-date';
 
 // State for modal management
@@ -288,7 +288,8 @@ export async function showCreateKeyModal(): Promise<void> {
   }
 
   const permissionsContainer = document.getElementById('apikey-permissions-list');
-  if (permissionsContainer) permissionsContainer.innerHTML = '<p class="text-muted">Loading your permissions&hellip;</p>';
+  // Issue #186: skeleton instead of a "Loading your permissions…" line.
+  if (permissionsContainer) showSkeletonText(permissionsContainer, 3);
 
   // Open the modal before the permissions fetch resolves so the dialog
   // never sits closed while waiting on the network.

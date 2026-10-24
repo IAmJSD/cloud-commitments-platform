@@ -5,7 +5,7 @@
 import * as api from './api';
 import * as state from './state';
 import type { CostPeriod } from './state';
-import { formatCurrency, formatTerm, escapeHtml, CURRENCY_DEFAULT_DIGITS } from './utils';
+import { formatCurrency, formatTerm, escapeHtml, CURRENCY_DEFAULT_DIGITS, NO_VALUE } from './utils';
 import { getRecommendationsFreshness, refreshRecommendations as refreshRecommendationsAPI } from './api/recommendations';
 import type { RecommendationsFreshness } from './api/recommendations';
 import { showToast } from './toast';
@@ -881,7 +881,7 @@ function renderRecommendationsSummary(
   const isSelectionView = selectedVisible.length > 0 && plr.cellCount > 0;
 
   // issue #319: scale savings by the active cost period.
-  // M-1: use ?? null so absent savings propagate to '--' via formatCostForPeriod
+  // M-1: use ?? null so absent savings propagate to NO_VALUE via formatCostForPeriod
   // rather than silently collapsing to $0 (scaleCost returns null only when input
   // is null/undefined; a genuine $0 saving returns 0, not null).
   const period = state.getCostPeriod();
@@ -893,16 +893,16 @@ function renderRecommendationsSummary(
   const savingsText = hasRecs && plr.savingsMax > 0 && scaledSavingsMin !== null && scaledSavingsMax !== null
     ? formatScaledRange(scaledSavingsMin, scaledSavingsMax, period)
     : hasRecs && (plr.savingsMin === null || plr.savingsMax === null)
-      ? '--'
+      ? NO_VALUE
       : formatCostForPeriod(0, period);
   const upfrontText = hasRecs && plr.upfrontMax > 0
     ? formatSavingsRange(plr.upfrontMin, plr.upfrontMax)
     : formatCurrency(0);
-  // L-2: use '--' for absent/inapplicable payback rather than '0 months'
+  // L-2: use NO_VALUE for absent/inapplicable payback rather than '0 months'
   // which falsely implies instantaneous payback.
   const paybackText = hasRecs && plr.paybackMonthsMax > 0
     ? formatPaybackRange(plr.paybackMonthsMin, plr.paybackMonthsMax)
-    : '—';
+    : NO_VALUE;
   // issue #748: count VARIANTS (= target.length), not cells (= plr.cellCount).
   // "Showing X of X" in the filter-status bar also counts variants, so both
   // numbers now agree on the same dataset.
@@ -1602,7 +1602,7 @@ export function effectiveSavingsPct(r: LocalRecommendation): number | null {
   // denominator (EstimatedMonthlyOnDemandCost from Cost Explorer). When it
   // is absent the reconstruction formula (monthly_cost + savings + amortized)
   // diverges from the true on-demand baseline for RI/SP recs, producing
-  // misleadingly high percentages. Return null so the UI renders "--" rather
+  // misleadingly high percentages. Return null so the UI renders NO_VALUE rather
   // than a silently-wrong value.
   if (r.provider === 'aws' && !hasOnDemand) return null;
   const monthsInTerm = r.term * 12;
@@ -1714,6 +1714,14 @@ const PERIOD_DECIMALS: Record<CostPeriod, number> = {
   yearly:  0,
 };
 
+// The non-monthly periods use explicit per-period precision (PERIOD_DECIMALS);
+// monthly keeps formatCurrency's default so it matches the rest of the
+// dashboard. Both go through formatCurrency so a yearly figure prints
+// "$123,456", not "$123456" (issue #739).
+function formatScaled(scaled: number, period: CostPeriod): string {
+  return period === 'monthly' ? formatCurrency(scaled) : formatCurrency(scaled, '$', PERIOD_DECIMALS[period]);
+}
+
 /**
  * Format a monthly cost value scaled to the requested display period.
  * Returns "—" for null/undefined input.
@@ -1722,15 +1730,8 @@ const PERIOD_DECIMALS: Record<CostPeriod, number> = {
  */
 export function formatCostForPeriod(monthly: number | null | undefined, period: CostPeriod): string {
   const scaled = scaleCost(monthly, period);
-  if (scaled === null) return '—';
-  // For the non-monthly periods we want explicit per-period decimal
-  // precision (PERIOD_DECIMALS), so we side-step formatCurrency (which
-  // uses CURRENCY_DEFAULT_DIGITS for any caller that doesn't override).
-  // Monthly keeps the existing formatCurrency behaviour for backward
-  // compatibility (and to stay in lock-step with the rest of the
-  // dashboard's monthly $ formatting).
-  if (period === 'monthly') return formatCurrency(scaled);
-  return `$${scaled.toFixed(PERIOD_DECIMALS[period])}`;
+  if (scaled === null) return NO_VALUE;
+  return formatScaled(scaled, period);
 }
 
 /** Human-readable suffix label for a period (used in column headers). */
@@ -1749,8 +1750,8 @@ export function periodSuffix(period: CostPeriod): string {
  * Collapses "$X – $X" to "$X".
  */
 function formatScaledRange(min: number, max: number, period: CostPeriod): string {
-  const lo = period === 'monthly' ? formatCurrency(min) : `$${min.toFixed(PERIOD_DECIMALS[period])}`;
-  const hi = period === 'monthly' ? formatCurrency(max) : `$${max.toFixed(PERIOD_DECIMALS[period])}`;
+  const lo = formatScaled(min, period);
+  const hi = formatScaled(max, period);
   return lo === hi ? lo : `${lo} – ${hi}`;
 }
 
@@ -3170,24 +3171,24 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
     case 'region':
       return `<td>${escapeHtml(rec.region)}</td>`;
     case 'count':
-      return `<td>${rec.count}</td>`;
+      return `<td class="num">${rec.count}</td>`;
     case 'term':
       return `<td>${formatTerm(rec.term)}</td>`;
     case 'payment':
       return `<td>${escapeHtml(formatPayment(rec.payment))}</td>`;
     case 'savings':
       // issue #319: savings display value scales with the active cost period.
-      return `<td class="savings">${formatCostForPeriod(rec.savings, ctx.period)}</td>`;
+      return `<td class="num savings">${formatCostForPeriod(rec.savings, ctx.period)}</td>`;
     case 'upfront_cost':
       // upfront_cost is one-time, not recurring \u2014 period-invariant.
-      return `<td>${formatCurrency(rec.upfront_cost)}</td>`;
+      return `<td class="num">${formatCurrency(rec.upfront_cost)}</td>`;
     case 'monthly_cost':
       // issue #319: monthly_cost display scales with period; null still renders as em-dash.
-      return `<td>${formatCostForPeriod(rec.monthly_cost, ctx.period)}</td>`;
+      return `<td class="num">${formatCostForPeriod(rec.monthly_cost, ctx.period)}</td>`;
     case 'on_demand_monthly':
       // issue #319: on-demand baseline scales with period to stay consistent
       // with the savings + monthly_cost columns.
-      return `<td>${formatCostForPeriod(onDemandMonthly(rec), ctx.period)}</td>`;
+      return `<td class="num">${formatCostForPeriod(onDemandMonthly(rec), ctx.period)}</td>`;
     case 'effective_savings_pct':
       return `<td${ctx.pctClass}>${ctx.pctText}</td>`;
     case 'usage_history':
@@ -3221,7 +3222,7 @@ function buildVariantRowMarkup(
   const badge = renderSuppressionBadge(rec);
   const recId = escapeHtml(rec.id);
   const pct = displaySavingsPct(rec);
-  const pctClass = pct !== null && pct < 0 ? ' class="effective-pct-negative"' : '';
+  const pctClass = pct !== null && pct < 0 ? ' class="num effective-pct-negative"' : ' class="num"';
   const pctText = pct === null ? '\u2014' : pct.toFixed(1) + '%';
   const nestedClass = isNested ? ' rec-variant-row' : '';
   const cellCtx = { accountName, badge, pct, pctClass, pctText, period };
@@ -3282,10 +3283,12 @@ function buildListMarkup(
     // and holds two sibling buttons, sort and filter. A focusable
     // role=button <th> wrapping the filter button made Enter on the filter
     // bubble into the sort handler, and nested the two controls.
+    // Money and count columns right-align so digits line up (issue #739).
+    const numClass = col.kind === 'numeric' ? ' num' : '';
     const ariaSort = sort.column === col.key
       ? ` aria-sort="${sort.direction === 'asc' ? 'ascending' : 'descending'}"`
       : '';
-    return `<th class="sortable" data-sort="${col.key}"${ariaSort}><button type="button" class="sort-btn"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}</button>${filterBtn(col.key)}</th>`;
+    return `<th class="sortable${numClass}" data-sort="${col.key}"${ariaSort}><button type="button" class="sort-btn"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}</button>${filterBtn(col.key)}</th>`;
   };
 
   // issues #225 + #226: group by cell, sort groups, then render.

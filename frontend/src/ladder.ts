@@ -127,8 +127,9 @@ function renderLadderingSection(globalEnabled: boolean): string {
       Add Account Config
     </button>` : ''}
   </div>
-  <div id="ladder-purchase-timeline"></div>
 </fieldset>
+<!-- Planned purchases renders its own settings card (issue #753). -->
+<div id="ladder-purchase-timeline"></div>
 
 <!-- Per-account ladder config modal -->
 <div id="ladder-config-modal" class="modal hidden" role="dialog" aria-modal="true"
