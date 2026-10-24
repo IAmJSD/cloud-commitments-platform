@@ -41,7 +41,11 @@ const CHART_ID = 'trends-savings-chart';
 
 const PROVIDER_LABELS: Record<string, string> = { aws: 'AWS', azure: 'Azure', gcp: 'GCP' };
 
-let trendsChart: Chart | null = null;
+// Typed as the bar chart it is: assigning Chart<'bar'> to the default
+// Chart<keyof ChartTypeRegistry> trips a Chart.js variance check whose
+// result depends on ts-loader's check order (it broke the webpack build
+// once chart-utils gained upsertChart, #747).
+let trendsChart: Chart<'bar', (number | null)[], string> | null = null;
 // Each load takes a ticket; a response that lands after a newer request was
 // issued is dropped so a slow reply can't overwrite the current scope.
 let loadSeq = 0;
