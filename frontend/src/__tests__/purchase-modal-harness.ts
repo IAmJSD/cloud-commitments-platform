@@ -140,3 +140,142 @@ jest.mock('../archera', () => ({
 jest.mock('../toast', () => ({
   showToast: jest.fn(),
 }));
+
+// Imports
+
+import { setupEventListeners } from '../app';
+import * as api from '../api';
+import * as state from '../state';
+import {
+  clearPurchaseModalRecommendations,
+  clearFanOutBuckets,
+  seedGlobalDefaults,
+} from '../recommendations';
+import { ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID } from '../permissions';
+import type { LocalRecommendation } from '../types';
+
+// Fixtures
+
+// One AWS EC2 cell fanned out into its four (term, payment) variants — the
+// same shape providers/aws/recommendations/client.go produces for a single
+// physical resource. Every #1903 test reads from a fresh copy of this list
+// via buildRows() so no test can leak a mutation into another.
+export function buildRows(): LocalRecommendation[] {
+  return [
+    {
+      id: 'v-3-all', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+      region: 'us-east-1', resource_type: 'm5.large', count: 2, term: 3,
+      payment: 'all-upfront', upfront_cost: 36000, monthly_cost: 0, savings: 900,
+    },
+    {
+      id: 'v-3-partial', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+      region: 'us-east-1', resource_type: 'm5.large', count: 2, term: 3,
+      payment: 'partial-upfront', upfront_cost: 18000, monthly_cost: 300, savings: 850,
+    },
+    {
+      id: 'v-1-all', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+      region: 'us-east-1', resource_type: 'm5.large', count: 2, term: 1,
+      payment: 'all-upfront', upfront_cost: 12000, monthly_cost: 0, savings: 700,
+    },
+    {
+      id: 'v-1-no', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+      region: 'us-east-1', resource_type: 'm5.large', count: 1, term: 1,
+      payment: 'no-upfront', upfront_cost: 0, monthly_cost: 800, savings: 500,
+    },
+  ];
+}
+
+/** Drains the microtask queue enough for the async handlers under test to settle. */
+export async function flush(): Promise<void> {
+  for (let i = 0; i < 6; i++) await Promise.resolve();
+}
+
+export function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+// Two buckets for the #1904 fan-out suites: a priced EC2 row and an RDS row
+// with no payment, which the fan-out modal must skip.
+export function buildFanOutRows(): LocalRecommendation[] {
+  return [
+    {
+      id: 'ec2-1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+      region: 'us-east-1', resource_type: 'm5.large', term: 1, payment: 'no-upfront',
+      count: 1, upfront_cost: 0, monthly_cost: 100, savings: 50,
+    },
+    {
+      id: 'rds-3', provider: 'aws', cloud_account_id: 'a1', service: 'rds',
+      region: 'us-east-1', resource_type: 'db.r5.large', term: 3, payment: undefined,
+      count: 1, upfront_cost: 1000, savings: 200,
+    },
+  ];
+}
+
+// DOM / mock scaffolding
+
+/** Rebuilds the purchase-modal DOM and resets every mock; run before each test. */
+export function setupPurchaseModalTest(): void {
+  document.body.replaceChildren();
+
+  const opportunitiesTab = document.createElement('div');
+  opportunitiesTab.id = 'opportunities-tab';
+  opportunitiesTab.className = 'tab-content active';
+  const summaryEl = document.createElement('div');
+  summaryEl.id = 'recommendations-summary';
+  const listEl = document.createElement('div');
+  listEl.id = 'recommendations-list';
+  opportunitiesTab.appendChild(summaryEl);
+  opportunitiesTab.appendChild(listEl);
+  document.body.appendChild(opportunitiesTab);
+
+  const purchaseModal = document.createElement('div');
+  purchaseModal.id = 'purchase-modal';
+  purchaseModal.className = 'hidden';
+  const purchaseDetails = document.createElement('div');
+  purchaseDetails.id = 'purchase-details';
+  purchaseModal.appendChild(purchaseDetails);
+  document.body.appendChild(purchaseModal);
+
+  const executeBtn = document.createElement('button');
+  executeBtn.id = 'execute-purchase-btn';
+  document.body.appendChild(executeBtn);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.id = 'close-purchase-modal-btn';
+  purchaseModal.appendChild(closeBtn);
+
+  setupEventListeners();
+
+  jest.clearAllMocks();
+  clearPurchaseModalRecommendations();
+  clearFanOutBuckets();
+  seedGlobalDefaults(3, 'all-upfront');
+
+  // loadBulkPurchaseState() (setup.ts's localStorage mock defaults getItem to
+  // null) only reads cachedGlobalDefaultPayment when a raw value is present —
+  // otherwise it falls back to the hardcoded 'all-upfront' default and never
+  // consults GlobalConfig. Seed a truthy (capacity-only) value so the
+  // bulk-purchase toolbar picks up the mocked getConfig() default_payment;
+  // tests that need a specific capacity override this per-test.
+  (localStorage.getItem as jest.Mock).mockReturnValue('{}');
+  (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+  (api.getConfig as jest.Mock).mockResolvedValue({ global: {} });
+  (api.executePurchase as jest.Mock).mockResolvedValue({
+    execution_id: 'exec-aaaaaaaa',
+    email_sent: true,
+    approval_recipient: 'approver@example.com',
+  });
+  (state.getCurrentUser as jest.Mock).mockReturnValue({
+    id: 'u-admin', email: 'admin@example.com', groups: [ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID],
+  });
+  // Every #1903 test needs the full loaded cell so pricedCellVariant /
+  // cellTermOptions / cellPaymentOptions can find the sibling rows.
+  (state.getRecommendations as jest.Mock).mockReturnValue(buildRows());
+}
