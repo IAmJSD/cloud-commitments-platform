@@ -22,6 +22,7 @@ import { buildCommitmentSummary, commitmentTotals, executeButtonLabel, executeCo
 import { handlePurchaseDeeplink } from './purchases-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
+import { showFanOutRetry, fanOutRetryLabel, type FanOutBucketOutcome } from './fanout-retry';
 
 /**
  * describeDuplicateSubmit words the outcome of a submit the backend collapsed
@@ -613,8 +614,34 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
   try {
     await submitFanOutBuckets(buckets);
   } finally {
-    setExecutePurchaseSubmitting(executeBtn, false, executeButtonLabel(false));
+    // Issue #757: after a partial failure the modal stays open in retry mode.
+    setExecutePurchaseSubmitting(executeBtn, false, fanOutRetryLabel() ?? executeButtonLabel(false));
   }
+}
+
+/**
+ * Per-bucket outcome for the retry view (issue #757). Uses the same
+ * success rule as the toast: a fulfilled POST whose approval email failed
+ * is a failure.
+ */
+function fanOutOutcomes(
+  buckets: FanOutBucket[],
+  results: PromiseSettledResult<api.PurchaseResult>[],
+): FanOutBucketOutcome[] {
+  return results.map((r, i) => {
+    const bucket = buckets[i]!;
+    if (r.status === 'rejected') {
+      return { bucket, ok: false, detail: r.reason instanceof Error ? r.reason.message : String(r.reason) };
+    }
+    if (r.value.email_sent === false || r.value.status === 'failed') {
+      return { bucket, ok: false, detail: r.value.email_reason || 'approval email did not send' };
+    }
+    if (r.value.duplicate) {
+      return { bucket, ok: true, detail: `joined existing request ${r.value.execution_id.slice(0, 8)}; ${duplicateState(r.value.status)}` };
+    }
+    const to = r.value.approval_recipient ? ` from ${r.value.approval_recipient}` : '';
+    return { bucket, ok: true, detail: `awaiting approval${to}` };
+  });
 }
 
 async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
@@ -655,9 +682,15 @@ async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
   );
   const succeeded = fulfilled.length - submissionFailures.length;
   const failed = results.length - succeeded;
-  closePurchaseModal();
-  clearFanOutBuckets();
-  clearPurchaseModalRecommendations();
+  // Issue #757: on any failure keep the modal open with per-bucket status
+  // and a retry limited to the failed buckets, instead of closing it and
+  // making the user reselect rows (and risk resubmitting the successes).
+  const retrying = failed > 0 && showFanOutRetry(fanOutOutcomes(buckets, results));
+  if (!retrying) {
+    closePurchaseModal();
+    clearFanOutBuckets();
+    clearPurchaseModalRecommendations();
+  }
 
   // Disclose payment-option coercions across every bucket that reached the
   // backend (#1503). Collected from all fulfilled responses, not just the
@@ -712,7 +745,10 @@ async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
         timeout: 15_000,
       });
     }
-  } else {
+  } else if (!retrying) {
+    // Issue #757: skipped while the modal stays open for a retry. The modal
+    // then shows every bucket's status and reason in full, and a sticky toast
+    // would sit on top of its Retry button.
     // Prefix each failure with its bucket's account so the user knows what to
     // retry when one account's bucket fails and another's succeeds (issue #333).
     const failureMsgs = results
@@ -772,7 +808,9 @@ async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
   // async email-link execution completes. Skipping the all-fail path keeps
   // the modal from layering on top of an error toast for a user who has
   // nothing to insure yet.
-  if (succeeded > 0) {
+  // Not while the purchase modal stays open for a retry (issue #757): the
+  // offer would stack on top of it. It fires once the retry completes.
+  if (succeeded > 0 && !retrying) {
     openArcheraOfferModal('purchase');
   }
 

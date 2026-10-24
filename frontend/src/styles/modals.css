@@ -514,3 +514,29 @@
     max-width: none;
     padding: 0.5rem 0 0;
 }
+
+/* Issue #757: per-bucket outcome after a partial bulk-purchase failure. The
+ * fan-out modal stays open; submitted buckets are dimmed and locked, failed
+ * ones are flagged with their reason and are the only ones a retry sends. */
+.fanout-bucket-result {
+    font-weight: 600;
+    margin: 0.25rem 0;
+}
+
+.fanout-bucket-result-ok {
+    color: var(--cudly-success-fg);
+}
+
+.fanout-bucket-result-failed {
+    color: var(--cudly-error-fg);
+}
+
+/* Dim the locked details but keep the status line at full contrast. */
+.fanout-bucket-submitted > :not(.fanout-bucket-result) {
+    opacity: 0.7;
+}
+
+.fanout-bucket-failed {
+    border-left: 3px solid var(--cudly-error);
+    padding-left: 0.75rem;
+}
