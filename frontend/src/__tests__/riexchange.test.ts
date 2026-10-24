@@ -615,6 +615,44 @@ describe('openExchangeModal', () => {
     expect(mockListOfferings).toHaveBeenCalledWith('ri-abc');
   });
 
+  it('shows an error with Retry, not a "type a UUID" dead end, when offerings fail to load (issue #740)', async () => {
+    const mockListOfferings = api.listTargetOfferings as jest.Mock;
+    mockListOfferings.mockRejectedValueOnce(new Error('throttled'));
+    openExchangeModal('ri-abc', 2);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const picker = modal.querySelector<HTMLSelectElement>('.modal-exchange-target-select');
+    expect(picker?.options[0]?.textContent).toBe('Could not load offerings');
+    expect(modal.textContent).not.toContain('UUID');
+    const errorRow = modal.querySelector<HTMLElement>('.exchange-offerings-error');
+    expect(errorRow?.classList.contains('hidden')).toBe(false);
+    expect(errorRow?.querySelector('[role="alert"]')?.textContent).toBe('Could not load target offerings: throttled');
+
+    mockListOfferings.mockResolvedValueOnce([{
+      offering_id: '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91', instance_type: 'm5.xlarge', offering_type: 'No Upfront',
+      product_description: 'Linux/UNIX', duration: 31536000, fixed_price: 0, usage_price: 0.12,
+      currency_code: 'USD', scope: 'Region', normalization_factor: 8,
+    }]);
+    Array.from(errorRow?.querySelectorAll('button') ?? []).find((b) => b.textContent === 'Retry')?.click();
+    expect(picker?.options[0]?.textContent).toBe('Loading offerings...');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(mockListOfferings).toHaveBeenCalledTimes(2);
+    expect(errorRow?.classList.contains('hidden')).toBe(true);
+    expect(Array.from(picker?.options ?? []).map((o) => o.value)).toContain('4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91');
+  });
+
+  it('keeps CE recommendations selectable when the AWS offerings fail to load', async () => {
+    (api.listTargetOfferings as jest.Mock).mockRejectedValueOnce(new Error('throttled'));
+    openExchangeModal('ri-abc', 2, undefined, [
+      { instance_type: 'm5.large', offering_id: '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91', effective_monthly_cost: 42.5 },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const picker = modal.querySelector<HTMLSelectElement>('.modal-exchange-target-select');
+    expect(picker?.options[0]?.textContent).toBe('AWS offerings unavailable -- pick a recommendation or retry');
+    expect(Array.from(picker?.options ?? []).map((o) => o.value)).toContain('4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91');
+  });
+
   it('selecting a picker option drives the hidden offering input with a UUID', () => {
     openExchangeModal('ri-abc', 2, undefined, [
       { instance_type: 'm5.large', offering_id: '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91', effective_monthly_cost: 42.5 },
@@ -644,6 +682,76 @@ describe('openExchangeModal', () => {
     // The result container must show an error mentioning the invalid value.
     const result = modal.querySelector('#modal-exchange-result');
     expect(result?.textContent).toContain('t3.medium');
+  });
+
+  describe('exchange result announcement and receipt (issue #738)', () => {
+    const offeringUUID = '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91';
+    const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+    const button = (label: string): HTMLButtonElement | undefined =>
+      Array.from(modal.querySelectorAll('button')).find((b) => b.textContent === label);
+
+    async function executeExchange(): Promise<void> {
+      (api.getExchangeQuote as jest.Mock).mockResolvedValueOnce({
+        IsValidExchange: true, ValidationFailureReason: '', CurrencyCode: 'USD', PaymentDueRaw: '12.50',
+        SourceHourlyPriceRaw: '', SourceRemainingUpfrontRaw: '', SourceRemainingTotalRaw: '',
+        TargetHourlyPriceRaw: '', TargetRemainingUpfrontRaw: '', TargetRemainingTotalRaw: '', Region: 'us-west-2',
+      });
+      (api.executeExchange as jest.Mock).mockResolvedValueOnce({ exchange_id: 'exch-42', quote: {} });
+      openExchangeModal('ri-abc', 1, 'm5.large', [
+        { instance_type: 'm5.large', offering_id: offeringUUID, effective_monthly_cost: 42.5 },
+      ]);
+      button('Get Quote')?.click();
+      await flush();
+      button('Execute Exchange')?.click();
+      document.querySelector<HTMLButtonElement>('.modal-confirm-actions .btn-destructive')?.click();
+      await flush();
+      await flush();
+    }
+
+    it('makes the result area a polite live region and announces errors as alerts', async () => {
+      (api.getExchangeQuote as jest.Mock).mockRejectedValueOnce(new Error('throttled'));
+      openExchangeModal('ri-abc', 1, 'm5.large', [
+        { instance_type: 'm5.large', offering_id: offeringUUID, effective_monthly_cost: 42.5 },
+      ]);
+      const result = modal.querySelector('#modal-exchange-result');
+      expect(result?.getAttribute('role')).toBe('status');
+      expect(result?.getAttribute('aria-live')).toBe('polite');
+      button('Get Quote')?.click();
+      await flush();
+      const alert = result?.querySelector('[role="alert"]');
+      expect(alert?.textContent).toBe('Quote failed: throttled');
+    });
+
+    it('keeps the exchange ID on screen until the user closes the modal', async () => {
+      await executeExchange();
+      await new Promise((resolve) => setTimeout(resolve, 2100));
+      expect(modal.classList.contains('hidden')).toBe(false);
+      expect(modal.querySelector('#modal-exchange-result')?.textContent).toBe('Exchange completed. ID: exch-42');
+      // The form is frozen so an edit cannot wipe the receipt, and only Close remains.
+      expect(button('Get Quote')?.classList.contains('hidden')).toBe(true);
+      expect(modal.querySelector<HTMLSelectElement>('.modal-exchange-target-select')?.disabled).toBe(true);
+      const close = button('Close');
+      expect(document.activeElement).toBe(close);
+      close?.click();
+      expect(modal.classList.contains('hidden')).toBe(true);
+    });
+
+    it('shows a success toast with the exchange ID and a link to the history', async () => {
+      const section = document.createElement('section');
+      const list = document.createElement('div');
+      list.id = 'ri-exchange-history-list';
+      section.appendChild(list);
+      section.scrollIntoView = jest.fn();
+      document.body.appendChild(section);
+
+      await executeExchange();
+      const toast = document.querySelector('.toast--success');
+      expect(toast?.querySelector('.toast-message')?.textContent).toBe('RI exchange completed. Exchange ID: exch-42');
+      Array.from(toast?.querySelectorAll('button') ?? []).find((b) => b.textContent === 'View history')?.click();
+      expect(modal.classList.contains('hidden')).toBe(true);
+      expect(section.scrollIntoView).toHaveBeenCalled();
+      expect(document.activeElement).toBe(list);
+    });
   });
 });
 
@@ -744,6 +852,27 @@ describe('reshape recommendations table', () => {
     expect(chips[0]?.textContent).toContain('$30.00/mo');
     expect(chips[1]?.textContent).toContain('m6i.large');
     expect(chips[1]?.textContent).toContain('$35.00/mo');
+  });
+
+  it('renders an unknown utilization as a neutral em-dash instead of throwing (#136)', async () => {
+    const mockGet = api.getReshapeRecommendations as jest.Mock;
+    const { utilization_percent: _omit, ...withoutUtil } = baseRec;
+    mockGet.mockResolvedValueOnce({
+      recommendations: [withoutUtil, { ...baseRec, source_ri_id: 'ri-def', utilization_percent: 97 }],
+      recs_staleness: '',
+      recs_collected_at: null,
+    });
+
+    await loadReshapeRecommendations();
+
+    const rows = tableContainer.querySelectorAll<HTMLTableRowElement>('tbody tr');
+    expect(rows).toHaveLength(2);
+    const unknown = rows[0]!.querySelectorAll('td')[4]!;
+    expect(unknown.textContent).toBe('—');
+    expect(unknown.className).toBe('');
+    const known = rows[1]!.querySelectorAll('td')[4]!;
+    expect(known.textContent).toBe('97.0%');
+    expect(known.className).toBe('util-green');
   });
 
   it('renders an em-dash in the Alternatives column when the rec has no alternative_targets', async () => {

@@ -54,7 +54,7 @@ export function buildExchangeConfirmBody({ quote, sources, targets }: ExchangeCo
     ['Pay now', `${quote.CurrencyCode} ${quote.PaymentDueRaw}`],
     ['Exchange', sources.join(', ')],
     ['For', targets.join(', ')],
-    ['Region', quote.Region ?? ''],
+    ['Region', quote.Region],
   ];
   const delta = hourlyPriceDelta(quote);
   if (delta) {

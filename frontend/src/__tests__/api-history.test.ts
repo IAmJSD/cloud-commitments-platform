@@ -101,11 +101,10 @@ describe('API History Module', () => {
         end: '2024-03-31',
         interval: 'daily',
         summary: {
-          total_period_savings: 5000,
-          total_upfront_spent: 10000,
-          purchase_count: 5,
-          average_savings_per_period: 50,
-          peak_savings: 200
+          total_purchases: 5,
+          total_upfront: 10000,
+          total_monthly_savings: 5000,
+          total_annual_savings: 60000
         },
         data_points: []
       };
