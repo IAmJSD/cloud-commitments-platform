@@ -70,7 +70,8 @@ export function formatCurrency(
  */
 export function formatCompactCurrency(value: number | null | undefined, digits = 2): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
-    return '--';
+    // Delegate so both formatters always share the absent marker (NO_VALUE).
+    return formatCurrency(value);
   }
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
