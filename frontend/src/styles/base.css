@@ -305,6 +305,17 @@ body {
     display: none;
 }
 
+/* The box only carries a top margin, so the submit button that follows it
+   in the auth forms (login, MFA, forgot/reset password, first-run setup)
+   sat flush against its border. Gap the button instead of the box: a hidden
+   box then leaves no stray space, and boxes that end a section or precede
+   .modal-buttons keep their spacing. `~` also reaches the reset form's
+   button, which has a (hidden) .success-message in between. */
+.error-message:not(.hidden) ~ button,
+.success-message:not(.hidden) + button {
+    margin-top: var(--cudly-sp-4);
+}
+
 /* Inline field-level error — sits underneath a single <input> rather
    than wrapping a whole form section like .error-message does. Used
    for live range / format validation messages so a user typing an
