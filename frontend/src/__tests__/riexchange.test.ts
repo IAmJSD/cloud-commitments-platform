@@ -953,6 +953,48 @@ describe('reshape recommendations empty state', () => {
     expect(recsEl.textContent).toContain('1 convertible RI ');
     expect(recsEl.textContent).not.toContain('none are registered');
   });
+
+  // Issue #1135: the three loads race. An empty reshape response that lands
+  // before the RI list must not keep the previous scope's count.
+  it('re-renders the empty-state count when recommendations resolve before the RI list', async () => {
+    (api.listConvertibleRIs as jest.Mock).mockResolvedValueOnce([sampleRI]);
+    await loadRIExchange();
+    expect(recsEl.textContent).toContain('All 1 convertible RI ');
+
+    let releaseRIs: (v: unknown) => void = () => undefined;
+    (api.listConvertibleRIs as jest.Mock).mockReturnValueOnce(new Promise(r => { releaseRIs = r; }));
+    const reload = loadRIExchange();
+    await new Promise(r => setTimeout(r, 0));
+    // Recommendations are in, RIs are not: no stale "All 1" claim.
+    expect(api.getReshapeRecommendations).toHaveBeenCalledTimes(2);
+    expect(recsEl.textContent).not.toContain('All 1 convertible RI');
+    expect(recsEl.textContent).toContain('No reshape recommendations right now.');
+
+    releaseRIs([sampleRI, { ...sampleRI, reserved_instance_id: 'ri-2' }, { ...sampleRI, reserved_instance_id: 'ri-3' }]);
+    await reload;
+    expect(recsEl.textContent).toContain('All 3 convertible RIs meet your utilization threshold');
+  });
+
+  it('does not quote a count from a failed RI load', async () => {
+    (api.listConvertibleRIs as jest.Mock).mockResolvedValueOnce([sampleRI]);
+    await loadRIExchange();
+    (api.listConvertibleRIs as jest.Mock).mockRejectedValueOnce(new Error('boom'));
+    await loadRIExchange();
+    expect(recsEl.textContent).toContain('No reshape recommendations right now.');
+    expect(recsEl.textContent).not.toContain('convertible RI');
+  });
+
+  it('keeps the error from a failed reshape load after the RI list arrives', async () => {
+    let releaseRIs: (v: unknown) => void = () => undefined;
+    (api.listConvertibleRIs as jest.Mock).mockReturnValueOnce(new Promise(r => { releaseRIs = r; }));
+    (api.getReshapeRecommendations as jest.Mock).mockRejectedValueOnce(new Error('ce down'));
+    const reload = loadRIExchange();
+    await new Promise(r => setTimeout(r, 0));
+    releaseRIs([sampleRI]);
+    await reload;
+    expect(recsEl.querySelector('.error')?.textContent).toContain('Failed to load recommendations: ce down');
+    expect(recsEl.textContent).not.toContain('utilization threshold');
+  });
 });
 
 // Staleness banner tests for issue #150.
