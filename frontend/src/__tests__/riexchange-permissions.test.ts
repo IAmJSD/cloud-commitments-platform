@@ -109,6 +109,27 @@ describe('RI Exchange tables permission gating (issue #365)', () => {
       expect(html).toContain('data-action="fill-quote"');
       expect(html).toContain('<th>Actions</th>');
     });
+
+    // #319: the row index is looked up from a map built once per render
+    // instead of an indexOf scan per row; it must still point at the
+    // matching recommendation in the unfiltered list.
+    test('filtered reshape rows keep the index of their source recommendation', async () => {
+      const recs = ['t3.small', 't3.medium', 't3.large'].map((type, i) => ({
+        ...sampleReshape, source_ri_id: `ri-${i}`, source_instance_type: type,
+      }));
+      (api.getReshapeRecommendations as jest.Mock).mockResolvedValue({ recommendations: recs, recs_staleness: '', recs_collected_at: null });
+      (state.getRiExchangeColumnFilters as jest.Mock).mockReturnValue({
+        source_instance_type: { kind: 'set', values: ['t3.medium', 't3.large'] },
+      });
+      try {
+        await loadRIExchange();
+        await loadReshapeRecommendations();
+        const buttons = document.querySelectorAll<HTMLButtonElement>('#ri-exchange-recommendations-list [data-action="fill-quote"]');
+        expect(Array.from(buttons, b => b.dataset['index'])).toEqual(['1', '2']);
+      } finally {
+        (state.getRiExchangeColumnFilters as jest.Mock).mockReturnValue({});
+      }
+    });
   });
 
   describe('user role', () => {

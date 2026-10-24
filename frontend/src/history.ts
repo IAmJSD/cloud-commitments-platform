@@ -11,6 +11,7 @@ import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
 import { approvalDetailsUnavailableMessage, buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
+import { renderApprovalQueueLink, wireApprovalQueueLinks } from './history-queue-link';
 import { getCurrentUser } from './state';
 import { canAccess } from './permissions';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
@@ -49,8 +50,10 @@ let activeStatusFilter: StatusFilter = 'all';
 
 // _fourEyesMode mirrors GlobalConfig.require_different_approver (issue #1005).
 // Gates the inline Approve button so a creator can't approve their own pending
-// purchase when dual-control is on.
-let _fourEyesMode = false;
+// purchase when dual-control is on. Starts ON, matching the fail-closed
+// default refreshFourEyesMode uses, so a render that runs before the first
+// config load cannot offer the creator an Approve button (#320).
+let _fourEyesMode = true;
 
 /**
  * Refresh _fourEyesMode and the dual-control banner from GlobalConfig.
@@ -562,6 +565,16 @@ function providerCell(p: HistoryPurchase): string {
   return `<span class="provider-badge ${safeProvider}">${safeProvider.toUpperCase()}</span>`;
 }
 
+// upfrontCell renders the Upfront Cost cell. With amortize on, the upfront is
+// already spread into the Monthly Cost column, so the cell is muted and
+// labeled to stop Upfront + 12 x Monthly being read as additive (#318).
+function upfrontCell(p: HistoryPurchase, amortize: boolean): string {
+  const amount = formatCurrency(p.upfront_cost);
+  const folded = amortize && p.monthly_cost != null && p.upfront_cost != null && p.upfront_cost > 0 && p.term > 0;
+  if (!folded) return `<td>${amount}</td>`;
+  return `<td class="upfront-in-monthly" title="Included in the amortized monthly cost">${amount}<div class="upfront-in-monthly-note">(in monthly)</div></td>`;
+}
+
 // canCancelPendingRow returns true when the current session is permitted
 // to cancel the given pending/notified history row via the session-authed
 // Cancel button (issue #46). UX gate only — the backend
@@ -699,7 +712,11 @@ function canRetryFailedRow(p: HistoryPurchase): boolean {
 // Conditions:
 //   * status must be "completed", "" (legacy blank), or "scheduled"
 //     (pre-fire delay: the cloud SDK has not been called yet -- free cancel);
-//   * provider must be "azure" (AWS and GCP have no direct cancel API);
+//   * completed (and legacy blank) rows must be provider "azure": only Azure
+//     reservations can be returned after purchase, AWS and GCP have no direct
+//     cancel API. Scheduled rows are allowed for every provider because the
+//     backend cancels them via CancelScheduledExecutionAtomic before any
+//     cloud call (issue #924);
 //   * revocation_window_closes_at must be in the future;
 //     for "scheduled" rows this field is populated with scheduled_execution_at
 //     by the backend (issue #290, second-wave CR Finding E);
@@ -712,16 +729,22 @@ function canRetryFailedRow(p: HistoryPurchase): boolean {
 function canRevokeCompletedRow(p: HistoryPurchase): boolean {
   const status = (p.status || '').toLowerCase();
   if (status !== 'completed' && status !== '' && status !== 'scheduled') return false;
-  if ((p.provider || '').toLowerCase() !== 'azure') return false;
+  if (status !== 'scheduled' && (p.provider || '').toLowerCase() !== 'azure') return false;
   if (p.revoked_at) return false; // already revoked
   if (!p.revocation_window_closes_at) return false;
   if (new Date(p.revocation_window_closes_at) <= new Date()) return false;
   const user = getCurrentUser();
   if (!user) return false;
-  // RBAC: admin or revoke-any always; otherwise revoke-own (account-scope
-  // ownership is enforced server-side, the same model as the backend handler).
+  // RBAC: admin or revoke-any always; otherwise revoke-own. The backend
+  // scopes revoke-own differently per row kind, so mirror both:
+  //   * scheduled rows are executions: authorizeRevokeOwnExecution requires
+  //     the creator, like the cancel/approve/retry predicates (#320);
+  //   * completed purchase_history rows carry no creator, so revoke-own is
+  //     account-scoped server-side (see ActionRevokeOwn in auth/types.go).
   if (canAccess('admin', '*') || canAccess('revoke-any', 'purchases')) return true;
-  return canAccess('revoke-own', 'purchases');
+  if (!canAccess('revoke-own', 'purchases')) return false;
+  if (status !== 'scheduled') return true;
+  return !!p.created_by_user_id && p.created_by_user_id === user.id;
 }
 
 // retryThresholdReached returns true when the row has hit the soft-
@@ -921,7 +944,8 @@ function renderPendingActionButtons(p: HistoryPurchase): string {
 // existing column keeps table width unchanged.
 //
 // Decision tree (status-driven, mutually exclusive):
-//   * pending|notified + canCancel  → Cancel button (issue #46)
+//   * pending|notified + any action → "Review in approval queue" link (issue
+//                                     #183; Approve / Cancel live in the queue)
 //   * failed + ops_hint set         → ⚠ ops-hint badge (issue #47, Q3 — no retry),
 //                                     plus any lineage link (issue #1040)
 //   * failed + threshold reached    → "Retried 5× — confirm to override" Retry button (Q2)
@@ -944,18 +968,22 @@ function renderLineageLinks(p: HistoryPurchase): string[] {
     // could surface the predecessor's exec ID via the API. For now
     // we render a static badge (no link target) so users at least
     // see "this is a retry" provenance.
-    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${p.retry_attempt_n} in its chain">↻ Retry #${p.retry_attempt_n}</span>`);
+    // Coerce to a number: the history response is cast, not validated
+    // (api.getHistory), so the TS number type is not a runtime guarantee
+    // and this value sits inside a title="..." attribute.
+    const attemptN = Number(p.retry_attempt_n) || 0;
+    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${attemptN} in its chain">↻ Retry #${attemptN}</span>`);
   }
   return lineage;
 }
 
 function renderActionCell(p: HistoryPurchase): string {
-  // Pending → render Approve + Cancel side-by-side when the session
-  // qualifies for both (the typical case after issue #286 — the same
-  // approve-own / cancel-own grant lives in DefaultUserPermissions).
-  const pendingButtons = renderPendingActionButtons(p);
-  if (pendingButtons) {
-    return pendingButtons;
+  // Pending → the Approval queue card is the one place to approve or cancel
+  // (issue #183). Where the session has a pending action (or a 4-eyes reason
+  // it can't), the table used to repeat the queue's controls; it now links
+  // to the row's queue entry instead.
+  if (p.purchase_id && renderPendingActionButtons(p)) {
+    return renderApprovalQueueLink(p.purchase_id);
   }
 
   // Failed → either ops-hint (no retry possible), Retry (with optional
@@ -975,7 +1003,7 @@ function renderActionCell(p: HistoryPurchase): string {
     }
     if (canRetryFailedRow(p) && p.purchase_id) {
       const overThreshold = retryThresholdReached(p);
-      const label = overThreshold ? `⚠ Retried ${p.retry_attempt_n ?? 0}× — click to override` : '↻ Retry';
+      const label = overThreshold ? `⚠ Retried ${Number(p.retry_attempt_n) || 0}× — click to override` : '↻ Retry';
       const cls = overThreshold ? 'btn-link history-retry-btn history-retry-over-threshold' : 'btn-link history-retry-btn';
       return `<button type="button" class="${cls}" data-retry-id="${escapeHtmlAttr(p.purchase_id)}">${label}</button>`;
     }
@@ -987,15 +1015,16 @@ function renderActionCell(p: HistoryPurchase): string {
   // Cancel button, or be an Azure row still inside its revoke window.
   const trailingActions: string[] = [];
   if (p.purchase_id) {
-    // Completed Azure row within revocation window: Revoke button (issue
-    // #290). Only Azure supports direct in-app revocation; AWS and GCP have
-    // no cancel API so the button is suppressed for those providers.
+    // Revoke button (issue #290): completed Azure rows within the refund
+    // window, and scheduled rows on any provider before they fire (#924).
+    // Completed AWS and GCP rows have no cancel API, so they get no button.
     if (canRevokeCompletedRow(p)) {
       trailingActions.push(`<button type="button" class="btn-link history-revoke-btn" data-revoke-id="${escapeHtml(p.purchase_id)}" data-revoke-scheduled="${(p.status || '').toLowerCase() === 'scheduled'}">Revoke</button>`);
     }
     // Completed Standard RI rows (AWS): Cancel listing / Sell on Marketplace
-    // (issue #292). Mutually exclusive with revoke in practice (revoke is
-    // Azure-only, marketplace is AWS Standard-RI-only).
+    // (issue #292). Mutually exclusive with revoke in practice (revoke on a
+    // completed row is Azure-only, marketplace is AWS Standard-RI-only and
+    // never applies to a scheduled row).
     if (canCancelMarketplaceListing(p)) {
       trailingActions.push(`<button type="button" class="btn-link history-marketplace-cancel-btn" data-marketplace-cancel-id="${escapeHtml(p.purchase_id)}">Cancel listing ${escapeHtml(p.listing_id || '')}</button>`);
     } else if (canSellOnMarketplace(p)) {
@@ -1121,6 +1150,12 @@ function purchaseHistoryDisplayLabel(
   return value;
 }
 
+// Per-table namespaces for the shared filter popover (issue #281): both
+// tables render buttons with the same bare column ids, so the popover keys
+// and resolves its anchor by (scope, column).
+const PURCHASE_HISTORY_FILTER_SCOPE = 'history';
+const APPROVAL_QUEUE_FILTER_SCOPE = 'queue';
+
 function wirePurchaseHistoryFilterButtons(
   container: HTMLElement,
   // The pre-column-filter slice — popover lists distinct values from
@@ -1137,6 +1172,7 @@ function wirePurchaseHistoryFilterButtons(
       const isNumeric = PURCHASE_HISTORY_NUMERIC_COLUMNS.has(column);
       const filters = state.getPurchaseHistoryColumnFilters();
       openHistoryColumnPopover<PurchaseHistoryColumnId>({
+        scope: PURCHASE_HISTORY_FILTER_SCOPE,
         column,
         anchor: btn,
         currentFilter: filters[column],
@@ -1225,6 +1261,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   const colFilters = state.getPurchaseHistoryColumnFilters();
   const visible = applyPurchaseHistoryColumnFilters(statusFiltered, colFilters);
 
+  const amortize = state.getAmortizeUpfront();
   const tableRows = visible.map(p => {
     const statusCell = (() => {
       const badge = statusBadgeHTML(normalizeStatus(p));
@@ -1239,7 +1276,6 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     })();
     const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtmlAttr(p.purchase_id)}"` : '';
     const planCellContent = renderActionCell(p);
-    const amortize = state.getAmortizeUpfront();
     const rawMonthly = p.monthly_cost != null ? p.monthly_cost : null;
     const displayMonthly = (rawMonthly != null && amortize)
       ? (p.upfront_cost == null ? null : amortizedMonthly(rawMonthly, p.upfront_cost, p.term))
@@ -1255,9 +1291,9 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
         <td>${escapeHtml(p.service)}</td>
         <td>${escapeHtml(p.resource_type)}</td>
         <td>${escapeHtml(p.region)}</td>
-        <td>${p.count}</td>
+        <td>${escapeHtml(String(p.count ?? ''))}</td>
         <td>${formatTerm(p.term)}</td>
-        <td>${formatCurrency(p.upfront_cost)}</td>
+        ${upfrontCell(p, amortize)}
         <td>${monthlyCostCell}</td>
         <td class="savings">${formatCurrency(p.estimated_savings)}</td>
         <td>${planCellContent}</td>
@@ -1265,10 +1301,9 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     `;
   }).join('');
 
-  const amortize = state.getAmortizeUpfront();
   const monthlyColHeader = amortize ? 'Monthly Cost (amortized)' : 'Monthly Cost';
   const fbtn = (col: PurchaseHistoryColumnId): string => renderHistoryFilterButton(
-    col, PURCHASE_HISTORY_LABELS[col], colFilters[col] != null,
+    col, PURCHASE_HISTORY_LABELS[col], colFilters[col] != null, PURCHASE_HISTORY_FILTER_SCOPE,
   );
   const markup = `
     ${buildStatusChipRowHTML(purchases, activeStatusFilter)}
@@ -1310,6 +1345,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   });
 
   wireRowActionHandlers(container);
+  wireApprovalQueueLinks(container);
 
   // Scroll + flash the deep-link target if the URL hash carries a
   // ?execution=<id>. The suppression badge on the Recommendations
@@ -1471,7 +1507,8 @@ function wireRowActionHandlers(container: HTMLElement): void {
   });
 
   // Wire the inline Revoke button on completed Azure rows within the
-  // free-cancel window (issue #290). quote -> confirmDialog -> POST -> reload.
+  // free-cancel window (issue #290) and on scheduled rows of any provider
+  // (#924). quote -> confirmDialog -> POST -> reload.
   // Completed rows fetch the Azure refund quote first so the user consents to
   // a concrete amount, which the backend re-checks before issuing the refund.
   // The backend is the security boundary; canRevokeCompletedRow is a
@@ -1492,12 +1529,14 @@ function wireRowActionHandlers(container: HTMLElement): void {
           return;
         }
       }
-      const refundLine = quote
-        ? `Azure will refund ${quote.refund_amount.toFixed(2)} ${quote.refund_currency}.`
-        : 'The scheduled purchase has not been submitted yet, so nothing will be charged.';
+      // A scheduled row has not reached any cloud yet, so its copy must not
+      // promise an Azure return: it may be an AWS or GCP purchase (#924).
+      const body = quote
+        ? `This will request an Azure reservation return. Azure will refund ${quote.refund_amount.toFixed(2)} ${quote.refund_currency}.`
+        : 'This will cancel the scheduled purchase. It has not been submitted yet, so nothing will be charged.';
       const ok = await confirmDialog({
         title: 'Revoke this purchase within the free-cancel window?',
-        body: `This will request an Azure reservation return. ${refundLine} This action cannot be undone.`,
+        body: `${body} This action cannot be undone.`,
         confirmLabel: 'Revoke purchase',
         destructive: true,
       });
@@ -1592,11 +1631,17 @@ function wireRowActionHandlers(container: HTMLElement): void {
           addRow('Resource type', purchase.resource_type || '-');
           addRow('Remaining term', remainingMonths === 1 ? '1 month' : `${remainingMonths} months`);
           if (listPricePerUnit > 0) {
+            // Show cents, and derive the fee from the two rounded totals, so
+            // the three lines always reconcile (fee + net = list price). The
+            // dashboard's whole-dollar default rounded each line on its own,
+            // e.g. $101 = $12 + $88 for a $100.50 listing (#318).
+            const listCents = Math.round(listPriceTotal * 100);
+            const netCents = Math.round(netProceedsTotal * 100);
             addRow('Default list price', count > 1
-              ? `${formatCurrency(listPricePerUnit)}/unit (${formatCurrency(listPriceTotal)} total for ${count} units)`
-              : formatCurrency(listPriceTotal));
-            addRow(`AWS fee (${AWS_MARKETPLACE_FEE_PERCENT}%)`, formatCurrency(listPriceTotal * (AWS_MARKETPLACE_FEE_PERCENT / 100)));
-            addRow('Estimated net proceeds', formatCurrency(netProceedsTotal));
+              ? `${formatCurrency(listPricePerUnit, '$', 2)}/unit (${formatCurrency(listCents / 100, '$', 2)} total for ${count} units)`
+              : formatCurrency(listCents / 100, '$', 2));
+            addRow(`AWS fee (${AWS_MARKETPLACE_FEE_PERCENT}%)`, formatCurrency((listCents - netCents) / 100, '$', 2));
+            addRow('Estimated net proceeds', formatCurrency(netCents / 100, '$', 2));
           } else {
             // No default price can be computed (no upfront cost or unknown
             // term) -- listing will be rejected server-side unless a custom
@@ -1812,6 +1857,7 @@ function wireApprovalQueueFilterButtons(
       const isNumeric = APPROVAL_QUEUE_NUMERIC_COLUMNS.has(column);
       const filters = state.getApprovalQueueColumnFilters();
       openHistoryColumnPopover<ApprovalQueueColumnId>({
+        scope: APPROVAL_QUEUE_FILTER_SCOPE,
         column,
         anchor: btn,
         currentFilter: filters[column],
@@ -1847,6 +1893,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
   const colFilters = state.getApprovalQueueColumnFilters();
   const visible = applyApprovalQueueColumnFilters(pending, colFilters);
 
+  const amortize = state.getAmortizeUpfront();
   const rows = visible.map(p => {
     const actions = renderPendingActionButtons(p);
     const actionsCell = actions || '<span class="muted">-</span>';
@@ -1862,7 +1909,6 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
       : '<span class="muted">-</span>';
     const termCell = p.term ? escapeHtml(formatTerm(p.term)) : '<span class="muted">-</span>';
     const paymentCell = p.payment ? escapeHtml(p.payment) : '<span class="muted">-</span>';
-    const amortize = state.getAmortizeUpfront();
     const rawMonthly = p.monthly_cost != null ? p.monthly_cost : null;
     const displayMonthly = (rawMonthly != null && amortize)
       ? (p.upfront_cost == null ? null : amortizedMonthly(rawMonthly, p.upfront_cost, p.term))
@@ -1877,11 +1923,11 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
         <td>${accountCell}</td>
         <td>${providerCell(p)}</td>
         <td>${escapeHtml(p.service)}</td>
-        <td>${p.count}</td>
+        <td>${escapeHtml(String(p.count ?? ''))}</td>
         <td>${termCell}</td>
         <td>${paymentCell}</td>
         <td>${monthlyCostCell}</td>
-        <td>${formatCurrency(p.upfront_cost)}</td>
+        ${upfrontCell(p, amortize)}
         <td class="savings">${formatCurrency(p.estimated_savings)}</td>
         <td>${createdBy}</td>
         <td>${actionsCell}</td>
@@ -1889,12 +1935,11 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
     `;
   }).join('');
 
-  const amortize = state.getAmortizeUpfront();
   const monthlyColHeader = amortize ? 'Monthly Cost (amortized)' : 'Monthly Cost';
   // monthlyColHeader is a hardcoded constant string (no user data), so
   // interpolating it directly into the template is safe.
   const fbtn = (col: ApprovalQueueColumnId): string => renderHistoryFilterButton(
-    col, APPROVAL_QUEUE_LABELS[col], colFilters[col] != null,
+    col, APPROVAL_QUEUE_LABELS[col], colFilters[col] != null, APPROVAL_QUEUE_FILTER_SCOPE,
   );
   container.innerHTML = `
     <table class="approval-queue-table">
