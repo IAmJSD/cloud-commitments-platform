@@ -706,7 +706,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   const resourceCell = hasNoRecommendations
     ? '<span class="no-recommendations" title="This step has no recommendations attached, so it cannot buy anything.">No recommendations attached</span>'
     : `${escapeHtml(purchase.resource_type)} (${escapeHtml(purchase.region)})`;
-  const countCell = hasNoRecommendations ? '—' : String(purchase.count);
+  const countCell = hasNoRecommendations ? '—' : escapeHtml(String(purchase.count ?? ''));
   const upfrontShown = hasNoRecommendations ? '—' : upfrontCell;
   const savingsCell = hasNoRecommendations ? '—' : `${formatCurrency(purchase.estimated_savings)}/mo`;
 
@@ -2232,7 +2232,7 @@ export async function openAddPurchasesModal(planId: string, planName: string, no
         <p class="help-text">Schedule additional purchases for <strong>${escapeHtml(planName)}</strong></p>
 
         <form id="add-purchases-form">
-          <input type="hidden" id="add-purchases-plan-id" value="${planId}">
+          <input type="hidden" id="add-purchases-plan-id" value="${escapeHtmlAttr(planId)}">
 
           <label>Number of Purchases:
             <input type="number" id="add-purchases-count" min="1" max="52" value="1" required>

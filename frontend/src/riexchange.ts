@@ -5,7 +5,7 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatDate, formatDateTime, escapeHtml, formatCurrency } from './utils';
+import { formatDate, formatDateTime, escapeHtml, escapeHtmlAttr, formatCurrency } from './utils';
 import { switchTab, switchSettingsSubTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
 import {
@@ -2109,6 +2109,15 @@ function buildAutoWarningBanner(): HTMLDivElement {
   return banner;
 }
 
+/**
+ * Render a config number into a double-quoted value="..." attribute. The
+ * RIExchangeConfig number types are erased at runtime, so escape rather than
+ * trust them (issue #37); a missing field renders as an empty input.
+ */
+function numberAttr(value: number | null | undefined): string {
+  return escapeHtmlAttr(String(value ?? ''));
+}
+
 function renderAutomationSettings(container: HTMLElement, config: RIExchangeConfig): void {
   const modeOptions = Object.entries(MODE_LABELS)
     .map(([value, label]) => {
@@ -2118,7 +2127,7 @@ function renderAutomationSettings(container: HTMLElement, config: RIExchangeConf
     .join('');
 
   // Build the form via innerHTML since this is all developer-controlled markup
-  // (all dynamic values are escaped via escapeHtml or are numbers)
+  // (all dynamic values are escaped via escapeHtml / numberAttr)
   const formHTML = '<form id="ri-exchange-settings-form" class="settings-form">'
     + '<fieldset class="settings-category">'
     + '<legend>Exchange Automation</legend>'
@@ -2136,19 +2145,19 @@ function renderAutomationSettings(container: HTMLElement, config: RIExchangeConf
     + '</div>'
     + '<div class="setting-row">'
     +   '<div class="setting-info"><label for="ri-exchange-threshold">Utilization Threshold (%)</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-threshold" value="' + config.utilization_threshold + '" min="0" max="100" step="0.1"></div>'
+    +   '<div class="setting-input"><input type="number" id="ri-exchange-threshold" value="' + numberAttr(config.utilization_threshold) + '" min="0" max="100" step="0.1"></div>'
     + '</div>'
     + '<div class="setting-row">'
     +   '<div class="setting-info"><label for="ri-exchange-max-per-exchange">Max Payment Per Exchange (USD)</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-max-per-exchange" value="' + config.max_payment_per_exchange_usd + '" min="0" step="0.01"></div>'
+    +   '<div class="setting-input"><input type="number" id="ri-exchange-max-per-exchange" value="' + numberAttr(config.max_payment_per_exchange_usd) + '" min="0" step="0.01"></div>'
     + '</div>'
     + '<div class="setting-row">'
     +   '<div class="setting-info"><label for="ri-exchange-max-daily">Max Payment Daily (USD)</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-max-daily" value="' + config.max_payment_daily_usd + '" min="0" step="0.01"></div>'
+    +   '<div class="setting-input"><input type="number" id="ri-exchange-max-daily" value="' + numberAttr(config.max_payment_daily_usd) + '" min="0" step="0.01"></div>'
     + '</div>'
     + '<div class="setting-row">'
     +   '<div class="setting-info"><label for="ri-exchange-lookback">Lookback Days</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-lookback" value="' + config.lookback_days + '" min="1" max="365"></div>'
+    +   '<div class="setting-input"><input type="number" id="ri-exchange-lookback" value="' + numberAttr(config.lookback_days) + '" min="1" max="365"></div>'
     + '</div>'
     + '</fieldset>'
     + '<div id="ri-exchange-settings-message" class="mt-3"></div>'
