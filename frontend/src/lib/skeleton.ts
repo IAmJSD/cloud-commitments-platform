@@ -16,7 +16,35 @@
  *
  * All helpers use `createElement` only — no `innerHTML` — to match the
  * codebase's XSS posture from issue #340.
+ *
+ * Accessibility (issue #729): the placeholders themselves are aria-hidden,
+ * so the container carries `aria-busy="true"` while a skeleton is showing.
+ * Success renders replace the children without calling back in here, so a
+ * MutationObserver clears the flag once no placeholder is left.
  */
+
+const SKELETON_SELECTOR = '.skeleton, .skeleton-group, .skeleton-tile, .skeleton-row, .skeleton-table';
+
+const busyObservers = new WeakMap<HTMLElement, MutationObserver>();
+
+function clearBusy(container: HTMLElement): void {
+  container.removeAttribute('aria-busy');
+  busyObservers.get(container)?.disconnect();
+  busyObservers.delete(container);
+}
+
+function markBusy(container: HTMLElement): void {
+  container.setAttribute('aria-busy', 'true');
+  if (busyObservers.has(container) || typeof MutationObserver === 'undefined') return;
+  // Records are delivered after the current task, by which point the show*
+  // helper has appended its placeholders, so the wipe that starts a show
+  // does not clear the flag.
+  const observer = new MutationObserver(() => {
+    if (!container.querySelector(SKELETON_SELECTOR)) clearBusy(container);
+  });
+  observer.observe(container, { childList: true, subtree: true });
+  busyObservers.set(container, observer);
+}
 
 /**
  * A single shimmer block. Width/height are CSS sizes (e.g. "60%", "1rem",
@@ -95,6 +123,7 @@ export function skeletonRow(cols: number): HTMLTableRowElement {
 function activateSkeleton(container: HTMLElement): void {
   while (container.firstChild) container.removeChild(container.firstChild);
   container.dataset['skeletonActive'] = '1';
+  markBusy(container);
 }
 
 /**
@@ -151,6 +180,7 @@ export function teardownSkeleton(container: HTMLElement): void {
     while (container.firstChild) container.removeChild(container.firstChild);
     delete container.dataset['skeletonActive'];
   }
+  clearBusy(container);
 }
 
 /**

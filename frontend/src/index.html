@@ -39,7 +39,7 @@
                 </span>
                 <h1>CUDly</h1>
             </div>
-            <div id="topbar-filters" class="app-topbar-filters" aria-label="Global filters"></div>
+            <div id="topbar-filters" class="app-topbar-filters" role="group" aria-label="Global filters"></div>
             <div id="user-info">
                 <button type="button" id="user-email-display" aria-label="Profile" hidden></button>
                 <span id="user-role-display" class="role-badge"></span>
@@ -256,6 +256,10 @@
                     <p id="history-truncation-notice" class="warning-message" role="status" hidden></p>
                     <section id="history-summary"></section>
                     <section id="history-list"></section>
+                    <!-- Load more (issue #676): shown only when the API reports has_more. -->
+                    <div id="history-load-more" class="history-load-more" hidden>
+                        <button type="button" id="history-load-more-btn" class="btn-secondary" aria-busy="false">Load more</button>
+                    </div>
                 </section>
             </div>
 
@@ -457,6 +461,23 @@
                     <h2>Purchasing policies</h2>
                     <p class="settings-description">Configure purchase defaults, per-provider service terms, and RI exchange automation.</p>
 
+                    <!-- In-page section links (issue #190). Plain anchors so they
+                         work without JS; purchasing-nav.ts adds the scrolling,
+                         opens a collapsed provider block and hides links whose
+                         section is hidden (disabled provider, no access). -->
+                    <nav id="purchasing-section-nav" class="section-jump-nav" aria-label="Purchasing policy sections">
+                        <a href="#purchasing-global-defaults">Defaults</a>
+                        <a href="#purchasing-recommendations-lookback">Lookback</a>
+                        <a href="#purchasing-grace-period">Grace period</a>
+                        <a href="#ec2-ri-offering-class">RI class</a>
+                        <a href="#purchasing-four-eyes">Approvals</a>
+                        <a href="#aws-settings">AWS services</a>
+                        <a href="#azure-settings">Azure services</a>
+                        <a href="#gcp-settings">GCP services</a>
+                        <a href="#ri-exchange-automation-settings">Exchange automation</a>
+                        <a href="#commitment-laddering-settings">Laddering</a>
+                    </nav>
+
                     <fieldset class="settings-category" id="purchasing-global-defaults">
                         <legend>Global Purchase Defaults</legend>
                         <p class="settings-help">Changing these defaults will automatically update all compatible service settings below. Payment options map differently per provider: AWS uses no/partial/all upfront; Azure reservations support upfront or monthly; GCP commitments are billed monthly only.</p>
@@ -580,7 +601,10 @@
                                 <span class="credential-status configured" id="aws-creds-status">Configured (IAM Role)</span>
                             </div>
                         </div>
-                        <h4 class="subsection-title">Service Defaults</h4>
+                        <!-- Collapsed by default to keep the page short (issue #190); the
+                             fields stay in the form, so Save still reads them. -->
+                        <details class="service-defaults-details">
+                        <summary class="subsection-title">Per-service term and payment (9 services)</summary>
                         <div class="service-defaults-grid">
                             <div class="service-default-card">
                                 <h5>EC2 Reserved Instances</h5>
@@ -640,12 +664,16 @@
                                 <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-database-enabled" checked> Enabled</label>
                             </div>
                         </div>
+                        </details>
                     </fieldset>
 
                     <!-- Azure Settings -->
                     <fieldset class="settings-category provider-settings hidden" id="azure-settings">
                         <legend><span class="provider-badge azure">Azure</span> Service Defaults</legend>
-                        <h4 class="subsection-title">Service Defaults</h4>
+                        <!-- Collapsed by default to keep the page short (issue #190); the
+                             fields stay in the form, so Save still reads them. -->
+                        <details class="service-defaults-details">
+                        <summary class="subsection-title">Per-service term and payment (5 services)</summary>
                         <div class="service-defaults-grid">
                             <div class="service-default-card">
                                 <h5>Virtual Machine Reservations</h5>
@@ -673,12 +701,16 @@
                                 <label>Payment: <select id="azure-search-payment"><option value="upfront" selected>Upfront</option><option value="monthly">Monthly</option></select></label>
                             </div>
                         </div>
+                        </details>
                     </fieldset>
 
                     <!-- GCP Settings -->
                     <fieldset class="settings-category provider-settings hidden" id="gcp-settings">
                         <legend><span class="provider-badge gcp">GCP</span> Service Defaults</legend>
-                        <h4 class="subsection-title">Service Defaults</h4>
+                        <!-- Collapsed by default to keep the page short (issue #190); the
+                             fields stay in the form, so Save still reads them. -->
+                        <details class="service-defaults-details">
+                        <summary class="subsection-title">Per-service term (3 services)</summary>
                         <div class="service-defaults-grid">
                             <div class="service-default-card">
                                 <h5>Compute Engine CUDs</h5>
@@ -693,6 +725,7 @@
                                 <label>Term: <select id="gcp-memorystore-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                             </div>
                         </div>
+                        </details>
                     </fieldset>
 
                     <!-- RI Exchange Automation Settings (loaded dynamically) -->
@@ -1081,7 +1114,7 @@
         <div id="user-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="user-modal-title">
             <div class="modal-content">
                 <h2 id="user-modal-title">Create User</h2>
-                <form id="user-form">
+                <form id="user-form" novalidate>
                     <input type="hidden" id="user-id">
                     <div class="form-group">
                         <label for="user-email">Email</label>

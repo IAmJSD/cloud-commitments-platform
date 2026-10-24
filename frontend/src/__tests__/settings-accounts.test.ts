@@ -691,7 +691,7 @@ describe('Overrides panel — AWS payment selector', () => {
     // Issue #109: Azure override rows now get inline payment editing.
     // Azure uses upfront/monthly (not the AWS no-upfront/partial/all-upfront set).
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
-      { id: 'o1', account_id: 'acc-1', provider: 'azure', service: 'vm', term: 1, payment: 'upfront' },
+      { id: 'o1', account_id: 'acc-1', provider: 'azure', service: 'compute', term: 1, payment: 'upfront' },
     ]);
 
     const panel = await openOverridesPanel('acc-1');
@@ -986,7 +986,7 @@ describe('Overrides panel: inline Term/Coverage/Enabled (issue #110)', () => {
     // Issue #109: Azure override rows now have inline editing on all fields,
     // same as AWS rows after issue #110.
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
-      { id: 'o1', account_id: 'acc-1', provider: 'azure', service: 'vm', term: 1, coverage: 80 },
+      { id: 'o1', account_id: 'acc-1', provider: 'azure', service: 'compute', term: 1, coverage: 80 },
     ]);
 
     const panel = await openOverridesPanel('acc-1');
@@ -1215,9 +1215,9 @@ describe('Create-override modal', () => {
     // Service dropdown lists Azure services, not AWS services.
     const svcSel = document.getElementById('override-service') as HTMLSelectElement;
     const svcValues = Array.from(svcSel.options).map(o => o.value);
-    expect(svcValues).toContain('vm');
-    expect(svcValues).toContain('sql');
-    expect(svcValues).toContain('cosmosdb');
+    expect(svcValues).toContain('compute');
+    expect(svcValues).toContain('relational-db');
+    expect(svcValues).toContain('nosql');
     expect(svcValues).not.toContain('ec2');
     expect(svcValues).not.toContain('rds');
   });
@@ -1330,6 +1330,62 @@ describe('Account overrides modal', () => {
     expect(modal.classList.contains('hidden')).toBe(true);
     // Body cleared so the next open doesn't flash stale rows for ~1ms.
     expect(body.children.length).toBe(0);
+  });
+
+  test('focus moves into the modal, Escape closes it, clears the body and restores focus (#731)', async () => {
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: 'acc-1', name: 'Prod', provider: 'aws', external_id: '111', enabled: true },
+    ]);
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'o1', account_id: 'acc-1', provider: 'aws', service: 'ec2', payment: 'all-upfront' },
+    ]);
+
+    await loadAccountsForProvider('aws');
+    const trigger = document.querySelector(
+      `button[aria-label="Service overrides for Prod (111)"]`,
+    ) as HTMLButtonElement;
+    trigger.focus();
+    trigger.click();
+    await new Promise(r => setTimeout(r, 0));
+
+    const modal = document.getElementById('account-overrides-modal') as HTMLElement;
+    const body = document.getElementById('account-overrides-modal-body') as HTMLElement;
+    expect(modal.contains(document.activeElement)).toBe(true);
+
+    modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(modal.classList.contains('hidden')).toBe(true);
+    expect(body.children.length).toBe(0);
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  test('Escape in the auto-opened create modal closes only that modal and returns focus to the outer one (#731)', async () => {
+    (api.listAccounts as jest.Mock).mockResolvedValue([
+      { id: 'acc-1', name: 'Prod', provider: 'aws', external_id: '111', enabled: true },
+    ]);
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
+
+    await loadAccountsForProvider('aws');
+    (document.querySelector(
+      `button[aria-label="Service overrides for Prod (111)"]`,
+    ) as HTMLButtonElement).click();
+    await new Promise(r => setTimeout(r, 0));
+
+    const outer = document.getElementById('account-overrides-modal') as HTMLElement;
+    const inner = document.getElementById('override-modal') as HTMLElement;
+    expect(inner.classList.contains('hidden')).toBe(false);
+    expect(inner.contains(document.activeElement)).toBe(true);
+
+    inner.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(inner.classList.contains('hidden')).toBe(true);
+    expect(outer.classList.contains('hidden')).toBe(false);
+    expect(outer.contains(document.activeElement)).toBe(true);
+
+    // The Escape path ran the same cleanup as the Close button: a stray
+    // submit no longer has an account context to save against.
+    (document.getElementById('override-form') as HTMLFormElement)
+      .dispatchEvent(new Event('submit', { cancelable: true }));
+    await new Promise(r => setTimeout(r, 0));
+    expect(api.saveAccountServiceOverride).not.toHaveBeenCalled();
   });
 
   test('no inline panel renders below the accounts table (issue #122 regression guard)', async () => {
@@ -2303,7 +2359,7 @@ describe('Bulk override modal (issue #119)', () => {
 
   test('all saves fail: error shown in form, modal stays open', async () => {
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
-    (api.saveAccountServiceOverride as jest.Mock).mockRejectedValue(new Error('timeout'));
+    (api.saveAccountServiceOverride as jest.Mock).mockRejectedValue(new Error('coverage must be between 0 and 100'));
 
     const { form, bulkList } = await openBulkModal();
 
@@ -2322,7 +2378,8 @@ describe('Bulk override modal (issue #119)', () => {
     expect(mockShowToast).not.toHaveBeenCalled();
 
     const errEl = document.getElementById('override-form-error') as HTMLElement;
-    expect(errEl.textContent).toMatch(/failed/i);
+    // Issue #748: the server's reason, not a blanket "Check your connection".
+    expect(errEl.textContent).toBe('All 2 saves failed: coverage must be between 0 and 100');
 
     // Modal stays open so user can retry.
     const modal = document.getElementById('override-modal') as HTMLElement;

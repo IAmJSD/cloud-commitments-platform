@@ -12,12 +12,20 @@ import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
 import { approvalDetailsUnavailableMessage, buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
+import {
+  historyTruncationMessage,
+  mergeHistoryPages,
+  nextHistoryCursor,
+  renderLoadMoreControl,
+} from './history-paging';
 import { renderApprovalQueueLink, wireApprovalQueueLinks } from './history-queue-link';
 import { getCurrentUser } from './state';
 import { canAccess } from './permissions';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { localDayRangeToUtcDays, toLocalDateInputValue } from './lib/local-date';
 import { getAccountName } from './recommendations';
 import { applyColumnFilters } from './lib/column-filters';
+import { hasNoCommitments, isRealTerm, NO_RECOMMENDATIONS_LABEL, NO_RECOMMENDATIONS_TITLE } from './lib/purchase-row-guards';
 import {
   openHistoryColumnPopover,
   renderHistoryFilterButton,
@@ -48,6 +56,15 @@ let lastPurchases: HistoryPurchase[] = [];
 const busyHistoryExecutions = new Set<string>();
 let historyMutationEpoch = 0;
 let activeStatusFilter: StatusFilter = 'all';
+
+// Load more paging (issue #676). historyLoadGeneration is bumped by every
+// first-page load, so a Load more response that lands after the user changed
+// a filter (or after a mutation reload) is dropped instead of being appended
+// to the new result set. historyPaging holds the filters of the first page and
+// the cursor of the last page loaded; null when there is nothing more to load.
+let historyLoadGeneration = 0;
+let historyPaging: { filters: api.HistoryFilters; cursor: string } | null = null;
+let loadMoreInFlight = false;
 
 // _fourEyesMode mirrors GlobalConfig.require_different_approver (issue #1005).
 // Gates the inline Approve button so a creator can't approve their own pending
@@ -171,6 +188,7 @@ export function applyExecutionDeepLink(): boolean {
  * + Load History button — those stay here.
  */
 export function setupHistoryHandlers(): void {
+  document.getElementById('history-load-more-btn')?.addEventListener('click', () => void loadMoreHistory());
   state.subscribeProvider(() => void loadHistory());
   state.subscribeAccount(() => void loadHistory());
   // Re-render both tables when the amortize toggle flips (issue #1112).
@@ -236,10 +254,10 @@ export function initHistoryDateRange(): void {
   const endInput = document.getElementById('history-end') as HTMLInputElement | null;
 
   if (startInput && !startInput.value) {
-    startInput.value = start.toISOString().split('T')[0] || '';
+    startInput.value = toLocalDateInputValue(start);
   }
   if (endInput && !endInput.value) {
-    endInput.value = end.toISOString().split('T')[0] || '';
+    endInput.value = toLocalDateInputValue(end);
   }
 }
 
@@ -261,6 +279,7 @@ export function initHistoryDateRange(): void {
  */
 export async function viewPlanHistory(planId: string): Promise<void> {
   const requestEpoch = historyMutationEpoch;
+  resetHistoryPaging();
   // skipDefaultLoad: the tab's own unscoped 7-day fetch would land after the
   // plan-scoped one below and overwrite it, and its date-range seeding is
   // exactly what the doc comment above says not to do here.
@@ -270,8 +289,10 @@ export async function viewPlanHistory(planId: string): Promise<void> {
   if (!canAccess('view', 'purchases')) return;
 
   try {
+    const filters: api.HistoryFilters = { planId };
+    const generation = historyLoadGeneration;
     const [data] = await Promise.all([
-      api.getHistory({ planId }) as unknown as Promise<HistoryResponse>,
+      api.getHistory(filters) as unknown as Promise<HistoryResponse>,
       refreshFourEyesMode(),
     ]);
     if (requestEpoch !== historyMutationEpoch) return;
@@ -281,6 +302,7 @@ export async function viewPlanHistory(planId: string): Promise<void> {
     renderApprovalQueue(purchases);
     renderHistoryList(purchases);
     snapDateInputsToPurchases(purchases);
+    updateHistoryPaging(generation, filters, data);
   } catch (error) {
     if (requestEpoch !== historyMutationEpoch) return;
     console.error('Failed to load plan history:', error);
@@ -304,7 +326,8 @@ export async function viewPlanHistory(planId: string): Promise<void> {
  * Set the From/To inputs to bracket the purchases that just rendered.
  * No-op when the list is empty — keeping the previous values is more
  * honest than seeding a fake "today" range. Timestamps are normalised
- * to UTC YYYY-MM-DD so they slot directly into `<input type="date">`.
+ * to the LOCAL calendar day (the day a date input shows and the table's
+ * formatted timestamps use), not the UTC day (issue #51).
  */
 function snapDateInputsToPurchases(purchases: HistoryPurchase[]): void {
   if (purchases.length === 0) return;
@@ -314,8 +337,8 @@ function snapDateInputsToPurchases(purchases: HistoryPurchase[]): void {
   if (epochs.length === 0) return;
   const startInput = document.getElementById('history-start') as HTMLInputElement | null;
   const endInput = document.getElementById('history-end') as HTMLInputElement | null;
-  const minDate = new Date(Math.min(...epochs)).toISOString().split('T')[0] || '';
-  const maxDate = new Date(Math.max(...epochs)).toISOString().split('T')[0] || '';
+  const minDate = toLocalDateInputValue(new Date(Math.min(...epochs)));
+  const maxDate = toLocalDateInputValue(new Date(Math.max(...epochs)));
   if (startInput) startInput.value = minDate;
   if (endInput) endInput.value = maxDate;
 }
@@ -325,6 +348,8 @@ function snapDateInputsToPurchases(purchases: HistoryPurchase[]): void {
  */
 export async function loadHistory(): Promise<void> {
   const requestEpoch = historyMutationEpoch;
+  resetHistoryPaging();
+  const generation = historyLoadGeneration;
   // Issue #344 T3: skeleton rows for the purchase-history table. 8
   // rows matches the typical first-page row count so the skeleton
   // doesn't shrink dramatically when real data arrives. Column count
@@ -358,9 +383,18 @@ export async function loadHistory(): Promise<void> {
     const stateAccountIDs = state.getCurrentAccountIDs();
     const accountIDs: string[] | undefined = stateAccountIDs.length > 0 ? stateAccountIDs : undefined;
 
+    // The From/To inputs hold LOCAL calendar days, but /history filters on
+    // whole UTC days. Widen to the UTC days covering the local range so an
+    // off-UTC user never loses rows from the edges of the days they picked
+    // (issue #51), without pushing a range the server accepts as typed
+    // over its 366-day cap.
+    const range = localDayRangeToUtcDays(
+      (document.getElementById('history-start') as HTMLInputElement | null)?.value,
+      (document.getElementById('history-end') as HTMLInputElement | null)?.value,
+    );
     const filters: api.HistoryFilters = {
-      start: (document.getElementById('history-start') as HTMLInputElement | null)?.value,
-      end: (document.getElementById('history-end') as HTMLInputElement | null)?.value,
+      start: range.start,
+      end: range.end,
       provider,
       account_ids: accountIDs
     };
@@ -374,6 +408,7 @@ export async function loadHistory(): Promise<void> {
     const purchases = data.purchases || [];
     renderApprovalQueue(purchases);
     renderHistoryList(purchases);
+    updateHistoryPaging(generation, filters, data);
   } catch (error) {
     if (requestEpoch !== historyMutationEpoch) return;
     console.error('Failed to load history:', error);
@@ -393,19 +428,75 @@ export async function loadHistory(): Promise<void> {
 }
 
 /**
+ * Forget the previous result set's cursor and hide Load more. Called at the
+ * start of every first-page load; bumping the generation also invalidates a
+ * Load more request still in flight for the previous result set.
+ */
+function resetHistoryPaging(): void {
+  historyLoadGeneration++;
+  historyPaging = null;
+  renderLoadMoreControl(false);
+}
+
+/** Remember where the next page starts and show Load more when there is one. */
+function updateHistoryPaging(generation: number, filters: api.HistoryFilters, data: HistoryResponse): void {
+  if (generation !== historyLoadGeneration) return;
+  const cursor = nextHistoryCursor(data);
+  historyPaging = cursor ? { filters, cursor } : null;
+  renderLoadMoreControl(historyPaging !== null);
+}
+
+/**
+ * Fetch the page after the last one loaded, with the first page's filters,
+ * and append it (issue #676). Both tables re-render from every loaded row, so
+ * the Approval Queue is built from all loaded pages. The summary cards keep
+ * the first page's totals: a later page's summary covers only that page on
+ * servers without whole-scope totals (#675).
+ */
+export async function loadMoreHistory(): Promise<void> {
+  const paging = historyPaging;
+  if (!paging || loadMoreInFlight) return;
+  const generation = historyLoadGeneration;
+  const requestEpoch = historyMutationEpoch;
+  loadMoreInFlight = true;
+  renderLoadMoreControl(true, true);
+  try {
+    const data = await (api.getHistory({ ...paging.filters, cursor: paging.cursor }) as unknown as Promise<HistoryResponse>);
+    if (generation !== historyLoadGeneration) return;
+    // A mutation landed mid-flight and its reload will replace the rows; keep
+    // the cursor so the button still works if that reload has not started.
+    if (requestEpoch !== historyMutationEpoch) {
+      renderLoadMoreControl(true);
+      return;
+    }
+    const purchases = mergeHistoryPages(lastPurchases, data.purchases || []);
+    renderTruncationNotices(data);
+    renderApprovalQueue(purchases);
+    renderHistoryList(purchases);
+    updateHistoryPaging(generation, paging.filters, data);
+  } catch (error) {
+    if (generation !== historyLoadGeneration) return;
+    console.error('Failed to load more history:', error);
+    showToast({ message: `Failed to load more history: ${(error as Error).message}`, kind: 'error' });
+    renderLoadMoreControl(true);
+  } finally {
+    loadMoreInFlight = false;
+  }
+}
+
+/**
  * Show or hide the "results capped" banner above the approval queue and the
  * history table. The API sets `truncated` when a fetch hit its row cap, in
- * which case pending approvals and the summary totals can under-report.
+ * which case pending approvals and the summary totals can under-report. When
+ * the API can page (#674), Load more replaces the banner for rows it can reach.
  */
 function renderTruncationNotices(data: HistoryResponse): void {
-  const message = data.truncated
-    ? `Results are capped at the most recent ${data.limit ?? '?'} completed purchases and ${data.executions_limit ?? '?'} pending, failed or other non-completed executions. Older rows are not shown, so pending approvals and totals may be incomplete. Narrow the date range or filters to see them.`
-    : '';
+  const message = historyTruncationMessage(data);
   for (const id of ['purchases-truncation-notice', 'history-truncation-notice']) {
     const el = document.getElementById(id);
     if (!el) continue;
     el.textContent = message;
-    el.hidden = !data.truncated;
+    el.hidden = message === '';
   }
 }
 
@@ -559,7 +650,18 @@ function buildStatusChipRowHTML(purchases: HistoryPurchase[], active: StatusFilt
   `;
 }
 
+const MUTED_DASH = '<span class="muted">-</span>';
+const NO_RECS_HTML = `<span class="no-recommendations" title="${NO_RECOMMENDATIONS_TITLE}">${NO_RECOMMENDATIONS_LABEL}</span>`;
+
+// #181: a row with no commitments has placeholder count/term/costs (0, "0
+// Years", $0) and a "0 commitment(s)" type; render dashes and say why
+// instead. A 0 term on a real row (a mixed-term basket) is also a dash.
+function termCell(p: HistoryPurchase): string {
+  return isRealTerm(p.term) ? escapeHtml(formatTerm(p.term)) : MUTED_DASH;
+}
+
 function providerCell(p: HistoryPurchase): string {
+  if (hasNoCommitments(p)) return MUTED_DASH;
   if (!p.provider || p.provider === 'multiple') return '<span class="provider-badge">Multiple</span>';
   // Whitelist provider to prevent stored XSS via class attribute injection (#443).
   const safeProvider = (VALID_PROVIDERS as string[]).includes(p.provider) ? p.provider : 'unknown';
@@ -713,7 +815,11 @@ function canRetryFailedRow(p: HistoryPurchase): boolean {
 // Conditions:
 //   * status must be "completed", "" (legacy blank), or "scheduled"
 //     (pre-fire delay: the cloud SDK has not been called yet -- free cancel);
-//   * provider must be "azure" (AWS and GCP have no direct cancel API);
+//   * completed (and legacy blank) rows must be provider "azure": only Azure
+//     reservations can be returned after purchase, AWS and GCP have no direct
+//     cancel API. Scheduled rows are allowed for every provider because the
+//     backend cancels them via CancelScheduledExecutionAtomic before any
+//     cloud call (issue #924);
 //   * revocation_window_closes_at must be in the future;
 //     for "scheduled" rows this field is populated with scheduled_execution_at
 //     by the backend (issue #290, second-wave CR Finding E);
@@ -726,7 +832,7 @@ function canRetryFailedRow(p: HistoryPurchase): boolean {
 function canRevokeCompletedRow(p: HistoryPurchase): boolean {
   const status = (p.status || '').toLowerCase();
   if (status !== 'completed' && status !== '' && status !== 'scheduled') return false;
-  if ((p.provider || '').toLowerCase() !== 'azure') return false;
+  if (status !== 'scheduled' && (p.provider || '').toLowerCase() !== 'azure') return false;
   if (p.revoked_at) return false; // already revoked
   if (!p.revocation_window_closes_at) return false;
   if (new Date(p.revocation_window_closes_at) <= new Date()) return false;
@@ -948,11 +1054,37 @@ function renderPendingActionButtons(p: HistoryPurchase): string {
 // Decision tree (status-driven, mutually exclusive):
 //   * pending|notified + any action → "Review in approval queue" link (issue
 //                                     #183; Approve / Cancel live in the queue)
-//   * failed + ops_hint set         → ⚠ ops-hint badge (issue #47, Q3 — no retry)
+//   * failed + ops_hint set         → ⚠ ops-hint badge (issue #47, Q3 — no retry),
+//                                     plus any lineage link (issue #1040)
 //   * failed + threshold reached    → "Retried 5× — confirm to override" Retry button (Q2)
 //   * failed + canRetry             → standard ↻ Retry button
 //   * any row with retry lineage    → inline ↻ Retried as / ↻ Retry of link
 //   * else                          → plan_name or "-"
+// renderLineageLinks returns the inline retry-chain cross-links for a row: a
+// row that was retried (retry_execution_id set) or is itself a retry
+// (retry_attempt_n > 0) links to the other end of the chain so the user can
+// navigate without scrolling. Both can be true simultaneously on a
+// middle-of-chain row (failed_v2 was retried into v3 AND is itself a retry
+// of v1).
+function renderLineageLinks(p: HistoryPurchase): string[] {
+  const lineage: string[] = [];
+  if (p.retry_execution_id) {
+    lineage.push(`<a href="#history?execution=${encodeURIComponent(p.retry_execution_id)}" class="history-retry-link" title="Jump to the retry execution">↻ Retried as #${escapeHtml(shortExecID(p.retry_execution_id))}</a>`);
+  }
+  if ((p.retry_attempt_n ?? 0) > 0) {
+    // We don't carry a back-pointer field — a future enhancement
+    // could surface the predecessor's exec ID via the API. For now
+    // we render a static badge (no link target) so users at least
+    // see "this is a retry" provenance.
+    // Coerce to a number: the history response is cast, not validated
+    // (api.getHistory), so the TS number type is not a runtime guarantee
+    // and this value sits inside a title="..." attribute.
+    const attemptN = Number(p.retry_attempt_n) || 0;
+    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${attemptN} in its chain">↻ Retry #${attemptN}</span>`);
+  }
+  return lineage;
+}
+
 function renderActionCell(p: HistoryPurchase): string {
   // Pending → the Approval queue card is the one place to approve or cancel
   // (issue #183). Where the session has a pending action (or a 4-eyes reason
@@ -972,7 +1104,10 @@ function renderActionCell(p: HistoryPurchase): string {
       const title = p.redrive_unsafe
         ? 'Permanent: this execution can never be retried; check the account, then start a new purchase if needed'
         : 'Operator action required — Retry will not help until this is fixed';
-      return `<span class="history-ops-hint" title="${title}">⚠ ${escapeHtml(p.ops_hint)}</span>`;
+      // Keep the lineage links next to the hint (issue #1040): a legacy row
+      // retried before the re-drive gate (#967) now carries the permanent
+      // hint, and the operator still needs the link to its successor.
+      return [`<span class="history-ops-hint" title="${title}">⚠ ${escapeHtml(p.ops_hint)}</span>`, ...renderLineageLinks(p)].join(' ');
     }
     if (canRetryFailedRow(p) && p.purchase_id) {
       const overThreshold = retryThresholdReached(p);
@@ -982,40 +1117,22 @@ function renderActionCell(p: HistoryPurchase): string {
     }
   }
 
-  // Lineage links: a row that was retried (retry_execution_id set) or
-  // is itself a retry (retry_attempt_n > 0) gets an inline cross-link
-  // to the other end of the chain so the user can navigate without
-  // scrolling. Both can be true simultaneously on a middle-of-chain
-  // row (failed_v2 was retried into v3 AND is itself a retry of v1).
-  const lineage: string[] = [];
-  if (p.retry_execution_id) {
-    lineage.push(`<a href="#history?execution=${encodeURIComponent(p.retry_execution_id)}" class="history-retry-link" title="Jump to the retry execution">↻ Retried as #${escapeHtml(shortExecID(p.retry_execution_id))}</a>`);
-  }
-  if ((p.retry_attempt_n ?? 0) > 0) {
-    // We don't carry a back-pointer field — a future enhancement
-    // could surface the predecessor's exec ID via the API. For now
-    // we render a static badge (no link target) so users at least
-    // see "this is a retry" provenance.
-    // Coerce to a number: the history response is cast, not validated
-    // (api.getHistory), so the TS number type is not a runtime guarantee
-    // and this value sits inside a title="..." attribute.
-    const attemptN = Number(p.retry_attempt_n) || 0;
-    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${attemptN} in its chain">↻ Retry #${attemptN}</span>`);
-  }
+  const lineage = renderLineageLinks(p);
   // Build the trailing action buttons so they compose with lineage links
   // — a retry-descendant can also have an active listing that needs a
   // Cancel button, or be an Azure row still inside its revoke window.
   const trailingActions: string[] = [];
   if (p.purchase_id) {
-    // Completed Azure row within revocation window: Revoke button (issue
-    // #290). Only Azure supports direct in-app revocation; AWS and GCP have
-    // no cancel API so the button is suppressed for those providers.
+    // Revoke button (issue #290): completed Azure rows within the refund
+    // window, and scheduled rows on any provider before they fire (#924).
+    // Completed AWS and GCP rows have no cancel API, so they get no button.
     if (canRevokeCompletedRow(p)) {
       trailingActions.push(`<button type="button" class="btn-link history-revoke-btn" data-revoke-id="${escapeHtml(p.purchase_id)}" data-revoke-scheduled="${(p.status || '').toLowerCase() === 'scheduled'}">Revoke</button>`);
     }
     // Completed Standard RI rows (AWS): Cancel listing / Sell on Marketplace
-    // (issue #292). Mutually exclusive with revoke in practice (revoke is
-    // Azure-only, marketplace is AWS Standard-RI-only).
+    // (issue #292). Mutually exclusive with revoke in practice (revoke on a
+    // completed row is Azure-only, marketplace is AWS Standard-RI-only and
+    // never applies to a scheduled row).
     if (canCancelMarketplaceListing(p)) {
       trailingActions.push(`<button type="button" class="btn-link history-marketplace-cancel-btn" data-marketplace-cancel-id="${escapeHtml(p.purchase_id)}">Cancel listing ${escapeHtml(p.listing_id || '')}</button>`);
     } else if (canSellOnMarketplace(p)) {
@@ -1135,8 +1252,9 @@ function purchaseHistoryDisplayLabel(
 ): string {
   if (value === '') return '(empty)';
   if (column === 'term') {
+    // Match the cell: a 0 term renders as a dash, never "0 Years" (#181).
     const n = Number(value);
-    return Number.isFinite(n) ? formatTerm(n) : value;
+    return isRealTerm(n) ? formatTerm(n) : Number.isFinite(n) ? '-' : value;
   }
   return value;
 }
@@ -1274,19 +1392,21 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     const monthlyCostCell = displayMonthly != null
       ? formatCurrency(displayMonthly)
       : '<span class="muted">-</span>';
+    const empty = hasNoCommitments(p);
+    const dashOr = (html: string): string => (empty ? MUTED_DASH : html);
     return `
       <tr${execIdAttr}>
         <td>${statusCell}</td>
         <td>${formatDate(p.timestamp)}</td>
         <td>${providerCell(p)}</td>
-        <td>${escapeHtml(p.service)}</td>
-        <td>${escapeHtml(p.resource_type)}</td>
-        <td>${escapeHtml(p.region)}</td>
-        <td>${escapeHtml(String(p.count ?? ''))}</td>
-        <td>${formatTerm(p.term)}</td>
-        ${upfrontCell(p, amortize)}
-        <td>${monthlyCostCell}</td>
-        <td class="savings">${formatCurrency(p.estimated_savings)}</td>
+        <td>${dashOr(escapeHtml(p.service))}</td>
+        <td>${empty ? NO_RECS_HTML : escapeHtml(p.resource_type)}</td>
+        <td>${dashOr(escapeHtml(p.region))}</td>
+        <td>${dashOr(escapeHtml(String(p.count ?? '')))}</td>
+        <td>${termCell(p)}</td>
+        ${empty ? `<td>${MUTED_DASH}</td>` : upfrontCell(p, amortize)}
+        <td>${dashOr(monthlyCostCell)}</td>
+        <td class="savings">${dashOr(formatCurrency(p.estimated_savings))}</td>
         <td>${planCellContent}</td>
       </tr>
     `;
@@ -1499,7 +1619,8 @@ function wireRowActionHandlers(container: HTMLElement): void {
   });
 
   // Wire the inline Revoke button on completed Azure rows within the
-  // free-cancel window (issue #290). quote -> confirmDialog -> POST -> reload.
+  // free-cancel window (issue #290) and on scheduled rows of any provider
+  // (#924). quote -> confirmDialog -> POST -> reload.
   // Completed rows fetch the Azure refund quote first so the user consents to
   // a concrete amount, which the backend re-checks before issuing the refund.
   // The backend is the security boundary; canRevokeCompletedRow is a
@@ -1520,12 +1641,14 @@ function wireRowActionHandlers(container: HTMLElement): void {
           return;
         }
       }
-      const refundLine = quote
-        ? `Azure will refund ${quote.refund_amount.toFixed(2)} ${quote.refund_currency}.`
-        : 'The scheduled purchase has not been submitted yet, so nothing will be charged.';
+      // A scheduled row has not reached any cloud yet, so its copy must not
+      // promise an Azure return: it may be an AWS or GCP purchase (#924).
+      const body = quote
+        ? `This will request an Azure reservation return. Azure will refund ${quote.refund_amount.toFixed(2)} ${quote.refund_currency}.`
+        : 'This will cancel the scheduled purchase. It has not been submitted yet, so nothing will be charged.';
       const ok = await confirmDialog({
         title: 'Revoke this purchase within the free-cancel window?',
-        body: `This will request an Azure reservation return. ${refundLine} This action cannot be undone.`,
+        body: `${body} This action cannot be undone.`,
         confirmLabel: 'Revoke purchase',
         destructive: true,
       });
@@ -1820,8 +1943,9 @@ function approvalQueueDisplayLabel(
 ): string {
   if (value === '') return '(empty)';
   if (column === 'term') {
+    // Match the cell: a 0 term renders as a dash, never "0 Years" (#181).
     const n = Number(value);
-    return Number.isFinite(n) ? formatTerm(n) : value;
+    return isRealTerm(n) ? formatTerm(n) : Number.isFinite(n) ? '-' : value;
   }
   if (column === 'account') {
     // Account cells render via getAccountName() — mirror the same display.
@@ -1896,7 +2020,8 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
     const accountCell = p.account_id
       ? escapeHtml(getAccountName(p.account_id))
       : '<span class="muted">-</span>';
-    const termCell = p.term ? escapeHtml(formatTerm(p.term)) : '<span class="muted">-</span>';
+    const empty = hasNoCommitments(p);
+    const dashOr = (html: string): string => (empty ? MUTED_DASH : html);
     const paymentCell = p.payment ? escapeHtml(p.payment) : '<span class="muted">-</span>';
     const rawMonthly = p.monthly_cost != null ? p.monthly_cost : null;
     const displayMonthly = (rawMonthly != null && amortize)
@@ -1911,13 +2036,13 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
         <td>${formatDate(p.timestamp)}</td>
         <td>${accountCell}</td>
         <td>${providerCell(p)}</td>
-        <td>${escapeHtml(p.service)}</td>
-        <td>${escapeHtml(String(p.count ?? ''))}</td>
-        <td>${termCell}</td>
-        <td>${paymentCell}</td>
-        <td>${monthlyCostCell}</td>
-        ${upfrontCell(p, amortize)}
-        <td class="savings">${formatCurrency(p.estimated_savings)}</td>
+        <td>${empty ? NO_RECS_HTML : escapeHtml(p.service)}</td>
+        <td>${dashOr(escapeHtml(String(p.count ?? '')))}</td>
+        <td>${termCell(p)}</td>
+        <td>${dashOr(paymentCell)}</td>
+        <td>${dashOr(monthlyCostCell)}</td>
+        ${empty ? `<td>${MUTED_DASH}</td>` : upfrontCell(p, amortize)}
+        <td class="savings">${dashOr(formatCurrency(p.estimated_savings))}</td>
         <td>${createdBy}</td>
         <td>${actionsCell}</td>
       </tr>
