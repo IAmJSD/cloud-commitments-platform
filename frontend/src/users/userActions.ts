@@ -3,7 +3,7 @@
  */
 
 import * as api from '../api';
-import { getCurrentUser } from '../state';
+import { getCurrentUser, setCurrentUser } from '../state';
 import { isAdmin, isPurchaser, PURCHASER_GROUP_ID } from '../permissions';
 import {
   allUsers,
@@ -19,6 +19,7 @@ import { applyFilters } from './filters';
 import { renderUsers, renderUserStats, populateBulkGroupSelect } from './userList';
 import { renderGroups } from '../groups/groupList';
 import { renderPermissionMatrix } from './permissionMatrix';
+import { clearUserSectionsStatus, renderUserSectionsError, showUserSectionsLoading } from './loadStatus';
 
 /**
  * Defence-in-depth normaliser for the API contract. The backend's TS-typed
@@ -65,9 +66,30 @@ function withCurrentUser(users: api.APIUser[]): api.APIUser[] {
 }
 
 /**
+ * Re-read the signed-in user's groups and effective permissions after a
+ * group-membership change that includes them, so permission-gated UI (e.g.
+ * the Opportunities Purchase button and no-Purchaser banner) reflects the
+ * change on its next render instead of after a reload (#20). Best-effort:
+ * a failed fetch keeps the old state, which is no worse than before.
+ */
+export async function refreshCurrentUserAccess(changedUserIds: readonly string[]): Promise<void> {
+  const current = getCurrentUser();
+  if (!current || !changedUserIds.includes(current.id)) return;
+  try {
+    const [me, perms] = await Promise.all([api.getCurrentUser(), api.getUserPermissions()]);
+    setCurrentUser({ ...me, effectivePermissions: perms.permissions });
+  } catch (err) {
+    console.warn('Failed to refresh current user permissions:', err);
+  }
+}
+
+/**
  * Load and display users and groups
  */
 export async function loadUsers(): Promise<void> {
+  // Issue #182: skeletons while the lists load, so an empty box is never
+  // mistaken for "no users" (no-op where a list is already on screen).
+  showUserSectionsLoading();
   try {
     const [usersResponse, groupsResponse] = await Promise.all([
       api.listUsers(),
@@ -83,6 +105,7 @@ export async function loadUsers(): Promise<void> {
 
     setAvailableGroups(groups);
     setAllUsers(withCurrentUser(users));
+    clearUserSectionsStatus();
 
     // Apply current filters
     applyFilters();
@@ -124,6 +147,10 @@ export async function loadUsers(): Promise<void> {
   } catch (error) {
     console.error('Failed to load users/groups:', error);
     showError('Failed to load users and groups');
+    // Issue #182: the toast fades; leave an inline error with a Retry in
+    // each section that has nothing else to show.
+    const detail = error instanceof Error ? error.message : '';
+    renderUserSectionsError(detail, () => { void loadUsers(); });
   }
 }
 
@@ -253,6 +280,7 @@ export async function bulkAddToGroup(groupId: string): Promise<void> {
     // Deselect only the successfully-applied users so any skipped
     // (contradictory) users stay selected for the admin to fix.
     applicable.forEach(({ userId }) => removeSelectedUserId(userId));
+    await refreshCurrentUserAccess(applicable.map(({ userId }) => userId));
     await loadUsers();
     showSuccess(`Successfully added ${applicable.length} user(s) to group`);
   } catch (error) {

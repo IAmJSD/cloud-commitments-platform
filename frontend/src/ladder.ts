@@ -22,6 +22,7 @@ import { initLadderAccountSelector } from './ladder-account-selector';
 import { renderLadderConfigTable } from './ladder-config-table';
 import { renderLadderConfigModal } from './ladder-config-modal';
 import { listAccountsMinimal, type AccountSummary } from './api/accounts';
+import { readLadderNumbers } from './ladder-form-numbers';
 
 // ==========================================
 // MODULE STATE
@@ -279,19 +280,21 @@ export async function saveLadderConfig(): Promise<void> {
     return;
   }
 
+  const numbers = readLadderNumbers();
+  if (!numbers.ok) {
+    showToast({ message: numbers.message, kind: 'error' });
+    numbers.field?.focus();
+    return;
+  }
+
   const cfg: api.LadderConfig = {
     id: (document.getElementById('ladder-cfg-id') as HTMLInputElement | null)?.value || undefined,
     ...identity,
     enabled: (document.getElementById('ladder-cfg-enabled') as HTMLInputElement | null)?.checked ?? false,
     mode: ((document.getElementById('ladder-cfg-mode') as HTMLSelectElement | null)?.value ?? 'email_approval') as api.LadderConfig['mode'],
     cadence: ((document.getElementById('ladder-cfg-cadence') as HTMLSelectElement | null)?.value ?? 'daily') as api.LadderConfig['cadence'],
-    target_coverage: Number((document.getElementById('ladder-cfg-target-coverage') as HTMLInputElement | null)?.value ?? '100'),
-    buffer_fraction: Number((document.getElementById('ladder-cfg-buffer-fraction') as HTMLInputElement | null)?.value ?? '0.10'),
-    baseline_percentile: Number((document.getElementById('ladder-cfg-baseline-percentile') as HTMLInputElement | null)?.value ?? '5'),
-    lookback_days: Number((document.getElementById('ladder-cfg-lookback-days') as HTMLInputElement | null)?.value ?? '30'),
-    buffer_utilization_threshold: Number((document.getElementById('ladder-cfg-buf-util-threshold') as HTMLInputElement | null)?.value ?? '90'),
+    ...numbers.values,
     max_hourly_commit_per_run: maxHourly,
-    max_actions_per_run: Number((document.getElementById('ladder-cfg-max-actions') as HTMLInputElement | null)?.value ?? '10'),
     ramp_schedule: rampSchedule,
   };
 

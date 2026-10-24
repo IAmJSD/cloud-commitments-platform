@@ -203,3 +203,24 @@ test('config form uses compact aligned inputs and scrolls inside the modal on sh
   await page.setViewportSize({ width: 390, height: 844 });
   expect((await box('buffer-fraction')).x).toBeCloseTo((await box('target-coverage')).x, 0);
 });
+
+test('a cleared Buffer Fraction blocks the save instead of sending a zero buffer (#134)', async ({ page }) => {
+  const { saves, writes, errors } = await setup(page);
+  await page.locator('#ladder-add-config-btn').click();
+  await expect(page.locator('#ladder-cfg-account')).toBeEnabled();
+  await page.locator('#ladder-cfg-account').selectOption('registered-aws');
+  await page.locator('#ladder-cfg-buffer-fraction').fill('');
+  await page.locator('#ladder-config-save-btn').click();
+  await expect(page.getByText('Buffer fraction is required. Enter a number before saving.')).toBeVisible();
+  await expect(page.locator('#ladder-config-modal')).toBeVisible();
+  await expect(page.locator('#ladder-cfg-buffer-fraction')).toBeFocused();
+  expect(saves).toEqual([]);
+  expect(writes).toEqual([]);
+
+  await page.locator('#ladder-cfg-buffer-fraction').fill('0');
+  await page.locator('#ladder-config-save-btn').click();
+  await expect(page.locator('#ladder-config-modal')).toBeHidden();
+  expect(saves).toHaveLength(1);
+  expect(saves[0]!.buffer_fraction).toBe(0);
+  expect(errors).toEqual([]);
+});

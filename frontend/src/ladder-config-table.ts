@@ -36,7 +36,7 @@ export function renderLadderConfigTable(container: HTMLElement, configs: readonl
       <td>${cfg.enabled ? 'Yes' : 'No'}</td>
       <td>${escapeHtml(cfg.mode === 'email_approval' ? 'Email Approval' : 'Auto Approve')}</td>
       <td>${escapeHtml(cfg.cadence === 'daily' ? 'Daily' : 'Weekly')}</td>
-      <td>${cfg.target_coverage.toFixed(1)}%</td>
+      <td>${typeof cfg.target_coverage === 'number' ? `${cfg.target_coverage.toFixed(1)}%` : 'N/A'}</td>
       <td>${cfg.updated_at ? escapeHtml(formatDate(cfg.updated_at)) : 'N/A'}</td>
       ${options.canEdit
         ? `<td><button type="button" class="btn btn-sm btn-secondary ladder-edit-btn"
