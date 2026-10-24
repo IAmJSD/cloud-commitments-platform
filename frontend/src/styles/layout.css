@@ -65,7 +65,7 @@
     display: flex;
     flex-direction: column;
     gap: var(--cudly-sp-2);
-    transition: width 0.2s ease;
+    transition: width var(--cudly-dur) var(--cudly-ease);
 }
 
 .app-sidebar.collapsed {
@@ -127,7 +127,7 @@
     font-weight: var(--cudly-fw-medium);
     cursor: pointer;
     width: 100%;
-    transition: background-color 0.15s, color 0.15s;
+    transition: background-color var(--cudly-dur-fast) var(--cudly-ease), color var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .app-sidebar-nav .tab-btn:visited {
@@ -219,7 +219,7 @@ header h1 {
     opacity: 0.9;
     padding: 0.3rem 0.6rem;
     border-radius: 4px;
-    transition: background-color 0.2s, opacity 0.2s;
+    transition: background-color var(--cudly-dur) var(--cudly-ease), opacity var(--cudly-dur) var(--cudly-ease);
 }
 
 #user-email:hover {
@@ -244,7 +244,7 @@ header h1 {
     color: var(--cudly-primary-fg);
     cursor: pointer;
     font-size: 0.85rem;
-    transition: background-color 0.2s, border-color 0.2s;
+    transition: background-color var(--cudly-dur) var(--cudly-ease), border-color var(--cudly-dur) var(--cudly-ease);
 }
 
 #logout-btn:hover {
@@ -258,7 +258,7 @@ header h1 {
     padding: var(--cudly-sp-2) var(--cudly-sp-3);
     border-radius: var(--cudly-r-sm);
     font-size: var(--cudly-fs-sm);
-    transition: background-color 0.2s;
+    transition: background-color var(--cudly-dur) var(--cudly-ease);
 }
 
 .header-link:hover {
@@ -278,9 +278,17 @@ main {
 
 #summary {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    /* Four KPI cards: 4 across, then 2x2, then 1 column (breakpoints in
+     * responsive.css), never 3 + an orphan (issue #191). */
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 1rem;
     margin-bottom: 2rem;
+}
+
+/* An error or notice rendered in place of the cards spans the whole row
+ * rather than squeezing into the first of the four fixed columns. */
+:is(#summary, #recommendations-summary, #history-summary) > :not(.card) {
+    grid-column: 1 / -1;
 }
 
 /* Footer */
