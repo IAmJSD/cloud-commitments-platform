@@ -85,6 +85,14 @@ describe('API History Module', () => {
       );
     });
 
+    test('passes the paging cursor after the filters (issue #676)', async () => {
+      (apiRequest as jest.Mock).mockResolvedValue({});
+
+      await getHistory({ provider: 'aws', cursor: 'djEuYS4x' });
+
+      expect(apiRequest).toHaveBeenCalledWith('/history?provider=aws&cursor=djEuYS4x');
+    });
+
     test('handles empty filters object', async () => {
       (apiRequest as jest.Mock).mockResolvedValue([]);
 

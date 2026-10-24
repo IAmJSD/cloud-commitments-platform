@@ -36,6 +36,7 @@ function canActOnRecommendations(): boolean {
 }
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 import { fetchOverridesForAccounts } from './lib/overrides';
+import { ownValue } from './lib/own-property';
 // Re-export the shared primitives so existing consumers that import from
 // recommendations.ts keep working without import-path churn (issue #166).
 export { parseNumericFilter } from './lib/column-filters';
@@ -1335,8 +1336,8 @@ function sortVariantsInCell(variants: LocalRecommendation[]): LocalRecommendatio
   return variants.slice().sort((a, b) => {
     const termDiff = a.term - b.term;
     if (termDiff !== 0) return termDiff;
-    const pa = PAYMENT_ORDER[a.payment ?? ''] ?? 99;
-    const pb = PAYMENT_ORDER[b.payment ?? ''] ?? 99;
+    const pa = ownValue(PAYMENT_ORDER, a.payment ?? '') ?? 99;
+    const pb = ownValue(PAYMENT_ORDER, b.payment ?? '') ?? 99;
     return pa - pb;
   });
 }
@@ -1454,7 +1455,7 @@ function cellScoreFor(
     // canonical order. Stringified so the existing string-column comparator
     // path handles it.
     const first = sortVariantsInCell(variants)[0];
-    return String(PAYMENT_ORDER[first?.payment ?? ''] ?? 99);
+    return String(ownValue(PAYMENT_ORDER, first?.payment ?? '') ?? 99);
   }
 
   // All other numeric columns (savings, count, on_demand_monthly): preserve
@@ -2470,7 +2471,8 @@ function buildPopoverContent(
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
   clearBtn.className = 'column-filter-clear';
-  clearBtn.textContent = 'Clear';
+  // Categorical: selects nothing (hides every row), so not "Clear" (#727).
+  clearBtn.textContent = input ? 'Clear' : 'Select none';
   clearBtn.addEventListener('click', () => {
     if (input) {
       // Numeric column: Clear drops the expression entirely (no filter).
@@ -3099,7 +3101,7 @@ const PAYMENT_DISPLAY_LABELS: Record<string, string> = {
 
 function formatPayment(payment: string | undefined): string {
   if (!payment) return '\u2014';
-  return PAYMENT_DISPLAY_LABELS[payment] ?? payment;
+  return ownValue(PAYMENT_DISPLAY_LABELS, payment) ?? payment;
 }
 
 // renderUsageSparkline returns an inline SVG polyline representing the
@@ -3240,7 +3242,7 @@ function buildVariantRowMarkup(
       rec.region,
       accountName,
       formatTerm(rec.term),
-      PAYMENT_DISPLAY_LABELS[rec.payment ?? ''] ?? '',
+      ownValue(PAYMENT_DISPLAY_LABELS, rec.payment ?? '') ?? '',
     ].filter(part => part).join(' '),
   );
   const checkboxCell = showCheckboxes
@@ -3276,7 +3278,14 @@ function buildListMarkup(
     if (col.sortable === false) {
       return `<th>${lbl}</th>`;
     }
-    return `<th class="sortable" data-sort="${col.key}" tabindex="0" role="button" aria-label="Sort by ${lbl}"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}${filterBtn(col.key)}</th>`;
+    // Issue #755: the <th> stays a plain column header (exposing aria-sort)
+    // and holds two sibling buttons, sort and filter. A focusable
+    // role=button <th> wrapping the filter button made Enter on the filter
+    // bubble into the sort handler, and nested the two controls.
+    const ariaSort = sort.column === col.key
+      ? ` aria-sort="${sort.direction === 'asc' ? 'ascending' : 'descending'}"`
+      : '';
+    return `<th class="sortable" data-sort="${col.key}"${ariaSort}><button type="button" class="sort-btn"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}</button>${filterBtn(col.key)}</th>`;
   };
 
   // issues #225 + #226: group by cell, sort groups, then render.
@@ -4967,10 +4976,17 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   ensureRecommendationsTabObserver();
 
   // Sortable column headers. Toggle ascending/descending on repeat click.
+  // The click listener sits on the <th> so the whole header stays a mouse
+  // target; keyboard users reach it through the inner .sort-btn, whose
+  // native Enter/Space activation bubbles here as a click. The filter
+  // button stops propagation, so it never sorts (issue #755).
   container.querySelectorAll<HTMLTableCellElement>('th.sortable').forEach((th) => {
     const onActivate = (): void => {
       const col = th.dataset['sort'];
       if (!col) return;
+      // The re-render below replaces the header, so remember whether the
+      // sort button had focus and move focus to its replacement.
+      const hadFocus = th.contains(document.activeElement);
       const prev = state.getRecommendationsSort();
       // Issue #480: first click on a different column uses that column's
       // per-config default direction (asc for text/most numerics; desc for
@@ -4987,14 +5003,13 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
       // at Savings desc".
       writeSortToUrl({ column: col as state.RecommendationsSortColumn, direction });
       renderRecommendationsList(loadedRecs);
+      if (hadFocus) {
+        document.querySelector<HTMLButtonElement>(
+          `#recommendations-list th[data-sort="${CSS.escape(col)}"] .sort-btn`,
+        )?.focus();
+      }
     };
     th.addEventListener('click', onActivate);
-    th.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        onActivate();
-      }
-    });
   });
 
   // Issue #869: selection handlers are only meaningful when the session can
