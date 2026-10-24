@@ -30,6 +30,7 @@ const PAGES = [
   '/plans',
   '/purchases',
   '/inventory',
+  '/inventory/trends',
   '/admin/general',
   '/admin/purchasing',
   '/admin/accounts',
