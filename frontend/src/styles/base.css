@@ -45,6 +45,7 @@
 
     /* Typography */
     --cudly-font-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --cudly-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     --cudly-fs-xs: 0.75rem;     /* 12px */
     --cudly-fs-sm: 0.875rem;    /* 14px */
     --cudly-fs-md: 1rem;        /* 16px */

@@ -782,7 +782,7 @@ function showMFACodeStep(): void {
         autocomplete="one-time-code"
         pattern="[0-9A-Za-z\\-]{6,16}"
         maxlength="16"
-        style="font-family: monospace; letter-spacing: 0.2em;"
+        class="code-input"
         autofocus
       >
     </label>
@@ -1092,7 +1092,7 @@ async function openProfileModal(): Promise<void> {
             <button type="submit" class="primary">Save Changes</button>
           </div>
         </form>
-        <hr style="margin: 24px 0;">
+        <hr class="profile-section-divider">
         <div id="profile-mfa-section">
           <!-- Populated by renderMFASection() on open -->
         </div>
@@ -1219,7 +1219,7 @@ function renderMFAEnrollPasswordStep(): void {
   const host = getMFAFlowHost();
   if (!host) return;
   host.innerHTML = `
-    <div style="margin-top: 12px; padding: 12px; border: 1px solid var(--border-color, #ddd); border-radius: 4px;">
+    <div class="mfa-panel">
       <h4>Confirm password</h4>
       <p class="help-text">Re-enter your password to begin setting up two-factor authentication.</p>
       <label>Password:
@@ -1262,16 +1262,16 @@ async function renderMFAEnrollQRStep(secret: string, provisioningURI: string): P
   const host = getMFAFlowHost();
   if (!host) return;
   host.innerHTML = `
-    <div style="margin-top: 12px; padding: 12px; border: 1px solid var(--border-color, #ddd); border-radius: 4px;">
+    <div class="mfa-panel">
       <h4>Scan QR code</h4>
       <p class="help-text">Scan this code with your authenticator app (Google Authenticator, Authy, Bitwarden, 1Password, etc.).</p>
-      <div id="mfa-qr" style="display: flex; justify-content: center; padding: 8px;"></div>
+      <div id="mfa-qr" class="mfa-qr"></div>
       <p class="help-text">Can't scan? Enter this secret manually:</p>
-      <div style="font-family: monospace; padding: 8px; background: var(--bg-subtle, #f5f5f5); border-radius: 4px; word-break: break-all;">
+      <div class="mfa-secret">
         <span id="mfa-secret-display">${escapeHtml(formatSecretForDisplay(secret))}</span>
-        <button type="button" id="mfa-secret-copy" style="margin-left: 8px;">Copy</button>
+        <button type="button" id="mfa-secret-copy">Copy</button>
       </div>
-      <label style="margin-top: 12px;">Enter the 6-digit code shown in your app:
+      <label>Enter the 6-digit code shown in your app:
         <input
           type="text"
           id="mfa-enroll-code"
@@ -1279,7 +1279,7 @@ async function renderMFAEnrollQRStep(secret: string, provisioningURI: string): P
           autocomplete="one-time-code"
           pattern="[0-9]{6}"
           maxlength="6"
-          style="font-family: monospace; letter-spacing: 0.2em;"
+          class="code-input"
         >
       </label>
       <div id="mfa-flow-error" class="error-message hidden"></div>
@@ -1306,7 +1306,6 @@ async function renderMFAEnrollQRStep(secret: string, provisioningURI: string): P
       const img = document.createElement('img');
       img.src = dataUrl;
       img.alt = 'Two-factor authentication QR code';
-      img.style.maxWidth = '200px';
       container.appendChild(img);
     }
   } catch (err) {
@@ -1365,12 +1364,12 @@ function setProfileSecretPending(pending: boolean): void {
 function renderMFAEnrollCodesStep(codes: string[]): void {
   const host = getMFAFlowHost();
   if (!host) return;
-  const codesList = codes.map((c) => `<li style="font-family: monospace; padding: 2px 0;">${escapeHtml(c)}</li>`).join('');
+  const codesList = codes.map((c) => `<li>${escapeHtml(c)}</li>`).join('');
   host.innerHTML = `
-    <div style="margin-top: 12px; padding: 12px; border: 2px solid var(--accent-color, #2563eb); border-radius: 4px;">
+    <div class="mfa-panel mfa-panel-emphasis">
       <h4>Save your recovery codes</h4>
       <p class="help-text"><strong>Each code can be used once</strong> if you lose access to your authenticator app. Save them somewhere safe — this is the only time they'll be shown.</p>
-      <ul style="list-style: none; padding: 8px; background: var(--bg-subtle, #f5f5f5); border-radius: 4px;">
+      <ul class="recovery-codes" aria-label="Recovery codes">
         ${codesList}
       </ul>
       <div class="modal-buttons">
@@ -1416,20 +1415,20 @@ function renderMFADisableFlow(): void {
   const host = getMFAFlowHost();
   if (!host) return;
   host.innerHTML = `
-    <div style="margin-top: 12px; padding: 12px; border: 1px solid var(--border-color, #ddd); border-radius: 4px;">
+    <div class="mfa-panel">
       <h4>Disable two-factor authentication</h4>
       <p class="help-text">Enter your password and a current code (or a recovery code) to disable.</p>
       <label>Password:
         <input type="password" id="mfa-disable-password" autocomplete="current-password">
       </label>
-      <label style="margin-top: 8px;">Authenticator code or recovery code:
+      <label>Authenticator code or recovery code:
         <input
           type="text"
           id="mfa-disable-code"
           inputmode="numeric"
           autocomplete="one-time-code"
           maxlength="16"
-          style="font-family: monospace; letter-spacing: 0.2em;"
+          class="code-input"
         >
       </label>
       <div id="mfa-flow-error" class="error-message hidden"></div>
@@ -1471,7 +1470,7 @@ function renderMFARegenerateFlow(): void {
   const host = getMFAFlowHost();
   if (!host) return;
   host.innerHTML = `
-    <div style="margin-top: 12px; padding: 12px; border: 1px solid var(--border-color, #ddd); border-radius: 4px;">
+    <div class="mfa-panel">
       <h4>Regenerate recovery codes</h4>
       <p class="help-text">Enter a current 6-digit code from your authenticator app. Existing recovery codes will stop working.</p>
       <label>Code:
@@ -1482,7 +1481,7 @@ function renderMFARegenerateFlow(): void {
           autocomplete="one-time-code"
           pattern="[0-9]{6}"
           maxlength="6"
-          style="font-family: monospace; letter-spacing: 0.2em;"
+          class="code-input"
         >
       </label>
       <div id="mfa-flow-error" class="error-message hidden"></div>
