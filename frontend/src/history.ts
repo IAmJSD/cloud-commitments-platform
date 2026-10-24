@@ -1048,11 +1048,37 @@ function renderPendingActionButtons(p: HistoryPurchase): string {
 // Decision tree (status-driven, mutually exclusive):
 //   * pending|notified + any action → "Review in approval queue" link (issue
 //                                     #183; Approve / Cancel live in the queue)
-//   * failed + ops_hint set         → ⚠ ops-hint badge (issue #47, Q3 — no retry)
+//   * failed + ops_hint set         → ⚠ ops-hint badge (issue #47, Q3 — no retry),
+//                                     plus any lineage link (issue #1040)
 //   * failed + threshold reached    → "Retried 5× — confirm to override" Retry button (Q2)
 //   * failed + canRetry             → standard ↻ Retry button
 //   * any row with retry lineage    → inline ↻ Retried as / ↻ Retry of link
 //   * else                          → plan_name or "-"
+// renderLineageLinks returns the inline retry-chain cross-links for a row: a
+// row that was retried (retry_execution_id set) or is itself a retry
+// (retry_attempt_n > 0) links to the other end of the chain so the user can
+// navigate without scrolling. Both can be true simultaneously on a
+// middle-of-chain row (failed_v2 was retried into v3 AND is itself a retry
+// of v1).
+function renderLineageLinks(p: HistoryPurchase): string[] {
+  const lineage: string[] = [];
+  if (p.retry_execution_id) {
+    lineage.push(`<a href="#history?execution=${encodeURIComponent(p.retry_execution_id)}" class="history-retry-link" title="Jump to the retry execution">↻ Retried as #${escapeHtml(shortExecID(p.retry_execution_id))}</a>`);
+  }
+  if ((p.retry_attempt_n ?? 0) > 0) {
+    // We don't carry a back-pointer field — a future enhancement
+    // could surface the predecessor's exec ID via the API. For now
+    // we render a static badge (no link target) so users at least
+    // see "this is a retry" provenance.
+    // Coerce to a number: the history response is cast, not validated
+    // (api.getHistory), so the TS number type is not a runtime guarantee
+    // and this value sits inside a title="..." attribute.
+    const attemptN = Number(p.retry_attempt_n) || 0;
+    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${attemptN} in its chain">↻ Retry #${attemptN}</span>`);
+  }
+  return lineage;
+}
+
 function renderActionCell(p: HistoryPurchase): string {
   // Pending → the Approval queue card is the one place to approve or cancel
   // (issue #183). Where the session has a pending action (or a 4-eyes reason
@@ -1072,7 +1098,10 @@ function renderActionCell(p: HistoryPurchase): string {
       const title = p.redrive_unsafe
         ? 'Permanent: this execution can never be retried; check the account, then start a new purchase if needed'
         : 'Operator action required — Retry will not help until this is fixed';
-      return `<span class="history-ops-hint" title="${title}">⚠ ${escapeHtml(p.ops_hint)}</span>`;
+      // Keep the lineage links next to the hint (issue #1040): a legacy row
+      // retried before the re-drive gate (#967) now carries the permanent
+      // hint, and the operator still needs the link to its successor.
+      return [`<span class="history-ops-hint" title="${title}">⚠ ${escapeHtml(p.ops_hint)}</span>`, ...renderLineageLinks(p)].join(' ');
     }
     if (canRetryFailedRow(p) && p.purchase_id) {
       const overThreshold = retryThresholdReached(p);
@@ -1082,26 +1111,7 @@ function renderActionCell(p: HistoryPurchase): string {
     }
   }
 
-  // Lineage links: a row that was retried (retry_execution_id set) or
-  // is itself a retry (retry_attempt_n > 0) gets an inline cross-link
-  // to the other end of the chain so the user can navigate without
-  // scrolling. Both can be true simultaneously on a middle-of-chain
-  // row (failed_v2 was retried into v3 AND is itself a retry of v1).
-  const lineage: string[] = [];
-  if (p.retry_execution_id) {
-    lineage.push(`<a href="#history?execution=${encodeURIComponent(p.retry_execution_id)}" class="history-retry-link" title="Jump to the retry execution">↻ Retried as #${escapeHtml(shortExecID(p.retry_execution_id))}</a>`);
-  }
-  if ((p.retry_attempt_n ?? 0) > 0) {
-    // We don't carry a back-pointer field — a future enhancement
-    // could surface the predecessor's exec ID via the API. For now
-    // we render a static badge (no link target) so users at least
-    // see "this is a retry" provenance.
-    // Coerce to a number: the history response is cast, not validated
-    // (api.getHistory), so the TS number type is not a runtime guarantee
-    // and this value sits inside a title="..." attribute.
-    const attemptN = Number(p.retry_attempt_n) || 0;
-    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${attemptN} in its chain">↻ Retry #${attemptN}</span>`);
-  }
+  const lineage = renderLineageLinks(p);
   // Build the trailing action buttons so they compose with lineage links
   // — a retry-descendant can also have an active listing that needs a
   // Cancel button, or be an Azure row still inside its revoke window.
