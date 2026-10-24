@@ -5,7 +5,7 @@
 import { Chart, registerables } from 'chart.js';
 import { getSavingsAnalytics, type SavingsAnalyticsResponse, type SavingsDataPoint } from '../api';
 import * as state from '../state';
-import { formatTrendAxisTick } from './chart-utils';
+import { formatTrendAxisTick, upsertChart } from './chart-utils';
 import { formatCompactCurrency, formatCurrency } from '../utils';
 import { setChartSummary, renderChartTable, removeChartTable } from '../lib/chart-a11y';
 
@@ -401,10 +401,6 @@ function renderSavingsChart(
     const axisMinMs = periodStart ? periodStart.getTime() : nowMs - 7 * 86400_000;
     const axisMaxMs = periodEnd ? periodEnd.getTime() : nowMs;
 
-    if (savingsChart) {
-        savingsChart.destroy();
-    }
-
     const label = cumulative ? 'Cumulative Savings' : 'Period Savings';
     const dataset = cumulative
         ? {
@@ -449,7 +445,10 @@ function renderSavingsChart(
         ]),
     });
 
-    savingsChart = new Chart(ctx, {
+    // #747: update in place so a period or unit change doesn't replay the
+    // entry animation. Switching the series (#749) changes the chart type,
+    // which upsertChart handles by recreating the chart.
+    savingsChart = upsertChart(savingsChart, ctx, {
         type: cumulative ? 'line' : 'bar',
         data: {
             datasets: [dataset],

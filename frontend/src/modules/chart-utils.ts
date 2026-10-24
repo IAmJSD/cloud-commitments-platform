@@ -2,6 +2,7 @@
  * Shared chart utility helpers used by multiple chart modules.
  */
 
+import { Chart, type ChartConfiguration } from 'chart.js';
 import { formatCurrency } from '../utils';
 
 /**
@@ -47,4 +48,29 @@ export function formatTrendTooltipTitle(tsMs: number, intervalHint: 'hourly' | '
         return d.toLocaleString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
     }
     return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+/**
+ * Create a chart, or update an existing one in place (issue #747).
+ *
+ * Destroying and recreating a chart on every filter or range change replays
+ * Chart.js's grow-from-zero entry animation each time. When `existing` is
+ * still drawing on `canvas`, swap in the new data and options and redraw
+ * without animation; otherwise (first render, the canvas was replaced, or the
+ * chart type changed, e.g. the Purchases chart's line/bar series toggle from
+ * #749) destroy any stale instance and create a fresh one.
+ */
+export function upsertChart(existing: Chart | null, canvas: HTMLCanvasElement, config: ChartConfiguration): Chart {
+    if (existing && existing.canvas === canvas && chartType(existing) === config.type) {
+        existing.data = config.data;
+        existing.options = config.options ?? {};
+        existing.update('none');
+        return existing;
+    }
+    existing?.destroy();
+    return new Chart(canvas, config);
+}
+
+function chartType(chart: Chart): string | undefined {
+    return 'type' in chart.config ? chart.config.type : undefined;
 }
