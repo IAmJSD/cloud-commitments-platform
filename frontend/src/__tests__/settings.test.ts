@@ -1409,7 +1409,7 @@ describe('Settings Module', () => {
       await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
 
       const azureVmCall = (api.updateServiceConfig as jest.Mock).mock.calls.find(
-        ([provider, service]) => provider === 'azure' && service === 'vm',
+        ([provider, service]) => provider === 'azure' && service === 'compute',
       );
       expect(azureVmCall).toBeDefined();
       const cfg = azureVmCall![2];

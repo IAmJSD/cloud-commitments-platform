@@ -622,6 +622,12 @@ select.dirty {
 tr.override-disabled {
     opacity: 0.55;
 }
+/* Issue #613: note on an override stored under an old Azure/GCP service id. */
+.override-legacy-hint {
+    max-width: 14rem;
+    font-size: 0.8rem;
+    color: var(--cudly-warn-fg);
+}
 
 /* The matrix scrolls sideways; its absolutely positioned .sr-only cell labels
  * need this scroller as their containing block or they extend the page. */

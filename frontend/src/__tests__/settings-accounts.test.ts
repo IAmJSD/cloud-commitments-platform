@@ -688,7 +688,7 @@ describe('Overrides panel — AWS payment selector', () => {
     // Issue #109: Azure override rows now get inline payment editing.
     // Azure uses upfront/monthly (not the AWS no-upfront/partial/all-upfront set).
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
-      { id: 'o1', account_id: 'acc-1', provider: 'azure', service: 'vm', term: 1, payment: 'upfront' },
+      { id: 'o1', account_id: 'acc-1', provider: 'azure', service: 'compute', term: 1, payment: 'upfront' },
     ]);
 
     const panel = await openOverridesPanel('acc-1');
@@ -983,7 +983,7 @@ describe('Overrides panel: inline Term/Coverage/Enabled (issue #110)', () => {
     // Issue #109: Azure override rows now have inline editing on all fields,
     // same as AWS rows after issue #110.
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
-      { id: 'o1', account_id: 'acc-1', provider: 'azure', service: 'vm', term: 1, coverage: 80 },
+      { id: 'o1', account_id: 'acc-1', provider: 'azure', service: 'compute', term: 1, coverage: 80 },
     ]);
 
     const panel = await openOverridesPanel('acc-1');
@@ -1212,9 +1212,9 @@ describe('Create-override modal', () => {
     // Service dropdown lists Azure services, not AWS services.
     const svcSel = document.getElementById('override-service') as HTMLSelectElement;
     const svcValues = Array.from(svcSel.options).map(o => o.value);
-    expect(svcValues).toContain('vm');
-    expect(svcValues).toContain('sql');
-    expect(svcValues).toContain('cosmosdb');
+    expect(svcValues).toContain('compute');
+    expect(svcValues).toContain('relational-db');
+    expect(svcValues).toContain('nosql');
     expect(svcValues).not.toContain('ec2');
     expect(svcValues).not.toContain('rds');
   });
