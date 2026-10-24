@@ -337,7 +337,7 @@
     border-radius: 4px;
     font-size: 1rem;
     font-weight: 500;
-    transition: background 0.2s;
+    transition: background var(--cudly-dur) var(--cudly-ease);
 }
 
 .archera-signup-btn:hover {
@@ -451,7 +451,7 @@
     border-radius: 4px;
     font-size: 0.92rem;
     font-weight: 500;
-    transition: background 0.2s;
+    transition: background var(--cudly-dur) var(--cudly-ease);
 }
 
 .archera-offer-signup:hover {
@@ -490,7 +490,7 @@
     content: "▸";
     display: inline-block;
     color: #888;
-    transition: transform 0.15s ease;
+    transition: transform var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .archera-offer-learnmore[open] > .archera-offer-learnmore-summary::after {

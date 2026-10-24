@@ -69,7 +69,7 @@
  * center pattern feels alive. Matches the mock's elevated-card hover
  * treatment. transform-only (no layout shift) so the grid stays put. */
 .kpi-tile {
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    transition: transform var(--cudly-dur-fast) var(--cudly-ease), box-shadow var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .kpi-tile:hover {
@@ -124,7 +124,7 @@ button {
     color: var(--cudly-text);
     cursor: pointer;
     font-size: 0.875rem;
-    transition: background 0.2s, border-color 0.2s;
+    transition: background var(--cudly-dur) var(--cudly-ease), border-color var(--cudly-dur) var(--cudly-ease);
 }
 
 /* :where() keeps this at class-level specificity so component classes that
@@ -196,7 +196,7 @@ button.secondary:hover {
     color: var(--cudly-text);
     cursor: pointer;
     font-size: 0.875rem;
-    transition: background 0.2s, border-color 0.2s;
+    transition: background var(--cudly-dur) var(--cudly-ease), border-color var(--cudly-dur) var(--cudly-ease);
 }
 
 .btn:hover {
@@ -375,7 +375,7 @@ button.secondary:hover {
     font-size: 0.9rem;
     color: #222;
     animation: toast-enter 0.18s ease-out;
-    transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+    transition: opacity var(--cudly-dur-fast) var(--cudly-ease), transform var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .toast--leaving {
@@ -477,7 +477,7 @@ button.secondary:hover {
     padding: 1rem;
     margin-top: 1rem;
     border-top: 1px solid transparent;
-    transition: box-shadow 0.2s, border-color 0.2s;
+    transition: box-shadow var(--cudly-dur) var(--cudly-ease), border-color var(--cudly-dur) var(--cudly-ease);
 }
 
 .settings-savebar.dirty {
@@ -549,7 +549,7 @@ button.secondary:hover {
     gap: 0.5rem;
     line-height: 1.2;
     min-width: 100px;
-    transition: background 0.15s, border-color 0.15s;
+    transition: background var(--cudly-dur-fast) var(--cudly-ease), border-color var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .accounts-overview-chip:hover {
@@ -852,7 +852,7 @@ th .column-filter-btn.active {
     overflow-y: auto;
     z-index: 20;
     transform: translateX(100%);
-    transition: transform 0.2s ease;
+    transition: transform var(--cudly-dur) var(--cudly-ease);
 }
 .context-drawer.open {
     transform: translateX(0);
@@ -1005,7 +1005,7 @@ tr.rec-cell-summary-row:hover {
     align-items: center;
     justify-content: center;
     border-radius: 4px;
-    transition: background 0.15s, color 0.15s;
+    transition: background var(--cudly-dur-fast) var(--cudly-ease), color var(--cudly-dur-fast) var(--cudly-ease);
 }
 .rec-cell-chevron:hover,
 .rec-cell-chevron:focus-visible {
@@ -1468,7 +1468,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     cursor: pointer;
     padding: 0.25rem;
     border-radius: 4px;
-    transition: background 0.2s;
+    transition: background var(--cudly-dur) var(--cudly-ease);
 }
 
 .copy-btn:hover {
@@ -1586,7 +1586,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     color: var(--cudly-text);
     font-size: var(--cudly-fs-sm);
     cursor: pointer;
-    transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
+    transition: border-color var(--cudly-dur-fast) var(--cudly-ease), box-shadow var(--cudly-dur-fast) var(--cudly-ease), background-color var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .chip-select:hover {
@@ -1613,7 +1613,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .chip-select-caret {
-    transition: transform 0.15s ease;
+    transition: transform var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .chip-select[aria-expanded="true"] .chip-select-caret {

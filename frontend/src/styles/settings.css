@@ -18,7 +18,7 @@
     font-size: 0.9rem;
     cursor: pointer;
     border-radius: 0;
-    transition: color 0.15s;
+    transition: color var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .sub-tab-btn:hover {
