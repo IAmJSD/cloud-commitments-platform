@@ -135,7 +135,7 @@ tr.history-row-highlight:hover {
 }
 
 .planned-purchase-row .plan-name {
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
     display: block;
 }
 

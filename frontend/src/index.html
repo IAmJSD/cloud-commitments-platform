@@ -99,6 +99,9 @@
             <!-- Home Tab. Provider/Account filters live in the topbar
                  (#topbar-filters); they're global across all sections. -->
             <div id="home-tab" class="tab-content active" role="tabpanel" aria-labelledby="home-tab-btn">
+                <!-- Issue #756: first-run onboarding card, filled by
+                     dashboard.ts:renderHomeOnboarding when nothing is loaded. -->
+                <section id="home-onboarding" class="hidden"></section>
                 <section id="summary"></section>
                 <section id="savings-trend-section" class="card chart-section">
                     <div class="section-header">
