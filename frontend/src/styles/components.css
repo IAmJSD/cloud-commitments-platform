@@ -1271,6 +1271,64 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     font-size: 0.9rem;
 }
 
+/* Azure RI exchange modal (issue #81). */
+.setting-row.azure-exchange-source-row,
+.setting-row.azure-exchange-target-row {
+    justify-content: flex-start;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+}
+.setting-row.azure-exchange-target-row {
+    display: grid;
+    grid-template-columns: 2fr 1.5fr 1fr 0.8fr auto;
+    align-items: end;
+}
+.azure-exchange .azure-exchange-target-row label,
+.azure-exchange .azure-exchange-source-row label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: var(--cudly-fs-sm);
+}
+.azure-exchange-source-row input[type="number"] {
+    width: 6em;
+}
+.azure-exchange-preview .quote-row {
+    display: flex;
+    justify-content: space-between;
+    max-width: 22rem;
+}
+.azure-exchange-preview.quote-invalid h4,
+.azure-exchange-policy-errors {
+    color: var(--cudly-error-fg);
+}
+.azure-exchange-guardrails {
+    display: grid;
+    grid-template-columns: 1fr 8rem;
+    gap: 0.5rem 1rem;
+    margin: 1rem 0;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: 6px;
+}
+.azure-exchange-guardrails.hidden {
+    display: none;
+}
+.azure-exchange-guardrails legend,
+.azure-exchange-guardrails > p {
+    grid-column: 1 / -1;
+}
+.azure-exchange .azure-exchange-guardrails label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+.setting-row.azure-exchange-toolbar {
+    justify-content: flex-start;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+}
+
 /* Info icon tooltip */
 /* Issue #909: Opportunities lookback selector toolbar. */
 .recommendations-toolbar {
