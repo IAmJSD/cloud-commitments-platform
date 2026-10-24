@@ -1116,7 +1116,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .account-delete-pending-total {
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
 }
 
 /* Approval-details modal (issue #374): when the confirmDialog body
