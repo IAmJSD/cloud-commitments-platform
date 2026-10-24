@@ -791,5 +791,13 @@ describe('HTML Structure', () => {
       // Inert until updateUserUI shows it with the signed-in email.
       expect(el?.hasAttribute('hidden')).toBe(true);
     });
+
+    test('every target="_blank" link sets rel="noopener noreferrer" (#136)', () => {
+      const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[target="_blank"]'));
+      expect(links.length).toBeGreaterThan(0);
+      for (const link of links) {
+        expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+      }
+    });
   });
 });

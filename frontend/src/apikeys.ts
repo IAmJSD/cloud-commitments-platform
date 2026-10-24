@@ -67,6 +67,16 @@ export async function loadApiKeys(): Promise<void> {
  * failed fetch. Uses textContent (no innerHTML) to stay XSS-safe and
  * matches the patterns used by other modules (e.g. dashboard.ts).
  */
+/**
+ * ISO timestamp for a title attribute, or '' for an unparseable value:
+ * toISOString throws a RangeError on an Invalid Date, and that throw inside
+ * the row map blanked the whole keys table, Revoke buttons included (#136).
+ */
+function isoOrEmpty(value: string): string {
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? '' : d.toISOString();
+}
+
 function renderApiKeysListError(container: HTMLElement | null, message: string): void {
   if (!container) return;
   container.replaceChildren();
@@ -129,7 +139,7 @@ export function renderApiKeysList(): void {
               <td><code>${escapeHtml(key.key_prefix)}...</code></td>
               <td><span class="badge ${statusClass}">${statusText}</span></td>
               <td>${formatDateTime(key.created_at)}</td>
-              <td>${key.last_used_at ? `<span title="${escapeHtml(new Date(key.last_used_at).toISOString())}">${escapeHtml(formatRelativeTime(key.last_used_at))}</span>` : '<span class="text-muted">Never</span>'}</td>
+              <td>${key.last_used_at ? `<span title="${escapeHtml(isoOrEmpty(key.last_used_at))}">${escapeHtml(formatRelativeTime(key.last_used_at) || '--')}</span>` : '<span class="text-muted">Never</span>'}</td>
               <td class="apikeys-count-cell">${countWindow}</td>
               <td class="apikeys-count-cell">${countTotal}</td>
               <td>${key.expires_at ? formatDateTime(key.expires_at) : '<span class="text-muted">Never</span>'}</td>

@@ -1090,6 +1090,13 @@ async function loadPlanAccountNames(planId: string, cardEl: Element): Promise<vo
 // actions that require an account (Add Purchases, Edit) are suppressed
 // — only History and Delete remain — and a read-only "Unassigned" badge
 // is shown so operators can identify and re-scope the plan.
+/** "n/m steps", or "--" when the step count is missing or not positive (#136). */
+function formatRampProgress(ramp: { current_step?: number; total_steps?: number }): string {
+  const total = ramp.total_steps;
+  if (typeof total !== 'number' || !Number.isFinite(total) || total <= 0) return '--';
+  return `${ramp.current_step || 0}/${total} steps`;
+}
+
 function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan: boolean, canAddPurchases: boolean): string {
   const info = extractPlanInfo(plan);
   const status = getStatusBadge(plan.enabled, plan.auto_purchase);
@@ -1145,7 +1152,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Progress</span>
-            <span class="plan-detail-value">${rampSchedule.current_step || 0}/${rampSchedule.total_steps || 1} steps</span>
+            <span class="plan-detail-value">${formatRampProgress(rampSchedule)}</span>
           </div>
           ${showNextDate ? `
           <div class="plan-detail">

@@ -727,6 +727,27 @@ describe('reshape recommendations table', () => {
     expect(chips[1]?.textContent).toContain('$35.00/mo');
   });
 
+  it('renders an unknown utilization as a neutral em-dash instead of throwing (#136)', async () => {
+    const mockGet = api.getReshapeRecommendations as jest.Mock;
+    const { utilization_percent: _omit, ...withoutUtil } = baseRec;
+    mockGet.mockResolvedValueOnce({
+      recommendations: [withoutUtil, { ...baseRec, source_ri_id: 'ri-def', utilization_percent: 97 }],
+      recs_staleness: '',
+      recs_collected_at: null,
+    });
+
+    await loadReshapeRecommendations();
+
+    const rows = tableContainer.querySelectorAll<HTMLTableRowElement>('tbody tr');
+    expect(rows).toHaveLength(2);
+    const unknown = rows[0]!.querySelectorAll('td')[4]!;
+    expect(unknown.textContent).toBe('—');
+    expect(unknown.className).toBe('');
+    const known = rows[1]!.querySelectorAll('td')[4]!;
+    expect(known.textContent).toBe('97.0%');
+    expect(known.className).toBe('util-green');
+  });
+
   it('renders an em-dash in the Alternatives column when the rec has no alternative_targets', async () => {
     const mockGet = api.getReshapeRecommendations as jest.Mock;
     mockGet.mockResolvedValueOnce({ recommendations: [{ ...baseRec }], recs_staleness: '', recs_collected_at: null }); // no alternative_targets
