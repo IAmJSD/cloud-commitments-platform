@@ -85,6 +85,7 @@ async function openQuote(page: Page) {
   await page.locator('.modal-exchange-target-select').selectOption(offering);
   await page.getByRole('button', { name: 'Get Quote', exact: true }).click();
   await expect(page.locator('#modal-exchange-result')).toContainText('Valid Exchange');
+  await expect(page.locator('#modal-exchange-result')).toContainText('Hourly Price Change:-0.0200 USD/hr, about -14.60 USD/month');
 }
 
 const execute = (page: Page) => page.locator('#ri-exchange-modal').getByRole('button', { name: 'Execute Exchange', exact: true });
@@ -135,7 +136,8 @@ for (const action of ['Execute', 'Approve']) {
       if (action === 'Approve') {
         await expect(dialog(page)).toContainText('Previously quoted payment: USD 123.456789');
         await expect(dialog(page)).toContainText('fresh quote');
-        await expect(dialog(page)).toContainText(`1 × ${offering}`);
+        await expect(dialog(page)).toContainText(`2 × m5.large (${ri})`);
+        await expect(dialog(page)).toContainText(`1 × m5.xlarge (offering ${offering})`);
       }
       if (dismissal === 'Escape') await page.keyboard.press('Escape');
       else if (dismissal === 'backdrop') await dialog(page).click({ position: { x: 2, y: 2 } });
@@ -149,7 +151,7 @@ for (const action of ['Execute', 'Approve']) {
       await expect.poll(() => state.requests.length).toBe(1);
       if (action === 'Approve') {
         expect(state.requests[0]).toEqual({ path: `/api/ri-exchange/approve/${state.history.id}`, body: null });
-        await expect(page.locator('#ri-exchange-history-list')).toContainText('completed');
+        await expect(page.locator('#ri-exchange-history-list')).toContainText('Completed');
       }
       expect(state.errors).toEqual([]);
     });
@@ -217,7 +219,7 @@ for (const reopenBeforeResponse of [false, true]) {
     await page.locator('#ri-exchange-modal').getByRole('button', { name: reopenBeforeResponse ? 'Cancel' : 'Close', exact: true }).click();
     await page.locator(`[data-action="quote-ri"][data-ri-id="${otherRI}"]`).click();
     if (reopenBeforeResponse) release();
-    await expect(page.locator('#ri-exchange-history-list')).toContainText('completed');
+    await expect(page.locator('#ri-exchange-history-list')).toContainText('Completed');
     await expect(page.locator(`[data-action="quote-ri"][data-ri-id="${ri}"]`)).toHaveCount(0);
     await page.waitForTimeout(2200);
     await expect(page.locator('#ri-exchange-modal')).toBeVisible();

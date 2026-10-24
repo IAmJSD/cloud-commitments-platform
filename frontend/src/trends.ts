@@ -17,7 +17,7 @@ import * as api from './api';
 import type { AnalyticsTrendsResponse, TrendsProviderRow, TrendsServiceRow } from './api';
 import type { ApiError } from './api/types';
 import * as state from './state';
-import { formatCurrency } from './utils';
+import { formatCurrency, NO_VALUE } from './utils';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { applyChartDefaults, chartColor } from './lib/chart-theme';
 import {
@@ -42,7 +42,11 @@ const CHART_ID = 'trends-savings-chart';
 
 const PROVIDER_LABELS: Record<string, string> = { aws: 'AWS', azure: 'Azure', gcp: 'GCP' };
 
-let trendsChart: Chart | null = null;
+// Typed as the bar chart it is: assigning Chart<'bar'> to the default
+// Chart<keyof ChartTypeRegistry> trips a Chart.js variance check whose
+// result depends on ts-loader's check order (it broke the webpack build
+// once chart-utils gained upsertChart, #747).
+let trendsChart: Chart<'bar', (number | null)[], string> | null = null;
 // Each load takes a ticket; a response that lands after a newer request was
 // issued is dropped so a slow reply can't overwrite the current scope.
 let loadSeq = 0;
@@ -220,9 +224,9 @@ function buildStats(series: TrendsMonthPoint[]): HTMLElement {
   const avg = meanOrNull(withData.map((p) => p.savings));
   const latestCoverage = [...series].reverse().find((p) => p.coverage !== null) ?? null;
   grid.append(
-    statCard('Latest savings', latest ? `${formatCurrency(latest.savings)}/mo` : '--',
+    statCard('Latest savings', latest ? `${formatCurrency(latest.savings)}/mo` : NO_VALUE,
       latest ? `run-rate in ${latest.label}` : 'no snapshots in this period'),
-    statCard('Average savings', avg !== null ? `${formatCurrency(avg)}/mo` : '--',
+    statCard('Average savings', avg !== null ? `${formatCurrency(avg)}/mo` : NO_VALUE,
       `over ${withData.length} of ${series.length} months with data`),
     statCard('Coverage', formatCoverage(latestCoverage?.coverage),
       latestCoverage ? `in ${latestCoverage.label}` : 'not collected for this period'),

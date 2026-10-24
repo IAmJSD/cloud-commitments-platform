@@ -1,5 +1,6 @@
 /**
- * History inline Cancel button tests (issue #46).
+ * Approval queue Cancel button tests (issue #46). Cancel renders only in
+ * the Approval queue card (#1331), not in the History table.
  *
  * Mirror of the backend RBAC matrix in
  * internal/api/handler_purchases.go::authorizeSessionCancel — keep both
@@ -29,6 +30,7 @@ jest.mock('../navigation', () => ({
 }));
 
 jest.mock('../utils', () => ({
+  NO_VALUE: '\u2014',
   formatCurrency: jest.fn((val) => `$${val || 0}`),
   formatDate: jest.fn((val) => (val ? new Date(val).toLocaleDateString() : '')),
   formatTerm: jest.fn((years) => (years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`)),
@@ -153,7 +155,7 @@ function makeRow(overrides: Record<string, unknown>) {
   };
 }
 
-describe('History inline Cancel button (issue #46)', () => {
+describe('Approval queue Cancel button (issue #46)', () => {
   beforeEach(() => {
     setupDOM();
     jest.clearAllMocks();
@@ -249,6 +251,29 @@ describe('History inline Cancel button (issue #46)', () => {
 
     expect(confirmDialog).toHaveBeenCalled();
     expect(api.cancelPurchase).not.toHaveBeenCalled();
+  });
+
+  test('confirm names the purchase being cancelled (issue #728)', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (confirmDialog as jest.Mock).mockResolvedValue(false);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({ purchase_id: 'exec-1', created_by_user_id: ADMIN_USER.id }),
+        makeRow({ purchase_id: 'exec-2', resource_type: 'm5.xlarge', count: 3, region: 'eu-west-1', upfront_cost: 4200, created_by_user_id: ADMIN_USER.id }),
+      ],
+    });
+
+    await loadHistory();
+    document.querySelector<HTMLButtonElement>('.history-cancel-btn[data-cancel-id="exec-2"]')!.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const body = (confirmDialog as jest.Mock).mock.calls[0][0].body as HTMLElement;
+    expect(body.querySelector('.history-confirm-summary strong')?.textContent).toBe('AWS ec2 m5.xlarge × 3 in eu-west-1');
+    // formatCurrency is mocked here; purchases-placeholders-181.test.ts
+    // pins the real "Upfront: $4,200" output with the real utils.
+    expect(body.textContent).toContain('Upfront:');
+    expect(body.textContent).toContain('The pending email approval link will stop working.');
   });
 
   test('accepted confirm posts cancel + reloads + toasts', async () => {

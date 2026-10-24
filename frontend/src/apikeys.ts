@@ -7,9 +7,12 @@ import type { APIKeyInfo, CreateAPIKeyResponse } from './types';
 import { loadApiKeysUsageStats } from './apikeys_usage';
 import { escapeHtml, formatDateTime, formatRelativeTime } from './utils';
 import { confirmDialog } from './confirmDialog';
+import { friendlyError } from './api/errors';
 import { showToast } from './toast';
+import { iconSvg } from './icons';
 import { openModal, closeModal } from './modal';
-import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { showSkeletonRows, showSkeletonText, teardownSkeleton } from './lib/skeleton';
+import { parseLocalDateInputValue, toLocalDateInputValue } from './lib/local-date';
 
 // State for modal management
 let currentApiKeys: APIKeyInfo[] = [];
@@ -144,8 +147,10 @@ export function renderApiKeysList(): void {
               <td class="apikeys-count-cell">${countTotal}</td>
               <td>${key.expires_at ? formatDateTime(key.expires_at) : '<span class="text-muted">Never</span>'}</td>
               <td>
-                ${key.is_active && !isExpired ? `<button class="btn-small btn-warning revoke-key-btn" data-key-id="${escapeHtml(key.id)}">Revoke</button>` : ''}
-                <button class="btn-small btn-danger delete-key-btn" data-key-id="${escapeHtml(key.id)}">Delete</button>
+                <div class="row-actions">
+                  ${key.is_active && !isExpired ? `<button type="button" class="btn-small btn-warning icon-btn revoke-key-btn" data-key-id="${escapeHtml(key.id)}" aria-label="Revoke API key" title="Revoke API key">${iconSvg('slash')}</button>` : ''}
+                  <button type="button" class="btn-small btn-danger icon-btn delete-key-btn" data-key-id="${escapeHtml(key.id)}" aria-label="Delete API key" title="Delete API key">${iconSvg('trash-2')}</button>
+                </div>
               </td>
             </tr>
           `;
@@ -283,7 +288,8 @@ export async function showCreateKeyModal(): Promise<void> {
   }
 
   const permissionsContainer = document.getElementById('apikey-permissions-list');
-  if (permissionsContainer) permissionsContainer.innerHTML = '<p class="text-muted">Loading your permissions&hellip;</p>';
+  // Issue #186: skeleton instead of a "Loading your permissions…" line.
+  if (permissionsContainer) showSkeletonText(permissionsContainer, 3);
 
   // Open the modal before the permissions fetch resolves so the dialog
   // never sits closed while waiting on the network.
@@ -299,29 +305,6 @@ export async function showCreateKeyModal(): Promise<void> {
     }
   }
   updateCreateKeySubmitState();
-}
-
-/**
- * Formats a Date as the YYYY-MM-DD value an <input type="date"> expects,
- * using local calendar components. toISOString() converts to UTC first,
- * which can shift the date by a day near local midnight.
- */
-function toLocalDateInputValue(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-/**
- * Parses an <input type="date"> value (YYYY-MM-DD) as local midnight.
- * new Date(dateString) parses it as UTC midnight instead, which can read as
- * "yesterday evening" in timezones behind UTC and reject a same-day or
- * next-day expiration that should be valid (CodeRabbit finding on #392).
- */
-function parseLocalDateInputValue(value: string): Date {
-  const [year, month, day] = value.split('-').map(Number);
-  return new Date(year ?? 0, (month ?? 1) - 1, day ?? 1);
 }
 
 /**
@@ -516,7 +499,7 @@ export async function revokeApiKey(keyId: string): Promise<void> {
     await loadApiKeys();
   } catch (error) {
     console.error('Failed to revoke API key:', error);
-    showError('Failed to revoke API key');
+    showError(`Failed to revoke API key: ${friendlyError(error)}`);
   }
 }
 
@@ -540,7 +523,7 @@ export async function deleteApiKey(keyId: string): Promise<void> {
     await loadApiKeys();
   } catch (error) {
     console.error('Failed to delete API key:', error);
-    showError('Failed to delete API key');
+    showError(`Failed to delete API key: ${friendlyError(error)}`);
   }
 }
 

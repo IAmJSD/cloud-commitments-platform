@@ -5,8 +5,9 @@
 import * as api from './api';
 import * as state from './state';
 import { buildCommitmentSummary, withIntro } from './commitmentSummary';
-import { formatDate, formatTerm, getStatusBadge, escapeHtml, escapeHtmlAttr, formatCurrency, CURRENCY_DEFAULT_DIGITS, providerBadgeHtml } from './utils';
+import { formatDate, formatTerm, getStatusBadge, escapeHtml, escapeHtmlAttr, formatCurrency, CURRENCY_DEFAULT_DIGITS, NO_VALUE, providerBadgeHtml } from './utils';
 import { showToast } from './toast';
+import { iconSvg } from './icons';
 import { confirmDialog } from './confirmDialog';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
 import { viewPlanHistory } from './history';
@@ -22,6 +23,8 @@ import {
   sortedDistinctValues,
 } from './lib/column-filter-popover';
 import { suggestedPurchaseStartDate } from './lib/calendar-date';
+import { badgeHtml, statusBadgeHtml } from './lib/status-badge';
+import { isPastScheduledDate } from './lib/purchase-row-guards';
 import { mountPlanEditorPanel } from './plan-editor-panel';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
@@ -157,7 +160,7 @@ function renderPlannedPurchasesInternal(): void {
   const filterBtn = (column: state.PlansColumnId, lbl: string): string => {
     const active = filters[column] ? ' active' : '';
     const label = filters[column] ? `Filter ${lbl} \u2014 currently active` : `Filter ${lbl}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">\u26db</button>`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">${iconSvg('filter')}</button>`;
   };
 
   const tbody = filtered.length === 0
@@ -434,6 +437,15 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
     canAccess('cancel-own', 'purchases')
   );
 
+  // #181: a pending step whose date has passed did not run; "pending" alone
+  // reads as on schedule. Flag it and name the next action the user can take.
+  const overdue = isPending && isPastScheduledDate(purchase.scheduled_date);
+  const overdueHint = canRunPurchase ? 'Not run on its date. Run now or pause.' : 'Not run on its date.';
+  const overdueBadge = overdue
+    ? badgeHtml('danger', 'Overdue', 'Scheduled date has passed')
+    : '';
+  const overdueHintHtml = overdue ? `<div class="overdue-hint">${overdueHint}</div>` : '';
+
   return `
     <tr class="planned-purchase-row ${statusClass}">
       <td>
@@ -448,13 +460,13 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td>${termCell}</td>
       <td>${upfrontShown}</td>
       <td class="savings">${savingsCell}</td>
-      <td><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span></td>
+      <td><span class="status-badges">${statusBadgeHtml(purchase.status)}${overdueBadge}</span>${overdueHintHtml}</td>
       <td class="actions">
-        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary" title="Run now" aria-label="Run now">▶</button>` : ''}
-        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause" aria-label="Pause">⏸</button>` : ''}
-        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume" aria-label="Resume">⏵</button>` : ''}
-        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan" aria-label="Edit Plan">✎</button>` : ''}
-        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Cancel this purchase and disable its plan" aria-label="Cancel this purchase and disable its plan">✕</button>` : ''}
+        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary icon-label" title="Run now" aria-label="Run now">${iconSvg('play')}<span>Run now</span></button>` : ''}
+        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause" aria-label="Pause">${iconSvg('pause')}</button>` : ''}
+        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume" aria-label="Resume">${iconSvg('play')}</button>` : ''}
+        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan" aria-label="Edit Plan">${iconSvg('edit')}</button>` : ''}
+        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Cancel this purchase and disable its plan" aria-label="Cancel this purchase and disable its plan">${iconSvg('x')}</button>` : ''}
       </td>
     </tr>
   `;
@@ -616,7 +628,7 @@ interface BackendPlan {
 
 // Score bands for the per-plan health badge (issue #340 follow-up). Green
 // >= 80 (healthy), amber 50-79 (needs attention), red < 50 (action needed).
-// Reuses the existing status-badge palette (badge-success/badge-warning/
+// Reuses the shared .badge tones (badge-success/badge-warning/
 // badge-danger) already used elsewhere on this card rather than introducing
 // new CSS.
 const HEALTH_SCORE_GOOD_THRESHOLD = 80;
@@ -669,14 +681,14 @@ function healthBadgeHtml(plan: BackendPlan): string {
     // execution history, while a non-finite value means the number itself
     // arrived unusable. Naming only the first would send an operator
     // chasing a database problem that may not exist.
-    return `<span class="status-badge badge-muted" title="${escapeHtmlAttr('Plan health is unavailable: this plan\'s score could not be determined.')}">Health: unknown</span>`;
+    return `<span class="badge badge-muted" title="${escapeHtmlAttr('Plan health is unavailable: this plan\'s score could not be determined.')}">Health: unknown</span>`;
   }
   const factors = plan.health_factors || [];
   const factorLines = factors.length > 0
     ? factors.map(f => `-${f.penalty}: ${f.note}`)
     : ['No issues detected'];
   const tooltip = [`Plan health: ${plan.health_score}/100`, ...factorLines].join('\n');
-  return `<span class="status-badge ${healthBadgeClass(plan.health_score)}" title="${escapeHtmlAttr(tooltip)}">Health: ${plan.health_score}</span>`;
+  return `<span class="badge ${healthBadgeClass(plan.health_score)}" title="${escapeHtmlAttr(tooltip)}">Health: ${plan.health_score}</span>`;
 }
 
 // Pretty label for a service slug used inside the plan card.
@@ -730,7 +742,7 @@ function extractPlanInfo(plan: BackendPlan): { provider: string | null; service:
           .map(s => planServiceLabel(s.service || '—'))
           .join(', ');
     // H-4: never fabricate provider/term/coverage when absent.
-    // Return null so callers can surface '--'/'Unknown' in the display
+    // Return null so callers can surface NO_VALUE/'Unknown' in the display
     // layer rather than silently committing to aws/3yr/80% defaults.
     return {
       provider: firstService.provider || null,
@@ -753,16 +765,19 @@ function isPlanOverdue(plan: BackendPlan): boolean {
   return nextDate < today;
 }
 
-// Format ramp schedule from backend struct
+// Format ramp schedule from backend struct. A preset name is shown only when
+// type, percent AND interval match the preset, the same rule Edit uses
+// (rampRadioValue), so the list never says "Weekly 20%" for a plan Edit opens
+// as Custom 20% / 7 days, or hides a 14-day interval behind "Weekly 25%" (#1185).
 function formatBackendRampSchedule(ramp: BackendPlan['ramp_schedule']): string {
   if (!ramp) return 'Immediate';
-  switch (ramp.type) {
-    case 'immediate': return 'Immediate';
-    case 'weekly': return `Weekly ${ramp.percent_per_step}%`;
-    case 'monthly': return `Monthly ${ramp.percent_per_step}%`;
-    case 'custom': return `Custom ${ramp.percent_per_step}% every ${ramp.step_interval_days} days`;
-    default: return ramp.type || 'Unknown';
-  }
+  if (!['immediate', 'weekly', 'monthly', 'custom'].includes(ramp.type)) return ramp.type || 'Unknown';
+  const value = rampRadioValue(ramp);
+  if (value === 'immediate') return 'Immediate';
+  const preset = PRESET_RAMPS.find(p => p.value === value);
+  if (preset) return preset.label;
+  const days = ramp.step_interval_days;
+  return days ? `Custom ${ramp.percent_per_step}% every ${days} day${days === 1 ? '' : 's'}` : `Custom ${ramp.percent_per_step}%`;
 }
 
 async function loadPlanAccountNames(planId: string, cardEl: Element): Promise<void> {
@@ -786,10 +801,10 @@ async function loadPlanAccountNames(planId: string, cardEl: Element): Promise<vo
 // actions that require an account (Add Purchases, Edit) are suppressed
 // — only History and Delete remain — and a read-only "Unassigned" badge
 // is shown so operators can identify and re-scope the plan.
-/** "n/m steps", or "--" when the step count is missing or not positive (#136). */
+/** "n/m steps", or NO_VALUE when the step count is missing or not positive (#136). */
 function formatRampProgress(ramp: { current_step?: number; total_steps?: number }): string {
   const total = ramp.total_steps;
-  if (typeof total !== 'number' || !Number.isFinite(total) || total <= 0) return '--';
+  if (typeof total !== 'number' || !Number.isFinite(total) || total <= 0) return NO_VALUE;
   return `${ramp.current_step || 0}/${total} steps`;
 }
 
@@ -802,7 +817,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
   // visible implies the plan will still run on that date, which it won't.
   const showNextDate = Boolean(plan.next_execution_date) && plan.enabled;
   const overdueBadge = overdue && plan.enabled
-    ? '<span class="status-badge badge-danger" title="Next purchase date is in the past">Overdue</span>'
+    ? '<span class="badge badge-danger" title="Next purchase date is in the past">Overdue</span>'
     : '';
   // Read-only mode: unassigned plans cannot be purchased against until an
   // operator re-assigns them to at least one account.
@@ -813,7 +828,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
       <div class="plan-header">
         <h3>${escapeHtml(plan.name)}</h3>
         <div class="plan-status">
-          <span class="status-badge ${status.class}">${status.label}</span>
+          <span class="badge badge-${status.class}">${status.label}</span>
           ${healthBadgeHtml(plan)}
           ${overdueBadge}
           ${canManagePlan && !isUnassigned ? `
@@ -836,11 +851,11 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Term</span>
-            <span class="plan-detail-value">${info.term !== null ? formatTerm(info.term) : '--'}</span>
+            <span class="plan-detail-value">${info.term !== null ? formatTerm(info.term) : NO_VALUE}</span>
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Coverage</span>
-            <span class="plan-detail-value">${info.coverage !== null ? `${info.coverage}%` : '--'}</span>
+            <span class="plan-detail-value">${info.coverage !== null ? `${info.coverage}%` : NO_VALUE}</span>
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Ramp Schedule</span>
@@ -977,9 +992,9 @@ function openPlanForm(modal: HTMLElement, restartsFromToday = false): void {
 
 // Presets mirror config.PresetRampSchedules; any other stored ramp is shown as
 // custom so Edit never rewrites it to a different schedule on Save (#1156).
-const PRESET_RAMPS: ReadonlyArray<{ value: string; type: string; percent: number; intervalDays: number }> = [
-  { value: 'weekly-25pct', type: 'weekly', percent: 25, intervalDays: 7 },
-  { value: 'monthly-10pct', type: 'monthly', percent: 10, intervalDays: 30 },
+const PRESET_RAMPS: ReadonlyArray<{ value: string; label: string; type: string; percent: number; intervalDays: number }> = [
+  { value: 'weekly-25pct', label: 'Weekly 25%', type: 'weekly', percent: 25, intervalDays: 7 },
+  { value: 'monthly-10pct', label: 'Monthly 10%', type: 'monthly', percent: 10, intervalDays: 30 },
 ];
 
 function rampRadioValue(ramp: { type?: string; percent_per_step?: number; step_interval_days?: number }): string {
@@ -1582,11 +1597,13 @@ function generatePlanName(rampSchedule: string, customStepPercent?: number, cust
       return `${serviceUpper} Monthly 10% Ramp-up (10 months)`;
     case 'custom':
       if (customStepPercent && customIntervalDays) {
-        const totalSteps = Math.ceil(100 / customStepPercent);
+        // Same count as the backend (buildCustomRampSchedule) and the schedule
+        // preview: whole steps only, at least one. 30% is 3 steps, not 4 (#1185).
+        const totalSteps = Math.max(1, Math.floor(100 / customStepPercent));
         const intervalLabel = customIntervalDays === 7 ? 'weekly' :
                               customIntervalDays === 30 ? 'monthly' :
                               `every ${customIntervalDays} days`;
-        return `${serviceUpper} Custom ${customStepPercent}% ${intervalLabel} (${totalSteps} steps)`;
+        return `${serviceUpper} Custom ${customStepPercent}% ${intervalLabel} (${totalSteps} step${totalSteps === 1 ? '' : 's'})`;
       }
       return `${serviceUpper} Custom Ramp-up Plan`;
     default:

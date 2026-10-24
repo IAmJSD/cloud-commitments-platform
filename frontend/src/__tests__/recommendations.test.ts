@@ -99,7 +99,12 @@ jest.mock('../state', () => ({
 
 // Mock utils
 jest.mock('../utils', () => ({
-  formatCurrency: jest.fn((val) => `$${val || 0}`),
+  // Explicit digits (the non-monthly cost periods) render fixed decimals;
+  // null/undefined render the shared NO_VALUE placeholder like the real one.
+  formatCurrency: jest.fn((val, _currency = '$', digits?: number) => (
+    val === null || val === undefined ? '\u2014' : digits ? `$${Number(val).toFixed(digits)}` : `$${val || 0}`
+  )),
+  NO_VALUE: '\u2014',
   formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   escapeHtml: jest.fn((str) => str || ''),
   populateAccountFilter: jest.fn(() => Promise.resolve()),
@@ -114,6 +119,24 @@ jest.mock('../utils', () => ({
 import * as api from '../api';
 import * as state from '../state';
 import * as recsApi from '../api/recommendations';
+
+// Issue #803: setup.ts's jest.clearAllMocks() clears recorded calls but keeps
+// any mockReturnValue / mockResolvedValue / mockImplementation a test
+// installed, so an override (cost period, column filters, selection, user,
+// account overrides, ...) leaked into whichever test jest ran next and the
+// file failed under --randomize. Snapshot every module mock's factory default
+// once, and restore it before each test, so each test starts from the
+// defaults above whatever order the tests run in.
+const mockFactoryDefaults = [...[api, state, recsApi].flatMap((mod) => Object.values(mod)), mockShowToast]
+  .filter((fn): fn is jest.Mock => jest.isMockFunction(fn))
+  .map((fn) => [fn, fn.getMockImplementation()] as const);
+
+beforeEach(() => {
+  for (const [fn, factoryDefault] of mockFactoryDefaults) {
+    fn.mockReset();
+    if (factoryDefault) fn.mockImplementation(factoryDefault);
+  }
+});
 
 describe('Recommendations Module', () => {
   beforeEach(() => {
@@ -335,6 +358,11 @@ describe('Recommendations Module', () => {
       };
       expect(cardValue()).toContain('$300');
       expect(cardValue()).toContain('$400');
+      // #180: unfiltered, the card covers every loaded row (same scope as
+      // Home), so it carries no "Filtered" scope line.
+      const scopeLine = (): string | null =>
+        document.querySelector('#recommendations-summary [data-testid="savings-scope"]')?.textContent ?? null;
+      expect(scopeLine()).toBeNull();
 
       // Apply a real column filter restricting to service=ec2 (cell1
       // only). renderRecommendationsList re-runs applyColumnFilters
@@ -352,12 +380,58 @@ describe('Recommendations Module', () => {
       expect(cardValue()).toContain('$150');
       expect(cardValue()).not.toContain('$300');
       expect(cardValue()).not.toContain('$400');
+      // #180: the narrowed scope is labeled so it can't be mistaken for
+      // Home's all-recommendations figure.
+      expect(scopeLine()).toBe('Filtered: 2 of 4 recommendations');
 
       // Restore the filter mock to empty so the leaked return value
       // doesn't bleed into subsequent tests in this file. jest.clearAllMocks
       // resets mock.calls but not .mockReturnValue, so we have to undo
       // explicitly.
       (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    });
+
+    test('savings card is labeled Filtered when the service filter is pushed to the server (#180)', async () => {
+      // A single-value service filter is sent as ?service= (#162) and the
+      // backend returns only matching rows, so the visible and loaded counts
+      // are equal. The card must still say it is filtered; otherwise it shows
+      // a smaller total than Home with no explanation.
+      const ec2Recs = [
+        { id: 'cell1-cheap',  provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 100, upfront_cost: 0 },
+        { id: 'cell1-pricey', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 150, upfront_cost: 1000 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 2, total_monthly_savings: 250, total_upfront_cost: 1000, avg_payback_months: 1 },
+        recommendations: ec2Recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(ec2Recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(ec2Recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        service: { kind: 'set', values: ['ec2'] },
+      });
+      const scopeLine = (): string | null =>
+        document.querySelector('#recommendations-summary [data-testid="savings-scope"]')?.textContent ?? null;
+
+      try {
+        await loadRecommendations();
+
+        expect(api.getRecommendations).toHaveBeenLastCalledWith(expect.objectContaining({ service: 'ec2' }));
+        expect(scopeLine()).toBe('Filtered: 2 recommendations (Service: ec2)');
+
+        // A further client-side filter is counted, not named.
+        (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+          service: { kind: 'set', values: ['ec2'] },
+          term: { kind: 'set', values: ['1'] },
+        });
+        document.querySelector<HTMLTableCellElement>('th[data-sort="service"]')?.click();
+        expect(scopeLine()).toBe('Filtered: 2 recommendations (Service: ec2, +1 more filter)');
+      } finally {
+        // Reload unfiltered so the pushed-down scope doesn't leak into later tests.
+        (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+        await loadRecommendations();
+      }
+      expect(scopeLine()).toBeNull();
     });
 
     test('summary cards narrow to selection in real time (closes #279)', async () => {
@@ -860,10 +934,11 @@ describe('Recommendations Module', () => {
       expect(capCell('rec-nocap')).toBe('—');
     });
 
-    test('shows empty-state message when no recommendations', async () => {
-      // Issue #700: zero rows now render an empty <tbody> with a hint cell
-      // rather than replacing the entire table with a <p>. The <thead> stays
-      // so column headers remain visible. The hint text lives inside the tbody.
+    test('shows the first-run empty state when nothing is loaded and no filter is set', async () => {
+      // Issue #756: zero loaded rows with no column filter is a first run, not
+      // a filter miss, so the "No rows match these filters." table hint
+      // (issue #700, still used for filtered-to-zero) is replaced by an
+      // onboarding card. The filtered case is covered by the #700 test below.
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
         recommendations: [],
@@ -873,12 +948,9 @@ describe('Recommendations Module', () => {
       await loadRecommendations();
 
       const list = document.getElementById('recommendations-list');
-      // The table (including <thead>) must still be rendered.
-      expect(list?.querySelector('thead')).not.toBeNull();
-      // The hint cell must be present inside the tbody.
-      const emptyCell = list?.querySelector('tbody td.empty');
-      expect(emptyCell).not.toBeNull();
-      expect(emptyCell?.textContent).toMatch(/No rows match/);
+      expect(list?.querySelector('thead')).toBeNull();
+      expect(list?.querySelector('.first-run-empty-state')).not.toBeNull();
+      expect(list?.textContent).not.toMatch(/No rows match/);
     });
 
     test('stores recommendations in state', async () => {
@@ -1217,6 +1289,49 @@ describe('Recommendations Module', () => {
       // The default sort is savings desc → that header shows an active ▼.
       const savingsHeader = list?.querySelector('th[data-sort="savings"]');
       expect(savingsHeader?.innerHTML).toContain('active');
+    });
+
+    describe('header keyboard semantics (issue #755)', () => {
+      test('header is a plain th with aria-sort and sibling sort and filter buttons', async () => {
+        await loadRecommendations();
+        const savings = document.querySelector<HTMLTableCellElement>('th[data-sort="savings"]');
+        expect(savings?.getAttribute('role')).toBeNull();
+        expect(savings?.hasAttribute('tabindex')).toBe(false);
+        expect(savings?.getAttribute('aria-sort')).toBe('descending');
+        expect(document.querySelector('th[data-sort="upfront_cost"]')?.hasAttribute('aria-sort')).toBe(false);
+        const sortBtn = savings?.querySelector('button.sort-btn');
+        const filterBtn = savings?.querySelector('button.column-filter-btn');
+        expect(sortBtn?.textContent).toContain('Savings');
+        expect(filterBtn).not.toBeNull();
+        expect(sortBtn?.contains(filterBtn ?? null)).toBe(false);
+      });
+
+      test('Enter on a column-filter button does not sort', async () => {
+        await loadRecommendations();
+        (state.setRecommendationsSort as jest.Mock).mockClear();
+        const filterBtn = document.querySelector<HTMLButtonElement>('th[data-sort="service"] .column-filter-btn');
+        filterBtn?.focus();
+        const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+        filterBtn?.dispatchEvent(enter);
+        expect(enter.defaultPrevented).toBe(false);
+        expect(state.setRecommendationsSort).not.toHaveBeenCalled();
+        // Native Enter activation of a <button> is a click, which opens the popover.
+        filterBtn?.click();
+        expect(document.querySelector('.column-filter-popover')).not.toBeNull();
+        expect(state.setRecommendationsSort).not.toHaveBeenCalled();
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      });
+
+      test('activating the sort button sorts and keeps focus on the re-rendered sort button', async () => {
+        await loadRecommendations();
+        const sortBtn = document.querySelector<HTMLButtonElement>('th[data-sort="upfront_cost"] .sort-btn');
+        sortBtn?.focus();
+        sortBtn?.click();
+        expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: 'upfront_cost', direction: 'asc' });
+        const active = document.activeElement;
+        expect(active?.classList.contains('sort-btn')).toBe(true);
+        expect(active?.closest('th')?.getAttribute('data-sort')).toBe('upfront_cost');
+      });
     });
 
     test('clicking a sortable header calls setRecommendationsSort', async () => {

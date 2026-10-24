@@ -21,6 +21,7 @@ import {
   type ColumnFilterKind,
 } from './column-filters';
 import { escapeHtmlAttr } from '../utils';
+import { iconSvg } from '../icons';
 
 export interface PopoverConfig<TColumnId extends string> {
   // Namespace of the owning table (e.g. 'history' / 'queue'). Both tables
@@ -326,7 +327,10 @@ export function openHistoryColumnPopover<TColumnId extends string>(
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
   clearBtn.className = 'column-filter-clear';
-  clearBtn.textContent = 'Clear';
+  // Issue #727 (UX-28): on a categorical filter this button selects
+  // nothing (an explicit empty allow-list, which hides every row), so it
+  // must not be called "Clear". (All) is how the filter is removed.
+  clearBtn.textContent = config.kind === 'numeric' ? 'Clear' : 'Select none';
   clearBtn.addEventListener('click', () => {
     if (config.kind === 'numeric') {
       if (inputRef) inputRef.value = '';
@@ -376,7 +380,7 @@ export function renderHistoryFilterButton<TColumnId extends string>(
   );
   const safeColumn = escapeHtmlAttr(String(column));
   const safeScope = escapeHtmlAttr(scope);
-  // Use the same gear-style glyph (⛛) the recommendations popover
-  // uses so the two surfaces are visually identical to the user.
-  return `<button type="button" class="${cls}" data-filter-scope="${safeScope}" data-column="${safeColumn}" aria-haspopup="dialog" aria-expanded="false" aria-label="${ariaLabel}" title="${ariaLabel}">⛛</button>`;
+  // Use the same filter icon the recommendations popover uses so the
+  // two surfaces are visually identical to the user.
+  return `<button type="button" class="${cls}" data-filter-scope="${safeScope}" data-column="${safeColumn}" aria-haspopup="dialog" aria-expanded="false" aria-label="${ariaLabel}" title="${ariaLabel}">${iconSvg('filter')}</button>`;
 }

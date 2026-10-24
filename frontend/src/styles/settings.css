@@ -29,7 +29,7 @@
 .sub-tab-btn.active {
     color: var(--cudly-primary);
     border-bottom-color: var(--cudly-primary);
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
 }
 
 /* Visible keyboard focus on sub-tab buttons (Admin sub-tabs + Inventory
@@ -77,7 +77,7 @@
 }
 
 .settings-category legend {
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     font-size: 1.1rem;
     color: var(--cudly-primary);
     padding: 0 0.5rem;
@@ -112,7 +112,7 @@
 
 .setting-info label,
 .setting-info .label-like {
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
     color: var(--cudly-text);
     margin: 0;
 }
@@ -185,7 +185,7 @@
 /* Subsection title */
 .subsection-title {
     font-size: 0.95rem;
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     color: var(--cudly-text);
     margin: 1.5rem 0 1rem;
     padding-bottom: 0.5rem;
@@ -224,13 +224,13 @@
 .service-default-card h5 {
     margin: 0 0 0.75rem;
     font-size: 0.9rem;
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     color: var(--cudly-text);
 }
 
 .service-default-card .service-default-hint {
     margin: -0.5rem 0 0.75rem;
-    font-size: 0.75rem;
+    font-size: var(--cudly-fs-xs);
     line-height: 1.3;
     color: var(--cudly-text-muted);
 }
@@ -313,7 +313,7 @@ select.dirty {
 }
 
 .target-cloud-row label {
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
     color: var(--cudly-text);
     margin: 0;
 }
@@ -330,7 +330,7 @@ select.dirty {
     border: 1px solid #c8d6ea;
     background: #f4f8fd;
     color: #355273;
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
 }
 
 .target-cloud-pills .target-cloud-pill[aria-pressed="true"],
@@ -358,7 +358,7 @@ select.dirty {
 }
 
 .federation-format-buttons .btn-multiline .label {
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
 }
 
 .federation-format-buttons .btn-multiline .sublabel {
@@ -396,7 +396,7 @@ select.dirty {
 }
 
 .federation-account-name {
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     font-size: 0.9rem;
     white-space: nowrap;
     overflow: hidden;
@@ -437,8 +437,8 @@ select.dirty {
 
 .provider-disabled-banner {
     display: none;
-    background: #fff3cd;
-    color: #664d03;
+    background: var(--cudly-warn-bg);
+    color: var(--cudly-warn-fg);
     border: 1px solid #ffecb5;
     border-radius: 4px;
     padding: 0.5rem 0.75rem;
@@ -455,10 +455,11 @@ select.dirty {
 /* Group cards */
 .group-card {
     border: 1px solid var(--cudly-border);
-    border-radius: 8px;
+    border-radius: var(--cudly-r-md);
+    box-shadow: var(--cudly-shadow-sm); /* the shared card surface (#743) */
     padding: 1.25rem;
     margin-bottom: 1rem;
-    background: white;
+    background: var(--cudly-surface);
 }
 .group-card-header {
     display: flex;
@@ -498,9 +499,9 @@ select.dirty {
 /* Permission matrix */
 .permission-matrix { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
 .permission-matrix th, .permission-matrix td { padding: 0.4rem 0.6rem; border: 1px solid var(--cudly-border); text-align: center; }
-.permission-matrix th { background: var(--cudly-bg); font-weight: 600; }
+.permission-matrix th { background: var(--cudly-bg); font-weight: var(--cudly-fw-semibold); }
 .permission-matrix td:first-child { text-align: left; font-family: monospace; }
-.permission-matrix .has-perm { color: #137333; font-weight: 600; }
+.permission-matrix .has-perm { color: #137333; font-weight: var(--cudly-fw-semibold); }
 .permission-matrix .no-perm { color: var(--cudly-border-strong); }
 
 /* Expandable user rows */
@@ -529,7 +530,7 @@ select.dirty {
 .expand-panel-perms h5 {
     margin: 0 0 0.5rem;
     font-size: 0.85rem;
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     color: var(--cudly-text);
 }
 .group-checkbox-list {
@@ -622,6 +623,12 @@ select.dirty {
 tr.override-disabled {
     opacity: 0.55;
 }
+/* Issue #613: note on an override stored under an old Azure/GCP service id. */
+.override-legacy-hint {
+    max-width: 14rem;
+    font-size: 0.8rem;
+    color: var(--cudly-warn-fg);
+}
 
 /* Issue #8: "Updated <when>" line under the override's service name. One
    line where there is room; below the drawer breakpoint it may wrap so the
@@ -630,7 +637,7 @@ tr.override-disabled {
     display: block;
     margin-top: 0.125rem;
     color: var(--cudly-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--cudly-fs-xs);
     white-space: nowrap;
 }
 @media (max-width: 768px) {
@@ -643,4 +650,63 @@ tr.override-disabled {
  * need this scroller as their containing block or they extend the page. */
 #permission-matrix {
     position: relative;
+}
+
+/* Admin -> Purchasing policies section links (issue #190). Sticky under
+ * the topbar inside the panel (no negative-margin gutter rail: that one
+ * collided with the sidebar, see settings-subnav.ts). */
+.section-jump-nav {
+    position: sticky;
+    top: var(--cudly-topbar-h);
+    z-index: 5;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--cudly-sp-2, 0.5rem);
+    margin: 1rem 0 1.5rem;
+    padding: 0.5rem 0;
+    background: var(--cudly-surface);
+}
+
+.section-jump-nav a {
+    padding: 0.25rem 0.75rem;
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-full);
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text);
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.section-jump-nav a:hover {
+    border-color: var(--cudly-primary);
+    color: var(--cudly-primary);
+}
+
+.section-jump-nav a[hidden] {
+    display: none;
+}
+
+/* Land a jumped-to section below the sticky topbar and link row. */
+#purchasing-panel .settings-category,
+#ri-exchange-automation-settings,
+#commitment-laddering-settings {
+    scroll-margin-top: calc(var(--cudly-topbar-h) + 4rem);
+}
+
+/* Per-provider service grids are collapsed by default (issue #190). */
+.service-defaults-details > summary {
+    cursor: pointer;
+}
+
+.service-defaults-details:not([open]) > summary {
+    margin-bottom: 0;
+}
+
+@media (max-width: 768px) {
+    /* One scrollable row on phones instead of a sticky multi-row block. */
+    .section-jump-nav {
+        position: static;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+    }
 }

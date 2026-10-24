@@ -293,6 +293,11 @@ export async function mockApi(page: Page): Promise<MockHandle> {
     if (provider && provider !== 'all' && provider !== '') {
       rows = RECS.filter((r) => r.provider === provider);
     }
+    // Like the backend, apply the single-value service/region pushdown (#162).
+    const service = u.searchParams.get('service');
+    if (service) rows = rows.filter((r) => r.service === service);
+    const region = u.searchParams.get('region');
+    if (region) rows = rows.filter((r) => r.region === region);
     if (pendingDelayMs > 0) {
       const wait = pendingDelayMs;
       pendingDelayMs = 0;
