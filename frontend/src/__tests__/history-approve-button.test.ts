@@ -620,3 +620,34 @@ describe('History inline Approve button (issue #286)', () => {
     expect(ids).toEqual(['exec-mine']);
   });
 });
+
+// #320: _fourEyesMode starts ON, matching the fail-closed default that
+// refreshFourEyesMode applies when the config is unreadable. A render that
+// runs before the first config load must not offer the creator Approve.
+describe('dual-control default before the first config load (#320)', () => {
+  test('renderApprovalQueue hides Approve on the creator\'s own row until the config says dual control is off', async () => {
+    setupDOM();
+    let history!: typeof import('../history');
+    let freshState!: { getCurrentUser: jest.Mock };
+    let freshApi!: { getConfig: jest.Mock; getHistory: jest.Mock };
+    jest.isolateModules(() => {
+      freshState = jest.requireMock('../state');
+      freshApi = jest.requireMock('../api');
+      history = jest.requireActual('../history');
+    });
+    freshState.getCurrentUser.mockReturnValue(REG_USER);
+    const row = makeRow({ purchase_id: 'exec-own', created_by_user_id: REG_USER.id });
+    const approveIds = (): (string | undefined)[] => Array.from(
+      document.querySelectorAll<HTMLButtonElement>('#purchases-approval-queue .history-approve-btn'),
+      b => b.dataset['approveId'],
+    );
+
+    history.renderApprovalQueue([row] as never);
+    expect(approveIds()).toEqual([]);
+
+    freshApi.getConfig.mockResolvedValue({ global: { require_different_approver: false } });
+    freshApi.getHistory.mockResolvedValue({ summary: {}, purchases: [row] });
+    await history.loadHistory();
+    expect(approveIds()).toEqual(['exec-own']);
+  });
+});

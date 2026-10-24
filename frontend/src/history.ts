@@ -50,8 +50,10 @@ let activeStatusFilter: StatusFilter = 'all';
 
 // _fourEyesMode mirrors GlobalConfig.require_different_approver (issue #1005).
 // Gates the inline Approve button so a creator can't approve their own pending
-// purchase when dual-control is on.
-let _fourEyesMode = false;
+// purchase when dual-control is on. Starts ON, matching the fail-closed
+// default refreshFourEyesMode uses, so a render that runs before the first
+// config load cannot offer the creator an Approve button (#320).
+let _fourEyesMode = true;
 
 /**
  * Refresh _fourEyesMode and the dual-control banner from GlobalConfig.
@@ -729,10 +731,16 @@ function canRevokeCompletedRow(p: HistoryPurchase): boolean {
   if (new Date(p.revocation_window_closes_at) <= new Date()) return false;
   const user = getCurrentUser();
   if (!user) return false;
-  // RBAC: admin or revoke-any always; otherwise revoke-own (account-scope
-  // ownership is enforced server-side, the same model as the backend handler).
+  // RBAC: admin or revoke-any always; otherwise revoke-own. The backend
+  // scopes revoke-own differently per row kind, so mirror both:
+  //   * scheduled rows are executions: authorizeRevokeOwnExecution requires
+  //     the creator, like the cancel/approve/retry predicates (#320);
+  //   * completed purchase_history rows carry no creator, so revoke-own is
+  //     account-scoped server-side (see ActionRevokeOwn in auth/types.go).
   if (canAccess('admin', '*') || canAccess('revoke-any', 'purchases')) return true;
-  return canAccess('revoke-own', 'purchases');
+  if (!canAccess('revoke-own', 'purchases')) return false;
+  if (status !== 'scheduled') return true;
+  return !!p.created_by_user_id && p.created_by_user_id === user.id;
 }
 
 // retryThresholdReached returns true when the row has hit the soft-
