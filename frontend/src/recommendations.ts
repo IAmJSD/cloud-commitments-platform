@@ -9,6 +9,7 @@ import { formatCurrency, formatTerm, escapeHtml, CURRENCY_DEFAULT_DIGITS, NO_VAL
 import { getRecommendationsFreshness, refreshRecommendations as refreshRecommendationsAPI } from './api/recommendations';
 import type { RecommendationsFreshness } from './api/recommendations';
 import { showToast } from './toast';
+import { createIcon, iconSvg } from './icons';
 import {
   isPaymentSupported,
   isSavingsPlanService,
@@ -754,11 +755,11 @@ function renderLookbackToolbar(): void {
     });
   }
 
-  // Info tooltip. textContent only (static constant, never API text) so
-  // there is no innerHTML injection surface.
+  // Info tooltip. DOM-built only (static icon, tooltip via textContent,
+  // never API text) so there is no innerHTML injection surface.
   const info = document.createElement('span');
   info.className = 'info-icon';
-  info.textContent = 'ⓘ'; // circled lowercase i
+  info.appendChild(createIcon('info'));
   const tip = document.createElement('span');
   tip.className = 'tooltip-text';
   tip.textContent = canEdit ? LOOKBACK_TOOLTIP : LOOKBACK_NO_PERMISSION_TOOLTIP;
@@ -1932,10 +1933,10 @@ function columnLabel(column: string): string {
 }
 
 function sortIndicator(column: string, active: string, direction: 'asc' | 'desc'): string {
-  if (column !== active) return '<span class="sort-indicator" aria-hidden="true">\u2195</span>';
+  if (column !== active) return `<span class="sort-indicator" aria-hidden="true">${iconSvg('chevrons-up-down')}</span>`;
   return direction === 'asc'
-    ? '<span class="sort-indicator active" aria-hidden="true">\u25B2</span>'
-    : '<span class="sort-indicator active" aria-hidden="true">\u25BC</span>';
+    ? `<span class="sort-indicator active" aria-hidden="true">${iconSvg('chevron-up')}</span>`
+    : `<span class="sort-indicator active" aria-hidden="true">${iconSvg('chevron-down')}</span>`;
 }
 
 // sortedRecommendations was removed in issues #225/#226: group-level sorting
@@ -3296,7 +3297,7 @@ function buildListMarkup(
     const active = filters[column] ? ' active' : '';
     const lbl = getColumnLabel(column, period);
     const label = filters[column] ? `Filter ${lbl} \u2014 currently active` : `Filter ${lbl}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">\u26db</button>`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">${iconSvg('filter')}</button>`;
   };
   const colHeader = (col: ColumnDef): string => {
     const lbl = getColumnLabel(col.key, period);
@@ -3371,7 +3372,7 @@ function buildListMarkup(
         ? (accountNamesCache.get(spRep.cloud_account_id) || spRep.cloud_account_id)
         : '\u2014';
       const isSpExpanded = expandedSpGroups.has(sgk);
-      const spChevron = isSpExpanded ? '\u25bc' : '\u25b6';
+      const spChevron = iconSvg(isSpExpanded ? 'chevron-down' : 'chevron-right');
       const spSlugs = childCellKeys.map((ck) => groups.get(ck)![0]!.service);
       const spLabel = savingsPlansBucketLabel(spSlugs);
       const planTypeCount = childCellKeys.length;
@@ -3430,7 +3431,7 @@ function buildListMarkup(
         const childTermDisplay = selectedChildVariant
           ? formatTerm(selectedChildVariant.term)
           : formatTermRange(childSummary.termMin, childSummary.termMax);
-        const cellChevron = isCellExpanded ? '\u25bc' : '\u25b6';
+        const cellChevron = iconSvg(isCellExpanded ? 'chevron-down' : 'chevron-right');
         const childIdentityParts = [
           `${escapeHtml(childRep.resource_type)}${childRep.engine ? ` (${escapeHtml(childRep.engine)})` : ''}`,
         ];
@@ -3500,7 +3501,7 @@ function buildListMarkup(
       ? formatTerm(selectedVariant.term)
       : formatTermRange(summary.termMin, summary.termMax);
 
-    const chevron = isExpanded ? '\u25bc' : '\u25b6';
+    const chevron = iconSvg(isExpanded ? 'chevron-down' : 'chevron-right');
     const identityParts = [
       `${escapeHtml(rep.resource_type)}${rep.engine ? ` (${escapeHtml(rep.engine)})` : ''}`,
     ];

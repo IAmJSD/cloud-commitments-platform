@@ -10,6 +10,8 @@
  * The header stays put while the body scrolls on short viewports.
  */
 
+import { iconSvg } from './icons';
+
 export function renderLadderConfigModal(): string {
   return `
 <!-- Per-account ladder config modal -->
@@ -19,7 +21,7 @@ export function renderLadderConfigModal(): string {
     <div class="modal-header">
       <h3 id="ladder-modal-title">Commitment Laddering Config</h3>
       <button type="button" class="modal-close" id="ladder-modal-close-btn"
-              aria-label="Close">&times;</button>
+              aria-label="Close">${iconSvg('x')}</button>
     </div>
     <div class="modal-body">
       <form id="ladder-config-form" class="ladder-form-grid" novalidate>
