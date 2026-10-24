@@ -113,7 +113,7 @@ describe('groups/groupList', () => {
       groupList.renderGroups([]);
 
       const container = document.getElementById('groups-list');
-      expect(container?.innerHTML).toContain('No groups found');
+      expect(container?.innerHTML).toContain('No groups yet');
       expect(container?.querySelector('.empty')).toBeTruthy();
     });
 
@@ -671,7 +671,7 @@ describe('groups/groupModals', () => {
       });
     });
 
-    it('should skip permissions without action', async () => {
+    it('refuses a permission row without an action instead of dropping it', async () => {
       document.body.innerHTML = `
         <div id="group-modal">
           <form id="group-form">
@@ -694,9 +694,12 @@ describe('groups/groupModals', () => {
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await groupModals.saveGroup(event);
 
-      expect(api.createGroup).toHaveBeenCalledWith(expect.objectContaining({
-        permissions: [{ action: 'execute', resource: '*' }],
-      }));
+      // Issue #213: dropping an authorization row silently is not
+      // acceptable; the row is refused with a note until fixed or removed.
+      expect(api.createGroup).not.toHaveBeenCalled();
+      expect(document.querySelector('.perm-action')?.getAttribute('aria-invalid')).toBe('true');
+      expect(document.querySelector('.permission-item .field-error')?.textContent)
+        .toContain('This permission has no action');
     });
 
     it('includes permissions with default resource value', async () => {

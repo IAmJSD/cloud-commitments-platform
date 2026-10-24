@@ -2110,33 +2110,18 @@ describe('users/handlers', () => {
       expect(api.updateUser).not.toHaveBeenCalled();
     });
 
-    it('should set up bulk group handler', async () => {
-      const mockUsers = [{ id: '1', email: 'test@test.com', groups: [], mfa_enabled: false }];
-      userState.setAllUsers(mockUsers as any);
+    it('never falls back to a native prompt() for bulk add to group (#705)', async () => {
       userState.addSelectedUserId('1');
-      (global.prompt as jest.Mock).mockReturnValue('admins');
 
       userHandlers.setupUserHandlers();
 
-      const bulkGroupBtn = document.getElementById('bulk-group-btn');
-      bulkGroupBtn?.click();
+      // A stray legacy #bulk-group-btn must stay inert: the dropdown is the
+      // only bulk add-to-group path.
+      document.getElementById('bulk-group-btn')?.click();
 
       await new Promise(resolve => setTimeout(resolve, 0));
 
-      expect(api.updateUser).toHaveBeenCalled();
-    });
-
-    it('should handle cancelled group prompt', async () => {
-      userState.addSelectedUserId('1');
-      (global.prompt as jest.Mock).mockReturnValue(null);
-
-      userHandlers.setupUserHandlers();
-
-      const bulkGroupBtn = document.getElementById('bulk-group-btn');
-      bulkGroupBtn?.click();
-
-      await new Promise(resolve => setTimeout(resolve, 0));
-
+      expect(global.prompt).not.toHaveBeenCalled();
       expect(api.updateUser).not.toHaveBeenCalled();
     });
   });

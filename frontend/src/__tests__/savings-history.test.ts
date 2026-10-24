@@ -145,11 +145,10 @@ describe('Savings History Module', () => {
         end: '2024-04-01T00:00:00Z',
         interval: 'daily',
         summary: {
-          total_period_savings: 500,
-          total_upfront_spent: 1000,
-          purchase_count: 5,
-          average_savings_per_period: 10,
-          peak_savings: 25
+          total_purchases: 2,
+          total_upfront: 250,
+          total_monthly_savings: 25,
+          total_annual_savings: 300
         },
         data_points: [
           { timestamp: '2024-01-01T00:00:00Z', total_savings: 10, cumulative_savings: 10, total_upfront: 100, purchase_count: 1 },
@@ -274,13 +273,39 @@ describe('Savings History Module', () => {
       }));
     });
 
-    test('renders savings stats from summary', async () => {
+    test('renders the period total from the wire summary key (issue #276)', async () => {
+      // The server total diverges from the bucket sum (e.g. it excludes
+      // revoked rows); the wire value must win over the client-side sum.
       const mockData = {
         summary: {
-          total_period_savings: 1500,
-          average_savings_per_period: 75,
-          peak_savings: 200
+          total_purchases: 1,
+          total_upfront: 500,
+          total_monthly_savings: 1800,
+          total_annual_savings: 21600
         },
+        data_points: [
+          { timestamp: '2024-01-01T00:00:00Z', total_savings: 2000, cumulative_savings: 2000, total_upfront: 500, purchase_count: 1 }
+        ]
+      };
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+      // Pin "now" away from DST changes so the 90d window is exactly 90 days.
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-01T12:00:00Z'));
+      try {
+        await loadSavingsHistory();
+      } finally {
+        jest.useRealTimers();
+      }
+
+      expect(document.getElementById('period-savings')?.textContent).toBe('$1.80K');
+      // 90d window: the average spreads the authoritative total over 90 days.
+      expect(document.getElementById('avg-hourly-savings')?.textContent).toBe('$20.00/mo');
+      // Peak has no wire counterpart, so it comes from the buckets.
+      expect(document.getElementById('peak-savings')?.textContent).toBe('$2.00K/mo');
+    });
+
+    test('ignores the never-sent legacy summary keys (issue #276)', async () => {
+      const mockData = {
+        summary: { total_period_savings: 9999, average_savings_per_period: 9999, peak_savings: 9999 },
         data_points: [
           { timestamp: '2024-01-01T00:00:00Z', total_savings: 100, cumulative_savings: 100, total_upfront: 500, purchase_count: 1 }
         ]
@@ -289,13 +314,8 @@ describe('Savings History Module', () => {
 
       await loadSavingsHistory();
 
-      const periodSavingsEl = document.getElementById('period-savings');
-      const avgSavingsEl = document.getElementById('avg-hourly-savings');
-      const peakSavingsEl = document.getElementById('peak-savings');
-
-      expect(periodSavingsEl?.textContent).toContain('$1.50K');
-      expect(avgSavingsEl?.textContent).toContain('$75.00/mo');
-      expect(peakSavingsEl?.textContent).toContain('$200.00/mo');
+      expect(document.getElementById('period-savings')?.textContent).toBe('$100.00');
+      expect(document.getElementById('peak-savings')?.textContent).toBe('$100.00/mo');
     });
 
     test('calculates stats from data points when summary missing', async () => {
@@ -339,11 +359,7 @@ describe('Savings History Module', () => {
 
     test('formats currency values over 1000 with K suffix', async () => {
       const mockData = {
-        summary: {
-          total_period_savings: 5000,
-          average_savings_per_period: 250,
-          peak_savings: 1500
-        },
+        summary: { total_monthly_savings: 5000, total_annual_savings: 60000 },
         data_points: [
           { timestamp: '2024-01-01T00:00:00Z', total_savings: 100, cumulative_savings: 100, total_upfront: 500, purchase_count: 1 }
         ]
@@ -358,11 +374,7 @@ describe('Savings History Module', () => {
 
     test('formats currency values under 1000 without suffix', async () => {
       const mockData = {
-        summary: {
-          total_period_savings: 500,
-          average_savings_per_period: 25,
-          peak_savings: 100
-        },
+        summary: { total_monthly_savings: 500, total_annual_savings: 6000 },
         data_points: [
           { timestamp: '2024-01-01T00:00:00Z', total_savings: 100, cumulative_savings: 100, total_upfront: 500, purchase_count: 1 }
         ]
@@ -1080,11 +1092,7 @@ describe('Savings History Module', () => {
       document.getElementById('peak-savings')?.remove();
 
       const mockData = {
-        summary: {
-          total_period_savings: 1500,
-          average_savings_per_period: 75,
-          peak_savings: 200
-        },
+        summary: { total_monthly_savings: 1500, total_annual_savings: 18000 },
         data_points: [
           { timestamp: '2024-01-01T00:00:00Z', total_savings: 100, cumulative_savings: 100, total_upfront: 500, purchase_count: 1 }
         ]
@@ -1363,14 +1371,19 @@ describe('Savings History Module', () => {
   // Issue #750: unit dropdown wires + KPI display per unit
   describe('unit dropdown (issue #750)', () => {
     const mockData = {
-      summary: {
-        total_period_savings: 730,       // $730/mo cumulative total
-        average_savings_per_period: 730, // $730/mo avg per bucket
-        peak_savings: 730                // $730/mo peak bucket
-      },
+      summary: { total_monthly_savings: 730, total_annual_savings: 8760 }, // $730/mo cumulative total
       data_points: [
         { timestamp: '2024-01-01T00:00:00Z', total_savings: 730, cumulative_savings: 730, total_upfront: 100, purchase_count: 1 }
       ]
+    };
+    // 90 daily buckets of $730/mo over the default 90d window: the window
+    // average (total / 90 days) is exactly $730/mo.
+    const windowAvgData = {
+      summary: { total_monthly_savings: 730 * 90, total_annual_savings: 730 * 90 * 12 },
+      data_points: Array.from({ length: 90 }, (_, i) => ({
+        timestamp: new Date(Date.UTC(2024, 0, 1 + i)).toISOString(),
+        total_savings: 730, cumulative_savings: 730 * (i + 1), total_upfront: 100, purchase_count: 1,
+      })),
     };
 
     test('default unit is monthly -- avg and peak show /mo suffix', async () => {
@@ -1386,7 +1399,7 @@ describe('Savings History Module', () => {
     test('hourly unit -- avg and peak show /hr suffix and value is monthly/730', async () => {
       const unitSelect = document.getElementById('savings-unit') as HTMLSelectElement;
       unitSelect.value = 'hourly';
-      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(windowAvgData);
       await loadSavingsHistory();
 
       const avgEl = document.getElementById('avg-hourly-savings');
@@ -1398,7 +1411,7 @@ describe('Savings History Module', () => {
     test('yearly unit -- avg and peak show /yr suffix and value is monthly*12', async () => {
       const unitSelect = document.getElementById('savings-unit') as HTMLSelectElement;
       unitSelect.value = 'yearly';
-      (getSavingsAnalytics as jest.Mock).mockResolvedValue(mockData);
+      (getSavingsAnalytics as jest.Mock).mockResolvedValue(windowAvgData);
       await loadSavingsHistory();
 
       const avgEl = document.getElementById('avg-hourly-savings');

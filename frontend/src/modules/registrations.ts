@@ -268,7 +268,12 @@ async function handleReject(reg: AccountRegistration): Promise<void> {
 
 /** Initialize the registrations panel: wire filter change and initial load. */
 export function initRegistrations(): void {
+  // Runs on every Accounts sub-tab visit, so wire the filter once; a stacked
+  // listener per visit fired N racing loads per filter change.
   const filterEl = document.getElementById('registrations-status-filter');
-  filterEl?.addEventListener('change', () => void loadRegistrations());
+  if (filterEl && filterEl.dataset['wired'] !== '1') {
+    filterEl.dataset['wired'] = '1';
+    filterEl.addEventListener('change', () => void loadRegistrations());
+  }
   void loadRegistrations();
 }
