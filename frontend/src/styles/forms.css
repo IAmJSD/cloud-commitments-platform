@@ -157,6 +157,13 @@ label {
     border-radius: 4px;
 }
 
+/* The rule above outranks the global [aria-invalid] border (base.css), so
+   repeat it here or a field flagged by showFieldError (#727) only turns
+   red while focused. */
+.form-group [aria-invalid="true"] {
+    border-color: var(--cudly-error);
+}
+
 /* Block, not the inline <small> default: inline it sat on the 16px body
  * line box, so with the 1.5 body line-height its wrapped lines were 24px
  * apart, and its margin-top had no effect. */
