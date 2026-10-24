@@ -72,6 +72,7 @@ jest.mock('../api', () => ({
   getRecommendations: jest.fn().mockResolvedValue([]),
 }));
 import { loadSavingsTrendChart, loadYtdSparkline, setupSavingsTrendHandlers, setupDashboardHandlers, formatTrendAxisTick } from '../dashboard';
+import { formatTrendTooltipTitle } from '../modules/chart-utils';
 
 // Mock state module
 jest.mock('../state', () => ({
@@ -449,6 +450,22 @@ describe('Dashboard Module', () => {
       const upcomingList = document.getElementById('upcoming-list');
       expect(upcomingList?.innerHTML).toContain('data-action="view-purchase"');
       expect(upcomingList?.innerHTML).toContain('data-action="cancel-purchase"');
+    });
+
+    test('row-level cancel button is the outlined destructive variant, not the filled one', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({ potential_monthly_savings: 1000, by_service: {} });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
+        purchases: [{
+          execution_id: 'exec-1', plan_id: 'plan-1', plan_name: 'Test Plan', provider: 'aws', service: 'ec2',
+          step_number: 1, total_steps: 4, estimated_savings: 100, scheduled_date: '2024-02-15',
+        }],
+      });
+
+      await loadDashboard();
+
+      const cancelBtn = document.querySelector<HTMLButtonElement>('#upcoming-list [data-action="cancel-purchase"]');
+      expect(cancelBtn?.classList.contains('btn-danger')).toBe(true);
+      expect(cancelBtn?.classList.contains('danger')).toBe(false);
     });
 
     test('handles missing canvas element gracefully', async () => {
@@ -996,7 +1013,7 @@ describe('Dashboard Module', () => {
       const bAll = document.createElement('button');
       bAll.className = 'trend-range';
       bAll.dataset['range'] = 'all';
-      bAll.textContent = 'All';
+      bAll.textContent = '1y'; // labeled 1y since #52; data-range stays 'all'
       document.body.appendChild(bAll);
       setupSavingsTrendHandlers();
       // Override the beforeEach default of empty data_points so the chart
@@ -1126,6 +1143,32 @@ describe('Dashboard Module', () => {
       expect(result).not.toMatch(/^\d{13}$/);
       // Must contain recognizable date text (month abbreviation).
       expect(result).toMatch(/Jun\s+\d+/);
+      // Must carry the year so points a year apart are distinguishable (#53).
+      expect(result).toMatch(/2024/);
+    });
+  });
+
+  // Issue #53: the tooltip title includes the year; the axis tick stays compact.
+  describe('formatTrendTooltipTitle (issue #53)', () => {
+    test.each(['daily', 'weekly'] as const)('%s titles include the year', (interval) => {
+      const ts = new Date('2024-06-15T12:00:00Z').getTime();
+      expect(formatTrendTooltipTitle(ts, interval)).toMatch(/^Jun 1[45], 2024$/);
+    });
+
+    test('hourly titles include the year and the time', () => {
+      const label = formatTrendTooltipTitle(new Date('2024-03-15T14:30:00Z').getTime(), 'hourly');
+      expect(label).toMatch(/Mar\s+1[45], 2024/);
+      expect(label).toMatch(/\d{2}:30/);
+    });
+
+    test('the same calendar day in different years produces different titles', () => {
+      const a = formatTrendTooltipTitle(new Date('2024-06-15T12:00:00Z').getTime(), 'weekly');
+      const b = formatTrendTooltipTitle(new Date('2025-06-15T12:00:00Z').getTime(), 'weekly');
+      expect(a).not.toBe(b);
+      // The compact axis tick for the same pair is identical, which is why the
+      // tooltip cannot reuse it.
+      expect(formatTrendAxisTick(new Date('2024-06-15T12:00:00Z').getTime(), 'weekly'))
+        .toBe(formatTrendAxisTick(new Date('2025-06-15T12:00:00Z').getTime(), 'weekly'));
     });
   });
 
@@ -1427,12 +1470,11 @@ describe('Dashboard Module', () => {
     // Import the public helpers from dashboard. The module is already
     // loaded above via the jest.mock chain, so we can import directly.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { renderSavingsByService, computeServiceStats, computeServiceStatsFromRecs, darkenHexColor, parseHexColor } = require('../dashboard') as {
+    const { renderSavingsByService, computeServiceStats, computeServiceStatsFromRecs, SAVINGS_LAYER_COLORS } = require('../dashboard') as {
       renderSavingsByService: (recs: unknown[], byService?: Record<string, { potential_savings: number; current_savings: number }>, filterDesc?: string) => void;
       computeServiceStats: (dataPoints: unknown[]) => Map<string, { min: number; max: number; sum: number; count: number; samples: number[] }>;
       computeServiceStatsFromRecs: (recs: unknown[]) => Map<string, { min: number; max: number; sum: number; count: number; samples: number[]; minLabel?: string; maxLabel?: string }>;
-      darkenHexColor: (hex: string, factor?: number) => string;
-      parseHexColor: (hex: string) => { r: number; g: number; b: number };
+      SAVINGS_LAYER_COLORS: { current: string; lowestOption: string; upside: string };
     };
 
     function buildDOM(): void {
@@ -1704,98 +1746,56 @@ describe('Dashboard Module', () => {
         expect(totalLine).toMatch(/\$400/);
       });
 
-      describe('stable per-service colours and matching legend (#700)', () => {
+      describe('one colour per layer, matching the legend (#189)', () => {
         type ChartCfg = {
-          data: { labels: string[]; datasets: { label: string; backgroundColor: string[] }[] };
-          options: { plugins: { legend: { labels: { generateLabels?: (c: unknown) => { text: string; fillStyle: string }[] } } } };
+          data: { labels: string[]; datasets: { label: string; backgroundColor: unknown }[] };
+          options: {
+            plugins: { legend: { labels: { generateLabels?: unknown } } };
+            scales: { x: { title?: { display?: boolean } } };
+          };
         };
         const lastCfg = (): ChartCfg => {
           const calls = (Chart as unknown as jest.Mock).mock.calls;
           return calls[calls.length - 1]?.[1] as ChartCfg;
         };
-        const colourOf = (cfg: ChartCfg, svc: string): string => {
-          const ds = cfg.data.datasets.find((d) => d.label === 'Lowest option');
-          return ds?.backgroundColor[cfg.data.labels.indexOf(svc)] ?? '';
-        };
 
-        test('a service keeps its colour when its rank changes between renders', () => {
+        test('each layer is one colour on every bar, so the default legend swatch matches it', () => {
           buildDOM();
-          renderSavingsByService([rec('ec2', 500), rec('rds', 300), rec('elasticache', 100)]);
-          const before = lastCfg();
-          expect(before.data.labels[0]).toBe('ec2');
-          const ec2Before = colourOf(before, 'ec2');
-          const rdsBefore = colourOf(before, 'rds');
-          const cacheBefore = colourOf(before, 'elasticache');
-
-          // Data refresh: rds overtakes ec2, elasticache jumps to rank 2.
-          renderSavingsByService([rec('ec2', 120), rec('rds', 900), rec('elasticache', 400)]);
-          const after = lastCfg();
-          expect(after.data.labels[0]).toBe('rds');
-          expect(colourOf(after, 'ec2')).toBe(ec2Before);
-          expect(colourOf(after, 'rds')).toBe(rdsBefore);
-          expect(colourOf(after, 'elasticache')).toBe(cacheBefore);
-          expect(new Set([ec2Before, rdsBefore, cacheBefore]).size).toBe(3);
-        });
-
-        test('every known service slug has a distinct colour per family, twins share one', () => {
-          const { serviceBarColor } = require('../dashboard') as { serviceBarColor: (s: string) => string };
-          const families: string[][] = [
-            ['compute', 'ec2', 'vm'],
-            ['relational-db', 'rds', 'sql', 'cloudsql'],
-            ['cache', 'elasticache', 'redis', 'memorystore'],
-            ['savingsplans', 'savings-plans', 'savings-plans-compute', 'savings-plans-ec2instance', 'savings-plans-sagemaker', 'savings-plans-database'],
-            ['search', 'opensearch'],
-            ['data-warehouse', 'redshift'],
-            ['memorydb'],
-          ];
-          const colours = families.map((slugs) => {
-            const set = new Set(slugs.map((x) => serviceBarColor(x)));
-            expect([...set]).toHaveLength(1);
-            return [...set][0];
-          });
-          expect(new Set(colours).size).toBe(families.length);
-        });
-
-        test('unknown slugs never reuse a known family colour', () => {
-          const { serviceBarColor } = require('../dashboard') as { serviceBarColor: (s: string) => string };
-          // Fallback colours must not reuse a known family's colour.
-          const known = new Set(['compute', 'relational-db', 'cache', 'savingsplans', 'search', 'data-warehouse', 'memorydb'].map((x) => serviceBarColor(x)));
-          for (const unknown of ['alpha', 'zeta-service', 'nosuch', 'x1', 'foo-bar']) {
-            expect(known.has(serviceBarColor(unknown))).toBe(false);
-          }
-        });
-
-        test('an unknown slug gets a deterministic colour from the name hash', () => {
-          const { serviceBarColor } = require('../dashboard') as { serviceBarColor: (s: string) => string };
-          expect(serviceBarColor('mystery-service')).toBe(serviceBarColor('mystery-service'));
-          expect(serviceBarColor('Mystery-Service')).toBe(serviceBarColor('mystery-service'));
-          // The hash must actually vary: a fixed slot for every unknown slug is a bug.
-          const seen = new Set(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((x) => serviceBarColor(`svc-${x}`)));
-          expect(seen.size).toBeGreaterThan(1);
-        });
-
-        test('legend swatches carry a border so the pale Upside swatch stays visible', () => {
-          buildDOM();
-          renderSavingsByService([rec('ec2', 500)]);
+          renderSavingsByService(
+            [rec('ec2', 100), rec('ec2', 500, 3), rec('rds', 300), rec('elasticache', 80)],
+            { ec2: { potential_savings: 500, current_savings: 50 } },
+          );
           const cfg = lastCfg();
-          const items = cfg.options.plugins.legend.labels.generateLabels?.({ data: { datasets: cfg.data.datasets }, isDatasetVisible: () => true }) as unknown as { strokeStyle: string; lineWidth: number }[];
-          for (const item of items) {
-            expect(item.lineWidth).toBeGreaterThanOrEqual(1);
-            expect(item.strokeStyle).toBe('#546e7a');
-          }
+          const colours = Object.fromEntries(cfg.data.datasets.map((d) => [d.label, d.backgroundColor]));
+          expect(colours).toEqual({
+            'Current / Committed': SAVINGS_LAYER_COLORS.current,
+            'Lowest option': SAVINGS_LAYER_COLORS.lowestOption,
+            Upside: SAVINGS_LAYER_COLORS.upside,
+          });
+          // A single string (not a per-bar array) is what Chart.js's default
+          // legend draws, so swatch and bars cannot diverge.
+          for (const d of cfg.data.datasets) expect(typeof d.backgroundColor).toBe('string');
+          expect(cfg.options.plugins.legend.labels.generateLabels).toBeUndefined();
         });
 
-        test('legend swatches use neutral tones matching the three bar layers, not the first bar colour', () => {
+        test('the three layers use three distinct colours', () => {
+          expect(new Set(Object.values(SAVINGS_LAYER_COLORS)).size).toBe(3);
+        });
+
+        test('colours do not change when a service changes rank', () => {
           buildDOM();
           renderSavingsByService([rec('ec2', 500), rec('rds', 300)]);
-          const cfg = lastCfg();
-          const gen = cfg.options.plugins.legend.labels.generateLabels;
-          expect(typeof gen).toBe('function');
-          const items = gen?.({ data: { datasets: cfg.data.datasets }, isDatasetVisible: () => true }) ?? [];
-          expect(items.map((i) => i.text)).toEqual(['Current / Committed', 'Lowest option', 'Upside']);
-          const barColours = cfg.data.datasets.flatMap((d) => d.backgroundColor);
-          for (const item of items) expect(barColours).not.toContain(item.fillStyle);
-          expect(new Set(items.map((i) => i.fillStyle)).size).toBe(3);
+          const before = lastCfg().data.datasets.map((d) => d.backgroundColor);
+          renderSavingsByService([rec('ec2', 120), rec('rds', 900)]);
+          const after = lastCfg();
+          expect(after.data.labels[0]).toBe('rds');
+          expect(after.data.datasets.map((d) => d.backgroundColor)).toEqual(before);
+        });
+
+        test('drops the redundant "Service" x-axis title', () => {
+          buildDOM();
+          renderSavingsByService([rec('ec2', 500)]);
+          expect(lastCfg().options.scales.x.title?.display).not.toBe(true);
         });
       });
 
@@ -1850,26 +1850,6 @@ describe('Dashboard Module', () => {
         }).data.datasets;
         const lowestDs = datasets.find((d) => d.label === 'Lowest option');
         expect(lowestDs?.data[0]).toBe(0);
-      });
-
-      test('current underlay uses a DARKER variant of each service base hue', () => {
-        buildDOM();
-        renderSavingsByService(
-          [rec('ec2', 500)],
-          { ec2: { potential_savings: 500, current_savings: 200 } },
-        );
-        const chartCtor = Chart as unknown as jest.Mock;
-        const lastCall = chartCtor.mock.calls[chartCtor.mock.calls.length - 1];
-        const datasets = (lastCall?.[1] as {
-          data: { datasets: { label: string; backgroundColor: string[] }[] };
-        }).data.datasets;
-        const lowestOptionColor = datasets.find((d) => d.label === 'Lowest option')?.backgroundColor[0] as string;
-        const currentColor = datasets.find((d) => d.label === 'Current / Committed')?.backgroundColor[0] as string;
-        // The current colour is the darkened form of the base (lowest-option) colour.
-        expect(currentColor).toBe(darkenHexColor(lowestOptionColor));
-        // And it is genuinely darker: each channel sum is lower.
-        const sum = (hex: string): number => { const c = parseHexColor(hex); return c.r + c.g + c.b; };
-        expect(sum(currentColor)).toBeLessThan(sum(lowestOptionColor));
       });
 
       test('current layer defaults to 0 for a service absent from byService', () => {
@@ -2086,36 +2066,6 @@ describe('Dashboard Module', () => {
         await loadDashboard();
         expect(lastChartData().labels).toContain('rds');
         expect(lastChartData().labels[0]).toBe('rds');
-      });
-    });
-
-    // Issue #908: colour-derivation helpers for the current-savings underlay.
-    describe('colour helpers (issue #908)', () => {
-      test('parseHexColor parses #rrggbb', () => {
-        expect(parseHexColor('#1a73e8')).toEqual({ r: 26, g: 115, b: 232 });
-      });
-
-      test('parseHexColor tolerates a missing leading hash', () => {
-        expect(parseHexColor('34a853')).toEqual({ r: 52, g: 168, b: 83 });
-      });
-
-      test('parseHexColor falls back to the default blue for malformed input', () => {
-        expect(parseHexColor('not-a-color')).toEqual({ r: 26, g: 115, b: 232 });
-      });
-
-      test('darkenHexColor returns a strictly darker same-hue colour', () => {
-        const base = '#34a853';
-        const darker = darkenHexColor(base);
-        expect(darker).toMatch(/^#[0-9a-f]{6}$/);
-        const sum = (hex: string): number => { const c = parseHexColor(hex); return c.r + c.g + c.b; };
-        expect(sum(darker)).toBeLessThan(sum(base));
-        // 30% reduction by default (factor 0.7): green channel 168 -> ~118.
-        expect(parseHexColor(darker).g).toBe(Math.round(168 * 0.7));
-      });
-
-      test('darkenHexColor honours an explicit factor', () => {
-        // factor 0.5 halves each channel.
-        expect(darkenHexColor('#646464', 0.5)).toBe('#323232');
       });
     });
   });

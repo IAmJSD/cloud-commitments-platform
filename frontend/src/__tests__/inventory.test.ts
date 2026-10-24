@@ -14,6 +14,12 @@ jest.mock('../riexchange', () => ({
   loadRIExchange: jest.fn(),
 }));
 
+// The Trends sub-tab's fetch/render is covered in trends.test.ts; here we
+// only check that the sub-section switch and chip reload route to it.
+jest.mock('../trends', () => ({
+  loadTrends: jest.fn(),
+}));
+
 // The active-commitments and coverage load paths hit the API. Mock the
 // entire api barrel so we don't need to stand up fetch — tests exercise
 // the render machinery, not the network shape.
@@ -53,6 +59,7 @@ jest.mock('../navigation', () => {
 import { loadInventory, switchInventorySubSection, loadActiveCommitments, loadCoverageBreakdown } from '../inventory';
 import { switchInventorySubTab } from '../navigation';
 import { loadRIExchange } from '../riexchange';
+import { loadTrends } from '../trends';
 import * as api from '../api';
 import * as state from '../state';
 import type { ProviderCoverageSection } from '../api';
@@ -217,6 +224,21 @@ describe('Inventory & Coverage sub-section switching', () => {
     expect(document.getElementById('inventory-active-commitments')?.classList.contains('hidden')).toBe(true);
     expect(document.getElementById('inventory-coverage')?.classList.contains('hidden')).toBe(true);
     expect(loadRIExchange).toHaveBeenCalledTimes(1);
+  });
+
+  test('switchInventorySubSection shows trends and calls loadTrends', () => {
+    const trends = document.createElement('section');
+    trends.id = 'inventory-trends';
+    trends.classList.add('hidden');
+    document.getElementById('inventory-tab')?.appendChild(trends);
+    (loadTrends as jest.Mock).mockClear();
+
+    expect(switchInventorySubSection('trends')).toBe('trends');
+
+    expect(trends.classList.contains('hidden')).toBe(false);
+    expect(document.getElementById('inventory-coverage')?.classList.contains('hidden')).toBe(true);
+    expect(document.getElementById('inventory-active-commitments')?.classList.contains('hidden')).toBe(true);
+    expect(loadTrends).toHaveBeenCalledTimes(1);
   });
 
   test('switchInventorySubSection falls back to active-commitments for unknown sub-section', () => {
@@ -754,6 +776,19 @@ describe('chip subscriptions (issue #866)', () => {
     expect(api.getCoverageBreakdown).toHaveBeenCalledWith(
       expect.objectContaining({ accountID: 'acct-Y' })
     );
+  });
+
+  test('account chip change re-fetches Trends when trends sub-tab is active', async () => {
+    activateInventoryTab();
+    loadInventory();
+    switchInventorySubSection('trends');
+    (loadTrends as jest.Mock).mockClear();
+
+    const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+    accountCb();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(loadTrends).toHaveBeenCalledTimes(1);
   });
 
   test('does NOT re-fetch when inventory tab is inactive (active-tab guard)', async () => {
