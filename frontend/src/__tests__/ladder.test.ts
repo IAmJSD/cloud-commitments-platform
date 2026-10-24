@@ -81,6 +81,7 @@ describe('ladder.ts', () => {
   test('lookback input advertises the 10-day baseline minimum', async () => {
     await renderSection([baseConfig({ id: 'config-1' })]);
     expect(document.getElementById('ladder-cfg-lookback-days')).toHaveAttribute('min', '10');
+    expect(document.getElementById('ladder-cfg-lookback-days')).toHaveAccessibleDescription('Minimum 10');
   });
 
   test.each([

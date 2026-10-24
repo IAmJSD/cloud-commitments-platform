@@ -164,3 +164,42 @@ test('table names the account, Auto Approve warns and confirms, and save errors 
   // The rejected PUT logs its 400 and the handler's console.error; nothing else may fail.
   expect(errors.filter(error => !error.includes('400') && !error.startsWith('saveLadderConfig:'))).toEqual([]);
 });
+
+test('config form uses compact aligned inputs and scrolls inside the modal on short viewports', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await setup(page);
+  await page.locator('#ladder-add-config-btn').click();
+  const box = async (id: string) => (await page.locator(`#ladder-cfg-${id}`).boundingBox())!;
+  const coverage = await box('target-coverage');
+  const fraction = await box('buffer-fraction');
+  for (const id of ['target-coverage', 'buffer-fraction', 'lookback-days', 'max-hourly', 'max-actions', 'cadence']) {
+    expect((await box(id)).height).toBeLessThan(44);
+  }
+  // Numeric fields pair up in two aligned columns.
+  expect(Math.abs(fraction.y - coverage.y)).toBeLessThan(1);
+  expect(fraction.x).toBeGreaterThan(coverage.x + coverage.width);
+  for (const id of ['baseline-percentile', 'max-hourly']) expect((await box(id)).x).toBeCloseTo(coverage.x, 0);
+  for (const id of ['buf-util-threshold', 'max-actions']) expect((await box(id)).x).toBeCloseTo(fraction.x, 0);
+  // The ramp textarea spans both columns, with its help text underneath.
+  const ramp = await box('ramp-schedule');
+  expect(ramp.x).toBeCloseTo(coverage.x, 0);
+  expect(ramp.x + ramp.width).toBeCloseTo(fraction.x + fraction.width, 0);
+  const rampHint = (await page.locator('#ladder-cfg-ramp-schedule-hint').boundingBox())!;
+  expect(rampHint.y).toBeGreaterThanOrEqual(ramp.y + ramp.height);
+  await expect(page.locator('#ladder-cfg-lookback-days')).toHaveAccessibleDescription('Minimum 10');
+
+  // Short viewport: header and Save stay on screen while the body scrolls.
+  await page.setViewportSize({ width: 1280, height: 720 });
+  const body = page.locator('#ladder-config-modal .modal-body');
+  expect(await body.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+  await page.locator('#ladder-cfg-ramp-schedule').scrollIntoViewIfNeeded();
+  for (const selector of ['#ladder-modal-title', '#ladder-config-save-btn']) {
+    const rect = (await page.locator(selector).boundingBox())!;
+    expect(rect.y).toBeGreaterThanOrEqual(0);
+    expect(rect.y + rect.height).toBeLessThanOrEqual(720);
+  }
+
+  // Narrow viewport: one column.
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect((await box('buffer-fraction')).x).toBeCloseTo((await box('target-coverage')).x, 0);
+});
