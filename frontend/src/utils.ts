@@ -63,6 +63,25 @@ export function formatCurrency(
 }
 
 /**
+ * Format a number as compact currency ("$950", "$1.5K", "$12.35K", "$3M")
+ * for chart axes, where full figures would crowd the ticks. Same en-US
+ * pinning and absent-value marker as formatCurrency; `digits` caps the
+ * fraction digits so close ticks (0.1 vs 0.2) stay distinct.
+ */
+export function formatCompactCurrency(value: number | null | undefined, digits = 2): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    // Delegate so both formatters always share the absent marker (NO_VALUE).
+    return formatCurrency(value);
+  }
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    notation: 'compact',
+    maximumFractionDigits: digits,
+  }).format(value);
+}
+
+/**
  * Parse a date input into a Date, treating bare calendar dates correctly.
  *
  * A date-only ISO string ("2024-03-15") is parsed by `new Date()` as UTC
