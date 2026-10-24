@@ -158,6 +158,17 @@ describe('HTML Structure', () => {
       const upcoming = document.getElementById('upcoming-purchases');
       expect(upcoming).toBeTruthy();
     });
+
+    // Issue #52: the longest savings-trend range is capped at 365 days by the
+    // analytics API, so its button must not promise "All" history.
+    test('labels the longest savings-trend range 1y, not All (issue #52)', () => {
+      const labels = Array.from(document.querySelectorAll<HTMLButtonElement>('.trend-range'))
+        .map(b => b.textContent?.trim());
+      expect(labels).toEqual(['7d', '30d', '90d', '1y']);
+      const longest = document.querySelector<HTMLButtonElement>('.trend-range[data-range="all"]');
+      expect(longest?.textContent?.trim()).toBe('1y');
+      expect(longest?.title).toBe('Last 365 days');
+    });
   });
 
   describe('Recommendations Tab', () => {
@@ -798,6 +809,14 @@ describe('HTML Structure', () => {
       expect(el?.getAttribute('type')).toBe('button');
       // Inert until updateUserUI shows it with the signed-in email.
       expect(el?.hasAttribute('hidden')).toBe(true);
+    });
+
+    test('every target="_blank" link sets rel="noopener noreferrer" (#136)', () => {
+      const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('a[target="_blank"]'));
+      expect(links.length).toBeGreaterThan(0);
+      for (const link of links) {
+        expect(link.getAttribute('rel')).toBe('noopener noreferrer');
+      }
     });
   });
 });

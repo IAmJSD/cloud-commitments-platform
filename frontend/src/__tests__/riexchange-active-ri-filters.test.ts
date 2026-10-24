@@ -62,7 +62,9 @@ jest.mock('../state', () => ({
 }));
 
 import { loadRIExchange } from '../riexchange';
+import { closeColumnFilterPopover } from '../lib/column-filter-popover';
 import * as api from '../api';
+import * as state from '../state';
 
 // Three convertible RIs with distinct instance types, AZs, and counts
 // so the categorical and numeric filter assertions can distinguish rows.
@@ -136,6 +138,7 @@ describe('Active Convertible RIs column filters (issue #1414)', () => {
 
   afterEach(() => {
     // Any detached popovers on body; clean up so they don't bleed.
+    closeColumnFilterPopover();
     document.body.querySelectorAll('.column-filter-popover').forEach((n) => n.remove());
   });
 
@@ -217,6 +220,52 @@ describe('Active Convertible RIs column filters (issue #1414)', () => {
     // ri-1 (count=4) and ri-3 (count=6) pass; ri-2 (count=2) is filtered out
     expect(countRows()).toBe(2);
   });
+
+  // Issue #18: the shared popover lib re-anchors the open popover to the
+  // trigger the commit re-render creates, instead of leaving it orphaned.
+  test('popover stays open and attached to the fresh trigger after a commit re-render', async () => {
+    await load();
+    const sel = '#ri-exchange-instances-list th .column-filter-btn[data-column="instance_type"]';
+    const before = document.querySelector<HTMLButtonElement>(sel);
+    before!.click();
+    const c6iCb = document.querySelector<HTMLInputElement>(
+      '.column-filter-popover .column-filter-item input[data-value="c6i.large"]',
+    );
+    c6iCb!.checked = false;
+    c6iCb!.dispatchEvent(new Event('change'));
+
+    const after = document.querySelector<HTMLButtonElement>(sel);
+    expect(after).not.toBe(before);
+    expect(after?.getAttribute('aria-expanded')).toBe('true');
+    expect(document.querySelectorAll('.column-filter-popover')).toHaveLength(1);
+  });
+
+  test('reshape table filter commits through the RI Exchange state slice', async () => {
+    (api.getReshapeRecommendations as jest.Mock).mockResolvedValue({
+      recommendations: [{
+        source_ri_id: 'ri-abc', source_instance_type: 'm5.xlarge', source_count: 1,
+        target_instance_type: 'm5.large', target_count: 2, utilization_percent: 50,
+        normalized_used: 4, normalized_purchased: 8, reason: 'underutilized',
+      }],
+      recs_staleness: '',
+      recs_collected_at: null,
+    });
+    await load();
+    const btn = document.querySelector<HTMLButtonElement>(
+      '#ri-exchange-recommendations-list th .column-filter-btn[data-column="source_count"]',
+    );
+    expect(btn).not.toBeNull();
+    btn!.click();
+    const popover = document.querySelector('.column-filter-popover');
+    expect(popover?.querySelector('h3')?.textContent).toBe('Filter Source count');
+    const input = popover?.querySelector<HTMLInputElement>('.column-filter-numeric-input');
+    expect(input?.placeholder).toBe('e.g. >50, 70..95, 1');
+    input!.value = '>1';
+    input!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(state.setRiExchangeColumnFilter).toHaveBeenCalledWith('source_count', { kind: 'expr', expr: '>1' });
+    expect(state.setActiveRiColumnFilter).not.toHaveBeenCalled();
+  });
+
   // Issue #729 (UX-27): Escape used to drop focus to <body>. It must close
   // the popover and land back on the column's filter button, the way the
   // History popover does.

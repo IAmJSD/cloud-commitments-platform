@@ -7,6 +7,7 @@ import { loadRecommendations } from './recommendations';
 import { loadPlans } from './plans';
 import { initHistoryDateRange, loadHistory } from './history';
 import { loadGlobalSettings, isUnsavedChanges, loadAccountsTab } from './settings';
+import { disposeLadderTimeline } from './ladder-timeline';
 import { loadUsers } from './users';
 import { loadApiKeys } from './apikeys';
 import { loadSavingsHistory } from './modules/savings-history';
@@ -162,6 +163,9 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
 
   setActiveNav(tabName);
 
+  // Leaving Settings: release the ladder chart and its listeners (#667).
+  if (tabName !== 'admin') disposeLadderTimeline();
+
   document.querySelectorAll<HTMLElement>('.tab-content').forEach(content => {
     content.classList.toggle('active', content.id === `${tabName}-tab`);
   });
@@ -299,6 +303,9 @@ export function switchSettingsSubTab(subTab: string, opts: SwitchTabOptions = {}
     btn.classList.toggle('active', isActive);
     btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
   });
+
+  // Only the Purchasing sub-tab shows the ladder timeline (#667).
+  if (subTab !== 'purchasing') disposeLadderTimeline();
 
   for (const [tab, ids] of Object.entries(SECTION_MAP)) {
     for (const id of ids) {
