@@ -23,7 +23,7 @@ import { handlePurchaseDeeplink } from './purchases-deeplink';
 import { handleRIExchangeDeeplink } from './riexchange-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
-import { showFanOutRetry, fanOutRetryLabel, type FanOutBucketOutcome } from './fanout-retry';
+import { showFanOutRetry, fanOutRetryLabel, purchaseModalReplaced, type FanOutBucketOutcome } from './fanout-retry';
 import { wireTablistKeyboard } from './lib/tablist';
 import { setOpenAccountsHandler } from './first-run-empty-state';
 import { setupMobileNav } from './nav/mobile-nav';
@@ -739,8 +739,13 @@ async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
   // Issue #757: on any failure keep the modal open with per-bucket status
   // and a retry limited to the failed buckets, instead of closing it and
   // making the user reselect rows (and risk resubmitting the successes).
+  // If the user closed the modal while the POSTs were in flight, report by
+  // toast as before. If they already opened another purchase modal, leave
+  // that one alone: it is not the one these results belong to.
+  // (Checked before showFanOutRetry, which narrows the modal's buckets.)
+  const replaced = purchaseModalReplaced(buckets);
   const retrying = failed > 0 && showFanOutRetry(fanOutOutcomes(buckets, results));
-  if (!retrying) {
+  if (!retrying && !replaced) {
     closePurchaseModal();
     clearFanOutBuckets();
     clearPurchaseModalRecommendations();
@@ -755,7 +760,9 @@ async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
     fulfilled.flatMap((r) => r.value.payment_adjustments ?? []),
   );
   if (fanOutNotice) {
-    showToast({ message: fanOutNotice, kind: 'warning', timeout: null });
+    // Sticky as before, except in retry mode, where it would cover the
+    // modal's Retry button; it then expires on the default timeout.
+    showToast({ message: fanOutNotice, kind: 'warning', ...(retrying ? {} : { timeout: null }) });
   }
 
   if (failed === 0) {
@@ -862,9 +869,10 @@ async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
   // async email-link execution completes. Skipping the all-fail path keeps
   // the modal from layering on top of an error toast for a user who has
   // nothing to insure yet.
-  // Not while the purchase modal stays open for a retry (issue #757): the
-  // offer would stack on top of it. It fires once the retry completes.
-  if (succeeded > 0 && !retrying) {
+  // Not while a purchase modal is open (issue #757): the retry view, or a
+  // newer modal the user opened before these POSTs settled. The offer would
+  // stack on top of it. In retry mode it fires once a retry closes the modal.
+  if (succeeded > 0 && !retrying && !replaced) {
     openArcheraOfferModal('purchase');
   }
 

@@ -43,16 +43,46 @@ function markSection(section: HTMLElement, outcome: FanOutBucketOutcome): void {
   }
 }
 
+function purchaseModalOpen(): boolean {
+  const modal = document.getElementById('purchase-modal');
+  return modal !== null && !modal.classList.contains('hidden');
+}
+
+/**
+ * Whether the purchase modal is still open on the buckets that were just
+ * submitted. Bucket ids are unique per modal open, so this is false once the
+ * user closed the modal (Escape or Cancel) while the POSTs were in flight,
+ * and also once a new purchase modal has replaced it.
+ */
+function modalHoldsBuckets(buckets: readonly FanOutBucket[]): boolean {
+  if (!purchaseModalOpen()) return false;
+  const current = getFanOutBuckets();
+  if (!current) return false;
+  const ids = new Set(current.map((b) => b.id));
+  return buckets.every((b) => b.id !== undefined && ids.has(b.id));
+}
+
+/**
+ * True when a different purchase modal is open than the one these buckets
+ * were submitted from: the user closed it and opened another before the
+ * POSTs settled. The caller must then leave the modal alone instead of
+ * closing it or clearing its state.
+ */
+export function purchaseModalReplaced(buckets: readonly FanOutBucket[]): boolean {
+  if (!buckets.every((b) => b.id)) return false;
+  return purchaseModalOpen() && !modalHoldsBuckets(buckets);
+}
+
 /**
  * Keeps the fan-out modal open after a partial failure and narrows it to the
- * failed buckets. Returns false (caller closes the modal as before) when
- * nothing failed, when the buckets carry no ids, or when the modal is not
- * rendered.
+ * failed buckets. Returns false (caller reports by toast and closes the modal
+ * as before) when nothing failed, when the buckets carry no ids, or when the
+ * modal that submitted them is no longer open.
  */
 export function showFanOutRetry(outcomes: readonly FanOutBucketOutcome[]): boolean {
   const failed = outcomes.filter((o) => !o.ok);
   if (failed.length === 0) return false;
-  if (!outcomes.every((o) => o.bucket.id)) return false;
+  if (!modalHoldsBuckets(outcomes.map((o) => o.bucket))) return false;
   const container = document.getElementById('purchase-details');
   if (!container || !container.querySelector('section.fanout-bucket')) return false;
 

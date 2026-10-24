@@ -4356,9 +4356,10 @@ export interface FanOutBucket {
   recs: LocalRecommendation[]; // scaled by capacityPercent
   paymentSource: 'override' | 'toolbar';
   /**
-   * Stable per-modal identity (issue #757). getFanOutBuckets() hands out
-   * copies, so the submit path needs this to map a POST result back to its
-   * bucket and section after a partial failure.
+   * Identity within one modal open (issue #757), unique across opens.
+   * getFanOutBuckets() hands out copies, so the submit path needs this to
+   * map a POST result back to its bucket and section after a partial
+   * failure, and to tell whether that modal is still the open one.
    */
   id?: string;
 }
@@ -4584,7 +4585,9 @@ async function openFanOutModal(
         paymentSource: resolvedPaymentSource,
         capacityPercent: toolbar.capacity,
         recs: resolvedRecs,
-        id: `bucket-${index}`,
+        // Unique per open, so results that settle after this modal closed
+        // cannot match the sections of a newer one.
+        id: `bucket-${openToken}-${index}`,
       };
     });
   currentFanOutBuckets = buckets;
