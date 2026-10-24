@@ -20,8 +20,22 @@ export function refreshLadderTimeline(configs: readonly LadderConfig[], globalEn
   updateTimeline?.(configs, globalEnabled);
 }
 
-export async function initLadderTimeline(root: HTMLElement, configs: readonly LadderConfig[], globalEnabled: boolean): Promise<void> {
+/**
+ * Destroys the planned-purchase chart (Chart.js removes its resize and event
+ * listeners on destroy) and drops any in-flight timeline load. Navigation
+ * calls this when the Purchasing settings section is left; loadGlobalSettings
+ * re-runs initLadderTimeline when the section is shown again (issue #667).
+ */
+export function disposeLadderTimeline(): void {
   disposeTimeline?.();
+  disposeTimeline = undefined;
+}
+
+export async function initLadderTimeline(root: HTMLElement, configs: readonly LadderConfig[], globalEnabled: boolean): Promise<void> {
+  disposeLadderTimeline();
+  // Settings loads also run for the General sub-tab, where the Purchasing
+  // panel is hidden; building a chart there would leak it until the next init.
+  if (root.closest('.hidden')) return;
   let chart: Chart<'line'> | undefined;
   let rowTotals = new Map<string, bigint | null>();
   let generation = 0;
@@ -32,7 +46,7 @@ export async function initLadderTimeline(root: HTMLElement, configs: readonly La
   let accountsLoaded = false;
   let filters: LadderFilters = { ...emptyLadderFilters(), status: 'scheduled', from: new Date().toISOString().slice(0, 19) };
   let selectedID = '';
-  disposeTimeline = () => { disposed = true; generation++; chart?.destroy(); updateTimeline = undefined; };
+  disposeTimeline = () => { disposed = true; generation++; chart?.destroy(); chart = undefined; updateTimeline = undefined; };
   const labels = { run_id: 'Run', layer_type: 'Commitment type', term: 'Commitment term', payment_option: 'Payment option', status: 'Status' };
   root.innerHTML = `<h4>Planned purchases</h4><p>Inspect retained planning tranches and edit future scheduled budgets.
     Ladder purchases are not executed yet. Coverage and expiry forecasts are unavailable.</p>
