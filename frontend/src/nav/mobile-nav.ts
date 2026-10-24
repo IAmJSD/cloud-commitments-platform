@@ -3,7 +3,8 @@
  * of topbar regions into it below the drawer breakpoint (issue #1779).
  *
  * Public API:
- * - setupMobileNav() wires the drawer once at startup.
+ * - setupMobileNav() wires the drawer once at startup and returns a
+ *   MobileNavHandle (or null when the page has no hamburger/sidebar).
  * - syncHeaderPlacement() moves the projected regions for a given width.
  * - MOBILE_NAV_QUERY is the breakpoint both of the above follow.
  *
@@ -15,6 +16,16 @@
  * in styles/responsive.css, which lays these same regions out of the topbar.
  */
 export const MOBILE_NAV_QUERY = '(max-width: 768px)';
+
+/**
+ * Handle returned by setupMobileNav. open and close are the same transitions
+ * the hamburger, overlay and Escape key drive, focus moves included.
+ */
+export interface MobileNavHandle {
+  open(): void;
+  close(): void;
+  isOpen(): boolean;
+}
 
 /**
  * Topbar regions with no room in the topbar below the breakpoint, listed in
@@ -74,12 +85,16 @@ export function syncHeaderPlacement(isNarrow: boolean): void {
  * an open nor a close: see applyBreakpointState.
  *
  * Sidebar links also close the drawer (they navigate within the SPA).
+ *
+ * Returns a handle on the wired drawer, or null when the page has no
+ * hamburger button or sidebar to wire. Call it once: every call binds its
+ * own listeners.
  */
-export function setupMobileNav(): void {
+export function setupMobileNav(): MobileNavHandle | null {
   const hamburger = document.getElementById('hamburger-btn') as HTMLButtonElement | null;
   const sidebar = document.getElementById('sidebar') as HTMLElement | null;
   const overlay = document.getElementById('sidebar-overlay') as HTMLElement | null;
-  if (!hamburger || !sidebar) return;
+  if (!hamburger || !sidebar) return null;
 
   function openDrawer(): void {
     document.body.classList.add('sidebar-open');
@@ -211,4 +226,10 @@ export function setupMobileNav(): void {
       }
     });
   });
+
+  return {
+    open: openDrawer,
+    close: closeDrawer,
+    isOpen: () => document.body.classList.contains('sidebar-open'),
+  };
 }
