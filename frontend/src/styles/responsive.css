@@ -73,7 +73,7 @@ a:active,
  * - .sidebar-overlay fades in to dim the content behind the drawer.
  * - Body scroll is locked while the drawer is open.
  * - The hamburger button itself is hidden above the breakpoint.
- * - aria-expanded / aria-hidden toggled from app.ts:setupMobileNav().
+ * - aria-expanded / aria-hidden toggled from nav/mobile-nav.ts:setupMobileNav().
  * ------------------------------------------------------------------------- */
 
 /* Hamburger button - mobile only */
@@ -160,8 +160,8 @@ body.sidebar-open {
      * `header { flex-direction: column }` rule, so every row past the first
      * overflowed past the gradient and painted its white text straight onto
      * the page content below. Both regions move into the drawer instead
-     * (app.ts:syncHeaderPlacement); laying them out away here covers the
-     * moment before that script has run. */
+     * (nav/mobile-nav.ts:syncHeaderPlacement); laying them out away here
+     * covers the moment before that script has run. */
     .app-topbar {
         justify-content: flex-start;
         gap: var(--cudly-sp-2);
