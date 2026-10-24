@@ -15,6 +15,7 @@
 /* Plan cards */
 .plan-card {
     background: var(--cudly-surface);
+    border: 1px solid var(--cudly-border); /* the shared card surface (#743) */
     border-radius: var(--cudly-r-md);
     box-shadow: var(--cudly-shadow-sm);
     margin-bottom: 1rem;
@@ -100,6 +101,7 @@
        (issue #1776). */
     gap: var(--cudly-sp-4);
     background: var(--cudly-surface);
+    border: 1px solid var(--cudly-border); /* shared card surface (#743); accent below */
     padding: var(--cudly-sp-4) var(--cudly-sp-5);
     border-radius: var(--cudly-r-md);
     box-shadow: var(--cudly-shadow-sm);

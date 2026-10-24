@@ -455,10 +455,11 @@ select.dirty {
 /* Group cards */
 .group-card {
     border: 1px solid var(--cudly-border);
-    border-radius: 8px;
+    border-radius: var(--cudly-r-md);
+    box-shadow: var(--cudly-shadow-sm); /* the shared card surface (#743) */
     padding: 1.25rem;
     margin-bottom: 1rem;
-    background: white;
+    background: var(--cudly-surface);
 }
 .group-card-header {
     display: flex;
