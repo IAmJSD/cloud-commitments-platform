@@ -145,7 +145,7 @@ export async function loadDashboard(): Promise<void> {
     ]);
 
     const summaryData = summaryResult.status === 'fulfilled' ? (summaryResult.value as DashboardSummary) : null;
-    const upcomingData = upcomingResult.status === 'fulfilled' ? (upcomingResult.value as { purchases?: UpcomingPurchase[] }) : null;
+    const upcomingData = upcomingResult.status === 'fulfilled' ? upcomingResult.value : null;
     // api.Recommendation and LocalRecommendation are structurally identical
     // except for provider: string vs provider: Provider. The provider values
     // from the API are always the union members at runtime, so this cast is safe.
@@ -429,7 +429,8 @@ async function retryUpcomingPurchases(): Promise<void> {
     showSkeletonBlock(container, '100%', '6rem');
   }
   try {
-    const data = (await api.getUpcomingPurchases()) as { purchases?: UpcomingPurchase[] } | null;
+    const data = await api.getUpcomingPurchases();
+    // `?.`: apiRequest resolves null for an empty 2xx body (#304).
     renderUpcomingPurchases(data?.purchases || []);
   } catch (error) {
     console.error('Failed to load upcoming purchases:', error);

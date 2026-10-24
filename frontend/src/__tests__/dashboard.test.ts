@@ -353,6 +353,22 @@ describe('Dashboard Module', () => {
       expect(upcomingList?.innerHTML).toContain('No upcoming scheduled purchases');
     });
 
+    // #1189: the Go handler serializes an empty result as `purchases: null`
+    // (nil slice), and apiRequest resolves null for an empty 2xx body (#304).
+    test.each([
+      ['purchases: null', { purchases: null }],
+      ['a null response', null],
+    ])('shows the empty message for %s', async (_label, value) => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({ potential_monthly_savings: 1000, by_service: {} });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue(value);
+
+      await loadDashboard();
+
+      const upcomingList = document.getElementById('upcoming-list');
+      expect(upcomingList?.textContent).toContain('No upcoming scheduled purchases');
+      expect(upcomingList?.querySelector('.error')).toBeNull();
+    });
+
     test('shows error on API failure', async () => {
       (api.getDashboardSummary as jest.Mock).mockRejectedValue(new Error('API Error'));
       console.error = jest.fn();
