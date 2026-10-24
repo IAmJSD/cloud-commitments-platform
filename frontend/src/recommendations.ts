@@ -1627,6 +1627,30 @@ export function displaySavingsPct(r: LocalRecommendation): number | null {
 }
 
 /**
+ * On-demand-weighted average of the per-row Eff. % the purchase modal shows
+ * (displaySavingsPct), so the Totals row can never print a figure the rows
+ * refused to: a row that renders an em-dash (e.g. AWS without on_demand_cost,
+ * #323) contributes nothing. Each row is weighted by its on-demand baseline:
+ * on_demand_cost when known, otherwise the baseline its own % implies
+ * (savings / pct). Returns null when no row contributes.
+ */
+export function weightedDisplaySavingsPct(recs: LocalRecommendation[]): number | null {
+  let num = 0;
+  let den = 0;
+  for (const r of recs) {
+    const pct = displaySavingsPct(r);
+    if (pct === null) continue;
+    const base = r.on_demand_cost != null && r.on_demand_cost > 0
+      ? r.on_demand_cost
+      : pct !== 0 ? (r.savings * 100) / pct : null;
+    if (base === null || !(base > 0)) continue;
+    num += (pct * base) / 100;
+    den += base;
+  }
+  return den > 0 ? (num / den) * 100 : null;
+}
+
+/**
  * Returns the provider-reported on-demand monthly cost (`r.on_demand_cost`)
  * directly. Issue #330 — earlier behaviour reconstructed the value from
  * `monthly_cost + savings + amortized_upfront`, which drifted from the
@@ -3625,9 +3649,13 @@ function loadBulkPurchaseState(): BulkPurchaseToolbarState {
     // legacy `term` or `payment` from older localStorage values at runtime.
     // Payment is seeded from GlobalConfig only (issue #282 drops the toolbar
     // dropdown; the field is internal-only, not persisted).
+    // Integers only, like every other numeric parse here: a hand-edited
+    // 33.33 would otherwise reach Math.floor scaling and the audited
+    // capacity_percent as a value no UI control can produce (#136).
+    const capacity = Number(parsed.capacity);
     return {
       payment: cachedGlobalDefaultPayment as BulkPurchasePayment,
-      capacity: Math.max(1, Math.min(100, Number(parsed.capacity) || 100)),
+      capacity: Number.isInteger(capacity) && capacity > 0 ? Math.min(100, capacity) : 100,
     };
   } catch {
     return { ...defaultBulkPurchaseState };
@@ -4113,7 +4141,7 @@ async function openCreatePlanFromBottomBox(snapshot: LocalRecommendation[]): Pro
 // Extracted from handleBulkPurchaseClick's scaling loop (issue #1903) so
 // pricedCellVariant can apply the same scaling to a sibling variant swapped
 // in on a Term/Payment change.
-function scaleRecForCapacity(r: LocalRecommendation, capacityPercent: number): LocalRecommendation | null {
+export function scaleRecForCapacity(r: LocalRecommendation, capacityPercent: number): LocalRecommendation | null {
   const newCount = Math.floor((r.count * capacityPercent) / 100);
   if (newCount <= 0) return null;
   const ratio = r.count > 0 ? newCount / r.count : 1;
@@ -4126,6 +4154,9 @@ function scaleRecForCapacity(r: LocalRecommendation, capacityPercent: number): L
     upfront_cost: r.upfront_cost * ratio,
     monthly_cost: r.monthly_cost != null ? r.monthly_cost * ratio : null,
     savings: r.savings * ratio,
+    // on_demand_cost is a per-rec total like savings, so it scales too;
+    // leaving it unscaled halved the Eff. % at 50% capacity (#136).
+    on_demand_cost: r.on_demand_cost != null ? r.on_demand_cost * ratio : r.on_demand_cost,
   };
 }
 
@@ -5392,9 +5423,7 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
   let totalUpfront = 0;
   let totalMonthlyCost = 0;
   let totalEffSavings = 0;
-  // Weighted-average effective %: sum effective savings / sum on-demand monthly.
-  let weightedEffSavingsNum = 0; // numerator: sum of effectiveMonthlySavings per checked rec
-  let weightedEffSavingsDen = 0; // denominator: sum of on-demand monthly per checked rec
+  const checkedRecs: LocalRecommendation[] = [];
   let hasMonthlyCostData = false;
 
   for (const idx of checkedPurchaseIndices) {
@@ -5407,26 +5436,10 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
       totalMonthlyCost += monthlyCost;
       hasMonthlyCostData = true;
     }
-    // Weighted-average effective % denominator should match effectiveSavingsPct:
-    // prefer provider-supplied on_demand_cost when present, otherwise fall back
-    // to the reconstructed monthly_cost + savings + amortized baseline.
-    // Include rows that only have on_demand_cost so they are not skipped.
-    if (rec.term) {
-      const amortized = rec.upfront_cost / (rec.term * 12);
-      const effSav = effectiveMonthlySavings(rec);
-      const hasOnDemand = rec.on_demand_cost != null && rec.on_demand_cost > 0;
-      const onDemand = hasOnDemand
-        ? rec.on_demand_cost
-        : monthlyCost != null
-          ? monthlyCost + rec.savings + amortized
-          : null;
-      if (onDemand != null && onDemand > 0) {
-        weightedEffSavingsNum += effSav;
-        weightedEffSavingsDen += onDemand;
-      }
-    }
+    checkedRecs.push(rec);
     totalEffSavings += effectiveMonthlySavings(rec);
   }
+  const avgEffPct = weightedDisplaySavingsPct(checkedRecs);
 
   // Rebuild the totals row DOM. Clear first.
   if (totalsRow) {
@@ -5489,10 +5502,9 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
     const tdEffPct = document.createElement('td');
     tdEffPct.id = 'purchase-modal-total-eff-pct';
     const effPctStrong = document.createElement('strong');
-    if (weightedEffSavingsDen > 0) {
-      const avgPct = (weightedEffSavingsNum / weightedEffSavingsDen) * 100;
-      effPctStrong.textContent = avgPct.toFixed(1) + '%';
-      if (avgPct < 0) tdEffPct.className = 'effective-pct-negative';
+    if (avgEffPct !== null) {
+      effPctStrong.textContent = avgEffPct.toFixed(1) + '%';
+      if (avgEffPct < 0) tdEffPct.className = 'effective-pct-negative';
     } else {
       effPctStrong.textContent = '—';
     }

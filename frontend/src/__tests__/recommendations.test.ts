@@ -1,7 +1,7 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, displaySavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS, isHomogeneousSelection, renderUsageSparkline, loadColumnFilters, saveColumnFilters, resetColumnFiltersState, spGroupKey, groupSpCellKeys, formatCapacity } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, displaySavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS, isHomogeneousSelection, renderUsageSparkline, loadColumnFilters, saveColumnFilters, resetColumnFiltersState, spGroupKey, groupSpCellKeys, formatCapacity, scaleRecForCapacity, weightedDisplaySavingsPct } from '../recommendations';
 import type { CostPeriod } from '../state';
 
 // Mock the api module
@@ -2107,14 +2107,48 @@ describe('Recommendations Module', () => {
       });
 
       test('totals row weighted effective % uses on_demand_cost when monthly_cost is null', async () => {
+        const azureVm = { provider: 'azure' as const, service: 'compute', payment: 'monthly' };
+        const recs = [
+          { ...makeRec('ta', { savings: 100, upfront_cost: 0, monthly_cost: null, on_demand_cost: 200 }), ...azureVm },
+          { ...makeRec('tb', { savings: 100, upfront_cost: 0, monthly_cost: 50 }), ...azureVm },
+        ];
+        await openPurchaseModal(recs);
+
+        // ta: 100/200; tb (Azure, reconstructed): 100/(50+100+0) -> 200 + 150 baseline.
+        const pctCell = document.getElementById('purchase-modal-total-eff-pct');
+        expect(pctCell?.textContent).toContain('57.1%');
+      });
+
+      test('totals Eff. % skips AWS rows whose own Eff. % is an em-dash (#136)', async () => {
+        // tb is AWS with no on_demand_cost: its row shows an em-dash, so the
+        // discredited reconstruction must not leak into the total.
         const recs = [
           makeRec('ta', { savings: 100, upfront_cost: 0, monthly_cost: null, on_demand_cost: 200 }),
           makeRec('tb', { savings: 100, upfront_cost: 0, monthly_cost: 50 }),
         ];
         await openPurchaseModal(recs);
 
-        const pctCell = document.getElementById('purchase-modal-total-eff-pct');
-        expect(pctCell?.textContent).toContain('57.1%');
+        const rowPcts = Array.from(document.querySelectorAll('#purchase-details tbody tr'))
+          .map((tr) => tr.querySelector('td:nth-last-child(3)')?.textContent);
+        expect(rowPcts).toEqual(['50.0%', '—']);
+        expect(document.getElementById('purchase-modal-total-eff-pct')?.textContent).toBe('50.0%');
+      });
+
+      test('totals Eff. % is an em-dash when no selected row has a known Eff. %', async () => {
+        await openPurchaseModal([makeRec('tb', { savings: 100, upfront_cost: 0, monthly_cost: 50 })]);
+
+        expect(document.getElementById('purchase-modal-total-eff-pct')?.textContent).toBe('—');
+      });
+
+      test('totals Eff. % uses the provider savings_percentage the rows display', async () => {
+        const recs = [
+          { ...makeRec('ta', { savings: 30, upfront_cost: 0, monthly_cost: 70 }), savings_percentage: 30 },
+          { ...makeRec('tb', { savings: 50, upfront_cost: 0, monthly_cost: null, on_demand_cost: 100 }), savings_percentage: 50 },
+        ];
+        await openPurchaseModal(recs);
+
+        // ta implied baseline 100 at 30%, tb baseline 100 at 50% -> 40%.
+        expect(document.getElementById('purchase-modal-total-eff-pct')?.textContent).toBe('40.0%');
       });
 
       test('clearPurchaseModalRecommendations also clears checked state', async () => {
@@ -3359,6 +3393,19 @@ describe('Bundle B: sticky bottom action box', () => {
     // Hint is visible with the heterogeneous explanation.
     expect(hint.hidden).toBe(false);
     expect(hint.textContent).toContain('Plans require one provider, service, term, and payment');
+  });
+
+  test.each([
+    [33.33, '100'],
+    [50, '50'],
+    [150, '100'],
+    [0, '100'],
+    ['abc', '100'],
+  ])('stored bulk-purchase capacity %p seeds the Capacity input as %s (#136)', async (stored, expected) => {
+    localStorageMock.getItem.mockImplementation((key: string) =>
+      key === 'cudly.recommendations.bulkPurchase.v1' ? JSON.stringify({ capacity: stored }) : null);
+    await loadRecommendations();
+    expect((document.getElementById('bulk-purchase-capacity') as HTMLInputElement).value).toBe(expected);
   });
 
   test('Capacity input value persists across re-render (mount-once-then-update)', async () => {
@@ -8464,5 +8511,31 @@ describe('Issue #1419: Opportunities Account column shows display name via listA
     const html = list?.innerHTML ?? '';
     // No matching entry: falls back to the raw ID.
     expect(html).toContain('acct-uuid-no-match');
+  });
+});
+
+describe('capacity scaling keeps Eff. % invariant (#136)', () => {
+  const rec = {
+    id: 'cap', provider: 'azure', service: 'vm', resource_type: 'D2s_v3', region: 'eastus',
+    count: 4, term: 1, payment: 'no-upfront', savings: 900, upfront_cost: 0,
+    monthly_cost: 1000, on_demand_cost: 1900,
+  } as unknown as LocalRecommendation;
+
+  test('on_demand_cost scales with count like savings and upfront', () => {
+    const scaled = scaleRecForCapacity(rec, 50)!;
+    expect(scaled.count).toBe(2);
+    expect(scaled.savings).toBe(450);
+    expect(scaled.on_demand_cost).toBe(950);
+  });
+
+  test.each([25, 50, 75, 100])('Eff. %% at %i%% capacity equals the unscaled 47.4%%', (capacity) => {
+    const scaled = scaleRecForCapacity(rec, capacity)!;
+    expect(displaySavingsPct(scaled)!.toFixed(1)).toBe('47.4');
+    expect(weightedDisplaySavingsPct([scaled])!.toFixed(1)).toBe('47.4');
+  });
+
+  test('an absent on_demand_cost stays absent', () => {
+    const scaled = scaleRecForCapacity({ ...rec, on_demand_cost: null } as LocalRecommendation, 50)!;
+    expect(scaled.on_demand_cost).toBeNull();
   });
 });
