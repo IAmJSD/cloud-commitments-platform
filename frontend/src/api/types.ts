@@ -750,6 +750,9 @@ export interface OfferingOption {
   instance_type: string;
   offering_id: string;
   effective_monthly_cost: number;
+  // ISO-4217 currency effective_monthly_cost is denominated in. Omitted
+  // by the backend when unknown (pkg/exchange.OfferingOption).
+  currency_code?: string;
 }
 
 // TargetOffering is one valid exchange target returned by
