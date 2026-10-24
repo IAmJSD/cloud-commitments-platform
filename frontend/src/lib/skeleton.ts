@@ -24,7 +24,38 @@
  * skeleton is still on screen after SKELETON_SLOW_MS, a visible "Still
  * loading" note is appended so a slow or stuck response does not look
  * like a hang.
+ *
+ * Accessibility (issue #729): the placeholders themselves are aria-hidden,
+ * so the container carries `aria-busy="true"` while a skeleton is showing.
+ * Success renders replace the children without calling back in here, so a
+ * MutationObserver clears the flag once no placeholder is left.
+ *
+ * The two coexist: aria-busy marks the container, while the sr-only status
+ * and the slow note are what a screen reader actually hears.
  */
+
+const SKELETON_SELECTOR = '.skeleton, .skeleton-group, .skeleton-tile, .skeleton-row, .skeleton-table';
+
+const busyObservers = new WeakMap<HTMLElement, MutationObserver>();
+
+function clearBusy(container: HTMLElement): void {
+  container.removeAttribute('aria-busy');
+  busyObservers.get(container)?.disconnect();
+  busyObservers.delete(container);
+}
+
+function markBusy(container: HTMLElement): void {
+  container.setAttribute('aria-busy', 'true');
+  if (busyObservers.has(container) || typeof MutationObserver === 'undefined') return;
+  // Records are delivered after the current task, by which point the show*
+  // helper has appended its placeholders, so the wipe that starts a show
+  // does not clear the flag.
+  const observer = new MutationObserver(() => {
+    if (!container.querySelector(SKELETON_SELECTOR)) clearBusy(container);
+  });
+  observer.observe(container, { childList: true, subtree: true });
+  busyObservers.set(container, observer);
+}
 
 /** How long a skeleton may show before the "Still loading" note appears. */
 export const SKELETON_SLOW_MS = 8_000;
@@ -138,6 +169,7 @@ function activateSkeleton(container: HTMLElement): void {
   status.setAttribute('role', 'status');
   status.textContent = 'Loading…';
   container.appendChild(status);
+  markBusy(container);
 
   clearSlowTimer(container);
   slowTimers.set(container, setTimeout(() => {
@@ -215,6 +247,7 @@ export function teardownSkeleton(container: HTMLElement): void {
     while (container.firstChild) container.removeChild(container.firstChild);
     delete container.dataset['skeletonActive'];
   }
+  clearBusy(container);
 }
 
 /**

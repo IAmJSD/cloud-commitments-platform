@@ -662,6 +662,25 @@ th.sortable:hover {
     background: var(--cudly-bg);
 }
 
+/* Sort trigger inside a sortable <th> (issue #755): looks like the header
+ * text, but is a real button so keyboard users can sort without the <th>
+ * itself being interactive. */
+th.sortable .sort-btn {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+    cursor: pointer;
+}
+
+th.sortable .sort-btn:focus-visible,
+th .column-filter-btn:focus-visible {
+    outline: 2px solid var(--cudly-primary);
+    outline-offset: 2px;
+}
+
 th.sortable .sort-indicator {
     margin-left: 0.35rem;
     color: var(--cudly-text-subtle);
@@ -672,8 +691,14 @@ th.sortable .sort-indicator.active {
     color: var(--cudly-primary);
 }
 
-/* Per-column filter trigger button inside <th>. */
+/* Per-column filter trigger button inside <th>. The 24px minimum keeps the
+ * glyph-sized button above the WCAG 2.5.8 target size (issue #755). */
 th .column-filter-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    min-height: 24px;
     margin-left: 0.35rem;
     padding: 0 0.25rem;
     border: 0;
@@ -682,6 +707,7 @@ th .column-filter-btn {
     cursor: pointer;
     font-size: 0.85em;
     line-height: 1;
+    vertical-align: middle;
 }
 th .column-filter-btn:hover {
     color: var(--cudly-primary);
@@ -810,7 +836,7 @@ th .column-filter-btn.active {
  * up the design tokens so colors + spacing + radii sit in the same
  * visual family as the rest of the action-center reskin. Drawer is
  * tracked as a deferred sub-task in #340. */
-:root { --action-box-height: 80px; }
+:root { --action-box-height: 80px; --action-box-offset: var(--action-box-height); }
 .recommendations-action-box {
     position: sticky;
     bottom: 0;
@@ -863,7 +889,7 @@ th .column-filter-btn.active {
     gap: 0.4rem;
     font-size: 0.9em;
 }
-#recommendations-list { padding-bottom: var(--action-box-height); }
+#recommendations-list { padding-bottom: var(--action-box-offset, var(--action-box-height)); }
 
 tr.recommendation-row {
     cursor: pointer;
@@ -1452,13 +1478,22 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 
 /* Subline rendered under the Pending badge in the Purchase History Status
  * column. Surfaces the approver's email address (the recipient of the
- * approval email) so the user knows which inbox to check.
+ * approval email) so the user knows which inbox to check. .status-detail
+ * reuses it for the failure reason under an RI exchange history badge.
  */
-.history-approver {
+.history-approver,
+.status-detail {
     margin-top: 0.35rem;
     font-size: 0.78rem;
     color: var(--cudly-text-muted);
     line-height: 1.25;
+}
+
+/* Cap the failure reason so a long AWS error wraps instead of squeezing the
+ * other history columns. */
+.status-detail {
+    max-width: 18rem;
+    overflow-wrap: anywhere;
 }
 
 .history-approver strong {

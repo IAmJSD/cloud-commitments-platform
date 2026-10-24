@@ -148,18 +148,45 @@ describe('loadAutomationSettings: graceful degradation on permission errors (iss
   );
 });
 
-describe('loadAutomationSettings loading state (issue #186)', () => {
-  test('shows the shared skeleton, not a "Loading settings..." paragraph', async () => {
+describe('loadAutomationSettings: loading and error stay inside the section frame (issue #190)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('while loading, a titled Exchange Automation fieldset holds the place', async () => {
     setupContainer();
-    let resolve: (v: unknown) => void = () => undefined;
+    let resolve!: (v: unknown) => void;
     (api.getRIExchangeConfig as jest.Mock).mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+
     const pending = loadAutomationSettings();
+
     const container = document.getElementById('ri-exchange-automation-settings')!;
-    expect(container.querySelector('.skeleton')).not.toBeNull();
-    expect(container.querySelector('p.loading')).toBeNull();
+    const fieldset = container.querySelector('fieldset.settings-category');
+    expect(container.children).toHaveLength(1);
+    expect(fieldset?.querySelector('legend')?.textContent).toBe('Exchange Automation');
+    expect(fieldset?.getAttribute('aria-busy')).toBe('true');
+    // Issue #186: the shared skeleton, not a visible loading paragraph.
+    expect(fieldset?.querySelector('.skeleton-group')).not.toBeNull();
+    expect(fieldset?.querySelector('.skeleton-status')?.textContent).toBe('Loading…');
+    expect(fieldset?.querySelector('p.loading')).toBeNull();
     expect(container.textContent).not.toContain('Loading settings...');
-    resolve(null);
-    await pending.catch(() => undefined);
+
+    resolve(Promise.reject(new Error('Failed to fetch')));
+    (settings.isPermissionDeniedError as jest.Mock).mockReturnValue(false);
+    await pending;
+  });
+
+  test('an error is shown inside the same titled frame', async () => {
+    setupContainer();
+    (api.getRIExchangeConfig as jest.Mock).mockRejectedValueOnce(new Error('Failed to fetch'));
+    (settings.isPermissionDeniedError as jest.Mock).mockReturnValue(false);
+
+    await loadAutomationSettings();
+
+    const fieldset = document.querySelector('#ri-exchange-automation-settings > fieldset.settings-category');
+    expect(fieldset?.querySelector('legend')?.textContent).toBe('Exchange Automation');
+    expect(fieldset?.querySelector('.error')?.textContent).toContain('Failed to fetch');
+    expect(fieldset?.querySelector('button')?.getAttribute('type')).toBe('button');
   });
 });
 
