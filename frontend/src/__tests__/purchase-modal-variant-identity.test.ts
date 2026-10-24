@@ -47,7 +47,14 @@ describe('Issue #1903: purchase modal re-prices on Term/Payment change', () => {
     const pendingFirst = openPurchaseModal([first]);
     await openPurchaseModal([second]);
     expect(getPurchaseModalRecommendations()).toEqual([second]);
-    if (action === 'closed') (document.getElementById('close-purchase-modal-btn') as HTMLButtonElement).click();
+    if (action === 'closed') {
+      (document.getElementById('close-purchase-modal-btn') as HTMLButtonElement).click();
+      // closePurchaseModal and modal.ts are mocked in this file, so run the
+      // onClose the real closeModal would (the close button no longer clears
+      // purchase state itself, issue #414).
+      const opens = (openModal as jest.Mock).mock.calls;
+      (opens[opens.length - 1]![1] as { onClose: () => void }).onClose();
+    }
     if (action === 'executed') await handleExecutePurchase();
     const rendered = document.getElementById('purchase-details')!.innerHTML;
     const openCount = (openModal as jest.Mock).mock.calls.length;

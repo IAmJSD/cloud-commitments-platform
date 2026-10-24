@@ -221,7 +221,10 @@ function buildPopover(config: ColumnFilterPopoverConfig): OpenPopover {
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
   clearBtn.className = 'column-filter-clear';
-  clearBtn.textContent = 'Clear';
+  // Issue #727 (UX-28): on a categorical filter this button selects
+  // nothing (an explicit empty allow-list, which hides every row), so it
+  // must not be called "Clear". (All) is how the filter is removed.
+  clearBtn.textContent = config.kind === 'numeric' ? 'Clear' : 'Select none';
   clearBtn.addEventListener('click', () => {
     if (p.input) {
       p.input.value = '';

@@ -173,3 +173,50 @@ describe('skeleton show / teardown lifecycle', () => {
     expect(container.querySelectorAll('.skeleton')).toHaveLength(1);
   });
 });
+
+// Issue #729 (UX-34): the placeholders are aria-hidden, so the container
+// carries aria-busy while one is showing, and drops it once real content
+// (or nothing) replaces it, whichever path did the replacing.
+describe('skeleton aria-busy', () => {
+  const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+
+  test.each([
+    ['tiles', (c: HTMLElement): void => showSkeletonTiles(c, 2)],
+    ['rows', (c: HTMLElement): void => showSkeletonRows(c, 2, 3)],
+    ['block', (c: HTMLElement): void => showSkeletonBlock(c, '100%', '4rem')],
+  ])('show (%s) marks the container busy and keeps it busy after observers run', async (_name, show) => {
+    const c = document.createElement('div');
+    c.innerHTML = '<p>old content</p>';
+    document.body.appendChild(c);
+    show(c);
+    expect(c.getAttribute('aria-busy')).toBe('true');
+    await flush();
+    expect(c.getAttribute('aria-busy')).toBe('true');
+    c.remove();
+  });
+
+  test('teardownSkeleton clears aria-busy synchronously', () => {
+    const c = document.createElement('div');
+    showSkeletonRows(c, 2, 3);
+    teardownSkeleton(c);
+    expect(c.hasAttribute('aria-busy')).toBe(false);
+  });
+
+  test('a success render that replaces the children clears aria-busy', async () => {
+    const c = document.createElement('div');
+    document.body.appendChild(c);
+    showSkeletonRows(c, 2, 3);
+    c.innerHTML = '<table><tbody><tr><td>real</td></tr></tbody></table>';
+    await flush();
+    expect(c.hasAttribute('aria-busy')).toBe(false);
+
+    // A second load re-arms the flag.
+    showSkeletonTiles(c, 1);
+    await flush();
+    expect(c.getAttribute('aria-busy')).toBe('true');
+    c.replaceChildren();
+    await flush();
+    expect(c.hasAttribute('aria-busy')).toBe(false);
+    c.remove();
+  });
+});
