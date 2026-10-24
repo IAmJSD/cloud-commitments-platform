@@ -12,9 +12,14 @@ import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 import { openModal, closeModal } from './modal';
 import { canAccess } from './permissions';
-import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale } from './recommendations';
+import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale, startRecommendationsRefresh } from './recommendations';
+import { getRecommendationsFreshness } from './api/recommendations';
+import { buildFirstRunEmptyState, isScopeFiltered } from './first-run-empty-state';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
+import { buildKpiTile } from './lib/kpi-tile';
+import { scopeUpcomingToProvider, upcomingEmptyMessage, UPCOMING_ACCOUNT_SCOPE_NOTE } from './lib/upcoming-scope';
 import { formatTrendAxisTick, formatTrendTooltipTitle, formatSparseTrendMessage, MIN_TREND_POINTS } from './modules/chart-utils';
+import { setChartSummary, renderChartTable, removeChartTable } from './lib/chart-a11y';
 // Re-export for backward compatibility (tests and other callers import from dashboard.ts).
 export { formatTrendAxisTick } from './modules/chart-utils';
 
@@ -31,6 +36,14 @@ let savingsByServiceChart: Chart | null = null;
 
 // Maximum number of services to show in the bar chart before truncating.
 const SAVINGS_BY_SERVICE_MAX = 10;
+
+// #744: a 2px card-coloured gap on top of every stacked segment, so adjacent
+// layers are separated by an edge as well as by their layer colour.
+const SEGMENT_GAP = { borderColor: '#ffffff', borderWidth: { top: 2, right: 0, bottom: 0, left: 0 } } as const;
+
+// Ids of the "View as table" text alternatives for the Home charts (#744).
+const SAVINGS_BY_SERVICE_TABLE_ID = 'savings-by-service-table';
+const SAVINGS_TREND_TABLE_ID = 'savings-trend-table';
 
 // One colour per stacked layer, the same on every bar, so the legend swatches
 // are exactly the colours drawn (#189). The x axis already names each service,
@@ -138,10 +151,14 @@ export async function loadDashboard(): Promise<void> {
     // move the range computation server-side if needed.
     // Promise.allSettled ensures the dashboard still renders if any individual
     // fetch fails -- each card falls back gracefully.
-    const [summaryResult, upcomingResult, recsResult] = await Promise.allSettled([
+    const [summaryResult, upcomingResult, recsResult, accountsResult] = await Promise.allSettled([
       api.getDashboardSummary(currentProvider, currentAccountIDs),
       api.getUpcomingPurchases(),
       api.getRecommendations({ provider: currentProvider, account_ids: currentAccountIDs }),
+      // Only feeds the first-run onboarding card (issue #756); wrapped so a
+      // missing or failing endpoint degrades to "unknown" instead of
+      // breaking the dashboard.
+      Promise.resolve().then(() => api.listAccountsMinimal()),
     ]);
 
     const summaryData = summaryResult.status === 'fulfilled' ? (summaryResult.value as DashboardSummary) : null;
@@ -178,6 +195,13 @@ export async function loadDashboard(): Promise<void> {
     const filterDesc = buildFilterDesc(currentProvider, currentAccountIDs);
 
     renderDashboardSummary(summaryData, recs);
+    renderHomeOnboarding(
+      recsResult.status === 'fulfilled' && recs.length === 0 && !summaryData.active_commitments,
+      accountsResult.status === 'fulfilled' && Array.isArray(accountsResult.value)
+        ? accountsResult.value.length > 0
+        : null,
+      isScopeFiltered(currentProvider, currentAccountIDs),
+    );
     // Single merged per-service chart (#908): potential range from recs +
     // current-savings underlay from the summary's by_service map.
     renderSavingsByService(recs, summaryData.by_service || {}, filterDesc);
@@ -218,6 +242,28 @@ export async function loadDashboard(): Promise<void> {
     const upcoming = document.getElementById('upcoming-list');
     if (upcoming) teardownSkeleton(upcoming);
   }
+}
+
+/**
+ * Issue #756: first-run onboarding card at the top of Home. Shown when no
+ * recommendations loaded and nothing is committed yet, so a new user gets a
+ * pointer to connecting an account (or refreshing) instead of a page of
+ * "--" tiles and empty charts.
+ */
+function renderHomeOnboarding(show: boolean, hasAccounts: boolean | null, scopeFiltered: boolean): void {
+  const host = document.getElementById('home-onboarding');
+  if (!host) return;
+  host.classList.toggle('hidden', !show);
+  if (!show) {
+    host.replaceChildren();
+    return;
+  }
+  host.replaceChildren(buildFirstRunEmptyState({
+    hasAccounts,
+    scopeFiltered,
+    onRefresh: () => startRecommendationsRefresh(loadDashboard),
+    loadFreshness: getRecommendationsFreshness,
+  }));
 }
 
 function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalRecommendation[]): void {
@@ -284,31 +330,9 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
     { kpi: 'ytd',         title: 'YTD Savings', value: formatCurrency(data.ytd_savings), valueSavings: true,
       detail: 'From commitment purchases' },
   ];
-  for (const t of tiles) {
-    const card = document.createElement('div');
-    card.classList.add('card', 'kpi-tile');
-    card.dataset['kpi'] = t.kpi;
-    const h3 = document.createElement('h3');
-    h3.textContent = t.title;
-    const valueP = document.createElement('p');
-    valueP.classList.add('value', 'kpi-tile-value');
-    // An absent figure is not a saving: keep the placeholder neutral rather
-    // than green (issue #739).
-    if (t.valueSavings && t.value !== NO_VALUE) valueP.classList.add('savings');
-    valueP.textContent = t.value;
-    const detailP = document.createElement('p');
-    detailP.classList.add('detail', 'kpi-tile-detail');
-    detailP.textContent = t.detail;
-    const spark = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    spark.classList.add('kpi-tile-spark', 'hidden');
-    spark.dataset['sparkKey'] = t.kpi;
-    spark.setAttribute('aria-hidden', 'true');
-    card.appendChild(h3);
-    card.appendChild(valueP);
-    card.appendChild(detailP);
-    card.appendChild(spark);
-    summary.appendChild(card);
-  }
+  // Shared with the Opportunities summary (issue #743). buildKpiTile keeps an
+  // absent (NO_VALUE) figure neutral rather than green (issue #739).
+  for (const t of tiles) summary.appendChild(buildKpiTile({ ...t, spark: true }));
 }
 
 /**
@@ -440,21 +464,36 @@ async function retryUpcomingPurchases(): Promise<void> {
   }
 }
 
-function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
+function renderUpcomingPurchases(allPurchases: UpcomingPurchase[]): void {
   const container = document.getElementById('upcoming-list');
   if (!container) return;
+
+  // The endpoint ignores the topbar chips, so apply the provider chip here
+  // and flag the account chip as not applied (#713, see lib/upcoming-scope).
+  const provider = state.getCurrentProvider();
+  const purchases = scopeUpcomingToProvider(allPurchases, provider);
 
   // Refresh the in-memory index so viewPurchaseDetails can render its
   // dialog from local data — there is no execution row to look up yet
   // (the upcoming list shows plans whose next execution hasn't fired).
   upcomingPurchasesIndex = new Map(purchases.map(p => [p.execution_id, p]));
 
-  if (!purchases || purchases.length === 0) {
-    container.innerHTML = '<p class="empty">No upcoming scheduled purchases</p>';
+  container.textContent = '';
+  if (purchases.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'empty';
+    empty.textContent = upcomingEmptyMessage(provider);
+    container.appendChild(empty);
     return;
   }
 
-  container.textContent = '';
+  if (state.getCurrentAccountIDs().length > 0) {
+    const note = document.createElement('p');
+    note.className = 'help-text upcoming-scope-note';
+    note.textContent = UPCOMING_ACCOUNT_SCOPE_NOTE;
+    container.appendChild(note);
+  }
+
   for (const p of purchases) {
     const dateParts = getDateParts(p.scheduled_date);
 
@@ -895,6 +934,7 @@ export function renderSavingsByService(
   if (positive.length === 0) {
     if (heading) heading.textContent = 'Potential savings range per service';
     canvas.classList.add('hidden');
+    removeChartTable(SAVINGS_BY_SERVICE_TABLE_ID);
     if (emptyEl) {
       // When a filter is active and excluded all results, surface it so the
       // user understands why the chart is blank (mirrors #747 pattern).
@@ -933,6 +973,21 @@ export function renderSavingsByService(
 
   const totalSavings = positive.reduce((acc, e) => acc + e.visibleTotal, 0);
 
+  // #744: the canvas is role="img", so its label and a table are the only
+  // way a screen-reader user can read these values. Every service is listed,
+  // including any beyond the SAVINGS_BY_SERVICE_MAX bars drawn.
+  const top = positive[0]!;
+  setChartSummary(canvas,
+    `Stacked bar chart of monthly savings for ${positive.length} service${positive.length === 1 ? '' : 's'}, `
+    + `${formatCurrency(totalSavings)} in total. Largest: ${top.svc} at ${formatCurrency(top.visibleTotal)}. `
+    + 'Layers: Current / Committed, Lowest option, Upside. Values are in the table below the chart.');
+  renderChartTable(canvas, SAVINGS_BY_SERVICE_TABLE_ID, {
+    caption: 'Potential savings range per service (monthly)',
+    columns: ['Service', 'Current / Committed', 'Lowest option', 'Upside', 'Total'],
+    rows: positive.map(e => [e.svc, formatCurrency(e.current), formatCurrency(e.lowestOption),
+      formatCurrency(e.upside), formatCurrency(e.visibleTotal)]),
+  });
+
   savingsByServiceChart = new Chart(canvas, {
     type: 'bar',
     data: {
@@ -946,6 +1001,7 @@ export function renderSavingsByService(
           data: currentData,
           backgroundColor: SAVINGS_LAYER_COLORS.current,
           borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 4, bottomRight: 4 },
+          ...SEGMENT_GAP,
           stack: 'savings',
         },
         {
@@ -953,6 +1009,7 @@ export function renderSavingsByService(
           data: lowestOptionData,
           backgroundColor: SAVINGS_LAYER_COLORS.lowestOption,
           borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 0, bottomRight: 0 },
+          ...SEGMENT_GAP,
           stack: 'savings',
         },
         {
@@ -960,6 +1017,7 @@ export function renderSavingsByService(
           data: upsideData,
           backgroundColor: SAVINGS_LAYER_COLORS.upside,
           borderRadius: { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 },
+          ...SEGMENT_GAP,
           stack: 'savings',
         },
       ],
@@ -1120,6 +1178,7 @@ export async function loadSavingsTrendChart(): Promise<void> {
         empty.classList.remove('hidden');
       }
       if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
+      removeChartTable(SAVINGS_TREND_TABLE_ID);
       return;
     }
     // Sparse data (#188): one point would paint a lone dot on a blank canvas,
@@ -1131,12 +1190,28 @@ export async function loadSavingsTrendChart(): Promise<void> {
         empty.classList.remove('hidden');
       }
       if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
+      // The sparse message carries the one value; drop any table left from
+      // an earlier render, as the empty state does (#744).
+      removeChartTable(SAVINGS_TREND_TABLE_ID);
       return;
     }
     canvas.classList.remove('hidden');
     empty?.classList.add('hidden');
 
     if (savingsTrendChart) savingsTrendChart.destroy();
+
+    // #744: summarize the plotted series and list every point as text.
+    const rangeText = isAllRange ? 'the last year' : `the last ${days} days`;
+    const latest = chartData[chartData.length - 1]!;
+    setChartSummary(canvas,
+      `Line chart of cumulative savings over ${rangeText}: ${formatCurrency(latest.y)} `
+      + `as of ${formatTrendAxisTick(latest.x, interval)}, ${chartData.length} data point${chartData.length === 1 ? '' : 's'}. `
+      + 'Values are in the table below the chart.');
+    renderChartTable(canvas, SAVINGS_TREND_TABLE_ID, {
+      caption: `Cumulative savings over ${rangeText}`,
+      columns: ['Date', 'Cumulative savings'],
+      rows: chartData.map(p => [formatTrendAxisTick(p.x, interval), formatCurrency(p.y)]),
+    });
 
     savingsTrendChart = new Chart(canvas, {
       type: 'line',
@@ -1193,6 +1268,7 @@ export async function loadSavingsTrendChart(): Promise<void> {
     // the dashboard — hide the widget and fall back to a neutral message.
     console.warn('Savings trend chart unavailable:', err);
     if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
+    removeChartTable(SAVINGS_TREND_TABLE_ID);
     canvas.classList.add('hidden');
     if (empty) {
       empty.textContent = 'Savings history is not available yet.';

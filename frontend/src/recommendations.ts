@@ -9,6 +9,7 @@ import { formatCurrency, formatTerm, escapeHtml, CURRENCY_DEFAULT_DIGITS, NO_VAL
 import { getRecommendationsFreshness, refreshRecommendations as refreshRecommendationsAPI } from './api/recommendations';
 import type { RecommendationsFreshness } from './api/recommendations';
 import { showToast } from './toast';
+import { createIcon, iconSvg } from './icons';
 import {
   isPaymentSupported,
   isSavingsPlanService,
@@ -24,8 +25,10 @@ import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary, GlobalConfig } from './types';
 import { openModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { renderKpiTiles } from './lib/kpi-tile';
 import { captureFocus, restoreFocus } from './lib/focus-restore';
 import { canAccess } from './permissions';
+import { buildFirstRunEmptyState, isScopeFiltered } from './first-run-empty-state';
 
 // Issue #869: true when the current session can take any action on
 // recommendations (purchase or plan). Readonly/viewer sessions have neither
@@ -63,6 +66,10 @@ let checkedPurchaseModalInitialised = false;
 let purchaseModalOpenToken = 0;
 // Cache of account ID → name for column display
 let accountNamesCache: Map<string, string> = new Map();
+// Whether the last account-list fetch returned any accounts; null when it
+// failed, so the first-run empty state (issue #756) does not claim "no
+// accounts connected" on a transient error.
+let lastHasAccounts: boolean | null = null;
 
 /**
  * Returns the display name for a cloud account ID, falling back to the raw
@@ -410,7 +417,7 @@ async function pollUntilCollectionClears(): Promise<RecommendationsFreshness | n
  * actually happening, poll the freshness endpoint until the in-flight
  * marker clears, then reload -- same as if this call had started it.
  */
-function startRecommendationsRefresh(
+export function startRecommendationsRefresh(
   onReload: () => Promise<void> = loadRecommendations,
 ): Promise<void> {
   // Dedup: if a refresh is already in flight, don't start a second one.
@@ -606,7 +613,7 @@ export async function loadRecommendations(): Promise<void> {
 
     const [data, accounts, cfgResponse] = await Promise.all([
       api.getRecommendations(filters) as unknown as RecommendationsResponse,
-      api.listAccountsMinimal().catch(() => []),
+      api.listAccountsMinimal().catch(() => null),
       // issue #223: fetch GlobalConfig so per-cell variant selection and
       // bulk-toolbar defaults reflect the operator's configured preference.
       // Failure is siloed — a missing/unreachable config endpoint must not
@@ -629,7 +636,8 @@ export async function loadRecommendations(): Promise<void> {
       // (issue #282 dropped the toolbar dropdown; no longer need to seed
       // defaultBulkPurchaseState — the module-level cache is the source of truth).
     }
-    accountNamesCache = new Map(accounts.map(a => [a.id, a.name]));
+    accountNamesCache = new Map((accounts ?? []).map(a => [a.id, a.name]));
+    lastHasAccounts = accounts ? accounts.length > 0 : null;
 
     // Issue #463: gate the Opportunities list by the Settings →
     // General → Enabled Providers preference. The backend currently
@@ -748,11 +756,11 @@ function renderLookbackToolbar(): void {
     });
   }
 
-  // Info tooltip. textContent only (static constant, never API text) so
-  // there is no innerHTML injection surface.
+  // Info tooltip. DOM-built only (static icon, tooltip via textContent,
+  // never API text) so there is no innerHTML injection surface.
   const info = document.createElement('span');
   info.className = 'info-icon';
-  info.textContent = 'ⓘ'; // circled lowercase i
+  info.appendChild(createIcon('info'));
   const tip = document.createElement('span');
   tip.className = 'tooltip-text';
   tip.textContent = canEdit ? LOOKBACK_TOOLTIP : LOOKBACK_NO_PERMISSION_TOOLTIP;
@@ -917,24 +925,14 @@ function renderRecommendationsSummary(
   const upfrontLabel = isSelectionView ? 'Selected Upfront Cost' : 'Total Upfront Cost';
   const paybackLabel = 'Payback Period';
 
-  container.innerHTML = `
-    <div class="card">
-      <h3>${countLabel}</h3>
-      <p class="value">${variantCount}</p>
-    </div>
-    <div class="card">
-      <h3>${savingsLabel}</h3>
-      <p class="value savings">${savingsText}</p>
-    </div>
-    <div class="card">
-      <h3>${upfrontLabel}</h3>
-      <p class="value">${upfrontText}</p>
-    </div>
-    <div class="card">
-      <h3>${paybackLabel}</h3>
-      <p class="value">${paybackText}</p>
-    </div>
-  `;
+  // Issue #743: the same .kpi-tile component as Home's summary, so the two
+  // pages' KPI cards match.
+  renderKpiTiles(container, [
+    { kpi: 'count', title: countLabel, value: String(variantCount) },
+    { kpi: 'savings', title: savingsLabel, value: savingsText, valueSavings: true },
+    { kpi: 'upfront', title: upfrontLabel, value: upfrontText },
+    { kpi: 'payback', title: paybackLabel, value: paybackText },
+  ]);
 }
 
 // Comparator extractors per column. Numeric columns return numbers
@@ -1926,10 +1924,10 @@ function columnLabel(column: string): string {
 }
 
 function sortIndicator(column: string, active: string, direction: 'asc' | 'desc'): string {
-  if (column !== active) return '<span class="sort-indicator" aria-hidden="true">\u2195</span>';
+  if (column !== active) return `<span class="sort-indicator" aria-hidden="true">${iconSvg('chevrons-up-down')}</span>`;
   return direction === 'asc'
-    ? '<span class="sort-indicator active" aria-hidden="true">\u25B2</span>'
-    : '<span class="sort-indicator active" aria-hidden="true">\u25BC</span>';
+    ? `<span class="sort-indicator active" aria-hidden="true">${iconSvg('chevron-up')}</span>`
+    : `<span class="sort-indicator active" aria-hidden="true">${iconSvg('chevron-down')}</span>`;
 }
 
 // sortedRecommendations was removed in issues #225/#226: group-level sorting
@@ -2705,6 +2703,31 @@ function rebindOpenPopoverAnchor(): void {
 // renderRecommendationsList itself (against the post-filter visible set),
 // so this helper doesn't need to call renderRecommendationsSummary
 // separately — every entry to renderRecommendationsList covers it.
+/**
+ * Clears every column filter. Re-fetches when a server-pushed-down column
+ * (service/region/account) was filtered, since the loaded set itself was
+ * narrowed; otherwise a client-side rerender is enough.
+ */
+function clearAllColumnFilters(): void {
+  const active = Object.keys(state.getRecommendationsColumnFilters()) as state.RecommendationsColumnId[];
+  const refetch = active.some((c) => SERVER_PUSHDOWN_COLUMNS.has(c));
+  state.clearAllRecommendationsColumnFilters();
+  saveColumnFilters(state.getRecommendationsColumnFilters());
+  if (refetch) void loadRecommendations();
+  else rerenderRecommendations();
+}
+
+/**
+ * Hides (or restores) the summary cards, filter-status bar and bottom action
+ * box around the list. Used by the first-run empty state (issue #756), where
+ * zero counts and a disabled Purchase bar only add noise.
+ */
+function setOpportunitiesChromeHidden(hidden: boolean): void {
+  for (const id of ['recommendations-summary', 'recommendations-filter-status', 'recommendations-action-box']) {
+    document.getElementById(id)?.classList.toggle('hidden', hidden);
+  }
+}
+
 function rerenderRecommendations(): void {
   const loaded = state.getRecommendations() as unknown as LocalRecommendation[];
   renderRecommendationsList(loaded);
@@ -2933,11 +2956,7 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
       badge = document.createElement('button');
       badge.type = 'button';
       badge.className = 'clear-filters';
-      badge.addEventListener('click', () => {
-        state.clearAllRecommendationsColumnFilters();
-        saveColumnFilters(state.getRecommendationsColumnFilters());
-        rerenderRecommendations();
-      });
+      badge.addEventListener('click', clearAllColumnFilters);
       bar.insertBefore(badge, live);
     }
     badge.textContent = `Clear filters (${activeCount})`;
@@ -3269,7 +3288,7 @@ function buildListMarkup(
     const active = filters[column] ? ' active' : '';
     const lbl = getColumnLabel(column, period);
     const label = filters[column] ? `Filter ${lbl} \u2014 currently active` : `Filter ${lbl}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">\u26db</button>`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">${iconSvg('filter')}</button>`;
   };
   const colHeader = (col: ColumnDef): string => {
     const lbl = getColumnLabel(col.key, period);
@@ -3344,7 +3363,7 @@ function buildListMarkup(
         ? (accountNamesCache.get(spRep.cloud_account_id) || spRep.cloud_account_id)
         : '\u2014';
       const isSpExpanded = expandedSpGroups.has(sgk);
-      const spChevron = isSpExpanded ? '\u25bc' : '\u25b6';
+      const spChevron = iconSvg(isSpExpanded ? 'chevron-down' : 'chevron-right');
       const spSlugs = childCellKeys.map((ck) => groups.get(ck)![0]!.service);
       const spLabel = savingsPlansBucketLabel(spSlugs);
       const planTypeCount = childCellKeys.length;
@@ -3403,7 +3422,7 @@ function buildListMarkup(
         const childTermDisplay = selectedChildVariant
           ? formatTerm(selectedChildVariant.term)
           : formatTermRange(childSummary.termMin, childSummary.termMax);
-        const cellChevron = isCellExpanded ? '\u25bc' : '\u25b6';
+        const cellChevron = iconSvg(isCellExpanded ? 'chevron-down' : 'chevron-right');
         const childIdentityParts = [
           `${escapeHtml(childRep.resource_type)}${childRep.engine ? ` (${escapeHtml(childRep.engine)})` : ''}`,
         ];
@@ -3473,7 +3492,7 @@ function buildListMarkup(
       ? formatTerm(selectedVariant.term)
       : formatTermRange(summary.termMin, summary.termMax);
 
-    const chevron = isExpanded ? '\u25bc' : '\u25b6';
+    const chevron = iconSvg(isExpanded ? 'chevron-down' : 'chevron-right');
     const identityParts = [
       `${escapeHtml(rep.resource_type)}${rep.engine ? ` (${escapeHtml(rep.engine)})` : ''}`,
     ];
@@ -4919,6 +4938,27 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // Mount once; update is per-render below.
   mountBottomActionBox();
 
+  // Issue #756: nothing loaded and no column filter narrowing the fetch is a
+  // first run (or an empty scope), not a filter miss. Show an onboarding card
+  // instead of an empty 15-column table, $0 summary cards and a Purchase bar
+  // that can never enable. The summary and action box stay rendered (disabled)
+  // but hidden, so state is coherent once rows arrive.
+  const firstRun = (loadedRecs?.length ?? 0) === 0
+    && Object.keys(state.getRecommendationsColumnFilters()).length === 0;
+  setOpportunitiesChromeHidden(firstRun);
+  if (firstRun) {
+    lastVisibleGroupKeys = [];
+    updateBottomActionBox(0, 0);
+    teardownSkeleton(container);
+    container.replaceChildren(buildFirstRunEmptyState({
+      hasAccounts: lastHasAccounts,
+      scopeFiltered: isScopeFiltered(state.getCurrentProvider(), state.getCurrentAccountIDs()),
+      onRefresh: () => startRecommendationsRefresh(loadRecommendations),
+      loadFreshness: getRecommendationsFreshness,
+    }));
+    return;
+  }
+
   const emptyResult = !recommendations || recommendations.length === 0;
   if (emptyResult) {
     lastVisibleGroupKeys = [];
@@ -4961,6 +5001,15 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
       td.setAttribute('colspan', String(colspan));
       td.className = 'empty';
       td.textContent = 'No rows match these filters.';
+      // Issue #756: give the hint a next step right where the user looks.
+      if (Object.keys(state.getRecommendationsColumnFilters()).length > 0) {
+        const clearBtn = document.createElement('button');
+        clearBtn.type = 'button';
+        clearBtn.className = 'btn-small empty-clear-filters';
+        clearBtn.textContent = 'Clear filters';
+        clearBtn.addEventListener('click', clearAllColumnFilters);
+        td.append(' ', clearBtn);
+      }
       tr.appendChild(td);
       tbody.appendChild(tr);
     }

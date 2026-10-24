@@ -106,7 +106,7 @@ jest.mock('../utils', () => ({
   formatDate: jest.fn((val) => val ? new Date(val).toLocaleDateString() : ''),
   formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   formatRampSchedule: jest.fn((val) => val || 'Unknown'),
-  getStatusBadge: jest.fn(() => ({ class: 'active', label: 'Active' })),
+  getStatusBadge: jest.fn(() => ({ class: 'success', label: 'Active' })),
   escapeHtml: jest.fn((str) => str || ''),
   escapeHtmlAttr: jest.fn((str: string | null | undefined) => {
     if (!str) return '';
@@ -478,7 +478,9 @@ describe('Plans Module', () => {
       await loadPlans();
 
       const list = document.getElementById('plans-list');
-      expect(list?.innerHTML).toContain('status-badge');
+      // getStatusBadge is mocked to the success tone; the card renders it as
+      // the shared .badge pill (issue #737).
+      expect(list?.querySelector('.plan-status .badge.badge-success')?.textContent).toBe('Active');
     });
 
     test('renders toggle switches for plans', async () => {
@@ -859,7 +861,7 @@ describe('Plans Module', () => {
       // Paused rows stay visible with a Paused badge and are NOT replaced by
       // the empty-state message.
       expect(container?.innerHTML).toContain('status-paused');
-      expect(container?.innerHTML).toContain('>paused<');
+      expect(container?.querySelector('.badge.badge-muted')?.textContent).toBe('Paused');
       expect(container?.innerHTML).not.toContain('No planned purchases');
     });
 
@@ -3283,6 +3285,12 @@ describe('Plans Module', () => {
       ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0 }
     };
 
+    // The plan's own status badge (Active, success tone) shares the card, so
+    // assert on the health badge element rather than on the card's markup.
+    const healthBadge = (): Element | undefined => Array.from(
+      document.querySelectorAll('#plans-list .badge'),
+    ).find((b) => (b.textContent ?? '').startsWith('Health:'));
+
     test('renders a green badge for a healthy score (>= 80)', async () => {
       (api.getPlans as jest.Mock).mockResolvedValue({
         plans: [{ ...basePlan, health_score: 90, health_factors: [] }]
@@ -3292,7 +3300,7 @@ describe('Plans Module', () => {
       await loadPlans();
 
       const list = document.getElementById('plans-list');
-      expect(list?.innerHTML).toContain('badge-success');
+      expect(healthBadge()?.className).toBe('badge badge-success');
       expect(list?.innerHTML).toContain('Health: 90');
     });
 
@@ -3309,7 +3317,7 @@ describe('Plans Module', () => {
       await loadPlans();
 
       const list = document.getElementById('plans-list');
-      expect(list?.innerHTML).toContain('badge-warning');
+      expect(healthBadge()?.className).toBe('badge badge-warning');
       expect(list?.innerHTML).toContain('Health: 65');
     });
 
@@ -3329,7 +3337,7 @@ describe('Plans Module', () => {
       await loadPlans();
 
       const list = document.getElementById('plans-list');
-      expect(list?.innerHTML).toContain('badge-danger');
+      expect(healthBadge()?.className).toBe('badge badge-danger');
       expect(list?.innerHTML).toContain('Health: 30');
     });
 
@@ -3357,9 +3365,8 @@ describe('Plans Module', () => {
 
       const list = document.getElementById('plans-list');
       expect(list?.innerHTML).toContain('Health: unknown');
-      expect(list?.innerHTML).toContain('badge-muted');
       // Critically, it must NOT be dressed up as a healthy score.
-      expect(list?.innerHTML).not.toContain('badge-success');
+      expect(healthBadge()?.className).toBe('badge badge-muted');
       expect(list?.innerHTML).not.toContain('Health: 100');
     });
 
@@ -3380,7 +3387,7 @@ describe('Plans Module', () => {
       await loadPlans();
 
       const list = document.getElementById('plans-list');
-      expect(list?.innerHTML).toContain(expectedClass);
+      expect(healthBadge()?.className).toBe(`badge ${expectedClass}`);
       expect(list?.innerHTML).toContain(`Health: ${score}`);
     });
 

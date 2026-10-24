@@ -14,12 +14,15 @@
  */
 
 import * as api from './api';
-import { escapeHtml, formatDate } from './utils';
 import { showToast } from './toast';
+import { confirmDialog } from './confirmDialog';
 import { openModal, closeModal } from './modal';
 import { canAccess } from './permissions';
 import { initLadderTimeline } from './ladder-timeline';
 import { initLadderAccountSelector } from './ladder-account-selector';
+import { renderLadderConfigTable } from './ladder-config-table';
+import { renderLadderConfigModal } from './ladder-config-modal';
+import { listAccountsMinimal, type AccountSummary } from './api/accounts';
 import { readLadderNumbers } from './ladder-form-numbers';
 
 // ==========================================
@@ -34,6 +37,9 @@ let configModalSaveInFlight = false;
 
 // Cached configs from the last successful load.
 let cachedConfigs: api.LadderConfig[] = [];
+// Registered accounts used to label table rows; empty when the list could not
+// be loaded, in which case rows fall back to the stored account ID.
+let tableAccounts: AccountSummary[] = [];
 let selectedAccount: ReturnType<typeof initLadderAccountSelector> | undefined;
 
 // ==========================================
@@ -61,7 +67,12 @@ export async function initLadderingSettings(globalEnabled: boolean): Promise<voi
   wireModalCloseButtons();
 
   try {
-    cachedConfigs = await api.getLadderConfigs();
+    const [configs, accounts] = await Promise.all([
+      api.getLadderConfigs(),
+      listAccountsMinimal().catch((): AccountSummary[] => []),
+    ]);
+    cachedConfigs = configs;
+    tableAccounts = accounts;
     renderConfigTable(cachedConfigs);
     const timeline = document.getElementById('ladder-purchase-timeline');
     if (timeline) await initLadderTimeline(timeline, cachedConfigs, globalEnabled);
@@ -130,122 +141,7 @@ function renderLadderingSection(globalEnabled: boolean): string {
 <!-- Planned purchases renders its own settings card (issue #753). -->
 <div id="ladder-purchase-timeline"></div>
 
-<!-- Per-account ladder config modal -->
-<div id="ladder-config-modal" class="modal hidden" role="dialog" aria-modal="true"
-     aria-labelledby="ladder-modal-title">
-  <div class="modal-content">
-    <div class="modal-header">
-      <h3 id="ladder-modal-title">Commitment Laddering Config</h3>
-      <button type="button" class="modal-close" id="ladder-modal-close-btn"
-              aria-label="Close">&times;</button>
-    </div>
-    <div class="modal-body">
-      <form id="ladder-config-form" novalidate>
-        <input type="hidden" id="ladder-cfg-id">
-
-        <div class="form-row">
-          <label for="ladder-cfg-account">Cloud Account</label>
-          <select id="ladder-cfg-account" required aria-describedby="ladder-cfg-account-status"></select>
-          <span id="ladder-cfg-account-status" class="form-hint" role="status"></span>
-        </div>
-
-        <div class="form-row">
-          <label for="ladder-cfg-provider">Provider</label>
-          <select id="ladder-cfg-provider">
-            <option value="aws">AWS</option>
-            <option value="azure">Azure</option>
-            <option value="gcp">GCP</option>
-          </select>
-        </div>
-
-        <div class="form-row">
-          <label class="form-checkbox-label">
-            <input type="checkbox" id="ladder-cfg-enabled">
-            Enabled for this account
-          </label>
-        </div>
-
-        <div class="form-row">
-          <label for="ladder-cfg-mode">Approval Mode</label>
-          <select id="ladder-cfg-mode">
-            <option value="email_approval">Email Approval</option>
-            <option value="auto_approve">Auto Approve</option>
-          </select>
-        </div>
-
-        <div class="form-row">
-          <label for="ladder-cfg-cadence">Cadence</label>
-          <select id="ladder-cfg-cadence">
-            <option value="daily">Daily</option>
-            <option value="weekly">Weekly</option>
-          </select>
-        </div>
-
-        <div class="form-row">
-          <label for="ladder-cfg-target-coverage">Target Coverage (%)</label>
-          <input type="number" id="ladder-cfg-target-coverage"
-                 value="100" min="1" max="100" step="0.01">
-        </div>
-
-        <div class="form-row">
-          <label for="ladder-cfg-buffer-fraction">Buffer Fraction (0&ndash;1)</label>
-          <input type="number" id="ladder-cfg-buffer-fraction"
-                 value="0.10" min="0" max="0.99" step="0.01">
-        </div>
-
-        <div class="form-row">
-          <label for="ladder-cfg-baseline-percentile">Baseline Percentile (1&ndash;50)</label>
-          <input type="number" id="ladder-cfg-baseline-percentile"
-                 value="5" min="1" max="50" step="0.1">
-        </div>
-
-        <div class="form-row">
-          <label for="ladder-cfg-lookback-days">Lookback Days (minimum 10)</label>
-          <input type="number" id="ladder-cfg-lookback-days"
-                 value="30" min="10" step="1">
-        </div>
-
-        <div class="form-row">
-          <label for="ladder-cfg-buf-util-threshold">Buffer Utilization Threshold (%)</label>
-          <input type="number" id="ladder-cfg-buf-util-threshold"
-                 value="90" min="1" max="100" step="0.1">
-        </div>
-
-        <div class="form-row">
-          <label for="ladder-cfg-max-hourly">Max Hourly Commit Per Run ($/hr, blank = no cap)</label>
-          <input type="number" id="ladder-cfg-max-hourly"
-                 placeholder="No cap" min="0.000001" step="any">
-        </div>
-
-        <div class="form-row">
-          <label for="ladder-cfg-max-actions">Max Actions Per Run (1&ndash;50)</label>
-          <input type="number" id="ladder-cfg-max-actions"
-                 value="10" min="1" max="50" step="1">
-        </div>
-
-        <div class="form-row">
-          <label for="ladder-cfg-ramp-schedule">Ramp Schedule (JSON)</label>
-          <textarea id="ladder-cfg-ramp-schedule" rows="4"
-                    placeholder='{"steps":[{"after_days":0,"fraction":1.0}]}'></textarea>
-          <span class="form-hint">
-            An array of steps. Each step has <code>after_days</code> (integer) and
-            <code>fraction</code> (0&ndash;1). Fractions must sum to 1.0.
-            Example: immediate &mdash; <code>{"steps":[{"after_days":0,"fraction":1.0}]}</code>
-          </span>
-        </div>
-
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" id="ladder-modal-cancel-btn">
-            Cancel
-          </button>
-          <button type="submit" class="btn btn-primary" id="ladder-config-save-btn">
-            Save Config
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-</div>
+${renderLadderConfigModal()}
 `;
 }
 
@@ -254,57 +150,10 @@ function renderLadderingSection(globalEnabled: boolean): string {
 export function renderConfigTable(configs: api.LadderConfig[]): void {
   const container = document.getElementById('ladder-configs-table-container');
   if (!container) return;
-
-  if (configs.length === 0) {
-    container.innerHTML = '<p class="settings-help">No per-account configurations yet. Click <strong>Add Account Config</strong> to create one.</p>';
-    return;
-  }
-
-  const canEdit = canAccess('update', 'config');
-  const rows = configs.map(cfg => `
-    <tr>
-      <td>${escapeHtml(cfg.cloud_account_id)}</td>
-      <td>${escapeHtml(cfg.provider.toUpperCase())}</td>
-      <td>${cfg.enabled ? 'Yes' : 'No'}</td>
-      <td>${escapeHtml(cfg.mode === 'email_approval' ? 'Email Approval' : 'Auto Approve')}</td>
-      <td>${escapeHtml(cfg.cadence === 'daily' ? 'Daily' : 'Weekly')}</td>
-      <td>${typeof cfg.target_coverage === 'number' ? `${cfg.target_coverage.toFixed(1)}%` : 'N/A'}</td>
-      <td>${cfg.updated_at ? escapeHtml(formatDate(cfg.updated_at)) : 'N/A'}</td>
-      ${canEdit
-        ? `<td><button type="button" class="btn btn-sm btn-secondary ladder-edit-btn"
-                       data-account-id="${escapeHtml(cfg.cloud_account_id)}"
-                       data-provider="${escapeHtml(cfg.provider)}">Edit</button></td>`
-        : '<td></td>'}
-    </tr>
-  `).join('');
-
-  container.innerHTML = `
-    <table class="data-table" aria-label="Per-account ladder configurations">
-      <thead>
-        <tr>
-          <th>Account ID</th>
-          <th>Provider</th>
-          <th>Enabled</th>
-          <th>Mode</th>
-          <th>Cadence</th>
-          <th>Target Coverage</th>
-          <th>Updated</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
-
-  // Wire edit buttons via querySelectorAll so no user data is ever injected
-  // into a JS string context (data-* attributes are HTML-attribute-context only).
-  container.querySelectorAll<HTMLButtonElement>('.ladder-edit-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const accountID = btn.dataset['accountId'] ?? '';
-      const provider = btn.dataset['provider'] ?? '';
-      const cfg = cachedConfigs.find(c => c.cloud_account_id === accountID && c.provider === provider);
-      if (cfg) openLadderConfigModal(cfg);
-    });
+  renderLadderConfigTable(container, configs, {
+    accounts: tableAccounts,
+    canEdit: canAccess('update', 'config'),
+    onEdit: cfg => openLadderConfigModal(cfg),
   });
 }
 
@@ -382,6 +231,7 @@ function openLadderConfigModal(existing?: api.LadderConfig): void {
     // Cancel is inside the cloned form; the outside Close button keeps its listener.
     newForm.querySelector('#ladder-modal-cancel-btn')
       ?.addEventListener('click', closeLadderModal);
+    newForm.querySelector('#ladder-cfg-mode')?.addEventListener('change', syncAutoApproveWarning);
   }
 
   // Populate modal fields.
@@ -389,6 +239,7 @@ function openLadderConfigModal(existing?: api.LadderConfig): void {
   setSelectValue('ladder-cfg-provider', existing?.provider ?? 'aws');
   setChecked('ladder-cfg-enabled', existing?.enabled ?? false);
   setSelectValue('ladder-cfg-mode', existing?.mode ?? 'email_approval');
+  syncAutoApproveWarning();
   setSelectValue('ladder-cfg-cadence', existing?.cadence ?? 'daily');
   setValue('ladder-cfg-target-coverage', String(existing?.target_coverage ?? 100));
   setValue('ladder-cfg-buffer-fraction', String(existing?.buffer_fraction ?? 0.10));
@@ -457,6 +308,7 @@ export async function saveLadderConfig(): Promise<void> {
   if (saveBtn) saveBtn.disabled = true;
 
   try {
+    if (activatesAutoApprove(cfg) && !(await confirmAutoApprove())) return;
     const saved = await api.upsertLadderConfig(cfg);
 
     // Update the in-memory cache and re-render the table.
@@ -473,12 +325,42 @@ export async function saveLadderConfig(): Promise<void> {
     closeLadderModal();
     showToast({ message: 'Ladder config saved.', kind: 'success' });
   } catch (err) {
-    showToast({ message: 'Failed to save ladder config. Check inputs and try again.', kind: 'error' });
+    // Surface the server's validation text (apiRequest copies the response's
+    // `error` field into err.message) instead of a generic failure.
+    const detail = err instanceof Error && err.message ? err.message : 'Check inputs and try again.';
+    showToast({ message: `Failed to save ladder config: ${detail}`, kind: 'error' });
     console.error('saveLadderConfig:', err);
   } finally {
     configModalSaveInFlight = false;
     if (saveBtn) saveBtn.disabled = false;
   }
+}
+
+// ==========================================
+// AUTO-APPROVE SAFEGUARDS
+// ==========================================
+
+function syncAutoApproveWarning(): void {
+  const mode = document.getElementById('ladder-cfg-mode') as HTMLSelectElement | null;
+  const warning = document.getElementById('ladder-cfg-mode-warning');
+  if (warning) warning.hidden = mode?.value !== 'auto_approve';
+}
+
+// True when this save turns on unattended purchasing for the account: the
+// saved config would be enabled with Auto Approve and the stored one was not.
+function activatesAutoApprove(cfg: api.LadderConfig): boolean {
+  const unattended = (c?: api.LadderConfig): boolean => !!c && c.enabled && c.mode === 'auto_approve';
+  const previous = cachedConfigs.find(c => c.cloud_account_id === cfg.cloud_account_id && c.provider === cfg.provider);
+  return unattended(cfg) && !unattended(previous);
+}
+
+function confirmAutoApprove(): Promise<boolean> {
+  return confirmDialog({
+    title: 'Enable Auto Approve?',
+    body: 'Ladder purchases for this account will run without human approval. Commitments are long-term and usually cannot be cancelled once bought. Check the target coverage and per-run caps before continuing.',
+    confirmLabel: 'Enable Auto Approve',
+    destructive: true,
+  });
 }
 
 // ==========================================

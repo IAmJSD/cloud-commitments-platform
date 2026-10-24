@@ -135,7 +135,7 @@ tr.history-row-highlight:hover {
 }
 
 .planned-purchase-row .plan-name {
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
     display: block;
 }
 
@@ -148,58 +148,12 @@ tr.history-row-highlight:hover {
     white-space: nowrap;
 }
 
-/* Planned purchase status badges */
-.status-pending {
-    color: #856404;
-}
-
-.status-paused {
-    color: #9e9e9e;
-}
-
-.status-running {
-    color: var(--cudly-primary);
-}
-
-.status-completed {
-    color: var(--cudly-success);
-}
-
-.status-failed {
-    color: var(--cudly-error);
-}
-
-.planned-purchases-table .status-badge {
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.8rem;
-    font-weight: 500;
-    text-transform: capitalize;
-}
-
-.planned-purchases-table .status-badge.status-pending {
-    background: #fef3cd;
-    color: #856404;
-}
-
-.planned-purchases-table .status-badge.status-paused {
-    background: #e9ecef;
-    color: #495057;
-}
-
-.planned-purchases-table .status-badge.status-running {
-    background: #cce5ff;
-    color: #004085;
-}
-
-.planned-purchases-table .status-badge.status-completed {
-    background: #d4edda;
-    color: #155724;
-}
-
-.planned-purchases-table .status-badge.status-failed {
-    background: #f8d7da;
-    color: #721c24;
+/* Planned purchase rows keep a status-<x> class as a hook (tests and column
+ * filters count rows by it). The status color lives only on the row's .badge
+ * (issue #737); tinting the whole row too gave e.g. a running row blue text
+ * next to an amber badge. A paused step is just dimmed. */
+.planned-purchase-row.status-paused {
+    color: var(--cudly-text-subtle);
 }
 
 /* Coverage breakdown bar, Inventory & Coverage -> Coverage (issue #1777).

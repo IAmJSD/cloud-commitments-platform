@@ -105,7 +105,7 @@ describe('RI exchange history failure reason (A12-069)', () => {
     await loadRIExchange();
 
     const cell = statusCell();
-    expect(cell.querySelector('.status-badge')?.textContent).toBe('failed');
+    expect(cell.querySelector('.badge.badge-danger')?.textContent).toBe('Failed');
     const detail = cell.querySelector('.status-detail');
     expect(detail?.textContent).toBe('AcceptReservedInstancesExchangeQuote: <b>InvalidParameter</b>');
     expect(detail?.querySelector('b')).toBeNull();
