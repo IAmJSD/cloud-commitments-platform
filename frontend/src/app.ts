@@ -278,11 +278,11 @@ function setupButtonHandlers(): void {
   // Purchase modal buttons
   const closePurchaseBtn = document.getElementById('close-purchase-modal-btn');
   if (closePurchaseBtn) {
-    closePurchaseBtn.addEventListener('click', () => {
-      closePurchaseModal();
-      clearPurchaseModalRecommendations();
-      clearFanOutBuckets();
-    });
+    // closePurchaseModal() routes through modal.ts closeModal(), which runs
+    // the onClose that openPurchaseModal / openFanOutModal registered; that
+    // callback discards the single-row and fan-out purchase state on every
+    // close path, Escape included (issue #331), so no manual clear here.
+    closePurchaseBtn.addEventListener('click', () => closePurchaseModal());
   }
 
   const executePurchaseBtn = document.getElementById('execute-purchase-btn');
