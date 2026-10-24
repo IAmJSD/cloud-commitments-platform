@@ -5,13 +5,15 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatDate, formatDateTime, escapeHtml, formatCurrency } from './utils';
+import { formatDate, formatDateTime, escapeHtml, escapeHtmlAttr, formatCurrency } from './utils';
 import { switchTab, switchSettingsSubTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
+import { applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 import {
-  parseNumericFilter,
-  applyColumnFilters as applyColumnFiltersLib,
-} from './lib/column-filters';
+  openColumnFilterPopover,
+  rebindColumnFilterPopover,
+  sortedDistinctValues,
+} from './lib/column-filter-popover';
 import type {
   ConvertibleRI,
   ExchangeableAzureRI,
@@ -79,12 +81,6 @@ async function resolveScope(): Promise<{ provider: Provider | ''; accountID?: st
 
 // Mode label mapping — single source of truth
 const MODE_LABELS: Record<string, string> = { manual: "Manual Approval", auto: "Fully Automated" };
-const MODE_VALUES: Record<string, string> = Object.fromEntries(
-  Object.entries(MODE_LABELS).map(([k, v]) => [v, k])
-);
-
-// Suppress unused variable warning — MODE_VALUES is used in saveAutomationSettings
-void MODE_VALUES;
 
 /**
  * Load the RI Exchange tab — called when tab is activated and whenever the
@@ -446,6 +442,8 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
       activeRiOpenPopoverFor(column, btn);
     });
   });
+  // Keep an open filter popover attached to the re-rendered trigger.
+  rebindColumnFilterPopover(ACTIVE_RI_POPOVER_SCOPE);
 
   // Attach "Exchange" handlers for individual RIs
   container.querySelectorAll<HTMLButtonElement>('[data-action="quote-ri"]').forEach(btn => {
@@ -817,535 +815,67 @@ export function applyActiveRiColumnFilters(
 }
 
 // ── Active RI popover ─────────────────────────────────────────────────────
+// Lifecycle lives in lib/column-filter-popover.ts (issue #18).
 
-interface ActiveRiPopoverState {
-  column: state.ActiveRiColumnId;
-  el: HTMLDivElement;
-  checkboxes: Map<string, HTMLInputElement>;
-  input: HTMLInputElement | null;
-  errorEl: HTMLElement | null;
-}
-
-let activeRiOpenPopover: ActiveRiPopoverState | null = null;
-let activeRiOutsideHandler: ((e: MouseEvent) => void) | null = null;
-let activeRiEscHandler: ((e: KeyboardEvent) => void) | null = null;
-
-function activeRiDistinctValues(col: state.ActiveRiColumnId): string[] {
-  const seen = new Set<string>();
-  for (const ri of currentRIs) seen.add(activeRiCategoricalCellValue(ri, col));
-  return Array.from(seen).sort((a, b) => {
-    if (a === '' && b !== '') return -1;
-    if (a !== '' && b === '') return 1;
-    return a.localeCompare(b);
-  });
-}
-
-function activeRiPositionPopover(popover: HTMLElement, anchor: HTMLElement): void {
-  const rect = anchor.getBoundingClientRect();
-  popover.style.display = 'block';
-  const popRect = popover.getBoundingClientRect();
-  const margin = 8;
-  let top = rect.bottom + 4;
-  if (top + popRect.height > window.innerHeight - margin) {
-    top = Math.max(margin, rect.top - popRect.height - 4);
-  }
-  let left = rect.left;
-  if (left + popRect.width > window.innerWidth - margin) {
-    left = Math.max(margin, window.innerWidth - margin - popRect.width);
-  }
-  popover.style.position = 'absolute';
-  popover.style.top = `${top + window.scrollY}px`;
-  popover.style.left = `${left + window.scrollX}px`;
-}
+const ACTIVE_RI_POPOVER_SCOPE = 'active-ri';
 
 function rerenderRIs(): void {
   const container = document.getElementById('ri-exchange-instances-list');
   if (container) renderRIsTable(container, currentRIAccountID);
 }
 
-function activeRiCloseOpenPopover(): void {
-  if (!activeRiOpenPopover) return;
-  const { column, el } = activeRiOpenPopover;
-  el.remove();
-  activeRiOpenPopover = null;
-  if (activeRiOutsideHandler) {
-    document.removeEventListener('mousedown', activeRiOutsideHandler);
-    activeRiOutsideHandler = null;
-  }
-  if (activeRiEscHandler) {
-    document.removeEventListener('keydown', activeRiEscHandler);
-    activeRiEscHandler = null;
-  }
-  const trigger = document.querySelector<HTMLButtonElement>(
+function activeRiTrigger(column: state.ActiveRiColumnId): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>(
     `#ri-exchange-instances-list .column-filter-btn[data-column="${column}"]`,
   );
-  if (trigger) trigger.setAttribute('aria-expanded', 'false');
-}
-
-function activeRiBuildPopover(column: state.ActiveRiColumnId): ActiveRiPopoverState {
-  const popover = document.createElement('div');
-  popover.className = 'column-filter-popover';
-  popover.setAttribute('role', 'dialog');
-  popover.setAttribute('aria-modal', 'false');
-
-  const headingId = `active-ri-filter-heading-${column}`;
-  popover.setAttribute('aria-labelledby', headingId);
-
-  const heading = document.createElement('h3');
-  heading.id = headingId;
-  heading.className = 'column-filter-heading';
-  heading.textContent = `Filter ${activeRiLabelFor(column)}`;
-  popover.appendChild(heading);
-
-  const checkboxes = new Map<string, HTMLInputElement>();
-  let input: HTMLInputElement | null = null;
-  let errorEl: HTMLElement | null = null;
-  let commitAllRef: ((target: boolean) => void) | null = null;
-
-  if (ACTIVE_RI_NUMERIC_COLUMNS.has(column)) {
-    // Numeric column: free-text expression input
-    const label = document.createElement('label');
-    label.className = 'column-filter-numeric-label';
-    label.textContent = 'Expression';
-    input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'column-filter-numeric-input';
-    input.placeholder = 'e.g. >50, 10..20, 4';
-    input.setAttribute('aria-describedby', `active-ri-filter-error-${column}`);
-    const current = state.getActiveRiColumnFilters()[column];
-    if (current && current.kind === 'expr') input.value = current.expr;
-    label.appendChild(input);
-    popover.appendChild(label);
-
-    errorEl = document.createElement('div');
-    errorEl.id = `active-ri-filter-error-${column}`;
-    errorEl.className = 'column-filter-error';
-    errorEl.setAttribute('role', 'status');
-    popover.appendChild(errorEl);
-
-    const inputEl = input;
-    const errorElRef = errorEl;
-    const commit = (): void => {
-      const expr = inputEl.value.trim();
-      if (expr === '') {
-        state.setActiveRiColumnFilter(column, null);
-        errorElRef.textContent = '';
-        rerenderRIs();
-        return;
-      }
-      const parsed = parseNumericFilter(expr);
-      if (!parsed.ok) {
-        errorElRef.textContent = parsed.error;
-        return;
-      }
-      errorElRef.textContent = '';
-      state.setActiveRiColumnFilter(column, { kind: 'expr', expr });
-      rerenderRIs();
-    };
-    inputEl.addEventListener('blur', commit);
-    inputEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); commit(); }
-    });
-  } else {
-    // Categorical column: checkbox list of distinct values
-    const distinct = activeRiDistinctValues(column);
-    const current = state.getActiveRiColumnFilters()[column];
-    const activeSet: ReadonlySet<string> | null =
-      current && current.kind === 'set' ? new Set(current.values) : null;
-
-    const allLabel = document.createElement('label');
-    allLabel.className = 'column-filter-all';
-    const allBox = document.createElement('input');
-    allBox.type = 'checkbox';
-    allBox.dataset['role'] = 'all';
-    allLabel.appendChild(allBox);
-    const allText = document.createElement('span');
-    allText.textContent = '(All)';
-    allLabel.appendChild(allText);
-    popover.appendChild(allLabel);
-
-    const list = document.createElement('div');
-    list.className = 'column-filter-list';
-    for (const value of distinct) {
-      const itemLabel = document.createElement('label');
-      itemLabel.className = 'column-filter-item';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.dataset['value'] = value;
-      cb.checked = activeSet === null ? true : activeSet.has(value);
-      itemLabel.appendChild(cb);
-      const text = document.createElement('span');
-      text.textContent = value === '' ? '(empty)' : value;
-      itemLabel.appendChild(text);
-      list.appendChild(itemLabel);
-      checkboxes.set(value, cb);
-    }
-    popover.appendChild(list);
-
-    const updateAllTriState = (): void => {
-      let checked = 0;
-      checkboxes.forEach((cb) => { if (cb.checked) checked++; });
-      const total = checkboxes.size;
-      allBox.indeterminate = checked > 0 && checked < total;
-      allBox.checked = total > 0 && checked === total;
-    };
-    updateAllTriState();
-
-    const commit = (): void => {
-      const selected: string[] = [];
-      checkboxes.forEach((cb, value) => { if (cb.checked) selected.push(value); });
-      if (selected.length === checkboxes.size) {
-        state.setActiveRiColumnFilter(column, null);
-      } else {
-        state.setActiveRiColumnFilter(column, { kind: 'set', values: selected });
-      }
-      updateAllTriState();
-      rerenderRIs();
-    };
-
-    const commitAll = (target: boolean): void => {
-      checkboxes.forEach((cb) => { cb.checked = target; });
-      if (target) {
-        state.setActiveRiColumnFilter(column, null);
-      } else {
-        state.setActiveRiColumnFilter(column, { kind: 'set', values: [] });
-      }
-      updateAllTriState();
-      rerenderRIs();
-    };
-    commitAllRef = commitAll;
-
-    checkboxes.forEach((cb) => { cb.addEventListener('change', commit); });
-    allBox.addEventListener('change', () => { commitAll(allBox.checked); });
-  }
-
-  const footer = document.createElement('div');
-  footer.className = 'column-filter-footer';
-  const clearBtn = document.createElement('button');
-  clearBtn.type = 'button';
-  clearBtn.className = 'column-filter-clear';
-  clearBtn.textContent = 'Clear';
-  clearBtn.addEventListener('click', () => {
-    if (input) {
-      state.setActiveRiColumnFilter(column, null);
-      input.value = '';
-      if (errorEl) errorEl.textContent = '';
-      rerenderRIs();
-    } else {
-      commitAllRef?.(false);
-    }
-  });
-  footer.appendChild(clearBtn);
-  popover.appendChild(footer);
-
-  return { column, el: popover, checkboxes, input, errorEl };
 }
 
 function activeRiOpenPopoverFor(column: state.ActiveRiColumnId, anchor: HTMLElement): void {
-  if (activeRiOpenPopover && !activeRiOpenPopover.el.isConnected) {
-    activeRiCloseOpenPopover();
-  }
-  if (activeRiOpenPopover && activeRiOpenPopover.column === column) {
-    activeRiCloseOpenPopover();
-    return;
-  }
-  if (activeRiOpenPopover) activeRiCloseOpenPopover();
-
-  const built = activeRiBuildPopover(column);
-  document.body.appendChild(built.el);
-  activeRiOpenPopover = built;
-  activeRiPositionPopover(built.el, anchor);
-  anchor.setAttribute('aria-expanded', 'true');
-
-  if (!activeRiOutsideHandler) {
-    activeRiOutsideHandler = (e: MouseEvent): void => {
-      if (!activeRiOpenPopover) return;
-      const target = e.target as Node | null;
-      if (!target) return;
-      if (activeRiOpenPopover.el.contains(target)) return;
-      if (target instanceof Element && target.closest('.column-filter-btn')) return;
-      activeRiCloseOpenPopover();
-    };
-    document.addEventListener('mousedown', activeRiOutsideHandler);
-  }
-  if (!activeRiEscHandler) {
-    activeRiEscHandler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') activeRiCloseOpenPopover();
-    };
-    document.addEventListener('keydown', activeRiEscHandler);
-  }
-
-  const firstFocusable = built.input
-    ?? built.el.querySelector<HTMLInputElement>('input[type="checkbox"]');
-  firstFocusable?.focus();
+  openColumnFilterPopover({
+    scope: ACTIVE_RI_POPOVER_SCOPE,
+    column,
+    label: activeRiLabelFor(column),
+    kind: ACTIVE_RI_NUMERIC_COLUMNS.has(column) ? 'numeric' : 'categorical',
+    placeholder: 'e.g. >50, 10..20, 4',
+    distinctValues: sortedDistinctValues(currentRIs, (ri) => activeRiCategoricalCellValue(ri, column)),
+    getFilter: () => state.getActiveRiColumnFilters()[column],
+    onCommit: (filter) => {
+      state.setActiveRiColumnFilter(column, filter);
+      rerenderRIs();
+    },
+    findTrigger: () => activeRiTrigger(column),
+  }, anchor);
 }
 
 // ── Reshape recommendations popover ──────────────────────────────────────
 
-interface RiexPopoverState {
-  column: state.RiExchangeColumnId;
-  el: HTMLDivElement;
-  checkboxes: Map<string, HTMLInputElement>;
-  input: HTMLInputElement | null;
-  errorEl: HTMLElement | null;
-}
-
-let riexOpenPopover: RiexPopoverState | null = null;
-let riexOutsideHandler: ((e: MouseEvent) => void) | null = null;
-let riexEscHandler: ((e: KeyboardEvent) => void) | null = null;
+const RIEX_POPOVER_SCOPE = 'riex';
 
 function riexLabelFor(col: state.RiExchangeColumnId): string {
   return RIEX_COLUMN_DEFS.find((c) => c.key === col)?.label ?? col;
 }
 
-function riexDistinctValues(
-  recs: readonly import('./api').ReshapeRecommendation[],
-  col: state.RiExchangeColumnId,
-): string[] {
-  const seen = new Set<string>();
-  for (const r of recs) seen.add(riexCategoricalCellValue(r, col));
-  return Array.from(seen).sort((a, b) => {
-    if (a === '' && b !== '') return -1;
-    if (a !== '' && b === '') return 1;
-    return a.localeCompare(b);
-  });
-}
-
-function riexPositionPopover(popover: HTMLElement, anchor: HTMLElement): void {
-  const rect = anchor.getBoundingClientRect();
-  popover.style.display = 'block';
-  const popRect = popover.getBoundingClientRect();
-  const margin = 8;
-  let top = rect.bottom + 4;
-  if (top + popRect.height > window.innerHeight - margin) {
-    top = Math.max(margin, rect.top - popRect.height - 4);
-  }
-  let left = rect.left;
-  if (left + popRect.width > window.innerWidth - margin) {
-    left = Math.max(margin, window.innerWidth - margin - popRect.width);
-  }
-  popover.style.position = 'absolute';
-  popover.style.top = `${top + window.scrollY}px`;
-  popover.style.left = `${left + window.scrollX}px`;
-}
-
-function riexBuildPopover(
-  column: state.RiExchangeColumnId,
-  recs: readonly import('./api').ReshapeRecommendation[],
-): RiexPopoverState {
-  const popover = document.createElement('div');
-  popover.className = 'column-filter-popover';
-  popover.setAttribute('role', 'dialog');
-  popover.setAttribute('aria-modal', 'false');
-
-  const headingId = `riex-column-filter-heading-${column}`;
-  popover.setAttribute('aria-labelledby', headingId);
-
-  const heading = document.createElement('h3');
-  heading.id = headingId;
-  heading.className = 'column-filter-heading';
-  heading.textContent = `Filter ${riexLabelFor(column)}`;
-  popover.appendChild(heading);
-
-  const checkboxes = new Map<string, HTMLInputElement>();
-  let input: HTMLInputElement | null = null;
-  let errorEl: HTMLElement | null = null;
-  let commitAllRef: ((target: boolean) => void) | null = null;
-
-  if (RIEX_NUMERIC_COLUMNS.has(column)) {
-    const label = document.createElement('label');
-    label.className = 'column-filter-numeric-label';
-    label.textContent = 'Expression';
-    input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'column-filter-numeric-input';
-    input.placeholder = 'e.g. >50, 70..95, 1';
-    input.setAttribute('aria-describedby', `riex-column-filter-error-${column}`);
-    const current = state.getRiExchangeColumnFilters()[column];
-    if (current && current.kind === 'expr') input.value = current.expr;
-    label.appendChild(input);
-    popover.appendChild(label);
-
-    errorEl = document.createElement('div');
-    errorEl.id = `riex-column-filter-error-${column}`;
-    errorEl.className = 'column-filter-error';
-    errorEl.setAttribute('role', 'status');
-    popover.appendChild(errorEl);
-
-    const commit = (): void => {
-      const expr = input!.value.trim();
-      if (expr === '') {
-        state.setRiExchangeColumnFilter(column, null);
-        errorEl!.textContent = '';
-        rerenderReshape();
-        return;
-      }
-      const parsed = parseNumericFilter(expr);
-      if (!parsed.ok) {
-        errorEl!.textContent = parsed.error;
-        return;
-      }
-      errorEl!.textContent = '';
-      state.setRiExchangeColumnFilter(column, { kind: 'expr', expr });
-      rerenderReshape();
-    };
-    input.addEventListener('blur', commit);
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        commit();
-      }
-    });
-  } else {
-    const distinct = riexDistinctValues(recs, column);
-    const current = state.getRiExchangeColumnFilters()[column];
-    const activeSet: ReadonlySet<string> | null =
-      current && current.kind === 'set' ? new Set(current.values) : null;
-
-    const allLabel = document.createElement('label');
-    allLabel.className = 'column-filter-all';
-    const allBox = document.createElement('input');
-    allBox.type = 'checkbox';
-    allBox.dataset['role'] = 'all';
-    allLabel.appendChild(allBox);
-    const allText = document.createElement('span');
-    allText.textContent = '(All)';
-    allLabel.appendChild(allText);
-    popover.appendChild(allLabel);
-
-    const list = document.createElement('div');
-    list.className = 'column-filter-list';
-    for (const value of distinct) {
-      const itemLabel = document.createElement('label');
-      itemLabel.className = 'column-filter-item';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.dataset['value'] = value;
-      cb.checked = activeSet === null ? true : activeSet.has(value);
-      itemLabel.appendChild(cb);
-      const text = document.createElement('span');
-      text.textContent = value === '' ? '(empty)' : value;
-      itemLabel.appendChild(text);
-      list.appendChild(itemLabel);
-      checkboxes.set(value, cb);
-    }
-    popover.appendChild(list);
-
-    const updateAllTriState = (): void => {
-      const total = checkboxes.size;
-      let checked = 0;
-      checkboxes.forEach((cb) => { if (cb.checked) checked++; });
-      allBox.indeterminate = checked > 0 && checked < total;
-      allBox.checked = checked === total && total > 0;
-    };
-    updateAllTriState();
-
-    const commit = (): void => {
-      const selected: string[] = [];
-      checkboxes.forEach((cb, value) => { if (cb.checked) selected.push(value); });
-      if (selected.length === checkboxes.size) {
-        state.setRiExchangeColumnFilter(column, null);
-      } else {
-        state.setRiExchangeColumnFilter(column, { kind: 'set', values: selected });
-      }
-      updateAllTriState();
-      rerenderReshape();
-    };
-
-    const commitAll = (target: boolean): void => {
-      checkboxes.forEach((cb) => { cb.checked = target; });
-      if (target) {
-        state.setRiExchangeColumnFilter(column, null);
-      } else {
-        state.setRiExchangeColumnFilter(column, { kind: 'set', values: [] });
-      }
-      updateAllTriState();
-      rerenderReshape();
-    };
-    commitAllRef = commitAll;
-
-    checkboxes.forEach((cb) => { cb.addEventListener('change', commit); });
-    allBox.addEventListener('change', () => { commitAll(allBox.checked); });
-  }
-
-  const footer = document.createElement('div');
-  footer.className = 'column-filter-footer';
-  const clearBtn = document.createElement('button');
-  clearBtn.type = 'button';
-  clearBtn.className = 'column-filter-clear';
-  clearBtn.textContent = 'Clear';
-  clearBtn.addEventListener('click', () => {
-    if (input) {
-      state.setRiExchangeColumnFilter(column, null);
-      input.value = '';
-      if (errorEl) errorEl.textContent = '';
-      rerenderReshape();
-    } else {
-      commitAllRef?.(false);
-    }
-  });
-  footer.appendChild(clearBtn);
-  popover.appendChild(footer);
-
-  return { column, el: popover, checkboxes, input, errorEl };
-}
-
-function riexCloseOpenPopover(): void {
-  if (!riexOpenPopover) return;
-  const { column, el } = riexOpenPopover;
-  el.remove();
-  riexOpenPopover = null;
-  if (riexOutsideHandler) {
-    document.removeEventListener('mousedown', riexOutsideHandler);
-    riexOutsideHandler = null;
-  }
-  if (riexEscHandler) {
-    document.removeEventListener('keydown', riexEscHandler);
-    riexEscHandler = null;
-  }
-  const trigger = document.querySelector<HTMLButtonElement>(
+function riexTrigger(column: state.RiExchangeColumnId): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>(
     `#ri-exchange-recommendations-list .column-filter-btn[data-column="${column}"]`,
   );
-  if (trigger) trigger.setAttribute('aria-expanded', 'false');
 }
 
 function riexOpenPopoverFor(column: state.RiExchangeColumnId, anchor: HTMLElement): void {
-  if (riexOpenPopover && !riexOpenPopover.el.isConnected) {
-    riexCloseOpenPopover();
-  }
-  if (riexOpenPopover && riexOpenPopover.column === column) {
-    riexCloseOpenPopover();
-    return;
-  }
-  if (riexOpenPopover) riexCloseOpenPopover();
-
-  const built = riexBuildPopover(column, currentRecommendations);
-  document.body.appendChild(built.el);
-  riexOpenPopover = built;
-  riexPositionPopover(built.el, anchor);
-  anchor.setAttribute('aria-expanded', 'true');
-
-  if (!riexOutsideHandler) {
-    riexOutsideHandler = (e: MouseEvent): void => {
-      if (!riexOpenPopover) return;
-      const target = e.target as Node | null;
-      if (!target) return;
-      if (riexOpenPopover.el.contains(target)) return;
-      if (target instanceof Element && target.closest('.column-filter-btn')) return;
-      riexCloseOpenPopover();
-    };
-    document.addEventListener('mousedown', riexOutsideHandler);
-  }
-  if (!riexEscHandler) {
-    riexEscHandler = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') riexCloseOpenPopover();
-    };
-    document.addEventListener('keydown', riexEscHandler);
-  }
-
-  const firstFocusable = built.input
-    ?? built.el.querySelector<HTMLInputElement>('input[type="checkbox"]');
-  firstFocusable?.focus();
+  openColumnFilterPopover({
+    scope: RIEX_POPOVER_SCOPE,
+    column,
+    label: riexLabelFor(column),
+    kind: RIEX_NUMERIC_COLUMNS.has(column) ? 'numeric' : 'categorical',
+    placeholder: 'e.g. >50, 70..95, 1',
+    distinctValues: sortedDistinctValues(currentRecommendations, (r) => riexCategoricalCellValue(r, column)),
+    getFilter: () => state.getRiExchangeColumnFilters()[column],
+    onCommit: (filter) => {
+      state.setRiExchangeColumnFilter(column, filter);
+      rerenderReshape();
+    },
+    findTrigger: () => riexTrigger(column),
+  }, anchor);
 }
 
 function rerenderReshape(): void {
@@ -1384,9 +914,16 @@ function renderRecommendations(container: HTMLElement): void {
 
   // Render an indexable list so per-row Exchange buttons can find the
   // matching original recommendation (idx into currentRecommendations).
+  // Index the full list once instead of an indexOf scan per visible row,
+  // which made the row build quadratic (#319). The first index wins, as
+  // with indexOf.
+  const indexByRec = new Map<ReshapeRecommendation, number>();
+  currentRecommendations.forEach((rec, i) => {
+    if (!indexByRec.has(rec)) indexByRec.set(rec, i);
+  });
   const visibleWithIdx = visible.map((rec) => ({
     rec,
-    idx: currentRecommendations.indexOf(rec),
+    idx: indexByRec.get(rec) ?? -1,
   }));
 
   container.innerHTML = `
@@ -1405,7 +942,14 @@ function renderRecommendations(container: HTMLElement): void {
       </thead>
       <tbody>
         ${visibleWithIdx.map(({ rec, idx }) => {
-          const utilClass = rec.utilization_percent >= 95 ? 'util-green' : rec.utilization_percent >= 70 ? 'util-yellow' : 'util-red';
+          // The API can omit utilization_percent (the filter extractor
+          // already maps it to NaN). Unknown renders as a neutral em-dash:
+          // calling toFixed on it threw and left the panel on its skeleton,
+          // and undefined >= 70 is false, which painted unknown as red.
+          const utilPct = typeof rec.utilization_percent === 'number' && Number.isFinite(rec.utilization_percent)
+            ? rec.utilization_percent
+            : null;
+          const utilClass = utilPct === null ? '' : utilPct >= 95 ? 'util-green' : utilPct >= 70 ? 'util-yellow' : 'util-red';
           const altCell = renderAlternativesCell(rec.alternative_targets);
           return `
           <tr>
@@ -1413,7 +957,7 @@ function renderRecommendations(container: HTMLElement): void {
             <td>${rec.source_count}x ${escapeHtml(rec.source_instance_type)}</td>
             <td>${rec.target_count}x ${escapeHtml(rec.target_instance_type)}</td>
             <td>${altCell}</td>
-            <td class="${utilClass}">${rec.utilization_percent.toFixed(1)}%</td>
+            <td class="${utilClass}">${utilPct === null ? '—' : `${utilPct.toFixed(1)}%`}</td>
             <td>${rec.normalized_used.toFixed(1)} / ${rec.normalized_purchased.toFixed(1)}</td>
             <td>${escapeHtml(rec.reason)}</td>
             ${canExchange ? `<td>
@@ -1437,6 +981,8 @@ function renderRecommendations(container: HTMLElement): void {
       riexOpenPopoverFor(column, btn);
     });
   });
+  // Keep an open filter popover attached to the re-rendered trigger.
+  rebindColumnFilterPopover(RIEX_POPOVER_SCOPE);
 
   // Attach "Exchange" handlers. Same as renderRIsTable: for non-admin
   // sessions the selector matches zero elements and this loop is a no-op.
@@ -1449,17 +995,32 @@ function renderRecommendations(container: HTMLElement): void {
   });
 }
 
+// currencyPrefix is the prefix formatCurrency puts before an amount in
+// `code`. USD keeps the app-wide "$"; any other ISO-4217 code is shown
+// as "EUR " so a non-USD price is never read as dollars (issue #284). An
+// absent code keeps "$": exchanges are USD-only end to end (the backend
+// refuses non-USD quotes), so a missing code is a USD offering.
+export function currencyPrefix(code: string | undefined): string {
+  const c = code?.trim().toUpperCase();
+  return !c || c === 'USD' ? '$' : `${c} `;
+}
+
+// formatOfferingCost renders an offering's monthly cost in its own currency.
+function formatOfferingCost(alt: OfferingOption, cost: number = alt.effective_monthly_cost): string {
+  return formatCurrency(cost, currencyPrefix(alt.currency_code), 2);
+}
+
 // renderAlternativesCell formats the cross-family alternative targets
 // as a comma-separated list of "<instance_type> $X.XX/mo" chips inside
 // a single table cell. Each instance_type is escapeHtml'd; cost values
-// go through the shared formatCurrency helper (digits: 2) so there's
-// no HTML injection vector through this helper.
+// go through the shared formatCurrency helper (digits: 2) and the
+// currency prefix is escaped too, so there's no HTML injection vector.
 function renderAlternativesCell(alternatives: OfferingOption[] | undefined): string {
   if (!alternatives || alternatives.length === 0) {
     return '—';
   }
   return alternatives
-    .map((alt) => `<span class="cost-chip">${escapeHtml(alt.instance_type)} ${formatCurrency(alt.effective_monthly_cost, '$', 2)}/mo</span>`)
+    .map((alt) => `<span class="cost-chip">${escapeHtml(alt.instance_type)} ${escapeHtml(formatOfferingCost(alt))}/mo</span>`)
     .join(' ');
 }
 
@@ -1512,7 +1073,6 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
   let modalQuoteReq: QuoteReqShape | null = null;
   let quoteRevision = 0;
   let sessionOpen = true;
-  let closeTimer: ReturnType<typeof setTimeout> | undefined;
 
   // Build header
   const h3 = document.createElement('h3');
@@ -1596,7 +1156,7 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
       for (const alt of alternativeTargets) {
         const opt = document.createElement('option');
         opt.value = alt.offering_id;
-        const costStr = formatCurrency(alt.effective_monthly_cost, '$', 2);
+        const costStr = formatOfferingCost(alt);
         opt.textContent = escapeHtml(alt.instance_type) + ' -- ' + costStr + '/mo';
         if (initialOfferingId && alt.offering_id === initialOfferingId) {
           opt.selected = true;
@@ -1699,17 +1259,16 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     updateRowChip(offeringInput.value, chipEl);
   };
 
-  // lookupCECost returns the per-instance monthly cost for an offering_id
-  // that appears in alternativeTargets, or undefined when absent.
-  function lookupCECost(offeringId: string): number | undefined {
+  // lookupCEAlt returns the alternativeTargets entry (cost and currency)
+  // for an offering_id, or undefined when absent.
+  function lookupCEAlt(offeringId: string): OfferingOption | undefined {
     if (!alternativeTargets || !offeringId) return undefined;
-    const hit = alternativeTargets.find((a) => a.offering_id === offeringId);
-    return hit?.effective_monthly_cost;
+    return alternativeTargets.find((a) => a.offering_id === offeringId);
   }
 
   function updateRowChip(offeringId: string, chip: HTMLSpanElement): void {
-    const cost = lookupCECost(offeringId);
-    chip.textContent = cost !== undefined ? `${formatCurrency(cost, '$', 2)}/mo each` : '—';
+    const alt = lookupCEAlt(offeringId);
+    chip.textContent = alt ? `${formatOfferingCost(alt)}/mo each` : '—';
   }
 
   // Seed the modal with one row, optionally pre-selecting by offering_id.
@@ -1755,24 +1314,35 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     }
     let total = 0;
     let anyMissing = false;
+    const prefixes = new Set<string>();
     for (const row of targetRows) {
-      const cost = lookupCECost(row.offeringInput.value);
+      const alt = lookupCEAlt(row.offeringInput.value);
       const rawCount = parseInt(row.countInput.value, 10);
       const cnt = isNaN(rawCount) || rawCount < 1 ? 1 : rawCount;
-      if (cost === undefined) {
+      if (!alt) {
         anyMissing = true;
         continue;
       }
-      total += cost * cnt;
+      prefixes.add(currencyPrefix(alt.currency_code));
+      total += alt.effective_monthly_cost * cnt;
     }
+    if (prefixes.size > 1) {
+      // Adding amounts in different currencies would print a meaningless sum.
+      runningTotalEl.textContent = 'Estimated monthly cost for the quoted target set: not totaled -- targets are priced in different currencies';
+      return;
+    }
+    const [prefix = '$'] = prefixes;
     const suffix = anyMissing ? ' (incomplete -- some targets have no pricing data)' : '';
-    runningTotalEl.textContent = `Estimated monthly cost for the quoted target set: ${formatCurrency(total, '$', 2)}/mo${suffix}`;
+    runningTotalEl.textContent = `Estimated monthly cost for the quoted target set: ${formatCurrency(total, prefix, 2)}/mo${suffix}`;
   }
   updateRunningTotal();
 
-  // Result container
+  // Result container. A polite live region so quote results, progress and
+  // the exchange receipt are announced; setResultText marks errors as alerts.
   const resultContainer = document.createElement('div');
   resultContainer.id = 'modal-exchange-result';
+  resultContainer.setAttribute('role', 'status');
+  resultContainer.setAttribute('aria-live', 'polite');
   content.appendChild(resultContainer);
 
   // Execute button (hidden until valid quote)
@@ -1801,7 +1371,6 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
   openModal(modal, { onClose: () => {
     sessionOpen = false;
     invalidateQuote();
-    clearTimeout(closeTimer);
   } });
 
   cancelBtn.addEventListener('click', () => {
@@ -1826,6 +1395,19 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
   executeBtn.addEventListener('click', () => {
     void submitModalExecute();
   });
+
+  // lockCompletedExchange freezes the form after a successful exchange so
+  // no edit can clear the receipt (edits call invalidateQuote) and no second
+  // quote is offered for RIs that no longer exist. Cancel becomes Close.
+  function lockCompletedExchange(): void {
+    targetsContainer.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input, select, button')
+      .forEach((el) => { el.disabled = true; });
+    addTargetBtn.disabled = true;
+    executeBtn.classList.add('hidden');
+    quoteBtn.classList.add('hidden');
+    cancelBtn.textContent = 'Close';
+    cancelBtn.focus();
+  }
 
   // offeringUUIDPattern mirrors the backend regex for AWS offering UUIDs.
   const offeringUUIDPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -1945,15 +1527,21 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
         region: quote.Region,
       });
       void loadRIExchange();
+      // The toast is the receipt even if the modal was closed mid-request;
+      // the exchange ID also stays in the open modal until the user closes it.
+      showToast({
+        kind: 'success',
+        message: `RI exchange completed. Exchange ID: ${result.exchange_id}`,
+        actions: [{ label: 'View history', onClick: () => {
+          if (sessionOpen) closeModal(modal);
+          revealExchangeHistory();
+        } }],
+      });
       if (!sessionOpen) return;
       setResultText(resultContainer, 'Exchange completed. ID: ' + result.exchange_id, 'success-message');
-      executeBtn.classList.add('hidden');
       modalQuote = null;
       modalQuoteReq = null;
-
-      closeTimer = setTimeout(() => {
-        closeModal(modal);
-      }, 2000);
+      lockCompletedExchange();
     } catch (error) {
       if (!sessionOpen) return;
       const err = error as Error;
@@ -1964,6 +1552,16 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
       if (!confirmed) executeBtn.focus();
     }
   }
+}
+
+// revealExchangeHistory scrolls the Exchange History card into view and
+// moves focus to its list, where the completed exchange is listed.
+function revealExchangeHistory(): void {
+  const list = document.getElementById('ri-exchange-history-list');
+  if (!list) return;
+  list.tabIndex = -1;
+  (list.closest('section') ?? list).scrollIntoView({ block: 'start' });
+  list.focus({ preventScroll: true });
 }
 
 interface ExchangeConfirmParts {
@@ -1987,7 +1585,7 @@ function buildExchangeConfirmBody({ quote, sources, targets }: ExchangeConfirmPa
   line('Pay now', `${quote.CurrencyCode} ${quote.PaymentDueRaw}`);
   line('Exchange', sources.join(', '));
   line('For', targets.join(', '));
-  line('Region', quote.Region ?? '');
+  line('Region', quote.Region);
   const src = Number(quote.SourceHourlyPriceRaw);
   const tgt = Number(quote.TargetHourlyPriceRaw);
   if (quote.SourceHourlyPriceRaw && quote.TargetHourlyPriceRaw && Number.isFinite(src) && Number.isFinite(tgt)) {
@@ -2009,6 +1607,9 @@ function setResultText(container: HTMLElement, message: string, cls: string): vo
   container.textContent = '';
   const p = document.createElement('p');
   p.className = cls;
+  // Errors interrupt; progress and success are announced politely by the
+  // container's own role="status".
+  if (cls === 'error') p.setAttribute('role', 'alert');
   p.textContent = message;
   container.appendChild(p);
 }
@@ -2107,6 +1708,15 @@ function buildAutoWarningBanner(): HTMLDivElement {
   return banner;
 }
 
+/**
+ * Render a config number into a double-quoted value="..." attribute. The
+ * RIExchangeConfig number types are erased at runtime, so escape rather than
+ * trust them (issue #37); a missing field renders as an empty input.
+ */
+function numberAttr(value: number | null | undefined): string {
+  return escapeHtmlAttr(String(value ?? ''));
+}
+
 function renderAutomationSettings(container: HTMLElement, config: RIExchangeConfig): void {
   const modeOptions = Object.entries(MODE_LABELS)
     .map(([value, label]) => {
@@ -2116,7 +1726,7 @@ function renderAutomationSettings(container: HTMLElement, config: RIExchangeConf
     .join('');
 
   // Build the form via innerHTML since this is all developer-controlled markup
-  // (all dynamic values are escaped via escapeHtml or are numbers)
+  // (all dynamic values are escaped via escapeHtml / numberAttr)
   const formHTML = '<form id="ri-exchange-settings-form" class="settings-form">'
     + '<fieldset class="settings-category">'
     + '<legend>Exchange Automation</legend>'
@@ -2134,19 +1744,19 @@ function renderAutomationSettings(container: HTMLElement, config: RIExchangeConf
     + '</div>'
     + '<div class="setting-row">'
     +   '<div class="setting-info"><label for="ri-exchange-threshold">Utilization Threshold (%)</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-threshold" value="' + config.utilization_threshold + '" min="0" max="100" step="0.1"></div>'
+    +   '<div class="setting-input"><input type="number" id="ri-exchange-threshold" value="' + numberAttr(config.utilization_threshold) + '" min="0" max="100" step="0.1"></div>'
     + '</div>'
     + '<div class="setting-row">'
     +   '<div class="setting-info"><label for="ri-exchange-max-per-exchange">Max Payment Per Exchange (USD)</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-max-per-exchange" value="' + config.max_payment_per_exchange_usd + '" min="0" step="0.01"></div>'
+    +   '<div class="setting-input"><input type="number" id="ri-exchange-max-per-exchange" value="' + numberAttr(config.max_payment_per_exchange_usd) + '" min="0" step="0.01"></div>'
     + '</div>'
     + '<div class="setting-row">'
     +   '<div class="setting-info"><label for="ri-exchange-max-daily">Max Payment Daily (USD)</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-max-daily" value="' + config.max_payment_daily_usd + '" min="0" step="0.01"></div>'
+    +   '<div class="setting-input"><input type="number" id="ri-exchange-max-daily" value="' + numberAttr(config.max_payment_daily_usd) + '" min="0" step="0.01"></div>'
     + '</div>'
     + '<div class="setting-row">'
     +   '<div class="setting-info"><label for="ri-exchange-lookback">Lookback Days</label></div>'
-    +   '<div class="setting-input"><input type="number" id="ri-exchange-lookback" value="' + config.lookback_days + '" min="1" max="365"></div>'
+    +   '<div class="setting-input"><input type="number" id="ri-exchange-lookback" value="' + numberAttr(config.lookback_days) + '" min="1" max="365"></div>'
     + '</div>'
     + '</fieldset>'
     + '<div id="ri-exchange-settings-message" class="mt-3"></div>'
@@ -2382,7 +1992,9 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
       + '<td>' + escapeHtml(formatDateTime(rec.created_at)) + '</td>'
       + '<td>' + escapeHtml(String(rec.source_count)) + 'x ' + escapeHtml(rec.source_instance_type) + '</td>'
       + '<td>' + escapeHtml(String(rec.target_count)) + 'x ' + escapeHtml(rec.target_instance_type) + '</td>'
-      + '<td>$' + escapeHtml(rec.payment_due) + '</td>'
+      // payment_due is USD (the execute cap is max_payment_due_usd); an
+      // empty amount renders as a dash, not a lone "$" (issue #284).
+      + '<td>' + (rec.payment_due ? '$' + escapeHtml(rec.payment_due) : '&mdash;') + '</td>'
       + '<td><span class="' + getStatusBadgeClass(rec.status) + '">' + escapeHtml(rec.status) + '</span></td>'
       + '<td>' + exchangeIdCell + '</td>'
       + '<td>' + approveBtn + '</td>'

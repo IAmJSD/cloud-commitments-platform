@@ -67,6 +67,16 @@ export async function loadApiKeys(): Promise<void> {
  * failed fetch. Uses textContent (no innerHTML) to stay XSS-safe and
  * matches the patterns used by other modules (e.g. dashboard.ts).
  */
+/**
+ * ISO timestamp for a title attribute, or '' for an unparseable value:
+ * toISOString throws a RangeError on an Invalid Date, and that throw inside
+ * the row map blanked the whole keys table, Revoke buttons included (#136).
+ */
+function isoOrEmpty(value: string): string {
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? '' : d.toISOString();
+}
+
 function renderApiKeysListError(container: HTMLElement | null, message: string): void {
   if (!container) return;
   container.replaceChildren();
@@ -129,7 +139,7 @@ export function renderApiKeysList(): void {
               <td><code>${escapeHtml(key.key_prefix)}...</code></td>
               <td><span class="badge ${statusClass}">${statusText}</span></td>
               <td>${formatDateTime(key.created_at)}</td>
-              <td>${key.last_used_at ? `<span title="${escapeHtml(new Date(key.last_used_at).toISOString())}">${escapeHtml(formatRelativeTime(key.last_used_at))}</span>` : '<span class="text-muted">Never</span>'}</td>
+              <td>${key.last_used_at ? `<span title="${escapeHtml(isoOrEmpty(key.last_used_at))}">${escapeHtml(formatRelativeTime(key.last_used_at) || '--')}</span>` : '<span class="text-muted">Never</span>'}</td>
               <td class="apikeys-count-cell">${countWindow}</td>
               <td class="apikeys-count-cell">${countTotal}</td>
               <td>${key.expires_at ? formatDateTime(key.expires_at) : '<span class="text-muted">Never</span>'}</td>
@@ -432,6 +442,7 @@ export function showKeyCreatedModal(apiKey: string): void {
           <code id="apikey-value" class="apikey-value">${escapeHtml(apiKey)}</code>
           <button type="button" id="copy-apikey-btn" class="btn-small primary">Copy</button>
         </div>
+        <p id="apikey-copy-error" class="field-error hidden" role="alert"></p>
       </div>
       <div class="modal-info">
         <p>Use this key in the <code>X-API-Key</code> header when making API requests:</p>
@@ -451,6 +462,7 @@ export function showKeyCreatedModal(apiKey: string): void {
   if (copyBtn) {
     copyBtn.addEventListener('click', () => {
       navigator.clipboard.writeText(apiKey).then(() => {
+        document.getElementById('apikey-copy-error')?.classList.add('hidden');
         copyBtn.textContent = 'Copied!';
         copyBtn.classList.add('copied');
         setTimeout(() => {
@@ -459,7 +471,15 @@ export function showKeyCreatedModal(apiKey: string): void {
         }, 2000);
       }).catch(err => {
         console.error('Failed to copy:', err);
-        alert('Failed to copy to clipboard. Please copy manually.');
+        // Inline message instead of a native alert() (#705): select the key so
+        // Ctrl+C / Cmd+C copies it without leaving the modal.
+        const valueEl = document.getElementById('apikey-value');
+        if (valueEl) window.getSelection()?.selectAllChildren(valueEl);
+        const copyError = document.getElementById('apikey-copy-error');
+        if (copyError) {
+          copyError.textContent = 'Could not copy automatically. The key is selected: press Ctrl+C (Cmd+C on Mac) to copy it.';
+          copyError.classList.remove('hidden');
+        }
       });
     });
   }
