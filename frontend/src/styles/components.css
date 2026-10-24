@@ -69,7 +69,7 @@
  * center pattern feels alive. Matches the mock's elevated-card hover
  * treatment. transform-only (no layout shift) so the grid stays put. */
 .kpi-tile {
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    transition: transform var(--cudly-dur-fast) var(--cudly-ease), box-shadow var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .kpi-tile:hover {
@@ -124,7 +124,7 @@ button {
     color: var(--cudly-text);
     cursor: pointer;
     font-size: 0.875rem;
-    transition: background 0.2s, border-color 0.2s;
+    transition: background var(--cudly-dur) var(--cudly-ease), border-color var(--cudly-dur) var(--cudly-ease);
 }
 
 /* :where() keeps this at class-level specificity so component classes that
@@ -196,7 +196,7 @@ button.secondary:hover {
     color: var(--cudly-text);
     cursor: pointer;
     font-size: 0.875rem;
-    transition: background 0.2s, border-color 0.2s;
+    transition: background var(--cudly-dur) var(--cudly-ease), border-color var(--cudly-dur) var(--cudly-ease);
 }
 
 .btn:hover {
@@ -375,7 +375,7 @@ button.secondary:hover {
     font-size: 0.9rem;
     color: #222;
     animation: toast-enter 0.18s ease-out;
-    transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+    transition: opacity var(--cudly-dur-fast) var(--cudly-ease), transform var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .toast--leaving {
@@ -477,7 +477,7 @@ button.secondary:hover {
     padding: 1rem;
     margin-top: 1rem;
     border-top: 1px solid transparent;
-    transition: box-shadow 0.2s, border-color 0.2s;
+    transition: box-shadow var(--cudly-dur) var(--cudly-ease), border-color var(--cudly-dur) var(--cudly-ease);
 }
 
 .settings-savebar.dirty {
@@ -549,7 +549,7 @@ button.secondary:hover {
     gap: 0.5rem;
     line-height: 1.2;
     min-width: 100px;
-    transition: background 0.15s, border-color 0.15s;
+    transition: background var(--cudly-dur-fast) var(--cudly-ease), border-color var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .accounts-overview-chip:hover {
@@ -852,7 +852,7 @@ th .column-filter-btn.active {
     overflow-y: auto;
     z-index: 20;
     transform: translateX(100%);
-    transition: transform 0.2s ease;
+    transition: transform var(--cudly-dur) var(--cudly-ease);
 }
 .context-drawer.open {
     transform: translateX(0);
@@ -966,8 +966,8 @@ tr.recommendation-row:hover {
  * of duties). Reuses the accent border pattern from .self-account-banner
  * in settings.css. */
 .info-banner {
-    border-left: 3px solid var(--accent, #4a9eff);
-    background: var(--cudly-info-bg, #eaf4ff);
+    border-left: 3px solid var(--cudly-info);
+    background: var(--cudly-info-bg);
     padding: 0.5rem 0.75rem;
     margin-bottom: 0.75rem;
     border-radius: 0 4px 4px 0;
@@ -1005,7 +1005,7 @@ tr.rec-cell-summary-row:hover {
     align-items: center;
     justify-content: center;
     border-radius: 4px;
-    transition: background 0.15s, color 0.15s;
+    transition: background var(--cudly-dur-fast) var(--cudly-ease), color var(--cudly-dur-fast) var(--cudly-ease);
 }
 .rec-cell-chevron:hover,
 .rec-cell-chevron:focus-visible {
@@ -1101,6 +1101,24 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     gap: 0.5rem;
 }
 
+/* Account delete cascade (issue #734): the purchases "Cancel All N
+ * Pending + Delete" will cancel. Scrolls so a long backlog keeps the
+ * dialog's buttons on screen. */
+.account-delete-pending p {
+    margin: 0 0 0.5rem;
+}
+
+.account-delete-pending-list {
+    margin: 0 0 0.5rem;
+    padding-left: 1.25rem;
+    max-height: 14rem;
+    overflow-y: auto;
+}
+
+.account-delete-pending-total {
+    font-weight: 600;
+}
+
 /* Approval-details modal (issue #374): when the confirmDialog body
  * carries an .approval-details element, widen the dialog so the 12-col
  * per-rec table can breathe. The selector targets the parent modal via
@@ -1119,10 +1137,12 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 
 .approval-details-header {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    /* At most four stats per row, so the eight stats sit in two even rows
+       instead of seven plus an orphan; fewer per row on narrow screens. */
+    grid-template-columns: repeat(auto-fit, minmax(max(120px, calc(25% - 1rem)), 1fr));
     gap: 0.5rem 1rem;
     padding: 0.75rem 1rem;
-    background: var(--cudly-surface-2, #f6f8fa);
+    background: var(--cudly-surface-muted);
     border: 1px solid var(--cudly-border, #e1e4e8);
     border-radius: 6px;
 }
@@ -1170,7 +1190,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 .approval-details-table thead th {
     position: sticky;
     top: 0;
-    background: var(--cudly-surface-2, #f6f8fa);
+    background: var(--cudly-surface-muted);
     font-weight: 600;
     color: var(--cudly-text-muted, #444);
     font-size: 0.78rem;
@@ -1260,7 +1280,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     background: #f0f2f5;
     color: var(--cudly-text);
     font-size: 0.78rem;
-    font-family: var(--mono-font, ui-monospace, monospace);
+    font-family: var(--cudly-font-mono);
 }
 
 /* Running total under the modal's target rows. Muted emphasis — this
@@ -1289,6 +1309,12 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     gap: 0.4rem;
     font-size: 0.85rem;
     color: var(--cudly-text-muted);
+}
+
+/* Issue #191: inline "AWS only" scope hint beside the lookback select. */
+.lookback-scope-hint {
+    font-size: var(--cudly-fs-xs);
+    font-style: italic;
 }
 
 .info-icon {
@@ -1449,6 +1475,18 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     font-weight: 600;
 }
 
+/* Upfront Cost cell when the amortize toggle folds the upfront into the
+ * Monthly Cost column (#318): muted so the two are not read as additive.
+ */
+.upfront-in-monthly {
+    color: var(--cudly-text-muted);
+}
+
+.upfront-in-monthly-note {
+    font-size: 0.78rem;
+    line-height: 1.25;
+}
+
 /* Purchase detail status badges */
 .status-badge.completed {
     background: var(--cudly-success-bg);
@@ -1477,7 +1515,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     cursor: pointer;
     padding: 0.25rem;
     border-radius: 4px;
-    transition: background 0.2s;
+    transition: background var(--cudly-dur) var(--cudly-ease);
 }
 
 .copy-btn:hover {
@@ -1595,7 +1633,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     color: var(--cudly-text);
     font-size: var(--cudly-fs-sm);
     cursor: pointer;
-    transition: border-color 0.15s, box-shadow 0.15s, background-color 0.15s;
+    transition: border-color var(--cudly-dur-fast) var(--cudly-ease), box-shadow var(--cudly-dur-fast) var(--cudly-ease), background-color var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .chip-select:hover {
@@ -1622,7 +1660,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 }
 
 .chip-select-caret {
-    transition: transform 0.15s ease;
+    transition: transform var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .chip-select[aria-expanded="true"] .chip-select-caret {
@@ -1729,7 +1767,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     padding: var(--cudly-sp-3);
     border-radius: var(--cudly-r-md);
     border: 1px solid var(--cudly-border);
-    background: var(--cudly-bg-elevated, white);
+    background: var(--cudly-surface);
 }
 
 .apikeys-usage-tile-label {
