@@ -539,7 +539,7 @@
  * fan-out modal stays open; submitted buckets are dimmed and locked, failed
  * ones are flagged with their reason and are the only ones a retry sends. */
 .fanout-bucket-result {
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     margin: 0.25rem 0;
 }
 
