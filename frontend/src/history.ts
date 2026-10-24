@@ -5,6 +5,7 @@
 import * as api from './api';
 import * as state from './state';
 import { formatCurrency, formatDate, formatTerm, escapeHtml, escapeHtmlAttr, amortizedMonthly } from './utils';
+import { historyConfirmBody } from './history-confirm-body';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import type { RevokeQuote } from './api';
 import { switchTab } from './navigation';
@@ -845,6 +846,11 @@ function sameRowActions(btn: HTMLButtonElement): HTMLButtonElement[] {
   );
 }
 
+/** The loaded History or Approval queue row for an execution ID. */
+function findHistoryRow(id: string): HistoryPurchase | undefined {
+  return lastPurchases.find(p => p.purchase_id === id) ?? lastPendingForQueue.find(p => p.purchase_id === id);
+}
+
 async function runHistoryRowAction(
   btn: HTMLButtonElement,
   id: string,
@@ -1378,7 +1384,8 @@ function wireRowActionHandlers(container: HTMLElement): void {
     btn.addEventListener('click', () => runHistoryRowAction(btn, id, async markMutationSucceeded => {
       const ok = await confirmDialog({
         title: 'Cancel this pending purchase?',
-        body: 'This will permanently abort the approval flow. The pending email approval link will stop working. This action cannot be undone.',
+        // Issue #728: name the purchase so the right row is confirmed.
+        body: historyConfirmBody(findHistoryRow(id), 'This will permanently abort the approval flow. The pending email approval link will stop working. This action cannot be undone.'),
         confirmLabel: 'Cancel purchase',
         destructive: true,
       });
@@ -1410,9 +1417,9 @@ function wireRowActionHandlers(container: HTMLElement): void {
       const overThreshold = btn.classList.contains('history-retry-over-threshold');
       const ok = await confirmDialog({
         title: overThreshold ? 'Retry past threshold?' : 'Retry this failed purchase?',
-        body: overThreshold
+        body: historyConfirmBody(findHistoryRow(id), overThreshold
           ? 'The same recommendations have already failed multiple times. Are you sure you want to retry again? This may not succeed.'
-          : 'This will create a new purchase execution from the same recommendations. The original failed row will be linked to the new attempt.',
+          : 'This will create a new purchase execution from the same recommendations. The original failed row will be linked to the new attempt.'),
         confirmLabel: overThreshold ? 'Retry anyway' : 'Retry purchase',
         destructive: false,
       });

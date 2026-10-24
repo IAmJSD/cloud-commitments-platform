@@ -353,6 +353,23 @@ describe('History inline Retry button (issue #47)', () => {
     expect(api.retryPurchase).not.toHaveBeenCalled();
   });
 
+  test('confirm names the purchase being retried (issue #728)', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (confirmDialog as jest.Mock).mockResolvedValue(false);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: 'r-1', service: 'rds', resource_type: 'db.r5.large', count: 2, created_by_user_id: ADMIN_USER.id })],
+    });
+
+    await loadHistory();
+    document.querySelector<HTMLButtonElement>('.history-retry-btn')!.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const body = (confirmDialog as jest.Mock).mock.calls[0][0].body as HTMLElement;
+    expect(body.querySelector('.history-confirm-summary strong')?.textContent).toBe('AWS rds db.r5.large × 2 in us-east-1');
+    expect(body.textContent).toContain('This will create a new purchase execution');
+  });
+
   test('accepted confirm posts retry + reloads + success toast when email_sent is true', async () => {
     (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
     (confirmDialog as jest.Mock).mockResolvedValue(true);

@@ -254,6 +254,27 @@ describe('History inline Cancel button (issue #46)', () => {
     expect(api.cancelPurchase).not.toHaveBeenCalled();
   });
 
+  test('confirm names the purchase being cancelled (issue #728)', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (confirmDialog as jest.Mock).mockResolvedValue(false);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({ purchase_id: 'exec-1', created_by_user_id: ADMIN_USER.id }),
+        makeRow({ purchase_id: 'exec-2', resource_type: 'm5.xlarge', count: 3, region: 'eu-west-1', upfront_cost: 4200, created_by_user_id: ADMIN_USER.id }),
+      ],
+    });
+
+    await loadHistory();
+    document.querySelector<HTMLButtonElement>('.history-cancel-btn[data-cancel-id="exec-2"]')!.click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    const body = (confirmDialog as jest.Mock).mock.calls[0][0].body as HTMLElement;
+    expect(body.querySelector('.history-confirm-summary strong')?.textContent).toBe('AWS ec2 m5.xlarge × 3 in eu-west-1');
+    expect(body.textContent).toContain('Upfront: $4200');
+    expect(body.textContent).toContain('The pending email approval link will stop working.');
+  });
+
   test('accepted confirm posts cancel + reloads + toasts', async () => {
     (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
     (confirmDialog as jest.Mock).mockResolvedValue(true);
