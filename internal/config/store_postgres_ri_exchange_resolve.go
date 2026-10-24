@@ -184,11 +184,20 @@ func checkRIExchangeCloudCheck(c RIExchangeCloudCheck, row riExchangeResolveRow)
 		return fmt.Errorf("%w: checked_region is not the exchange's region", ErrRIExchangeResolveInvalid)
 	case c.CheckedAt.After(row.dbNow):
 		return fmt.Errorf("%w: checked_at is in the future", ErrRIExchangeResolveInvalid)
-	case !c.CheckedAt.After(row.updatedAt):
+	case !checkPostdatesDBTime(c.CheckedAt, row.updatedAt):
 		return fmt.Errorf("%w: checked_at must be after the exchange's last change at %s",
 			ErrRIExchangeResolveInvalid, row.updatedAt.UTC().Format(time.RFC3339))
 	}
 	return nil
+}
+
+// checkPostdatesDBTime reports whether an operator's check time is strictly
+// after last, a timestamp read back from Postgres. Postgres keeps microseconds,
+// so the check is compared at that precision too: a check taken within the
+// same microsecond as the change cannot be ordered after it, and comparing the
+// raw nanoseconds would let it through.
+func checkPostdatesDBTime(checked, last time.Time) bool {
+	return checked.Truncate(time.Microsecond).After(last)
 }
 
 // applyRIExchangeResolve writes the outcome. completed keeps payment_due (the

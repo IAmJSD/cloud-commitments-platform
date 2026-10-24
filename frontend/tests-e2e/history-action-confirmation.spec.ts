@@ -58,7 +58,9 @@ for (const action of actions) {
     const pageErrors: string[] = [];
     page.on('pageerror', error => pageErrors.push(error.message));
     await page.goto('/purchases/history');
-    const btn = page.locator(`#history-list .history-${action}-btn`);
+    // Approve / Cancel live only in the Approval queue (issue #183).
+    const scope = action === 'approve' || action === 'cancel' ? '#purchases-approval-queue' : '#history-list';
+    const btn = page.locator(`${scope} .history-${action}-btn`);
     await btn.click();
     await expect(page.locator('.modal-confirm-backdrop')).toHaveCount(1);
     await expect(btn).toBeDisabled();
@@ -94,7 +96,7 @@ for (const action of actions) {
   });
 }
 
-test('actual double-click and second projection cannot duplicate pending approval details', async ({ page }) => {
+test('actual double-click cannot duplicate pending approval details', async ({ page }) => {
   const fixture = await historyFixture(page, 'approve');
   const details = gate();
   let detailGets = 0;
@@ -104,11 +106,10 @@ test('actual double-click and second projection cannot duplicate pending approva
     await route.fulfill({ json: DETAILS });
   });
   await page.goto('/purchases/history');
-  const btn = page.locator('#history-list .history-approve-btn');
+  const btn = page.locator('#purchases-approval-queue .history-approve-btn');
   await btn.dblclick();
   await expect(btn).toBeDisabled();
-  await expect(page.locator('#history-list .history-cancel-btn')).toBeDisabled();
-  await page.locator('#purchases-approval-queue .history-approve-btn').click();
+  await expect(page.locator('#purchases-approval-queue .history-cancel-btn')).toBeDisabled();
   details.release();
   await expect(page.locator('.modal-confirm-backdrop')).toHaveCount(1);
   expect(detailGets).toBe(1);
@@ -126,7 +127,7 @@ test('approve is not offered when the purchase details cannot be loaded (issue #
       : route.fulfill({ json: DETAILS });
   });
   await page.goto('/purchases/history');
-  const btn = page.locator('#history-list .history-approve-btn');
+  const btn = page.locator('#purchases-approval-queue .history-approve-btn');
   await btn.click();
   await expect(page.getByRole('alert')).toContainText('cannot be approved without showing the amount');
   await expect(page.locator('.modal-confirm-backdrop')).toHaveCount(0);
@@ -161,7 +162,7 @@ test('canceling an independent row does not steal focus from another confirmatio
     await route.fulfill({ json: DETAILS });
   });
   await page.goto('/purchases/history');
-  const buttons = page.locator('#history-list .history-approve-btn');
+  const buttons = page.locator('#purchases-approval-queue .history-approve-btn');
   await buttons.nth(0).click();
   await buttons.nth(1).click();
   details.release();
@@ -192,12 +193,12 @@ test('success survives failed refresh, cached redraw and old GET; fresh same-ID 
     } else await route.fulfill({ json: { summary: {}, purchases: [fixture.row] } });
   });
   await page.goto('/purchases/history');
-  await expect(page.locator('.history-approve-btn')).toHaveCount(2);
+  await expect(page.locator('.history-approve-btn')).toHaveCount(1);
   holdNext = true;
   await page.getByRole('button', { name: 'Load History', exact: true }).click();
   await expect.poll(() => held).toBe(true);
   await page.locator('#history-amortize-checkbox').check();
-  await page.locator('#history-list .history-approve-btn').click();
+  await page.locator('#purchases-approval-queue .history-approve-btn').click();
   failHistory = true;
   await expect(page.locator('.modal-confirm-backdrop')).toHaveCount(1);
   await page.locator('.modal-confirm-actions button').last().click();
