@@ -368,6 +368,7 @@ body.sidebar-open {
  * that edge out, so the clipped column reads as "more this way". The fade is
  * a mask on the scroller's own box, so cell and row backgrounds cannot cover
  * it; the extra mask layers keep any scrollbar at full opacity. */
+:root { --scroll-hint-sb-w: 0px; --scroll-hint-sb-h: 0px; }
 .scroll-hint-left,
 .scroll-hint-right {
     --scroll-hint-l: #000;

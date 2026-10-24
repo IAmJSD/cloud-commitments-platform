@@ -6,6 +6,8 @@
  * the action box) is covered by tests-e2e/table-scroll-affordance.spec.ts.
  */
 
+import fs from 'fs';
+import path from 'path';
 import {
   HINT_LEFT,
   HINT_RIGHT,
@@ -245,4 +247,19 @@ describe('keepFocusClear', () => {
     keepFocusClear(outside);
     expect(scrollBy).not.toHaveBeenCalled();
   });
+});
+
+test('every custom property the module sets has a stylesheet default', () => {
+  // The stylesheets read these with var(); a CSS default keeps them defined
+  // before the first measurement and for the custom-property lint (#745).
+  const src = path.join(__dirname, '..');
+  const source = fs.readFileSync(path.join(src, 'lib', 'table-scroll.ts'), 'utf8');
+  const set = [...source.matchAll(/setVar\([^,]+,\s*'(--[\w-]+)'/g)].map((m) => m[1]!);
+  expect(set.sort()).toEqual(['--action-box-offset', '--scroll-hint-sb-h', '--scroll-hint-sb-w']);
+  const stylesDir = path.join(src, 'styles');
+  const css = fs.readdirSync(stylesDir)
+    .filter((f) => f.endsWith('.css'))
+    .map((f) => fs.readFileSync(path.join(stylesDir, f), 'utf8'))
+    .join('\n');
+  expect(set.filter((name) => !new RegExp(`:root\\s*\\{[^}]*${name}\\s*:`).test(css))).toEqual([]);
 });

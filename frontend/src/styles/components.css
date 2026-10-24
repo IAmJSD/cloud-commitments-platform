@@ -810,7 +810,7 @@ th .column-filter-btn.active {
  * up the design tokens so colors + spacing + radii sit in the same
  * visual family as the rest of the action-center reskin. Drawer is
  * tracked as a deferred sub-task in #340. */
-:root { --action-box-height: 80px; }
+:root { --action-box-height: 80px; --action-box-offset: var(--action-box-height); }
 .recommendations-action-box {
     position: sticky;
     bottom: 0;
