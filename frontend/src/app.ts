@@ -20,6 +20,7 @@ import { formatPaymentAdjustmentNotice } from './commitmentOptions';
 import { confirmDialog } from './confirmDialog';
 import { buildCommitmentSummary, commitmentLine, commitmentTotals, executeButtonLabel, executeConfirmLabel, withIntro } from './commitmentSummary';
 import { handlePurchaseDeeplink } from './purchases-deeplink';
+import { handleRIExchangeDeeplink } from './riexchange-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
 
@@ -133,6 +134,10 @@ export async function init(): Promise<void> {
     // through so the user lands on the Purchases tab with their action's
     // outcome rendered as a toast.
     await handlePurchaseDeeplink();
+    // Same one-shot pattern for the RI-exchange approval email's
+    // /inventory/ri-exchange/{approve,reject}/:id?token=… links (#579): confirm,
+    // POST, then land on /inventory/ri-exchange.
+    await handleRIExchangeDeeplink();
     // Archera education deep-links (/archera-insurance, /archera-insurance/
     // how-it-works) open the overlay panel on top of the dashboard. Normal
     // tab routing still runs underneath so the app is fully functional.
