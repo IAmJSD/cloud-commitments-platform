@@ -20,6 +20,7 @@ import {
   isServiceFilterError,
 } from './serviceFilters';
 import { initLadderingSettings } from './ladder';
+import { buildLastUpdatedStamp } from './lib/last-updated';
 
 /**
  * Issue #196 — after any mutation to an `account_service_overrides` row
@@ -1240,6 +1241,10 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
 
       const serviceTd = tr.insertCell();
       serviceTd.textContent = `${o.provider}/${o.service}`;
+      // When this override last changed (issue #8), under the service name so
+      // the column order users learned (#110) stays put.
+      const stamp = buildLastUpdatedStamp(o.updated_at);
+      if (stamp) serviceTd.append(stamp);
 
       // Term cell: editable <select> for all providers (issue #109 extends
       // the AWS-only #110 inline editing to Azure/GCP).
