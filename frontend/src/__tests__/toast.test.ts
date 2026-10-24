@@ -105,4 +105,57 @@ describe('showToast', () => {
     showToast({ message: 'ok', kind: 'success' });
     expect(document.querySelector('.toast--success')?.getAttribute('role')).toBe('status');
   });
+
+  describe('pause while hovered or focused (issue #728, WCAG 2.2.1)', () => {
+    const toastEl = (): HTMLElement => document.querySelector('.toast') as HTMLElement;
+
+    it('hover pauses the countdown and leaving resumes it with the time left', () => {
+      showToast({ message: 'read me', timeout: 5_000 });
+      jest.advanceTimersByTime(3_000);
+      toastEl().dispatchEvent(new MouseEvent('mouseenter'));
+      jest.advanceTimersByTime(60_000);
+      expect(toastEl()).not.toBeNull();
+
+      toastEl().dispatchEvent(new MouseEvent('mouseleave'));
+      jest.advanceTimersByTime(1_999);
+      expect(toastEl().classList.contains('toast--leaving')).toBe(false);
+      jest.advanceTimersByTime(2 + 200);
+      expect(document.querySelector('.toast')).toBeNull();
+    });
+
+    it('focus inside the toast pauses it until focus leaves the toast', () => {
+      const handler = jest.fn();
+      showToast({ message: 'undo?', timeout: 5_000, actions: [{ label: 'Undo', onClick: handler }] });
+      const undo = toastEl().querySelector('button') as HTMLButtonElement;
+      undo.focus();
+      jest.advanceTimersByTime(60_000);
+      expect(toastEl()).not.toBeNull();
+
+      // Moving focus within the toast keeps it paused.
+      (toastEl().querySelector('.toast-close') as HTMLButtonElement).focus();
+      jest.advanceTimersByTime(60_000);
+      expect(toastEl()).not.toBeNull();
+
+      (document.activeElement as HTMLElement).blur();
+      jest.advanceTimersByTime(5_000 + 200);
+      expect(document.querySelector('.toast')).toBeNull();
+    });
+
+    it('resumes with at least one second so it does not vanish on mouse-out', () => {
+      showToast({ message: 'almost gone', timeout: 5_000 });
+      jest.advanceTimersByTime(4_990);
+      toastEl().dispatchEvent(new MouseEvent('mouseenter'));
+      toastEl().dispatchEvent(new MouseEvent('mouseleave'));
+      jest.advanceTimersByTime(900);
+      expect(toastEl().classList.contains('toast--leaving')).toBe(false);
+    });
+
+    it('sticky toasts stay sticky after hover', () => {
+      showToast({ message: 'stay', timeout: null });
+      toastEl().dispatchEvent(new MouseEvent('mouseenter'));
+      toastEl().dispatchEvent(new MouseEvent('mouseleave'));
+      jest.advanceTimersByTime(120_000);
+      expect(toastEl()).not.toBeNull();
+    });
+  });
 });

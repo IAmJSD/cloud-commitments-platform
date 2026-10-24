@@ -1432,8 +1432,8 @@ describe('Account overrides modal', () => {
       expect(undoToast!.actions).toBeDefined();
       expect(undoToast!.actions!.length).toBe(1);
       expect(undoToast!.actions![0]!.label).toBe('Undo');
-      // 5-second TTL per issue spec.
-      expect(undoToast!.timeout).toBe(5_000);
+      // 10-second TTL (issue #728; was 5 s per issue #113).
+      expect(undoToast!.timeout).toBe(10_000);
 
       // Simulate clicking Undo.
       undoToast!.actions![0]!.onClick();
@@ -1488,7 +1488,7 @@ describe('Account overrides modal', () => {
       }>).find(t => t.kind === 'info' && t.message?.includes('aws/rds'));
       expect(undoToast).toBeDefined();
       expect(undoToast!.actions?.[0]?.label).toBe('Undo');
-      expect(undoToast!.timeout).toBe(5_000);
+      expect(undoToast!.timeout).toBe(10_000);
 
       // Let the pending refresh resolve so the async chain completes cleanly.
       resolveRefresh();

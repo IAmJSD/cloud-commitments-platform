@@ -14,7 +14,10 @@
  * the bottom.
  *
  * Dismissal: × button click, timeout expiry, or Esc while the toast has
- * focus. The dismiss() return value lets callers clear a toast
+ * focus. The countdown pauses while the pointer is over the toast or
+ * focus is inside it, and restarts with the time that was left when both
+ * leave, so a toast being read or acted on never vanishes (WCAG 2.2.1,
+ * issue #728). The dismiss() return value lets callers clear a toast
  * programmatically (e.g. tie an "uploading..." toast to the completion
  * of the upload).
  */
@@ -119,6 +122,10 @@ export function showToast(opts: ToastOptions): ToastHandle {
 
   let dismissed = false;
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let remaining = timeout;
+  let startedAt = 0;
+  let hovered = false;
+  let focused = false;
 
   const handle: ToastHandle = {
     dismiss: () => {
@@ -144,11 +151,34 @@ export function showToast(opts: ToastOptions): ToastHandle {
   };
   toast.addEventListener('keydown', onKey);
 
-  container.appendChild(toast);
+  const startTimer = (): void => {
+    if (dismissed || remaining === null || timeoutId !== null || hovered || focused) return;
+    startedAt = Date.now();
+    timeoutId = setTimeout(() => handle.dismiss(), remaining);
+  };
+  const pauseTimer = (): void => {
+    if (timeoutId === null || remaining === null) return;
+    clearTimeout(timeoutId);
+    timeoutId = null;
+    remaining = Math.max(remaining - (Date.now() - startedAt), 0);
+  };
+  // Restart with at least a second left so the toast does not vanish the
+  // instant the pointer moves off it.
+  const resumeTimer = (): void => {
+    if (remaining !== null) remaining = Math.max(remaining, 1_000);
+    startTimer();
+  };
+  toast.addEventListener('mouseenter', () => { hovered = true; pauseTimer(); });
+  toast.addEventListener('mouseleave', () => { hovered = false; resumeTimer(); });
+  toast.addEventListener('focusin', () => { focused = true; pauseTimer(); });
+  toast.addEventListener('focusout', (e: FocusEvent) => {
+    if (e.relatedTarget instanceof Node && toast.contains(e.relatedTarget)) return;
+    focused = false;
+    resumeTimer();
+  });
 
-  if (timeout !== null) {
-    timeoutId = setTimeout(() => handle.dismiss(), timeout);
-  }
+  container.appendChild(toast);
+  startTimer();
 
   return handle;
 }

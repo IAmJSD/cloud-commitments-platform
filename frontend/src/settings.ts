@@ -1301,7 +1301,7 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
           showToast({ message: `Failed to delete override: ${(err as Error).message}`, kind: 'error' });
           return;
         }
-        // The server has confirmed the delete. Show the 5-second undo toast
+        // The server has confirmed the delete. Show the 10-second undo toast
         // IMMEDIATELY, before the panel reload + recommendations refresh below.
         // Previously the toast was awaited behind both of those calls, so a
         // slow recommendations refresh (a full page-worth of API calls) delayed
@@ -1318,7 +1318,9 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
         showToast({
           message: `Override for ${o.provider}/${o.service} deleted.`,
           kind: 'info',
-          timeout: 5_000,
+          // 10 s (was 5 s, issue #728) so there is time to read the message
+          // and reach Undo; the countdown also pauses on hover/focus.
+          timeout: 10_000,
           actions: [{
             label: 'Undo',
             onClick: () => {
