@@ -252,8 +252,8 @@ describe('Plans Module', () => {
 
     test.each([
       [{ current_step: 2, total_steps: 4 }, '2/4 steps'],
-      [{ current_step: 0, total_steps: 0 }, '--'],
-      [{ current_step: 0 }, '--'],
+      [{ current_step: 0, total_steps: 0 }, '\u2014'],
+      [{ current_step: 0 }, '\u2014'],
     ])('ramp progress %j renders %s instead of a fabricated 0/1 (#136)', async (steps, expected) => {
       (api.getPlans as jest.Mock).mockResolvedValue({
         plans: [{
