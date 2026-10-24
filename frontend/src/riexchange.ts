@@ -1555,7 +1555,7 @@ function buildExchangeConfirmBody({ quote, sources, targets }: ExchangeConfirmPa
   line('Pay now', `${quote.CurrencyCode} ${quote.PaymentDueRaw}`);
   line('Exchange', sources.join(', '));
   line('For', targets.join(', '));
-  line('Region', quote.Region ?? '');
+  line('Region', quote.Region);
   const src = Number(quote.SourceHourlyPriceRaw);
   const tgt = Number(quote.TargetHourlyPriceRaw);
   if (quote.SourceHourlyPriceRaw && quote.TargetHourlyPriceRaw && Number.isFinite(src) && Number.isFinite(tgt)) {
