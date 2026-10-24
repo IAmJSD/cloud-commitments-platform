@@ -32,7 +32,7 @@ import { canAccess } from './permissions';
 import { applyReadOnlySettings, isPermissionDeniedError } from './settings';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
-import { attachAzureExchangeToolbar, buildAzureSelectCell, canPreviewAzureExchange } from './riexchange-azure';
+import { attachAzureExchangeToolbar, buildAzureSelectCell, buildAzureSelectHeader, canPreviewAzureExchange } from './riexchange-azure';
 
 // Module state
 let currentRIs: ConvertibleRI[] = [];
@@ -486,7 +486,8 @@ function renderAzureRIsTable(
   const thead = document.createElement('thead');
   const headerRow = document.createElement('tr');
   const labels = ['Reservation', 'SKU', 'Quantity', 'Region', 'Term', 'Expiry'];
-  for (const label of canExchange ? ['', ...labels] : labels) {
+  if (canExchange) headerRow.appendChild(buildAzureSelectHeader());
+  for (const label of labels) {
     const th = document.createElement('th');
     th.textContent = label;
     headerRow.appendChild(th);

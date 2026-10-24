@@ -17,7 +17,7 @@ import { isRIExchanger } from './permissions';
 import {
   AZURE_EXCHANGE_TERMS, MAX_AZURE_EXCHANGE_ITEMS, azureTermLabel, describeAzureExchangeError, formatAzureAmount,
   resolveExchangeSubscription, validateAzureExchangeForm, validateAzureGuardrails,
-  type AzureExchangeSourceInput, type AzureExchangeTargetInput,
+  isAzureExchangeOutcomeUnknown, type AzureExchangeSourceInput, type AzureExchangeTargetInput,
 } from './lib/azure-exchange';
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -119,7 +119,8 @@ function renderPreview(container: HTMLElement, resp: AzureCompatibleOfferingsRes
 
 /**
  * Opens the exchange modal for the selected reservations. onExecuted runs
- * after a successful exchange so the caller can reload the list.
+ * after an exchange that succeeded or may have, so the caller can reload the
+ * list and history.
  */
 export function openAzureExchangeModal(sources: readonly ExchangeableAzureRI[], onExecuted: () => void): void {
   const modal = document.getElementById('ri-exchange-modal');
@@ -303,6 +304,15 @@ export function openAzureExchangeModal(sources: readonly ExchangeableAzureRI[], 
     }
   }
 
+  // Hides Execute and drops the preview it would send, keeping the outcome
+  // message and the preview on screen.
+  function retirePreview(): void {
+    executeBtn.classList.add('hidden');
+    guard.classList.add('hidden');
+    lastPreview = null;
+    lastRequest = null;
+  }
+
   async function execute(): Promise<void> {
     if (executeBtn.disabled || !lastPreview?.preview || !lastRequest) return;
     const guardError = validateAzureGuardrails(maxInput.value, currencyInput.value);
@@ -335,13 +345,15 @@ export function openAzureExchangeModal(sources: readonly ExchangeableAzureRI[], 
       onExecuted();
       if (!sessionOpen) return;
       setMessage(statusBox, `Exchange ${result.status || 'submitted'}. Net payable ${formatAzureAmount(result.net_payable, result.net_payable_currency)}; refunds ${formatAzureAmount(result.refunds_total, result.net_payable_currency)}; purchases ${formatAzureAmount(result.purchases_total, result.net_payable_currency)}. Session ${result.session_id}.`, 'success-message');
-      executeBtn.classList.add('hidden');
-      guard.classList.add('hidden');
-      lastPreview = null;
-      lastRequest = null;
+      retirePreview();
     } catch (error) {
+      // An unknown outcome may still commit at Azure: refresh the list and
+      // history, and retire this preview so a retry needs a fresh one.
+      const unknown = isAzureExchangeOutcomeUnknown(error);
+      if (unknown) onExecuted();
       if (!sessionOpen) return;
       setMessage(statusBox, describeAzureExchangeError(error, 'execute'), 'error');
+      if (unknown) retirePreview();
     } finally {
       executeBtn.disabled = false;
       previewBtn.disabled = false;

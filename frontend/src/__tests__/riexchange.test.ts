@@ -1241,6 +1241,9 @@ describe('RI Exchange global filter scoping (issue #871)', () => {
     await loadRIExchange();
     expect(instancesEl.querySelectorAll('tbody input.azure-ri-select')).toHaveLength(2);
     expect(instancesEl.querySelectorAll('thead th')).toHaveLength(7);
+    // The checkbox column's header has an accessible name, visually hidden.
+    const selectHeader = instancesEl.querySelector('thead th')!;
+    expect(selectHeader.querySelector('.sr-only')?.textContent).toBe('Select for exchange');
     const btn = instancesEl.querySelector<HTMLButtonElement>('#azure-exchange-selected-btn')!;
     expect(btn.disabled).toBe(true);
   });

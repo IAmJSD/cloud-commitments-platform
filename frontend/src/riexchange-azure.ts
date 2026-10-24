@@ -6,6 +6,7 @@
 
 import type { ExchangeableAzureRI } from './api';
 import { canAccess } from './permissions';
+import { showToast } from './toast';
 
 /** Previewing needs view:purchases; executing needs execute:ri-exchange (carved out of admin:*). */
 export function canPreviewAzureExchange(): boolean {
@@ -17,6 +18,13 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, t
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+/** Header for the selection column: an accessible name, visually hidden. */
+export function buildAzureSelectHeader(): HTMLTableCellElement {
+  const th = el('th');
+  th.appendChild(el('span', 'sr-only', 'Select for exchange'));
+  return th;
 }
 
 /** Checkbox cell that selects one reservation for an exchange. */
@@ -50,7 +58,9 @@ export function attachAzureExchangeToolbar(container: HTMLElement, table: HTMLTa
   table.addEventListener('change', sync);
   btn.addEventListener('click', () => {
     const picked = selected();
-    void import('./riexchange-azure-modal').then(m => m.openAzureExchangeModal(picked, onExecuted));
+    import('./riexchange-azure-modal')
+      .then(m => m.openAzureExchangeModal(picked, onExecuted))
+      .catch(() => showToast({ message: 'Could not load the exchange dialog. Reload the page and try again.', kind: 'error' }));
   });
   bar.append(btn, el('span', 'help-text', 'Tick the reservations to hand back, then preview what Azure offers for them.'));
   sync();

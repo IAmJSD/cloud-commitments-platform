@@ -116,10 +116,26 @@ const GUARDRAIL_HINTS: ReadonlyArray<[RegExp, string]> = [
   [/^Azure rejected this exchange/, 'Change the sources or targets so they meet Azure\'s exchange policy.'],
 ];
 
+/**
+ * Whether a failed execute call leaves the exchange's outcome unknown. Only a
+ * 4xx is a definite refusal: every gate, the guardrails, the idempotency claim
+ * and Azure's own client-fault rejections answer 4xx. A 5xx, a gateway or
+ * client timeout (status 0) or a network error may arrive after the exchange
+ * was submitted, which is why the backend audits those as unknown
+ * (directExchangeFailureStatus).
+ */
+export function isAzureExchangeOutcomeUnknown(error: unknown): boolean {
+  const status = (error as ApiErrorLike | null | undefined)?.status;
+  return !(typeof status === 'number' && status >= 400 && status < 500);
+}
+
 /** User-facing text for a failed preview or execute call. */
 export function describeAzureExchangeError(error: unknown, phase: 'preview' | 'execute'): string {
   const err = (error ?? {}) as ApiErrorLike;
   const msg = err.message || 'Unknown error';
+  if (phase === 'execute' && isAzureExchangeOutcomeUnknown(error)) {
+    return `The exchange may have been submitted to Azure. Check the RI exchange history (or the Azure portal) before trying again. Details: ${msg}`;
+  }
   const what = phase === 'preview' ? 'Could not preview the exchange' : 'Exchange not executed';
   switch (err.status) {
     case 422: {

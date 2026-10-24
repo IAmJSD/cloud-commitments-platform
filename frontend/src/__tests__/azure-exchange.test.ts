@@ -105,8 +105,31 @@ describe('describeAzureExchangeError', () => {
       .toBe('Exchange not executed: you are not allowed to do this. direct RI exchange execution is disabled while 4-eyes approval mode is on; use the approval flow');
     expect(describeAzureExchangeError(e(404, 'not found'), 'preview')).toMatch(/^Could not preview the exchange: no Azure account/);
     expect(describeAzureExchangeError(e(400, 'targets[0].sku is required'), 'preview')).toMatch(/rejected\. targets\[0\]\.sku is required/);
-    expect(describeAzureExchangeError(e(500, 'exchange execution failed and may already have been submitted to Azure'), 'execute'))
-      .toMatch(/may already have been submitted/);
     expect(describeAzureExchangeError(undefined, 'preview')).toBe('Could not preview the exchange: Unknown error');
+  });
+
+  // The backend records any non-4xx execute failure as outcome unknown
+  // (directExchangeFailureStatus): Azure may already have the exchange.
+  const unknownOutcome = (detail: string) =>
+    `The exchange may have been submitted to Azure. Check the RI exchange history (or the Azure portal) before trying again. Details: ${detail}`;
+  it.each([
+    ['a 500', e(500, 'exchange execution failed and may already have been submitted to Azure; verify the reservation state in the Azure portal before retrying'),
+      'exchange execution failed and may already have been submitted to Azure; verify the reservation state in the Azure portal before retrying'],
+    ['a 504 gateway timeout', e(504, 'HTTP 504'), 'HTTP 504'],
+    ['a client timeout (status 0)', e(0, 'Request to /ri-exchange/azure-instances/exchange timed out after 90000ms'),
+      'Request to /ri-exchange/azure-instances/exchange timed out after 90000ms'],
+    ['a network error (no status)', new TypeError('Failed to fetch'), 'Failed to fetch'],
+  ])('reports %s on execute as an unknown outcome, never "not executed"', (_label, error, detail) => {
+    expect(describeAzureExchangeError(error, 'execute')).toBe(unknownOutcome(detail));
+  });
+  it('keeps 4xx execute refusals as definite', () => {
+    const guardrail = e(422, 'quoted net payable 120.00 USD exceeds max_payment_due 100.00 USD');
+    expect(describeAzureExchangeError(guardrail, 'execute')).toBe(
+      'Exchange blocked by a safety check: quoted net payable 120.00 USD exceeds max_payment_due 100.00 USD. Raise the maximum payment or change the targets, then preview again.');
+    const conflict = e(409, 'an identical exchange is already being submitted');
+    expect(describeAzureExchangeError(conflict, 'execute')).toBe('Exchange not executed: an identical exchange is already being submitted');
+  });
+  it('keeps preview failures as "could not preview" whatever the status', () => {
+    expect(describeAzureExchangeError(e(504, 'HTTP 504'), 'preview')).toBe('Could not preview the exchange: HTTP 504');
   });
 });

@@ -7,6 +7,7 @@ jest.mock('../api', () => ({
 }));
 jest.mock('../permissions', () => ({ canAccess: jest.fn(), isRIExchanger: jest.fn() }));
 jest.mock('../confirmDialog', () => ({ confirmDialog: jest.fn() }));
+jest.mock('../toast', () => ({ showToast: jest.fn() }));
 
 import * as api from '../api';
 import { canAccess, isRIExchanger } from '../permissions';
@@ -94,6 +95,27 @@ describe('Azure exchange table action', () => {
     expect($('#ri-exchange-modal').classList.contains('hidden')).toBe(false);
     expect(document.querySelectorAll('.azure-exchange-source-row')).toHaveLength(2);
     expect($('.azure-exchange').textContent).toContain(`Subscription ${SUB}`);
+  });
+
+  it('shows a toast when the exchange dialog fails to load', async () => {
+    let toast: jest.Mock | undefined;
+    jest.isolateModules(() => {
+      jest.doMock('../riexchange-azure-modal', () => { throw new Error('ChunkLoadError'); });
+      toast = (jest.requireMock('../toast') as { showToast: jest.Mock }).showToast;
+      const isolated = jest.requireActual('../riexchange-azure') as typeof import('../riexchange-azure');
+      const container = document.createElement('div');
+      const table = document.createElement('table');
+      table.createTBody().insertRow().appendChild(isolated.buildAzureSelectCell(reservations[0]!, 0));
+      container.appendChild(table);
+      document.body.appendChild(container);
+      isolated.attachAzureExchangeToolbar(container, table, reservations, onExecuted);
+      table.querySelector<HTMLInputElement>('input.azure-ri-select')!.checked = true;
+      table.dispatchEvent(new Event('change'));
+    });
+    $<HTMLButtonElement>('#azure-exchange-selected-btn').click();
+    for (let i = 0; i < 5 && toast!.mock.calls.length === 0; i++) await flush();
+    jest.dontMock('../riexchange-azure-modal');
+    expect(toast).toHaveBeenCalledWith({ message: 'Could not load the exchange dialog. Reload the page and try again.', kind: 'error' });
   });
 });
 
@@ -215,6 +237,28 @@ describe('openAzureExchangeModal', () => {
     await flush();
     expect(statusText()).toBe('Exchange blocked by a safety check: quoted net payable 160.00 USD exceeds max_payment_due 150.00 USD. Raise the maximum payment or change the targets, then preview again.');
     expect(onExecuted).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a 504 gateway timeout', Object.assign(new Error('HTTP 504'), { status: 504 }), 'HTTP 504'],
+    ['a client timeout', Object.assign(new Error('Request to /ri-exchange/azure-instances/exchange timed out after 90000ms'), { status: 0 }),
+      'Request to /ri-exchange/azure-instances/exchange timed out after 90000ms'],
+  ])('treats %s on execute as an unknown outcome: refreshes and requires a new preview', async (_label, error, detail) => {
+    (api.executeAzureExchange as jest.Mock).mockRejectedValue(error);
+    await openAndPreview();
+    setValue($<HTMLInputElement>('#azure-exchange-max-payment'), '150');
+    setValue($<HTMLInputElement>('#azure-exchange-currency'), 'USD');
+    executeBtn().click();
+    await flush();
+    await flush();
+    expect(statusText()).toBe(`The exchange may have been submitted to Azure. Check the RI exchange history (or the Azure portal) before trying again. Details: ${detail}`);
+    expect(onExecuted).toHaveBeenCalledTimes(1);
+    expect(executeBtn().classList.contains('hidden')).toBe(true);
+    expect($('.azure-exchange-guardrails').classList.contains('hidden')).toBe(true);
+    // A stray click on the now-hidden button cannot resubmit the old preview.
+    executeBtn().click();
+    await flush();
+    expect(api.executeAzureExchange).toHaveBeenCalledTimes(1);
   });
 
   it('previews but hides Execute without execute:ri-exchange', async () => {
