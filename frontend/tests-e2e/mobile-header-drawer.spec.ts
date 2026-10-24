@@ -2,7 +2,7 @@
  * Mobile topbar / drawer layout at a phone viewport (issue #1779).
  *
  * The reported failure is that below the drawer breakpoint the CUDly logo,
- * the signed-in email, the admin badge, API Docs, Feedback, Logout and the
+ * the signed-in email, the admin badge, API Docs, Feedback, Log out and the
  * Provider / Account filter chips paint as faint text over the page content
  * and cannot be used. The markup was always correct: the topbar is a fixed
  * --cudly-topbar-h box, and a `header { flex-direction: column }` rule
@@ -54,7 +54,7 @@ const DRAWER_CONTROLS: Record<string, string> = {
   'admin badge': '#sidebar #user-role-display',
   'API Docs link': '#sidebar #user-info a[href="/docs/"]',
   'Feedback link': '#sidebar #feedback-link',
-  'Logout button': '#sidebar #logout-btn',
+  'Log out button': '#sidebar #logout-btn',
   'Provider chip': '#sidebar button[aria-label="Provider"]',
   'Account chip': '#sidebar button[aria-label="Account"]',
 };
@@ -113,7 +113,7 @@ async function focusIsInsideHiddenSubtree(page: Page): Promise<boolean> {
 const TAPPABLE = [
   'API Docs link',
   'Feedback link',
-  'Logout button',
+  'Log out button',
   'Provider chip',
   'Account chip',
 ] as const;
@@ -349,7 +349,7 @@ test.describe('phone viewport', () => {
    * The mirror of the widening defect. A closed drawer is parked off-screen
    * by a CSS transform, which hides it from sight but not from assistive
    * technology, and this file moves the account controls into it. Without an
-   * aria-hidden a screen-reader user reaches Logout, the identity block and
+   * aria-hidden a screen-reader user reaches Log out, the identity block and
    * both filter chips inside a drawer that is closed.
    */
   test('a closed drawer is out of the accessibility tree on a narrow load', async ({ page }) => {

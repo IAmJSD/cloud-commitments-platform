@@ -12,7 +12,7 @@ test('localStorage.clear() in another tab signs this tab out', async ({ page, co
   await page.goto('/');
   await page.evaluate(() => { localStorage.setItem('authToken', 'smoke-token'); localStorage.setItem('csrfToken', 'smoke-csrf'); });
   await page.reload();
-  await expect(page.getByRole('button', { name: 'Logout' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'CUDly Login' })).toHaveCount(0);
 
   const other = await context.newPage();
