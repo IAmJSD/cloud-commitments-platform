@@ -244,6 +244,21 @@ function byId<T extends HTMLElement>(id: string): T | null {
   return document.getElementById(id) as T | null;
 }
 
+// Setting `.value` from code fires neither 'input' nor 'blur', so the inline
+// range validators below never see a value written by loadGlobalSettings or
+// resetSettings. Without a re-run, an error from an earlier edit (e.g. an
+// emptied coverage field) stays visible, with aria-invalid, next to a valid
+// value (#642). A dedicated event re-runs only the validators, not the
+// dirty-tracking or other 'input' listeners.
+const RANGE_REVALIDATE_EVENT = 'cudly:range-revalidate';
+
+/** Re-run every wired inline range validator against the current values. */
+function revalidateInlineRanges(): void {
+  document.querySelectorAll<HTMLInputElement>('input[data-range-validated]').forEach((el) => {
+    el.dispatchEvent(new Event(RANGE_REVALIDATE_EVENT));
+  });
+}
+
 /**
  * Wire inline range validation on a numeric `<input>` driven by its
  * existing `min` / `max` HTML5 attributes. Surfaces a single message
@@ -338,6 +353,8 @@ function wireInlineRangeValidation(
   };
   input.addEventListener('input', check, { signal });
   input.addEventListener('blur', check, { signal });
+  input.addEventListener(RANGE_REVALIDATE_EVENT, check, { signal });
+  input.dataset['rangeValidated'] = '';
 }
 
 /**
@@ -3312,6 +3329,7 @@ export async function loadGlobalSettings(): Promise<void> {
     // this fix) gets clamped here to the first valid payment option,
     // which will then be re-persisted on the user's next save.
     syncAllServiceCommitmentConstraints();
+    revalidateInlineRanges();
 
     if (loadingEl) loadingEl.classList.add('hidden');
     if (formEl) formEl.classList.remove('hidden');
@@ -3787,6 +3805,7 @@ export async function resetSettings(): Promise<void> {
   // clicks Reset and navigates away loses their reset silently.
   updateProviderSettingsVisibility();
   updateCollectionScheduleVisibility();
+  revalidateInlineRanges();
   updateDirtyMarkers();
 }
 
