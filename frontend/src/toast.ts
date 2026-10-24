@@ -21,11 +21,12 @@
  * Open dialogs (issue #742): a toast stays up for 30s, and the default
  * bottom-right corner is where a dialog's Cancel / Save row sits on a
  * laptop-sized viewport, so an error toast used to swallow the click on
- * Save until it was dismissed. While a dialog box is on screen,
- * layoutToastStack() keeps the stack off it: beside the dialog when the
- * gap to its right is wide enough for a readable toast, otherwise lifted
- * above the dialog's button row. The positions are CSS custom properties
- * set through the CSSOM (CSP forbids style attributes in markup).
+ * Save until it was dismissed. layoutToastStack() moves the stack only when
+ * its default corner would cover a visible button row of the topmost open
+ * dialog: beside the dialog when the gap to its right is wide enough for a
+ * readable toast, otherwise above the dialog or its button row. The
+ * positions are CSS custom properties set through the CSSOM (CSP forbids
+ * style attributes in markup).
  */
 
 export type ToastKind = 'success' | 'info' | 'warning' | 'error';
@@ -61,12 +62,15 @@ const KIND_ICONS: Record<ToastKind, string> = {
 // that must stay clickable.
 const DIALOG_BOX_SELECTOR = '.modal-content, .modal-confirm';
 const DIALOG_FOOTER_SELECTOR = '.modal-footer, .modal-buttons, .modal-confirm-actions';
-// Matches the container's 1rem inset in components.css.
+// Matches the container's 1rem inset and 400px max-width in components.css.
 const EDGE_PX = 16;
+const DEFAULT_MAX_WIDTH_PX = 400;
 const FOOTER_GAP_PX = 8;
 // Narrower than this, a toast beside the dialog is too cramped to read, so
-// the stack is lifted above the button row instead.
+// the stack is lifted above the dialog (or its button row) instead.
 const MIN_SIDE_WIDTH_PX = 240;
+
+interface Box { left: number; top: number; right: number; bottom: number }
 
 function setVar(el: HTMLElement, name: string, value: string | null): void {
   if (value === null) el.style.removeProperty(name);
@@ -78,49 +82,94 @@ function visibleRect(el: Element): DOMRect | null {
   return rect.width > 0 && rect.height > 0 ? rect : null;
 }
 
+function intersect(a: Box, b: Box): Box | null {
+  const box = {
+    left: Math.max(a.left, b.left),
+    top: Math.max(a.top, b.top),
+    right: Math.min(a.right, b.right),
+    bottom: Math.min(a.bottom, b.bottom),
+  };
+  return box.right > box.left && box.bottom > box.top ? box : null;
+}
+
 /**
- * Keep the toast stack off any dialog box that is on screen. Exported for
- * tests; runs on every new toast and, while toasts are showing, whenever a
- * dialog opens or closes or the viewport is resized.
+ * The dialog the user is looking at: a confirm dialog (z-index 2000) sits
+ * over any .modal (1000), and among equals the later one in the DOM paints
+ * on top. Dialogs underneath are behind a backdrop and can't be clicked.
+ */
+function topmostDialog(): { el: Element; rect: DOMRect } | null {
+  let top: { el: Element; rect: DOMRect; rank: number } | null = null;
+  for (const el of Array.from(document.querySelectorAll(DIALOG_BOX_SELECTOR))) {
+    const rect = visibleRect(el);
+    const rank = el.classList.contains('modal-confirm') ? 1 : 0;
+    if (rect && (!top || rank >= top.rank)) top = { el, rect, rank };
+  }
+  return top;
+}
+
+/**
+ * Keep the toast stack off the topmost open dialog's button rows. The stack
+ * stays in its default corner unless that corner overlaps a button row that
+ * is actually on screen. Then it moves, in order of preference: beside the
+ * dialog (when the gap is at least 240px), above the whole dialog (when
+ * there is room), or just above the button row it would cover. The last
+ * case can put the stack over the lower part of a dialog that fills the
+ * screen; the buttons stay clickable and the toast can be dismissed.
+ * Exported for tests; runs on every new toast and, while toasts are
+ * showing, whenever a dialog opens or closes, something scrolls, or the
+ * viewport is resized.
  */
 export function layoutToastStack(): void {
   const container = document.getElementById(CONTAINER_ID);
   if (!container) return;
-  let maxWidth: string | null = null;
-  let bottom: string | null = null;
+  // Measure the stack where it sits by default; the rect is its real size.
+  setVar(container, '--toast-max-width', null);
+  setVar(container, '--toast-bottom', null);
+  const stack = visibleRect(container);
+  const dialog = topmostDialog();
+  if (!stack || !dialog) return;
 
-  const boxes: Array<{ el: Element; rect: DOMRect }> = [];
-  document.querySelectorAll(DIALOG_BOX_SELECTOR).forEach((el) => {
+  const vw = document.documentElement.clientWidth || window.innerWidth;
+  const vh = document.documentElement.clientHeight || window.innerHeight;
+  const onScreen = intersect(dialog.rect, { left: 0, top: 0, right: vw, bottom: vh });
+  const rows: Box[] = [];
+  dialog.el.querySelectorAll(DIALOG_FOOTER_SELECTOR).forEach((el) => {
     const rect = visibleRect(el);
-    if (rect) boxes.push({ el, rect });
+    const shown = rect && onScreen ? intersect(rect, onScreen) : null;
+    if (shown) rows.push(shown);
   });
-  if (boxes.length > 0) {
-    const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
-    const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
-    const dialogRight = Math.max(...boxes.map(b => b.rect.right));
-    const side = Math.floor(viewportWidth - dialogRight - 2 * EDGE_PX);
-    if (side >= MIN_SIDE_WIDTH_PX) {
-      maxWidth = `${side}px`;
-    } else {
-      const footerTops: number[] = [];
-      for (const { el } of boxes) {
-        const footer = Array.from(el.querySelectorAll(DIALOG_FOOTER_SELECTOR)).pop();
-        const rect = footer ? visibleRect(footer) : null;
-        if (rect) footerTops.push(rect.top);
-      }
-      if (footerTops.length > 0) {
-        const lift = Math.ceil(viewportHeight - Math.min(...footerTops) + FOOTER_GAP_PX);
-        if (lift > EDGE_PX) bottom = `${lift}px`;
-      }
-    }
+  const width = Math.min(stack.width, DEFAULT_MAX_WIDTH_PX);
+  const boxAt = (bottom: number): Box =>
+    ({ left: vw - EDGE_PX - width, right: vw - EDGE_PX, top: vh - bottom - stack.height, bottom: vh - bottom });
+  const covered = (bottom: number): Box | undefined =>
+    rows.find(row => intersect(boxAt(bottom), row) !== null);
+
+  let row = covered(EDGE_PX);
+  if (!row) return;
+
+  const side = Math.floor(vw - dialog.rect.right - 2 * EDGE_PX);
+  if (side >= MIN_SIDE_WIDTH_PX) {
+    setVar(container, '--toast-max-width', `${Math.min(side, DEFAULT_MAX_WIDTH_PX)}px`);
+    return;
   }
-  setVar(container, '--toast-max-width', maxWidth);
-  setVar(container, '--toast-bottom', bottom);
+  const aboveDialog = Math.ceil(vh - dialog.rect.top + FOOTER_GAP_PX);
+  if (dialog.rect.top - FOOTER_GAP_PX - stack.height >= EDGE_PX) {
+    setVar(container, '--toast-bottom', `${aboveDialog}px`);
+    return;
+  }
+  // Step up past each button row the stack would cover, lowest first.
+  let bottom = EDGE_PX;
+  for (let i = 0; row && i <= rows.length; i++) {
+    bottom = Math.ceil(vh - row.top + FOOTER_GAP_PX);
+    row = covered(bottom);
+  }
+  setVar(container, '--toast-bottom', `${bottom}px`);
 }
 
 // While toasts are showing, re-run the layout when a dialog opens or closes
-// (class / hidden toggles, or a confirm dialog added to <body>) or the
-// viewport changes. Nothing is watched while the stack is empty.
+// (class / hidden toggles, or a confirm dialog added to <body>), anything
+// scrolls (a dialog body brings its buttons into view), or the viewport
+// changes. Nothing is watched once the last toast is gone.
 let watcher: MutationObserver | null = null;
 let layoutQueued = false;
 
@@ -129,7 +178,9 @@ function queueLayout(): void {
   layoutQueued = true;
   requestAnimationFrame(() => {
     layoutQueued = false;
-    layoutToastStack();
+    const container = document.getElementById(CONTAINER_ID);
+    if (container?.querySelector('.toast')) layoutToastStack();
+    else stopWatchingIfEmpty(container);
   });
 }
 
@@ -143,13 +194,16 @@ function startWatching(): void {
     attributeFilter: ['class', 'hidden'],
   });
   window.addEventListener('resize', queueLayout);
+  // scroll doesn't bubble; capture sees scrolling inside any element.
+  document.addEventListener('scroll', queueLayout, { capture: true, passive: true });
 }
 
-function stopWatchingIfEmpty(container: HTMLElement): void {
-  if (container.querySelector('.toast')) return;
+function stopWatchingIfEmpty(container: HTMLElement | null): void {
+  if (container?.querySelector('.toast')) return;
   watcher?.disconnect();
   watcher = null;
   window.removeEventListener('resize', queueLayout);
+  document.removeEventListener('scroll', queueLayout, { capture: true });
 }
 
 function ensureContainer(): HTMLElement {

@@ -347,11 +347,12 @@ button.secondary:hover {
 
 /* Toast notifications (bottom-right stack, AutoSpotting-style).
  * Rendered by toast.ts. Default timeout 30s. Kind classes set the
- * left-border + icon colour. While a dialog is open, toast.ts overrides
+ * left-border + icon colour. When the default corner would cover a
+ * visible button row of the topmost open dialog, toast.ts overrides
  * --toast-max-width (the stack fits beside the dialog) or --toast-bottom
- * (the stack is lifted above the dialog's buttons) on the element so it
- * never covers Save (issue #742); removing the override restores these
- * defaults.
+ * (the stack is lifted above the dialog or that row) on the element, and
+ * re-checks on open/close, scroll and resize (issue #742). Otherwise these
+ * defaults apply.
  */
 .toast-container {
     --toast-bottom: 1rem;
