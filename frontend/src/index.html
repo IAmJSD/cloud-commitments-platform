@@ -89,16 +89,19 @@
                 </nav>
                 <!-- Drawer slot for the topbar controls. Below the drawer
                      breakpoint the topbar has no room for the filter chips
-                     and the account actions, so app.ts:setupMobileNav()
-                     relocates #topbar-filters and #user-info in here, and
-                     back out again above it (issue #1779). Empty on
-                     desktop. -->
+                     and the account actions, so
+                     nav/mobile-nav.ts:setupMobileNav() relocates
+                     #topbar-filters and #user-info in here, and back out
+                     again above it (issue #1779). Empty on desktop. -->
                 <div class="app-sidebar-extras" id="sidebar-extras"></div>
             </aside>
             <main class="app-main" id="main-content">
             <!-- Home Tab. Provider/Account filters live in the topbar
                  (#topbar-filters); they're global across all sections. -->
             <div id="home-tab" class="tab-content active" role="tabpanel" aria-labelledby="home-tab-btn">
+                <!-- Issue #756: first-run onboarding card, filled by
+                     dashboard.ts:renderHomeOnboarding when nothing is loaded. -->
+                <section id="home-onboarding" class="hidden"></section>
                 <section id="summary"></section>
                 <section id="savings-trend-section" class="card chart-section">
                     <div class="section-header">
@@ -215,16 +218,16 @@
                     <div id="savings-stats" class="stats-grid">
                         <div class="stat-card">
                             <h4 id="period-savings-label">Period Savings</h4>
-                            <p id="period-savings" class="stat-value">$0.00</p>
+                            <p id="period-savings" class="stat-value">—</p>
                             <p class="stat-unit-context" id="period-savings-unit">shown in monthly equivalents</p>
                         </div>
                         <div class="stat-card">
                             <h4 id="avg-savings-label">Avg Monthly Savings</h4>
-                            <p id="avg-hourly-savings" class="stat-value">$0.00/mo</p>
+                            <p id="avg-hourly-savings" class="stat-value">—</p>
                         </div>
                         <div class="stat-card">
                             <h4 id="peak-savings-label">Peak Savings</h4>
-                            <p id="peak-savings" class="stat-value">$0.00/mo</p>
+                            <p id="peak-savings" class="stat-value">—</p>
                         </div>
                     </div>
 
