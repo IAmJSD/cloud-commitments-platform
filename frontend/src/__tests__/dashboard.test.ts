@@ -103,9 +103,10 @@ jest.mock('../state', () => ({
 
 // Mock utils
 jest.mock('../utils', () => ({
+  NO_VALUE: '\u2014',
   formatCurrency: jest.fn((val) => {
     const n = typeof val === 'number' ? val : Number(val);
-    if (val == null || !Number.isFinite(n)) return '--';
+    if (val == null || !Number.isFinite(n)) return '—';
     return `$${n}`;
   }),
   getDateParts: jest.fn(() => ({ day: 15, month: 'Jan' })),
@@ -869,11 +870,11 @@ describe('Dashboard Module', () => {
       expect(summary?.innerHTML).toContain('Active Commitments');
       expect(summary?.innerHTML).toContain('Current Coverage');
       expect(summary?.innerHTML).toContain('YTD Savings');
-      // Savings card must fall back to '--' (not throw, go blank, or fabricate $0).
+      // Savings card must fall back to '—' (not throw, go blank, or fabricate $0).
       const savingsCard = summary?.querySelector('.card');
       expect(savingsCard?.textContent).toContain('Potential Monthly Savings');
-      // When recs fail cellCount=0, the sentinel '--' is shown instead of fabricated $0.
-      expect(savingsCard?.innerHTML).toContain('--');
+      // When recs fail cellCount=0, the sentinel '—' is shown instead of fabricated $0.
+      expect(savingsCard?.innerHTML).toContain('—');
       expect(savingsCard?.innerHTML).not.toContain('$0');
     });
 
@@ -934,10 +935,10 @@ describe('Dashboard Module', () => {
       expect(summary?.innerHTML).toContain('Current Coverage');
       expect(summary?.innerHTML).toContain('YTD Savings');
 
-      // Savings card shows '--' when recs are absent (no fabricated $0).
+      // Savings card shows '—' when recs are absent (no fabricated $0).
       const savingsCard = summary?.querySelector('.card');
       expect(savingsCard?.textContent).toContain('Potential Monthly Savings');
-      expect(savingsCard?.innerHTML).toContain('--');
+      expect(savingsCard?.innerHTML).toContain('—');
       expect(savingsCard?.innerHTML).not.toContain('$0');
     });
 
@@ -963,9 +964,9 @@ describe('Dashboard Module', () => {
       const summary = document.getElementById('summary');
       expect(summary?.innerHTML).toContain('Active Commitments');
 
-      // Savings card shows '--' (no fabricated $0 when recs are absent).
+      // Savings card shows '—' (no fabricated $0 when recs are absent).
       const savingsCard = summary?.querySelector('.card');
-      expect(savingsCard?.innerHTML).toContain('--');
+      expect(savingsCard?.innerHTML).toContain('—');
       expect(savingsCard?.innerHTML).not.toContain('$0');
     });
 
@@ -2193,12 +2194,12 @@ describe('Dashboard Module', () => {
     });
   });
 
-  // H-3 regression: absent API coverage/count fields must render '--', not '$0'/'80%'/'0'.
+  // H-3 regression: absent API coverage/count fields must render '—', not '$0'/'80%'/'0'.
   // Pre-fix: `data.current_coverage || 0` fabricated '0%'; `data.target_coverage || 80`
   // fabricated '80%'; `data.active_commitments || 0` fabricated '0'; the savings catch
   // block fell back to formatCurrency(0). These tests must FAIL on pre-fix code.
-  describe('H-3: absent dashboard KPI fields render -- sentinel, not fabricated values', () => {
-    test('absent target_coverage shows -- not hardcoded 80%', async () => {
+  describe('H-3: absent dashboard KPI fields render the em-dash sentinel, not fabricated values', () => {
+    test('absent target_coverage shows an em dash, not hardcoded 80%', async () => {
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
         // target_coverage deliberately absent
         total_recommendations: 1,
@@ -2216,11 +2217,11 @@ describe('Dashboard Module', () => {
       // Must not show the hardcoded 80% fallback
       expect(summary?.textContent).not.toContain('Target: 80.0%');
       expect(summary?.textContent).not.toContain('Target: 80%');
-      // Must show the '--' sentinel for absent target
-      expect(summary?.textContent).toContain('Target: --');
+      // Must show the '—' sentinel for absent target
+      expect(summary?.textContent).toContain('Target: —');
     });
 
-    test('absent current_coverage shows -- not fabricated 0%', async () => {
+    test('absent current_coverage shows an em dash, not fabricated 0%', async () => {
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
         // current_coverage deliberately absent
         total_recommendations: 2,
@@ -2242,11 +2243,11 @@ describe('Dashboard Module', () => {
       );
       expect(coverageTile).toBeDefined();
       const valueEl = coverageTile?.querySelector('.kpi-tile-value');
-      // Must show '--' (not a fabricated '0.0%') when current_coverage is absent
-      expect(valueEl?.textContent).toBe('--');
+      // Must show the em dash (not a fabricated '0.0%') when current_coverage is absent
+      expect(valueEl?.textContent).toBe('—');
     });
 
-    test('absent active_commitments shows -- not fabricated 0', async () => {
+    test('absent active_commitments shows an em dash, not fabricated 0', async () => {
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
         total_recommendations: 1,
         // active_commitments deliberately absent
@@ -2267,12 +2268,12 @@ describe('Dashboard Module', () => {
         t.textContent?.includes('Active Commitments')
       );
       expect(commitmentsTile).toBeDefined();
-      // Must not show fabricated '0'; must show '--'
+      // Must not show fabricated '0'; must show '—'
       const valueEl = commitmentsTile?.querySelector('.kpi-tile-value');
-      expect(valueEl?.textContent).toBe('--');
+      expect(valueEl?.textContent).toBe('—');
     });
 
-    test('savings range catch block shows -- not $0 when computation throws', async () => {
+    test('savings range catch block shows an em dash, not $0 when computation throws', async () => {
       // Force the groupRecsByCell mock to throw so the catch block fires.
       mockGroupRecsByCell.mockImplementationOnce(() => { throw new Error('compute error'); });
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
@@ -2295,8 +2296,10 @@ describe('Dashboard Module', () => {
       );
       expect(savingsTile).toBeDefined();
       const valueEl = savingsTile?.querySelector('.kpi-tile-value');
-      // Must show '--' (not '$0') when the savings computation fails
-      expect(valueEl?.textContent).toBe('--');
+      // Must show the em dash (not '$0') when the savings computation fails,
+      // and not in savings green: it is not a saving (issue #739).
+      expect(valueEl?.textContent).toBe('—');
+      expect(valueEl?.classList.contains('savings')).toBe(false);
     });
   });
 });
