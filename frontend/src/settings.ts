@@ -3459,6 +3459,26 @@ async function renderAccountsOverview(): Promise<void> {
 }
 
 /**
+ * Names of the per-Savings-Plan coverage cards whose edited value is not a
+ * whole number between 0 and 100. Untouched cards and empty inputs are not
+ * checked: the save keeps their persisted value, as it always has.
+ */
+function invalidEditedCardCoverages(): string[] {
+  const bad: string[] = [];
+  for (const field of SERVICE_FIELDS) {
+    if (!('coverageId' in field) || !field.coverageId) continue;
+    const input = byId<HTMLInputElement>(field.coverageId);
+    const raw = input?.value ?? '';
+    if (raw.trim() === '' || getFieldValue(field.coverageId) === savedSnapshot[field.coverageId]) continue;
+    const parsed = Number(raw);
+    if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 100) continue;
+    const title = input?.closest('.service-default-card')?.querySelector('h5')?.textContent?.trim();
+    bad.push(title || field.service);
+  }
+  return bad;
+}
+
+/**
  * Save global settings
  */
 export async function saveGlobalSettings(e: Event): Promise<void> {
@@ -3538,6 +3558,17 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
   const rawStaleHours = Number(byId<HTMLInputElement>('setting-recs-stale-hours')?.value ?? '24');
   if (!Number.isFinite(rawStaleHours) || !Number.isInteger(rawStaleHours) || rawStaleHours < 0 || rawStaleHours > 8760) {
     showToast({ message: 'Cache stale threshold must be a whole number between 0 and 8760 hours (0 = disable)', kind: 'error' });
+    if (saveBtn) saveBtn.disabled = false;
+    saveInFlight = false;
+    return;
+  }
+  // The per-Savings-Plan coverage cards sit outside the settings <form>, so
+  // native min/max validation never runs for them and the inline hint only
+  // paints a message. Apply the global field's whole-number 0..100 rule here,
+  // before any PUT, so a fractional value like 12.7 is not persisted.
+  const badCoverageCards = invalidEditedCardCoverages();
+  if (badCoverageCards.length > 0) {
+    showToast({ message: `Target coverage must be a whole number between 0 and 100 (${badCoverageCards.join(', ')})`, kind: 'error' });
     if (saveBtn) saveBtn.disabled = false;
     saveInFlight = false;
     return;
