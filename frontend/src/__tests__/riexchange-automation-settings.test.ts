@@ -147,3 +147,54 @@ describe('loadAutomationSettings: graceful degradation on permission errors (iss
     },
   );
 });
+
+describe('loadAutomationSettings: number fields are escaped into value attributes (issue #37)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  // RIExchangeConfig's number types are erased at runtime, so a string
+  // that reaches a value="..." attribute must not be able to close it.
+  test('a non-number config field cannot break out of its input value', async () => {
+    setupContainer();
+    const hostile = '5" autofocus onfocus="alert(1)';
+    (api.getRIExchangeConfig as jest.Mock).mockResolvedValueOnce({
+      auto_exchange_enabled: false,
+      mode: 'manual',
+      utilization_threshold: hostile,
+      max_payment_per_exchange_usd: hostile,
+      max_payment_daily_usd: hostile,
+      lookback_days: hostile,
+    });
+
+    await loadAutomationSettings();
+
+    const container = document.getElementById('ri-exchange-automation-settings') as HTMLElement;
+    expect(container.querySelector('[onfocus]')).toBeNull();
+    for (const id of ['ri-exchange-threshold', 'ri-exchange-max-per-exchange', 'ri-exchange-max-daily', 'ri-exchange-lookback']) {
+      const input = container.querySelector<HTMLInputElement>('#' + id);
+      expect(input).not.toBeNull();
+      expect(input?.getAttribute('value')).toBe(hostile);
+    }
+  });
+
+  test('numeric config fields still prefill the inputs', async () => {
+    setupContainer();
+    (api.getRIExchangeConfig as jest.Mock).mockResolvedValueOnce({
+      auto_exchange_enabled: true,
+      mode: 'manual',
+      utilization_threshold: 95.5,
+      max_payment_per_exchange_usd: 0,
+      max_payment_daily_usd: 1000,
+      lookback_days: 30,
+    });
+
+    await loadAutomationSettings();
+
+    const value = (id: string) => (document.getElementById(id) as HTMLInputElement).value;
+    expect(value('ri-exchange-threshold')).toBe('95.5');
+    expect(value('ri-exchange-max-per-exchange')).toBe('0');
+    expect(value('ri-exchange-max-daily')).toBe('1000');
+    expect(value('ri-exchange-lookback')).toBe('30');
+  });
+});
