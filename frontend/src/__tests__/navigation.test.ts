@@ -26,6 +26,9 @@ jest.mock('../settings', () => ({
   isUnsavedChanges: jest.fn().mockReturnValue(false),
   loadAccountsTab: jest.fn().mockResolvedValue(undefined),
 }));
+jest.mock('../ladder-timeline', () => ({
+  disposeLadderTimeline: jest.fn(),
+}));
 jest.mock('../riexchange', () => ({
   loadRIExchange: jest.fn().mockResolvedValue(undefined),
   loadAutomationSettings: jest.fn().mockResolvedValue(undefined),
@@ -62,6 +65,7 @@ import { loadAutomationSettings } from '../riexchange';
 import { canAccess } from '../permissions';
 import { loadInventory } from '../inventory';
 import { isAdmin } from '../auth';
+import { disposeLadderTimeline } from '../ladder-timeline';
 
 function setPathname(pathname: string): void {
   const url = new URL(window.location.href);
@@ -691,6 +695,40 @@ describe('Navigation Module', () => {
       await Promise.resolve();
       await Promise.resolve();
       expect(document.getElementById('home-tab')?.classList.contains('active')).toBe(true);
+    });
+  });
+
+  // Issue #667: the ladder planned-purchase chart is released when its
+  // section is left; returning re-runs loadGlobalSettings, which re-inits it.
+  describe('ladder timeline teardown', () => {
+    test('leaving Settings disposes the ladder chart; the dirty guard keeps it until confirmed', async () => {
+      switchTab('admin');
+      switchSettingsSubTab('purchasing');
+      (disposeLadderTimeline as jest.Mock).mockClear();
+      (isUnsavedChanges as jest.Mock).mockReturnValue(true);
+      switchTab('home');
+      expect(disposeLadderTimeline).not.toHaveBeenCalled();
+      (isUnsavedChanges as jest.Mock).mockReturnValue(false);
+      switchTab('plans');
+      expect(disposeLadderTimeline).toHaveBeenCalledTimes(1);
+      document.querySelector<HTMLElement>('.modal-confirm-backdrop')?.remove();
+    });
+
+    test('other settings sub-tabs dispose it and Purchasing reloads it', () => {
+      switchTab('admin');
+      (disposeLadderTimeline as jest.Mock).mockClear();
+      switchSettingsSubTab('purchasing');
+      expect(disposeLadderTimeline).not.toHaveBeenCalled();
+      for (const sub of ['general', 'accounts', 'users']) {
+        (disposeLadderTimeline as jest.Mock).mockClear();
+        switchSettingsSubTab(sub);
+        expect(disposeLadderTimeline).toHaveBeenCalledTimes(1);
+      }
+      (loadGlobalSettings as jest.Mock).mockClear();
+      (disposeLadderTimeline as jest.Mock).mockClear();
+      switchSettingsSubTab('purchasing');
+      expect(disposeLadderTimeline).not.toHaveBeenCalled();
+      expect(loadGlobalSettings).toHaveBeenCalledTimes(1);
     });
   });
 });
