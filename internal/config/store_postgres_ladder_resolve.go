@@ -198,7 +198,7 @@ func validateLadderUnverifiedFail(req LadderResolveFailed, layer string, account
 		return fmt.Errorf("%w: checked_service must be %q", ErrLadderResolveInvalid, layer)
 	case c.CheckedAt.After(req.Now):
 		return fmt.Errorf("%w: checked_at is in the future", ErrLadderResolveInvalid)
-	case !c.CheckedAt.After(lastChange):
+	case !checkPostdatesDBTime(c.CheckedAt, lastChange):
 		return fmt.Errorf("%w: checked_at must be after the last execution change at %s", ErrLadderResolveInvalid, lastChange.UTC().Format(time.RFC3339))
 	}
 	return nil
