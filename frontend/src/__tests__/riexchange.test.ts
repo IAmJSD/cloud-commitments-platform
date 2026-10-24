@@ -261,6 +261,21 @@ describe('openExchangeModal', () => {
     document.querySelector<HTMLButtonElement>('.modal-confirm-close')?.click();
   });
 
+  it('shows the hourly price change in the quote summary (issue #709)', async () => {
+    (api.getExchangeQuote as jest.Mock).mockResolvedValueOnce({
+      IsValidExchange: true, ValidationFailureReason: '', CurrencyCode: 'USD', PaymentDueRaw: '12.50',
+      SourceHourlyPriceRaw: '0.1000', SourceRemainingUpfrontRaw: '', SourceRemainingTotalRaw: '',
+      TargetHourlyPriceRaw: '0.1250', TargetRemainingUpfrontRaw: '', TargetRemainingTotalRaw: '', Region: 'us-west-2',
+    });
+    openExchangeModal('ri-abc', 3, 'm5.large', [
+      { instance_type: 'm5.large', offering_id: '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91', effective_monthly_cost: 42.5 },
+    ]);
+    Array.from(modal.querySelectorAll('button')).find((b) => b.textContent === 'Get Quote')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const rows = Array.from(modal.querySelectorAll('.quote-row')).map((r) => r.textContent);
+    expect(rows).toContain('Hourly Price Change:+0.0250 USD/hr, about +18.25 USD/month');
+  });
+
   it('invalidates a fetched quote when the count changes, hiding Execute (issue #244)', async () => {
     const mockGetQuote = api.getExchangeQuote as jest.Mock;
     mockGetQuote.mockResolvedValueOnce({
@@ -952,6 +967,48 @@ describe('reshape recommendations empty state', () => {
     expect(recsEl.textContent).toContain('meet your utilization threshold');
     expect(recsEl.textContent).toContain('1 convertible RI ');
     expect(recsEl.textContent).not.toContain('none are registered');
+  });
+
+  // Issue #1135: the three loads race. An empty reshape response that lands
+  // before the RI list must not keep the previous scope's count.
+  it('re-renders the empty-state count when recommendations resolve before the RI list', async () => {
+    (api.listConvertibleRIs as jest.Mock).mockResolvedValueOnce([sampleRI]);
+    await loadRIExchange();
+    expect(recsEl.textContent).toContain('All 1 convertible RI ');
+
+    let releaseRIs: (v: unknown) => void = () => undefined;
+    (api.listConvertibleRIs as jest.Mock).mockReturnValueOnce(new Promise(r => { releaseRIs = r; }));
+    const reload = loadRIExchange();
+    await new Promise(r => setTimeout(r, 0));
+    // Recommendations are in, RIs are not: no stale "All 1" claim.
+    expect(api.getReshapeRecommendations).toHaveBeenCalledTimes(2);
+    expect(recsEl.textContent).not.toContain('All 1 convertible RI');
+    expect(recsEl.textContent).toContain('No reshape recommendations right now.');
+
+    releaseRIs([sampleRI, { ...sampleRI, reserved_instance_id: 'ri-2' }, { ...sampleRI, reserved_instance_id: 'ri-3' }]);
+    await reload;
+    expect(recsEl.textContent).toContain('All 3 convertible RIs meet your utilization threshold');
+  });
+
+  it('does not quote a count from a failed RI load', async () => {
+    (api.listConvertibleRIs as jest.Mock).mockResolvedValueOnce([sampleRI]);
+    await loadRIExchange();
+    (api.listConvertibleRIs as jest.Mock).mockRejectedValueOnce(new Error('boom'));
+    await loadRIExchange();
+    expect(recsEl.textContent).toContain('No reshape recommendations right now.');
+    expect(recsEl.textContent).not.toContain('convertible RI');
+  });
+
+  it('keeps the error from a failed reshape load after the RI list arrives', async () => {
+    let releaseRIs: (v: unknown) => void = () => undefined;
+    (api.listConvertibleRIs as jest.Mock).mockReturnValueOnce(new Promise(r => { releaseRIs = r; }));
+    (api.getReshapeRecommendations as jest.Mock).mockRejectedValueOnce(new Error('ce down'));
+    const reload = loadRIExchange();
+    await new Promise(r => setTimeout(r, 0));
+    releaseRIs([sampleRI]);
+    await reload;
+    expect(recsEl.querySelector('.error')?.textContent).toContain('Failed to load recommendations: ce down');
+    expect(recsEl.textContent).not.toContain('utilization threshold');
   });
 });
 

@@ -24,6 +24,7 @@ import { handleRIExchangeDeeplink } from './riexchange-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
 import { wireTablistKeyboard } from './lib/tablist';
+import { initPurchasingNav } from './purchasing-nav';
 import { renderInitError } from './init-error';
 
 /**
@@ -306,11 +307,11 @@ function setupButtonHandlers(): void {
   // Purchase modal buttons
   const closePurchaseBtn = document.getElementById('close-purchase-modal-btn');
   if (closePurchaseBtn) {
-    closePurchaseBtn.addEventListener('click', () => {
-      closePurchaseModal();
-      clearPurchaseModalRecommendations();
-      clearFanOutBuckets();
-    });
+    // closePurchaseModal() routes through modal.ts closeModal(), which runs
+    // the onClose that openPurchaseModal / openFanOutModal registered; that
+    // callback discards the single-row and fan-out purchase state on every
+    // close path, Escape included (issue #331), so no manual clear here.
+    closePurchaseBtn.addEventListener('click', () => closePurchaseModal());
   }
 
   const executePurchaseBtn = document.getElementById('execute-purchase-btn');
@@ -354,6 +355,9 @@ function setupButtonHandlers(): void {
   // RI Exchange form was removed and its persistence rolled into this
   // sticky bar. If the RI Exchange form hasn't rendered yet (panel never
   // visited), the guard inside saveAutomationSettings no-ops cleanly.
+  // Admin -> Purchasing policies section links (issue #190).
+  initPurchasingNav();
+
   const savePurchasingBtn = document.getElementById('save-purchasing-btn');
   if (savePurchasingBtn) {
     savePurchasingBtn.addEventListener('click', () => {

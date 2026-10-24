@@ -37,25 +37,10 @@ export interface ServiceSavings {
   current_savings: number;
 }
 
-export interface UpcomingPurchase {
-  execution_id: string;
-  plan_id: string;
-  plan_name: string;
-  scheduled_date: string;
-  provider: api.Provider;
-  service: string;
-  step_number: number;
-  total_steps: number;
-  estimated_savings: number;
-  // false when the step carries no recommendations; estimated_savings is
-  // then a placeholder, not data (platform#609). Only an explicit false is bare.
-  has_recommendations?: boolean;
-  // created_by_user_id mirrors the field on api.UpcomingPurchase so the
-  // dashboard widget can apply the issue-#950 creator-scope ownership
-  // gate on the Cancel button. Optional: legacy / scheduler-tick rows
-  // ship NULL here.
-  created_by_user_id?: string;
-}
+// The dashboard renders the API rows as-is, so this is the API type rather
+// than a hand-kept copy that drifted from it and forced casts at the call
+// sites (#1189). Field notes live on api.UpcomingPurchase.
+export type UpcomingPurchase = api.UpcomingPurchase;
 
 // Recommendations types
 export interface RecommendationsResponse {
@@ -204,6 +189,18 @@ export interface HistoryResponse {
   limit?: number;
   /** Fixed row cap on non-completed executions. */
   executions_limit?: number;
+  /**
+   * Row cap on actionable executions (pending, approved, running, ...).
+   * They are not paged: the first page lists them all, up to this cap.
+   */
+  actionable_executions_limit?: number;
+  /**
+   * True when older rows follow this page (issue #674). Absent on servers
+   * that predate paging, which the UI treats as "cannot page".
+   */
+  has_more?: boolean;
+  /** Opaque position to pass back as `cursor`; set only with has_more. */
+  next_cursor?: string;
 }
 
 export interface HistorySummary {
