@@ -356,6 +356,12 @@ body.sidebar-open {
     overflow-x: auto;
 }
 
+/* The loading skeleton has nothing to scroll; as a block its cells
+ * collapsed and the shimmer was invisible (issue #186). */
+#recommendations-list > table.skeleton-table {
+    display: table;
+}
+
 /* Wide-table scroll affordances (issue #185); lib/table-scroll.ts sets the
  * classes and variables. A scroller with columns cut off on one side fades
  * that edge out, so the clipped column reads as "more this way". The fade is
