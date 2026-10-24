@@ -10,6 +10,7 @@ import type { DashboardSummary, UpcomingPurchase, ServiceSavings, LocalRecommend
 import type { SavingsDataPoint } from './api';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
+import { openModal, closeModal } from './modal';
 import { canAccess } from './permissions';
 import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale } from './recommendations';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
@@ -145,7 +146,7 @@ export async function loadDashboard(): Promise<void> {
     ]);
 
     const summaryData = summaryResult.status === 'fulfilled' ? (summaryResult.value as DashboardSummary) : null;
-    const upcomingData = upcomingResult.status === 'fulfilled' ? (upcomingResult.value as { purchases?: UpcomingPurchase[] }) : null;
+    const upcomingData = upcomingResult.status === 'fulfilled' ? upcomingResult.value : null;
     // api.Recommendation and LocalRecommendation are structurally identical
     // except for provider: string vs provider: Provider. The provider values
     // from the API are always the union members at runtime, so this cast is safe.
@@ -190,6 +191,7 @@ export async function loadDashboard(): Promise<void> {
     // Load the savings-over-time widget independently -- failure shouldn't
     // block the rest of the dashboard (e.g. analytics not configured).
     void loadSavingsTrendChart();
+    void loadYtdSparkline();
 
     // Auto-refresh the recommendations cache if the last collection
     // is older than 24h (or never ran). The dashboard's KPI tiles +
@@ -407,7 +409,8 @@ async function retryUpcomingPurchases(): Promise<void> {
     showSkeletonBlock(container, '100%', '6rem');
   }
   try {
-    const data = (await api.getUpcomingPurchases()) as { purchases?: UpcomingPurchase[] } | null;
+    const data = await api.getUpcomingPurchases();
+    // `?.`: apiRequest resolves null for an empty 2xx body (#304).
     renderUpcomingPurchases(data?.purchases || []);
   } catch (error) {
     console.error('Failed to load upcoming purchases:', error);
@@ -522,7 +525,7 @@ function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
     btn.addEventListener('click', () => viewPurchaseDetails(btn.dataset['id'] || ''));
   });
   container.querySelectorAll<HTMLButtonElement>('[data-action="cancel-purchase"]').forEach(btn => {
-    btn.addEventListener('click', () => void cancelScheduledPurchase(btn.dataset['id'] || ''));
+    btn.addEventListener('click', () => void cancelScheduledPurchase(btn.dataset['id'] || '', btn));
   });
 }
 
@@ -542,6 +545,9 @@ function viewPurchaseDetails(executionId: string): void {
 
   const modal = buildUpcomingDetailsModal(purchase, executionId);
   document.body.appendChild(modal);
+  // Focus moves into the dialog, Tab is trapped, Escape closes it and focus
+  // returns to View Details (#731). Every close path removes the element.
+  openModal(modal, { onClose: () => modal.remove() });
 }
 
 // buildUpcomingDetailsModal constructs the dialog via DOM-API, not
@@ -552,12 +558,16 @@ function buildUpcomingDetailsModal(p: UpcomingPurchase, executionId: string): HT
   const modal = document.createElement('div');
   modal.id = 'purchase-details-modal';
   modal.className = 'modal';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-labelledby', 'purchase-details-modal-title');
 
   const content = document.createElement('div');
   content.className = 'modal-content modal-wide';
   modal.appendChild(content);
 
   const h2 = document.createElement('h2');
+  h2.id = 'purchase-details-modal-title';
   h2.textContent = 'Upcoming Purchase Details';
   content.appendChild(h2);
 
@@ -614,23 +624,9 @@ function buildUpcomingDetailsModal(p: UpcomingPurchase, executionId: string): HT
     cancelBtn.id = 'cancel-purchase-detail-btn';
     cancelBtn.className = 'danger';
     cancelBtn.textContent = 'Cancel Purchase';
-    cancelBtn.addEventListener('click', async () => {
-      const ok = await confirmDialog({
-        title: 'Cancel this scheduled purchase?',
-        body: 'Cancelling a scheduled purchase cannot be undone. Any upfront cost already committed will not be refunded.',
-        confirmLabel: 'Cancel purchase',
-        destructive: true,
-      });
-      if (!ok) return;
-      try {
-        await api.deletePlannedPurchase(executionId);
-        modal.remove();
-        await loadDashboard();
-        showToast({ message: 'Purchase cancelled successfully', kind: 'success', timeout: 5_000 });
-      } catch (cancelError) {
-        console.error('Failed to cancel purchase:', cancelError);
-        showToast({ message: 'Failed to cancel purchase', kind: 'error' });
-      }
+    // Same confirm copy and request path as the card's Cancel button (#731).
+    cancelBtn.addEventListener('click', () => {
+      void cancelScheduledPurchase(executionId, cancelBtn, () => closeModal(modal));
     });
     btnRow.appendChild(cancelBtn);
   }
@@ -639,13 +635,22 @@ function buildUpcomingDetailsModal(p: UpcomingPurchase, executionId: string): HT
   closeBtn.type = 'button';
   closeBtn.id = 'close-purchase-details-btn';
   closeBtn.textContent = 'Close';
-  closeBtn.addEventListener('click', () => modal.remove());
+  closeBtn.addEventListener('click', () => closeModal(modal));
   btnRow.appendChild(closeBtn);
 
   return modal;
 }
 
-async function cancelScheduledPurchase(executionId: string): Promise<void> {
+// Execution IDs with a cancel in progress. A second click, or a click on the
+// other Cancel button for the same step (card vs details dialog), must not
+// open another confirm or send a second DELETE (#731).
+const cancelsInFlight = new Set<string>();
+
+async function cancelScheduledPurchase(
+  executionId: string,
+  trigger?: HTMLButtonElement,
+  onCancelled?: () => void,
+): Promise<void> {
   // Cancel just THIS scheduled instance via DELETE /api/purchases/planned/{id}
   // (the deletePlannedPurchase backend handler operates on
   // purchase_executions). The plan template stays intact — the next
@@ -656,21 +661,30 @@ async function cancelScheduledPurchase(executionId: string): Promise<void> {
   //   - falling back to deletePlan (which deleted the WHOLE plan).
   // The widget now enumerates real pending executions and surfaces
   // execution_id, so neither workaround is needed.
-  const ok = await confirmDialog({
-    title: 'Cancel this scheduled purchase?',
-    body: 'Cancelling removes this upcoming step from the plan. The plan itself stays in place; the next scheduled step (if any) is unaffected.',
-    confirmLabel: 'Cancel purchase',
-    destructive: true,
-  });
-  if (!ok) return;
-
+  if (cancelsInFlight.has(executionId)) return;
+  cancelsInFlight.add(executionId);
   try {
+    const ok = await confirmDialog({
+      title: 'Cancel this scheduled purchase?',
+      body: 'Cancelling removes this upcoming step from the plan. The plan itself stays in place; the next scheduled step (if any) is unaffected.',
+      confirmLabel: 'Cancel purchase',
+      destructive: true,
+    });
+    if (!ok) return;
+
+    // Disabled only after the confirm closes, so the confirm can hand focus
+    // back to the button first.
+    if (trigger) trigger.disabled = true;
     await api.deletePlannedPurchase(executionId);
+    onCancelled?.();
     await loadDashboard();
     showToast({ message: 'Purchase cancelled successfully', kind: 'success', timeout: 5_000 });
   } catch (error) {
     console.error('Failed to cancel purchase:', error);
     showToast({ message: 'Failed to cancel purchase', kind: 'error' });
+  } finally {
+    cancelsInFlight.delete(executionId);
+    if (trigger) trigger.disabled = false;
   }
 }
 
@@ -1042,11 +1056,6 @@ export async function loadSavingsTrendChart(): Promise<void> {
 
     const points = data.data_points ?? [];
 
-    // YTD Savings KPI tile sparkline (issue #340 T6) — uses the same
-    // cumulative_savings series the main chart renders. Skips silently
-    // when the tile isn't in the DOM (e.g. a different layout is mounted).
-    attachSparkline('ytd', points.map((p: SavingsDataPoint) => p.cumulative_savings || 0));
-
     // Determine the left edge of the x-axis.
     // For 'all': anchor to the earliest purchase so the line fills the
     // chart rather than clustering at the right end. Fall back to now-365d
@@ -1087,7 +1096,6 @@ export async function loadSavingsTrendChart(): Promise<void> {
         empty.classList.remove('hidden');
       }
       if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
-      attachSparkline('ytd', []);
       return;
     }
     canvas.classList.remove('hidden');
@@ -1150,12 +1158,46 @@ export async function loadSavingsTrendChart(): Promise<void> {
     // the dashboard — hide the widget and fall back to a neutral message.
     console.warn('Savings trend chart unavailable:', err);
     if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
-    attachSparkline('ytd', []);
     canvas.classList.add('hidden');
     if (empty) {
       empty.textContent = 'Savings history is not available yet.';
       empty.classList.remove('hidden');
     }
+  }
+}
+
+let ytdSparklineGeneration = 0;
+
+/**
+ * Sparkline for the YTD Savings tile. It used to reuse the trend chart's
+ * points, whose window follows the 7d/30d/90d/All toggle, so the line under
+ * "YTD" changed shape with a control that does not change the number. It now
+ * plots its own series from 1 January (UTC, the same year start the backend
+ * uses for ytd_savings) to now, scoped by the same provider/account chips.
+ */
+export async function loadYtdSparkline(): Promise<void> {
+  if (!document.querySelector('.kpi-tile-spark[data-spark-key="ytd"]')) return;
+  const generation = ++ytdSparklineGeneration;
+  const now = new Date();
+  const yearStartMs = Date.UTC(now.getUTCFullYear(), 0, 1);
+  const days = (now.getTime() - yearStartMs) / 86400_000;
+  const interval: 'hourly' | 'daily' | 'weekly' = days <= 7 ? 'hourly' : days <= 90 ? 'daily' : 'weekly';
+  const accountIDs = state.getCurrentAccountIDs();
+  const provider = state.getCurrentProvider();
+  try {
+    const data = await api.getSavingsAnalytics({
+      start: new Date(yearStartMs).toISOString(),
+      end: now.toISOString(),
+      interval,
+      ...(provider ? { provider } : {}),
+      ...(accountIDs.length > 0 ? { account_ids: accountIDs } : {}),
+    });
+    if (generation !== ytdSparklineGeneration) return;
+    attachSparkline('ytd', (data.data_points ?? []).map((p: SavingsDataPoint) => p.cumulative_savings || 0));
+  } catch (err) {
+    if (generation !== ytdSparklineGeneration) return;
+    console.warn('YTD sparkline unavailable:', err);
+    attachSparkline('ytd', []);
   }
 }
 

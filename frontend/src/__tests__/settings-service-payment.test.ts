@@ -98,8 +98,8 @@ describe('Settings Save payment tokens (issue #545)', () => {
     await saveGlobalSettings(new Event('submit'));
 
     const calls = serviceCalls();
-    expect(calls.find(c => c.provider === 'azure' && c.service === 'vm')!.payment).toBe('monthly');
-    expect(calls.find(c => c.provider === 'azure' && c.service === 'sql')!.payment).toBe('upfront');
+    expect(calls.find(c => c.provider === 'azure' && c.service === 'compute')!.payment).toBe('monthly');
+    expect(calls.find(c => c.provider === 'azure' && c.service === 'relational-db')!.payment).toBe('upfront');
     for (const c of calls.filter(x => x.provider === 'gcp')) expect(c.payment).toBe('monthly');
   });
 
@@ -107,7 +107,7 @@ describe('Settings Save payment tokens (issue #545)', () => {
     expect(document.getElementById('gcp-storage-term')).toBeNull();
     await save();
     expect(serviceCalls().filter(c => c.provider === 'gcp').map(c => c.service))
-      .toEqual(['compute', 'sql', 'memorystore']);
+      .toEqual(['compute', 'relational-db', 'cache']);
   });
 
   it('ignores a stored gcp/storage row on load and keeps the other GCP cards', async () => {
@@ -150,7 +150,7 @@ describe('Settings Save payment tokens (issue #545)', () => {
   it('one failed service PUT reports that service, still saves the rest and keeps only its fields dirty', async () => {
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     (api.updateServiceConfig as jest.Mock).mockImplementation(async (provider: string, service: string) => {
-      if (provider === 'azure' && service === 'vm') throw new Error('invalid payment option');
+      if (provider === 'azure' && service === 'compute') throw new Error('invalid payment option');
     });
     await loadGlobalSettings();
     const azurePayment = document.getElementById('azure-vm-payment') as HTMLSelectElement;
@@ -163,7 +163,7 @@ describe('Settings Save payment tokens (issue #545)', () => {
     expect(api.updateServiceConfig).toHaveBeenCalledTimes(17);
     expect(mockShowToast).toHaveBeenCalledTimes(1);
     expect(mockShowToast).toHaveBeenCalledWith({
-      message: 'Settings saved, but 1 service failed: azure/vm: invalid payment option',
+      message: 'Settings saved, but 1 service failed: azure/compute: invalid payment option',
       kind: 'error',
     });
     expect(azurePayment.classList.contains('dirty')).toBe(true);
@@ -241,7 +241,7 @@ describe('Settings Save payment tokens (issue #545)', () => {
     await save();
 
     expect((document.getElementById('azure-vm-payment') as HTMLSelectElement).value).toBe(expected);
-    expect(serviceCalls().find(c => c.provider === 'azure' && c.service === 'vm')!.payment).toBe(expected);
+    expect(serviceCalls().find(c => c.provider === 'azure' && c.service === 'compute')!.payment).toBe(expected);
   });
 
   it('never falls back to upfront when a payment select has no matching option at Save', async () => {
@@ -250,7 +250,7 @@ describe('Settings Save payment tokens (issue #545)', () => {
     expect((document.getElementById('azure-vm-payment') as HTMLSelectElement).value).toBe('');
     await saveGlobalSettings(new Event('submit'));
 
-    expect(serviceCalls().find(c => c.provider === 'azure' && c.service === 'vm')!.payment).toBe('monthly');
+    expect(serviceCalls().find(c => c.provider === 'azure' && c.service === 'compute')!.payment).toBe('monthly');
   });
 
   it('counts only AWS services when asking to propagate the default payment', async () => {
