@@ -359,7 +359,8 @@ export async function loadHistory(): Promise<void> {
     // The From/To inputs hold LOCAL calendar days, but /history filters on
     // whole UTC days. Widen to the UTC days covering the local range so an
     // off-UTC user never loses rows from the edges of the days they picked
-    // (issue #51).
+    // (issue #51), without pushing a range the server accepts as typed
+    // over its 366-day cap.
     const range = localDayRangeToUtcDays(
       (document.getElementById('history-start') as HTMLInputElement | null)?.value,
       (document.getElementById('history-end') as HTMLInputElement | null)?.value,
