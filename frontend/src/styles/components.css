@@ -1291,6 +1291,12 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     color: var(--cudly-text-muted);
 }
 
+/* Issue #191: inline "AWS only" scope hint beside the lookback select. */
+.lookback-scope-hint {
+    font-size: var(--cudly-fs-xs);
+    font-style: italic;
+}
+
 .info-icon {
     display: inline-block;
     cursor: help;
