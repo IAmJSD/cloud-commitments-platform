@@ -90,7 +90,7 @@ describe('chart-theme', () => {
 
 describe('color literals (theming ratchet)', () => {
   // Chart modules must take every color from lib/chart-theme.ts.
-  it.each(['dashboard.ts', 'modules/savings-history.ts', 'ladder-timeline-chart.ts'])('%s has no color literals', (file) => {
+  it.each(['dashboard.ts', 'modules/savings-history.ts', 'ladder-timeline-chart.ts', 'trends.ts'])('%s has no color literals', (file) => {
     const code = fs.readFileSync(path.join(SRC, file), 'utf8')
       .split('\n')
       .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))

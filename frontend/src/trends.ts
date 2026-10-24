@@ -19,6 +19,7 @@ import type { ApiError } from './api/types';
 import * as state from './state';
 import { formatCurrency } from './utils';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { applyChartDefaults, chartColor } from './lib/chart-theme';
 import {
   DEFAULT_TRENDS_PERIOD_MONTHS,
   isTrendsPeriodMonths,
@@ -266,6 +267,7 @@ function buildTable(id: string, headers: string[], rows: string[][]): HTMLElemen
  */
 function renderChart(canvas: HTMLCanvasElement, series: TrendsMonthPoint[]): void {
   destroyChart();
+  applyChartDefaults(Chart.defaults);
   trendsChart = new Chart(canvas, {
     type: 'bar',
     data: {
@@ -273,7 +275,7 @@ function renderChart(canvas: HTMLCanvasElement, series: TrendsMonthPoint[]): voi
       datasets: [{
         label: 'Savings /mo',
         data: series.map((p) => p.savings),
-        backgroundColor: '#34a853',
+        backgroundColor: chartColor('--cudly-chart-2'),
         borderRadius: 4,
         maxBarThickness: 48,
       }],
@@ -293,7 +295,7 @@ function renderChart(canvas: HTMLCanvasElement, series: TrendsMonthPoint[]): voi
         x: { grid: { display: false } },
         y: {
           beginAtZero: true,
-          grid: { color: 'rgba(0, 0, 0, 0.05)' },
+          grid: { color: chartColor('--cudly-chart-grid-faint') },
           ticks: { maxTicksLimit: 6, callback: (v) => formatCurrency(Number(v)) },
         },
       },
