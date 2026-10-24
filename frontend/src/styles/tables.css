@@ -87,6 +87,17 @@ tr.history-row-highlight:hover {
     margin-bottom: 1.5rem;
 }
 
+/* Load more under the Purchase History table (issue #676) */
+.history-load-more {
+    display: flex;
+    justify-content: center;
+    margin-top: 1rem;
+}
+
+.history-load-more[hidden] {
+    display: none;
+}
+
 /* Planned Purchases Section */
 #planned-purchases-header {
     margin-top: 2rem;
@@ -200,17 +211,53 @@ tr.history-row-highlight:hover {
     vertical-align: middle;
 }
 
+/* Issue #726: the fill used to be success-green at every value, so 5% read
+ * as healthy as 95%. It is neutral now; lib/coverage-bar.ts adds a tone class
+ * when coverage is far below the service's target and draws a tick at the
+ * target. Not clipped (no overflow: hidden) so the tick can stand proud of
+ * the track; the fill carries the rounded ends itself. */
 .coverage-bar {
+    position: relative;
     height: 8px;
     background: var(--cudly-border);
     border-radius: var(--cudly-r-full);
-    overflow: hidden;
 }
 
 .coverage-bar-fill {
     height: 100%;
-    background: var(--cudly-success);
+    max-width: 100%;
+    background: var(--cudly-primary);
     border-radius: inherit;
+}
+
+/* The darker amber: --cudly-warn (#fbbc04) is 1.4:1 against the grey track,
+ * below the 3:1 a graphic needs; --cudly-warn-fg is 4.1:1. */
+.coverage-bar--below .coverage-bar-fill {
+    background: var(--cudly-warn-fg);
+}
+
+.coverage-bar--far-below .coverage-bar-fill {
+    background: var(--cudly-error);
+}
+
+/* Tint the track as well, so 0% (no fill at all) still reads as a problem. */
+.coverage-bar--below {
+    background: var(--cudly-warn-bg);
+}
+
+.coverage-bar--far-below {
+    background: var(--cudly-error-bg);
+}
+
+/* Target marker: a dark 2px tick centered on the target percentage. */
+.coverage-bar-target {
+    position: absolute;
+    top: -4px;
+    bottom: -4px;
+    width: 2px;
+    margin-left: -1px;
+    background: var(--cudly-text);
+    border-radius: 1px;
 }
 
 /* No coverage figure for this service. Distinguishes "unknown" from a 0%
@@ -218,4 +265,18 @@ tr.history-row-highlight:hover {
 .coverage-bar-absent {
     color: var(--cudly-text-subtle);
     font-size: var(--cudly-fs-xs);
+}
+
+/* Status + Overdue badges side by side, and the next-action hint under an
+ * overdue planned purchase's status (#181). */
+.planned-purchase-row .status-badges {
+    display: inline-flex;
+    gap: 0.25rem;
+    white-space: nowrap;
+}
+
+.planned-purchase-row .overdue-hint {
+    margin-top: 0.25rem;
+    font-size: 0.8rem;
+    color: var(--cudly-text-muted);
 }

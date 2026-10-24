@@ -22,6 +22,7 @@ import {
   sortedDistinctValues,
 } from './lib/column-filter-popover';
 import { suggestedPurchaseStartDate } from './lib/calendar-date';
+import { isPastScheduledDate } from './lib/purchase-row-guards';
 import { mountPlanEditorPanel } from './plan-editor-panel';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
@@ -434,6 +435,15 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
     canAccess('cancel-own', 'purchases')
   );
 
+  // #181: a pending step whose date has passed did not run; "pending" alone
+  // reads as on schedule. Flag it and name the next action the user can take.
+  const overdue = isPending && isPastScheduledDate(purchase.scheduled_date);
+  const overdueHint = canRunPurchase ? 'Not run on its date. Run now or pause.' : 'Not run on its date.';
+  const overdueBadge = overdue
+    ? '<span class="status-badge badge-danger" title="Scheduled date has passed">Overdue</span>'
+    : '';
+  const overdueHintHtml = overdue ? `<div class="overdue-hint">${overdueHint}</div>` : '';
+
   return `
     <tr class="planned-purchase-row ${statusClass}">
       <td>
@@ -448,7 +458,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td>${termCell}</td>
       <td>${upfrontShown}</td>
       <td class="savings">${savingsCell}</td>
-      <td><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span></td>
+      <td><span class="status-badges"><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span>${overdueBadge}</span>${overdueHintHtml}</td>
       <td class="actions">
         ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary" title="Run now" aria-label="Run now">▶</button>` : ''}
         ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause" aria-label="Pause">⏸</button>` : ''}
@@ -753,16 +763,19 @@ function isPlanOverdue(plan: BackendPlan): boolean {
   return nextDate < today;
 }
 
-// Format ramp schedule from backend struct
+// Format ramp schedule from backend struct. A preset name is shown only when
+// type, percent AND interval match the preset, the same rule Edit uses
+// (rampRadioValue), so the list never says "Weekly 20%" for a plan Edit opens
+// as Custom 20% / 7 days, or hides a 14-day interval behind "Weekly 25%" (#1185).
 function formatBackendRampSchedule(ramp: BackendPlan['ramp_schedule']): string {
   if (!ramp) return 'Immediate';
-  switch (ramp.type) {
-    case 'immediate': return 'Immediate';
-    case 'weekly': return `Weekly ${ramp.percent_per_step}%`;
-    case 'monthly': return `Monthly ${ramp.percent_per_step}%`;
-    case 'custom': return `Custom ${ramp.percent_per_step}% every ${ramp.step_interval_days} days`;
-    default: return ramp.type || 'Unknown';
-  }
+  if (!['immediate', 'weekly', 'monthly', 'custom'].includes(ramp.type)) return ramp.type || 'Unknown';
+  const value = rampRadioValue(ramp);
+  if (value === 'immediate') return 'Immediate';
+  const preset = PRESET_RAMPS.find(p => p.value === value);
+  if (preset) return preset.label;
+  const days = ramp.step_interval_days;
+  return days ? `Custom ${ramp.percent_per_step}% every ${days} day${days === 1 ? '' : 's'}` : `Custom ${ramp.percent_per_step}%`;
 }
 
 async function loadPlanAccountNames(planId: string, cardEl: Element): Promise<void> {
@@ -977,9 +990,9 @@ function openPlanForm(modal: HTMLElement, restartsFromToday = false): void {
 
 // Presets mirror config.PresetRampSchedules; any other stored ramp is shown as
 // custom so Edit never rewrites it to a different schedule on Save (#1156).
-const PRESET_RAMPS: ReadonlyArray<{ value: string; type: string; percent: number; intervalDays: number }> = [
-  { value: 'weekly-25pct', type: 'weekly', percent: 25, intervalDays: 7 },
-  { value: 'monthly-10pct', type: 'monthly', percent: 10, intervalDays: 30 },
+const PRESET_RAMPS: ReadonlyArray<{ value: string; label: string; type: string; percent: number; intervalDays: number }> = [
+  { value: 'weekly-25pct', label: 'Weekly 25%', type: 'weekly', percent: 25, intervalDays: 7 },
+  { value: 'monthly-10pct', label: 'Monthly 10%', type: 'monthly', percent: 10, intervalDays: 30 },
 ];
 
 function rampRadioValue(ramp: { type?: string; percent_per_step?: number; step_interval_days?: number }): string {
@@ -1582,11 +1595,13 @@ function generatePlanName(rampSchedule: string, customStepPercent?: number, cust
       return `${serviceUpper} Monthly 10% Ramp-up (10 months)`;
     case 'custom':
       if (customStepPercent && customIntervalDays) {
-        const totalSteps = Math.ceil(100 / customStepPercent);
+        // Same count as the backend (buildCustomRampSchedule) and the schedule
+        // preview: whole steps only, at least one. 30% is 3 steps, not 4 (#1185).
+        const totalSteps = Math.max(1, Math.floor(100 / customStepPercent));
         const intervalLabel = customIntervalDays === 7 ? 'weekly' :
                               customIntervalDays === 30 ? 'monthly' :
                               `every ${customIntervalDays} days`;
-        return `${serviceUpper} Custom ${customStepPercent}% ${intervalLabel} (${totalSteps} steps)`;
+        return `${serviceUpper} Custom ${customStepPercent}% ${intervalLabel} (${totalSteps} step${totalSteps === 1 ? '' : 's'})`;
       }
       return `${serviceUpper} Custom Ramp-up Plan`;
     default:

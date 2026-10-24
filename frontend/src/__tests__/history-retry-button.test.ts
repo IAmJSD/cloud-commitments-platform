@@ -273,6 +273,49 @@ describe('History inline Retry button (issue #47)', () => {
     expect(hint?.getAttribute('title')).not.toContain('Operator action required');
   });
 
+  test('ops_hint row keeps its lineage links next to the hint (issue #1040)', async () => {
+    // A legacy row retried before the re-drive gate (#967) now carries the
+    // permanent hint; it must still link to its successor, and Retry stays hidden.
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({
+          purchase_id: 'r-legacy',
+          created_by_user_id: ADMIN_USER.id,
+          ops_hint: 'Azure savings plans have no provider-side duplicate guard',
+          redrive_unsafe: true,
+          retry_execution_id: 'succ-5678-aaaa',
+          retry_attempt_n: 2,
+        }),
+      ],
+    });
+
+    await loadHistory();
+    const row = document.querySelector('#history-list tr[data-execution-id="r-legacy"]')!;
+    expect(row.querySelector('.history-ops-hint')?.textContent).toContain('Azure savings plans');
+    const link = row.querySelector<HTMLAnchorElement>('a.history-retry-link');
+    expect(link?.textContent).toContain('Retried as #succ-567');
+    expect(link?.getAttribute('href')).toBe('#history?execution=succ-5678-aaaa');
+    expect(row.querySelector('.history-retry-of')?.textContent).toContain('Retry #2');
+    expect(row.querySelectorAll('.history-retry-btn')).toHaveLength(0);
+  });
+
+  test('ops_hint row without lineage renders the hint alone', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({ purchase_id: 'r-1', created_by_user_id: ADMIN_USER.id, ops_hint: 'Set FROM_EMAIL tfvar then retry' }),
+      ],
+    });
+
+    await loadHistory();
+    const row = document.querySelector('#history-list tr[data-execution-id="r-1"]')!;
+    expect(row.querySelector('.history-ops-hint')).not.toBeNull();
+    expect(row.querySelectorAll('.history-retry-link')).toHaveLength(0);
+  });
+
   test('threshold-reached row renders override button + sends force=true on accept', async () => {
     (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
     (confirmDialog as jest.Mock).mockResolvedValue(true);
