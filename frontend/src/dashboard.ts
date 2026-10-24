@@ -14,6 +14,7 @@ import { openModal, closeModal } from './modal';
 import { canAccess } from './permissions';
 import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale } from './recommendations';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
+import { scopeUpcomingToProvider, upcomingEmptyMessage, UPCOMING_ACCOUNT_SCOPE_NOTE } from './lib/upcoming-scope';
 import { formatTrendAxisTick, formatTrendTooltipTitle, formatSparseTrendMessage, MIN_TREND_POINTS } from './modules/chart-utils';
 // Re-export for backward compatibility (tests and other callers import from dashboard.ts).
 export { formatTrendAxisTick } from './modules/chart-utils';
@@ -440,21 +441,36 @@ async function retryUpcomingPurchases(): Promise<void> {
   }
 }
 
-function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
+function renderUpcomingPurchases(allPurchases: UpcomingPurchase[]): void {
   const container = document.getElementById('upcoming-list');
   if (!container) return;
+
+  // The endpoint ignores the topbar chips, so apply the provider chip here
+  // and flag the account chip as not applied (#713, see lib/upcoming-scope).
+  const provider = state.getCurrentProvider();
+  const purchases = scopeUpcomingToProvider(allPurchases, provider);
 
   // Refresh the in-memory index so viewPurchaseDetails can render its
   // dialog from local data — there is no execution row to look up yet
   // (the upcoming list shows plans whose next execution hasn't fired).
   upcomingPurchasesIndex = new Map(purchases.map(p => [p.execution_id, p]));
 
-  if (!purchases || purchases.length === 0) {
-    container.innerHTML = '<p class="empty">No upcoming scheduled purchases</p>';
+  container.textContent = '';
+  if (purchases.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'empty';
+    empty.textContent = upcomingEmptyMessage(provider);
+    container.appendChild(empty);
     return;
   }
 
-  container.textContent = '';
+  if (state.getCurrentAccountIDs().length > 0) {
+    const note = document.createElement('p');
+    note.className = 'help-text upcoming-scope-note';
+    note.textContent = UPCOMING_ACCOUNT_SCOPE_NOTE;
+    container.appendChild(note);
+  }
+
   for (const p of purchases) {
     const dateParts = getDateParts(p.scheduled_date);
 
