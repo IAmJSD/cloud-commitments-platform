@@ -16,6 +16,7 @@ import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefresh
 import { getRecommendationsFreshness } from './api/recommendations';
 import { buildFirstRunEmptyState, isScopeFiltered } from './first-run-empty-state';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
+import { filterByEnabledProviders } from './lib/enabled-providers';
 import { buildKpiTile } from './lib/kpi-tile';
 import { scopeUpcomingToProvider, upcomingEmptyMessage, UPCOMING_ACCOUNT_SCOPE_NOTE } from './lib/upcoming-scope';
 import { formatTrendAxisTick, formatTrendTooltipTitle, formatSparseTrendMessage, MIN_TREND_POINTS } from './modules/chart-utils';
@@ -151,10 +152,11 @@ export async function loadDashboard(): Promise<void> {
     // move the range computation server-side if needed.
     // Promise.allSettled ensures the dashboard still renders if any individual
     // fetch fails -- each card falls back gracefully.
-    const [summaryResult, upcomingResult, recsResult, accountsResult] = await Promise.allSettled([
+    const [summaryResult, upcomingResult, recsResult, enabledProviders, accountsResult] = await Promise.allSettled([
       api.getDashboardSummary(currentProvider, currentAccountIDs),
       api.getUpcomingPurchases(),
       api.getRecommendations({ provider: currentProvider, account_ids: currentAccountIDs }),
+      loadEnabledProviders(),
       // Only feeds the first-run onboarding card (issue #756); wrapped so a
       // missing or failing endpoint degrades to "unknown" instead of
       // breaking the dashboard.
@@ -181,7 +183,15 @@ export async function loadDashboard(): Promise<void> {
       : (rawRecs != null && typeof rawRecs === 'object' && Array.isArray((rawRecs as { recommendations?: unknown }).recommendations))
         ? (rawRecs as { recommendations: unknown[] }).recommendations
         : [];
-    const recs: readonly LocalRecommendation[] = recsArray as unknown as LocalRecommendation[];
+    // #180: apply the same Settings -> Enabled Providers filter as the
+    // Opportunities page, so the two Potential Monthly Savings cards are
+    // computed from the same rows. A failed recs fetch stays distinguishable
+    // (null) so the tile can fall back to the backend count.
+    const recs: readonly LocalRecommendation[] = filterByEnabledProviders(
+      recsArray as unknown as LocalRecommendation[],
+      enabledProviders.status === 'fulfilled' ? enabledProviders.value : null,
+    );
+    const recsCount = recsResult.status === 'fulfilled' ? recs.length : null;
 
     if (summaryResult.status === 'rejected') {
       throw summaryResult.reason as Error;
@@ -194,7 +204,10 @@ export async function loadDashboard(): Promise<void> {
     // on the Home chart. Mirrors the pattern from loadSavingsTrendChart (#747).
     const filterDesc = buildFilterDesc(currentProvider, currentAccountIDs);
 
-    renderDashboardSummary(summaryData, recs);
+    renderDashboardSummary(summaryData, recs, recsCount);
+    // `recs` is already narrowed to Enabled Providers (#180), matching the
+    // Opportunities first-run check, which also runs on the preference-
+    // filtered list.
     renderHomeOnboarding(
       recsResult.status === 'fulfilled' && recs.length === 0 && !summaryData.active_commitments,
       accountsResult.status === 'fulfilled' && Array.isArray(accountsResult.value)
@@ -245,6 +258,20 @@ export async function loadDashboard(): Promise<void> {
 }
 
 /**
+ * Settings -> Enabled Providers, or null when the config can't be read (a
+ * missing permission or network error must not block Home; null means "no
+ * filter", the same permissive fallback the Opportunities page uses).
+ */
+async function loadEnabledProviders(): Promise<readonly string[] | null> {
+  try {
+    const cfg = await api.getConfig();
+    return cfg?.global?.enabled_providers ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Issue #756: first-run onboarding card at the top of Home. Shown when no
  * recommendations loaded and nothing is committed yet, so a new user gets a
  * pointer to connecting an account (or refreshing) instead of a page of
@@ -266,7 +293,11 @@ function renderHomeOnboarding(show: boolean, hasAccounts: boolean | null, scopeF
   }));
 }
 
-function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalRecommendation[]): void {
+function renderDashboardSummary(
+  data: DashboardSummary,
+  recs: readonly LocalRecommendation[],
+  recsCount: number | null,
+): void {
   const summary = document.getElementById('summary');
   if (!summary) return;
 
@@ -323,7 +354,9 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
     detail: string;
   }> = [
     { kpi: 'savings',     title: 'Potential Monthly Savings', value: savingsDisplay, valueSavings: true,
-      detail: `${data.total_recommendations ?? NO_VALUE} recommendations` },
+      // #180: count the same rows the range sums (and the Opportunities page
+      // counts); the backend total ignores the Enabled Providers setting.
+      detail: `${recsCount ?? data.total_recommendations ?? NO_VALUE} recommendations` },
     { kpi: 'commitments', title: 'Active Commitments', value: data.active_commitments != null ? String(data.active_commitments) : NO_VALUE,
       detail: `${formatCurrency(data.committed_monthly)}/mo committed` },
     { kpi: 'coverage',    title: 'Current Coverage', value: coverageValue, detail: coverageDetail },

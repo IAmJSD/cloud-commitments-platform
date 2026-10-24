@@ -358,6 +358,11 @@ describe('Recommendations Module', () => {
       };
       expect(cardValue()).toContain('$300');
       expect(cardValue()).toContain('$400');
+      // #180: unfiltered, the card covers every loaded row (same scope as
+      // Home), so it carries no "Filtered" scope line.
+      const scopeLine = (): string | null =>
+        document.querySelector('#recommendations-summary [data-testid="savings-scope"]')?.textContent ?? null;
+      expect(scopeLine()).toBeNull();
 
       // Apply a real column filter restricting to service=ec2 (cell1
       // only). renderRecommendationsList re-runs applyColumnFilters
@@ -375,12 +380,58 @@ describe('Recommendations Module', () => {
       expect(cardValue()).toContain('$150');
       expect(cardValue()).not.toContain('$300');
       expect(cardValue()).not.toContain('$400');
+      // #180: the narrowed scope is labeled so it can't be mistaken for
+      // Home's all-recommendations figure.
+      expect(scopeLine()).toBe('Filtered: 2 of 4 recommendations');
 
       // Restore the filter mock to empty so the leaked return value
       // doesn't bleed into subsequent tests in this file. jest.clearAllMocks
       // resets mock.calls but not .mockReturnValue, so we have to undo
       // explicitly.
       (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    });
+
+    test('savings card is labeled Filtered when the service filter is pushed to the server (#180)', async () => {
+      // A single-value service filter is sent as ?service= (#162) and the
+      // backend returns only matching rows, so the visible and loaded counts
+      // are equal. The card must still say it is filtered; otherwise it shows
+      // a smaller total than Home with no explanation.
+      const ec2Recs = [
+        { id: 'cell1-cheap',  provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 100, upfront_cost: 0 },
+        { id: 'cell1-pricey', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 150, upfront_cost: 1000 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 2, total_monthly_savings: 250, total_upfront_cost: 1000, avg_payback_months: 1 },
+        recommendations: ec2Recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(ec2Recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(ec2Recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        service: { kind: 'set', values: ['ec2'] },
+      });
+      const scopeLine = (): string | null =>
+        document.querySelector('#recommendations-summary [data-testid="savings-scope"]')?.textContent ?? null;
+
+      try {
+        await loadRecommendations();
+
+        expect(api.getRecommendations).toHaveBeenLastCalledWith(expect.objectContaining({ service: 'ec2' }));
+        expect(scopeLine()).toBe('Filtered: 2 recommendations (Service: ec2)');
+
+        // A further client-side filter is counted, not named.
+        (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+          service: { kind: 'set', values: ['ec2'] },
+          term: { kind: 'set', values: ['1'] },
+        });
+        document.querySelector<HTMLTableCellElement>('th[data-sort="service"]')?.click();
+        expect(scopeLine()).toBe('Filtered: 2 recommendations (Service: ec2, +1 more filter)');
+      } finally {
+        // Reload unfiltered so the pushed-down scope doesn't leak into later tests.
+        (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+        await loadRecommendations();
+      }
+      expect(scopeLine()).toBeNull();
     });
 
     test('summary cards narrow to selection in real time (closes #279)', async () => {

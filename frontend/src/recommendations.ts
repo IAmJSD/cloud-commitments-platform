@@ -6,6 +6,7 @@ import * as api from './api';
 import * as state from './state';
 import type { CostPeriod } from './state';
 import { formatCurrency, formatTerm, escapeHtml, CURRENCY_DEFAULT_DIGITS, NO_VALUE } from './utils';
+import { filterByEnabledProviders } from './lib/enabled-providers';
 import { getRecommendationsFreshness, refreshRecommendations as refreshRecommendationsAPI } from './api/recommendations';
 import type { RecommendationsFreshness } from './api/recommendations';
 import { showToast } from './toast';
@@ -112,6 +113,12 @@ const expandedSpGroups = new Set<string>();
 // itself is recomputed client-side from the *visible* recs (so it stays
 // in sync with the per-cell banner range under the table).
 let lastRecommendationsSummary: RecommendationsSummary | null = null;
+
+// #180: the single-value column filters the last successful fetch sent to the
+// server (#162 pushdown). The loaded list is already narrowed by these, so the
+// unfiltered total is unknown and the savings card must still say "Filtered"
+// even though the visible and loaded counts match.
+let loadedServerFilters: ReadonlyArray<{ column: state.RecommendationsColumnId; value: string }> = [];
 
 // #284 (CR follow-up): guard against concurrent stale-load refreshes. If a
 // background refresh is already in flight, any subsequent stale detection
@@ -653,12 +660,15 @@ export async function loadRecommendations(): Promise<void> {
     // permissive default on the checkboxes (line ~2510).
     const enabledProviders = cfgResponse?.global?.enabled_providers;
     const rawRecs = (data.recommendations || []) as unknown as api.Recommendation[];
-    const visibleByPreference: api.Recommendation[] = enabledProviders && enabledProviders.length > 0
-      ? rawRecs.filter(r => enabledProviders.includes(r.provider as api.Provider))
-      : rawRecs;
+    // Shared with Home's savings card (#180) so both screens sum the same rows.
+    const visibleByPreference = filterByEnabledProviders(rawRecs, enabledProviders);
 
     state.setRecommendations(visibleByPreference);
     state.clearSelectedRecommendations();
+    loadedServerFilters = [
+      ...(pushedService !== undefined ? [{ column: 'service' as const, value: pushedService }] : []),
+      ...(pushedRegion !== undefined ? [{ column: 'region' as const, value: pushedRegion }] : []),
+    ];
 
     // Cache the API-derived summary so renderRecommendationsList can
     // recompute the savings card from the visible (post-filter) set on
@@ -850,9 +860,31 @@ async function onLookbackChange(rawValue: string): Promise<void> {
   }
 }
 
+/**
+ * #180: the savings card's scope line, or null when the card covers every
+ * recommendation (the same scope as Home). "Filtered" is decided by whether a
+ * column filter is active or the fetch itself was narrowed server-side, not by
+ * comparing counts: a pushed-down service/region filter returns only matching
+ * rows, so the visible and loaded counts are equal. In that case the
+ * unfiltered total isn't known, so the line names the server-side filter
+ * instead of an "of Y" figure.
+ */
+function savingsScopeText(visibleCount: number, loadedCount: number): string | null {
+  const active = Object.keys(state.getRecommendationsColumnFilters());
+  if (loadedServerFilters.length > 0) {
+    const pushed = loadedServerFilters.map((f) => `${columnLabel(f.column)}: ${f.value}`);
+    const others = active.filter((col) => !loadedServerFilters.some((f) => f.column === col)).length;
+    if (others > 0) pushed.push(`+${others} more ${others === 1 ? 'filter' : 'filters'}`);
+    return `Filtered: ${visibleCount} recommendations (${pushed.join(', ')})`;
+  }
+  if (active.length === 0 && visibleCount >= loadedCount) return null;
+  return `Filtered: ${visibleCount} of ${loadedCount} recommendations`;
+}
+
 function renderRecommendationsSummary(
   _summary: RecommendationsSummary | null,
   recommendations: readonly LocalRecommendation[],
+  loadedCount: number = recommendations.length,
 ): void {
   const container = document.getElementById('recommendations-summary');
   if (!container) return;
@@ -922,17 +954,26 @@ function renderRecommendationsSummary(
     const sfx = periodSuffix(period);
     return isSelectionView ? `Selected Savings ${sfx}` : `Potential Savings ${sfx}`;
   })();
+  // #180: Home's Potential Monthly Savings always covers every
+  // recommendation, so when column filters narrow this page the card must say
+  // so; otherwise the two same-named KPIs disagree with no visible reason.
+  const scopeText = isSelectionView ? null : savingsScopeText(variantCount, loadedCount);
   const upfrontLabel = isSelectionView ? 'Selected Upfront Cost' : 'Total Upfront Cost';
   const paybackLabel = 'Payback Period';
 
   // Issue #743: the same .kpi-tile component as Home's summary, so the two
-  // pages' KPI cards match.
+  // pages' KPI cards match. The #180 scope line is the savings tile's detail.
   renderKpiTiles(container, [
     { kpi: 'count', title: countLabel, value: String(variantCount) },
-    { kpi: 'savings', title: savingsLabel, value: savingsText, valueSavings: true },
+    {
+      kpi: 'savings', title: savingsLabel, value: savingsText, valueSavings: true,
+      ...(scopeText ? { detail: scopeText } : {}),
+    },
     { kpi: 'upfront', title: upfrontLabel, value: upfrontText },
     { kpi: 'payback', title: paybackLabel, value: paybackText },
   ]);
+  const scopeDetail = container.querySelector<HTMLElement>('[data-kpi="savings"] .kpi-tile-detail');
+  if (scopeDetail) scopeDetail.dataset['testid'] = 'savings-scope';
 }
 
 // Comparator extractors per column. Numeric columns return numbers
@@ -4913,7 +4954,7 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // total_upfront_cost, avg_payback_months); the savings figure itself is
   // recomputed from `recommendations` inside renderRecommendationsSummary
   // via the same pageLevelRange the banner uses.
-  renderRecommendationsSummary(lastRecommendationsSummary, recommendations);
+  renderRecommendationsSummary(lastRecommendationsSummary, recommendations, loadedRecs?.length ?? 0);
 
   // Mount once; update is per-render below.
   mountBottomActionBox();

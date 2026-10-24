@@ -70,6 +70,9 @@ jest.mock('../api', () => ({
   // empty list so existing tests that don't care about the savings card
   // value don't need to be updated.
   getRecommendations: jest.fn().mockResolvedValue([]),
+  // #180: Home applies the Settings -> Enabled Providers filter, like the
+  // Opportunities page. Default to "no preference" (no filter).
+  getConfig: jest.fn().mockResolvedValue({ global: {} }),
 }));
 import { loadSavingsTrendChart, loadYtdSparkline, setupSavingsTrendHandlers, setupDashboardHandlers, formatTrendAxisTick } from '../dashboard';
 import { formatTrendTooltipTitle } from '../modules/chart-utils';
@@ -799,6 +802,67 @@ describe('Dashboard Module', () => {
       expect(savingsCard?.textContent).toContain('$400');
       // The overcounted flat sum must NOT appear in the savings card.
       expect(savingsCard?.textContent).not.toContain('$700');
+    });
+
+    // #180: Home and Opportunities must sum the same rows, so Home applies the
+    // same Enabled Providers filter and counts the rows it summed.
+    describe('Enabled Providers scope parity with Opportunities (#180)', () => {
+      const scopedRecs = [
+        { id: 'a1', provider: 'aws', service: 'ec2', region: 'us-east-1', resource_type: 't3.medium', term: 1, savings: 150, upfront_cost: 0, count: 1 },
+        { id: 'a2', provider: 'aws', service: 'rds', region: 'us-east-1', resource_type: 'db.t3.medium', term: 1, savings: 100, upfront_cost: 0, count: 1 },
+        { id: 'z1', provider: 'azure', service: 'aks', region: 'eastus', resource_type: 'Standard_D2_v3', term: 1, savings: 90, upfront_cost: 0, count: 1 },
+      ];
+      const summaryFor = (total: number) => ({
+        potential_monthly_savings: 0, total_recommendations: total, active_commitments: 0,
+        committed_monthly: 0, current_coverage: 0, target_coverage: 80, ytd_savings: 0, by_service: {},
+      });
+      const savingsTile = (): Element | null => document.querySelector('[data-kpi="savings"]');
+      const rangeInputIds = (): string[] =>
+        (mockGroupRecsByCell.mock.calls[0]![0] as Array<{ id: string }>).map((r) => r.id);
+
+      beforeEach(() => {
+        (api.getRecommendations as jest.Mock).mockResolvedValue(scopedRecs);
+        (api.getDashboardSummary as jest.Mock).mockResolvedValue(summaryFor(3));
+        (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+      });
+
+      test('drops recommendations for disabled providers before computing the range', async () => {
+        (api.getConfig as jest.Mock).mockResolvedValueOnce({ global: { enabled_providers: ['aws'] } });
+
+        await loadDashboard();
+
+        expect(rangeInputIds()).toEqual(['a1', 'a2']);
+        // The count matches the rows summed, not the backend total (3).
+        expect(savingsTile()?.querySelector('.kpi-tile-detail')?.textContent).toBe('2 recommendations');
+      });
+
+      test('empty enabled_providers keeps every recommendation (permissive default)', async () => {
+        (api.getConfig as jest.Mock).mockResolvedValueOnce({ global: { enabled_providers: [] } });
+
+        await loadDashboard();
+
+        expect(rangeInputIds()).toEqual(['a1', 'a2', 'z1']);
+        expect(savingsTile()?.querySelector('.kpi-tile-detail')?.textContent).toBe('3 recommendations');
+      });
+
+      test('a config fetch failure does not block the dashboard and applies no filter', async () => {
+        (api.getConfig as jest.Mock).mockRejectedValueOnce(new Error('403 Forbidden'));
+
+        await loadDashboard();
+
+        expect(rangeInputIds()).toEqual(['a1', 'a2', 'z1']);
+        expect(savingsTile()?.querySelector('.kpi-tile-value')?.textContent).toBe('$300 – $400');
+      });
+
+      test('falls back to the backend count when the recommendations fetch fails', async () => {
+        (api.getRecommendations as jest.Mock).mockRejectedValueOnce(new Error('boom'));
+        (api.getDashboardSummary as jest.Mock).mockResolvedValue(summaryFor(7));
+
+        await loadDashboard();
+
+        expect(savingsTile()?.querySelector('.kpi-tile-value')?.textContent).toBe('\u2014');
+        expect(savingsTile()?.querySelector('.kpi-tile-detail')?.textContent).toBe('7 recommendations');
+      });
     });
 
     // #978: Current Coverage KPI must render with exactly 1 decimal place so it
