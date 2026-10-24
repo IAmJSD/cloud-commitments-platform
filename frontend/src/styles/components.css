@@ -1440,6 +1440,18 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     font-weight: 600;
 }
 
+/* Upfront Cost cell when the amortize toggle folds the upfront into the
+ * Monthly Cost column (#318): muted so the two are not read as additive.
+ */
+.upfront-in-monthly {
+    color: var(--cudly-text-muted);
+}
+
+.upfront-in-monthly-note {
+    font-size: 0.78rem;
+    line-height: 1.25;
+}
+
 /* Purchase detail status badges */
 .status-badge.completed {
     background: var(--cudly-success-bg);

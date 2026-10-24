@@ -562,6 +562,16 @@ function providerCell(p: HistoryPurchase): string {
   return `<span class="provider-badge ${safeProvider}">${safeProvider.toUpperCase()}</span>`;
 }
 
+// upfrontCell renders the Upfront Cost cell. With amortize on, the upfront is
+// already spread into the Monthly Cost column, so the cell is muted and
+// labeled to stop Upfront + 12 x Monthly being read as additive (#318).
+function upfrontCell(p: HistoryPurchase, amortize: boolean): string {
+  const amount = formatCurrency(p.upfront_cost);
+  const folded = amortize && p.monthly_cost != null && p.upfront_cost != null && p.upfront_cost > 0 && p.term > 0;
+  if (!folded) return `<td>${amount}</td>`;
+  return `<td class="upfront-in-monthly" title="Included in the amortized monthly cost">${amount}<div class="upfront-in-monthly-note">(in monthly)</div></td>`;
+}
+
 // canCancelPendingRow returns true when the current session is permitted
 // to cancel the given pending/notified history row via the session-authed
 // Cancel button (issue #46). UX gate only — the backend
@@ -1215,6 +1225,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
   const colFilters = state.getPurchaseHistoryColumnFilters();
   const visible = applyPurchaseHistoryColumnFilters(statusFiltered, colFilters);
 
+  const amortize = state.getAmortizeUpfront();
   const tableRows = visible.map(p => {
     const statusCell = (() => {
       const badge = statusBadgeHTML(normalizeStatus(p));
@@ -1229,7 +1240,6 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     })();
     const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtmlAttr(p.purchase_id)}"` : '';
     const planCellContent = renderActionCell(p);
-    const amortize = state.getAmortizeUpfront();
     const rawMonthly = p.monthly_cost != null ? p.monthly_cost : null;
     const displayMonthly = (rawMonthly != null && amortize)
       ? (p.upfront_cost == null ? null : amortizedMonthly(rawMonthly, p.upfront_cost, p.term))
@@ -1247,7 +1257,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
         <td>${escapeHtml(p.region)}</td>
         <td>${p.count}</td>
         <td>${formatTerm(p.term)}</td>
-        <td>${formatCurrency(p.upfront_cost)}</td>
+        ${upfrontCell(p, amortize)}
         <td>${monthlyCostCell}</td>
         <td class="savings">${formatCurrency(p.estimated_savings)}</td>
         <td>${planCellContent}</td>
@@ -1255,7 +1265,6 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     `;
   }).join('');
 
-  const amortize = state.getAmortizeUpfront();
   const monthlyColHeader = amortize ? 'Monthly Cost (amortized)' : 'Monthly Cost';
   const fbtn = (col: PurchaseHistoryColumnId): string => renderHistoryFilterButton(
     col, PURCHASE_HISTORY_LABELS[col], colFilters[col] != null,
@@ -1843,6 +1852,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
   const colFilters = state.getApprovalQueueColumnFilters();
   const visible = applyApprovalQueueColumnFilters(pending, colFilters);
 
+  const amortize = state.getAmortizeUpfront();
   const rows = visible.map(p => {
     const actions = renderPendingActionButtons(p);
     const actionsCell = actions || '<span class="muted">-</span>';
@@ -1858,7 +1868,6 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
       : '<span class="muted">-</span>';
     const termCell = p.term ? escapeHtml(formatTerm(p.term)) : '<span class="muted">-</span>';
     const paymentCell = p.payment ? escapeHtml(p.payment) : '<span class="muted">-</span>';
-    const amortize = state.getAmortizeUpfront();
     const rawMonthly = p.monthly_cost != null ? p.monthly_cost : null;
     const displayMonthly = (rawMonthly != null && amortize)
       ? (p.upfront_cost == null ? null : amortizedMonthly(rawMonthly, p.upfront_cost, p.term))
@@ -1877,7 +1886,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
         <td>${termCell}</td>
         <td>${paymentCell}</td>
         <td>${monthlyCostCell}</td>
-        <td>${formatCurrency(p.upfront_cost)}</td>
+        ${upfrontCell(p, amortize)}
         <td class="savings">${formatCurrency(p.estimated_savings)}</td>
         <td>${createdBy}</td>
         <td>${actionsCell}</td>
@@ -1885,7 +1894,6 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
     `;
   }).join('');
 
-  const amortize = state.getAmortizeUpfront();
   const monthlyColHeader = amortize ? 'Monthly Cost (amortized)' : 'Monthly Cost';
   // monthlyColHeader is a hardcoded constant string (no user data), so
   // interpolating it directly into the template is safe.
