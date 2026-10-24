@@ -22,7 +22,7 @@ test('Trends sub-tab renders the series, breakdowns and a laid-out chart', async
   const monthly = page.locator('#trends-monthly-table tbody tr');
   await expect(monthly).toHaveCount(6);
   await expect(monthly.nth(5).locator('td').nth(1)).toHaveText('$2,040');
-  await expect(monthly.nth(3).locator('td').nth(1)).toHaveText('--');
+  await expect(monthly.nth(3).locator('td').nth(1)).toHaveText('\u2014');
   await expect(page.locator('#trends-provider-table tbody tr')).toHaveCount(3);
   await expect(page.locator('#trends-service-table tbody tr')).toHaveCount(4);
 

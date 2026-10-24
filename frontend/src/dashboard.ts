@@ -5,7 +5,7 @@
 import { Chart, registerables } from 'chart.js';
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, getDateParts, providerBadgeClass } from './utils';
+import { formatCurrency, getDateParts, NO_VALUE, providerBadgeClass } from './utils';
 import type { DashboardSummary, UpcomingPurchase, ServiceSavings, LocalRecommendation } from './types';
 import type { SavingsDataPoint } from './api';
 import { showToast } from './toast';
@@ -14,7 +14,7 @@ import { openModal, closeModal } from './modal';
 import { canAccess } from './permissions';
 import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale } from './recommendations';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
-import { formatTrendAxisTick, formatTrendTooltipTitle } from './modules/chart-utils';
+import { formatTrendAxisTick, formatTrendTooltipTitle, formatSparseTrendMessage, MIN_TREND_POINTS } from './modules/chart-utils';
 import { setChartSummary, renderChartTable, removeChartTable } from './lib/chart-a11y';
 // Re-export for backward compatibility (tests and other callers import from dashboard.ts).
 export { formatTrendAxisTick } from './modules/chart-utils';
@@ -237,22 +237,22 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
   // min/max savings (best and worst variant per physical resource cell),
   // avoiding the ~6x inflation of summing every variant of every cell that
   // the flat summary.potential_monthly_savings carries.
-  // Falls back to '--' when recs is empty or fetch failed; never fabricates $0
+  // Falls back to NO_VALUE (an em dash) when recs is empty or fetch failed; never fabricates $0
   // for an absent/failed computation (finding H-3: no silent $0 fallback).
   // Soft-fail (#304): wrap in try/catch so an unexpected non-iterable shape
   // that slips past the Array.isArray guard in loadDashboard (e.g. if
   // groupRecsByCell is called from a path that bypasses the guard) cannot
-  // blank the entire dashboard -- the savings card shows '--' instead.
+  // blank the entire dashboard -- the savings card shows NO_VALUE instead.
   let savingsDisplay: string;
   try {
     const groups = groupRecsByCell(recs);
     const range = pageLevelRange(groups);
     savingsDisplay = range.cellCount > 0
       ? formatSavingsRange(range.savingsMin, range.savingsMax)
-      : '--';
+      : NO_VALUE;
   } catch (recErr) {
     console.warn('Dashboard: failed to compute savings range from recommendations:', recErr);
-    savingsDisplay = '--';
+    savingsDisplay = NO_VALUE;
   }
 
   // When no recommendations and no commitments exist, "100% coverage" is
@@ -260,7 +260,7 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
   const nothingTracked = !data.total_recommendations && !data.active_commitments;
   // #978: round to 1 decimal place to match sibling coverage formatting (inventory.ts)
   // and prevent overflow at narrower screen widths.
-  // H-3: use null-safe checks so absent coverage/target are shown as '--'/'--'
+  // H-3: use null-safe checks so absent coverage/target are shown as NO_VALUE
   // rather than fabricating '0%'/'80%'. The hardcoded 80 default is removed
   // because target_coverage is a user-configured value from the API -- the
   // frontend must not substitute a business default when the field is absent.
@@ -268,10 +268,10 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
   const targetCoverage = data.target_coverage ?? null;
   const coverageValue = nothingTracked
     ? '—'
-    : currentCoverage !== null ? `${currentCoverage.toFixed(1)}%` : '--';
+    : currentCoverage !== null ? `${currentCoverage.toFixed(1)}%` : NO_VALUE;
   const coverageDetail = nothingTracked
     ? 'No services tracked'
-    : targetCoverage !== null ? `Target: ${targetCoverage.toFixed(1)}%` : 'Target: --';
+    : targetCoverage !== null ? `Target: ${targetCoverage.toFixed(1)}%` : `Target: ${NO_VALUE}`;
 
   // Render KPI tiles via DOM construction (textContent / appendChild)
   // rather than an innerHTML template literal, per the issue #340 plan's
@@ -286,8 +286,8 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
     detail: string;
   }> = [
     { kpi: 'savings',     title: 'Potential Monthly Savings', value: savingsDisplay, valueSavings: true,
-      detail: `${data.total_recommendations ?? '--'} recommendations` },
-    { kpi: 'commitments', title: 'Active Commitments', value: data.active_commitments != null ? String(data.active_commitments) : '--',
+      detail: `${data.total_recommendations ?? NO_VALUE} recommendations` },
+    { kpi: 'commitments', title: 'Active Commitments', value: data.active_commitments != null ? String(data.active_commitments) : NO_VALUE,
       detail: `${formatCurrency(data.committed_monthly)}/mo committed` },
     { kpi: 'coverage',    title: 'Current Coverage', value: coverageValue, detail: coverageDetail },
     { kpi: 'ytd',         title: 'YTD Savings', value: formatCurrency(data.ytd_savings), valueSavings: true,
@@ -301,7 +301,9 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
     h3.textContent = t.title;
     const valueP = document.createElement('p');
     valueP.classList.add('value', 'kpi-tile-value');
-    if (t.valueSavings) valueP.classList.add('savings');
+    // An absent figure is not a saving: keep the placeholder neutral rather
+    // than green (issue #739).
+    if (t.valueSavings && t.value !== NO_VALUE) valueP.classList.add('savings');
     valueP.textContent = t.value;
     const detailP = document.createElement('p');
     detailP.classList.add('detail', 'kpi-tile-detail');
@@ -1061,8 +1063,10 @@ export function renderSavingsByService(
  * supersedes QA 3.1's earlier empty-axes suggestion), the canvas is hidden
  * and an empty-state banner is shown: a filter-aware "No savings history
  * for <filter>" when a provider or account chip is active, otherwise the
- * generic "No purchase history yet." Fetch failures hide the canvas and
- * show the "Savings history is not available yet." stub instead.
+ * generic "No purchase history yet." A single data point is too sparse to
+ * draw a trend, so it gets a "Not enough history yet" message carrying that
+ * point's value instead of a lone dot on a blank canvas (#188). Fetch failures
+ * hide the canvas and show the "Savings history is not available yet." stub.
  */
 export async function loadSavingsTrendChart(): Promise<void> {
   const canvas = document.getElementById('savings-trend-chart') as HTMLCanvasElement | null;
@@ -1144,6 +1148,20 @@ export async function loadSavingsTrendChart(): Promise<void> {
         empty.classList.remove('hidden');
       }
       if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
+      removeChartTable(SAVINGS_TREND_TABLE_ID);
+      return;
+    }
+    // Sparse data (#188): one point would paint a lone dot on a blank canvas,
+    // so show "not enough history yet" with the value we have instead.
+    if (points.length < MIN_TREND_POINTS) {
+      canvas.classList.add('hidden');
+      if (empty) {
+        empty.textContent = formatSparseTrendMessage(points[0] as SavingsDataPoint);
+        empty.classList.remove('hidden');
+      }
+      if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
+      // The sparse message carries the one value; drop any table left from
+      // an earlier render, as the empty state does (#744).
       removeChartTable(SAVINGS_TREND_TABLE_ID);
       return;
     }
