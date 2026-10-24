@@ -6,7 +6,8 @@
 jest.mock('../api', () => ({
   initAuth: jest.fn(),
   isAuthenticated: jest.fn(),
-  getCurrentUser: jest.fn()
+  getCurrentUser: jest.fn(),
+  getPublicInfo: jest.fn(),
 }));
 
 jest.mock('../state', () => ({
@@ -25,6 +26,7 @@ jest.mock('../state', () => ({
 
 jest.mock('../auth', () => ({
   showLoginModal: jest.fn(),
+  showAdminSetupModal: jest.fn(),
   updateUserUI: jest.fn()
 }));
 
@@ -97,6 +99,39 @@ describe('App Module', () => {
 
       expect(auth.showLoginModal).toHaveBeenCalled();
       expect(api.getCurrentUser).not.toHaveBeenCalled();
+    });
+
+    test('shows admin setup only when /api/info says no admin exists', async () => {
+      (api.isAuthenticated as jest.Mock).mockReturnValue(false);
+      (api.getPublicInfo as jest.Mock).mockResolvedValue({ version: '1', admin_exists: false });
+
+      await init();
+
+      expect(auth.showAdminSetupModal).toHaveBeenCalled();
+      expect(auth.showLoginModal).not.toHaveBeenCalled();
+    });
+
+    test('a failed /api/info lands on login with the failure named, not on admin setup', async () => {
+      (api.isAuthenticated as jest.Mock).mockReturnValue(false);
+      (api.getPublicInfo as jest.Mock).mockRejectedValue(Object.assign(new Error('HTTP 503'), { status: 503 }));
+      console.error = jest.fn();
+
+      await init();
+
+      expect(auth.showAdminSetupModal).not.toHaveBeenCalled();
+      expect(auth.showLoginModal).toHaveBeenCalledWith(expect.stringContaining('HTTP 503'));
+    });
+
+    test('a network failure on /api/info names no status', async () => {
+      (api.isAuthenticated as jest.Mock).mockReturnValue(false);
+      (api.getPublicInfo as jest.Mock).mockRejectedValue(new TypeError('Failed to fetch'));
+      console.error = jest.fn();
+
+      await init();
+
+      expect(auth.showLoginModal).toHaveBeenCalledWith(
+        'Could not reach the CUDly API. Sign-in may fail until it is available again.',
+      );
     });
 
     test('loads user and routes to dashboard when authenticated', async () => {

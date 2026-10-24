@@ -541,9 +541,10 @@ async function handleAdminSetupSubmit(e: Event): Promise<void> {
 }
 
 /**
- * Show login modal
+ * Show login modal. `notice`, when given, is shown in the form's error line
+ * on open (e.g. the API could not be reached during startup).
  */
-export async function showLoginModal(): Promise<void> {
+export async function showLoginModal(notice?: string): Promise<void> {
   // Remove any existing login modal to prevent duplicates
   document.getElementById('login-modal')?.remove();
 
@@ -580,6 +581,7 @@ export async function showLoginModal(): Promise<void> {
   document.body.appendChild(modal);
 
   setupLoginModalHandlers(modal);
+  if (notice) showLoginError(notice);
 }
 
 function setupLoginModalHandlers(modal: HTMLElement): void {
@@ -671,13 +673,42 @@ function showLoginError(message: string): void {
 // Pending-MFA closure (issue #497). When the server responds with
 // `mfa_required` on the first POST /api/auth/login, we keep the
 // email + password in memory ONLY for the resubmit. Cleared on
-// success, cancel, or modal close. Never persisted.
+// success, cancel, any terminal error, or after MFA_PENDING_TTL_MS so an
+// abandoned prompt does not keep the plaintext password reachable for the
+// rest of the page's life. Never persisted.
 let pendingMFAEmail = '';
 let pendingMFAPassword = '';
+let pendingMFATimer: ReturnType<typeof setTimeout> | undefined;
+export const MFA_PENDING_TTL_MS = 5 * 60 * 1000;
 
 function clearPendingMFA(): void {
   pendingMFAEmail = '';
   pendingMFAPassword = '';
+  if (pendingMFATimer !== undefined) {
+    clearTimeout(pendingMFATimer);
+    pendingMFATimer = undefined;
+  }
+}
+
+function stashPendingMFA(email: string, password: string): void {
+  clearPendingMFA();
+  pendingMFAEmail = email;
+  pendingMFAPassword = password;
+  pendingMFATimer = setTimeout(() => {
+    pendingMFATimer = undefined;
+    if (document.getElementById('mfa-code')) {
+      restartLogin('The two-factor prompt expired. Log in again.');
+    } else {
+      clearPendingMFA();
+    }
+  }, MFA_PENDING_TTL_MS);
+}
+
+/** Drop the pending credentials and return to the email/password step. */
+function restartLogin(notice?: string): void {
+  clearPendingMFA();
+  document.getElementById('login-modal')?.remove();
+  void showLoginModal(notice);
 }
 
 async function handleLogin(e: Event): Promise<void> {
@@ -717,8 +748,7 @@ async function handleLogin(e: Event): Promise<void> {
       // First-leg success: password is correct, server wants the
       // TOTP code. Stash credentials in the closure and swap the
       // form to the MFA code prompt.
-      pendingMFAEmail = email;
-      pendingMFAPassword = password;
+      stashPendingMFA(email, password);
       showMFACodeStep();
       return;
     }
@@ -762,10 +792,8 @@ function showMFACodeStep(): void {
   `;
   document.getElementById('mfa-cancel-link')?.addEventListener('click', (e) => {
     e.preventDefault();
-    clearPendingMFA();
     // Easiest re-render: tear down and re-open the modal.
-    document.getElementById('login-modal')?.remove();
-    void showLoginModal();
+    restartLogin();
   });
   // Re-bind submit to handleMFACodeSubmit (the form's submit
   // listener attached to handleLogin still fires; replace the form's
@@ -811,8 +839,10 @@ async function handleMFACodeSubmit(e: Event): Promise<void> {
       showLoginError('Two-factor code required');
       return;
     }
+    // Any other failure ends this attempt: a resubmit cannot succeed
+    // without the password, so drop it and restart at the first step.
     const message = error instanceof Error ? error.message : String(error);
-    showLoginError(mapServerLoginError(message));
+    restartLogin(mapServerLoginError(message));
   }
 }
 

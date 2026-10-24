@@ -54,6 +54,12 @@ function describeDuplicateSubmit(result: api.PurchaseResult): string {
   return `This matches an existing execution ${id}, so no new request was created; ${duplicateState(result.status)}. Check Purchase History.`;
 }
 
+function describePublicInfoFailure(err: unknown): string {
+  const status = (err as { status?: unknown } | null)?.status;
+  const detail = typeof status === 'number' && status > 0 ? ` (HTTP ${status})` : '';
+  return `Could not reach the CUDly API${detail}. Sign-in may fail until it is available again.`;
+}
+
 /**
  * Initialize app
  */
@@ -80,6 +86,7 @@ export async function init(): Promise<void> {
   setActiveNav(applyTabFromPath());
 
   if (!api.isAuthenticated()) {
+    let notice: string | undefined;
     try {
       const publicInfo = await api.getPublicInfo();
       if (!publicInfo.admin_exists) {
@@ -89,10 +96,14 @@ export async function init(): Promise<void> {
         await showAdminSetupModal(undefined);
         return;
       }
-    } catch {
-      // If public info fails, fall through to login
+    } catch (err) {
+      // getPublicInfo throws on a non-OK response, so an unreachable API
+      // lands on the login form with the failure named, rather than on the
+      // first-run setup screen asserting that no admin exists.
+      console.error('Failed to load /api/info:', err);
+      notice = describePublicInfoFailure(err);
     }
-    await showLoginModal();
+    await showLoginModal(notice);
     return;
   }
 
