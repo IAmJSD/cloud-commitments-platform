@@ -11,6 +11,7 @@ import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
 import { approvalDetailsUnavailableMessage, buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
+import { iconSvg } from './icons';
 import {
   historyTruncationMessage,
   mergeHistoryPages,
@@ -1070,7 +1071,7 @@ function renderPendingActionButtons(p: HistoryPurchase): string {
 function renderLineageLinks(p: HistoryPurchase): string[] {
   const lineage: string[] = [];
   if (p.retry_execution_id) {
-    lineage.push(`<a href="#history?execution=${encodeURIComponent(p.retry_execution_id)}" class="history-retry-link" title="Jump to the retry execution">↻ Retried as #${escapeHtml(shortExecID(p.retry_execution_id))}</a>`);
+    lineage.push(`<a href="#history?execution=${encodeURIComponent(p.retry_execution_id)}" class="history-retry-link" title="Jump to the retry execution">${iconSvg('rotate-cw')} Retried as #${escapeHtml(shortExecID(p.retry_execution_id))}</a>`);
   }
   if ((p.retry_attempt_n ?? 0) > 0) {
     // We don't carry a back-pointer field — a future enhancement
@@ -1081,7 +1082,7 @@ function renderLineageLinks(p: HistoryPurchase): string[] {
     // (api.getHistory), so the TS number type is not a runtime guarantee
     // and this value sits inside a title="..." attribute.
     const attemptN = Number(p.retry_attempt_n) || 0;
-    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${attemptN} in its chain">↻ Retry #${attemptN}</span>`);
+    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${attemptN} in its chain">${iconSvg('rotate-cw')} Retry #${attemptN}</span>`);
   }
   return lineage;
 }
@@ -1108,11 +1109,13 @@ function renderActionCell(p: HistoryPurchase): string {
       // Keep the lineage links next to the hint (issue #1040): a legacy row
       // retried before the re-drive gate (#967) now carries the permanent
       // hint, and the operator still needs the link to its successor.
-      return [`<span class="history-ops-hint" title="${title}">⚠ ${escapeHtml(p.ops_hint)}</span>`, ...renderLineageLinks(p)].join(' ');
+      return [`<span class="history-ops-hint" title="${title}">${iconSvg('alert-triangle')} ${escapeHtml(p.ops_hint)}</span>`, ...renderLineageLinks(p)].join(' ');
     }
     if (canRetryFailedRow(p) && p.purchase_id) {
       const overThreshold = retryThresholdReached(p);
-      const label = overThreshold ? `⚠ Retried ${Number(p.retry_attempt_n) || 0}× — click to override` : '↻ Retry';
+      const label = overThreshold
+        ? `${iconSvg('alert-triangle')} Retried ${Number(p.retry_attempt_n) || 0}× — click to override`
+        : `${iconSvg('rotate-cw')} Retry`;
       const cls = overThreshold ? 'btn-link history-retry-btn history-retry-over-threshold' : 'btn-link history-retry-btn';
       return `<button type="button" class="${cls}" data-retry-id="${escapeHtmlAttr(p.purchase_id)}">${label}</button>`;
     }

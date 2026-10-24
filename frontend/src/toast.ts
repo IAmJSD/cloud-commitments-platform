@@ -19,6 +19,8 @@
  * of the upload).
  */
 
+import { createIcon, type IconName } from './icons';
+
 export type ToastKind = 'success' | 'info' | 'warning' | 'error';
 
 export interface ToastAction {
@@ -41,11 +43,11 @@ export interface ToastHandle {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const CONTAINER_ID = 'toast-container';
 
-const KIND_ICONS: Record<ToastKind, string> = {
-  success: '\u2713',  // ✓
-  info: '\u2139',     // ℹ
-  warning: '\u26A0',  // ⚠
-  error: '\u2715',    // ✕
+const KIND_ICONS: Record<ToastKind, IconName> = {
+  success: 'check-circle',
+  info: 'info',
+  warning: 'alert-triangle',
+  error: 'x-circle',
 };
 
 function ensureContainer(): HTMLElement {
@@ -80,7 +82,7 @@ export function showToast(opts: ToastOptions): ToastHandle {
   const icon = document.createElement('span');
   icon.className = 'toast-icon';
   icon.setAttribute('aria-hidden', 'true');
-  icon.textContent = KIND_ICONS[kind];
+  icon.appendChild(createIcon(KIND_ICONS[kind]));
   toast.appendChild(icon);
 
   const body = document.createElement('div');
@@ -113,7 +115,7 @@ export function showToast(opts: ToastOptions): ToastHandle {
   closeBtn.type = 'button';
   closeBtn.className = 'toast-close';
   closeBtn.setAttribute('aria-label', 'Dismiss notification');
-  closeBtn.textContent = '\u00D7'; // ×
+  closeBtn.appendChild(createIcon('x'));
   closeBtn.addEventListener('click', () => handle.dismiss());
   toast.appendChild(closeBtn);
 
