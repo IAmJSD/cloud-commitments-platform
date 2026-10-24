@@ -768,6 +768,31 @@ describe('Recommendations API', () => {
       expect(url).not.toContain('min_savings=');
     });
 
+    // Issue #65: non-finite or non-positive savings floors must never reach
+    // the query string. The backend 400s on NaN/Infinity/negatives, which
+    // would turn a bad widget value into an opaque load error.
+    test.each([
+      ['NaN', NaN],
+      ['Infinity', Infinity],
+      ['-Infinity', -Infinity],
+      ['a negative value', -5],
+      ['zero', 0],
+    ])('drops min_savings_usd and min_savings_pct when the floor is %s', async (_label, value) => {
+      await getRecommendations({ provider: 'aws', minSavingsUsd: value, minSavingsPct: value });
+
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toBe('/api/recommendations?provider=aws');
+      expect(url).not.toContain('min_savings_usd');
+      expect(url).not.toContain('min_savings_pct');
+    });
+
+    test('a bad usd floor does not suppress a valid pct floor', async () => {
+      await getRecommendations({ minSavingsUsd: Infinity, minSavingsPct: 12.5 });
+
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toBe('/api/recommendations?min_savings_pct=12.5');
+    });
+
     test('applies other filters to query string', async () => {
       await getRecommendations({
         provider: 'aws',
