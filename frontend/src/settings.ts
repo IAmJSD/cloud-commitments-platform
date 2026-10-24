@@ -3558,7 +3558,8 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     for (const [key, ids] of GLOBAL_CONFIG_FIELDS) {
       if (ids.every(id => getFieldValue(id) === savedSnapshot[id])) delete changedGlobal[key];
     }
-    if (Object.keys(changedGlobal).length > 0) {
+    const globalSent = Object.keys(changedGlobal).length > 0;
+    if (globalSent) {
       await api.updateConfig(changedGlobal);
       // Persisted: advance the snapshot now, so a later validation failure or
       // service-save error does not leave these fields looking unsaved.
@@ -3678,10 +3679,7 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
 
     if (failures.length > 0) {
       console.error('Failed to save service configs:', failures);
-      showToast({
-        message: `Settings saved, but ${failures.length} service${failures.length === 1 ? '' : 's'} failed: ${failures.join('; ')}`,
-        kind: 'error',
-      });
+      showToast({ message: serviceSaveFailureMessage(results, failures, globalSent), kind: 'error' });
     } else {
       showToast({ message: 'Settings saved successfully', kind: 'success', timeout: 5_000 });
     }
@@ -3693,6 +3691,31 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     saveInFlight = false;
     if (saveBtn) saveBtn.disabled = false;
   }
+}
+
+/**
+ * Toast text for a Save where at least one service PUT failed. Only claim
+ * "Settings saved" when something was: the global PUT went out or a service
+ * PUT succeeded. When nothing saved and every service PUT was denied (a
+ * scoped admin after #614 gated service config on unrestricted account
+ * scope), show the single backend reason, matching the global PUT's
+ * "Failed to save settings: permission denied: ..." toast instead of
+ * repeating it once per service (#617).
+ */
+function serviceSaveFailureMessage(
+  results: PromiseSettledResult<void>[],
+  failures: string[],
+  globalSent: boolean,
+): string {
+  const savedSomething = globalSent || results.some(r => r.status === 'fulfilled');
+  if (savedSomething) {
+    return `Settings saved, but ${failures.length} service${failures.length === 1 ? '' : 's'} failed: ${failures.join('; ')}`;
+  }
+  const reasons = results.map(r => (r.status === 'rejected' ? r.reason : null));
+  if (reasons.every(isPermissionDeniedError)) {
+    return `Failed to save settings: ${(reasons[0] as Error).message}`;
+  }
+  return `Failed to save settings: ${failures.length} service${failures.length === 1 ? '' : 's'} failed: ${failures.join('; ')}`;
 }
 
 /**
