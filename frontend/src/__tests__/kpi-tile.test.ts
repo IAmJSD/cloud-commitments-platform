@@ -3,6 +3,7 @@
  * Opportunities.
  */
 import { buildKpiTile, renderKpiTiles } from '../lib/kpi-tile';
+import { NO_VALUE } from '../utils';
 
 describe('buildKpiTile', () => {
   test('builds the full tile: title, value, detail and hidden spark slot', () => {
@@ -29,6 +30,13 @@ describe('buildKpiTile', () => {
     expect(tile.querySelector('.kpi-tile-detail')).toBeNull();
     expect(tile.querySelector('svg')).toBeNull();
     expect(tile.children).toHaveLength(2);
+  });
+
+  test('keeps an absent (NO_VALUE) savings figure neutral, not green (issue #739)', () => {
+    const tile = buildKpiTile({ kpi: 'savings', title: 'Potential Monthly Savings', value: NO_VALUE, valueSavings: true });
+    const value = tile.querySelector('p.value')!;
+    expect(value.textContent).toBe(NO_VALUE);
+    expect(value.classList.contains('savings')).toBe(false);
   });
 
   test('an empty-string detail still renders the line', () => {

@@ -17,12 +17,17 @@
  * tests. Text is set with textContent, never innerHTML.
  */
 
+import { NO_VALUE } from '../utils';
+
 export interface KpiTileSpec {
   /** Stable key, rendered as data-kpi (and data-spark-key when spark is set). */
   kpi: string;
   title: string;
   value: string;
-  /** Render the value in the savings (green) color. */
+  /**
+   * Render the value in the savings (green) color. An absent figure
+   * (NO_VALUE) is not a saving, so it stays neutral (issue #739).
+   */
   valueSavings?: boolean;
   /** Small line under the value; omitted when absent. */
   detail?: string;
@@ -43,7 +48,7 @@ export function buildKpiTile(spec: KpiTileSpec): HTMLDivElement {
 
   const value = document.createElement('p');
   value.classList.add('value', 'kpi-tile-value');
-  if (spec.valueSavings) value.classList.add('savings');
+  if (spec.valueSavings && spec.value !== NO_VALUE) value.classList.add('savings');
   value.textContent = spec.value;
   card.appendChild(value);
 
