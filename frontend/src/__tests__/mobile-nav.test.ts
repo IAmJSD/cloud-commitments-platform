@@ -5,7 +5,7 @@
  * aria-expanded toggle, focus management, body scroll-lock class.
  */
 
-import { setupMobileNav, syncHeaderPlacement } from '../app';
+import { setupMobileNav, syncHeaderPlacement } from '../nav/mobile-nav';
 
 function buildDOM(): void {
   document.body.innerHTML = `
