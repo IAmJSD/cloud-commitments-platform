@@ -1582,11 +1582,17 @@ function wireRowActionHandlers(container: HTMLElement): void {
           addRow('Resource type', purchase.resource_type || '-');
           addRow('Remaining term', remainingMonths === 1 ? '1 month' : `${remainingMonths} months`);
           if (listPricePerUnit > 0) {
+            // Show cents, and derive the fee from the two rounded totals, so
+            // the three lines always reconcile (fee + net = list price). The
+            // dashboard's whole-dollar default rounded each line on its own,
+            // e.g. $101 = $12 + $88 for a $100.50 listing (#318).
+            const listCents = Math.round(listPriceTotal * 100);
+            const netCents = Math.round(netProceedsTotal * 100);
             addRow('Default list price', count > 1
-              ? `${formatCurrency(listPricePerUnit)}/unit (${formatCurrency(listPriceTotal)} total for ${count} units)`
-              : formatCurrency(listPriceTotal));
-            addRow(`AWS fee (${AWS_MARKETPLACE_FEE_PERCENT}%)`, formatCurrency(listPriceTotal * (AWS_MARKETPLACE_FEE_PERCENT / 100)));
-            addRow('Estimated net proceeds', formatCurrency(netProceedsTotal));
+              ? `${formatCurrency(listPricePerUnit, '$', 2)}/unit (${formatCurrency(listCents / 100, '$', 2)} total for ${count} units)`
+              : formatCurrency(listCents / 100, '$', 2));
+            addRow(`AWS fee (${AWS_MARKETPLACE_FEE_PERCENT}%)`, formatCurrency((listCents - netCents) / 100, '$', 2));
+            addRow('Estimated net proceeds', formatCurrency(netCents / 100, '$', 2));
           } else {
             // No default price can be computed (no upfront cost or unknown
             // term) -- listing will be rejected server-side unless a custom
