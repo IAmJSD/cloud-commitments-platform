@@ -490,9 +490,9 @@ button.secondary:hover {
     content: 'Unsaved changes';
     display: inline-block;
     padding: 0.25rem 0.6rem;
-    background: #fff3cd;
-    color: #856404;
-    border-radius: 12px;
+    background: var(--cudly-warn-bg);
+    color: var(--cudly-warn-fg);
+    border-radius: var(--cudly-r-full);
     font-size: 0.8rem;
     margin-right: 0.75rem;
     vertical-align: middle;
@@ -1272,32 +1272,9 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     color: var(--cudly-primary);
 }
 
-/* Status badges */
-.status-badge {
-    padding: 0.25rem 0.75rem;
-    border-radius: 12px;
-    font-size: 0.8rem;
-    font-weight: var(--cudly-fw-semibold);
-}
-
-.status-badge.active {
-    background: var(--cudly-success-bg);
-    color: #137333;
-}
-
-.status-badge.paused {
-    background: #ffe0b2;
-    color: #e65100;
-}
-
-.status-badge.disabled {
-    background: var(--cudly-bg);
-    color: var(--cudly-text-muted);
-}
-
 /* Cost chips: used in the reshape-alternatives cell and the exchange
- * modal's per-target-row cost slot. Shares geometry with
- * .status-badge so the visual style stays consistent. Neutral grey
+ * modal's per-target-row cost slot. Pill-shaped like .badge so the visual
+ * style stays consistent. Neutral grey
  * background since costs are advisory information, not status. */
 .cost-chip {
     display: inline-block;
@@ -1407,59 +1384,33 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     text-transform: lowercase;
 }
 
-/* Role badges in user table */
-.badge-admin {
-    display: inline-block;
-    font-size: 0.8rem;
-    font-weight: var(--cudly-fw-semibold);
-    padding: 0.2rem 0.5rem;
-    border-radius: 4px;
-    background: var(--cudly-info-bg);
-    color: var(--cudly-primary);
-}
-
-.badge-user {
-    display: inline-block;
-    font-size: 0.8rem;
-    font-weight: var(--cudly-fw-semibold);
-    padding: 0.2rem 0.5rem;
-    border-radius: 4px;
-    background: var(--cudly-border);
-    color: var(--cudly-text-muted);
-}
-
-.badge-readonly {
-    display: inline-block;
-    font-size: 0.8rem;
-    font-weight: var(--cudly-fw-semibold);
-    padding: 0.2rem 0.5rem;
-    border-radius: 4px;
-    background: var(--cudly-bg);
-    color: #999;
-}
-
-/* Generic status badges used by the Purchase History status column and the
- * Accounts table status column. Base `.badge` sets the pill shape; the
- * modifier classes set the colour pair. Kept alongside the existing role
- * badges so any table can drop a `<span class="badge badge-xxx">` inline.
+/* Badges (issue #737): the one pill used for every status and tag. Pick the
+ * tone with statusTone() in lib/status-badge.ts rather than by hand, so a
+ * status reads the same on every page:
+ *   success  finished well        warning  not finished yet (pending, running)
+ *   danger   failed or refused    muted    inactive or final (canceled, paused)
+ *   info     informational tags, not a status
+ * Colors come from the tokens in base.css (all >= 4.5:1 text contrast).
  */
 .badge {
     display: inline-block;
     font-size: 0.8rem;
     font-weight: var(--cudly-fw-semibold);
+    line-height: var(--cudly-lh-tight);
     padding: 0.2rem 0.55rem;
-    border-radius: 999px;
+    border-radius: var(--cudly-r-full);
     letter-spacing: 0.01em;
+    white-space: nowrap;
 }
 
 .badge-success {
     background: var(--cudly-success-bg);
-    color: #137333;
+    color: var(--cudly-success-fg);
 }
 
 .badge-warning {
-    background: #fef7e0;
-    color: #8a6d0c;
+    background: var(--cudly-warn-bg);
+    color: var(--cudly-warn-fg);
 }
 
 .badge-danger {
@@ -1512,27 +1463,6 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 .upfront-in-monthly-note {
     font-size: 0.78rem;
     line-height: 1.25;
-}
-
-/* Purchase detail status badges */
-.status-badge.completed {
-    background: var(--cudly-success-bg);
-    color: #137333;
-}
-
-.status-badge.pending {
-    background: var(--cudly-info-bg);
-    color: var(--cudly-primary);
-}
-
-.status-badge.failed {
-    background: var(--cudly-error-bg);
-    color: var(--cudly-error-fg);
-}
-
-.status-badge.running {
-    background: #ffe0b2;
-    color: #e65100;
 }
 
 /* Copy button */

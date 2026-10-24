@@ -31,6 +31,7 @@ import type {
 } from './api';
 import { openModal, closeModal } from './modal';
 import { showSkeletonRows, showSkeletonText, teardownSkeleton } from './lib/skeleton';
+import { statusBadgeHtml } from './lib/status-badge';
 import { canAccess } from './permissions';
 import { createIcon, iconSvg } from './icons';
 import { applyReadOnlySettings, isPermissionDeniedError } from './settings';
@@ -1994,24 +1995,6 @@ async function loadExchangeHistory(generation: number = scopeGeneration): Promis
   }
 }
 
-function getStatusBadgeClass(status: string): string {
-  switch (status) {
-    case 'completed': return 'status-badge completed';
-    case 'pending': return 'status-badge pending';
-    case 'processing': return 'status-badge running';
-    case 'failed': return 'status-badge failed';
-    // Migration 000089 (expand-contract rename, ri_exchange_history.status):
-    // backend may return either spelling during the rolling deploy window.
-    // Match both so a row written by EITHER old or new code keeps the muted
-    // "disabled" visual treatment instead of falling through to the default
-    // class. The CONTRACT migration (#1278) normalizes the data; the British
-    // branch can be removed then.
-    case 'canceled':
-    case 'cancelled': return 'status-badge disabled';
-    default: return 'status-badge';
-  }
-}
-
 function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistoryRecord[]): void {
   if (!records || records.length === 0) {
     container.textContent = '';
@@ -2042,7 +2025,7 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
       // payment_due is USD (the execute cap is max_payment_due_usd); an
       // empty amount renders as a dash, not a lone "$" (issue #284).
       + '<td>' + (rec.payment_due ? '$' + escapeHtml(rec.payment_due) : '&mdash;') + '</td>'
-      + '<td><span class="' + getStatusBadgeClass(rec.status) + '">' + escapeHtml(rec.status) + '</span>' + errorLine + '</td>'
+      + '<td>' + statusBadgeHtml(rec.status) + errorLine + '</td>'
       + '<td>' + exchangeIdCell + '</td>'
       + '<td>' + approveBtn + '</td>'
       + '</tr>';
