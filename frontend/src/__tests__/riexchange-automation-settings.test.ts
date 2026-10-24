@@ -147,3 +147,42 @@ describe('loadAutomationSettings: graceful degradation on permission errors (iss
     },
   );
 });
+
+describe('loadAutomationSettings: loading and error stay inside the section frame (issue #190)', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('while loading, a titled Exchange Automation fieldset holds the place', async () => {
+    setupContainer();
+    let resolve!: (v: unknown) => void;
+    (api.getRIExchangeConfig as jest.Mock).mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+
+    const pending = loadAutomationSettings();
+
+    const container = document.getElementById('ri-exchange-automation-settings')!;
+    const fieldset = container.querySelector('fieldset.settings-category');
+    expect(container.children).toHaveLength(1);
+    expect(fieldset?.querySelector('legend')?.textContent).toBe('Exchange Automation');
+    expect(fieldset?.getAttribute('aria-busy')).toBe('true');
+    expect(fieldset?.querySelector('.loading')?.textContent).toBe('Loading exchange automation settings...');
+    expect(fieldset?.querySelector('.skeleton-group')).not.toBeNull();
+
+    resolve(Promise.reject(new Error('Failed to fetch')));
+    (settings.isPermissionDeniedError as jest.Mock).mockReturnValue(false);
+    await pending;
+  });
+
+  test('an error is shown inside the same titled frame', async () => {
+    setupContainer();
+    (api.getRIExchangeConfig as jest.Mock).mockRejectedValueOnce(new Error('Failed to fetch'));
+    (settings.isPermissionDeniedError as jest.Mock).mockReturnValue(false);
+
+    await loadAutomationSettings();
+
+    const fieldset = document.querySelector('#ri-exchange-automation-settings > fieldset.settings-category');
+    expect(fieldset?.querySelector('legend')?.textContent).toBe('Exchange Automation');
+    expect(fieldset?.querySelector('.error')?.textContent).toContain('Failed to fetch');
+    expect(fieldset?.querySelector('button')?.getAttribute('type')).toBe('button');
+  });
+});

@@ -27,7 +27,7 @@ import type {
   Provider,
 } from './api';
 import { openModal, closeModal } from './modal';
-import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { showSkeletonRows, teardownSkeleton, skeletonText } from './lib/skeleton';
 import { canAccess } from './permissions';
 import { applyReadOnlySettings, isPermissionDeniedError } from './settings';
 import { showToast } from './toast';
@@ -2065,11 +2065,15 @@ export async function loadAutomationSettings(): Promise<void> {
   const container = document.getElementById('ri-exchange-automation-settings');
   if (!container) return;
 
-  container.textContent = '';
+  // Hold the section's place with its own titled frame while the config
+  // loads (issue #190): a bare "Loading settings..." line between the GCP
+  // block and Commitment Laddering read as the whole page half-loaded.
   const loadingP = document.createElement('p');
   loadingP.className = 'loading';
-  loadingP.textContent = 'Loading settings...';
-  container.appendChild(loadingP);
+  loadingP.textContent = 'Loading exchange automation settings...';
+  const loadingShell = automationSectionShell(loadingP, skeletonText(3));
+  loadingShell.setAttribute('aria-busy', 'true');
+  container.replaceChildren(loadingShell);
 
   try {
     const config = await api.getRIExchangeConfig();
@@ -2086,17 +2090,30 @@ export async function loadAutomationSettings(): Promise<void> {
       return;
     }
     const err = error as Error;
-    container.textContent = '';
     const errorP = document.createElement('p');
     errorP.className = 'error';
     errorP.textContent = 'Failed to load settings: ' + err.message;
-    container.appendChild(errorP);
     const retryBtn = document.createElement('button');
+    retryBtn.type = 'button';
     retryBtn.className = 'btn btn-small mt-2';
     retryBtn.textContent = 'Retry';
     retryBtn.addEventListener('click', () => { void loadAutomationSettings(); });
-    container.appendChild(retryBtn);
+    container.replaceChildren(automationSectionShell(errorP, retryBtn));
   }
+}
+
+/**
+ * The "Exchange Automation" fieldset frame used while the real form is not
+ * there yet (loading or failed), so the state is attributed to this section
+ * rather than floating between its neighbours.
+ */
+function automationSectionShell(...children: HTMLElement[]): HTMLFieldSetElement {
+  const fieldset = document.createElement('fieldset');
+  fieldset.className = 'settings-category';
+  const legend = document.createElement('legend');
+  legend.textContent = 'Exchange Automation';
+  fieldset.append(legend, ...children);
+  return fieldset;
 }
 
 function buildAutoWarningBanner(): HTMLDivElement {
