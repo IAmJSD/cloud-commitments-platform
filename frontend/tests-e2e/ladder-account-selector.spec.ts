@@ -15,13 +15,16 @@ const existing: LadderConfig = {
   ramp_schedule: { steps: [{ after_days: 0, fraction: 1 }] },
 };
 
+type Box = { x: number; y: number; width: number; height: number };
+const overlaps = (t: Box, s: Box): boolean =>
+  t.x < s.x + s.width && s.x < t.x + t.width && t.y < s.y + s.height && s.y < t.y + t.height;
+
 // Fails when the toast's box overlaps Save's; Playwright's click() would
 // otherwise only time out on the intercepted pointer event.
 async function expectSaveClear(page: Page, toast: Locator): Promise<void> {
   const t = (await toast.boundingBox())!;
   const s = (await page.locator('#ladder-config-save-btn').boundingBox())!;
-  const overlaps = t.x < s.x + s.width && s.x < t.x + t.width && t.y < s.y + s.height && s.y < t.y + t.height;
-  expect(overlaps, `toast ${JSON.stringify(t)} covers Save ${JSON.stringify(s)}`).toBe(false);
+  expect(overlaps(t, s), `toast ${JSON.stringify(t)} covers Save ${JSON.stringify(s)}`).toBe(false);
 }
 
 async function setup(page: Page): Promise<{ saves: LadderConfig[]; writes: string[]; errors: string[]; failures: string[] }> {
@@ -265,3 +268,35 @@ for (const [width, height] of [[1280, 720], [390, 844]]) {
     expect(errors.filter(error => !error.includes('400') && !error.startsWith('saveLadderConfig:'))).toEqual([]);
   });
 }
+
+// Only the topmost dialog counts: when the Auto Approve confirm opens over the
+// ladder modal while a validation toast is still up, the toast must stay off
+// the confirm, including the warning text in its body (#742).
+test('a toast stays off the Auto Approve confirm stacked over the ladder modal at 1100x720', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 720 });
+  const { saves, errors } = await setup(page);
+  await page.locator('#ladder-add-config-btn').click();
+  await expect(page.locator('#ladder-cfg-account')).toBeEnabled();
+  await page.locator('#ladder-cfg-account').selectOption('registered-aws');
+  await page.locator('#ladder-cfg-buffer-fraction').fill('');
+  await page.locator('#ladder-config-save-btn').click();
+  const toast = page.getByRole('alert').filter({ hasText: 'Buffer fraction is required.' });
+  await expect(toast).toBeVisible();
+
+  await page.locator('#ladder-cfg-buffer-fraction').fill('0.1');
+  await page.locator('#ladder-cfg-mode').selectOption('auto_approve');
+  await page.locator('#ladder-cfg-enabled').check();
+  await page.locator('#ladder-config-save-btn').click();
+  const confirm = page.getByRole('dialog', { name: 'Enable Auto Approve?' });
+  await expect(confirm).toBeVisible();
+  await expect(toast).toBeVisible();
+  // The layout re-runs on the next frame after the confirm is added.
+  await expect.poll(async () => overlaps((await toast.boundingBox())!, (await confirm.locator('.modal-confirm').boundingBox())!)).toBe(false);
+  expect(overlaps((await toast.boundingBox())!, (await confirm.locator('.modal-confirm-body').boundingBox())!)).toBe(false);
+
+  await confirm.getByRole('button', { name: 'Cancel' }).click();
+  await expect(confirm).toHaveCount(0);
+  await expectSaveClear(page, toast);
+  expect(saves).toEqual([]);
+  expect(errors).toEqual([]);
+});
