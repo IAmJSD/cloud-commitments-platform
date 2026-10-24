@@ -20,6 +20,13 @@ test('admin users sections show an inline error with Retry, then the lists', asy
   await expect(page.locator('#groups-list .error')).toHaveText('Could not load groups: database unavailable');
   await expect(page.locator('#permission-matrix .error'))
     .toHaveText('Could not load the permission overview: database unavailable');
+  // Each Retry sits below its error box with a visible gap, not flush on it.
+  for (const id of ['users-list', 'groups-list', 'permission-matrix']) {
+    const box = await page.locator(`#${id} .error`).boundingBox();
+    const btn = await page.locator(`#${id} button[data-action="retry-load-users"]`).boundingBox();
+    expect(box && btn).toBeTruthy();
+    expect(btn!.y - (box!.y + box!.height)).toBeGreaterThanOrEqual(12);
+  }
 
   fail = false;
   await page.locator('#groups-list button[data-action="retry-load-users"]').click();
