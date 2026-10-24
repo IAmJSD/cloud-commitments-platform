@@ -434,6 +434,18 @@ describe('loadCoverageBreakdown — fetch + render flow', () => {
     clearDOM();
   });
 
+  test('a provider named like an Object.prototype member renders as text, not a function (#317)', async () => {
+    (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({
+      providers: [makeProviderSection('constructor', null, null), makeProviderSection('toString', null, null)],
+    });
+
+    await loadCoverageBreakdown();
+
+    const titles = Array.from(document.querySelectorAll('#coverage-providers .coverage-provider-card h3'))
+      .map((h) => h.textContent);
+    expect(titles).toEqual(['CONSTRUCTOR', 'TOSTRING']);
+  });
+
   test('renders per-provider sections with service rows', async () => {
     (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({
       providers: [
