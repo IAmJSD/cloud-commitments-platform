@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Docker and Docker Compose
-- Go 1.26.9+
+- Go 1.26.10+
 - Node.js and npm (for frontend development)
 - Make (optional, for convenience commands)
 
