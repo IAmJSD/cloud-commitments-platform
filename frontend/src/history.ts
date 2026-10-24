@@ -22,6 +22,7 @@ import { renderApprovalQueueLink, wireApprovalQueueLinks } from './history-queue
 import { getCurrentUser } from './state';
 import { canAccess } from './permissions';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { statusBadgeHtml } from './lib/status-badge';
 import { localDayRangeToUtcDays, toLocalDateInputValue } from './lib/local-date';
 import { getAccountName } from './recommendations';
 import { applyColumnFilters } from './lib/column-filters';
@@ -562,22 +563,25 @@ function renderHistorySummary(summary: HistorySummary | null): void {
   `;
 }
 
-function statusBadgeHTML(status: string): string {
+// historyDisplayStatus folds the purchase lifecycle onto the statuses the
+// Status column shows. Tone and text then come from lib/status-badge.ts, the
+// same map every other page uses (issue #737).
+function historyDisplayStatus(status: string): string {
   const normalized = (status || 'completed').toLowerCase();
   switch (normalized) {
     case 'pending':
     case 'notified':
-      return '<span class="badge badge-warning">Pending</span>';
+      return 'pending';
     case 'approved':
     case 'running':
     case 'paused':
       // In-flight (issue #621): not finished — never show the green Completed
       // badge for these, or the user may think the purchase is done.
-      return '<span class="badge badge-warning">In Progress</span>';
+      return 'in_progress';
     case 'scheduled':
       // Issue #239: a delayed purchase whose provider call has not fired
       // yet — must never fall through to the default green Completed badge.
-      return '<span class="badge badge-warning">Scheduled</span>';
+      return 'scheduled';
     case 'canceled':
     case 'cancelled':
       // Migration 000089 (expand-contract rename): the backend may return
@@ -587,19 +591,22 @@ function statusBadgeHTML(status: string): string {
       // badge instead of falling through to the green Completed default.
       // The CONTRACT migration (#1278) will normalize the data once the deploy
       // is stable; the British branch can be removed then.
-      return '<span class="badge badge-muted">Cancelled</span>';
+      return 'cancelled';
     case 'partially_completed':
       // #642: some commitments succeeded, some failed. Not a clean success
       // and never "failed" (real commitments exist) — a distinct warning badge
       // so the user knows to read the description and reconcile the failures.
-      return '<span class="badge badge-warning">Partial</span>';
+      return 'partially_completed';
     case 'failed':
-      return '<span class="badge badge-danger">Failed</span>';
     case 'expired':
-      return '<span class="badge badge-muted">Expired</span>';
+      return normalized;
     default:
-      return '<span class="badge badge-success">Completed</span>';
+      return 'completed';
   }
+}
+
+function statusBadgeHTML(status: string): string {
+  return statusBadgeHtml(historyDisplayStatus(status));
 }
 
 function buildStatusChipRowHTML(purchases: HistoryPurchase[], active: StatusFilter): string {

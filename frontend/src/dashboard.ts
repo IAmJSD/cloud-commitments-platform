@@ -17,6 +17,7 @@ import { getRecommendationsFreshness } from './api/recommendations';
 import { buildFirstRunEmptyState, isScopeFiltered } from './first-run-empty-state';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
 import { filterByEnabledProviders } from './lib/enabled-providers';
+import { buildKpiTile } from './lib/kpi-tile';
 import { scopeUpcomingToProvider, upcomingEmptyMessage, UPCOMING_ACCOUNT_SCOPE_NOTE } from './lib/upcoming-scope';
 import { formatTrendAxisTick, formatTrendTooltipTitle, formatSparseTrendMessage, MIN_TREND_POINTS } from './modules/chart-utils';
 import { setChartSummary, renderChartTable, removeChartTable } from './lib/chart-a11y';
@@ -362,31 +363,9 @@ function renderDashboardSummary(
     { kpi: 'ytd',         title: 'YTD Savings', value: formatCurrency(data.ytd_savings), valueSavings: true,
       detail: 'From commitment purchases' },
   ];
-  for (const t of tiles) {
-    const card = document.createElement('div');
-    card.classList.add('card', 'kpi-tile');
-    card.dataset['kpi'] = t.kpi;
-    const h3 = document.createElement('h3');
-    h3.textContent = t.title;
-    const valueP = document.createElement('p');
-    valueP.classList.add('value', 'kpi-tile-value');
-    // An absent figure is not a saving: keep the placeholder neutral rather
-    // than green (issue #739).
-    if (t.valueSavings && t.value !== NO_VALUE) valueP.classList.add('savings');
-    valueP.textContent = t.value;
-    const detailP = document.createElement('p');
-    detailP.classList.add('detail', 'kpi-tile-detail');
-    detailP.textContent = t.detail;
-    const spark = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    spark.classList.add('kpi-tile-spark', 'hidden');
-    spark.dataset['sparkKey'] = t.kpi;
-    spark.setAttribute('aria-hidden', 'true');
-    card.appendChild(h3);
-    card.appendChild(valueP);
-    card.appendChild(detailP);
-    card.appendChild(spark);
-    summary.appendChild(card);
-  }
+  // Shared with the Opportunities summary (issue #743). buildKpiTile keeps an
+  // absent (NO_VALUE) figure neutral rather than green (issue #739).
+  for (const t of tiles) summary.appendChild(buildKpiTile({ ...t, spark: true }));
 }
 
 /**

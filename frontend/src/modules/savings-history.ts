@@ -6,6 +6,7 @@ import { Chart, registerables } from 'chart.js';
 import { getSavingsAnalytics, type SavingsAnalyticsResponse, type SavingsDataPoint } from '../api';
 import * as state from '../state';
 import { formatTrendAxisTick } from './chart-utils';
+import { formatCompactCurrency, formatCurrency } from '../utils';
 import { setChartSummary, renderChartTable, removeChartTable } from '../lib/chart-a11y';
 
 // Register Chart.js components
@@ -75,6 +76,18 @@ function getSelectedUnit(): SavingsUnit {
 }
 
 /**
+ * Which series the chart plots (issue #749). Period savings and the running
+ * total have different scales and units, so they are shown one at a time on
+ * a single axis instead of on two axes whose line crossings mean nothing.
+ */
+export type SavingsSeries = 'period' | 'cumulative';
+
+function getSelectedSeries(): SavingsSeries {
+    const el = document.getElementById('savings-series') as HTMLSelectElement | null;
+    return el?.value === 'cumulative' ? 'cumulative' : 'period';
+}
+
+/**
  * Load savings history data based on selected period
  */
 export async function loadSavingsHistory(): Promise<void> {
@@ -122,7 +135,7 @@ export async function loadSavingsHistory(): Promise<void> {
         if (statsEl) statsEl.classList.remove('hidden');
 
         renderSavingsStats(data, start, end, interval);
-        renderSavingsChart(data.data_points, interval, getSelectedUnit(), start, end);
+        renderSavingsChart(data.data_points, interval, getSelectedUnit(), start, end, getSelectedSeries());
     } catch (error) {
         const msg = error instanceof Error ? error.message : 'Unknown error';
         console.error('Failed to load savings history:', msg);
@@ -310,7 +323,7 @@ function renderSavingsStats(data: SavingsAnalyticsResponse, start: Date, end: Da
     if (periodSavingsEl) {
         // Period Savings is the cumulative total over the selected date range
         // (no per-unit rate suffix -- it is already a dollar total).
-        periodSavingsEl.textContent = formatCurrency(displayTotal);
+        periodSavingsEl.textContent = formatCurrency(displayTotal, '$', 2);
     }
     if (periodSavingsLabelEl) {
         periodSavingsLabelEl.textContent = 'Period Savings';
@@ -322,44 +335,30 @@ function renderSavingsStats(data: SavingsAnalyticsResponse, start: Date, end: Da
         avgLabelEl.textContent = `Avg ${adjective} Savings`;
     }
     if (avgSavingsEl) {
-        avgSavingsEl.textContent = `${formatCurrency(displayAvg)}${suffix}`;
+        avgSavingsEl.textContent = `${formatCurrency(displayAvg, '$', 2)}${suffix}`;
     }
     if (peakSavingsEl) {
-        peakSavingsEl.textContent = `${formatCurrency(displayPeak)}${suffix}`;
+        peakSavingsEl.textContent = `${formatCurrency(displayPeak, '$', 2)}${suffix}`;
     }
-}
-
-/**
- * Format currency value for chart contexts (abbreviated K for >= $1000).
- *
- * M-7: add a null/non-finite guard so a future API change that introduces
- * null on total_savings or cumulative_savings doesn't crash the chart with
- * a TypeError on .toFixed(). Returns '--' for absent/non-finite values,
- * matching the shared formatCurrency sentinel in utils.ts.
- */
-function formatCurrency(value: number | null | undefined): string {
-    if (value == null || !Number.isFinite(value)) {
-        return '--';
-    }
-    if (value >= 1000) {
-        return `$${(value / 1000).toFixed(2)}K`;
-    }
-    return `$${value.toFixed(2)}`;
 }
 
 /**
  * Render savings chart using Chart.js.
  *
- * BUG FIX (QA 2.2): the x-axis is now `type:'linear'` anchored to the selected
+ * Issue #749: one series on one y-axis. Period savings are bars (each bar is
+ * one interval's projected monthly additions, converted to the chosen unit);
+ * the running total is a separate view picked with #savings-series. The old
+ * chart drew both on two y-axes, so the points where the lines crossed had
+ * no meaning. Ticks and tooltips use the shared formatters ("$1.5K" on the
+ * axis, "$1,500.00" in the tooltip) instead of `$${x.toFixed(2)}`.
+ *
+ * BUG FIX (QA 2.2): the x-axis is `type:'linear'` anchored to the selected
  * period [start, end] so the leftmost tick is the period start, not the first
  * data point. Mirrors the approach used by the Home dashboard chart (PR #746).
  *
- * BUG FIX (QA 2.3): Period Savings tooltip now uses toFixed(2) matching
- * Cumulative and the KPI box above the chart.
- *
- * BUG FIX (QA 2.4/2.5): Both y-axes have maxTicksLimit:6 to prevent tick
- * instability when toggling series; y1 formatter avoids duplicate integer
- * labels by showing 2 decimal places for non-integer float ticks.
+ * BUG FIX (QA 2.4/2.5): the y-axis has maxTicksLimit:6 to prevent tick
+ * instability; the compact formatter keeps up to two fraction digits so
+ * close float ticks stay distinct.
  */
 function renderSavingsChart(
     dataPoints: SavingsDataPoint[],
@@ -367,6 +366,7 @@ function renderSavingsChart(
     unit: SavingsUnit = 'monthly',
     periodStart?: Date,
     periodEnd?: Date,
+    series: SavingsSeries = 'period',
 ): void {
     const ctx = document.getElementById('savings-history-chart') as HTMLCanvasElement;
 
@@ -375,7 +375,10 @@ function renderSavingsChart(
         return;
     }
 
-    const suffix = unitSuffix(unit);
+    const cumulative = series === 'cumulative';
+    // The running total is a dollar amount, not a rate, so it takes no
+    // unit suffix (its unit conversion is tracked separately in #134).
+    const suffix = cumulative ? '' : unitSuffix(unit);
 
     // Determine the interval hint for the x-axis tick formatter.
     // The interval parameter can be 'hourly', 'daily', 'weekly', or 'monthly';
@@ -387,13 +390,9 @@ function renderSavingsChart(
     // Map each data point to {x: timestamp_ms, y: value} so Chart.js positions
     // each point at its real date on the linear axis instead of by label index.
     // M-6: use ?? 0 (not || 0) to treat a genuine 0-saving bucket correctly.
-    const periodSavingsData = dataPoints.map(dp => ({
+    const points = dataPoints.map(dp => ({
         x: new Date(dp.timestamp).getTime(),
-        y: convertFromMonthly(dp.total_savings ?? 0, unit),
-    }));
-    const cumulativeSavingsData = dataPoints.map(dp => ({
-        x: new Date(dp.timestamp).getTime(),
-        y: dp.cumulative_savings ?? 0,
+        y: cumulative ? dp.cumulative_savings ?? 0 : convertFromMonthly(dp.total_savings ?? 0, unit),
     }));
 
     // Axis bounds: anchor to the selected period so the leftmost tick is the
@@ -406,51 +405,54 @@ function renderSavingsChart(
         savingsChart.destroy();
     }
 
+    const label = cumulative ? 'Cumulative Savings' : 'Period Savings';
+    const dataset = cumulative
+        ? {
+            type: 'line' as const,
+            label,
+            data: points,
+            borderColor: '#4285f4',
+            backgroundColor: 'rgba(66, 133, 244, 0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: dataPoints.length > 50 ? 0 : 3,
+            pointHoverRadius: 5,
+        }
+        : {
+            type: 'bar' as const,
+            label,
+            data: points,
+            backgroundColor: 'rgba(52, 168, 83, 0.7)',
+            borderColor: '#34a853',
+            borderWidth: 1,
+            maxBarThickness: 24,
+        };
+
     // #744: a value summary for the role="img" canvas plus every point as a
     // table. The table goes after the sizing container, not inside it.
+    // Merged with #749: the summary names the series currently drawn, and the
+    // table keeps both columns (period in the chosen unit, running total)
+    // whichever series the chart shows, so no value is hidden by the toggle.
     const latest = dataPoints[dataPoints.length - 1];
     setChartSummary(ctx,
-        `Line chart of savings over time: ${dataPoints.length} data point${dataPoints.length === 1 ? '' : 's'}, `
-        + `cumulative savings ${formatCurrency(latest?.cumulative_savings ?? 0)} at the latest point. `
+        `${cumulative ? 'Line chart of cumulative savings' : 'Bar chart of savings per period'}: `
+        + `${dataPoints.length} data point${dataPoints.length === 1 ? '' : 's'}, `
+        + `cumulative savings ${formatCurrency(latest?.cumulative_savings ?? 0, '$', 2)} at the latest point. `
         + 'Values are in the table below the chart.');
     renderChartTable(ctx.parentElement ?? ctx, SAVINGS_HISTORY_TABLE_ID, {
         caption: 'Savings history',
-        columns: ['Date', `Period savings (${suffix})`, 'Cumulative savings'],
-        rows: periodSavingsData.map((p, i) => [
-            formatTrendAxisTick(p.x, tickIntervalHint),
-            formatCurrency(p.y),
-            formatCurrency(cumulativeSavingsData[i]?.y),
+        columns: ['Date', `Period savings (${unitSuffix(unit)})`, 'Cumulative savings'],
+        rows: dataPoints.map((dp) => [
+            formatTrendAxisTick(new Date(dp.timestamp).getTime(), tickIntervalHint),
+            formatCurrency(convertFromMonthly(dp.total_savings ?? 0, unit), '$', 2),
+            formatCurrency(dp.cumulative_savings ?? 0, '$', 2),
         ]),
     });
 
     savingsChart = new Chart(ctx, {
-        type: 'line',
+        type: cumulative ? 'line' : 'bar',
         data: {
-            datasets: [
-                {
-                    label: 'Period Savings',
-                    data: periodSavingsData,
-                    borderColor: '#34a853',
-                    backgroundColor: 'rgba(52, 168, 83, 0.1)',
-                    fill: true,
-                    tension: 0.3,
-                    pointRadius: dataPoints.length > 50 ? 0 : 3,
-                    pointHoverRadius: 5,
-                    yAxisID: 'y',
-                },
-                {
-                    label: 'Cumulative Savings',
-                    data: cumulativeSavingsData,
-                    borderColor: '#4285f4',
-                    backgroundColor: 'rgba(66, 133, 244, 0.05)',
-                    fill: false,
-                    tension: 0.3,
-                    borderDash: [5, 5],
-                    pointRadius: dataPoints.length > 50 ? 0 : 2,
-                    pointHoverRadius: 4,
-                    yAxisID: 'y1',
-                },
-            ],
+            datasets: [dataset],
         },
         options: {
             responsive: true,
@@ -465,6 +467,9 @@ function renderSavingsChart(
                     display: true,
                     min: axisMinMs,
                     max: axisMaxMs,
+                    // A bar chart pads the x-axis by default, which would
+                    // push the period start off the axis edge (QA 2.2).
+                    offset: false,
                     grid: {
                         display: false,
                     },
@@ -486,62 +491,25 @@ function renderSavingsChart(
                         maxTicksLimit: 6,
                         callback: function(value: number | string) {
                             const numValue = typeof value === 'string' ? parseFloat(value) : value;
-                            return `$${numValue.toFixed(2)}`;
+                            return formatCompactCurrency(numValue);
                         },
                     },
                     title: {
                         display: true,
-                        text: `Savings per Period (${unitLabel(unit)})`,
-                    },
-                },
-                y1: {
-                    type: 'linear',
-                    display: true,
-                    position: 'right',
-                    beginAtZero: true,
-                    grid: {
-                        drawOnChartArea: false,
-                    },
-                    ticks: {
-                        maxTicksLimit: 6,
-                        callback: function(value: number | string) {
-                            const numValue = typeof value === 'string' ? parseFloat(value) : value;
-                            if (numValue >= 1000) {
-                                return `$${(numValue / 1000).toFixed(1)}K`;
-                            }
-                            // Show 2 decimal places for non-integer float ticks to prevent
-                            // distinct values collapsing to the same integer label when the
-                            // auto-scaled domain is narrow (QA 2.4/2.5).
-                            return Number.isInteger(numValue)
-                                ? `$${numValue}`
-                                : `$${numValue.toFixed(2)}`;
-                        },
-                    },
-                    title: {
-                        display: true,
-                        text: 'Cumulative Savings',
+                        text: cumulative ? 'Cumulative savings' : `Savings per period (${unitLabel(unit)})`,
                     },
                 },
             },
             plugins: {
                 legend: {
-                    position: 'top',
-                    labels: {
-                        usePointStyle: true,
-                        boxWidth: 8,
-                    },
+                    display: false,
                 },
                 tooltip: {
                     callbacks: {
                         label: function(context) {
                             const raw = context.raw as ({ x: number; y: number } | number) | null | undefined;
                             const value = (raw != null && typeof raw === 'object' ? raw.y : raw as number) || 0;
-                            if (context.datasetIndex === 1) {
-                                // Cumulative savings -- raw total, no rate suffix
-                                return `${context.dataset.label}: $${value.toFixed(2)}`;
-                            }
-                            // Period Savings: 2 decimal places matching the KPI box (QA 2.3)
-                            return `${context.dataset.label}: $${value.toFixed(2)}${suffix}`;
+                            return `${context.dataset.label}: ${formatCurrency(value, '$', 2)}${suffix}`;
                         },
                     },
                 },
@@ -593,6 +561,16 @@ export function initSavingsHistory(): void {
 
     if (refreshBtn) {
         refreshBtn.addEventListener('click', loadSavingsHistory);
+    }
+
+    // Series toggle (issue #749): same dedup pattern as the unit dropdown.
+    const seriesSelect = document.getElementById('savings-series') as (HTMLSelectElement & { _seriesChangeHandler?: () => void }) | null;
+    if (seriesSelect) {
+        if (seriesSelect._seriesChangeHandler) {
+            seriesSelect.removeEventListener('change', seriesSelect._seriesChangeHandler);
+        }
+        seriesSelect._seriesChangeHandler = (): void => { void loadSavingsHistory(); };
+        seriesSelect.addEventListener('change', seriesSelect._seriesChangeHandler);
     }
 
     // Wire unit dropdown. Using a named handler stored as a property so that

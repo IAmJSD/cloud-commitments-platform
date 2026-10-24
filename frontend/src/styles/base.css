@@ -94,6 +94,18 @@
     --cudly-topbar-h: 56px;
     --cudly-sidebar-w: 232px;
     --cudly-sidebar-w-collapsed: 64px;
+
+    /* Dialogs (issue #743): one scrim, one dialog shadow and a named stacking
+     * ladder shared by .modal, .modal-overlay, confirmDialog and the Archera
+     * offer, which each used their own opacity, shadow and z-index. Values
+     * keep the existing order: a confirm can open on top of any modal. */
+    --cudly-scrim: rgba(15, 23, 42, 0.5);
+    --cudly-shadow-dialog: 0 10px 30px rgba(15, 23, 42, 0.25);
+    --cudly-z-modal: 1000;         /* .modal, .modal-overlay */
+    --cudly-z-modal-raised: 1050;  /* Archera offer, opened as a modal closes */
+    --cudly-z-page-overlay: 1100;  /* Archera education page, opened from a modal */
+    --cudly-z-confirm: 2000;       /* confirmDialog, may sit on any modal */
+    --cudly-z-toast: 2100;         /* toasts stay above everything */
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }

@@ -324,7 +324,7 @@ describe('App Module', () => {
       const dashboardBtn = document.querySelector('[data-tab="dashboard"]') as HTMLButtonElement;
       dashboardBtn.click();
 
-      expect(navigation.switchTab).toHaveBeenCalledWith('dashboard');
+      expect(navigation.switchTab).toHaveBeenCalledWith('dashboard', { focusContent: true });
     });
 
     test('does not call switchTab if tab data attribute is missing', () => {

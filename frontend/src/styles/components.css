@@ -2,10 +2,13 @@
 
 /* Cards */
 .card {
-    background: white;
+    background: var(--cudly-surface);
     padding: 1.5rem;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    /* The one card surface (issue #743): hairline border + small shadow,
+     * shared with .kpi-tile, .plan-card, .group-card and .upcoming-card. */
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+    box-shadow: var(--cudly-shadow-sm);
 }
 
 /* ---------------------------------------------------------------------------
@@ -15,10 +18,8 @@
  * are referenced via `.card`).
  * ------------------------------------------------------------------------- */
 .kpi-tile {
+    /* Border, radius and shadow come from .card (issue #743). */
     padding: var(--cudly-sp-4);
-    border-radius: var(--cudly-r-md);
-    border: 1px solid var(--cudly-border);
-    box-shadow: var(--cudly-shadow-sm);
     display: grid;
     grid-template-columns: 1fr auto;
     grid-template-areas:
@@ -347,18 +348,25 @@ button.secondary:hover {
 
 /* Toast notifications (bottom-right stack, AutoSpotting-style).
  * Rendered by toast.ts. Default timeout 30s. Kind classes set the
- * left-border + icon colour.
+ * left-border + icon colour. When the default corner would cover a
+ * visible button row of the topmost open dialog, toast.ts overrides
+ * --toast-max-width (the stack fits beside the dialog) or --toast-bottom
+ * (the stack is lifted above the dialog or that row) on the element, and
+ * re-checks on open/close, scroll and resize (issue #742). Otherwise these
+ * defaults apply.
  */
 .toast-container {
+    --toast-bottom: 1rem;
+    --toast-max-width: 400px;
     position: fixed;
-    bottom: 1rem;
+    bottom: var(--toast-bottom);
     right: 1rem;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    z-index: 2100;
+    z-index: var(--cudly-z-toast);
     pointer-events: none;
-    max-width: 400px;
+    max-width: var(--toast-max-width);
 }
 
 .toast {
@@ -489,9 +497,9 @@ button.secondary:hover {
     content: 'Unsaved changes';
     display: inline-block;
     padding: 0.25rem 0.6rem;
-    background: #fff3cd;
-    color: #856404;
-    border-radius: 12px;
+    background: var(--cudly-warn-bg);
+    color: var(--cudly-warn-fg);
+    border-radius: var(--cudly-r-full);
     font-size: 0.8rem;
     margin-right: 0.75rem;
     vertical-align: middle;
@@ -1069,18 +1077,18 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 .modal-confirm-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.45);
+    background: var(--cudly-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 2000;
+    z-index: var(--cudly-z-confirm);
 }
 
 .modal-confirm {
     position: relative;
-    background: white;
-    border-radius: 8px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    background: var(--cudly-surface);
+    border-radius: var(--cudly-r-lg);
+    box-shadow: var(--cudly-shadow-dialog);
     max-width: min(480px, calc(100vw - 2rem));
     min-width: 320px;
     padding: 1.5rem;
@@ -1271,32 +1279,9 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     color: var(--cudly-primary);
 }
 
-/* Status badges */
-.status-badge {
-    padding: 0.25rem 0.75rem;
-    border-radius: 12px;
-    font-size: 0.8rem;
-    font-weight: var(--cudly-fw-semibold);
-}
-
-.status-badge.active {
-    background: var(--cudly-success-bg);
-    color: #137333;
-}
-
-.status-badge.paused {
-    background: #ffe0b2;
-    color: #e65100;
-}
-
-.status-badge.disabled {
-    background: var(--cudly-bg);
-    color: var(--cudly-text-muted);
-}
-
 /* Cost chips: used in the reshape-alternatives cell and the exchange
- * modal's per-target-row cost slot. Shares geometry with
- * .status-badge so the visual style stays consistent. Neutral grey
+ * modal's per-target-row cost slot. Pill-shaped like .badge so the visual
+ * style stays consistent. Neutral grey
  * background since costs are advisory information, not status. */
 .cost-chip {
     display: inline-block;
@@ -1406,59 +1391,33 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     text-transform: lowercase;
 }
 
-/* Role badges in user table */
-.badge-admin {
-    display: inline-block;
-    font-size: 0.8rem;
-    font-weight: var(--cudly-fw-semibold);
-    padding: 0.2rem 0.5rem;
-    border-radius: 4px;
-    background: var(--cudly-info-bg);
-    color: var(--cudly-primary);
-}
-
-.badge-user {
-    display: inline-block;
-    font-size: 0.8rem;
-    font-weight: var(--cudly-fw-semibold);
-    padding: 0.2rem 0.5rem;
-    border-radius: 4px;
-    background: var(--cudly-border);
-    color: var(--cudly-text-muted);
-}
-
-.badge-readonly {
-    display: inline-block;
-    font-size: 0.8rem;
-    font-weight: var(--cudly-fw-semibold);
-    padding: 0.2rem 0.5rem;
-    border-radius: 4px;
-    background: var(--cudly-bg);
-    color: #999;
-}
-
-/* Generic status badges used by the Purchase History status column and the
- * Accounts table status column. Base `.badge` sets the pill shape; the
- * modifier classes set the colour pair. Kept alongside the existing role
- * badges so any table can drop a `<span class="badge badge-xxx">` inline.
+/* Badges (issue #737): the one pill used for every status and tag. Pick the
+ * tone with statusTone() in lib/status-badge.ts rather than by hand, so a
+ * status reads the same on every page:
+ *   success  finished well        warning  not finished yet (pending, running)
+ *   danger   failed or refused    muted    inactive or final (canceled, paused)
+ *   info     informational tags, not a status
+ * Colors come from the tokens in base.css (all >= 4.5:1 text contrast).
  */
 .badge {
     display: inline-block;
     font-size: 0.8rem;
     font-weight: var(--cudly-fw-semibold);
+    line-height: var(--cudly-lh-tight);
     padding: 0.2rem 0.55rem;
-    border-radius: 999px;
+    border-radius: var(--cudly-r-full);
     letter-spacing: 0.01em;
+    white-space: nowrap;
 }
 
 .badge-success {
     background: var(--cudly-success-bg);
-    color: #137333;
+    color: var(--cudly-success-fg);
 }
 
 .badge-warning {
-    background: #fef7e0;
-    color: #8a6d0c;
+    background: var(--cudly-warn-bg);
+    color: var(--cudly-warn-fg);
 }
 
 .badge-danger {
@@ -1511,27 +1470,6 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 .upfront-in-monthly-note {
     font-size: 0.78rem;
     line-height: 1.25;
-}
-
-/* Purchase detail status badges */
-.status-badge.completed {
-    background: var(--cudly-success-bg);
-    color: #137333;
-}
-
-.status-badge.pending {
-    background: var(--cudly-info-bg);
-    color: var(--cudly-primary);
-}
-
-.status-badge.failed {
-    background: var(--cudly-error-bg);
-    color: var(--cudly-error-fg);
-}
-
-.status-badge.running {
-    background: #ffe0b2;
-    color: #e65100;
 }
 
 /* Copy button */

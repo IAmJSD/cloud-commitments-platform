@@ -1,0 +1,149 @@
+/* Commitment Laddering per-account config modal (issue #742 review).
+ * Labels stack above their inputs, the short fields pair up in a two-column
+ * grid, and qualifiers such as ranges live in a muted hint under the input.
+ * The header stays fixed and the body scrolls on short viewports, with the
+ * Cancel / Save footer pinned to the bottom of the scroll area. */
+
+.ladder-config-dialog {
+    width: 680px;
+    max-width: 95vw;
+    max-height: 90vh;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.ladder-config-dialog .modal-header {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--cudly-sp-4);
+    padding: var(--cudly-sp-4) var(--cudly-sp-5);
+    border-bottom: 1px solid var(--cudly-border);
+}
+
+.ladder-config-dialog .modal-header h3 {
+    margin: 0;
+    font-size: var(--cudly-fs-lg);
+    color: var(--cudly-text);
+}
+
+.ladder-config-dialog .modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--cudly-sp-5) var(--cudly-sp-5) 0;
+}
+
+.ladder-form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.875rem var(--cudly-sp-5);
+    align-items: start;
+}
+
+.ladder-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    min-width: 0;
+}
+
+.ladder-field-full {
+    grid-column: 1 / -1;
+}
+
+.ladder-config-dialog .ladder-field > label {
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+    font-weight: var(--cudly-fw-medium);
+}
+
+.ladder-config-dialog .ladder-field input:not([type="checkbox"]),
+.ladder-config-dialog .ladder-field select,
+.ladder-config-dialog .ladder-field textarea {
+    width: 100%;
+    min-height: 2.25rem;
+    margin: 0;
+}
+
+.ladder-config-dialog .ladder-field textarea {
+    min-height: 6rem;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.85rem;
+}
+
+.ladder-config-dialog .form-hint {
+    font-size: var(--cudly-fs-xs);
+    line-height: 1.4;
+    color: var(--cudly-text-muted);
+}
+
+.ladder-config-dialog .form-hint:empty {
+    display: none;
+}
+
+.ladder-config-dialog .form-hint code {
+    font-size: 0.7rem;
+    word-break: break-all;
+}
+
+/* Sits beside Approval Mode, centred on the select's line. */
+.ladder-field-check {
+    align-self: end;
+    min-height: 2.25rem;
+    justify-content: center;
+}
+
+.ladder-config-dialog .form-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: var(--cudly-sp-2);
+    margin: 0;
+    font-size: var(--cudly-fs-sm);
+    cursor: pointer;
+}
+
+.ladder-config-dialog .warning-message {
+    margin: 0;
+    padding: var(--cudly-sp-3) var(--cudly-sp-4);
+    font-size: var(--cudly-fs-sm);
+}
+
+.ladder-config-dialog .ladder-form-section {
+    grid-column: 1 / -1;
+    margin: var(--cudly-sp-1) 0 0;
+    padding-top: var(--cudly-sp-4);
+    border-top: 1px solid var(--cudly-border);
+    font-size: var(--cudly-fs-xs);
+    font-weight: var(--cudly-fw-semibold);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--cudly-text-muted);
+}
+
+.ladder-config-dialog .modal-footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--cudly-sp-3);
+    margin: 0 calc(-1 * var(--cudly-sp-5));
+    padding: var(--cudly-sp-4) var(--cudly-sp-5);
+    background: var(--cudly-surface);
+    border-top: 1px solid var(--cudly-border);
+}
+
+@media (max-width: 640px) {
+    .ladder-form-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .ladder-field-check {
+        align-self: auto;
+        min-height: 0;
+    }
+}
