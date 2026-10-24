@@ -1,8 +1,9 @@
 import { test, expect, type Page } from '@playwright/test';
 import { mockApi, seedAuth } from './fixtures/recs';
 
-// Issue #728: History Cancel names the purchase it cancels (UX-29), and a
-// toast stays while the pointer is over it (VIS-25, WCAG 2.2.1).
+// Issue #728: Cancel (in the Approval queue since #1331) names the purchase it
+// cancels (UX-29), and a toast stays while the pointer is over it (VIS-25,
+// WCAG 2.2.1).
 
 const ROWS = [
   { id: '11111111-1111-1111-1111-111111111111', resource_type: 'm5.large', count: 1, upfront_cost: 1200 },
@@ -25,7 +26,7 @@ async function historyPage(page: Page): Promise<void> {
 
 test('Cancel confirm names the purchase on the clicked row', async ({ page }) => {
   await historyPage(page);
-  await page.locator(`#history-list .history-cancel-btn[data-cancel-id="${ROWS[1]!.purchase_id}"]`).click();
+  await page.locator(`#purchases-approval-queue .history-cancel-btn[data-cancel-id="${ROWS[1]!.purchase_id}"]`).click();
 
   const summary = page.getByRole('dialog').locator('.history-confirm-summary');
   await expect(summary.locator('strong')).toHaveText('AWS ec2 c5.2xlarge × 4 in us-east-1');
@@ -35,7 +36,7 @@ test('Cancel confirm names the purchase on the clicked row', async ({ page }) =>
 test('a toast does not expire while hovered and does once the pointer leaves', async ({ page }) => {
   await page.clock.install();
   await historyPage(page);
-  await page.locator('#history-list .history-cancel-btn').first().click();
+  await page.locator('#purchases-approval-queue .history-cancel-btn').first().click();
   await page.getByRole('dialog').getByRole('button', { name: 'Cancel purchase' }).click();
 
   const toast = page.locator('.toast--success', { hasText: 'Purchase cancelled' });
