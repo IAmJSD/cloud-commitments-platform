@@ -58,7 +58,7 @@
 .ladder-config-dialog .ladder-field > label {
     margin: 0;
     font-size: var(--cudly-fs-sm);
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
 }
 
 .ladder-config-dialog .ladder-field input:not([type="checkbox"]),
@@ -118,7 +118,7 @@
     padding-top: var(--cudly-sp-4);
     border-top: 1px solid var(--cudly-border);
     font-size: var(--cudly-fs-xs);
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     letter-spacing: 0.04em;
     text-transform: uppercase;
     color: var(--cudly-text-muted);
