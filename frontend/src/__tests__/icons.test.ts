@@ -8,8 +8,8 @@ import { showToast } from '../toast';
 
 const ALL: IconName[] = [
   'alert-triangle', 'check', 'check-circle', 'chevron-down', 'chevron-right',
-  'chevron-up', 'chevrons-up-down', 'download', 'edit', 'filter', 'info',
-  'pause', 'play', 'rotate-cw', 'settings', 'x', 'x-circle',
+  'chevron-up', 'chevrons-up-down', 'copy', 'download', 'edit', 'filter', 'info',
+  'pause', 'play', 'rotate-cw', 'settings', 'slash', 'trash-2', 'x', 'x-circle',
 ];
 
 function parse(markup: string): SVGSVGElement {

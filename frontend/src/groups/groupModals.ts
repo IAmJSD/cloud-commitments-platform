@@ -9,6 +9,7 @@ import { availableGroups } from '../users/state';
 import { escapeHtml, showError, showSuccess } from '../users/utils';
 import { loadUsers } from '../users/userActions';
 import { openModal, closeModal } from '../modal';
+import { iconSvg } from '../icons';
 import { ALL_ACTIONS, ALL_RESOURCES } from '../permissions';
 import type { Action, Resource } from '../permissions';
 
@@ -268,7 +269,7 @@ export function addPermission(permission?: Permission): void {
           ${buildResourceOptions(permission?.resource)}
         </select>
       </label>
-      <button type="button" class="btn-small btn-danger remove-permission-btn">Remove</button>
+      <button type="button" class="btn-small btn-danger icon-btn remove-permission-btn" aria-label="Remove permission" title="Remove permission">${iconSvg('trash-2')}</button>
     </div>
     <div class="constraints-section">
       <h4>Constraints (Optional)</h4>

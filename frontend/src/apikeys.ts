@@ -8,6 +8,7 @@ import { loadApiKeysUsageStats } from './apikeys_usage';
 import { escapeHtml, formatDateTime, formatRelativeTime } from './utils';
 import { confirmDialog } from './confirmDialog';
 import { showToast } from './toast';
+import { iconSvg } from './icons';
 import { openModal, closeModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 
@@ -134,8 +135,10 @@ export function renderApiKeysList(): void {
               <td class="apikeys-count-cell">${countTotal}</td>
               <td>${key.expires_at ? formatDateTime(key.expires_at) : '<span class="text-muted">Never</span>'}</td>
               <td>
-                ${key.is_active && !isExpired ? `<button class="btn-small btn-warning revoke-key-btn" data-key-id="${escapeHtml(key.id)}">Revoke</button>` : ''}
-                <button class="btn-small btn-danger delete-key-btn" data-key-id="${escapeHtml(key.id)}">Delete</button>
+                <div class="row-actions">
+                  ${key.is_active && !isExpired ? `<button type="button" class="btn-small btn-warning icon-btn revoke-key-btn" data-key-id="${escapeHtml(key.id)}" aria-label="Revoke API key" title="Revoke API key">${iconSvg('slash')}</button>` : ''}
+                  <button type="button" class="btn-small btn-danger icon-btn delete-key-btn" data-key-id="${escapeHtml(key.id)}" aria-label="Delete API key" title="Delete API key">${iconSvg('trash-2')}</button>
+                </div>
               </td>
             </tr>
           `;
