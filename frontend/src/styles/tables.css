@@ -55,11 +55,11 @@ tr.history-row-highlight:hover {
     100% { background: #fff8c4; }
 }
 
-/* Summary sections */
+/* Summary sections: four cards each, balanced like #summary (issue #191) */
 #recommendations-summary,
 #history-summary {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 1rem;
     margin-bottom: 1.5rem;
 }

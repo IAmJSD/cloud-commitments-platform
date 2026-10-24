@@ -24,6 +24,7 @@ import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary, GlobalConfig } from './types';
 import { openModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { captureFocus, restoreFocus } from './lib/focus-restore';
 import { canAccess } from './permissions';
 
 // Issue #869: true when the current session can take any action on
@@ -164,6 +165,8 @@ const DEFAULT_LOOKBACK_DAYS = 7;
 const LOOKBACK_TOOLTIP =
   'Applies to AWS recommendations only (Cost Explorer lookback window); ' +
   'Azure and GCP are unaffected.';
+// Issue #191: always-visible scope hint next to the lookback select.
+export const LOOKBACK_SCOPE_HINT = 'Applies to AWS rows only';
 const LOOKBACK_NO_PERMISSION_TOOLTIP =
   'Changing the lookback window requires admin (update:config) permission. ' +
   'Ask an administrator to adjust it in Settings.';
@@ -754,7 +757,16 @@ function renderLookbackToolbar(): void {
   tip.textContent = canEdit ? LOOKBACK_TOOLTIP : LOOKBACK_NO_PERMISSION_TOOLTIP;
   info.appendChild(tip);
 
-  wrap.append(label, select, info);
+  // Issue #191: the tooltip above is hover-only, and the control sits over a
+  // multi-provider table, so it read as a global setting. A short visible
+  // hint states the scope for everyone; aria-describedby announces it too.
+  const scope = document.createElement('span');
+  scope.id = 'recs-lookback-scope';
+  scope.className = 'lookback-scope-hint';
+  scope.textContent = LOOKBACK_SCOPE_HINT;
+  select.setAttribute('aria-describedby', scope.id);
+
+  wrap.append(label, select, scope, info);
   container.appendChild(wrap);
 }
 
@@ -4897,7 +4909,11 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // run before renderFilterStatusBar (which reads it for the Expand-All button).
   // safe: buildListMarkup escapes all API-derived values via escapeHtml.
   // nosec: innerHTML is intentional here; see security note above.
+  // Issue #191: the rebuild below drops the focused control (row checkbox,
+  // chevron, sort header); put keyboard focus back on its replacement.
+  const focusSnapshot = captureFocus(container);
   container.innerHTML = buildListMarkup(recommendations ?? [], selectedIDs, visibleCols, showCheckboxes); // nosec
+  restoreFocus(container, focusSnapshot);
 
   // Issue #700: when the filter yields zero rows, preserve the <thead> by
   // injecting a hint row into the empty <tbody> rather than replacing the

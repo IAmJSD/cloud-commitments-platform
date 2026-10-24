@@ -273,9 +273,17 @@ main {
 
 #summary {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    /* Four KPI cards: 4 across, then 2x2, then 1 column (breakpoints in
+     * responsive.css), never 3 + an orphan (issue #191). */
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 1rem;
     margin-bottom: 2rem;
+}
+
+/* An error or notice rendered in place of the cards spans the whole row
+ * rather than squeezing into the first of the four fixed columns. */
+:is(#summary, #recommendations-summary, #history-summary) > :not(.card) {
+    grid-column: 1 / -1;
 }
 
 /* Footer */

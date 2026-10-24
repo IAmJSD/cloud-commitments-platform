@@ -134,7 +134,8 @@ body {
 
 
 .error {
-    color: var(--cudly-error);
+    /* --cudly-error on --cudly-error-bg is 4.1:1; the -fg shade is 4.9:1 (AA, issue #191). */
+    color: var(--cudly-error-fg);
     padding: 1rem;
     background: var(--cudly-error-bg);
     border-radius: 4px;

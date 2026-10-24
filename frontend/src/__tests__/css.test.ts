@@ -79,8 +79,9 @@ describe('CSS Styles', () => {
 
     test('has error class with error color token', () => {
       // Post-#340 the literal #ea4335 was replaced with the
-      // --cudly-error token; assert either form.
-      expect(css).toMatch(/\.error\s*\{[^}]*color:\s*(var\(--cudly-error\)|#ea4335)/);
+      // --cudly-error token; #191 moved the text to the darker -fg shade
+      // (AA on --cudly-error-bg). Assert any of those forms.
+      expect(css).toMatch(/\.error\s*\{[^}]*color:\s*(var\(--cudly-error(-fg)?\)|#ea4335)/);
     });
 
     test('has provider badge classes', () => {
