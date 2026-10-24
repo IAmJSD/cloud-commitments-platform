@@ -14,6 +14,7 @@ import { showToast } from './toast';
 import { getCurrentUser } from './state';
 import { canAccess } from './permissions';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { localDayRangeToUtcDays, toLocalDateInputValue } from './lib/local-date';
 import { getAccountName } from './recommendations';
 import { applyColumnFilters } from './lib/column-filters';
 import {
@@ -232,10 +233,10 @@ export function initHistoryDateRange(): void {
   const endInput = document.getElementById('history-end') as HTMLInputElement | null;
 
   if (startInput && !startInput.value) {
-    startInput.value = start.toISOString().split('T')[0] || '';
+    startInput.value = toLocalDateInputValue(start);
   }
   if (endInput && !endInput.value) {
-    endInput.value = end.toISOString().split('T')[0] || '';
+    endInput.value = toLocalDateInputValue(end);
   }
 }
 
@@ -300,7 +301,8 @@ export async function viewPlanHistory(planId: string): Promise<void> {
  * Set the From/To inputs to bracket the purchases that just rendered.
  * No-op when the list is empty — keeping the previous values is more
  * honest than seeding a fake "today" range. Timestamps are normalised
- * to UTC YYYY-MM-DD so they slot directly into `<input type="date">`.
+ * to the LOCAL calendar day (the day a date input shows and the table's
+ * formatted timestamps use), not the UTC day (issue #51).
  */
 function snapDateInputsToPurchases(purchases: HistoryPurchase[]): void {
   if (purchases.length === 0) return;
@@ -310,8 +312,8 @@ function snapDateInputsToPurchases(purchases: HistoryPurchase[]): void {
   if (epochs.length === 0) return;
   const startInput = document.getElementById('history-start') as HTMLInputElement | null;
   const endInput = document.getElementById('history-end') as HTMLInputElement | null;
-  const minDate = new Date(Math.min(...epochs)).toISOString().split('T')[0] || '';
-  const maxDate = new Date(Math.max(...epochs)).toISOString().split('T')[0] || '';
+  const minDate = toLocalDateInputValue(new Date(Math.min(...epochs)));
+  const maxDate = toLocalDateInputValue(new Date(Math.max(...epochs)));
   if (startInput) startInput.value = minDate;
   if (endInput) endInput.value = maxDate;
 }
@@ -354,9 +356,17 @@ export async function loadHistory(): Promise<void> {
     const stateAccountIDs = state.getCurrentAccountIDs();
     const accountIDs: string[] | undefined = stateAccountIDs.length > 0 ? stateAccountIDs : undefined;
 
+    // The From/To inputs hold LOCAL calendar days, but /history filters on
+    // whole UTC days. Widen to the UTC days covering the local range so an
+    // off-UTC user never loses rows from the edges of the days they picked
+    // (issue #51).
+    const range = localDayRangeToUtcDays(
+      (document.getElementById('history-start') as HTMLInputElement | null)?.value,
+      (document.getElementById('history-end') as HTMLInputElement | null)?.value,
+    );
     const filters: api.HistoryFilters = {
-      start: (document.getElementById('history-start') as HTMLInputElement | null)?.value,
-      end: (document.getElementById('history-end') as HTMLInputElement | null)?.value,
+      start: range.start,
+      end: range.end,
       provider,
       account_ids: accountIDs
     };
