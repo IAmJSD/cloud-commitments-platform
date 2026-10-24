@@ -628,3 +628,62 @@ tr.override-disabled {
 #permission-matrix {
     position: relative;
 }
+
+/* Admin -> Purchasing policies section links (issue #190). Sticky under
+ * the topbar inside the panel (no negative-margin gutter rail: that one
+ * collided with the sidebar, see settings-subnav.ts). */
+.section-jump-nav {
+    position: sticky;
+    top: var(--cudly-topbar-h);
+    z-index: 5;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--cudly-sp-2, 0.5rem);
+    margin: 1rem 0 1.5rem;
+    padding: 0.5rem 0;
+    background: var(--cudly-surface);
+}
+
+.section-jump-nav a {
+    padding: 0.25rem 0.75rem;
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-full);
+    font-size: var(--cudly-fs-sm);
+    color: var(--cudly-text);
+    text-decoration: none;
+    white-space: nowrap;
+}
+
+.section-jump-nav a:hover {
+    border-color: var(--cudly-primary);
+    color: var(--cudly-primary);
+}
+
+.section-jump-nav a[hidden] {
+    display: none;
+}
+
+/* Land a jumped-to section below the sticky topbar and link row. */
+#purchasing-panel .settings-category,
+#ri-exchange-automation-settings,
+#commitment-laddering-settings {
+    scroll-margin-top: calc(var(--cudly-topbar-h) + 4rem);
+}
+
+/* Per-provider service grids are collapsed by default (issue #190). */
+.service-defaults-details > summary {
+    cursor: pointer;
+}
+
+.service-defaults-details:not([open]) > summary {
+    margin-bottom: 0;
+}
+
+@media (max-width: 768px) {
+    /* One scrollable row on phones instead of a sticky multi-row block. */
+    .section-jump-nav {
+        position: static;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+    }
+}
