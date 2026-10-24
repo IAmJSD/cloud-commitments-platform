@@ -16,7 +16,7 @@ function buildDOM(): void {
         aria-expanded="false">
       </button>
       <div class="app-topbar-brand"><h1>CUDly</h1></div>
-      <div id="topbar-filters" class="app-topbar-filters" aria-label="Global filters"></div>
+      <div id="topbar-filters" class="app-topbar-filters" role="group" aria-label="Global filters"></div>
       <div id="user-info">
         <button type="button" id="user-email-display">me@example.com</button>
         <span id="user-role-display" class="role-badge"></span>
