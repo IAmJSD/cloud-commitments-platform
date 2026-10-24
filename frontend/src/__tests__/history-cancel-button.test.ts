@@ -172,9 +172,8 @@ describe('History inline Cancel button (issue #46)', () => {
 
     await loadHistory();
 
-    // Scope to history-list. The queue card (issue #340 sub-task)
-    // also renders Cancel buttons for pending rows.
-    const list = document.getElementById('history-list')!;
+    // The Approval queue card is the only approval surface (issue #183).
+    const list = document.getElementById('purchases-approval-queue')!;
     const buttons = list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn');
     const ids = Array.from(buttons).map((b) => b.dataset['cancelId']);
     expect(ids).toEqual(expect.arrayContaining(['exec-mine', 'exec-other', 'exec-legacy']));
@@ -194,9 +193,8 @@ describe('History inline Cancel button (issue #46)', () => {
 
     await loadHistory();
 
-    // Scope to history-list. The queue card (issue #340 sub-task)
-    // also renders Cancel buttons for pending rows.
-    const list = document.getElementById('history-list')!;
+    // The Approval queue card is the only approval surface (issue #183).
+    const list = document.getElementById('purchases-approval-queue')!;
     const buttons = list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn');
     const ids = Array.from(buttons).map((b) => b.dataset['cancelId']);
     expect(ids).toEqual(['exec-mine']);
@@ -229,9 +227,8 @@ describe('History inline Cancel button (issue #46)', () => {
 
     await loadHistory();
 
-    // Scope to history-list. The queue card also paints the same
-    // notified row.
-    const list = document.getElementById('history-list')!;
+    // The Approval queue card is the only approval surface (issue #183).
+    const list = document.getElementById('purchases-approval-queue')!;
     const ids = Array.from(list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn'))
       .map((b) => b.dataset['cancelId']);
     expect(ids).toEqual(['exec-notified']);
@@ -339,7 +336,7 @@ describe('History inline Cancel button (issue #46)', () => {
   let resolveConfirm!: (value: boolean) => void;
   (confirmDialog as jest.Mock).mockImplementationOnce(() => new Promise<boolean>(resolve => { resolveConfirm = resolve; }));
   await loadHistory();
-  const btn = document.querySelector<HTMLButtonElement>('#history-list .history-cancel-btn')!;
+  const btn = document.querySelector<HTMLButtonElement>('#purchases-approval-queue .history-cancel-btn')!;
   btn.click();
   btn.dispatchEvent(new MouseEvent('click'));
   const disabledDuringConfirmation = btn.disabled;

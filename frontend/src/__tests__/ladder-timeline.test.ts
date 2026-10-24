@@ -5,7 +5,7 @@ jest.mock('../permissions', () => ({ canAccess: jest.fn(() => true) }));
 
 import { listAccountsMinimal } from '../api/accounts';
 import { getLadderEvents, getLadderRuns, amendLadderEvent, type LadderEvent, type LadderRun } from '../api/ladder';
-import { initLadderTimeline } from '../ladder-timeline';
+import { initLadderTimeline, disposeLadderTimeline } from '../ladder-timeline';
 import { canAccess } from '../permissions';
 import { Chart } from 'chart.js';
 
@@ -399,5 +399,37 @@ describe('planned purchases layout and UTC date filters (issue #753)', () => {
     expect(date('to')).not.toHaveAttribute('aria-invalid');
     expect(error()).toHaveClass('hidden');
     expect(date('to').value).toBe('');
+  });
+});
+
+describe('chart teardown on navigation (issue #667)', () => {
+  const chartInstance = (index: number): { destroy: jest.Mock } => jest.mocked(Chart).mock.results[index]!.value as { destroy: jest.Mock };
+
+  test('dispose destroys the chart, stops pending loads and init builds a fresh one', async () => {
+    await initLadderTimeline(document.getElementById('timeline')!, [], false);
+    expect(Chart).toHaveBeenCalledTimes(1);
+    let release!: (value: LadderEvent[]) => void;
+    jest.mocked(getLadderEvents).mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    document.querySelector<HTMLButtonElement>('[data-reload]')!.click();
+    disposeLadderTimeline();
+    expect(chartInstance(0).destroy).toHaveBeenCalled();
+    release([event]);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(Chart).toHaveBeenCalledTimes(1);
+    disposeLadderTimeline();
+    await initLadderTimeline(document.getElementById('timeline')!, [], false);
+    expect(Chart).toHaveBeenCalledTimes(2);
+  });
+
+  test('a hidden section is not initialized and releases the previous chart', async () => {
+    await initLadderTimeline(document.getElementById('timeline')!, [], false);
+    document.body.classList.add('hidden');
+    const calls = jest.mocked(getLadderEvents).mock.calls.length;
+    await initLadderTimeline(document.getElementById('timeline')!, [], false);
+    document.body.classList.remove('hidden');
+    expect(chartInstance(0).destroy).toHaveBeenCalled();
+    expect(Chart).toHaveBeenCalledTimes(1);
+    expect(listAccountsMinimal).toHaveBeenCalledTimes(1);
+    expect(getLadderEvents).toHaveBeenCalledTimes(calls);
   });
 });
