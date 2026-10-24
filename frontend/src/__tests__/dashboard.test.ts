@@ -1073,7 +1073,11 @@ describe('Dashboard Module', () => {
         const cfg = calls[calls.length - 1]?.[1] as { data: { datasets: { data: { y: number }[] }[] } } | undefined;
         return cfg?.data.datasets[0]?.data.map((p) => p.y) ?? [];
       };
-      const point = (y: number) => ({ data_points: [{ timestamp: '2026-01-01T00:00:00Z', cumulative_savings: y }] });
+      // Two points: one point is the sparse-data state (#188), which draws no chart.
+      const point = (y: number) => ({ data_points: [
+        { timestamp: '2025-12-31T00:00:00Z', cumulative_savings: 0 },
+        { timestamp: '2026-01-01T00:00:00Z', cumulative_savings: y },
+      ] });
 
       test('an older response landing last is ignored', async () => {
         const older = deferAnalytics();
@@ -1087,7 +1091,7 @@ describe('Dashboard Module', () => {
         await first;
 
         expect(Chart).toHaveBeenCalledTimes(1);
-        expect(plotted()).toEqual([200]);
+        expect(plotted()).toEqual([0, 200]);
       });
 
       test('an older request failing last does not replace the newer chart with an error', async () => {
@@ -1112,8 +1116,14 @@ describe('Dashboard Module', () => {
       const destroy = jest.fn();
       (Chart as unknown as jest.Mock).mockImplementationOnce((canvas: HTMLCanvasElement) => ({ canvas, update, destroy }));
       (api.getSavingsAnalytics as jest.Mock)
-        .mockResolvedValueOnce({ data_points: [{ timestamp: '2026-01-01T00:00:00Z', cumulative_savings: 100 }] })
-        .mockResolvedValueOnce({ data_points: [{ timestamp: '2026-01-01T00:00:00Z', cumulative_savings: 300 }] });
+        .mockResolvedValueOnce({ data_points: [
+          { timestamp: '2025-12-31T00:00:00Z', cumulative_savings: 0 },
+          { timestamp: '2026-01-01T00:00:00Z', cumulative_savings: 100 },
+        ] })
+        .mockResolvedValueOnce({ data_points: [
+          { timestamp: '2025-12-31T00:00:00Z', cumulative_savings: 0 },
+          { timestamp: '2026-01-01T00:00:00Z', cumulative_savings: 300 },
+        ] });
 
       await loadSavingsTrendChart();
       await loadSavingsTrendChart();
