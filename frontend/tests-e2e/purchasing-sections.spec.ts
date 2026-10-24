@@ -65,5 +65,9 @@ test('Exchange Automation loads inside its own titled frame', async ({ page }) =
   const frame = page.locator('#ri-exchange-automation-settings > fieldset');
   await expect(frame.locator('legend')).toHaveText('Exchange Automation');
   await expect(frame).toHaveAttribute('aria-busy', 'true');
-  await expect(frame.locator('.loading')).toHaveText('Loading exchange automation settings...');
+  // Issue #186: the shared skeleton (with its screen-reader status) fills the
+  // frame instead of a visible loading paragraph.
+  await expect(frame.locator('.skeleton-group')).toBeVisible();
+  await expect(frame.locator('.skeleton-status')).toHaveText('Loading…');
+  await expect(frame.locator('p.loading')).toHaveCount(0);
 });

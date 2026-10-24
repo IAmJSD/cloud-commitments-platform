@@ -37,14 +37,14 @@ describe('formatCurrency', () => {
   });
 
   test('handles null and undefined with distinct absent marker (11-N2)', () => {
-    // Absent/non-finite values now render as '--' to distinguish missing data
+    // Absent/non-finite values now render as '—' to distinguish missing data
     // from a real $0 balance (finding 11-N2, feedback_nullable_not_zero).
-    expect(formatCurrency(null as unknown as number)).toBe('--');
-    expect(formatCurrency(undefined as unknown as number)).toBe('--');
+    expect(formatCurrency(null as unknown as number)).toBe('—');
+    expect(formatCurrency(undefined as unknown as number)).toBe('—');
   });
 
   test('handles NaN with distinct absent marker (11-N2)', () => {
-    expect(formatCurrency(NaN)).toBe('--');
+    expect(formatCurrency(NaN)).toBe('—');
   });
 
   test('still renders real zero as $0', () => {
@@ -662,20 +662,20 @@ describe('formatCompactCurrency (issue #749)', () => {
 });
 
 describe('formatCurrency (11-N2: absent vs real zero)', () => {
-  test('null returns -- not $0', () => {
-    expect(formatCurrency(null as unknown as number)).toBe('--');
+  test('null returns an em dash, not $0', () => {
+    expect(formatCurrency(null as unknown as number)).toBe('—');
   });
 
-  test('undefined returns -- not $0', () => {
-    expect(formatCurrency(undefined as unknown as number)).toBe('--');
+  test('undefined returns an em dash, not $0', () => {
+    expect(formatCurrency(undefined as unknown as number)).toBe('—');
   });
 
-  test('NaN returns -- not $0', () => {
-    expect(formatCurrency(NaN)).toBe('--');
+  test('NaN returns an em dash, not $0', () => {
+    expect(formatCurrency(NaN)).toBe('—');
   });
 
-  test('Infinity returns -- not $Infinity', () => {
-    expect(formatCurrency(Infinity)).toBe('--');
+  test('Infinity returns an em dash, not $Infinity', () => {
+    expect(formatCurrency(Infinity)).toBe('—');
   });
 
   test('real zero still renders as $0', () => {
