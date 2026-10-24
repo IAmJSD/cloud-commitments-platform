@@ -148,7 +148,7 @@ for (const action of ['Execute', 'Approve']) {
       await expect.poll(() => state.requests.length).toBe(1);
       if (action === 'Approve') {
         expect(state.requests[0]).toEqual({ path: `/api/ri-exchange/approve/${state.history.id}`, body: null });
-        await expect(page.locator('#ri-exchange-history-list')).toContainText('completed');
+        await expect(page.locator('#ri-exchange-history-list')).toContainText('Completed');
       }
       expect(state.errors).toEqual([]);
     });
@@ -215,7 +215,7 @@ for (const reopenBeforeResponse of [false, true]) {
     await page.locator('#ri-exchange-modal').getByRole('button', { name: 'Cancel', exact: true }).click();
     await page.locator(`[data-action="quote-ri"][data-ri-id="${otherRI}"]`).click();
     if (reopenBeforeResponse) release();
-    await expect(page.locator('#ri-exchange-history-list')).toContainText('completed');
+    await expect(page.locator('#ri-exchange-history-list')).toContainText('Completed');
     await expect(page.locator(`[data-action="quote-ri"][data-ri-id="${ri}"]`)).toHaveCount(0);
     await page.waitForTimeout(2200);
     await expect(page.locator('#ri-exchange-modal')).toBeVisible();

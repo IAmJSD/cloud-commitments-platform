@@ -434,21 +434,21 @@ describe('formatRampSchedule', () => {
 });
 
 describe('getStatusBadge', () => {
-  test('returns disabled for disabled items', () => {
+  test('returns the muted tone for disabled plans', () => {
     const result = getStatusBadge(false, true);
-    expect(result.class).toBe('disabled');
+    expect(result.class).toBe('muted');
     expect(result.label).toBe('Disabled');
   });
 
-  test('returns active for enabled + auto purchase', () => {
+  test('returns the success tone for enabled + auto purchase', () => {
     const result = getStatusBadge(true, true);
-    expect(result.class).toBe('active');
+    expect(result.class).toBe('success');
     expect(result.label).toBe('Active');
   });
 
-  test('returns paused for enabled without auto purchase', () => {
+  test('returns the info tone (not a warning) for enabled without auto purchase', () => {
     const result = getStatusBadge(true, false);
-    expect(result.class).toBe('paused');
+    expect(result.class).toBe('info');
     expect(result.label).toBe('Manual');
   });
 });

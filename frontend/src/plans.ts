@@ -17,6 +17,7 @@ import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/ske
 import { canAccess } from './permissions';
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 import { suggestedPurchaseStartDate } from './lib/calendar-date';
+import { statusBadgeHtml } from './lib/status-badge';
 import { mountPlanEditorPanel } from './plan-editor-panel';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
@@ -752,7 +753,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td>${termCell}</td>
       <td>${upfrontShown}</td>
       <td class="savings">${savingsCell}</td>
-      <td><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span></td>
+      <td>${statusBadgeHtml(purchase.status)}</td>
       <td class="actions">
         ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary" title="Run now" aria-label="Run now">▶</button>` : ''}
         ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause" aria-label="Pause">⏸</button>` : ''}
@@ -920,7 +921,7 @@ interface BackendPlan {
 
 // Score bands for the per-plan health badge (issue #340 follow-up). Green
 // >= 80 (healthy), amber 50-79 (needs attention), red < 50 (action needed).
-// Reuses the existing status-badge palette (badge-success/badge-warning/
+// Reuses the shared .badge tones (badge-success/badge-warning/
 // badge-danger) already used elsewhere on this card rather than introducing
 // new CSS.
 const HEALTH_SCORE_GOOD_THRESHOLD = 80;
@@ -973,14 +974,14 @@ function healthBadgeHtml(plan: BackendPlan): string {
     // execution history, while a non-finite value means the number itself
     // arrived unusable. Naming only the first would send an operator
     // chasing a database problem that may not exist.
-    return `<span class="status-badge badge-muted" title="${escapeHtmlAttr('Plan health is unavailable: this plan\'s score could not be determined.')}">Health: unknown</span>`;
+    return `<span class="badge badge-muted" title="${escapeHtmlAttr('Plan health is unavailable: this plan\'s score could not be determined.')}">Health: unknown</span>`;
   }
   const factors = plan.health_factors || [];
   const factorLines = factors.length > 0
     ? factors.map(f => `-${f.penalty}: ${f.note}`)
     : ['No issues detected'];
   const tooltip = [`Plan health: ${plan.health_score}/100`, ...factorLines].join('\n');
-  return `<span class="status-badge ${healthBadgeClass(plan.health_score)}" title="${escapeHtmlAttr(tooltip)}">Health: ${plan.health_score}</span>`;
+  return `<span class="badge ${healthBadgeClass(plan.health_score)}" title="${escapeHtmlAttr(tooltip)}">Health: ${plan.health_score}</span>`;
 }
 
 // Pretty label for a service slug used inside the plan card.
@@ -1099,7 +1100,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
   // visible implies the plan will still run on that date, which it won't.
   const showNextDate = Boolean(plan.next_execution_date) && plan.enabled;
   const overdueBadge = overdue && plan.enabled
-    ? '<span class="status-badge badge-danger" title="Next purchase date is in the past">Overdue</span>'
+    ? '<span class="badge badge-danger" title="Next purchase date is in the past">Overdue</span>'
     : '';
   // Read-only mode: unassigned plans cannot be purchased against until an
   // operator re-assigns them to at least one account.
@@ -1110,7 +1111,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
       <div class="plan-header">
         <h3>${escapeHtml(plan.name)}</h3>
         <div class="plan-status">
-          <span class="status-badge ${status.class}">${status.label}</span>
+          <span class="badge badge-${status.class}">${status.label}</span>
           ${healthBadgeHtml(plan)}
           ${overdueBadge}
           ${canManagePlan && !isUnassigned ? `

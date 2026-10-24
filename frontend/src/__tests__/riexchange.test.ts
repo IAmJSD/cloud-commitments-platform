@@ -1351,6 +1351,28 @@ describe('exchange history table counts (issue #286)', () => {
     expect(cells).toContain('1x m5.4xlarge');
     expect(cells).not.toContain('4');
   });
+
+  // Issue #737: the status cell used to print the raw lowercase value with a
+  // page-local color (pending blue, processing orange). It now uses the shared
+  // badge tones and display labels.
+  it.each([
+    ['pending', 'badge-warning', 'Pending'],
+    ['processing', 'badge-warning', 'Processing'],
+    ['completed', 'badge-success', 'Completed'],
+    ['failed', 'badge-danger', 'Failed'],
+    ['canceled', 'badge-muted', 'Cancelled'],
+  ])('renders status %s as a %s badge reading %s', async (status, cls, label) => {
+    (api.getRIExchangeHistory as jest.Mock).mockResolvedValue([{
+      id: 'h1', account_id: 'a', exchange_id: 'exch-1', region: 'us-east-1', source_ri_ids: ['ri-1'],
+      source_instance_type: 'm5.large', source_count: 1, target_offering_id: 'o', target_instance_type: 'm5.xlarge',
+      target_count: 1, payment_due: '1.00', status, mode: 'manual',
+      created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+    }]);
+    await loadRIExchange();
+    const badge = document.querySelector('#ri-exchange-history-list tbody .badge')!;
+    expect(badge.className).toBe(`badge ${cls}`);
+    expect(badge.textContent).toBe(label);
+  });
 });
 
 // Issue #1181: RIs left out of reshape analysis must be visible in the UI.

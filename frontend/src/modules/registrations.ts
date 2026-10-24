@@ -7,6 +7,7 @@ import type { AccountRegistration } from '../api/registrations';
 import type { CloudAccount, CloudAccountRequest } from '../api/accounts';
 import { openAccountModal, loadAccountsForProvider } from '../settings';
 import { formatDateTime } from '../utils';
+import { badgeClass, statusLabel, statusTone } from '../lib/status-badge';
 import { showToast } from '../toast';
 import { confirmDialog } from '../confirmDialog';
 
@@ -45,11 +46,8 @@ function providerLabel(p: string): string {
 
 function createStatusBadge(status: string): HTMLSpanElement {
   const span = document.createElement('span');
-  const cls = status === 'pending' ? 'badge-warning'
-    : status === 'approved' ? 'badge-success'
-    : 'badge-danger';
-  span.className = `status-badge ${cls}`;
-  span.textContent = status;
+  span.className = badgeClass(statusTone(status));
+  span.textContent = statusLabel(status);
   return span;
 }
 
@@ -131,7 +129,7 @@ function renderRegistrationsTable(container: HTMLElement, regs: AccountRegistrat
     statusTd.appendChild(createStatusBadge(reg.status));
     if (reg.has_credentials) {
       const credBadge = document.createElement('span');
-      credBadge.className = 'status-badge badge-info ml-xs';
+      credBadge.className = `${badgeClass('info')} ml-xs`;
       credBadge.textContent = 'creds';
       credBadge.title = 'Credentials included — will be auto-stored on approval';
       statusTd.appendChild(credBadge);

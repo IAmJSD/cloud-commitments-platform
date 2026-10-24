@@ -344,21 +344,23 @@ export function formatRampSchedule(schedule: RampSchedule | string | null | unde
 }
 
 export interface StatusBadge {
-  class: 'active' | 'paused' | 'disabled';
+  /** Badge tone (lib/status-badge.ts BadgeTone); rendered as `badge badge-<class>`. */
+  class: 'success' | 'info' | 'muted';
   label: string;
 }
 
 /**
- * Get status badge class
+ * Plan status badge. "Manual" (enabled, purchases need a manual run) is a
+ * valid configuration, not a warning, so it is info rather than amber.
  */
 export function getStatusBadge(enabled: boolean, autoPurchase: boolean): StatusBadge {
   if (!enabled) {
-    return { class: 'disabled', label: 'Disabled' };
+    return { class: 'muted', label: 'Disabled' };
   }
   if (autoPurchase) {
-    return { class: 'active', label: 'Active' };
+    return { class: 'success', label: 'Active' };
   }
-  return { class: 'paused', label: 'Manual' };
+  return { class: 'info', label: 'Manual' };
 }
 
 /**
