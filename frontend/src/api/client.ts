@@ -93,11 +93,18 @@ function installStorageListener(): void {
   if (storageListenerInstalled) return;
   if (typeof window === 'undefined' || !window.addEventListener) return;
   window.addEventListener('storage', (e: StorageEvent) => {
-    if (!e.key || !(STORAGE_KEYS as readonly string[]).includes(e.key)) return;
-    // Only react to a *cleared* key (newValue === null); partial
-    // updates (e.g. token refresh) propagate via the in-memory state
-    // and don't need a reload.
-    if (e.newValue !== null) return;
+    if (e.key === null) {
+      // localStorage.clear() in another tab (a browser privacy control,
+      // devtools, a future clear() call) fires with key === null: every
+      // key, auth included, is gone. Signed-out tabs have nothing to drop.
+      if (!authToken && !apiKey && !csrfToken) return;
+    } else {
+      if (!(STORAGE_KEYS as readonly string[]).includes(e.key)) return;
+      // Only react to a *cleared* key (newValue === null); partial
+      // updates (e.g. token refresh) propagate via the in-memory state
+      // and don't need a reload.
+      if (e.newValue !== null) return;
+    }
     authToken = '';
     apiKey = '';
     csrfToken = '';

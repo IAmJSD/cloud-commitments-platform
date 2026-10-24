@@ -35,6 +35,7 @@ function canActOnRecommendations(): boolean {
 }
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 import { fetchOverridesForAccounts } from './lib/overrides';
+import { ownValue } from './lib/own-property';
 // Re-export the shared primitives so existing consumers that import from
 // recommendations.ts keep working without import-path churn (issue #166).
 export { parseNumericFilter } from './lib/column-filters';
@@ -1334,8 +1335,8 @@ function sortVariantsInCell(variants: LocalRecommendation[]): LocalRecommendatio
   return variants.slice().sort((a, b) => {
     const termDiff = a.term - b.term;
     if (termDiff !== 0) return termDiff;
-    const pa = PAYMENT_ORDER[a.payment ?? ''] ?? 99;
-    const pb = PAYMENT_ORDER[b.payment ?? ''] ?? 99;
+    const pa = ownValue(PAYMENT_ORDER, a.payment ?? '') ?? 99;
+    const pb = ownValue(PAYMENT_ORDER, b.payment ?? '') ?? 99;
     return pa - pb;
   });
 }
@@ -1453,7 +1454,7 @@ function cellScoreFor(
     // canonical order. Stringified so the existing string-column comparator
     // path handles it.
     const first = sortVariantsInCell(variants)[0];
-    return String(PAYMENT_ORDER[first?.payment ?? ''] ?? 99);
+    return String(ownValue(PAYMENT_ORDER, first?.payment ?? '') ?? 99);
   }
 
   // All other numeric columns (savings, count, on_demand_monthly): preserve
@@ -3098,7 +3099,7 @@ const PAYMENT_DISPLAY_LABELS: Record<string, string> = {
 
 function formatPayment(payment: string | undefined): string {
   if (!payment) return '\u2014';
-  return PAYMENT_DISPLAY_LABELS[payment] ?? payment;
+  return ownValue(PAYMENT_DISPLAY_LABELS, payment) ?? payment;
 }
 
 // renderUsageSparkline returns an inline SVG polyline representing the
@@ -3239,7 +3240,7 @@ function buildVariantRowMarkup(
       rec.region,
       accountName,
       formatTerm(rec.term),
-      PAYMENT_DISPLAY_LABELS[rec.payment ?? ''] ?? '',
+      ownValue(PAYMENT_DISPLAY_LABELS, rec.payment ?? '') ?? '',
     ].filter(part => part).join(' '),
   );
   const checkboxCell = showCheckboxes

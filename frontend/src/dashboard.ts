@@ -189,6 +189,7 @@ export async function loadDashboard(): Promise<void> {
     // Load the savings-over-time widget independently -- failure shouldn't
     // block the rest of the dashboard (e.g. analytics not configured).
     void loadSavingsTrendChart();
+    void loadYtdSparkline();
 
     // Auto-refresh the recommendations cache if the last collection
     // is older than 24h (or never ran). The dashboard's KPI tiles +
@@ -1062,11 +1063,6 @@ export async function loadSavingsTrendChart(): Promise<void> {
 
     const points = data.data_points ?? [];
 
-    // YTD Savings KPI tile sparkline (issue #340 T6) — uses the same
-    // cumulative_savings series the main chart renders. Skips silently
-    // when the tile isn't in the DOM (e.g. a different layout is mounted).
-    attachSparkline('ytd', points.map((p: SavingsDataPoint) => p.cumulative_savings || 0));
-
     // Determine the left edge of the x-axis.
     // For 'all': anchor to the earliest purchase so the line fills the
     // chart rather than clustering at the right end. Fall back to now-365d
@@ -1107,7 +1103,6 @@ export async function loadSavingsTrendChart(): Promise<void> {
         empty.classList.remove('hidden');
       }
       if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
-      attachSparkline('ytd', []);
       return;
     }
     canvas.classList.remove('hidden');
@@ -1170,12 +1165,46 @@ export async function loadSavingsTrendChart(): Promise<void> {
     // the dashboard — hide the widget and fall back to a neutral message.
     console.warn('Savings trend chart unavailable:', err);
     if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
-    attachSparkline('ytd', []);
     canvas.classList.add('hidden');
     if (empty) {
       empty.textContent = 'Savings history is not available yet.';
       empty.classList.remove('hidden');
     }
+  }
+}
+
+let ytdSparklineGeneration = 0;
+
+/**
+ * Sparkline for the YTD Savings tile. It used to reuse the trend chart's
+ * points, whose window follows the 7d/30d/90d/All toggle, so the line under
+ * "YTD" changed shape with a control that does not change the number. It now
+ * plots its own series from 1 January (UTC, the same year start the backend
+ * uses for ytd_savings) to now, scoped by the same provider/account chips.
+ */
+export async function loadYtdSparkline(): Promise<void> {
+  if (!document.querySelector('.kpi-tile-spark[data-spark-key="ytd"]')) return;
+  const generation = ++ytdSparklineGeneration;
+  const now = new Date();
+  const yearStartMs = Date.UTC(now.getUTCFullYear(), 0, 1);
+  const days = (now.getTime() - yearStartMs) / 86400_000;
+  const interval: 'hourly' | 'daily' | 'weekly' = days <= 7 ? 'hourly' : days <= 90 ? 'daily' : 'weekly';
+  const accountIDs = state.getCurrentAccountIDs();
+  const provider = state.getCurrentProvider();
+  try {
+    const data = await api.getSavingsAnalytics({
+      start: new Date(yearStartMs).toISOString(),
+      end: now.toISOString(),
+      interval,
+      ...(provider ? { provider } : {}),
+      ...(accountIDs.length > 0 ? { account_ids: accountIDs } : {}),
+    });
+    if (generation !== ytdSparklineGeneration) return;
+    attachSparkline('ytd', (data.data_points ?? []).map((p: SavingsDataPoint) => p.cumulative_savings || 0));
+  } catch (err) {
+    if (generation !== ytdSparklineGeneration) return;
+    console.warn('YTD sparkline unavailable:', err);
+    attachSparkline('ytd', []);
   }
 }
 
