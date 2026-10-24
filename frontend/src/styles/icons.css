@@ -1,0 +1,28 @@
+/* Shared SVG icon set (issue #751). Icons come from src/icons.ts and are
+ * sized in em, so they follow the font size of the control they sit in
+ * and take its text color through stroke="currentColor". */
+.icon {
+    display: inline-block;
+    flex-shrink: 0;
+    width: 1em;
+    height: 1em;
+    /* Sit on the text baseline like the glyphs they replaced. */
+    vertical-align: -0.125em;
+    pointer-events: none;
+}
+
+/* Icon followed by a text label (e.g. "Run now", "Retry", "Exchange settings"). */
+.icon-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3em;
+}
+
+
+/* The sort indicator's font-size is 0.75em, sized for the old ↕ ▲ ▼ glyphs
+ * whose ink filled the em box; the chevrons need a little more room to
+ * stay legible next to the header label. */
+th.sortable .sort-indicator .icon {
+    width: 1.25em;
+    height: 1.25em;
+}

@@ -9,6 +9,7 @@ import { initFederationPanel } from './federation';
 import { confirmDialog } from './confirmDialog';
 import { reflectDirtyState } from './settings-subnav';
 import { showToast } from './toast';
+import { createIcon } from './icons';
 import { isValidCombination, getValidPaymentOptions, getValidTermOptions, getPaymentLabel, getCommitmentConfig, normalizePaymentValue } from './commitmentOptions';
 import { openModal, closeModal } from './modal';
 import { loadRecommendations } from './recommendations';
@@ -3790,7 +3791,7 @@ export function copyToClipboard(elementId: string): void {
     btn.replaceChildren();
     const tick = document.createElement('span');
     tick.className = 'copy-icon';
-    tick.textContent = '✓'; // ✓
+    tick.appendChild(createIcon('check'));
     btn.appendChild(tick);
     btn.classList.add('copied');
     setTimeout(() => {

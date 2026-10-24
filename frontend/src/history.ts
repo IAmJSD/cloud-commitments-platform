@@ -11,6 +11,7 @@ import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
 import { approvalDetailsUnavailableMessage, buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
+import { iconSvg } from './icons';
 import { getCurrentUser } from './state';
 import { canAccess } from './permissions';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
@@ -946,11 +947,13 @@ function renderActionCell(p: HistoryPurchase): string {
       const title = p.redrive_unsafe
         ? 'Permanent: this execution can never be retried; check the account, then start a new purchase if needed'
         : 'Operator action required — Retry will not help until this is fixed';
-      return `<span class="history-ops-hint" title="${title}">⚠ ${escapeHtml(p.ops_hint)}</span>`;
+      return `<span class="history-ops-hint" title="${title}">${iconSvg('alert-triangle')} ${escapeHtml(p.ops_hint)}</span>`;
     }
     if (canRetryFailedRow(p) && p.purchase_id) {
       const overThreshold = retryThresholdReached(p);
-      const label = overThreshold ? `⚠ Retried ${p.retry_attempt_n ?? 0}× — click to override` : '↻ Retry';
+      const label = overThreshold
+        ? `${iconSvg('alert-triangle')} Retried ${p.retry_attempt_n ?? 0}× — click to override`
+        : `${iconSvg('rotate-cw')} Retry`;
       const cls = overThreshold ? 'btn-link history-retry-btn history-retry-over-threshold' : 'btn-link history-retry-btn';
       return `<button type="button" class="${cls}" data-retry-id="${escapeHtmlAttr(p.purchase_id)}">${label}</button>`;
     }
@@ -963,14 +966,14 @@ function renderActionCell(p: HistoryPurchase): string {
   // row (failed_v2 was retried into v3 AND is itself a retry of v1).
   const lineage: string[] = [];
   if (p.retry_execution_id) {
-    lineage.push(`<a href="#history?execution=${encodeURIComponent(p.retry_execution_id)}" class="history-retry-link" title="Jump to the retry execution">↻ Retried as #${escapeHtml(shortExecID(p.retry_execution_id))}</a>`);
+    lineage.push(`<a href="#history?execution=${encodeURIComponent(p.retry_execution_id)}" class="history-retry-link" title="Jump to the retry execution">${iconSvg('rotate-cw')} Retried as #${escapeHtml(shortExecID(p.retry_execution_id))}</a>`);
   }
   if ((p.retry_attempt_n ?? 0) > 0) {
     // We don't carry a back-pointer field — a future enhancement
     // could surface the predecessor's exec ID via the API. For now
     // we render a static badge (no link target) so users at least
     // see "this is a retry" provenance.
-    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${p.retry_attempt_n} in its chain">↻ Retry #${p.retry_attempt_n}</span>`);
+    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${p.retry_attempt_n} in its chain">${iconSvg('rotate-cw')} Retry #${p.retry_attempt_n}</span>`);
   }
   // Build the trailing action buttons so they compose with lineage links
   // — a retry-descendant can also have an active listing that needs a

@@ -20,6 +20,7 @@ import {
   type ColumnFilterKind,
 } from './column-filters';
 import { escapeHtmlAttr } from '../utils';
+import { iconSvg } from '../icons';
 
 export interface PopoverConfig<TColumnId extends string> {
   column: TColumnId;
@@ -355,7 +356,7 @@ export function renderHistoryFilterButton<TColumnId extends string>(
     active ? `Filter ${label} - currently active` : `Filter ${label}`,
   );
   const safeColumn = escapeHtmlAttr(String(column));
-  // Use the same gear-style glyph (⛛) the recommendations popover
-  // uses so the two surfaces are visually identical to the user.
-  return `<button type="button" class="${cls}" data-column="${safeColumn}" aria-haspopup="dialog" aria-expanded="false" aria-label="${ariaLabel}" title="${ariaLabel}">⛛</button>`;
+  // Use the same filter icon the recommendations popover uses so the
+  // two surfaces are visually identical to the user.
+  return `<button type="button" class="${cls}" data-column="${safeColumn}" aria-haspopup="dialog" aria-expanded="false" aria-label="${ariaLabel}" title="${ariaLabel}">${iconSvg('filter')}</button>`;
 }

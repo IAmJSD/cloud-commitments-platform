@@ -29,6 +29,7 @@ import type {
 import { openModal, closeModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
+import { createIcon, iconSvg } from './icons';
 import { applyReadOnlySettings, isPermissionDeniedError } from './settings';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
@@ -396,7 +397,7 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
     const active = filters[column] ? ' active' : '';
     const lbl = activeRiLabelFor(column);
     const label = filters[column] ? `Filter ${lbl} — currently active` : `Filter ${lbl}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">&#x26DB;</button>`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${iconSvg('filter')}</button>`;
   };
 
   container.innerHTML = `
@@ -1379,7 +1380,7 @@ function renderRecommendations(container: HTMLElement): void {
     const active = filters[column] ? ' active' : '';
     const lbl = riexLabelFor(column);
     const label = filters[column] ? `Filter ${lbl} — currently active` : `Filter ${lbl}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">⛛</button>`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${iconSvg('filter')}</button>`;
   };
 
   // Render an indexable list so per-row Exchange buttons can find the
@@ -1660,7 +1661,7 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.className = 'btn exchange-remove-target';
-    removeBtn.textContent = '×';
+    removeBtn.appendChild(createIcon('x'));
     removeBtn.setAttribute('aria-label', 'Remove target');
     removeBtn.addEventListener('click', () => {
       if (targetRows.length <= 1) return; // keep at least one row

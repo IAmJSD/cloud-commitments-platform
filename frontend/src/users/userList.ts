@@ -19,6 +19,7 @@ import { openEditUserModal, deleteUser } from './userActions';
 import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 import { confirmDialog } from '../confirmDialog';
 import { getCurrentUser } from '../state';
+import { createIcon, iconSvg } from '../icons';
 
 // Placeholder row id withCurrentUser prepends when the API omits the caller.
 const SYNTHETIC_USER_ID = 'current';
@@ -103,7 +104,7 @@ export function renderUsers(users: APIUser[]): void {
               <input type="checkbox" class="user-checkbox" data-user-id="${escapeHtml(user.id)}" aria-label="Select ${escapeHtml(user.email)}" ${selectedUserIds.has(user.id) ? 'checked' : ''} ${user.id === SYNTHETIC_USER_ID ? 'disabled' : ''}>
             </td>
             <td>
-              <button class="btn-small btn-icon user-expand-btn" data-user-id="${escapeHtml(user.id)}" title="Expand" aria-label="Expand user ${escapeHtml(user.email)}" aria-expanded="false">&#x25B8;</button>
+              <button class="btn-small btn-icon user-expand-btn" data-user-id="${escapeHtml(user.id)}" title="Expand" aria-label="Expand user ${escapeHtml(user.email)}" aria-expanded="false">${iconSvg('chevron-right')}</button>
             </td>
             <td>
               <div class="user-email">
@@ -437,11 +438,11 @@ function setupUserTableListeners(): void {
         if (user) panel.innerHTML = renderUserExpandPanel(user);
         expandRow.classList.remove('hidden');
         btn.setAttribute('aria-expanded', 'true');
-        btn.textContent = '\u25BE'; // ▾ down-pointing triangle
+        btn.replaceChildren(createIcon('chevron-down'));
       } else {
         expandRow.classList.add('hidden');
         btn.setAttribute('aria-expanded', 'false');
-        btn.textContent = '\u25B8'; // ▸ right-pointing triangle
+        btn.replaceChildren(createIcon('chevron-right'));
       }
     });
   });

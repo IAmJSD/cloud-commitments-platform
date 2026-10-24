@@ -16,6 +16,7 @@
 import * as api from './api';
 import { escapeHtml, formatDate } from './utils';
 import { showToast } from './toast';
+import { iconSvg } from './icons';
 import { canAccess } from './permissions';
 import { initLadderTimeline } from './ladder-timeline';
 import { initLadderAccountSelector } from './ladder-account-selector';
@@ -134,7 +135,7 @@ function renderLadderingSection(globalEnabled: boolean): string {
     <div class="modal-header">
       <h3 id="ladder-modal-title">Commitment Laddering Config</h3>
       <button type="button" class="modal-close" id="ladder-modal-close-btn"
-              aria-label="Close">&times;</button>
+              aria-label="Close">${iconSvg('x')}</button>
     </div>
     <div class="modal-body">
       <form id="ladder-config-form" novalidate>
