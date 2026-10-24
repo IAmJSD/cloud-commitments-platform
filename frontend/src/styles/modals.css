@@ -76,6 +76,24 @@
     margin-bottom: 1rem;
 }
 
+/* Example command in a modal (e.g. the curl line in the "API Key Created"
+   dialog). Wraps instead of running past the modal's right edge. */
+.modal-content .code-example {
+    max-width: 100%;
+    box-sizing: border-box;
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--cudly-bg);
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    color: var(--cudly-text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 /* Modal overlay */
 .modal-overlay {
     position: fixed;
