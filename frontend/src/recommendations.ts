@@ -20,11 +20,12 @@ import {
   type Payment as CompatPayment,
   type Provider as CompatProvider,
 } from './lib/purchase-compatibility';
-import { executeButtonLabel } from './commitmentSummary';
+import { billsMonthly, buildCommitmentBand, commitmentLine, commitmentTotals, executeButtonLabel, formatCommitmentTotals, type CommitmentLine } from './commitmentSummary';
 import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary, GlobalConfig } from './types';
 import { openModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { captureFocus, restoreFocus } from './lib/focus-restore';
 import { canAccess } from './permissions';
 
 // Issue #869: true when the current session can take any action on
@@ -165,6 +166,8 @@ const DEFAULT_LOOKBACK_DAYS = 7;
 const LOOKBACK_TOOLTIP =
   'Applies to AWS recommendations only (Cost Explorer lookback window); ' +
   'Azure and GCP are unaffected.';
+// Issue #191: always-visible scope hint next to the lookback select.
+export const LOOKBACK_SCOPE_HINT = 'Applies to AWS rows only';
 const LOOKBACK_NO_PERMISSION_TOOLTIP =
   'Changing the lookback window requires admin (update:config) permission. ' +
   'Ask an administrator to adjust it in Settings.';
@@ -755,7 +758,16 @@ function renderLookbackToolbar(): void {
   tip.textContent = canEdit ? LOOKBACK_TOOLTIP : LOOKBACK_NO_PERMISSION_TOOLTIP;
   info.appendChild(tip);
 
-  wrap.append(label, select, info);
+  // Issue #191: the tooltip above is hover-only, and the control sits over a
+  // multi-provider table, so it read as a global setting. A short visible
+  // hint states the scope for everyone; aria-describedby announces it too.
+  const scope = document.createElement('span');
+  scope.id = 'recs-lookback-scope';
+  scope.className = 'lookback-scope-hint';
+  scope.textContent = LOOKBACK_SCOPE_HINT;
+  select.setAttribute('aria-describedby', scope.id);
+
+  wrap.append(label, select, scope, info);
   container.appendChild(wrap);
 }
 
@@ -1625,6 +1637,30 @@ export function displaySavingsPct(r: LocalRecommendation): number | null {
     return provided;
   }
   return effectiveSavingsPct(r);
+}
+
+/**
+ * On-demand-weighted average of the per-row Eff. % the purchase modal shows
+ * (displaySavingsPct), so the Totals row can never print a figure the rows
+ * refused to: a row that renders an em-dash (e.g. AWS without on_demand_cost,
+ * #323) contributes nothing. Each row is weighted by its on-demand baseline:
+ * on_demand_cost when known, otherwise the baseline its own % implies
+ * (savings / pct). Returns null when no row contributes.
+ */
+export function weightedDisplaySavingsPct(recs: LocalRecommendation[]): number | null {
+  let num = 0;
+  let den = 0;
+  for (const r of recs) {
+    const pct = displaySavingsPct(r);
+    if (pct === null) continue;
+    const base = r.on_demand_cost != null && r.on_demand_cost > 0
+      ? r.on_demand_cost
+      : pct !== 0 ? (r.savings * 100) / pct : null;
+    if (base === null || !(base > 0)) continue;
+    num += (pct * base) / 100;
+    den += base;
+  }
+  return den > 0 ? (num / den) * 100 : null;
 }
 
 /**
@@ -3626,9 +3662,13 @@ function loadBulkPurchaseState(): BulkPurchaseToolbarState {
     // legacy `term` or `payment` from older localStorage values at runtime.
     // Payment is seeded from GlobalConfig only (issue #282 drops the toolbar
     // dropdown; the field is internal-only, not persisted).
+    // Integers only, like every other numeric parse here: a hand-edited
+    // 33.33 would otherwise reach Math.floor scaling and the audited
+    // capacity_percent as a value no UI control can produce (#136).
+    const capacity = Number(parsed.capacity);
     return {
       payment: cachedGlobalDefaultPayment as BulkPurchasePayment,
-      capacity: Math.max(1, Math.min(100, Number(parsed.capacity) || 100)),
+      capacity: Number.isInteger(capacity) && capacity > 0 ? Math.min(100, capacity) : 100,
     };
   } catch {
     return { ...defaultBulkPurchaseState };
@@ -3843,54 +3883,33 @@ function mountBottomActionBox(): HTMLElement | null {
   capacityLabel.appendChild(capacityInput);
   box.appendChild(capacityLabel);
 
-  // Purchase one-off (preserved ID). Issue #365: hide for sessions
-  // that lack `execute:purchases`. After issue #923, execute:purchases
-  // requires Purchaser-group membership; Administrators-group alone is
-  // no longer sufficient. The element stays in the DOM so the click
-  // handler stays wired and the existing `updateBottomActionBox`
-  // updates still flow through; `.hidden` toggles via the HTML hidden
-  // attribute which renders as `display: none`.
+  // Purchase one-off (preserved ID). Issue #365: hidden for sessions
+  // that lack `execute:purchases` (issue #923: Purchaser-group membership,
+  // not Administrators alone). The element stays in the DOM so the click
+  // handler stays wired; syncBottomActionBoxPermissions toggles `.hidden`
+  // on every render. Starts hidden so the box fails closed until then.
   const purchaseBtn = document.createElement('button');
   purchaseBtn.type = 'button';
   purchaseBtn.className = 'btn btn-primary';
   purchaseBtn.id = 'bulk-purchase-btn';
   purchaseBtn.textContent = 'Purchase';
   purchaseBtn.title = 'Buy these reservations now (one-off, processed immediately)';
-  purchaseBtn.hidden = !canAccess('execute', 'purchases');
+  purchaseBtn.hidden = true;
   box.appendChild(purchaseBtn);
 
-  // Issue #923: show an informational banner when the session can view
-  // recommendations but cannot execute purchases. The predicate MUST
-  // mirror the Purchase CTA's gate (canAccess('execute', 'purchases'))
-  // so a custom-role user who holds execute:purchases via a non-seeded
-  // group sees the live button without a contradictory "you can view
-  // but not execute" notice. Pure read-only users won't reach this
-  // page's action area anyway.
-  if (!canAccess('execute', 'purchases')) {
-    const noPurchaseBanner = document.createElement('div');
-    noPurchaseBanner.className = 'info-banner';
-    noPurchaseBanner.setAttribute('role', 'note');
-    // Scope the message to the execute-purchases capability only (row 550):
-    // Standard users CAN create plans, so the banner must not imply otherwise.
-    // The nav tab is "Admin" (renamed from Settings in #340), and Admin → Users
-    // is admin-only, so a non-admin can't self-serve there — only an admin can
-    // add them to the Purchaser group.
-    noPurchaseBanner.textContent =
-      'You can view and plan, but not execute purchases directly. ' +
-      'Ask an admin to add you to the Purchaser group (Admin → Users) to execute purchases.';
-    box.appendChild(noPurchaseBanner);
-  }
+  // The no-Purchaser banner (issue #923) is inserted after purchaseBtn by
+  // syncBottomActionBoxPermissions, not here.
 
   // Create Purchase Plan (relocated from old top bar). Issue #365:
-  // hide for sessions that lack `create:plans` (readonly loses it;
-  // admin + user keep it).
+  // hidden for sessions that lack `create:plans` (readonly loses it;
+  // admin + user keep it). Synced per render like the Purchase button.
   const planBtn = document.createElement('button');
   planBtn.type = 'button';
   planBtn.className = 'btn btn-secondary';
   planBtn.id = 'create-plan-btn';
   planBtn.textContent = 'Create Plan';
   planBtn.title = 'Schedule a recurring plan that will purchase these recommendations on a defined cadence';
-  planBtn.hidden = !canAccess('create', 'plans');
+  planBtn.hidden = true;
   box.appendChild(planBtn);
 
   // a11y hint for the disabled-button state (#273 CR follow-up).
@@ -3974,12 +3993,58 @@ export function isHomogeneousSelection(recs: readonly LocalRecommendation[]): bo
   );
 }
 
+const NO_PURCHASER_BANNER_ID = 'recommendations-no-purchaser-banner';
+
+// syncBottomActionBoxPermissions applies the permission-gated parts of the
+// action box: Purchase and Create Plan visibility and the no-Purchaser
+// banner. mountBottomActionBox builds the box once and returns early on
+// every later render, so gating evaluated there was a snapshot taken on the
+// first render; a permission change made in-session (e.g. an admin adding
+// themselves to the Purchaser group) never showed up until a reload (#20).
+// Re-evaluating here, on every render, keeps it current.
+function syncBottomActionBoxPermissions(): void {
+  const purchaseBtn = document.getElementById('bulk-purchase-btn');
+  const planBtn = document.getElementById('create-plan-btn');
+  const canPurchase = canAccess('execute', 'purchases');
+  if (purchaseBtn) purchaseBtn.hidden = !canPurchase;
+  if (planBtn) planBtn.hidden = !canAccess('create', 'plans');
+
+  // Issue #923: an informational banner for sessions that can view
+  // recommendations but cannot execute purchases. The predicate MUST mirror
+  // the Purchase CTA's gate (canAccess('execute', 'purchases')) so a
+  // custom-role user who holds execute:purchases via a non-seeded group
+  // sees the live button without a contradictory "you can view but not
+  // execute" notice.
+  const existing = document.getElementById(NO_PURCHASER_BANNER_ID);
+  if (canPurchase) {
+    existing?.remove();
+    return;
+  }
+  if (existing || !purchaseBtn) return;
+  const banner = document.createElement('div');
+  banner.id = NO_PURCHASER_BANNER_ID;
+  banner.className = 'info-banner';
+  banner.setAttribute('role', 'note');
+  // Scope the message to the execute-purchases capability only (row 550):
+  // Standard users CAN create plans, so the banner must not imply otherwise.
+  // The nav tab is "Admin" (renamed from Settings in #340), and Admin → Users
+  // is admin-only, so a non-admin can't self-serve there — only an admin can
+  // add them to the Purchaser group.
+  banner.textContent =
+    'You can view and plan, but not execute purchases directly. ' +
+    'Ask an admin to add you to the Purchaser group (Admin → Users) to execute purchases.';
+  purchaseBtn.after(banner);
+}
+
 // updateBottomActionBox refreshes labels and disabled state on every
 // renderRecommendationsList call without rebuilding the input/select DOM,
 // preserving any in-progress typing in the Capacity input.
 function updateBottomActionBox(visibleCount: number, loadedCount: number): void {
   const box = document.getElementById('recommendations-action-box');
   if (!box) return;
+
+  // Before the disabled-hint logic below, which reads planBtn.hidden.
+  syncBottomActionBoxPermissions();
 
   const selected = state.getSelectedRecommendationIDs();
   // Count only selections that are currently visible.
@@ -4114,7 +4179,7 @@ async function openCreatePlanFromBottomBox(snapshot: LocalRecommendation[]): Pro
 // Extracted from handleBulkPurchaseClick's scaling loop (issue #1903) so
 // pricedCellVariant can apply the same scaling to a sibling variant swapped
 // in on a Term/Payment change.
-function scaleRecForCapacity(r: LocalRecommendation, capacityPercent: number): LocalRecommendation | null {
+export function scaleRecForCapacity(r: LocalRecommendation, capacityPercent: number): LocalRecommendation | null {
   const newCount = Math.floor((r.count * capacityPercent) / 100);
   if (newCount <= 0) return null;
   const ratio = r.count > 0 ? newCount / r.count : 1;
@@ -4127,6 +4192,9 @@ function scaleRecForCapacity(r: LocalRecommendation, capacityPercent: number): L
     upfront_cost: r.upfront_cost * ratio,
     monthly_cost: r.monthly_cost != null ? r.monthly_cost * ratio : null,
     savings: r.savings * ratio,
+    // on_demand_cost is a per-rec total like savings, so it scales too;
+    // leaving it unscaled halved the Eff. % at 50% capacity (#136).
+    on_demand_cost: r.on_demand_cost != null ? r.on_demand_cost * ratio : r.on_demand_cost,
   };
 }
 
@@ -4541,6 +4609,12 @@ function renderFanOutSummary(summary: HTMLElement, buckets: FanOutBucket[]): voi
   const fanOutPeriod = state.getCostPeriod();
   summary.appendChild(totalLine('Total commitments', String(totals.totalCount)));
   summary.appendChild(totalLine('Total upfront', formatCurrency(totals.totalUpfront)));
+  // Issue #711: upfront alone reads $0 for no-upfront buckets that bill
+  // monthly for one or three years, so state the recurring charge and the
+  // total over the term next to it.
+  const termText = formatCommitmentTotals(submittable.flatMap(bucketCommitmentLines), CURRENCY_DEFAULT_DIGITS);
+  summary.appendChild(totalLine('Monthly recurring', termText.monthly));
+  summary.appendChild(totalLine('Total over term', termText.termTotal));
   summary.appendChild(totalLine(`Total savings ${periodSuffix(fanOutPeriod)}`, formatCostForPeriod(totals.totalSavings, fanOutPeriod), 'savings'));
 
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
@@ -4562,6 +4636,10 @@ function refreshFanOutSummary(): void {
   const summary = document.getElementById('fanout-summary');
   if (!summary) return;
   renderFanOutSummary(summary, currentFanOutBuckets);
+}
+
+function bucketCommitmentLines(b: FanOutBucket): CommitmentLine[] {
+  return b.recs.map((r) => commitmentLine(r, { payment: b.payment }));
 }
 
 function computeFanOutTotals(buckets: FanOutBucket[]): { totalCount: number; totalUpfront: number; totalSavings: number } {
@@ -4704,7 +4782,9 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   const bPeriod = state.getCostPeriod();
   const totals = document.createElement('p');
   totals.className = 'fanout-bucket-totals';
-  totals.textContent = `${bucketTotal.count} commitments · ${formatCurrency(bucketTotal.upfront)} upfront · ${formatCostForPeriod(bucketTotal.savings, bPeriod)} savings ${periodSuffix(bPeriod)}`;
+  const bucketMonthly = commitmentTotals(bucketCommitmentLines(b)).monthly;
+  const monthlyPart = bucketMonthly === null ? 'monthly cost not reported' : `${formatCurrency(bucketMonthly)}/mo recurring`;
+  totals.textContent = `${bucketTotal.count} commitments · ${formatCurrency(bucketTotal.upfront)} upfront · ${monthlyPart} · ${formatCostForPeriod(bucketTotal.savings, bPeriod)} savings ${periodSuffix(bPeriod)}`;
   section.appendChild(totals);
 
   // Issue #249: for mixed-SP buckets with 2+ distinct plan types, render
@@ -4830,7 +4910,11 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // run before renderFilterStatusBar (which reads it for the Expand-All button).
   // safe: buildListMarkup escapes all API-derived values via escapeHtml.
   // nosec: innerHTML is intentional here; see security note above.
+  // Issue #191: the rebuild below drops the focused control (row checkbox,
+  // chevron, sort header); put keyboard focus back on its replacement.
+  const focusSnapshot = captureFocus(container);
   container.innerHTML = buildListMarkup(recommendations ?? [], selectedIDs, visibleCols, showCheckboxes); // nosec
+  restoreFocus(container, focusSnapshot);
 
   // Issue #700: when the filter yields zero rows, preserve the <thead> by
   // injecting a hint row into the empty <tbody> rather than replacing the
@@ -5103,22 +5187,36 @@ function resolvePerRecPaymentSeed(
 // follow both a checkbox toggle (updatePurchaseModalTotals, pre-existing
 // gap) and a Term/Payment re-price, not only the radio's own change event.
 // No-ops when the callout isn't in the DOM (no direct-execute permission).
+function checkedPurchaseLines(): CommitmentLine[] {
+  const lines: CommitmentLine[] = [];
+  for (const idx of checkedPurchaseIndices) {
+    const r = currentPurchaseRecommendations[idx];
+    if (r) lines.push(commitmentLine(r));
+  }
+  return lines;
+}
+
 function renderDirectExecuteWarning(): void {
   const directWarning = document.querySelector<HTMLElement>('#purchase-details .direct-execute-warning');
   if (!directWarning) return;
   directWarning.hidden = currentExecuteMode !== 'direct';
   if (currentExecuteMode !== 'direct') return;
-  let totalUpfront = 0;
-  for (const idx of checkedPurchaseIndices) {
-    const r = currentPurchaseRecommendations[idx];
-    if (r) totalUpfront += r.upfront_cost;
+  const lines = checkedPurchaseLines();
+  const totals = commitmentTotals(lines);
+  const shown = formatCommitmentTotals(lines);
+  // Issue #711: a no-upfront purchase would otherwise read "charge $0.00".
+  let recurring = '';
+  if (totals.monthly === null) {
+    recurring = billsMonthly(lines) ? ', plus monthly fees the provider did not report' : '';
+  } else if (totals.monthly > 0) {
+    recurring = `, then ${shown.monthly} a month for the term (${shown.termTotal} in total)`;
   }
   while (directWarning.firstChild) directWarning.removeChild(directWarning.firstChild);
   const icon = document.createElement('strong');
   icon.textContent = 'Warning: ';
   directWarning.appendChild(icon);
   const text = document.createTextNode(
-    `This will charge ${formatCurrency(totalUpfront, '$', 2)} upfront immediately. ` +
+    `This will charge ${shown.upfront} upfront immediately${recurring}. ` +
     'This bypasses the approval step.',
   );
   directWarning.appendChild(text);
@@ -5336,6 +5434,11 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[], 
   tfoot.appendChild(totalsRow);
 
   commitsSection.appendChild(table);
+  // Upfront / Monthly / Total over term for the checked rows (issue #711);
+  // refilled by updatePurchaseModalTotals.
+  const band = document.createElement('div');
+  band.id = 'purchase-modal-commitment-band';
+  commitsSection.appendChild(band);
   container.appendChild(commitsSection);
 
   // Wire the select-all checkbox (must happen after tbody rows are in DOM
@@ -5393,9 +5496,7 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
   let totalUpfront = 0;
   let totalMonthlyCost = 0;
   let totalEffSavings = 0;
-  // Weighted-average effective %: sum effective savings / sum on-demand monthly.
-  let weightedEffSavingsNum = 0; // numerator: sum of effectiveMonthlySavings per checked rec
-  let weightedEffSavingsDen = 0; // denominator: sum of on-demand monthly per checked rec
+  const checkedRecs: LocalRecommendation[] = [];
   let hasMonthlyCostData = false;
 
   for (const idx of checkedPurchaseIndices) {
@@ -5408,26 +5509,10 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
       totalMonthlyCost += monthlyCost;
       hasMonthlyCostData = true;
     }
-    // Weighted-average effective % denominator should match effectiveSavingsPct:
-    // prefer provider-supplied on_demand_cost when present, otherwise fall back
-    // to the reconstructed monthly_cost + savings + amortized baseline.
-    // Include rows that only have on_demand_cost so they are not skipped.
-    if (rec.term) {
-      const amortized = rec.upfront_cost / (rec.term * 12);
-      const effSav = effectiveMonthlySavings(rec);
-      const hasOnDemand = rec.on_demand_cost != null && rec.on_demand_cost > 0;
-      const onDemand = hasOnDemand
-        ? rec.on_demand_cost
-        : monthlyCost != null
-          ? monthlyCost + rec.savings + amortized
-          : null;
-      if (onDemand != null && onDemand > 0) {
-        weightedEffSavingsNum += effSav;
-        weightedEffSavingsDen += onDemand;
-      }
-    }
+    checkedRecs.push(rec);
     totalEffSavings += effectiveMonthlySavings(rec);
   }
+  const avgEffPct = weightedDisplaySavingsPct(checkedRecs);
 
   // Rebuild the totals row DOM. Clear first.
   if (totalsRow) {
@@ -5490,10 +5575,9 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
     const tdEffPct = document.createElement('td');
     tdEffPct.id = 'purchase-modal-total-eff-pct';
     const effPctStrong = document.createElement('strong');
-    if (weightedEffSavingsDen > 0) {
-      const avgPct = (weightedEffSavingsNum / weightedEffSavingsDen) * 100;
-      effPctStrong.textContent = avgPct.toFixed(1) + '%';
-      if (avgPct < 0) tdEffPct.className = 'effective-pct-negative';
+    if (avgEffPct !== null) {
+      effPctStrong.textContent = avgEffPct.toFixed(1) + '%';
+      if (avgEffPct < 0) tdEffPct.className = 'effective-pct-negative';
     } else {
       effPctStrong.textContent = '—';
     }
@@ -5531,6 +5615,9 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
     selectAllCb.checked = false;
     selectAllCb.indeterminate = true;
   }
+
+  const band = document.getElementById('purchase-modal-commitment-band');
+  if (band) band.replaceChildren(buildCommitmentBand(checkedPurchaseLines(), { upfrontLabel: 'Upfront' }));
 
   // Issue #1903: the direct-execute warning's dollar total is derived from
   // checkedPurchaseIndices too, so it must refresh on every checkbox toggle,

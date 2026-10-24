@@ -187,10 +187,25 @@ export function getAuthHeaders(): Record<string, string> {
 }
 
 /**
- * Base64 encode a string (for password encoding)
+ * Base64 encode a string (for password encoding).
+ *
+ * `btoa` only accepts code points up to U+00FF and throws a raw
+ * InvalidCharacterError otherwise, so a passphrase with an emoji, a CJK
+ * character or a curly quote could never be submitted. Strings that fit in
+ * Latin-1 keep the exact bytes `btoa` has always sent, so existing passwords
+ * still hash the same on the server; anything wider is sent as UTF-8, which
+ * is how Go's `string(decoded)` reads it.
  */
 export function base64Encode(str: string): string {
-  return btoa(str);
+  // eslint-disable-next-line no-control-regex
+  if (/^[\u0000-\u00ff]*$/.test(str)) {
+    return btoa(str);
+  }
+  let binary = '';
+  for (const byte of new TextEncoder().encode(str)) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
 }
 
 /**

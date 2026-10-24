@@ -8,6 +8,7 @@ import { escapeHtml } from '../users/utils';
 import { openEditGroupModal, deleteGroup } from './groupActions';
 import { openDuplicateGroupModal } from './groupModals';
 import { iconSvg } from '../icons';
+import { isSystemManagedGroup, SYSTEM_GROUP_NOTE } from './systemGroups';
 
 /**
  * Format permission constraints as a readable string for tooltips
@@ -31,7 +32,7 @@ export function renderGroups(groups: APIGroup[]): void {
   if (!container) return;
 
   if (groups.length === 0) {
-    container.innerHTML = '<div class="empty">No groups found</div>';
+    container.innerHTML = '<div class="empty">No groups yet. Use Create Group to define who can do what.</div>';
     return;
   }
 
@@ -50,6 +51,7 @@ export function renderGroups(groups: APIGroup[]): void {
       ? members.map(m => `<span class="member-pill">${escapeHtml(m.email)}</span>`).join('')
       : '<span class="text-muted">No members</span>';
 
+    const locked = isSystemManagedGroup(group);
     const description = group.description
       ? `<p class="group-description">${escapeHtml(group.description)}</p>`
       : '';
@@ -64,9 +66,11 @@ export function renderGroups(groups: APIGroup[]): void {
           <div class="group-card-actions">
             <span class="badge">${memberCount} member${memberCount !== 1 ? 's' : ''}</span>
             <span class="row-actions">
-              <button class="btn-small icon-btn edit-group-btn" data-group-id="${escapeHtml(group.id)}" aria-label="Edit group ${escapeHtml(group.name)}" title="Edit group">${iconSvg('edit')}</button>
+              ${locked
+                ? `<span class="badge badge-muted system-group-badge" title="${escapeHtml(SYSTEM_GROUP_NOTE)}">System group<span class="sr-only">. ${escapeHtml(SYSTEM_GROUP_NOTE)}</span></span>`
+                : `<button class="btn-small icon-btn edit-group-btn" data-group-id="${escapeHtml(group.id)}" aria-label="Edit group ${escapeHtml(group.name)}" title="Edit group">${iconSvg('edit')}</button>`}
               <button class="btn-small icon-btn duplicate-group-btn" data-group-id="${escapeHtml(group.id)}" aria-label="Duplicate group ${escapeHtml(group.name)}" title="Duplicate group">${iconSvg('copy')}</button>
-              <button class="btn-small btn-danger icon-btn delete-group-btn" data-group-id="${escapeHtml(group.id)}" aria-label="Delete group ${escapeHtml(group.name)}" title="Delete group">${iconSvg('trash-2')}</button>
+              ${locked ? '' : `<button class="btn-small btn-danger icon-btn delete-group-btn" data-group-id="${escapeHtml(group.id)}" aria-label="Delete group ${escapeHtml(group.name)}" title="Delete group">${iconSvg('trash-2')}</button>`}
             </span>
           </div>
         </div>

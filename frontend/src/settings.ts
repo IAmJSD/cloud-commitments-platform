@@ -7,6 +7,7 @@ import type { ConfigResponse } from './types';
 import { fetchAndPopulateCommitmentOptions } from './commitmentOptions';
 import { initFederationPanel } from './federation';
 import { confirmDialog } from './confirmDialog';
+import { deleteAccount } from './settings-account-delete';
 import { reflectDirtyState } from './settings-subnav';
 import { showToast } from './toast';
 import { createIcon } from './icons';
@@ -21,6 +22,7 @@ import {
   isServiceFilterError,
 } from './serviceFilters';
 import { initLadderingSettings } from './ladder';
+import { buildLastUpdatedStamp } from './lib/last-updated';
 
 /**
  * Issue #196 — after any mutation to an `account_service_overrides` row
@@ -244,6 +246,21 @@ function byId<T extends HTMLElement>(id: string): T | null {
   return document.getElementById(id) as T | null;
 }
 
+// Setting `.value` from code fires neither 'input' nor 'blur', so the inline
+// range validators below never see a value written by loadGlobalSettings or
+// resetSettings. Without a re-run, an error from an earlier edit (e.g. an
+// emptied coverage field) stays visible, with aria-invalid, next to a valid
+// value (#642). A dedicated event re-runs only the validators, not the
+// dirty-tracking or other 'input' listeners.
+const RANGE_REVALIDATE_EVENT = 'cudly:range-revalidate';
+
+/** Re-run every wired inline range validator against the current values. */
+function revalidateInlineRanges(): void {
+  document.querySelectorAll<HTMLInputElement>('input[data-range-validated]').forEach((el) => {
+    el.dispatchEvent(new Event(RANGE_REVALIDATE_EVENT));
+  });
+}
+
 /**
  * Wire inline range validation on a numeric `<input>` driven by its
  * existing `min` / `max` HTML5 attributes. Surfaces a single message
@@ -338,6 +355,8 @@ function wireInlineRangeValidation(
   };
   input.addEventListener('input', check, { signal });
   input.addEventListener('blur', check, { signal });
+  input.addEventListener(RANGE_REVALIDATE_EVENT, check, { signal });
+  input.dataset['rangeValidated'] = '';
 }
 
 /**
@@ -643,7 +662,7 @@ function renderAccountsList(
     deleteBtn.className = 'btn btn-small btn-destructive';
     deleteBtn.textContent = 'Delete';
     deleteBtn.setAttribute('aria-label', `Delete ${accountLabel}`);
-    deleteBtn.addEventListener('click', () => void deleteAccount(account.id, provider, container));
+    deleteBtn.addEventListener('click', () => void deleteAccount(account, provider, loadAccountsForProvider));
     actionsTd.appendChild(deleteBtn);
 
     tr.appendChild(actionsTd);
@@ -1241,6 +1260,10 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
 
       const serviceTd = tr.insertCell();
       serviceTd.textContent = `${o.provider}/${o.service}`;
+      // When this override last changed (issue #8), under the service name so
+      // the column order users learned (#110) stays put.
+      const stamp = buildLastUpdatedStamp(o.updated_at);
+      if (stamp) serviceTd.append(stamp);
 
       // Term cell: editable <select> for all providers (issue #109 extends
       // the AWS-only #110 inline editing to Azure/GCP).
@@ -1343,167 +1366,6 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
     panel.appendChild(table);
   } catch (err) {
     panel.textContent = `Failed to load overrides: ${(err as Error).message}`;
-  }
-}
-
-/**
- * Re-entrancy guard for the deleteAccount + handlePendingExecutions409
- * flow. A double-click on the Delete button (or a click during the
- * cancel-loop-then-retry-delete sequence) used to be able to start two
- * concurrent deletes for the same account, racing on the backend
- * preflight + cancel + delete sequence. Module-scoped so guards apply
- * across both helpers; keyed on account ID so different accounts can
- * still be deleted in parallel.
- */
-const inflightDeletes = new Set<string>();
-
-/**
- * Delete an account after confirmation.
- *
- * Issue #606 — when the backend preflight detects pending purchase
- * executions still referencing this account, it returns a 409 with
- * `pending_count` + `pending_execution_ids` in `error.details`. The
- * handler offers the operator a second confirmation: "Cancel All N
- * Pending + Delete" which cancels each pending execution sequentially
- * and then retries the delete. On any per-execution cancel failure we
- * surface a toast with the count of failures and stop short of the
- * delete so the operator can investigate manually instead of partially
- * cancelling and silently moving on.
- */
-async function deleteAccount(accountId: string, provider: AccountProvider, _container: HTMLElement): Promise<void> {
-  if (inflightDeletes.has(accountId)) {
-    showToast({ message: 'Delete already in progress for this account.', kind: 'info' });
-    return;
-  }
-  const ok = await confirmDialog({
-    title: 'Delete account?',
-    body: 'Delete this account? This also removes its credentials and service overrides. This action cannot be undone.',
-    confirmLabel: 'Delete account',
-    destructive: true,
-  });
-  if (!ok) return;
-  inflightDeletes.add(accountId);
-  try {
-    try {
-      await api.deleteAccount(accountId);
-      await loadAccountsForProvider(provider);
-      return;
-    } catch (err) {
-      const apiErr = err as Error & { status?: number; details?: Record<string, unknown> };
-      if (apiErr.status === 409 && apiErr.details?.['reason'] === 'pending_executions') {
-        await handlePendingExecutions409(accountId, provider, apiErr);
-        return;
-      }
-      console.error('Failed to delete account:', err);
-      showToast({ message: `Failed to delete account: ${(err as Error).message}`, kind: 'error' });
-      void loadAccountsForProvider(provider);
-    }
-  } finally {
-    inflightDeletes.delete(accountId);
-  }
-}
-
-/**
- * Issue #606 — 409 handler for the deleteAccount path. Surfaces a second
- * confirmation dialog with the pending-count and, on confirm, walks the
- * `pending_execution_ids` list cancelling each one before retrying the
- * delete. Exported (lower-case) helper so the test file can exercise it
- * without standing up the full settings page chrome.
- */
-async function handlePendingExecutions409(
-  accountId: string,
-  provider: AccountProvider,
-  apiErr: Error & { status?: number; details?: Record<string, unknown> },
-): Promise<void> {
-  // Defense-in-depth re-entrancy guard. deleteAccount already adds to the
-  // set before calling us, in which case `ownsLock` stays false and the
-  // outer try/finally owns cleanup. A direct external caller (e.g. tests
-  // or a future caller invoking this helper standalone) gets a fresh
-  // lock + a finally that releases it.
-  let ownsLock = false;
-  if (!inflightDeletes.has(accountId)) {
-    inflightDeletes.add(accountId);
-    ownsLock = true;
-  }
-  try {
-    await handlePendingExecutions409Inner(accountId, provider, apiErr);
-  } finally {
-    if (ownsLock) inflightDeletes.delete(accountId);
-  }
-}
-
-async function handlePendingExecutions409Inner(
-  accountId: string,
-  provider: AccountProvider,
-  apiErr: Error & { status?: number; details?: Record<string, unknown> },
-): Promise<void> {
-  const rawCount = apiErr.details?.['pending_count'];
-  const pendingCount = typeof rawCount === 'number' ? rawCount : Number(rawCount) || 0;
-  const rawIDs = apiErr.details?.['pending_execution_ids'];
-  const pendingIDs = Array.isArray(rawIDs) ? (rawIDs as unknown[]).filter((x): x is string => typeof x === 'string') : [];
-
-  // No IDs to cancel (the server's list-call errored — see the Go-side
-  // PendingListErr_StillReturns409 path). Skip the "Cancel All N Pending"
-  // confirm entirely, since we can't enumerate cancellations, and point
-  // the operator at the History page instead.
-  if (pendingIDs.length === 0) {
-    showToast({
-      message: `Cannot auto-cancel: pending purchase IDs unavailable. Cancel them from the History page and try again.`,
-      kind: 'error',
-      timeout: null,
-    });
-    return;
-  }
-
-  const proceed = await confirmDialog({
-    title: 'Pending purchases must be cancelled',
-    body: `This account has ${pendingCount} pending purchase${pendingCount === 1 ? '' : 's'}. They must be cancelled before the account can be deleted. Cancel all pending purchases and then delete the account?`,
-    confirmLabel: `Cancel All ${pendingCount} Pending + Delete`,
-    destructive: true,
-  });
-  if (!proceed) {
-    // Operator cancelled the second dialog. Refresh to keep the list in
-    // sync; the account is unchanged.
-    void loadAccountsForProvider(provider);
-    return;
-  }
-
-  const failures: { id: string; err: Error }[] = [];
-  for (const execID of pendingIDs) {
-    try {
-      await api.cancelPurchase(execID);
-    } catch (cancelErr) {
-      failures.push({ id: execID, err: cancelErr as Error });
-    }
-  }
-
-  if (failures.length > 0) {
-    console.error('Failed to cancel some pending executions:', failures);
-    showToast({
-      message: `Cancelled ${pendingIDs.length - failures.length} of ${pendingIDs.length} purchases; ${failures.length} failed. Account NOT deleted — review History and retry.`,
-      kind: 'error',
-      timeout: null,
-    });
-    void loadAccountsForProvider(provider);
-    return;
-  }
-
-  // All cancels succeeded — retry the delete.
-  try {
-    await api.deleteAccount(accountId);
-    showToast({
-      message: `Cancelled ${pendingIDs.length} pending purchase${pendingIDs.length === 1 ? '' : 's'} and deleted the account.`,
-      kind: 'success',
-    });
-  } catch (retryErr) {
-    console.error('Failed to delete account after cancelling pending purchases:', retryErr);
-    showToast({
-      message: `Cancelled ${pendingIDs.length} purchase${pendingIDs.length === 1 ? '' : 's'} but the account delete still failed: ${(retryErr as Error).message}`,
-      kind: 'error',
-      timeout: null,
-    });
-  } finally {
-    void loadAccountsForProvider(provider);
   }
 }
 
@@ -3308,6 +3170,7 @@ export async function loadGlobalSettings(): Promise<void> {
     // this fix) gets clamped here to the first valid payment option,
     // which will then be re-persisted on the user's next save.
     syncAllServiceCommitmentConstraints();
+    revalidateInlineRanges();
 
     if (loadingEl) loadingEl.classList.add('hidden');
     if (formEl) formEl.classList.remove('hidden');
@@ -3437,6 +3300,26 @@ async function renderAccountsOverview(): Promise<void> {
 }
 
 /**
+ * Names of the per-Savings-Plan coverage cards whose edited value is not a
+ * whole number between 0 and 100. Untouched cards and empty inputs are not
+ * checked: the save keeps their persisted value, as it always has.
+ */
+function invalidEditedCardCoverages(): string[] {
+  const bad: string[] = [];
+  for (const field of SERVICE_FIELDS) {
+    if (!('coverageId' in field) || !field.coverageId) continue;
+    const input = byId<HTMLInputElement>(field.coverageId);
+    const raw = input?.value ?? '';
+    if (raw.trim() === '' || getFieldValue(field.coverageId) === savedSnapshot[field.coverageId]) continue;
+    const parsed = Number(raw);
+    if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 100) continue;
+    const title = input?.closest('.service-default-card')?.querySelector('h5')?.textContent?.trim();
+    bad.push(title || field.service);
+  }
+  return bad;
+}
+
+/**
  * Save global settings
  */
 export async function saveGlobalSettings(e: Event): Promise<void> {
@@ -3520,6 +3403,17 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     saveInFlight = false;
     return;
   }
+  // The per-Savings-Plan coverage cards sit outside the settings <form>, so
+  // native min/max validation never runs for them and the inline hint only
+  // paints a message. Apply the global field's whole-number 0..100 rule here,
+  // before any PUT, so a fractional value like 12.7 is not persisted.
+  const badCoverageCards = invalidEditedCardCoverages();
+  if (badCoverageCards.length > 0) {
+    showToast({ message: `Target coverage must be a whole number between 0 and 100 (${badCoverageCards.join(', ')})`, kind: 'error' });
+    if (saveBtn) saveBtn.disabled = false;
+    saveInFlight = false;
+    return;
+  }
 
   const rawOfferingClass = byId<HTMLSelectElement>('setting-ec2-offering-class')?.value ?? 'convertible';
   const offeringClass: 'convertible' | 'standard' = (rawOfferingClass === 'standard') ? 'standard' : 'convertible';
@@ -3559,7 +3453,8 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     for (const [key, ids] of GLOBAL_CONFIG_FIELDS) {
       if (ids.every(id => getFieldValue(id) === savedSnapshot[id])) delete changedGlobal[key];
     }
-    if (Object.keys(changedGlobal).length > 0) {
+    const globalSent = Object.keys(changedGlobal).length > 0;
+    if (globalSent) {
       await api.updateConfig(changedGlobal);
       // Persisted: advance the snapshot now, so a later validation failure or
       // service-save error does not leave these fields looking unsaved.
@@ -3679,10 +3574,7 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
 
     if (failures.length > 0) {
       console.error('Failed to save service configs:', failures);
-      showToast({
-        message: `Settings saved, but ${failures.length} service${failures.length === 1 ? '' : 's'} failed: ${failures.join('; ')}`,
-        kind: 'error',
-      });
+      showToast({ message: serviceSaveFailureMessage(results, failures, globalSent), kind: 'error' });
     } else {
       showToast({ message: 'Settings saved successfully', kind: 'success', timeout: 5_000 });
     }
@@ -3694,6 +3586,31 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     saveInFlight = false;
     if (saveBtn) saveBtn.disabled = false;
   }
+}
+
+/**
+ * Toast text for a Save where at least one service PUT failed. Only claim
+ * "Settings saved" when something was: the global PUT went out or a service
+ * PUT succeeded. When nothing saved and every service PUT was denied (a
+ * scoped admin after #614 gated service config on unrestricted account
+ * scope), show the single backend reason, matching the global PUT's
+ * "Failed to save settings: permission denied: ..." toast instead of
+ * repeating it once per service (#617).
+ */
+function serviceSaveFailureMessage(
+  results: PromiseSettledResult<void>[],
+  failures: string[],
+  globalSent: boolean,
+): string {
+  const savedSomething = globalSent || results.some(r => r.status === 'fulfilled');
+  if (savedSomething) {
+    return `Settings saved, but ${failures.length} service${failures.length === 1 ? '' : 's'} failed: ${failures.join('; ')}`;
+  }
+  const reasons = results.map(r => (r.status === 'rejected' ? r.reason : null));
+  if (reasons.every(isPermissionDeniedError)) {
+    return `Failed to save settings: ${(reasons[0] as Error).message}`;
+  }
+  return `Failed to save settings: ${failures.length} service${failures.length === 1 ? '' : 's'} failed: ${failures.join('; ')}`;
 }
 
 /**
@@ -3760,6 +3677,7 @@ export async function resetSettings(): Promise<void> {
   // clicks Reset and navigates away loses their reset silently.
   updateProviderSettingsVisibility();
   updateCollectionScheduleVisibility();
+  revalidateInlineRanges();
   updateDirtyMarkers();
 }
 
