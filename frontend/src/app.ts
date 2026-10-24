@@ -23,6 +23,7 @@ import { handlePurchaseDeeplink } from './purchases-deeplink';
 import { handleRIExchangeDeeplink } from './riexchange-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
+import { setOpenAccountsHandler } from './first-run-empty-state';
 import { setupMobileNav } from './nav/mobile-nav';
 import { initPurchasingNav } from './purchasing-nav';
 import { renderInitError } from './init-error';
@@ -227,6 +228,15 @@ export function setupEventListeners(): void {
 
   // Setup recommendations event handlers (provider filter, service filter, etc.)
   setupRecommendationsHandlers();
+
+  // First-run empty state (issue #756) links to Admin > Accounts. Injected
+  // here so that module does not import navigation.ts (import cycle). Same
+  // two-step as the RI Exchange settings shortcut: switchSettingsSubTab owns
+  // the sub-tab DOM, title and history push.
+  setOpenAccountsHandler(() => {
+    switchTab('admin', { push: false, skipDefaultLoad: true });
+    switchSettingsSubTab('accounts');
+  });
 
   // Setup plan event handlers (provider-aware service dropdown)
   setupPlanHandlers();
