@@ -20,6 +20,7 @@ jest.mock('../riexchange', () => ({
 jest.mock('../api', () => ({
   listActiveCommitments: jest.fn(),
   getCoverageBreakdown: jest.fn(),
+  getConfig: jest.fn(),
 }));
 
 // Mock state so chip subscription tests can control provider/account
@@ -813,5 +814,64 @@ describe('chip subscriptions (issue #866)', () => {
     const empty = list.querySelector('.empty');
     expect(empty).not.toBeNull();
     expect(empty!.textContent).toMatch(/no active commitments found across your registered accounts/i);
+  });
+});
+
+// Issue #726: the bar was success-green at every value. It is neutral now,
+// marks the service's coverage target, and turns amber/red far below it.
+describe('loadCoverageBreakdown — coverage bar target and tone', () => {
+  beforeEach(() => {
+    buildInventoryDOM();
+    (api.getCoverageBreakdown as jest.Mock).mockReset().mockResolvedValue({
+      providers: [makeProviderSection('aws', [
+        { service: 'ec2', covered_monthly: 900, on_demand_monthly: 100, coverage_pct: 90 },
+        { service: 'rds', covered_monthly: 500, on_demand_monthly: 500, coverage_pct: 50 },
+        { service: 'lambda', covered_monthly: 5, on_demand_monthly: 95, coverage_pct: 5 },
+      ], 60)],
+    });
+    (state.subscribeProvider as jest.Mock).mockReturnValue(jest.fn());
+    (state.subscribeAccount as jest.Mock).mockReturnValue(jest.fn());
+    (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+  });
+
+  afterEach(() => {
+    clearDOM();
+    (api.getConfig as jest.Mock).mockReset();
+  });
+
+  const bars = () => Array.from(document.querySelectorAll<HTMLElement>('#coverage-providers .coverage-bar'));
+
+  test('uses the per-service target, else the global default, and tones by distance', async () => {
+    (api.getConfig as jest.Mock).mockResolvedValue({
+      global: { default_coverage: 80 },
+      services: [{ provider: 'aws', service: 'rds', coverage: 60, enabled: true, term: 1, payment: 'no-upfront' }],
+    });
+
+    await loadCoverageBreakdown();
+
+    const [ec2, rds, lambda] = bars();
+    // ec2: 90% vs the 80% default -> on track, tick at 80%.
+    expect(ec2!.className).toBe('coverage-bar coverage-bar--on-track');
+    expect(ec2!.querySelector<HTMLElement>('.coverage-bar-target')!.style.left).toBe('80%');
+    // rds: 50% vs its own 60% target -> 0.83 of target, still on track.
+    expect(rds!.className).toBe('coverage-bar coverage-bar--on-track');
+    expect(rds!.querySelector<HTMLElement>('.coverage-bar-target')!.style.left).toBe('60%');
+    // lambda: 5% vs 80% -> far below, and the label says so.
+    expect(lambda!.className).toBe('coverage-bar coverage-bar--far-below');
+    expect(lambda!.getAttribute('aria-label')).toBe('5.0% covered, target 80%, far below target');
+  });
+
+  test('a config that cannot be read leaves the bars neutral with no target tick', async () => {
+    (api.getConfig as jest.Mock).mockRejectedValue(new Error('403 forbidden'));
+
+    await loadCoverageBreakdown();
+
+    expect(bars()).toHaveLength(3);
+    for (const bar of bars()) {
+      expect(bar.className).toBe('coverage-bar coverage-bar--on-track');
+      expect(bar.querySelector('.coverage-bar-target')).toBeNull();
+    }
+    expect(document.querySelector('#coverage-providers .error')).toBeNull();
   });
 });
