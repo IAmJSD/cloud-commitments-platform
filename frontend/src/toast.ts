@@ -17,6 +17,15 @@
  * focus. The dismiss() return value lets callers clear a toast
  * programmatically (e.g. tie an "uploading..." toast to the completion
  * of the upload).
+ *
+ * Open dialogs (issue #742): a toast stays up for 30s, and the default
+ * bottom-right corner is where a dialog's Cancel / Save row sits on a
+ * laptop-sized viewport, so an error toast used to swallow the click on
+ * Save until it was dismissed. While a dialog box is on screen,
+ * layoutToastStack() keeps the stack off it: beside the dialog when the
+ * gap to its right is wide enough for a readable toast, otherwise lifted
+ * above the dialog's button row. The positions are CSS custom properties
+ * set through the CSSOM (CSP forbids style attributes in markup).
  */
 
 export type ToastKind = 'success' | 'info' | 'warning' | 'error';
@@ -47,6 +56,101 @@ const KIND_ICONS: Record<ToastKind, string> = {
   warning: '\u26A0',  // ⚠
   error: '\u2715',    // ✕
 };
+
+// Dialog boxes the stack must not cover, and the button rows inside them
+// that must stay clickable.
+const DIALOG_BOX_SELECTOR = '.modal-content, .modal-confirm';
+const DIALOG_FOOTER_SELECTOR = '.modal-footer, .modal-buttons, .modal-confirm-actions';
+// Matches the container's 1rem inset in components.css.
+const EDGE_PX = 16;
+const FOOTER_GAP_PX = 8;
+// Narrower than this, a toast beside the dialog is too cramped to read, so
+// the stack is lifted above the button row instead.
+const MIN_SIDE_WIDTH_PX = 240;
+
+function setVar(el: HTMLElement, name: string, value: string | null): void {
+  if (value === null) el.style.removeProperty(name);
+  else if (el.style.getPropertyValue(name) !== value) el.style.setProperty(name, value);
+}
+
+function visibleRect(el: Element): DOMRect | null {
+  const rect = el.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0 ? rect : null;
+}
+
+/**
+ * Keep the toast stack off any dialog box that is on screen. Exported for
+ * tests; runs on every new toast and, while toasts are showing, whenever a
+ * dialog opens or closes or the viewport is resized.
+ */
+export function layoutToastStack(): void {
+  const container = document.getElementById(CONTAINER_ID);
+  if (!container) return;
+  let maxWidth: string | null = null;
+  let bottom: string | null = null;
+
+  const boxes: Array<{ el: Element; rect: DOMRect }> = [];
+  document.querySelectorAll(DIALOG_BOX_SELECTOR).forEach((el) => {
+    const rect = visibleRect(el);
+    if (rect) boxes.push({ el, rect });
+  });
+  if (boxes.length > 0) {
+    const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+    const viewportHeight = document.documentElement.clientHeight || window.innerHeight;
+    const dialogRight = Math.max(...boxes.map(b => b.rect.right));
+    const side = Math.floor(viewportWidth - dialogRight - 2 * EDGE_PX);
+    if (side >= MIN_SIDE_WIDTH_PX) {
+      maxWidth = `${side}px`;
+    } else {
+      const footerTops: number[] = [];
+      for (const { el } of boxes) {
+        const footer = Array.from(el.querySelectorAll(DIALOG_FOOTER_SELECTOR)).pop();
+        const rect = footer ? visibleRect(footer) : null;
+        if (rect) footerTops.push(rect.top);
+      }
+      if (footerTops.length > 0) {
+        const lift = Math.ceil(viewportHeight - Math.min(...footerTops) + FOOTER_GAP_PX);
+        if (lift > EDGE_PX) bottom = `${lift}px`;
+      }
+    }
+  }
+  setVar(container, '--toast-max-width', maxWidth);
+  setVar(container, '--toast-bottom', bottom);
+}
+
+// While toasts are showing, re-run the layout when a dialog opens or closes
+// (class / hidden toggles, or a confirm dialog added to <body>) or the
+// viewport changes. Nothing is watched while the stack is empty.
+let watcher: MutationObserver | null = null;
+let layoutQueued = false;
+
+function queueLayout(): void {
+  if (layoutQueued) return;
+  layoutQueued = true;
+  requestAnimationFrame(() => {
+    layoutQueued = false;
+    layoutToastStack();
+  });
+}
+
+function startWatching(): void {
+  if (watcher) return;
+  watcher = new MutationObserver(queueLayout);
+  watcher.observe(document.body, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ['class', 'hidden'],
+  });
+  window.addEventListener('resize', queueLayout);
+}
+
+function stopWatchingIfEmpty(container: HTMLElement): void {
+  if (container.querySelector('.toast')) return;
+  watcher?.disconnect();
+  watcher = null;
+  window.removeEventListener('resize', queueLayout);
+}
 
 function ensureContainer(): HTMLElement {
   let container = document.getElementById(CONTAINER_ID);
@@ -130,7 +234,10 @@ export function showToast(opts: ToastOptions): ToastHandle {
       // Allow CSS transition to play out; fall back to immediate remove
       // if the element has no transition (tests run without computed
       // transitions).
-      const remove = (): void => toast.remove();
+      const remove = (): void => {
+        toast.remove();
+        stopWatchingIfEmpty(container);
+      };
       toast.addEventListener('transitionend', remove, { once: true });
       setTimeout(remove, 200);
     },
@@ -145,6 +252,8 @@ export function showToast(opts: ToastOptions): ToastHandle {
   toast.addEventListener('keydown', onKey);
 
   container.appendChild(toast);
+  layoutToastStack();
+  startWatching();
 
   if (timeout !== null) {
     timeoutId = setTimeout(() => handle.dismiss(), timeout);

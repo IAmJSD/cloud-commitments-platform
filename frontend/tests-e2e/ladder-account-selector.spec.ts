@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Route } from '@playwright/test';
+import { test, expect, type Locator, type Page, type Route } from '@playwright/test';
 import { mockApi, seedAuth } from './fixtures/recs';
 import type { LadderConfig } from '../src/api/ladder';
 
@@ -14,6 +14,15 @@ const existing: LadderConfig = {
   max_hourly_commit_per_run: null, max_actions_per_run: 10,
   ramp_schedule: { steps: [{ after_days: 0, fraction: 1 }] },
 };
+
+// Fails when the toast's box overlaps Save's; Playwright's click() would
+// otherwise only time out on the intercepted pointer event.
+async function expectSaveClear(page: Page, toast: Locator): Promise<void> {
+  const t = (await toast.boundingBox())!;
+  const s = (await page.locator('#ladder-config-save-btn').boundingBox())!;
+  const overlaps = t.x < s.x + s.width && s.x < t.x + t.width && t.y < s.y + s.height && s.y < t.y + t.height;
+  expect(overlaps, `toast ${JSON.stringify(t)} covers Save ${JSON.stringify(s)}`).toBe(false);
+}
 
 async function setup(page: Page): Promise<{ saves: LadderConfig[]; writes: string[]; errors: string[]; failures: string[] }> {
   const saves: LadderConfig[] = [];
@@ -216,10 +225,11 @@ test('a cleared Buffer Fraction blocks the save instead of sending a zero buffer
   await expect(page.locator('#ladder-cfg-buffer-fraction')).toBeFocused();
   expect(saves).toEqual([]);
   expect(writes).toEqual([]);
-  // The compact modal pins Save to its bottom-right corner, where the error
-  // toast sits at a 1280x720 viewport; dismiss it as ladder-config.spec.ts does.
-  await page.getByRole('button', { name: 'Dismiss notification' }).click();
-  await expect(page.getByRole('button', { name: 'Dismiss notification' })).toHaveCount(0);
+  // The error toast stays up for 30s; it must sit beside the modal, not on
+  // Save, so the corrected form saves without dismissing it first (#742).
+  const toast = page.getByRole('alert').filter({ hasText: 'Buffer fraction is required.' });
+  await expect(toast).toBeVisible();
+  await expectSaveClear(page, toast);
 
   await page.locator('#ladder-cfg-buffer-fraction').fill('0');
   await page.locator('#ladder-config-save-btn').click();
@@ -228,3 +238,30 @@ test('a cleared Buffer Fraction blocks the save instead of sending a zero buffer
   expect(saves[0]!.buffer_fraction).toBe(0);
   expect(errors).toEqual([]);
 });
+
+for (const [width, height] of [[1280, 720], [390, 844]]) {
+  test(`Save stays clickable while a save-error toast is showing at ${width}x${height} (#742)`, async ({ page }) => {
+    await page.setViewportSize({ width, height });
+    const { errors } = await setup(page);
+    let puts = 0;
+    await page.route('**/api/ladder/configs', route => {
+      puts += 1;
+      return route.fulfill({ status: 400, json: { error: 'max_actions_per_run must be between 1 and 50' } });
+    });
+    await page.locator('#ladder-add-config-btn').click();
+    await expect(page.locator('#ladder-cfg-account')).toBeEnabled();
+    await page.locator('#ladder-cfg-account').selectOption('registered-aws');
+    await page.locator('#ladder-config-save-btn').click();
+    const toast = page.getByRole('alert').filter({ hasText: 'Failed to save ladder config: max_actions_per_run must be between 1 and 50' });
+    await expect(toast).toBeVisible();
+    await expect.poll(() => puts).toBe(1);
+
+    await expectSaveClear(page, toast);
+    // Retry with the toast still up: the click reaches Save and sends a second PUT.
+    await page.locator('#ladder-config-save-btn').click({ timeout: 5000 });
+    await expect.poll(() => puts).toBe(2);
+    await expect(toast.first()).toBeVisible();
+    await expect(page.locator('#ladder-config-modal')).toBeVisible();
+    expect(errors.filter(error => !error.includes('400') && !error.startsWith('saveLadderConfig:'))).toEqual([]);
+  });
+}

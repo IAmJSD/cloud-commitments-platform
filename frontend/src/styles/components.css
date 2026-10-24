@@ -347,18 +347,21 @@ button.secondary:hover {
 
 /* Toast notifications (bottom-right stack, AutoSpotting-style).
  * Rendered by toast.ts. Default timeout 30s. Kind classes set the
- * left-border + icon colour.
+ * left-border + icon colour. While a dialog is open, toast.ts sets
+ * --toast-max-width (the stack fits beside the dialog) or --toast-bottom
+ * (the stack is lifted above the dialog's buttons) so it never covers
+ * Save (issue #742).
  */
 .toast-container {
     position: fixed;
-    bottom: 1rem;
+    bottom: var(--toast-bottom, 1rem);
     right: 1rem;
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
     z-index: 2100;
     pointer-events: none;
-    max-width: 400px;
+    max-width: var(--toast-max-width, 400px);
 }
 
 .toast {

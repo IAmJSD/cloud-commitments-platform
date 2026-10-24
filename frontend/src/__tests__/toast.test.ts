@@ -2,7 +2,7 @@
  * Tests for the shared toast notification system.
  */
 
-import { showToast } from '../toast';
+import { showToast, layoutToastStack } from '../toast';
 
 describe('showToast', () => {
   beforeEach(() => {
@@ -104,5 +104,82 @@ describe('showToast', () => {
   it('non-error kind has role="status" (polite)', () => {
     showToast({ message: 'ok', kind: 'success' });
     expect(document.querySelector('.toast--success')?.getAttribute('role')).toBe('status');
+  });
+});
+
+// Issue #742: a toast must not sit on top of an open dialog's Save button.
+// jsdom has no layout, so the dialog geometry is stubbed.
+describe('toast stack and open dialogs', () => {
+  const rect = (left: number, top: number, width: number, height: number): DOMRect =>
+    ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+
+  function openDialog(box: DOMRect, footer: DOMRect): HTMLElement {
+    const modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.innerHTML = '<div class="modal-content"><div class="modal-body"></div><div class="modal-footer"><button>Save</button></div></div>';
+    document.body.appendChild(modal);
+    jest.spyOn(modal.querySelector('.modal-content')!, 'getBoundingClientRect').mockReturnValue(box);
+    jest.spyOn(modal.querySelector('.modal-footer')!, 'getBoundingClientRect').mockReturnValue(footer);
+    return modal;
+  }
+
+  function setViewport(width: number, height: number): void {
+    jest.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(width);
+    jest.spyOn(document.documentElement, 'clientHeight', 'get').mockReturnValue(height);
+  }
+
+  const container = (): HTMLElement => document.getElementById('toast-container')!;
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    document.body.replaceChildren();
+  });
+
+  it('keeps the default corner when no dialog is open', () => {
+    setViewport(1280, 720);
+    showToast({ message: 'saved' });
+    expect(container().style.getPropertyValue('--toast-bottom')).toBe('');
+    expect(container().style.getPropertyValue('--toast-max-width')).toBe('');
+  });
+
+  it('fits the stack beside a dialog when the gap to its right is wide enough', () => {
+    setViewport(1280, 720);
+    openDialog(rect(300, 36, 680, 648), rect(300, 620, 680, 64));
+    showToast({ message: 'Buffer fraction is required.', kind: 'error' });
+    // 1280 - 980 - 2 * 16 = 268px beside the dialog; the bottom stays put.
+    expect(container().style.getPropertyValue('--toast-max-width')).toBe('268px');
+    expect(container().style.getPropertyValue('--toast-bottom')).toBe('');
+  });
+
+  it("lifts the stack above the dialog's button row when there is no room beside it", () => {
+    setViewport(390, 844);
+    openDialog(rect(10, 40, 370, 760), rect(10, 736, 370, 64));
+    showToast({ message: 'Failed to save', kind: 'error' });
+    // 844 - 736 + 8 = 116px from the bottom: above the footer, not on it.
+    expect(container().style.getPropertyValue('--toast-bottom')).toBe('116px');
+    expect(container().style.getPropertyValue('--toast-max-width')).toBe('');
+  });
+
+  it('re-lays out when a dialog opens or closes under a showing toast', async () => {
+    setViewport(390, 844);
+    showToast({ message: 'saved', kind: 'success' });
+    expect(container().style.getPropertyValue('--toast-bottom')).toBe('');
+
+    const modal = openDialog(rect(10, 40, 370, 760), rect(10, 736, 370, 64));
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    expect(container().style.getPropertyValue('--toast-bottom')).toBe('116px');
+
+    jest.spyOn(modal.querySelector('.modal-content')!, 'getBoundingClientRect').mockReturnValue(rect(0, 0, 0, 0));
+    modal.classList.add('hidden');
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    expect(container().style.getPropertyValue('--toast-bottom')).toBe('');
+  });
+
+  it('ignores dialogs that are not rendered', () => {
+    setViewport(390, 844);
+    openDialog(rect(0, 0, 0, 0), rect(0, 0, 0, 0));
+    showToast({ message: 'saved' });
+    layoutToastStack();
+    expect(container().style.getPropertyValue('--toast-bottom')).toBe('');
   });
 });
