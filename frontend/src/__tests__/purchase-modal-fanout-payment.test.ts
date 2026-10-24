@@ -17,6 +17,7 @@ import {
 } from './purchase-modal-harness';
 import * as api from '../api';
 import * as state from '../state';
+import { showToast } from '../toast';
 import {
   getFanOutBuckets,
   loadRecommendations,
@@ -296,5 +297,135 @@ describe('Issue #1904: fan-out modal skips incompatible buckets', () => {
         upfront_cost: 1000, monthly_cost: 50,
       }),
     ]);
+  });
+
+  test('fan-out renders an absent current payment as a disabled unavailable select', async () => {
+    const rows: LocalRecommendation[] = [
+      {
+        id: 'ec2-1-all', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+        region: 'us-east-1', resource_type: 'm5.large', term: 1, payment: 'all-upfront',
+        count: 2, upfront_cost: 2000, monthly_cost: 0, savings: 500,
+      },
+      {
+        id: 'rds-3-no', provider: 'aws', cloud_account_id: 'a1', service: 'rds',
+        region: 'us-east-1', resource_type: 'db.r5.large', term: 3, payment: 'no-upfront',
+        count: 2, upfront_cost: 0, monthly_cost: 800, savings: 500,
+      },
+    ];
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'no-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['ec2-1-all', 'rds-3-no']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    const rdsSection = Array.from(document.querySelectorAll<HTMLElement>('.fanout-bucket'))
+      .find((section) => section.textContent?.includes('rds'))!;
+    const select = rdsSection.querySelector<HTMLSelectElement>('.fanout-bucket-payment')!;
+    expect(select.disabled).toBe(true);
+    expect(Array.from(select.options)).toHaveLength(1);
+    expect(select.options[0]).toMatchObject({
+      textContent: 'Unavailable: no priced payment', disabled: true, selected: true,
+    });
+  });
+
+  test('fan-out resolves a viable legacy sibling before rendering the bucket control', async () => {
+    const rows: LocalRecommendation[] = [
+      {
+        id: 'ec2-1-all', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+        region: 'us-east-1', resource_type: 'm5.large', term: 1, payment: 'all-upfront',
+        count: 2, upfront_cost: 2000, monthly_cost: 0, savings: 500,
+      },
+      {
+        id: 'rds-3-no', provider: 'aws', cloud_account_id: 'a1', service: 'rds',
+        region: 'us-east-1', resource_type: 'db.r5.large', term: 3, payment: 'no-upfront',
+        count: 2, upfront_cost: 0, monthly_cost: 800, savings: 500,
+      },
+      {
+        id: 'rds-3-all', provider: 'aws', cloud_account_id: 'a1', service: 'rds',
+        region: 'us-east-1', resource_type: 'db.r5.large', term: 3, payment: 'all-upfront',
+        count: 2, upfront_cost: 6000, monthly_cost: 0, savings: 1000,
+      },
+    ];
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'no-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['ec2-1-all', 'rds-3-no']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    const rdsSection = Array.from(document.querySelectorAll<HTMLElement>('.fanout-bucket'))
+      .find((section) => section.textContent?.includes('rds'))!;
+    const select = rdsSection.querySelector<HTMLSelectElement>('.fanout-bucket-payment')!;
+    expect(select.disabled).toBe(false);
+    expect(Array.from(select.options).map((option) => option.value)).toEqual(['all-upfront']);
+    expect(select.value).toBe('all-upfront');
+    expect(select.closest('.fanout-bucket')!.querySelector('.fanout-bucket-totals')!.textContent).toContain('$6,000');
+  });
+
+  test('fan-out restores unchanged state when an offered sibling disappears during edit', async () => {
+    const loadedRows: LocalRecommendation[] = [
+      {
+        id: 'ec2-1-all', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+        region: 'us-east-1', resource_type: 'm5.large', term: 1, payment: 'all-upfront',
+        count: 2, upfront_cost: 2000, monthly_cost: 0, savings: 500,
+      },
+      {
+        id: 'rds-3-no', provider: 'aws', cloud_account_id: 'a1', service: 'rds',
+        region: 'us-east-1', resource_type: 'db.r5.large', term: 3, payment: 'no-upfront',
+        count: 2, upfront_cost: 0, monthly_cost: 800, savings: 500,
+      },
+      {
+        id: 'rds-3-all', provider: 'aws', cloud_account_id: 'a1', service: 'rds',
+        region: 'us-east-1', resource_type: 'db.r5.large', term: 3, payment: 'all-upfront',
+        count: 2, upfront_cost: 6000, monthly_cost: 0, savings: 1000,
+      },
+      {
+        id: 'rds-3-partial', provider: 'aws', cloud_account_id: 'a1', service: 'rds',
+        region: 'us-east-1', resource_type: 'db.r5.large', term: 3, payment: 'partial-upfront',
+        count: 2, upfront_cost: 3000, monthly_cost: 100, savings: 900,
+      },
+    ];
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'all-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: loadedRows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(loadedRows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(loadedRows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['ec2-1-all', 'rds-3-no']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    const rdsSection = Array.from(document.querySelectorAll<HTMLElement>('.fanout-bucket'))
+      .find((section) => section.textContent?.includes('rds'))!;
+    const paymentSelect = rdsSection.querySelector<HTMLSelectElement>('.fanout-bucket-payment')!;
+    const totalsBefore = rdsSection.querySelector('.fanout-bucket-totals')!.textContent;
+    expect(paymentSelect.value).toBe('all-upfront');
+    expect(Array.from(paymentSelect.options).map((option) => option.value)).toEqual(['all-upfront', 'partial-upfront']);
+    expect(totalsBefore).toContain('$6,000');
+
+    loadedRows.splice(loadedRows.findIndex((row) => row.id === 'rds-3-partial'), 1);
+    paymentSelect.value = 'partial-upfront';
+    paymentSelect.dispatchEvent(new Event('change'));
+    expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'warning' }));
+    expect(paymentSelect.value).toBe('all-upfront');
+    expect(rdsSection.querySelector('.fanout-bucket-totals')!.textContent).toBe(totalsBefore);
+    expect(getFanOutBuckets()!.find((bucket) => bucket.service === 'rds')!.recs[0]).toMatchObject({
+      id: 'rds-3-all', payment: 'all-upfront', upfront_cost: 6000, monthly_cost: 0,
+    });
+    (document.getElementById('execute-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    const body = (api.executePurchase as jest.Mock).mock.calls
+      .map(([payload]) => payload as Array<Record<string, unknown>>)
+      .find((payload) => payload.some((rec) => rec['service'] === 'rds'))!;
+    expect(body).toEqual([expect.objectContaining({
+      id: 'rds-3-all', payment: 'all-upfront', upfront_cost: 6000, monthly_cost: 0,
+    })]);
   });
 });
