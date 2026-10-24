@@ -20,7 +20,7 @@
     box-shadow: var(--cudly-shadow-sm);
     margin-bottom: 1rem;
     overflow: hidden;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    transition: transform var(--cudly-dur-fast) var(--cudly-ease), box-shadow var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .plan-card:hover {
@@ -107,7 +107,7 @@
     box-shadow: var(--cudly-shadow-sm);
     margin-bottom: var(--cudly-sp-3);
     border-left: 4px solid var(--cudly-primary);
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    transition: transform var(--cudly-dur-fast) var(--cudly-ease), box-shadow var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .upcoming-card:hover {
@@ -173,7 +173,8 @@
     color: var(--cudly-text-muted);
 }
 
-/* Ramp schedule options */
+/* Ramp schedule options. The only copy: forms.css used to repeat this block
+ * verbatim, so editing one left the other stale (issue #725). */
 .ramp-options {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -188,7 +189,7 @@
     border: 2px solid var(--cudly-border-strong);
     border-radius: 8px;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: border-color var(--cudly-dur) var(--cudly-ease), background-color var(--cudly-dur) var(--cudly-ease), box-shadow var(--cudly-dur) var(--cudly-ease);
 }
 
 .ramp-option:hover {

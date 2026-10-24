@@ -18,7 +18,7 @@
     font-size: 0.9rem;
     cursor: pointer;
     border-radius: 0;
-    transition: color 0.15s;
+    transition: color var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .sub-tab-btn:hover {
@@ -383,7 +383,7 @@ select.dirty {
  * registered account). Uses the accent border to pull the eye without
  * reading as an error. */
 .self-account-banner {
-    border-left: 3px solid var(--accent, #4a9eff);
+    border-left: 3px solid var(--cudly-primary);
     padding: 8px 12px;
     margin-bottom: 8px;
 }
@@ -622,6 +622,22 @@ select.dirty {
 }
 tr.override-disabled {
     opacity: 0.55;
+}
+
+/* Issue #8: "Updated <when>" line under the override's service name. One
+   line where there is room; below the drawer breakpoint it may wrap so the
+   Service column does not squeeze the inline Term/Payment selects further. */
+.last-updated-stamp {
+    display: block;
+    margin-top: 0.125rem;
+    color: var(--cudly-text-muted);
+    font-size: 0.75rem;
+    white-space: nowrap;
+}
+@media (max-width: 768px) {
+    .last-updated-stamp {
+        white-space: normal;
+    }
 }
 
 /* The matrix scrolls sideways; its absolutely positioned .sr-only cell labels

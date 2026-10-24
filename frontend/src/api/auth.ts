@@ -4,6 +4,7 @@
 
 import { apiRequest, getAuthHeaders, setAuthToken, setCsrfToken, clearAuth, addContentHashHeader, base64Encode, getApiBase } from './client';
 import type {
+  ApiError,
   LoginResponse,
   User,
   PermissionEntry,
@@ -293,8 +294,9 @@ export async function setupAdmin(key: string, email: string, password: string): 
   });
 
   if (!response.ok) {
-    const data = await response.json() as { error?: string };
-    throw new Error(data.error || 'Failed to create admin');
+    // A proxy 502 carries an HTML body; don't surface the JSON SyntaxError.
+    const data = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(data.error || `Failed to create admin (HTTP ${response.status})`);
   }
 
   const data = await response.json() as LoginResponse & { csrf_token?: string };
@@ -412,10 +414,12 @@ export async function regenerateMFARecoveryCodes(code: string): Promise<MFARecov
 export async function getPublicInfo(): Promise<PublicInfo> {
   const API_BASE = getApiBase();
   const response = await fetch(`${API_BASE}/info`);
-  if (response.ok) {
-    return response.json() as Promise<PublicInfo>;
+  if (!response.ok) {
+    // Throw rather than fabricating `admin_exists: false`: a 502/503 must
+    // not route every visitor to the first-run admin-setup screen.
+    throw httpError('GET /api/info', response.status);
   }
-  return { version: '', admin_exists: false };
+  return response.json() as Promise<PublicInfo>;
 }
 
 /**
@@ -428,8 +432,14 @@ export async function getDeploymentInfo(): Promise<DeploymentInfo> {
   const response = await fetch(`${API_BASE}/info/deployment`, {
     headers: getAuthHeaders(),
   });
-  if (response.ok) {
-    return response.json() as Promise<DeploymentInfo>;
+  if (!response.ok) {
+    throw httpError('GET /api/info/deployment', response.status);
   }
-  return {};
+  return response.json() as Promise<DeploymentInfo>;
+}
+
+function httpError(what: string, status: number): ApiError {
+  const error: ApiError = new Error(`${what} failed with HTTP ${status}`);
+  error.status = status;
+  return error;
 }
