@@ -164,7 +164,8 @@ describe('index.html tab semantics (issue #730)', () => {
 
   test('every remaining tab has a roving tabindex and a tablist parent', () => {
     const tabs = Array.from(document.querySelectorAll<HTMLElement>('[role="tab"]'));
-    expect(tabs.length).toBe(7);
+    // 4 Inventory sub-tabs (incl. Trends, #1317) + 4 Admin sub-tabs.
+    expect(tabs.length).toBe(8);
     tabs.forEach(t => {
       expect(t.parentElement?.getAttribute('role')).toBe('tablist');
       expect(t.getAttribute('tabindex')).toBe(t.getAttribute('aria-selected') === 'true' ? '0' : '-1');
