@@ -962,7 +962,7 @@ describe('API Keys Module', () => {
 
       await revokeApiKey('key-1');
 
-      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to revoke API key');
+      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to revoke API key: Revoke failed');
       expect(document.getElementById('create-apikey-error')?.classList.contains('hidden')).toBe(true);
       consoleError.mockRestore();
     });
@@ -977,7 +977,7 @@ describe('API Keys Module', () => {
       await revokeApiKey('key-1');
 
       expect(consoleError).toHaveBeenCalledWith('Failed to revoke API key:', expect.any(Error));
-      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to revoke API key');
+      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to revoke API key: Revoke failed');
       consoleError.mockRestore();
     });
   });
@@ -1031,7 +1031,7 @@ describe('API Keys Module', () => {
       await deleteApiKey('key-1');
 
       expect(consoleError).toHaveBeenCalledWith('Failed to delete API key:', expect.any(Error));
-      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to delete API key');
+      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to delete API key: Delete failed');
       consoleError.mockRestore();
     });
   });
