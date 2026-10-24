@@ -860,7 +860,7 @@ describe('Dashboard Module', () => {
 
         await loadDashboard();
 
-        expect(savingsTile()?.querySelector('.kpi-tile-value')?.textContent).toBe('--');
+        expect(savingsTile()?.querySelector('.kpi-tile-value')?.textContent).toBe('\u2014');
         expect(savingsTile()?.querySelector('.kpi-tile-detail')?.textContent).toBe('7 recommendations');
       });
     });
