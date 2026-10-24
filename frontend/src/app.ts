@@ -23,6 +23,7 @@ import { handlePurchaseDeeplink } from './purchases-deeplink';
 import { handleRIExchangeDeeplink } from './riexchange-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
+import { initPurchasingNav } from './purchasing-nav';
 import { renderInitError } from './init-error';
 
 /**
@@ -347,6 +348,9 @@ function setupButtonHandlers(): void {
   // RI Exchange form was removed and its persistence rolled into this
   // sticky bar. If the RI Exchange form hasn't rendered yet (panel never
   // visited), the guard inside saveAutomationSettings no-ops cleanly.
+  // Admin -> Purchasing policies section links (issue #190).
+  initPurchasingNav();
+
   const savePurchasingBtn = document.getElementById('save-purchasing-btn');
   if (savePurchasingBtn) {
     savePurchasingBtn.addEventListener('click', () => {
