@@ -43,7 +43,7 @@
             <div id="user-info">
                 <button type="button" id="user-email-display" aria-label="Profile" hidden></button>
                 <span id="user-role-display" class="role-badge"></span>
-                <a href="/docs/" target="_blank" class="header-link">API Docs</a>
+                <a href="/docs/" target="_blank" rel="noopener noreferrer" class="header-link">API Docs</a>
                 <a id="feedback-link" href="#" class="header-link feedback-link">Feedback</a>
                 <button id="logout-btn">Logout</button>
             </div>
@@ -107,7 +107,9 @@
                             <button type="button" class="btn btn-small trend-range" data-range="7">7d</button>
                             <button type="button" class="btn btn-small trend-range" data-range="30">30d</button>
                             <button type="button" class="btn btn-small trend-range active" data-range="90">90d</button>
-                            <button type="button" class="btn btn-small trend-range" data-range="all">All</button>
+                            <!-- data-range="all" is the longest window the analytics API allows
+                                 (366-day cap), so the button says 1y, not All (#52). -->
+                            <button type="button" class="btn btn-small trend-range" data-range="all" title="Last 365 days">1y</button>
                         </div>
                     </div>
                     <canvas id="savings-trend-chart" role="img" aria-label="Line chart showing cumulative savings over time"></canvas>
@@ -115,7 +117,7 @@
                 </section>
                 <section id="savings-by-service-section" class="card chart-section">
                     <h3>Potential savings range per service</h3>
-                    <canvas id="savings-by-service-chart" role="img" aria-label="Bar chart showing the min-to-max potential savings range per service plus a darker current committed-savings bar per service"></canvas>
+                    <canvas id="savings-by-service-chart" role="img" aria-label="Bar chart showing the min-to-max potential savings range per service plus a current committed-savings layer per service"></canvas>
                     <p id="savings-by-service-empty" class="empty hidden">No positive potential savings found for current recommendations.</p>
                 </section>
                 <section id="upcoming-purchases">
@@ -173,13 +175,14 @@
                      pending-approval purchases at the top of the Purchases
                      tab so users don't have to scan the full Purchase
                      History table for them. Rows render with inline
-                     Approve / Cancel buttons (issues #46 + #286) and the
-                     same click flow as the history table. Auto-loaded on
-                     tab switch via loadHistory(); also re-rendered after
-                     any Approve / Cancel from either view. -->
+                     Approve / Cancel buttons (issues #46 + #286). It is the
+                     only approval surface (issue #183): pending rows in the
+                     Purchase History table link here instead of repeating
+                     the buttons. Auto-loaded on tab switch via loadHistory();
+                     also re-rendered after any Approve / Cancel. -->
                 <section id="purchases-approval-queue-section" class="card page-hero">
                     <h2>Approval queue</h2>
-                    <p class="help-text page-hero-description">Purchases awaiting approval. Review and approve or cancel each one. The same actions are available from the Purchase History table below.</p>
+                    <p class="help-text page-hero-description">Purchases awaiting approval. Approve or cancel each one here. Purchase History below lists them as Pending and links back to this queue.</p>
                     <p id="purchases-truncation-notice" class="warning-message" role="status" hidden></p>
                     <section id="purchases-approval-queue"></section>
                 </section>
@@ -265,6 +268,7 @@
                 <div class="inventory-subnav" role="tablist" aria-label="Inventory &amp; Coverage navigation">
                     <button class="sub-tab-btn active" id="inv-subtab-active-commitments" data-inv-subtab="active-commitments" role="tab" aria-selected="true" aria-controls="inventory-active-commitments">Active commitments</button>
                     <button class="sub-tab-btn" id="inv-subtab-coverage" data-inv-subtab="coverage" role="tab" aria-selected="false" aria-controls="inventory-coverage">Coverage</button>
+                    <button class="sub-tab-btn" id="inv-subtab-trends" data-inv-subtab="trends" role="tab" aria-selected="false" aria-controls="inventory-trends">Trends</button>
                     <button class="sub-tab-btn" id="inv-subtab-ri-exchange" data-inv-subtab="ri-exchange" role="tab" aria-selected="false" aria-controls="inventory-ri-exchange">RI Exchange</button>
                 </div>
 
@@ -300,6 +304,28 @@
                         <p class="settings-description">Per-provider coverage rate: the share of on-demand spend protected by Reserved Instances, Savings Plans, or Committed Use Discounts.</p>
                     </section>
                     <div id="coverage-providers"></div>
+                </section>
+
+                <!-- Trends — savings-snapshot history from /api/analytics/trends
+                     (issue #30). trends.ts renders into #trends-content. -->
+                <section id="inventory-trends" class="hidden" role="tabpanel" aria-labelledby="inv-subtab-trends">
+                    <section class="card page-hero">
+                        <div class="section-header">
+                            <h2>Savings trends</h2>
+                            <div class="section-header-actions">
+                                <label>Period:
+                                    <select id="trends-period">
+                                        <option value="3">Last 3 months</option>
+                                        <option value="6" selected>Last 6 months</option>
+                                        <option value="12">Last 12 months</option>
+                                    </select>
+                                </label>
+                                <button id="trends-refresh-btn" class="btn btn-small">Refresh</button>
+                            </div>
+                        </div>
+                        <p class="settings-description">Monthly savings run-rate and coverage from the snapshots CUDly collects of your active commitments, broken down by provider and by service.</p>
+                    </section>
+                    <div id="trends-content"></div>
                 </section>
 
                 <!-- RI Exchange — relocated from the former top-level ri-exchange-tab. -->
@@ -1088,7 +1114,7 @@
         <div id="group-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="group-modal-title">
             <div class="modal-content modal-wide">
                 <h2 id="group-modal-title">Create Group</h2>
-                <form id="group-form">
+                <form id="group-form" novalidate>
                     <input type="hidden" id="group-id">
                     <div class="form-group">
                         <label for="group-name">Group Name</label>

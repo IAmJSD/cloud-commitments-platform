@@ -1020,6 +1020,31 @@ describe('Settings Module', () => {
         expect(isUnsavedChanges()).toBe(false);
       });
 
+      test.each(['12.7', '-40', '500'])('an SP card coverage of %s aborts the save before any PUT (#318)', async (value) => {
+        await loadWithCoverage50();
+        mockShowToast.mockClear();
+        (document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement).value = value;
+
+        await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
+
+        expect(api.updateConfig).not.toHaveBeenCalled();
+        expect(api.updateServiceConfig).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+          kind: 'error',
+          message: expect.stringContaining('whole number between 0 and 100 (savings-plans-compute)'),
+        }));
+        expect(isUnsavedChanges()).toBe(true);
+      });
+
+      test.each([['0', 0], ['100', 100]])('an SP card coverage of %s is within range and saved (#318)', async (value, sent) => {
+        await loadWithCoverage50();
+        (document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement).value = value;
+
+        await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
+
+        expect(coverageSentFor('savings-plans-compute')).toBe(sent);
+      });
+
       test('a saved service payment edit leaves nothing unsaved (#576)', async () => {
         await loadWithCoverage50();
         (document.getElementById('aws-ec2-payment') as HTMLSelectElement).value = 'partial-upfront';

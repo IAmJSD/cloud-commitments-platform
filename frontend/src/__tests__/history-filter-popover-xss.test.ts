@@ -24,7 +24,7 @@ describe('renderHistoryFilterButton: attribute-injection XSS guard', () => {
   const EVENT_PAYLOAD = '" onmouseover="alert(1)" x="';
 
   test('hostile label does not inject raw <script> tag into attribute context', () => {
-    const html = renderHistoryFilterButton('provider', SCRIPT_PAYLOAD, false);
+    const html = renderHistoryFilterButton('provider', SCRIPT_PAYLOAD, false, 'history');
     // The raw < > and " chars must be entity-encoded; no unescaped angle brackets.
     expect(html).not.toContain('"><script>');
     expect(html).not.toContain('</script>');
@@ -33,7 +33,7 @@ describe('renderHistoryFilterButton: attribute-injection XSS guard', () => {
   });
 
   test('hostile label does not inject event handler attribute', () => {
-    const html = renderHistoryFilterButton('provider', EVENT_PAYLOAD, false);
+    const html = renderHistoryFilterButton('provider', EVENT_PAYLOAD, false, 'history');
     // The injected " must be encoded; no raw onmouseover= outside an attribute value.
     expect(html).not.toContain('" onmouseover=');
     // The encoded form must appear inside the attribute value.
@@ -42,21 +42,28 @@ describe('renderHistoryFilterButton: attribute-injection XSS guard', () => {
 
   test('hostile column id does not inject raw markup into data-column', () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const html = renderHistoryFilterButton(SCRIPT_PAYLOAD as any, 'Provider', false);
+    const html = renderHistoryFilterButton(SCRIPT_PAYLOAD as any, 'Provider', false, 'history');
     expect(html).not.toContain('><script>');
     expect(html).not.toContain('</script>');
     expect(html).toContain('&lt;script&gt;');
   });
 
   test('safe column and label pass through correctly', () => {
-    const html = renderHistoryFilterButton('provider', 'Provider', false);
+    const html = renderHistoryFilterButton('provider', 'Provider', false, 'history');
     expect(html).toContain('data-column="provider"');
     expect(html).toContain('aria-label="Filter Provider"');
     expect(html).toContain('class="history-column-filter-btn"');
+    expect(html).toContain('data-filter-scope="history"');
+  });
+
+  test('hostile scope does not inject raw markup into data-filter-scope', () => {
+    const html = renderHistoryFilterButton('provider', 'Provider', false, SCRIPT_PAYLOAD);
+    expect(html).not.toContain('><script>');
+    expect(html).toContain('&lt;script&gt;');
   });
 
   test('active flag adds "active" class and updates aria-label', () => {
-    const html = renderHistoryFilterButton('savings', 'Monthly Savings', true);
+    const html = renderHistoryFilterButton('savings', 'Monthly Savings', true, 'queue');
     expect(html).toContain('class="history-column-filter-btn active"');
     expect(html).toContain('aria-label="Filter Monthly Savings - currently active"');
   });
