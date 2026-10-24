@@ -50,7 +50,7 @@ describe('GCP storage removal (issue #543)', () => {
     await new Promise(r => setTimeout(r, 0));
   });
 
-  it('offers compute, sql and memorystore, not storage, in the override Add list', async () => {
+  it('offers compute, relational-db and cache, not storage, in the override Add list', async () => {
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
     panel.innerHTML = '';
     await loadOverridesPanel('acct1', panel, 'gcp' as never);
@@ -59,7 +59,7 @@ describe('GCP storage removal (issue #543)', () => {
     add.click();
     await new Promise(r => setTimeout(r, 0));
     const options = Array.from((document.getElementById('override-service') as HTMLSelectElement).options).map(o => o.value);
-    expect(options).toEqual(['compute', 'sql', 'memorystore']);
+    expect(options).toEqual(['compute', 'relational-db', 'cache']);
   });
 
   it('still renders a stored gcp/storage override with a Delete button', () => {
