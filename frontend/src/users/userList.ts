@@ -15,7 +15,7 @@ import {
   setAllUsers,
 } from './state';
 import { escapeHtml, formatRelativeTime, formatDate, showSuccess, showError, validateGroupCombination } from './utils';
-import { openEditUserModal, deleteUser } from './userActions';
+import { openEditUserModal, deleteUser, refreshCurrentUserAccess } from './userActions';
 import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 import { confirmDialog } from '../confirmDialog';
 import { getCurrentUser } from '../state';
@@ -289,6 +289,7 @@ async function toggleUserGroup(userId: string, groupId: string, checked: boolean
     // calculations reflect the change without a full round-trip re-render.
     const updatedUser: APIUser = { ...latest, groups: groupsToSave };
     setAllUsers(allUsers.map(u => (u.id === userId ? updatedUser : u)));
+    void refreshCurrentUserAccess([userId]); // self-edits re-gate the UI (#20)
 
     // Re-render the expand panel in place so the checkboxes and permissions
     // summary stay current without collapsing the row or re-rendering the
