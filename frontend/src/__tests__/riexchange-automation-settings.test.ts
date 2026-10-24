@@ -165,8 +165,11 @@ describe('loadAutomationSettings: loading and error stay inside the section fram
     expect(container.children).toHaveLength(1);
     expect(fieldset?.querySelector('legend')?.textContent).toBe('Exchange Automation');
     expect(fieldset?.getAttribute('aria-busy')).toBe('true');
-    expect(fieldset?.querySelector('.loading')?.textContent).toBe('Loading exchange automation settings...');
+    // Issue #186: the shared skeleton, not a visible loading paragraph.
     expect(fieldset?.querySelector('.skeleton-group')).not.toBeNull();
+    expect(fieldset?.querySelector('.skeleton-status')?.textContent).toBe('Loading…');
+    expect(fieldset?.querySelector('p.loading')).toBeNull();
+    expect(container.textContent).not.toContain('Loading settings...');
 
     resolve(Promise.reject(new Error('Failed to fetch')));
     (settings.isPermissionDeniedError as jest.Mock).mockReturnValue(false);
