@@ -15,7 +15,12 @@ import { populateTermSelect, populatePaymentSelect, isValidCombination, normaliz
 import { openModal, closeModal } from './modal';
 import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
-import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
+import { applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
+import {
+  openColumnFilterPopover,
+  rebindColumnFilterPopover,
+  sortedDistinctValues,
+} from './lib/column-filter-popover';
 import { suggestedPurchaseStartDate } from './lib/calendar-date';
 import { isPastScheduledDate } from './lib/purchase-row-guards';
 import { mountPlanEditorPanel } from './plan-editor-panel';
@@ -205,7 +210,7 @@ function renderPlannedPurchasesInternal(): void {
 
   // Re-anchor any open popover to the freshly-rendered trigger so the
   // popover survives table re-renders triggered by other state changes.
-  rebindOpenPlansPopoverAnchor();
+  rebindColumnFilterPopover(PLANS_POPOVER_SCOPE);
 }
 
 // ---------------------------------------------------------------------------
@@ -288,27 +293,17 @@ function roundForDisplay(n: number, precision: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// Plans column-filter popover (portal pattern — sibling of the one in
-// recommendations.ts). Lives appended to document.body so it survives the
-// table's innerHTML rewrite on every render.
+// Plans column-filter popover. The lifecycle (portal DOM, positioning,
+// outside click / Escape, re-sync after re-render) lives in the shared
+// lib/column-filter-popover.ts (issue #18); this table only supplies its
+// column metadata and state accessors.
 // ---------------------------------------------------------------------------
+
+const PLANS_POPOVER_SCOPE = 'plans';
 
 const PLANS_NUMERIC_COLUMNS: ReadonlySet<state.PlansColumnId> = new Set<state.PlansColumnId>([
   'count', 'upfront_cost', 'estimated_savings',
 ]);
-
-interface PlansPopoverState {
-  column: state.PlansColumnId;
-  el: HTMLDivElement;
-  checkboxes: Map<string, HTMLInputElement>;
-  input: HTMLInputElement | null;
-  errorEl: HTMLElement | null;
-}
-
-let openPlansPopover: PlansPopoverState | null = null;
-let plansOutsideClickHandler: ((e: MouseEvent) => void) | null = null;
-let plansEscKeyHandler: ((e: KeyboardEvent) => void) | null = null;
-let plansResizeHandler: (() => void) | null = null;
 
 function plansColumnLabel(column: state.PlansColumnId): string {
   switch (column) {
@@ -342,320 +337,21 @@ function getPlansColumnTriggerButton(column: state.PlansColumnId): HTMLButtonEle
   );
 }
 
-function positionPlansPopover(popover: HTMLElement, anchor: HTMLElement): void {
-  const rect = anchor.getBoundingClientRect();
-  popover.style.display = 'block';
-  const popRect = popover.getBoundingClientRect();
-  const margin = 8;
-
-  let top = rect.bottom + 4;
-  if (top + popRect.height > window.innerHeight - margin) {
-    top = Math.max(margin, rect.top - popRect.height - 4);
-  }
-  let left = rect.left;
-  if (left + popRect.width > window.innerWidth - margin) {
-    left = Math.max(margin, window.innerWidth - margin - popRect.width);
-  }
-  popover.style.position = 'absolute';
-  popover.style.top = `${top + window.scrollY}px`;
-  popover.style.left = `${left + window.scrollX}px`;
-}
-
-function plansDistinctValuesForColumn(
-  purchases: readonly PlannedPurchase[],
-  column: state.PlansColumnId,
-): string[] {
-  const seen = new Set<string>();
-  for (const p of purchases) {
-    seen.add(categoricalCellValueForPlan(p, column));
-  }
-  return Array.from(seen).sort((a, b) => {
-    if (a === '' && b !== '') return -1;
-    if (a !== '' && b === '') return 1;
-    return a.localeCompare(b);
-  });
-}
-
-function buildPlansPopoverContent(
-  column: state.PlansColumnId,
-  purchases: readonly PlannedPurchase[],
-): { el: HTMLDivElement; checkboxes: Map<string, HTMLInputElement>; input: HTMLInputElement | null; errorEl: HTMLElement | null } {
-  const popover = document.createElement('div');
-  popover.className = 'column-filter-popover';
-  popover.setAttribute('role', 'dialog');
-  popover.setAttribute('aria-modal', 'false');
-
-  const headingId = `plans-column-filter-heading-${column}`;
-  popover.setAttribute('aria-labelledby', headingId);
-
-  const heading = document.createElement('h3');
-  heading.id = headingId;
-  heading.className = 'column-filter-heading';
-  heading.textContent = `Filter ${plansColumnLabel(column)}`;
-  popover.appendChild(heading);
-
-  const checkboxes = new Map<string, HTMLInputElement>();
-  let input: HTMLInputElement | null = null;
-  let errorEl: HTMLElement | null = null;
-  let commitAllRef: ((target: boolean) => void) | null = null;
-
-  if (PLANS_NUMERIC_COLUMNS.has(column)) {
-    const label = document.createElement('label');
-    label.className = 'column-filter-numeric-label';
-    label.textContent = 'Expression';
-    input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'column-filter-numeric-input';
-    input.placeholder = 'e.g. >100, 50..200, 5';
-    input.setAttribute('aria-describedby', `plans-column-filter-error-${column}`);
-    label.appendChild(input);
-    popover.appendChild(label);
-
-    errorEl = document.createElement('div');
-    errorEl.id = `plans-column-filter-error-${column}`;
-    errorEl.className = 'column-filter-error';
-    errorEl.setAttribute('role', 'status');
-    popover.appendChild(errorEl);
-
-    const commit = (): void => {
-      const expr = input!.value.trim();
-      if (expr === '') {
-        state.setPlansColumnFilter(column, null);
-        errorEl!.textContent = '';
-        rerenderPlannedPurchases();
-        return;
-      }
-      const parsed = parseNumericFilter(expr);
-      if (!parsed.ok) {
-        errorEl!.textContent = parsed.error;
-        return;
-      }
-      errorEl!.textContent = '';
-      state.setPlansColumnFilter(column, { kind: 'expr', expr });
-      rerenderPlannedPurchases();
-    };
-    input.addEventListener('blur', commit);
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        commit();
-      }
-    });
-  } else {
-    const distinct = plansDistinctValuesForColumn(purchases, column);
-
-    const allLabel = document.createElement('label');
-    allLabel.className = 'column-filter-all';
-    const allBox = document.createElement('input');
-    allBox.type = 'checkbox';
-    allBox.dataset['role'] = 'all';
-    allLabel.appendChild(allBox);
-    const allText = document.createElement('span');
-    allText.textContent = '(All)';
-    allLabel.appendChild(allText);
-    popover.appendChild(allLabel);
-
-    const list = document.createElement('div');
-    list.className = 'column-filter-list';
-    for (const value of distinct) {
-      const itemLabel = document.createElement('label');
-      itemLabel.className = 'column-filter-item';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.dataset['value'] = value;
-      itemLabel.appendChild(cb);
-      const text = document.createElement('span');
-      text.textContent = plansCategoricalDisplayLabel(column, value);
-      itemLabel.appendChild(text);
-      list.appendChild(itemLabel);
-      checkboxes.set(value, cb);
-    }
-    popover.appendChild(list);
-
-    const updateAllTriState = (): void => {
-      const total = checkboxes.size;
-      let checked = 0;
-      checkboxes.forEach((cb) => { if (cb.checked) checked++; });
-      allBox.indeterminate = checked > 0 && checked < total;
-      allBox.checked = checked === total && total > 0;
-    };
-
-    const commit = (): void => {
-      const selected: string[] = [];
-      checkboxes.forEach((cb, value) => { if (cb.checked) selected.push(value); });
-      if (selected.length === checkboxes.size) {
-        state.setPlansColumnFilter(column, null);
-      } else {
-        state.setPlansColumnFilter(column, { kind: 'set', values: selected });
-      }
-      updateAllTriState();
-      rerenderPlannedPurchases();
-    };
-
-    const commitAll = (target: boolean): void => {
-      checkboxes.forEach((cb) => { cb.checked = target; });
-      if (target) {
-        state.setPlansColumnFilter(column, null);
-      } else {
-        state.setPlansColumnFilter(column, { kind: 'set', values: [] });
-      }
-      updateAllTriState();
-      rerenderPlannedPurchases();
-    };
-    commitAllRef = commitAll;
-
-    checkboxes.forEach((cb) => {
-      cb.addEventListener('change', commit);
-    });
-    allBox.addEventListener('change', () => {
-      commitAll(allBox.checked);
-    });
-  }
-
-  const footer = document.createElement('div');
-  footer.className = 'column-filter-footer';
-  const clearBtn = document.createElement('button');
-  clearBtn.type = 'button';
-  clearBtn.className = 'column-filter-clear';
-  clearBtn.textContent = 'Clear';
-  clearBtn.addEventListener('click', () => {
-    if (input) {
-      state.setPlansColumnFilter(column, null);
-      input.value = '';
-      if (errorEl) errorEl.textContent = '';
-      rerenderPlannedPurchases();
-    } else {
-      commitAllRef?.(false);
-    }
-  });
-  footer.appendChild(clearBtn);
-  popover.appendChild(footer);
-
-  return { el: popover, checkboxes, input, errorEl };
-}
-
-function resyncOpenPlansPopover(): void {
-  if (!openPlansPopover) return;
-  const f = state.getPlansColumnFilters()[openPlansPopover.column];
-  if (openPlansPopover.input) {
-    if (document.activeElement !== openPlansPopover.input) {
-      const expr = f && f.kind === 'expr' ? f.expr : '';
-      openPlansPopover.input.value = expr;
-      if (openPlansPopover.errorEl) openPlansPopover.errorEl.textContent = '';
-    }
-    return;
-  }
-  if (f == null) {
-    openPlansPopover.checkboxes.forEach((cb) => { cb.checked = true; });
-  } else {
-    const values: ReadonlySet<string> = f.kind === 'set' ? new Set(f.values) : new Set();
-    openPlansPopover.checkboxes.forEach((cb, value) => {
-      cb.checked = values.has(value);
-    });
-  }
-  const allBox = openPlansPopover.el.querySelector<HTMLInputElement>('input[data-role="all"]');
-  if (allBox) {
-    const total = openPlansPopover.checkboxes.size;
-    let checked = 0;
-    openPlansPopover.checkboxes.forEach((cb) => { if (cb.checked) checked++; });
-    allBox.indeterminate = checked > 0 && checked < total;
-    allBox.checked = checked === total && total > 0;
-  }
-}
-
-function attachPlansPopoverGlobalListeners(): void {
-  if (plansOutsideClickHandler) return;
-  plansOutsideClickHandler = (e: MouseEvent): void => {
-    if (!openPlansPopover) return;
-    const target = e.target as Node | null;
-    if (!target) return;
-    if (openPlansPopover.el.contains(target)) return;
-    if (target instanceof Element && target.closest('.column-filter-btn')) return;
-    closePlansPopover();
-  };
-  plansEscKeyHandler = (e: KeyboardEvent): void => {
-    if (!openPlansPopover) return;
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      closePlansPopover(true);
-    }
-  };
-  plansResizeHandler = (): void => {
-    if (!openPlansPopover) return;
-    const trigger = getPlansColumnTriggerButton(openPlansPopover.column);
-    if (!trigger) {
-      closePlansPopover();
-      return;
-    }
-    positionPlansPopover(openPlansPopover.el, trigger);
-  };
-  document.addEventListener('mousedown', plansOutsideClickHandler);
-  document.addEventListener('keydown', plansEscKeyHandler);
-  window.addEventListener('resize', plansResizeHandler);
-}
-
-function detachPlansPopoverGlobalListeners(): void {
-  if (plansOutsideClickHandler) document.removeEventListener('mousedown', plansOutsideClickHandler);
-  if (plansEscKeyHandler) document.removeEventListener('keydown', plansEscKeyHandler);
-  if (plansResizeHandler) window.removeEventListener('resize', plansResizeHandler);
-  plansOutsideClickHandler = null;
-  plansEscKeyHandler = null;
-  plansResizeHandler = null;
-}
-
 function openPlansColumnPopover(column: state.PlansColumnId, anchor: HTMLElement): void {
-  if (openPlansPopover && !openPlansPopover.el.isConnected) {
-    detachPlansPopoverGlobalListeners();
-    openPlansPopover = null;
-  }
-  if (openPlansPopover && openPlansPopover.column === column) {
-    closePlansPopover(true);
-    return;
-  }
-  if (openPlansPopover) closePlansPopover();
-
-  const built = buildPlansPopoverContent(column, lastLoadedPurchases);
-  document.body.appendChild(built.el);
-  openPlansPopover = {
+  openColumnFilterPopover({
+    scope: PLANS_POPOVER_SCOPE,
     column,
-    el: built.el,
-    checkboxes: built.checkboxes,
-    input: built.input,
-    errorEl: built.errorEl,
-  };
-  resyncOpenPlansPopover();
-  positionPlansPopover(built.el, anchor);
-  anchor.setAttribute('aria-expanded', 'true');
-  attachPlansPopoverGlobalListeners();
-
-  const firstFocusable = built.input
-    ?? built.el.querySelector<HTMLInputElement>('input[type="checkbox"]');
-  firstFocusable?.focus();
-}
-
-function closePlansPopover(restoreFocus = false): void {
-  if (!openPlansPopover) return;
-  const { column, el } = openPlansPopover;
-  el.remove();
-  openPlansPopover = null;
-  detachPlansPopoverGlobalListeners();
-  const trigger = getPlansColumnTriggerButton(column);
-  if (trigger) {
-    trigger.setAttribute('aria-expanded', 'false');
-    if (restoreFocus) trigger.focus();
-  }
-}
-
-function rebindOpenPlansPopoverAnchor(): void {
-  if (!openPlansPopover) return;
-  const trigger = getPlansColumnTriggerButton(openPlansPopover.column);
-  if (!trigger) {
-    closePlansPopover();
-    return;
-  }
-  trigger.setAttribute('aria-expanded', 'true');
-  positionPlansPopover(openPlansPopover.el, trigger);
-  resyncOpenPlansPopover();
+    label: plansColumnLabel(column),
+    kind: PLANS_NUMERIC_COLUMNS.has(column) ? 'numeric' : 'categorical',
+    distinctValues: sortedDistinctValues(lastLoadedPurchases, (p) => categoricalCellValueForPlan(p, column)),
+    displayLabel: (value) => plansCategoricalDisplayLabel(column, value),
+    getFilter: () => state.getPlansColumnFilters()[column],
+    onCommit: (filter) => {
+      state.setPlansColumnFilter(column, filter);
+      rerenderPlannedPurchases();
+    },
+    findTrigger: () => getPlansColumnTriggerButton(column),
+  }, anchor);
 }
 
 function rerenderPlannedPurchases(): void {
@@ -707,7 +403,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   const resourceCell = hasNoRecommendations
     ? '<span class="no-recommendations" title="This step has no recommendations attached, so it cannot buy anything.">No recommendations attached</span>'
     : `${escapeHtml(purchase.resource_type)} (${escapeHtml(purchase.region)})`;
-  const countCell = hasNoRecommendations ? '—' : String(purchase.count);
+  const countCell = hasNoRecommendations ? '—' : escapeHtml(String(purchase.count ?? ''));
   const upfrontShown = hasNoRecommendations ? '—' : upfrontCell;
   const savingsCell = hasNoRecommendations ? '—' : `${formatCurrency(purchase.estimated_savings)}/mo`;
 
@@ -1100,6 +796,13 @@ async function loadPlanAccountNames(planId: string, cardEl: Element): Promise<vo
 // actions that require an account (Add Purchases, Edit) are suppressed
 // — only History and Delete remain — and a read-only "Unassigned" badge
 // is shown so operators can identify and re-scope the plan.
+/** "n/m steps", or "--" when the step count is missing or not positive (#136). */
+function formatRampProgress(ramp: { current_step?: number; total_steps?: number }): string {
+  const total = ramp.total_steps;
+  if (typeof total !== 'number' || !Number.isFinite(total) || total <= 0) return '--';
+  return `${ramp.current_step || 0}/${total} steps`;
+}
+
 function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan: boolean, canAddPurchases: boolean): string {
   const info = extractPlanInfo(plan);
   const status = getStatusBadge(plan.enabled, plan.auto_purchase);
@@ -1155,7 +858,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Progress</span>
-            <span class="plan-detail-value">${rampSchedule.current_step || 0}/${rampSchedule.total_steps || 1} steps</span>
+            <span class="plan-detail-value">${formatRampProgress(rampSchedule)}</span>
           </div>
           ${showNextDate ? `
           <div class="plan-detail">
@@ -2242,7 +1945,7 @@ export async function openAddPurchasesModal(planId: string, planName: string, no
         <p class="help-text">Schedule additional purchases for <strong>${escapeHtml(planName)}</strong></p>
 
         <form id="add-purchases-form">
-          <input type="hidden" id="add-purchases-plan-id" value="${planId}">
+          <input type="hidden" id="add-purchases-plan-id" value="${escapeHtmlAttr(planId)}">
 
           <label>Number of Purchases:
             <input type="number" id="add-purchases-count" min="1" max="52" value="1" required>
