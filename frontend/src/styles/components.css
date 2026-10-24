@@ -1534,7 +1534,7 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 .cli-command {
     display: flex;
     align-items: center;
-    background: #f8f9fa;
+    background: var(--cudly-surface-muted);
     border: 1px solid var(--cudly-border);
     border-radius: 4px;
     padding: 0.5rem 0.75rem;

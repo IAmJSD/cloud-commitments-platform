@@ -6,6 +6,7 @@ import { Chart, registerables } from 'chart.js';
 import { getSavingsAnalytics, type SavingsAnalyticsResponse, type SavingsDataPoint } from '../api';
 import * as state from '../state';
 import { formatTrendAxisTick } from './chart-utils';
+import { applyChartDefaults, chartColor, withAlpha } from '../lib/chart-theme';
 
 // Register Chart.js components
 Chart.register(...registerables);
@@ -401,6 +402,9 @@ function renderSavingsChart(
         savingsChart.destroy();
     }
 
+    const periodColor = chartColor('--cudly-chart-2');
+    const cumulativeColor = chartColor('--cudly-chart-cumulative');
+    applyChartDefaults(Chart.defaults);
     savingsChart = new Chart(ctx, {
         type: 'line',
         data: {
@@ -408,8 +412,8 @@ function renderSavingsChart(
                 {
                     label: 'Period Savings',
                     data: periodSavingsData,
-                    borderColor: '#34a853',
-                    backgroundColor: 'rgba(52, 168, 83, 0.1)',
+                    borderColor: periodColor,
+                    backgroundColor: withAlpha(periodColor, 0.1),
                     fill: true,
                     tension: 0.3,
                     pointRadius: dataPoints.length > 50 ? 0 : 3,
@@ -419,8 +423,8 @@ function renderSavingsChart(
                 {
                     label: 'Cumulative Savings',
                     data: cumulativeSavingsData,
-                    borderColor: '#4285f4',
-                    backgroundColor: 'rgba(66, 133, 244, 0.05)',
+                    borderColor: cumulativeColor,
+                    backgroundColor: withAlpha(cumulativeColor, 0.05),
                     fill: false,
                     tension: 0.3,
                     borderDash: [5, 5],
@@ -458,7 +462,7 @@ function renderSavingsChart(
                     position: 'left',
                     beginAtZero: true,
                     grid: {
-                        color: 'rgba(0, 0, 0, 0.05)',
+                        color: chartColor('--cudly-chart-grid-faint'),
                     },
                     ticks: {
                         maxTicksLimit: 6,

@@ -80,6 +80,28 @@
     --cudly-shadow-md: 0 2px 6px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
     --cudly-shadow-lg: 0 8px 24px rgba(15, 23, 42, 0.08);
 
+    /* Charts (issue #699). Chart.js paints on canvas, so lib/chart-theme.ts
+     * reads these at render time; override them to restyle every chart.
+     * Series and legend colors must be #rrggbb (the charts derive shades
+     * from them). Keep lib/chart-theme.ts CHART_TOKEN_FALLBACKS in sync. */
+    --cudly-chart-1: #1a73e8;
+    --cudly-chart-2: #34a853;
+    --cudly-chart-3: #fbbc04;
+    --cudly-chart-4: #ea4335;
+    --cudly-chart-5: #9c27b0;
+    --cudly-chart-6: #00bcd4;
+    --cudly-chart-7: #ff5722;
+    --cudly-chart-8: #607d8b;
+    --cudly-chart-9: #795548;
+    --cudly-chart-10: #e91e63;
+    --cudly-chart-cumulative: #4285f4;
+    --cudly-chart-legend-dark: #37474f;
+    --cudly-chart-legend-mid: #78909c;
+    --cudly-chart-legend-border: #546e7a;
+    --cudly-chart-text: #666666;
+    --cudly-chart-grid: rgba(0, 0, 0, 0.1);
+    --cudly-chart-grid-faint: rgba(0, 0, 0, 0.05);
+
     /* Layout — used by the action-center shell (top bar + sidebar) */
     --cudly-topbar-h: 56px;
     --cudly-sidebar-w: 232px;
