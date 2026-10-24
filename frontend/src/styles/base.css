@@ -212,6 +212,20 @@ body {
     display: none;
 }
 
+/* Follow-up lines and call-to-action row in an empty-state card (issue
+ * #756 first-run onboarding on Opportunities and Home). */
+.empty-state p + p {
+    margin-top: var(--cudly-sp-2);
+}
+
+.empty-state-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--cudly-sp-3);
+    margin-top: var(--cudly-sp-4);
+}
+
 /* Help text */
 .help-text {
     color: var(--cudly-text-muted);

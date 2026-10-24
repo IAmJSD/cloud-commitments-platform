@@ -25,6 +25,7 @@ import type { RecommendationsResponse, LocalRecommendation, RecommendationsSumma
 import { openModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
+import { buildFirstRunEmptyState, isScopeFiltered } from './first-run-empty-state';
 
 // Issue #869: true when the current session can take any action on
 // recommendations (purchase or plan). Readonly/viewer sessions have neither
@@ -61,6 +62,10 @@ let checkedPurchaseModalInitialised = false;
 let purchaseModalOpenToken = 0;
 // Cache of account ID → name for column display
 let accountNamesCache: Map<string, string> = new Map();
+// Whether the last account-list fetch returned any accounts; null when it
+// failed, so the first-run empty state (issue #756) does not claim "no
+// accounts connected" on a transient error.
+let lastHasAccounts: boolean | null = null;
 
 /**
  * Returns the display name for a cloud account ID, falling back to the raw
@@ -406,7 +411,7 @@ async function pollUntilCollectionClears(): Promise<RecommendationsFreshness | n
  * actually happening, poll the freshness endpoint until the in-flight
  * marker clears, then reload -- same as if this call had started it.
  */
-function startRecommendationsRefresh(
+export function startRecommendationsRefresh(
   onReload: () => Promise<void> = loadRecommendations,
 ): Promise<void> {
   // Dedup: if a refresh is already in flight, don't start a second one.
@@ -602,7 +607,7 @@ export async function loadRecommendations(): Promise<void> {
 
     const [data, accounts, cfgResponse] = await Promise.all([
       api.getRecommendations(filters) as unknown as RecommendationsResponse,
-      api.listAccountsMinimal().catch(() => []),
+      api.listAccountsMinimal().catch(() => null),
       // issue #223: fetch GlobalConfig so per-cell variant selection and
       // bulk-toolbar defaults reflect the operator's configured preference.
       // Failure is siloed — a missing/unreachable config endpoint must not
@@ -625,7 +630,8 @@ export async function loadRecommendations(): Promise<void> {
       // (issue #282 dropped the toolbar dropdown; no longer need to seed
       // defaultBulkPurchaseState — the module-level cache is the source of truth).
     }
-    accountNamesCache = new Map(accounts.map(a => [a.id, a.name]));
+    accountNamesCache = new Map((accounts ?? []).map(a => [a.id, a.name]));
+    lastHasAccounts = accounts ? accounts.length > 0 : null;
 
     // Issue #463: gate the Opportunities list by the Settings →
     // General → Enabled Providers preference. The backend currently
@@ -2666,6 +2672,31 @@ function rebindOpenPopoverAnchor(): void {
 // renderRecommendationsList itself (against the post-filter visible set),
 // so this helper doesn't need to call renderRecommendationsSummary
 // separately — every entry to renderRecommendationsList covers it.
+/**
+ * Clears every column filter. Re-fetches when a server-pushed-down column
+ * (service/region/account) was filtered, since the loaded set itself was
+ * narrowed; otherwise a client-side rerender is enough.
+ */
+function clearAllColumnFilters(): void {
+  const active = Object.keys(state.getRecommendationsColumnFilters()) as state.RecommendationsColumnId[];
+  const refetch = active.some((c) => SERVER_PUSHDOWN_COLUMNS.has(c));
+  state.clearAllRecommendationsColumnFilters();
+  saveColumnFilters(state.getRecommendationsColumnFilters());
+  if (refetch) void loadRecommendations();
+  else rerenderRecommendations();
+}
+
+/**
+ * Hides (or restores) the summary cards, filter-status bar and bottom action
+ * box around the list. Used by the first-run empty state (issue #756), where
+ * zero counts and a disabled Purchase bar only add noise.
+ */
+function setOpportunitiesChromeHidden(hidden: boolean): void {
+  for (const id of ['recommendations-summary', 'recommendations-filter-status', 'recommendations-action-box']) {
+    document.getElementById(id)?.classList.toggle('hidden', hidden);
+  }
+}
+
 function rerenderRecommendations(): void {
   const loaded = state.getRecommendations() as unknown as LocalRecommendation[];
   renderRecommendationsList(loaded);
@@ -2894,11 +2925,7 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
       badge = document.createElement('button');
       badge.type = 'button';
       badge.className = 'clear-filters';
-      badge.addEventListener('click', () => {
-        state.clearAllRecommendationsColumnFilters();
-        saveColumnFilters(state.getRecommendationsColumnFilters());
-        rerenderRecommendations();
-      });
+      badge.addEventListener('click', clearAllColumnFilters);
       bar.insertBefore(badge, live);
     }
     badge.textContent = `Clear filters (${activeCount})`;
@@ -4807,6 +4834,27 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // Mount once; update is per-render below.
   mountBottomActionBox();
 
+  // Issue #756: nothing loaded and no column filter narrowing the fetch is a
+  // first run (or an empty scope), not a filter miss. Show an onboarding card
+  // instead of an empty 15-column table, $0 summary cards and a Purchase bar
+  // that can never enable. The summary and action box stay rendered (disabled)
+  // but hidden, so state is coherent once rows arrive.
+  const firstRun = (loadedRecs?.length ?? 0) === 0
+    && Object.keys(state.getRecommendationsColumnFilters()).length === 0;
+  setOpportunitiesChromeHidden(firstRun);
+  if (firstRun) {
+    lastVisibleGroupKeys = [];
+    updateBottomActionBox(0, 0);
+    teardownSkeleton(container);
+    container.replaceChildren(buildFirstRunEmptyState({
+      hasAccounts: lastHasAccounts,
+      scopeFiltered: isScopeFiltered(state.getCurrentProvider(), state.getCurrentAccountIDs()),
+      onRefresh: () => startRecommendationsRefresh(loadRecommendations),
+      loadFreshness: getRecommendationsFreshness,
+    }));
+    return;
+  }
+
   const emptyResult = !recommendations || recommendations.length === 0;
   if (emptyResult) {
     lastVisibleGroupKeys = [];
@@ -4845,6 +4893,15 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
       td.setAttribute('colspan', String(colspan));
       td.className = 'empty';
       td.textContent = 'No rows match these filters.';
+      // Issue #756: give the hint a next step right where the user looks.
+      if (Object.keys(state.getRecommendationsColumnFilters()).length > 0) {
+        const clearBtn = document.createElement('button');
+        clearBtn.type = 'button';
+        clearBtn.className = 'btn-small empty-clear-filters';
+        clearBtn.textContent = 'Clear filters';
+        clearBtn.addEventListener('click', clearAllColumnFilters);
+        td.append(' ', clearBtn);
+      }
       tr.appendChild(td);
       tbody.appendChild(tr);
     }

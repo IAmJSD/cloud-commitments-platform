@@ -11,7 +11,9 @@ import type { SavingsDataPoint } from './api';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 import { canAccess } from './permissions';
-import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale } from './recommendations';
+import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale, startRecommendationsRefresh } from './recommendations';
+import { getRecommendationsFreshness } from './api/recommendations';
+import { buildFirstRunEmptyState, isScopeFiltered } from './first-run-empty-state';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
 import { formatTrendAxisTick } from './modules/chart-utils';
 // Re-export for backward compatibility (tests and other callers import from dashboard.ts).
@@ -208,10 +210,14 @@ export async function loadDashboard(): Promise<void> {
     // move the range computation server-side if needed.
     // Promise.allSettled ensures the dashboard still renders if any individual
     // fetch fails -- each card falls back gracefully.
-    const [summaryResult, upcomingResult, recsResult] = await Promise.allSettled([
+    const [summaryResult, upcomingResult, recsResult, accountsResult] = await Promise.allSettled([
       api.getDashboardSummary(currentProvider, currentAccountIDs),
       api.getUpcomingPurchases(),
       api.getRecommendations({ provider: currentProvider, account_ids: currentAccountIDs }),
+      // Only feeds the first-run onboarding card (issue #756); wrapped so a
+      // missing or failing endpoint degrades to "unknown" instead of
+      // breaking the dashboard.
+      Promise.resolve().then(() => api.listAccountsMinimal()),
     ]);
 
     const summaryData = summaryResult.status === 'fulfilled' ? (summaryResult.value as DashboardSummary) : null;
@@ -248,6 +254,13 @@ export async function loadDashboard(): Promise<void> {
     const filterDesc = buildFilterDesc(currentProvider, currentAccountIDs);
 
     renderDashboardSummary(summaryData, recs);
+    renderHomeOnboarding(
+      recsResult.status === 'fulfilled' && recs.length === 0 && !summaryData.active_commitments,
+      accountsResult.status === 'fulfilled' && Array.isArray(accountsResult.value)
+        ? accountsResult.value.length > 0
+        : null,
+      isScopeFiltered(currentProvider, currentAccountIDs),
+    );
     // Single merged per-service chart (#908): potential range from recs +
     // current-savings underlay from the summary's by_service map.
     renderSavingsByService(recs, summaryData.by_service || {}, filterDesc);
@@ -287,6 +300,28 @@ export async function loadDashboard(): Promise<void> {
     const upcoming = document.getElementById('upcoming-list');
     if (upcoming) teardownSkeleton(upcoming);
   }
+}
+
+/**
+ * Issue #756: first-run onboarding card at the top of Home. Shown when no
+ * recommendations loaded and nothing is committed yet, so a new user gets a
+ * pointer to connecting an account (or refreshing) instead of a page of
+ * "--" tiles and empty charts.
+ */
+function renderHomeOnboarding(show: boolean, hasAccounts: boolean | null, scopeFiltered: boolean): void {
+  const host = document.getElementById('home-onboarding');
+  if (!host) return;
+  host.classList.toggle('hidden', !show);
+  if (!show) {
+    host.replaceChildren();
+    return;
+  }
+  host.replaceChildren(buildFirstRunEmptyState({
+    hasAccounts,
+    scopeFiltered,
+    onRefresh: () => startRecommendationsRefresh(loadDashboard),
+    loadFreshness: getRecommendationsFreshness,
+  }));
 }
 
 function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalRecommendation[]): void {

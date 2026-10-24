@@ -271,6 +271,11 @@ main {
     margin: 0 auto;
 }
 
+/* Issue #756: first-run onboarding card above the Home KPI tiles. */
+#home-onboarding {
+    margin-bottom: 1.5rem;
+}
+
 #summary {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
