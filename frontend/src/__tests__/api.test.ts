@@ -36,6 +36,7 @@ import {
   getPublicInfo,
   getDeploymentInfo
 } from '../api';
+import { base64Encode } from '../api/client';
 import type { CreatePlanRequest, Config, Recommendation } from '../api';
 
 describe('Authentication', () => {
@@ -660,6 +661,47 @@ describe('API Requests', () => {
       // tab on the same origin inherits the session.
       expect(localStorageMock.setItem).toHaveBeenCalledWith('authToken', 'admin-token');
     });
+
+    test('a non-JSON error body (proxy 502) yields a readable message, not a SyntaxError', async () => {
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: () => Promise.reject(new SyntaxError('Unexpected token < in JSON at position 0')),
+      });
+
+      await expect(setupAdmin('api-key', 'admin@example.com', 'password'))
+        .rejects.toThrow('Failed to create admin (HTTP 502)');
+    });
+
+    test('a JSON error body still surfaces the server message', async () => {
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: () => Promise.resolve({ error: 'password too weak' }),
+      });
+
+      await expect(setupAdmin('api-key', 'admin@example.com', 'password')).rejects.toThrow('password too weak');
+    });
+  });
+
+  describe('base64Encode', () => {
+    test('Latin-1 passwords keep the exact bytes btoa has always sent', () => {
+      expect(base64Encode('password')).toBe(btoa('password'));
+      expect(base64Encode('caf\u00e9')).toBe(btoa('caf\u00e9'));
+    });
+
+    test('non-Latin-1 passwords are sent as UTF-8 instead of throwing', () => {
+      const pw = 'it\u2019s a \u5bc6\u7801 \u{1F511}';
+      const encoded = base64Encode(pw);
+      expect(Buffer.from(encoded, 'base64').toString('utf8')).toBe(pw);
+    });
+
+    test('login with a non-Latin-1 password reaches the network', async () => {
+      fetchMock.mockResolvedValue({ ok: true, json: () => Promise.resolve({ token: 't' }) });
+      await login('user@example.com', 'p\u00e4ss\u2014w\u00f6rd \u{1F600}');
+      const body = JSON.parse(fetchMock.mock.calls[fetchMock.mock.calls.length - 1][1].body as string) as { password: string };
+      expect(Buffer.from(body.password, 'base64').toString('utf8')).toBe('p\u00e4ss\u2014w\u00f6rd \u{1F600}');
+    });
   });
 });
 
@@ -1061,12 +1103,10 @@ describe('Public Info API', () => {
       expect(fetchMock).toHaveBeenCalledWith('/api/info');
     });
 
-    test('returns default values on error', async () => {
-      fetchMock.mockResolvedValue({ ok: false });
+    test('throws with the HTTP status on a non-OK response instead of fabricating admin_exists: false', async () => {
+      fetchMock.mockResolvedValue({ ok: false, status: 502 });
 
-      const info = await getPublicInfo();
-      expect(info.version).toBe('');
-      expect(info.admin_exists).toBe(false);
+      await expect(getPublicInfo()).rejects.toMatchObject({ status: 502, message: expect.stringContaining('HTTP 502') });
     });
   });
 
@@ -1086,12 +1126,10 @@ describe('Public Info API', () => {
       expect(fetchMock).toHaveBeenCalledWith('/api/info/deployment', expect.objectContaining({}));
     });
 
-    test('returns empty object on error', async () => {
-      fetchMock.mockResolvedValue({ ok: false });
+    test('throws with the HTTP status on a non-OK response', async () => {
+      fetchMock.mockResolvedValue({ ok: false, status: 401 });
 
-      const info = await getDeploymentInfo();
-      expect(info.api_key_secret_url).toBeUndefined();
-      expect(info.deployment_aws_account_id).toBeUndefined();
+      await expect(getDeploymentInfo()).rejects.toMatchObject({ status: 401 });
     });
   });
 });
