@@ -140,6 +140,14 @@ body {
     border-radius: 4px;
 }
 
+/* The global reset zeroes <p> margins, so a Retry button placed right after
+   an inline error (Admin > Users sections, Home upcoming widget) sat flush
+   against the box. Gap the button rather than the box: most .error boxes are
+   the only child of their container and must not gain trailing space. */
+.error:not(.hidden) + button {
+    margin-top: var(--cudly-sp-4);
+}
+
 /* Inline empty state — used WITHIN a card or section that already has
  * its own surface. Subtle muted pill so it reads as "this slot is
  * empty" without competing with the card chrome around it. Standalone
