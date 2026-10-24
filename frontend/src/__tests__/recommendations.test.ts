@@ -1235,6 +1235,49 @@ describe('Recommendations Module', () => {
       expect(savingsHeader?.innerHTML).toContain('active');
     });
 
+    describe('header keyboard semantics (issue #755)', () => {
+      test('header is a plain th with aria-sort and sibling sort and filter buttons', async () => {
+        await loadRecommendations();
+        const savings = document.querySelector<HTMLTableCellElement>('th[data-sort="savings"]');
+        expect(savings?.getAttribute('role')).toBeNull();
+        expect(savings?.hasAttribute('tabindex')).toBe(false);
+        expect(savings?.getAttribute('aria-sort')).toBe('descending');
+        expect(document.querySelector('th[data-sort="upfront_cost"]')?.hasAttribute('aria-sort')).toBe(false);
+        const sortBtn = savings?.querySelector('button.sort-btn');
+        const filterBtn = savings?.querySelector('button.column-filter-btn');
+        expect(sortBtn?.textContent).toContain('Savings');
+        expect(filterBtn).not.toBeNull();
+        expect(sortBtn?.contains(filterBtn ?? null)).toBe(false);
+      });
+
+      test('Enter on a column-filter button does not sort', async () => {
+        await loadRecommendations();
+        (state.setRecommendationsSort as jest.Mock).mockClear();
+        const filterBtn = document.querySelector<HTMLButtonElement>('th[data-sort="service"] .column-filter-btn');
+        filterBtn?.focus();
+        const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+        filterBtn?.dispatchEvent(enter);
+        expect(enter.defaultPrevented).toBe(false);
+        expect(state.setRecommendationsSort).not.toHaveBeenCalled();
+        // Native Enter activation of a <button> is a click, which opens the popover.
+        filterBtn?.click();
+        expect(document.querySelector('.column-filter-popover')).not.toBeNull();
+        expect(state.setRecommendationsSort).not.toHaveBeenCalled();
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      });
+
+      test('activating the sort button sorts and keeps focus on the re-rendered sort button', async () => {
+        await loadRecommendations();
+        const sortBtn = document.querySelector<HTMLButtonElement>('th[data-sort="upfront_cost"] .sort-btn');
+        sortBtn?.focus();
+        sortBtn?.click();
+        expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: 'upfront_cost', direction: 'asc' });
+        const active = document.activeElement;
+        expect(active?.classList.contains('sort-btn')).toBe(true);
+        expect(active?.closest('th')?.getAttribute('data-sort')).toBe('upfront_cost');
+      });
+    });
+
     test('clicking a sortable header calls setRecommendationsSort', async () => {
       await loadRecommendations();
       const header = document.querySelector<HTMLTableCellElement>('th[data-sort="upfront_cost"]');
