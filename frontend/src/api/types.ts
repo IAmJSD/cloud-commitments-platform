@@ -120,6 +120,13 @@ export interface UpcomingPurchase {
   created_by_user_id?: string;
 }
 
+// GET /api/dashboard/upcoming wraps the rows in an object (#1189). The Go
+// handler builds the slice with `var upcoming []UpcomingPurchase`, so an
+// empty result serializes as `purchases: null`, not `[]`.
+export interface UpcomingPurchasesResponse {
+  purchases: UpcomingPurchase[] | null;
+}
+
 // Recommendation types
 export interface Recommendation {
   id: string;
@@ -294,6 +301,8 @@ export interface HistoryFilters {
   provider?: Provider;
   planId?: string;
   account_ids?: string[];
+  /** next_cursor from the previous page, to fetch the rows after it. */
+  cursor?: string;
 }
 
 // Config types
@@ -957,6 +966,10 @@ export interface ApiError extends Error {
   // See internal/api/handler.go for the flattening — keys are
   // promoted to the top level of the JSON body.
   details?: Record<string, unknown>;
+  // Raw technical text behind a user-facing message (e.g. "HTTP 502 from
+  // /api/x", "timed out after 90000ms", the browser's fetch error), kept
+  // for the console and support while `message` stays readable (#748).
+  detail?: string;
 }
 
 export interface RequestOptions extends RequestInit {

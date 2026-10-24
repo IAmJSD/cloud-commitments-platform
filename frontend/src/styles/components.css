@@ -836,7 +836,7 @@ th .column-filter-btn.active {
  * up the design tokens so colors + spacing + radii sit in the same
  * visual family as the rest of the action-center reskin. Drawer is
  * tracked as a deferred sub-task in #340. */
-:root { --action-box-height: 80px; }
+:root { --action-box-height: 80px; --action-box-offset: var(--action-box-height); }
 .recommendations-action-box {
     position: sticky;
     bottom: 0;
@@ -889,7 +889,7 @@ th .column-filter-btn.active {
     gap: 0.4rem;
     font-size: 0.9em;
 }
-#recommendations-list { padding-bottom: var(--action-box-height); }
+#recommendations-list { padding-bottom: var(--action-box-offset, var(--action-box-height)); }
 
 tr.recommendation-row {
     cursor: pointer;
@@ -1478,13 +1478,22 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 
 /* Subline rendered under the Pending badge in the Purchase History Status
  * column. Surfaces the approver's email address (the recipient of the
- * approval email) so the user knows which inbox to check.
+ * approval email) so the user knows which inbox to check. .status-detail
+ * reuses it for the failure reason under an RI exchange history badge.
  */
-.history-approver {
+.history-approver,
+.status-detail {
     margin-top: 0.35rem;
     font-size: 0.78rem;
     color: var(--cudly-text-muted);
     line-height: 1.25;
+}
+
+/* Cap the failure reason so a long AWS error wraps instead of squeezing the
+ * other history columns. */
+.status-detail {
+    max-width: 18rem;
+    overflow-wrap: anywhere;
 }
 
 .history-approver strong {

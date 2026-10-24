@@ -261,6 +261,21 @@ describe('openExchangeModal', () => {
     document.querySelector<HTMLButtonElement>('.modal-confirm-close')?.click();
   });
 
+  it('shows the hourly price change in the quote summary (issue #709)', async () => {
+    (api.getExchangeQuote as jest.Mock).mockResolvedValueOnce({
+      IsValidExchange: true, ValidationFailureReason: '', CurrencyCode: 'USD', PaymentDueRaw: '12.50',
+      SourceHourlyPriceRaw: '0.1000', SourceRemainingUpfrontRaw: '', SourceRemainingTotalRaw: '',
+      TargetHourlyPriceRaw: '0.1250', TargetRemainingUpfrontRaw: '', TargetRemainingTotalRaw: '', Region: 'us-west-2',
+    });
+    openExchangeModal('ri-abc', 3, 'm5.large', [
+      { instance_type: 'm5.large', offering_id: '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91', effective_monthly_cost: 42.5 },
+    ]);
+    Array.from(modal.querySelectorAll('button')).find((b) => b.textContent === 'Get Quote')?.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const rows = Array.from(modal.querySelectorAll('.quote-row')).map((r) => r.textContent);
+    expect(rows).toContain('Hourly Price Change:+0.0250 USD/hr, about +18.25 USD/month');
+  });
+
   it('invalidates a fetched quote when the count changes, hiding Execute (issue #244)', async () => {
     const mockGetQuote = api.getExchangeQuote as jest.Mock;
     mockGetQuote.mockResolvedValueOnce({

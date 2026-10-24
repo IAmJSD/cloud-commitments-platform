@@ -23,6 +23,7 @@ import {
 import { formatCurrency, formatDate, amortizedMonthly } from './utils';
 import * as state from './state';
 import { switchInventorySubTab } from './navigation';
+import { ownValue } from './lib/own-property';
 
 type InventorySubSection = 'active-commitments' | 'coverage' | 'trends' | 'ri-exchange';
 
@@ -446,7 +447,7 @@ function buildProviderSection(
   const header = document.createElement('div');
   header.className = 'section-header';
 
-  const providerLabel = PROVIDER_DISPLAY_NAMES[section.provider] ?? section.provider.toUpperCase();
+  const providerLabel = ownValue(PROVIDER_DISPLAY_NAMES, section.provider) ?? section.provider.toUpperCase();
 
   const title = document.createElement('h3');
   title.textContent = providerLabel;

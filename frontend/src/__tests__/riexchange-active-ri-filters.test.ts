@@ -265,4 +265,63 @@ describe('Active Convertible RIs column filters (issue #1414)', () => {
     expect(state.setRiExchangeColumnFilter).toHaveBeenCalledWith('source_count', { kind: 'expr', expr: '>1' });
     expect(state.setActiveRiColumnFilter).not.toHaveBeenCalled();
   });
+
+  // Issue #729 (UX-27): Escape used to drop focus to <body>. It must close
+  // the popover and land back on the column's filter button, the way the
+  // History popover does.
+  test('Escape closes the Active RI popover and returns focus to its trigger', async () => {
+    await load();
+    const btn = document.querySelector<HTMLButtonElement>(
+      '#ri-exchange-instances-list th .column-filter-btn[data-column="instance_type"]',
+    )!;
+    btn.focus();
+    btn.click();
+    const popover = document.body.querySelector('.column-filter-popover')!;
+    expect(popover.contains(document.activeElement)).toBe(true);
+
+    const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+    document.activeElement!.dispatchEvent(esc);
+
+    expect(document.body.querySelector('.column-filter-popover')).toBeNull();
+    expect(esc.defaultPrevented).toBe(true);
+    expect(btn.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(btn);
+  });
+
+  test('Escape closes the reshape popover and returns focus to its trigger', async () => {
+    (api.getReshapeRecommendations as jest.Mock).mockResolvedValue({
+      recommendations: [{
+        source_ri_id: 'ri-1', source_instance_type: 'm5.xlarge', source_count: 4,
+        target_instance_type: 'm5.large', target_count: 8, utilization_percent: 50,
+        normalized_used: 4, normalized_purchased: 8, reason: 'underutilized',
+      }],
+      recs_staleness: '',
+      recs_collected_at: null,
+    });
+    await load();
+    const btn = document.querySelector<HTMLButtonElement>(
+      '#ri-exchange-recommendations-list .column-filter-btn[data-column]',
+    )!;
+    expect(btn).not.toBeNull();
+    btn.focus();
+    btn.click();
+    expect(document.body.querySelector('.column-filter-popover')).not.toBeNull();
+
+    document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+
+    expect(document.body.querySelector('.column-filter-popover')).toBeNull();
+    expect(document.activeElement).toBe(btn);
+  });
+
+  test('closing by clicking outside does not move focus', async () => {
+    await load();
+    const btn = document.querySelector<HTMLButtonElement>(
+      '#ri-exchange-instances-list th .column-filter-btn[data-column="instance_type"]',
+    )!;
+    btn.click();
+    const outside = document.getElementById('ri-exchange-history-list')!;
+    outside.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(document.body.querySelector('.column-filter-popover')).toBeNull();
+    expect(document.activeElement).not.toBe(btn);
+  });
 });
