@@ -78,6 +78,26 @@ describe('ladder.ts', () => {
     ]);
   });
 
+  test('config modal moves focus inside, traps Tab, closes on Escape and restores focus (#731)', async () => {
+    await renderSection([baseConfig({ id: 'config-1' })]);
+    const editBtn = document.querySelector<HTMLButtonElement>('.ladder-edit-btn')!;
+    editBtn.focus();
+    editBtn.click();
+
+    const modal = document.getElementById('ladder-config-modal')!;
+    expect(modal).not.toHaveClass('hidden');
+    expect(modal).toHaveAttribute('role', 'dialog');
+    expect(modal.contains(document.activeElement)).toBe(true);
+
+    // Shift+Tab from the first focusable wraps to the last one inside the modal.
+    modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
+    expect(modal.contains(document.activeElement)).toBe(true);
+
+    modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(modal).toHaveClass('hidden');
+    expect(document.activeElement).toBe(editBtn);
+  });
+
   test('lookback input advertises the 10-day baseline minimum', async () => {
     await renderSection([baseConfig({ id: 'config-1' })]);
     expect(document.getElementById('ladder-cfg-lookback-days')).toHaveAttribute('min', '10');

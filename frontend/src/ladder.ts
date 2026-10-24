@@ -16,6 +16,7 @@
 import * as api from './api';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
+import { openModal, closeModal } from './modal';
 import { canAccess } from './permissions';
 import { initLadderTimeline } from './ladder-timeline';
 import { initLadderAccountSelector } from './ladder-account-selector';
@@ -159,9 +160,11 @@ export function renderConfigTable(configs: api.LadderConfig[]): void {
 // MODAL CLOSE WIRING
 // ==========================================
 
-// closeLadderModal hides the per-account config modal.
+// closeLadderModal hides the per-account config modal through the shared
+// helper, which also releases the focus trap and restores focus (#731).
 function closeLadderModal(): void {
-  document.getElementById('ladder-config-modal')?.classList.add('hidden');
+  const modal = document.getElementById('ladder-config-modal');
+  if (modal) closeModal(modal);
 }
 
 // wireModalCloseButtons attaches click listeners to the modal's × and Cancel
@@ -252,7 +255,8 @@ function openLadderConfigModal(existing?: api.LadderConfig): void {
     existing?.ramp_schedule ? JSON.stringify(existing.ramp_schedule, null, 2) : defaultRamp);
 
   selectedAccount = initLadderAccountSelector(document.getElementById('ladder-config-form')!, existing);
-  modal.classList.remove('hidden');
+  // openModal shows it, moves focus inside, traps Tab and closes on Escape (#731).
+  openModal(modal);
 }
 
 // Exported for unit testing (see renderConfigTable note).

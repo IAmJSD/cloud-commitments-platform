@@ -133,9 +133,12 @@ describe('categorical commits', () => {
     expect(onCommit).toHaveBeenLastCalledWith('plans', 'provider', null);
   });
 
-  test('Clear writes an explicit empty allow-list', () => {
+  test('Select none writes an explicit empty allow-list', () => {
     openFor('plans', 'provider');
-    document.querySelector<HTMLButtonElement>('.column-filter-clear')!.click();
+    const btn = document.querySelector<HTMLButtonElement>('.column-filter-clear')!;
+    // #727 (UX-28): it hides every row, so it is not labelled "Clear".
+    expect(btn.textContent).toBe('Select none');
+    btn.click();
     expect(onCommit).toHaveBeenLastCalledWith('plans', 'provider', { kind: 'set', values: [] });
     expect(box('azure').checked).toBe(false);
   });
@@ -168,7 +171,9 @@ describe('numeric commits', () => {
     filters['plans:count'] = { kind: 'expr', expr: '5' };
     openFor('plans', 'count');
     expect(exprInput().value).toBe('5');
-    document.querySelector<HTMLButtonElement>('.column-filter-clear')!.click();
+    const btn = document.querySelector<HTMLButtonElement>('.column-filter-clear')!;
+    expect(btn.textContent).toBe('Clear');
+    btn.click();
     expect(exprInput().value).toBe('');
     expect(onCommit).toHaveBeenLastCalledWith('plans', 'count', null);
   });
