@@ -42,7 +42,7 @@ jest.mock('../permissions', () => ({
 // must still resolve+return the sub-section (default-first) because
 // navigation.switchInventorySubTab uses the return value to build the URL.
 jest.mock('../inventory', () => {
-  const VALID = ['active-commitments', 'coverage', 'ri-exchange'];
+  const VALID = ['active-commitments', 'coverage', 'trends', 'ri-exchange'];
   const DEFAULT = 'active-commitments';
   const isValid = (n: string): boolean => VALID.includes(n);
   return {
@@ -513,7 +513,7 @@ describe('Navigation Module', () => {
       },
     );
 
-    test.each(['active-commitments', 'coverage', 'ri-exchange'])(
+    test.each(['active-commitments', 'coverage', 'trends', 'ri-exchange'])(
       'a deep-linked /inventory/%s keeps its sub-tab segment',
       (sub) => {
         window.history.replaceState(null, '', '/inventory/' + sub);
