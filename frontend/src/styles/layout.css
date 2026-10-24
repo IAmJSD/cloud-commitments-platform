@@ -271,6 +271,11 @@ main {
     margin: 0 auto;
 }
 
+/* Issue #756: first-run onboarding card above the Home KPI tiles. */
+#home-onboarding {
+    margin-bottom: 1.5rem;
+}
+
 #summary {
     display: grid;
     /* Four KPI cards: 4 across, then 2x2, then 1 column (breakpoints in

@@ -119,9 +119,40 @@ html {
 
 body {
     font-family: var(--cudly-font-base);
+    line-height: var(--cudly-lh-normal);
     background: var(--cudly-bg);
     color: var(--cudly-text);
 }
+
+/* Form controls do not inherit the page font by default (inputs fall back
+ * to 13.33px system text next to 14px buttons). Inherit family and weight,
+ * then pin the size to the button size and keep the line-height tight so
+ * control heights stay as they were. Element selectors, so the existing
+ * `select`, `button` and class rules later in the cascade still win. */
+button,
+input,
+select,
+textarea {
+    font: inherit;
+    font-size: var(--cudly-fs-sm);
+    line-height: var(--cudly-lh-tight);
+}
+
+/* Base heading scale on the type tokens, close to the browser defaults it
+ * replaces (h1 32px -> 28px, h2 24px -> 22px, h5/h6 grow to 14px). Weight
+ * stays the browser's bold so headings that only set a size keep their
+ * look. :where() keeps it at zero specificity so every contextual heading
+ * rule (.card h3, .page-hero h2, ...) still overrides it. */
+:where(h1, h2, h3, h4, h5, h6) {
+    line-height: var(--cudly-lh-tight);
+    font-weight: var(--cudly-fw-bold);
+}
+
+:where(h1) { font-size: var(--cudly-fs-2xl); }
+:where(h2) { font-size: var(--cudly-fs-xl); }
+:where(h3) { font-size: var(--cudly-fs-lg); }
+:where(h4) { font-size: var(--cudly-fs-md); }
+:where(h5, h6) { font-size: var(--cudly-fs-sm); }
 
 /* Default keyboard focus ring. Zero specificity (:where) so a component that
  * draws its own focus style keeps it; everything else gets a visible ring. */
@@ -243,10 +274,24 @@ body {
     display: none;
 }
 
+/* Follow-up lines and call-to-action row in an empty-state card (issue
+ * #756 first-run onboarding on Opportunities and Home). */
+.empty-state p + p {
+    margin-top: var(--cudly-sp-2);
+}
+
+.empty-state-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--cudly-sp-3);
+    margin-top: var(--cudly-sp-4);
+}
+
 /* Help text */
 .help-text {
     color: var(--cudly-text-muted);
-    font-size: 0.875rem;
+    font-size: var(--cudly-fs-sm);
     margin-bottom: 0.75rem;
 }
 

@@ -54,7 +54,7 @@
     border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     margin-top: 0.25rem;
-    font-size: 0.9rem;
+    font-size: var(--cudly-fs-sm);
 }
 
 .modal-content textarea {
@@ -121,7 +121,7 @@
 .modal-hint a {
     color: var(--cudly-primary);
     text-decoration: none;
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
 }
 
 .modal-hint a:hover {
@@ -290,7 +290,7 @@
 }
 
 .archera-page-lead {
-    font-size: 1rem;
+    font-size: var(--cudly-fs-md);
     color: #555;
     line-height: 1.6;
     margin-bottom: 1rem;
@@ -355,8 +355,8 @@
     text-decoration: none;
     padding: 0.65rem 1.5rem;
     border-radius: 4px;
-    font-size: 1rem;
-    font-weight: 500;
+    font-size: var(--cudly-fs-md);
+    font-weight: var(--cudly-fw-medium);
     transition: background var(--cudly-dur) var(--cudly-ease);
 }
 
@@ -470,7 +470,7 @@
     padding: 0.55rem 1.1rem;
     border-radius: 4px;
     font-size: 0.92rem;
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
     transition: background var(--cudly-dur) var(--cudly-ease);
 }
 
