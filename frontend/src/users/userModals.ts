@@ -15,7 +15,7 @@ import {
   availableGroups
 } from './state';
 import { escapeHtml, showError, showSuccess, validateGroupCombination } from './utils';
-import { loadUsers } from './userActions';
+import { loadUsers, refreshCurrentUserAccess } from './userActions';
 import { openModal, closeModal } from '../modal';
 import { clearFieldErrors, showFieldError } from '../lib/field-errors';
 
@@ -177,6 +177,7 @@ async function submitUserForm(): Promise<void> {
         email,
         groups: selectedGroups
       });
+      await refreshCurrentUserAccess([currentEditingUser.id]);
       showSuccess('User updated successfully');
     } else {
       // Create new user. Password is optional: if blank, the backend
