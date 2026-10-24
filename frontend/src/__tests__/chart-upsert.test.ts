@@ -3,8 +3,9 @@
  * so the entry animation doesn't replay on every filter or range change.
  */
 jest.mock('chart.js', () => {
-  const MockChart = jest.fn().mockImplementation((canvas: HTMLCanvasElement, config: { data: unknown; options?: unknown }) => ({
+  const MockChart = jest.fn().mockImplementation((canvas: HTMLCanvasElement, config: { type: string; data: unknown; options?: unknown }) => ({
     canvas,
+    config: { type: config.type },
     data: config.data,
     options: config.options,
     update: jest.fn(),
@@ -18,8 +19,8 @@ import { upsertChart } from '../modules/chart-utils';
 
 type MockInstance = { canvas: HTMLCanvasElement; data: unknown; options: unknown; update: jest.Mock; destroy: jest.Mock };
 
-const config = (value: number): ChartConfiguration => ({
-  type: 'line',
+const config = (value: number, type: 'line' | 'bar' = 'line'): ChartConfiguration => ({
+  type,
   data: { datasets: [{ label: 'x', data: [value] }] },
   options: { responsive: true },
 });
@@ -57,6 +58,19 @@ describe('upsertChart', () => {
     expect((first as unknown as MockInstance).destroy).toHaveBeenCalledTimes(1);
     expect(second).not.toBe(first);
     expect((second as unknown as MockInstance).canvas).toBe(fresh);
+    expect(Chart).toHaveBeenCalledTimes(2);
+  });
+
+  // #749's Purchases series toggle switches between a line and a bar chart;
+  // Chart.js can't change the chart type of an instance in place.
+  test('recreates the chart when the chart type changes', () => {
+    const canvas = document.createElement('canvas');
+    const first = upsertChart(null, canvas, config(1, 'bar'));
+    const second = upsertChart(first, canvas, config(2, 'line'));
+
+    expect((first as unknown as MockInstance).destroy).toHaveBeenCalledTimes(1);
+    expect((first as unknown as MockInstance).update).not.toHaveBeenCalled();
+    expect(second).not.toBe(first);
     expect(Chart).toHaveBeenCalledTimes(2);
   });
 });

@@ -1114,7 +1114,7 @@ describe('Dashboard Module', () => {
     test('a second load updates the trend chart in place without animation (#747)', async () => {
       const update = jest.fn();
       const destroy = jest.fn();
-      (Chart as unknown as jest.Mock).mockImplementationOnce((canvas: HTMLCanvasElement) => ({ canvas, update, destroy }));
+      (Chart as unknown as jest.Mock).mockImplementationOnce((canvas: HTMLCanvasElement, config: { type: string }) => ({ canvas, config, update, destroy }));
       (api.getSavingsAnalytics as jest.Mock)
         .mockResolvedValueOnce({ data_points: [
           { timestamp: '2025-12-31T00:00:00Z', cumulative_savings: 0 },
@@ -1134,6 +1134,51 @@ describe('Dashboard Module', () => {
       // The trend chart is module state; drop it so later tests start fresh.
       (api.getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: [] });
       await loadSavingsTrendChart();
+    });
+
+    // #744: summary label + table for the trend chart.
+    test('describes the plotted series and lists every point as a table (#744)', async () => {
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [
+        { timestamp: '2026-01-01T00:00:00Z', cumulative_savings: 100 },
+        { timestamp: '2026-01-02T00:00:00Z', cumulative_savings: 250 },
+      ] });
+
+      await loadSavingsTrendChart();
+
+      const label = document.getElementById('savings-trend-chart')?.getAttribute('aria-label') ?? '';
+      expect(label).toContain('cumulative savings over the last');
+      expect(label).toContain('$250');
+      expect(label).toContain('2 data points');
+      const rows = document.querySelectorAll('#savings-trend-table tbody tr');
+      expect(rows).toHaveLength(2);
+      expect(rows[1]?.querySelector('td')?.textContent).toBe('$250');
+    });
+
+    // Two points: one point is the sparse-data state (#1334), which draws
+    // no chart and so has no table.
+    const twoTrendPoints = [
+      { timestamp: '2026-01-01T00:00:00Z', cumulative_savings: 100 },
+      { timestamp: '2026-01-02T00:00:00Z', cumulative_savings: 150 },
+    ];
+
+    test('removes the trend table when there is no data to plot (#744)', async () => {
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: twoTrendPoints });
+      await loadSavingsTrendChart();
+      expect(document.getElementById('savings-trend-table')).not.toBeNull();
+
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: [] });
+      await loadSavingsTrendChart();
+      expect(document.getElementById('savings-trend-table')).toBeNull();
+    });
+
+    test('removes the trend table in the sparse-data state (#744, #1334)', async () => {
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: twoTrendPoints });
+      await loadSavingsTrendChart();
+      expect(document.getElementById('savings-trend-table')).not.toBeNull();
+
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: [twoTrendPoints[0]] });
+      await loadSavingsTrendChart();
+      expect(document.getElementById('savings-trend-table')).toBeNull();
     });
 
     test('uses daily interval for the default 90-day range', async () => {
@@ -1875,7 +1920,7 @@ describe('Dashboard Module', () => {
         buildDOM();
         const update = jest.fn();
         const destroy = jest.fn();
-        (Chart as unknown as jest.Mock).mockImplementationOnce((canvas: HTMLCanvasElement) => ({ canvas, update, destroy }));
+        (Chart as unknown as jest.Mock).mockImplementationOnce((canvas: HTMLCanvasElement, config: { type: string }) => ({ canvas, config, update, destroy }));
         renderSavingsByService([rec('ec2', 100)]);
         renderSavingsByService([rec('ec2', 100), rec('rds', 50)]);
 
@@ -1886,6 +1931,67 @@ describe('Dashboard Module', () => {
         // The empty state still tears the chart down.
         renderSavingsByService([]);
         expect(destroy).toHaveBeenCalledTimes(1);
+      });
+
+      // #744: the role="img" canvas gets a value summary and a table.
+      describe('text alternative (#744)', () => {
+        const tableRows = (): string[][] =>
+          Array.from(document.querySelectorAll('#savings-by-service-table tbody tr'))
+            .map((tr) => Array.from((tr as HTMLTableRowElement).cells).map((c) => c.textContent ?? ''));
+
+        test('summarizes the plotted values in the canvas aria-label', () => {
+          buildDOM();
+          renderSavingsByService(
+            [rec('ec2', 100), rec('ec2', 300, 3), rec('rds', 50)],
+            { ec2: { potential_savings: 300, current_savings: 40 } },
+          );
+          const label = document.getElementById('savings-by-service-chart')?.getAttribute('aria-label') ?? '';
+          // ec2: 40 current + 60 lowest option + 200 upside = 300; rds: 50. Total 350.
+          expect(label).toContain('2 services');
+          expect(label).toContain('$350 in total');
+          expect(label).toContain('Largest: ec2 at $300');
+        });
+
+        test('lists every layer value per service in a "View as table" disclosure', () => {
+          buildDOM();
+          renderSavingsByService(
+            [rec('ec2', 100), rec('ec2', 300, 3), rec('rds', 50)],
+            { ec2: { potential_savings: 300, current_savings: 40 } },
+          );
+          expect(document.querySelector('#savings-by-service-table summary')?.textContent).toBe('View as table');
+          const headers = Array.from(document.querySelectorAll('#savings-by-service-table thead th')).map((th) => th.textContent);
+          expect(headers).toEqual(['Service', 'Current / Committed', 'Lowest option', 'Upside', 'Total']);
+          expect(tableRows()).toEqual([
+            ['ec2', '$40', '$60', '$200', '$300'],
+            ['rds', '$0', '$50', '$0', '$50'],
+          ]);
+        });
+
+        test('the table includes services beyond the bars drawn', () => {
+          buildDOM();
+          const many = Array.from({ length: 12 }, (_, i) => rec(`svc-${i}`, 100 + i));
+          renderSavingsByService(many);
+          expect(tableRows()).toHaveLength(12);
+        });
+
+        test('the table is removed when the chart switches to its empty state', () => {
+          buildDOM();
+          renderSavingsByService([rec('ec2', 100)]);
+          expect(document.getElementById('savings-by-service-table')).not.toBeNull();
+          renderSavingsByService([]);
+          expect(document.getElementById('savings-by-service-table')).toBeNull();
+        });
+
+        test('stacked layers are separated by a 2px gap, not only by shade', () => {
+          buildDOM();
+          renderSavingsByService([rec('ec2', 100), rec('ec2', 300, 3)], { ec2: { potential_savings: 300, current_savings: 40 } });
+          const calls = (Chart as unknown as jest.Mock).mock.calls;
+          const datasets = (calls[calls.length - 1]?.[1] as { data: { datasets: { borderWidth: { top: number }; borderColor: string }[] } }).data.datasets;
+          for (const d of datasets) {
+            expect(d.borderWidth.top).toBe(2);
+            expect(d.borderColor).toBe('#ffffff');
+          }
+        });
       });
 
       test('shows empty state and hides canvas when no recommendations', () => {

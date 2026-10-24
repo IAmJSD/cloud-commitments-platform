@@ -56,11 +56,12 @@ export function formatTrendTooltipTitle(tsMs: number, intervalHint: 'hourly' | '
  * Destroying and recreating a chart on every filter or range change replays
  * Chart.js's grow-from-zero entry animation each time. When `existing` is
  * still drawing on `canvas`, swap in the new data and options and redraw
- * without animation; otherwise (first render, or the canvas was replaced)
- * destroy any stale instance and create a fresh one.
+ * without animation; otherwise (first render, the canvas was replaced, or the
+ * chart type changed, e.g. the Purchases chart's line/bar series toggle from
+ * #749) destroy any stale instance and create a fresh one.
  */
 export function upsertChart(existing: Chart | null, canvas: HTMLCanvasElement, config: ChartConfiguration): Chart {
-    if (existing && existing.canvas === canvas) {
+    if (existing && existing.canvas === canvas && chartType(existing) === config.type) {
         existing.data = config.data;
         existing.options = config.options ?? {};
         existing.update('none');
@@ -68,4 +69,8 @@ export function upsertChart(existing: Chart | null, canvas: HTMLCanvasElement, c
     }
     existing?.destroy();
     return new Chart(canvas, config);
+}
+
+function chartType(chart: Chart): string | undefined {
+    return 'type' in chart.config ? chart.config.type : undefined;
 }

@@ -5,11 +5,11 @@
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0,0,0,0.5);
+    background: var(--cudly-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 1000;
+    z-index: var(--cudly-z-modal);
 }
 
 .modal.hidden {
@@ -17,9 +17,11 @@
 }
 
 .modal-content {
-    background: white;
+    background: var(--cudly-surface);
     padding: 2rem;
-    border-radius: 8px;
+    /* Same dialog surface as .modal-confirm (issue #743). */
+    border-radius: var(--cudly-r-lg);
+    box-shadow: var(--cudly-shadow-dialog);
     width: 500px;
     max-width: 90%;
     max-height: 90vh;
@@ -52,7 +54,7 @@
     border: 1px solid var(--cudly-border-strong);
     border-radius: 4px;
     margin-top: 0.25rem;
-    font-size: 0.9rem;
+    font-size: var(--cudly-fs-sm);
 }
 
 .modal-content textarea {
@@ -101,11 +103,11 @@
     left: 0;
     width: 100%;
     height: 100%;
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--cudly-scrim);
     display: flex;
     justify-content: center;
     align-items: center;
-    z-index: 1000;
+    z-index: var(--cudly-z-modal);
 }
 
 .modal-hint {
@@ -119,7 +121,7 @@
 .modal-hint a {
     color: var(--cudly-primary);
     text-decoration: none;
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
 }
 
 .modal-hint a:hover {
@@ -265,7 +267,7 @@
     /* 1100 sits above .modal/.modal-overlay (z-index: 1000) so the education
        page renders on top of open modals, which is how the overlay gets
        launched (user clicks the CTA link inside a modal). */
-    z-index: 1100;
+    z-index: var(--cudly-z-page-overlay);
     overflow-y: auto;
 }
 
@@ -288,7 +290,7 @@
 }
 
 .archera-page-lead {
-    font-size: 1rem;
+    font-size: var(--cudly-fs-md);
     color: #555;
     line-height: 1.6;
     margin-bottom: 1rem;
@@ -353,8 +355,8 @@
     text-decoration: none;
     padding: 0.65rem 1.5rem;
     border-radius: 4px;
-    font-size: 1rem;
-    font-weight: 500;
+    font-size: var(--cudly-fs-md);
+    font-weight: var(--cudly-fw-medium);
     transition: background var(--cudly-dur) var(--cudly-ease);
 }
 
@@ -381,7 +383,7 @@
 #archera-offer-modal-container {
     position: fixed;
     inset: 0;
-    z-index: 1050;
+    z-index: var(--cudly-z-modal-raised);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -390,14 +392,14 @@
 .archera-offer-backdrop {
     position: absolute;
     inset: 0;
-    background: rgba(0, 0, 0, 0.45);
+    background: var(--cudly-scrim);
 }
 
 .archera-offer-panel {
     position: relative;
-    background: #fff;
-    border-radius: 8px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.25);
+    background: var(--cudly-surface);
+    border-radius: var(--cudly-r-lg);
+    box-shadow: var(--cudly-shadow-dialog);
     max-width: 440px;
     width: calc(100% - 2rem);
     padding: 1.5rem 1.75rem;
@@ -468,7 +470,7 @@
     padding: 0.55rem 1.1rem;
     border-radius: 4px;
     font-size: 0.92rem;
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
     transition: background var(--cudly-dur) var(--cudly-ease);
 }
 

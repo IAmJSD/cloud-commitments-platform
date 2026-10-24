@@ -91,10 +91,13 @@ describe('CSS Styles', () => {
       expect(css).toMatch(/\.provider-badge\.gcp/);
     });
 
-    test('has status badge classes', () => {
-      expect(css).toMatch(/\.status-badge\.active/);
-      expect(css).toMatch(/\.status-badge\.paused/);
-      expect(css).toMatch(/\.status-badge\.disabled/);
+    test('has one badge component with a tone per status family (#737)', () => {
+      for (const tone of ['success', 'warning', 'danger', 'info', 'muted']) {
+        expect(componentsCss).toMatch(new RegExp(`\\.badge-${tone}\\s*\\{[^}]*background:\\s*var\\(--cudly-`));
+      }
+      // The retired per-page variants must not come back.
+      expect(css).not.toMatch(/\.status-badge\b/);
+      expect(css).not.toMatch(/\.badge-(admin|user|readonly)\b/);
     });
 
     test('has toggle switch styles', () => {
@@ -389,7 +392,7 @@ describe('CSS File Organization', () => {
     expect(components).toMatch(/button\s*\{/);
     expect(components).toMatch(/button\.primary\s*\{/);
     expect(components).toMatch(/\.provider-badge/);
-    expect(components).toMatch(/\.status-badge/);
+    expect(components).toMatch(/\.badge\s*\{/);
   });
 
   test('forms.css contains form elements', () => {
