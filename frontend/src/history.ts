@@ -950,7 +950,7 @@ function renderActionCell(p: HistoryPurchase): string {
     }
     if (canRetryFailedRow(p) && p.purchase_id) {
       const overThreshold = retryThresholdReached(p);
-      const label = overThreshold ? `⚠ Retried ${p.retry_attempt_n ?? 0}× — click to override` : '↻ Retry';
+      const label = overThreshold ? `⚠ Retried ${Number(p.retry_attempt_n) || 0}× — click to override` : '↻ Retry';
       const cls = overThreshold ? 'btn-link history-retry-btn history-retry-over-threshold' : 'btn-link history-retry-btn';
       return `<button type="button" class="${cls}" data-retry-id="${escapeHtmlAttr(p.purchase_id)}">${label}</button>`;
     }
@@ -970,7 +970,11 @@ function renderActionCell(p: HistoryPurchase): string {
     // could surface the predecessor's exec ID via the API. For now
     // we render a static badge (no link target) so users at least
     // see "this is a retry" provenance.
-    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${p.retry_attempt_n} in its chain">↻ Retry #${p.retry_attempt_n}</span>`);
+    // Coerce to a number: the history response is cast, not validated
+    // (api.getHistory), so the TS number type is not a runtime guarantee
+    // and this value sits inside a title="..." attribute.
+    const attemptN = Number(p.retry_attempt_n) || 0;
+    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${attemptN} in its chain">↻ Retry #${attemptN}</span>`);
   }
   // Build the trailing action buttons so they compose with lineage links
   // — a retry-descendant can also have an active listing that needs a
@@ -1245,7 +1249,7 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
         <td>${escapeHtml(p.service)}</td>
         <td>${escapeHtml(p.resource_type)}</td>
         <td>${escapeHtml(p.region)}</td>
-        <td>${p.count}</td>
+        <td>${escapeHtml(String(p.count ?? ''))}</td>
         <td>${formatTerm(p.term)}</td>
         <td>${formatCurrency(p.upfront_cost)}</td>
         <td>${monthlyCostCell}</td>
@@ -1867,7 +1871,7 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
         <td>${accountCell}</td>
         <td>${providerCell(p)}</td>
         <td>${escapeHtml(p.service)}</td>
-        <td>${p.count}</td>
+        <td>${escapeHtml(String(p.count ?? ''))}</td>
         <td>${termCell}</td>
         <td>${paymentCell}</td>
         <td>${monthlyCostCell}</td>
