@@ -28,14 +28,17 @@ for (const sample of [
     await expect(warning).toBeHidden();
     await page.locator('#execute-mode-direct').check();
     await expect(warning).toBeVisible();
-    await expect(warning).toHaveText(`Warning: This will charge $${row.upfront_cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} upfront immediately. This bypasses the approval step.`);
+    // A monthly-billed commitment also states its recurring charge (issue #711).
+    const recurring = row.monthly_cost ? `, then $${row.monthly_cost.toFixed(2)} a month for the term ($${(row.monthly_cost * 12).toLocaleString('en-US', { minimumFractionDigits: 2 })} in total)` : '';
+    await expect(warning).toHaveText(`Warning: This will charge $${row.upfront_cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} upfront immediately${recurring}. This bypasses the approval step.`);
+    await expect(page.locator('#purchase-modal-commitment-band')).toContainText('Total over term');
     await expect(warning).not.toContainText(/AWS|cancell|24 hours/);
     await expect(page.locator('#execute-purchase-btn')).toHaveText('Execute Purchase Now');
     await page.getByRole('checkbox', { name: 'Include row 1' }).uncheck();
     await expect(warning).toHaveText('Warning: This will charge $0.00 upfront immediately. This bypasses the approval step.');
     await expect(page.locator('#execute-purchase-btn')).toBeDisabled();
     await page.getByRole('checkbox', { name: 'Include row 1' }).check();
-    await expect(warning).toContainText(`$${row.upfront_cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} upfront immediately.`);
+    await expect(warning).toContainText(`$${row.upfront_cost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} upfront immediately${recurring}.`);
     await expect(page.locator('#execute-purchase-btn')).toBeEnabled();
     if (sample.provider === 'gcp') {
       await page.setViewportSize({ width: 390, height: 844 });
@@ -69,6 +72,9 @@ test('mixed providers use fan-out without cancellation reassurance', async ({ pa
   }
   await page.locator('#bulk-purchase-btn').click();
   await expect(page.locator('#fanout-summary')).toBeVisible();
+  // r01 ($350/mo, 1y, $2,400 upfront) + r12 ($200/mo, 1y, $1,500 upfront) (issue #711).
+  await expect(page.locator('#fanout-summary')).toContainText('Monthly recurring: $550');
+  await expect(page.locator('#fanout-summary')).toContainText('Total over term: $10,500');
   await expect(page.locator('#purchase-details')).not.toContainText(/cancellation|24 hours/);
   await expect(page.locator('#execute-mode-direct')).toHaveCount(0);
   expect(api.calls.filter(call => call.method === 'POST' && call.url.includes('/purchases/execute'))).toEqual([]);
