@@ -170,6 +170,63 @@ describe('Settings Save payment tokens (issue #545)', () => {
     expect(awsPayment.classList.contains('dirty')).toBe(false);
     consoleError.mockRestore();
   });
+  // Issue #617: after #614 a scoped admin's service PUTs all 403. With no
+  // global change and no service saved, the toast must not claim "Settings
+  // saved" or repeat the same denial 17 times.
+  function denied(): Error {
+    return Object.assign(new Error('permission denied: global configuration requires unrestricted account access'), { status: 403 });
+  }
+
+  it('scoped admin: every service PUT denied shows one permission-denied failure toast', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    (api.updateServiceConfig as jest.Mock).mockRejectedValue(denied());
+    await loadGlobalSettings();
+    const awsPayment = document.getElementById('aws-ec2-payment') as HTMLSelectElement;
+    awsPayment.value = 'no-upfront';
+
+    await saveGlobalSettings(new Event('submit'));
+
+    expect(api.updateConfig).not.toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledTimes(1);
+    expect(mockShowToast).toHaveBeenCalledWith({
+      message: 'Failed to save settings: permission denied: global configuration requires unrestricted account access',
+      kind: 'error',
+    });
+    // Nothing saved, so the edited card stays dirty for a retry.
+    expect(awsPayment.classList.contains('dirty')).toBe(true);
+    consoleError.mockRestore();
+  });
+
+  it('every service PUT failing for other reasons says the save failed, listing each service', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    (api.updateServiceConfig as jest.Mock).mockImplementation(async (provider: string, service: string) => {
+      throw provider === 'aws' && service === 'ec2' ? new Error('boom') : denied();
+    });
+    await loadGlobalSettings();
+
+    await saveGlobalSettings(new Event('submit'));
+
+    const { message } = mockShowToast.mock.calls[0]![0] as { message: string };
+    expect(message).toMatch(/^Failed to save settings: 17 services failed: /);
+    expect(message).toContain('aws/ec2: boom');
+    consoleError.mockRestore();
+  });
+
+  it('a saved global change still reports "Settings saved, but" when every service PUT fails', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    (api.updateServiceConfig as jest.Mock).mockRejectedValue(new Error('unavailable'));
+    await loadGlobalSettings();
+    const notify = document.getElementById('setting-notification-days') as HTMLInputElement;
+    notify.value = '9';
+
+    await saveGlobalSettings(new Event('submit'));
+
+    expect(api.updateConfig).toHaveBeenCalledTimes(1);
+    const { message } = mockShowToast.mock.calls[0]![0] as { message: string };
+    expect(message).toMatch(/^Settings saved, but 17 services failed: /);
+    consoleError.mockRestore();
+  });
+
   it.each([
     ['no-upfront', 'monthly'],
     ['partial-upfront', 'monthly'],
