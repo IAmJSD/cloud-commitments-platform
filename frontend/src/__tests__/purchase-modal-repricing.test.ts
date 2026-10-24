@@ -13,11 +13,14 @@
 // The harness registers the module mocks, so it must be imported first.
 import {
   buildRows,
+  deferred,
   flush,
   setupPurchaseModalTest,
 } from './purchase-modal-harness';
 import * as api from '../api';
 import * as state from '../state';
+import { showToast } from '../toast';
+import { confirmDialog } from '../confirmDialog';
 import {
   openPurchaseModal,
   getPurchaseModalRecommendations,
@@ -186,5 +189,197 @@ describe('Issue #1903: purchase modal re-prices on Term/Payment change', () => {
     expect(row.cells[6]!.textContent).toBe(formatCurrency(800));
     expect(row.querySelector<HTMLSelectElement>('.purchase-row-term')!.value).toBe('3');
     expect(row.querySelector<HTMLSelectElement>('.purchase-row-payment')!.value).toBe('no-upfront');
+  });
+
+  test('T3 all-zero term restores the prior priced row', async () => {
+    const rows = [
+      { ...buildRows()[0]!, count: 2 },
+      { ...buildRows()[2]!, count: 1, upfront_cost: 6000 },
+      { ...buildRows()[3]!, count: 1, recommended_count: 1 },
+    ];
+    (localStorage.getItem as jest.Mock).mockReturnValue(JSON.stringify({ capacity: 50 }));
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['v-3-all']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    const before = getPurchaseModalRecommendations()[0]!;
+    const termSelect = document.querySelector<HTMLSelectElement>('.purchase-row-term')!;
+    termSelect.value = '1';
+    termSelect.dispatchEvent(new Event('change'));
+
+    expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'warning' }));
+    expect(termSelect.value).toBe('3');
+    expect(getPurchaseModalRecommendations()[0]).toEqual(before);
+    expect(document.querySelector<HTMLSelectElement>('.purchase-row-payment')!.value).toBe('all-upfront');
+  });
+
+  test('T4 capacity scaling survives a swap (bulk path)', async () => {
+    const rows = buildRows();
+    (localStorage.getItem as jest.Mock).mockReturnValue(JSON.stringify({ capacity: 50 }));
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['v-3-all']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    const tr = document.querySelector<HTMLTableRowElement>('.purchase-modal-table tbody tr')!;
+    expect(tr.cells[4]!.textContent).toBe('1');
+    expect(tr.cells[5]!.textContent).toBe(formatCurrency(18000));
+
+    const termSelect = document.querySelector<HTMLSelectElement>('.purchase-row-term')!;
+    termSelect.value = '1';
+    termSelect.dispatchEvent(new Event('change'));
+
+    const tr2 = document.querySelector<HTMLTableRowElement>('.purchase-modal-table tbody tr')!;
+    expect(tr2.cells[5]!.textContent).toBe(formatCurrency(6000));
+
+    (document.getElementById('execute-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    expect(api.executePurchase).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ id: 'v-1-all', count: 1, recommended_count: 2, upfront_cost: 6000 })]),
+      50,
+      undefined,
+    );
+  });
+
+  test('T5 zero-unit variant is refused and the row keeps its price', async () => {
+    const rows = buildRows();
+    (localStorage.getItem as jest.Mock).mockReturnValue(JSON.stringify({ capacity: 50 }));
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['v-3-all']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    const termSelect = document.querySelector<HTMLSelectElement>('.purchase-row-term')!;
+    termSelect.value = '1';
+    termSelect.dispatchEvent(new Event('change'));
+
+    // The term-change re-render replaced the row — re-query the fresh Payment select.
+    const paymentSelect = document.querySelector<HTMLSelectElement>('.purchase-row-payment')!;
+    paymentSelect.value = 'no-upfront';
+    paymentSelect.dispatchEvent(new Event('change'));
+
+    expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'warning' }));
+    expect(paymentSelect.value).toBe('all-upfront');
+
+    (document.getElementById('execute-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+
+    const body = (api.executePurchase as jest.Mock).mock.calls[0]![0] as Array<Record<string, unknown>>;
+    expect(body[0]).toMatchObject({ id: 'v-1-all', upfront_cost: 6000 });
+  });
+
+  test('T6 account override re-prices at open', async () => {
+    const rows = buildRows();
+    const v3all = rows.find((r) => r.id === 'v-3-all')!;
+
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'ovr-1', account_id: 'a1', provider: 'aws', service: 'ec2', payment: 'partial-upfront' },
+    ]);
+    await openPurchaseModal([v3all]);
+
+    const live = getPurchaseModalRecommendations();
+    expect(live[0]).toMatchObject({ id: 'v-3-partial', payment: 'partial-upfront', upfront_cost: 18000 });
+    expect(document.querySelector('.purchase-row-payment-source')).not.toBeNull();
+    expect(document.querySelector<HTMLTableRowElement>('.purchase-modal-table tbody tr')!.cells[5]!.textContent)
+      .toBe(formatCurrency(18000));
+
+    clearPurchaseModalRecommendations();
+    (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([
+      { id: 'ovr-2', account_id: 'a1', provider: 'aws', service: 'ec2', payment: 'no-upfront' },
+    ]);
+    await openPurchaseModal([v3all]);
+
+    const live2 = getPurchaseModalRecommendations();
+    expect(live2[0]).toMatchObject({ id: 'v-3-all', payment: 'all-upfront', upfront_cost: 36000 });
+    expect(document.querySelector('.purchase-row-payment-source')).toBeNull();
+  });
+
+  test('T7 direct-execute warning follows a term change', async () => {
+    const rows = buildRows();
+    const v3all = rows.find((r) => r.id === 'v-3-all')!;
+
+    await openPurchaseModal([v3all]);
+
+    const directRadio = document.getElementById('execute-mode-direct') as HTMLInputElement;
+    expect(directRadio).not.toBeNull();
+    directRadio.click();
+    directRadio.dispatchEvent(new Event('change', { bubbles: true }));
+
+    expect(document.querySelector('.direct-execute-warning')?.textContent).toContain('36,000.00');
+
+    const termSelect = document.querySelector<HTMLSelectElement>('.purchase-row-term')!;
+    termSelect.value = '1';
+    termSelect.dispatchEvent(new Event('change'));
+
+    expect(document.querySelector('.direct-execute-warning')?.textContent).toContain('12,000.00');
+  });
+
+  test('busy single purchase stays disabled while its request is pending', async () => {
+    const request = deferred<Awaited<ReturnType<typeof api.executePurchase>>>();
+    (api.executePurchase as jest.Mock).mockReturnValue(request.promise);
+    const rows = buildRows();
+    await openPurchaseModal([rows[0]!]);
+
+    const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    executeBtn.click();
+    await flush();
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+
+    const termSelect = document.querySelector<HTMLSelectElement>('.purchase-row-term')!;
+    termSelect.value = '1';
+    termSelect.dispatchEvent(new Event('change'));
+    const include = document.querySelector<HTMLInputElement>('.purchase-modal-row-include')!;
+    include.checked = false;
+    include.dispatchEvent(new Event('change'));
+    include.checked = true;
+    include.dispatchEvent(new Event('change'));
+
+    expect(executeBtn.disabled).toBe(true);
+    executeBtn.click();
+    await flush();
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
+
+    request.resolve({
+      execution_id: 'exec-single',
+      status: 'pending',
+      email_sent: true,
+      approval_recipient: 'approver@example.com',
+    });
+    await flush();
+    expect(executeBtn.dataset['submitting']).toBeUndefined();
+  });
+
+  test('confirmation cancel restores normal single-purchase submission', async () => {
+    (confirmDialog as jest.Mock)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const rows = buildRows();
+    await openPurchaseModal([rows[0]!]);
+
+    const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
+    executeBtn.click();
+    await flush();
+
+    expect(api.executePurchase).not.toHaveBeenCalled();
+    expect(executeBtn.dataset['submitting']).toBeUndefined();
+    expect(executeBtn.disabled).toBe(false);
+
+    executeBtn.click();
+    await flush();
+    expect(api.executePurchase).toHaveBeenCalledTimes(1);
   });
 });
