@@ -175,13 +175,14 @@
                      pending-approval purchases at the top of the Purchases
                      tab so users don't have to scan the full Purchase
                      History table for them. Rows render with inline
-                     Approve / Cancel buttons (issues #46 + #286) and the
-                     same click flow as the history table. Auto-loaded on
-                     tab switch via loadHistory(); also re-rendered after
-                     any Approve / Cancel from either view. -->
+                     Approve / Cancel buttons (issues #46 + #286). It is the
+                     only approval surface (issue #183): pending rows in the
+                     Purchase History table link here instead of repeating
+                     the buttons. Auto-loaded on tab switch via loadHistory();
+                     also re-rendered after any Approve / Cancel. -->
                 <section id="purchases-approval-queue-section" class="card page-hero">
                     <h2>Approval queue</h2>
-                    <p class="help-text page-hero-description">Purchases awaiting approval. Review and approve or cancel each one. The same actions are available from the Purchase History table below.</p>
+                    <p class="help-text page-hero-description">Purchases awaiting approval. Approve or cancel each one here. Purchase History below lists them as Pending and links back to this queue.</p>
                     <p id="purchases-truncation-notice" class="warning-message" role="status" hidden></p>
                     <section id="purchases-approval-queue"></section>
                 </section>
