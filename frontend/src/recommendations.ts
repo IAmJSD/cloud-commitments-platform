@@ -3842,54 +3842,33 @@ function mountBottomActionBox(): HTMLElement | null {
   capacityLabel.appendChild(capacityInput);
   box.appendChild(capacityLabel);
 
-  // Purchase one-off (preserved ID). Issue #365: hide for sessions
-  // that lack `execute:purchases`. After issue #923, execute:purchases
-  // requires Purchaser-group membership; Administrators-group alone is
-  // no longer sufficient. The element stays in the DOM so the click
-  // handler stays wired and the existing `updateBottomActionBox`
-  // updates still flow through; `.hidden` toggles via the HTML hidden
-  // attribute which renders as `display: none`.
+  // Purchase one-off (preserved ID). Issue #365: hidden for sessions
+  // that lack `execute:purchases` (issue #923: Purchaser-group membership,
+  // not Administrators alone). The element stays in the DOM so the click
+  // handler stays wired; syncBottomActionBoxPermissions toggles `.hidden`
+  // on every render. Starts hidden so the box fails closed until then.
   const purchaseBtn = document.createElement('button');
   purchaseBtn.type = 'button';
   purchaseBtn.className = 'btn btn-primary';
   purchaseBtn.id = 'bulk-purchase-btn';
   purchaseBtn.textContent = 'Purchase';
   purchaseBtn.title = 'Buy these reservations now (one-off, processed immediately)';
-  purchaseBtn.hidden = !canAccess('execute', 'purchases');
+  purchaseBtn.hidden = true;
   box.appendChild(purchaseBtn);
 
-  // Issue #923: show an informational banner when the session can view
-  // recommendations but cannot execute purchases. The predicate MUST
-  // mirror the Purchase CTA's gate (canAccess('execute', 'purchases'))
-  // so a custom-role user who holds execute:purchases via a non-seeded
-  // group sees the live button without a contradictory "you can view
-  // but not execute" notice. Pure read-only users won't reach this
-  // page's action area anyway.
-  if (!canAccess('execute', 'purchases')) {
-    const noPurchaseBanner = document.createElement('div');
-    noPurchaseBanner.className = 'info-banner';
-    noPurchaseBanner.setAttribute('role', 'note');
-    // Scope the message to the execute-purchases capability only (row 550):
-    // Standard users CAN create plans, so the banner must not imply otherwise.
-    // The nav tab is "Admin" (renamed from Settings in #340), and Admin → Users
-    // is admin-only, so a non-admin can't self-serve there — only an admin can
-    // add them to the Purchaser group.
-    noPurchaseBanner.textContent =
-      'You can view and plan, but not execute purchases directly. ' +
-      'Ask an admin to add you to the Purchaser group (Admin → Users) to execute purchases.';
-    box.appendChild(noPurchaseBanner);
-  }
+  // The no-Purchaser banner (issue #923) is inserted after purchaseBtn by
+  // syncBottomActionBoxPermissions, not here.
 
   // Create Purchase Plan (relocated from old top bar). Issue #365:
-  // hide for sessions that lack `create:plans` (readonly loses it;
-  // admin + user keep it).
+  // hidden for sessions that lack `create:plans` (readonly loses it;
+  // admin + user keep it). Synced per render like the Purchase button.
   const planBtn = document.createElement('button');
   planBtn.type = 'button';
   planBtn.className = 'btn btn-secondary';
   planBtn.id = 'create-plan-btn';
   planBtn.textContent = 'Create Plan';
   planBtn.title = 'Schedule a recurring plan that will purchase these recommendations on a defined cadence';
-  planBtn.hidden = !canAccess('create', 'plans');
+  planBtn.hidden = true;
   box.appendChild(planBtn);
 
   // a11y hint for the disabled-button state (#273 CR follow-up).
@@ -3973,12 +3952,58 @@ export function isHomogeneousSelection(recs: readonly LocalRecommendation[]): bo
   );
 }
 
+const NO_PURCHASER_BANNER_ID = 'recommendations-no-purchaser-banner';
+
+// syncBottomActionBoxPermissions applies the permission-gated parts of the
+// action box: Purchase and Create Plan visibility and the no-Purchaser
+// banner. mountBottomActionBox builds the box once and returns early on
+// every later render, so gating evaluated there was a snapshot taken on the
+// first render; a permission change made in-session (e.g. an admin adding
+// themselves to the Purchaser group) never showed up until a reload (#20).
+// Re-evaluating here, on every render, keeps it current.
+function syncBottomActionBoxPermissions(): void {
+  const purchaseBtn = document.getElementById('bulk-purchase-btn');
+  const planBtn = document.getElementById('create-plan-btn');
+  const canPurchase = canAccess('execute', 'purchases');
+  if (purchaseBtn) purchaseBtn.hidden = !canPurchase;
+  if (planBtn) planBtn.hidden = !canAccess('create', 'plans');
+
+  // Issue #923: an informational banner for sessions that can view
+  // recommendations but cannot execute purchases. The predicate MUST mirror
+  // the Purchase CTA's gate (canAccess('execute', 'purchases')) so a
+  // custom-role user who holds execute:purchases via a non-seeded group
+  // sees the live button without a contradictory "you can view but not
+  // execute" notice.
+  const existing = document.getElementById(NO_PURCHASER_BANNER_ID);
+  if (canPurchase) {
+    existing?.remove();
+    return;
+  }
+  if (existing || !purchaseBtn) return;
+  const banner = document.createElement('div');
+  banner.id = NO_PURCHASER_BANNER_ID;
+  banner.className = 'info-banner';
+  banner.setAttribute('role', 'note');
+  // Scope the message to the execute-purchases capability only (row 550):
+  // Standard users CAN create plans, so the banner must not imply otherwise.
+  // The nav tab is "Admin" (renamed from Settings in #340), and Admin → Users
+  // is admin-only, so a non-admin can't self-serve there — only an admin can
+  // add them to the Purchaser group.
+  banner.textContent =
+    'You can view and plan, but not execute purchases directly. ' +
+    'Ask an admin to add you to the Purchaser group (Admin → Users) to execute purchases.';
+  purchaseBtn.after(banner);
+}
+
 // updateBottomActionBox refreshes labels and disabled state on every
 // renderRecommendationsList call without rebuilding the input/select DOM,
 // preserving any in-progress typing in the Capacity input.
 function updateBottomActionBox(visibleCount: number, loadedCount: number): void {
   const box = document.getElementById('recommendations-action-box');
   if (!box) return;
+
+  // Before the disabled-hint logic below, which reads planBtn.hidden.
+  syncBottomActionBoxPermissions();
 
   const selected = state.getSelectedRecommendationIDs();
   // Count only selections that are currently visible.
