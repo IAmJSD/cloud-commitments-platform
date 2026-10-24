@@ -10,6 +10,7 @@ import { formatDateTime } from '../utils';
 import { badgeClass, statusLabel, statusTone } from '../lib/status-badge';
 import { showToast } from '../toast';
 import { confirmDialog } from '../confirmDialog';
+import { friendlyError } from '../api/errors';
 
 type AccountProvider = 'aws' | 'azure' | 'gcp';
 
@@ -230,8 +231,8 @@ async function handleDelete(reg: AccountRegistration): Promise<void> {
   try {
     await api.deleteRegistration(reg.id);
     await loadRegistrations();
-  } catch {
-    showToast({ message: 'Failed to delete registration.', kind: 'error' });
+  } catch (err) {
+    showToast({ message: `Failed to delete registration: ${friendlyError(err)}`, kind: 'error' });
   }
 }
 
@@ -257,9 +258,9 @@ async function handleReject(reg: AccountRegistration): Promise<void> {
   try {
     await api.rejectRegistration(reg.id, reason || undefined);
     await loadRegistrations();
-  } catch {
+  } catch (err) {
     // Use showToast instead of blocking alert() (finding 11-L3).
-    showToast({ message: 'Failed to reject registration.', kind: 'error' });
+    showToast({ message: `Failed to reject registration: ${friendlyError(err)}`, kind: 'error' });
   }
 }
 

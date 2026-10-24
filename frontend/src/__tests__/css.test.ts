@@ -96,7 +96,7 @@ describe('CSS Styles', () => {
         expect(componentsCss).toMatch(new RegExp(`\\.badge-${tone}\\s*\\{[^}]*background:\\s*var\\(--cudly-`));
       }
       // The retired per-page variants must not come back.
-      expect(css).not.toMatch(/\.status-badge/);
+      expect(css).not.toMatch(/\.status-badge\b/);
       expect(css).not.toMatch(/\.badge-(admin|user|readonly)\b/);
     });
 
