@@ -33,6 +33,7 @@ jest.mock('../utils', () => ({
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }),
+  amortizedMonthly: jest.requireActual('../utils').amortizedMonthly,
   populateAccountFilter: jest.fn(() => Promise.resolve())
 }));
 
@@ -103,6 +104,30 @@ describe('History Module', () => {
     expect(history?.querySelectorAll('td')[9]?.textContent).toBe(amortize ? '-' : '$50');
     expect(queue?.querySelectorAll('td')[7]?.textContent).toBe(amortize ? '-' : '$50');
     expect(queue?.querySelectorAll('td')[8]?.textContent).toBe('--');
+  });
+
+  // Issue #318: with amortize on, the upfront is already in Monthly Cost, so
+  // the Upfront cell is muted and labeled to keep it from reading as additive.
+  test.each([false, true])('upfront folded into monthly with amortization %s is labeled only when on', async (amortize) => {
+    (getAmortizeUpfront as jest.Mock).mockReturnValue(amortize);
+    const purchase = {
+      timestamp: '2026-09-29T00:00:00Z', provider: 'aws', service: 'ec2', resource_type: 'm5.large',
+      region: 'us-east-1', count: 1, term: 1, upfront_cost: 1200, monthly_cost: 100, estimated_savings: 300,
+    };
+    (api.getHistory as jest.Mock).mockResolvedValue({ summary: {}, purchases: [
+      { ...purchase, purchase_id: 'complete', status: 'completed' },
+      { ...purchase, purchase_id: 'pending', status: 'pending' },
+    ] });
+    await loadHistory();
+    const historyCells = document.querySelectorAll('#history-list tr[data-execution-id="complete"] td');
+    const queueCells = document.querySelectorAll('#purchases-approval-queue tr[data-execution-id="pending"] td');
+    expect(historyCells[9]?.textContent).toBe(amortize ? '$200' : '$100');
+    expect(queueCells[7]?.textContent).toBe(amortize ? '$200' : '$100');
+    for (const upfront of [historyCells[8], queueCells[8]]) {
+      expect(upfront?.classList.contains('upfront-in-monthly')).toBe(amortize);
+      expect(upfront?.textContent).toBe(amortize ? '$1200(in monthly)' : '$1200');
+      expect(upfront?.getAttribute('title')).toBe(amortize ? 'Included in the amortized monthly cost' : null);
+    }
   });
 
   describe('initHistoryDateRange', () => {
