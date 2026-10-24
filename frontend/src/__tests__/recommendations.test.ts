@@ -115,6 +115,24 @@ import * as api from '../api';
 import * as state from '../state';
 import * as recsApi from '../api/recommendations';
 
+// Issue #803: setup.ts's jest.clearAllMocks() clears recorded calls but keeps
+// any mockReturnValue / mockResolvedValue / mockImplementation a test
+// installed, so an override (cost period, column filters, selection, user,
+// account overrides, ...) leaked into whichever test jest ran next and the
+// file failed under --randomize. Snapshot every module mock's factory default
+// once, and restore it before each test, so each test starts from the
+// defaults above whatever order the tests run in.
+const mockFactoryDefaults = [...[api, state, recsApi].flatMap((mod) => Object.values(mod)), mockShowToast]
+  .filter((fn): fn is jest.Mock => jest.isMockFunction(fn))
+  .map((fn) => [fn, fn.getMockImplementation()] as const);
+
+beforeEach(() => {
+  for (const [fn, factoryDefault] of mockFactoryDefaults) {
+    fn.mockReset();
+    if (factoryDefault) fn.mockImplementation(factoryDefault);
+  }
+});
+
 describe('Recommendations Module', () => {
   beforeEach(() => {
     // Reset DOM
