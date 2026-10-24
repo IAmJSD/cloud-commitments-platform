@@ -3275,7 +3275,14 @@ function buildListMarkup(
     if (col.sortable === false) {
       return `<th>${lbl}</th>`;
     }
-    return `<th class="sortable" data-sort="${col.key}" tabindex="0" role="button" aria-label="Sort by ${lbl}"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}${filterBtn(col.key)}</th>`;
+    // Issue #755: the <th> stays a plain column header (exposing aria-sort)
+    // and holds two sibling buttons, sort and filter. A focusable
+    // role=button <th> wrapping the filter button made Enter on the filter
+    // bubble into the sort handler, and nested the two controls.
+    const ariaSort = sort.column === col.key
+      ? ` aria-sort="${sort.direction === 'asc' ? 'ascending' : 'descending'}"`
+      : '';
+    return `<th class="sortable" data-sort="${col.key}"${ariaSort}><button type="button" class="sort-btn"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}</button>${filterBtn(col.key)}</th>`;
   };
 
   // issues #225 + #226: group by cell, sort groups, then render.
@@ -4966,10 +4973,17 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   ensureRecommendationsTabObserver();
 
   // Sortable column headers. Toggle ascending/descending on repeat click.
+  // The click listener sits on the <th> so the whole header stays a mouse
+  // target; keyboard users reach it through the inner .sort-btn, whose
+  // native Enter/Space activation bubbles here as a click. The filter
+  // button stops propagation, so it never sorts (issue #755).
   container.querySelectorAll<HTMLTableCellElement>('th.sortable').forEach((th) => {
     const onActivate = (): void => {
       const col = th.dataset['sort'];
       if (!col) return;
+      // The re-render below replaces the header, so remember whether the
+      // sort button had focus and move focus to its replacement.
+      const hadFocus = th.contains(document.activeElement);
       const prev = state.getRecommendationsSort();
       // Issue #480: first click on a different column uses that column's
       // per-config default direction (asc for text/most numerics; desc for
@@ -4986,14 +5000,13 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
       // at Savings desc".
       writeSortToUrl({ column: col as state.RecommendationsSortColumn, direction });
       renderRecommendationsList(loadedRecs);
+      if (hadFocus) {
+        document.querySelector<HTMLButtonElement>(
+          `#recommendations-list th[data-sort="${CSS.escape(col)}"] .sort-btn`,
+        )?.focus();
+      }
     };
     th.addEventListener('click', onActivate);
-    th.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        onActivate();
-      }
-    });
   });
 
   // Issue #869: selection handlers are only meaningful when the session can

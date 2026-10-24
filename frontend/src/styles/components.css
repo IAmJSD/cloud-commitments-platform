@@ -662,6 +662,25 @@ th.sortable:hover {
     background: var(--cudly-bg);
 }
 
+/* Sort trigger inside a sortable <th> (issue #755): looks like the header
+ * text, but is a real button so keyboard users can sort without the <th>
+ * itself being interactive. */
+th.sortable .sort-btn {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+    cursor: pointer;
+}
+
+th.sortable .sort-btn:focus-visible,
+th .column-filter-btn:focus-visible {
+    outline: 2px solid var(--cudly-primary);
+    outline-offset: 2px;
+}
+
 th.sortable .sort-indicator {
     margin-left: 0.35rem;
     color: var(--cudly-text-subtle);
@@ -672,8 +691,14 @@ th.sortable .sort-indicator.active {
     color: var(--cudly-primary);
 }
 
-/* Per-column filter trigger button inside <th>. */
+/* Per-column filter trigger button inside <th>. The 24px minimum keeps the
+ * glyph-sized button above the WCAG 2.5.8 target size (issue #755). */
 th .column-filter-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    min-height: 24px;
     margin-left: 0.35rem;
     padding: 0 0.25rem;
     border: 0;
@@ -682,6 +707,7 @@ th .column-filter-btn {
     cursor: pointer;
     font-size: 0.85em;
     line-height: 1;
+    vertical-align: middle;
 }
 th .column-filter-btn:hover {
     color: var(--cudly-primary);
