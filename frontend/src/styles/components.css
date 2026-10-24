@@ -2,10 +2,13 @@
 
 /* Cards */
 .card {
-    background: white;
+    background: var(--cudly-surface);
     padding: 1.5rem;
-    border-radius: 8px;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    /* The one card surface (issue #743): hairline border + small shadow,
+     * shared with .kpi-tile, .plan-card, .group-card and .upcoming-card. */
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-md);
+    box-shadow: var(--cudly-shadow-sm);
 }
 
 /* ---------------------------------------------------------------------------
@@ -15,10 +18,8 @@
  * are referenced via `.card`).
  * ------------------------------------------------------------------------- */
 .kpi-tile {
+    /* Border, radius and shadow come from .card (issue #743). */
     padding: var(--cudly-sp-4);
-    border-radius: var(--cudly-r-md);
-    border: 1px solid var(--cudly-border);
-    box-shadow: var(--cudly-shadow-sm);
     display: grid;
     grid-template-columns: 1fr auto;
     grid-template-areas:
@@ -356,7 +357,7 @@ button.secondary:hover {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    z-index: 2100;
+    z-index: var(--cudly-z-toast);
     pointer-events: none;
     max-width: 400px;
 }
@@ -1069,18 +1070,18 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
 .modal-confirm-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.45);
+    background: var(--cudly-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 2000;
+    z-index: var(--cudly-z-confirm);
 }
 
 .modal-confirm {
     position: relative;
-    background: white;
-    border-radius: 8px;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    background: var(--cudly-surface);
+    border-radius: var(--cudly-r-lg);
+    box-shadow: var(--cudly-shadow-dialog);
     max-width: min(480px, calc(100vw - 2rem));
     min-width: 320px;
     padding: 1.5rem;
