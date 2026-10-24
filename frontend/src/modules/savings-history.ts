@@ -287,16 +287,16 @@ function renderSavingsStats(data: SavingsAnalyticsResponse, start: Date, end: Da
         }
     }
 
-    // Average projected monthly additions over the whole requested window, including empty intervals.
+    // The server's window total (HistorySummary.total_monthly_savings) is
+    // authoritative; the client-side bucket sum is only a fallback for a
+    // missing summary. Average and peak have no wire counterpart (#276): the
+    // average spreads the total over the whole requested window (empty
+    // intervals included) and the peak comes from data_points. All monthly.
+    const monthlyTotal = summary?.total_monthly_savings ?? totalSavings;
     const intervalMs = interval === 'hourly' ? 3600000 : 86400000;
     const periodCount = (end.getTime() - start.getTime()) / intervalMs;
-    const avgPerPeriod = totalSavings / periodCount;
-
-    // Use summary if available, otherwise fall back to calculated values.
-    // All three values are in the API's canonical monthly unit.
-    const monthlyTotal = summary?.total_period_savings ?? totalSavings;
-    const monthlyAvg = summary?.average_savings_per_period ?? avgPerPeriod;
-    const monthlyPeak = summary?.peak_savings ?? peakSavings;
+    const monthlyAvg = monthlyTotal / periodCount;
+    const monthlyPeak = peakSavings;
 
     // Convert to the user-chosen display unit.
     const displayTotal = convertFromMonthly(monthlyTotal, unit);

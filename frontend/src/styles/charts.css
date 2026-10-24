@@ -106,3 +106,12 @@
 #ladder-purchase-timeline [data-table] { overflow-x: auto; }
 .ladder-selected { outline: 2px solid var(--cudly-primary); outline-offset: -2px; }
 .ladder-event-editor form { padding: 1rem; }
+
+/* Inventory & Coverage -> Trends (issue #30): breakdown tables scroll
+   sideways on narrow screens instead of widening the page. */
+.trends-table-wrap { overflow-x: auto; margin-top: 1rem; }
+#trends-content > .card { margin-top: 1rem; }
+/* Let the Period picker and Refresh drop below the title on phones rather
+   than squeezing the heading and pushing Refresh past the card edge. */
+#inventory-trends .section-header { flex-wrap: wrap; gap: 0.5rem; }
+#inventory-trends .section-header-actions { flex-wrap: wrap; }

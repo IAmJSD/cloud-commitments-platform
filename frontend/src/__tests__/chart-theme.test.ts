@@ -44,7 +44,7 @@ describe('chart-theme', () => {
     expect(cssChartTokens.sort()).toEqual([...TOKENS].sort());
   });
 
-  it('series and legend tokens are #rrggbb so charts can derive shades from them', () => {
+  it('series and layer tokens are #rrggbb so charts can derive shades from them', () => {
     for (const name of TOKENS) {
       if (/text|grid/.test(name)) continue;
       expect(CHART_TOKEN_FALLBACKS[name]).toMatch(/^#[0-9a-f]{6}$/);
@@ -79,10 +79,12 @@ describe('chart-theme', () => {
   });
 
   it('the dashboard follows a themed palette', () => {
-    const { serviceBarColor } = require('../dashboard') as { serviceBarColor: (s: string) => string };
-    expect(serviceBarColor('ec2')).toBe('#1a73e8');
-    document.documentElement.style.setProperty('--cudly-chart-1', '#8ab4f8');
-    expect(serviceBarColor('ec2')).toBe('#8ab4f8');
+    const { savingsLayerColors } = require('../dashboard') as {
+      savingsLayerColors: () => { current: string; lowestOption: string; upside: string };
+    };
+    expect(savingsLayerColors().current).toBe('#2a78d6');
+    document.documentElement.style.setProperty('--cudly-chart-layer-current', '#8ab4f8');
+    expect(savingsLayerColors().current).toBe('#8ab4f8');
   });
 });
 

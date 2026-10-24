@@ -13,13 +13,13 @@
  * (jsdom tests, a failed CSS load). They must match base.css; a jest test
  * compares the two so they cannot drift.
  *
- * Series and legend tokens must be #rrggbb: the charts derive darker and
- * translucent shades from them (see withAlpha and darkenHexColor).
+ * Series and layer tokens must be #rrggbb: the charts derive translucent
+ * shades from them (see withAlpha).
  */
 
 export const CHART_TOKEN_FALLBACKS = {
-  // Per-service bar palette. A service keeps its slot across refreshes
-  // (dashboard.serviceBarColor), so reordering these recolors services.
+  // General series palette (savings trend and savings-history lines use
+  // slots 1 and 2).
   '--cudly-chart-1': '#1a73e8',
   '--cudly-chart-2': '#34a853',
   '--cudly-chart-3': '#fbbc04',
@@ -32,10 +32,11 @@ export const CHART_TOKEN_FALLBACKS = {
   '--cudly-chart-10': '#e91e63',
   // Cumulative savings line on the savings-history chart.
   '--cudly-chart-cumulative': '#4285f4',
-  // Neutral legend swatches for the stacked savings-range layers.
-  '--cudly-chart-legend-dark': '#37474f',
-  '--cudly-chart-legend-mid': '#78909c',
-  '--cudly-chart-legend-border': '#546e7a',
+  // Per-service savings chart: one hue per stacked layer (#189), the same
+  // on every bar so Chart.js's default legend swatch matches the bars.
+  '--cudly-chart-layer-current': '#2a78d6',
+  '--cudly-chart-layer-lowest': '#eb6834',
+  '--cudly-chart-layer-upside': '#1baf7a',
   // Axis labels and gridlines (Chart.js's own defaults until now).
   '--cudly-chart-text': '#666666',
   '--cudly-chart-grid': 'rgba(0, 0, 0, 0.1)',
@@ -66,7 +67,7 @@ export function chartColor(name: ChartToken): string {
   return readToken(name) || CHART_TOKEN_FALLBACKS[name];
 }
 
-/** The per-service series palette, in slot order. */
+/** The series palette, in slot order. */
 export function chartPalette(): string[] {
   return SERIES.map(chartColor);
 }

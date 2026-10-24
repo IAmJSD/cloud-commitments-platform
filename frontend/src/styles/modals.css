@@ -76,6 +76,24 @@
     margin-bottom: 1rem;
 }
 
+/* Example command in a modal (e.g. the curl line in the "API Key Created"
+   dialog). Wraps instead of running past the modal's right edge. */
+.modal-content .code-example {
+    max-width: 100%;
+    box-sizing: border-box;
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--cudly-bg);
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    color: var(--cudly-text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 /* Modal overlay */
 .modal-overlay {
     position: fixed;
@@ -210,7 +228,7 @@
  * ----------------------------------------------------------------------- */
 .archera-cta {
     font-size: 0.82rem;
-    color: #888;
+    color: var(--cudly-text-muted); /* #888 was 3.5:1, under WCAG AA (issue #191) */
     margin-top: 0.75rem;
     margin-bottom: 0;
     line-height: 1.4;
@@ -337,7 +355,7 @@
     border-radius: 4px;
     font-size: 1rem;
     font-weight: 500;
-    transition: background 0.2s;
+    transition: background var(--cudly-dur) var(--cudly-ease);
 }
 
 .archera-signup-btn:hover {
@@ -349,7 +367,7 @@
 .archera-signup-note {
     margin-top: 0.75rem;
     font-size: 0.8rem;
-    color: #888;
+    color: var(--cudly-text-muted); /* #888 was 3.3:1 on the offer card (issue #191) */
 }
 
 /* -----------------------------------------------------------------------
@@ -410,7 +428,7 @@
 .archera-offer-disclosure {
     margin: 0 0 1rem;
     font-size: 0.82rem;
-    color: #777;
+    color: var(--cudly-text-muted); /* #777 was 4.2:1 on the offer card (issue #191) */
     font-style: italic;
 }
 
@@ -451,7 +469,7 @@
     border-radius: 4px;
     font-size: 0.92rem;
     font-weight: 500;
-    transition: background 0.2s;
+    transition: background var(--cudly-dur) var(--cudly-ease);
 }
 
 .archera-offer-signup:hover {
@@ -490,7 +508,7 @@
     content: "▸";
     display: inline-block;
     color: #888;
-    transition: transform 0.15s ease;
+    transition: transform var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .archera-offer-learnmore[open] > .archera-offer-learnmore-summary::after {

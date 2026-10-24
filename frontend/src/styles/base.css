@@ -45,6 +45,7 @@
 
     /* Typography */
     --cudly-font-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --cudly-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     --cudly-fs-xs: 0.75rem;     /* 12px */
     --cudly-fs-sm: 0.875rem;    /* 14px */
     --cudly-fs-md: 1rem;        /* 16px */
@@ -82,7 +83,7 @@
 
     /* Charts (issue #699). Chart.js paints on canvas, so lib/chart-theme.ts
      * reads these at render time; override them to restyle every chart.
-     * Series and legend colors must be #rrggbb (the charts derive shades
+     * Series and layer colors must be #rrggbb (the charts derive shades
      * from them). Keep lib/chart-theme.ts CHART_TOKEN_FALLBACKS in sync. */
     --cudly-chart-1: #1a73e8;
     --cudly-chart-2: #34a853;
@@ -95,12 +96,22 @@
     --cudly-chart-9: #795548;
     --cudly-chart-10: #e91e63;
     --cudly-chart-cumulative: #4285f4;
-    --cudly-chart-legend-dark: #37474f;
-    --cudly-chart-legend-mid: #78909c;
-    --cudly-chart-legend-border: #546e7a;
+    /* Per-service savings chart layers (#189): one hue per stacked layer. */
+    --cudly-chart-layer-current: #2a78d6;
+    --cudly-chart-layer-lowest: #eb6834;
+    --cudly-chart-layer-upside: #1baf7a;
     --cudly-chart-text: #666666;
     --cudly-chart-grid: rgba(0, 0, 0, 0.1);
     --cudly-chart-grid-faint: rgba(0, 0, 0, 0.05);
+
+    /* Motion (issue #725): one easing curve and three durations so every
+     * transition moves alike. Name the transitioned properties; never use
+     * `transition: all`, which also animates layout and color changes that
+     * should be instant. */
+    --cudly-ease: ease;
+    --cudly-dur-fast: 0.15s;
+    --cudly-dur: 0.2s;
+    --cudly-dur-slow: 0.25s;
 
     /* Layout — used by the action-center shell (top bar + sidebar) */
     --cudly-topbar-h: 56px;
@@ -156,10 +167,19 @@ body {
 
 
 .error {
-    color: var(--cudly-error);
+    /* --cudly-error on --cudly-error-bg is 4.1:1; the -fg shade is 4.9:1 (AA, issue #191). */
+    color: var(--cudly-error-fg);
     padding: 1rem;
     background: var(--cudly-error-bg);
     border-radius: 4px;
+}
+
+/* The global reset zeroes <p> margins, so a Retry button placed right after
+   an inline error (Admin > Users sections, Home upcoming widget) sat flush
+   against the box. Gap the button rather than the box: most .error boxes are
+   the only child of their container and must not gain trailing space. */
+.error:not(.hidden) + button {
+    margin-top: var(--cudly-sp-4);
 }
 
 /* Inline empty state — used WITHIN a card or section that already has
@@ -327,6 +347,17 @@ body {
     display: none;
 }
 
+/* The box only carries a top margin, so the submit button that follows it
+   in the auth forms (login, MFA, forgot/reset password, first-run setup)
+   sat flush against its border. Gap the button instead of the box: a hidden
+   box then leaves no stray space, and boxes that end a section or precede
+   .modal-buttons keep their spacing. `~` also reaches the reset form's
+   button, which has a (hidden) .success-message in between. */
+.error-message:not(.hidden) ~ button,
+.success-message:not(.hidden) + button {
+    margin-top: var(--cudly-sp-4);
+}
+
 /* Inline field-level error — sits underneath a single <input> rather
    than wrapping a whole form section like .error-message does. Used
    for live range / format validation messages so a user typing an
@@ -451,7 +482,7 @@ body {
     font-weight: var(--cudly-fw-semibold);
     z-index: 200;
     transform: translateY(-200%);
-    transition: transform 0.15s ease;
+    transition: transform var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .skip-to-main:focus {
