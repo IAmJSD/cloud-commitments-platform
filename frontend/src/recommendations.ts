@@ -106,6 +106,12 @@ const expandedSpGroups = new Set<string>();
 // in sync with the per-cell banner range under the table).
 let lastRecommendationsSummary: RecommendationsSummary | null = null;
 
+// #180: the single-value column filters the last successful fetch sent to the
+// server (#162 pushdown). The loaded list is already narrowed by these, so the
+// unfiltered total is unknown and the savings card must still say "Filtered"
+// even though the visible and loaded counts match.
+let loadedServerFilters: ReadonlyArray<{ column: state.RecommendationsColumnId; value: string }> = [];
+
 // #284 (CR follow-up): guard against concurrent stale-load refreshes. If a
 // background refresh is already in flight, any subsequent stale detection
 // skips kicking off a second request (and duplicate toasts).
@@ -650,6 +656,10 @@ export async function loadRecommendations(): Promise<void> {
 
     state.setRecommendations(visibleByPreference);
     state.clearSelectedRecommendations();
+    loadedServerFilters = [
+      ...(pushedService !== undefined ? [{ column: 'service' as const, value: pushedService }] : []),
+      ...(pushedRegion !== undefined ? [{ column: 'region' as const, value: pushedRegion }] : []),
+    ];
 
     // Cache the API-derived summary so renderRecommendationsList can
     // recompute the savings card from the visible (post-filter) set on
@@ -841,6 +851,27 @@ async function onLookbackChange(rawValue: string): Promise<void> {
   }
 }
 
+/**
+ * #180: the savings card's scope line, or null when the card covers every
+ * recommendation (the same scope as Home). "Filtered" is decided by whether a
+ * column filter is active or the fetch itself was narrowed server-side, not by
+ * comparing counts: a pushed-down service/region filter returns only matching
+ * rows, so the visible and loaded counts are equal. In that case the
+ * unfiltered total isn't known, so the line names the server-side filter
+ * instead of an "of Y" figure.
+ */
+function savingsScopeText(visibleCount: number, loadedCount: number): string | null {
+  const active = Object.keys(state.getRecommendationsColumnFilters());
+  if (loadedServerFilters.length > 0) {
+    const pushed = loadedServerFilters.map((f) => `${columnLabel(f.column)}: ${f.value}`);
+    const others = active.filter((col) => !loadedServerFilters.some((f) => f.column === col)).length;
+    if (others > 0) pushed.push(`+${others} more ${others === 1 ? 'filter' : 'filters'}`);
+    return `Filtered: ${visibleCount} recommendations (${pushed.join(', ')})`;
+  }
+  if (active.length === 0 && visibleCount >= loadedCount) return null;
+  return `Filtered: ${visibleCount} of ${loadedCount} recommendations`;
+}
+
 function renderRecommendationsSummary(
   _summary: RecommendationsSummary | null,
   recommendations: readonly LocalRecommendation[],
@@ -914,12 +945,12 @@ function renderRecommendationsSummary(
     const sfx = periodSuffix(period);
     return isSelectionView ? `Selected Savings ${sfx}` : `Potential Savings ${sfx}`;
   })();
-  // #180: Home's Potential Monthly Savings always covers every loaded
+  // #180: Home's Potential Monthly Savings always covers every
   // recommendation, so when column filters narrow this page the card must say
   // so; otherwise the two same-named KPIs disagree with no visible reason.
-  const isFilteredView = !isSelectionView && variantCount < loadedCount;
-  const savingsScopeDetail = isFilteredView
-    ? `<p class="detail" data-testid="savings-scope">Filtered: ${variantCount} of ${loadedCount} recommendations</p>`
+  const scopeText = isSelectionView ? null : savingsScopeText(variantCount, loadedCount);
+  const savingsScopeDetail = scopeText
+    ? `<p class="detail" data-testid="savings-scope">${escapeHtml(scopeText)}</p>`
     : '';
   const upfrontLabel = isSelectionView ? 'Selected Upfront Cost' : 'Total Upfront Cost';
   const paybackLabel = 'Payback Period';

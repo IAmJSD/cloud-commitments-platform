@@ -66,3 +66,28 @@ test('a column-filtered Opportunities card labels its narrower scope', async ({ 
   await expect(opportunitiesSavingsCard(page).getByTestId('savings-scope'))
     .toHaveText(`Filtered: ${AWS_EC2_COUNT} of ${AWS_COUNT} recommendations`);
 });
+
+test('the card stays labeled when the service filter is sent to the server', async ({ page }) => {
+  // The persisted filter is seeded after the first fetch, so only a later
+  // load (here: leaving and returning to Opportunities) sends ?service=ec2.
+  // The server then returns only ec2 rows and the counts match, but the card
+  // still covers less than Home's figure.
+  await page.addInitScript(() => {
+    localStorage.setItem('cudly.recs.columnFilters.v1', JSON.stringify({
+      schemaVersion: 1,
+      filters: { service: { kind: 'set', values: ['ec2'] } },
+    }));
+  });
+  await setup(page);
+
+  await page.goto('/opportunities');
+  const scope = opportunitiesSavingsCard(page).getByTestId('savings-scope');
+  await expect(scope).toHaveText(`Filtered: ${AWS_EC2_COUNT} of ${AWS_COUNT} recommendations`);
+
+  await page.locator('#home-tab-btn').click();
+  const pushed = page.waitForRequest((req) =>
+    req.url().includes('/api/recommendations') && new URL(req.url()).searchParams.get('service') === 'ec2');
+  await page.locator('#opportunities-tab-btn').click();
+  await pushed;
+  await expect(scope).toHaveText(`Filtered: ${AWS_EC2_COUNT} recommendations (Service: ec2)`);
+});
