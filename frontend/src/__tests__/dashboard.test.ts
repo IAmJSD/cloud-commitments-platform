@@ -1076,14 +1076,29 @@ describe('Dashboard Module', () => {
       expect(rows[1]?.querySelector('td')?.textContent).toBe('$250');
     });
 
+    // Two points: one point is the sparse-data state (#1334), which draws
+    // no chart and so has no table.
+    const twoTrendPoints = [
+      { timestamp: '2026-01-01T00:00:00Z', cumulative_savings: 100 },
+      { timestamp: '2026-01-02T00:00:00Z', cumulative_savings: 150 },
+    ];
+
     test('removes the trend table when there is no data to plot (#744)', async () => {
-      (api.getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: [
-        { timestamp: '2026-01-01T00:00:00Z', cumulative_savings: 100 },
-      ] });
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: twoTrendPoints });
       await loadSavingsTrendChart();
       expect(document.getElementById('savings-trend-table')).not.toBeNull();
 
       (api.getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: [] });
+      await loadSavingsTrendChart();
+      expect(document.getElementById('savings-trend-table')).toBeNull();
+    });
+
+    test('removes the trend table in the sparse-data state (#744, #1334)', async () => {
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: twoTrendPoints });
+      await loadSavingsTrendChart();
+      expect(document.getElementById('savings-trend-table')).not.toBeNull();
+
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: [twoTrendPoints[0]] });
       await loadSavingsTrendChart();
       expect(document.getElementById('savings-trend-table')).toBeNull();
     });
