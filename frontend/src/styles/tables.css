@@ -33,6 +33,14 @@ th {
     letter-spacing: 0.04em;
 }
 
+/* Money and count columns: right-aligned with tabular digits so amounts line
+   up for comparison (issue #739). */
+th.num,
+td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
 tr:hover {
     background: #f1f3f4;
 }

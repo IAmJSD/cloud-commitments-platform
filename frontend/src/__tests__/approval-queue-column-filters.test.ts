@@ -24,6 +24,7 @@ import type { ApprovalQueueColumnFilters } from '../state';
 jest.mock('../api', () => ({}));
 jest.mock('../navigation', () => ({ switchTab: jest.fn() }));
 jest.mock('../utils', () => ({
+  NO_VALUE: '\u2014',
   formatCurrency: jest.fn((v) => `$${v ?? 0}`),
   formatDate: jest.fn((v) => v),
   formatTerm: jest.fn((y) => `${y} Year${y === 1 ? '' : 's'}`),
