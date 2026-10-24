@@ -623,6 +623,22 @@ tr.override-disabled {
     opacity: 0.55;
 }
 
+/* Issue #8: "Updated <when>" line under the override's service name. One
+   line where there is room; below the drawer breakpoint it may wrap so the
+   Service column does not squeeze the inline Term/Payment selects further. */
+.last-updated-stamp {
+    display: block;
+    margin-top: 0.125rem;
+    color: var(--cudly-text-muted);
+    font-size: 0.75rem;
+    white-space: nowrap;
+}
+@media (max-width: 768px) {
+    .last-updated-stamp {
+        white-space: normal;
+    }
+}
+
 /* The matrix scrolls sideways; its absolutely positioned .sr-only cell labels
  * need this scroller as their containing block or they extend the page. */
 #permission-matrix {
