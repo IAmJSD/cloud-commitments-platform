@@ -5,7 +5,7 @@
 import * as api from './api';
 import * as state from './state';
 import { buildCommitmentSummary, withIntro } from './commitmentSummary';
-import { formatDate, formatTerm, getStatusBadge, escapeHtml, escapeHtmlAttr, formatCurrency, CURRENCY_DEFAULT_DIGITS, providerBadgeHtml } from './utils';
+import { formatDate, formatTerm, getStatusBadge, escapeHtml, escapeHtmlAttr, formatCurrency, CURRENCY_DEFAULT_DIGITS, NO_VALUE, providerBadgeHtml } from './utils';
 import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
@@ -741,7 +741,7 @@ function extractPlanInfo(plan: BackendPlan): { provider: string | null; service:
           .map(s => planServiceLabel(s.service || '—'))
           .join(', ');
     // H-4: never fabricate provider/term/coverage when absent.
-    // Return null so callers can surface '--'/'Unknown' in the display
+    // Return null so callers can surface NO_VALUE/'Unknown' in the display
     // layer rather than silently committing to aws/3yr/80% defaults.
     return {
       provider: firstService.provider || null,
@@ -800,10 +800,10 @@ async function loadPlanAccountNames(planId: string, cardEl: Element): Promise<vo
 // actions that require an account (Add Purchases, Edit) are suppressed
 // — only History and Delete remain — and a read-only "Unassigned" badge
 // is shown so operators can identify and re-scope the plan.
-/** "n/m steps", or "--" when the step count is missing or not positive (#136). */
+/** "n/m steps", or NO_VALUE when the step count is missing or not positive (#136). */
 function formatRampProgress(ramp: { current_step?: number; total_steps?: number }): string {
   const total = ramp.total_steps;
-  if (typeof total !== 'number' || !Number.isFinite(total) || total <= 0) return '--';
+  if (typeof total !== 'number' || !Number.isFinite(total) || total <= 0) return NO_VALUE;
   return `${ramp.current_step || 0}/${total} steps`;
 }
 
@@ -850,11 +850,11 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Term</span>
-            <span class="plan-detail-value">${info.term !== null ? formatTerm(info.term) : '--'}</span>
+            <span class="plan-detail-value">${info.term !== null ? formatTerm(info.term) : NO_VALUE}</span>
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Coverage</span>
-            <span class="plan-detail-value">${info.coverage !== null ? `${info.coverage}%` : '--'}</span>
+            <span class="plan-detail-value">${info.coverage !== null ? `${info.coverage}%` : NO_VALUE}</span>
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Ramp Schedule</span>

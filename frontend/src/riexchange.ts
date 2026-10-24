@@ -30,7 +30,7 @@ import type {
   Provider,
 } from './api';
 import { openModal, closeModal } from './modal';
-import { showSkeletonRows, teardownSkeleton, skeletonText } from './lib/skeleton';
+import { showSkeletonRows, showSkeletonText, teardownSkeleton } from './lib/skeleton';
 import { statusBadgeHtml } from './lib/status-badge';
 import { canAccess } from './permissions';
 import { applyReadOnlySettings, isPermissionDeniedError } from './settings';
@@ -1690,12 +1690,14 @@ export async function loadAutomationSettings(): Promise<void> {
   // Hold the section's place with its own titled frame while the config
   // loads (issue #190): a bare "Loading settings..." line between the GCP
   // block and Commitment Laddering read as the whole page half-loaded.
-  const loadingP = document.createElement('p');
-  loadingP.className = 'loading';
-  loadingP.textContent = 'Loading exchange automation settings...';
-  const loadingShell = automationSectionShell(loadingP, skeletonText(3));
+  // Inside the frame, the shared text skeleton (issue #186) stands in for
+  // the form: it brings the screen-reader "Loading…" status and the
+  // "Still loading" note, so no visible loading paragraph is needed.
+  const loadingBody = document.createElement('div');
+  const loadingShell = automationSectionShell(loadingBody);
   loadingShell.setAttribute('aria-busy', 'true');
   container.replaceChildren(loadingShell);
+  showSkeletonText(loadingBody, 4);
 
   try {
     const config = await api.getRIExchangeConfig();
@@ -1974,11 +1976,8 @@ async function loadExchangeHistory(generation: number = scopeGeneration): Promis
   const container = document.getElementById('ri-exchange-history-list');
   if (!container) return;
 
-  container.textContent = '';
-  const loadingP = document.createElement('p');
-  loadingP.className = 'loading';
-  loadingP.textContent = 'Loading exchange history...';
-  container.appendChild(loadingP);
+  // Issue #186: skeleton rows shaped like the 7-column history table.
+  showSkeletonRows(container, 3, 7);
 
   try {
     const records = await api.getRIExchangeHistory();

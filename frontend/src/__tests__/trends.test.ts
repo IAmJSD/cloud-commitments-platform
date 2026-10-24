@@ -153,7 +153,7 @@ describe('loadTrends', () => {
     expect(monthly).toHaveLength(6);
     expect(monthly[5]).toEqual([monthLabel(latest), '$400', '80.0%']);
     expect(monthly[4]).toEqual([monthLabel(previous), '$400', '70.0%']);
-    expect(monthly[0]).toEqual([monthLabel(keys[0]!), '--', 'N/A']);
+    expect(monthly[0]).toEqual([monthLabel(keys[0]!), '\u2014', 'N/A']);
 
     expect(cells('trends-provider-table')).toEqual([
       ['AWS', 'ec2', '$350', '75.0%'],
@@ -185,7 +185,7 @@ describe('loadTrends', () => {
     expect((api.getAnalyticsTrends as jest.Mock).mock.calls[0][0].provider).toBe('gcp');
     expect(cells('trends-provider-table')).toEqual([['GCP', 'compute', '$100', 'N/A']]);
     expect(cells('trends-monthly-table')[4]).toEqual([monthLabel(previous), '$100', 'N/A']);
-    expect(cells('trends-monthly-table')[5]).toEqual([monthLabel(latest), '--', 'N/A']);
+    expect(cells('trends-monthly-table')[5]).toEqual([monthLabel(latest), '\u2014', 'N/A']);
   });
 
   test('period select drives the window length', async () => {

@@ -99,7 +99,12 @@ jest.mock('../state', () => ({
 
 // Mock utils
 jest.mock('../utils', () => ({
-  formatCurrency: jest.fn((val) => `$${val || 0}`),
+  // Explicit digits (the non-monthly cost periods) render fixed decimals;
+  // null/undefined render the shared NO_VALUE placeholder like the real one.
+  formatCurrency: jest.fn((val, _currency = '$', digits?: number) => (
+    val === null || val === undefined ? '\u2014' : digits ? `$${Number(val).toFixed(digits)}` : `$${val || 0}`
+  )),
+  NO_VALUE: '\u2014',
   formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   escapeHtml: jest.fn((str) => str || ''),
   populateAccountFilter: jest.fn(() => Promise.resolve()),

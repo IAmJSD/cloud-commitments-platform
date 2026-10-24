@@ -18,6 +18,14 @@ export function reloadPage(): void {
 export const CURRENCY_DEFAULT_DIGITS = 0;
 
 /**
+ * The one placeholder for an absent value (issue #739). Money, counts,
+ * percentages and terms that the API did not report all render this, so a
+ * missing figure never reads as a real $0 and never shows as "--" on one
+ * tile and "—" on the next.
+ */
+export const NO_VALUE = '\u2014';
+
+/**
  * Format a number as currency.
  *
  * `digits` controls fraction digits (defaults to `CURRENCY_DEFAULT_DIGITS`,
@@ -46,7 +54,7 @@ export function formatCurrency(
   // Represent absent or non-finite values distinctly from a real $0 so
   // callers can see when data is missing vs actually zero (finding 11-N2).
   if (value === null || value === undefined || !Number.isFinite(value)) {
-    return '--';
+    return NO_VALUE;
   }
   return `${currency}${value.toLocaleString('en-US', {
     minimumFractionDigits: digits,
