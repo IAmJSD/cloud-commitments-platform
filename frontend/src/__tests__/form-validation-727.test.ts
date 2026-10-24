@@ -195,7 +195,7 @@ describe('history filter popover footer label (#727 UX-28)', () => {
   function open(kind: 'numeric' | 'categorical', onCommit = jest.fn()): HTMLButtonElement {
     document.body.innerHTML = '<button id="anchor"></button>';
     openHistoryColumnPopover({
-      column: 'provider', anchor: $('anchor'), currentFilter: undefined, headerLabel: 'Provider', kind,
+      scope: 'history', column: 'provider', anchor: $('anchor'), currentFilter: undefined, headerLabel: 'Provider', kind,
       distinctValues: kind === 'categorical' ? ['aws', 'gcp'] : undefined, onCommit,
     });
     return document.querySelector<HTMLButtonElement>('.column-filter-clear')!;
