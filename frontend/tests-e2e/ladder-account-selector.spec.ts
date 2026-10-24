@@ -216,6 +216,10 @@ test('a cleared Buffer Fraction blocks the save instead of sending a zero buffer
   await expect(page.locator('#ladder-cfg-buffer-fraction')).toBeFocused();
   expect(saves).toEqual([]);
   expect(writes).toEqual([]);
+  // The compact modal pins Save to its bottom-right corner, where the error
+  // toast sits at a 1280x720 viewport; dismiss it as ladder-config.spec.ts does.
+  await page.getByRole('button', { name: 'Dismiss notification' }).click();
+  await expect(page.getByRole('button', { name: 'Dismiss notification' })).toHaveCount(0);
 
   await page.locator('#ladder-cfg-buffer-fraction').fill('0');
   await page.locator('#ladder-config-save-btn').click();
