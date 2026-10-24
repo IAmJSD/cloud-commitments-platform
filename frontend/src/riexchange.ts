@@ -914,9 +914,16 @@ function renderRecommendations(container: HTMLElement): void {
 
   // Render an indexable list so per-row Exchange buttons can find the
   // matching original recommendation (idx into currentRecommendations).
+  // Index the full list once instead of an indexOf scan per visible row,
+  // which made the row build quadratic (#319). The first index wins, as
+  // with indexOf.
+  const indexByRec = new Map<ReshapeRecommendation, number>();
+  currentRecommendations.forEach((rec, i) => {
+    if (!indexByRec.has(rec)) indexByRec.set(rec, i);
+  });
   const visibleWithIdx = visible.map((rec) => ({
     rec,
-    idx: currentRecommendations.indexOf(rec),
+    idx: indexByRec.get(rec) ?? -1,
   }));
 
   container.innerHTML = `
