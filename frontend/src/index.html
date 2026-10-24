@@ -261,6 +261,7 @@
                 <div class="inventory-subnav" role="tablist" aria-label="Inventory &amp; Coverage navigation">
                     <button class="sub-tab-btn active" id="inv-subtab-active-commitments" data-inv-subtab="active-commitments" role="tab" aria-selected="true" aria-controls="inventory-active-commitments">Active commitments</button>
                     <button class="sub-tab-btn" id="inv-subtab-coverage" data-inv-subtab="coverage" role="tab" aria-selected="false" aria-controls="inventory-coverage">Coverage</button>
+                    <button class="sub-tab-btn" id="inv-subtab-trends" data-inv-subtab="trends" role="tab" aria-selected="false" aria-controls="inventory-trends">Trends</button>
                     <button class="sub-tab-btn" id="inv-subtab-ri-exchange" data-inv-subtab="ri-exchange" role="tab" aria-selected="false" aria-controls="inventory-ri-exchange">RI Exchange</button>
                 </div>
 
@@ -296,6 +297,28 @@
                         <p class="settings-description">Per-provider coverage rate: the share of on-demand spend protected by Reserved Instances, Savings Plans, or Committed Use Discounts.</p>
                     </section>
                     <div id="coverage-providers"></div>
+                </section>
+
+                <!-- Trends — savings-snapshot history from /api/analytics/trends
+                     (issue #30). trends.ts renders into #trends-content. -->
+                <section id="inventory-trends" class="hidden" role="tabpanel" aria-labelledby="inv-subtab-trends">
+                    <section class="card page-hero">
+                        <div class="section-header">
+                            <h2>Savings trends</h2>
+                            <div class="section-header-actions">
+                                <label>Period:
+                                    <select id="trends-period">
+                                        <option value="3">Last 3 months</option>
+                                        <option value="6" selected>Last 6 months</option>
+                                        <option value="12">Last 12 months</option>
+                                    </select>
+                                </label>
+                                <button id="trends-refresh-btn" class="btn btn-small">Refresh</button>
+                            </div>
+                        </div>
+                        <p class="settings-description">Monthly savings run-rate and coverage from the snapshots CUDly collects of your active commitments, broken down by provider and by service.</p>
+                    </section>
+                    <div id="trends-content"></div>
                 </section>
 
                 <!-- RI Exchange — relocated from the former top-level ri-exchange-tab. -->
