@@ -3,7 +3,7 @@
  */
 
 import * as api from '../api';
-import { getCurrentUser } from '../state';
+import { getCurrentUser, setCurrentUser } from '../state';
 import { isAdmin, isPurchaser, PURCHASER_GROUP_ID } from '../permissions';
 import {
   allUsers,
@@ -62,6 +62,24 @@ function withCurrentUser(users: api.APIUser[]): api.APIUser[] {
     mfa_enabled: current.mfa_enabled === true,
   };
   return [synthetic, ...users];
+}
+
+/**
+ * Re-read the signed-in user's groups and effective permissions after a
+ * group-membership change that includes them, so permission-gated UI (e.g.
+ * the Opportunities Purchase button and no-Purchaser banner) reflects the
+ * change on its next render instead of after a reload (#20). Best-effort:
+ * a failed fetch keeps the old state, which is no worse than before.
+ */
+export async function refreshCurrentUserAccess(changedUserIds: readonly string[]): Promise<void> {
+  const current = getCurrentUser();
+  if (!current || !changedUserIds.includes(current.id)) return;
+  try {
+    const [me, perms] = await Promise.all([api.getCurrentUser(), api.getUserPermissions()]);
+    setCurrentUser({ ...me, effectivePermissions: perms.permissions });
+  } catch (err) {
+    console.warn('Failed to refresh current user permissions:', err);
+  }
 }
 
 /**
@@ -253,6 +271,7 @@ export async function bulkAddToGroup(groupId: string): Promise<void> {
     // Deselect only the successfully-applied users so any skipped
     // (contradictory) users stay selected for the admin to fix.
     applicable.forEach(({ userId }) => removeSelectedUserId(userId));
+    await refreshCurrentUserAccess(applicable.map(({ userId }) => userId));
     await loadUsers();
     showSuccess(`Successfully added ${applicable.length} user(s) to group`);
   } catch (error) {
