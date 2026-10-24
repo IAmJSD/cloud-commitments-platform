@@ -55,7 +55,8 @@ describe('CSS Styles', () => {
     });
 
     test('has tab styles', () => {
-      expect(css).toMatch(/\.tab-btn\s*\{/);
+      // The tab buttons are the sidebar links (layout.css).
+      expect(css).toMatch(/\.app-sidebar-nav \.tab-btn\s*\{/);
       expect(css).toMatch(/\.tab-content\s*\{/);
     });
 
@@ -79,8 +80,9 @@ describe('CSS Styles', () => {
 
     test('has error class with error color token', () => {
       // Post-#340 the literal #ea4335 was replaced with the
-      // --cudly-error token; assert either form.
-      expect(css).toMatch(/\.error\s*\{[^}]*color:\s*(var\(--cudly-error\)|#ea4335)/);
+      // --cudly-error token; #191 moved the text to the darker -fg shade
+      // (AA on --cudly-error-bg). Assert any of those forms.
+      expect(css).toMatch(/\.error\s*\{[^}]*color:\s*(var\(--cudly-error(-fg)?\)|#ea4335)/);
     });
 
     test('has provider badge classes', () => {
@@ -419,9 +421,11 @@ describe('CSS File Organization', () => {
 
   test('tabs.css contains tab navigation styles', () => {
     const tabs = readCssFile('tabs.css');
-    expect(tabs).toMatch(/\.tabs\s*\{/);
-    expect(tabs).toMatch(/\.tab-btn\s*\{/);
     expect(tabs).toMatch(/\.tab-content\s*\{/);
+    // Issue #725: the dead top-bar rules must not return; .tab-btn.active
+    // leaked font-weight 600 onto the selected sidebar item.
+    expect(tabs).not.toMatch(/\.tabs\s*\{/);
+    expect(tabs).not.toMatch(/(^|\n)\.tab-btn[^\n]*\{/);
   });
 
   test('plans.css contains plan-specific styles', () => {
@@ -539,5 +543,60 @@ describe('CSS Applied Correctly', () => {
     const activeTab = document.querySelector('.tab-content.active') as HTMLElement;
     const computedStyle = window.getComputedStyle(activeTab);
     expect(computedStyle.display).toBe('block');
+  });
+});
+
+// Issue #725: table and CSS hygiene. Source-text checks, since JSDOM does not
+// lay out tables or resolve the cascade across the imported files.
+describe('CSS hygiene (issue #725)', () => {
+  const stylesDir = path.join(__dirname, '..', 'styles');
+  const files = fs.readdirSync(stylesDir).filter(f => f.endsWith('.css'));
+  const read = (f: string) => fs.readFileSync(path.join(stylesDir, f), 'utf8');
+  const all = files.map(read).join('\n');
+  const rule = (css: string, selector: RegExp) => css.match(new RegExp(`(^|\\n)${selector.source}\\s*\\{([^}]*)\\}`))?.[2] ?? '';
+
+  test('tables use the separate border model so the radius clips the header corners', () => {
+    const table = rule(read('tables.css'), /table/);
+    expect(table).toMatch(/border-collapse:\s*separate/);
+    expect(table).toMatch(/border-spacing:\s*0/);
+    // clip, not hidden: hidden would turn the table into a scroll container
+    // and break the sticky headers inside scrolling modals.
+    expect(table).toMatch(/overflow:\s*clip/);
+  });
+
+  test('table headers are small, uppercase and muted', () => {
+    const th = rule(read('tables.css'), /th/);
+    expect(th).toMatch(/font-size:\s*var\(--cudly-fs-xs\)/);
+    expect(th).toMatch(/text-transform:\s*uppercase/);
+    expect(th).toMatch(/color:\s*var\(--cudly-text-muted\)/);
+  });
+
+  test('savings row stripes survive the separate border model', () => {
+    const tables = read('tables.css');
+    expect(tables).not.toMatch(/tr\.(high|medium)-savings\s*\{[^}]*border-left/);
+    expect(tables).toMatch(/tr\.high-savings > :first-child\s*\{[^}]*inset 3px 0 0/);
+  });
+
+  test('the ramp option block exists once', () => {
+    expect(all.match(/(^|\n)\.ramp-options\s*\{/g)).toHaveLength(1);
+    expect(all.match(/(^|\n)#custom-ramp-config\s*\{/g)).toHaveLength(1);
+  });
+
+  test('no transition animates `all` or omits its property', () => {
+    const decls = all.match(/(^|\n)\s*transition:[^;]+;/g) ?? [];
+    expect(decls.length).toBeGreaterThan(0);
+    for (const d of decls) {
+      expect(d).not.toMatch(/transition:\s*all\b/);
+      expect(d).not.toMatch(/transition:\s*[\d.]+m?s/);
+    }
+  });
+
+  test('transitions use the shared motion tokens', () => {
+    expect(read('base.css')).toMatch(/--cudly-ease:/);
+    const decls = all.match(/(^|\n)\s*transition:[^;]+;/g) ?? [];
+    for (const d of decls) {
+      expect(d).toMatch(/var\(--cudly-ease\)/);
+      expect(d).not.toMatch(/\d+(\.\d+)?m?s\b/);
+    }
   });
 });
