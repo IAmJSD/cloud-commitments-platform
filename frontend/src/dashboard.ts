@@ -13,6 +13,7 @@ import { confirmDialog } from './confirmDialog';
 import { canAccess } from './permissions';
 import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale } from './recommendations';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
+import { buildKpiTile } from './lib/kpi-tile';
 import { formatTrendAxisTick } from './modules/chart-utils';
 // Re-export for backward compatibility (tests and other callers import from dashboard.ts).
 export { formatTrendAxisTick } from './modules/chart-utils';
@@ -353,29 +354,8 @@ function renderDashboardSummary(data: DashboardSummary, recs: readonly LocalReco
     { kpi: 'ytd',         title: 'YTD Savings', value: formatCurrency(data.ytd_savings), valueSavings: true,
       detail: 'From commitment purchases' },
   ];
-  for (const t of tiles) {
-    const card = document.createElement('div');
-    card.classList.add('card', 'kpi-tile');
-    card.dataset['kpi'] = t.kpi;
-    const h3 = document.createElement('h3');
-    h3.textContent = t.title;
-    const valueP = document.createElement('p');
-    valueP.classList.add('value', 'kpi-tile-value');
-    if (t.valueSavings) valueP.classList.add('savings');
-    valueP.textContent = t.value;
-    const detailP = document.createElement('p');
-    detailP.classList.add('detail', 'kpi-tile-detail');
-    detailP.textContent = t.detail;
-    const spark = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    spark.classList.add('kpi-tile-spark', 'hidden');
-    spark.dataset['sparkKey'] = t.kpi;
-    spark.setAttribute('aria-hidden', 'true');
-    card.appendChild(h3);
-    card.appendChild(valueP);
-    card.appendChild(detailP);
-    card.appendChild(spark);
-    summary.appendChild(card);
-  }
+  // Shared with the Opportunities summary (issue #743).
+  for (const t of tiles) summary.appendChild(buildKpiTile({ ...t, spark: true }));
 }
 
 /**

@@ -24,6 +24,7 @@ import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary, GlobalConfig } from './types';
 import { openModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { renderKpiTiles } from './lib/kpi-tile';
 import { canAccess } from './permissions';
 
 // Issue #869: true when the current session can take any action on
@@ -904,24 +905,14 @@ function renderRecommendationsSummary(
   const upfrontLabel = isSelectionView ? 'Selected Upfront Cost' : 'Total Upfront Cost';
   const paybackLabel = 'Payback Period';
 
-  container.innerHTML = `
-    <div class="card">
-      <h3>${countLabel}</h3>
-      <p class="value">${variantCount}</p>
-    </div>
-    <div class="card">
-      <h3>${savingsLabel}</h3>
-      <p class="value savings">${savingsText}</p>
-    </div>
-    <div class="card">
-      <h3>${upfrontLabel}</h3>
-      <p class="value">${upfrontText}</p>
-    </div>
-    <div class="card">
-      <h3>${paybackLabel}</h3>
-      <p class="value">${paybackText}</p>
-    </div>
-  `;
+  // Issue #743: the same .kpi-tile component as Home's summary, so the two
+  // pages' KPI cards match.
+  renderKpiTiles(container, [
+    { kpi: 'count', title: countLabel, value: String(variantCount) },
+    { kpi: 'savings', title: savingsLabel, value: savingsText, valueSavings: true },
+    { kpi: 'upfront', title: upfrontLabel, value: upfrontText },
+    { kpi: 'payback', title: paybackLabel, value: paybackText },
+  ]);
 }
 
 // Comparator extractors per column. Numeric columns return numbers
