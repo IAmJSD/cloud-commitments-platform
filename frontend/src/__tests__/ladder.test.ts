@@ -12,9 +12,10 @@ import type { LadderConfig } from '../api';
 import { waitFor } from '@testing-library/dom';
 import { listAccountsMinimal, type AccountSummary } from '../api/accounts';
 import { canAccess } from '../permissions';
+import { refreshLadderTimeline } from '../ladder-timeline';
 
 jest.mock('../api/accounts', () => ({ listAccountsMinimal: jest.fn() }));
-jest.mock('../ladder-timeline', () => ({ initLadderTimeline: jest.fn() }));
+jest.mock('../ladder-timeline', () => ({ initLadderTimeline: jest.fn(), refreshLadderTimeline: jest.fn() }));
 
 jest.mock('../api', () => ({
   getLadderConfigs: jest.fn(),
@@ -101,6 +102,8 @@ describe('ladder.ts', () => {
     expect(api.upsertLadderConfig).toHaveBeenCalledTimes(1);
     const { updated_at: _updatedAt, ...expected } = config;
     expect(api.upsertLadderConfig).toHaveBeenCalledWith({ ...expected, target_coverage: 75 });
+    // Issue #728: the timeline picks up the saved config without a reload.
+    expect(refreshLadderTimeline).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ cloud_account_id: config.cloud_account_id })]));
   });
 
   describe('renderLadderingSection: toggle label accessibility (issue #1412 row 3.1)', () => {
@@ -158,6 +161,8 @@ describe('ladder.ts', () => {
       expect(api.updateConfig).toHaveBeenCalledWith({ laddering_enabled: !before });
       expect(toggle.checked).toBe(!before);
       await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' })));
+      // Issue #728: the timeline re-evaluates with the new kill-switch state.
+      expect(refreshLadderTimeline).toHaveBeenCalledWith(expect.any(Array), !before);
     });
 
     test('a failed PUT reverts the toggle and shows an error toast', async () => {

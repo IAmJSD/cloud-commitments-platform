@@ -5,7 +5,7 @@ jest.mock('../permissions', () => ({ canAccess: jest.fn(() => true) }));
 
 import { listAccountsMinimal } from '../api/accounts';
 import { getLadderEvents, getLadderRuns, amendLadderEvent, type LadderEvent, type LadderRun } from '../api/ladder';
-import { initLadderTimeline } from '../ladder-timeline';
+import { initLadderTimeline, refreshLadderTimeline } from '../ladder-timeline';
 import { canAccess } from '../permissions';
 import { Chart } from 'chart.js';
 
@@ -359,4 +359,20 @@ test('editor labels each row by its basis and keeps the native amount', async ()
   expect(open('m1')).toBe('Planning budget (commitment $/hr)|5.000000');
   expect(open('m2')).toBe('Planning budget (on-demand-equivalent $/hr)|2.000000');
   expect(open('m3')).toBe('Planning budget (on-demand-equivalent $/hr)|1.000000');
+});
+
+test('refreshLadderTimeline re-evaluates the state after a config save and a kill-switch toggle (issue #728)', async () => {
+  await initLadderTimeline(document.getElementById('timeline')!, [], false);
+  const state = (): string => document.querySelector('[data-state]')!.textContent ?? '';
+  expect(state()).toContain('No ladder configuration');
+
+  const cfg = { cloud_account_id: 'account', provider: 'aws', enabled: true } as unknown as Parameters<typeof refreshLadderTimeline>[0][number];
+  refreshLadderTimeline([cfg]);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(state()).toContain('Ladder planning is disabled');
+
+  refreshLadderTimeline([cfg], true);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(state()).toContain('Timeline loaded');
+  expect(getLadderEvents).toHaveBeenCalledTimes(3);
 });
