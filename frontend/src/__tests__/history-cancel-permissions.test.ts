@@ -174,7 +174,7 @@ describe('History Cancel button permission gating (issue #158)', () => {
 
     await loadHistory();
 
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     const ids = Array.from(list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn'))
       .map((b) => b.dataset['cancelId']);
     expect(ids).toEqual(expect.arrayContaining(['exec-mine', 'exec-other', 'exec-legacy']));
@@ -195,7 +195,7 @@ describe('History Cancel button permission gating (issue #158)', () => {
 
     await loadHistory();
 
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     const ids = Array.from(list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn'))
       .map((b) => b.dataset['cancelId']);
     expect(ids).toEqual(expect.arrayContaining(['exec-mine', 'exec-other', 'exec-legacy']));
@@ -216,7 +216,7 @@ describe('History Cancel button permission gating (issue #158)', () => {
 
     await loadHistory();
 
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     const ids = Array.from(list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn'))
       .map((b) => b.dataset['cancelId']);
     expect(ids).toEqual(['exec-mine']);
@@ -234,7 +234,7 @@ describe('History Cancel button permission gating (issue #158)', () => {
 
     await loadHistory();
 
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     const buttons = list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn');
     expect(buttons).toHaveLength(0);
   });

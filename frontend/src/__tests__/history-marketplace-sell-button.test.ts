@@ -78,6 +78,7 @@ jest.mock('../state', () => ({
 import * as api from '../api';
 import { getCurrentUser } from '../state';
 import { confirmDialog } from '../confirmDialog';
+import { formatCurrency } from '../utils';
 
 // Administrators group GUID -- mirrors ADMINISTRATORS_GROUP_ID in
 // frontend/src/permissions.ts. Without this, isAdmin() returns false and
@@ -451,6 +452,36 @@ describe('Marketplace consent modal residual proration (issue #808 follow-up)', 
     expect(text).not.toContain('7 months');
     expect(text).not.toContain('$665');
     expect(text).not.toContain('$585');
+  });
+
+  // Issue #318: list price, AWS fee and net proceeds were each rounded to whole
+  // dollars on their own, so a $142.50 listing showed $143 = $17 + $125. Run
+  // the real formatter and check that the three lines reconcile to the cent.
+  test('issue #318: list price, fee and net proceeds show cents and add up', async () => {
+    const realFormat = jest.requireActual<typeof import('../utils')>('../utils').formatCurrency;
+    (formatCurrency as jest.Mock).mockImplementation(realFormat);
+    try {
+      const PARTWAY = new Date(Date.now() - 2.5 * 30.4375 * 24 * 60 * 60 * 1000).toISOString();
+      (api.getHistory as jest.Mock).mockResolvedValue({
+        summary: {},
+        purchases: [makeRow({
+          purchase_id: 'ri-cents', offering_class: 'standard', term: 1, timestamp: PARTWAY,
+          count: 1, upfront_cost: 200, monthly_cost: 0,
+        })],
+      });
+      await loadHistory();
+      document.querySelector<HTMLButtonElement>('.history-marketplace-sell-btn[data-marketplace-sell-id="ri-cents"]')!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const arg = (confirmDialog as jest.Mock).mock.calls[0][0] as { body: HTMLElement };
+      const values = Array.from(arg.body.querySelectorAll('dd')).map(dd => dd.textContent);
+      // remaining 9 of 12 months: residual 150, list 142.50, net 142.50 * 0.88 = 125.40.
+      expect(values).toEqual(expect.arrayContaining(['$142.50', '$17.10', '$125.40']));
+      expect(values).not.toContain('$143');
+    } finally {
+      (formatCurrency as jest.Mock).mockImplementation((val) => `$${val || 0}`);
+    }
   });
 
   test('shows default price as unavailable for a no-upfront RI instead of a fabricated price', async () => {

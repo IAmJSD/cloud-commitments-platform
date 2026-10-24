@@ -92,6 +92,17 @@ const NON_REVOKER_USER = {
   ],
 };
 
+// revoke-own only (the default User grant), no admin group (#320).
+const REVOKE_OWN_USER = {
+  id: 'own-uuid',
+  email: 'own@example.com',
+  groups: [],
+  effectivePermissions: [
+    { action: 'view', resource: 'history' },
+    { action: 'revoke-own', resource: 'purchases' },
+  ],
+};
+
 const FUTURE = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(); // +5 days
 const PAST = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(); // -1 hour
 
@@ -305,6 +316,26 @@ describe('History inline Revoke button (issue #290)', () => {
     await loadHistory();
 
     expect(revokeIds()).toContain('commit-scheduled');
+  });
+
+  // #320: a scheduled row is an execution, and the backend's revoke-own path
+  // for executions (authorizeRevokeOwnExecution) requires the creator. Completed
+  // purchase_history rows have no creator and stay account-scoped server-side.
+  test('revoke-own shows Revoke only on its own scheduled rows, and on completed rows', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(REVOKE_OWN_USER);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({ status: 'scheduled', purchase_id: 'sched-own', created_by_user_id: 'own-uuid', revocation_window_closes_at: FUTURE }),
+        makeRow({ status: 'scheduled', purchase_id: 'sched-other', created_by_user_id: 'other-uuid', revocation_window_closes_at: FUTURE }),
+        makeRow({ status: 'scheduled', purchase_id: 'sched-legacy', revocation_window_closes_at: FUTURE }),
+        makeRow({ status: 'completed', purchase_id: 'completed-row', revocation_window_closes_at: FUTURE }),
+      ],
+    });
+
+    await loadHistory();
+
+    expect(revokeIds().sort()).toEqual(['completed-row', 'sched-own']);
   });
 });
 

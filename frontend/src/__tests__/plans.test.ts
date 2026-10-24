@@ -250,6 +250,27 @@ describe('Plans Module', () => {
       expect(list?.innerHTML).toContain('ec2');
     });
 
+    test.each([
+      [{ current_step: 2, total_steps: 4 }, '2/4 steps'],
+      [{ current_step: 0, total_steps: 0 }, '--'],
+      [{ current_step: 0 }, '--'],
+    ])('ramp progress %j renders %s instead of a fabricated 0/1 (#136)', async (steps, expected) => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{
+          id: 'plan-1', name: 'Ramp Plan', enabled: true, auto_purchase: true,
+          services: { ec2: { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'all-upfront', coverage: 80 } },
+          ramp_schedule: { type: 'weekly', percent_per_step: 25, step_interval_days: 7, ...steps },
+        }],
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const progress = Array.from(document.querySelectorAll('#plans-list .plan-detail'))
+        .find((el) => el.querySelector('.plan-detail-label')?.textContent === 'Progress');
+      expect(progress?.querySelector('.plan-detail-value')?.textContent).toBe(expected);
+    });
+
     test('multi-SP plan summary lists every plan-type covered (issue #131)', async () => {
       // Pre-fix: extractPlanInfo took serviceValues[0], so a plan
       // covering both Compute SP and SageMaker SP rendered only
