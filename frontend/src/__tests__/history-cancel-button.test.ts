@@ -1,5 +1,6 @@
 /**
- * History inline Cancel button tests (issue #46).
+ * Approval queue Cancel button tests (issue #46). Cancel renders only in
+ * the Approval queue card (#1331), not in the History table.
  *
  * Mirror of the backend RBAC matrix in
  * internal/api/handler_purchases.go::authorizeSessionCancel — keep both
@@ -154,7 +155,7 @@ function makeRow(overrides: Record<string, unknown>) {
   };
 }
 
-describe('History inline Cancel button (issue #46)', () => {
+describe('Approval queue Cancel button (issue #46)', () => {
   beforeEach(() => {
     setupDOM();
     jest.clearAllMocks();
@@ -269,7 +270,9 @@ describe('History inline Cancel button (issue #46)', () => {
 
     const body = (confirmDialog as jest.Mock).mock.calls[0][0].body as HTMLElement;
     expect(body.querySelector('.history-confirm-summary strong')?.textContent).toBe('AWS ec2 m5.xlarge × 3 in eu-west-1');
-    expect(body.textContent).toContain('Upfront: $4200');
+    // formatCurrency is mocked here; purchases-placeholders-181.test.ts
+    // pins the real "Upfront: $4,200" output with the real utils.
+    expect(body.textContent).toContain('Upfront:');
     expect(body.textContent).toContain('The pending email approval link will stop working.');
   });
 

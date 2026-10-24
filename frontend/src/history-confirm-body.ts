@@ -4,18 +4,25 @@
  * this pending purchase?", so in a long table the user could not tell
  * which row they were confirming. The summary mirrors the row: provider,
  * service, resource and count, region, account, upfront cost and date.
+ * A row with no commitments (#181) shows the same "No recommendations
+ * attached" label as the row instead of its placeholder values.
  */
 
 import type { HistoryPurchase } from './types';
 import { getAccountName } from './recommendations';
 import { formatCurrency, formatDate, formatTerm } from './utils';
+import { hasNoCommitments, isRealTerm, NO_RECOMMENDATIONS_LABEL } from './lib/purchase-row-guards';
+
+/** The API's "multiple" placeholder for a basket spanning providers or regions. */
+const specific = (v: string | undefined): string => (v && v !== 'multiple' ? v : '');
 
 /** One-line description of a History row, e.g. "AWS ec2 m5.large × 2 in us-east-1". */
 export function describeHistoryPurchase(p: HistoryPurchase): string {
-  const provider = p.provider && p.provider !== 'multiple' ? p.provider.toUpperCase() : '';
+  if (hasNoCommitments(p)) return NO_RECOMMENDATIONS_LABEL;
+  const provider = specific(p.provider).toUpperCase();
   const what = [provider, p.service, p.resource_type].filter(Boolean).join(' ');
   const count = p.count > 1 ? ` × ${p.count}` : '';
-  const region = p.region ? ` in ${p.region}` : '';
+  const region = specific(p.region) ? ` in ${p.region}` : '';
   return `${what || 'Purchase'}${count}${region}`;
 }
 
@@ -34,8 +41,8 @@ export function historyConfirmBody(p: HistoryPurchase | undefined, explanation: 
     summary.appendChild(name);
     const facts: string[] = [];
     if (p.account_id) facts.push(`Account: ${getAccountName(p.account_id)}`);
-    if (p.term) facts.push(`Term: ${formatTerm(p.term)}`);
-    if (p.upfront_cost != null) facts.push(`Upfront: ${formatCurrency(p.upfront_cost)}`);
+    if (isRealTerm(p.term)) facts.push(`Term: ${formatTerm(p.term)}`);
+    if (p.upfront_cost != null && !hasNoCommitments(p)) facts.push(`Upfront: ${formatCurrency(p.upfront_cost)}`);
     const date = formatDate(p.timestamp);
     if (date) facts.push(`Created: ${date}`);
     if (facts.length > 0) {
