@@ -580,15 +580,19 @@ export async function handleExecutePurchase(): Promise<void> {
 /**
  * fanOutBucketLabel renders a short human identifier for a fan-out bucket so a
  * partial-failure toast can name which buckets created pending executions
- * (issue #642). Uses the (provider/service @ capacity%) tuple — the same
- * fields the user chose in the modal — so the orphaned-but-actionable pending
- * requests are identifiable rather than hidden behind a bare count.
+ * (issue #642). Uses the provider / account / service @ capacity% tuple, laid
+ * out like the bucket header the user just saw in the modal, so the
+ * orphaned-but-actionable pending requests are identifiable rather than hidden
+ * behind a bare count. Buckets are per account (#333), so without the account
+ * a two-account split of one service read as the same label twice (#434). The
+ * account uses the header's label (name, else ID, else 'Unattributed'); the
+ * toast renders it via textContent.
  */
 function fanOutBucketLabel(b: FanOutBucket): string {
   const provider = (b.provider || '').toString().toUpperCase();
   const service = b.service || 'commitment';
   const cap = Number.isFinite(b.capacityPercent) ? `@${b.capacityPercent}%` : '';
-  return `${provider} ${service}${cap}`.trim();
+  return [provider, fanOutBucketAccountLabel(b), `${service}${cap}`].filter(Boolean).join(' / ');
 }
 
 /**
