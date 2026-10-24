@@ -81,12 +81,6 @@ async function resolveScope(): Promise<{ provider: Provider | ''; accountID?: st
 
 // Mode label mapping — single source of truth
 const MODE_LABELS: Record<string, string> = { manual: "Manual Approval", auto: "Fully Automated" };
-const MODE_VALUES: Record<string, string> = Object.fromEntries(
-  Object.entries(MODE_LABELS).map(([k, v]) => [v, k])
-);
-
-// Suppress unused variable warning — MODE_VALUES is used in saveAutomationSettings
-void MODE_VALUES;
 
 /**
  * Load the RI Exchange tab — called when tab is activated and whenever the
@@ -941,7 +935,14 @@ function renderRecommendations(container: HTMLElement): void {
       </thead>
       <tbody>
         ${visibleWithIdx.map(({ rec, idx }) => {
-          const utilClass = rec.utilization_percent >= 95 ? 'util-green' : rec.utilization_percent >= 70 ? 'util-yellow' : 'util-red';
+          // The API can omit utilization_percent (the filter extractor
+          // already maps it to NaN). Unknown renders as a neutral em-dash:
+          // calling toFixed on it threw and left the panel on its skeleton,
+          // and undefined >= 70 is false, which painted unknown as red.
+          const utilPct = typeof rec.utilization_percent === 'number' && Number.isFinite(rec.utilization_percent)
+            ? rec.utilization_percent
+            : null;
+          const utilClass = utilPct === null ? '' : utilPct >= 95 ? 'util-green' : utilPct >= 70 ? 'util-yellow' : 'util-red';
           const altCell = renderAlternativesCell(rec.alternative_targets);
           return `
           <tr>
@@ -949,7 +950,7 @@ function renderRecommendations(container: HTMLElement): void {
             <td>${rec.source_count}x ${escapeHtml(rec.source_instance_type)}</td>
             <td>${rec.target_count}x ${escapeHtml(rec.target_instance_type)}</td>
             <td>${altCell}</td>
-            <td class="${utilClass}">${rec.utilization_percent.toFixed(1)}%</td>
+            <td class="${utilClass}">${utilPct === null ? '—' : `${utilPct.toFixed(1)}%`}</td>
             <td>${rec.normalized_used.toFixed(1)} / ${rec.normalized_purchased.toFixed(1)}</td>
             <td>${escapeHtml(rec.reason)}</td>
             ${canExchange ? `<td>

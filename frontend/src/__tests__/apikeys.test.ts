@@ -1221,6 +1221,24 @@ describe('API Keys Module', () => {
       expect(container?.innerHTML).toContain('Never');
     });
 
+    test('one malformed last_used_at degrades to one cell instead of blanking the table (#136)', async () => {
+      const mockKeys = [
+        { id: 'key-bad', name: 'Bad Timestamp', key_prefix: 'bad111', is_active: true,
+          created_at: '2024-01-15T10:00:00Z', last_used_at: 'not-a-date' },
+        { id: 'key-ok', name: 'Leaked Key', key_prefix: 'ok2222', is_active: true,
+          created_at: '2024-01-15T10:00:00Z', last_used_at: '2024-01-16T15:30:00Z' },
+      ];
+
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
+      await loadApiKeys();
+
+      const container = document.getElementById('apikeys-list');
+      const rows = container?.querySelectorAll('tbody tr');
+      expect(rows).toHaveLength(2);
+      expect(rows?.[0]?.textContent).toContain('--');
+      expect(container?.querySelectorAll('.revoke-key-btn')).toHaveLength(2);
+    });
+
     // #492: populated last_used_at renders relative time with ISO title for hover
     test('renders relative time with ISO title for populated last_used_at (issue #492)', async () => {
       const recentTs = new Date(Date.now() - 2 * 3600 * 1000).toISOString(); // 2 hours ago
