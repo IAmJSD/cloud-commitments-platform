@@ -4,8 +4,8 @@
 import fs from 'fs';
 import path from 'path';
 import {
-  CHART_TOKEN_FALLBACKS, applyChartDefaults, chartColor, chartPalette, requireToken, withAlpha,
-  type ChartToken,
+  CHART_TOKEN_FALLBACKS, SURFACE_FALLBACK, applyChartDefaults, chartColor, chartPalette, requireToken,
+  surfaceColor, withAlpha, type ChartToken,
 } from '../lib/chart-theme';
 
 const SRC = path.join(__dirname, '..');
@@ -42,6 +42,13 @@ describe('chart-theme', () => {
     for (const name of TOKENS) expect([name, defined.get(name)]).toEqual([name, CHART_TOKEN_FALLBACKS[name]]);
     const cssChartTokens = [...defined.keys()].filter((k) => k.startsWith('--cudly-chart-'));
     expect(cssChartTokens.sort()).toEqual([...TOKENS].sort());
+  });
+
+  it('surfaceColor reads --cudly-surface, falling back to its base.css value', () => {
+    expect(baseRootTokens().get('--cudly-surface')).toBe(SURFACE_FALLBACK);
+    expect(surfaceColor()).toBe(SURFACE_FALLBACK);
+    document.documentElement.style.setProperty('--cudly-surface', '#1f2937');
+    expect(surfaceColor()).toBe('#1f2937');
   });
 
   it('series and layer tokens are #rrggbb so charts can derive shades from them', () => {

@@ -2056,6 +2056,19 @@ describe('Dashboard Module', () => {
             expect(d.borderColor).toBe('#ffffff');
           }
         });
+
+        test('the segment gap follows a themed --cudly-surface (#699)', () => {
+          buildDOM();
+          document.documentElement.style.setProperty('--cudly-surface', '#1f2937');
+          try {
+            renderSavingsByService([rec('ec2', 100), rec('ec2', 300, 3)], { ec2: { potential_savings: 300, current_savings: 40 } });
+            const calls = (Chart as unknown as jest.Mock).mock.calls;
+            const datasets = (calls[calls.length - 1]?.[1] as { data: { datasets: { borderColor: string }[] } }).data.datasets;
+            for (const d of datasets) expect(d.borderColor).toBe('#1f2937');
+          } finally {
+            document.documentElement.style.removeProperty('--cudly-surface');
+          }
+        });
       });
 
       test('shows empty state and hides canvas when no recommendations', () => {

@@ -110,3 +110,14 @@ export function applyChartDefaults(defaults: ChartDefaultsLike | undefined): voi
   defaults.color = chartColor('--cudly-chart-text');
   defaults.borderColor = chartColor('--cudly-chart-grid');
 }
+
+/** base.css default of --cudly-surface (card background), with the same fallback rule as above. */
+export const SURFACE_FALLBACK = '#ffffff';
+
+/**
+ * The card surface color, for chart strokes that must read as background
+ * (the gap between stacked bar segments, #744).
+ */
+export function surfaceColor(): string {
+  return readToken('--cudly-surface') || SURFACE_FALLBACK;
+}

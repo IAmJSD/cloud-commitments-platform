@@ -21,7 +21,7 @@ import { buildKpiTile } from './lib/kpi-tile';
 import { scopeUpcomingToProvider, upcomingEmptyMessage, UPCOMING_ACCOUNT_SCOPE_NOTE } from './lib/upcoming-scope';
 import { formatTrendAxisTick, formatTrendTooltipTitle, formatSparseTrendMessage, MIN_TREND_POINTS, upsertChart } from './modules/chart-utils';
 import { setChartSummary, renderChartTable, removeChartTable } from './lib/chart-a11y';
-import { applyChartDefaults, chartColor, withAlpha } from './lib/chart-theme';
+import { applyChartDefaults, chartColor, surfaceColor, withAlpha } from './lib/chart-theme';
 // Re-export for backward compatibility (tests and other callers import from dashboard.ts).
 export { formatTrendAxisTick } from './modules/chart-utils';
 
@@ -42,8 +42,11 @@ let savingsByServiceChart: Chart | null = null;
 const SAVINGS_BY_SERVICE_MAX = 10;
 
 // #744: a 2px card-coloured gap on top of every stacked segment, so adjacent
-// layers are separated by an edge as well as by their layer colour.
-const SEGMENT_GAP = { borderColor: '#ffffff', borderWidth: { top: 2, right: 0, bottom: 0, left: 0 } } as const;
+// layers are separated by an edge as well as by their layer colour. The
+// colour is the --cudly-surface token (#699), read at render time.
+function segmentGap() {
+  return { borderColor: surfaceColor(), borderWidth: { top: 2, right: 0, bottom: 0, left: 0 } } as const;
+}
 
 // Ids of the "View as table" text alternatives for the Home charts (#744).
 const SAVINGS_BY_SERVICE_TABLE_ID = 'savings-by-service-table';
@@ -1025,6 +1028,7 @@ export function renderSavingsByService(
   });
 
   const layerColors = savingsLayerColors();
+  const gap = segmentGap();
   applyChartDefaults(Chart.defaults);
   // #747: update in place so a filter change doesn't replay the entry animation.
   savingsByServiceChart = upsertChart(savingsByServiceChart, canvas, {
@@ -1040,7 +1044,7 @@ export function renderSavingsByService(
           data: currentData,
           backgroundColor: layerColors.current,
           borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 4, bottomRight: 4 },
-          ...SEGMENT_GAP,
+          ...gap,
           stack: 'savings',
         },
         {
@@ -1048,7 +1052,7 @@ export function renderSavingsByService(
           data: lowestOptionData,
           backgroundColor: layerColors.lowestOption,
           borderRadius: { topLeft: 0, topRight: 0, bottomLeft: 0, bottomRight: 0 },
-          ...SEGMENT_GAP,
+          ...gap,
           stack: 'savings',
         },
         {
@@ -1056,7 +1060,7 @@ export function renderSavingsByService(
           data: upsideData,
           backgroundColor: layerColors.upside,
           borderRadius: { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 },
-          ...SEGMENT_GAP,
+          ...gap,
           stack: 'savings',
         },
       ],
