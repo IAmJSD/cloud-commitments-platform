@@ -113,13 +113,21 @@ export function setupMobileNav(): MobileNavHandle | null {
     firstFocusable?.focus();
   }
 
-  function closeDrawer(): void {
+  /**
+   * `returnFocus: 'if-inside'` returns focus to the hamburger only when it is
+   * still inside the drawer. A sidebar link click has by then moved it to the
+   * new page's heading (issue #730), or a dirty-guard dialog holds it, and
+   * pulling it back to the hamburger would undo either.
+   */
+  function closeDrawer(returnFocus: 'always' | 'if-inside' = 'always'): void {
+    const focusInside = sidebar!.contains(document.activeElement);
     document.body.classList.remove('sidebar-open');
     hamburger!.setAttribute('aria-expanded', 'false');
     sidebar!.setAttribute('aria-hidden', 'true');
+    // Before inert lands, which does not blur focus in Chromium.
+    if (returnFocus === 'always' || focusInside) hamburger!.focus();
     sidebar!.setAttribute('inert', '');
     if (overlay) overlay.setAttribute('aria-hidden', 'true');
-    hamburger!.focus();
   }
 
   /**
@@ -222,14 +230,14 @@ export function setupMobileNav(): MobileNavHandle | null {
         return;
       }
       if (document.body.classList.contains('sidebar-open')) {
-        closeDrawer();
+        closeDrawer('if-inside');
       }
     });
   });
 
   return {
     open: openDrawer,
-    close: closeDrawer,
+    close: () => closeDrawer(),
     isOpen: () => document.body.classList.contains('sidebar-open'),
   };
 }
