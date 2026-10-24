@@ -72,6 +72,7 @@ jest.mock('../confirmDialog', () => ({
 }));
 
 jest.mock('../utils', () => ({
+  NO_VALUE: '\u2014',
   formatDate: jest.fn((v) => v ?? ''),
   formatTerm: jest.fn((y) => `${y}yr`),
   formatRampSchedule: jest.fn((v) => v ?? ''),
