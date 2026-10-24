@@ -125,9 +125,9 @@ export function renderUsers(users: APIUser[]): void {
             <td><span class="text-muted">${user.created_at ? formatDate(user.created_at) : '-'}</span></td>
             <td><span class="text-muted">${user.last_login ? formatRelativeTime(user.last_login) : 'Never'}</span></td>
             <td>
-              <div class="action-buttons">
-                <button class="btn-small edit-user-btn" data-user-id="${escapeHtml(user.id)}" ${user.id === SYNTHETIC_USER_ID ? 'disabled' : ''} aria-label="Edit user ${escapeHtml(user.email)}">Edit</button>
-                <button class="btn-small btn-danger delete-user-btn" data-user-id="${escapeHtml(user.id)}" ${user.id === SYNTHETIC_USER_ID ? 'disabled' : ''} aria-label="Delete user ${escapeHtml(user.email)}">Delete</button>
+              <div class="action-buttons row-actions">
+                <button class="btn-small icon-btn edit-user-btn" data-user-id="${escapeHtml(user.id)}" ${user.id === SYNTHETIC_USER_ID ? 'disabled' : ''} aria-label="Edit user ${escapeHtml(user.email)}" title="Edit user">${iconSvg('edit')}</button>
+                <button class="btn-small btn-danger icon-btn delete-user-btn" data-user-id="${escapeHtml(user.id)}" ${user.id === SYNTHETIC_USER_ID ? 'disabled' : ''} aria-label="Delete user ${escapeHtml(user.email)}" title="Delete user">${iconSvg('trash-2')}</button>
               </div>
             </td>
           </tr>

@@ -242,12 +242,18 @@ describe('groups/groupList', () => {
       groupList.renderGroups([xssGroup]);
 
       const container = document.getElementById('groups-list');
-      // Verify script tag is escaped (not executable)
-      expect(container?.innerHTML).not.toContain('<script>');
-      expect(container?.innerHTML).toContain('&lt;script&gt;');
-      // Verify img tag is escaped (not executable)
-      expect(container?.innerHTML).not.toContain('<img');
-      expect(container?.innerHTML).toContain('&lt;img');
+      // The name and description must stay text: no element is created
+      // from them anywhere in the card.
+      expect(container?.querySelector('script, img')).toBeNull();
+      expect(container?.querySelector('h4')?.textContent).toBe(xssGroup.name);
+      expect(container?.querySelector('.group-description')?.textContent).toBe(xssGroup.description);
+      // The icon buttons carry the name in aria-label. The attribute must
+      // round-trip the raw string, so a quote cannot end it early. (innerHTML
+      // serialises attribute values without escaping < and >, which is why
+      // this checks the DOM rather than the serialised markup.)
+      const edit = container?.querySelector('.edit-group-btn');
+      expect(edit?.getAttribute('aria-label')).toBe(`Edit group ${xssGroup.name}`);
+      expect(edit?.getAttributeNames().sort()).toEqual(['aria-label', 'class', 'data-group-id', 'title']);
     });
 
     it('should not render if container not found', () => {

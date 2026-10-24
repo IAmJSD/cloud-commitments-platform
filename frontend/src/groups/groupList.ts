@@ -7,6 +7,7 @@ import { allUsers } from '../users/state';
 import { escapeHtml } from '../users/utils';
 import { openEditGroupModal, deleteGroup } from './groupActions';
 import { openDuplicateGroupModal } from './groupModals';
+import { iconSvg } from '../icons';
 
 /**
  * Format permission constraints as a readable string for tooltips
@@ -62,9 +63,11 @@ export function renderGroups(groups: APIGroup[]): void {
           </div>
           <div class="group-card-actions">
             <span class="badge">${memberCount} member${memberCount !== 1 ? 's' : ''}</span>
-            <button class="btn-small edit-group-btn" data-group-id="${escapeHtml(group.id)}">Edit</button>
-            <button class="btn-small duplicate-group-btn" data-group-id="${escapeHtml(group.id)}" title="Duplicate">Duplicate</button>
-            <button class="btn-small btn-danger delete-group-btn" data-group-id="${escapeHtml(group.id)}">Delete</button>
+            <span class="row-actions">
+              <button class="btn-small icon-btn edit-group-btn" data-group-id="${escapeHtml(group.id)}" aria-label="Edit group ${escapeHtml(group.name)}" title="Edit group">${iconSvg('edit')}</button>
+              <button class="btn-small icon-btn duplicate-group-btn" data-group-id="${escapeHtml(group.id)}" aria-label="Duplicate group ${escapeHtml(group.name)}" title="Duplicate group">${iconSvg('copy')}</button>
+              <button class="btn-small btn-danger icon-btn delete-group-btn" data-group-id="${escapeHtml(group.id)}" aria-label="Delete group ${escapeHtml(group.name)}" title="Delete group">${iconSvg('trash-2')}</button>
+            </span>
           </div>
         </div>
         <div class="group-card-body">

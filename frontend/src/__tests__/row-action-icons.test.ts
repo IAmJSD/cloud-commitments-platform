@@ -1,7 +1,8 @@
 /**
  * Icon-only row actions on the admin page (issue #751 review feedback).
  *
- * API key Revoke/Delete and the group editor's permission Remove used to be
+ * API key Revoke/Delete, the group editor's permission Remove, and the
+ * users/groups Edit, Duplicate and Delete actions used to be
  * chunky text buttons. They now render an SVG from the shared icon set, so
  * the accessible name has to come from aria-label. These tests pin the icon,
  * the name a screen reader (and getByRole) sees, the tooltip, and that the
@@ -10,6 +11,9 @@
 import { getByRole, queryByRole } from '@testing-library/dom';
 import { loadApiKeys } from '../apikeys';
 import { addPermission } from '../groups/groupModals';
+import { renderGroups } from '../groups/groupList';
+import { renderUsers } from '../users/userList';
+import * as userState from '../users/state';
 
 jest.mock('../api', () => ({
   getApiKeys: jest.fn(),
@@ -110,5 +114,51 @@ describe('group editor permission Remove', () => {
     remove.click();
     expect(list.querySelectorAll('.permission-item')).toHaveLength(1);
     expect(list.querySelector<HTMLSelectElement>('.perm-action')?.value).toBe('update');
+  });
+});
+
+describe('users table and group card actions', () => {
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it('users Edit/Delete are pencil and trash icon buttons with per-user names', () => {
+    document.body.innerHTML = '<div id="users-list"></div>';
+    renderUsers([
+      { id: 'u1', email: 'alice@example.com', groups: [], mfa_enabled: false },
+    ] as unknown as Parameters<typeof renderUsers>[0]);
+    const row = document.querySelector<HTMLElement>('#users-list tbody tr')!;
+    const edit = getByRole(row, 'button', { name: 'Edit user alice@example.com' });
+    const del = getByRole(row, 'button', { name: 'Delete user alice@example.com' });
+    expect(edit.querySelector('svg.icon-edit')).not.toBeNull();
+    expect(del.querySelector('svg.icon-trash-2')).not.toBeNull();
+    expect(edit.textContent?.trim()).toBe('');
+    expect(del.textContent?.trim()).toBe('');
+    expect(edit.getAttribute('title')).toBe('Edit user');
+    expect(del.getAttribute('title')).toBe('Delete user');
+    expect(del.classList.contains('btn-danger')).toBe(true);
+    expect(edit.parentElement?.classList.contains('row-actions')).toBe(true);
+  });
+
+  it('group Edit/Duplicate/Delete are icon buttons named after the group', () => {
+    document.body.innerHTML = '<div id="groups-list"></div>';
+    userState.setAllUsers([]);
+    renderGroups([
+      { id: 'g1', name: 'Ops', description: '', permissions: [], allowed_accounts: [] },
+    ] as unknown as Parameters<typeof renderGroups>[0]);
+    const card = document.querySelector<HTMLElement>('#groups-list .group-card')!;
+    const cases: Array<[string, string, string, string]> = [
+      ['Edit group Ops', 'edit', 'Edit group', 'edit-group-btn'],
+      ['Duplicate group Ops', 'copy', 'Duplicate group', 'duplicate-group-btn'],
+      ['Delete group Ops', 'trash-2', 'Delete group', 'delete-group-btn'],
+    ];
+    for (const [name, icon, title, cls] of cases) {
+      const btn = getByRole(card, 'button', { name });
+      expect(btn.querySelector(`svg.icon-${icon}`)).not.toBeNull();
+      expect(btn.textContent?.trim()).toBe('');
+      expect(btn.getAttribute('title')).toBe(title);
+      expect(btn.classList.contains(cls)).toBe(true);
+      expect(btn.dataset['groupId']).toBe('g1');
+    }
   });
 });
