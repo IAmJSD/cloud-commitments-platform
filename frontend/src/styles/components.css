@@ -1101,6 +1101,24 @@ tr.rec-variant-row:hover td:not(.checkbox-col) {
     gap: 0.5rem;
 }
 
+/* Account delete cascade (issue #734): the purchases "Cancel All N
+ * Pending + Delete" will cancel. Scrolls so a long backlog keeps the
+ * dialog's buttons on screen. */
+.account-delete-pending p {
+    margin: 0 0 0.5rem;
+}
+
+.account-delete-pending-list {
+    margin: 0 0 0.5rem;
+    padding-left: 1.25rem;
+    max-height: 14rem;
+    overflow-y: auto;
+}
+
+.account-delete-pending-total {
+    font-weight: 600;
+}
+
 /* Approval-details modal (issue #374): when the confirmDialog body
  * carries an .approval-details element, widen the dialog so the 12-col
  * per-rec table can breathe. The selector targets the parent modal via
