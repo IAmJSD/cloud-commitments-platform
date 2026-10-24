@@ -71,7 +71,7 @@ jest.mock('../api', () => ({
   // value don't need to be updated.
   getRecommendations: jest.fn().mockResolvedValue([]),
 }));
-import { loadSavingsTrendChart, setupSavingsTrendHandlers, setupDashboardHandlers, formatTrendAxisTick } from '../dashboard';
+import { loadSavingsTrendChart, loadYtdSparkline, setupSavingsTrendHandlers, setupDashboardHandlers, formatTrendAxisTick } from '../dashboard';
 import { formatTrendTooltipTitle } from '../modules/chart-utils';
 
 // Mock state module
@@ -351,6 +351,22 @@ describe('Dashboard Module', () => {
 
       const upcomingList = document.getElementById('upcoming-list');
       expect(upcomingList?.innerHTML).toContain('No upcoming scheduled purchases');
+    });
+
+    // #1189: the Go handler serializes an empty result as `purchases: null`
+    // (nil slice), and apiRequest resolves null for an empty 2xx body (#304).
+    test.each([
+      ['purchases: null', { purchases: null }],
+      ['a null response', null],
+    ])('shows the empty message for %s', async (_label, value) => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({ potential_monthly_savings: 1000, by_service: {} });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue(value);
+
+      await loadDashboard();
+
+      const upcomingList = document.getElementById('upcoming-list');
+      expect(upcomingList?.textContent).toContain('No upcoming scheduled purchases');
+      expect(upcomingList?.querySelector('.error')).toBeNull();
     });
 
     test('shows error on API failure', async () => {
@@ -688,6 +704,66 @@ describe('Dashboard Module', () => {
         message: 'Failed to cancel purchase',
         kind: 'error',
       }));
+    });
+
+    // #731: the details dialog goes through openModal and shares the card's
+    // cancel path (same confirm copy, one DELETE per step at a time).
+    describe('upcoming purchase details dialog (#731)', () => {
+      const upcoming = {
+        execution_id: 'exec-731', plan_id: 'plan-731', plan_name: 'Test Plan', provider: 'aws',
+        service: 'ec2', step_number: 1, total_steps: 4, estimated_savings: 100, scheduled_date: '2024-02-15',
+      };
+
+      async function openDetails(): Promise<{ viewBtn: HTMLButtonElement; modal: HTMLElement }> {
+        (api.getDashboardSummary as jest.Mock).mockResolvedValue({ potential_monthly_savings: 0, by_service: {} });
+        (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [upcoming] });
+        await loadDashboard();
+        const viewBtn = document.querySelector('[data-action="view-purchase"]') as HTMLButtonElement;
+        viewBtn.focus();
+        viewBtn.click();
+        return { viewBtn, modal: document.getElementById('purchase-details-modal') as HTMLElement };
+      }
+
+      test('is a named dialog that takes focus, closes on Escape and restores focus', async () => {
+        const { viewBtn, modal } = await openDetails();
+        expect(modal.getAttribute('role')).toBe('dialog');
+        expect(modal.getAttribute('aria-modal')).toBe('true');
+        const titleId = modal.getAttribute('aria-labelledby') ?? '';
+        expect(document.getElementById(titleId)?.textContent).toBe('Upcoming Purchase Details');
+        expect(modal.contains(document.activeElement)).toBe(true);
+
+        modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        expect(document.getElementById('purchase-details-modal')).toBeNull();
+        expect(document.activeElement).toBe(viewBtn);
+      });
+
+      test('Cancel Purchase uses the card confirm copy and sends one DELETE while in flight', async () => {
+        const { modal } = await openDetails();
+        let finishDelete: () => void = () => {};
+        (api.deletePlannedPurchase as jest.Mock).mockReturnValue(new Promise<void>(r => { finishDelete = r; }));
+        mockConfirmDialog.mockClear();
+
+        const cancelBtn = modal.querySelector('#cancel-purchase-detail-btn') as HTMLButtonElement;
+        cancelBtn.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(cancelBtn.disabled).toBe(true);
+        cancelBtn.disabled = false; // force a second click through
+        cancelBtn.click();
+        (document.querySelector('[data-action="cancel-purchase"]') as HTMLButtonElement).click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
+        const body = (mockConfirmDialog.mock.calls[0]![0] as { body: string }).body;
+        expect(body).toContain('removes this upcoming step from the plan');
+        expect(body).not.toContain('refunded');
+        expect(api.deletePlannedPurchase).toHaveBeenCalledTimes(1);
+
+        (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+        finishDelete();
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(document.getElementById('purchase-details-modal')).toBeNull();
+        expect(api.deletePlannedPurchase).toHaveBeenCalledWith('exec-731');
+      });
     });
 
     // #293: Potential Monthly Savings card renders per-cell range, not
@@ -1324,10 +1400,11 @@ describe('Dashboard Module', () => {
       accountCb();
       await new Promise((r) => setTimeout(r, 0));
 
-      expect(api.getSavingsAnalytics).toHaveBeenCalledTimes(1);
-      expect(api.getSavingsAnalytics).toHaveBeenCalledWith(
-        expect.objectContaining({ account_ids: ['uuid-acct-1'] })
-      );
+      // Two scoped series: the trend chart and the YTD tile sparkline (#317).
+      expect(api.getSavingsAnalytics).toHaveBeenCalledTimes(2);
+      for (const [filters] of (api.getSavingsAnalytics as jest.Mock).mock.calls) {
+        expect(filters).toEqual(expect.objectContaining({ account_ids: ['uuid-acct-1'] }));
+      }
     });
 
     test('does NOT fire when home tab is inactive (active-tab guard)', async () => {
@@ -2260,5 +2337,84 @@ describe('Dashboard Module', () => {
       // Must show '--' (not '$0') when the savings computation fails
       expect(valueEl?.textContent).toBe('--');
     });
+  });
+});
+
+describe('YTD Savings tile sparkline (#317)', () => {
+  function addYtdTile(): SVGSVGElement {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.classList.add('kpi-tile-spark', 'hidden');
+    svg.dataset['sparkKey'] = 'ytd';
+    const canvas = document.createElement('canvas');
+    canvas.id = 'savings-trend-chart';
+    const b7 = document.createElement('button');
+    b7.className = 'trend-range';
+    b7.dataset['range'] = '7';
+    document.body.replaceChildren(svg, canvas, b7);
+    return svg;
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (state.getCurrentProvider as jest.Mock).mockReturnValue('aws');
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['uuid-acct-1']);
+  });
+
+  test('requests 1 January (UTC) to now, scoped by the chips, whatever the trend range', async () => {
+    addYtdTile();
+    (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+    await loadYtdSparkline();
+
+    expect(api.getSavingsAnalytics).toHaveBeenCalledTimes(1);
+    const filters = (api.getSavingsAnalytics as jest.Mock).mock.calls[0][0];
+    const start = new Date(filters.start);
+    expect(start.toISOString()).toBe(new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1)).toISOString());
+    expect(filters).toEqual(expect.objectContaining({ provider: 'aws', account_ids: ['uuid-acct-1'] }));
+  });
+
+  test('draws the YTD series into the tile', async () => {
+    const svg = addYtdTile();
+    (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
+      data_points: [
+        { timestamp: '2026-01-05T00:00:00Z', cumulative_savings: 10 },
+        { timestamp: '2026-05-05T00:00:00Z', cumulative_savings: 40 },
+      ],
+    });
+
+    await loadYtdSparkline();
+
+    expect(svg.classList.contains('hidden')).toBe(false);
+    expect(svg.querySelector('polyline')).not.toBeNull();
+  });
+
+  test('the trend chart (7-day range) no longer redraws the YTD tile', async () => {
+    const svg = addYtdTile();
+    (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
+      data_points: [
+        { timestamp: new Date(Date.now() - 2 * 86400_000).toISOString(), cumulative_savings: 1 },
+        { timestamp: new Date().toISOString(), cumulative_savings: 2 },
+      ],
+    });
+    setupSavingsTrendHandlers();
+    (document.querySelector('.trend-range[data-range="7"]') as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.getSavingsAnalytics).toHaveBeenCalledTimes(1);
+    expect(svg.querySelector('polyline')).toBeNull();
+  });
+
+  test('a failed fetch hides the sparkline and a missing tile skips the request', async () => {
+    const svg = addYtdTile();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    (api.getSavingsAnalytics as jest.Mock).mockRejectedValue(new Error('503'));
+    await loadYtdSparkline();
+    expect(svg.classList.contains('hidden')).toBe(true);
+
+    document.body.replaceChildren();
+    (api.getSavingsAnalytics as jest.Mock).mockClear();
+    await loadYtdSparkline();
+    expect(api.getSavingsAnalytics).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

@@ -131,28 +131,44 @@ describe('History Module', () => {
   });
 
   describe('initHistoryDateRange', () => {
-    test('sets default date range to 7 days', () => {
-      initHistoryDateRange();
+    // Issue #51: the inputs are seeded from the LOCAL calendar day. Jest
+    // runs in America/New_York (globalSetup), so pin "now" to an evening
+    // instant where the local day trails the UTC day: the old toISOString()
+    // seeding showed tomorrow in To and dropped a day from From.
+    test('sets default 7-day range from the local calendar day', () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-28T03:30:00Z')); // Jul 27, 23:30 EDT
+      try {
+        initHistoryDateRange();
+      } finally {
+        jest.useRealTimers();
+      }
 
       const startInput = document.getElementById('history-start') as HTMLInputElement;
       const endInput = document.getElementById('history-end') as HTMLInputElement;
+      // Purchase events are a log view (7 days); Savings History has its
+      // own 90-day default via #savings-period in index.html.
+      expect(endInput.value).toBe('2026-07-27');
+      expect(startInput.value).toBe('2026-07-20');
+    });
 
-      expect(startInput.value).toBeTruthy();
-      expect(endInput.value).toBeTruthy();
+    test('the seeded range requests a purchase made earlier the same local day', async () => {
+      // A purchase at 21:00 EDT on Jul 27 is 01:00 UTC on Jul 28. The
+      // server filters on whole UTC days, so the request must reach Jul 28
+      // even though the To input (correctly) shows Jul 27.
+      const purchaseAt = '2026-07-28T01:00:00Z';
+      (api.getHistory as jest.Mock).mockResolvedValue({ summary: {}, purchases: [] });
+      jest.useFakeTimers().setSystemTime(new Date('2026-07-28T03:30:00Z'));
+      try {
+        initHistoryDateRange();
+      } finally {
+        jest.useRealTimers();
+      }
+      await loadHistory();
 
-      // End date should be today in UTC (code uses toISOString which is UTC)
-      const today = new Date();
-      const todayUTC = today.toISOString().split('T')[0] || '';
-      expect(endInput.value).toBe(todayUTC);
-
-      // Start date should be 7 days ago (UTC). Purchase events are a log
-      // view — recent activity is what matters. Savings History (the trend
-      // view) defaults to 90 days separately via #savings-period in
-      // index.html.
-      const expectedStart = new Date();
-      expectedStart.setDate(expectedStart.getDate() - 7);
-      const expectedStartUTC = expectedStart.toISOString().split('T')[0] || '';
-      expect(startInput.value).toBe(expectedStartUTC);
+      const filters = (api.getHistory as jest.Mock).mock.calls[0][0] as { start: string; end: string };
+      const purchaseUtcDay = purchaseAt.slice(0, 10);
+      expect(filters.start <= purchaseUtcDay && purchaseUtcDay <= filters.end).toBe(true);
+      expect(filters).toEqual(expect.objectContaining({ start: '2026-07-20', end: '2026-07-28' }));
     });
 
     test('does not overwrite existing values', () => {
@@ -263,6 +279,20 @@ describe('History Module', () => {
       expect(endInput.value).toBe('2026-02-04');
     });
 
+    test('snaps to the LOCAL day of a purchase made after UTC midnight', async () => {
+      // 02:00 UTC on Feb 5 is 21:00 EST on Feb 4: the table shows Feb 4,
+      // so the To input must too (issue #51).
+      (api.getHistory as jest.Mock).mockResolvedValue({
+        summary: {},
+        purchases: [{ timestamp: '2026-02-01T12:00:00Z' }, { timestamp: '2026-02-05T02:00:00Z' }],
+      });
+
+      await viewPlanHistory('plan-123');
+
+      expect((document.getElementById('history-start') as HTMLInputElement).value).toBe('2026-02-01');
+      expect((document.getElementById('history-end') as HTMLInputElement).value).toBe('2026-02-04');
+    });
+
     test('leaves From/To inputs untouched when the plan has no purchases', async () => {
       // No data → no honest range to display. Clobbering the inputs with
       // `today` would lie to the user; preserve whatever was there.
@@ -300,9 +330,12 @@ describe('History Module', () => {
 
       await loadHistory();
 
+      // The inputs are local (America/New_York) days; the request carries
+      // the UTC days covering them, so the To day's evening (already Mar 2
+      // in UTC) is included (issue #51).
       expect(api.getHistory).toHaveBeenCalledWith({
         start: '2024-01-01',
-        end: '2024-03-01',
+        end: '2024-03-02',
         provider: 'aws'
       });
     });
