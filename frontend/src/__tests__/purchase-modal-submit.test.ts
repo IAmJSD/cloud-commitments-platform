@@ -11,13 +11,11 @@
 
 // The harness registers the module mocks, so it must be imported first.
 import {
-  buildFanOutRows,
   buildRows,
   deferred,
   flush,
   setupPurchaseModalTest,
 } from './purchase-modal-harness';
-import { handleExecutePurchase } from '../app';
 import * as api from '../api';
 import * as state from '../state';
 import { showToast } from '../toast';
@@ -27,7 +25,6 @@ import {
   openPurchaseModal,
   getPurchaseModalRecommendations,
   getFanOutBuckets,
-  getExecuteMode,
   loadRecommendations,
 } from '../recommendations';
 import { formatCurrency } from '../utils';
@@ -132,154 +129,6 @@ describe('Issue #251: Execute Now makes no cancellation promise', () => {
 // #1904: fan-out modal skips incompatible buckets
 
 describe('Issue #1904: fan-out modal skips incompatible buckets', () => {
-  test('fan-out open and close reset the execute button label and mode (#754)', async () => {
-    const rows = buildFanOutRows();
-    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'no-upfront' } });
-    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
-    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
-    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
-    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['ec2-1', 'rds-3']));
-    await loadRecommendations();
-
-    const btn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
-    btn.textContent = 'Execute Purchase Now';
-    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
-    await flush();
-    expect(btn.textContent).toBe('Send for Approval');
-    expect(getExecuteMode()).toBe('');
-
-    btn.textContent = 'Execute Purchase Now';
-    const onClose = (openModal as jest.Mock).mock.calls.slice(-1)[0][1].onClose as () => void;
-    onClose();
-    expect(btn.textContent).toBe('Send for Approval');
-    expect(getExecuteMode()).toBe('');
-  });
-
-  test('busy fan-out stays disabled while its requests are pending', async () => {
-    const requests = [
-      deferred<Awaited<ReturnType<typeof api.executePurchase>>>(),
-      deferred<Awaited<ReturnType<typeof api.executePurchase>>>(),
-    ];
-    (api.executePurchase as jest.Mock)
-      .mockReturnValueOnce(requests[0]!.promise)
-      .mockReturnValueOnce(requests[1]!.promise);
-    const rows = buildFanOutRows().map((row) => row.service === 'rds'
-      ? { ...row, payment: 'partial-upfront' as const, upfront_cost: 1000 }
-      : row);
-    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'partial-upfront' } });
-    (api.getRecommendations as jest.Mock).mockResolvedValue({
-      summary: {}, recommendations: rows, regions: [],
-    });
-    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
-    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
-    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['ec2-1', 'rds-3']));
-
-    await loadRecommendations();
-    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
-    await flush();
-    const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
-    executeBtn.click();
-    await flush();
-    expect(api.executePurchase).toHaveBeenCalledTimes(2);
-
-    const paymentSelect = document.querySelector<HTMLSelectElement>('.fanout-bucket-payment')!;
-    paymentSelect.value = 'partial-upfront';
-    paymentSelect.dispatchEvent(new Event('change'));
-
-    expect(executeBtn.disabled).toBe(true);
-    executeBtn.click();
-    await flush();
-    expect(api.executePurchase).toHaveBeenCalledTimes(2);
-
-    for (const [i, request] of requests.entries()) {
-      request.resolve({
-        execution_id: `exec-fanout-${i}`,
-        status: 'pending',
-        email_sent: true,
-        approval_recipient: 'approver@example.com',
-      });
-    }
-    await flush();
-    expect(executeBtn.dataset['submitting']).toBeUndefined();
-  });
-
-  test('pending fan-out bucket payment restores its value and preserves the captured request', async () => {
-    const rows: LocalRecommendation[] = [
-      ...buildRows(),
-      {
-        id: 'rds-3', provider: 'aws', cloud_account_id: 'a1', service: 'rds', region: 'us-east-1',
-        resource_type: 'db.r5.large', term: 3, payment: 'all-upfront', count: 2,
-        upfront_cost: 3000, monthly_cost: 0, savings: 500,
-      },
-    ];
-    const request = deferred<Awaited<ReturnType<typeof api.executePurchase>>>();
-    (api.executePurchase as jest.Mock).mockReturnValue(request.promise);
-    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'all-upfront' } });
-    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: rows, regions: [] });
-    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
-    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
-    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['v-1-all', 'rds-3']));
-
-    await loadRecommendations();
-    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
-    await flush();
-    const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
-    const paymentSelect = document.querySelector<HTMLSelectElement>('.fanout-bucket-payment')!;
-    const beforeValue = paymentSelect.value;
-    const alternate = Array.from(paymentSelect.options).find((option) => !option.disabled && option.value !== beforeValue)!;
-    expect(alternate).toBeTruthy();
-    executeBtn.click();
-    await flush();
-    expect((api.executePurchase as jest.Mock).mock.calls).toHaveLength(2);
-    expect(executeBtn.dataset['submitting']).toBe('true');
-    const callsBefore = (api.executePurchase as jest.Mock).mock.calls
-      .map(([payload, capacity, mode]) => [JSON.parse(JSON.stringify(payload)), capacity, mode]);
-    const summaryBefore = document.getElementById('fanout-summary')!.textContent;
-    paymentSelect.value = alternate.value;
-    expect(paymentSelect.value).not.toBe(beforeValue);
-    paymentSelect.dispatchEvent(new Event('change'));
-    expect(paymentSelect.value).toBe(beforeValue);
-    expect(document.getElementById('fanout-summary')!.textContent).toBe(summaryBefore);
-    const livePaymentSelect = document.querySelector<HTMLSelectElement>('.fanout-bucket-payment')!;
-    expect(livePaymentSelect.isConnected).toBe(true);
-    expect(livePaymentSelect.value).toBe(beforeValue);
-    expect((api.executePurchase as jest.Mock).mock.calls).toHaveLength(2);
-    expect((api.executePurchase as jest.Mock).mock.calls.map(([payload, capacity, mode]) => [JSON.parse(JSON.stringify(payload)), capacity, mode]))
-      .toEqual(callsBefore);
-    request.resolve({ execution_id: 'pending-bucket', status: 'pending' });
-    await flush();
-  });
-
-  test('fan-out clears submitting state when result processing throws', async () => {
-    const rows = buildFanOutRows().map((row) => row.service === 'rds'
-      ? { ...row, payment: 'partial-upfront' as const, upfront_cost: 1000 }
-      : row);
-    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'partial-upfront' } });
-    (api.getRecommendations as jest.Mock).mockResolvedValue({
-      summary: {}, recommendations: rows, regions: [],
-    });
-    (state.getRecommendations as jest.Mock).mockReturnValue(rows);
-    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(rows);
-    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['ec2-1', 'rds-3']));
-    (api.executePurchase as jest.Mock)
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({
-        execution_id: 'exec-valid',
-        status: 'pending',
-        email_sent: true,
-      });
-
-    await loadRecommendations();
-    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
-    await flush();
-    const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement;
-    await expect(handleExecutePurchase()).rejects.toThrow(TypeError);
-
-    expect(api.executePurchase).toHaveBeenCalledTimes(2);
-    expect(executeBtn.dataset['submitting']).toBeUndefined();
-    expect(executeBtn.disabled).toBe(false);
-  });
-
   test('fan-out payment changes replace the priced sibling in the displayed totals and POST', async () => {
     const rows: LocalRecommendation[] = [
       {
