@@ -146,7 +146,7 @@ describe('Purchases tables never render impossible values (#181)', () => {
     await loadHistory();
     const row = cells('#history-list', 'exec-empty');
     // Status, Date, Provider, Service, Type, Region, Count, Term, Upfront, Monthly, Savings, Plan
-    expect(row.slice(2, 11)).toEqual(['-', '-', 'No recommendations attached', '-', '-', '-', '-', '-', '-']);
+    expect(row.slice(2, 11)).toEqual(['—', '—', 'No recommendations attached', '—', '—', '—', '—', '—', '—']);
     const text = row.join(' ');
     expect(text).not.toMatch(/0 Years|0 commitment\(s\)|Multiple|\$0/);
   });
@@ -155,14 +155,14 @@ describe('Purchases tables never render impossible values (#181)', () => {
     await loadHistory();
     const row = cells('#purchases-approval-queue', 'exec-empty');
     // Date, Account, Provider, Service, Count, Term, Payment, Monthly, Upfront, Savings, Created by, Actions
-    expect(row.slice(2, 10)).toEqual(['-', 'No recommendations attached', '-', '-', '-', '-', '-', '-']);
+    expect(row.slice(2, 10)).toEqual(['—', 'No recommendations attached', '—', '—', '—', '—', '—', '—']);
   });
 
   test('a real mixed-term basket keeps its values but shows a dash, not "0 Years", for the term', async () => {
     await loadHistory();
     const row = cells('#history-list', 'exec-mixed');
     expect(row[6]).toBe('2');
-    expect(row[7]).toBe('-');
+    expect(row[7]).toBe('—');
     expect(row[8]).toBe('$1,200');
     expect(row.join(' ')).not.toContain('0 Years');
   });
