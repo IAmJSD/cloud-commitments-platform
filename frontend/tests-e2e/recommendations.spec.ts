@@ -58,9 +58,12 @@ test('shows loading and zero-result filter states without losing filter controls
   await expression.press('Enter');
 
   await expect(page.locator('#recommendations-list thead')).toBeVisible();
-  await expect(page.locator('#recommendations-list tbody .empty')).toHaveText(
+  // Issue #756: the hint now carries a Clear filters button as its next step.
+  await expect(page.locator('#recommendations-list tbody .empty')).toContainText(
     'No rows match these filters.',
   );
+  await expect(page.locator('#recommendations-list tbody .empty')
+    .getByRole('button', { name: 'Clear filters' })).toBeVisible();
   await expect(page.locator('#recommendations-action-summary')).toHaveText(
     '(0 visible — adjust filters)',
   );
