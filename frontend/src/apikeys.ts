@@ -7,6 +7,7 @@ import type { APIKeyInfo, CreateAPIKeyResponse } from './types';
 import { loadApiKeysUsageStats } from './apikeys_usage';
 import { escapeHtml, formatDateTime, formatRelativeTime } from './utils';
 import { confirmDialog } from './confirmDialog';
+import { friendlyError } from './api/errors';
 import { showToast } from './toast';
 import { openModal, closeModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
@@ -494,7 +495,7 @@ export async function revokeApiKey(keyId: string): Promise<void> {
     await loadApiKeys();
   } catch (error) {
     console.error('Failed to revoke API key:', error);
-    showError('Failed to revoke API key');
+    showError(`Failed to revoke API key: ${friendlyError(error)}`);
   }
 }
 
@@ -518,7 +519,7 @@ export async function deleteApiKey(keyId: string): Promise<void> {
     await loadApiKeys();
   } catch (error) {
     console.error('Failed to delete API key:', error);
-    showError('Failed to delete API key');
+    showError(`Failed to delete API key: ${friendlyError(error)}`);
   }
 }
 

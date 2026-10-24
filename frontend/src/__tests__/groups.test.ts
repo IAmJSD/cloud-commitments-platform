@@ -910,7 +910,7 @@ describe('groups/groupActions', () => {
 
       await groupActions.deleteGroup('group-1');
 
-      expect(document.querySelector('.toast-error')?.textContent).toContain('Failed to delete group');
+      expect(document.querySelector('.toast-error')?.textContent).toContain('Failed to delete group: Server error');
     });
   });
 

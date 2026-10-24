@@ -2359,7 +2359,7 @@ describe('Bulk override modal (issue #119)', () => {
 
   test('all saves fail: error shown in form, modal stays open', async () => {
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
-    (api.saveAccountServiceOverride as jest.Mock).mockRejectedValue(new Error('timeout'));
+    (api.saveAccountServiceOverride as jest.Mock).mockRejectedValue(new Error('coverage must be between 0 and 100'));
 
     const { form, bulkList } = await openBulkModal();
 
@@ -2378,7 +2378,8 @@ describe('Bulk override modal (issue #119)', () => {
     expect(mockShowToast).not.toHaveBeenCalled();
 
     const errEl = document.getElementById('override-form-error') as HTMLElement;
-    expect(errEl.textContent).toMatch(/failed/i);
+    // Issue #748: the server's reason, not a blanket "Check your connection".
+    expect(errEl.textContent).toBe('All 2 saves failed: coverage must be between 0 and 100');
 
     // Modal stays open so user can retry.
     const modal = document.getElementById('override-modal') as HTMLElement;
