@@ -5,8 +5,9 @@
 import * as api from './api';
 import * as state from './state';
 import { buildCommitmentSummary, withIntro } from './commitmentSummary';
-import { formatDate, formatTerm, getStatusBadge, escapeHtml, escapeHtmlAttr, formatCurrency, CURRENCY_DEFAULT_DIGITS, providerBadgeHtml } from './utils';
+import { formatDate, formatTerm, getStatusBadge, escapeHtml, escapeHtmlAttr, formatCurrency, CURRENCY_DEFAULT_DIGITS, NO_VALUE, providerBadgeHtml } from './utils';
 import { showToast } from './toast';
+import { iconSvg } from './icons';
 import { confirmDialog } from './confirmDialog';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
 import { viewPlanHistory } from './history';
@@ -22,6 +23,7 @@ import {
   sortedDistinctValues,
 } from './lib/column-filter-popover';
 import { suggestedPurchaseStartDate } from './lib/calendar-date';
+import { isPastScheduledDate } from './lib/purchase-row-guards';
 import { mountPlanEditorPanel } from './plan-editor-panel';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
@@ -157,7 +159,7 @@ function renderPlannedPurchasesInternal(): void {
   const filterBtn = (column: state.PlansColumnId, lbl: string): string => {
     const active = filters[column] ? ' active' : '';
     const label = filters[column] ? `Filter ${lbl} \u2014 currently active` : `Filter ${lbl}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">\u26db</button>`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">${iconSvg('filter')}</button>`;
   };
 
   const tbody = filtered.length === 0
@@ -434,6 +436,15 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
     canAccess('cancel-own', 'purchases')
   );
 
+  // #181: a pending step whose date has passed did not run; "pending" alone
+  // reads as on schedule. Flag it and name the next action the user can take.
+  const overdue = isPending && isPastScheduledDate(purchase.scheduled_date);
+  const overdueHint = canRunPurchase ? 'Not run on its date. Run now or pause.' : 'Not run on its date.';
+  const overdueBadge = overdue
+    ? '<span class="status-badge badge-danger" title="Scheduled date has passed">Overdue</span>'
+    : '';
+  const overdueHintHtml = overdue ? `<div class="overdue-hint">${overdueHint}</div>` : '';
+
   return `
     <tr class="planned-purchase-row ${statusClass}">
       <td>
@@ -448,13 +459,13 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td>${termCell}</td>
       <td>${upfrontShown}</td>
       <td class="savings">${savingsCell}</td>
-      <td><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span></td>
+      <td><span class="status-badges"><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span>${overdueBadge}</span>${overdueHintHtml}</td>
       <td class="actions">
-        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary" title="Run now" aria-label="Run now">▶</button>` : ''}
-        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause" aria-label="Pause">⏸</button>` : ''}
-        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume" aria-label="Resume">⏵</button>` : ''}
-        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan" aria-label="Edit Plan">✎</button>` : ''}
-        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Cancel this purchase and disable its plan" aria-label="Cancel this purchase and disable its plan">✕</button>` : ''}
+        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary icon-label" title="Run now" aria-label="Run now">${iconSvg('play')}<span>Run now</span></button>` : ''}
+        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause" aria-label="Pause">${iconSvg('pause')}</button>` : ''}
+        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume" aria-label="Resume">${iconSvg('play')}</button>` : ''}
+        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan" aria-label="Edit Plan">${iconSvg('edit')}</button>` : ''}
+        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Cancel this purchase and disable its plan" aria-label="Cancel this purchase and disable its plan">${iconSvg('x')}</button>` : ''}
       </td>
     </tr>
   `;
@@ -730,7 +741,7 @@ function extractPlanInfo(plan: BackendPlan): { provider: string | null; service:
           .map(s => planServiceLabel(s.service || '—'))
           .join(', ');
     // H-4: never fabricate provider/term/coverage when absent.
-    // Return null so callers can surface '--'/'Unknown' in the display
+    // Return null so callers can surface NO_VALUE/'Unknown' in the display
     // layer rather than silently committing to aws/3yr/80% defaults.
     return {
       provider: firstService.provider || null,
@@ -789,10 +800,10 @@ async function loadPlanAccountNames(planId: string, cardEl: Element): Promise<vo
 // actions that require an account (Add Purchases, Edit) are suppressed
 // — only History and Delete remain — and a read-only "Unassigned" badge
 // is shown so operators can identify and re-scope the plan.
-/** "n/m steps", or "--" when the step count is missing or not positive (#136). */
+/** "n/m steps", or NO_VALUE when the step count is missing or not positive (#136). */
 function formatRampProgress(ramp: { current_step?: number; total_steps?: number }): string {
   const total = ramp.total_steps;
-  if (typeof total !== 'number' || !Number.isFinite(total) || total <= 0) return '--';
+  if (typeof total !== 'number' || !Number.isFinite(total) || total <= 0) return NO_VALUE;
   return `${ramp.current_step || 0}/${total} steps`;
 }
 
@@ -839,11 +850,11 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Term</span>
-            <span class="plan-detail-value">${info.term !== null ? formatTerm(info.term) : '--'}</span>
+            <span class="plan-detail-value">${info.term !== null ? formatTerm(info.term) : NO_VALUE}</span>
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Coverage</span>
-            <span class="plan-detail-value">${info.coverage !== null ? `${info.coverage}%` : '--'}</span>
+            <span class="plan-detail-value">${info.coverage !== null ? `${info.coverage}%` : NO_VALUE}</span>
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Ramp Schedule</span>

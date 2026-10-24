@@ -33,6 +33,14 @@ th {
     letter-spacing: 0.04em;
 }
 
+/* Money and count columns: right-aligned with tabular digits so amounts line
+   up for comparison (issue #739). */
+th.num,
+td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
 tr:hover {
     background: #f1f3f4;
 }
@@ -79,6 +87,17 @@ tr.history-row-highlight:hover {
     margin-bottom: 1.5rem;
 }
 
+/* Load more under the Purchase History table (issue #676) */
+.history-load-more {
+    display: flex;
+    justify-content: center;
+    margin-top: 1rem;
+}
+
+.history-load-more[hidden] {
+    display: none;
+}
+
 /* Planned Purchases Section */
 #planned-purchases-header {
     margin-top: 2rem;
@@ -116,7 +135,7 @@ tr.history-row-highlight:hover {
 }
 
 .planned-purchase-row .plan-name {
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
     display: block;
 }
 
@@ -154,7 +173,7 @@ tr.history-row-highlight:hover {
     padding: 0.25rem 0.5rem;
     border-radius: 4px;
     font-size: 0.8rem;
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
     text-transform: capitalize;
 }
 
@@ -246,4 +265,18 @@ tr.history-row-highlight:hover {
 .coverage-bar-absent {
     color: var(--cudly-text-subtle);
     font-size: var(--cudly-fs-xs);
+}
+
+/* Status + Overdue badges side by side, and the next-action hint under an
+ * overdue planned purchase's status (#181). */
+.planned-purchase-row .status-badges {
+    display: inline-flex;
+    gap: 0.25rem;
+    white-space: nowrap;
+}
+
+.planned-purchase-row .overdue-hint {
+    margin-top: 0.25rem;
+    font-size: 0.8rem;
+    color: var(--cudly-text-muted);
 }

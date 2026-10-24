@@ -4,19 +4,28 @@
 
 import * as api from './api';
 import * as state from './state';
-import { formatCurrency, formatDate, formatTerm, escapeHtml, escapeHtmlAttr, amortizedMonthly } from './utils';
+import { formatCurrency, formatDate, formatTerm, escapeHtml, escapeHtmlAttr, amortizedMonthly, NO_VALUE } from './utils';
 import type { HistoryResponse, HistorySummary, HistoryPurchase } from './types';
 import type { RevokeQuote } from './api';
 import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
 import { approvalDetailsUnavailableMessage, buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
+import { iconSvg } from './icons';
+import {
+  historyTruncationMessage,
+  mergeHistoryPages,
+  nextHistoryCursor,
+  renderLoadMoreControl,
+} from './history-paging';
 import { renderApprovalQueueLink, wireApprovalQueueLinks } from './history-queue-link';
 import { getCurrentUser } from './state';
 import { canAccess } from './permissions';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { localDayRangeToUtcDays, toLocalDateInputValue } from './lib/local-date';
 import { getAccountName } from './recommendations';
 import { applyColumnFilters } from './lib/column-filters';
+import { hasNoCommitments, isRealTerm, NO_RECOMMENDATIONS_LABEL, NO_RECOMMENDATIONS_TITLE } from './lib/purchase-row-guards';
 import {
   openHistoryColumnPopover,
   renderHistoryFilterButton,
@@ -47,6 +56,15 @@ let lastPurchases: HistoryPurchase[] = [];
 const busyHistoryExecutions = new Set<string>();
 let historyMutationEpoch = 0;
 let activeStatusFilter: StatusFilter = 'all';
+
+// Load more paging (issue #676). historyLoadGeneration is bumped by every
+// first-page load, so a Load more response that lands after the user changed
+// a filter (or after a mutation reload) is dropped instead of being appended
+// to the new result set. historyPaging holds the filters of the first page and
+// the cursor of the last page loaded; null when there is nothing more to load.
+let historyLoadGeneration = 0;
+let historyPaging: { filters: api.HistoryFilters; cursor: string } | null = null;
+let loadMoreInFlight = false;
 
 // _fourEyesMode mirrors GlobalConfig.require_different_approver (issue #1005).
 // Gates the inline Approve button so a creator can't approve their own pending
@@ -170,6 +188,7 @@ export function applyExecutionDeepLink(): boolean {
  * + Load History button — those stay here.
  */
 export function setupHistoryHandlers(): void {
+  document.getElementById('history-load-more-btn')?.addEventListener('click', () => void loadMoreHistory());
   state.subscribeProvider(() => void loadHistory());
   state.subscribeAccount(() => void loadHistory());
   // Re-render both tables when the amortize toggle flips (issue #1112).
@@ -235,10 +254,10 @@ export function initHistoryDateRange(): void {
   const endInput = document.getElementById('history-end') as HTMLInputElement | null;
 
   if (startInput && !startInput.value) {
-    startInput.value = start.toISOString().split('T')[0] || '';
+    startInput.value = toLocalDateInputValue(start);
   }
   if (endInput && !endInput.value) {
-    endInput.value = end.toISOString().split('T')[0] || '';
+    endInput.value = toLocalDateInputValue(end);
   }
 }
 
@@ -260,6 +279,7 @@ export function initHistoryDateRange(): void {
  */
 export async function viewPlanHistory(planId: string): Promise<void> {
   const requestEpoch = historyMutationEpoch;
+  resetHistoryPaging();
   // skipDefaultLoad: the tab's own unscoped 7-day fetch would land after the
   // plan-scoped one below and overwrite it, and its date-range seeding is
   // exactly what the doc comment above says not to do here.
@@ -269,8 +289,10 @@ export async function viewPlanHistory(planId: string): Promise<void> {
   if (!canAccess('view', 'purchases')) return;
 
   try {
+    const filters: api.HistoryFilters = { planId };
+    const generation = historyLoadGeneration;
     const [data] = await Promise.all([
-      api.getHistory({ planId }) as unknown as Promise<HistoryResponse>,
+      api.getHistory(filters) as unknown as Promise<HistoryResponse>,
       refreshFourEyesMode(),
     ]);
     if (requestEpoch !== historyMutationEpoch) return;
@@ -280,6 +302,7 @@ export async function viewPlanHistory(planId: string): Promise<void> {
     renderApprovalQueue(purchases);
     renderHistoryList(purchases);
     snapDateInputsToPurchases(purchases);
+    updateHistoryPaging(generation, filters, data);
   } catch (error) {
     if (requestEpoch !== historyMutationEpoch) return;
     console.error('Failed to load plan history:', error);
@@ -303,7 +326,8 @@ export async function viewPlanHistory(planId: string): Promise<void> {
  * Set the From/To inputs to bracket the purchases that just rendered.
  * No-op when the list is empty — keeping the previous values is more
  * honest than seeding a fake "today" range. Timestamps are normalised
- * to UTC YYYY-MM-DD so they slot directly into `<input type="date">`.
+ * to the LOCAL calendar day (the day a date input shows and the table's
+ * formatted timestamps use), not the UTC day (issue #51).
  */
 function snapDateInputsToPurchases(purchases: HistoryPurchase[]): void {
   if (purchases.length === 0) return;
@@ -313,8 +337,8 @@ function snapDateInputsToPurchases(purchases: HistoryPurchase[]): void {
   if (epochs.length === 0) return;
   const startInput = document.getElementById('history-start') as HTMLInputElement | null;
   const endInput = document.getElementById('history-end') as HTMLInputElement | null;
-  const minDate = new Date(Math.min(...epochs)).toISOString().split('T')[0] || '';
-  const maxDate = new Date(Math.max(...epochs)).toISOString().split('T')[0] || '';
+  const minDate = toLocalDateInputValue(new Date(Math.min(...epochs)));
+  const maxDate = toLocalDateInputValue(new Date(Math.max(...epochs)));
   if (startInput) startInput.value = minDate;
   if (endInput) endInput.value = maxDate;
 }
@@ -324,6 +348,8 @@ function snapDateInputsToPurchases(purchases: HistoryPurchase[]): void {
  */
 export async function loadHistory(): Promise<void> {
   const requestEpoch = historyMutationEpoch;
+  resetHistoryPaging();
+  const generation = historyLoadGeneration;
   // Issue #344 T3: skeleton rows for the purchase-history table. 8
   // rows matches the typical first-page row count so the skeleton
   // doesn't shrink dramatically when real data arrives. Column count
@@ -357,9 +383,18 @@ export async function loadHistory(): Promise<void> {
     const stateAccountIDs = state.getCurrentAccountIDs();
     const accountIDs: string[] | undefined = stateAccountIDs.length > 0 ? stateAccountIDs : undefined;
 
+    // The From/To inputs hold LOCAL calendar days, but /history filters on
+    // whole UTC days. Widen to the UTC days covering the local range so an
+    // off-UTC user never loses rows from the edges of the days they picked
+    // (issue #51), without pushing a range the server accepts as typed
+    // over its 366-day cap.
+    const range = localDayRangeToUtcDays(
+      (document.getElementById('history-start') as HTMLInputElement | null)?.value,
+      (document.getElementById('history-end') as HTMLInputElement | null)?.value,
+    );
     const filters: api.HistoryFilters = {
-      start: (document.getElementById('history-start') as HTMLInputElement | null)?.value,
-      end: (document.getElementById('history-end') as HTMLInputElement | null)?.value,
+      start: range.start,
+      end: range.end,
       provider,
       account_ids: accountIDs
     };
@@ -373,6 +408,7 @@ export async function loadHistory(): Promise<void> {
     const purchases = data.purchases || [];
     renderApprovalQueue(purchases);
     renderHistoryList(purchases);
+    updateHistoryPaging(generation, filters, data);
   } catch (error) {
     if (requestEpoch !== historyMutationEpoch) return;
     console.error('Failed to load history:', error);
@@ -392,19 +428,75 @@ export async function loadHistory(): Promise<void> {
 }
 
 /**
+ * Forget the previous result set's cursor and hide Load more. Called at the
+ * start of every first-page load; bumping the generation also invalidates a
+ * Load more request still in flight for the previous result set.
+ */
+function resetHistoryPaging(): void {
+  historyLoadGeneration++;
+  historyPaging = null;
+  renderLoadMoreControl(false);
+}
+
+/** Remember where the next page starts and show Load more when there is one. */
+function updateHistoryPaging(generation: number, filters: api.HistoryFilters, data: HistoryResponse): void {
+  if (generation !== historyLoadGeneration) return;
+  const cursor = nextHistoryCursor(data);
+  historyPaging = cursor ? { filters, cursor } : null;
+  renderLoadMoreControl(historyPaging !== null);
+}
+
+/**
+ * Fetch the page after the last one loaded, with the first page's filters,
+ * and append it (issue #676). Both tables re-render from every loaded row, so
+ * the Approval Queue is built from all loaded pages. The summary cards keep
+ * the first page's totals: a later page's summary covers only that page on
+ * servers without whole-scope totals (#675).
+ */
+export async function loadMoreHistory(): Promise<void> {
+  const paging = historyPaging;
+  if (!paging || loadMoreInFlight) return;
+  const generation = historyLoadGeneration;
+  const requestEpoch = historyMutationEpoch;
+  loadMoreInFlight = true;
+  renderLoadMoreControl(true, true);
+  try {
+    const data = await (api.getHistory({ ...paging.filters, cursor: paging.cursor }) as unknown as Promise<HistoryResponse>);
+    if (generation !== historyLoadGeneration) return;
+    // A mutation landed mid-flight and its reload will replace the rows; keep
+    // the cursor so the button still works if that reload has not started.
+    if (requestEpoch !== historyMutationEpoch) {
+      renderLoadMoreControl(true);
+      return;
+    }
+    const purchases = mergeHistoryPages(lastPurchases, data.purchases || []);
+    renderTruncationNotices(data);
+    renderApprovalQueue(purchases);
+    renderHistoryList(purchases);
+    updateHistoryPaging(generation, paging.filters, data);
+  } catch (error) {
+    if (generation !== historyLoadGeneration) return;
+    console.error('Failed to load more history:', error);
+    showToast({ message: `Failed to load more history: ${(error as Error).message}`, kind: 'error' });
+    renderLoadMoreControl(true);
+  } finally {
+    loadMoreInFlight = false;
+  }
+}
+
+/**
  * Show or hide the "results capped" banner above the approval queue and the
  * history table. The API sets `truncated` when a fetch hit its row cap, in
- * which case pending approvals and the summary totals can under-report.
+ * which case pending approvals and the summary totals can under-report. When
+ * the API can page (#674), Load more replaces the banner for rows it can reach.
  */
 function renderTruncationNotices(data: HistoryResponse): void {
-  const message = data.truncated
-    ? `Results are capped at the most recent ${data.limit ?? '?'} completed purchases and ${data.executions_limit ?? '?'} pending, failed or other non-completed executions. Older rows are not shown, so pending approvals and totals may be incomplete. Narrow the date range or filters to see them.`
-    : '';
+  const message = historyTruncationMessage(data);
   for (const id of ['purchases-truncation-notice', 'history-truncation-notice']) {
     const el = document.getElementById(id);
     if (!el) continue;
     el.textContent = message;
-    el.hidden = !data.truncated;
+    el.hidden = message === '';
   }
 }
 
@@ -420,19 +512,19 @@ function renderHistorySummary(summary: HistorySummary | null): void {
     container.innerHTML = `
       <div class="card">
         <h3>Total Purchases</h3>
-        <p class="value">--</p>
+        <p class="value">${NO_VALUE}</p>
       </div>
       <div class="card">
         <h3>Total Upfront Spent</h3>
-        <p class="value">--</p>
+        <p class="value">${NO_VALUE}</p>
       </div>
       <div class="card">
         <h3>Monthly Savings</h3>
-        <p class="value savings">--</p>
+        <p class="value">${NO_VALUE}</p>
       </div>
       <div class="card">
         <h3>Annual Savings</h3>
-        <p class="value savings">--</p>
+        <p class="value">${NO_VALUE}</p>
       </div>
     `;
     return;
@@ -442,7 +534,7 @@ function renderHistorySummary(summary: HistorySummary | null): void {
   // summary renders sensibly against an older API deploy that hasn't shipped
   // the new counters yet.
   const total = summary.total_purchases ?? null;
-  const totalDisplay = total !== null ? String(total) : '--';
+  const totalDisplay = total !== null ? String(total) : NO_VALUE;
   const completed = summary.total_completed ?? total;
   const pending = summary.total_pending ?? 0;
   const detail = (total !== null && pending > 0)
@@ -558,7 +650,18 @@ function buildStatusChipRowHTML(purchases: HistoryPurchase[], active: StatusFilt
   `;
 }
 
+const MUTED_DASH = `<span class="muted">${NO_VALUE}</span>`;
+const NO_RECS_HTML = `<span class="no-recommendations" title="${NO_RECOMMENDATIONS_TITLE}">${NO_RECOMMENDATIONS_LABEL}</span>`;
+
+// #181: a row with no commitments has placeholder count/term/costs (0, "0
+// Years", $0) and a "0 commitment(s)" type; render dashes and say why
+// instead. A 0 term on a real row (a mixed-term basket) is also a dash.
+function termCell(p: HistoryPurchase): string {
+  return isRealTerm(p.term) ? escapeHtml(formatTerm(p.term)) : MUTED_DASH;
+}
+
 function providerCell(p: HistoryPurchase): string {
+  if (hasNoCommitments(p)) return MUTED_DASH;
   if (!p.provider || p.provider === 'multiple') return '<span class="provider-badge">Multiple</span>';
   // Whitelist provider to prevent stored XSS via class attribute injection (#443).
   const safeProvider = (VALID_PROVIDERS as string[]).includes(p.provider) ? p.provider : 'unknown';
@@ -571,8 +674,8 @@ function providerCell(p: HistoryPurchase): string {
 function upfrontCell(p: HistoryPurchase, amortize: boolean): string {
   const amount = formatCurrency(p.upfront_cost);
   const folded = amortize && p.monthly_cost != null && p.upfront_cost != null && p.upfront_cost > 0 && p.term > 0;
-  if (!folded) return `<td>${amount}</td>`;
-  return `<td class="upfront-in-monthly" title="Included in the amortized monthly cost">${amount}<div class="upfront-in-monthly-note">(in monthly)</div></td>`;
+  if (!folded) return `<td class="num">${amount}</td>`;
+  return `<td class="num upfront-in-monthly" title="Included in the amortized monthly cost">${amount}<div class="upfront-in-monthly-note">(in monthly)</div></td>`;
 }
 
 // canCancelPendingRow returns true when the current session is permitted
@@ -946,11 +1049,37 @@ function renderPendingActionButtons(p: HistoryPurchase): string {
 // Decision tree (status-driven, mutually exclusive):
 //   * pending|notified + any action → "Review in approval queue" link (issue
 //                                     #183; Approve / Cancel live in the queue)
-//   * failed + ops_hint set         → ⚠ ops-hint badge (issue #47, Q3 — no retry)
+//   * failed + ops_hint set         → ⚠ ops-hint badge (issue #47, Q3 — no retry),
+//                                     plus any lineage link (issue #1040)
 //   * failed + threshold reached    → "Retried 5× — confirm to override" Retry button (Q2)
 //   * failed + canRetry             → standard ↻ Retry button
 //   * any row with retry lineage    → inline ↻ Retried as / ↻ Retry of link
 //   * else                          → plan_name or "-"
+// renderLineageLinks returns the inline retry-chain cross-links for a row: a
+// row that was retried (retry_execution_id set) or is itself a retry
+// (retry_attempt_n > 0) links to the other end of the chain so the user can
+// navigate without scrolling. Both can be true simultaneously on a
+// middle-of-chain row (failed_v2 was retried into v3 AND is itself a retry
+// of v1).
+function renderLineageLinks(p: HistoryPurchase): string[] {
+  const lineage: string[] = [];
+  if (p.retry_execution_id) {
+    lineage.push(`<a href="#history?execution=${encodeURIComponent(p.retry_execution_id)}" class="history-retry-link" title="Jump to the retry execution">${iconSvg('rotate-cw')} Retried as #${escapeHtml(shortExecID(p.retry_execution_id))}</a>`);
+  }
+  if ((p.retry_attempt_n ?? 0) > 0) {
+    // We don't carry a back-pointer field — a future enhancement
+    // could surface the predecessor's exec ID via the API. For now
+    // we render a static badge (no link target) so users at least
+    // see "this is a retry" provenance.
+    // Coerce to a number: the history response is cast, not validated
+    // (api.getHistory), so the TS number type is not a runtime guarantee
+    // and this value sits inside a title="..." attribute.
+    const attemptN = Number(p.retry_attempt_n) || 0;
+    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${attemptN} in its chain">${iconSvg('rotate-cw')} Retry #${attemptN}</span>`);
+  }
+  return lineage;
+}
+
 function renderActionCell(p: HistoryPurchase): string {
   // Pending → the Approval queue card is the one place to approve or cancel
   // (issue #183). Where the session has a pending action (or a 4-eyes reason
@@ -970,36 +1099,22 @@ function renderActionCell(p: HistoryPurchase): string {
       const title = p.redrive_unsafe
         ? 'Permanent: this execution can never be retried; check the account, then start a new purchase if needed'
         : 'Operator action required — Retry will not help until this is fixed';
-      return `<span class="history-ops-hint" title="${title}">⚠ ${escapeHtml(p.ops_hint)}</span>`;
+      // Keep the lineage links next to the hint (issue #1040): a legacy row
+      // retried before the re-drive gate (#967) now carries the permanent
+      // hint, and the operator still needs the link to its successor.
+      return [`<span class="history-ops-hint" title="${title}">${iconSvg('alert-triangle')} ${escapeHtml(p.ops_hint)}</span>`, ...renderLineageLinks(p)].join(' ');
     }
     if (canRetryFailedRow(p) && p.purchase_id) {
       const overThreshold = retryThresholdReached(p);
-      const label = overThreshold ? `⚠ Retried ${Number(p.retry_attempt_n) || 0}× — click to override` : '↻ Retry';
+      const label = overThreshold
+        ? `${iconSvg('alert-triangle')} Retried ${Number(p.retry_attempt_n) || 0}× — click to override`
+        : `${iconSvg('rotate-cw')} Retry`;
       const cls = overThreshold ? 'btn-link history-retry-btn history-retry-over-threshold' : 'btn-link history-retry-btn';
       return `<button type="button" class="${cls}" data-retry-id="${escapeHtmlAttr(p.purchase_id)}">${label}</button>`;
     }
   }
 
-  // Lineage links: a row that was retried (retry_execution_id set) or
-  // is itself a retry (retry_attempt_n > 0) gets an inline cross-link
-  // to the other end of the chain so the user can navigate without
-  // scrolling. Both can be true simultaneously on a middle-of-chain
-  // row (failed_v2 was retried into v3 AND is itself a retry of v1).
-  const lineage: string[] = [];
-  if (p.retry_execution_id) {
-    lineage.push(`<a href="#history?execution=${encodeURIComponent(p.retry_execution_id)}" class="history-retry-link" title="Jump to the retry execution">↻ Retried as #${escapeHtml(shortExecID(p.retry_execution_id))}</a>`);
-  }
-  if ((p.retry_attempt_n ?? 0) > 0) {
-    // We don't carry a back-pointer field — a future enhancement
-    // could surface the predecessor's exec ID via the API. For now
-    // we render a static badge (no link target) so users at least
-    // see "this is a retry" provenance.
-    // Coerce to a number: the history response is cast, not validated
-    // (api.getHistory), so the TS number type is not a runtime guarantee
-    // and this value sits inside a title="..." attribute.
-    const attemptN = Number(p.retry_attempt_n) || 0;
-    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${attemptN} in its chain">↻ Retry #${attemptN}</span>`);
-  }
+  const lineage = renderLineageLinks(p);
   // Build the trailing action buttons so they compose with lineage links
   // — a retry-descendant can also have an active listing that needs a
   // Cancel button, or be an Azure row still inside its revoke window.
@@ -1134,8 +1249,9 @@ function purchaseHistoryDisplayLabel(
 ): string {
   if (value === '') return '(empty)';
   if (column === 'term') {
+    // Match the cell: a 0 term renders as a dash, never "0 Years" (#181).
     const n = Number(value);
-    return Number.isFinite(n) ? formatTerm(n) : value;
+    return isRealTerm(n) ? formatTerm(n) : Number.isFinite(n) ? NO_VALUE : value;
   }
   return value;
 }
@@ -1272,20 +1388,22 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
       : rawMonthly;
     const monthlyCostCell = displayMonthly != null
       ? formatCurrency(displayMonthly)
-      : '<span class="muted">-</span>';
+      : `<span class="muted">${NO_VALUE}</span>`;
+    const empty = hasNoCommitments(p);
+    const dashOr = (html: string): string => (empty ? MUTED_DASH : html);
     return `
       <tr${execIdAttr}>
         <td>${statusCell}</td>
         <td>${formatDate(p.timestamp)}</td>
         <td>${providerCell(p)}</td>
-        <td>${escapeHtml(p.service)}</td>
-        <td>${escapeHtml(p.resource_type)}</td>
-        <td>${escapeHtml(p.region)}</td>
-        <td>${escapeHtml(String(p.count ?? ''))}</td>
-        <td>${formatTerm(p.term)}</td>
-        ${upfrontCell(p, amortize)}
-        <td>${monthlyCostCell}</td>
-        <td class="savings">${formatCurrency(p.estimated_savings)}</td>
+        <td>${dashOr(escapeHtml(p.service))}</td>
+        <td>${empty ? NO_RECS_HTML : escapeHtml(p.resource_type)}</td>
+        <td>${dashOr(escapeHtml(p.region))}</td>
+        <td class="num">${dashOr(escapeHtml(String(p.count ?? '')))}</td>
+        <td>${termCell(p)}</td>
+        ${empty ? `<td class="num">${MUTED_DASH}</td>` : upfrontCell(p, amortize)}
+        <td class="num">${dashOr(monthlyCostCell)}</td>
+        <td class="num savings">${dashOr(formatCurrency(p.estimated_savings))}</td>
         <td>${planCellContent}</td>
       </tr>
     `;
@@ -1306,11 +1424,11 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
           <th><span>Service</span>${fbtn('service')}</th>
           <th><span>Type</span>${fbtn('resource_type')}</th>
           <th><span>Region</span>${fbtn('region')}</th>
-          <th><span>Count</span>${fbtn('count')}</th>
+          <th class="num"><span>Count</span>${fbtn('count')}</th>
           <th><span>Term</span>${fbtn('term')}</th>
-          <th><span>Upfront Cost</span>${fbtn('upfront_cost')}</th>
-          <th>${escapeHtml(monthlyColHeader)}</th>
-          <th><span>Monthly Savings</span>${fbtn('savings')}</th>
+          <th class="num"><span>Upfront Cost</span>${fbtn('upfront_cost')}</th>
+          <th class="num">${escapeHtml(monthlyColHeader)}</th>
+          <th class="num"><span>Monthly Savings</span>${fbtn('savings')}</th>
           <th>Plan</th>
         </tr>
       </thead>
@@ -1821,8 +1939,9 @@ function approvalQueueDisplayLabel(
 ): string {
   if (value === '') return '(empty)';
   if (column === 'term') {
+    // Match the cell: a 0 term renders as a dash, never "0 Years" (#181).
     const n = Number(value);
-    return Number.isFinite(n) ? formatTerm(n) : value;
+    return isRealTerm(n) ? formatTerm(n) : Number.isFinite(n) ? NO_VALUE : value;
   }
   if (column === 'account') {
     // Account cells render via getAccountName() — mirror the same display.
@@ -1886,39 +2005,40 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
   const amortize = state.getAmortizeUpfront();
   const rows = visible.map(p => {
     const actions = renderPendingActionButtons(p);
-    const actionsCell = actions || '<span class="muted">-</span>';
+    const actionsCell = actions || `<span class="muted">${NO_VALUE}</span>`;
     // Show email when resolved; fall back to UUID so the cancel-own gate still
     // has something human-readable to show. Fall back to "-" for scheduler rows.
     const createdBy = p.created_by_user_email
       ? escapeHtml(p.created_by_user_email)
       : p.created_by_user_id
         ? escapeHtml(p.created_by_user_id)
-        : '<span class="muted">-</span>';
+        : `<span class="muted">${NO_VALUE}</span>`;
     const accountCell = p.account_id
       ? escapeHtml(getAccountName(p.account_id))
-      : '<span class="muted">-</span>';
-    const termCell = p.term ? escapeHtml(formatTerm(p.term)) : '<span class="muted">-</span>';
-    const paymentCell = p.payment ? escapeHtml(p.payment) : '<span class="muted">-</span>';
+      : `<span class="muted">${NO_VALUE}</span>`;
+    const empty = hasNoCommitments(p);
+    const dashOr = (html: string): string => (empty ? MUTED_DASH : html);
+    const paymentCell = p.payment ? escapeHtml(p.payment) : `<span class="muted">${NO_VALUE}</span>`;
     const rawMonthly = p.monthly_cost != null ? p.monthly_cost : null;
     const displayMonthly = (rawMonthly != null && amortize)
       ? (p.upfront_cost == null ? null : amortizedMonthly(rawMonthly, p.upfront_cost, p.term))
       : rawMonthly;
     const monthlyCostCell = displayMonthly != null
       ? formatCurrency(displayMonthly)
-      : '<span class="muted">-</span>';
+      : `<span class="muted">${NO_VALUE}</span>`;
     const execIdAttr = p.purchase_id ? ` data-execution-id="${escapeHtmlAttr(p.purchase_id)}"` : '';
     return `
       <tr${execIdAttr}>
         <td>${formatDate(p.timestamp)}</td>
         <td>${accountCell}</td>
         <td>${providerCell(p)}</td>
-        <td>${escapeHtml(p.service)}</td>
-        <td>${escapeHtml(String(p.count ?? ''))}</td>
-        <td>${termCell}</td>
-        <td>${paymentCell}</td>
-        <td>${monthlyCostCell}</td>
-        ${upfrontCell(p, amortize)}
-        <td class="savings">${formatCurrency(p.estimated_savings)}</td>
+        <td>${empty ? NO_RECS_HTML : escapeHtml(p.service)}</td>
+        <td class="num">${dashOr(escapeHtml(String(p.count ?? '')))}</td>
+        <td>${termCell(p)}</td>
+        <td>${dashOr(paymentCell)}</td>
+        <td class="num">${dashOr(monthlyCostCell)}</td>
+        ${empty ? `<td class="num">${MUTED_DASH}</td>` : upfrontCell(p, amortize)}
+        <td class="num savings">${dashOr(formatCurrency(p.estimated_savings))}</td>
         <td>${createdBy}</td>
         <td>${actionsCell}</td>
       </tr>
@@ -1939,12 +2059,12 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
           <th><span>Account</span>${fbtn('account')}</th>
           <th><span>Provider</span>${fbtn('provider')}</th>
           <th><span>Service</span>${fbtn('service')}</th>
-          <th><span>Count</span>${fbtn('count')}</th>
+          <th class="num"><span>Count</span>${fbtn('count')}</th>
           <th><span>Term</span>${fbtn('term')}</th>
           <th><span>Payment</span>${fbtn('payment')}</th>
-          <th><span>${monthlyColHeader}</span>${fbtn('monthly_cost')}</th>
-          <th><span>Upfront Cost</span>${fbtn('upfront_cost')}</th>
-          <th><span>Monthly Savings</span>${fbtn('savings')}</th>
+          <th class="num"><span>${monthlyColHeader}</span>${fbtn('monthly_cost')}</th>
+          <th class="num"><span>Upfront Cost</span>${fbtn('upfront_cost')}</th>
+          <th class="num"><span>Monthly Savings</span>${fbtn('savings')}</th>
           <th><span>Created by</span>${fbtn('created_by')}</th>
           <th>Actions</th>
         </tr>

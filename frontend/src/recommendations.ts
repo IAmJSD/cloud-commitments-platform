@@ -5,11 +5,12 @@
 import * as api from './api';
 import * as state from './state';
 import type { CostPeriod } from './state';
-import { formatCurrency, formatTerm, escapeHtml, CURRENCY_DEFAULT_DIGITS } from './utils';
+import { formatCurrency, formatTerm, escapeHtml, CURRENCY_DEFAULT_DIGITS, NO_VALUE } from './utils';
 import { filterByEnabledProviders } from './lib/enabled-providers';
 import { getRecommendationsFreshness, refreshRecommendations as refreshRecommendationsAPI } from './api/recommendations';
 import type { RecommendationsFreshness } from './api/recommendations';
 import { showToast } from './toast';
+import { createIcon, iconSvg } from './icons';
 import {
   isPaymentSupported,
   isSavingsPlanService,
@@ -27,6 +28,7 @@ import { openModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { captureFocus, restoreFocus } from './lib/focus-restore';
 import { canAccess } from './permissions';
+import { buildFirstRunEmptyState, isScopeFiltered } from './first-run-empty-state';
 
 // Issue #869: true when the current session can take any action on
 // recommendations (purchase or plan). Readonly/viewer sessions have neither
@@ -36,6 +38,7 @@ function canActOnRecommendations(): boolean {
 }
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 import { fetchOverridesForAccounts } from './lib/overrides';
+import { ownValue } from './lib/own-property';
 // Re-export the shared primitives so existing consumers that import from
 // recommendations.ts keep working without import-path churn (issue #166).
 export { parseNumericFilter } from './lib/column-filters';
@@ -63,6 +66,10 @@ let checkedPurchaseModalInitialised = false;
 let purchaseModalOpenToken = 0;
 // Cache of account ID → name for column display
 let accountNamesCache: Map<string, string> = new Map();
+// Whether the last account-list fetch returned any accounts; null when it
+// failed, so the first-run empty state (issue #756) does not claim "no
+// accounts connected" on a transient error.
+let lastHasAccounts: boolean | null = null;
 
 /**
  * Returns the display name for a cloud account ID, falling back to the raw
@@ -416,7 +423,7 @@ async function pollUntilCollectionClears(): Promise<RecommendationsFreshness | n
  * actually happening, poll the freshness endpoint until the in-flight
  * marker clears, then reload -- same as if this call had started it.
  */
-function startRecommendationsRefresh(
+export function startRecommendationsRefresh(
   onReload: () => Promise<void> = loadRecommendations,
 ): Promise<void> {
   // Dedup: if a refresh is already in flight, don't start a second one.
@@ -612,7 +619,7 @@ export async function loadRecommendations(): Promise<void> {
 
     const [data, accounts, cfgResponse] = await Promise.all([
       api.getRecommendations(filters) as unknown as RecommendationsResponse,
-      api.listAccountsMinimal().catch(() => []),
+      api.listAccountsMinimal().catch(() => null),
       // issue #223: fetch GlobalConfig so per-cell variant selection and
       // bulk-toolbar defaults reflect the operator's configured preference.
       // Failure is siloed — a missing/unreachable config endpoint must not
@@ -635,7 +642,8 @@ export async function loadRecommendations(): Promise<void> {
       // (issue #282 dropped the toolbar dropdown; no longer need to seed
       // defaultBulkPurchaseState — the module-level cache is the source of truth).
     }
-    accountNamesCache = new Map(accounts.map(a => [a.id, a.name]));
+    accountNamesCache = new Map((accounts ?? []).map(a => [a.id, a.name]));
+    lastHasAccounts = accounts ? accounts.length > 0 : null;
 
     // Issue #463: gate the Opportunities list by the Settings →
     // General → Enabled Providers preference. The backend currently
@@ -757,11 +765,11 @@ function renderLookbackToolbar(): void {
     });
   }
 
-  // Info tooltip. textContent only (static constant, never API text) so
-  // there is no innerHTML injection surface.
+  // Info tooltip. DOM-built only (static icon, tooltip via textContent,
+  // never API text) so there is no innerHTML injection surface.
   const info = document.createElement('span');
   info.className = 'info-icon';
-  info.textContent = 'ⓘ'; // circled lowercase i
+  info.appendChild(createIcon('info'));
   const tip = document.createElement('span');
   tip.className = 'tooltip-text';
   tip.textContent = canEdit ? LOOKBACK_TOOLTIP : LOOKBACK_NO_PERMISSION_TOOLTIP;
@@ -911,7 +919,7 @@ function renderRecommendationsSummary(
   const isSelectionView = selectedVisible.length > 0 && plr.cellCount > 0;
 
   // issue #319: scale savings by the active cost period.
-  // M-1: use ?? null so absent savings propagate to '--' via formatCostForPeriod
+  // M-1: use ?? null so absent savings propagate to NO_VALUE via formatCostForPeriod
   // rather than silently collapsing to $0 (scaleCost returns null only when input
   // is null/undefined; a genuine $0 saving returns 0, not null).
   const period = state.getCostPeriod();
@@ -923,16 +931,16 @@ function renderRecommendationsSummary(
   const savingsText = hasRecs && plr.savingsMax > 0 && scaledSavingsMin !== null && scaledSavingsMax !== null
     ? formatScaledRange(scaledSavingsMin, scaledSavingsMax, period)
     : hasRecs && (plr.savingsMin === null || plr.savingsMax === null)
-      ? '--'
+      ? NO_VALUE
       : formatCostForPeriod(0, period);
   const upfrontText = hasRecs && plr.upfrontMax > 0
     ? formatSavingsRange(plr.upfrontMin, plr.upfrontMax)
     : formatCurrency(0);
-  // L-2: use '--' for absent/inapplicable payback rather than '0 months'
+  // L-2: use NO_VALUE for absent/inapplicable payback rather than '0 months'
   // which falsely implies instantaneous payback.
   const paybackText = hasRecs && plr.paybackMonthsMax > 0
     ? formatPaybackRange(plr.paybackMonthsMin, plr.paybackMonthsMax)
-    : '—';
+    : NO_VALUE;
   // issue #748: count VARIANTS (= target.length), not cells (= plr.cellCount).
   // "Showing X of X" in the filter-status bar also counts variants, so both
   // numbers now agree on the same dataset.
@@ -1373,8 +1381,8 @@ function sortVariantsInCell(variants: LocalRecommendation[]): LocalRecommendatio
   return variants.slice().sort((a, b) => {
     const termDiff = a.term - b.term;
     if (termDiff !== 0) return termDiff;
-    const pa = PAYMENT_ORDER[a.payment ?? ''] ?? 99;
-    const pb = PAYMENT_ORDER[b.payment ?? ''] ?? 99;
+    const pa = ownValue(PAYMENT_ORDER, a.payment ?? '') ?? 99;
+    const pb = ownValue(PAYMENT_ORDER, b.payment ?? '') ?? 99;
     return pa - pb;
   });
 }
@@ -1492,7 +1500,7 @@ function cellScoreFor(
     // canonical order. Stringified so the existing string-column comparator
     // path handles it.
     const first = sortVariantsInCell(variants)[0];
-    return String(PAYMENT_ORDER[first?.payment ?? ''] ?? 99);
+    return String(ownValue(PAYMENT_ORDER, first?.payment ?? '') ?? 99);
   }
 
   // All other numeric columns (savings, count, on_demand_monthly): preserve
@@ -1639,7 +1647,7 @@ export function effectiveSavingsPct(r: LocalRecommendation): number | null {
   // denominator (EstimatedMonthlyOnDemandCost from Cost Explorer). When it
   // is absent the reconstruction formula (monthly_cost + savings + amortized)
   // diverges from the true on-demand baseline for RI/SP recs, producing
-  // misleadingly high percentages. Return null so the UI renders "--" rather
+  // misleadingly high percentages. Return null so the UI renders NO_VALUE rather
   // than a silently-wrong value.
   if (r.provider === 'aws' && !hasOnDemand) return null;
   const monthsInTerm = r.term * 12;
@@ -1751,6 +1759,14 @@ const PERIOD_DECIMALS: Record<CostPeriod, number> = {
   yearly:  0,
 };
 
+// The non-monthly periods use explicit per-period precision (PERIOD_DECIMALS);
+// monthly keeps formatCurrency's default so it matches the rest of the
+// dashboard. Both go through formatCurrency so a yearly figure prints
+// "$123,456", not "$123456" (issue #739).
+function formatScaled(scaled: number, period: CostPeriod): string {
+  return period === 'monthly' ? formatCurrency(scaled) : formatCurrency(scaled, '$', PERIOD_DECIMALS[period]);
+}
+
 /**
  * Format a monthly cost value scaled to the requested display period.
  * Returns "—" for null/undefined input.
@@ -1759,15 +1775,8 @@ const PERIOD_DECIMALS: Record<CostPeriod, number> = {
  */
 export function formatCostForPeriod(monthly: number | null | undefined, period: CostPeriod): string {
   const scaled = scaleCost(monthly, period);
-  if (scaled === null) return '—';
-  // For the non-monthly periods we want explicit per-period decimal
-  // precision (PERIOD_DECIMALS), so we side-step formatCurrency (which
-  // uses CURRENCY_DEFAULT_DIGITS for any caller that doesn't override).
-  // Monthly keeps the existing formatCurrency behaviour for backward
-  // compatibility (and to stay in lock-step with the rest of the
-  // dashboard's monthly $ formatting).
-  if (period === 'monthly') return formatCurrency(scaled);
-  return `$${scaled.toFixed(PERIOD_DECIMALS[period])}`;
+  if (scaled === null) return NO_VALUE;
+  return formatScaled(scaled, period);
 }
 
 /** Human-readable suffix label for a period (used in column headers). */
@@ -1786,8 +1795,8 @@ export function periodSuffix(period: CostPeriod): string {
  * Collapses "$X – $X" to "$X".
  */
 function formatScaledRange(min: number, max: number, period: CostPeriod): string {
-  const lo = period === 'monthly' ? formatCurrency(min) : `$${min.toFixed(PERIOD_DECIMALS[period])}`;
-  const hi = period === 'monthly' ? formatCurrency(max) : `$${max.toFixed(PERIOD_DECIMALS[period])}`;
+  const lo = formatScaled(min, period);
+  const hi = formatScaled(max, period);
   return lo === hi ? lo : `${lo} – ${hi}`;
 }
 
@@ -1963,10 +1972,10 @@ function columnLabel(column: string): string {
 }
 
 function sortIndicator(column: string, active: string, direction: 'asc' | 'desc'): string {
-  if (column !== active) return '<span class="sort-indicator" aria-hidden="true">\u2195</span>';
+  if (column !== active) return `<span class="sort-indicator" aria-hidden="true">${iconSvg('chevrons-up-down')}</span>`;
   return direction === 'asc'
-    ? '<span class="sort-indicator active" aria-hidden="true">\u25B2</span>'
-    : '<span class="sort-indicator active" aria-hidden="true">\u25BC</span>';
+    ? `<span class="sort-indicator active" aria-hidden="true">${iconSvg('chevron-up')}</span>`
+    : `<span class="sort-indicator active" aria-hidden="true">${iconSvg('chevron-down')}</span>`;
 }
 
 // sortedRecommendations was removed in issues #225/#226: group-level sorting
@@ -2508,7 +2517,8 @@ function buildPopoverContent(
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
   clearBtn.className = 'column-filter-clear';
-  clearBtn.textContent = 'Clear';
+  // Categorical: selects nothing (hides every row), so not "Clear" (#727).
+  clearBtn.textContent = input ? 'Clear' : 'Select none';
   clearBtn.addEventListener('click', () => {
     if (input) {
       // Numeric column: Clear drops the expression entirely (no filter).
@@ -2741,6 +2751,31 @@ function rebindOpenPopoverAnchor(): void {
 // renderRecommendationsList itself (against the post-filter visible set),
 // so this helper doesn't need to call renderRecommendationsSummary
 // separately — every entry to renderRecommendationsList covers it.
+/**
+ * Clears every column filter. Re-fetches when a server-pushed-down column
+ * (service/region/account) was filtered, since the loaded set itself was
+ * narrowed; otherwise a client-side rerender is enough.
+ */
+function clearAllColumnFilters(): void {
+  const active = Object.keys(state.getRecommendationsColumnFilters()) as state.RecommendationsColumnId[];
+  const refetch = active.some((c) => SERVER_PUSHDOWN_COLUMNS.has(c));
+  state.clearAllRecommendationsColumnFilters();
+  saveColumnFilters(state.getRecommendationsColumnFilters());
+  if (refetch) void loadRecommendations();
+  else rerenderRecommendations();
+}
+
+/**
+ * Hides (or restores) the summary cards, filter-status bar and bottom action
+ * box around the list. Used by the first-run empty state (issue #756), where
+ * zero counts and a disabled Purchase bar only add noise.
+ */
+function setOpportunitiesChromeHidden(hidden: boolean): void {
+  for (const id of ['recommendations-summary', 'recommendations-filter-status', 'recommendations-action-box']) {
+    document.getElementById(id)?.classList.toggle('hidden', hidden);
+  }
+}
+
 function rerenderRecommendations(): void {
   const loaded = state.getRecommendations() as unknown as LocalRecommendation[];
   renderRecommendationsList(loaded);
@@ -2969,11 +3004,7 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
       badge = document.createElement('button');
       badge.type = 'button';
       badge.className = 'clear-filters';
-      badge.addEventListener('click', () => {
-        state.clearAllRecommendationsColumnFilters();
-        saveColumnFilters(state.getRecommendationsColumnFilters());
-        rerenderRecommendations();
-      });
+      badge.addEventListener('click', clearAllColumnFilters);
       bar.insertBefore(badge, live);
     }
     badge.textContent = `Clear filters (${activeCount})`;
@@ -3137,7 +3168,7 @@ const PAYMENT_DISPLAY_LABELS: Record<string, string> = {
 
 function formatPayment(payment: string | undefined): string {
   if (!payment) return '\u2014';
-  return PAYMENT_DISPLAY_LABELS[payment] ?? payment;
+  return ownValue(PAYMENT_DISPLAY_LABELS, payment) ?? payment;
 }
 
 // renderUsageSparkline returns an inline SVG polyline representing the
@@ -3206,24 +3237,24 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
     case 'region':
       return `<td>${escapeHtml(rec.region)}</td>`;
     case 'count':
-      return `<td>${rec.count}</td>`;
+      return `<td class="num">${rec.count}</td>`;
     case 'term':
       return `<td>${formatTerm(rec.term)}</td>`;
     case 'payment':
       return `<td>${escapeHtml(formatPayment(rec.payment))}</td>`;
     case 'savings':
       // issue #319: savings display value scales with the active cost period.
-      return `<td class="savings">${formatCostForPeriod(rec.savings, ctx.period)}</td>`;
+      return `<td class="num savings">${formatCostForPeriod(rec.savings, ctx.period)}</td>`;
     case 'upfront_cost':
       // upfront_cost is one-time, not recurring \u2014 period-invariant.
-      return `<td>${formatCurrency(rec.upfront_cost)}</td>`;
+      return `<td class="num">${formatCurrency(rec.upfront_cost)}</td>`;
     case 'monthly_cost':
       // issue #319: monthly_cost display scales with period; null still renders as em-dash.
-      return `<td>${formatCostForPeriod(rec.monthly_cost, ctx.period)}</td>`;
+      return `<td class="num">${formatCostForPeriod(rec.monthly_cost, ctx.period)}</td>`;
     case 'on_demand_monthly':
       // issue #319: on-demand baseline scales with period to stay consistent
       // with the savings + monthly_cost columns.
-      return `<td>${formatCostForPeriod(onDemandMonthly(rec), ctx.period)}</td>`;
+      return `<td class="num">${formatCostForPeriod(onDemandMonthly(rec), ctx.period)}</td>`;
     case 'effective_savings_pct':
       return `<td${ctx.pctClass}>${ctx.pctText}</td>`;
     case 'usage_history':
@@ -3257,7 +3288,7 @@ function buildVariantRowMarkup(
   const badge = renderSuppressionBadge(rec);
   const recId = escapeHtml(rec.id);
   const pct = displaySavingsPct(rec);
-  const pctClass = pct !== null && pct < 0 ? ' class="effective-pct-negative"' : '';
+  const pctClass = pct !== null && pct < 0 ? ' class="num effective-pct-negative"' : ' class="num"';
   const pctText = pct === null ? '\u2014' : pct.toFixed(1) + '%';
   const nestedClass = isNested ? ' rec-variant-row' : '';
   const cellCtx = { accountName, badge, pct, pctClass, pctText, period };
@@ -3278,7 +3309,7 @@ function buildVariantRowMarkup(
       rec.region,
       accountName,
       formatTerm(rec.term),
-      PAYMENT_DISPLAY_LABELS[rec.payment ?? ''] ?? '',
+      ownValue(PAYMENT_DISPLAY_LABELS, rec.payment ?? '') ?? '',
     ].filter(part => part).join(' '),
   );
   const checkboxCell = showCheckboxes
@@ -3305,7 +3336,7 @@ function buildListMarkup(
     const active = filters[column] ? ' active' : '';
     const lbl = getColumnLabel(column, period);
     const label = filters[column] ? `Filter ${lbl} \u2014 currently active` : `Filter ${lbl}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">\u26db</button>`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">${iconSvg('filter')}</button>`;
   };
   const colHeader = (col: ColumnDef): string => {
     const lbl = getColumnLabel(col.key, period);
@@ -3318,10 +3349,12 @@ function buildListMarkup(
     // and holds two sibling buttons, sort and filter. A focusable
     // role=button <th> wrapping the filter button made Enter on the filter
     // bubble into the sort handler, and nested the two controls.
+    // Money and count columns right-align so digits line up (issue #739).
+    const numClass = col.kind === 'numeric' ? ' num' : '';
     const ariaSort = sort.column === col.key
       ? ` aria-sort="${sort.direction === 'asc' ? 'ascending' : 'descending'}"`
       : '';
-    return `<th class="sortable" data-sort="${col.key}"${ariaSort}><button type="button" class="sort-btn"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}</button>${filterBtn(col.key)}</th>`;
+    return `<th class="sortable${numClass}" data-sort="${col.key}"${ariaSort}><button type="button" class="sort-btn"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}</button>${filterBtn(col.key)}</th>`;
   };
 
   // issues #225 + #226: group by cell, sort groups, then render.
@@ -3378,7 +3411,7 @@ function buildListMarkup(
         ? (accountNamesCache.get(spRep.cloud_account_id) || spRep.cloud_account_id)
         : '\u2014';
       const isSpExpanded = expandedSpGroups.has(sgk);
-      const spChevron = isSpExpanded ? '\u25bc' : '\u25b6';
+      const spChevron = iconSvg(isSpExpanded ? 'chevron-down' : 'chevron-right');
       const spSlugs = childCellKeys.map((ck) => groups.get(ck)![0]!.service);
       const spLabel = savingsPlansBucketLabel(spSlugs);
       const planTypeCount = childCellKeys.length;
@@ -3437,7 +3470,7 @@ function buildListMarkup(
         const childTermDisplay = selectedChildVariant
           ? formatTerm(selectedChildVariant.term)
           : formatTermRange(childSummary.termMin, childSummary.termMax);
-        const cellChevron = isCellExpanded ? '\u25bc' : '\u25b6';
+        const cellChevron = iconSvg(isCellExpanded ? 'chevron-down' : 'chevron-right');
         const childIdentityParts = [
           `${escapeHtml(childRep.resource_type)}${childRep.engine ? ` (${escapeHtml(childRep.engine)})` : ''}`,
         ];
@@ -3507,7 +3540,7 @@ function buildListMarkup(
       ? formatTerm(selectedVariant.term)
       : formatTermRange(summary.termMin, summary.termMax);
 
-    const chevron = isExpanded ? '\u25bc' : '\u25b6';
+    const chevron = iconSvg(isExpanded ? 'chevron-down' : 'chevron-right');
     const identityParts = [
       `${escapeHtml(rep.resource_type)}${rep.engine ? ` (${escapeHtml(rep.engine)})` : ''}`,
     ];
@@ -4933,6 +4966,27 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // Mount once; update is per-render below.
   mountBottomActionBox();
 
+  // Issue #756: nothing loaded and no column filter narrowing the fetch is a
+  // first run (or an empty scope), not a filter miss. Show an onboarding card
+  // instead of an empty 15-column table, $0 summary cards and a Purchase bar
+  // that can never enable. The summary and action box stay rendered (disabled)
+  // but hidden, so state is coherent once rows arrive.
+  const firstRun = (loadedRecs?.length ?? 0) === 0
+    && Object.keys(state.getRecommendationsColumnFilters()).length === 0;
+  setOpportunitiesChromeHidden(firstRun);
+  if (firstRun) {
+    lastVisibleGroupKeys = [];
+    updateBottomActionBox(0, 0);
+    teardownSkeleton(container);
+    container.replaceChildren(buildFirstRunEmptyState({
+      hasAccounts: lastHasAccounts,
+      scopeFiltered: isScopeFiltered(state.getCurrentProvider(), state.getCurrentAccountIDs()),
+      onRefresh: () => startRecommendationsRefresh(loadRecommendations),
+      loadFreshness: getRecommendationsFreshness,
+    }));
+    return;
+  }
+
   const emptyResult = !recommendations || recommendations.length === 0;
   if (emptyResult) {
     lastVisibleGroupKeys = [];
@@ -4975,6 +5029,15 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
       td.setAttribute('colspan', String(colspan));
       td.className = 'empty';
       td.textContent = 'No rows match these filters.';
+      // Issue #756: give the hint a next step right where the user looks.
+      if (Object.keys(state.getRecommendationsColumnFilters()).length > 0) {
+        const clearBtn = document.createElement('button');
+        clearBtn.type = 'button';
+        clearBtn.className = 'btn-small empty-clear-filters';
+        clearBtn.textContent = 'Clear filters';
+        clearBtn.addEventListener('click', clearAllColumnFilters);
+        td.append(' ', clearBtn);
+      }
       tr.appendChild(td);
       tbody.appendChild(tr);
     }

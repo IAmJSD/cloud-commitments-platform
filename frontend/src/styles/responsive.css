@@ -73,7 +73,7 @@ a:active,
  * - .sidebar-overlay fades in to dim the content behind the drawer.
  * - Body scroll is locked while the drawer is open.
  * - The hamburger button itself is hidden above the breakpoint.
- * - aria-expanded / aria-hidden toggled from app.ts:setupMobileNav().
+ * - aria-expanded / aria-hidden toggled from nav/mobile-nav.ts:setupMobileNav().
  * ------------------------------------------------------------------------- */
 
 /* Hamburger button - mobile only */
@@ -160,8 +160,8 @@ body.sidebar-open {
      * `header { flex-direction: column }` rule, so every row past the first
      * overflowed past the gradient and painted its white text straight onto
      * the page content below. Both regions move into the drawer instead
-     * (app.ts:syncHeaderPlacement); laying them out away here covers the
-     * moment before that script has run. */
+     * (nav/mobile-nav.ts:syncHeaderPlacement); laying them out away here
+     * covers the moment before that script has run. */
     .app-topbar {
         justify-content: flex-start;
         gap: var(--cudly-sp-2);
@@ -354,4 +354,81 @@ body.sidebar-open {
     display: block;
     max-width: 100%;
     overflow-x: auto;
+}
+
+/* The loading skeleton has nothing to scroll; as a block its cells
+ * collapsed and the shimmer was invisible (issue #186). */
+#recommendations-list > table.skeleton-table {
+    display: table;
+}
+
+/* Wide-table scroll affordances (issue #185); lib/table-scroll.ts sets the
+ * classes and variables. A scroller with columns cut off on one side fades
+ * that edge out, so the clipped column reads as "more this way". The fade is
+ * a mask on the scroller's own box, so cell and row backgrounds cannot cover
+ * it; the extra mask layers keep any scrollbar at full opacity. */
+:root { --scroll-hint-sb-w: 0px; --scroll-hint-sb-h: 0px; }
+.scroll-hint-left,
+.scroll-hint-right {
+    --scroll-hint-l: #000;
+    --scroll-hint-r: #000;
+    --scroll-hint-fade: linear-gradient(to right, var(--scroll-hint-l), #000 4rem, #000 calc(100% - 4rem), var(--scroll-hint-r));
+    -webkit-mask-image: var(--scroll-hint-fade), linear-gradient(#000, #000), linear-gradient(#000, #000);
+    mask-image: var(--scroll-hint-fade), linear-gradient(#000, #000), linear-gradient(#000, #000);
+    -webkit-mask-size: calc(100% - var(--scroll-hint-sb-w, 0px)) calc(100% - var(--scroll-hint-sb-h, 0px)), var(--scroll-hint-sb-w, 0px) 100%, 100% var(--scroll-hint-sb-h, 0px);
+    mask-size: calc(100% - var(--scroll-hint-sb-w, 0px)) calc(100% - var(--scroll-hint-sb-h, 0px)), var(--scroll-hint-sb-w, 0px) 100%, 100% var(--scroll-hint-sb-h, 0px);
+    -webkit-mask-position: 0 0, 100% 0, 0 100%;
+    mask-position: 0 0, 100% 0, 0 100%;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+}
+.scroll-hint-left { --scroll-hint-l: rgb(0 0 0 / 0.12); }
+.scroll-hint-right { --scroll-hint-r: rgb(0 0 0 / 0.12); }
+
+/* The Opportunities table is page-tall, so its own horizontal scrollbar sat
+ * off-screen under the action box. The strip after it mirrors that scrollbar
+ * and sticks just above the action box while the table is on screen; the
+ * table's own bar is hidden so the two never show at once (touch, trackpad
+ * and Shift+wheel still scroll the table directly). The ::-webkit-scrollbar
+ * rules keep the strip's bar visible where the OS uses overlay scrollbars;
+ * Chromium ignores them once scrollbar-color is set, hence the @supports. */
+#recommendations-list > table {
+    scrollbar-width: none;
+}
+#recommendations-list > table::-webkit-scrollbar {
+    display: none;
+}
+.table-scroll-strip {
+    position: sticky;
+    bottom: var(--action-box-offset, var(--action-box-height));
+    z-index: 9;
+    overflow-x: scroll;
+    overflow-y: hidden;
+    background: var(--cudly-surface);
+    border-top: 1px solid var(--cudly-border);
+}
+.table-scroll-strip[hidden] {
+    display: none;
+}
+.table-scroll-strip > div {
+    height: 1px;
+}
+.table-scroll-strip::-webkit-scrollbar {
+    height: 12px;
+}
+.table-scroll-strip::-webkit-scrollbar-track {
+    background: var(--cudly-surface-muted);
+}
+.table-scroll-strip::-webkit-scrollbar-thumb {
+    background: var(--cudly-border-strong);
+    border: 2px solid var(--cudly-surface-muted);
+    border-radius: var(--cudly-r-full);
+}
+.table-scroll-strip::-webkit-scrollbar-thumb:hover {
+    background: var(--cudly-text-subtle);
+}
+@supports not selector(::-webkit-scrollbar) {
+    .table-scroll-strip {
+        scrollbar-color: var(--cudly-border-strong) var(--cudly-surface-muted);
+    }
 }

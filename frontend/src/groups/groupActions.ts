@@ -7,6 +7,7 @@ import { availableGroups } from '../users/state';
 import { showError, showSuccess } from '../users/utils';
 import { loadUsers } from '../users/userActions';
 import { confirmDialog } from '../confirmDialog';
+import { friendlyError } from '../api/errors';
 import { isSystemManagedGroup, SYSTEM_GROUP_NOTE } from './systemGroups';
 
 /**
@@ -37,9 +38,9 @@ export async function deleteGroup(groupId: string): Promise<void> {
   } catch (error) {
     console.error('Failed to delete group:', error);
     // Surface the server's reason (e.g. the system-managed refusal), as the
-    // Edit path already does (#919 review comment).
-    const err = error as Error;
-    showError(err?.message ? `Failed to delete group: ${err.message}` : 'Failed to delete group');
+    // Edit path already does (#919 review comment). friendlyError keeps a
+    // server message and turns transport failures into plain text (#748).
+    showError(`Failed to delete group: ${friendlyError(error)}`);
   }
 }
 

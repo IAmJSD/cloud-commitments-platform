@@ -16,6 +16,8 @@
 import * as api from './api';
 import { escapeHtml, formatDate } from './utils';
 import { showToast } from './toast';
+import { iconSvg } from './icons';
+import { openModal, closeModal } from './modal';
 import { canAccess } from './permissions';
 import { initLadderTimeline } from './ladder-timeline';
 import { initLadderAccountSelector } from './ladder-account-selector';
@@ -125,8 +127,9 @@ function renderLadderingSection(globalEnabled: boolean): string {
       Add Account Config
     </button>` : ''}
   </div>
-  <div id="ladder-purchase-timeline"></div>
 </fieldset>
+<!-- Planned purchases renders its own settings card (issue #753). -->
+<div id="ladder-purchase-timeline"></div>
 
 <!-- Per-account ladder config modal -->
 <div id="ladder-config-modal" class="modal hidden" role="dialog" aria-modal="true"
@@ -135,7 +138,7 @@ function renderLadderingSection(globalEnabled: boolean): string {
     <div class="modal-header">
       <h3 id="ladder-modal-title">Commitment Laddering Config</h3>
       <button type="button" class="modal-close" id="ladder-modal-close-btn"
-              aria-label="Close">&times;</button>
+              aria-label="Close">${iconSvg('x')}</button>
     </div>
     <div class="modal-body">
       <form id="ladder-config-form" novalidate>
@@ -310,9 +313,11 @@ export function renderConfigTable(configs: api.LadderConfig[]): void {
 // MODAL CLOSE WIRING
 // ==========================================
 
-// closeLadderModal hides the per-account config modal.
+// closeLadderModal hides the per-account config modal through the shared
+// helper, which also releases the focus trap and restores focus (#731).
 function closeLadderModal(): void {
-  document.getElementById('ladder-config-modal')?.classList.add('hidden');
+  const modal = document.getElementById('ladder-config-modal');
+  if (modal) closeModal(modal);
 }
 
 // wireModalCloseButtons attaches click listeners to the modal's × and Cancel
@@ -401,7 +406,8 @@ function openLadderConfigModal(existing?: api.LadderConfig): void {
     existing?.ramp_schedule ? JSON.stringify(existing.ramp_schedule, null, 2) : defaultRamp);
 
   selectedAccount = initLadderAccountSelector(document.getElementById('ladder-config-form')!, existing);
-  modal.classList.remove('hidden');
+  // openModal shows it, moves focus inside, traps Tab and closes on Escape (#731).
+  openModal(modal);
 }
 
 // Exported for unit testing (see renderConfigTable note).

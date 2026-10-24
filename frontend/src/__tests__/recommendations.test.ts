@@ -99,7 +99,12 @@ jest.mock('../state', () => ({
 
 // Mock utils
 jest.mock('../utils', () => ({
-  formatCurrency: jest.fn((val) => `$${val || 0}`),
+  // Explicit digits (the non-monthly cost periods) render fixed decimals;
+  // null/undefined render the shared NO_VALUE placeholder like the real one.
+  formatCurrency: jest.fn((val, _currency = '$', digits?: number) => (
+    val === null || val === undefined ? '\u2014' : digits ? `$${Number(val).toFixed(digits)}` : `$${val || 0}`
+  )),
+  NO_VALUE: '\u2014',
   formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   escapeHtml: jest.fn((str) => str || ''),
   populateAccountFilter: jest.fn(() => Promise.resolve()),
@@ -929,10 +934,11 @@ describe('Recommendations Module', () => {
       expect(capCell('rec-nocap')).toBe('—');
     });
 
-    test('shows empty-state message when no recommendations', async () => {
-      // Issue #700: zero rows now render an empty <tbody> with a hint cell
-      // rather than replacing the entire table with a <p>. The <thead> stays
-      // so column headers remain visible. The hint text lives inside the tbody.
+    test('shows the first-run empty state when nothing is loaded and no filter is set', async () => {
+      // Issue #756: zero loaded rows with no column filter is a first run, not
+      // a filter miss, so the "No rows match these filters." table hint
+      // (issue #700, still used for filtered-to-zero) is replaced by an
+      // onboarding card. The filtered case is covered by the #700 test below.
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
         recommendations: [],
@@ -942,12 +948,9 @@ describe('Recommendations Module', () => {
       await loadRecommendations();
 
       const list = document.getElementById('recommendations-list');
-      // The table (including <thead>) must still be rendered.
-      expect(list?.querySelector('thead')).not.toBeNull();
-      // The hint cell must be present inside the tbody.
-      const emptyCell = list?.querySelector('tbody td.empty');
-      expect(emptyCell).not.toBeNull();
-      expect(emptyCell?.textContent).toMatch(/No rows match/);
+      expect(list?.querySelector('thead')).toBeNull();
+      expect(list?.querySelector('.first-run-empty-state')).not.toBeNull();
+      expect(list?.textContent).not.toMatch(/No rows match/);
     });
 
     test('stores recommendations in state', async () => {

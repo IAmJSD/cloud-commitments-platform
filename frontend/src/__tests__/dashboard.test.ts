@@ -74,7 +74,7 @@ jest.mock('../api', () => ({
   // Opportunities page. Default to "no preference" (no filter).
   getConfig: jest.fn().mockResolvedValue({ global: {} }),
 }));
-import { loadSavingsTrendChart, setupSavingsTrendHandlers, setupDashboardHandlers, formatTrendAxisTick } from '../dashboard';
+import { loadSavingsTrendChart, loadYtdSparkline, setupSavingsTrendHandlers, setupDashboardHandlers, formatTrendAxisTick } from '../dashboard';
 import { formatTrendTooltipTitle } from '../modules/chart-utils';
 
 // Mock state module
@@ -106,9 +106,10 @@ jest.mock('../state', () => ({
 
 // Mock utils
 jest.mock('../utils', () => ({
+  NO_VALUE: '\u2014',
   formatCurrency: jest.fn((val) => {
     const n = typeof val === 'number' ? val : Number(val);
-    if (val == null || !Number.isFinite(n)) return '--';
+    if (val == null || !Number.isFinite(n)) return '—';
     return `$${n}`;
   }),
   getDateParts: jest.fn(() => ({ day: 15, month: 'Jan' })),
@@ -354,6 +355,22 @@ describe('Dashboard Module', () => {
 
       const upcomingList = document.getElementById('upcoming-list');
       expect(upcomingList?.innerHTML).toContain('No upcoming scheduled purchases');
+    });
+
+    // #1189: the Go handler serializes an empty result as `purchases: null`
+    // (nil slice), and apiRequest resolves null for an empty 2xx body (#304).
+    test.each([
+      ['purchases: null', { purchases: null }],
+      ['a null response', null],
+    ])('shows the empty message for %s', async (_label, value) => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({ potential_monthly_savings: 1000, by_service: {} });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue(value);
+
+      await loadDashboard();
+
+      const upcomingList = document.getElementById('upcoming-list');
+      expect(upcomingList?.textContent).toContain('No upcoming scheduled purchases');
+      expect(upcomingList?.querySelector('.error')).toBeNull();
     });
 
     test('shows error on API failure', async () => {
@@ -693,6 +710,66 @@ describe('Dashboard Module', () => {
       }));
     });
 
+    // #731: the details dialog goes through openModal and shares the card's
+    // cancel path (same confirm copy, one DELETE per step at a time).
+    describe('upcoming purchase details dialog (#731)', () => {
+      const upcoming = {
+        execution_id: 'exec-731', plan_id: 'plan-731', plan_name: 'Test Plan', provider: 'aws',
+        service: 'ec2', step_number: 1, total_steps: 4, estimated_savings: 100, scheduled_date: '2024-02-15',
+      };
+
+      async function openDetails(): Promise<{ viewBtn: HTMLButtonElement; modal: HTMLElement }> {
+        (api.getDashboardSummary as jest.Mock).mockResolvedValue({ potential_monthly_savings: 0, by_service: {} });
+        (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [upcoming] });
+        await loadDashboard();
+        const viewBtn = document.querySelector('[data-action="view-purchase"]') as HTMLButtonElement;
+        viewBtn.focus();
+        viewBtn.click();
+        return { viewBtn, modal: document.getElementById('purchase-details-modal') as HTMLElement };
+      }
+
+      test('is a named dialog that takes focus, closes on Escape and restores focus', async () => {
+        const { viewBtn, modal } = await openDetails();
+        expect(modal.getAttribute('role')).toBe('dialog');
+        expect(modal.getAttribute('aria-modal')).toBe('true');
+        const titleId = modal.getAttribute('aria-labelledby') ?? '';
+        expect(document.getElementById(titleId)?.textContent).toBe('Upcoming Purchase Details');
+        expect(modal.contains(document.activeElement)).toBe(true);
+
+        modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        expect(document.getElementById('purchase-details-modal')).toBeNull();
+        expect(document.activeElement).toBe(viewBtn);
+      });
+
+      test('Cancel Purchase uses the card confirm copy and sends one DELETE while in flight', async () => {
+        const { modal } = await openDetails();
+        let finishDelete: () => void = () => {};
+        (api.deletePlannedPurchase as jest.Mock).mockReturnValue(new Promise<void>(r => { finishDelete = r; }));
+        mockConfirmDialog.mockClear();
+
+        const cancelBtn = modal.querySelector('#cancel-purchase-detail-btn') as HTMLButtonElement;
+        cancelBtn.click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(cancelBtn.disabled).toBe(true);
+        cancelBtn.disabled = false; // force a second click through
+        cancelBtn.click();
+        (document.querySelector('[data-action="cancel-purchase"]') as HTMLButtonElement).click();
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
+        const body = (mockConfirmDialog.mock.calls[0]![0] as { body: string }).body;
+        expect(body).toContain('removes this upcoming step from the plan');
+        expect(body).not.toContain('refunded');
+        expect(api.deletePlannedPurchase).toHaveBeenCalledTimes(1);
+
+        (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+        finishDelete();
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(document.getElementById('purchase-details-modal')).toBeNull();
+        expect(api.deletePlannedPurchase).toHaveBeenCalledWith('exec-731');
+      });
+    });
+
     // #293: Potential Monthly Savings card renders per-cell range, not
     // the flat summary.potential_monthly_savings value.
     test('Potential Monthly Savings card renders per-cell range (#293)', async () => {
@@ -857,11 +934,11 @@ describe('Dashboard Module', () => {
       expect(summary?.innerHTML).toContain('Active Commitments');
       expect(summary?.innerHTML).toContain('Current Coverage');
       expect(summary?.innerHTML).toContain('YTD Savings');
-      // Savings card must fall back to '--' (not throw, go blank, or fabricate $0).
+      // Savings card must fall back to '—' (not throw, go blank, or fabricate $0).
       const savingsCard = summary?.querySelector('.card');
       expect(savingsCard?.textContent).toContain('Potential Monthly Savings');
-      // When recs fail cellCount=0, the sentinel '--' is shown instead of fabricated $0.
-      expect(savingsCard?.innerHTML).toContain('--');
+      // When recs fail cellCount=0, the sentinel '—' is shown instead of fabricated $0.
+      expect(savingsCard?.innerHTML).toContain('—');
       expect(savingsCard?.innerHTML).not.toContain('$0');
     });
 
@@ -922,10 +999,10 @@ describe('Dashboard Module', () => {
       expect(summary?.innerHTML).toContain('Current Coverage');
       expect(summary?.innerHTML).toContain('YTD Savings');
 
-      // Savings card shows '--' when recs are absent (no fabricated $0).
+      // Savings card shows '—' when recs are absent (no fabricated $0).
       const savingsCard = summary?.querySelector('.card');
       expect(savingsCard?.textContent).toContain('Potential Monthly Savings');
-      expect(savingsCard?.innerHTML).toContain('--');
+      expect(savingsCard?.innerHTML).toContain('—');
       expect(savingsCard?.innerHTML).not.toContain('$0');
     });
 
@@ -951,9 +1028,9 @@ describe('Dashboard Module', () => {
       const summary = document.getElementById('summary');
       expect(summary?.innerHTML).toContain('Active Commitments');
 
-      // Savings card shows '--' (no fabricated $0 when recs are absent).
+      // Savings card shows '—' (no fabricated $0 when recs are absent).
       const savingsCard = summary?.querySelector('.card');
-      expect(savingsCard?.innerHTML).toContain('--');
+      expect(savingsCard?.innerHTML).toContain('—');
       expect(savingsCard?.innerHTML).not.toContain('$0');
     });
 
@@ -1045,6 +1122,51 @@ describe('Dashboard Module', () => {
       (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
     });
 
+    // #744: summary label + table for the trend chart.
+    test('describes the plotted series and lists every point as a table (#744)', async () => {
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [
+        { timestamp: '2026-01-01T00:00:00Z', cumulative_savings: 100 },
+        { timestamp: '2026-01-02T00:00:00Z', cumulative_savings: 250 },
+      ] });
+
+      await loadSavingsTrendChart();
+
+      const label = document.getElementById('savings-trend-chart')?.getAttribute('aria-label') ?? '';
+      expect(label).toContain('cumulative savings over the last');
+      expect(label).toContain('$250');
+      expect(label).toContain('2 data points');
+      const rows = document.querySelectorAll('#savings-trend-table tbody tr');
+      expect(rows).toHaveLength(2);
+      expect(rows[1]?.querySelector('td')?.textContent).toBe('$250');
+    });
+
+    // Two points: one point is the sparse-data state (#1334), which draws
+    // no chart and so has no table.
+    const twoTrendPoints = [
+      { timestamp: '2026-01-01T00:00:00Z', cumulative_savings: 100 },
+      { timestamp: '2026-01-02T00:00:00Z', cumulative_savings: 150 },
+    ];
+
+    test('removes the trend table when there is no data to plot (#744)', async () => {
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: twoTrendPoints });
+      await loadSavingsTrendChart();
+      expect(document.getElementById('savings-trend-table')).not.toBeNull();
+
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: [] });
+      await loadSavingsTrendChart();
+      expect(document.getElementById('savings-trend-table')).toBeNull();
+    });
+
+    test('removes the trend table in the sparse-data state (#744, #1334)', async () => {
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: twoTrendPoints });
+      await loadSavingsTrendChart();
+      expect(document.getElementById('savings-trend-table')).not.toBeNull();
+
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValueOnce({ data_points: [twoTrendPoints[0]] });
+      await loadSavingsTrendChart();
+      expect(document.getElementById('savings-trend-table')).toBeNull();
+    });
+
     test('uses daily interval for the default 90-day range', async () => {
       await loadSavingsTrendChart();
 
@@ -1083,7 +1205,10 @@ describe('Dashboard Module', () => {
       // Override the beforeEach default of empty data_points so the chart
       // actually renders -- the test asserts the empty-state stays hidden.
       (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
-        data_points: [{ timestamp: new Date().toISOString(), cumulative_savings: 500, total_savings: 50, total_upfront: 0, purchase_count: 1 }],
+        data_points: [
+          { timestamp: new Date(Date.now() - 86400_000).toISOString(), cumulative_savings: 450, total_savings: 450, total_upfront: 0, purchase_count: 1 },
+          { timestamp: new Date().toISOString(), cumulative_savings: 500, total_savings: 50, total_upfront: 0, purchase_count: 1 },
+        ],
       });
       (api.getSavingsAnalytics as jest.Mock).mockClear();
 
@@ -1137,11 +1262,14 @@ describe('Dashboard Module', () => {
       document.body.appendChild(b7);
       setupSavingsTrendHandlers();
 
-      // Single purchase at the very start of the 7-day window.
+      // Two purchases near the start of the 7-day window.
       const now = Date.now();
       const purchaseTs = new Date(now - 6 * 86400_000).toISOString();
       (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
-        data_points: [{ timestamp: purchaseTs, cumulative_savings: 100, total_savings: 5, total_upfront: 200, purchase_count: 1 }],
+        data_points: [
+          { timestamp: purchaseTs, cumulative_savings: 100, total_savings: 5, total_upfront: 200, purchase_count: 1 },
+          { timestamp: new Date(now - 5 * 86400_000).toISOString(), cumulative_savings: 105, total_savings: 5, total_upfront: 200, purchase_count: 1 },
+        ],
       });
 
       (Chart as unknown as jest.Mock).mockClear();
@@ -1160,7 +1288,10 @@ describe('Dashboard Module', () => {
     test('data points use {x: timestamp_ms, y: value} so they are positioned by real date (QA 3.1)', async () => {
       const purchaseTs = '2024-06-15T12:00:00Z';
       (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
-        data_points: [{ timestamp: purchaseTs, cumulative_savings: 250, total_savings: 10, total_upfront: 500, purchase_count: 1 }],
+        data_points: [
+          { timestamp: purchaseTs, cumulative_savings: 250, total_savings: 10, total_upfront: 500, purchase_count: 1 },
+          { timestamp: '2024-06-16T12:00:00Z', cumulative_savings: 260, total_savings: 10, total_upfront: 500, purchase_count: 1 },
+        ],
       });
 
       await loadSavingsTrendChart();
@@ -1168,6 +1299,41 @@ describe('Dashboard Module', () => {
       const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
       const dataset = chartCall[1].data.datasets[0];
       expect(dataset.data[0]).toMatchObject({ x: new Date(purchaseTs).getTime(), y: 250 });
+    });
+
+    // Issue #188: one data point would paint a lone dot on a blank canvas.
+    test('a single data point shows the sparse-data message instead of a chart (#188)', async () => {
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
+        data_points: [{ timestamp: '2026-10-20T12:00:00Z', cumulative_savings: 1.1, total_savings: 1.1, total_upfront: 0, purchase_count: 1 }],
+      });
+      (Chart as unknown as jest.Mock).mockClear();
+
+      await loadSavingsTrendChart();
+
+      const canvas = document.getElementById('savings-trend-chart');
+      const empty = document.getElementById('savings-trend-empty');
+      expect(canvas?.classList.contains('hidden')).toBe(true);
+      expect(empty?.classList.contains('hidden')).toBe(false);
+      // formatCurrency is mocked in this file; the exact copy is pinned in chart-utils.test.ts.
+      expect(empty?.textContent).toContain('Not enough history yet to show a trend.');
+      expect(empty?.textContent).toContain('Oct 20, 2026');
+      expect(Chart).not.toHaveBeenCalled();
+    });
+
+    test('going from one data point back to two redraws the chart and hides the sparse message (#188)', async () => {
+      const one = { timestamp: '2026-10-20T12:00:00Z', cumulative_savings: 1.1, total_savings: 1.1, total_upfront: 0, purchase_count: 1 };
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [one] });
+      await loadSavingsTrendChart();
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
+        data_points: [one, { ...one, timestamp: '2026-10-21T12:00:00Z', cumulative_savings: 2.2 }],
+      });
+      (Chart as unknown as jest.Mock).mockClear();
+
+      await loadSavingsTrendChart();
+
+      expect(Chart).toHaveBeenCalledTimes(1);
+      expect(document.getElementById('savings-trend-chart')?.classList.contains('hidden')).toBe(false);
+      expect(document.getElementById('savings-trend-empty')?.classList.contains('hidden')).toBe(true);
     });
 
     test('fetch error shows error stub and hides canvas (not the empty-axes path) (QA 3.1)', async () => {
@@ -1187,7 +1353,10 @@ describe('Dashboard Module', () => {
     test('tooltip title callback returns a formatted date string, not a raw ms timestamp (QA 3.2)', async () => {
       const purchaseTs = '2024-06-15T12:00:00Z';
       (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
-        data_points: [{ timestamp: purchaseTs, cumulative_savings: 250, total_savings: 10, total_upfront: 500, purchase_count: 1 }],
+        data_points: [
+          { timestamp: purchaseTs, cumulative_savings: 250, total_savings: 10, total_upfront: 500, purchase_count: 1 },
+          { timestamp: '2024-06-16T12:00:00Z', cumulative_savings: 260, total_savings: 10, total_upfront: 500, purchase_count: 1 },
+        ],
       });
 
       await loadSavingsTrendChart();
@@ -1320,10 +1489,11 @@ describe('Dashboard Module', () => {
       accountCb();
       await new Promise((r) => setTimeout(r, 0));
 
-      expect(api.getSavingsAnalytics).toHaveBeenCalledTimes(1);
-      expect(api.getSavingsAnalytics).toHaveBeenCalledWith(
-        expect.objectContaining({ account_ids: ['uuid-acct-1'] })
-      );
+      // Two scoped series: the trend chart and the YTD tile sparkline (#317).
+      expect(api.getSavingsAnalytics).toHaveBeenCalledTimes(2);
+      for (const [filters] of (api.getSavingsAnalytics as jest.Mock).mock.calls) {
+        expect(filters).toEqual(expect.objectContaining({ account_ids: ['uuid-acct-1'] }));
+      }
     });
 
     test('does NOT fire when home tab is inactive (active-tab guard)', async () => {
@@ -1731,6 +1901,67 @@ describe('Dashboard Module', () => {
 
     // renderSavingsByService DOM behaviour tests (now driven by recommendation fixtures).
     describe('DOM behaviour', () => {
+      // #744: the role="img" canvas gets a value summary and a table.
+      describe('text alternative (#744)', () => {
+        const tableRows = (): string[][] =>
+          Array.from(document.querySelectorAll('#savings-by-service-table tbody tr'))
+            .map((tr) => Array.from((tr as HTMLTableRowElement).cells).map((c) => c.textContent ?? ''));
+
+        test('summarizes the plotted values in the canvas aria-label', () => {
+          buildDOM();
+          renderSavingsByService(
+            [rec('ec2', 100), rec('ec2', 300, 3), rec('rds', 50)],
+            { ec2: { potential_savings: 300, current_savings: 40 } },
+          );
+          const label = document.getElementById('savings-by-service-chart')?.getAttribute('aria-label') ?? '';
+          // ec2: 40 current + 60 lowest option + 200 upside = 300; rds: 50. Total 350.
+          expect(label).toContain('2 services');
+          expect(label).toContain('$350 in total');
+          expect(label).toContain('Largest: ec2 at $300');
+        });
+
+        test('lists every layer value per service in a "View as table" disclosure', () => {
+          buildDOM();
+          renderSavingsByService(
+            [rec('ec2', 100), rec('ec2', 300, 3), rec('rds', 50)],
+            { ec2: { potential_savings: 300, current_savings: 40 } },
+          );
+          expect(document.querySelector('#savings-by-service-table summary')?.textContent).toBe('View as table');
+          const headers = Array.from(document.querySelectorAll('#savings-by-service-table thead th')).map((th) => th.textContent);
+          expect(headers).toEqual(['Service', 'Current / Committed', 'Lowest option', 'Upside', 'Total']);
+          expect(tableRows()).toEqual([
+            ['ec2', '$40', '$60', '$200', '$300'],
+            ['rds', '$0', '$50', '$0', '$50'],
+          ]);
+        });
+
+        test('the table includes services beyond the bars drawn', () => {
+          buildDOM();
+          const many = Array.from({ length: 12 }, (_, i) => rec(`svc-${i}`, 100 + i));
+          renderSavingsByService(many);
+          expect(tableRows()).toHaveLength(12);
+        });
+
+        test('the table is removed when the chart switches to its empty state', () => {
+          buildDOM();
+          renderSavingsByService([rec('ec2', 100)]);
+          expect(document.getElementById('savings-by-service-table')).not.toBeNull();
+          renderSavingsByService([]);
+          expect(document.getElementById('savings-by-service-table')).toBeNull();
+        });
+
+        test('stacked layers are separated by a 2px gap, not only by shade', () => {
+          buildDOM();
+          renderSavingsByService([rec('ec2', 100), rec('ec2', 300, 3)], { ec2: { potential_savings: 300, current_savings: 40 } });
+          const calls = (Chart as unknown as jest.Mock).mock.calls;
+          const datasets = (calls[calls.length - 1]?.[1] as { data: { datasets: { borderWidth: { top: number }; borderColor: string }[] } }).data.datasets;
+          for (const d of datasets) {
+            expect(d.borderWidth.top).toBe(2);
+            expect(d.borderColor).toBe('#ffffff');
+          }
+        });
+      });
+
       test('shows empty state and hides canvas when no recommendations', () => {
         buildDOM();
         renderSavingsByService([]);
@@ -2133,12 +2364,12 @@ describe('Dashboard Module', () => {
     });
   });
 
-  // H-3 regression: absent API coverage/count fields must render '--', not '$0'/'80%'/'0'.
+  // H-3 regression: absent API coverage/count fields must render '—', not '$0'/'80%'/'0'.
   // Pre-fix: `data.current_coverage || 0` fabricated '0%'; `data.target_coverage || 80`
   // fabricated '80%'; `data.active_commitments || 0` fabricated '0'; the savings catch
   // block fell back to formatCurrency(0). These tests must FAIL on pre-fix code.
-  describe('H-3: absent dashboard KPI fields render -- sentinel, not fabricated values', () => {
-    test('absent target_coverage shows -- not hardcoded 80%', async () => {
+  describe('H-3: absent dashboard KPI fields render the em-dash sentinel, not fabricated values', () => {
+    test('absent target_coverage shows an em dash, not hardcoded 80%', async () => {
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
         // target_coverage deliberately absent
         total_recommendations: 1,
@@ -2156,11 +2387,11 @@ describe('Dashboard Module', () => {
       // Must not show the hardcoded 80% fallback
       expect(summary?.textContent).not.toContain('Target: 80.0%');
       expect(summary?.textContent).not.toContain('Target: 80%');
-      // Must show the '--' sentinel for absent target
-      expect(summary?.textContent).toContain('Target: --');
+      // Must show the '—' sentinel for absent target
+      expect(summary?.textContent).toContain('Target: —');
     });
 
-    test('absent current_coverage shows -- not fabricated 0%', async () => {
+    test('absent current_coverage shows an em dash, not fabricated 0%', async () => {
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
         // current_coverage deliberately absent
         total_recommendations: 2,
@@ -2182,11 +2413,11 @@ describe('Dashboard Module', () => {
       );
       expect(coverageTile).toBeDefined();
       const valueEl = coverageTile?.querySelector('.kpi-tile-value');
-      // Must show '--' (not a fabricated '0.0%') when current_coverage is absent
-      expect(valueEl?.textContent).toBe('--');
+      // Must show the em dash (not a fabricated '0.0%') when current_coverage is absent
+      expect(valueEl?.textContent).toBe('—');
     });
 
-    test('absent active_commitments shows -- not fabricated 0', async () => {
+    test('absent active_commitments shows an em dash, not fabricated 0', async () => {
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
         total_recommendations: 1,
         // active_commitments deliberately absent
@@ -2207,12 +2438,12 @@ describe('Dashboard Module', () => {
         t.textContent?.includes('Active Commitments')
       );
       expect(commitmentsTile).toBeDefined();
-      // Must not show fabricated '0'; must show '--'
+      // Must not show fabricated '0'; must show '—'
       const valueEl = commitmentsTile?.querySelector('.kpi-tile-value');
-      expect(valueEl?.textContent).toBe('--');
+      expect(valueEl?.textContent).toBe('—');
     });
 
-    test('savings range catch block shows -- not $0 when computation throws', async () => {
+    test('savings range catch block shows an em dash, not $0 when computation throws', async () => {
       // Force the groupRecsByCell mock to throw so the catch block fires.
       mockGroupRecsByCell.mockImplementationOnce(() => { throw new Error('compute error'); });
       (api.getDashboardSummary as jest.Mock).mockResolvedValue({
@@ -2235,8 +2466,89 @@ describe('Dashboard Module', () => {
       );
       expect(savingsTile).toBeDefined();
       const valueEl = savingsTile?.querySelector('.kpi-tile-value');
-      // Must show '--' (not '$0') when the savings computation fails
-      expect(valueEl?.textContent).toBe('--');
+      // Must show the em dash (not '$0') when the savings computation fails,
+      // and not in savings green: it is not a saving (issue #739).
+      expect(valueEl?.textContent).toBe('—');
+      expect(valueEl?.classList.contains('savings')).toBe(false);
     });
+  });
+});
+
+describe('YTD Savings tile sparkline (#317)', () => {
+  function addYtdTile(): SVGSVGElement {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.classList.add('kpi-tile-spark', 'hidden');
+    svg.dataset['sparkKey'] = 'ytd';
+    const canvas = document.createElement('canvas');
+    canvas.id = 'savings-trend-chart';
+    const b7 = document.createElement('button');
+    b7.className = 'trend-range';
+    b7.dataset['range'] = '7';
+    document.body.replaceChildren(svg, canvas, b7);
+    return svg;
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (state.getCurrentProvider as jest.Mock).mockReturnValue('aws');
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['uuid-acct-1']);
+  });
+
+  test('requests 1 January (UTC) to now, scoped by the chips, whatever the trend range', async () => {
+    addYtdTile();
+    (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [] });
+
+    await loadYtdSparkline();
+
+    expect(api.getSavingsAnalytics).toHaveBeenCalledTimes(1);
+    const filters = (api.getSavingsAnalytics as jest.Mock).mock.calls[0][0];
+    const start = new Date(filters.start);
+    expect(start.toISOString()).toBe(new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1)).toISOString());
+    expect(filters).toEqual(expect.objectContaining({ provider: 'aws', account_ids: ['uuid-acct-1'] }));
+  });
+
+  test('draws the YTD series into the tile', async () => {
+    const svg = addYtdTile();
+    (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
+      data_points: [
+        { timestamp: '2026-01-05T00:00:00Z', cumulative_savings: 10 },
+        { timestamp: '2026-05-05T00:00:00Z', cumulative_savings: 40 },
+      ],
+    });
+
+    await loadYtdSparkline();
+
+    expect(svg.classList.contains('hidden')).toBe(false);
+    expect(svg.querySelector('polyline')).not.toBeNull();
+  });
+
+  test('the trend chart (7-day range) no longer redraws the YTD tile', async () => {
+    const svg = addYtdTile();
+    (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
+      data_points: [
+        { timestamp: new Date(Date.now() - 2 * 86400_000).toISOString(), cumulative_savings: 1 },
+        { timestamp: new Date().toISOString(), cumulative_savings: 2 },
+      ],
+    });
+    setupSavingsTrendHandlers();
+    (document.querySelector('.trend-range[data-range="7"]') as HTMLButtonElement).click();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(api.getSavingsAnalytics).toHaveBeenCalledTimes(1);
+    expect(svg.querySelector('polyline')).toBeNull();
+  });
+
+  test('a failed fetch hides the sparkline and a missing tile skips the request', async () => {
+    const svg = addYtdTile();
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    (api.getSavingsAnalytics as jest.Mock).mockRejectedValue(new Error('503'));
+    await loadYtdSparkline();
+    expect(svg.classList.contains('hidden')).toBe(true);
+
+    document.body.replaceChildren();
+    (api.getSavingsAnalytics as jest.Mock).mockClear();
+    await loadYtdSparkline();
+    expect(api.getSavingsAnalytics).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

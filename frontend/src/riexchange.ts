@@ -8,6 +8,7 @@ import * as state from './state';
 import { formatDate, formatDateTime, escapeHtml, escapeHtmlAttr, formatCurrency } from './utils';
 import { switchTab, switchSettingsSubTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
+import { buildApproveConfirmBody, buildExchangeConfirmBody, hourlyPriceDelta } from './riexchange-confirm';
 import { applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 import {
   openColumnFilterPopover,
@@ -29,8 +30,9 @@ import type {
   Provider,
 } from './api';
 import { openModal, closeModal } from './modal';
-import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { showSkeletonRows, showSkeletonText, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
+import { createIcon, iconSvg } from './icons';
 import { applyReadOnlySettings, isPermissionDeniedError } from './settings';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
@@ -408,7 +410,7 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
     const active = filters[column] ? ' active' : '';
     const lbl = activeRiLabelFor(column);
     const label = filters[column] ? `Filter ${lbl} — currently active` : `Filter ${lbl}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">&#x26DB;</button>`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${iconSvg('filter')}</button>`;
   };
 
   container.innerHTML = `
@@ -933,7 +935,7 @@ function renderRecommendations(container: HTMLElement): void {
     const active = filters[column] ? ' active' : '';
     const lbl = riexLabelFor(column);
     const label = filters[column] ? `Filter ${lbl} — currently active` : `Filter ${lbl}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">⛛</button>`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${iconSvg('filter')}</button>`;
   };
 
   // Render an indexable list so per-row Exchange buttons can find the
@@ -1167,8 +1169,8 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
         const opt = document.createElement('option');
         opt.value = o.offering_id;
         // Display: "m5.large -- No Upfront" (no HTML injection: all fields from API)
-        const label = escapeHtml(o.instance_type) + (o.offering_type ? ' -- ' + escapeHtml(o.offering_type) : '');
-        opt.textContent = label;
+        // textContent escapes on its own; pre-escaping would show "&amp;".
+        opt.textContent = o.instance_type + (o.offering_type ? ' -- ' + o.offering_type : '');
         if (initialOfferingId && o.offering_id === initialOfferingId) {
           opt.selected = true;
         }
@@ -1185,7 +1187,7 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
         const opt = document.createElement('option');
         opt.value = alt.offering_id;
         const costStr = formatOfferingCost(alt);
-        opt.textContent = escapeHtml(alt.instance_type) + ' -- ' + costStr + '/mo';
+        opt.textContent = alt.instance_type + ' -- ' + costStr + '/mo';
         if (initialOfferingId && alt.offering_id === initialOfferingId) {
           opt.selected = true;
         }
@@ -1276,7 +1278,7 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.className = 'btn exchange-remove-target';
-    removeBtn.textContent = '×';
+    removeBtn.appendChild(createIcon('x'));
     removeBtn.setAttribute('aria-label', 'Remove target');
     removeBtn.addEventListener('click', () => {
       if (targetRows.length <= 1) return; // keep at least one row
@@ -1620,45 +1622,6 @@ function revealExchangeHistory(): void {
   list.focus({ preventScroll: true });
 }
 
-interface ExchangeConfirmParts {
-  quote: ExchangeQuoteSummary;
-  sources: string[];
-  targets: string[];
-}
-
-// Hours in an average month; only used for the approximate monthly delta.
-const HOURS_PER_MONTH = 730;
-
-function buildExchangeConfirmBody({ quote, sources, targets }: ExchangeConfirmParts): HTMLElement {
-  const root = document.createElement('div');
-  const line = (label: string, value: string): void => {
-    const p = document.createElement('p');
-    const strong = document.createElement('strong');
-    strong.textContent = value;
-    p.append(`${label}: `, strong);
-    root.appendChild(p);
-  };
-  line('Pay now', `${quote.CurrencyCode} ${quote.PaymentDueRaw}`);
-  line('Exchange', sources.join(', '));
-  line('For', targets.join(', '));
-  line('Region', quote.Region);
-  const src = Number(quote.SourceHourlyPriceRaw);
-  const tgt = Number(quote.TargetHourlyPriceRaw);
-  if (quote.SourceHourlyPriceRaw && quote.TargetHourlyPriceRaw && Number.isFinite(src) && Number.isFinite(tgt)) {
-    const delta = tgt - src;
-    const sign = delta >= 0 ? '+' : '-';
-    const abs = Math.abs(delta);
-    line(
-      'Hourly price change',
-      `${quote.CurrencyCode} ${src.toFixed(4)} \u2192 ${tgt.toFixed(4)} (${sign}${abs.toFixed(4)} ${quote.CurrencyCode}/hr, about ${sign}${(abs * HOURS_PER_MONTH).toFixed(2)} ${quote.CurrencyCode}/month)`,
-    );
-  }
-  const warn = document.createElement('p');
-  warn.textContent = 'This exchange executes immediately and cannot be reversed.';
-  root.appendChild(warn);
-  return root;
-}
-
 function setResultText(container: HTMLElement, message: string, cls: string): void {
   container.textContent = '';
   const p = document.createElement('p');
@@ -1693,6 +1656,8 @@ function renderModalQuoteResult(container: HTMLElement, quote: ExchangeQuoteSumm
     ['Source Hourly Price', quote.SourceHourlyPriceRaw],
     ['Target Hourly Price', quote.TargetHourlyPriceRaw],
   ];
+  const delta = hourlyPriceDelta(quote);
+  if (delta) rows.push(['Hourly Price Change', delta]);
   if (quote.OutputReservedInstancesExp) {
     rows.push(['New RI Expiry', quote.OutputReservedInstancesExp]);
   }
@@ -1722,11 +1687,17 @@ export async function loadAutomationSettings(): Promise<void> {
   const container = document.getElementById('ri-exchange-automation-settings');
   if (!container) return;
 
-  container.textContent = '';
-  const loadingP = document.createElement('p');
-  loadingP.className = 'loading';
-  loadingP.textContent = 'Loading settings...';
-  container.appendChild(loadingP);
+  // Hold the section's place with its own titled frame while the config
+  // loads (issue #190): a bare "Loading settings..." line between the GCP
+  // block and Commitment Laddering read as the whole page half-loaded.
+  // Inside the frame, the shared text skeleton (issue #186) stands in for
+  // the form: it brings the screen-reader "Loading…" status and the
+  // "Still loading" note, so no visible loading paragraph is needed.
+  const loadingBody = document.createElement('div');
+  const loadingShell = automationSectionShell(loadingBody);
+  loadingShell.setAttribute('aria-busy', 'true');
+  container.replaceChildren(loadingShell);
+  showSkeletonText(loadingBody, 4);
 
   try {
     const config = await api.getRIExchangeConfig();
@@ -1743,17 +1714,30 @@ export async function loadAutomationSettings(): Promise<void> {
       return;
     }
     const err = error as Error;
-    container.textContent = '';
     const errorP = document.createElement('p');
     errorP.className = 'error';
     errorP.textContent = 'Failed to load settings: ' + err.message;
-    container.appendChild(errorP);
     const retryBtn = document.createElement('button');
+    retryBtn.type = 'button';
     retryBtn.className = 'btn btn-small mt-2';
     retryBtn.textContent = 'Retry';
     retryBtn.addEventListener('click', () => { void loadAutomationSettings(); });
-    container.appendChild(retryBtn);
+    container.replaceChildren(automationSectionShell(errorP, retryBtn));
   }
+}
+
+/**
+ * The "Exchange Automation" fieldset frame used while the real form is not
+ * there yet (loading or failed), so the state is attributed to this section
+ * rather than floating between its neighbours.
+ */
+function automationSectionShell(...children: HTMLElement[]): HTMLFieldSetElement {
+  const fieldset = document.createElement('fieldset');
+  fieldset.className = 'settings-category';
+  const legend = document.createElement('legend');
+  legend.textContent = 'Exchange Automation';
+  fieldset.append(legend, ...children);
+  return fieldset;
 }
 
 function buildAutoWarningBanner(): HTMLDivElement {
@@ -1992,11 +1976,8 @@ async function loadExchangeHistory(generation: number = scopeGeneration): Promis
   const container = document.getElementById('ri-exchange-history-list');
   if (!container) return;
 
-  container.textContent = '';
-  const loadingP = document.createElement('p');
-  loadingP.className = 'loading';
-  loadingP.textContent = 'Loading exchange history...';
-  container.appendChild(loadingP);
+  // Issue #186: skeleton rows shaped like the 7-column history table.
+  showSkeletonRows(container, 3, 7);
 
   try {
     const records = await api.getRIExchangeHistory();
@@ -2046,6 +2027,11 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
     const exchangeIdCell = rec.exchange_id
       ? '<span class="monospace">' + escapeHtml(rec.exchange_id) + '</span>'
       : '&mdash;';
+    // A failed exchange carries the AWS reason in rec.error; show it under the
+    // badge so the operator can see why without reading backend logs.
+    const errorLine = rec.error
+      ? '<div class="status-detail">' + escapeHtml(rec.error) + '</div>'
+      : '';
     const approveBtn = canApproveRIExchangeRow(rec)
       ? '<button type="button" class="btn-link riexchange-approve-btn" data-approve-id="' + escapeHtml(rec.id) + '">Approve</button>'
       : '';
@@ -2056,7 +2042,7 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
       // payment_due is USD (the execute cap is max_payment_due_usd); an
       // empty amount renders as a dash, not a lone "$" (issue #284).
       + '<td>' + (rec.payment_due ? '$' + escapeHtml(rec.payment_due) : '&mdash;') + '</td>'
-      + '<td><span class="' + getStatusBadgeClass(rec.status) + '">' + escapeHtml(rec.status) + '</span></td>'
+      + '<td><span class="' + getStatusBadgeClass(rec.status) + '">' + escapeHtml(rec.status) + '</span>' + errorLine + '</td>'
       + '<td>' + exchangeIdCell + '</td>'
       + '<td>' + approveBtn + '</td>'
       + '</tr>';
@@ -2093,11 +2079,7 @@ async function handleRIExchangeApproveClick(btn: HTMLButtonElement, record: RIEx
   btn.disabled = true;
   const confirmed = await confirmDialog({
     title: 'Approve RI Exchange',
-    body: `Previously quoted payment: USD ${record.payment_due}. `
-      + `Source RIs: ${record.source_ri_ids.join(', ')}. Region: ${record.region}. `
-      + `Target: ${record.target_count} × ${record.target_offering_id} (${record.target_instance_type}). `
-      + 'Approving executes immediately using a fresh quote, within the configured per-exchange '
-      + 'and remaining daily spending limits. This exchange cannot be reversed.',
+    body: buildApproveConfirmBody(record),
     confirmLabel: 'Approve',
     destructive: true,
   });
