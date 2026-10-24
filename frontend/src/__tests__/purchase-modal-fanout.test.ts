@@ -12,7 +12,6 @@
 
 // The harness registers the module mocks, so it must be imported first.
 import {
-  buildFanOutRows,
   buildRows,
   deferred,
   flush,
@@ -34,6 +33,21 @@ import type { LocalRecommendation } from '../types';
 beforeEach(setupPurchaseModalTest);
 
 describe('Issue #1904: fan-out modal skips incompatible buckets', () => {
+  function buildFanOutRows(): LocalRecommendation[] {
+    return [
+      {
+        id: 'ec2-1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
+        region: 'us-east-1', resource_type: 'm5.large', term: 1, payment: 'no-upfront',
+        count: 1, upfront_cost: 0, monthly_cost: 100, savings: 50,
+      },
+      {
+        id: 'rds-3', provider: 'aws', cloud_account_id: 'a1', service: 'rds',
+        region: 'us-east-1', resource_type: 'db.r5.large', term: 3, payment: undefined,
+        count: 1, upfront_cost: 1000, savings: 200,
+      },
+    ];
+  }
+
   test('T8 skipped bucket is not submitted and not totalled', async () => {
     const [ec2Rec, rdsRec] = buildFanOutRows();
     (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'no-upfront' } });

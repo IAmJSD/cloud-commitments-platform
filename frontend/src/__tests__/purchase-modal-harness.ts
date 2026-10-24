@@ -201,23 +201,6 @@ export function deferred<T>(): {
   return { promise, resolve };
 }
 
-// Two buckets for the #1904 fan-out suites: a priced EC2 row and an RDS row
-// with no payment, which the fan-out modal must skip.
-export function buildFanOutRows(): LocalRecommendation[] {
-  return [
-    {
-      id: 'ec2-1', provider: 'aws', cloud_account_id: 'a1', service: 'ec2',
-      region: 'us-east-1', resource_type: 'm5.large', term: 1, payment: 'no-upfront',
-      count: 1, upfront_cost: 0, monthly_cost: 100, savings: 50,
-    },
-    {
-      id: 'rds-3', provider: 'aws', cloud_account_id: 'a1', service: 'rds',
-      region: 'us-east-1', resource_type: 'db.r5.large', term: 3, payment: undefined,
-      count: 1, upfront_cost: 1000, savings: 200,
-    },
-  ];
-}
-
 // DOM / mock scaffolding
 
 /** Rebuilds the purchase-modal DOM and resets every mock; run before each test. */
