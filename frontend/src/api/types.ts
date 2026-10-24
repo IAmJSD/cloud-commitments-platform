@@ -815,11 +815,9 @@ export interface ExchangeQuoteSummary {
   TargetRemainingUpfrontRaw: string;
   TargetRemainingTotalRaw: string;
   OutputReservedInstancesExp?: string;
-  // Region the backend's SDK chain resolved for this quote (issue #238).
-  // Echo it back unchanged on the paired execute call: execute requires
-  // a region and refuses to default it, since exchanges are financially
-  // irreversible.
-  Region?: string;
+  // Region the quote was priced in; the backend always sets it. Execute
+  // must send this same region back (ExchangeExecuteRequest.region).
+  Region: string;
 }
 
 // ExchangeExecuteRequest: same `targets[]` vs legacy singleton
@@ -833,7 +831,9 @@ export interface ExchangeExecuteRequest {
   target_offering_id?: string;
   target_count?: number;
   max_payment_due_usd: string;
-  region?: string;
+  // Required: the backend rejects an execute without a region rather than
+  // defaulting one, since exchanges are irreversible. Pass the quote's Region.
+  region: string;
 }
 
 export interface ExchangeResult {
