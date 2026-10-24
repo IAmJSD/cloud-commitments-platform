@@ -361,6 +361,47 @@ test('editor labels each row by its basis and keeps the native amount', async ()
   expect(open('m3')).toBe('Planning budget (on-demand-equivalent $/hr)|1.000000');
 });
 
+describe('planned purchases layout and UTC date filters (issue #753)', () => {
+  const date = (edge: 'from' | 'to'): HTMLInputElement => document.querySelector<HTMLInputElement>(`[data-date="${edge}"]`)!;
+  const type = (edge: 'from' | 'to', value: string): void => { date(edge).value = value; date(edge).dispatchEvent(new Event('change')); };
+  const error = (): HTMLElement => document.getElementById('ladder-timeline-date-error')!;
+  const summary = (): string => document.querySelector('[data-summary]')!.textContent ?? '';
+
+  test('renders its own card with labelled controls and plain-text UTC dates', async () => {
+    await initLadderTimeline(document.getElementById('timeline')!, [], false);
+    const card = document.querySelector('#timeline > fieldset.settings-category')!;
+    expect(card.querySelector('legend')).toHaveTextContent('Planned purchases');
+    card.querySelectorAll('.ladder-timeline-controls select, .ladder-timeline-controls input').forEach(control => {
+      expect(card.querySelector(`label[for="${control.id}"]`)).not.toBeNull();
+      expect(control.closest('.form-group')).not.toBeNull();
+    });
+    expect(card.querySelector('input[type="datetime-local"]')).toBeNull();
+    expect(date('from').type).toBe('text');
+    expect(date('from').value).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/);
+    expect(date('to')).toHaveAttribute('placeholder', 'YYYY-MM-DD HH:MM');
+    expect(card.querySelector('[data-reset]')).toHaveClass('btn-tertiary');
+  });
+
+  test('valid dates filter and normalize; invalid dates are flagged and ignored until cleared', async () => {
+    await initLadderTimeline(document.getElementById('timeline')!, [], false);
+    type('from', '');
+    type('to', '2029-12-31');
+    expect(date('to').value).toBe('2029-12-31 23:59:59');
+    expect(summary()).toContain('0 of 1');
+    type('to', '2030-01-01');
+    expect(summary()).toContain('1 of 1');
+    type('to', '01.01.2029');
+    expect(date('to')).toHaveAttribute('aria-invalid', 'true');
+    expect(error()).not.toHaveClass('hidden');
+    expect(error()).toHaveTextContent('To date "01.01.2029" is not a valid UTC date');
+    expect(summary()).toContain('1 of 1');
+    document.querySelector<HTMLButtonElement>('#timeline [data-reset]')!.click();
+    expect(date('to')).not.toHaveAttribute('aria-invalid');
+    expect(error()).toHaveClass('hidden');
+    expect(date('to').value).toBe('');
+  });
+});
+
 describe('chart teardown on navigation (issue #667)', () => {
   const chartInstance = (index: number): { destroy: jest.Mock } => jest.mocked(Chart).mock.results[index]!.value as { destroy: jest.Mock };
 
