@@ -20,6 +20,7 @@ import {
   isServiceFilterError,
 } from './serviceFilters';
 import { initLadderingSettings } from './ladder';
+import { showSkeletonText } from './lib/skeleton';
 
 /**
  * Issue #196 — after any mutation to an `account_service_overrides` row
@@ -1174,7 +1175,7 @@ function closeAccountOverridesModal(): void {
 }
 
 export async function loadOverridesPanel(accountId: string, panel: HTMLElement, provider: AccountProvider): Promise<void> {
-  panel.textContent = 'Loading\u2026';
+  showSkeletonText(panel, 2); // issue #186: was a plain "Loading…" line
   try {
     const overrides = await api.listAccountServiceOverrides(accountId);
     panel.textContent = '';
@@ -3167,7 +3168,11 @@ export async function loadGlobalSettings(): Promise<void> {
   const formEl = document.getElementById('global-settings-form');
   const errorEl = document.getElementById('settings-error');
 
-  if (loadingEl) loadingEl.classList.remove('hidden');
+  if (loadingEl) {
+    loadingEl.classList.remove('hidden');
+    // Issue #186: skeleton instead of the static "Loading settings..." text.
+    showSkeletonText(loadingEl, 6);
+  }
   if (formEl) formEl.classList.add('hidden');
   if (errorEl) errorEl.classList.add('hidden');
 

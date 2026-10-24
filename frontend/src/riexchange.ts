@@ -27,7 +27,7 @@ import type {
   Provider,
 } from './api';
 import { openModal, closeModal } from './modal';
-import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { showSkeletonRows, showSkeletonText, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
 import { applyReadOnlySettings, isPermissionDeniedError } from './settings';
 import { showToast } from './toast';
@@ -2065,11 +2065,9 @@ export async function loadAutomationSettings(): Promise<void> {
   const container = document.getElementById('ri-exchange-automation-settings');
   if (!container) return;
 
-  container.textContent = '';
-  const loadingP = document.createElement('p');
-  loadingP.className = 'loading';
-  loadingP.textContent = 'Loading settings...';
-  container.appendChild(loadingP);
+  // Issue #186: same skeleton pattern as the rest of the app (was a
+  // "Loading settings..." paragraph next to shimmering tables).
+  showSkeletonText(container, 4);
 
   try {
     const config = await api.getRIExchangeConfig();
@@ -2326,11 +2324,8 @@ async function loadExchangeHistory(generation: number = scopeGeneration): Promis
   const container = document.getElementById('ri-exchange-history-list');
   if (!container) return;
 
-  container.textContent = '';
-  const loadingP = document.createElement('p');
-  loadingP.className = 'loading';
-  loadingP.textContent = 'Loading exchange history...';
-  container.appendChild(loadingP);
+  // Issue #186: skeleton rows shaped like the 7-column history table.
+  showSkeletonRows(container, 3, 7);
 
   try {
     const records = await api.getRIExchangeHistory();

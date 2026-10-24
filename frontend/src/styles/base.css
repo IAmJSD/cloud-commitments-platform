@@ -276,6 +276,32 @@ body {
     margin-bottom: 0;
 }
 
+/* Skeleton tables (showSkeletonRows). The shimmer boxes are 80% of an
+ * auto-sized cell; with nothing else in the cell, auto layout shrank the
+ * cells to their padding and the boxes to 0px, so on Opportunities the
+ * "skeleton" was a blank card that read as a hang (issue #186). Fixed
+ * layout spreads the columns over the full width and the min-width keeps
+ * every box visible on narrow viewports. */
+.skeleton-table {
+    width: 100%;
+    table-layout: fixed;
+}
+
+.skeleton-row .skeleton {
+    min-width: 1.5rem;
+}
+
+/* Slow-response fallback appended by lib/skeleton.ts after
+ * SKELETON_SLOW_MS (issue #186). Spans the full row when the skeleton
+ * container is a grid (Home KPI tiles, Plans cards). */
+.skeleton-slow-note {
+    grid-column: 1 / -1;
+    margin: var(--cudly-sp-3) 0 0;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-sm);
+    text-align: center;
+}
+
 @keyframes cudly-shimmer {
     0%   { background-position: 200% 0; }
     100% { background-position: -200% 0; }

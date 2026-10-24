@@ -16,7 +16,44 @@
  *
  * All helpers use `createElement` only — no `innerHTML` — to match the
  * codebase's XSS posture from issue #340.
+ *
+ * Issue #186: skeletons are the one loading pattern for panels (plain
+ * "Loading..." paragraphs were migrated to showSkeletonText). Every show*
+ * call also adds a screen-reader-only "Loading…" status, since the shimmer
+ * blocks are aria-hidden, and arms a slow-response fallback: if the
+ * skeleton is still on screen after SKELETON_SLOW_MS, a visible "Still
+ * loading" note is appended so a slow or stuck response does not look
+ * like a hang.
  */
+
+/** How long a skeleton may show before the "Still loading" note appears. */
+export const SKELETON_SLOW_MS = 8_000;
+
+const SLOW_NOTE_TEXT = 'Still loading. This is taking longer than usual.';
+
+const slowTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
+
+function clearSlowTimer(container: HTMLElement): void {
+  const t = slowTimers.get(container);
+  if (t !== undefined) {
+    clearTimeout(t);
+    slowTimers.delete(container);
+  }
+}
+
+/**
+ * True while the container still shows skeleton placeholders. Success
+ * renders replace the children (often via innerHTML, which leaves the
+ * data marker behind), so the shimmer elements themselves are the signal.
+ */
+function skeletonStillShown(container: HTMLElement): boolean {
+  return container.isConnected
+    && container.dataset['skeletonActive'] === '1'
+    && container.querySelector('.skeleton') !== null
+    // A placeholder whose panel was hidden (e.g. #settings-loading once the
+    // form shows) is not something the user is waiting on.
+    && container.closest('.hidden') === null;
+}
 
 /**
  * A single shimmer block. Width/height are CSS sizes (e.g. "60%", "1rem",
@@ -95,6 +132,32 @@ export function skeletonRow(cols: number): HTMLTableRowElement {
 function activateSkeleton(container: HTMLElement): void {
   while (container.firstChild) container.removeChild(container.firstChild);
   container.dataset['skeletonActive'] = '1';
+
+  const status = document.createElement('span');
+  status.className = 'sr-only skeleton-status';
+  status.setAttribute('role', 'status');
+  status.textContent = 'Loading…';
+  container.appendChild(status);
+
+  clearSlowTimer(container);
+  slowTimers.set(container, setTimeout(() => {
+    slowTimers.delete(container);
+    if (!skeletonStillShown(container) || container.querySelector('.skeleton-slow-note')) return;
+    const note = document.createElement('p');
+    note.className = 'skeleton-slow-note';
+    note.setAttribute('role', 'status');
+    note.textContent = SLOW_NOTE_TEXT;
+    container.appendChild(note);
+  }, SKELETON_SLOW_MS));
+}
+
+/**
+ * Replace the children of `container` with `lines` text-line skeletons —
+ * the panel/form counterpart of showSkeletonRows (issue #186).
+ */
+export function showSkeletonText(container: HTMLElement, lines: number): void {
+  activateSkeleton(container);
+  container.appendChild(skeletonText(lines));
 }
 
 /**
@@ -147,6 +210,7 @@ export function showSkeletonBlock(container: HTMLElement, width: string, height:
  * content.
  */
 export function teardownSkeleton(container: HTMLElement): void {
+  clearSlowTimer(container);
   if (container.dataset['skeletonActive']) {
     while (container.firstChild) container.removeChild(container.firstChild);
     delete container.dataset['skeletonActive'];
