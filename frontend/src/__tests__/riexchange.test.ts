@@ -600,6 +600,44 @@ describe('openExchangeModal', () => {
     expect(mockListOfferings).toHaveBeenCalledWith('ri-abc');
   });
 
+  it('shows an error with Retry, not a "type a UUID" dead end, when offerings fail to load (issue #740)', async () => {
+    const mockListOfferings = api.listTargetOfferings as jest.Mock;
+    mockListOfferings.mockRejectedValueOnce(new Error('throttled'));
+    openExchangeModal('ri-abc', 2);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const picker = modal.querySelector<HTMLSelectElement>('.modal-exchange-target-select');
+    expect(picker?.options[0]?.textContent).toBe('Could not load offerings');
+    expect(modal.textContent).not.toContain('UUID');
+    const errorRow = modal.querySelector<HTMLElement>('.exchange-offerings-error');
+    expect(errorRow?.classList.contains('hidden')).toBe(false);
+    expect(errorRow?.querySelector('[role="alert"]')?.textContent).toBe('Could not load target offerings: throttled');
+
+    mockListOfferings.mockResolvedValueOnce([{
+      offering_id: '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91', instance_type: 'm5.xlarge', offering_type: 'No Upfront',
+      product_description: 'Linux/UNIX', duration: 31536000, fixed_price: 0, usage_price: 0.12,
+      currency_code: 'USD', scope: 'Region', normalization_factor: 8,
+    }]);
+    Array.from(errorRow?.querySelectorAll('button') ?? []).find((b) => b.textContent === 'Retry')?.click();
+    expect(picker?.options[0]?.textContent).toBe('Loading offerings...');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(mockListOfferings).toHaveBeenCalledTimes(2);
+    expect(errorRow?.classList.contains('hidden')).toBe(true);
+    expect(Array.from(picker?.options ?? []).map((o) => o.value)).toContain('4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91');
+  });
+
+  it('keeps CE recommendations selectable when the AWS offerings fail to load', async () => {
+    (api.listTargetOfferings as jest.Mock).mockRejectedValueOnce(new Error('throttled'));
+    openExchangeModal('ri-abc', 2, undefined, [
+      { instance_type: 'm5.large', offering_id: '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91', effective_monthly_cost: 42.5 },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const picker = modal.querySelector<HTMLSelectElement>('.modal-exchange-target-select');
+    expect(picker?.options[0]?.textContent).toBe('AWS offerings unavailable -- pick a recommendation or retry');
+    expect(Array.from(picker?.options ?? []).map((o) => o.value)).toContain('4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91');
+  });
+
   it('selecting a picker option drives the hidden offering input with a UUID', () => {
     openExchangeModal('ri-abc', 2, undefined, [
       { instance_type: 'm5.large', offering_id: '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91', effective_monthly_cost: 42.5 },
@@ -914,6 +952,48 @@ describe('reshape recommendations empty state', () => {
     expect(recsEl.textContent).toContain('meet your utilization threshold');
     expect(recsEl.textContent).toContain('1 convertible RI ');
     expect(recsEl.textContent).not.toContain('none are registered');
+  });
+
+  // Issue #1135: the three loads race. An empty reshape response that lands
+  // before the RI list must not keep the previous scope's count.
+  it('re-renders the empty-state count when recommendations resolve before the RI list', async () => {
+    (api.listConvertibleRIs as jest.Mock).mockResolvedValueOnce([sampleRI]);
+    await loadRIExchange();
+    expect(recsEl.textContent).toContain('All 1 convertible RI ');
+
+    let releaseRIs: (v: unknown) => void = () => undefined;
+    (api.listConvertibleRIs as jest.Mock).mockReturnValueOnce(new Promise(r => { releaseRIs = r; }));
+    const reload = loadRIExchange();
+    await new Promise(r => setTimeout(r, 0));
+    // Recommendations are in, RIs are not: no stale "All 1" claim.
+    expect(api.getReshapeRecommendations).toHaveBeenCalledTimes(2);
+    expect(recsEl.textContent).not.toContain('All 1 convertible RI');
+    expect(recsEl.textContent).toContain('No reshape recommendations right now.');
+
+    releaseRIs([sampleRI, { ...sampleRI, reserved_instance_id: 'ri-2' }, { ...sampleRI, reserved_instance_id: 'ri-3' }]);
+    await reload;
+    expect(recsEl.textContent).toContain('All 3 convertible RIs meet your utilization threshold');
+  });
+
+  it('does not quote a count from a failed RI load', async () => {
+    (api.listConvertibleRIs as jest.Mock).mockResolvedValueOnce([sampleRI]);
+    await loadRIExchange();
+    (api.listConvertibleRIs as jest.Mock).mockRejectedValueOnce(new Error('boom'));
+    await loadRIExchange();
+    expect(recsEl.textContent).toContain('No reshape recommendations right now.');
+    expect(recsEl.textContent).not.toContain('convertible RI');
+  });
+
+  it('keeps the error from a failed reshape load after the RI list arrives', async () => {
+    let releaseRIs: (v: unknown) => void = () => undefined;
+    (api.listConvertibleRIs as jest.Mock).mockReturnValueOnce(new Promise(r => { releaseRIs = r; }));
+    (api.getReshapeRecommendations as jest.Mock).mockRejectedValueOnce(new Error('ce down'));
+    const reload = loadRIExchange();
+    await new Promise(r => setTimeout(r, 0));
+    releaseRIs([sampleRI]);
+    await reload;
+    expect(recsEl.querySelector('.error')?.textContent).toContain('Failed to load recommendations: ce down');
+    expect(recsEl.textContent).not.toContain('utilization threshold');
   });
 });
 

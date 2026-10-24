@@ -37,6 +37,11 @@ import { getCurrentUser } from './state';
 
 // Module state
 let currentRIs: ConvertibleRI[] = [];
+// True once currentRIs holds the convertible-RI list of the scope being
+// shown. The reshape empty state only quotes currentRIs.length while this is
+// set, so it never prints the previous scope's count, or a count from a list
+// that failed to load (issue #1135).
+let currentRIsLoaded = false;
 let currentUtilization: Map<string, RIUtilization> = new Map();
 let currentRecommendations: ReshapeRecommendation[] = [];
 const exchangePaymentPattern = /^\d+(?:\.\d+)?$/;
@@ -103,6 +108,7 @@ export async function loadRIExchange(): Promise<void> {
     if (generation !== scopeGeneration) return;
     utilizationGeneration++;
     currentRIs = [];
+    currentRIsLoaded = false;
     currentUtilization = new Map();
     currentRecommendations = [];
     currentRIAccountID = undefined;
@@ -137,11 +143,17 @@ export async function loadRIExchange(): Promise<void> {
   }
 
   // AWS (default / empty provider): full convertible-RI flow.
-  await Promise.all([
+  const [, recsLoaded] = await Promise.all([
     loadConvertibleRIs(accountID, generation),
     loadReshapeRecommendations(generation),
     loadExchangeHistory(generation),
   ]);
+  // The three loads race. When the reshape list came back empty before the
+  // RI list, its empty state was written without this scope's RI count, so
+  // render it again now that both are in. A failed reshape load keeps its
+  // error message (issue #1135).
+  if (generation !== scopeGeneration) return;
+  if (recsLoaded && currentRecommendations.length === 0) rerenderReshape();
 }
 
 /**
@@ -151,6 +163,7 @@ export async function loadRIExchange(): Promise<void> {
  */
 function renderGCPEmptyStates(): void {
   currentRIs = [];
+  currentRIsLoaded = false;
   currentUtilization = new Map();
   currentRecommendations = [];
   currentRIAccountID = undefined;
@@ -297,6 +310,7 @@ async function loadConvertibleRIs(accountID?: string, generation: number = scope
   showSkeletonRows(container, 3, 8);
 
   currentRIAccountID = accountID;
+  currentRIsLoaded = false;
 
   try {
     // issue #871: scope to the selected account so the page honours the
@@ -304,6 +318,7 @@ async function loadConvertibleRIs(accountID?: string, generation: number = scope
     const ris = await api.listConvertibleRIs(accountID);
     if (generation !== scopeGeneration) return;
     currentRIs = ris;
+    currentRIsLoaded = true;
     renderRIsTable(container, accountID);
     // Load utilization asynchronously (Cost Explorer is slow)
     utilizationGeneration++;
@@ -335,6 +350,7 @@ async function loadExchangeableAzureRIs(accountID: string | undefined, generatio
   // later provider switch back to AWS starts clean and reshape copy that
   // reads currentRIs.length isn't skewed by stale AWS rows.
   currentRIs = [];
+  currentRIsLoaded = false;
   currentUtilization = new Map();
   currentRIAccountID = undefined;
 
@@ -519,9 +535,11 @@ function appendAzureCell(tr: HTMLTableRowElement, text: string): void {
 // Reshape recommendations
 // ──────────────────────────────────────────────
 
-export async function loadReshapeRecommendations(generation: number = scopeGeneration): Promise<void> {
+// Resolves true when this call rendered a fresh reshape list (empty or not),
+// false when it was superseded, failed, or had nowhere to render.
+export async function loadReshapeRecommendations(generation: number = scopeGeneration): Promise<boolean> {
   const container = document.getElementById('ri-exchange-recommendations-list');
-  if (!container) return;
+  if (!container) return false;
 
   // Issue #344 T3: skeleton rows for the reshape-recommendations table.
   // 3 rows × 8 cols matches the rendered table shape — see
@@ -531,17 +549,19 @@ export async function loadReshapeRecommendations(generation: number = scopeGener
 
   try {
     const resp: ReshapeRecommendationsResponse = await api.getReshapeRecommendations();
-    if (generation !== scopeGeneration) return;
+    if (generation !== scopeGeneration) return false;
     currentRecommendations = resp.recommendations ?? [];
     renderRecommendations(container);
     renderReshapeStalenessBanner(resp.recs_staleness, resp.recs_collected_at);
     renderExcludedRIsNotice(resp.excluded_ris);
+    return true;
   } catch (error) {
-    if (generation !== scopeGeneration) return;
+    if (generation !== scopeGeneration) return false;
     teardownSkeleton(container);
     renderExcludedRIsNotice(undefined);
     const err = error as Error;
     container.innerHTML = `<p class="error">Failed to load recommendations: ${escapeHtml(err.message)}</p>`;
+    return false;
   }
 }
 
@@ -889,9 +909,13 @@ function renderRecommendations(container: HTMLElement): void {
     // contains convertibles to be utilized. Prior to this commit the same
     // message fired regardless of fleet presence, so a brand-new tenant saw
     // a claim about utilization of a non-existent fleet.
-    const copy = currentRIs.length === 0
-      ? 'Reshape recommendations appear once your accounts have active convertible Reserved Instances — none are registered yet.'
-      : `All ${currentRIs.length} convertible RI${currentRIs.length === 1 ? '' : 's'} meet your utilization threshold. No reshape needed.`;
+    // Until this scope's RI list is in (or when it failed to load), say
+    // nothing about the fleet rather than quote a stale count (#1135).
+    const copy = !currentRIsLoaded
+      ? 'No reshape recommendations right now.'
+      : currentRIs.length === 0
+        ? 'Reshape recommendations appear once your accounts have active convertible Reserved Instances — none are registered yet.'
+        : `All ${currentRIs.length} convertible RI${currentRIs.length === 1 ? '' : 's'} meet your utilization threshold. No reshape needed.`;
     container.innerHTML = `<p class="empty">${escapeHtml(copy)}</p>`;
     return;
   }
@@ -1123,7 +1147,11 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     const placeholder = document.createElement('option');
     placeholder.value = '';
     if (offeringsError) {
-      placeholder.textContent = 'Could not load offerings -- type a UUID';
+      // The AWS list failed; CE recommendations (if any) stay selectable,
+      // and the Retry button below the targets reloads the AWS list.
+      placeholder.textContent = alternativeTargets && alternativeTargets.length > 0
+        ? 'AWS offerings unavailable -- pick a recommendation or retry'
+        : 'Could not load offerings';
     } else if (!offeringsLoaded) {
       placeholder.textContent = 'Loading offerings...';
     } else {
@@ -1167,21 +1195,49 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     }
   };
 
-  // populateAwsOfferings loads target offerings from the backend and
-  // refreshes all existing pickers.
-  const populateAwsOfferings = async (): Promise<void> => {
-    try {
-      awsOfferings = await api.listTargetOfferings(riId);
-      offeringsLoaded = true;
-    } catch {
-      offeringsLoaded = true;
-      offeringsError = true;
-    }
-    // Refresh all existing row pickers with the loaded offerings.
+  const refreshPickers = (): void => {
     for (const row of targetRows) {
       buildPickerOptions(row.pickerSelect, row.offeringInput.value || undefined);
     }
   };
+
+  // populateAwsOfferings loads target offerings from the backend and
+  // refreshes all existing pickers. On failure it shows an error with a
+  // Retry button instead of leaving the user at a dead end (issue #740).
+  const populateAwsOfferings = async (): Promise<void> => {
+    offeringsLoaded = false;
+    offeringsError = false;
+    offeringsErrorRow.classList.add('hidden');
+    refreshPickers();
+    try {
+      awsOfferings = await api.listTargetOfferings(riId);
+    } catch (error) {
+      awsOfferings = [];
+      offeringsError = true;
+      const reason = error instanceof Error && error.message ? `: ${error.message}` : '.';
+      offeringsErrorText.textContent = `Could not load target offerings${reason}`;
+      offeringsErrorRow.classList.remove('hidden');
+    }
+    offeringsLoaded = true;
+    refreshPickers();
+  };
+
+  // Error state for a failed offerings load: the message is an alert so
+  // screen readers hear it, and Retry reloads the list in place.
+  const offeringsErrorRow = document.createElement('div');
+  offeringsErrorRow.className = 'setting-row exchange-offerings-error hidden';
+  const offeringsErrorText = document.createElement('p');
+  offeringsErrorText.className = 'error';
+  offeringsErrorText.setAttribute('role', 'alert');
+  const retryOfferingsBtn = document.createElement('button');
+  retryOfferingsBtn.type = 'button';
+  retryOfferingsBtn.className = 'btn';
+  retryOfferingsBtn.textContent = 'Retry';
+  retryOfferingsBtn.addEventListener('click', () => {
+    void populateAwsOfferings();
+  });
+  offeringsErrorRow.append(offeringsErrorText, retryOfferingsBtn);
+  content.appendChild(offeringsErrorRow);
 
   const addTargetRow = (initialOfferingId?: string, initialCount?: number): void => {
     const rowIndex = targetRows.length;
