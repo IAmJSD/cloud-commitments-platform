@@ -9,6 +9,16 @@ import { ladderChartConfig, ladderChartModel, ladderChartSummary, LADDER_UNIT_LA
 
 Chart.register(...registerables);
 let disposeTimeline: (() => void) | undefined;
+let updateTimeline: ((configs: readonly LadderConfig[], globalEnabled?: boolean) => void) | undefined;
+
+/**
+ * Re-evaluate the mounted timeline after a kill-switch toggle or a config
+ * save, keeping the selected provider, account and filters (issue #728:
+ * it kept saying "disabled" or "no configuration" until reload).
+ */
+export function refreshLadderTimeline(configs: readonly LadderConfig[], globalEnabled?: boolean): void {
+  updateTimeline?.(configs, globalEnabled);
+}
 
 /**
  * Destroys the planned-purchase chart (Chart.js removes its resize and event
@@ -36,7 +46,7 @@ export async function initLadderTimeline(root: HTMLElement, configs: readonly La
   let accountsLoaded = false;
   let filters: LadderFilters = { ...emptyLadderFilters(), status: 'scheduled', from: new Date().toISOString().slice(0, 19) };
   let selectedID = '';
-  disposeTimeline = () => { disposed = true; generation++; chart?.destroy(); chart = undefined; };
+  disposeTimeline = () => { disposed = true; generation++; chart?.destroy(); chart = undefined; updateTimeline = undefined; };
   const labels = { run_id: 'Run', layer_type: 'Commitment type', term: 'Commitment term', payment_option: 'Payment option', status: 'Status' };
   const group = (id: string, label: string, control: string): string => `<div class="form-group"><label for="ladder-timeline-${id}">${label}</label>${control}</div>`;
   const dateInput = (edge: 'from' | 'to'): string => `<input type="text" id="ladder-timeline-${edge}" data-date="${edge}" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="YYYY-MM-DD HH:MM" aria-describedby="ladder-timeline-date-hint ladder-timeline-date-error">`;
@@ -186,5 +196,10 @@ export async function initLadderTimeline(root: HTMLElement, configs: readonly La
     render();
   }));
   root.querySelector('[data-reset]')!.addEventListener('click', () => { resetFilters(); render(); });
+  updateTimeline = (nextConfigs, nextEnabled) => {
+    configs = nextConfigs;
+    if (nextEnabled !== undefined) globalEnabled = nextEnabled;
+    void load();
+  };
   await load();
 }

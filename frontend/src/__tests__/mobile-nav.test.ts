@@ -22,7 +22,7 @@ function buildDOM(): void {
         <span id="user-role-display" class="role-badge"></span>
         <a href="/docs/" target="_blank" class="header-link">API Docs</a>
         <a id="feedback-link" href="#" class="header-link feedback-link">Feedback</a>
-        <button id="logout-btn">Logout</button>
+        <button id="logout-btn">Log out</button>
       </div>
     </header>
     <div class="sidebar-overlay" id="sidebar-overlay" aria-hidden="true"></div>

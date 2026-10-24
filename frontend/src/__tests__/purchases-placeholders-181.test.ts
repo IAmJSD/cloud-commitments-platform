@@ -9,7 +9,9 @@
  */
 
 import { loadHistory } from '../history';
-import { hasNoCommitments, isRealTerm, isPastScheduledDate } from '../lib/purchase-row-guards';
+import { hasNoCommitments, isRealTerm, isPastScheduledDate, NO_RECOMMENDATIONS_LABEL } from '../lib/purchase-row-guards';
+import { describeHistoryPurchase } from '../history-confirm-body';
+import type { HistoryPurchase } from '../types';
 
 jest.mock('../api', () => ({
   getHistory: jest.fn(),
@@ -61,6 +63,7 @@ jest.mock('../recommendations', () => ({
 }));
 
 import * as api from '../api';
+import { confirmDialog } from '../confirmDialog';
 import { getCurrentUser } from '../state';
 import { ADMINISTRATORS_GROUP_ID } from '../permissions';
 
@@ -165,5 +168,66 @@ describe('Purchases tables never render impossible values (#181)', () => {
     expect(row[7]).toBe('—');
     expect(row[8]).toBe('$1,200');
     expect(row.join(' ')).not.toContain('0 Years');
+  });
+});
+
+// The Cancel and Retry confirms (#728) summarise the row they act on, so
+// they must apply the same guards as the row: a no-commitments execution
+// must not read "multiple 0 commitment(s) in multiple ... Upfront: $0".
+describe('Cancel and Retry confirms apply the no-commitments guards (#181, #728)', () => {
+  const EMPTY_FAILED = { ...EMPTY_PENDING, purchase_id: 'exec-empty-failed', status: 'failed' };
+  const REAL_PENDING = {
+    ...EMPTY_PENDING,
+    purchase_id: 'exec-real',
+    provider: 'aws',
+    service: 'ec2',
+    resource_type: 'm5.xlarge',
+    region: 'eu-west-1',
+    count: 3,
+    term: 1,
+    upfront_cost: 4200,
+  };
+
+  beforeEach(() => {
+    setupDOM();
+    jest.clearAllMocks();
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+    (confirmDialog as jest.Mock).mockResolvedValue(false);
+    (api.getHistory as jest.Mock).mockResolvedValue({ summary: {}, purchases: [EMPTY_PENDING, EMPTY_FAILED, REAL_PENDING] });
+  });
+
+  const confirmBodyFor = async (selector: string): Promise<HTMLElement> => {
+    await loadHistory();
+    document.querySelector<HTMLButtonElement>(selector)!.click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(confirmDialog).toHaveBeenCalledTimes(1);
+    return (confirmDialog as jest.Mock).mock.calls[0][0].body as HTMLElement;
+  };
+
+  const expectNoPlaceholders = (body: HTMLElement): void => {
+    expect(body.querySelector('.history-confirm-summary strong')?.textContent).toBe(NO_RECOMMENDATIONS_LABEL);
+    const text = body.textContent || '';
+    expect(text).not.toMatch(/multiple|0 commitment\(s\)|Upfront|\$0|0 Years/i);
+    expect(text).toContain('Created:');
+  };
+
+  test('Cancel on a pending row with no commitments says so instead of printing placeholders', async () => {
+    expectNoPlaceholders(await confirmBodyFor('#purchases-approval-queue .history-cancel-btn[data-cancel-id="exec-empty"]'));
+  });
+
+  test('Retry on a failed row with no commitments says so instead of printing placeholders', async () => {
+    expectNoPlaceholders(await confirmBodyFor('#history-list .history-retry-btn[data-retry-id="exec-empty-failed"]'));
+  });
+
+  test('Cancel on a real row names it and shows upfront in the shipped currency format', async () => {
+    const body = await confirmBodyFor('#purchases-approval-queue .history-cancel-btn[data-cancel-id="exec-real"]');
+    expect(body.querySelector('.history-confirm-summary strong')?.textContent).toBe('AWS ec2 m5.xlarge × 3 in eu-west-1');
+    expect(body.textContent).toContain('Upfront: $4,200');
+    expect(body.textContent).toContain('Term: 1 Year');
+  });
+
+  test('a "multiple" region is left out like a "multiple" provider', () => {
+    const p = { ...REAL_PENDING, resource_type: '2 commitment(s)', count: 2, region: 'multiple' } as unknown as HistoryPurchase;
+    expect(describeHistoryPurchase(p)).toBe('AWS ec2 2 commitment(s) × 2');
   });
 });

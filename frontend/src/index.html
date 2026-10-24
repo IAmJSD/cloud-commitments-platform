@@ -45,7 +45,7 @@
                 <span id="user-role-display" class="role-badge"></span>
                 <a href="/docs/" target="_blank" rel="noopener noreferrer" class="header-link">API Docs</a>
                 <a id="feedback-link" href="#" class="header-link feedback-link">Feedback</a>
-                <button id="logout-btn">Logout</button>
+                <button id="logout-btn">Log out</button>
             </div>
         </header>
         <!-- Overlay: covers content when sidebar drawer is open on mobile.
@@ -473,7 +473,7 @@
 
                 <!-- Purchasing Section -->
                 <section id="purchasing-panel" class="card page-hero hidden" role="tabpanel" aria-labelledby="admin-subtab-purchasing">
-                    <h2>Purchasing Settings</h2>
+                    <h2>Purchasing policies</h2>
                     <p class="settings-description">Configure purchase defaults, per-provider service terms, and RI exchange automation.</p>
 
                     <!-- In-page section links (issue #190). Plain anchors so they
@@ -1223,7 +1223,7 @@
         <div id="account-overrides-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="account-overrides-modal-title">
             <div class="modal-content modal-wide">
                 <h2 id="account-overrides-modal-title">Service overrides</h2>
-                <p class="help-text">Per-account overrides take precedence over the global service defaults configured in Settings → Purchasing.</p>
+                <p class="help-text">Per-account overrides take precedence over the global service defaults configured in Admin → Purchasing policies.</p>
                 <div id="account-overrides-modal-body"></div>
                 <div class="modal-buttons">
                     <button type="button" id="close-account-overrides-modal-btn">Close</button>
@@ -1235,7 +1235,7 @@
         <div id="override-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="override-modal-title">
             <div class="modal-content">
                 <h2 id="override-modal-title">Add service override</h2>
-                <p class="help-text">Per-account override that takes precedence over the global service defaults. Only AWS services are supported today.</p>
+                <p class="help-text">Per-account override that takes precedence over the global service defaults. The services listed are the ones available for this account's cloud provider.</p>
                 <form id="override-form">
                     <input type="hidden" id="override-account-id">
                     <input type="hidden" id="override-provider" value="aws">
@@ -1378,7 +1378,7 @@
                         <h3>Azure Authentication</h3>
                         <label>Auth Mode:
                             <select id="account-azure-auth-mode">
-                                <option value="workload_identity_federation" selected title="Authenticate using an RSA certificate assertion — no client secrets stored in CUDly. Requires an App Registration with a certificate credential.">Workload Identity Federation (recommended)</option>
+                                <option value="workload_identity_federation" selected title="Authenticate with CUDly's OIDC identity through a federated identity credential on an App Registration. No client secret or certificate is stored in CUDly.">Workload Identity Federation (recommended)</option>
                                 <option value="managed_identity" title="Use the Azure Managed Identity of the host VM or container. Only works when CUDly itself runs on Azure.">Managed Identity (Azure-hosted CUDly only)</option>
                                 <option value="client_secret" title="Store an Azure AD client secret in CUDly. Simple to set up but stores a long-lived credential.">Client Secret</option>
                             </select>

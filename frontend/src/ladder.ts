@@ -18,7 +18,7 @@ import { showToast } from './toast';
 import { confirmDialog } from './confirmDialog';
 import { openModal, closeModal } from './modal';
 import { canAccess } from './permissions';
-import { initLadderTimeline } from './ladder-timeline';
+import { initLadderTimeline, refreshLadderTimeline } from './ladder-timeline';
 import { initLadderAccountSelector } from './ladder-account-selector';
 import { renderLadderConfigTable } from './ladder-config-table';
 import { renderLadderConfigModal } from './ladder-config-modal';
@@ -201,6 +201,7 @@ function wireKillSwitchToggle(): void {
         message: `Commitment Laddering ${toggle.checked ? 'enabled' : 'disabled'} globally.`,
         kind: 'success',
       });
+      refreshLadderTimeline(cachedConfigs, toggle.checked);
     } catch (err) {
       toggle.checked = !toggle.checked; // revert on error
       showToast({ message: 'Failed to update laddering kill-switch.', kind: 'error' });
@@ -321,6 +322,7 @@ export async function saveLadderConfig(): Promise<void> {
       cachedConfigs.push(saved);
     }
     renderConfigTable(cachedConfigs);
+    refreshLadderTimeline(cachedConfigs);
 
     closeLadderModal();
     showToast({ message: 'Ladder config saved.', kind: 'success' });
