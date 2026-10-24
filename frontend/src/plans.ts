@@ -1057,16 +1057,19 @@ function isPlanOverdue(plan: BackendPlan): boolean {
   return nextDate < today;
 }
 
-// Format ramp schedule from backend struct
+// Format ramp schedule from backend struct. A preset name is shown only when
+// type, percent AND interval match the preset, the same rule Edit uses
+// (rampRadioValue), so the list never says "Weekly 20%" for a plan Edit opens
+// as Custom 20% / 7 days, or hides a 14-day interval behind "Weekly 25%" (#1185).
 function formatBackendRampSchedule(ramp: BackendPlan['ramp_schedule']): string {
   if (!ramp) return 'Immediate';
-  switch (ramp.type) {
-    case 'immediate': return 'Immediate';
-    case 'weekly': return `Weekly ${ramp.percent_per_step}%`;
-    case 'monthly': return `Monthly ${ramp.percent_per_step}%`;
-    case 'custom': return `Custom ${ramp.percent_per_step}% every ${ramp.step_interval_days} days`;
-    default: return ramp.type || 'Unknown';
-  }
+  if (!['immediate', 'weekly', 'monthly', 'custom'].includes(ramp.type)) return ramp.type || 'Unknown';
+  const value = rampRadioValue(ramp);
+  if (value === 'immediate') return 'Immediate';
+  const preset = PRESET_RAMPS.find(p => p.value === value);
+  if (preset) return preset.label;
+  const days = ramp.step_interval_days;
+  return days ? `Custom ${ramp.percent_per_step}% every ${days} day${days === 1 ? '' : 's'}` : `Custom ${ramp.percent_per_step}%`;
 }
 
 async function loadPlanAccountNames(planId: string, cardEl: Element): Promise<void> {
@@ -1274,9 +1277,9 @@ function openPlanForm(modal: HTMLElement, restartsFromToday = false): void {
 
 // Presets mirror config.PresetRampSchedules; any other stored ramp is shown as
 // custom so Edit never rewrites it to a different schedule on Save (#1156).
-const PRESET_RAMPS: ReadonlyArray<{ value: string; type: string; percent: number; intervalDays: number }> = [
-  { value: 'weekly-25pct', type: 'weekly', percent: 25, intervalDays: 7 },
-  { value: 'monthly-10pct', type: 'monthly', percent: 10, intervalDays: 30 },
+const PRESET_RAMPS: ReadonlyArray<{ value: string; label: string; type: string; percent: number; intervalDays: number }> = [
+  { value: 'weekly-25pct', label: 'Weekly 25%', type: 'weekly', percent: 25, intervalDays: 7 },
+  { value: 'monthly-10pct', label: 'Monthly 10%', type: 'monthly', percent: 10, intervalDays: 30 },
 ];
 
 function rampRadioValue(ramp: { type?: string; percent_per_step?: number; step_interval_days?: number }): string {
@@ -1879,11 +1882,13 @@ function generatePlanName(rampSchedule: string, customStepPercent?: number, cust
       return `${serviceUpper} Monthly 10% Ramp-up (10 months)`;
     case 'custom':
       if (customStepPercent && customIntervalDays) {
-        const totalSteps = Math.ceil(100 / customStepPercent);
+        // Same count as the backend (buildCustomRampSchedule) and the schedule
+        // preview: whole steps only, at least one. 30% is 3 steps, not 4 (#1185).
+        const totalSteps = Math.max(1, Math.floor(100 / customStepPercent));
         const intervalLabel = customIntervalDays === 7 ? 'weekly' :
                               customIntervalDays === 30 ? 'monthly' :
                               `every ${customIntervalDays} days`;
-        return `${serviceUpper} Custom ${customStepPercent}% ${intervalLabel} (${totalSteps} steps)`;
+        return `${serviceUpper} Custom ${customStepPercent}% ${intervalLabel} (${totalSteps} step${totalSteps === 1 ? '' : 's'})`;
       }
       return `${serviceUpper} Custom Ramp-up Plan`;
     default:
