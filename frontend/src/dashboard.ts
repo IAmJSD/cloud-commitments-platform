@@ -14,7 +14,7 @@ import { openModal, closeModal } from './modal';
 import { canAccess } from './permissions';
 import { groupRecsByCell, pageLevelRange, formatSavingsRange, triggerAutoRefreshIfStale } from './recommendations';
 import { showSkeletonTiles, showSkeletonBlock, teardownSkeleton } from './lib/skeleton';
-import { formatTrendAxisTick, formatTrendTooltipTitle } from './modules/chart-utils';
+import { formatTrendAxisTick, formatTrendTooltipTitle, formatSparseTrendMessage, MIN_TREND_POINTS } from './modules/chart-utils';
 // Re-export for backward compatibility (tests and other callers import from dashboard.ts).
 export { formatTrendAxisTick } from './modules/chart-utils';
 
@@ -1033,8 +1033,10 @@ export function renderSavingsByService(
  * supersedes QA 3.1's earlier empty-axes suggestion), the canvas is hidden
  * and an empty-state banner is shown: a filter-aware "No savings history
  * for <filter>" when a provider or account chip is active, otherwise the
- * generic "No purchase history yet." Fetch failures hide the canvas and
- * show the "Savings history is not available yet." stub instead.
+ * generic "No purchase history yet." A single data point is too sparse to
+ * draw a trend, so it gets a "Not enough history yet" message carrying that
+ * point's value instead of a lone dot on a blank canvas (#188). Fetch failures
+ * hide the canvas and show the "Savings history is not available yet." stub.
  */
 export async function loadSavingsTrendChart(): Promise<void> {
   const canvas = document.getElementById('savings-trend-chart') as HTMLCanvasElement | null;
@@ -1113,6 +1115,17 @@ export async function loadSavingsTrendChart(): Promise<void> {
         empty.textContent = filterDesc
           ? `No savings history for ${filterDesc}.`
           : 'No purchase history yet.';
+        empty.classList.remove('hidden');
+      }
+      if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }
+      return;
+    }
+    // Sparse data (#188): one point would paint a lone dot on a blank canvas,
+    // so show "not enough history yet" with the value we have instead.
+    if (points.length < MIN_TREND_POINTS) {
+      canvas.classList.add('hidden');
+      if (empty) {
+        empty.textContent = formatSparseTrendMessage(points[0] as SavingsDataPoint);
         empty.classList.remove('hidden');
       }
       if (savingsTrendChart) { savingsTrendChart.destroy(); savingsTrendChart = null; }

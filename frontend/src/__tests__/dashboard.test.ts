@@ -1095,7 +1095,10 @@ describe('Dashboard Module', () => {
       // Override the beforeEach default of empty data_points so the chart
       // actually renders -- the test asserts the empty-state stays hidden.
       (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
-        data_points: [{ timestamp: new Date().toISOString(), cumulative_savings: 500, total_savings: 50, total_upfront: 0, purchase_count: 1 }],
+        data_points: [
+          { timestamp: new Date(Date.now() - 86400_000).toISOString(), cumulative_savings: 450, total_savings: 450, total_upfront: 0, purchase_count: 1 },
+          { timestamp: new Date().toISOString(), cumulative_savings: 500, total_savings: 50, total_upfront: 0, purchase_count: 1 },
+        ],
       });
       (api.getSavingsAnalytics as jest.Mock).mockClear();
 
@@ -1149,11 +1152,14 @@ describe('Dashboard Module', () => {
       document.body.appendChild(b7);
       setupSavingsTrendHandlers();
 
-      // Single purchase at the very start of the 7-day window.
+      // Two purchases near the start of the 7-day window.
       const now = Date.now();
       const purchaseTs = new Date(now - 6 * 86400_000).toISOString();
       (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
-        data_points: [{ timestamp: purchaseTs, cumulative_savings: 100, total_savings: 5, total_upfront: 200, purchase_count: 1 }],
+        data_points: [
+          { timestamp: purchaseTs, cumulative_savings: 100, total_savings: 5, total_upfront: 200, purchase_count: 1 },
+          { timestamp: new Date(now - 5 * 86400_000).toISOString(), cumulative_savings: 105, total_savings: 5, total_upfront: 200, purchase_count: 1 },
+        ],
       });
 
       (Chart as unknown as jest.Mock).mockClear();
@@ -1172,7 +1178,10 @@ describe('Dashboard Module', () => {
     test('data points use {x: timestamp_ms, y: value} so they are positioned by real date (QA 3.1)', async () => {
       const purchaseTs = '2024-06-15T12:00:00Z';
       (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
-        data_points: [{ timestamp: purchaseTs, cumulative_savings: 250, total_savings: 10, total_upfront: 500, purchase_count: 1 }],
+        data_points: [
+          { timestamp: purchaseTs, cumulative_savings: 250, total_savings: 10, total_upfront: 500, purchase_count: 1 },
+          { timestamp: '2024-06-16T12:00:00Z', cumulative_savings: 260, total_savings: 10, total_upfront: 500, purchase_count: 1 },
+        ],
       });
 
       await loadSavingsTrendChart();
@@ -1180,6 +1189,41 @@ describe('Dashboard Module', () => {
       const chartCall = (Chart as unknown as jest.Mock).mock.calls[0];
       const dataset = chartCall[1].data.datasets[0];
       expect(dataset.data[0]).toMatchObject({ x: new Date(purchaseTs).getTime(), y: 250 });
+    });
+
+    // Issue #188: one data point would paint a lone dot on a blank canvas.
+    test('a single data point shows the sparse-data message instead of a chart (#188)', async () => {
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
+        data_points: [{ timestamp: '2026-10-20T12:00:00Z', cumulative_savings: 1.1, total_savings: 1.1, total_upfront: 0, purchase_count: 1 }],
+      });
+      (Chart as unknown as jest.Mock).mockClear();
+
+      await loadSavingsTrendChart();
+
+      const canvas = document.getElementById('savings-trend-chart');
+      const empty = document.getElementById('savings-trend-empty');
+      expect(canvas?.classList.contains('hidden')).toBe(true);
+      expect(empty?.classList.contains('hidden')).toBe(false);
+      // formatCurrency is mocked in this file; the exact copy is pinned in chart-utils.test.ts.
+      expect(empty?.textContent).toContain('Not enough history yet to show a trend.');
+      expect(empty?.textContent).toContain('Oct 20, 2026');
+      expect(Chart).not.toHaveBeenCalled();
+    });
+
+    test('going from one data point back to two redraws the chart and hides the sparse message (#188)', async () => {
+      const one = { timestamp: '2026-10-20T12:00:00Z', cumulative_savings: 1.1, total_savings: 1.1, total_upfront: 0, purchase_count: 1 };
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({ data_points: [one] });
+      await loadSavingsTrendChart();
+      (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
+        data_points: [one, { ...one, timestamp: '2026-10-21T12:00:00Z', cumulative_savings: 2.2 }],
+      });
+      (Chart as unknown as jest.Mock).mockClear();
+
+      await loadSavingsTrendChart();
+
+      expect(Chart).toHaveBeenCalledTimes(1);
+      expect(document.getElementById('savings-trend-chart')?.classList.contains('hidden')).toBe(false);
+      expect(document.getElementById('savings-trend-empty')?.classList.contains('hidden')).toBe(true);
     });
 
     test('fetch error shows error stub and hides canvas (not the empty-axes path) (QA 3.1)', async () => {
@@ -1199,7 +1243,10 @@ describe('Dashboard Module', () => {
     test('tooltip title callback returns a formatted date string, not a raw ms timestamp (QA 3.2)', async () => {
       const purchaseTs = '2024-06-15T12:00:00Z';
       (api.getSavingsAnalytics as jest.Mock).mockResolvedValue({
-        data_points: [{ timestamp: purchaseTs, cumulative_savings: 250, total_savings: 10, total_upfront: 500, purchase_count: 1 }],
+        data_points: [
+          { timestamp: purchaseTs, cumulative_savings: 250, total_savings: 10, total_upfront: 500, purchase_count: 1 },
+          { timestamp: '2024-06-16T12:00:00Z', cumulative_savings: 260, total_savings: 10, total_upfront: 500, purchase_count: 1 },
+        ],
       });
 
       await loadSavingsTrendChart();
