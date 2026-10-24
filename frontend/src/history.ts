@@ -18,6 +18,7 @@ import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { localDayRangeToUtcDays, toLocalDateInputValue } from './lib/local-date';
 import { getAccountName } from './recommendations';
 import { applyColumnFilters } from './lib/column-filters';
+import { hasNoCommitments, isRealTerm, NO_RECOMMENDATIONS_LABEL, NO_RECOMMENDATIONS_TITLE } from './lib/purchase-row-guards';
 import {
   openHistoryColumnPopover,
   renderHistoryFilterButton,
@@ -569,7 +570,18 @@ function buildStatusChipRowHTML(purchases: HistoryPurchase[], active: StatusFilt
   `;
 }
 
+const MUTED_DASH = '<span class="muted">-</span>';
+const NO_RECS_HTML = `<span class="no-recommendations" title="${NO_RECOMMENDATIONS_TITLE}">${NO_RECOMMENDATIONS_LABEL}</span>`;
+
+// #181: a row with no commitments has placeholder count/term/costs (0, "0
+// Years", $0) and a "0 commitment(s)" type; render dashes and say why
+// instead. A 0 term on a real row (a mixed-term basket) is also a dash.
+function termCell(p: HistoryPurchase): string {
+  return isRealTerm(p.term) ? escapeHtml(formatTerm(p.term)) : MUTED_DASH;
+}
+
 function providerCell(p: HistoryPurchase): string {
+  if (hasNoCommitments(p)) return MUTED_DASH;
   if (!p.provider || p.provider === 'multiple') return '<span class="provider-badge">Multiple</span>';
   // Whitelist provider to prevent stored XSS via class attribute injection (#443).
   const safeProvider = (VALID_PROVIDERS as string[]).includes(p.provider) ? p.provider : 'unknown';
@@ -1145,8 +1157,9 @@ function purchaseHistoryDisplayLabel(
 ): string {
   if (value === '') return '(empty)';
   if (column === 'term') {
+    // Match the cell: a 0 term renders as a dash, never "0 Years" (#181).
     const n = Number(value);
-    return Number.isFinite(n) ? formatTerm(n) : value;
+    return isRealTerm(n) ? formatTerm(n) : Number.isFinite(n) ? '-' : value;
   }
   return value;
 }
@@ -1284,19 +1297,21 @@ function renderHistoryList(purchases: HistoryPurchase[]): void {
     const monthlyCostCell = displayMonthly != null
       ? formatCurrency(displayMonthly)
       : '<span class="muted">-</span>';
+    const empty = hasNoCommitments(p);
+    const dashOr = (html: string): string => (empty ? MUTED_DASH : html);
     return `
       <tr${execIdAttr}>
         <td>${statusCell}</td>
         <td>${formatDate(p.timestamp)}</td>
         <td>${providerCell(p)}</td>
-        <td>${escapeHtml(p.service)}</td>
-        <td>${escapeHtml(p.resource_type)}</td>
-        <td>${escapeHtml(p.region)}</td>
-        <td>${escapeHtml(String(p.count ?? ''))}</td>
-        <td>${formatTerm(p.term)}</td>
-        ${upfrontCell(p, amortize)}
-        <td>${monthlyCostCell}</td>
-        <td class="savings">${formatCurrency(p.estimated_savings)}</td>
+        <td>${dashOr(escapeHtml(p.service))}</td>
+        <td>${empty ? NO_RECS_HTML : escapeHtml(p.resource_type)}</td>
+        <td>${dashOr(escapeHtml(p.region))}</td>
+        <td>${dashOr(escapeHtml(String(p.count ?? '')))}</td>
+        <td>${termCell(p)}</td>
+        ${empty ? `<td>${MUTED_DASH}</td>` : upfrontCell(p, amortize)}
+        <td>${dashOr(monthlyCostCell)}</td>
+        <td class="savings">${dashOr(formatCurrency(p.estimated_savings))}</td>
         <td>${planCellContent}</td>
       </tr>
     `;
@@ -1832,8 +1847,9 @@ function approvalQueueDisplayLabel(
 ): string {
   if (value === '') return '(empty)';
   if (column === 'term') {
+    // Match the cell: a 0 term renders as a dash, never "0 Years" (#181).
     const n = Number(value);
-    return Number.isFinite(n) ? formatTerm(n) : value;
+    return isRealTerm(n) ? formatTerm(n) : Number.isFinite(n) ? '-' : value;
   }
   if (column === 'account') {
     // Account cells render via getAccountName() — mirror the same display.
@@ -1908,7 +1924,8 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
     const accountCell = p.account_id
       ? escapeHtml(getAccountName(p.account_id))
       : '<span class="muted">-</span>';
-    const termCell = p.term ? escapeHtml(formatTerm(p.term)) : '<span class="muted">-</span>';
+    const empty = hasNoCommitments(p);
+    const dashOr = (html: string): string => (empty ? MUTED_DASH : html);
     const paymentCell = p.payment ? escapeHtml(p.payment) : '<span class="muted">-</span>';
     const rawMonthly = p.monthly_cost != null ? p.monthly_cost : null;
     const displayMonthly = (rawMonthly != null && amortize)
@@ -1923,13 +1940,13 @@ export function renderApprovalQueue(purchases: HistoryPurchase[]): void {
         <td>${formatDate(p.timestamp)}</td>
         <td>${accountCell}</td>
         <td>${providerCell(p)}</td>
-        <td>${escapeHtml(p.service)}</td>
-        <td>${escapeHtml(String(p.count ?? ''))}</td>
-        <td>${termCell}</td>
-        <td>${paymentCell}</td>
-        <td>${monthlyCostCell}</td>
-        ${upfrontCell(p, amortize)}
-        <td class="savings">${formatCurrency(p.estimated_savings)}</td>
+        <td>${empty ? NO_RECS_HTML : escapeHtml(p.service)}</td>
+        <td>${dashOr(escapeHtml(String(p.count ?? '')))}</td>
+        <td>${termCell(p)}</td>
+        <td>${dashOr(paymentCell)}</td>
+        <td>${dashOr(monthlyCostCell)}</td>
+        ${empty ? `<td>${MUTED_DASH}</td>` : upfrontCell(p, amortize)}
+        <td class="savings">${dashOr(formatCurrency(p.estimated_savings))}</td>
         <td>${createdBy}</td>
         <td>${actionsCell}</td>
       </tr>
