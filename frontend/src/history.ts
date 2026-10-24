@@ -12,6 +12,7 @@ import { switchTab } from './navigation';
 import { confirmDialog } from './confirmDialog';
 import { approvalDetailsUnavailableMessage, buildApprovalDetailsBody } from './approval-details';
 import { showToast } from './toast';
+import { iconSvg } from './icons';
 import {
   historyTruncationMessage,
   mergeHistoryPages,
@@ -22,6 +23,7 @@ import { renderApprovalQueueLink, wireApprovalQueueLinks } from './history-queue
 import { getCurrentUser } from './state';
 import { canAccess } from './permissions';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { statusBadgeHtml } from './lib/status-badge';
 import { localDayRangeToUtcDays, toLocalDateInputValue } from './lib/local-date';
 import { getAccountName } from './recommendations';
 import { applyColumnFilters } from './lib/column-filters';
@@ -562,22 +564,25 @@ function renderHistorySummary(summary: HistorySummary | null): void {
   `;
 }
 
-function statusBadgeHTML(status: string): string {
+// historyDisplayStatus folds the purchase lifecycle onto the statuses the
+// Status column shows. Tone and text then come from lib/status-badge.ts, the
+// same map every other page uses (issue #737).
+function historyDisplayStatus(status: string): string {
   const normalized = (status || 'completed').toLowerCase();
   switch (normalized) {
     case 'pending':
     case 'notified':
-      return '<span class="badge badge-warning">Pending</span>';
+      return 'pending';
     case 'approved':
     case 'running':
     case 'paused':
       // In-flight (issue #621): not finished — never show the green Completed
       // badge for these, or the user may think the purchase is done.
-      return '<span class="badge badge-warning">In Progress</span>';
+      return 'in_progress';
     case 'scheduled':
       // Issue #239: a delayed purchase whose provider call has not fired
       // yet — must never fall through to the default green Completed badge.
-      return '<span class="badge badge-warning">Scheduled</span>';
+      return 'scheduled';
     case 'canceled':
     case 'cancelled':
       // Migration 000089 (expand-contract rename): the backend may return
@@ -587,19 +592,22 @@ function statusBadgeHTML(status: string): string {
       // badge instead of falling through to the green Completed default.
       // The CONTRACT migration (#1278) will normalize the data once the deploy
       // is stable; the British branch can be removed then.
-      return '<span class="badge badge-muted">Cancelled</span>';
+      return 'cancelled';
     case 'partially_completed':
       // #642: some commitments succeeded, some failed. Not a clean success
       // and never "failed" (real commitments exist) — a distinct warning badge
       // so the user knows to read the description and reconcile the failures.
-      return '<span class="badge badge-warning">Partial</span>';
+      return 'partially_completed';
     case 'failed':
-      return '<span class="badge badge-danger">Failed</span>';
     case 'expired':
-      return '<span class="badge badge-muted">Expired</span>';
+      return normalized;
     default:
-      return '<span class="badge badge-success">Completed</span>';
+      return 'completed';
   }
+}
+
+function statusBadgeHTML(status: string): string {
+  return statusBadgeHtml(historyDisplayStatus(status));
 }
 
 function buildStatusChipRowHTML(purchases: HistoryPurchase[], active: StatusFilter): string {
@@ -1069,7 +1077,7 @@ function renderPendingActionButtons(p: HistoryPurchase): string {
 function renderLineageLinks(p: HistoryPurchase): string[] {
   const lineage: string[] = [];
   if (p.retry_execution_id) {
-    lineage.push(`<a href="#history?execution=${encodeURIComponent(p.retry_execution_id)}" class="history-retry-link" title="Jump to the retry execution">↻ Retried as #${escapeHtml(shortExecID(p.retry_execution_id))}</a>`);
+    lineage.push(`<a href="#history?execution=${encodeURIComponent(p.retry_execution_id)}" class="history-retry-link" title="Jump to the retry execution">${iconSvg('rotate-cw')} Retried as #${escapeHtml(shortExecID(p.retry_execution_id))}</a>`);
   }
   if ((p.retry_attempt_n ?? 0) > 0) {
     // We don't carry a back-pointer field — a future enhancement
@@ -1080,7 +1088,7 @@ function renderLineageLinks(p: HistoryPurchase): string[] {
     // (api.getHistory), so the TS number type is not a runtime guarantee
     // and this value sits inside a title="..." attribute.
     const attemptN = Number(p.retry_attempt_n) || 0;
-    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${attemptN} in its chain">↻ Retry #${attemptN}</span>`);
+    lineage.push(`<span class="history-retry-link history-retry-of" title="This row is retry #${attemptN} in its chain">${iconSvg('rotate-cw')} Retry #${attemptN}</span>`);
   }
   return lineage;
 }
@@ -1107,11 +1115,13 @@ function renderActionCell(p: HistoryPurchase): string {
       // Keep the lineage links next to the hint (issue #1040): a legacy row
       // retried before the re-drive gate (#967) now carries the permanent
       // hint, and the operator still needs the link to its successor.
-      return [`<span class="history-ops-hint" title="${title}">⚠ ${escapeHtml(p.ops_hint)}</span>`, ...renderLineageLinks(p)].join(' ');
+      return [`<span class="history-ops-hint" title="${title}">${iconSvg('alert-triangle')} ${escapeHtml(p.ops_hint)}</span>`, ...renderLineageLinks(p)].join(' ');
     }
     if (canRetryFailedRow(p) && p.purchase_id) {
       const overThreshold = retryThresholdReached(p);
-      const label = overThreshold ? `⚠ Retried ${Number(p.retry_attempt_n) || 0}× — click to override` : '↻ Retry';
+      const label = overThreshold
+        ? `${iconSvg('alert-triangle')} Retried ${Number(p.retry_attempt_n) || 0}× — click to override`
+        : `${iconSvg('rotate-cw')} Retry`;
       const cls = overThreshold ? 'btn-link history-retry-btn history-retry-over-threshold' : 'btn-link history-retry-btn';
       return `<button type="button" class="${cls}" data-retry-id="${escapeHtmlAttr(p.purchase_id)}">${label}</button>`;
     }

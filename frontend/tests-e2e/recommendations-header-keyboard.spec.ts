@@ -10,7 +10,7 @@ async function openOpportunities(page: Page): Promise<void> {
   await mockApi(page);
   await seedAuth(page);
   await page.goto('/');
-  await page.getByRole('tab', { name: 'Opportunities' }).click();
+  await page.getByRole('link', { name: 'Opportunities', exact: true }).click();
   await expect(page.locator('.recommendations-filter-live')).toContainText(
     `Showing ${RECS.length} of ${RECS.length} recommendations`,
   );

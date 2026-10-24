@@ -70,7 +70,7 @@ type AriaRole = Parameters<Page['getByRole']>[0];
  */
 const ACCESSIBLE_DRAWER_CONTENT: ReadonlyArray<readonly [AriaRole, string]> = [
   ['complementary', 'Primary navigation'],
-  ['tablist', 'Main navigation'],
+  ['navigation', 'Main navigation'],
   ['button', 'Log out'],
 ];
 

@@ -21,6 +21,7 @@ import {
 import { isAdmin } from './auth';
 import { confirmDialog } from './confirmDialog';
 import { canAccess } from './permissions';
+import { syncTabStops } from './lib/tablist';
 
 interface TabMeta {
   title: string;
@@ -77,6 +78,13 @@ interface SwitchTabOptions {
    * applies.
    */
   skipDefaultLoad?: boolean;
+  /**
+   * Move focus to the tab's page heading once it is shown, so keyboard and
+   * screen-reader users land on (and hear) the new page instead of staying
+   * on the sidebar link (issue #730). Set by user-driven navigation: sidebar
+   * clicks and browser back/forward. Programmatic switches leave focus alone.
+   */
+  focusContent?: boolean;
 }
 
 /**
@@ -119,7 +127,19 @@ function renderNoAccess(tabId: string): void {
   p.className = 'empty-state';
   p.textContent =
     'You do not have access to this page. Contact your administrator if you need access.';
-  container.replaceChildren(p);
+  // Keep the page heading: it names the page and is the route-change focus
+  // target (focusPageHeading).
+  const heading = container.querySelector(':scope > .page-heading');
+  container.replaceChildren(...(heading ? [heading] : []), p);
+}
+
+/**
+ * Focus the shown tab's page heading (a visually hidden <h2 tabindex="-1">
+ * at the top of each .tab-content), so a screen reader announces the new
+ * page and the next Tab press continues from the top of its content.
+ */
+function focusPageHeading(tabName: string): void {
+  document.querySelector<HTMLElement>(`#${tabName}-tab > .page-heading`)?.focus();
 }
 
 /**
@@ -135,12 +155,18 @@ function confirmLeaveSettings(): Promise<boolean> {
   });
 }
 
-/** Mark the sidebar item for tabName active, without loading the tab. */
+/**
+ * Mark the sidebar item for tabName active, without loading the tab.
+ *
+ * The sidebar items are page links, not ARIA tabs (issue #730), so the
+ * current one carries aria-current="page" and the rest carry nothing.
+ */
 export function setActiveNav(tabName: string): void {
   document.querySelectorAll<HTMLElement>('.tab-btn').forEach(btn => {
     const isActive = btn.dataset['tab'] === tabName;
     btn.classList.toggle('active', isActive);
-    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    if (isActive) btn.setAttribute('aria-current', 'page');
+    else btn.removeAttribute('aria-current');
   });
 }
 
@@ -209,6 +235,8 @@ export function switchTab(tabName: string, opts: SwitchTabOptions = {}): void {
       loadInventory(getInventorySubTabFromPath());
       break;
   }
+
+  if (opts.focusContent) focusPageHeading(tabName);
 
   if (isSelfSwitch) return;
 
@@ -303,6 +331,7 @@ export function switchSettingsSubTab(subTab: string, opts: SwitchTabOptions = {}
     btn.classList.toggle('active', isActive);
     btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
   });
+  syncTabStops(document.querySelector('#admin-tab [role="tablist"]'));
 
   // Only the Purchasing sub-tab shows the ladder timeline (#667).
   if (subTab !== 'purchasing') disposeLadderTimeline();
@@ -388,7 +417,7 @@ export function initRouter(): void {
       void confirmLeaveSettings().then(leave => {
         if (leave) {
           historyId = newId;
-          switchTab(target, { push: false, skipDirtyGuard: true });
+          switchTab(target, { push: false, skipDirtyGuard: true, focusContent: true });
         } else if (delta !== 0) {
           window.history.go(-delta);
         }
@@ -397,6 +426,6 @@ export function initRouter(): void {
     }
 
     historyId = newId;
-    switchTab(target, { push: false, skipDirtyGuard: true });
+    switchTab(target, { push: false, skipDirtyGuard: true, focusContent: true });
   });
 }

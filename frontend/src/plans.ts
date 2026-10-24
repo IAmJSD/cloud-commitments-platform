@@ -7,6 +7,7 @@ import * as state from './state';
 import { buildCommitmentSummary, withIntro } from './commitmentSummary';
 import { formatDate, formatTerm, getStatusBadge, escapeHtml, escapeHtmlAttr, formatCurrency, CURRENCY_DEFAULT_DIGITS, NO_VALUE, providerBadgeHtml } from './utils';
 import { showToast } from './toast';
+import { iconSvg } from './icons';
 import { confirmDialog } from './confirmDialog';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
 import { viewPlanHistory } from './history';
@@ -22,6 +23,7 @@ import {
   sortedDistinctValues,
 } from './lib/column-filter-popover';
 import { suggestedPurchaseStartDate } from './lib/calendar-date';
+import { badgeHtml, statusBadgeHtml } from './lib/status-badge';
 import { isPastScheduledDate } from './lib/purchase-row-guards';
 import { mountPlanEditorPanel } from './plan-editor-panel';
 
@@ -158,7 +160,7 @@ function renderPlannedPurchasesInternal(): void {
   const filterBtn = (column: state.PlansColumnId, lbl: string): string => {
     const active = filters[column] ? ' active' : '';
     const label = filters[column] ? `Filter ${lbl} \u2014 currently active` : `Filter ${lbl}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">\u26db</button>`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">${iconSvg('filter')}</button>`;
   };
 
   const tbody = filtered.length === 0
@@ -440,7 +442,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   const overdue = isPending && isPastScheduledDate(purchase.scheduled_date);
   const overdueHint = canRunPurchase ? 'Not run on its date. Run now or pause.' : 'Not run on its date.';
   const overdueBadge = overdue
-    ? '<span class="status-badge badge-danger" title="Scheduled date has passed">Overdue</span>'
+    ? badgeHtml('danger', 'Overdue', 'Scheduled date has passed')
     : '';
   const overdueHintHtml = overdue ? `<div class="overdue-hint">${overdueHint}</div>` : '';
 
@@ -458,13 +460,13 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td>${termCell}</td>
       <td>${upfrontShown}</td>
       <td class="savings">${savingsCell}</td>
-      <td><span class="status-badges"><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span>${overdueBadge}</span>${overdueHintHtml}</td>
+      <td><span class="status-badges">${statusBadgeHtml(purchase.status)}${overdueBadge}</span>${overdueHintHtml}</td>
       <td class="actions">
-        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary" title="Run now" aria-label="Run now">▶</button>` : ''}
-        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause" aria-label="Pause">⏸</button>` : ''}
-        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume" aria-label="Resume">⏵</button>` : ''}
-        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan" aria-label="Edit Plan">✎</button>` : ''}
-        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Cancel this purchase and disable its plan" aria-label="Cancel this purchase and disable its plan">✕</button>` : ''}
+        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary icon-label" title="Run now" aria-label="Run now">${iconSvg('play')}<span>Run now</span></button>` : ''}
+        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause" aria-label="Pause">${iconSvg('pause')}</button>` : ''}
+        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume" aria-label="Resume">${iconSvg('play')}</button>` : ''}
+        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan" aria-label="Edit Plan">${iconSvg('edit')}</button>` : ''}
+        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Cancel this purchase and disable its plan" aria-label="Cancel this purchase and disable its plan">${iconSvg('x')}</button>` : ''}
       </td>
     </tr>
   `;
@@ -626,7 +628,7 @@ interface BackendPlan {
 
 // Score bands for the per-plan health badge (issue #340 follow-up). Green
 // >= 80 (healthy), amber 50-79 (needs attention), red < 50 (action needed).
-// Reuses the existing status-badge palette (badge-success/badge-warning/
+// Reuses the shared .badge tones (badge-success/badge-warning/
 // badge-danger) already used elsewhere on this card rather than introducing
 // new CSS.
 const HEALTH_SCORE_GOOD_THRESHOLD = 80;
@@ -679,14 +681,14 @@ function healthBadgeHtml(plan: BackendPlan): string {
     // execution history, while a non-finite value means the number itself
     // arrived unusable. Naming only the first would send an operator
     // chasing a database problem that may not exist.
-    return `<span class="status-badge badge-muted" title="${escapeHtmlAttr('Plan health is unavailable: this plan\'s score could not be determined.')}">Health: unknown</span>`;
+    return `<span class="badge badge-muted" title="${escapeHtmlAttr('Plan health is unavailable: this plan\'s score could not be determined.')}">Health: unknown</span>`;
   }
   const factors = plan.health_factors || [];
   const factorLines = factors.length > 0
     ? factors.map(f => `-${f.penalty}: ${f.note}`)
     : ['No issues detected'];
   const tooltip = [`Plan health: ${plan.health_score}/100`, ...factorLines].join('\n');
-  return `<span class="status-badge ${healthBadgeClass(plan.health_score)}" title="${escapeHtmlAttr(tooltip)}">Health: ${plan.health_score}</span>`;
+  return `<span class="badge ${healthBadgeClass(plan.health_score)}" title="${escapeHtmlAttr(tooltip)}">Health: ${plan.health_score}</span>`;
 }
 
 // Pretty label for a service slug used inside the plan card.
@@ -815,7 +817,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
   // visible implies the plan will still run on that date, which it won't.
   const showNextDate = Boolean(plan.next_execution_date) && plan.enabled;
   const overdueBadge = overdue && plan.enabled
-    ? '<span class="status-badge badge-danger" title="Next purchase date is in the past">Overdue</span>'
+    ? '<span class="badge badge-danger" title="Next purchase date is in the past">Overdue</span>'
     : '';
   // Read-only mode: unassigned plans cannot be purchased against until an
   // operator re-assigns them to at least one account.
@@ -826,7 +828,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
       <div class="plan-header">
         <h3>${escapeHtml(plan.name)}</h3>
         <div class="plan-status">
-          <span class="status-badge ${status.class}">${status.label}</span>
+          <span class="badge badge-${status.class}">${status.label}</span>
           ${healthBadgeHtml(plan)}
           ${overdueBadge}
           ${canManagePlan && !isUnassigned ? `

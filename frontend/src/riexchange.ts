@@ -31,7 +31,9 @@ import type {
 } from './api';
 import { openModal, closeModal } from './modal';
 import { showSkeletonRows, showSkeletonText, teardownSkeleton } from './lib/skeleton';
+import { statusBadgeHtml } from './lib/status-badge';
 import { canAccess } from './permissions';
+import { createIcon, iconSvg } from './icons';
 import { applyReadOnlySettings, isPermissionDeniedError } from './settings';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
@@ -409,7 +411,7 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
     const active = filters[column] ? ' active' : '';
     const lbl = activeRiLabelFor(column);
     const label = filters[column] ? `Filter ${lbl} — currently active` : `Filter ${lbl}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">&#x26DB;</button>`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${iconSvg('filter')}</button>`;
   };
 
   container.innerHTML = `
@@ -934,7 +936,7 @@ function renderRecommendations(container: HTMLElement): void {
     const active = filters[column] ? ' active' : '';
     const lbl = riexLabelFor(column);
     const label = filters[column] ? `Filter ${lbl} — currently active` : `Filter ${lbl}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">⛛</button>`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}">${iconSvg('filter')}</button>`;
   };
 
   // Render an indexable list so per-row Exchange buttons can find the
@@ -1277,7 +1279,7 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
     removeBtn.className = 'btn exchange-remove-target';
-    removeBtn.textContent = '×';
+    removeBtn.appendChild(createIcon('x'));
     removeBtn.setAttribute('aria-label', 'Remove target');
     removeBtn.addEventListener('click', () => {
       if (targetRows.length <= 1) return; // keep at least one row
@@ -1993,24 +1995,6 @@ async function loadExchangeHistory(generation: number = scopeGeneration): Promis
   }
 }
 
-function getStatusBadgeClass(status: string): string {
-  switch (status) {
-    case 'completed': return 'status-badge completed';
-    case 'pending': return 'status-badge pending';
-    case 'processing': return 'status-badge running';
-    case 'failed': return 'status-badge failed';
-    // Migration 000089 (expand-contract rename, ri_exchange_history.status):
-    // backend may return either spelling during the rolling deploy window.
-    // Match both so a row written by EITHER old or new code keeps the muted
-    // "disabled" visual treatment instead of falling through to the default
-    // class. The CONTRACT migration (#1278) normalizes the data; the British
-    // branch can be removed then.
-    case 'canceled':
-    case 'cancelled': return 'status-badge disabled';
-    default: return 'status-badge';
-  }
-}
-
 function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistoryRecord[]): void {
   if (!records || records.length === 0) {
     container.textContent = '';
@@ -2041,7 +2025,7 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
       // payment_due is USD (the execute cap is max_payment_due_usd); an
       // empty amount renders as a dash, not a lone "$" (issue #284).
       + '<td>' + (rec.payment_due ? '$' + escapeHtml(rec.payment_due) : '&mdash;') + '</td>'
-      + '<td><span class="' + getStatusBadgeClass(rec.status) + '">' + escapeHtml(rec.status) + '</span>' + errorLine + '</td>'
+      + '<td>' + statusBadgeHtml(rec.status) + errorLine + '</td>'
       + '<td>' + exchangeIdCell + '</td>'
       + '<td>' + approveBtn + '</td>'
       + '</tr>';

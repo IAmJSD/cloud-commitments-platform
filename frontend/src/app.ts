@@ -23,6 +23,7 @@ import { handlePurchaseDeeplink } from './purchases-deeplink';
 import { handleRIExchangeDeeplink } from './riexchange-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
+import { wireTablistKeyboard } from './lib/tablist';
 import { setOpenAccountsHandler } from './first-run-empty-state';
 import { setupMobileNav } from './nav/mobile-nav';
 import { initPurchasingNav } from './purchasing-nav';
@@ -196,10 +197,16 @@ export function setupEventListeners(): void {
       const tab = btn.dataset['tab'];
       if (tab) {
         e.preventDefault();
-        switchTab(tab);
+        switchTab(tab, { focusContent: true });
       }
     });
   });
+
+  // In-page sub-tab lists (Inventory & Coverage, Admin): arrow/Home/End
+  // focus movement and a roving tabindex, the keyboard model their
+  // role="tablist" promises (issue #730).
+  document.querySelectorAll<HTMLElement>('.inventory-subnav[role="tablist"], .settings-tabs[role="tablist"]')
+    .forEach(wireTablistKeyboard);
 
   // Settings sub-tab switching
   document.querySelectorAll<HTMLButtonElement>('.sub-tab-btn').forEach(btn => {
