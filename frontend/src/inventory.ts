@@ -7,23 +7,27 @@
  *                          /api/inventory/commitments
  *   - coverage           — per-provider coverage breakdowns backed by
  *                          /api/inventory/coverage (issue #754)
+ *   - trends             — savings-snapshot history backed by
+ *                          /api/analytics/trends (issue #30, trends.ts)
  *   - ri-exchange        — hosts the existing RI Exchange UI unchanged
  */
 
 import * as api from './api';
 import type { ProviderCoverageSection, CoverageServiceRow } from './api';
 import { loadRIExchange } from './riexchange';
+import { loadTrends } from './trends';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { formatCurrency, formatDate, amortizedMonthly } from './utils';
 import * as state from './state';
 import { switchInventorySubTab } from './navigation';
 import { syncTabStops } from './lib/tablist';
 
-type InventorySubSection = 'active-commitments' | 'coverage' | 'ri-exchange';
+type InventorySubSection = 'active-commitments' | 'coverage' | 'trends' | 'ri-exchange';
 
 const SUB_SECTION_IDS: Record<InventorySubSection, string> = {
   'active-commitments': 'inventory-active-commitments',
   'coverage': 'inventory-coverage',
+  'trends': 'inventory-trends',
   'ri-exchange': 'inventory-ri-exchange',
 };
 
@@ -38,7 +42,7 @@ let listenersWired = false;
  * segment without duplicating the closed set.
  */
 export function isValidInventorySubSection(name: string): name is InventorySubSection {
-  return name === 'active-commitments' || name === 'coverage' || name === 'ri-exchange';
+  return name === 'active-commitments' || name === 'coverage' || name === 'trends' || name === 'ri-exchange';
 }
 
 /**
@@ -78,6 +82,8 @@ export function switchInventorySubSection(name: string): InventorySubSection {
     void loadActiveCommitments();
   } else if (target === 'coverage') {
     void loadCoverageBreakdown();
+  } else if (target === 'trends') {
+    void loadTrends();
   }
 
   currentSubSection = target;
@@ -618,6 +624,8 @@ function wireChipSubscriptions(): void {
         void loadActiveCommitments();
       } else if (currentSubSection === 'coverage') {
         void loadCoverageBreakdown();
+      } else if (currentSubSection === 'trends') {
+        void loadTrends();
       }
     });
   };
