@@ -107,9 +107,10 @@ describe('color literals (theming ratchet)', () => {
   });
 
   // Stylesheet literals bypass the tokens, so a theme cannot reach them.
-  // This ceiling may only go down: migrate a literal to a token, then lower
-  // it. Raising it means a new hard-coded color; use or add a token instead.
-  const CSS_LITERAL_CEILING = 136;
+  // The baseline is the count on main when this ratchet landed. This ceiling
+  // may only go down: migrate a literal to a token, then lower it. Raising it
+  // means a new hard-coded color; use or add a token instead.
+  const CSS_LITERAL_CEILING = 113;
 
   it(`styles/*.css hold at most ${CSS_LITERAL_CEILING} color literals outside token definitions`, () => {
     const counts = fs.readdirSync(STYLES)
