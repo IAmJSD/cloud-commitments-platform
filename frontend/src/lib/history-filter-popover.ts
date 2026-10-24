@@ -4,7 +4,8 @@
  *
  * Mirrors the visual shape of recommendations.ts's popover (so the same
  * CSS in styles/components.css applies) but is intentionally simpler:
- *   - One popover open at a time per `openColumnPopover` call.
+ *   - One popover open at a time across both tables; each button is
+ *     identified by (scope, column) because the tables share column ids.
  *   - The caller owns the column-id enum, the filter state slice, and
  *     the re-render callback; this module only renders the popover DOM,
  *     wires inputs to commit, and manages anchor/global-listener teardown.
@@ -22,6 +23,13 @@ import {
 import { escapeHtmlAttr } from '../utils';
 
 export interface PopoverConfig<TColumnId extends string> {
+  // Namespace of the owning table (e.g. 'history' / 'queue'). Both tables
+  // on the Purchases tab use the same bare column ids, so the open-popover
+  // key, the anchor lookup and the generated element ids are all qualified
+  // by scope; otherwise one table's popover toggles or refocuses the other
+  // table's button (issue #281). Must match the scope passed to
+  // renderHistoryFilterButton.
+  scope: string;
   column: TColumnId;
   anchor: HTMLElement;
   // Current filter for this column (null = not narrowed).
@@ -42,7 +50,17 @@ export interface PopoverConfig<TColumnId extends string> {
 
 interface OpenPopoverHandle {
   el: HTMLDivElement;
+  scope: string;
   column: string;
+}
+
+// Resolve a table's filter button by (scope, column). Document-wide, because
+// the button is re-created on every table re-render, but never ambiguous
+// across tables thanks to the scope attribute.
+function findFilterButton(scope: string, column: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    `.history-column-filter-btn[data-filter-scope="${CSS.escape(scope)}"][data-column="${CSS.escape(column)}"]`,
+  );
 }
 
 let openPopover: OpenPopoverHandle | null = null;
@@ -71,13 +89,11 @@ function detachGlobalListeners(): void {
 
 export function closeOpenHistoryPopover(restoreFocus = false): void {
   if (!openPopover) return;
-  const { el, column } = openPopover;
+  const { el, scope, column } = openPopover;
   el.remove();
   openPopover = null;
   detachGlobalListeners();
-  const trigger = document.querySelector<HTMLElement>(
-    `.history-column-filter-btn[data-column="${CSS.escape(column)}"]`,
-  );
+  const trigger = findFilterButton(scope, column);
   // Always clear the stale expanded state, regardless of focus restoration.
   trigger?.setAttribute('aria-expanded', 'false');
   if (restoreFocus) {
@@ -152,7 +168,8 @@ export function openHistoryColumnPopover<TColumnId extends string>(
 ): void {
   // Toggle / swap.
   if (openPopover) {
-    const sameColumn = openPopover.column === config.column;
+    const sameColumn = openPopover.scope === config.scope
+      && openPopover.column === config.column;
     closeOpenHistoryPopover();
     if (sameColumn) return;
   }
@@ -162,7 +179,8 @@ export function openHistoryColumnPopover<TColumnId extends string>(
   popover.setAttribute('role', 'dialog');
   popover.setAttribute('aria-modal', 'false');
 
-  const headingId = `history-column-filter-heading-${String(config.column)}`;
+  const idSuffix = `${config.scope}-${String(config.column)}`;
+  const headingId = `history-column-filter-heading-${idSuffix}`;
   popover.setAttribute('aria-labelledby', headingId);
 
   const heading = document.createElement('h3');
@@ -183,7 +201,7 @@ export function openHistoryColumnPopover<TColumnId extends string>(
     input.type = 'text';
     input.className = 'column-filter-numeric-input';
     input.placeholder = 'e.g. >100, 50..200, 5';
-    const errorId = `history-column-filter-error-${String(config.column)}`;
+    const errorId = `history-column-filter-error-${idSuffix}`;
     input.setAttribute('aria-describedby', errorId);
     label.appendChild(input);
     popover.appendChild(label);
@@ -328,10 +346,10 @@ export function openHistoryColumnPopover<TColumnId extends string>(
   config.anchor.setAttribute('aria-expanded', 'true');
   positionPopover(popover, config.anchor);
 
-  openPopover = { el: popover, column: String(config.column) };
-  lastAnchorSelector = (): HTMLElement | null => document.querySelector<HTMLElement>(
-    `.history-column-filter-btn[data-column="${CSS.escape(String(config.column))}"]`,
-  );
+  const scope = config.scope;
+  const column = String(config.column);
+  openPopover = { el: popover, scope, column };
+  lastAnchorSelector = (): HTMLElement | null => findFilterButton(scope, column);
   attachGlobalListeners(popover);
 
   // Focus first interactive control for keyboard users.
@@ -343,19 +361,22 @@ export function openHistoryColumnPopover<TColumnId extends string>(
 /**
  * Render the filter-icon button placed inside a `<th>` cell. The caller
  * binds the click handler against `.history-column-filter-btn` after the
- * table is innerHTML-rewritten.
+ * table is innerHTML-rewritten. `scope` names the owning table and must
+ * match the `scope` the caller passes to openHistoryColumnPopover.
  */
 export function renderHistoryFilterButton<TColumnId extends string>(
   column: TColumnId,
   label: string,
   active: boolean,
+  scope: string,
 ): string {
   const cls = `history-column-filter-btn${active ? ' active' : ''}`;
   const ariaLabel = escapeHtmlAttr(
     active ? `Filter ${label} - currently active` : `Filter ${label}`,
   );
   const safeColumn = escapeHtmlAttr(String(column));
+  const safeScope = escapeHtmlAttr(scope);
   // Use the same gear-style glyph (⛛) the recommendations popover
   // uses so the two surfaces are visually identical to the user.
-  return `<button type="button" class="${cls}" data-column="${safeColumn}" aria-haspopup="dialog" aria-expanded="false" aria-label="${ariaLabel}" title="${ariaLabel}">⛛</button>`;
+  return `<button type="button" class="${cls}" data-filter-scope="${safeScope}" data-column="${safeColumn}" aria-haspopup="dialog" aria-expanded="false" aria-label="${ariaLabel}" title="${ariaLabel}">⛛</button>`;
 }

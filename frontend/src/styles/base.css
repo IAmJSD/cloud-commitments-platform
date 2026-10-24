@@ -45,6 +45,7 @@
 
     /* Typography */
     --cudly-font-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --cudly-font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     --cudly-fs-xs: 0.75rem;     /* 12px */
     --cudly-fs-sm: 0.875rem;    /* 14px */
     --cudly-fs-md: 1rem;        /* 16px */
@@ -79,6 +80,15 @@
     --cudly-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
     --cudly-shadow-md: 0 2px 6px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
     --cudly-shadow-lg: 0 8px 24px rgba(15, 23, 42, 0.08);
+
+    /* Motion (issue #725): one easing curve and three durations so every
+     * transition moves alike. Name the transitioned properties; never use
+     * `transition: all`, which also animates layout and color changes that
+     * should be instant. */
+    --cudly-ease: ease;
+    --cudly-dur-fast: 0.15s;
+    --cudly-dur: 0.2s;
+    --cudly-dur-slow: 0.25s;
 
     /* Layout — used by the action-center shell (top bar + sidebar) */
     --cudly-topbar-h: 56px;
@@ -134,10 +144,19 @@ body {
 
 
 .error {
-    color: var(--cudly-error);
+    /* --cudly-error on --cudly-error-bg is 4.1:1; the -fg shade is 4.9:1 (AA, issue #191). */
+    color: var(--cudly-error-fg);
     padding: 1rem;
     background: var(--cudly-error-bg);
     border-radius: 4px;
+}
+
+/* The global reset zeroes <p> margins, so a Retry button placed right after
+   an inline error (Admin > Users sections, Home upcoming widget) sat flush
+   against the box. Gap the button rather than the box: most .error boxes are
+   the only child of their container and must not gain trailing space. */
+.error:not(.hidden) + button {
+    margin-top: var(--cudly-sp-4);
 }
 
 /* Inline empty state — used WITHIN a card or section that already has
@@ -305,6 +324,17 @@ body {
     display: none;
 }
 
+/* The box only carries a top margin, so the submit button that follows it
+   in the auth forms (login, MFA, forgot/reset password, first-run setup)
+   sat flush against its border. Gap the button instead of the box: a hidden
+   box then leaves no stray space, and boxes that end a section or precede
+   .modal-buttons keep their spacing. `~` also reaches the reset form's
+   button, which has a (hidden) .success-message in between. */
+.error-message:not(.hidden) ~ button,
+.success-message:not(.hidden) + button {
+    margin-top: var(--cudly-sp-4);
+}
+
 /* Inline field-level error — sits underneath a single <input> rather
    than wrapping a whole form section like .error-message does. Used
    for live range / format validation messages so a user typing an
@@ -429,7 +459,7 @@ body {
     font-weight: var(--cudly-fw-semibold);
     z-index: 200;
     transform: translateY(-200%);
-    transition: transform 0.15s ease;
+    transition: transform var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .skip-to-main:focus {
