@@ -24,6 +24,7 @@ import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary, GlobalConfig } from './types';
 import { openModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { captureFocus, restoreFocus } from './lib/focus-restore';
 import { canAccess } from './permissions';
 
 // Issue #869: true when the current session can take any action on
@@ -4840,7 +4841,11 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // run before renderFilterStatusBar (which reads it for the Expand-All button).
   // safe: buildListMarkup escapes all API-derived values via escapeHtml.
   // nosec: innerHTML is intentional here; see security note above.
+  // Issue #191: the rebuild below drops the focused control (row checkbox,
+  // chevron, sort header); put keyboard focus back on its replacement.
+  const focusSnapshot = captureFocus(container);
   container.innerHTML = buildListMarkup(recommendations ?? [], selectedIDs, visibleCols, showCheckboxes); // nosec
+  restoreFocus(container, focusSnapshot);
 
   // Issue #700: when the filter yields zero rows, preserve the <thead> by
   // injecting a hint row into the empty <tbody> rather than replacing the
