@@ -1073,7 +1073,6 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
   let modalQuoteReq: QuoteReqShape | null = null;
   let quoteRevision = 0;
   let sessionOpen = true;
-  let closeTimer: ReturnType<typeof setTimeout> | undefined;
 
   // Build header
   const h3 = document.createElement('h3');
@@ -1338,9 +1337,12 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
   }
   updateRunningTotal();
 
-  // Result container
+  // Result container. A polite live region so quote results, progress and
+  // the exchange receipt are announced; setResultText marks errors as alerts.
   const resultContainer = document.createElement('div');
   resultContainer.id = 'modal-exchange-result';
+  resultContainer.setAttribute('role', 'status');
+  resultContainer.setAttribute('aria-live', 'polite');
   content.appendChild(resultContainer);
 
   // Execute button (hidden until valid quote)
@@ -1369,7 +1371,6 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
   openModal(modal, { onClose: () => {
     sessionOpen = false;
     invalidateQuote();
-    clearTimeout(closeTimer);
   } });
 
   cancelBtn.addEventListener('click', () => {
@@ -1394,6 +1395,19 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
   executeBtn.addEventListener('click', () => {
     void submitModalExecute();
   });
+
+  // lockCompletedExchange freezes the form after a successful exchange so
+  // no edit can clear the receipt (edits call invalidateQuote) and no second
+  // quote is offered for RIs that no longer exist. Cancel becomes Close.
+  function lockCompletedExchange(): void {
+    targetsContainer.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input, select, button')
+      .forEach((el) => { el.disabled = true; });
+    addTargetBtn.disabled = true;
+    executeBtn.classList.add('hidden');
+    quoteBtn.classList.add('hidden');
+    cancelBtn.textContent = 'Close';
+    cancelBtn.focus();
+  }
 
   // offeringUUIDPattern mirrors the backend regex for AWS offering UUIDs.
   const offeringUUIDPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -1513,15 +1527,21 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
         region: quote.Region,
       });
       void loadRIExchange();
+      // The toast is the receipt even if the modal was closed mid-request;
+      // the exchange ID also stays in the open modal until the user closes it.
+      showToast({
+        kind: 'success',
+        message: `RI exchange completed. Exchange ID: ${result.exchange_id}`,
+        actions: [{ label: 'View history', onClick: () => {
+          if (sessionOpen) closeModal(modal);
+          revealExchangeHistory();
+        } }],
+      });
       if (!sessionOpen) return;
       setResultText(resultContainer, 'Exchange completed. ID: ' + result.exchange_id, 'success-message');
-      executeBtn.classList.add('hidden');
       modalQuote = null;
       modalQuoteReq = null;
-
-      closeTimer = setTimeout(() => {
-        closeModal(modal);
-      }, 2000);
+      lockCompletedExchange();
     } catch (error) {
       if (!sessionOpen) return;
       const err = error as Error;
@@ -1532,6 +1552,16 @@ export function openExchangeModal(riId: string, count: number, suggestedTargetTy
       if (!confirmed) executeBtn.focus();
     }
   }
+}
+
+// revealExchangeHistory scrolls the Exchange History card into view and
+// moves focus to its list, where the completed exchange is listed.
+function revealExchangeHistory(): void {
+  const list = document.getElementById('ri-exchange-history-list');
+  if (!list) return;
+  list.tabIndex = -1;
+  (list.closest('section') ?? list).scrollIntoView({ block: 'start' });
+  list.focus({ preventScroll: true });
 }
 
 interface ExchangeConfirmParts {
@@ -1577,6 +1607,9 @@ function setResultText(container: HTMLElement, message: string, cls: string): vo
   container.textContent = '';
   const p = document.createElement('p');
   p.className = cls;
+  // Errors interrupt; progress and success are announced politely by the
+  // container's own role="status".
+  if (cls === 'error') p.setAttribute('role', 'alert');
   p.textContent = message;
   container.appendChild(p);
 }
