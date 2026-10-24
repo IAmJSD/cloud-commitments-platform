@@ -55,7 +55,7 @@ jest.mock('../recommendations', () => ({
   fanOutBucketAccountLabel: jest.fn(
     (b: { recs: Array<{ cloud_account_id?: string }> }) => b.recs[0]?.cloud_account_id || 'Unattributed',
   ),
-  // The fan-out confirm names each line's account (issue #711).
+  // The confirm summaries (single and fan-out, #707/#711) name each line's account.
   getAccountName: jest.fn((id: string) => id),
 }));
 

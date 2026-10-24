@@ -622,18 +622,23 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
   // charges fire when each approver clicks the link in their email.
   // State the monthly charge and the term total too (issue #711): for
   // no-upfront and partial-upfront buckets the upfront alone reads $0
-  // while the account is billed monthly for one or three years.
-  const summary = buildCommitmentSummary(
-    buckets.flatMap((b) => b.recs.map((r) => commitmentLine(
-      r,
-      { payment: b.payment, ...(r.cloud_account_id ? { account: getAccountName(r.cloud_account_id) } : {}) },
-    ))),
-    { upfrontLabel: 'Upfront on approval' },
-  );
+  // while the account is billed monthly for one or three years. The
+  // totals are combined across every bucket and the button carries the
+  // upfront amount, as on the single-purchase confirm (#707). A
+  // submittable bucket's recs already carry the bucket's payment option,
+  // so their costs are the ones that will be approved.
+  const summaryLines = buckets.flatMap((b) => b.recs.map((r) => commitmentLine(
+    r,
+    { payment: b.payment, ...(r.cloud_account_id ? { account: getAccountName(r.cloud_account_id) } : {}) },
+  )));
+  const totals = commitmentTotals(summaryLines);
   const ok = await confirmDialog({
     title: `Send ${buckets.length} bulk purchase${buckets.length === 1 ? '' : 's'} for approval?`,
-    body: withIntro(`This will submit ${buckets.length} separate purchase request${buckets.length === 1 ? '' : 's'} and email ${buckets.length} approval request${buckets.length === 1 ? '' : 's'}. Each must be approved individually before its commitments are charged.`, summary),
-    confirmLabel: 'Send all for approval',
+    body: withIntro(
+      `This will submit ${buckets.length} separate purchase request${buckets.length === 1 ? '' : 's'} and email ${buckets.length} approval request${buckets.length === 1 ? '' : 's'}. Each must be approved individually before its commitments are charged. Totals below are across all requests.`,
+      buildCommitmentSummary(summaryLines, { upfrontLabel: 'Upfront on approval' }),
+    ),
+    confirmLabel: executeConfirmLabel(false, totals.upfront),
     destructive: false,
   });
   if (!ok) {
