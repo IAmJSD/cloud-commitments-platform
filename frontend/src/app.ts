@@ -18,11 +18,13 @@ import { setupRIExchangeHandlers, saveAutomationSettings } from './riexchange';
 import { showToast } from './toast';
 import { formatPaymentAdjustmentNotice } from './commitmentOptions';
 import { confirmDialog } from './confirmDialog';
-import { buildCommitmentSummary, commitmentTotals, executeButtonLabel, executeConfirmLabel, withIntro } from './commitmentSummary';
+import { buildCommitmentSummary, commitmentLine, commitmentTotals, executeButtonLabel, executeConfirmLabel, withIntro } from './commitmentSummary';
 import { handlePurchaseDeeplink } from './purchases-deeplink';
+import { handleRIExchangeDeeplink } from './riexchange-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
 import { initPurchasingNav } from './purchasing-nav';
+import { renderInitError } from './init-error';
 
 /**
  * describeDuplicateSubmit words the outcome of a submit the backend collapsed
@@ -55,6 +57,12 @@ function describeDuplicateSubmit(result: api.PurchaseResult): string {
   return `This matches an existing execution ${id}, so no new request was created; ${duplicateState(result.status)}. Check Purchase History.`;
 }
 
+function describePublicInfoFailure(err: unknown): string {
+  const status = (err as { status?: unknown } | null)?.status;
+  const detail = typeof status === 'number' && status > 0 ? ` (HTTP ${status})` : '';
+  return `Could not reach the CUDly API${detail}. Sign-in may fail until it is available again.`;
+}
+
 /**
  * Initialize app
  */
@@ -81,6 +89,7 @@ export async function init(): Promise<void> {
   setActiveNav(applyTabFromPath());
 
   if (!api.isAuthenticated()) {
+    let notice: string | undefined;
     try {
       const publicInfo = await api.getPublicInfo();
       if (!publicInfo.admin_exists) {
@@ -90,10 +99,14 @@ export async function init(): Promise<void> {
         await showAdminSetupModal(undefined);
         return;
       }
-    } catch {
-      // If public info fails, fall through to login
+    } catch (err) {
+      // getPublicInfo throws on a non-OK response, so an unreachable API
+      // lands on the login form with the failure named, rather than on the
+      // first-run setup screen asserting that no admin exists.
+      console.error('Failed to load /api/info:', err);
+      notice = describePublicInfoFailure(err);
     }
-    await showLoginModal();
+    await showLoginModal(notice);
     return;
   }
 
@@ -123,6 +136,10 @@ export async function init(): Promise<void> {
     // through so the user lands on the Purchases tab with their action's
     // outcome rendered as a toast.
     await handlePurchaseDeeplink();
+    // Same one-shot pattern for the RI-exchange approval email's
+    // /inventory/ri-exchange/{approve,reject}/:id?token=… links (#579): confirm,
+    // POST, then land on /inventory/ri-exchange.
+    await handleRIExchangeDeeplink();
     // Archera education deep-links (/archera-insurance, /archera-insurance/
     // how-it-works) open the overlay panel on top of the dashboard. Normal
     // tab routing still runs underneath so the app is fully functional.
@@ -143,7 +160,11 @@ export async function init(): Promise<void> {
     const err = error as { status?: number; message?: string };
     if (err.status === 401 || err.message?.includes('Unauthorized')) {
       await showLoginModal();
+      return;
     }
+    // Anything else would leave the pre-rendered Home markup on screen with
+    // no listeners bound, under whatever URL was requested (#206).
+    renderInitError(error);
   }
 }
 
@@ -436,18 +457,10 @@ export async function handleExecutePurchase(): Promise<void> {
   //   - Approval path: low-friction, non-destructive.
   //   - Direct-execute path: red destructive dialog with cost callout and
   //     immediate-charge callout; no cancellation promise (issue #251).
-  const summaryLines = recsWithPayment.map((r) => ({
-      service: r.service,
-      provider: r.provider,
-      region: r.region,
-      resourceType: r.resource_type,
-      count: r.count,
-      term: r.term,
-      payment: r.payment,
-      upfront: r.upfront_cost,
-      monthly: r.monthly_cost ?? null,
-      ...(r.cloud_account_id ? { account: getAccountName(r.cloud_account_id) } : {}),
-  }));
+  const summaryLines = recsWithPayment.map((r) => commitmentLine(
+    r,
+    r.cloud_account_id ? { account: getAccountName(r.cloud_account_id) } : {},
+  ));
   const totals = commitmentTotals(summaryLines);
   const summary = buildCommitmentSummary(
     summaryLines,
@@ -573,15 +586,19 @@ export async function handleExecutePurchase(): Promise<void> {
 /**
  * fanOutBucketLabel renders a short human identifier for a fan-out bucket so a
  * partial-failure toast can name which buckets created pending executions
- * (issue #642). Uses the (provider/service @ capacity%) tuple — the same
- * fields the user chose in the modal — so the orphaned-but-actionable pending
- * requests are identifiable rather than hidden behind a bare count.
+ * (issue #642). Uses the provider / account / service @ capacity% tuple, laid
+ * out like the bucket header the user just saw in the modal, so the
+ * orphaned-but-actionable pending requests are identifiable rather than hidden
+ * behind a bare count. Buckets are per account (#333), so without the account
+ * a two-account split of one service read as the same label twice (#434). The
+ * account uses the header's label (name, else ID, else 'Unattributed'); the
+ * toast renders it via textContent.
  */
 function fanOutBucketLabel(b: FanOutBucket): string {
   const provider = (b.provider || '').toString().toUpperCase();
   const service = b.service || 'commitment';
   const cap = Number.isFinite(b.capacityPercent) ? `@${b.capacityPercent}%` : '';
-  return `${provider} ${service}${cap}`.trim();
+  return [provider, fanOutBucketAccountLabel(b), `${service}${cap}`].filter(Boolean).join(' / ');
 }
 
 /**
@@ -603,9 +620,19 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
   // Same approval-required default as the single-purchase path: each
   // bucket POSTs a request that triggers an approval email; the actual
   // charges fire when each approver clicks the link in their email.
+  // State the monthly charge and the term total too (issue #711): for
+  // no-upfront and partial-upfront buckets the upfront alone reads $0
+  // while the account is billed monthly for one or three years.
+  const summary = buildCommitmentSummary(
+    buckets.flatMap((b) => b.recs.map((r) => commitmentLine(
+      r,
+      { payment: b.payment, ...(r.cloud_account_id ? { account: getAccountName(r.cloud_account_id) } : {}) },
+    ))),
+    { upfrontLabel: 'Upfront on approval' },
+  );
   const ok = await confirmDialog({
     title: `Send ${buckets.length} bulk purchase${buckets.length === 1 ? '' : 's'} for approval?`,
-    body: `This will submit ${buckets.length} separate purchase request${buckets.length === 1 ? '' : 's'} and email ${buckets.length} approval request${buckets.length === 1 ? '' : 's'}. Each must be approved individually before its commitments are charged.`,
+    body: withIntro(`This will submit ${buckets.length} separate purchase request${buckets.length === 1 ? '' : 's'} and email ${buckets.length} approval request${buckets.length === 1 ? '' : 's'}. Each must be approved individually before its commitments are charged.`, summary),
     confirmLabel: 'Send all for approval',
     destructive: false,
   });

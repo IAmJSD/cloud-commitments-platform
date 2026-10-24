@@ -19,6 +19,7 @@ import { showToast } from './toast';
 import { canAccess } from './permissions';
 import { initLadderTimeline } from './ladder-timeline';
 import { initLadderAccountSelector } from './ladder-account-selector';
+import { readLadderNumbers } from './ladder-form-numbers';
 
 // ==========================================
 // MODULE STATE
@@ -265,7 +266,7 @@ export function renderConfigTable(configs: api.LadderConfig[]): void {
       <td>${cfg.enabled ? 'Yes' : 'No'}</td>
       <td>${escapeHtml(cfg.mode === 'email_approval' ? 'Email Approval' : 'Auto Approve')}</td>
       <td>${escapeHtml(cfg.cadence === 'daily' ? 'Daily' : 'Weekly')}</td>
-      <td>${cfg.target_coverage.toFixed(1)}%</td>
+      <td>${typeof cfg.target_coverage === 'number' ? `${cfg.target_coverage.toFixed(1)}%` : 'N/A'}</td>
       <td>${cfg.updated_at ? escapeHtml(formatDate(cfg.updated_at)) : 'N/A'}</td>
       ${canEdit
         ? `<td><button type="button" class="btn btn-sm btn-secondary ladder-edit-btn"
@@ -428,19 +429,21 @@ export async function saveLadderConfig(): Promise<void> {
     return;
   }
 
+  const numbers = readLadderNumbers();
+  if (!numbers.ok) {
+    showToast({ message: numbers.message, kind: 'error' });
+    numbers.field?.focus();
+    return;
+  }
+
   const cfg: api.LadderConfig = {
     id: (document.getElementById('ladder-cfg-id') as HTMLInputElement | null)?.value || undefined,
     ...identity,
     enabled: (document.getElementById('ladder-cfg-enabled') as HTMLInputElement | null)?.checked ?? false,
     mode: ((document.getElementById('ladder-cfg-mode') as HTMLSelectElement | null)?.value ?? 'email_approval') as api.LadderConfig['mode'],
     cadence: ((document.getElementById('ladder-cfg-cadence') as HTMLSelectElement | null)?.value ?? 'daily') as api.LadderConfig['cadence'],
-    target_coverage: Number((document.getElementById('ladder-cfg-target-coverage') as HTMLInputElement | null)?.value ?? '100'),
-    buffer_fraction: Number((document.getElementById('ladder-cfg-buffer-fraction') as HTMLInputElement | null)?.value ?? '0.10'),
-    baseline_percentile: Number((document.getElementById('ladder-cfg-baseline-percentile') as HTMLInputElement | null)?.value ?? '5'),
-    lookback_days: Number((document.getElementById('ladder-cfg-lookback-days') as HTMLInputElement | null)?.value ?? '30'),
-    buffer_utilization_threshold: Number((document.getElementById('ladder-cfg-buf-util-threshold') as HTMLInputElement | null)?.value ?? '90'),
+    ...numbers.values,
     max_hourly_commit_per_run: maxHourly,
-    max_actions_per_run: Number((document.getElementById('ladder-cfg-max-actions') as HTMLInputElement | null)?.value ?? '10'),
     ramp_schedule: rampSchedule,
   };
 
