@@ -594,7 +594,10 @@ function renderUpcomingPurchases(purchases: UpcomingPurchase[]): void {
       const cancelBtn = document.createElement('button');
       cancelBtn.dataset['action'] = 'cancel-purchase';
       cancelBtn.dataset['id'] = String(p.execution_id);
-      cancelBtn.className = 'danger';
+      // Outlined destructive (issue #695): the filled red `danger` style made
+      // Cancel the loudest element on every row. It still reads as
+      // destructive and fills on hover; the confirm dialog guards the action.
+      cancelBtn.className = 'btn-danger';
       cancelBtn.textContent = 'Cancel';
       actions.appendChild(cancelBtn);
     }

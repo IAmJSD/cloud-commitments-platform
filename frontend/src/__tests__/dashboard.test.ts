@@ -452,6 +452,22 @@ describe('Dashboard Module', () => {
       expect(upcomingList?.innerHTML).toContain('data-action="cancel-purchase"');
     });
 
+    test('row-level cancel button is the outlined destructive variant, not the filled one', async () => {
+      (api.getDashboardSummary as jest.Mock).mockResolvedValue({ potential_monthly_savings: 1000, by_service: {} });
+      (api.getUpcomingPurchases as jest.Mock).mockResolvedValue({
+        purchases: [{
+          execution_id: 'exec-1', plan_id: 'plan-1', plan_name: 'Test Plan', provider: 'aws', service: 'ec2',
+          step_number: 1, total_steps: 4, estimated_savings: 100, scheduled_date: '2024-02-15',
+        }],
+      });
+
+      await loadDashboard();
+
+      const cancelBtn = document.querySelector<HTMLButtonElement>('#upcoming-list [data-action="cancel-purchase"]');
+      expect(cancelBtn?.classList.contains('btn-danger')).toBe(true);
+      expect(cancelBtn?.classList.contains('danger')).toBe(false);
+    });
+
     test('handles missing canvas element gracefully', async () => {
       document.body.innerHTML = `
         <div id="summary"></div>
