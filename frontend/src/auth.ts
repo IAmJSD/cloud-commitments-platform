@@ -6,6 +6,7 @@ import * as api from './api';
 import * as state from './state';
 import { escapeHtml, reloadPage } from './utils';
 import { openModal, closeModal } from './modal';
+import { openAuthDialog } from './authDialog';
 import { isAdmin as permissionsIsAdmin, canAccess } from './permissions';
 import { showToast } from './toast';
 
@@ -121,7 +122,7 @@ function renderResetForm(modal: HTMLElement, token: string, flow: string): void 
             </div>
           </label>
 
-          <div id="reset-error" class="error-message hidden"></div>
+          <div id="reset-error" class="error-message hidden" role="alert"></div>
           <div id="reset-success" class="success-message hidden"></div>
           <button type="submit" class="primary">${submitLabel}</button>
         </form>
@@ -143,6 +144,7 @@ function renderResetForm(modal: HTMLElement, token: string, flow: string): void 
   }
 
   setupPasswordToggle(modal);
+  openAuthDialog(modal, '#new-password');
 }
 
 // renderExpiredView replaces the reset modal with a "link expired"
@@ -176,6 +178,7 @@ function renderExpiredView(modal: HTMLElement, flow: string): void {
     e.preventDefault();
     void closeResetModalAndShowLogin();
   });
+  openAuthDialog(modal, '#reset-expired-request-new');
 }
 
 // renderUsedView covers both consumed and never-existed tokens (the
@@ -207,6 +210,7 @@ function renderUsedView(modal: HTMLElement, flow: string): void {
     e.preventDefault();
     void openForgotPasswordFromExpired();
   });
+  openAuthDialog(modal, '#reset-used-go-to-login');
 }
 
 async function closeResetModalAndShowLogin(): Promise<void> {
@@ -454,7 +458,7 @@ export async function showAdminSetupModal(apiKeyHint?: string): Promise<void> {
             </div>
           </label>
 
-          <div id="setup-error" class="error-message hidden"></div>
+          <div id="setup-error" class="error-message hidden" role="alert"></div>
           <button type="submit" class="primary">Create Admin Account</button>
         </form>
         <p class="help-text"><a href="#" id="admin-setup-login-link">Already have an account? Log in</a></p>
@@ -486,6 +490,7 @@ export async function showAdminSetupModal(apiKeyHint?: string): Promise<void> {
   }
 
   setupPasswordToggle(modal);
+  openAuthDialog(modal, '#setup-api-key');
 }
 
 async function handleAdminSetupSubmit(e: Event): Promise<void> {
@@ -572,7 +577,7 @@ export async function showLoginModal(notice?: string): Promise<void> {
           </label>
           <p class="help-text"><a href="#" id="forgot-password-link">Forgot password?</a></p>
 
-          <div id="login-error" class="error-message hidden"></div>
+          <div id="login-error" class="error-message hidden" role="alert"></div>
           <button type="submit" class="primary">Login</button>
         </form>
       </div>
@@ -581,6 +586,7 @@ export async function showLoginModal(notice?: string): Promise<void> {
   document.body.appendChild(modal);
 
   setupLoginModalHandlers(modal);
+  openAuthDialog(modal, '#login-email');
   if (notice) showLoginError(notice);
 }
 
@@ -786,7 +792,7 @@ function showMFACodeStep(): void {
         autofocus
       >
     </label>
-    <div id="login-error" class="error-message hidden"></div>
+    <div id="login-error" class="error-message hidden" role="alert"></div>
     <button type="submit" class="primary" id="mfa-submit-btn">Verify</button>
     <p><a href="#" id="mfa-cancel-link">Back to login</a></p>
   `;
@@ -800,6 +806,8 @@ function showMFACodeStep(): void {
   // listener via a fresh handler).
   form.removeEventListener('submit', handleLoginSubmitListener);
   form.addEventListener('submit', handleMFACodeSubmitListener);
+  // The swap destroyed the focused field; keep focus inside the dialog (#731).
+  document.getElementById('mfa-code')?.focus();
 }
 
 // Stored listener references so we can swap them on the form
@@ -856,7 +864,7 @@ function showForgotPasswordForm(modal: HTMLElement): void {
       <input type="email" id="reset-email" placeholder="Your email address" autocomplete="email" autocapitalize="none" autocorrect="off" required>
     </label>
     <p class="help-text">We'll send you a link to reset your password.</p>
-    <div id="login-error" class="error-message hidden"></div>
+    <div id="login-error" class="error-message hidden" role="alert"></div>
     <button type="submit" id="send-reset-btn" class="primary">Send Reset Link</button>
     <p><a href="#" id="back-to-login-link">Back to login</a></p>
   `;
@@ -869,6 +877,8 @@ function showForgotPasswordForm(modal: HTMLElement): void {
     e.preventDefault();
     reloadPage();
   });
+  // The swap destroyed the focused link; keep focus inside the dialog (#731).
+  document.getElementById('reset-email')?.focus();
 }
 
 async function handlePasswordReset(): Promise<void> {
@@ -930,6 +940,7 @@ function showResetEmailConfirmation(): void {
     // (same exit-path as the existing back-to-login-link).
     reloadPage();
   });
+  document.getElementById('reset-confirmation-close')?.focus();
 }
 
 /**
@@ -1225,7 +1236,7 @@ function renderMFAEnrollPasswordStep(): void {
       <label>Password:
         <input type="password" id="mfa-enroll-password" autocomplete="current-password">
       </label>
-      <div id="mfa-flow-error" class="error-message hidden"></div>
+      <div id="mfa-flow-error" class="error-message hidden" role="alert"></div>
       <div class="modal-buttons">
         <button type="button" id="mfa-enroll-cancel">Cancel</button>
         <button type="button" id="mfa-enroll-continue" class="primary">Continue</button>
@@ -1282,7 +1293,7 @@ async function renderMFAEnrollQRStep(secret: string, provisioningURI: string): P
           class="code-input"
         >
       </label>
-      <div id="mfa-flow-error" class="error-message hidden"></div>
+      <div id="mfa-flow-error" class="error-message hidden" role="alert"></div>
       <div class="modal-buttons">
         <button type="button" id="mfa-qr-cancel">Cancel</button>
         <button type="button" id="mfa-qr-verify" class="primary">Verify and enable</button>
@@ -1431,7 +1442,7 @@ function renderMFADisableFlow(): void {
           class="code-input"
         >
       </label>
-      <div id="mfa-flow-error" class="error-message hidden"></div>
+      <div id="mfa-flow-error" class="error-message hidden" role="alert"></div>
       <div class="modal-buttons">
         <button type="button" id="mfa-disable-cancel">Cancel</button>
         <button type="button" id="mfa-disable-submit" class="primary">Disable</button>
@@ -1484,7 +1495,7 @@ function renderMFARegenerateFlow(): void {
           class="code-input"
         >
       </label>
-      <div id="mfa-flow-error" class="error-message hidden"></div>
+      <div id="mfa-flow-error" class="error-message hidden" role="alert"></div>
       <div class="modal-buttons">
         <button type="button" id="mfa-regen-cancel">Cancel</button>
         <button type="button" id="mfa-regen-submit" class="primary">Regenerate</button>
