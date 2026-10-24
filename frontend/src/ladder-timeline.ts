@@ -3,7 +3,7 @@ import { listAccountsMinimal, type AccountSummary } from './api/accounts';
 import { getLadderEvents, getLadderRuns, type LadderConfig, type LadderEvent, type LadderRun } from './api/ladder';
 import { canAccess } from './permissions';
 import { escapeHtml } from './utils';
-import { emptyLadderFilters, filterLadderEvents, ladderDimensions, ladderFilterOptions, ladderEditReason, ladderTotalOd, ladderOdAmount, ladderLabel, formatLadderAmount, formatLadderUnits, ladderNotCountedNote, LADDER_COUNTED_NOTE, formatLadderDateTime, type LadderFilters } from './ladder-timeline-filters';
+import { emptyLadderFilters, filterLadderEvents, ladderDimensions, ladderFilterOptions, ladderEditReason, ladderTotalOd, ladderOdAmount, ladderLabel, formatLadderAmount, formatLadderUnits, ladderNotCountedNote, LADDER_COUNTED_NOTE, formatLadderDateTime, formatLadderUtcInput, parseLadderUtcInput, type LadderFilters } from './ladder-timeline-filters';
 import { openLadderEventEditor } from './ladder-timeline-editor';
 import { ladderChartConfig, ladderChartModel, ladderChartSummary, LADDER_UNIT_LABEL } from './ladder-timeline-chart';
 
@@ -38,26 +38,31 @@ export async function initLadderTimeline(root: HTMLElement, configs: readonly La
   let selectedID = '';
   disposeTimeline = () => { disposed = true; generation++; chart?.destroy(); chart = undefined; };
   const labels = { run_id: 'Run', layer_type: 'Commitment type', term: 'Commitment term', payment_option: 'Payment option', status: 'Status' };
-  root.innerHTML = `<h4>Planned purchases</h4><p>Inspect retained planning tranches and edit future scheduled budgets.
+  const group = (id: string, label: string, control: string): string => `<div class="form-group"><label for="ladder-timeline-${id}">${label}</label>${control}</div>`;
+  const dateInput = (edge: 'from' | 'to'): string => `<input type="text" id="ladder-timeline-${edge}" data-date="${edge}" inputmode="numeric" autocomplete="off" spellcheck="false" placeholder="YYYY-MM-DD HH:MM" aria-describedby="ladder-timeline-date-hint ladder-timeline-date-error">`;
+  root.innerHTML = `<fieldset class="settings-category ladder-timeline"><legend>Planned purchases</legend>
+    <p class="settings-help">Inspect retained planning tranches and edit future scheduled budgets.
     Ladder purchases are not executed yet. Coverage and expiry forecasts are unavailable.</p>
-    <div class="ladder-timeline-controls"><label>Cloud provider <select data-provider><option value="aws">AWS</option><option value="azure">Azure</option><option value="gcp">GCP</option></select></label>
-    <label>Cloud account <select data-account></select></label><button type="button" data-reload>Reload timeline</button></div>
-    <p data-state role="status"></p><div data-content hidden>
-    <div class="ladder-timeline-controls">${ladderDimensions.map(key => `<label>${labels[key]} <select data-filter="${key}"></select></label>`).join('')}
-    <label>From (UTC) <input type="datetime-local" step="1" data-date="from"></label>
-    <label>To (UTC) <input type="datetime-local" step="1" data-date="to"></label>
-    <button type="button" data-reset>Clear filters</button></div>
-    <p>Service, instance type, region and currency filters are unavailable because saved ladder tranches do not contain those fields.</p>
-    <p data-summary aria-live="polite"></p><p data-snapshot></p>
+    <div class="ladder-timeline-controls">${group('provider', 'Cloud provider', '<select id="ladder-timeline-provider" data-provider><option value="aws">AWS</option><option value="azure">Azure</option><option value="gcp">GCP</option></select>')}
+    ${group('account', 'Cloud account', '<select id="ladder-timeline-account" data-account></select>')}<button type="button" class="btn btn-secondary" data-reload>Reload timeline</button></div>
+    <p class="ladder-timeline-state" data-state role="status"></p><div data-content hidden>
+    <div class="ladder-timeline-controls">${ladderDimensions.map(key => group(key, labels[key], `<select id="ladder-timeline-${key}" data-filter="${key}"></select>`)).join('')}
+    ${group('from', 'From (UTC)', dateInput('from'))}${group('to', 'To (UTC)', dateInput('to'))}
+    <button type="button" class="btn btn-tertiary" data-reset>Clear filters</button></div>
+    <p class="ladder-timeline-note" id="ladder-timeline-date-hint">Enter dates in UTC as YYYY-MM-DD HH:MM (24-hour); the time is optional.</p>
+    <p class="field-error hidden" id="ladder-timeline-date-error" role="alert"></p>
+    <p class="ladder-timeline-stat" data-summary aria-live="polite"></p><p class="ladder-timeline-note" data-snapshot></p>
     <div class="ladder-timeline-chart"><canvas aria-label="Cumulative planned commitment chart. The purchase table below lists the same figures." role="img"></canvas></div>
-    <div data-table></div></div>`;
+    <div data-table></div>
+    <p class="ladder-timeline-note">Service, instance type, region and currency filters are unavailable because saved ladder tranches do not contain those fields.</p></div></fieldset>`;
   const provider = root.querySelector<HTMLSelectElement>('[data-provider]')!;
   const account = root.querySelector<HTMLSelectElement>('[data-account]')!;
   const state = root.querySelector<HTMLElement>('[data-state]')!;
   const content = root.querySelector<HTMLElement>('[data-content]')!;
   const summary = root.querySelector<HTMLElement>('[data-summary]')!;
   const table = root.querySelector<HTMLElement>('[data-table]')!;
-  root.querySelector<HTMLInputElement>('[data-date="from"]')!.value = filters.from;
+  const dateError = root.querySelector<HTMLElement>('#ladder-timeline-date-error')!;
+  root.querySelector<HTMLInputElement>('[data-date="from"]')!.value = formatLadderUtcInput(filters.from);
   const focusEvent = (id: string): void => {
     Array.from(table.querySelectorAll<HTMLButtonElement>('[data-event]')).find(button => button.dataset['event'] === id)?.focus();
   };
@@ -154,13 +159,32 @@ export async function initLadderTimeline(root: HTMLElement, configs: readonly La
   };
   const resetFilters = (): void => {
     filters = emptyLadderFilters();
-    root.querySelectorAll<HTMLInputElement>('[data-date]').forEach(input => { input.value = ''; });
+    root.querySelectorAll<HTMLInputElement>('[data-date]').forEach(input => { input.value = ''; input.removeAttribute('aria-invalid'); });
+    showDateError('');
+  };
+  const showDateError = (message: string): void => {
+    dateError.textContent = message;
+    dateError.classList.toggle('hidden', !message);
   };
   provider.addEventListener('change', () => { resetFilters(); setAccounts(); void load(); });
   account.addEventListener('change', () => { resetFilters(); void load(); });
   root.querySelector('[data-reload]')!.addEventListener('click', () => { void load(); });
   root.querySelectorAll<HTMLSelectElement>('[data-filter]').forEach(select => select.addEventListener('change', () => { filters[select.dataset['filter'] as typeof ladderDimensions[number]] = select.value; render(); }));
-  root.querySelectorAll<HTMLInputElement>('[data-date]').forEach(input => input.addEventListener('change', () => { filters[input.dataset['date'] as 'from' | 'to'] = input.value; render(); }));
+  root.querySelectorAll<HTMLInputElement>('[data-date]').forEach(input => input.addEventListener('change', () => {
+    const edge = input.dataset['date'] as 'from' | 'to';
+    const value = parseLadderUtcInput(input.value, edge);
+    // An unparseable date keeps the last valid filter instead of guessing.
+    if (value === null) {
+      input.setAttribute('aria-invalid', 'true');
+      showDateError(`${edge === 'from' ? 'From' : 'To'} date "${input.value.trim()}" is not a valid UTC date. Use YYYY-MM-DD HH:MM.`);
+      return;
+    }
+    input.removeAttribute('aria-invalid');
+    if (!root.querySelector('[data-date][aria-invalid="true"]')) showDateError('');
+    filters[edge] = value;
+    input.value = formatLadderUtcInput(value);
+    render();
+  }));
   root.querySelector('[data-reset]')!.addEventListener('click', () => { resetFilters(); render(); });
   await load();
 }
