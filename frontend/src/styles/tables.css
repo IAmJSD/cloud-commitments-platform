@@ -1,11 +1,19 @@
-/* Tables styling */
+/* Tables styling.
+ * Issue #725: browsers ignore border-radius on a border-collapse: collapse
+ * table, so the header's square corners poked out of the rounded, shadowed
+ * card. The separate model with zero spacing looks the same (cells only draw
+ * a bottom border) and lets the radius plus overflow clip the corners.
+ * `clip`, not `hidden`: hidden would make the table a scroll container and
+ * break the sticky headers of tables inside scrolling modals. Column filter
+ * popovers live in document.body, so the clip cannot cut them off. */
 table {
     width: 100%;
     background: var(--cudly-surface);
     border-radius: var(--cudly-r-md);
-    overflow: visible;
+    overflow: clip;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    border-collapse: collapse;
+    border-collapse: separate;
+    border-spacing: 0;
 }
 
 th, td {
@@ -15,9 +23,14 @@ th, td {
     font-size: 0.9rem;
 }
 
+/* Header labels read as labels, not as one more row of data (issue #725). */
 th {
     background: var(--cudly-surface-muted);
-    font-weight: 600;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-xs);
+    font-weight: var(--cudly-fw-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
 }
 
 tr:hover {
@@ -25,12 +38,14 @@ tr:hover {
 }
 
 /* Recommendation row highlighting */
-tr.high-savings {
-    border-left: 3px solid var(--cudly-success);
+/* Row borders only paint in the collapsed border model, so the savings
+ * stripe is an inset shadow on the row's first cell. */
+tr.high-savings > :first-child {
+    box-shadow: inset 3px 0 0 var(--cudly-success);
 }
 
-tr.medium-savings {
-    border-left: 3px solid var(--cudly-warn);
+tr.medium-savings > :first-child {
+    box-shadow: inset 3px 0 0 var(--cudly-warn);
 }
 
 /* Deep-link target highlight: applied by applyExecutionDeepLink() in
@@ -83,7 +98,6 @@ tr.history-row-highlight:hover {
 
 .planned-purchases-table {
     width: 100%;
-    border-collapse: collapse;
     background: var(--cudly-surface);
     border-radius: var(--cudly-r-md);
     overflow: hidden;
@@ -95,13 +109,6 @@ tr.history-row-highlight:hover {
     padding: 0.75rem 1rem;
     text-align: left;
     border-bottom: 1px solid var(--cudly-border);
-}
-
-.planned-purchases-table th {
-    background: var(--cudly-surface-muted);
-    font-weight: 600;
-    font-size: 0.85rem;
-    color: var(--cudly-text-muted);
 }
 
 .planned-purchases-table tbody tr:hover {
