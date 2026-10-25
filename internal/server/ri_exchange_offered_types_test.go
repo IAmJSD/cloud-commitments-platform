@@ -118,7 +118,7 @@ func TestNewRIExchangeClients_RoutesToClients(t *testing.T) {
 	ec2 := &catalogEC2{offered: []string{"m5.large"}}
 	recs := &catalogRecs{}
 	exch := validQuoteClient()
-	c := newRIExchangeClients(ec2, recs, exch, catalogTestRegion, "acct-1")
+	c := newRIExchangeClients(ec2, recs, exch, catalogTestRegion, "123456789012")
 
 	offered, err := c.offeredInstanceTypes(ctx)
 	require.NoError(t, err)
@@ -139,7 +139,7 @@ func TestNewRIExchangeClients_RoutesToClients(t *testing.T) {
 
 	assert.Same(t, exch, c.exchangeClient)
 	assert.Equal(t, catalogTestRegion, c.region)
-	assert.Equal(t, "acct-1", c.accountID)
+	assert.Equal(t, "123456789012", c.accountID)
 }
 
 // reshapeEntryPoints are the two scheduled paths that run RunAutoExchange:
@@ -228,7 +228,7 @@ func TestRIExchangeReshape_OfferedCatalog(t *testing.T) {
 			t.Run(ep.name+"/"+tc.name, func(t *testing.T) {
 				logs := captureWarnLogs(t)
 				ec2 := tc.ec2()
-				clients := newRIExchangeClients(ec2, &catalogRecs{}, validQuoteClient(), catalogTestRegion, "acct-1")
+				clients := newRIExchangeClients(ec2, &catalogRecs{}, validQuoteClient(), catalogTestRegion, "123456789012")
 
 				result := ep.run(t, clients)
 
