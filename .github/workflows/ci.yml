@@ -1081,6 +1081,16 @@ jobs:
           cd "terraform/environments/$CLOUD"
           terraform validate
 
+      # Environment input validation, e.g. the PostgreSQL 15+ floor the
+      # migrations need (#1233). Every provider is mocked. Skips a cloud
+      # until it has a tests dir.
+      - name: Test environment inputs
+        run: |
+          cd "terraform/environments/$CLOUD"
+          if [ -d tests ]; then
+            terraform test
+          fi
+
       - name: Validate environment tfvars files
         run: |
           cd "terraform/environments/$CLOUD"
