@@ -13,8 +13,10 @@ import { resetSettings } from './settings';
 import { loadHistory } from './history';
 import { logout } from './auth';
 import { openCreateUserModal, closeUserModal } from './users/userModals';
-import { openCreateGroupModal, closeGroupModal, addPermission, closeDuplicateGroupModal, saveDuplicateGroup } from './groups/groupModals';
+import { openCreateGroupModal, closeGroupModal, addPermission, closeDuplicateGroupModal, saveDuplicateGroup, saveGroup } from './groups/groupModals';
+import { wireGroupForm } from './groups/groupFormValidation';
 import { initTopbarFilters } from './topbar-filters';
+import { initTableScroll } from './lib/table-scroll';
 
 // Re-export for external use
 export { api, utils };
@@ -48,6 +50,10 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('close-group-duplicate-modal-btn')?.addEventListener('click', closeDuplicateGroupModal);
   document.getElementById('cancel-group-duplicate-btn')?.addEventListener('click', closeDuplicateGroupModal);
   document.getElementById('group-duplicate-form')?.addEventListener('submit', (e) => void saveDuplicateGroup(e));
+  // Issue #213 / audit A11-001: nothing bound #group-form's submit at
+  // runtime, so Save fell through to a native submission that reloaded the
+  // page and lost the edit.
+  wireGroupForm((e) => void saveGroup(e));
 
   // Sidebar collapse toggle (issue #340). Persisted in localStorage so the
   // user's preference survives reloads.
@@ -71,6 +77,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // used to carry; sections subscribe to state.subscribeProvider /
   // subscribeAccount and reload themselves when the filter changes.
   initTopbarFilters();
+
+  // Edge fades and the Opportunities scrollbar strip for wide tables (#185).
+  initTableScroll();
 });
 
 // Initialize on page load

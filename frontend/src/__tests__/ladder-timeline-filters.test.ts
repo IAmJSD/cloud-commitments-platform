@@ -1,5 +1,5 @@
 import type { LadderEvent } from '../api/ladder';
-import { emptyLadderFilters, filterLadderEvents, ladderFilterOptions, ladderTotal, ladderEditReason, ladderLabel, formatLadderAmount, formatLadderDateTime, ladderCumulative, ladderNotCountedNote } from '../ladder-timeline-filters';
+import { emptyLadderFilters, filterLadderEvents, ladderFilterOptions, ladderTotal, ladderEditReason, ladderLabel, formatLadderAmount, formatLadderDateTime, ladderCumulative, ladderNotCountedNote, parseLadderUtcInput, formatLadderUtcInput } from '../ladder-timeline-filters';
 
 const event: LadderEvent = {
   id: 'one', config_id: 'config', run_id: 'run', layer_type: 'compute-sp', term: '1yr',
@@ -90,4 +90,21 @@ test('ladderCumulative counts only scheduled, fired and completed tranches (#698
   expect([...result.rowTotals]).toEqual([['s', 1000000n], ['c', null], ['f', null], ['x', null], ['fi', 3000000n], ['d', 6000000n]]);
   expect(rows.map(ladderNotCountedNote)).toEqual([undefined, 'Not counted', 'Not counted', 'Not counted (unknown status)', undefined, undefined]);
   expect(ladderCumulative([at('c', 'cancelled', '5.000000', 1)], 0n).times).toEqual([]);
+});
+
+test('typed UTC filter dates parse strictly and whole days cover both edges (issue #753)', () => {
+  expect(parseLadderUtcInput('', 'from')).toBe('');
+  expect(parseLadderUtcInput('  ', 'to')).toBe('');
+  expect(parseLadderUtcInput('2030-01-02', 'from')).toBe('2030-01-02T00:00:00');
+  expect(parseLadderUtcInput('2030-01-02', 'to')).toBe('2030-01-02T23:59:59');
+  expect(parseLadderUtcInput('2030-01-02 08:30', 'from')).toBe('2030-01-02T08:30:00');
+  expect(parseLadderUtcInput('2030-01-02T08:30:15', 'to')).toBe('2030-01-02T08:30:15');
+  expect(parseLadderUtcInput(' 2030-01-02 08:30 UTC ', 'from')).toBe('2030-01-02T08:30:00');
+  expect(parseLadderUtcInput('2030-01-02T08:30Z', 'from')).toBe('2030-01-02T08:30:00');
+  for (const bad of ['02.01.2030', '01/02/2030', '2030-02-30', '2030-13-01', '2030-01-02 24:00', '2030-01-02 8:30', 'tomorrow']) {
+    expect(parseLadderUtcInput(bad, 'from')).toBeNull();
+  }
+  expect(formatLadderUtcInput('')).toBe('');
+  expect(formatLadderUtcInput('2030-01-02T08:30:00')).toBe('2030-01-02 08:30');
+  expect(formatLadderUtcInput('2030-01-02T23:59:59')).toBe('2030-01-02 23:59:59');
 });

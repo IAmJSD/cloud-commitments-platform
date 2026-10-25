@@ -21,19 +21,18 @@ import (
 // "multi", a lineage without one is left unpinned, the up statement is
 // idempotent, and the down migration drops the table.
 func TestMigration_PurchaseExecutionFanOutShapes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 123)))
 
 	fannedOut, singleOnly := uuid.NewString(), uuid.NewString()
 	for _, key := range []string{fannedOut, fannedOut + ":" + uuid.NewString(), singleOnly} {
-		_, err = pool.Exec(ctx, `
+		_, err := pool.Exec(ctx, `
 			INSERT INTO purchase_executions (status, scheduled_date, idempotency_key)
 			VALUES ('failed', NOW(), $1)`, key)
 		require.NoError(t, err)
