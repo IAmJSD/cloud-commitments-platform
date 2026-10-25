@@ -49,6 +49,7 @@ func offeringClassOf(ctx context.Context, t *testing.T, pool *pgxpool.Pool, purc
 // Fail-before: with the UPDATE removed from the up file, the cleared rows keep
 // 'convertible' and the NULL assertions fail.
 func TestMigration133_ClearsConvertibleEC2Stamps(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
@@ -100,6 +101,7 @@ func TestMigration133_ClearsConvertibleEC2Stamps(t *testing.T) {
 // commits, the UPDATE re-checks its WHERE clause on the new row version and
 // must leave the authoritative 'standard' in place rather than clearing it.
 func TestMigration133_ConcurrentStandardStampWins(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 

@@ -22,10 +22,12 @@ import (
 // EXISTS guard makes 000027 safe to apply regardless of whether 000018 has
 // already created the constraint.
 func TestMigration_SavingsSnapshotsPK(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
 	t.Run("full migration from scratch succeeds (000018 + 000027 coexist)", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
@@ -49,6 +51,7 @@ func TestMigration_SavingsSnapshotsPK(t *testing.T) {
 	})
 
 	t.Run("rollback to 000026 then re-apply 000027 succeeds", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 

@@ -45,10 +45,12 @@ func queryGroupIDsByEmail(t *testing.T, ctx context.Context, pool *pgxpool.Pool,
 // collision with Standard Users (000057), and must backfill all Administrators
 // group members into Purchaser.
 func TestMigration_RelocatePurchaserGroup(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
 	t.Run("Purchaser seeded at new UUID after full migration run", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireMigratedDatabase(ctx, t, migrationsPath)
 		pool := container.DB.Pool()
 
@@ -66,6 +68,7 @@ func TestMigration_RelocatePurchaserGroup(t *testing.T) {
 	})
 
 	t.Run("admin-backfill: Administrators members land in Purchaser", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
@@ -98,6 +101,7 @@ func TestMigration_RelocatePurchaserGroup(t *testing.T) {
 	})
 
 	t.Run("idempotent: re-running migrations does not duplicate Purchaser membership", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 

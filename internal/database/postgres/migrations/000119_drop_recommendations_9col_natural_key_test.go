@@ -25,6 +25,7 @@ const insertRecForMigration119 = `
 // the 9-column index is gone, the 11-column index still dedupes, and the
 // rollback recreates the 9-column index after collapsing those duplicates.
 func TestMigration_DropRecommendations9ColNaturalKey(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

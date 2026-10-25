@@ -39,6 +39,7 @@ func queryGroupIDs(t *testing.T, ctx context.Context, pool *pgxpool.Pool, email 
 // no user loses access; guarantees no user can be left with zero groups; and
 // removes the role column from both users and sessions.
 func TestMigration_DropUserRoleToGroups(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
@@ -132,6 +133,7 @@ func assertColumnAbsent(t *testing.T, ctx context.Context, pool *pgxpool.Pool, t
 // TestMigration_DropUserRoleToGroups_Down restores the role column and
 // reconstructs role from group membership.
 func TestMigration_DropUserRoleToGroups_Down(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

@@ -47,6 +47,7 @@ const (
 //
 //nolint:misspell // test body deliberately exercises the legacy British DB spelling under test -- see migration 000089
 func TestMigration_000089_RollbackWithCanceledRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
@@ -164,6 +165,7 @@ func TestMigration_000089_RollbackWithCanceledRows(t *testing.T) {
 //
 //nolint:misspell // test body deliberately exercises the legacy British DB spelling under test -- see migration 000089
 func TestMigration_000089_UpIsAdditiveAndDualCompatible(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

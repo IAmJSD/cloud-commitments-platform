@@ -19,6 +19,7 @@ import (
 // #71's sagemaker row, and fresh install. Round-trips up/down to verify
 // no row identity is lost in the lossy down migration.
 func TestMigration_SplitSavingsPlans(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
@@ -54,6 +55,7 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 	}
 
 	t.Run("scenario 1: umbrella only", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
@@ -111,6 +113,7 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 	})
 
 	t.Run("scenario 2: umbrella + PR #71 sagemaker row (different values)", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
@@ -158,6 +161,7 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 	})
 
 	t.Run("scenario 3: fresh install (no SP rows)", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
@@ -189,6 +193,7 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 // source key should be removed. Plans without an SP entry should be
 // untouched.
 func TestMigration_SplitSavingsPlans_PurchasePlansJSONB(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

@@ -33,6 +33,7 @@ import (
 // The down migration is a no-op by design (deleted rows cannot be recovered
 // from SQL alone), so no rollback assertion is made.
 func TestMigration_CleanupUniversalPlans(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
