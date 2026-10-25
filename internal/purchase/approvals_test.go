@@ -1333,9 +1333,12 @@ func TestClearApprovalToken_PersistsEmpty(t *testing.T) {
 		ApprovalTokenExpiresAt: &future,
 	}
 	store.On("GetExecutionByID", ctx, "exec-tok-clear").Return(execution, nil)
-	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+	// Guarded on "canceled" (issue #835). The mock falls back to
+	// SavePurchaseExecution only when no guarded expectation is set, so this
+	// expectation is what pins the guard.
+	store.On("SaveExecutionIfStatus", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
 		return e.ExecutionID == "exec-tok-clear" && e.ApprovalToken == "" && e.ApprovalTokenExpiresAt == nil
-	})).Return(nil)
+	}), []string{"canceled"}).Return(nil)
 
 	err := manager.clearApprovalToken(ctx, "exec-tok-clear")
 	require.NoError(t, err)
@@ -1355,13 +1358,14 @@ func TestMintRevocationToken_PersistsFreshToken(t *testing.T) {
 		Status:        "completed",
 		ApprovalToken: "old-approval-token",
 	}
-	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+	// Guarded on the terminal status the row already carries (issue #835).
+	store.On("SaveExecutionIfStatus", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
 		// Fresh token must be non-empty, different from old, and expiry set.
 		return e.ExecutionID == "exec-mint" &&
 			e.ApprovalToken != "" &&
 			e.ApprovalToken != "old-approval-token" &&
 			e.ApprovalTokenExpiresAt != nil
-	})).Return(nil)
+	}), []string{"completed"}).Return(nil)
 
 	rawToken, err := manager.rotateApprovalToken(ctx, execution, config.RevocationWindow)
 	require.NoError(t, err)

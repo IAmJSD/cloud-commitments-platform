@@ -75,3 +75,34 @@ func (m *Manager) claimAndCheck(ctx context.Context, executionID string, from []
 	}
 	return updated, nil
 }
+
+// errClaimLostBeforePurchase marks a run that stopped before any provider call
+// because its post-claim audit stamp found the row no longer "running": another
+// writer moved it on (or it vanished) after the claim, so this run no longer
+// owns it and must not buy (issue #835). It wraps the store's lost-guard error,
+// so errors.Is(err, config.ErrExecutionNotInExpectedStatus) (or ErrNotFound)
+// still holds for callers that map those to a 409 or a race loss.
+var errClaimLostBeforePurchase = errors.New("claim lost before the purchase; nothing was bought")
+
+// stampClaimedAudit persists the audit fields (approved_by, executed_at, ...)
+// the caller set on its freshly claimed row, guarded on "running" so a stale
+// copy never rewrites a status another writer set.
+//
+// Losing the guard is fail-closed: it returns errClaimLostBeforePurchase and
+// the caller must stop before the provider call, because the guard has just
+// proved the claim is gone (issue #835). Any other save error stays
+// best-effort, as before: the claim is still this run's, the terminal save is
+// guarded on "running" too, and missing attribution must not block a purchase.
+// what names the fields for the AUDIT GAP log line.
+func (m *Manager) stampClaimedAudit(ctx context.Context, exec *config.PurchaseExecution, what string) error {
+	err := m.config.SaveExecutionIfStatus(ctx, exec, executorOwnedStatuses)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, config.ErrExecutionNotInExpectedStatus) || errors.Is(err, config.ErrNotFound) {
+		logging.Warnf("purchase[%s]: %s stamp found the claim gone; not purchasing: %v", exec.ExecutionID, what, err)
+		return fmt.Errorf("%w: %w", errClaimLostBeforePurchase, err)
+	}
+	logging.Errorf("AUDIT GAP: failed to stamp %s on %s: %v", what, exec.ExecutionID, err)
+	return nil
+}
