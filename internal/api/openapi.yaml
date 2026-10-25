@@ -4369,6 +4369,10 @@ components:
           enum: [healthy, unhealthy]
         message:
           type: string
+          description: Fixed human-readable text; never a raw error string.
+        reason:
+          type: string
+          description: Stable code for a failed check, e.g. db_unreachable or migration_failed.
 
     # -- Info ---------------------------------------------------------------
     PublicInfoResponse:
