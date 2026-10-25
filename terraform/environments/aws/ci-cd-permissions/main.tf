@@ -7,7 +7,7 @@ terraform {
       # (see .terraform.lock.hcl); pinned to ~> 6.0 rather than the
       # workload environments' ~> 5.0 to match the committed lock file.
       source  = "hashicorp/aws"
-      version = "~> 6.0"
+      version = "~> 6.36"
     }
   }
 

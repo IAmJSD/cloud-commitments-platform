@@ -1007,6 +1007,33 @@ func TestHandler_updateConfig_ValidationError(t *testing.T) {
 	assert.Contains(t, err.Error(), "validation error")
 }
 
+// TestUpdateConfig_RejectsOutOfRangeRIExchangeLimits covers #120: PUT
+// /api/config must refuse a negative RI-exchange cap or an out-of-range
+// utilization threshold instead of storing it. The principal holds
+// execute:ri-exchange, so the #1765 auto-mode gate never refuses these writes
+// and only validation can.
+func TestUpdateConfig_RejectsOutOfRangeRIExchangeLimits(t *testing.T) {
+	for body, field := range map[string]string{
+		`{"ri_exchange_max_daily_usd": -1}`:           "ri_exchange_max_daily_usd",
+		`{"ri_exchange_max_per_exchange_usd": -250}`:  "ri_exchange_max_per_exchange_usd",
+		`{"ri_exchange_utilization_threshold": 101}`:  "ri_exchange_utilization_threshold",
+		`{"ri_exchange_utilization_threshold": -0.5}`: "ri_exchange_utilization_threshold",
+	} {
+		t.Run(body, func(t *testing.T) {
+			r, store := autoGateSessionRouter(t, autoGateAdminPlusExchange, disarmedConfig())
+
+			_, err := r.Route(context.Background(), "PUT", genericPath, autoGateTokenReq(body))
+
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "expected a client error, got %v", err)
+			assert.Equal(t, 400, ce.code)
+			assert.Contains(t, err.Error(), field)
+			assert.False(t, wrote(store), "a rejected write must not reach the store")
+		})
+	}
+}
+
 func TestHandler_updateConfig_SaveError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)

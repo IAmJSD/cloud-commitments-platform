@@ -58,6 +58,24 @@ output "alb_security_group_id" {
   value       = var.create_alb_security_group ? aws_security_group.alb[0].id : null
 }
 
+# Derived from the security group's inline ingress rules, not just from
+# var.restrict_alb_ingress_to_cloudfront, so an inline rule added back to the
+# group that admits anything other than the CloudFront origin-facing prefix
+# list turns this false (and trips the environment's #412 check block). Rules
+# attached from outside this resource (aws_vpc_security_group_ingress_rule)
+# are not visible here.
+output "alb_ingress_cloudfront_only" {
+  description = "True when every ingress rule on the ALB security group admits only the CloudFront origin-facing managed prefix list. False when the group is not created."
+  value = var.create_alb_security_group && length(data.aws_ec2_managed_prefix_list.cloudfront_origin_facing) > 0 ? alltrue([
+    for r in aws_security_group.alb[0].ingress :
+    length(r.cidr_blocks == null ? [] : r.cidr_blocks) == 0 &&
+    length(r.ipv6_cidr_blocks == null ? [] : r.ipv6_cidr_blocks) == 0 &&
+    length(r.security_groups == null ? [] : r.security_groups) == 0 &&
+    !(r.self == true) &&
+    toset(r.prefix_list_ids == null ? [] : r.prefix_list_ids) == toset([data.aws_ec2_managed_prefix_list.cloudfront_origin_facing[0].id])
+  ]) : false
+}
+
 output "internet_gateway_id" {
   description = "Internet Gateway ID"
   value       = local.create_vpc ? aws_internet_gateway.main[0].id : null

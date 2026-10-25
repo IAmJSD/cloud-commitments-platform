@@ -295,6 +295,14 @@ type StoreInterface interface {
 	// inside a WithTx block so the suppression cleanup and the status flip
 	// commit atomically.
 	CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (canceled bool, currentStatus string, err error)
+	// CancelExecutionAtomicTokenPinned is CancelExecutionAtomic that also
+	// requires the row's stored approval token hash to match rawToken and to
+	// be unexpired, in the same statement as the status change, so a token
+	// rotated or expired after the email-link cancel validated it cannot
+	// cancel the row (issue #1190). A lost token pin on a row still
+	// pending/notified returns an error wrapping ErrApprovalTokenChanged; a
+	// lost status CAS returns (false, currentStatus, nil) as usual.
+	CancelExecutionAtomicTokenPinned(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string, rawToken string) (canceled bool, currentStatus string, err error)
 	// CancelScheduledExecutionAtomic atomically flips status from 'scheduled' to
 	// 'canceled' (canonical US spelling), setting canceled_by. Used by the
 	// Gmail-style pre-fire delay revoke path (issue #291 wave-2) to cancel a
@@ -414,8 +422,22 @@ type StoreInterface interface {
 	// CreateReservedInstancesListing succeeds (listing_state="active") and
 	// on subsequent poll/cancel transitions (issue #292). Recording a listing
 	// resolves the attempt, so it also clears the persisted client token and
-	// price schedule (issue #525).
+	// price schedule (issue #525). It never marks a listing the row records as
+	// canceled or closed live again; that write returns
+	// ErrMarketplaceListingEnded.
 	UpdatePurchaseHistoryListing(ctx context.Context, purchaseID, listingID, listingState string) error
+
+	// GetMarketplaceListingAttempt returns the listing id, state and the token
+	// of an unresolved list attempt of the row for purchaseID, or (nil, nil)
+	// when there is none. The cancel endpoint uses it to recover a pending row
+	// (issue #525).
+	GetMarketplaceListingAttempt(ctx context.Context, purchaseID string) (*MarketplaceListingAttempt, error)
+
+	// ResolveMarketplaceListingAttempt records listingID in an ended (or, to
+	// clear a stuck pending row without a listing, empty) state and drops the
+	// attempt token, only while the row still matches seen or already holds
+	// listingID. It reports whether the row was written (issue #525).
+	ResolveMarketplaceListingAttempt(ctx context.Context, purchaseID string, seen MarketplaceListingAttempt, listingID, state string) (bool, error)
 
 	// StampOfferingClass writes the offering_class value to a purchase_history
 	// row identified by purchase_id. Called by the marketplace-list handler
@@ -539,6 +561,8 @@ type StoreInterface interface {
 
 	// Account credentials (encrypted blobs; never returned via API)
 	SaveAccountCredential(ctx context.Context, accountID, credentialType, encryptedBlob string) error
+	// GetAccountCredential returns ErrNotFound when the account has no
+	// credential of credentialType.
 	GetAccountCredential(ctx context.Context, accountID, credentialType string) (string, error)
 	DeleteAccountCredentials(ctx context.Context, accountID string) error
 	HasAccountCredentials(ctx context.Context, accountID string) (bool, error)
@@ -587,6 +611,14 @@ type StoreInterface interface {
 	// someone else); an empty token is a boundary error, since only a
 	// caller that actually owns a marker should ever call Clear.
 	ClearCollectionStarted(ctx context.Context, token string) error
+	// ClaimCollectionInvocation is called by a token-carrying collect run
+	// once it holds the task advisory lock (issue #84). It re-stamps the
+	// marker with a fresh invocation-scoped token when the marker is still
+	// owned by markerToken, or free/stale, so a lock-skipped duplicate
+	// delivery of the same event (same markerToken) can no longer clear
+	// it. Returns the new token and true when the caller now owns the
+	// marker; ("", false, nil) when another run holds a fresh marker.
+	ClaimCollectionInvocation(ctx context.Context, markerToken string) (token string, ok bool, err error)
 
 	// RI utilization cache. Postgres-backed TTL cache for Cost Explorer
 	// GetReservationUtilization; shared across Lambda containers so
@@ -633,11 +665,6 @@ type StoreInterface interface {
 	// tx-accepting variants of SaveExecutionIfStatus and RecoverReapedExecution.
 	SaveExecutionIfStatusTx(ctx context.Context, tx pgx.Tx, execution *PurchaseExecution, expected []string) error
 	RecoverReapedExecutionTx(ctx context.Context, tx pgx.Tx, execution *PurchaseExecution) error
-
-	// GetPendingExecutionsTx is the tx-accepting variant of
-	// GetPendingExecutions. It row-locks the pending rows it returns; it does
-	// not serialize concurrent inserts (see ListRecentSubmitsTx).
-	GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) ([]PurchaseExecution, error)
 
 	// ListRecentSubmitsTx takes a per-creator transaction-scoped lock and
 	// returns the creator's web-submitted executions scheduled at or after

@@ -46,7 +46,10 @@ func TestGlobalFiltersPersistedAmbientAndRegistered(t *testing.T) {
 	}{
 		{"disabled", config.ServiceConfig{}, nil, "enabled=false"},
 		{"enabled", config.ServiceConfig{Enabled: true}, []string{"1", "10", "11", "sibling"}, ""},
-		{"minimum", config.ServiceConfig{Enabled: true, MinCount: 10}, []string{"10", "11", "sibling"}, ""},
+		// The list drops count-1 recs under the floor, so their detail must say
+		// why, like every other dimension in this table (#120). min_count is
+		// only ever set on the service config (overrides have no MinCount).
+		{"minimum", config.ServiceConfig{Enabled: true, MinCount: 10}, []string{"10", "11", "sibling"}, "min_count"},
 		{"include engine", config.ServiceConfig{Enabled: true, IncludeEngines: []string{"postgres"}}, []string{"sibling"}, "engine"},
 		{"exclude engine", config.ServiceConfig{Enabled: true, ExcludeEngines: []string{"mysql"}}, []string{"sibling"}, "engine"},
 		{"include region", config.ServiceConfig{Enabled: true, IncludeRegions: []string{"us-west-2"}}, []string{"sibling"}, "region"},
