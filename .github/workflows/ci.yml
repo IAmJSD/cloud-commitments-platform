@@ -1075,7 +1075,7 @@ jobs:
       # until it has a tests dir.
       - name: Test environment inputs
         run: |
-          cd terraform/environments/${{ matrix.cloud }}
+          cd "terraform/environments/$CLOUD"
           if [ -d tests ]; then
             terraform test
           fi
