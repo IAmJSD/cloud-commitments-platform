@@ -1742,6 +1742,9 @@ jobs:
       - name: Run smoke-gate self-test
         run: bash scripts/test-wait-for-healthy.sh
 
+      - name: Run Terraform output reader self-test
+        run: bash scripts/test-read-tf-outputs.sh
+
   # Execute database-migration.yml's down-migration gate (#68): the gate script
   # over adversarial inputs, then the workflow's own validate and migrate-* run
   # blocks extracted from the YAML with a stub `migrate`, so a request that
