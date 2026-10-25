@@ -679,8 +679,9 @@ type RecommendationRecord struct {
 	CloudAccountID    *string  `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
 	SourceAccountID   *string  `json:"source_account_id,omitempty" dynamodbav:"source_account_id,omitempty"`
 	// SuppressedCount is the cumulative count already committed against
-	// this recommendation's 6-tuple (account, provider, service, region,
-	// resource_type, engine) within the active grace window. The
+	// this recommendation's suppression key (account, provider, service,
+	// region, resource_type, engine, plus availability zone, platform and
+	// tenancy, issue #816) within the active grace window. The
 	// scheduler subtracts this from Count before returning the rec to
 	// the frontend; a rec where SuppressedCount ≥ original count is
 	// dropped entirely. Populated by the scheduler — zero on writes.
@@ -739,6 +740,30 @@ type PurchaseSuppression struct {
 	SuppressedCount int       `json:"suppressed_count"`
 	ExpiresAt       time.Time `json:"expires_at"`
 	CreatedAt       time.Time `json:"created_at"`
+	// Variant narrows the row to one availability zone, platform and tenancy
+	// on its 6-tuple (issue #816, migration 000134). nil means the variant is
+	// unknown: rows written before 000134 or by code predating #816. Such a
+	// row is a wildcard over its 6-tuple (see AppliesTo).
+	Variant *SuppressionVariant `json:"variant,omitempty"`
+}
+
+// SuppressionVariant is the part of the suppression key beyond the 6-tuple:
+// the zonal EC2 availability zone and the EC2 platform and tenancy, the same
+// three fields the rec identity key carries (issues #792, #806). Empty strings
+// are known values (a regional rec, a non-EC2 rec), not wildcards.
+type SuppressionVariant struct {
+	AvailabilityZone string `json:"availability_zone"`
+	Platform         string `json:"platform"`
+	Tenancy          string `json:"tenancy"`
+}
+
+// AppliesTo reports whether the suppression counts against a recommendation
+// on the same 6-tuple whose variant is v. A row without a variant (legacy)
+// applies to every variant, and a nil v (the rec's Details could not be read)
+// matches every row: both fall back to the pre-#816 6-tuple match, which
+// over-suppresses (under-buys) rather than over-shows.
+func (s *PurchaseSuppression) AppliesTo(v *SuppressionVariant) bool {
+	return s.Variant == nil || v == nil || *s.Variant == *v
 }
 
 // RecommendationFilter parameterises ListStoredRecommendations and the

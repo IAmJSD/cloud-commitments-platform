@@ -7,7 +7,6 @@ import (
 	"crypto/elliptic"
 	"crypto/x509"
 	"fmt"
-	"sync"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
@@ -25,11 +24,8 @@ type AWSKMSClient interface {
 // The private key never leaves KMS.
 type AWSKMSSigner struct {
 	client AWSKMSClient
-	err    error
-	pubKey *ecdsa.PublicKey
 	keyID  string
-	kid    string
-	once   sync.Once
+	keys   publicKeyCache
 }
 
 // NewAWSKMSSigner constructs a signer bound to the given KMS key. The
@@ -70,46 +66,32 @@ func (s *AWSKMSSigner) Sign(ctx context.Context, digest []byte) ([]byte, error) 
 	return derToRawECDSASignature(out.Signature)
 }
 
-// PublicKey fetches the public half of the KMS key once and caches it.
-// Subsequent calls return the cached value.
+// PublicKey fetches the public half of the KMS key and caches it once a
+// fetch succeeds. A failed fetch is returned and retried on the next call.
 func (s *AWSKMSSigner) PublicKey(ctx context.Context) (crypto.PublicKey, error) {
-	s.resolveOnce(ctx)
-	return s.pubKey, s.err
+	return s.keys.publicKey(ctx, s.fetchPublicKey)
 }
 
 // KeyID returns the JWK kid derived from the cached public key.
 func (s *AWSKMSSigner) KeyID(ctx context.Context) (string, error) {
-	s.resolveOnce(ctx)
-	return s.kid, s.err
+	return s.keys.keyID(ctx, s.fetchPublicKey)
 }
 
-func (s *AWSKMSSigner) resolveOnce(ctx context.Context) {
-	s.once.Do(func() {
-		out, err := s.client.GetPublicKey(ctx, &kms.GetPublicKeyInput{KeyId: &s.keyID})
-		if err != nil {
-			s.err = fmt.Errorf("oidc: kms:GetPublicKey: %w", err)
-			return
-		}
-		pub, err := x509.ParsePKIXPublicKey(out.PublicKey)
-		if err != nil {
-			s.err = fmt.Errorf("oidc: parse kms public key: %w", err)
-			return
-		}
-		ecPub, ok := pub.(*ecdsa.PublicKey)
-		if !ok {
-			s.err = fmt.Errorf("oidc: kms key is not ECDSA (got %T); key must be ECC_NIST_P256", pub)
-			return
-		}
-		if ecPub.Curve != elliptic.P256() {
-			s.err = fmt.Errorf("oidc: kms key curve is %s; key must be ECC_NIST_P256 (ES256)", ecPub.Curve.Params().Name)
-			return
-		}
-		kid, err := ComputeKeyID(ecPub)
-		if err != nil {
-			s.err = err
-			return
-		}
-		s.pubKey = ecPub
-		s.kid = kid
-	})
+func (s *AWSKMSSigner) fetchPublicKey(ctx context.Context) (*ecdsa.PublicKey, error) {
+	out, err := s.client.GetPublicKey(ctx, &kms.GetPublicKeyInput{KeyId: &s.keyID})
+	if err != nil {
+		return nil, fmt.Errorf("oidc: kms:GetPublicKey: %w", err)
+	}
+	pub, err := x509.ParsePKIXPublicKey(out.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("oidc: parse kms public key: %w", err)
+	}
+	ecPub, ok := pub.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("oidc: kms key is not ECDSA (got %T); key must be ECC_NIST_P256", pub)
+	}
+	if ecPub.Curve != elliptic.P256() {
+		return nil, fmt.Errorf("oidc: kms key curve is %s; key must be ECC_NIST_P256 (ES256)", ecPub.Curve.Params().Name)
+	}
+	return ecPub, nil
 }
