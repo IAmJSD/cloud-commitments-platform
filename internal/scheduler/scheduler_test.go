@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/mocks"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/testutil/goroutines"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/stretchr/testify/assert"
@@ -1102,14 +1104,14 @@ func TestScheduler_ListRecommendations_LambdaSkipsBackgroundRefresh(t *testing.T
 		cacheTTL: time.Nanosecond,
 	}
 
+	mark := goroutines.NewMark()
 	_, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
 	require.NoError(t, err)
 
-	// Give any (wrongly-spawned) goroutine time to hit the store; none
-	// should fire, so no GetGlobalConfig call should be observed.
-	time.Sleep(20 * time.Millisecond)
-
-	mockStore.AssertNotCalled(t, "GetGlobalConfig", mock.Anything)
+	// No wall-clock wait (issue #36): a wrongly spawned refresh is either
+	// still alive and in the goroutine snapshot, or already done and in the
+	// GetGlobalConfig call log.
+	assertNoBackgroundCollect(t, mark, mockStore)
 	assert.False(t, scheduler.collecting.Load(), "collecting flag must stay unset on Lambda")
 }
 
@@ -1303,20 +1305,17 @@ func TestScheduler_ListRecommendations_ColdStart_NonLambda_KicksBackgroundCollec
 	}
 }
 
-// fanOutPerAccount runs up to CUDLY_MAX_ACCOUNT_PARALLELISM account calls
-// in parallel, and no more. The fake fn increments an atomic in-flight
-// counter on entry, records the peak and decrements on exit. The first
-// `limit` calls also wait at a one-shot barrier that opens once `limit`
-// calls have arrived, so a correct fan-out deterministically reaches a peak
-// of exactly `limit` regardless of runner load. A serial (or under-limit)
-// fan-out never gets `limit` calls in flight: the first call waits out
-// barrierTimeout alone and the test fails (issue #38, audit A16-011).
-// barrierTimeout only bounds that failure path; a passing run never waits on it.
+// fanOutPerAccount bounds parallel in-flight calls to
+// CUDLY_MAX_ACCOUNT_PARALLELISM. Every fake fn call parks on release, so the
+// fan-out fills its slots and then blocks in errgroup.Go waiting for one. Once
+// it is parked there and every worker it started has entered fn, nothing else
+// can start until the test releases, so the in-flight count read then is the
+// bound itself, with no wall-clock wait (issue #36): a missing limit never
+// parks (the Eventually times out) and a wrong one parks at another count. The
+// final peak must equal the limit exactly, so a serial or under-limit fan-out
+// fails too (issue #38, audit A16-011).
 func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
-	const (
-		limit          = 3
-		barrierTimeout = 2 * time.Second
-	)
+	const limit = 3
 	t.Setenv("CUDLY_MAX_ACCOUNT_PARALLELISM", fmt.Sprint(limit))
 
 	// 20 accounts to make the bound observable.
@@ -1336,43 +1335,73 @@ func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
 		}
 	}
 
-	var arrived atomic.Int32
-	var barrierTimeouts atomic.Int32
-	limitReached := make(chan struct{})
-	var openBarrier sync.Once
-	release := func() { openBarrier.Do(func() { close(limitReached) }) }
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseAll)
 
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
-		updatePeak(inflight.Add(1))
-		defer inflight.Add(-1)
-		if arrived.Add(1) == limit {
-			release()
-		}
-		select {
-		case <-limitReached:
-		case <-time.After(barrierTimeout):
-			// Record the failure, then open the barrier for every later
-			// call so a serial fan-out fails after one timeout, not twenty.
-			barrierTimeouts.Add(1)
-			release()
-		}
-		// Short hold so a fan-out that ignored the limit would let extra
-		// workers overlap the held ones and push the peak above it.
-		time.Sleep(5 * time.Millisecond)
+	//nolint:unparam // signature is fixed by fanOutPerAccount; these calls never report a gap or error
+	fn := func(_ context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
+		cur := inflight.Add(1)
+		updatePeak(cur)
+		<-release
+		inflight.Add(-1)
 		return []config.RecommendationRecord{{ID: acct.ID}}, nil, nil
 	}
 
-	out, outcome := fanOutPerAccount(context.Background(), "Test", accounts, fn)
-	assert.Len(t, out, len(accounts), "all accounts contribute one record")
-	assert.LessOrEqual(t, peak.Load(), int32(limit), "peak in-flight must not exceed CUDLY_MAX_ACCOUNT_PARALLELISM")
-	assert.Equal(t, int32(limit), peak.Load(),
-		"fanOutPerAccount must run CUDLY_MAX_ACCOUNT_PARALLELISM accounts in parallel: peak in-flight was %d, want %d",
-		peak.Load(), limit)
-	assert.Zero(t, barrierTimeouts.Load(),
-		"%d account call(s) waited %v at the barrier without %d calls in flight: the fan-out ran serially or below the limit",
-		barrierTimeouts.Load(), barrierTimeout, limit)
-	assert.Equal(t, len(accounts), outcome.SucceededCount)
-	assert.Zero(t, outcome.FailedCount)
+	type fanOutResult struct {
+		out     []config.RecommendationRecord
+		outcome accountOutcome
+	}
+	done := make(chan fanOutResult, 1)
+	mark := goroutines.NewMark()
+	go func() {
+		out, outcome := fanOutPerAccount(context.Background(), "Test", accounts, fn)
+		done <- fanOutResult{out, outcome}
+	}()
+
+	var atBound int32
+	require.Eventually(t, func() bool {
+		parked, workers := fanOutParkedOnLimit(mark)
+		n := inflight.Load()
+		atBound = n
+		return parked && int(n) == workers
+	}, 10*time.Second, time.Millisecond, "fanOutPerAccount never blocked waiting for a free slot: no parallelism limit")
+	assert.Equal(t, int32(limit), atBound, "in-flight calls while the fan-out waits for a slot must equal CUDLY_MAX_ACCOUNT_PARALLELISM")
+
+	releaseAll()
+	var res fanOutResult
+	select {
+	case res = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fanOutPerAccount did not finish after its calls were released")
+	}
+	assert.Len(t, res.out, len(accounts), "all accounts contribute one record")
+	assert.Equal(t, int32(limit), peak.Load(), "peak in-flight must reach, and never exceed, CUDLY_MAX_ACCOUNT_PARALLELISM")
+	assert.Equal(t, len(accounts), res.outcome.SucceededCount)
+	assert.Zero(t, res.outcome.FailedCount)
+}
+
+// fanOutParkedOnLimit reports whether the goroutine the test started to run
+// fanOutPerAccount is blocked in errgroup.Go on the limit's semaphore, and how
+// many of the workers it started are alive. It runs inside require.Eventually,
+// so it identifies goroutines by creator rather than with mark.Spawned.
+func fanOutParkedOnLimit(mark goroutines.Mark) (parked bool, workers int) {
+	started := mark.Started()
+	var runner int64
+	for _, g := range started {
+		if strings.Contains(g.CreatedBy, "scheduler.TestFanOutPerAccount_RespectsParallelismLimit") &&
+			strings.Contains(g.Stack, "scheduler.fanOutPerAccount(") {
+			runner = g.ID
+			parked = strings.Contains(g.Stack, "[chan send") && strings.Contains(g.Stack, "errgroup.(*Group).Go(")
+		}
+	}
+	for _, g := range started {
+		if runner != 0 && g.CreatorID == runner {
+			workers++
+		}
+	}
+	return parked, workers
 }
 
 // TestFanOutPerAccount_AllAccountsFail pins the new accountOutcome

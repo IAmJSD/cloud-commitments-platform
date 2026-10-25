@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/testutil/goroutines"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -101,42 +102,47 @@ func TestDBRateLimiter_maybeCleanup_TooSoon(t *testing.T) {
 func TestDBRateLimiter_maybeCleanup_ReadyToCleanup(t *testing.T) {
 	rl := NewDBRateLimiter(nil)
 	rl.cleanupInterval = time.Millisecond
-	rl.lastCleanup = time.Now().Add(-time.Minute) // Long ago
+	before := time.Now().Add(-time.Minute) // Long ago
+	rl.lastCleanup = before
 
+	mark := goroutines.NewMark()
 	// Should trigger cleanup (no-op because pool is nil)
 	rl.maybeCleanup()
-	// Brief wait for the goroutine to complete
-	time.Sleep(20 * time.Millisecond)
+
+	// The trigger stamps lastCleanup before it starts the goroutine.
+	rl.cleanupMu.Lock()
+	stamped := rl.lastCleanup.After(before)
+	rl.cleanupMu.Unlock()
+	assert.True(t, stamped, "a due cleanup must record when it ran")
+
+	// Wait for the cleanup goroutine to return and hand the slot back,
+	// rather than sleeping a fixed 20ms (issue #36).
+	require.Eventually(t, func() bool {
+		return len(mark.StartedBy("api.(*DBRateLimiter).maybeCleanup")) == 0 && !rl.cleanupRunning.Load()
+	}, 10*time.Second, time.Millisecond, "the cleanup goroutine did not finish and release cleanupRunning")
 }
 
 // Regression test for 02-M2: StartCleanupWorker must launch a goroutine that
-// stops cleanly on context cancellation. The goroutine is exercised with a
-// fast ticker so we can confirm it fires without sleeping in tests.
+// stops cleanly on context cancellation. The goroutine is found in the
+// runtime's goroutine snapshot, so the test waits for its exit instead of
+// sleeping (issue #36).
+//
+// With a nil pool, cleanup() is a no-op, so a tick is not observable here and
+// the test no longer shortens dbRateLimiterScheduledCleanupInterval: the
+// worker reads that variable on its own goroutine, and restoring it in
+// t.Cleanup is a data race the race detector reports, since nothing orders
+// the worker's read before the restore.
 func TestDBRateLimiter_StartCleanupWorker_StopsOnContextCancel(t *testing.T) {
-	// Override the scheduled interval to a very short duration for testing.
-	orig := dbRateLimiterScheduledCleanupInterval
-	dbRateLimiterScheduledCleanupInterval = 5 * time.Millisecond
-	t.Cleanup(func() { dbRateLimiterScheduledCleanupInterval = orig })
-
 	rl := NewDBRateLimiter(nil) // nil pool; cleanup() is a no-op
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	done := make(chan struct{})
-	// Wrap cleanup in a channel signal to confirm the worker ran.
-	go func() {
-		defer close(done)
-		rl.StartCleanupWorker(ctx)
-	}()
+	mark := goroutines.NewMark()
+	rl.StartCleanupWorker(ctx)
+	const worker = "api.(*DBRateLimiter).StartCleanupWorker"
+	require.Len(t, mark.StartedBy(worker), 1, "StartCleanupWorker must run the worker on its own goroutine")
 
-	// Let the ticker fire at least twice (2 * 5ms = 10ms + margin).
-	time.Sleep(30 * time.Millisecond)
 	cancel()
-
-	// StartCleanupWorker itself returns immediately (goroutine is launched
-	// inside it). The done channel signals the outer goroutine exited.
-	select {
-	case <-done:
-	case <-time.After(100 * time.Millisecond):
-		t.Error("StartCleanupWorker goroutine wrapper did not return after cancel")
-	}
+	require.Eventually(t, func() bool { return len(mark.StartedBy(worker)) == 0 },
+		10*time.Second, time.Millisecond, "the cleanup worker did not exit after its context was canceled")
 }
