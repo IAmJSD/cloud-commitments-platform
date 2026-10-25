@@ -199,8 +199,8 @@ type AuthServiceInterface interface {
 	GetUser(ctx context.Context, userID string) (*User, error)
 	UpdateUserProfile(ctx context.Context, userID string, email string, currentPassword string, newPassword string) error
 	// User management - uses auth.API* types
-	CreateUserAPI(ctx context.Context, actorUserID string, req any) (any, error)
-	UpdateUserAPI(ctx context.Context, actorUserID, userID string, req any) (any, error)
+	CreateUserAPI(ctx context.Context, actorUserID string, req auth.APICreateUserRequest) (*auth.APICreateUserResponse, error)
+	UpdateUserAPI(ctx context.Context, actorUserID, userID string, req auth.APIUpdateUserRequest) (*auth.APIUser, error)
 	DeleteUser(ctx context.Context, userID string) error
 	ListUsersAPI(ctx context.Context) (any, error)
 	ChangePasswordAPI(ctx context.Context, userID, currentPassword, newPassword string) error
@@ -217,8 +217,8 @@ type AuthServiceInterface interface {
 	// permission onto a group that their own effective permissions do not
 	// hold, and the money verbs carved out of admin:* are not grantable at
 	// all (issues #1550, #1629).
-	CreateGroupAPI(ctx context.Context, actorUserID string, req any) (any, error)
-	UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, req any) (any, error)
+	CreateGroupAPI(ctx context.Context, actorUserID string, req auth.APICreateGroupRequest) (*auth.APIGroup, error)
+	UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, req auth.APIUpdateGroupRequest) (*auth.APIGroup, error)
 	DeleteGroup(ctx context.Context, groupID string) error
 	GetGroupAPI(ctx context.Context, groupID string) (any, error)
 	ListGroupsAPI(ctx context.Context) (any, error)
