@@ -1394,12 +1394,6 @@ func (m *MockAuthStore) UpdateAPIKey(ctx context.Context, key *auth.UserAPIKey) 
 	return args.Error(0)
 }
 
-// UpdateAPIKeyLastUsed mocks the UpdateAPIKeyLastUsed operation.
-func (m *MockAuthStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error {
-	args := m.Called(ctx, keyID)
-	return args.Error(0)
-}
-
 // RecordAPIKeyUsage mocks the RecordAPIKeyUsage operation.
 func (m *MockAuthStore) RecordAPIKeyUsage(ctx context.Context, keyID string, delta int64) error {
 	args := m.Called(ctx, keyID, delta)

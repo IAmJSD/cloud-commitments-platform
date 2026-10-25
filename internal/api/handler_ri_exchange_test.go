@@ -1616,19 +1616,19 @@ func (m *mockAuthForExchange) GetUser(_ context.Context, _ string) (*User, error
 func (m *mockAuthForExchange) UpdateUserProfile(_ context.Context, _, _, _, _ string) error {
 	return nil
 }
-func (m *mockAuthForExchange) CreateUserAPI(_ context.Context, _ string, _ any) (any, error) {
+func (m *mockAuthForExchange) CreateUserAPI(_ context.Context, _ string, _ auth.APICreateUserRequest) (*auth.APICreateUserResponse, error) {
 	return nil, nil
 }
-func (m *mockAuthForExchange) UpdateUserAPI(_ context.Context, _, _ string, _ any) (any, error) {
+func (m *mockAuthForExchange) UpdateUserAPI(_ context.Context, _, _ string, _ auth.APIUpdateUserRequest) (*auth.APIUser, error) {
 	return nil, nil
 }
 func (m *mockAuthForExchange) DeleteUser(_ context.Context, _ string) error              { return nil }
 func (m *mockAuthForExchange) ListUsersAPI(_ context.Context) (any, error)               { return nil, nil }
 func (m *mockAuthForExchange) ChangePasswordAPI(_ context.Context, _, _, _ string) error { return nil }
-func (m *mockAuthForExchange) CreateGroupAPI(_ context.Context, _ string, _ any) (any, error) {
+func (m *mockAuthForExchange) CreateGroupAPI(_ context.Context, _ string, _ auth.APICreateGroupRequest) (*auth.APIGroup, error) {
 	return nil, nil
 }
-func (m *mockAuthForExchange) UpdateGroupAPI(_ context.Context, _, _ string, _ any) (any, error) {
+func (m *mockAuthForExchange) UpdateGroupAPI(_ context.Context, _, _ string, _ auth.APIUpdateGroupRequest) (*auth.APIGroup, error) {
 	return nil, nil
 }
 func (m *mockAuthForExchange) DeleteGroup(_ context.Context, _ string) error        { return nil }

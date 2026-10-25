@@ -271,9 +271,9 @@ func (m *Manager) reapOne(ctx context.Context, exec *config.PurchaseExecution, r
 	// the reaper attribution. Bump Errored so ops can track it.
 	//
 	// "safe to retry" is only appended when every recommendation in the
-	// execution uses an idempotent provider API. Azure savings-plans use a
-	// timestamp-based alias name with no server-side idempotency key, so
-	// retrying a reaped Azure SP row risks creating a duplicate commitment.
+	// execution uses an idempotent provider API. Azure savings-plans are not
+	// confirmed to deduplicate a repeat order-alias PUT (RedriveRefusalReason),
+	// so retrying a reaped Azure SP row risks creating a duplicate commitment.
 	safeMsg := ""
 	if allRecsSafeToRedrive(exec) {
 		safeMsg = "; safe to retry"
@@ -282,7 +282,9 @@ func (m *Manager) reapOne(ctx context.Context, exec *config.PurchaseExecution, r
 		ageMinutes, prevStatus, safeMsg)
 	if m.annotateReapedRow(ctx, transitioned, result) {
 		// The won CAS makes this sweep the one writer that notifies (#1195).
-		m.notifyExecutionFailure(ctx, transitioned)
+		// The stuck executor may already have bought, so the email reports
+		// an unknown outcome rather than a failure to retry (#1415).
+		m.notifyOutcomeUnknown(ctx, transitioned)
 	}
 }
 

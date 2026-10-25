@@ -203,3 +203,29 @@ func TestBuildSuppressions_ComputeSlugEC2(t *testing.T) {
 		})
 	}
 }
+
+func TestCanonicalSuppressionService(t *testing.T) {
+	assert.Equal(t, "compute", CanonicalSuppressionService("aws", "ec2"))
+	assert.Equal(t, "compute", CanonicalSuppressionService("aws", "compute"))
+	assert.Equal(t, "rds", CanonicalSuppressionService("aws", "rds"))
+	assert.Equal(t, "compute", CanonicalSuppressionService("azure", "compute"))
+	assert.Equal(t, "ec2", CanonicalSuppressionService("azure", "ec2"))
+	assert.Equal(t, "compute", CanonicalSuppressionService("gcp", "compute"))
+}
+
+// Issue #1412: AWS "ec2" and "compute" recs in one request share a bucket and
+// are written under the canonical slug; Azure compute is untouched.
+func TestBuildSuppressions_CanonicalisesAWSEC2Slug(t *testing.T) {
+	now := time.Date(2026, 4, 24, 0, 0, 0, 0, time.UTC)
+	gp := &GlobalConfig{GracePeriodDays: map[string]int{"aws": 7, "azure": 7}}
+	sups := BuildSuppressions([]RecommendationRecord{
+		{Provider: "aws", Service: "ec2", Region: "r", ResourceType: "m5.large", Count: 3},
+		{Provider: "aws", Service: "compute", Region: "r", ResourceType: "m5.large", Count: 2},
+		{Provider: "azure", Service: "compute", Region: "r", ResourceType: "D2", Count: 1},
+	}, "exec-1", gp, now)
+	require.Len(t, sups, 2)
+	assert.Equal(t, "compute", sups[0].Service)
+	assert.Equal(t, 5, sups[0].SuppressedCount)
+	assert.Equal(t, "compute", sups[1].Service)
+	assert.Equal(t, "azure", sups[1].Provider)
+}

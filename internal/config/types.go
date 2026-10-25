@@ -760,6 +760,19 @@ type SuppressionVariant struct {
 	Tenancy          string `json:"tenancy"`
 }
 
+// CanonicalSuppressionService maps the legacy AWS EC2 slug "ec2" to the
+// canonical "compute" slug so a suppression and a rec match whichever spelling
+// each was stored under (issue #1412). Other providers' services, including
+// Azure and GCP "compute", are returned unchanged. It lives in config, the
+// lowest package both the scheduler and BuildSuppressions import; the pinned
+// cloud-commitments-go common package has no such mapping.
+func CanonicalSuppressionService(provider, service string) string {
+	if provider == "aws" && service == "ec2" {
+		return "compute"
+	}
+	return service
+}
+
 // AppliesTo reports whether the suppression counts against a recommendation
 // on the same 6-tuple whose variant is v. A row without a variant (legacy)
 // applies to every variant, and a nil v (the rec's Details could not be read)
@@ -1297,7 +1310,7 @@ type AccountServiceOverride struct {
 // of the federation IaC, then approved or rejected by a CUDly admin.
 type AccountRegistration struct {
 	ID                   string     `json:"id"`
-	ReferenceToken       string     `json:"reference_token"`
+	ReferenceToken       string     `json:"-"`      // registrant's status credential; only submitRegistration returns it (#310)
 	Status               string     `json:"status"` // pending, approved, rejected
 	Provider             string     `json:"provider"`
 	ExternalID           string     `json:"external_id"`

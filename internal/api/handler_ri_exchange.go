@@ -30,6 +30,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/ctxutil"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/ricost"
 )
 
 // reshapeEC2Client is the narrow slice of the EC2 client that
@@ -1603,25 +1604,11 @@ func parseThresholdParam(params map[string]string) (float64, error) {
 	return f, nil
 }
 
-// monthlyCostFromConvertibleRI computes the per-instance per-month
-// effective cost from an RI's pricing fields, matching the same
-// formula effectiveMonthlyCost uses for offerings:
-//
-//	monthly = (FixedPrice / hours_per_term + UsagePrice + recurring_hourly) × 730
-//
-// 730 is AWS's canonical hours-per-month constant. Returns an error when
-// Duration is non-positive: a zero cost would read as a free RI and skip
-// reshape's dollar-units pricing gate, so callers must exclude the RI.
-//
-// Used to populate exchange.RIInfo.MonthlyCost so the cross-family
-// dollar-units pre-filter can compare against per-target offering
-// costs computed with the same formula.
+// monthlyCostFromConvertibleRI delegates to ricost.MonthlyCostFromConvertibleRI,
+// the single implementation of the convertible RI monthly cost formula shared
+// with internal/server.
 func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
-	if ri.Duration <= 0 {
-		return 0, fmt.Errorf("convertible RI %s has non-positive duration %d: monthly cost is not computable", ri.ReservedInstanceID, ri.Duration)
-	}
-	hoursPerTerm := float64(ri.Duration) / 3600
-	return ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730, nil
+	return ricost.MonthlyCostFromConvertibleRI(ri)
 }
 
 // convertToExchangeTypes converts provider-specific types to the exchange package types.

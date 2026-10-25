@@ -198,10 +198,32 @@ add_pattern 'api[_-]?key[[:space:]]*[=:][[:space:]]*['\''"][^'\''"]{8,}'        
 add_pattern 'secret[_-]?key[[:space:]]*[=:][[:space:]]*['\''"][^'\''"]{8,}'      # Secret key with quoted value
 add_pattern 'BEGIN[[:space:]]((RSA|DSA|EC|OPENSSH|ENCRYPTED)[[:space:]])?PRIVATE[[:space:]]KEY-----'  # PEM private keys
 
-# Database connection strings
-add_pattern 'postgres://[^:]+:[^@]+@'                           # PostgreSQL
-add_pattern 'mysql://[^:]+:[^@]+@'                              # MySQL
-add_pattern 'mongodb(\+srv)?://[^:]+:[^@]+@'                    # MongoDB
+# Database connection strings (#368). A DSN detector covers each scheme a client
+# accepts for that database: libpq's postgresql:// as well as postgres://, the
+# pgx/pgx4/pgx5 schemes golang-migrate uses (this repo's migrations use pgx5://),
+# and SQLAlchemy-style "+driver" suffixes. The user name may be empty
+# (scheme://:password@host is a valid DSN), so it is [^:]* rather than [^:]+.
+# URL-encoded credentials and IPv6 hosts need nothing extra: the match ends at
+# the "@" before the host. The last detector catches a password passed as a
+# query parameter instead of in the user info (?password=, &password=), which
+# libpq and the JDBC drivers accept.
+add_pattern '(postgres(ql)?|pgx[45]?)(\+[A-Za-z0-9]+)?://[^:]*:[^@]+@'  # PostgreSQL
+add_pattern '(mysql|mariadb)(\+[A-Za-z0-9]+)?://[^:]*:[^@]+@'         # MySQL
+add_pattern 'mongodb(\+srv)?://[^:]*:[^@]+@'                         # MongoDB
+add_pattern '(postgres(ql)?|pgx[45]?|mysql|mariadb)(\+[A-Za-z0-9]+)?://[^[:space:]'\''"]*[?&]password=[^&[:space:]'\''"]+'  # DSN password query parameter
+
+# Clones set up before #368 still carry the narrower DSN detectors, bare (before
+# #328) or word-wrapped. Each matches a subset of what its replacement above
+# matches, so a re-run drops them instead of scanning for both. Each scheme is
+# split into two adjacent quoted strings so this line does not match the
+# detectors it names.
+for legacy_dsn in 'postgres:''//[^:]+:[^@]+@' 'mysql:''//[^:]+:[^@]+@' 'mongodb(\+srv)?:''//[^:]+:[^@]+@'; do
+    for legacy_form in "${legacy_dsn}" "${word_chars}(${legacy_dsn})${word_chars}"; do
+        if git config --local --get-all secrets.patterns | grep -qxF -- "${legacy_form}"; then
+            git config --local --unset-all --fixed-value secrets.patterns "${legacy_form}"
+        fi
+    done
+done
 
 # Allowed patterns live in .gitallowed (versioned, applied by every scan, including CI).
 # They are matched against the whole "path:line:content" scanner output line, so an entry

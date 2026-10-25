@@ -73,15 +73,9 @@ func (s *Service) ListGroups(ctx context.Context) ([]Group, error) {
 // permission set. A nil group (the store returns nil, nil for a deleted/
 // missing group) is skipped without error.
 func (s *Service) GetUserPermissions(ctx context.Context, userID string) ([]Permission, error) {
-	user, err := s.store.GetUserByID(ctx, userID)
+	user, err := s.loadUser(ctx, userID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("user not found")
-		}
 		return nil, err
-	}
-	if user == nil {
-		return nil, fmt.Errorf("user not found")
 	}
 
 	// Permissions come exclusively from group memberships.
@@ -171,15 +165,9 @@ func (s *Service) accountsForGroups(ctx context.Context, groupIDs []string) ([]s
 // user's group memberships; a user with no groups gets an empty context and
 // is denied everything (fail closed).
 func (s *Service) BuildAuthContext(ctx context.Context, userID string) (*AuthContext, error) {
-	user, err := s.store.GetUserByID(ctx, userID)
+	user, err := s.loadUser(ctx, userID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("user not found")
-		}
 		return nil, err
-	}
-	if user == nil {
-		return nil, fmt.Errorf("user not found")
 	}
 
 	authCtx := &AuthContext{

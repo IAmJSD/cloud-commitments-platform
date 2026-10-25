@@ -1412,8 +1412,9 @@ func aggregateSuppressions(sups []config.PurchaseSuppression) map[suppressionKey
 	for i := range sups {
 		sup := sups[i]
 		k := suppressionKey{
-			accountID: sup.AccountID, provider: sup.Provider, service: sup.Service,
-			region: sup.Region, resourceType: sup.ResourceType, engine: sup.Engine,
+			accountID: sup.AccountID, provider: sup.Provider,
+			service: config.CanonicalSuppressionService(sup.Provider, sup.Service),
+			region:  sup.Region, resourceType: sup.ResourceType, engine: sup.Engine,
 		}
 		index[k] = append(index[k], sup)
 	}
@@ -1457,8 +1458,9 @@ func applySuppressionIndex(recs []config.RecommendationRecord, index map[suppres
 			accountID = *rec.CloudAccountID
 		}
 		k := suppressionKey{
-			accountID: accountID, provider: rec.Provider, service: rec.Service,
-			region: rec.Region, resourceType: rec.ResourceType, engine: rec.Engine,
+			accountID: accountID, provider: rec.Provider,
+			service: config.CanonicalSuppressionService(rec.Provider, rec.Service),
+			region:  rec.Region, resourceType: rec.ResourceType, engine: rec.Engine,
 		}
 		a := matchingSuppressions(&rec, index[k])
 		if a == nil {

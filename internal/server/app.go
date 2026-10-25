@@ -1181,11 +1181,11 @@ func (a *authServiceAdapter) UpdateUserProfile(ctx context.Context, userID, emai
 }
 
 // User management methods - delegate to auth service API methods.
-func (a *authServiceAdapter) CreateUserAPI(ctx context.Context, actorUserID string, req any) (any, error) {
+func (a *authServiceAdapter) CreateUserAPI(ctx context.Context, actorUserID string, req auth.APICreateUserRequest) (*auth.APICreateUserResponse, error) {
 	return a.service.CreateUserAPI(ctx, actorUserID, req)
 }
 
-func (a *authServiceAdapter) UpdateUserAPI(ctx context.Context, actorUserID, userID string, req any) (any, error) {
+func (a *authServiceAdapter) UpdateUserAPI(ctx context.Context, actorUserID, userID string, req auth.APIUpdateUserRequest) (*auth.APIUser, error) {
 	return a.service.UpdateUserAPI(ctx, actorUserID, userID, req)
 }
 
@@ -1219,11 +1219,11 @@ func (a *authServiceAdapter) MFARegenerateRecoveryCodesAPI(ctx context.Context, 
 }
 
 // Group management methods - delegate to auth service API methods.
-func (a *authServiceAdapter) CreateGroupAPI(ctx context.Context, actorUserID string, req any) (any, error) {
+func (a *authServiceAdapter) CreateGroupAPI(ctx context.Context, actorUserID string, req auth.APICreateGroupRequest) (*auth.APIGroup, error) {
 	return a.service.CreateGroupAPI(ctx, actorUserID, req)
 }
 
-func (a *authServiceAdapter) UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, req any) (any, error) {
+func (a *authServiceAdapter) UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, req auth.APIUpdateGroupRequest) (*auth.APIGroup, error) {
 	return a.service.UpdateGroupAPI(ctx, actorUserID, groupID, req)
 }
 

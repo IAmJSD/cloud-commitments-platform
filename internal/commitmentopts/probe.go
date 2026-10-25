@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
@@ -81,20 +82,46 @@ func walkPaginated(
 	service string,
 	fetchPage func(ctx context.Context, token *string) ([]rawOffer, *string, error),
 ) ([]rawOffer, error) {
-	var raw []rawOffer
+	raw, _, err := walkPaginatedCapped(ctx, service, fetchPage)
+	return raw, err
+}
+
+// walkPaginatedCapped is walkPaginated that also reports whether the page cap
+// stopped the walk while AWS still had pages to return (capped=true), as
+// opposed to pagination running out.
+func walkPaginatedCapped(
+	ctx context.Context,
+	service string,
+	fetchPage func(ctx context.Context, token *string) ([]rawOffer, *string, error),
+) (raw []rawOffer, capped bool, err error) {
 	var token *string
 	for page := 0; page < maxPages; page++ {
-		offers, next, err := fetchPage(ctx, token)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", service, err)
+		offers, next, fetchErr := fetchPage(ctx, token)
+		if fetchErr != nil {
+			return nil, false, fmt.Errorf("%s: %w", service, fetchErr)
 		}
 		raw = append(raw, offers...)
 		if next == nil || aws.ToString(next) == "" {
-			break
+			return raw, false, nil
 		}
 		token = next
 	}
-	return raw, nil
+	return raw, true, nil
+}
+
+// collectUnlessCapped is collect for the probers that filter the probe target
+// client-side (OpenSearch, Redshift): their APIs take no instance-type filter,
+// so the walk pages through every type and the page cap can cut off part of
+// the target's (term, payment) matrix. A capped walk yields no combos for the
+// service, which Service.Validate treats like an unprobed service
+// (permissive, with a warning), instead of a partial list that would reject
+// combos AWS does sell (issue #243).
+func collectUnlessCapped(service string, raw []rawOffer, capped bool) []Combo {
+	if capped {
+		logging.Warnf("commitmentopts: %s probe hit the %d-page cap before pagination ended; recording no combos for it so validation stays permissive", service, maxPages)
+		return nil
+	}
+	return collect(service, raw)
 }
 
 // collect dedupes a probe's raw (durationSeconds, rawPayment) pairs, runs
@@ -270,7 +297,7 @@ func (p *OpenSearchProber) Service() string { return "opensearch" }
 // Probe returns the combos for t3.small.search.
 func (p *OpenSearchProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) {
 	client := p.client(cfg)
-	raw, err := walkPaginated(ctx, p.Service(), func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
+	raw, capped, err := walkPaginatedCapped(ctx, p.Service(), func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
 		out, err := client.DescribeReservedInstanceOfferings(ctx, &opensearch.DescribeReservedInstanceOfferingsInput{
 			MaxResults: pageSize,
 			NextToken:  token,
@@ -293,7 +320,7 @@ func (p *OpenSearchProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, 
 	if err != nil {
 		return nil, err
 	}
-	return collect(p.Service(), raw), nil
+	return collectUnlessCapped(p.Service(), raw, capped), nil
 }
 
 func (p *OpenSearchProber) client(cfg aws.Config) OpenSearchDescribeOfferings {
@@ -325,7 +352,7 @@ func (p *RedshiftProber) Service() string { return "redshift" }
 // Probe returns the combos for dc2.large.
 func (p *RedshiftProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, error) {
 	client := p.client(cfg)
-	raw, err := walkPaginated(ctx, p.Service(), func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
+	raw, capped, err := walkPaginatedCapped(ctx, p.Service(), func(ctx context.Context, token *string) ([]rawOffer, *string, error) {
 		out, err := client.DescribeReservedNodeOfferings(ctx, &redshift.DescribeReservedNodeOfferingsInput{
 			MaxRecords: aws.Int32(pageSize),
 			Marker:     token,
@@ -348,7 +375,7 @@ func (p *RedshiftProber) Probe(ctx context.Context, cfg aws.Config) ([]Combo, er
 	if err != nil {
 		return nil, err
 	}
-	return collect(p.Service(), raw), nil
+	return collectUnlessCapped(p.Service(), raw, capped), nil
 }
 
 func (p *RedshiftProber) client(cfg aws.Config) RedshiftDescribeOfferings {
