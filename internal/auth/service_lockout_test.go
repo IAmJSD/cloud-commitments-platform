@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestLogin_AccountLockout_Bookkeeping(t *testing.T) {
@@ -111,6 +112,26 @@ func TestLogin_BookkeepingErrors(t *testing.T) {
 			store.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.Anything)
 			store.AssertExpectations(t)
 		})
+	}
+}
+
+// Production (NewService with no BcryptCost) compares against the fixed
+// cost-12 sentinel. Only a test cost override switches the timing-equalizing
+// compare to a hash at that cost.
+func TestDummyHashForCompare_MatchesHashCost(t *testing.T) {
+	prod := NewService(ServiceConfig{DashboardURL: "https://dashboard.example.com", CSRFKey: testCSRFKey}).dummyHashForCompare()
+	assert.Equal(t, dummyPasswordHash, prod)
+	prodCost, err := bcrypt.Cost([]byte(prod))
+	require.NoError(t, err)
+	assert.Equal(t, bcryptCost, prodCost)
+
+	for name, svc := range map[string]*Service{
+		"override": newTestService(),
+		"config":   NewService(ServiceConfig{DashboardURL: "https://dashboard.example.com", CSRFKey: testCSRFKey, BcryptCost: bcrypt.MinCost}),
+	} {
+		testCost, err := bcrypt.Cost([]byte(svc.dummyHashForCompare()))
+		require.NoError(t, err, name)
+		assert.Equal(t, bcrypt.MinCost, testCost, name)
 	}
 }
 

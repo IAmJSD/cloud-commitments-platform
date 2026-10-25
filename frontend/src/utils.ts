@@ -18,6 +18,14 @@ export function reloadPage(): void {
 export const CURRENCY_DEFAULT_DIGITS = 0;
 
 /**
+ * The one placeholder for an absent value (issue #739). Money, counts,
+ * percentages and terms that the API did not report all render this, so a
+ * missing figure never reads as a real $0 and never shows as "--" on one
+ * tile and "—" on the next.
+ */
+export const NO_VALUE = '\u2014';
+
+/**
  * Format a number as currency.
  *
  * `digits` controls fraction digits (defaults to `CURRENCY_DEFAULT_DIGITS`,
@@ -46,12 +54,31 @@ export function formatCurrency(
   // Represent absent or non-finite values distinctly from a real $0 so
   // callers can see when data is missing vs actually zero (finding 11-N2).
   if (value === null || value === undefined || !Number.isFinite(value)) {
-    return '--';
+    return NO_VALUE;
   }
   return `${currency}${value.toLocaleString('en-US', {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits
   })}`;
+}
+
+/**
+ * Format a number as compact currency ("$950", "$1.5K", "$12.35K", "$3M")
+ * for chart axes, where full figures would crowd the ticks. Same en-US
+ * pinning and absent-value marker as formatCurrency; `digits` caps the
+ * fraction digits so close ticks (0.1 vs 0.2) stay distinct.
+ */
+export function formatCompactCurrency(value: number | null | undefined, digits = 2): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    // Delegate so both formatters always share the absent marker (NO_VALUE).
+    return formatCurrency(value);
+  }
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    notation: 'compact',
+    maximumFractionDigits: digits,
+  }).format(value);
 }
 
 /**
@@ -344,21 +371,23 @@ export function formatRampSchedule(schedule: RampSchedule | string | null | unde
 }
 
 export interface StatusBadge {
-  class: 'active' | 'paused' | 'disabled';
+  /** Badge tone (lib/status-badge.ts BadgeTone); rendered as `badge badge-<class>`. */
+  class: 'success' | 'info' | 'muted';
   label: string;
 }
 
 /**
- * Get status badge class
+ * Plan status badge. "Manual" (enabled, purchases need a manual run) is a
+ * valid configuration, not a warning, so it is info rather than amber.
  */
 export function getStatusBadge(enabled: boolean, autoPurchase: boolean): StatusBadge {
   if (!enabled) {
-    return { class: 'disabled', label: 'Disabled' };
+    return { class: 'muted', label: 'Disabled' };
   }
   if (autoPurchase) {
-    return { class: 'active', label: 'Active' };
+    return { class: 'success', label: 'Active' };
   }
-  return { class: 'paused', label: 'Manual' };
+  return { class: 'info', label: 'Manual' };
 }
 
 /**
