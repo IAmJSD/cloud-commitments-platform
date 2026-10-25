@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // hashSessionTokenForTest mirrors auth.hashSessionToken (private). Session
@@ -36,6 +37,9 @@ func createMockAuthService(t *testing.T) (*authServiceAdapter, *auth.MockStore) 
 		// random ephemeral key, so any test asserting a specific derived CSRF
 		// token (TestAuthServiceAdapter_ValidateCSRFToken) cannot reproduce it.
 		CSRFKey: auth.TestCSRFKey(),
+		// Hashing and Login's timing-equalizing compare run at the test
+		// cost; cost 12 takes seconds per call under -race.
+		BcryptCost: bcrypt.MinCost,
 	})
 	adapter := newAuthServiceAdapter(service)
 	return adapter, mockStore
@@ -427,9 +431,9 @@ func TestAuthServiceAdapter_CreateAPIKeyAPI(t *testing.T) {
 	require.NotNil(t, result)
 }
 
-// The handler passes api.CreateAPIKeyRequest, whose constraint JSON tags
-// (accounts, max_amount) differ from auth.PermissionConstraints. Every
-// constraint field must reach the store; a dropped one widens the key's scope.
+// The wire constraint tags (accounts, max_amount) differ from
+// auth.PermissionConstraints. Every constraint field must reach the store; a
+// dropped one widens the key's scope.
 func TestAuthServiceAdapter_CreateAPIKeyAPI_KeepsPermissionConstraints(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
 	ctx := context.Background()
@@ -450,13 +454,13 @@ func TestAuthServiceAdapter_CreateAPIKeyAPI_KeepsPermissionConstraints(t *testin
 		Run(func(args mock.Arguments) { stored = args.Get(1).(*auth.UserAPIKey) }).Return(nil)
 
 	expiresAt := time.Now().Add(24 * time.Hour)
-	_, err := adapter.CreateAPIKeyAPI(ctx, "user-1", api.CreateAPIKeyRequest{
+	_, err := adapter.CreateAPIKeyAPI(ctx, "user-1", auth.APICreateAPIKeyRequest{
 		Name:      "scoped",
 		Password:  password,
 		ExpiresAt: &expiresAt,
-		Permissions: []api.Permission{{
+		Permissions: []auth.APIPermission{{
 			Action: auth.ActionView, Resource: auth.ResourceRecommendations,
-			Constraints: &api.PermissionConstraint{
+			Constraints: &auth.APIPermissionConstraint{
 				Accounts: []string{"123"}, Providers: []string{"aws"}, Services: []string{"ec2"},
 				Regions: []string{"us-east-1"}, MaxAmount: 500,
 			},
@@ -582,6 +586,7 @@ func TestSetupAdminThenLogin_RoundTrip(t *testing.T) {
 		SessionDuration: time.Hour,
 		CSRFKey:         auth.TestCSRFKey(),
 		DashboardURL:    "http://localhost:3000",
+		BcryptCost:      bcrypt.MinCost,
 	})
 	adapter := newAuthServiceAdapter(realAuth)
 	handler := api.NewHandler(api.HandlerConfig{AuthService: adapter})

@@ -23,42 +23,6 @@ const recommendationsBatchSize = 500
 
 const azurePricingMigrationVersion = 106
 
-// ReplaceRecommendations wipes the recommendations table and reinserts the
-// full snapshot inside a single transaction. Used for a force-full-resync
-// path; the steady-state write path (see commit 6) is UpsertRecommendations.
-// Atomic replace means concurrent readers either see the full old snapshot
-// or the full new one — never a partial mid-replace state.
-func (s *PostgresStore) ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord) error {
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to begin tx: %w", err)
-	}
-	defer rollbackTx(ctx, tx, "ReplaceRecommendations")
-
-	if _, err := tx.Exec(ctx, `DELETE FROM recommendations`); err != nil {
-		return fmt.Errorf("failed to wipe recommendations: %w", err)
-	}
-
-	if err := insertRecommendationsBatched(ctx, tx, collectedAt, recs, false); err != nil {
-		return err
-	}
-
-	if _, err := tx.Exec(ctx, `
-		UPDATE recommendations_state
-		   SET last_collected_at       = $1,
-		       last_collection_error   = NULL,
-		       last_collection_partial = NULL
-		 WHERE id = 1
-	`, collectedAt); err != nil {
-		return fmt.Errorf("failed to update state: %w", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit replace: %w", err)
-	}
-	return nil
-}
-
 // UpsertRecommendations is the incremental write path: it upserts each row
 // by natural key (cloud_account_id, provider, service, region,
 // resource_type, engine, term, payment_option, availability_zone, platform, tenancy) and then evicts stale rows for the
@@ -87,7 +51,7 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 	}
 	defer rollbackTx(ctx, tx, "UpsertRecommendations")
 
-	if err := insertRecommendationsBatched(ctx, tx, collectedAt, recs, true); err != nil {
+	if err := insertRecommendationsBatched(ctx, tx, collectedAt, recs); err != nil {
 		return err
 	}
 
@@ -147,18 +111,16 @@ func successfulCollectArrays(scs []SuccessfulCollect) (providers []string, accou
 	return providers, accountKeys, nil
 }
 
-// insertRecommendationsBatched performs a batched multi-row INSERT of recs
-// inside the given transaction. If onConflict is true, it appends an
-// ON CONFLICT DO UPDATE clause keyed by the natural key; if false, the
-// insert assumes the table was pre-wiped and conflicts can't occur (used
-// by ReplaceRecommendations).
-func insertRecommendationsBatched(ctx context.Context, tx pgx.Tx, collectedAt time.Time, recs []RecommendationRecord, onConflict bool) error {
+// insertRecommendationsBatched performs a batched multi-row upsert of recs
+// inside the given transaction: each batch carries an ON CONFLICT DO UPDATE
+// clause keyed by the natural key.
+func insertRecommendationsBatched(ctx context.Context, tx pgx.Tx, collectedAt time.Time, recs []RecommendationRecord) error {
 	for start := 0; start < len(recs); start += recommendationsBatchSize {
 		end := start + recommendationsBatchSize
 		if end > len(recs) {
 			end = len(recs)
 		}
-		if err := insertRecommendationsBatch(ctx, tx, collectedAt, recs[start:end], onConflict); err != nil {
+		if err := insertRecommendationsBatch(ctx, tx, collectedAt, recs[start:end]); err != nil {
 			return err
 		}
 	}
@@ -177,7 +139,7 @@ func insertRecommendationsBatched(ctx context.Context, tx pgx.Tx, collectedAt ti
 // every Azure term × payment variant per SKU instead of collapsing
 // onto the highest-savings one.
 // engine was added to distinguish MySQL vs Postgres RDS at the same SKU.
-func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time.Time, recs []RecommendationRecord, onConflict bool) error {
+func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time.Time, recs []RecommendationRecord) error {
 	if len(recs) == 0 {
 		return nil
 	}
@@ -222,19 +184,14 @@ func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time
 		     resource_type, engine, payload, upfront_cost, monthly_savings,
 		     term, payment_option)
 		VALUES %s
+		ON CONFLICT (account_key, provider, service, region, resource_type, engine, term, payment_option, availability_zone, platform, tenancy)
+		DO UPDATE SET
+		    payload         = EXCLUDED.payload,
+		    upfront_cost    = EXCLUDED.upfront_cost,
+		    monthly_savings = EXCLUDED.monthly_savings,
+		    collected_at    = EXCLUDED.collected_at,
+		    cloud_account_id = EXCLUDED.cloud_account_id
 	`, strings.Join(placeholders, ","))
-
-	if onConflict {
-		query += `
-			ON CONFLICT (account_key, provider, service, region, resource_type, engine, term, payment_option, availability_zone, platform, tenancy)
-			DO UPDATE SET
-			    payload         = EXCLUDED.payload,
-			    upfront_cost    = EXCLUDED.upfront_cost,
-			    monthly_savings = EXCLUDED.monthly_savings,
-			    collected_at    = EXCLUDED.collected_at,
-			    cloud_account_id = EXCLUDED.cloud_account_id
-		`
-	}
 
 	if _, err := tx.Exec(ctx, query, args...); err != nil {
 		return fmt.Errorf("failed to insert recommendations batch: %w", err)
@@ -566,8 +523,8 @@ func (s *PostgresStore) MarkCollectionStarted(ctx context.Context) (token string
 // token) so the frontend knows an async collection has finished. Called by
 // the scheduler on both success and failure paths. On the success path,
 // last_collected_at and last_collection_error are updated by
-// UpsertRecommendations/ReplaceRecommendations, so this method only touches
-// started_at and the owner column.
+// UpsertRecommendations, so this method only touches started_at and the
+// owner column.
 //
 // The clear is scoped to rows where last_collection_owner_id still matches
 // token (issue #261): a caller whose token no longer matches (another run

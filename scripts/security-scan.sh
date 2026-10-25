@@ -36,18 +36,15 @@ print_section() {
 }
 
 # 1. Go Security Scanner (gosec)
+# scripts/run-gosec.sh owns the gosec pin, module list and rule set, shared
+# with the pre-commit hook, `make security-scan-go` and CI (issue #340). It
+# installs the pinned gosec itself, so there is no not-installed branch.
 print_section "1. Go Security Scanner (gosec)"
-if command_exists gosec; then
-    if gosec -fmt=json -out="$REPORT_DIR/gosec-report.json" -exclude-dir=vendor -exclude-dir=testdata ./...; then
-        echo -e "${GREEN}✓ gosec scan completed${NC}"
-        # Also generate human-readable output
-        gosec -fmt=text -out="$REPORT_DIR/gosec-report.txt" -exclude-dir=vendor -exclude-dir=testdata ./... || true
-    else
-        echo -e "${RED}✗ gosec found security issues${NC}"
-        OVERALL_STATUS=1
-    fi
+if "$(dirname "$0")/run-gosec.sh" 2>&1 | tee "$REPORT_DIR/gosec-report.txt"; then
+    echo -e "${GREEN}✓ gosec scan completed${NC}"
 else
-    echo -e "${YELLOW}⚠ gosec not installed. Install: go install github.com/securego/gosec/v2/cmd/gosec@latest${NC}"
+    echo -e "${RED}✗ gosec found security issues${NC}"
+    OVERALL_STATUS=1
 fi
 
 # 2. Static Analysis (staticcheck)
