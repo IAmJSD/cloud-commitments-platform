@@ -143,7 +143,10 @@ jobs:
           # Exclude _test.go files to stay consistent with .golangci.yml, which
           # excludes gocyclo on test files (test helpers/table-driven tests are
           # allowed higher complexity). Production code is still gated at >10.
-          COMPLEXITY_ISSUES=$(gocyclo -over 10 -ignore "_test\.go" . 2>&1 || true)
+          # Also exclude node_modules/ and vendor/ trees: the `.` walk would
+          # otherwise report third-party Go files that npm packages ship
+          # (e.g. frontend/node_modules/flatted) whenever deps are installed.
+          COMPLEXITY_ISSUES=$(gocyclo -over 10 -ignore "_test\.go|(^|/)(node_modules|vendor)/" . 2>&1 || true)
           if [ -n "$COMPLEXITY_ISSUES" ]; then
             echo "❌ Found functions with cyclomatic complexity over 10:"
             echo "$COMPLEXITY_ISSUES"
