@@ -333,7 +333,14 @@ func TestNewAzureResolver_GetSecret_BlocksMetadata(t *testing.T) {
 			resolver, err := NewAzureResolver(ctx, vaultURL)
 			require.NoError(t, err)
 
-			secret, err := resolver.GetSecret(ctx, "test-secret")
+			// The SDK retries the blocked dial 3 times with exponential
+			// backoff (about 9s). Keep the retries but shrink the delay for
+			// this call only, via azcore's per-call override.
+			callCtx := policy.WithRetryOptions(ctx, policy.RetryOptions{
+				RetryDelay:    time.Millisecond,
+				MaxRetryDelay: time.Millisecond,
+			})
+			secret, err := resolver.GetSecret(callCtx, "test-secret")
 			require.Error(t, err)
 			assert.Empty(t, secret)
 			assert.Contains(t, err.Error(), "connection to metadata endpoint 169.254.169.254 is blocked")

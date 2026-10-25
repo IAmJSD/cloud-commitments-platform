@@ -48,9 +48,6 @@ var rollbackSites = []struct {
 	{"SetPlanAccounts", "SetPlanAccounts", func(ctx context.Context, s *PostgresStore) error {
 		return s.SetPlanAccounts(ctx, "22222222-2222-2222-2222-222222222222", nil)
 	}},
-	{"ReplaceRecommendations", "ReplaceRecommendations", func(ctx context.Context, s *PostgresStore) error {
-		return s.ReplaceRecommendations(ctx, time.Now(), nil)
-	}},
 	{"UpsertRecommendations", "UpsertRecommendations", func(ctx context.Context, s *PostgresStore) error {
 		return s.UpsertRecommendations(ctx, time.Now(), nil, nil)
 	}},

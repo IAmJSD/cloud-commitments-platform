@@ -18,7 +18,6 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -81,10 +80,7 @@ func marketplaceSession(t *testing.T, store *auth.PostgresStore, permissions []a
 
 func TestMarketplacePermissionConstraintsHTTP(t *testing.T) {
 	ctx := t.Context()
-	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 	store, authStore := config.NewPostgresStore(pg.DB), auth.NewPostgresStore(pg.DB)
 	csrfKey := []byte(strings.Repeat("m", 32))
 	handler := NewHandler(HandlerConfig{ConfigStore: store, AuthService: &marketplaceAuthFixture{service: auth.NewService(auth.ServiceConfig{Store: authStore, CSRFKey: csrfKey})}})
