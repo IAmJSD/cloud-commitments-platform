@@ -612,6 +612,17 @@ func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, 
 	return args.Bool(0), args.String(1), args.Error(2)
 }
 
+// CancelExecutionAtomicTokenPinned mocks the token-pinned cancel (issue
+// #1190). Like TransitionExecutionStatusTokenPinned it has no default and does
+// not delegate to CancelExecutionAtomic: a caller that must pin the approval
+// token is expected to call this method, so a test has to register it
+// explicitly.
+func (m *MockConfigStore) CancelExecutionAtomicTokenPinned(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string, rawToken string) (bool, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
+	m.record("CancelExecutionAtomicTokenPinned", ctx, tx, executionID, cancelledBy, rawToken)
+	args := m.Called(ctx, tx, executionID, cancelledBy, rawToken)
+	return args.Bool(0), args.String(1), args.Error(2)
+}
+
 // CancelScheduledExecutionAtomic mocks the CancelScheduledExecutionAtomic
 // operation (Gmail-style pre-fire delay revoke, issue #290 wave-2). Default
 // is the happy path (true, "cancelled", nil) so the scheduled-revoke tests
