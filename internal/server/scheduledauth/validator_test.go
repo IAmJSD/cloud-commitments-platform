@@ -625,12 +625,12 @@ func TestVerifyRetry_RebuildRateLimited(t *testing.T) {
 		t.Fatalf("lastRebuild must not change on rate-limited token, got %v", rb2)
 	}
 
-	// Sanity: at least two JWKS fetches must have occurred (the lazy initial
-	// fetch and the rebuild retry). The exact count is non-deterministic due
-	// to go-oidc's goroutine scheduling (see comment above), so we only
-	// assert a lower bound.
-	if hits := srv.hits.Load(); hits < 2 {
-		t.Fatalf("expected at least 2 JWKS fetches, got %d", hits)
+	// Exactly one JWKS fetch: token 1's refresh, which started after the
+	// token arrived and lacked kid-X, puts kid-X in the negative kid cache
+	// (issue #75). The rebuild retry and token 2 are then rejected without
+	// reaching go-oidc, so neither fetches.
+	if hits := srv.hits.Load(); hits != 1 {
+		t.Fatalf("expected exactly 1 JWKS fetch, got %d", hits)
 	}
 }
 
@@ -879,6 +879,49 @@ func TestNew_RejectsOIDCMalformedJWKSURL(t *testing.T) {
 			})
 			if !errors.Is(err, ErrConfigInvalid) {
 				t.Fatalf("expected ErrConfigInvalid, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestNew_OIDCJWKSURLScheme(t *testing.T) {
+	cases := []struct {
+		name    string
+		jwksURL string
+		wantErr bool
+	}{
+		{"http remote host rejected", "http://jwks.example.com/keys", true},
+		{"ftp rejected", "ftp://jwks.example.com/keys", true},
+		{"https accepted", "https://jwks.example.com/keys", false},
+		{"http loopback accepted for local test doubles", "http://127.0.0.1:8080/keys", false},
+		{"localhost subdomain rejected", "http://localhost.evil.com/keys", true},
+		{"loopback userinfo trick rejected", "http://127.0.0.1@evil.com/keys", true},
+		{"localhost trailing dot rejected", "http://localhost./x", true},
+		{"loopback lookalike domain rejected", "http://127.0.0.1.nip.io/keys", true},
+		{"http ipv6 loopback accepted", "http://[::1]:8080", false},
+		{"http LOCALHOST accepted", "http://LOCALHOST", false},
+		{"http 127.0.0.2 accepted", "http://127.0.0.2", false},
+		{"http unspecified ip rejected", "http://0.0.0.0/k", true},
+		{"http private ip rejected", "http://10.0.0.1/k", true},
+		{"http link-local metadata ip rejected", "http://169.254.169.254/k", true},
+		{"empty falls back to Google JWKS URL", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := New(Config{
+				Mode:      ModeOIDC,
+				JWKSURL:   tc.jwksURL,
+				Audiences: []string{"https://api.example.com"},
+				Subjects:  []string{testSchedulerSubject},
+			})
+			if tc.wantErr {
+				if !errors.Is(err, ErrConfigInvalid) {
+					t.Fatalf("expected ErrConfigInvalid, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
 			}
 		})
 	}

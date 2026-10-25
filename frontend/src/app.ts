@@ -7,7 +7,7 @@ import * as state from './state';
 import { showLoginModal, showAdminSetupModal, showResetPasswordModal, updateUserUI } from './auth';
 import { loadDashboard, setupDashboardHandlers } from './dashboard';
 import { setupRecommendationsHandlers, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, getFanOutBuckets, clearFanOutBuckets, getExecuteMode, clearExecuteMode, fanOutBucketAccountLabel, getAccountName, type FanOutBucket } from './recommendations';
-import { switchTab, applyTabFromPath, initRouter, switchSettingsSubTab, canonicalTabPath } from './navigation';
+import { switchTab, setActiveNav, applyTabFromPath, initRouter, switchSettingsSubTab, canonicalTabPath } from './navigation';
 import { savePlan, setupPlanHandlers, closePlanModal, openNewPlanModal, closePurchaseModal } from './plans';
 import { saveGlobalSettings, setupSettingsHandlers, resetSettings } from './settings';
 import { setupUserHandlers } from './users';
@@ -18,10 +18,17 @@ import { setupRIExchangeHandlers, saveAutomationSettings } from './riexchange';
 import { showToast } from './toast';
 import { formatPaymentAdjustmentNotice } from './commitmentOptions';
 import { confirmDialog } from './confirmDialog';
-import { buildCommitmentSummary, withIntro } from './commitmentSummary';
+import { buildCommitmentSummary, commitmentLine, commitmentTotals, executeButtonLabel, executeConfirmLabel, withIntro } from './commitmentSummary';
 import { handlePurchaseDeeplink } from './purchases-deeplink';
+import { handleRIExchangeDeeplink } from './riexchange-deeplink';
 import { handleArcheraDeeplink, openArcheraOfferModal } from './archera';
 import { closeModal } from './modal';
+import { showFanOutRetry, fanOutRetryLabel, purchaseModalReplaced, type FanOutBucketOutcome } from './fanout-retry';
+import { wireTablistKeyboard } from './lib/tablist';
+import { setOpenAccountsHandler } from './first-run-empty-state';
+import { setupMobileNav } from './nav/mobile-nav';
+import { initPurchasingNav } from './purchasing-nav';
+import { renderInitError } from './init-error';
 
 /**
  * describeDuplicateSubmit words the outcome of a submit the backend collapsed
@@ -54,6 +61,12 @@ function describeDuplicateSubmit(result: api.PurchaseResult): string {
   return `This matches an existing execution ${id}, so no new request was created; ${duplicateState(result.status)}. Check Purchase History.`;
 }
 
+function describePublicInfoFailure(err: unknown): string {
+  const status = (err as { status?: unknown } | null)?.status;
+  const detail = typeof status === 'number' && status > 0 ? ` (HTTP ${status})` : '';
+  return `Could not reach the CUDly API${detail}. Sign-in may fail until it is available again.`;
+}
+
 /**
  * Initialize app
  */
@@ -75,7 +88,12 @@ export async function init(): Promise<void> {
     return;
   }
 
+  // The server-rendered markup marks Home active; correct it from the URL
+  // now instead of after the async fetches below.
+  setActiveNav(applyTabFromPath());
+
   if (!api.isAuthenticated()) {
+    let notice: string | undefined;
     try {
       const publicInfo = await api.getPublicInfo();
       if (!publicInfo.admin_exists) {
@@ -85,10 +103,14 @@ export async function init(): Promise<void> {
         await showAdminSetupModal(undefined);
         return;
       }
-    } catch {
-      // If public info fails, fall through to login
+    } catch (err) {
+      // getPublicInfo throws on a non-OK response, so an unreachable API
+      // lands on the login form with the failure named, rather than on the
+      // first-run setup screen asserting that no admin exists.
+      console.error('Failed to load /api/info:', err);
+      notice = describePublicInfoFailure(err);
     }
-    await showLoginModal();
+    await showLoginModal(notice);
     return;
   }
 
@@ -118,6 +140,10 @@ export async function init(): Promise<void> {
     // through so the user lands on the Purchases tab with their action's
     // outcome rendered as a toast.
     await handlePurchaseDeeplink();
+    // Same one-shot pattern for the RI-exchange approval email's
+    // /inventory/ri-exchange/{approve,reject}/:id?token=… links (#579): confirm,
+    // POST, then land on /inventory/ri-exchange.
+    await handleRIExchangeDeeplink();
     // Archera education deep-links (/archera-insurance, /archera-insurance/
     // how-it-works) open the overlay panel on top of the dashboard. Normal
     // tab routing still runs underneath so the app is fully functional.
@@ -138,7 +164,11 @@ export async function init(): Promise<void> {
     const err = error as { status?: number; message?: string };
     if (err.status === 401 || err.message?.includes('Unauthorized')) {
       await showLoginModal();
+      return;
     }
+    // Anything else would leave the pre-rendered Home markup on screen with
+    // no listeners bound, under whatever URL was requested (#206).
+    renderInitError(error);
   }
 }
 
@@ -168,10 +198,16 @@ export function setupEventListeners(): void {
       const tab = btn.dataset['tab'];
       if (tab) {
         e.preventDefault();
-        switchTab(tab);
+        switchTab(tab, { focusContent: true });
       }
     });
   });
+
+  // In-page sub-tab lists (Inventory & Coverage, Admin): arrow/Home/End
+  // focus movement and a roving tabindex, the keyboard model their
+  // role="tablist" promises (issue #730).
+  document.querySelectorAll<HTMLElement>('.inventory-subnav[role="tablist"], .settings-tabs[role="tablist"]')
+    .forEach(wireTablistKeyboard);
 
   // Settings sub-tab switching
   document.querySelectorAll<HTMLButtonElement>('.sub-tab-btn').forEach(btn => {
@@ -200,6 +236,15 @@ export function setupEventListeners(): void {
 
   // Setup recommendations event handlers (provider filter, service filter, etc.)
   setupRecommendationsHandlers();
+
+  // First-run empty state (issue #756) links to Admin > Accounts. Injected
+  // here so that module does not import navigation.ts (import cycle). Same
+  // two-step as the RI Exchange settings shortcut: switchSettingsSubTab owns
+  // the sub-tab DOM, title and history push.
+  setOpenAccountsHandler(() => {
+    switchTab('admin', { push: false, skipDefaultLoad: true });
+    switchSettingsSubTab('accounts');
+  });
 
   // Setup plan event handlers (provider-aware service dropdown)
   setupPlanHandlers();
@@ -274,11 +319,11 @@ function setupButtonHandlers(): void {
   // Purchase modal buttons
   const closePurchaseBtn = document.getElementById('close-purchase-modal-btn');
   if (closePurchaseBtn) {
-    closePurchaseBtn.addEventListener('click', () => {
-      closePurchaseModal();
-      clearPurchaseModalRecommendations();
-      clearFanOutBuckets();
-    });
+    // closePurchaseModal() routes through modal.ts closeModal(), which runs
+    // the onClose that openPurchaseModal / openFanOutModal registered; that
+    // callback discards the single-row and fan-out purchase state on every
+    // close path, Escape included (issue #331), so no manual clear here.
+    closePurchaseBtn.addEventListener('click', () => closePurchaseModal());
   }
 
   const executePurchaseBtn = document.getElementById('execute-purchase-btn');
@@ -322,6 +367,9 @@ function setupButtonHandlers(): void {
   // RI Exchange form was removed and its persistence rolled into this
   // sticky bar. If the RI Exchange form hasn't rendered yet (panel never
   // visited), the guard inside saveAutomationSettings no-ops cleanly.
+  // Admin -> Purchasing policies section links (issue #190).
+  initPurchasingNav();
+
   const savePurchasingBtn = document.getElementById('save-purchasing-btn');
   if (savePurchasingBtn) {
     savePurchasingBtn.addEventListener('click', () => {
@@ -424,43 +472,35 @@ export async function handleExecutePurchase(): Promise<void> {
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
   setExecutePurchaseSubmitting(executeBtn, true, 'Sending...');
 
-  const defaultBtnLabel = isDirect ? 'Execute Purchase Now' : 'Send for Approval';
-
   // Confirmation dialog varies by mode:
   //   - Approval path: low-friction, non-destructive.
   //   - Direct-execute path: red destructive dialog with cost callout and
   //     immediate-charge callout; no cancellation promise (issue #251).
+  const summaryLines = recsWithPayment.map((r) => commitmentLine(
+    r,
+    r.cloud_account_id ? { account: getAccountName(r.cloud_account_id) } : {},
+  ));
+  const totals = commitmentTotals(summaryLines);
   const summary = buildCommitmentSummary(
-    recsWithPayment.map((r) => ({
-      service: r.service,
-      provider: r.provider,
-      region: r.region,
-      resourceType: r.resource_type,
-      count: r.count,
-      term: r.term,
-      payment: r.payment,
-      upfront: r.upfront_cost,
-      monthly: r.monthly_cost ?? null,
-      ...(r.cloud_account_id ? { account: getAccountName(r.cloud_account_id) } : {}),
-    })),
+    summaryLines,
     isDirect ? {} : { upfrontLabel: 'Upfront on approval' },
   );
   const ok = isDirect
     ? await confirmDialog({
         title: `Execute ${localRecs.length} purchase${localRecs.length === 1 ? '' : 's'} now?`,
         body: withIntro('This charges the amount shown under "Charged today" immediately and bypasses the approval step. The monthly amount, if any, is billed for the whole term.', summary),
-        confirmLabel: 'Execute Purchase Now',
+        confirmLabel: executeConfirmLabel(true, totals.upfront),
         destructive: true,
       })
     : await confirmDialog({
         title: `Send ${localRecs.length} purchase${localRecs.length === 1 ? '' : 's'} for approval?`,
         body: withIntro('This emails an approval request to the configured approver. Nothing is charged until the approver clicks the link in that email.', summary),
-        confirmLabel: 'Send for approval',
+        confirmLabel: executeConfirmLabel(false, totals.upfront),
         destructive: false,
       });
 
   if (!ok) {
-    setExecutePurchaseSubmitting(executeBtn, false, defaultBtnLabel);
+    setExecutePurchaseSubmitting(executeBtn, false, executeButtonLabel(getExecuteMode() === 'direct'));
     return;
   }
 
@@ -558,22 +598,26 @@ export async function handleExecutePurchase(): Promise<void> {
     const verb = isDirect ? 'execute' : 'send for approval';
     showToast({ message: `Failed to ${verb} purchase: ${err.message}`, kind: 'error' });
   } finally {
-    setExecutePurchaseSubmitting(executeBtn, false, defaultBtnLabel);
+    setExecutePurchaseSubmitting(executeBtn, false, executeButtonLabel(getExecuteMode() === 'direct'));
   }
 }
 
 /**
  * fanOutBucketLabel renders a short human identifier for a fan-out bucket so a
  * partial-failure toast can name which buckets created pending executions
- * (issue #642). Uses the (provider/service @ capacity%) tuple — the same
- * fields the user chose in the modal — so the orphaned-but-actionable pending
- * requests are identifiable rather than hidden behind a bare count.
+ * (issue #642). Uses the provider / account / service @ capacity% tuple, laid
+ * out like the bucket header the user just saw in the modal, so the
+ * orphaned-but-actionable pending requests are identifiable rather than hidden
+ * behind a bare count. Buckets are per account (#333), so without the account
+ * a two-account split of one service read as the same label twice (#434). The
+ * account uses the header's label (name, else ID, else 'Unattributed'); the
+ * toast renders it via textContent.
  */
 function fanOutBucketLabel(b: FanOutBucket): string {
   const provider = (b.provider || '').toString().toUpperCase();
   const service = b.service || 'commitment';
   const cap = Number.isFinite(b.capacityPercent) ? `@${b.capacityPercent}%` : '';
-  return `${provider} ${service}${cap}`.trim();
+  return [provider, fanOutBucketAccountLabel(b), `${service}${cap}`].filter(Boolean).join(' / ');
 }
 
 /**
@@ -595,22 +639,63 @@ async function handleFanOutExecute(buckets: FanOutBucket[]): Promise<void> {
   // Same approval-required default as the single-purchase path: each
   // bucket POSTs a request that triggers an approval email; the actual
   // charges fire when each approver clicks the link in their email.
+  // State the monthly charge and the term total too (issue #711): for
+  // no-upfront and partial-upfront buckets the upfront alone reads $0
+  // while the account is billed monthly for one or three years. The
+  // totals are combined across every bucket and the button carries the
+  // upfront amount, as on the single-purchase confirm (#707). A
+  // submittable bucket's recs already carry the bucket's payment option,
+  // so their costs are the ones that will be approved.
+  const summaryLines = buckets.flatMap((b) => b.recs.map((r) => commitmentLine(
+    r,
+    { payment: b.payment, ...(r.cloud_account_id ? { account: getAccountName(r.cloud_account_id) } : {}) },
+  )));
+  const totals = commitmentTotals(summaryLines);
   const ok = await confirmDialog({
     title: `Send ${buckets.length} bulk purchase${buckets.length === 1 ? '' : 's'} for approval?`,
-    body: `This will submit ${buckets.length} separate purchase request${buckets.length === 1 ? '' : 's'} and email ${buckets.length} approval request${buckets.length === 1 ? '' : 's'}. Each must be approved individually before its commitments are charged.`,
-    confirmLabel: 'Send all for approval',
+    body: withIntro(
+      `This will submit ${buckets.length} separate purchase request${buckets.length === 1 ? '' : 's'} and email ${buckets.length} approval request${buckets.length === 1 ? '' : 's'}. Each must be approved individually before its commitments are charged. Totals below are across all requests.`,
+      buildCommitmentSummary(summaryLines, { upfrontLabel: 'Upfront on approval' }),
+    ),
+    confirmLabel: executeConfirmLabel(false, totals.upfront),
     destructive: false,
   });
   if (!ok) {
-    setExecutePurchaseSubmitting(executeBtn, false, 'Send for Approval');
+    setExecutePurchaseSubmitting(executeBtn, false, executeButtonLabel(false));
     return;
   }
 
   try {
     await submitFanOutBuckets(buckets);
   } finally {
-    setExecutePurchaseSubmitting(executeBtn, false, 'Send for Approval');
+    // Issue #757: after a partial failure the modal stays open in retry mode.
+    setExecutePurchaseSubmitting(executeBtn, false, fanOutRetryLabel() ?? executeButtonLabel(false));
   }
+}
+
+/**
+ * Per-bucket outcome for the retry view (issue #757). Uses the same
+ * success rule as the toast: a fulfilled POST whose approval email failed
+ * is a failure.
+ */
+function fanOutOutcomes(
+  buckets: FanOutBucket[],
+  results: PromiseSettledResult<api.PurchaseResult>[],
+): FanOutBucketOutcome[] {
+  return results.map((r, i) => {
+    const bucket = buckets[i]!;
+    if (r.status === 'rejected') {
+      return { bucket, ok: false, detail: r.reason instanceof Error ? r.reason.message : String(r.reason) };
+    }
+    if (r.value.email_sent === false || r.value.status === 'failed') {
+      return { bucket, ok: false, detail: r.value.email_reason || 'approval email did not send' };
+    }
+    if (r.value.duplicate) {
+      return { bucket, ok: true, detail: `joined existing request ${r.value.execution_id.slice(0, 8)}; ${duplicateState(r.value.status)}` };
+    }
+    const to = r.value.approval_recipient ? ` from ${r.value.approval_recipient}` : '';
+    return { bucket, ok: true, detail: `awaiting approval${to}` };
+  });
 }
 
 async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
@@ -651,9 +736,20 @@ async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
   );
   const succeeded = fulfilled.length - submissionFailures.length;
   const failed = results.length - succeeded;
-  closePurchaseModal();
-  clearFanOutBuckets();
-  clearPurchaseModalRecommendations();
+  // Issue #757: on any failure keep the modal open with per-bucket status
+  // and a retry limited to the failed buckets, instead of closing it and
+  // making the user reselect rows (and risk resubmitting the successes).
+  // If the user closed the modal while the POSTs were in flight, report by
+  // toast as before. If they already opened another purchase modal, leave
+  // that one alone: it is not the one these results belong to.
+  // (Checked before showFanOutRetry, which narrows the modal's buckets.)
+  const replaced = purchaseModalReplaced(buckets);
+  const retrying = failed > 0 && showFanOutRetry(fanOutOutcomes(buckets, results));
+  if (!retrying && !replaced) {
+    closePurchaseModal();
+    clearFanOutBuckets();
+    clearPurchaseModalRecommendations();
+  }
 
   // Disclose payment-option coercions across every bucket that reached the
   // backend (#1503). Collected from all fulfilled responses, not just the
@@ -664,7 +760,9 @@ async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
     fulfilled.flatMap((r) => r.value.payment_adjustments ?? []),
   );
   if (fanOutNotice) {
-    showToast({ message: fanOutNotice, kind: 'warning', timeout: null });
+    // Sticky as before, except in retry mode, where it would cover the
+    // modal's Retry button; it then expires on the default timeout.
+    showToast({ message: fanOutNotice, kind: 'warning', ...(retrying ? {} : { timeout: null }) });
   }
 
   if (failed === 0) {
@@ -708,7 +806,10 @@ async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
         timeout: 15_000,
       });
     }
-  } else {
+  } else if (!retrying) {
+    // Issue #757: skipped while the modal stays open for a retry. The modal
+    // then shows every bucket's status and reason in full, and a sticky toast
+    // would sit on top of its Retry button.
     // Prefix each failure with its bucket's account so the user knows what to
     // retry when one account's bucket fails and another's succeeds (issue #333).
     const failureMsgs = results
@@ -768,205 +869,14 @@ async function submitFanOutBuckets(buckets: FanOutBucket[]): Promise<void> {
   // async email-link execution completes. Skipping the all-fail path keeps
   // the modal from layering on top of an error toast for a user who has
   // nothing to insure yet.
-  if (succeeded > 0) {
+  // Not while a purchase modal is open (issue #757): the retry view, or a
+  // newer modal the user opened before these POSTs settled. The offer would
+  // stack on top of it. In retry mode it fires once a retry closes the modal.
+  if (succeeded > 0 && !retrying && !replaced) {
     openArcheraOfferModal('purchase');
   }
 
   await loadDashboard();
-}
-
-/**
- * Drawer breakpoint. Must stay in lockstep with the `max-width: 768px` block
- * in styles/responsive.css, which lays these same regions out of the topbar.
- */
-const MOBILE_NAV_QUERY = '(max-width: 768px)';
-
-/**
- * Topbar regions with no room in the topbar below the breakpoint, listed in
- * the order they appear in the header so restoring them re-appends correctly.
- */
-const DRAWER_PROJECTED_IDS = ['topbar-filters', 'user-info'] as const;
-
-/**
- * Move the global filter chips and the account actions between the topbar
- * and the drawer (issue #1779). Relocation rather than duplication: the
- * chips and the logout/profile handlers are bound to these exact nodes, and
- * moving a node keeps its listeners and state.
- *
- * Idempotent, and a no-op when either endpoint is absent.
- */
-export function syncHeaderPlacement(isNarrow: boolean): void {
-  const topbar = document.querySelector<HTMLElement>('.app-topbar');
-  const extras = document.getElementById('sidebar-extras');
-  if (!topbar || !extras) return;
-
-  const target = isNarrow ? extras : topbar;
-  const elements = DRAWER_PROJECTED_IDS
-    .map(id => document.getElementById(id))
-    .filter((el): el is HTMLElement => el !== null);
-
-  // Re-append all of them whenever any one is misplaced, so the restored
-  // header keeps DRAWER_PROJECTED_IDS order. Appending an element that is
-  // already in place would tear its subtree out and back in, dropping focus
-  // and closing an open chip popover, so the whole pass is skipped instead.
-  const misplaced = elements.some(el => el.parentElement !== target);
-  if (!misplaced) return;
-  for (const el of elements) target.appendChild(el);
-}
-
-/**
- * Wire the mobile navigation drawer (hamburger button + overlay + Escape).
- *
- * Activates below 768px (CSS hides the hamburger above that breakpoint).
- *
- * Open:  body.classList.add('sidebar-open')
- *        hamburger aria-expanded="true"
- *        sidebar aria-hidden="false", inert cleared
- *        Focus first focusable link in the sidebar
- *
- * Close: body.classList.remove('sidebar-open')
- *        hamburger aria-expanded="false"
- *        sidebar aria-hidden="true", inert set
- *        Return focus to the hamburger button
- *
- * A closed drawer needs both attributes and they always move together.
- * aria-hidden takes it out of the accessibility tree; inert takes it out of
- * sequential keyboard navigation, which neither aria-hidden nor the
- * off-screen transform affects. With only the first, tabbing walks into
- * controls that are invisible and expose no accessible name.
- *
- * Crossing the breakpoint in either direction is a third transition, neither
- * an open nor a close: see applyBreakpointState.
- *
- * Sidebar links also close the drawer (they navigate within the SPA).
- */
-export function setupMobileNav(): void {
-  const hamburger = document.getElementById('hamburger-btn') as HTMLButtonElement | null;
-  const sidebar = document.getElementById('sidebar') as HTMLElement | null;
-  const overlay = document.getElementById('sidebar-overlay') as HTMLElement | null;
-  if (!hamburger || !sidebar) return;
-
-  function openDrawer(): void {
-    document.body.classList.add('sidebar-open');
-    hamburger!.setAttribute('aria-expanded', 'true');
-    sidebar!.setAttribute('aria-hidden', 'false');
-    // Before the focus below, not after: focus into an inert subtree is
-    // dropped silently and the caret would land on <body>.
-    sidebar!.removeAttribute('inert');
-    if (overlay) overlay.setAttribute('aria-hidden', 'false');
-
-    // Focus the first focusable element in the sidebar
-    const firstFocusable = sidebar!.querySelector<HTMLElement>(
-      'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    );
-    firstFocusable?.focus();
-  }
-
-  function closeDrawer(): void {
-    document.body.classList.remove('sidebar-open');
-    hamburger!.setAttribute('aria-expanded', 'false');
-    sidebar!.setAttribute('aria-hidden', 'true');
-    sidebar!.setAttribute('inert', '');
-    if (overlay) overlay.setAttribute('aria-hidden', 'true');
-    hamburger!.focus();
-  }
-
-  /**
-   * Put the drawer into the closed state the current breakpoint calls for.
-   * Runs on load and on every crossing, neither of which the user asked for,
-   * so unlike openDrawer and closeDrawer it moves focus only to rescue it.
-   *
-   * Whether the sidebar is reachable at all is what the two widths disagree
-   * about. Above the breakpoint it is the permanently visible navigation and
-   * must stay both in the accessibility tree and in the tab order; below, it
-   * is a drawer parked off-screen holding the controls syncHeaderPlacement
-   * moves into it, and everything in there has to leave both with it.
-   *
-   * The narrow branch can never be hiding an open drawer: the only crossing
-   * that reaches it comes from the desktop side, where nothing opens one.
-   */
-  function applyBreakpointState(isNarrow: boolean): void {
-    // body.sidebar-open sets overflow:hidden outside the media query, so a
-    // drawer open across a resize would lock scrolling with no drawer left.
-    document.body.classList.remove('sidebar-open');
-    hamburger!.setAttribute('aria-expanded', 'false');
-    if (overlay) overlay.setAttribute('aria-hidden', 'true');
-
-    if (!isNarrow) {
-      sidebar!.removeAttribute('aria-hidden');
-      sidebar!.removeAttribute('inert');
-      return;
-    }
-    // Focus survives the crossing when it was already on a sidebar link, and
-    // hiding the subtree under it strands the caret where no screen reader
-    // can follow. Chromium does not blur it for us when inert lands, so this
-    // has to run first.
-    if (sidebar!.contains(document.activeElement)) hamburger!.focus();
-    sidebar!.setAttribute('aria-hidden', 'true');
-    sidebar!.setAttribute('inert', '');
-  }
-
-  hamburger.addEventListener('click', () => {
-    const isOpen = document.body.classList.contains('sidebar-open');
-    if (isOpen) {
-      closeDrawer();
-    } else {
-      openDrawer();
-    }
-  });
-
-  // Overlay click closes the drawer
-  if (overlay) {
-    overlay.addEventListener('click', () => closeDrawer());
-  }
-
-  // Escape key closes the drawer
-  document.addEventListener('keydown', (e: KeyboardEvent) => {
-    if (e.key === 'Escape' && document.body.classList.contains('sidebar-open')) {
-      e.preventDefault();
-      closeDrawer();
-    }
-  });
-
-  // Projected topbar controls: place them for the current width, then follow
-  // the breakpoint. Listeners are bound once here, never per relocation.
-  const mediaQuery = window.matchMedia(MOBILE_NAV_QUERY);
-  syncHeaderPlacement(mediaQuery.matches);
-  applyBreakpointState(mediaQuery.matches);
-  mediaQuery.addEventListener('change', event => {
-    syncHeaderPlacement(event.matches);
-    applyBreakpointState(event.matches);
-  });
-
-  // Account actions inside the drawer navigate or end the session, so they
-  // close it. Delegated from the slot, which outlives every relocation; the
-  // filter chips are deliberately excluded so picking a filter keeps the
-  // drawer open for the next one.
-  const extras = document.getElementById('sidebar-extras');
-  extras?.addEventListener('click', (e: MouseEvent) => {
-    const target = e.target as HTMLElement | null;
-    if (!target?.closest('#user-info a, #user-info button')) return;
-    if (document.body.classList.contains('sidebar-open')) closeDrawer();
-  });
-
-  // Clicking any sidebar link closes the drawer (SPA navigation)
-  sidebar.querySelectorAll<HTMLElement>('.tab-btn').forEach(link => {
-    link.addEventListener('click', (e: MouseEvent) => {
-      // Only close on unmodified left-click (same guard as tab switching above)
-      if (
-        e.button !== 0 ||
-        e.metaKey ||
-        e.ctrlKey ||
-        e.shiftKey ||
-        e.altKey
-      ) {
-        return;
-      }
-      if (document.body.classList.contains('sidebar-open')) {
-        closeDrawer();
-      }
-    });
-  });
 }
 
 /**

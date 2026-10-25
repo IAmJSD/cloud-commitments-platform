@@ -130,4 +130,15 @@ describe('applyColumnFilters (lib)', () => {
     // Parse fails -> filter is skipped -> all rows pass
     expect(out).toHaveLength(rows.length);
   });
+
+  test('each numeric expression is read once per call, not once per row (#319)', () => {
+    let reads = 0;
+    const filter = {
+      kind: 'expr' as const,
+      get expr(): string { reads += 1; return '>100'; },
+    };
+    const out = applyColumnFilters<Row, Col>(rows, { savings: filter }, extractors);
+    expect(out.map((r) => r.id)).toEqual(['b', 'c']);
+    expect(reads).toBe(1);
+  });
 });

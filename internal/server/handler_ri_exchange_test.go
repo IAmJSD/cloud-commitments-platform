@@ -226,7 +226,7 @@ func TestConfigExchangeStoreAdapter(t *testing.T) {
 	t.Run("SaveRIExchangeRecord", func(t *testing.T) {
 		ctx := testutil.TestContext(t)
 		record := &exchange.ExchangeRecord{
-			AccountID:          "123456789",
+			AccountID:          "123456789012",
 			Region:             "us-east-1",
 			SourceRIIDs:        []string{"ri-123"},
 			SourceInstanceType: "m5.large",
@@ -244,7 +244,7 @@ func TestConfigExchangeStoreAdapter(t *testing.T) {
 		if savedRecord == nil {
 			t.Fatal("expected record to be saved")
 		}
-		testutil.AssertEqual(t, "123456789", savedRecord.AccountID)
+		testutil.AssertEqual(t, "123456789012", savedRecord.AccountID)
 		testutil.AssertEqual(t, "m5.large", savedRecord.SourceInstanceType)
 		testutil.AssertEqual(t, "m6i.large", savedRecord.TargetInstanceType)
 		testutil.AssertEqual(t, "saved-id", record.ID)
@@ -252,7 +252,10 @@ func TestConfigExchangeStoreAdapter(t *testing.T) {
 
 	t.Run("ReserveRIExchange", func(t *testing.T) {
 		ladderRunID := "ladder-run-1"
-		record := &exchange.ExchangeRecord{PaymentDue: "5", Status: "processing", Mode: "auto", LadderRunID: &ladderRunID}
+		record := &exchange.ExchangeRecord{
+			AccountID:  "123456789012",
+			PaymentDue: "5", Status: "processing", Mode: "auto", LadderRunID: &ladderRunID,
+		}
 		ceiling, err := adapter.ReserveRIExchange(context.Background(), record, "20", "10")
 		testutil.AssertNoError(t, err)
 		testutil.AssertEqual(t, "10.000000", ceiling)
@@ -279,6 +282,48 @@ func TestConfigExchangeStoreAdapter(t *testing.T) {
 		testutil.AssertNoError(t, err)
 		testutil.AssertEqual(t, "42.50", spend)
 	})
+}
+
+// TestConfigExchangeStoreAdapter_RefusesNonAWSAccountID pins the Go-side half
+// of issue #144. Migration 000137 dropped the AWS-only CHECK on
+// ri_exchange_history.account_id so the column can hold Azure and GCP
+// identifiers; the AWS exchange adapter must keep refusing anything that is not
+// a 12-digit AWS account ID before it reaches the store, or the STS-failure
+// placeholder "unknown" would start landing in the exchange audit table.
+func TestConfigExchangeStoreAdapter_RefusesNonAWSAccountID(t *testing.T) {
+	storeCalls := 0
+	adapter := newConfigExchangeStoreAdapter(&mockConfigStoreForExchange{
+		saveRIExchangeRecordFunc: func(context.Context, *config.RIExchangeRecord) error {
+			storeCalls++
+			return nil
+		},
+		reserveRIExchangeFunc: func(context.Context, *config.RIExchangeRecord, string, string) (string, error) {
+			storeCalls++
+			return "0", nil
+		},
+	})
+
+	for _, accountID := range []string{
+		"",
+		"unknown", // resolveAccountID's STS-failure placeholder
+		"12345678901",
+		"1234567890123",
+		"3f2504e0-4f89-11d3-9a0c-0305e82c3301", // Azure subscription GUID
+		"cudly-prod-0042",                      // GCP project ID
+		"123456789012\n",
+		"١٢٣٤٥٦٧٨٩٠١٢", // 12 non-ASCII digits
+	} {
+		t.Run(fmt.Sprintf("%q", accountID), func(t *testing.T) {
+			saveErr := adapter.SaveRIExchangeRecord(context.Background(), &exchange.ExchangeRecord{AccountID: accountID})
+			testutil.AssertError(t, saveErr)
+			testutil.AssertContains(t, saveErr.Error(), "not a 12-digit AWS account ID")
+
+			_, reserveErr := adapter.ReserveRIExchange(context.Background(), &exchange.ExchangeRecord{AccountID: accountID}, "20", "10")
+			testutil.AssertError(t, reserveErr)
+			testutil.AssertContains(t, reserveErr.Error(), "not a 12-digit AWS account ID")
+		})
+	}
+	testutil.AssertEqual(t, 0, storeCalls)
 }
 
 func TestSendExchangeNotification_NoEmailSender(t *testing.T) {
@@ -463,7 +508,7 @@ func TestExecuteRIExchangeReshape_NoConvertibleRIs(t *testing.T) {
 		lookupOffering: func(ctx context.Context, _ exchange.LookupOfferingParams) (string, error) {
 			return "", nil
 		},
-		accountID: "123456789",
+		accountID: "123456789012",
 		region:    "us-east-1",
 	}
 
@@ -590,7 +635,7 @@ func TestExecuteRIExchangeReshape_ManualMode(t *testing.T) {
 		lookupOffering: func(ctx context.Context, _ exchange.LookupOfferingParams) (string, error) {
 			return "offering-123", nil
 		},
-		accountID: "123456789",
+		accountID: "123456789012",
 		region:    "us-east-1",
 	}
 
@@ -709,7 +754,7 @@ func TestExecuteRIExchangeReshape_AutoMode(t *testing.T) {
 		lookupOffering: func(ctx context.Context, _ exchange.LookupOfferingParams) (string, error) {
 			return "offering-456", nil
 		},
-		accountID: "123456789",
+		accountID: "123456789012",
 		region:    "us-east-1",
 	}
 
@@ -824,7 +869,7 @@ func TestExecuteRIExchangeReshape_DailyCapHitMidRun(t *testing.T) {
 		lookupOffering: func(ctx context.Context, _ exchange.LookupOfferingParams) (string, error) {
 			return "offering-cap-test", nil
 		},
-		accountID: "123456789",
+		accountID: "123456789012",
 		region:    "us-east-1",
 	}
 
@@ -1067,4 +1112,42 @@ func (m *mockConfigStoreForExchange) ClearRevocationInFlight(_ context.Context, 
 
 func (m *mockConfigStoreForExchange) GetPurchaseHistoryInFlight(_ context.Context) ([]*config.PurchaseHistoryRecord, error) {
 	return nil, nil
+}
+
+// A convertible RI with a non-positive Duration has no computable monthly
+// cost. Converting it to MonthlyCost=0 would make reshape's pricing gate
+// treat it as free and skip the dollar-units check, so it must be excluded.
+func TestConvertForAutoExchange_ExcludesNonPositiveDuration(t *testing.T) {
+	instances := []ec2svc.ConvertibleRI{
+		{ReservedInstanceID: "ri-zero", InstanceType: "m5.large", InstanceCount: 1, FixedPrice: 8760, Duration: 0},
+		{
+			ReservedInstanceID: "ri-valid", InstanceType: "m5.large", InstanceCount: 2,
+			NormalizationFactor: 4, FixedPrice: 8760, UsagePrice: 0.01, Duration: 31536000, CurrencyCode: "USD",
+		},
+		{ReservedInstanceID: "ri-neg", InstanceType: "c5.large", InstanceCount: 1, FixedPrice: 8760, Duration: -1},
+	}
+
+	riInfos, _, meta := convertForAutoExchange(instances, nil)
+
+	if len(riInfos) != 1 || riInfos[0].ID != "ri-valid" {
+		t.Fatalf("want only ri-valid, got %+v", riInfos)
+	}
+	if want := (8760.0/8760 + 0.01) * 730; riInfos[0].MonthlyCost < want-1e-6 || riInfos[0].MonthlyCost > want+1e-6 {
+		t.Fatalf("MonthlyCost = %v, want %v", riInfos[0].MonthlyCost, want)
+	}
+	if _, ok := meta["ri-zero"]; ok || len(meta) != 1 {
+		t.Fatalf("metadata must cover only ri-valid, got %+v", meta)
+	}
+}
+
+func TestMonthlyCostFromConvertibleRI_NonPositiveDurationErrors(t *testing.T) {
+	for _, d := range []int64{0, -1} {
+		if _, err := monthlyCostFromConvertibleRI(ec2svc.ConvertibleRI{ReservedInstanceID: "ri-x", FixedPrice: 100, Duration: d}); err == nil || !strings.Contains(err.Error(), "ri-x") {
+			t.Fatalf("duration %d: want error naming ri-x, got %v", d, err)
+		}
+	}
+	cost, err := monthlyCostFromConvertibleRI(ec2svc.ConvertibleRI{FixedPrice: 8760, Duration: 31536000})
+	if err != nil || cost < 730-1e-6 || cost > 730+1e-6 {
+		t.Fatalf("valid RI: cost=%v err=%v", cost, err)
+	}
 }

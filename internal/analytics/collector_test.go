@@ -10,6 +10,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/mocks"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -208,6 +209,10 @@ func (m *mockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses 
 	return nil, nil
 }
 
+func (m *mockConfigStore) HistorySummaryAggregate(ctx context.Context, filter config.HistorySummaryFilter) (*config.HistorySummaryGroups, error) {
+	return &config.HistorySummaryGroups{}, nil
+}
+
 func (m *mockConfigStore) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string, since time.Time) (map[string]config.ExecutionStatusCounts, error) {
 	return nil, nil
 }
@@ -315,6 +320,10 @@ func (m *mockConfigStore) TransitionExecutionStatusPinned(ctx context.Context, e
 	return nil, nil
 }
 
+func (m *mockConfigStore) TransitionExecutionStatusPinnedTx(ctx context.Context, tx pgx.Tx, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) TransitionExecutionStatusTokenPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, rawToken string) (*config.PurchaseExecution, error) {
 	return nil, nil
 }
@@ -347,6 +356,10 @@ func (m *mockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, 
 	return false, "", nil
 }
 
+func (m *mockConfigStore) CancelExecutionAtomicTokenPinned(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string, rawToken string) (bool, string, error) {
+	return false, "", nil
+}
+
 func (m *mockConfigStore) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
 	return false, "", nil
 }
@@ -372,6 +385,9 @@ func (m *mockConfigStore) GetRIExchangeRecordByToken(ctx context.Context, token 
 	return nil, nil
 }
 func (m *mockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]config.RIExchangeRecord, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) GetRIExchangeHistoryForAccounts(ctx context.Context, since time.Time, limit int, accountIDs []string) ([]config.RIExchangeRecord, error) {
 	return nil, nil
 }
 func (m *mockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*config.RIExchangeRecord, error) {
@@ -401,6 +417,14 @@ func (m *mockConfigStore) CancelPendingExchangesByOrigin(_ context.Context, _ co
 }
 func (m *mockConfigStore) GetStaleProcessingExchanges(ctx context.Context, olderThan time.Duration) ([]config.RIExchangeRecord, error) {
 	return nil, nil
+}
+
+func (m *mockConfigStore) SaveRIExchangeDirectExecution(_ context.Context, _ *config.RIExchangeDirectExecution) error {
+	return nil
+}
+
+func (m *mockConfigStore) FinalizeRIExchangeDirectExecution(_ context.Context, _ string, _ config.RIExchangeDirectOutcome) error {
+	return nil
 }
 
 func (m *mockConfigStore) CreateCloudAccount(ctx context.Context, account *config.CloudAccount) error {
@@ -472,9 +496,6 @@ func (m *mockConfigStore) TransitionRegistrationStatus(_ context.Context, _ *con
 func (m *mockConfigStore) DeleteAccountRegistration(_ context.Context, _ string) error {
 	return nil
 }
-func (m *mockConfigStore) ReplaceRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord) error {
-	return nil
-}
 func (m *mockConfigStore) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []config.SuccessfulCollect) error {
 	return nil
 }
@@ -495,6 +516,9 @@ func (m *mockConfigStore) MarkCollectionStarted(_ context.Context) (string, bool
 }
 func (m *mockConfigStore) ClearCollectionStarted(_ context.Context, _ string) error {
 	return nil
+}
+func (m *mockConfigStore) ClaimCollectionInvocation(_ context.Context, _ string) (string, bool, error) {
+	return mocks.MockInvocationToken, true, nil
 }
 func (m *mockConfigStore) GetRIUtilizationCache(_ context.Context, _ string, _ int) (*config.RIUtilizationCacheEntry, error) {
 	return nil, nil

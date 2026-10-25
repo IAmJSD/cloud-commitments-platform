@@ -88,6 +88,14 @@ type Application struct {
 	migrationsTimeout time.Duration
 	migrationMu       sync.Mutex
 
+	// lifeCtx outlives any request; Close cancels it. rlCleanupStop stops the
+	// previous cleanup worker when a retried reinitializeAfterConnect starts
+	// a new one, so at most one worker runs.
+	lifeMu        sync.Mutex
+	lifeCtx       context.Context
+	lifeCancel    context.CancelFunc
+	rlCleanupStop context.CancelFunc
+
 	// initRetryDelay is the pause between background database-initialization
 	// attempts (see startBackgroundInit). Zero means backgroundInitRetryDelay.
 	// Only tests set it.
@@ -137,6 +145,9 @@ type ApplicationConfig struct {
 	// SQS event source mapping's function_response_types actually includes
 	// "ReportBatchItemFailures" (issue #108 follow-up).
 	ReportSQSBatchItemFailures bool
+	// authBcryptCost is passed to auth.ServiceConfig.BcryptCost. Only tests
+	// in this package set it; zero keeps the production bcrypt cost.
+	authBcryptCost int
 }
 
 // ExternalDeps holds pre-built external dependencies that require infrastructure.
@@ -508,6 +519,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		EmailSender:     deps.EmailSender,
 		SessionDuration: 24 * time.Hour,
 		DashboardURL:    cfg.DashboardURL,
+		BcryptCost:      cfg.authBcryptCost,
 	})
 
 	// Sensitive requests pass ensureDB, which replaces this temporary limiter
@@ -756,11 +768,33 @@ func (app *Application) initAuthService(authStore *auth.PostgresStore, encKey []
 		DashboardURL:     app.appConfig.DashboardURL,
 		OnPasswordChange: buildAdminPasswordSyncCallback(authStore, app.secretResolver),
 		CSRFKey:          csrfKey,
+		BcryptCost:       app.appConfig.authBcryptCost,
 	})
 	if svc == nil {
 		return nil, fmt.Errorf("failed to create auth service")
 	}
 	return svc, nil
+}
+
+type cleanupWorkerStarter interface {
+	StartCleanupWorker(ctx context.Context)
+}
+
+// startRateLimiterCleanup runs the limiter's scheduled cleanup on the
+// process-lifetime context (canceled by Close), not the request context that
+// triggered the lazy DB connect.
+func (app *Application) startRateLimiterCleanup(rl cleanupWorkerStarter) {
+	app.lifeMu.Lock()
+	defer app.lifeMu.Unlock()
+	if app.lifeCtx == nil {
+		app.lifeCtx, app.lifeCancel = context.WithCancel(context.Background())
+	}
+	if app.rlCleanupStop != nil {
+		app.rlCleanupStop()
+	}
+	var workerCtx context.Context
+	workerCtx, app.rlCleanupStop = context.WithCancel(app.lifeCtx)
+	rl.StartCleanupWorker(workerCtx)
 }
 
 // reinitializeAfterConnect re-creates all stores and services that depend on the
@@ -803,8 +837,6 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 	app.Auth = authSvc
 
 	dbRL := api.NewDBRateLimiter(dbConn.Pool())
-	// Periodic cleanup also evicts expired keys with no subsequent allowed request.
-	dbRL.StartCleanupWorker(ctx)
 	app.RateLimiter = dbRL
 	log.Println("Initialized database-backed rate limiter with shared replica counters")
 
@@ -909,6 +941,11 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		return fmt.Errorf("failed to create API handler")
 	}
 
+	// Periodic cleanup also evicts expired keys with no subsequent allowed
+	// request. Started last: on any earlier error ensureDB closes the pool, and
+	// a worker started before that would keep ticking against it.
+	app.startRateLimiterCleanup(dbRL)
+
 	return nil
 }
 
@@ -972,6 +1009,12 @@ func buildAdminPasswordSyncCallback(store auth.StoreInterface, resolver secrets.
 // Close gracefully shuts down the application.
 func (app *Application) Close() error {
 	log.Println("Shutting down CUDly Server...")
+
+	app.lifeMu.Lock()
+	if app.lifeCancel != nil {
+		app.lifeCancel()
+	}
+	app.lifeMu.Unlock()
 
 	// Close database connection if using PostgreSQL
 	if app.DB != nil {
@@ -1227,7 +1270,7 @@ func (a *authServiceAdapter) ValidateCSRFToken(ctx context.Context, sessionToken
 }
 
 // API Key management.
-func (a *authServiceAdapter) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error) {
+func (a *authServiceAdapter) CreateAPIKeyAPI(ctx context.Context, userID string, req auth.APICreateAPIKeyRequest) (any, error) {
 	return a.service.CreateAPIKeyAPI(ctx, userID, req)
 }
 

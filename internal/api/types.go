@@ -245,7 +245,9 @@ type AuthServiceInterface interface {
 	// Account access - returns the union of allowed_accounts from all user groups (empty = all access)
 	GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error)
 	// API Key management
-	CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error)
+	// CreateAPIKeyAPI takes the auth wire type directly: re-encoding a local
+	// copy erased an explicit max_amount of 0 (issue #980).
+	CreateAPIKeyAPI(ctx context.Context, userID string, req auth.APICreateAPIKeyRequest) (any, error)
 	ListUserAPIKeysAPI(ctx context.Context, userID string) (any, error)
 	// GetAPIKeysUsageStatsAPI returns the section-level usage summary
 	// (active count, fixed-window/lifetime request totals, top-3 most
@@ -441,9 +443,10 @@ type StatusResponse struct {
 }
 
 // DeletePlannedPurchaseResponse is the body of DELETE /api/purchases/planned/{id}.
-// PlanDisabled is omitted when the execution has no plan, true when the plan
-// was disabled, and false when the plan was left enabled because it spans
-// accounts outside the caller's scope (issue #520).
+// PlanDisabled is omitted when the execution has no plan and true when the
+// plan was disabled. A plan the caller may not disable fails the request
+// (403 before the cancel, 409 if the plan changed after it) instead of
+// reporting false (issues #520, #623).
 type DeletePlannedPurchaseResponse struct {
 	Status       string `json:"status"`
 	PlanDisabled *bool  `json:"plan_disabled,omitempty"`
@@ -955,9 +958,17 @@ type CreatePlannedPurchasesResponse struct {
 // HistoryResponse represents the response from the history API.
 type HistoryResponse struct {
 	Purchases []config.PurchaseHistoryRecord `json:"purchases"`
-	Summary   HistorySummary                 `json:"summary"`
+	// Summary covers every row matching the request's filters and the caller's
+	// account scope, including rows beyond the row caps (issue #675), unless
+	// SummaryComplete is false.
+	Summary HistorySummary `json:"summary"`
+	// SummaryComplete is true when Summary was computed over every matching
+	// row. It is false only when that aggregate failed and Summary fell back
+	// to the rows in Purchases, which under-reports when Truncated is true.
+	SummaryComplete bool `json:"summary_complete"`
 	// Truncated is true when a fetch reached its row cap, so older rows (and
-	// possibly pending approvals) may be missing from Purchases and Summary.
+	// possibly pending approvals) may be missing from Purchases. Summary still
+	// counts them while SummaryComplete is true.
 	// It also fires when the actionable execution class hits its MaxListLimit cap.
 	// It can be a false positive when exactly a cap's worth of rows exist.
 	Truncated bool `json:"truncated"`

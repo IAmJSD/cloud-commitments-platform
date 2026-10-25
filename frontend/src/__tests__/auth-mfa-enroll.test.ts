@@ -49,6 +49,7 @@ import * as state from '../state';
 // trigger it indirectly by clicking the user-email element after
 // updateUserUI mounts it.
 import { updateUserUI } from '../auth';
+import { closeModal } from '../modal';
 
 beforeEach(() => {
   document.body.innerHTML = `
@@ -199,5 +200,103 @@ describe('MFA regenerate-recovery-codes flow', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(api.regenerateMFARecoveryCodes).toHaveBeenCalledWith('123456');
     expect(document.body.textContent).toContain('NEW1-XXXX');
+  });
+
+  test('Escape and Cancel cannot discard recovery codes until acknowledged (issue #732)', async () => {
+    (api.regenerateMFARecoveryCodes as jest.Mock).mockResolvedValue({ recovery_codes: ['NEW1-XXXX'] });
+    await openProfile();
+    document.getElementById('mfa-regenerate-btn')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    (document.getElementById('mfa-regen-code') as HTMLInputElement).value = '123456';
+    document.getElementById('mfa-regen-submit')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 10));
+
+    const modal = document.getElementById('profile-modal')!;
+    modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(modal.classList.contains('hidden')).toBe(false);
+    expect((document.getElementById('profile-cancel') as HTMLButtonElement).disabled).toBe(true);
+
+    document.getElementById('mfa-codes-done')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(modal.classList.contains('hidden')).toBe(true);
+  });
+
+  test('Save Changes and Enter cannot close the profile modal while codes are pending (issue #732)', async () => {
+    (api.regenerateMFARecoveryCodes as jest.Mock).mockResolvedValue({ recovery_codes: ['NEW1-XXXX'] });
+    await openProfile();
+    document.getElementById('mfa-regenerate-btn')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    (document.getElementById('mfa-regen-code') as HTMLInputElement).value = '123456';
+    document.getElementById('mfa-regen-submit')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await new Promise((r) => setTimeout(r, 10));
+
+    const modal = document.getElementById('profile-modal')!;
+    const save = modal.querySelector<HTMLButtonElement>('#profile-form button[type="submit"]')!;
+    expect(save.disabled).toBe(true);
+    document.getElementById('profile-form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(modal.classList.contains('hidden')).toBe(false);
+    closeModal(modal);
+    expect(modal.classList.contains('hidden')).toBe(false);
+
+    document.getElementById('mfa-codes-done')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(save.disabled).toBe(false);
+    closeModal(modal);
+    expect(modal.classList.contains('hidden')).toBe(true);
+  });
+});
+
+// Issue #745: the CSP (`style-src 'self'`) blocks style="" attributes, so
+// the MFA panels must be styled through stylesheet classes.
+describe('MFA panels are styled by classes, not inline styles (issue #745)', () => {
+  const click = (id: string): void => {
+    document.getElementById(id)!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  };
+  const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 10));
+  const inlineStyled = (): number => document.querySelectorAll('#profile-modal [style]').length;
+
+  test('enrollment steps use .mfa-panel, .mfa-secret, .code-input and .recovery-codes', async () => {
+    (api.setupMFA as jest.Mock).mockResolvedValue({
+      secret: 'JBSWY3DPEHPK3PXP',
+      provisioning_uri: 'otpauth://totp/CUDly:user@x.com?secret=JBSWY3DPEHPK3PXP',
+    });
+    (api.enableMFA as jest.Mock).mockResolvedValue({ recovery_codes: ['AAAA-BBBB', 'CCCC-DDDD'] });
+    await openProfile();
+    expect(document.querySelector('#profile-modal hr.profile-section-divider')).not.toBeNull();
+
+    click('mfa-enable-btn');
+    expect(document.querySelector('#mfa-flow-host .mfa-panel')).not.toBeNull();
+    expect(inlineStyled()).toBe(0);
+
+    (document.getElementById('mfa-enroll-password') as HTMLInputElement).value = 'pw';
+    click('mfa-enroll-continue');
+    await tick();
+    expect(document.getElementById('mfa-qr')?.classList.contains('mfa-qr')).toBe(true);
+    expect(document.querySelector('.mfa-secret #mfa-secret-display')).not.toBeNull();
+    expect(document.getElementById('mfa-enroll-code')?.classList.contains('code-input')).toBe(true);
+    expect(inlineStyled()).toBe(0);
+
+    (document.getElementById('mfa-enroll-code') as HTMLInputElement).value = '123456';
+    click('mfa-qr-verify');
+    await tick();
+    expect(document.querySelector('#mfa-flow-host .mfa-panel.mfa-panel-emphasis')).not.toBeNull();
+    expect(document.querySelectorAll('ul.recovery-codes li')).toHaveLength(2);
+    expect(inlineStyled()).toBe(0);
+  });
+
+  test('disable and regenerate flows use .mfa-panel and .code-input', async () => {
+    (state.getCurrentUser as jest.Mock).mockReturnValue({
+      id: 'u1', email: 'user@x.com', groups: [], mfa_enabled: true,
+    });
+    updateUserUI();
+    await openProfile();
+
+    click('mfa-disable-btn');
+    expect(document.querySelector('#mfa-flow-host .mfa-panel')).not.toBeNull();
+    expect(document.getElementById('mfa-disable-code')?.classList.contains('code-input')).toBe(true);
+    expect(inlineStyled()).toBe(0);
+
+    click('mfa-disable-cancel');
+    click('mfa-regenerate-btn');
+    expect(document.getElementById('mfa-regen-code')?.classList.contains('code-input')).toBe(true);
+    expect(inlineStyled()).toBe(0);
   });
 });

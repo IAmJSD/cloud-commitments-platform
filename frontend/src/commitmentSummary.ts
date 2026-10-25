@@ -33,6 +33,38 @@ export interface CommitmentTotals {
 
 const MAX_LISTED_LINES = 5;
 
+/** The priced-recommendation fields a commitment line is built from. */
+export interface PricedCommitment {
+  service: string;
+  provider?: string;
+  region?: string;
+  resource_type: string;
+  count: number;
+  term: number;
+  payment?: string;
+  upfront_cost: number;
+  monthly_cost?: number | null;
+}
+
+/**
+ * Map a priced recommendation onto a commitment line. `payment` overrides
+ * the rec's own (the bulk modal prices a whole bucket at one payment).
+ */
+export function commitmentLine(r: PricedCommitment, opts: { payment?: string; account?: string } = {}): CommitmentLine {
+  return {
+    service: r.service,
+    ...(r.provider ? { provider: r.provider } : {}),
+    ...(r.region ? { region: r.region } : {}),
+    resourceType: r.resource_type,
+    count: r.count,
+    term: r.term,
+    payment: opts.payment ?? r.payment ?? '',
+    upfront: r.upfront_cost,
+    monthly: r.monthly_cost ?? null,
+    ...(opts.account ? { account: opts.account } : {}),
+  };
+}
+
 export function commitmentTotals(lines: readonly CommitmentLine[]): CommitmentTotals {
   let upfront = 0;
   let monthly: number | null = 0;
@@ -48,6 +80,20 @@ export function commitmentTotals(lines: readonly CommitmentLine[]): CommitmentTo
     termTotal += l.upfront + l.monthly * 12 * l.term;
   }
   return { upfront, monthly, termTotal };
+}
+
+/** Label of the purchase modal's primary button; one source for every place that sets it. */
+export function executeButtonLabel(direct: boolean): string {
+  return direct ? 'Execute Purchase Now' : 'Send for Approval';
+}
+
+/**
+ * Confirm-dialog button: the same verb as the modal button plus the upfront
+ * amount, so the highest-stakes click states the money involved.
+ */
+export function executeConfirmLabel(direct: boolean, upfront: number): string {
+  const amount = formatCurrency(upfront, '$', 2);
+  return `${executeButtonLabel(direct)} (${amount} ${direct ? 'charged today' : 'upfront on approval'})`;
 }
 
 export function paymentLabel(payment: string): string {
@@ -74,11 +120,34 @@ function stat(label: string, value: string): HTMLElement {
   return el;
 }
 
+/** True when any line is partial or no upfront, so it bills monthly. */
+export function billsMonthly(lines: readonly CommitmentLine[]): boolean {
+  return lines.some(l => paymentLabel(l.payment) !== 'All upfront');
+}
+
 // A partial or no-upfront commitment bills monthly; saying only "not
 // reported" would read as "no monthly fee".
 function monthlyUnknownText(lines: readonly CommitmentLine[]): string {
-  const bills = lines.some(l => paymentLabel(l.payment) !== 'All upfront');
-  return bills ? 'Not reported (monthly fees apply)' : 'Not reported';
+  return billsMonthly(lines) ? 'Not reported (monthly fees apply)' : 'Not reported';
+}
+
+export interface CommitmentTotalsText {
+  upfront: string;
+  monthly: string;
+  termTotal: string;
+}
+
+/**
+ * The three totals as display strings, so every screen words an unknown
+ * monthly cost the same way instead of printing a partial sum or $0.
+ */
+export function formatCommitmentTotals(lines: readonly CommitmentLine[], digits = 2): CommitmentTotalsText {
+  const totals = commitmentTotals(lines);
+  return {
+    upfront: formatCurrency(totals.upfront, '$', digits),
+    monthly: totals.monthly === null ? monthlyUnknownText(lines) : formatCurrency(totals.monthly, '$', digits),
+    termTotal: totals.termTotal === null ? 'Not available' : formatCurrency(totals.termTotal, '$', digits),
+  };
 }
 
 function describe(l: CommitmentLine): string {
@@ -93,19 +162,23 @@ export interface SummaryOptions {
   upfrontLabel?: string;
 }
 
-export function buildCommitmentSummary(lines: readonly CommitmentLine[], opts: SummaryOptions = {}): HTMLElement {
-  const totals = commitmentTotals(lines);
-  const root = document.createElement('div');
-  root.className = 'commitment-summary';
-
+/** Just the Upfront / Monthly / Total over term band, for screens that already list the lines. */
+export function buildCommitmentBand(lines: readonly CommitmentLine[], opts: SummaryOptions = {}): HTMLElement {
+  const text = formatCommitmentTotals(lines);
   const band = document.createElement('div');
   band.className = 'commitment-summary-band';
   band.append(
-    stat(opts.upfrontLabel ?? 'Charged today', formatCurrency(totals.upfront, '$', 2)),
-    stat('Monthly', totals.monthly === null ? monthlyUnknownText(lines) : formatCurrency(totals.monthly, '$', 2)),
-    stat('Total over term', totals.termTotal === null ? 'Not available' : formatCurrency(totals.termTotal, '$', 2)),
+    stat(opts.upfrontLabel ?? 'Charged today', text.upfront),
+    stat('Monthly', text.monthly),
+    stat('Total over term', text.termTotal),
   );
-  root.appendChild(band);
+  return band;
+}
+
+export function buildCommitmentSummary(lines: readonly CommitmentLine[], opts: SummaryOptions = {}): HTMLElement {
+  const root = document.createElement('div');
+  root.className = 'commitment-summary';
+  root.appendChild(buildCommitmentBand(lines, opts));
 
   const list = document.createElement('ul');
   list.className = 'commitment-summary-lines';

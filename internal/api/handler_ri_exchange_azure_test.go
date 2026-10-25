@@ -1899,38 +1899,33 @@ func TestRequireAzureSourceOwnership_DenialsAreIndistinguishable(t *testing.T) {
 // --- the Regions constraint must bound the SOURCES too, not only the targets ---
 
 // newAzureRegionScopedHandler builds a handler whose caller holds
-// execute:ri-exchange constrained to exactly one region, emulating
-// auth.matchAllRegionsConstraint's all-match rule: the permission grants the
-// request only when EVERY region in the submitted constraint set is the
-// permitted one. Comparison is a plain equality test because the constraint
-// set reaches the auth layer canonically lower-cased.
+// execute:ri-exchange constrained to exactly one region, eastus. The grant goes
+// through grantPermissions, so the constraint check is answered by
+// auth.PermissionsAllowForConstraintSets: the production matcher (including
+// matchAllRegionsConstraint's all-match rule) evaluates the constraint set the
+// handler actually built. The test states only the permission; whether a
+// request falls inside it is decided by the code that decides it in
+// production. An earlier version hand-wrote the all-match rule here and fed
+// its own verdict back as the answer, so these tests stayed green with the
+// matcher regressed to containsAny's any-match rule (issue #208).
 //
-// captured receives the constraint set the handler submitted, so a test can
-// assert which regions the handler thought the operation touches rather than
-// only that it was denied.
-func newAzureRegionScopedHandler(t *testing.T, ctx context.Context, opsClient azureExchangeClient, permittedRegion string, captured *[]auth.PermissionConstraints) *Handler {
+// The returned mock records every call, so submittedConstraintSets can still
+// recover which regions the handler thought the operation touches.
+func newAzureRegionScopedHandler(t *testing.T, ctx context.Context, opsClient azureExchangeClient) (*Handler, *MockAuthService) {
 	t.Helper()
-	permits := func(sets []auth.PermissionConstraints) bool {
-		*captured = sets
-		for _, s := range sets {
-			for _, r := range s.Regions {
-				if r != permittedRegion {
-					return false
-				}
-			}
-		}
-		return true
-	}
-
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
-	mockAuth.On("HasPermissionAPI", ctx, "user-1", "execute", "ri-exchange").Return(true, nil)
-	allowAnyAccountScope(mockAuth)
-	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
-		mock.MatchedBy(permits)).Return(true, nil).Maybe()
-	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
-		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool { return !permits(sets) })).Return(false, nil).Maybe()
-	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	mockAuth.grantPermissions([]auth.Permission{{
+		Action:      auth.ActionExecute,
+		Resource:    auth.ResourceRIExchange,
+		Constraints: &auth.PermissionConstraints{Regions: []string{"eastus"}},
+	}})
+	// grantPermissions registers the verb check as optional; every test built
+	// on this helper reaches it, so keep requiring it as the old helper did.
+	t.Cleanup(func() {
+		mockAuth.AssertExpectations(t)
+		mockAuth.AssertCalled(t, "HasPermissionAPI", ctx, "user-1", auth.ActionExecute, auth.ResourceRIExchange)
+	})
 
 	mockStore := &MockConfigStore{}
 	mockStore.GetCloudAccountByExternalIDFn = func(_ context.Context, _, _ string) (*config.CloudAccount, error) {
@@ -1941,7 +1936,28 @@ func newAzureRegionScopedHandler(t *testing.T, ctx context.Context, opsClient az
 		auth:                 mockAuth,
 		config:               mockStore,
 		azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient },
+	}, mockAuth
+}
+
+// submittedConstraintSets returns the constraint sets the handler passed to
+// HasPermissionForConstraintsAPI, failing the test unless it made exactly one
+// such call, for user-1's execute:ri-exchange.
+func submittedConstraintSets(t *testing.T, m *MockAuthService) []auth.PermissionConstraints {
+	t.Helper()
+	var submitted [][]auth.PermissionConstraints
+	for _, call := range m.Calls {
+		if call.Method != "HasPermissionForConstraintsAPI" {
+			continue
+		}
+		assert.Equal(t, "user-1", call.Arguments.String(1))
+		assert.Equal(t, auth.ActionExecute, call.Arguments.String(2))
+		assert.Equal(t, auth.ResourceRIExchange, call.Arguments.String(3))
+		sets, ok := call.Arguments.Get(4).([]auth.PermissionConstraints)
+		require.True(t, ok, "constraint sets argument has type %T", call.Arguments.Get(4))
+		submitted = append(submitted, sets)
 	}
+	require.Len(t, submitted, 1, "the handler must make exactly one constraint check")
+	return submitted[0]
 }
 
 // foreignRegionSourceBody names a source reservation the caller's own
@@ -1979,15 +1995,13 @@ const foreignRegionSourceBody = `{
 // gate -- the money path must not be reached at all.
 func TestExecuteAzureExchange_SourceRegionOutsidePermissionRefused(t *testing.T) {
 	ctx := context.Background()
-	var captured []auth.PermissionConstraints
-
 	opsClient := new(mockAzureExchangeOpsClient)
 	opsClient.On("ListExchangeableReservations", mock.Anything).Return([]azurecompute.ExchangeableReservation{
 		{ReservationID: "res-west", BillingScopeID: "/subscriptions/sub-1", Region: "westeurope", Quantity: 1},
 	}, nil)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
-	h := newAzureRegionScopedHandler(t, ctx, opsClient, "eastus", &captured)
+	h, mockAuth := newAzureRegionScopedHandler(t, ctx, opsClient)
 	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer tok"},
 		Body:    foreignRegionSourceBody,
@@ -1997,11 +2011,46 @@ func TestExecuteAzureExchange_SourceRegionOutsidePermissionRefused(t *testing.T)
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
 	assert.Equal(t, 403, ce.code)
+	captured := submittedConstraintSets(t, mockAuth)
 	require.Len(t, captured, 1)
 	assert.Contains(t, captured[0].Regions, "westeurope",
 		"the source's own region must reach the permission check; the exchange mutates it too")
 	opsClient.AssertNotCalled(t, "CalculateExchange", mock.Anything, mock.Anything, mock.Anything)
 	opsClient.AssertNotCalled(t, "ExecuteExchange", mock.Anything, mock.Anything)
+}
+
+// TestExecuteAzureExchange_RegionScopedCallerAllowedInsideRegion is the
+// positive control for the region-scoped denials around it: the same eastus-only
+// grant must ALLOW an exchange whose source and target both sit in eastus.
+// Without it a grant that denied everything would satisfy every denial test
+// vacuously, and so would a matcher that refused any non-empty Regions list.
+func TestExecuteAzureExchange_RegionScopedCallerAllowedInsideRegion(t *testing.T) {
+	ctx := context.Background()
+
+	opsClient := new(mockAzureExchangeOpsClient)
+	opsClient.On("ListExchangeableReservations", mock.Anything).Return([]azurecompute.ExchangeableReservation{
+		{ReservationID: "res-1", BillingScopeID: "/subscriptions/sub-1", Region: "eastus", Quantity: 1},
+	}, nil)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+		&azurecompute.ExchangePreview{SessionID: "sess-east", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
+		[]azurecompute.CompatibleOffering{}, nil,
+	)
+	opsClient.On("ExecuteExchange", mock.Anything, "sess-east").Return(
+		&azurecompute.ExchangeResult{SessionID: "sess-east", Status: "Succeeded"}, nil,
+	)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h, mockAuth := newAzureRegionScopedHandler(t, ctx, opsClient)
+	resp, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody, // sources: res-1, targets: eastus
+	})
+
+	require.NoError(t, err, "an eastus-only caller must be allowed an exchange that stays inside eastus")
+	require.NotNil(t, resp)
+	captured := submittedConstraintSets(t, mockAuth)
+	require.Len(t, captured, 1)
+	assert.Equal(t, []string{"eastus"}, captured[0].Regions)
 }
 
 // TestExecuteAzureExchange_UnreportedSourceRegionRefused covers the
@@ -2013,8 +2062,6 @@ func TestExecuteAzureExchange_SourceRegionOutsidePermissionRefused(t *testing.T)
 // instead.
 func TestExecuteAzureExchange_UnreportedSourceRegionRefused(t *testing.T) {
 	ctx := context.Background()
-	var captured []auth.PermissionConstraints
-
 	opsClient := new(mockAzureExchangeOpsClient)
 	opsClient.On("ListExchangeableReservations", mock.Anything).Return([]azurecompute.ExchangeableReservation{
 		// Billed to the caller's own subscription, but Azure reported no region.
@@ -2022,7 +2069,7 @@ func TestExecuteAzureExchange_UnreportedSourceRegionRefused(t *testing.T) {
 	}, nil)
 	t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
-	h := newAzureRegionScopedHandler(t, ctx, opsClient, "eastus", &captured)
+	h, mockAuth := newAzureRegionScopedHandler(t, ctx, opsClient)
 	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer tok"},
 		Body:    validAzureExecuteBody, // sources: res-1, targets: eastus
@@ -2032,6 +2079,7 @@ func TestExecuteAzureExchange_UnreportedSourceRegionRefused(t *testing.T) {
 	ce, ok := IsClientError(err)
 	require.True(t, ok)
 	assert.Equal(t, 403, ce.code)
+	captured := submittedConstraintSets(t, mockAuth)
 	require.Len(t, captured, 1)
 	assert.Contains(t, captured[0].Regions, unknownRegionConstraint,
 		"an unreported source region must surface as a sentinel no permission can name, not be dropped")
@@ -2112,12 +2160,11 @@ func TestExecuteAzureExchange_UnownedSourceDenialsAreIndistinguishable(t *testin
 	}
 
 	probe := func(reservationID string) error {
-		var captured []auth.PermissionConstraints
 		opsClient := new(mockAzureExchangeOpsClient)
 		opsClient.On("ListExchangeableReservations", mock.Anything).Return(tenantListing, nil)
 		t.Cleanup(func() { opsClient.AssertExpectations(t) })
 
-		h := newAzureRegionScopedHandler(t, ctx, opsClient, "eastus", &captured)
+		h, _ := newAzureRegionScopedHandler(t, ctx, opsClient)
 		_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
 			Headers: map[string]string{"authorization": "Bearer tok"},
 			Body:    bodyFor(reservationID),

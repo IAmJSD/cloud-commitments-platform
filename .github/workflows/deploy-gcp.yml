@@ -5,6 +5,7 @@
 #
 # Required GitHub Secrets:
 #   - ADMIN_EMAIL: Admin email for notifications
+#   - ALERT_EMAILS: Optional, comma-separated addresses that receive monitoring alerts (#714)
 #
 # Required GitHub Variables:
 #   - GCP_REGION: GCP region (e.g., us-central1)
@@ -48,6 +49,8 @@ on:
     secrets:
       ADMIN_EMAIL:
         required: true
+      ALERT_EMAILS:
+        required: false
       TF_BACKEND_GCP:
         required: true
 
@@ -191,6 +194,7 @@ jobs:
       - name: Terraform Plan
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_alert_emails: ${{ secrets.ALERT_EMAILS }}
         run: |
           cd terraform/environments/gcp
           terraform plan \
@@ -202,6 +206,7 @@ jobs:
         id: deploy
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_alert_emails: ${{ secrets.ALERT_EMAILS }}
         run: |
           cd terraform/environments/gcp
           terraform apply -auto-approve tfplan

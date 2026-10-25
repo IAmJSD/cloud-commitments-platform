@@ -2,6 +2,7 @@ package mocks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -19,6 +20,11 @@ import (
 // returns when no expectation is registered, so existing tests that call it
 // implicitly keep getting a non-empty token to thread through.
 const MockOwnerToken = "mock-owner-token"
+
+// MockInvocationToken is the default token MockConfigStore.ClaimCollectionInvocation
+// returns when no expectation is registered. It differs from MockOwnerToken
+// so tests can tell the re-stamped invocation token from the marker token.
+const MockInvocationToken = "mock-invocation-token"
 
 // MockConfigStore is a shared testify-based mock for config.StoreInterface.
 //
@@ -484,6 +490,26 @@ func (m *MockConfigStore) TransitionExecutionStatusPinned(ctx context.Context, e
 	return v, args.Error(1)
 }
 
+// TransitionExecutionStatusPinnedTx mocks the tx variant of the pinned claim.
+// With no expectation registered it delegates to TransitionExecutionStatusPinned
+// (and from there to TransitionExecutionStatus), so tests that mock the
+// non-tx transition keep working.
+func (m *MockConfigStore) TransitionExecutionStatusPinnedTx(ctx context.Context, tx pgx.Tx, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*config.PurchaseExecution, error) {
+	m.record("TransitionExecutionStatusPinnedTx", ctx, tx, executionID, fromStatuses, toStatus, actor, sawEmptyRecommendations)
+	if !isExpected(&m.Mock, "TransitionExecutionStatusPinnedTx") {
+		return m.TransitionExecutionStatusPinned(ctx, executionID, fromStatuses, toStatus, actor, sawEmptyRecommendations)
+	}
+	args := m.Called(ctx, tx, executionID, fromStatuses, toStatus, actor, sawEmptyRecommendations)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.PurchaseExecution)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.PurchaseExecution, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 // TransitionExecutionStatusTokenPinned mocks the token-pinned transition
 // (issue #590). It does not delegate to TransitionExecutionStatus: a caller
 // that must pin the approval token is expected to call this method, so a test
@@ -583,6 +609,17 @@ func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, 
 		return true, "cancelled", nil
 	}
 	args := m.Called(ctx, tx, executionID, cancelledBy)
+	return args.Bool(0), args.String(1), args.Error(2)
+}
+
+// CancelExecutionAtomicTokenPinned mocks the token-pinned cancel (issue
+// #1190). Like TransitionExecutionStatusTokenPinned it has no default and does
+// not delegate to CancelExecutionAtomic: a caller that must pin the approval
+// token is expected to call this method, so a test has to register it
+// explicitly.
+func (m *MockConfigStore) CancelExecutionAtomicTokenPinned(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string, rawToken string) (bool, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
+	m.record("CancelExecutionAtomicTokenPinned", ctx, tx, executionID, cancelledBy, rawToken)
+	args := m.Called(ctx, tx, executionID, cancelledBy, rawToken)
 	return args.Bool(0), args.String(1), args.Error(2)
 }
 
@@ -938,6 +975,19 @@ func (m *MockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.T
 	return v, args.Error(1)
 }
 
+func (m *MockConfigStore) GetRIExchangeHistoryForAccounts(ctx context.Context, since time.Time, limit int, accountIDs []string) ([]config.RIExchangeRecord, error) {
+	m.record("GetRIExchangeHistoryForAccounts", ctx, since, limit, accountIDs)
+	args := m.Called(ctx, since, limit, accountIDs)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).([]config.RIExchangeRecord)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected []config.RIExchangeRecord, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 func (m *MockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id, fromStatus, toStatus string, actor *string) (*config.RIExchangeRecord, error) {
 	m.record("TransitionRIExchangeStatus", ctx, id, fromStatus, toStatus, actor)
 	args := m.Called(ctx, id, fromStatus, toStatus, actor)
@@ -1006,6 +1056,30 @@ func (m *MockConfigStore) GetStaleProcessingExchanges(ctx context.Context, older
 		panic(fmt.Sprintf("mock: expected []config.RIExchangeRecord, got %T", args.Get(0)))
 	}
 	return v, args.Error(1)
+}
+
+// SaveRIExchangeDirectExecution mocks the direct-execute audit insert (issue
+// #82). With no registered expectation it succeeds, so the many execute-path
+// tests whose subject is a gate or the provider call keep reaching it; tests
+// whose subject IS the audit trail register an expectation or record the row.
+func (m *MockConfigStore) SaveRIExchangeDirectExecution(ctx context.Context, record *config.RIExchangeDirectExecution) error {
+	m.record("SaveRIExchangeDirectExecution", ctx, record)
+	if !isExpected(&m.Mock, "SaveRIExchangeDirectExecution") {
+		return nil
+	}
+	args := m.Called(ctx, record)
+	return args.Error(0)
+}
+
+// FinalizeRIExchangeDirectExecution mocks recording the direct-execute
+// outcome (issue #82). Defaults to success like SaveRIExchangeDirectExecution.
+func (m *MockConfigStore) FinalizeRIExchangeDirectExecution(ctx context.Context, id string, outcome config.RIExchangeDirectOutcome) error {
+	m.record("FinalizeRIExchangeDirectExecution", ctx, id, outcome)
+	if !isExpected(&m.Mock, "FinalizeRIExchangeDirectExecution") {
+		return nil
+	}
+	args := m.Called(ctx, id, outcome)
+	return args.Error(0)
 }
 
 // MockAuthStore is a mock implementation of auth.Store.
@@ -1554,15 +1628,6 @@ func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDay
 // don't set expectations for them. Tests that want to assert on these paths
 // register an explicit expectation via .On(...).Return(...).
 
-func (m *MockConfigStore) ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord) error {
-	m.record("ReplaceRecommendations", ctx, collectedAt, recs)
-	if !isExpected(&m.Mock, "ReplaceRecommendations") {
-		return nil
-	}
-	args := m.Called(ctx, collectedAt, recs)
-	return args.Error(0)
-}
-
 func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect) error {
 	m.record("UpsertRecommendations", ctx, collectedAt, recs, successfulCollects)
 	if !isExpected(&m.Mock, "UpsertRecommendations") {
@@ -1885,6 +1950,31 @@ func executionSortsBefore(a, b *config.PurchaseExecution, now time.Time) bool {
 	return a.ScheduledDate.After(b.ScheduledDate)
 }
 
+// ErrHistorySummaryAggregateNotStubbed is HistorySummaryAggregate's default
+// error. The History handler treats an aggregate error as "totals unavailable"
+// and falls back to summarizing the rows it fetched, so tests written before
+// the aggregate existed (issue #675) keep asserting the page summary without
+// registering an expectation.
+var ErrHistorySummaryAggregateNotStubbed = errors.New("mock: HistorySummaryAggregate not stubbed")
+
+// HistorySummaryAggregate mocks the HistorySummaryAggregate operation. With no
+// expectation registered it returns ErrHistorySummaryAggregateNotStubbed.
+func (m *MockConfigStore) HistorySummaryAggregate(ctx context.Context, filter config.HistorySummaryFilter) (*config.HistorySummaryGroups, error) {
+	m.record("HistorySummaryAggregate", ctx, filter)
+	if !isExpected(&m.Mock, "HistorySummaryAggregate") {
+		return nil, ErrHistorySummaryAggregateNotStubbed
+	}
+	args := m.Called(ctx, filter)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.HistorySummaryGroups)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.HistorySummaryGroups, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 // CountExecutionsByPlanAndStatus mocks the CountExecutionsByPlanAndStatus operation.
 func (m *MockConfigStore) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string, since time.Time) (map[string]config.ExecutionStatusCounts, error) {
 	m.record("CountExecutionsByPlanAndStatus", ctx, statuses, since)
@@ -1979,6 +2069,19 @@ func (m *MockConfigStore) ClearCollectionStarted(ctx context.Context, token stri
 		return nil
 	}
 	return m.Called(ctx, token).Error(0)
+}
+
+// ClaimCollectionInvocation mocks the ClaimCollectionInvocation operation.
+// Defaults to (MockInvocationToken, true, nil) when no expectation is
+// registered, so a token-carrying collect run that wins the lock keeps
+// owning the marker under a distinct invocation token.
+func (m *MockConfigStore) ClaimCollectionInvocation(ctx context.Context, markerToken string) (token string, ok bool, err error) {
+	m.record("ClaimCollectionInvocation", ctx, markerToken)
+	if !isExpected(&m.Mock, "ClaimCollectionInvocation") {
+		return MockInvocationToken, true, nil
+	}
+	args := m.Called(ctx, markerToken)
+	return args.String(0), args.Bool(1), args.Error(2)
 }
 
 // StampRIExchangeApprovedBy mocks the StampRIExchangeApprovedBy operation.

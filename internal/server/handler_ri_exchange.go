@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/exchange"
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	awsprovider "github.com/LeanerCloud/cloud-commitments-go/providers/aws"
 	"github.com/LeanerCloud/cloud-commitments-go/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
@@ -39,6 +41,9 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
+	// Before the enabled check: a stranded hold from an earlier run still
+	// blocks approvals of pending exchanges while automation is off.
+	app.alarmStaleRIExchanges(ctx)
 	if !cfg.RIExchangeEnabled {
 		log.Println("RI exchange automation is disabled, skipping")
 		return nil, nil
@@ -65,6 +70,36 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 	}
 
 	return app.executeRIExchangeReshape(ctx, cfg, clients)
+}
+
+// riExchangeStaleAlarmAfter is how long a processing RI exchange may go
+// unchanged before the scheduled run raises an operator alarm (#692). Every
+// writer settles its row well inside this (4m30s on the API path, the task
+// timeout on the scheduled path), so a row this old was most likely stranded
+// by a crash between the provider call and the ledger write.
+const riExchangeStaleAlarmAfter = time.Hour
+
+// alarmStaleRIExchanges logs an ERROR, which feeds the application error
+// alarm, for every processing RI exchange older than riExchangeStaleAlarmAfter.
+// Such a row keeps its reserved ceiling counted against the daily cap on every
+// later day, and whether the exchange happened at AWS is unknown, so it is
+// never settled or released here: an operator verifies it at AWS and resolves
+// it via POST /api/ri-exchange/resolve/{id}. It returns how many it reported.
+func (app *Application) alarmStaleRIExchanges(ctx context.Context) int {
+	stale, err := app.Config.GetStaleProcessingExchanges(ctx, riExchangeStaleAlarmAfter)
+	if err != nil {
+		logging.Errorf("RI exchange reconciliation: failed to list stale processing exchanges: %v", err)
+		return 0
+	}
+	for i := range stale {
+		r := &stale[i]
+		logging.Errorf("RI exchange reconciliation needed: record_id=%s account_id=%s region=%s source_ri_ids=%v held_usd=%s processing_since=%s: "+
+			"the exchange outcome at AWS is unknown and the row keeps holding daily-cap headroom; check the source RIs in AWS, "+
+			"then resolve it with POST /api/ri-exchange/resolve/%s (allowed once unchanged for %s)",
+			r.ID, r.AccountID, r.Region, r.SourceRIIDs, r.PaymentDue, r.UpdatedAt.UTC().Format(time.RFC3339),
+			r.ID, config.RIExchangeResolveStaleAfter)
+	}
+	return len(stale)
 }
 
 // convertibleOfferingFinder is the slice of the EC2 client the offering
@@ -243,37 +278,42 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 //
 //	monthly = (FixedPrice / hours_per_term + UsagePrice + recurring_hourly) × 730
 //
+// Returns an error when Duration is non-positive: a zero cost would read
+// as a free RI and skip the pricing gate, so callers must exclude the RI.
+//
 // Used to populate exchange.RIInfo.MonthlyCost so the cross-family
 // dollar-units pre-filter compares apples-to-apples against per-target
 // offering costs.
-func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 {
+func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
 	if ri.Duration <= 0 {
-		return 0
+		return 0, fmt.Errorf("convertible RI %s has non-positive duration %d: monthly cost is not computable", ri.ReservedInstanceID, ri.Duration)
 	}
 	hoursPerTerm := float64(ri.Duration) / 3600
-	if hoursPerTerm <= 0 {
-		return 0
-	}
-	return ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730
+	return ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730, nil
 }
 
 // convertForAutoExchange converts provider-specific types to exchange package types,
 // including RI metadata needed for offering lookup.
 func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recommendations.RIUtilization) ([]exchange.RIInfo, []exchange.UtilizationInfo, map[string]exchange.RIMetadataInfo) {
-	riInfos := make([]exchange.RIInfo, len(instances))
+	riInfos := make([]exchange.RIInfo, 0, len(instances))
 	riMetadata := make(map[string]exchange.RIMetadataInfo, len(instances))
 
 	for i := range instances {
 		inst := instances[i]
-		riInfos[i] = exchange.RIInfo{
+		monthlyCost, err := monthlyCostFromConvertibleRI(inst)
+		if err != nil {
+			logging.Warnf("convertForAutoExchange: excluding RI from auto-exchange: %v", err)
+			continue
+		}
+		riInfos = append(riInfos, exchange.RIInfo{
 			ID:                  inst.ReservedInstanceID,
 			InstanceType:        inst.InstanceType,
 			InstanceCount:       inst.InstanceCount,
 			OfferingClass:       "convertible",
 			NormalizationFactor: inst.NormalizationFactor,
-			MonthlyCost:         monthlyCostFromConvertibleRI(inst),
+			MonthlyCost:         monthlyCost,
 			CurrencyCode:        inst.CurrencyCode,
-		}
+		})
 		riMetadata[inst.ReservedInstanceID] = exchange.RIMetadataInfo{
 			ProductDescription: inst.ProductDescription,
 			InstanceTenancy:    inst.InstanceTenancy,
@@ -304,7 +344,29 @@ func newConfigExchangeStoreAdapter(store config.StoreInterface) *configExchangeS
 	return &configExchangeStoreAdapter{store: store}
 }
 
+// awsAccountIDPattern is the shape of an AWS account ID: exactly 12 ASCII digits
+// (RE2's \d is ASCII-only).
+var awsAccountIDPattern = regexp.MustCompile(`^\d{12}$`)
+
+// requireAWSExchangeAccountID refuses an exchange record whose account ID is not
+// an AWS account ID. Every record this adapter writes comes from the AWS EC2
+// exchange engine, so its account ID must be the 12-digit account STS
+// reported. ri_exchange_history.account_id itself no longer enforces that
+// shape (migration 000137 dropped the AWS-only CHECK so the column can hold
+// Azure and GCP identifiers, issue #144); this check keeps the guarantee for
+// AWS rows at the boundary where the provider is known, including refusing the
+// "unknown" placeholder resolveAccountID falls back to when STS fails.
+func requireAWSExchangeAccountID(accountID string) error {
+	if !awsAccountIDPattern.MatchString(accountID) {
+		return fmt.Errorf("refusing to record RI exchange: account ID %q is not a 12-digit AWS account ID", accountID)
+	}
+	return nil
+}
+
 func (a *configExchangeStoreAdapter) SaveRIExchangeRecord(ctx context.Context, record *exchange.ExchangeRecord) error {
+	if err := requireAWSExchangeAccountID(record.AccountID); err != nil {
+		return err
+	}
 	cfgRecord := exchangeToConfigRecord(record)
 	if err := a.store.SaveRIExchangeRecord(ctx, cfgRecord); err != nil {
 		return err
@@ -314,6 +376,9 @@ func (a *configExchangeStoreAdapter) SaveRIExchangeRecord(ctx context.Context, r
 }
 
 func (a *configExchangeStoreAdapter) ReserveRIExchange(ctx context.Context, record *exchange.ExchangeRecord, dailyCapUSD, perExchangeCapUSD string) (string, error) {
+	if err := requireAWSExchangeAccountID(record.AccountID); err != nil {
+		return "", err
+	}
 	cfgRecord := exchangeToConfigRecord(record)
 	ceiling, err := a.store.ReserveRIExchange(ctx, cfgRecord, dailyCapUSD, perExchangeCapUSD)
 	if err != nil {

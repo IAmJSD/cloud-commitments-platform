@@ -6,7 +6,8 @@
 jest.mock('../api', () => ({
   initAuth: jest.fn(),
   isAuthenticated: jest.fn(),
-  getCurrentUser: jest.fn()
+  getCurrentUser: jest.fn(),
+  getPublicInfo: jest.fn(),
 }));
 
 jest.mock('../state', () => ({
@@ -25,6 +26,7 @@ jest.mock('../state', () => ({
 
 jest.mock('../auth', () => ({
   showLoginModal: jest.fn(),
+  showAdminSetupModal: jest.fn(),
   updateUserUI: jest.fn()
 }));
 
@@ -35,6 +37,7 @@ jest.mock('../dashboard', () => ({
 
 jest.mock('../navigation', () => ({
   switchTab: jest.fn(),
+  setActiveNav: jest.fn(),
   applyTabFromPath: jest.fn().mockReturnValue('dashboard'),
   initRouter: jest.fn(),
   switchSettingsSubTab: jest.fn(),
@@ -98,6 +101,39 @@ describe('App Module', () => {
       expect(api.getCurrentUser).not.toHaveBeenCalled();
     });
 
+    test('shows admin setup only when /api/info says no admin exists', async () => {
+      (api.isAuthenticated as jest.Mock).mockReturnValue(false);
+      (api.getPublicInfo as jest.Mock).mockResolvedValue({ version: '1', admin_exists: false });
+
+      await init();
+
+      expect(auth.showAdminSetupModal).toHaveBeenCalled();
+      expect(auth.showLoginModal).not.toHaveBeenCalled();
+    });
+
+    test('a failed /api/info lands on login with the failure named, not on admin setup', async () => {
+      (api.isAuthenticated as jest.Mock).mockReturnValue(false);
+      (api.getPublicInfo as jest.Mock).mockRejectedValue(Object.assign(new Error('HTTP 503'), { status: 503 }));
+      console.error = jest.fn();
+
+      await init();
+
+      expect(auth.showAdminSetupModal).not.toHaveBeenCalled();
+      expect(auth.showLoginModal).toHaveBeenCalledWith(expect.stringContaining('HTTP 503'));
+    });
+
+    test('a network failure on /api/info names no status', async () => {
+      (api.isAuthenticated as jest.Mock).mockReturnValue(false);
+      (api.getPublicInfo as jest.Mock).mockRejectedValue(new TypeError('Failed to fetch'));
+      console.error = jest.fn();
+
+      await init();
+
+      expect(auth.showLoginModal).toHaveBeenCalledWith(
+        'Could not reach the CUDly API. Sign-in may fail until it is available again.',
+      );
+    });
+
     test('loads user and routes to dashboard when authenticated', async () => {
       (api.isAuthenticated as jest.Mock).mockReturnValue(true);
       (api.getCurrentUser as jest.Mock).mockResolvedValue({ id: 'user-1', email: 'test@example.com' });
@@ -111,6 +147,17 @@ describe('App Module', () => {
       expect(navigation.applyTabFromPath).toHaveBeenCalled();
       expect(navigation.switchTab).toHaveBeenCalledWith('dashboard', { push: false });
       expect(auth.updateUserUI).toHaveBeenCalled();
+    });
+
+    test('highlights the nav from the URL before any async fetch resolves (#187)', async () => {
+      (api.isAuthenticated as jest.Mock).mockReturnValue(true);
+      (api.getCurrentUser as jest.Mock).mockReturnValue(new Promise(() => {}));
+      (navigation.applyTabFromPath as jest.Mock).mockReturnValue('opportunities');
+
+      void init();
+      await Promise.resolve();
+
+      expect(navigation.setActiveNav).toHaveBeenCalledWith('opportunities');
     });
 
     test('seeds the URL from canonicalTabPath before routing', async () => {
@@ -159,6 +206,52 @@ describe('App Module', () => {
 
       expect(console.error).toHaveBeenCalledWith('Init error:', expect.any(Error));
       expect(auth.showLoginModal).not.toHaveBeenCalled();
+    });
+
+    describe('non-auth failures surface an error state (#206)', () => {
+      beforeEach(() => {
+        document.body.innerHTML = `
+          <main id="main-content">
+            <div id="home-tab" class="tab-content active"></div>
+            <div id="plans-tab" class="tab-content"></div>
+          </main>`;
+        (api.isAuthenticated as jest.Mock).mockReturnValue(true);
+        console.error = jest.fn();
+      });
+
+      test('a failed user fetch replaces the pre-rendered Home panel', async () => {
+        (api.getCurrentUser as jest.Mock).mockRejectedValue(
+          Object.assign(new Error('HTTP 503'), { status: 503 }),
+        );
+
+        await init();
+
+        expect(document.querySelector('.tab-content.active')).toBeNull();
+        expect(document.getElementById('init-error')).not.toBeNull();
+        expect(document.getElementById('init-error')!.textContent).toContain('HTTP 503');
+      });
+
+      test('a throw during routing also surfaces the error state', async () => {
+        (api.getCurrentUser as jest.Mock).mockResolvedValue({ id: 'user-1', email: 'test@example.com' });
+        (navigation.switchTab as jest.Mock).mockImplementationOnce(() => {
+          throw new Error('routing exploded');
+        });
+
+        await init();
+
+        expect(document.getElementById('init-error')!.textContent).toContain('routing exploded');
+        expect(document.querySelector('.tab-content.active')).toBeNull();
+      });
+
+      test('a 401 shows the login modal and no error state', async () => {
+        (api.getCurrentUser as jest.Mock).mockRejectedValue({ status: 401 });
+
+        await init();
+
+        expect(auth.showLoginModal).toHaveBeenCalled();
+        expect(document.getElementById('init-error')).toBeNull();
+        expect(document.getElementById('home-tab')!.classList.contains('active')).toBe(true);
+      });
     });
   });
 
@@ -231,7 +324,7 @@ describe('App Module', () => {
       const dashboardBtn = document.querySelector('[data-tab="dashboard"]') as HTMLButtonElement;
       dashboardBtn.click();
 
-      expect(navigation.switchTab).toHaveBeenCalledWith('dashboard');
+      expect(navigation.switchTab).toHaveBeenCalledWith('dashboard', { focusContent: true });
     });
 
     test('does not call switchTab if tab data attribute is missing', () => {

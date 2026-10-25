@@ -55,13 +55,15 @@ func attachRec(id string, count int) config.RecommendationRecord {
 
 type countingSender struct {
 	*MockEmailSender
-	mu    sync.Mutex
-	sends int
+	mu          sync.Mutex
+	sends       int
+	failedSends int // purchase-failed emails (issue #1195)
 }
 
 func newCountingSender(ctx context.Context) *countingSender {
 	s := &countingSender{MockEmailSender: new(MockEmailSender)}
 	s.On("SendScheduledPurchaseNotification", ctx, mock.Anything).Run(func(mock.Arguments) { s.mu.Lock(); s.sends++; s.mu.Unlock() }).Return(nil)
+	s.On("SendPurchaseFailedNotification", mock.Anything, mock.Anything).Run(func(mock.Arguments) { s.mu.Lock(); s.failedSends++; s.mu.Unlock() }).Return(nil)
 	return s
 }
 
@@ -135,9 +137,11 @@ func TestAttachIntegration_NoMatchAndCap(t *testing.T) {
 		lowered := *plan
 		lowered.MaxStepCommitment = f64(1)
 		require.NoError(t, store.UpdatePurchasePlan(ctx, &lowered))
-		m := &Manager{config: store, email: newCountingSender(ctx), resolver: &fakeResolver{recs: []config.RecommendationRecord{attachRec("rec-a", 5)}}}
+		sender := newCountingSender(ctx)
+		m := &Manager{config: store, email: sender, resolver: &fakeResolver{recs: []config.RecommendationRecord{attachRec("rec-a", 5)}}}
 
 		require.False(t, m.sendPlanNotification(ctx, &snapshot))
+		assert.Equal(t, 1, sender.failedSends, "the failed step is reported once (issue #1195)")
 
 		rows := stepRowsInDB(ctx, t, store, plan.ID)
 		require.Len(t, rows, 1)

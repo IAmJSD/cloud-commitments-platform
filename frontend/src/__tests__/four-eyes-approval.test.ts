@@ -22,6 +22,7 @@ jest.mock('../navigation', () => ({
 }));
 
 jest.mock('../utils', () => ({
+  NO_VALUE: '\u2014',
   formatCurrency: jest.fn((val) => `$${val || 0}`),
   formatDate: jest.fn((val) => (val ? new Date(val).toLocaleDateString() : '')),
   formatTerm: jest.fn((years) => (years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`)),
@@ -156,7 +157,7 @@ describe('4-eyes approval mode (issue #1005)', () => {
 
     await loadHistory();
 
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     expect(list.querySelectorAll('.history-approve-btn')).toHaveLength(0);
   });
 
@@ -173,7 +174,7 @@ describe('4-eyes approval mode (issue #1005)', () => {
 
     await loadHistory();
 
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     const buttons = list.querySelectorAll<HTMLButtonElement>('.history-approve-btn');
     expect(buttons).toHaveLength(1);
     expect(buttons[0]?.dataset['approveId']).toBe('exec-other');
@@ -189,7 +190,7 @@ describe('4-eyes approval mode (issue #1005)', () => {
 
     await loadHistory();
 
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     const buttons = list.querySelectorAll<HTMLButtonElement>('.history-approve-btn');
     expect(buttons).toHaveLength(1);
     expect(buttons[0]?.dataset['approveId']).toBe('exec-own');
@@ -210,7 +211,7 @@ describe('4-eyes approval mode (issue #1005)', () => {
 
     await loadHistory();
 
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     expect(list.querySelectorAll('.history-approve-btn')).toHaveLength(0);
     expect(document.getElementById('four-eyes-banner')?.classList.contains('hidden')).toBe(false);
   });
@@ -227,7 +228,7 @@ describe('4-eyes approval mode (issue #1005)', () => {
 
     await loadHistory();
 
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     expect(list.querySelectorAll('.history-approve-btn')).toHaveLength(1);
     expect(document.getElementById('four-eyes-banner')?.classList.contains('hidden')).toBe(true);
   });
@@ -245,7 +246,7 @@ describe('4-eyes approval mode (issue #1005)', () => {
 
     await loadHistory();
 
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     expect(list.querySelectorAll('.history-approve-btn')).toHaveLength(0);
     const badge = list.querySelector('.badge-muted');
     expect(badge).not.toBeNull();
@@ -266,7 +267,7 @@ describe('4-eyes approval mode (issue #1005)', () => {
 
       await loadHistory();
 
-      const list = document.getElementById('history-list')!;
+      const list = document.getElementById('purchases-approval-queue')!;
       expect(list.querySelectorAll('.history-approve-btn')).toHaveLength(0);
       const badges = list.querySelectorAll('.badge-muted');
       expect(badges).toHaveLength(1);
@@ -284,7 +285,40 @@ describe('4-eyes approval mode (issue #1005)', () => {
 
     await loadHistory();
 
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     expect(list.querySelectorAll('.history-approve-btn')).toHaveLength(0);
+  });
+
+  describe('scheduler-created (system) rows (#233)', () => {
+    async function render(user: unknown, row: Record<string, unknown>, fourEyes = true) {
+      (getCurrentUser as jest.Mock).mockReturnValue(user);
+      (api.getConfig as jest.Mock).mockResolvedValue({ global: { require_different_approver: fourEyes } });
+      (api.getHistory as jest.Mock).mockResolvedValue({ summary: {}, purchases: [makeRow(row)] });
+      await loadHistory();
+      return document.getElementById('purchases-approval-queue')!;
+    }
+
+    test('approve-any holder sees Approve and no badge', async () => {
+      const list = await render(ADMIN_USER, { purchase_id: 'exec-sys', created_by_user_id: undefined, created_by_system: true });
+      expect(list.querySelectorAll('.history-approve-btn')).toHaveLength(1);
+      expect(list.querySelectorAll('.badge-muted')).toHaveLength(0);
+    });
+
+    test('approve-own-only user cannot approve', async () => {
+      const list = await render(REG_USER, { purchase_id: 'exec-sys', created_by_user_id: undefined, created_by_system: true });
+      expect(list.querySelectorAll('.history-approve-btn')).toHaveLength(0);
+      expect(list.querySelectorAll('.badge-muted')).toHaveLength(0);
+    });
+
+    test('non-system row with no creator keeps the no-creator badge', async () => {
+      const list = await render(ADMIN_USER, { purchase_id: 'exec-nocreator', created_by_user_id: undefined, created_by_system: false });
+      expect(list.querySelectorAll('.history-approve-btn')).toHaveLength(0);
+      expect(list.querySelector('.badge-muted')?.textContent).toBe('No recorded creator - an admin must disable 4-eyes mode');
+    });
+
+    test('four-eyes off: system row approvable by approve-any holder', async () => {
+      const list = await render(ADMIN_USER, { purchase_id: 'exec-sys', created_by_user_id: undefined, created_by_system: true }, false);
+      expect(list.querySelectorAll('.history-approve-btn')).toHaveLength(1);
+    });
   });
 });
