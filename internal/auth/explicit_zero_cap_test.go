@@ -61,8 +61,8 @@ func TestGroupWrite_RejectsExplicitZeroMaxAmount(t *testing.T) {
 	}
 }
 
-// The shared adapter also guards CreateAPIKeyAPI for a caller that decodes
-// auth.APICreateAPIKeyRequest itself. The HTTP key handler does not (#980).
+// The shared adapter also guards CreateAPIKeyAPI. The HTTP key handler decodes
+// auth.APICreateAPIKeyRequest itself, so this is the path it takes (#980).
 func TestCreateAPIKeyAPI_RejectsDecodedExplicitZeroMaxAmount(t *testing.T) {
 	var req APICreateAPIKeyRequest
 	require.NoError(t, json.Unmarshal([]byte(

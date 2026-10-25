@@ -26,6 +26,10 @@ const skippedCollectionMarkerClearTimeout = 5 * time.Second
 type TaskLocker interface {
 	TryAdvisoryLock(ctx context.Context, lockID int64) (bool, error)
 	ReleaseAdvisoryLock(ctx context.Context, lockID int64)
+	// AdvisoryLockHeldFor reports how long the current holder has held
+	// lockID; found is false when nobody holds it or the age is unknown.
+	// Used to tell a genuinely running task from a stuck lock (issue #394).
+	AdvisoryLockHeldFor(ctx context.Context, lockID int64) (heldFor time.Duration, found bool, err error)
 }
 
 // ScheduledTaskType represents different types of scheduled tasks.
@@ -110,9 +114,13 @@ func (app *Application) runScheduledTask(ctx context.Context, taskType Scheduled
 		if !acquired {
 			log.Printf("Task %q already running (advisory lock held), skipping", taskType) // #nosec G706 -- taskType is looked up from a known-value map; %q quotes the value to prevent CR/LF log injection
 			app.releaseSkippedCollectionMarker(taskType, params.OwnerToken)
+			if err := stuckTaskLockError(ctx, locker, taskType, lockID); err != nil {
+				return nil, err
+			}
 			return map[string]string{"status": "skipped", "reason": "already_running"}, nil
 		}
 		defer locker.ReleaseAdvisoryLock(ctx, lockID)
+		params = app.claimCollectionInvocation(ctx, taskType, params)
 	}
 
 	return app.dispatchTask(ctx, taskType, params)
@@ -137,22 +145,10 @@ func (app *Application) runScheduledTask(ctx context.Context, taskType Scheduled
 // lets the Lambda async-invoke retry the same event (same owner token) and
 // still run the collect, so the marker must survive that path.
 //
-// Known residual gap: the token identifies the MARKER, not the invocation, so
-// this cannot distinguish "the lock is held by a tokenless cron run" (release
-// is required, or the marker strands for the full 5-minute window) from "the
-// lock is held by a concurrent duplicate delivery of my own event" (release is
-// premature, since that sibling carries the same token and is still
-// collecting). Lambda's async invocation is at-least-once, so the second case
-// is reachable, and there it clears the marker mid-run: the frontend banner
-// drops early and a refresh issued during the remainder wins a fresh marker
-// only to be lock-skipped and released again, returning 202 without collecting.
-// It is bounded and self-healing (the next refresh after the run completes
-// behaves normally) and touches no purchase or money path. Releasing is still
-// strictly better than not releasing, because the cron-overlap case is routine
-// while duplicate delivery is rare. Closing it properly needs an
-// invocation-scoped identity distinct from the marker token (e.g. the lock
-// winner re-stamping last_collection_owner_id with a fresh token), which is a
-// design change deliberately left out of this PR.
+// A lock held by a duplicate delivery of this same event (Lambda async invoke
+// is at-least-once, so it carries the same token) is safe too: that winner
+// re-stamped the marker with its own invocation token on taking the lock
+// (claimCollectionInvocation, issue #84), so this clear no longer matches it.
 //
 // Scoped by ownerToken, so this can only ever release the marker this run
 // owns, never a concurrent run's. Callers that never won MarkCollectionStarted

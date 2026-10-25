@@ -7,7 +7,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 5.100"
     }
   }
 }
@@ -521,8 +521,6 @@ resource "aws_iam_role_policy" "org_discovery" {
         Effect = "Allow"
         Action = [
           "organizations:ListAccounts",
-          "organizations:DescribeAccount",
-          "organizations:DescribeOrganization",
         ]
         Resource = "*" # Organizations API does not support resource-level restrictions
       }

@@ -146,15 +146,13 @@ func TestCreateAccount_AWSExternalID_RoleArnHappyPath(t *testing.T) {
 // that the validation does NOT fire when role_arn mode is paired with
 // an empty role ARN — that combination is the self-account onboarding
 // path (uses ambient Lambda credentials, no AssumeRole, no ExternalId
-// needed). See credentials.resolveRoleARNProvider.
+// needed). See credentials.resolveRoleARNProvider. The external_id is the
+// fake host account, which that shape now requires (#531).
 func TestCreateAccount_AWSExternalID_RoleArnNoRoleArnSelfAccount(t *testing.T) {
 	ctx := context.Background()
-	mockAuth := new(MockAuthService)
-	setupAdminAuth(ctx, mockAuth)
-	store := setupAdminMock(ctx)
-	handler := &Handler{auth: mockAuth, config: store}
+	handler := hostCheckHandler(setupAdminMock(ctx), &probeSTS{}, nil)
 
-	body := `{"name":"CUDly host","provider":"aws","external_id":"123456789012",` +
+	body := `{"name":"CUDly host","provider":"aws","external_id":"` + probeHostAcct + `",` +
 		`"aws_auth_mode":"role_arn"}` // no aws_role_arn, no aws_external_id
 	_, err := handler.createAccount(ctx, adminRequest(body))
 	require.NoError(t, err)

@@ -51,7 +51,7 @@ func (h *Handler) priceRecommendationsFromStore(ctx context.Context, recs []conf
 			if !ok {
 				// The request names a specific origin recommendation that no
 				// longer exists in the current stored set (e.g. a collection
-				// refresh -- ReplaceRecommendations -- wiped it between page
+				// refresh's stale-row eviction removed it between page
 				// load and purchase, while the NEWLY requested term/payment
 				// still resolves via config.RecIdentityKey). Refusing here, not
 				// skipping the check, closes the fail-open gap: an honest

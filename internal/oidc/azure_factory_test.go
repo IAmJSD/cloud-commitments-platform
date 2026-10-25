@@ -13,7 +13,7 @@ import (
 )
 
 // fakeAzureKeyVaultClient is a minimal AzureKeyVaultClient backed by an
-// in-process EC key. Used to exercise resolveOnce without a real Key Vault.
+// in-process EC key. Used to exercise fetchPublicKey without a real Key Vault.
 type fakeAzureKeyVaultClient struct {
 	signErr error
 	key     *ecdsa.PublicKey
@@ -107,7 +107,7 @@ func (f *fakeAzureKeyVaultClient) jwkCrv() *azkeys.CurveName {
 // M6 -- Azure EC key completeness guard (replaces RSA exponent-range check)
 // ---------------------------------------------------------------------------
 
-// TestAzureSigner_ECKeyCompleteness verifies that resolveOnce rejects Key
+// TestAzureSigner_ECKeyCompleteness verifies that fetchPublicKey rejects Key
 // Vault responses that are missing the EC public-key coordinates, which
 // would otherwise produce a zero-valued *ecdsa.PublicKey and sign invalid
 // tokens. A valid response with both X and Y must be accepted.
