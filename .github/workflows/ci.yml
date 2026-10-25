@@ -375,12 +375,47 @@ jobs:
             echo "::warning::Coverage is below 80% (current: ${coverage}%)"
           fi
 
-  # Integration tests with real PostgreSQL
+  # Integration tests with real PostgreSQL, sharded across parallel runners.
+  #
+  # Only the tests the Unit Tests job does not run are run here: those in
+  # `//go:build integration` files, plus untagged tests that skip themselves
+  # under -short. scripts/integration-test-selection.sh finds them and prints a
+  # `-run` regex per package; packages with none are not even compiled. Before
+  # that, this job re-ran every unit test under -tags=integration as well.
+  #
+  # Each leg runs the packages INTEGRATION_SHARDS gives its shard; `*` marks
+  # the catch-all shard, which takes every package with integration tests that
+  # no other shard names, so a new package is never silently skipped. Balance
+  # the shards by the per-package "ok ... <time>" lines in the test step's log.
+  # `needs: integration-tests` waits for every leg, so ci-success fails if any
+  # leg fails or is cancelled.
   integration-tests:
-    name: Integration Tests
+    name: Integration Tests (${{ matrix.title }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      # One shard failing must not cancel the others: their results are what
+      # tell a real failure from a flaky one.
+      fail-fast: false
+      matrix:
+        # Same shards, same order as INTEGRATION_SHARDS below; the guard step
+        # fails on any difference.
+        include:
+          - shard: migrations
+            title: migrations
+          - shard: api-purchase-config
+            title: api, purchase, config
+          - shard: auth-server-rest
+            title: auth, server, rest
+            e2e-typecheck: true
+    env:
+      # <shard> <package path relative to the module> ... ; `*` = the rest.
+      INTEGRATION_SHARDS: |
+        migrations internal/database/postgres/migrations
+        api-purchase-config internal/api internal/purchase internal/config
+        auth-server-rest internal/auth internal/server *
+      SHARD: ${{ matrix.shard }}
 
     services:
       postgres:
@@ -437,6 +472,37 @@ jobs:
               up
           fi
 
+      - name: Select integration tests
+        run: |
+          set -euo pipefail
+          bash scripts/integration-test-selection.sh ./... > "$RUNNER_TEMP/selection.tsv"
+          echo "Packages with integration tests (top-level tests selected):"
+          awk -F'\t' '{ printf "  %s (%d)\n", $1, $3 }' "$RUNNER_TEMP/selection.tsv"
+
+      - name: Check every package with integration tests is in exactly one shard
+        env:
+          SHARD_INDEX: ${{ strategy.job-index }}
+          SHARD_TOTAL: ${{ strategy.job-total }}
+        run: |
+          set -euo pipefail
+          # The matrix and INTEGRATION_SHARDS must list the same shards in the
+          # same order. job-index is unique per leg, so each spec shard then
+          # has exactly one leg, and no leg runs a shard the spec lacks.
+          mapfile -t names < <(awk 'NF { print $1 }' <<<"$INTEGRATION_SHARDS")
+          if [ "${#names[@]}" -ne "$SHARD_TOTAL" ] || [ "${names[$SHARD_INDEX]:-}" != "$SHARD" ]; then
+            echo "::error::matrix leg $((SHARD_INDEX + 1)) of $SHARD_TOTAL is shard '$SHARD', but INTEGRATION_SHARDS line $((SHARD_INDEX + 1)) of ${#names[@]} is '${names[$SHARD_INDEX]:-}'"
+            exit 1
+          fi
+          # Fails if a package lands in no shard or in two, if a named package
+          # has no integration tests left, or if a shard is left empty.
+          # From go.mod, not `go list -m`: the checked-in go.work makes that
+          # print tests/e2e's module path as well.
+          INTEGRATION_MODULE="$(awk '$1 == "module" { print $2; exit }' go.mod)" \
+            bash scripts/integration-test-selection.sh \
+              --shard "$SHARD" "$RUNNER_TEMP/selection.tsv" > "$RUNNER_TEMP/shard.tsv"
+          echo "Shard $SHARD runs:"
+          cut -f1 "$RUNNER_TEMP/shard.tsv" | sed 's/^/  /'
+
       - name: Run integration tests
         env:
           DB_HOST: localhost
@@ -446,51 +512,113 @@ jobs:
           DB_PASSWORD: test_password  # CI-only throwaway password — not used in any real environment
           DB_SSL_MODE: disable
         run: |
-          # Integration tests run in the root module; E2E gets its own tag.
           set -uo pipefail
+          log="$RUNNER_TEMP/integration-${SHARD}.log"
+          profile="$RUNNER_TEMP/coverage-integration-${SHARD}.out"
+          mapfile -t pkgs < <(cut -f1 "$RUNNER_TEMP/shard.tsv")
+          # One go test for the whole shard, so its packages still build and
+          # run in parallel. -run is the per-package regexes joined by |; a
+          # name only matches that name, so another package in the shard runs
+          # extra tests only if it has a test of the same name (counted below).
+          run_regex="$(cut -f2 "$RUNNER_TEMP/shard.tsv" | paste -sd'|' -)"
+          selected=$(awk -F'\t' '{ n += $3 } END { print n + 0 }' "$RUNNER_TEMP/shard.tsv")
           status=0
-          for mod in . tests/e2e; do
-            tag=$(echo "$mod" | tr './' '--' | sed 's/^-/root/')
-            log="$RUNNER_TEMP/integration-${tag}.log"
-            # See the unit job: tests/e2e has no package to test without its own
-            # tag, so it gets a type-check here too rather than a run.
-            if [ "$mod" = "tests/e2e" ]; then
-              echo "==> type-check $mod under -tags=e2e (tests run in the e2e-tests job)"
-              if ! (cd "$mod" && go vet -tags=e2e ./...) 2>&1 | tee "$log"; then
-                echo "::error::$mod failed to type-check under -tags=e2e"
-                status=1
-              fi
-              continue
-            fi
-            echo "==> integration tests in $mod"
-            if ! (cd "$mod" && go test -v -race -tags=integration -timeout=20m \
-                    -coverprofile="$RUNNER_TEMP/coverage-integration-${tag}.out" \
-                    ./...) 2>&1 | tee "$log"; then
-              echo "::error::integration tests failed in $mod"
-              status=1
-            fi
-            ran=$(grep -cE '^--- (PASS|FAIL|SKIP)' "$log" || true)
-            echo "==> $mod ran $ran top-level test(s)"
-            if [ "$ran" -eq 0 ]; then
-              echo "::error::$mod ran zero tests -- it is in the loop but asserting nothing"
-              status=1
-            fi
-          done
+          echo "==> integration tests: ${pkgs[*]}"
+          if ! go test -v -race -tags=integration -timeout=20m \
+                  -run "$run_regex" \
+                  -coverprofile="$profile" \
+                  "${pkgs[@]}" 2>&1 | tee "$log"; then
+            echo "::error::integration tests failed in shard $SHARD"
+            status=1
+          fi
+          # Every selected test reports exactly one top-level result line
+          # (subtests are indented). Fewer means the selection named tests
+          # that did not run; zero is the #1751 shape, asserting nothing.
+          ran=$(grep -cE '^--- (PASS|FAIL|SKIP)' "$log" || true)
+          echo "==> shard $SHARD ran $ran of $selected selected top-level test(s)"
+          if [ "$ran" -eq 0 ] || [ "$ran" -lt "$selected" ]; then
+            echo "::error::shard $SHARD ran $ran top-level test(s), $selected were selected"
+            status=1
+          elif [ "$ran" -gt "$selected" ]; then
+            echo "::warning::shard $SHARD ran $ran top-level tests for $selected selected: a selected name also names a unit test in another package of this shard, which therefore ran twice"
+          fi
+          if [ ! -s "$profile" ]; then
+            echo "::error::shard $SHARD produced no integration coverage profile" >&2
+            status=1
+          fi
+          exit "$status"
 
-          # Merge per-module profiles for the upload step (see the unit job).
+      - name: Type-check tests/e2e under -tags=e2e
+        # tests/e2e holds only //go:build e2e files in a module of its own, so
+        # it has no package to test here; its tests run in the e2e-tests job.
+        # One leg is enough for a type-check. It runs even when the tests
+        # failed, as both results were reported side by side before.
+        if: ${{ !cancelled() && matrix.e2e-typecheck }}
+        working-directory: tests/e2e
+        run: go vet -tags=e2e ./...
+
+      - name: Upload integration coverage
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          # One artifact per shard; the integration-coverage job below merges
+          # them into the single artifact this job used to upload. Short
+          # retention: only the merged one is kept for 30 days.
+          name: integration-coverage-${{ matrix.shard }}
+          path: ${{ runner.temp }}/coverage-integration-${{ matrix.shard }}.out
+          if-no-files-found: error
+          retention-days: 1
+
+  # Rebuild the integration-coverage artifact (coverage-integration.out) the
+  # unsharded job used to upload. That job ran the unit tests too, so its
+  # profile covered both suites; the shards run only integration tests, so
+  # the unit job's profile is merged back in and the artifact keeps its
+  # meaning (81.6% total on main's run 40153816430, 81.6% for the same merge
+  # on this layout). Nothing in CI reads it: Codecov and the 80% coverage
+  # warning use the unit job's own profile. Produced only when every shard
+  # and the unit job passed.
+  integration-coverage:
+    name: Merge integration coverage
+    needs: [unit-tests, integration-tests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download shard coverage
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: integration-coverage-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: true
+
+      - name: Download unit coverage
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: coverage-report
+          path: ${{ runner.temp }}/unit
+
+      - name: Merge profiles
+        run: |
+          set -euo pipefail
           shopt -s nullglob
-          profiles=("$RUNNER_TEMP"/coverage-integration-*.out)
+          profiles=("$RUNNER_TEMP"/shards/coverage-integration-*.out)
           if [ "${#profiles[@]}" -eq 0 ]; then
-            echo "::error::no module produced an integration coverage profile" >&2
+            echo "::error::no integration shard produced a coverage profile" >&2
             exit 1
           fi
+          profiles+=("$RUNNER_TEMP/unit/coverage.out")
+          # Same merge as the unit job: one "mode:" header, then every
+          # profile's blocks. All are atomic (-race); a block present in
+          # more than one profile is summed by go tool cover when read.
           merged="$RUNNER_TEMP/coverage-integration.out"
           head -n 1 "${profiles[0]}" > "$merged"
           for p in "${profiles[@]}"; do
+            if [ "$(head -n 1 "$p")" != "$(head -n 1 "$merged")" ]; then
+              echo "::error::$p has '$(head -n 1 "$p")', expected '$(head -n 1 "$merged")'" >&2
+              exit 1
+            fi
             tail -n +2 "$p" >> "$merged"
           done
-          echo "Merged ${#profiles[@]} integration coverage profile(s)"
-          exit "$status"
+          echo "Merged ${#profiles[@]} coverage profile(s), $(( $(wc -l < "$merged") - 1 )) block(s)"
 
       - name: Upload integration coverage
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -1443,6 +1571,7 @@ jobs:
       - workflow-lint
       - unit-tests
       - integration-tests
+      - integration-coverage
       - integration-test-selection
       - docker-build
       - terraform-validate
