@@ -3,6 +3,7 @@
  */
 
 import { openCreateGroupModal, closeGroupModal, saveGroup, addPermission } from './groupModals';
+import { wireGroupForm } from './groupFormValidation';
 
 /**
  * Setup event handlers for group management
@@ -14,8 +15,6 @@ export function setupGroupHandlers(): void {
   (window as any).addPermission = () => addPermission();
 
   // Setup form handlers
-  const groupForm = document.getElementById('group-form');
-  if (groupForm) {
-    groupForm.addEventListener('submit', (e) => void saveGroup(e));
-  }
+  // Idempotent: index.ts wires the same form at startup (issue #213).
+  wireGroupForm((e) => void saveGroup(e));
 }
