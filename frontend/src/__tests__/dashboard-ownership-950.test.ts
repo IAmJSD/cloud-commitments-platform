@@ -67,6 +67,7 @@ jest.mock('../state', () => ({
 }));
 
 jest.mock('../utils', () => ({
+  NO_VALUE: '\u2014',
   formatCurrency: jest.fn((val) => `$${val || 0}`),
   getDateParts: jest.fn(() => ({ day: 15, month: 'Jan' })),
   escapeHtml: jest.fn((str) => str || ''),

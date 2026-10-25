@@ -16,6 +16,7 @@
  */
 
 import { FOCUSABLE_SELECTOR } from './modal';
+import { createIcon } from './icons';
 
 let dialogSeq = 0;
 
@@ -61,7 +62,7 @@ export function confirmDialog(opts: ConfirmDialogOptions): Promise<boolean> {
     closeBtn.type = 'button';
     closeBtn.className = 'modal-confirm-close';
     closeBtn.setAttribute('aria-label', 'Close');
-    closeBtn.textContent = '×';
+    closeBtn.appendChild(createIcon('x'));
     dialog.appendChild(closeBtn);
 
     const titleEl = document.createElement('h3');

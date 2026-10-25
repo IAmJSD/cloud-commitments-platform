@@ -22,13 +22,13 @@ import (
 // EXISTS guard makes 000027 safe to apply regardless of whether 000018 has
 // already created the constraint.
 func TestMigration_SavingsSnapshotsPK(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
 	t.Run("full migration from scratch succeeds (000018 + 000027 coexist)", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Running all migrations must succeed on a fresh DB — 000027's
@@ -39,7 +39,7 @@ func TestMigration_SavingsSnapshotsPK(t *testing.T) {
 
 		// The primary key must exist and cover (id, timestamp).
 		var constraintExists bool
-		err = pool.QueryRow(ctx, `
+		err := pool.QueryRow(ctx, `
 			SELECT EXISTS (
 				SELECT 1 FROM pg_constraint
 				WHERE conname = 'savings_snapshots_pkey'
@@ -51,9 +51,8 @@ func TestMigration_SavingsSnapshotsPK(t *testing.T) {
 	})
 
 	t.Run("rollback to 000026 then re-apply 000027 succeeds", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin the schema at 000027 (which re-created the PK over 000018's
@@ -67,7 +66,7 @@ func TestMigration_SavingsSnapshotsPK(t *testing.T) {
 
 		// Verify the constraint is gone (000027 was rolled back).
 		var constraintExists bool
-		err = pool.QueryRow(ctx, `
+		err := pool.QueryRow(ctx, `
 			SELECT EXISTS (
 				SELECT 1 FROM pg_constraint
 				WHERE conname = 'savings_snapshots_pkey'

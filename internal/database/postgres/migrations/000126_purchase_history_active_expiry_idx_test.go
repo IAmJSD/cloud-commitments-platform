@@ -16,9 +16,9 @@ import (
 // value still inserts once the index exists, and that the down migration
 // removes it.
 func TestMigration_PurchaseHistoryActiveExpiryIndex(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool, path := container.DB.Pool(), getMigrationsPath()
 
 	indexDef := func() string {

@@ -7,7 +7,6 @@
  * will not render it.
  */
 
-import { availableGroups } from './state';
 import { handleUserSearch, handleFilterChange, clearFilters, updateGroupFilterDropdown } from './filters';
 import { openCreateUserModal, closeUserModal, saveUser } from './userModals';
 import { bulkDeleteUsers, bulkAddToGroup } from './userActions';
@@ -73,18 +72,9 @@ export function setupUserHandlers(): void {
   // Any existing UI element for it is intentionally left unwired so
   // it becomes a no-op rather than crashing.
 
-  const bulkGroupBtn = document.getElementById('bulk-group-btn');
-  if (bulkGroupBtn) {
-    bulkGroupBtn.addEventListener('click', () => {
-      // Show group selection dialog
-      const groupId = prompt(`Enter group ID (available: ${availableGroups.map(g => g.name).join(', ')}):`);
-      if (groupId) {
-        void bulkAddToGroup(groupId);
-      }
-    });
-  }
-
-  // Bulk group select dropdown (replaces the prompt on the production toolbar)
+  // Bulk add to group goes through the #bulk-group-select dropdown. The old
+  // #bulk-group-btn handler asked for a group ID via native prompt(); that
+  // button is not in index.html, so the dead handler was removed (#705).
   const bulkGroupSelect = document.getElementById('bulk-group-select') as HTMLSelectElement | null;
   if (bulkGroupSelect) {
     bulkGroupSelect.addEventListener('change', () => {
