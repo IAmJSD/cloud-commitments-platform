@@ -386,23 +386,40 @@ func (h *Handler) buildRecommendationDetail(ctx context.Context, rec *config.Rec
 	}
 }
 
+// Confidence bucket cut-offs for the recommendation drawer badge. They must
+// stay equal to exchange.ConfidenceHighSavingsUSD, exchange.ConfidenceHighMinCount
+// and exchange.ConfidenceMediumSavingsUSD in cloud-commitments-go pkg/exchange,
+// which score the reshape ranking the badge accompanies. Those exported
+// constants are newer than the pkg version pinned in go.mod; once the pin is
+// bumped past them, alias these to the exchange constants (#343).
+const (
+	confidenceHighSavingsUSD   = 200.0 // USD per month, high bucket
+	confidenceHighMinCount     = 3     // instances, high bucket
+	confidenceMediumSavingsUSD = 50.0  // USD per month, medium bucket
+)
+
 // confidenceBucketFor mirrors the heuristic that previously lived
 // client-side in frontend/src/recommendations.ts. Centralizing it on
 // the server lets future provider-specific tuning land in one place
 // without a frontend deploy. Thresholds intentionally match the original
 // shim 1:1 so the drawer label doesn't visibly shift on rollout.
 //
-//	high   = ≥ $200/mo savings AND ≥ 3-instance fleet (both signals)
-//	medium = ≥ $50/mo savings (single signal)
+//	high   = savings >= confidenceHighSavingsUSD AND count >= confidenceHighMinCount
+//	medium = savings >= confidenceMediumSavingsUSD
 //	low    = otherwise
+//
+// A count below 1 (missing) is clamped to 1, so savings alone decide between
+// medium and low. This deliberately differs from the exchange ranking, which
+// returns a neutral score for a zero count: a badge must always show a
+// bucket, while a ranking score should stay neutral on missing data.
 func confidenceBucketFor(savings float64, count int) string {
 	if count < 1 {
 		count = 1
 	}
-	if savings >= 200 && count >= 3 {
+	if savings >= confidenceHighSavingsUSD && count >= confidenceHighMinCount {
 		return "high"
 	}
-	if savings >= 50 {
+	if savings >= confidenceMediumSavingsUSD {
 		return "medium"
 	}
 	return "low"
