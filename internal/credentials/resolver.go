@@ -471,6 +471,9 @@ func loadStoredGCPTokenSource(
 	if err != nil {
 		return nil, fmt.Errorf("credentials: load gcp credentials for account %s: %w", account.ID, err)
 	}
+	if checkErr := checkStoredGCPEndpoints(account.ID, raw); checkErr != nil {
+		return nil, checkErr
+	}
 	if raw == nil {
 		return nil, fmt.Errorf("credentials: no gcp credentials stored for account %s", account.ID)
 	}
