@@ -31,7 +31,7 @@ var federationBundleCombos = []struct {
 func renderBundleFiles(t *testing.T, target, source, sourceCloud string) map[string][]byte {
 	t.Helper()
 	t.Setenv("CUDLY_SOURCE_CLOUD", sourceCloud)
-	h := federationHandler()
+	h := federationHandler(t)
 	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
 		"target": target, "source": source, "format": "bundle",
 	}))
