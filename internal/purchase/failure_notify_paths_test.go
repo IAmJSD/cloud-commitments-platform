@@ -59,6 +59,15 @@ func strandedWriterCases() []writerCase {
 			require.NoError(t, err)
 			assert.True(t, counted)
 		}},
+		// The row was recovered before the guarded stamp: the failed outcome
+		// is stale, so nothing alerts (#1417).
+		{name: "safeFail won CAS, row recovered before the stamp", run: func(t *testing.T, m *Manager, store *MockConfigStore) {
+			failedRowFromCAS(store, "TransitionExecutionStatus", transition...)
+			store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{failedStatus}).Return(config.ErrExecutionNotInExpectedStatus)
+			counted, err := m.safeFail(context.Background(), writerRow("approved"))
+			require.NoError(t, err)
+			assert.True(t, counted)
+		}},
 		{name: "safeFail lost CAS", run: func(t *testing.T, m *Manager, store *MockConfigStore) {
 			store.On("TransitionExecutionStatus", transition...).Return(nil, config.ErrExecutionNotInExpectedStatus)
 			counted, err := m.safeFail(context.Background(), writerRow("approved"))
