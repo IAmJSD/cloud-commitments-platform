@@ -102,3 +102,47 @@ func TestLegacyEC2RetrySuppressesBoughtVariant_RealPostgres(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got, "the bought variant must be fully suppressed")
 }
+
+// TestSuppressionsMatchAcrossEC2Slugs_RealPostgres is the issue #1412
+// regression on a real database: an "ec2" rec is hidden by a "compute"
+// suppression row and a "compute" rec by an "ec2" row (both spellings exist in
+// stored data), while an Azure "compute" rec is not hidden by an AWS row.
+func TestSuppressionsMatchAcrossEC2Slugs_RealPostgres(t *testing.T) {
+	ctx := t.Context()
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
+	store := config.NewPostgresStore(pg.DB)
+
+	rec := func(id, provider, service, resourceType string) config.RecommendationRecord {
+		return config.RecommendationRecord{
+			ID: id, Provider: provider, Service: service, Region: "us-east-1", ResourceType: resourceType,
+			Count: 5, Term: 1, Payment: "all-upfront",
+			Details: []byte(`{"availability_zone":"","platform":"","tenancy":""}`),
+		}
+	}
+	require.NoError(t, store.UpsertRecommendations(ctx, time.Now(), []config.RecommendationRecord{
+		rec("ec2-rec", "aws", "ec2", "m5.large"),
+		rec("compute-rec", "aws", "compute", "c5.large"),
+		rec("azure-rec", "azure", "compute", "m5.large"),
+	}, nil))
+
+	for _, row := range []struct{ provider, service, resourceType string }{
+		{"aws", "compute", "m5.large"},
+		{"aws", "ec2", "c5.large"},
+	} {
+		_, err := pg.DB.Pool().Exec(ctx, `
+			INSERT INTO purchase_suppressions (execution_id, account_id, provider, service, region,
+			                                   resource_type, engine, suppressed_count, expires_at)
+			VALUES ($1, '', $2, $3, 'us-east-1', $4, '', 2, NOW() + INTERVAL '1 day')`,
+			uuid.NewString(), row.provider, row.service, row.resourceType)
+		require.NoError(t, err)
+	}
+
+	s := &Scheduler{config: store, isLambda: true}
+	got, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	require.NoError(t, err)
+	counts := map[string]int{}
+	for _, r := range got {
+		counts[r.ID] = r.Count
+	}
+	assert.Equal(t, map[string]int{"ec2-rec": 3, "compute-rec": 3, "azure-rec": 5}, counts)
+}

@@ -32,7 +32,7 @@ func suppressionBucketOf(rec *RecommendationRecord) suppressionBucket {
 	b := suppressionBucket{
 		accountID:    accountID,
 		provider:     rec.Provider,
-		service:      rec.Service,
+		service:      CanonicalSuppressionService(rec.Provider, rec.Service),
 		region:       rec.Region,
 		resourceType: rec.ResourceType,
 		engine:       rec.Engine,
@@ -43,8 +43,7 @@ func suppressionBucketOf(rec *RecommendationRecord) suppressionBucket {
 		b.unknownVariant = true
 		return b
 	}
-	isAWSEC2 := rec.Provider == string(common.ProviderAWS) &&
-		(rec.Service == string(common.ServiceEC2) || rec.Service == string(common.ServiceCompute))
+	isAWSEC2 := b.provider == string(common.ProviderAWS) && b.service == string(common.ServiceCompute)
 	if isAWSEC2 && v.Platform == "" && v.Tenancy == "" {
 		// Saved before Details existed (#453) and retried without re-matching:
 		// the bought platform/tenancy is unknown, so a known {az,"",""} would
