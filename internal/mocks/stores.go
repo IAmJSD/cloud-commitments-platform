@@ -21,6 +21,11 @@ import (
 // implicitly keep getting a non-empty token to thread through.
 const MockOwnerToken = "mock-owner-token"
 
+// MockInvocationToken is the default token MockConfigStore.ClaimCollectionInvocation
+// returns when no expectation is registered. It differs from MockOwnerToken
+// so tests can tell the re-stamped invocation token from the marker token.
+const MockInvocationToken = "mock-invocation-token"
+
 // MockConfigStore is a shared testify-based mock for config.StoreInterface.
 //
 // Most methods dispatch through m.Called only when an expectation has been
@@ -607,6 +612,17 @@ func (m *MockConfigStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, 
 		return true, "cancelled", nil
 	}
 	args := m.Called(ctx, tx, executionID, cancelledBy)
+	return args.Bool(0), args.String(1), args.Error(2)
+}
+
+// CancelExecutionAtomicTokenPinned mocks the token-pinned cancel (issue
+// #1190). Like TransitionExecutionStatusTokenPinned it has no default and does
+// not delegate to CancelExecutionAtomic: a caller that must pin the approval
+// token is expected to call this method, so a test has to register it
+// explicitly.
+func (m *MockConfigStore) CancelExecutionAtomicTokenPinned(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string, rawToken string) (bool, string, error) { //nolint:gocritic // unnamedResult: return names would conflict with body locals
+	m.record("CancelExecutionAtomicTokenPinned", ctx, tx, executionID, cancelledBy, rawToken)
+	args := m.Called(ctx, tx, executionID, cancelledBy, rawToken)
 	return args.Bool(0), args.String(1), args.Error(2)
 }
 
@@ -1618,15 +1634,6 @@ func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDay
 // don't set expectations for them. Tests that want to assert on these paths
 // register an explicit expectation via .On(...).Return(...).
 
-func (m *MockConfigStore) ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord) error {
-	m.record("ReplaceRecommendations", ctx, collectedAt, recs)
-	if !isExpected(&m.Mock, "ReplaceRecommendations") {
-		return nil
-	}
-	args := m.Called(ctx, collectedAt, recs)
-	return args.Error(0)
-}
-
 func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect) error {
 	m.record("UpsertRecommendations", ctx, collectedAt, recs, successfulCollects)
 	if !isExpected(&m.Mock, "UpsertRecommendations") {
@@ -2068,6 +2075,19 @@ func (m *MockConfigStore) ClearCollectionStarted(ctx context.Context, token stri
 		return nil
 	}
 	return m.Called(ctx, token).Error(0)
+}
+
+// ClaimCollectionInvocation mocks the ClaimCollectionInvocation operation.
+// Defaults to (MockInvocationToken, true, nil) when no expectation is
+// registered, so a token-carrying collect run that wins the lock keeps
+// owning the marker under a distinct invocation token.
+func (m *MockConfigStore) ClaimCollectionInvocation(ctx context.Context, markerToken string) (token string, ok bool, err error) {
+	m.record("ClaimCollectionInvocation", ctx, markerToken)
+	if !isExpected(&m.Mock, "ClaimCollectionInvocation") {
+		return MockInvocationToken, true, nil
+	}
+	args := m.Called(ctx, markerToken)
+	return args.String(0), args.Bool(1), args.Error(2)
 }
 
 // StampRIExchangeApprovedBy mocks the StampRIExchangeApprovedBy operation.

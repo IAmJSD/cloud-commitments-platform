@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/api"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -40,13 +39,13 @@ func TestAuthServiceAdapter_ConstrainedAdminKeyRefusedOutOfScope(t *testing.T) {
 		Run(func(args mock.Arguments) { stored = args.Get(1).(*auth.UserAPIKey) }).Return(nil)
 
 	expiresAt := time.Now().Add(24 * time.Hour)
-	_, err := adapter.CreateAPIKeyAPI(ctx, "user-1", api.CreateAPIKeyRequest{
+	_, err := adapter.CreateAPIKeyAPI(ctx, "user-1", auth.APICreateAPIKeyRequest{
 		Name:      "admin-scoped",
 		Password:  ownerPass,
 		ExpiresAt: &expiresAt,
-		Permissions: []api.Permission{{
+		Permissions: []auth.APIPermission{{
 			Action: auth.ActionAdmin, Resource: auth.ResourceAll,
-			Constraints: &api.PermissionConstraint{Accounts: []string{"acct-a"}, MaxAmount: 500},
+			Constraints: &auth.APIPermissionConstraint{Accounts: []string{"acct-a"}, MaxAmount: 500},
 		}},
 	})
 	require.NoError(t, err)

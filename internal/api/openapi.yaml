@@ -3182,8 +3182,8 @@ components:
           exclusiveMinimum: true
           description: >-
             Spend cap per purchase. Omit for no cap. An explicit 0 is rejected
-            with 400 on group writes (create and update); API-key creation
-            over HTTP does not enforce this yet.
+            with 400 on group writes (create and update) and on API-key
+            creation.
 
     # -- API Keys -----------------------------------------------------------
     CreateAPIKeyRequest:

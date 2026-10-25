@@ -3088,12 +3088,13 @@ func TestPGXMock_CancelExecutionAtomic_WritesCanonicalStatus(t *testing.T) {
 
 	// The mock uses regexp matching. We pin on:
 	//   - "canceled_by" to confirm the new column is targeted (not cancelled_by)
-	//   - WithArgs: $1=execID, $2=&actor, $3=StatusCanceled
+	//   - WithArgs: $1=execID, $2=&actor, $3=StatusCanceled, $4=nil (no
+	//     token pin on the unpinned cancel, issue #1190)
 	// The RETURNING row also carries "canceled" so the caller's returned
 	// status is the canonical spelling end-to-end.
 	rows := pgxmock.NewRows([]string{"status"}).AddRow(StatusCanceled)
 	mock.ExpectQuery("canceled_by").
-		WithArgs("exec-1", &actor, StatusCanceled).
+		WithArgs("exec-1", &actor, StatusCanceled, (*string)(nil)).
 		WillReturnRows(rows)
 
 	// Pass mock directly as pgx.Tx (PgxPoolIface embeds pgx.Tx).

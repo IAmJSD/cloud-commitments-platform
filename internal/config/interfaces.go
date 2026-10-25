@@ -295,6 +295,14 @@ type StoreInterface interface {
 	// inside a WithTx block so the suppression cleanup and the status flip
 	// commit atomically.
 	CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (canceled bool, currentStatus string, err error)
+	// CancelExecutionAtomicTokenPinned is CancelExecutionAtomic that also
+	// requires the row's stored approval token hash to match rawToken and to
+	// be unexpired, in the same statement as the status change, so a token
+	// rotated or expired after the email-link cancel validated it cannot
+	// cancel the row (issue #1190). A lost token pin on a row still
+	// pending/notified returns an error wrapping ErrApprovalTokenChanged; a
+	// lost status CAS returns (false, currentStatus, nil) as usual.
+	CancelExecutionAtomicTokenPinned(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string, rawToken string) (canceled bool, currentStatus string, err error)
 	// CancelScheduledExecutionAtomic atomically flips status from 'scheduled' to
 	// 'canceled' (canonical US spelling), setting canceled_by. Used by the
 	// Gmail-style pre-fire delay revoke path (issue #291 wave-2) to cancel a
@@ -555,20 +563,20 @@ type StoreInterface interface {
 
 	// Recommendations cache (ADR: store recommendations in Postgres so the
 	// dashboard serves provider-switch clicks from SQL instead of live cloud
-	// API calls). ReplaceRecommendations is the "force full resync" path;
-	// UpsertRecommendations is the steady-state write path and takes a list
-	// of (provider, account) pairs that successfully collected this cycle.
-	// Stale-row eviction is scoped to that union so a partially-failed
+	// API calls). UpsertRecommendations is the only write path and takes a
+	// list of (provider, account) pairs that successfully collected this
+	// cycle. Stale-row eviction is scoped to that union so a partially-failed
 	// provider preserves the failed accounts' previous-cycle rows. See
-	// SuccessfulCollect for the per-row semantics.
-	ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord) error
+	// SuccessfulCollect for the per-row semantics. There is deliberately no
+	// unscoped "replace everything" method (issue #159).
 	UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect) error
 	ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error)
 	GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error)
 	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error
 	// SetRecommendationsCollectionPartial records (or, with nil, clears) the
-	// most recent collection's incomplete-sweep summary. Upsert/Replace
-	// clear it, so a later complete collection drops the marker.
+	// most recent collection's incomplete-sweep summary.
+	// UpsertRecommendations clears it, so a later complete collection drops
+	// the marker.
 	SetRecommendationsCollectionPartial(ctx context.Context, partial *RecommendationsCollectionPartial) error
 	// MarkCollectionStarted atomically sets last_collection_started_at = now
 	// only when no in-flight collection is running (last_collection_started_at IS NULL
@@ -587,6 +595,14 @@ type StoreInterface interface {
 	// someone else); an empty token is a boundary error, since only a
 	// caller that actually owns a marker should ever call Clear.
 	ClearCollectionStarted(ctx context.Context, token string) error
+	// ClaimCollectionInvocation is called by a token-carrying collect run
+	// once it holds the task advisory lock (issue #84). It re-stamps the
+	// marker with a fresh invocation-scoped token when the marker is still
+	// owned by markerToken, or free/stale, so a lock-skipped duplicate
+	// delivery of the same event (same markerToken) can no longer clear
+	// it. Returns the new token and true when the caller now owns the
+	// marker; ("", false, nil) when another run holds a fresh marker.
+	ClaimCollectionInvocation(ctx context.Context, markerToken string) (token string, ok bool, err error)
 
 	// RI utilization cache. Postgres-backed TTL cache for Cost Explorer
 	// GetReservationUtilization; shared across Lambda containers so

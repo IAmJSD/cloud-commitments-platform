@@ -40,12 +40,28 @@ func (m *Manager) claimRunning(ctx context.Context, executionID string, from []s
 	return m.config.TransitionExecutionStatus(ctx, executionID, from, "running", actor)
 }
 
+// claimRunningForApprove is claimRunning for transitionApproveAndExecute. A
+// non-empty approvalToken (the email-link and SQS token approve) is pinned in
+// the same UPDATE as the claim: the row's stored token hash must still match
+// it and be unexpired, so a re-notification that rotated the token after
+// ApproveExecution validated its snapshot refuses the claim with
+// config.ErrApprovalTokenChanged instead of letting the old, revoked token buy
+// (issue #1190, the immediate-approve side of #590). Session, direct-execute
+// and run-now callers pass "" and are not token-gated.
+func (m *Manager) claimRunningForApprove(ctx context.Context, executionID string, from []string, actor *string, approvalToken string) (*config.PurchaseExecution, error) {
+	if approvalToken == "" {
+		return m.claimRunning(ctx, executionID, from, actor)
+	}
+	return m.config.TransitionExecutionStatusTokenPinned(ctx, executionID, from, "running", actor, approvalToken)
+}
+
 // claimAndCheck claims the row for transitionApproveAndExecute and then runs
 // check against the claimed row. A lost claim returns (nil, err). A refused
 // check fails the claimed row before submission and returns (row, err), with
 // err satisfying errors.Is(err, ErrClaimedRowRefused); nothing is bought.
-func (m *Manager) claimAndCheck(ctx context.Context, executionID string, from []string, actor *string, check ClaimedRowCheck, t0 time.Time) (*config.PurchaseExecution, error) {
-	updated, err := m.claimRunning(ctx, executionID, from, actor)
+// approvalToken is pinned inside the claim; see claimRunningForApprove.
+func (m *Manager) claimAndCheck(ctx context.Context, executionID string, from []string, actor *string, approvalToken string, check ClaimedRowCheck, t0 time.Time) (*config.PurchaseExecution, error) {
+	updated, err := m.claimRunningForApprove(ctx, executionID, from, actor, approvalToken)
 	if err != nil {
 		logging.Errorf("purchase[%s]: transitionApproveAndExecute status transition failed after %s: %v",
 			executionID, time.Since(t0), err)

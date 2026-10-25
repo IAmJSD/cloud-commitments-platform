@@ -38,11 +38,14 @@ func redrivable(exec *config.PurchaseExecution) bool {
 // bought, so no_submission is not stamped and plan suppressions are kept.
 // Returns (true, nil) when the row was failed, matching safeFail's count, and
 // an ErrAuditLoss error when the terminal save fails (the row would then sit
-// in "running" for the reaper).
+// in "running" for the reaper). This worker holds the claim, so it is the one
+// writer that alerts, and it alerts either way, as failClaimedBeforeSubmission
+// does (issue #1195).
 func (m *Manager) failClaimedRedrive(ctx context.Context, exec *config.PurchaseExecution) (bool, error) {
 	cause := errors.New(strandedRecoveryError(exec))
 	logging.Errorf("Recovering stranded approved execution %s: the claimed row no longer qualifies for an in-place re-drive; failing it for visibility", exec.ExecutionID)
 	m.finalizeExecution(exec, cause)
+	defer m.notifyExecutionFailure(ctx, exec)
 	if err := m.saveTerminalExecution(ctx, exec, cause); err != nil {
 		return false, fmt.Errorf("%w: failed to save stranded execution %s as failed after claiming it (row stranded in running): %w",
 			config.ErrAuditLoss, exec.ExecutionID, err)
