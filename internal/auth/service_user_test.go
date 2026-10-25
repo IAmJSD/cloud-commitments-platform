@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
 )
 
 func TestService_SetupAdmin(t *testing.T) {
@@ -1191,18 +1190,19 @@ func TestService_SetupAdmin_EdgeCases(t *testing.T) {
 // Test TOTP functions.
 func TestService_UpdateUserProfile(t *testing.T) {
 	ctx := context.Background()
+	// Hashed once at MinCost: the subtests only need a hash that
+	// verifyPassword accepts, not the production work factor.
+	oldHash := TestPasswordHash(t, "OldPassword123")
 
 	t.Run("update email and password successfully", func(t *testing.T) {
 		mockStore := new(MockStore)
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		// Create user with bcrypt hash for UpdateUserProfile test
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 			CreatedAt:    time.Now(),
 		}
@@ -1224,11 +1224,10 @@ func TestService_UpdateUserProfile(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 		}
 
@@ -1252,11 +1251,10 @@ func TestService_UpdateUserProfile(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 		}
 		otherUser := &User{
@@ -1280,11 +1278,10 @@ func TestService_UpdateUserProfile(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 		}
 
@@ -1302,11 +1299,10 @@ func TestService_UpdateUserProfile(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 		}
 
@@ -1337,11 +1333,10 @@ func TestService_UpdateUserProfile(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 		}
 
