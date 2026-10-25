@@ -80,7 +80,7 @@ func (f *historySummaryFixture) seed(ctx context.Context, t *testing.T) {
 	recA := []RecommendationRecord{{Provider: "aws", CloudAccountID: &a}}
 	mixed := []RecommendationRecord{{Provider: "aws", CloudAccountID: &a}, {Provider: "azure", CloudAccountID: &b}}
 	statuses := []string{"pending", "notified", "scheduled", "approved", "running", "paused", "failed", "expired",
-		StatusCanceled, LegacyStatusCanceled, "partially_completed"}
+		StatusCanceled, "partially_completed"}
 	for i, st := range statuses {
 		at := f.base.Add(time.Duration(i) * 36 * time.Hour)
 		f.saveExecution(ctx, t, at, st, "", &a, nil, recA)
@@ -188,7 +188,7 @@ func TestIntegration_HistorySummaryAggregate_MatchesRowFetch(t *testing.T) {
 		"all":              {Provider: "aws", AccountIDs: []string{f.accountA}, Start: &start, End: &end},
 	}
 	statuses := []string{"pending", "notified", "scheduled", "approved", "running", "paused",
-		"completed", "partially_completed", "failed", "expired", StatusCanceled, LegacyStatusCanceled}
+		"completed", "partially_completed", "failed", "expired", StatusCanceled}
 	for name, filter := range filters {
 		t.Run(name, func(t *testing.T) {
 			agg, err := f.store.HistorySummaryAggregate(ctx, HistorySummaryFilter{
