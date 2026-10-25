@@ -9,7 +9,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"hash/crc32"
-	"sync"
 
 	kms "cloud.google.com/go/kms/apiv1"
 	kmspb "cloud.google.com/go/kms/apiv1/kmspb"
@@ -41,11 +40,8 @@ func (w gcpKMSWrapper) GetPublicKey(ctx context.Context, req *kmspb.GetPublicKey
 // private half never leaves the KMS.
 type GCPKMSSigner struct {
 	client      GCPKMSClient
-	err         error
-	pubKey      *ecdsa.PublicKey
 	keyResource string
-	kid         string
-	once        sync.Once
+	keys        publicKeyCache
 }
 
 // NewGCPKMSSigner constructs a signer bound to a specific KMS key
@@ -92,50 +88,36 @@ func (s *GCPKMSSigner) Sign(ctx context.Context, digest []byte) ([]byte, error) 
 	return derToRawECDSASignature(resp.Signature)
 }
 
-// PublicKey fetches the public half of the KMS key once and caches it.
+// PublicKey fetches the public half of the KMS key and caches it once a
+// fetch succeeds. A failed fetch is returned and retried on the next call.
 func (s *GCPKMSSigner) PublicKey(ctx context.Context) (crypto.PublicKey, error) {
-	s.resolveOnce(ctx)
-	return s.pubKey, s.err
+	return s.keys.publicKey(ctx, s.fetchPublicKey)
 }
 
 // KeyID returns a stable kid derived from the cached public key.
 func (s *GCPKMSSigner) KeyID(ctx context.Context) (string, error) {
-	s.resolveOnce(ctx)
-	return s.kid, s.err
+	return s.keys.keyID(ctx, s.fetchPublicKey)
 }
 
-func (s *GCPKMSSigner) resolveOnce(ctx context.Context) {
-	s.once.Do(func() {
-		resp, err := s.client.GetPublicKey(ctx, &kmspb.GetPublicKeyRequest{Name: s.keyResource})
-		if err != nil {
-			s.err = fmt.Errorf("oidc: gcp kms GetPublicKey: %w", err)
-			return
-		}
-		block, _ := pem.Decode([]byte(resp.Pem))
-		if block == nil {
-			s.err = fmt.Errorf("oidc: gcp kms public key is not PEM-encoded")
-			return
-		}
-		pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-		if err != nil {
-			s.err = fmt.Errorf("oidc: parse gcp kms public key: %w", err)
-			return
-		}
-		ecPub, ok := pub.(*ecdsa.PublicKey)
-		if !ok {
-			s.err = fmt.Errorf("oidc: gcp kms key is not ECDSA (got %T); key must be EC_SIGN_P256_SHA256", pub)
-			return
-		}
-		if ecPub.Curve != elliptic.P256() {
-			s.err = fmt.Errorf("oidc: gcp kms key curve is %s; key must be EC_SIGN_P256_SHA256 (ES256)", ecPub.Curve.Params().Name)
-			return
-		}
-		kid, err := ComputeKeyID(ecPub)
-		if err != nil {
-			s.err = err
-			return
-		}
-		s.pubKey = ecPub
-		s.kid = kid
-	})
+func (s *GCPKMSSigner) fetchPublicKey(ctx context.Context) (*ecdsa.PublicKey, error) {
+	resp, err := s.client.GetPublicKey(ctx, &kmspb.GetPublicKeyRequest{Name: s.keyResource})
+	if err != nil {
+		return nil, fmt.Errorf("oidc: gcp kms GetPublicKey: %w", err)
+	}
+	block, _ := pem.Decode([]byte(resp.Pem))
+	if block == nil {
+		return nil, fmt.Errorf("oidc: gcp kms public key is not PEM-encoded")
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("oidc: parse gcp kms public key: %w", err)
+	}
+	ecPub, ok := pub.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("oidc: gcp kms key is not ECDSA (got %T); key must be EC_SIGN_P256_SHA256", pub)
+	}
+	if ecPub.Curve != elliptic.P256() {
+		return nil, fmt.Errorf("oidc: gcp kms key curve is %s; key must be EC_SIGN_P256_SHA256 (ES256)", ecPub.Curve.Params().Name)
+	}
+	return ecPub, nil
 }

@@ -1192,11 +1192,10 @@ func TestPostgresStoreDB_SaveRIExchangeRecord_DefaultsEmptyPaymentDue(t *testing
 	ctx := context.Background()
 
 	record := &RIExchangeRecord{
-		// AccountID must satisfy the ri_exchange_history schema
-		// invariants: VARCHAR(20) + CHECK (account_id ~ '^\d{12}$').
-		// The earlier test value "payment-due-test-account" tripped both
-		// the length cap and the regex check — replaced with a
-		// 12-digit AWS-style account ID.
+		// A 12-digit AWS-style account ID, the shape every row written
+		// by the AWS exchange path carries (enforced in Go by the
+		// server's exchange store adapter since migration 000137
+		// dropped the column's AWS-only CHECK, issue #144).
 		AccountID:          "123456789012",
 		ExchangeID:         "payment-due-test-exchange",
 		Region:             "us-east-1",

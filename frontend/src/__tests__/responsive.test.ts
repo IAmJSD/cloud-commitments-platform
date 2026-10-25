@@ -15,30 +15,14 @@ describe('responsive.css nav wrap rules', () => {
     'utf-8',
   );
 
-  it('declares a @media (max-width: 1100px) block', () => {
-    expect(css).toMatch(/@media\s*\(max-width:\s*1100px\)/);
-  });
-
-  it('sets flex-wrap: wrap on .tabs inside the 1100px block', () => {
-    // Extract the contents of the 1100px block and assert the .tabs rule
-    // wraps. Using a [\s\S] group instead of a dotall flag to stay
-    // compatible with older TS lib targets.
-    const match = css.match(/@media\s*\(max-width:\s*1100px\)\s*{([\s\S]*?)\n}/);
-    expect(match).not.toBeNull();
-    const body = match?.[1] ?? '';
-    expect(body).toMatch(/\.tabs\s*{[\s\S]*?flex-wrap:\s*wrap/);
-  });
-
-  it('drops overflow-x: auto from the .tabs rule at ≤768px (wrap replaces it)', () => {
-    const match = css.match(/@media\s*\(max-width:\s*768px\)\s*{([\s\S]*?)\n}/);
-    expect(match).not.toBeNull();
-    const body = match?.[1] ?? '';
-    // Isolate the .tabs rule specifically and ensure it no longer sets
-    // overflow-x. Other selectors in the block (e.g. `table`) may still
-    // use overflow-x: auto — that is intentional and unrelated.
-    const tabsRule = body.match(/\.tabs\s*{[\s\S]*?}/);
-    expect(tabsRule).not.toBeNull();
-    expect(tabsRule?.[0] ?? '').not.toMatch(/overflow-x/);
+  // Issue #10 wrapped the old top-bar .tabs row at <=1100px and <=768px. The
+  // main nav has since moved into the sidebar (.app-sidebar-nav .tab-btn in
+  // layout.css), so those rules matched nothing (.tabs) or were outranked
+  // (.tab-btn) and were removed as dead code (issue #725).
+  it('no longer carries the dead top-bar .tabs / .tab-btn rules', () => {
+    expect(css).not.toMatch(/(^|\n)\s*\.tabs\s*{/);
+    expect(css).not.toMatch(/(^|\n)\s*\.tab-btn\s*{/);
+    expect(css).not.toMatch(/@media\s*\(max-width:\s*1100px\)/);
   });
 
   /**
