@@ -28,9 +28,7 @@ func TestMigration_BackfillAdminGroupIDs(t *testing.T) {
 	migrationsPath := getMigrationsPath()
 	const adminEmail = "restore-path@test.example"
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	// Pin the DB at version 55 so 000056 (the SQL backfill under test) is
@@ -41,7 +39,7 @@ func TestMigration_BackfillAdminGroupIDs(t *testing.T) {
 
 	// Simulate a restored/manually-seeded admin whose group_ids drifted to
 	// empty (the bug pattern from issue #351).
-	_, err = pool.Exec(ctx, `
+	_, err := pool.Exec(ctx, `
 		INSERT INTO users (id, email, password_hash, salt, role, active, group_ids, created_at, updated_at)
 		VALUES (gen_random_uuid(), $1, '', '', 'admin', false, '{}', NOW(), NOW())
 	`, adminEmail)

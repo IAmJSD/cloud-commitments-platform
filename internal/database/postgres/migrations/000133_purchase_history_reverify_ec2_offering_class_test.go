@@ -52,8 +52,7 @@ func TestMigration133_ClearsConvertibleEC2Stamps(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 	migrationsPath := getMigrationsPath()
 
@@ -104,8 +103,7 @@ func TestMigration133_ConcurrentStandardStampWins(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 	migrationsPath := getMigrationsPath()
 

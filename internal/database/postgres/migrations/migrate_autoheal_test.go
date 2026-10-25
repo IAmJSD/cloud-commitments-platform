@@ -51,9 +51,7 @@ func TestMigrations_AutoHealDirty(t *testing.T) {
 	migrationsPath := getMigrationsPath()
 
 	t.Run("by default a dirty DB fails loud with recovery instructions", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Migrate to head, then simulate a dirty state by forcing the dirty
@@ -87,9 +85,7 @@ func TestMigrations_AutoHealDirty(t *testing.T) {
 	})
 
 	t.Run("with CUDLY_MIGRATION_AUTOHEAL=true a dirty DB fails loud with recovery instructions", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
@@ -109,9 +105,7 @@ func TestMigrations_AutoHealDirty(t *testing.T) {
 	})
 
 	t.Run("CUDLY_MIGRATION_AUTOHEAL=false bypasses auto-heal check; dirty DB errors via Up()", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
@@ -145,9 +139,7 @@ func TestMigrations_AutoHealDirty(t *testing.T) {
 	// dirty at head -- NOT Force-cleared to clean, which would permanently skip
 	// the missing DDL.
 	t.Run("dirty-at-N with N-effects-absent: auto-heal refuses to silently mark it applied", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Migrate to head so we know the head version number.

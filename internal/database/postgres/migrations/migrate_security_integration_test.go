@@ -29,9 +29,7 @@ func TestAdminBootstrap_LogsToStderr_NotStdout(t *testing.T) {
 	migrationsPath := getMigrationsPath()
 	const adminEmail = "stderr-bootstrap@test.example"
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	readStdout := captureStdout(t)

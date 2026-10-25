@@ -13,12 +13,9 @@ import (
 
 func TestMigration_APIKeyPasswordVersion(t *testing.T) {
 	ctx := context.Background()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, container.Cleanup(ctx)) })
-	pool := container.DB.Pool()
 	path := getMigrationsPath()
-	require.NoError(t, migrations.RunMigrations(ctx, pool, path, "", ""))
+	container := testhelpers.RequireMigratedDatabase(ctx, t, path)
+	pool := container.DB.Pool()
 
 	var id string
 	var version int64

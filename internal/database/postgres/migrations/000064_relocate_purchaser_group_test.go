@@ -49,16 +49,12 @@ func TestMigration_RelocatePurchaserGroup(t *testing.T) {
 	migrationsPath := getMigrationsPath()
 
 	t.Run("Purchaser seeded at new UUID after full migration run", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		container := testhelpers.RequireMigratedDatabase(ctx, t, migrationsPath)
 		pool := container.DB.Pool()
-
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 
 		// Purchaser must exist at the new UUID.
 		var name string
-		err = pool.QueryRow(ctx, `SELECT name FROM groups WHERE id = $1`, purchaserGroupIDTest).Scan(&name)
+		err := pool.QueryRow(ctx, `SELECT name FROM groups WHERE id = $1`, purchaserGroupIDTest).Scan(&name)
 		require.NoError(t, err, "Purchaser group must exist at UUID %s", purchaserGroupIDTest)
 		assert.Equal(t, "Purchaser", name, "group at new UUID must be named 'Purchaser'")
 
@@ -70,9 +66,7 @@ func TestMigration_RelocatePurchaserGroup(t *testing.T) {
 	})
 
 	t.Run("admin-backfill: Administrators members land in Purchaser", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin the DB just below 000064 so we can seed an admin and
@@ -83,7 +77,7 @@ func TestMigration_RelocatePurchaserGroup(t *testing.T) {
 
 		// Seed an admin user in the Administrators group but NOT in Purchaser.
 		const adminEmail = "admin-purchaser-test@test.example"
-		_, err = pool.Exec(ctx, `
+		_, err := pool.Exec(ctx, `
 			INSERT INTO users (id, email, password_hash, salt, active, group_ids, created_at, updated_at)
 			VALUES (gen_random_uuid(), $1, '', '', true,
 			        ARRAY[$2::uuid], NOW(), NOW())
@@ -104,16 +98,14 @@ func TestMigration_RelocatePurchaserGroup(t *testing.T) {
 	})
 
 	t.Run("idempotent: re-running migrations does not duplicate Purchaser membership", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Seed an admin before first run so 000064 backfill fires.
 		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 
 		const adminEmail = "idempotent-test@test.example"
-		_, err = pool.Exec(ctx, `
+		_, err := pool.Exec(ctx, `
 			INSERT INTO users (id, email, password_hash, salt, active, group_ids, created_at, updated_at)
 			VALUES (gen_random_uuid(), $1, '', '', true,
 			        ARRAY[$2::uuid, $3::uuid], NOW(), NOW())

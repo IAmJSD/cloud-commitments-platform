@@ -21,8 +21,7 @@ import (
 func TestMigration_PurchasePlansRampBaseline(t *testing.T) {
 	ctx := context.Background()
 	path := getMigrationsPath()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, previousMigrationVersion(t, 118)))

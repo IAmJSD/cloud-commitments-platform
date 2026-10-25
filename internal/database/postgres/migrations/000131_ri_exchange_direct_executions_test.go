@@ -24,9 +24,7 @@ func TestMigration_RIExchangeDirectExecutions(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	tableExists := func() bool {

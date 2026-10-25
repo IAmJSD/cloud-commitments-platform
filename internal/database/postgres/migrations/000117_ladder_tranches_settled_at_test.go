@@ -24,9 +24,7 @@ import (
 func TestMigration_LadderTranchesSettledAt(t *testing.T) {
 	ctx := context.Background()
 	path := getMigrationsPath()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, previousMigrationVersion(t, 117)))
@@ -42,7 +40,7 @@ func TestMigration_LadderTranchesSettledAt(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, `SELECT convalidated FROM pg_constraint WHERE conname = 'ladder_tranches_completed_has_settled_at'`).Scan(&validated))
 	assert.True(t, validated)
 
-	_, err = pool.Exec(ctx, `UPDATE ladder_tranches SET status_reason = 'x' WHERE id = $1`, ids.tranches["account"])
+	_, err := pool.Exec(ctx, `UPDATE ladder_tranches SET status_reason = 'x' WHERE id = $1`, ids.tranches["account"])
 	require.NoError(t, err, "an unrelated update of a legacy completed row must succeed")
 	_, err = pool.Exec(ctx, `DELETE FROM cloud_accounts WHERE id = $1`, ids.account)
 	require.NoError(t, err, "deleting the account of a legacy completed tranche")

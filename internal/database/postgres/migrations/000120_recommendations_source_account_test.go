@@ -17,9 +17,7 @@ import (
 
 func TestMigration_RecommendationsSourceAccount(t *testing.T) {
 	ctx := context.Background()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, container.Cleanup(ctx)) })
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 	path := getMigrationsPath()
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, previousMigrationVersion(t, 120)))
@@ -34,7 +32,7 @@ func TestMigration_RecommendationsSourceAccount(t *testing.T) {
 		"verbatim": {`{"source_account_id":" A|β\t "}`, " A|β\t "},
 	}
 	for name, v := range vectors {
-		_, err = pool.Exec(ctx, insert, name, v.payload)
+		_, err := pool.Exec(ctx, insert, name, v.payload)
 		require.NoError(t, err)
 	}
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 120))
@@ -54,7 +52,7 @@ func TestMigration_RecommendationsSourceAccount(t *testing.T) {
 			assert.Contains(t, definition, "(account_key, provider, service, region, resource_type, engine, term, payment_option, availability_zone, platform, tenancy, source_account_key)")
 		}
 	}
-	_, err = pool.Exec(ctx, insert, "known", `{"source_account_id":"OtherSource"}`)
+	_, err := pool.Exec(ctx, insert, "known", `{"source_account_id":"OtherSource"}`)
 	var constraint *pgconn.PgError
 	require.ErrorAs(t, err, &constraint)
 	assert.Equal(t, "23505", constraint.Code)

@@ -21,9 +21,7 @@ func TestMigration_RecommendationsStateOwnerID(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	// Pin at 000092 (pre-migration) so the assertions exercise 000093's
@@ -31,7 +29,7 @@ func TestMigration_RecommendationsStateOwnerID(t *testing.T) {
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 92))
 
 	var columnExists bool
-	err = pool.QueryRow(ctx, `
+	err := pool.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM information_schema.columns
 			 WHERE table_name = 'recommendations_state'

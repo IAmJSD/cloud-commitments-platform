@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -116,7 +117,7 @@ func TestRequireMigratedDatabase_TemplateRefusesConnections(t *testing.T) {
 	db := RequireMigratedDatabase(ctx, t, sharedTestMigrationsPath())
 
 	shared.mu.Lock()
-	tmpl := shared.templates[filepath.Clean(sharedTestMigrationsPath())]
+	tmpl := shared.templates[templateKey(sharedTestMigrationsPath())]
 	shared.mu.Unlock()
 	require.NoError(t, tmpl.err)
 	require.NotEmpty(t, tmpl.name)
@@ -201,4 +202,142 @@ func connString(cfg *database.Config, dbName string) string {
 		RawQuery: "sslmode=disable",
 	}
 	return u.String()
+}
+
+// userRelations counts the relations (tables, views, sequences, indexes, ...)
+// outside the system schemas: zero for a database nothing has touched.
+func userRelations(ctx context.Context, t *testing.T, db *database.Connection) int {
+	t.Helper()
+	var n int
+	require.NoError(t, db.QueryRow(ctx, `
+		SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%'`).Scan(&n))
+	return n
+}
+
+// requireEmpty asserts db is what CREATE DATABASE ... TEMPLATE template0 makes:
+// no user relations and no extension beyond the built-in plpgsql.
+func requireEmpty(ctx context.Context, t *testing.T, db *database.Connection, name string) {
+	t.Helper()
+	assert.Zero(t, userRelations(ctx, t, db), "%s must have no tables", name)
+	assert.False(t, tableExists(ctx, t, db, "schema_migrations"), "%s must not be migrated", name)
+	rows, err := db.Query(ctx, `SELECT extname FROM pg_extension ORDER BY extname`)
+	require.NoError(t, err)
+	extensions, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	require.NoError(t, err)
+	assert.Equal(t, []string{"plpgsql"}, extensions, "%s must have only the built-in extension", name)
+}
+
+// TestRequireEmptyDatabase_IsEmpty pins the contract the migration tests rely
+// on: the database starts with nothing in it, even after a migrated template
+// exists on the same server, and it is the caller's alone.
+func TestRequireEmptyDatabase_IsEmpty(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// A migrated database first, so a template with every table exists on the
+	// server and an empty database cloned from the wrong template would show it.
+	migrated := RequireMigratedDatabase(ctx, t, sharedTestMigrationsPath())
+	require.True(t, tableExists(ctx, t, migrated.DB, "schema_migrations"))
+
+	db := RequireEmptyDatabase(ctx, t)
+	assert.Nil(t, db.Container, "the shared container is not the caller's to terminate")
+	assert.NotEqual(t, migrated.Config.Database, db.Config.Database)
+	assert.Equal(t, migrated.Config.Host, db.Config.Host, "empty databases live on the one shared server")
+	assert.Equal(t, migrated.Config.Port, db.Config.Port, "empty databases live on the one shared server")
+	requireEmpty(ctx, t, db.DB, "a new empty database")
+
+	var current string
+	require.NoError(t, db.DB.QueryRow(ctx, `SELECT current_database()`).Scan(&current))
+	assert.Equal(t, db.Config.Database, current, "Config and DB must point at the same database")
+}
+
+// TestRequireEmptyDatabase_IsolatedFromOtherDatabases migrates one empty
+// database all the way, as a migration test does, and checks that neither a
+// sibling nor a database handed out afterwards sees any of it, and that the
+// migrated template is untouched by it.
+func TestRequireEmptyDatabase_IsolatedFromOtherDatabases(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	want := latestMigrationVersion(t)
+
+	a := RequireEmptyDatabase(ctx, t)
+	b := RequireEmptyDatabase(ctx, t)
+	assert.NotEqual(t, a.Config.Database, b.Config.Database, "each caller needs a database of its own")
+
+	require.NoError(t, migrations.RunMigrations(ctx, a.DB.Pool(), sharedTestMigrationsPath(), "", ""),
+		"the full chain must apply to an empty database")
+	requireFullyMigrated(ctx, t, a.DB, want)
+	_, err := a.DB.Exec(ctx, `CREATE TABLE isolation_probe (id int)`)
+	require.NoError(t, err)
+
+	c := RequireEmptyDatabase(ctx, t)
+	requireEmpty(ctx, t, b.DB, "a sibling empty database")
+	requireEmpty(ctx, t, c.DB, "a later empty database")
+
+	m := RequireMigratedDatabase(ctx, t, sharedTestMigrationsPath())
+	assert.False(t, tableExists(ctx, t, m.DB, "isolation_probe"), "a migrated database sees a table an empty one created")
+}
+
+// TestRequireEmptyDatabase_DropsDatabaseWhenTestEnds checks that an empty
+// database does not outlive its test, even with a leaked connection to it.
+func TestRequireEmptyDatabase_DropsDatabaseWhenTestEnds(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	var name string
+	var cfg *database.Config
+	t.Run("uses and leaks", func(t *testing.T) {
+		db := RequireEmptyDatabase(ctx, t)
+		name, cfg = db.Config.Database, db.Config
+		leaked, err := pgx.Connect(ctx, connString(cfg, name))
+		require.NoError(t, err)
+		require.NoError(t, leaked.Ping(ctx)) // never closed, on purpose
+	})
+	require.NotEmpty(t, name)
+
+	admin, err := pgx.Connect(ctx, connString(cfg, "postgres"))
+	require.NoError(t, err)
+	defer func() { _ = admin.Close(ctx) }()
+	var exists bool
+	require.NoError(t, admin.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)`, name).Scan(&exists))
+	assert.False(t, exists, "database %s outlived its test", name)
+}
+
+// TestRequireEmptyDatabase_ConcurrentFirstUse has parallel callers ask for an
+// empty database from a cold start. They must share one container, each get a
+// distinct empty database, and not cause a template to be migrated: nobody
+// asked for one.
+func TestRequireEmptyDatabase_ConcurrentFirstUse(t *testing.T) {
+	require.NoError(t, TerminateSharedPostgres(), "reset to a cold start")
+
+	const callers = 8
+	var mu sync.Mutex
+	names := map[string]bool{}
+	servers := map[string]bool{}
+	t.Run("group", func(t *testing.T) {
+		for i := 0; i < callers; i++ {
+			t.Run(fmt.Sprintf("caller-%d", i), func(t *testing.T) {
+				t.Parallel()
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				defer cancel()
+				db := RequireEmptyDatabase(ctx, t)
+				// Each caller writes to its own database; a shared one would
+				// make the second CREATE fail.
+				_, err := db.DB.Exec(ctx, `CREATE TABLE concurrency_probe (id int)`)
+				require.NoError(t, err)
+
+				mu.Lock()
+				defer mu.Unlock()
+				names[db.Config.Database] = true
+				servers[fmt.Sprintf("%s:%d", db.Config.Host, db.Config.Port)] = true
+			})
+		}
+	})
+
+	assert.Len(t, names, callers, "every caller needs a database of its own")
+	assert.Len(t, servers, 1, "concurrent first callers must share one container")
+	shared.mu.Lock()
+	defer shared.mu.Unlock()
+	assert.Empty(t, shared.templates, "an empty database must not migrate a template")
 }

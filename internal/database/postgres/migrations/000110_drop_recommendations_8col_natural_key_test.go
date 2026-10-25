@@ -28,9 +28,7 @@ func TestMigration_DropRecommendations8ColNaturalKey(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	indexExists := func(name string) bool {
@@ -49,7 +47,7 @@ func TestMigration_DropRecommendations8ColNaturalKey(t *testing.T) {
 	require.True(t, indexExists("recommendations_natural_key_idx"))
 
 	// A regional row and one zonal row exist before the migration.
-	_, err = pool.Exec(ctx, insertRecForMigration110, "2026-01-01T00:00:00Z", "regional", `{"details":{"scope":"Region"}}`)
+	_, err := pool.Exec(ctx, insertRecForMigration110, "2026-01-01T00:00:00Z", "regional", `{"details":{"scope":"Region"}}`)
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, insertRecForMigration110, "2026-01-01T00:00:00Z", "zonal", `{"availability_zone":"us-east-1a"}`)
 	require.NoError(t, err)

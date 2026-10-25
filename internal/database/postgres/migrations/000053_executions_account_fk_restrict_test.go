@@ -21,9 +21,7 @@ func TestMigration_ExecutionsAccountFKRestrict(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	// Pin the schema at 000053 so the assertions exercise this migration's
@@ -33,7 +31,7 @@ func TestMigration_ExecutionsAccountFKRestrict(t *testing.T) {
 
 	// Verify the FK is RESTRICT after the migration.
 	var deleteAction string
-	err = pool.QueryRow(ctx, `
+	err := pool.QueryRow(ctx, `
 		SELECT confdeltype::text
 		FROM pg_constraint
 		WHERE conname = 'purchase_executions_cloud_account_id_fkey'
@@ -104,9 +102,7 @@ func TestMigration_ExecutionsAccountFKRestrict_Rollback(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	// Pin the schema at 000053, then roll back exactly that migration. A
@@ -116,7 +112,7 @@ func TestMigration_ExecutionsAccountFKRestrict_Rollback(t *testing.T) {
 	require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
 
 	var deleteAction string
-	err = pool.QueryRow(ctx, `
+	err := pool.QueryRow(ctx, `
 		SELECT confdeltype::text
 		FROM pg_constraint
 		WHERE conname = 'purchase_executions_cloud_account_id_fkey'

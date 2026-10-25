@@ -35,16 +35,12 @@ func TestMigration_SeedRIExchangerGroup(t *testing.T) {
 	migrationsPath := getMigrationsPath()
 
 	t.Run("RI Exchanger seeded, system-managed, granting execute:ri-exchange", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		container := testhelpers.RequireMigratedDatabase(ctx, t, migrationsPath)
 		pool := container.DB.Pool()
-
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 
 		var name string
 		var systemManaged bool
-		err = pool.QueryRow(ctx,
+		err := pool.QueryRow(ctx,
 			`SELECT name, system_managed FROM groups WHERE id = $1`, riExchangerGroupIDTest).
 			Scan(&name, &systemManaged)
 		require.NoError(t, err, "RI Exchanger group must exist at UUID %s", riExchangerGroupIDTest)
@@ -74,9 +70,7 @@ func TestMigration_SeedRIExchangerGroup(t *testing.T) {
 	})
 
 	t.Run("admin-backfill: Administrators members land in RI Exchanger", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin just below 000096 so the backfill is observed firing, rather
@@ -84,7 +78,7 @@ func TestMigration_SeedRIExchangerGroup(t *testing.T) {
 		require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 95))
 
 		const adminEmail = "admin-riexchanger-test@test.example"
-		_, err = pool.Exec(ctx, `
+		_, err := pool.Exec(ctx, `
 			INSERT INTO users (id, email, password_hash, salt, active, group_ids, created_at, updated_at)
 			VALUES (gen_random_uuid(), $1, '', '', true, ARRAY[$2::uuid], NOW(), NOW())
 		`, adminEmail, adminGroupIDForPurchaserTest)
@@ -104,15 +98,11 @@ func TestMigration_SeedRIExchangerGroup(t *testing.T) {
 	})
 
 	t.Run("backfill is idempotent and leaves no duplicate entry", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		container := testhelpers.RequireMigratedDatabase(ctx, t, migrationsPath)
 		pool := container.DB.Pool()
 
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
-
 		const adminEmail = "admin-riexchanger-idempotent@test.example"
-		_, err = pool.Exec(ctx, `
+		_, err := pool.Exec(ctx, `
 			INSERT INTO users (id, email, password_hash, salt, active, group_ids, created_at, updated_at)
 			VALUES (gen_random_uuid(), $1, '', '', true, ARRAY[$2::uuid, $3::uuid], NOW(), NOW())
 		`, adminEmail, adminGroupIDForPurchaserTest, riExchangerGroupIDTest)

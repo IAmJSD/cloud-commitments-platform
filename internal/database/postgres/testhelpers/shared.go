@@ -16,13 +16,13 @@ import (
 )
 
 // sharedServer is one PostgreSQL container shared by every test in a test
-// binary that asks for a migrated database (issue #982). Starting a container
-// and applying the full migration chain for each test was most of the
-// internal/config integration run. Here the container starts once, the
-// migrations run once into a template database, and each test gets its own
-// CREATE DATABASE ... TEMPLATE copy of it. Tests stay isolated from each other
-// exactly as before: every test starts from a freshly migrated database that
-// nothing else writes to.
+// binary that asks for a migrated or an empty database (issue #982). Starting
+// a container and applying the full migration chain for each test was most of
+// the integration run. Here the container starts once, the migrations run once
+// into a template database, and each test gets its own CREATE DATABASE ...
+// TEMPLATE copy of it (of template0, for an empty one). Tests stay isolated
+// from each other exactly as before: every test starts from a fresh database
+// that nothing else writes to.
 //
 // One mutex covers all of it. Holding it while the container starts and the
 // template migrates makes concurrent first callers wait for the one setup
@@ -59,12 +59,38 @@ var shared sharedServer
 // job of TerminateSharedPostgres, called from the package's TestMain.
 func RequireMigratedDatabase(ctx context.Context, t *testing.T, migrationsPath string) *PostgresContainer {
 	t.Helper()
+	require.NotEmpty(t, migrationsPath, "RequireMigratedDatabase needs a migrations path; use RequireEmptyDatabase for an unmigrated database")
+	return requireSharedDatabase(ctx, t, migrationsPath)
+}
+
+// RequireEmptyDatabase gives t an empty database of its own on the same
+// shared container RequireMigratedDatabase uses: no tables, no
+// schema_migrations, nothing but what CREATE DATABASE ... TEMPLATE template0
+// puts there. It is for tests whose subject is the migration chain itself (up,
+// down, dirty, heal), which need to start from nothing and must not see a
+// template another test migrated.
+//
+// Cleanup, skips and the missing Container are exactly as for
+// RequireMigratedDatabase. Being per database, it is no substitute for a
+// dedicated server where a test touches server-wide state (roles, ALTER
+// SYSTEM, connection limits, other sessions' backends); see
+// RequirePostgresContainer for those.
+func RequireEmptyDatabase(ctx context.Context, t *testing.T) *PostgresContainer {
+	t.Helper()
+	return requireSharedDatabase(ctx, t, "")
+}
+
+// requireSharedDatabase creates the per-test database (cloned from the
+// migrated template for migrationsPath, or from template0 when it is empty),
+// registers its drop, and connects to it.
+func requireSharedDatabase(ctx context.Context, t *testing.T, migrationsPath string) *PostgresContainer {
+	t.Helper()
 
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
 	name, cfg, err := shared.newDatabase(ctx, t, migrationsPath)
 	require.NoError(t, err,
-		"Docker is healthy but no migrated PostgreSQL test database could be created; "+
+		"Docker is healthy but no PostgreSQL test database could be created on the shared server; "+
 			"this is a real failure, not an environment without Docker")
 	// Registered before connecting, so a database that was created but could not
 	// be connected to is still dropped.
@@ -95,8 +121,15 @@ func TerminateSharedPostgres() error {
 	return err
 }
 
+// emptyTemplate is what RequireEmptyDatabase clones. template0 is the pristine
+// database every PostgreSQL server ships and never accepts connections, so,
+// unlike template1 (which CREATE DATABASE uses by default and buildTemplate
+// clones), nothing can have added objects to it or be connected to it.
+const emptyTemplate = "template0"
+
 // newDatabase returns the name and connection config of a new database cloned
-// from the migrated template for migrationsPath.
+// from the migrated template for migrationsPath, or from template0 when
+// migrationsPath is empty.
 func (s *sharedServer) newDatabase(ctx context.Context, t *testing.T, migrationsPath string) (string, *database.Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -104,9 +137,12 @@ func (s *sharedServer) newDatabase(ctx context.Context, t *testing.T, migrations
 	if err := s.start(ctx, t); err != nil {
 		return "", nil, err
 	}
-	tmpl, err := s.template(ctx, migrationsPath)
-	if err != nil {
-		return "", nil, err
+	tmpl := emptyTemplate
+	if migrationsPath != "" {
+		var err error
+		if tmpl, err = s.template(ctx, migrationsPath); err != nil {
+			return "", nil, err
+		}
 	}
 
 	s.seq++
@@ -130,10 +166,21 @@ func (s *sharedServer) start(ctx context.Context, t *testing.T) error {
 	return s.startErr
 }
 
+// templateKey identifies the migrations directory a template was built from.
+// It is absolute so that "../database/postgres/migrations" and a
+// runtime.Caller-derived path to the same directory share one template instead
+// of each paying for a migration run.
+func templateKey(migrationsPath string) string {
+	if abs, err := filepath.Abs(migrationsPath); err == nil {
+		return abs
+	}
+	return filepath.Clean(migrationsPath)
+}
+
 // template returns the template database for migrationsPath, creating and
 // migrating it on first use. Callers hold s.mu.
 func (s *sharedServer) template(ctx context.Context, migrationsPath string) (string, error) {
-	key := filepath.Clean(migrationsPath)
+	key := templateKey(migrationsPath)
 	if tmpl, ok := s.templates[key]; ok {
 		return tmpl.name, tmpl.err
 	}

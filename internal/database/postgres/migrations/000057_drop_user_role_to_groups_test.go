@@ -42,9 +42,7 @@ func TestMigration_DropUserRoleToGroups(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	// Pin the DB at v56, where the `role` column still exists and we can
@@ -70,7 +68,7 @@ func TestMigration_DropUserRoleToGroups(t *testing.T) {
 	// the legacy {admin,user,readonly} set; this is the path the migration's
 	// fail-safe net (step 3 in 000057.up.sql) is designed to catch -- without
 	// it, that net is exercised by no test and could rot silently.
-	_, err = pool.Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS valid_role`)
+	_, err := pool.Exec(ctx, `ALTER TABLE users DROP CONSTRAINT IF EXISTS valid_role`)
 	require.NoError(t, err)
 	seed("unknown@test.example", "legacy-custom")
 
@@ -137,16 +135,14 @@ func TestMigration_DropUserRoleToGroups_Down(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	// Pin at v57 so the rollback below exercises exactly 000057's down.
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 57))
 
 	// Seed group-only users (post-#907 shape) before rolling back.
-	_, err = pool.Exec(ctx, `
+	_, err := pool.Exec(ctx, `
 		INSERT INTO users (id, email, password_hash, salt, active, group_ids, created_at, updated_at)
 		VALUES
 			(gen_random_uuid(), 'adm@test.example', '', '', true, ARRAY['`+defaultAdminGroupIDTest+`']::uuid[], NOW(), NOW()),

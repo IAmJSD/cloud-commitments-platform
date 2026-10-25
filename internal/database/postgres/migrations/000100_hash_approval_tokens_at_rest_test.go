@@ -115,9 +115,7 @@ func TestMigration_HashApprovalTokensAtRest(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	prev := previousMigrationVersion(t, 100)
@@ -156,7 +154,7 @@ func TestMigration_HashApprovalTokensAtRest(t *testing.T) {
 	for _, tt := range tokenTables {
 		lateWritten[tt.name] = tt.seed(ctx, t, pool, "pending", strPtr("late-"+rawToken+tt.name))
 	}
-	_, err = pool.Exec(ctx, `UPDATE purchase_executions SET approval_token = '' WHERE execution_id = $1`, resavedEmpty)
+	_, err := pool.Exec(ctx, `UPDATE purchase_executions SET approval_token = '' WHERE execution_id = $1`, resavedEmpty)
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, `UPDATE purchase_executions SET approval_token = 'old-code-fresh-token' WHERE execution_id = $1`, resavedFresh)
 	require.NoError(t, err)
@@ -189,9 +187,7 @@ func TestMigration_HashApprovalTokensAtRest_StoreReadsTokenlessRows(t *testing.T
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 100)))

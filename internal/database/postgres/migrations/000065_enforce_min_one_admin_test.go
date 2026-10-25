@@ -8,7 +8,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
@@ -73,12 +72,8 @@ func TestMigration_EnforceMinOneAdmin_ConcurrentRace(t *testing.T) {
 	// arbitration. It returns how many of the two transactions committed and the
 	// number of active admins left afterwards.
 	runConcurrentRace := func(t *testing.T, mutateSQL string) (commits, remainingAdmins int) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		container := testhelpers.RequireMigratedDatabase(ctx, t, migrationsPath)
 		pool := container.DB.Pool()
-
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 
 		adminA := seedActiveAdmin(t, ctx, pool, "race-admin-a@test.example")
 		adminB := seedActiveAdmin(t, ctx, pool, "race-admin-b@test.example")
@@ -175,11 +170,8 @@ func TestMigration_EnforceMinOneAdmin_BlocksLastAdminRemoval(t *testing.T) {
 	// from a clean admin count.
 	freshPool := func(t *testing.T) *pgxpool.Pool {
 		t.Helper()
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = container.Cleanup(ctx) })
+		container := testhelpers.RequireMigratedDatabase(ctx, t, migrationsPath)
 		pool := container.DB.Pool()
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 		return pool
 	}
 

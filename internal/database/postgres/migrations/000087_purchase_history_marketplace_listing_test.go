@@ -26,8 +26,7 @@ func TestMigration087_MarketplaceColumns(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 
 	require.NoError(t, migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", ""),
 		"migrations must apply cleanly through 000087")

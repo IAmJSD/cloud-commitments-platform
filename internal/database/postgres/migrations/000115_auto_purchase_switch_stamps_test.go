@@ -23,13 +23,11 @@ func TestMigration_AutoPurchaseSwitchStamps(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 115)))
-	_, err = pool.Exec(ctx, `INSERT INTO global_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING`)
+	_, err := pool.Exec(ctx, `INSERT INTO global_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING`)
 	require.NoError(t, err)
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 115))

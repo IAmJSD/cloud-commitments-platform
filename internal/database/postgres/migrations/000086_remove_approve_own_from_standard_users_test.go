@@ -42,9 +42,7 @@ func TestMigration_RemoveApproveOwnFromStandardUsers(t *testing.T) {
 	migrationsPath := getMigrationsPath()
 
 	t.Run("approve-own removed, sibling own-verbs retained", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin at 000083, the last migration before 000086. approve-own was
@@ -77,9 +75,7 @@ func TestMigration_RemoveApproveOwnFromStandardUsers(t *testing.T) {
 	})
 
 	t.Run("down migration restores approve-own", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin at exactly 000086 before rolling back. RunMigrations would migrate

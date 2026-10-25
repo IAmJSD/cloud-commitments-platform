@@ -265,25 +265,29 @@ app := &Application{Scheduler: mockScheduler}
 
 ### Integration Test Setup
 
+Integration tests share one PostgreSQL container per test binary and each get a
+fresh database of their own on it (`internal/database/postgres/testhelpers`):
+
 ```go
 //go:build integration
 
 func TestWithPostgres(t *testing.T) {
-    if testing.Short() {
-        t.Skip("Skipping integration test")
-    }
-
-    ctx := testutil.TestContext(t)
-    pg, err := testutil.SetupPostgresContainer(ctx, t)
-    testutil.AssertNoError(t, err)
-
-    for k, v := range pg.Config() {
-        testutil.SetEnv(t, k, v)
-    }
+    ctx := t.Context()
+    // Fully migrated, dropped when the test ends. For a migration test that
+    // needs to start from nothing, use testhelpers.RequireEmptyDatabase(ctx, t).
+    pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
+    store := config.NewPostgresStore(pg.DB)
 
     // Test with real database...
 }
 ```
+
+The package needs a `TestMain` (in a `//go:build integration` file) that calls
+`testhelpers.TerminateSharedPostgres()` after `m.Run()`; see
+`internal/config/main_integration_test.go`. Start a dedicated server with
+`testhelpers.RequirePostgresContainer` only for a test that touches server-wide
+state (roles, `ALTER SYSTEM`, connection limits, other sessions' backends), and
+say why next to the call.
 
 ### Coverage
 

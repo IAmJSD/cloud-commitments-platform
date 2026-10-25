@@ -20,9 +20,7 @@ func TestMigration_PurchaseHistoryListingAttempt(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	const insertSQL = `
@@ -32,7 +30,7 @@ func TestMigration_PurchaseHistoryListingAttempt(t *testing.T) {
 		) VALUES ('acct', 'ri-105', $1, 'aws', 'ec2', 'us-east-1', 't3.micro', 12, 'All Upfront')`
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 105)))
-	_, err = pool.Exec(ctx, insertSQL, time.Now())
+	_, err := pool.Exec(ctx, insertSQL, time.Now())
 	require.NoError(t, err)
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 105))

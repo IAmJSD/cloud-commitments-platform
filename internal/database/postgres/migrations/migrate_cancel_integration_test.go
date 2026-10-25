@@ -22,16 +22,16 @@ import (
 
 // migrationDB returns a pool on a fresh, empty database so each test controls
 // its own schema_migrations state. CUDLY_TEST_ADMIN_DSN points at an existing
-// server (used where Docker is unavailable); otherwise a container is started.
+// server (used where Docker is unavailable); otherwise the test gets an empty
+// database on the package's shared container.
 func migrationDB(t *testing.T) (*pgxpool.Pool, string) {
 	t.Helper()
 	ctx := context.Background()
 
 	adminDSN := os.Getenv("CUDLY_TEST_ADMIN_DSN")
 	if adminDSN == "" {
-		c := testhelpers.RequirePostgresContainer(ctx, t)
-		t.Cleanup(func() { _ = c.Cleanup(ctx) })
-		adminDSN = fmt.Sprintf("postgres://cudly_test:test_password@%s:%d/cudly_test?sslmode=disable", c.Config.Host, c.Config.Port)
+		c := testhelpers.RequireEmptyDatabase(ctx, t)
+		return c.DB.Pool(), c.Config.Database
 	}
 
 	admin, err := pgxpool.New(ctx, adminDSN)

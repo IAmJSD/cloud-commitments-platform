@@ -18,9 +18,7 @@ import (
 func TestMigration_InvalidateAzureRecsLookbackUnits(t *testing.T) {
 	ctx := context.Background()
 	path := getMigrationsPath()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 105))
 	fixtures := []string{
@@ -31,7 +29,7 @@ func TestMigration_InvalidateAzureRecsLookbackUnits(t *testing.T) {
 	expected := make([]map[string]any, len(fixtures))
 	for i, payload := range fixtures {
 		require.NoError(t, json.Unmarshal([]byte(payload), &expected[i]))
-		_, err = pool.Exec(ctx, `INSERT INTO recommendations
+		_, err := pool.Exec(ctx, `INSERT INTO recommendations
    (collected_at,provider,service,region,resource_type,engine,payload,upfront_cost,monthly_savings,term,payment_option)
    VALUES (NOW(),$1,'compute','westeurope','Standard_D4s_v5','',$2::jsonb,0,0,3,$3)`,
 			expected[i]["provider"], payload, expected[i]["payment"])

@@ -15,9 +15,7 @@ import (
 func TestMigration_LadderTrancheAmendments(t *testing.T) {
 	ctx := context.Background()
 	path := getMigrationsPath()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 106))
@@ -46,7 +44,7 @@ func TestMigration_LadderTrancheAmendments(t *testing.T) {
 	require.NoError(t, pool.QueryRow(ctx, `SELECT revision FROM ladder_tranches WHERE id = $1`, trancheID).Scan(&revision))
 	assert.Equal(t, int64(0), revision, "pre-existing tranches start at revision 0")
 
-	_, err = pool.Exec(ctx, `UPDATE ladder_tranches SET revision = -1 WHERE id = $1`, trancheID)
+	_, err := pool.Exec(ctx, `UPDATE ladder_tranches SET revision = -1 WHERE id = $1`, trancheID)
 	require.Error(t, err, "CHECK (revision >= 0) must reject negative revisions")
 
 	_, err = pool.Exec(ctx, `INSERT INTO ladder_tranche_amendments
@@ -91,9 +89,7 @@ func TestMigration_LadderTrancheAmendments(t *testing.T) {
 func TestMigration_LadderTrancheAmendmentsRollbackWhenEmpty(t *testing.T) {
 	ctx := context.Background()
 	path := getMigrationsPath()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 107))

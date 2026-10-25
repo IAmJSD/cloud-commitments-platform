@@ -17,8 +17,7 @@ import (
 // removes it.
 func TestMigration_PurchaseHistoryActiveExpiryIndex(t *testing.T) {
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool, path := container.DB.Pool(), getMigrationsPath()
 
 	indexDef := func() string {

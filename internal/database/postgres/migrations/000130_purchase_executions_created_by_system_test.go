@@ -14,8 +14,7 @@ import (
 // TestMigration_PurchaseExecutionsCreatedBySystem covers 000130 up, down and the CHECK (#233).
 func TestMigration_PurchaseExecutionsCreatedBySystem(t *testing.T) {
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool, path := container.DB.Pool(), getMigrationsPath()
 
 	hasColumn := func() bool {

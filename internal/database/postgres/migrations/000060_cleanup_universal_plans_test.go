@@ -36,9 +36,7 @@ func TestMigration_CleanupUniversalPlans(t *testing.T) {
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	// Pin the DB at v59, seed fixtures, then apply 000060 in isolation.
@@ -47,7 +45,7 @@ func TestMigration_CleanupUniversalPlans(t *testing.T) {
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 59))
 
 	// Seed: two cloud accounts (needed for plan_accounts FK).
-	_, err = pool.Exec(ctx, `
+	_, err := pool.Exec(ctx, `
 		INSERT INTO cloud_accounts (id, name, provider, external_id)
 		VALUES
 		  ('aaaaaaaa-aaaa-aaaa-aaaa-000000000001', 'acct-1', 'aws', '111111111111'),
