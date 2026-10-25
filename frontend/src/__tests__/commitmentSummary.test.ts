@@ -1,4 +1,7 @@
-import { buildCommitmentSummary, commitmentTotals, paymentLabel, withIntro, type CommitmentLine } from '../commitmentSummary';
+import {
+  billsMonthly, buildCommitmentBand, buildCommitmentSummary, commitmentLine, commitmentTotals, formatCommitmentTotals,
+  paymentLabel, withIntro, type CommitmentLine,
+} from '../commitmentSummary';
 
 const line = (over: Partial<CommitmentLine> = {}): CommitmentLine => ({
   service: 'ec2',
@@ -84,5 +87,49 @@ describe('buildCommitmentSummary', () => {
     const body = withIntro('Intro.', buildCommitmentSummary([line()]));
     expect(body.firstElementChild?.textContent).toBe('Intro.');
     expect(body.querySelector('.commitment-summary')).not.toBeNull();
+  });
+});
+
+describe('commitmentLine (issue #711)', () => {
+  const rec = {
+    service: 'rds', provider: 'aws', region: 'us-east-1', resource_type: 'db.r5.large',
+    count: 2, term: 3, payment: 'partial-upfront', upfront_cost: 900, monthly_cost: 40,
+  };
+
+  it('maps a priced recommendation onto a line', () => {
+    expect(commitmentLine(rec)).toEqual({
+      service: 'rds', provider: 'aws', region: 'us-east-1', resourceType: 'db.r5.large',
+      count: 2, term: 3, payment: 'partial-upfront', upfront: 900, monthly: 40,
+    });
+  });
+
+  it('takes a bucket payment and account, and keeps an absent monthly cost as null', () => {
+    const l = commitmentLine({ ...rec, monthly_cost: undefined }, { payment: 'no-upfront', account: 'prod' });
+    expect(l.payment).toBe('no-upfront');
+    expect(l.account).toBe('prod');
+    expect(l.monthly).toBeNull();
+  });
+});
+
+describe('formatCommitmentTotals and buildCommitmentBand (issue #711)', () => {
+  it('formats the three totals at the requested precision', () => {
+    expect(formatCommitmentTotals([line({ monthly: 100.4, term: 1 })], 0))
+      .toEqual({ upfront: '$0', monthly: '$100', termTotal: '$1,205' });
+  });
+
+  it('never prints a partial monthly sum when one line is unreported', () => {
+    expect(formatCommitmentTotals([line(), line({ monthly: null })]))
+      .toEqual({ upfront: '$0.00', monthly: 'Not reported (monthly fees apply)', termTotal: 'Not available' });
+  });
+
+  it('billsMonthly is false only when every line is all upfront', () => {
+    expect(billsMonthly([line({ payment: 'all-upfront' })])).toBe(false);
+    expect(billsMonthly([line({ payment: 'all-upfront' }), line()])).toBe(true);
+  });
+
+  it('builds the band alone, without the line list', () => {
+    const band = buildCommitmentBand([line({ upfront: 50, monthly: 10, term: 1 })], { upfrontLabel: 'Upfront' });
+    expect(band.textContent).toBe('Upfront$50.00Monthly$10.00Total over term$170.00');
+    expect(band.querySelector('li')).toBeNull();
   });
 });

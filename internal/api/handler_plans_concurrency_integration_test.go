@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
@@ -45,10 +44,7 @@ type createConcurrencyFixture struct {
 func newCreateConcurrencyFixture(ctx context.Context, t *testing.T) *createConcurrencyFixture {
 	t.Helper()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = container.Cleanup(context.Background()) })
-	require.NoError(t, migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", ""))
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 
 	store := config.NewPostgresStore(container.DB)
 
@@ -74,7 +70,7 @@ func newCreateConcurrencyFixture(ctx context.Context, t *testing.T) *createConcu
 	// created_by_user_id, which is a foreign key, so a synthetic UUID would make
 	// every insert fail for a reason unrelated to what these tests measure.
 	userID := uuid.New().String()
-	_, err = container.DB.Pool().Exec(ctx, `
+	_, err := container.DB.Pool().Exec(ctx, `
 		INSERT INTO users (id, email, password_hash, salt, active, group_ids, created_at, updated_at)
 		SELECT $1, 'creator@example.com', 'x', 'y', true, ARRAY[g.id], now(), now()
 		  FROM groups g ORDER BY g.name LIMIT 1`, userID)
@@ -273,7 +269,8 @@ func TestCreatePlannedPurchases_BlocksOnTheRampLockAndSeesTheWinner(t *testing.T
 		var blocked int
 		if qErr := f.pool.QueryRow(ctx, `
 			SELECT count(*) FROM pg_stat_activity
-			 WHERE wait_event_type = 'Lock'
+			 WHERE datname = current_database()
+			   AND wait_event_type = 'Lock'
 			   AND state = 'active'
 			   AND pid <> pg_backend_pid()
 			   AND query ILIKE '%purchase_plans%FOR UPDATE%'`,
