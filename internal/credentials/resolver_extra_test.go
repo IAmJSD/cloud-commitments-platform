@@ -324,24 +324,6 @@ func TestResolveGCPTokenSource_InvalidJSON(t *testing.T) {
 // Additional coverage for already-partially-covered functions
 // ---------------------------------------------------------------------------
 
-func TestResolveGCPCredentials_LoadError(t *testing.T) {
-	store := newMockStore()
-	store.err = assert.AnError
-
-	account := &config.CloudAccount{ID: "acct1"}
-	_, err := ResolveGCPCredentials(context.Background(), account, store)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "load gcp service account")
-}
-
-func TestResolveGCPCredentials_NotStored(t *testing.T) {
-	store := newMockStore()
-	account := &config.CloudAccount{ID: "acct1"}
-	_, err := ResolveGCPCredentials(context.Background(), account, store)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no service account stored")
-}
-
 func TestResolveAzureCredentials_LoadError(t *testing.T) {
 	store := newMockStore()
 	store.err = assert.AnError
@@ -383,7 +365,7 @@ func TestResolveAccessKeyProvider_InvalidJSON(t *testing.T) {
 }
 
 func TestResolveRoleARNProvider_LongID_WithExternalID(t *testing.T) {
-	// Exercise the branch where account.ID > 8 chars (sessionSuffix truncated)
+	// Exercise the branch where account.ID > 8 chars (roleSessionName truncates)
 	// and AWSExternalID is set.
 	account := &config.CloudAccount{
 		ID:            "a-very-long-account-id",
@@ -397,7 +379,7 @@ func TestResolveRoleARNProvider_LongID_WithExternalID(t *testing.T) {
 }
 
 func TestResolveWebIdentityProvider_LongID_WithTokenFile(t *testing.T) {
-	// Exercises resolveWebIdentityProvider with a long account ID (truncation branch)
+	// Exercises resolveWebIdentityProvider with a long account ID (roleSessionName truncates)
 	// and with the token file path set in the account struct.
 	f, err := os.CreateTemp("", "wif-token-*.txt")
 	require.NoError(t, err)

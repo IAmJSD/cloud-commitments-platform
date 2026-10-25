@@ -301,19 +301,33 @@ func (s *Service) sendInviteEmail(ctx context.Context, user *User, inviteToken s
 }
 
 // loadUser fetches a user by ID, normalising a missing row (either pgx.ErrNoRows
-// or a nil user) into a uniform "user not found" error. Extracted so the mutating
-// service methods share one lookup-or-not-found path and stay under gocyclo's
-// complexity threshold.
+// or a nil user) into a uniform "user not found" error and wrapping any other
+// store error as "failed to get user: %w". Every service method that looks a
+// user up by ID goes through here (or loadActiveUser) so the not-found and
+// error paths cannot drift between copies (issue #313).
 func (s *Service) loadUser(ctx context.Context, userID string) (*User, error) {
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("user not found")
 		}
-		return nil, err
+		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
 	if user == nil {
 		return nil, fmt.Errorf("user not found")
+	}
+	return user, nil
+}
+
+// loadActiveUser is loadUser for paths that must refuse a deactivated
+// account: minting an API key and authenticating with one.
+func (s *Service) loadActiveUser(ctx context.Context, userID string) (*User, error) {
+	user, err := s.loadUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !user.Active {
+		return nil, fmt.Errorf("user account is not active")
 	}
 	return user, nil
 }
@@ -740,12 +754,8 @@ func (s *Service) DeleteUser(ctx context.Context, userID string) error {
 	}
 
 	if containsGroup(user.GroupIDs, DefaultAdminGroupID) {
-		count, err := s.store.CountGroupMembers(ctx, DefaultAdminGroupID)
-		if err != nil {
-			return fmt.Errorf("failed to count administrators: %w", err)
-		}
-		if count <= 1 {
-			return ErrLastAdmin
+		if err := s.checkLastAdminConstraint(ctx); err != nil {
+			return err
 		}
 	}
 
@@ -774,15 +784,9 @@ func (s *Service) GetUser(ctx context.Context, userID string) (*User, error) {
 
 // UpdateUserProfile allows a user to update their own email and password.
 func (s *Service) UpdateUserProfile(ctx context.Context, userID, email, currentPassword, newPassword string) error {
-	user, err := s.store.GetUserByID(ctx, userID)
+	user, err := s.loadUser(ctx, userID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("user not found")
-		}
-		return fmt.Errorf("failed to get user: %w", err)
-	}
-	if user == nil {
-		return fmt.Errorf("user not found")
+		return err
 	}
 
 	if !s.verifyPassword(currentPassword, user.PasswordHash) {

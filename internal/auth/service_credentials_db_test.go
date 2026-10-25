@@ -65,9 +65,6 @@ func (m *recordingMailSink) SendPasswordResetEmail(_ context.Context, email, _ s
 	m.resets = append(m.resets, email)
 	return m.err
 }
-func (m *recordingMailSink) SendWelcomeEmail(context.Context, string, string, string) error {
-	return nil
-}
 func (m *recordingMailSink) SendUserInviteEmail(context.Context, string, string) error { return nil }
 
 type credentialRaceFixture struct {

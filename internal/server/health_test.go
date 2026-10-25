@@ -172,10 +172,6 @@ func (m *mockAuthStoreForHealth) UpdateAPIKey(ctx context.Context, key *auth.Use
 	return nil
 }
 
-func (m *mockAuthStoreForHealth) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error {
-	return nil
-}
-
 func (m *mockAuthStoreForHealth) RecordAPIKeyUsage(ctx context.Context, keyID string, delta int64) error {
 	return nil
 }
