@@ -1,0 +1,7 @@
+# Fixture (issue #150): an authoritative project policy whose body starts in
+# column 0, the layout `terraform fmt` would rewrite. Must exit 2.
+
+resource "google_project_iam_policy" "project" {
+project = var.project_id
+policy_data = var.project_policy_data
+}
