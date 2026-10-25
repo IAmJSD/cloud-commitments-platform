@@ -98,8 +98,8 @@ describe('Settings Save payment tokens (issue #545)', () => {
     await saveGlobalSettings(new Event('submit'));
 
     const calls = serviceCalls();
-    expect(calls.find(c => c.provider === 'azure' && c.service === 'vm')!.payment).toBe('monthly');
-    expect(calls.find(c => c.provider === 'azure' && c.service === 'sql')!.payment).toBe('upfront');
+    expect(calls.find(c => c.provider === 'azure' && c.service === 'compute')!.payment).toBe('monthly');
+    expect(calls.find(c => c.provider === 'azure' && c.service === 'relational-db')!.payment).toBe('upfront');
     for (const c of calls.filter(x => x.provider === 'gcp')) expect(c.payment).toBe('monthly');
   });
 
@@ -107,7 +107,7 @@ describe('Settings Save payment tokens (issue #545)', () => {
     expect(document.getElementById('gcp-storage-term')).toBeNull();
     await save();
     expect(serviceCalls().filter(c => c.provider === 'gcp').map(c => c.service))
-      .toEqual(['compute', 'sql', 'memorystore']);
+      .toEqual(['compute', 'relational-db', 'cache']);
   });
 
   it('ignores a stored gcp/storage row on load and keeps the other GCP cards', async () => {
@@ -150,7 +150,7 @@ describe('Settings Save payment tokens (issue #545)', () => {
   it('one failed service PUT reports that service, still saves the rest and keeps only its fields dirty', async () => {
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
     (api.updateServiceConfig as jest.Mock).mockImplementation(async (provider: string, service: string) => {
-      if (provider === 'azure' && service === 'vm') throw new Error('invalid payment option');
+      if (provider === 'azure' && service === 'compute') throw new Error('invalid payment option');
     });
     await loadGlobalSettings();
     const azurePayment = document.getElementById('azure-vm-payment') as HTMLSelectElement;
@@ -163,13 +163,70 @@ describe('Settings Save payment tokens (issue #545)', () => {
     expect(api.updateServiceConfig).toHaveBeenCalledTimes(17);
     expect(mockShowToast).toHaveBeenCalledTimes(1);
     expect(mockShowToast).toHaveBeenCalledWith({
-      message: 'Settings saved, but 1 service failed: azure/vm: invalid payment option',
+      message: 'Settings saved, but 1 service failed: azure/compute: invalid payment option',
       kind: 'error',
     });
     expect(azurePayment.classList.contains('dirty')).toBe(true);
     expect(awsPayment.classList.contains('dirty')).toBe(false);
     consoleError.mockRestore();
   });
+  // Issue #617: after #614 a scoped admin's service PUTs all 403. With no
+  // global change and no service saved, the toast must not claim "Settings
+  // saved" or repeat the same denial 17 times.
+  function denied(): Error {
+    return Object.assign(new Error('permission denied: global configuration requires unrestricted account access'), { status: 403 });
+  }
+
+  it('scoped admin: every service PUT denied shows one permission-denied failure toast', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    (api.updateServiceConfig as jest.Mock).mockRejectedValue(denied());
+    await loadGlobalSettings();
+    const awsPayment = document.getElementById('aws-ec2-payment') as HTMLSelectElement;
+    awsPayment.value = 'no-upfront';
+
+    await saveGlobalSettings(new Event('submit'));
+
+    expect(api.updateConfig).not.toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledTimes(1);
+    expect(mockShowToast).toHaveBeenCalledWith({
+      message: 'Failed to save settings: permission denied: global configuration requires unrestricted account access',
+      kind: 'error',
+    });
+    // Nothing saved, so the edited card stays dirty for a retry.
+    expect(awsPayment.classList.contains('dirty')).toBe(true);
+    consoleError.mockRestore();
+  });
+
+  it('every service PUT failing for other reasons says the save failed, listing each service', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    (api.updateServiceConfig as jest.Mock).mockImplementation(async (provider: string, service: string) => {
+      throw provider === 'aws' && service === 'ec2' ? new Error('boom') : denied();
+    });
+    await loadGlobalSettings();
+
+    await saveGlobalSettings(new Event('submit'));
+
+    const { message } = mockShowToast.mock.calls[0]![0] as { message: string };
+    expect(message).toMatch(/^Failed to save settings: 17 services failed: /);
+    expect(message).toContain('aws/ec2: boom');
+    consoleError.mockRestore();
+  });
+
+  it('a saved global change still reports "Settings saved, but" when every service PUT fails', async () => {
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    (api.updateServiceConfig as jest.Mock).mockRejectedValue(new Error('unavailable'));
+    await loadGlobalSettings();
+    const notify = document.getElementById('setting-notification-days') as HTMLInputElement;
+    notify.value = '9';
+
+    await saveGlobalSettings(new Event('submit'));
+
+    expect(api.updateConfig).toHaveBeenCalledTimes(1);
+    const { message } = mockShowToast.mock.calls[0]![0] as { message: string };
+    expect(message).toMatch(/^Settings saved, but 17 services failed: /);
+    consoleError.mockRestore();
+  });
+
   it.each([
     ['no-upfront', 'monthly'],
     ['partial-upfront', 'monthly'],
@@ -184,7 +241,7 @@ describe('Settings Save payment tokens (issue #545)', () => {
     await save();
 
     expect((document.getElementById('azure-vm-payment') as HTMLSelectElement).value).toBe(expected);
-    expect(serviceCalls().find(c => c.provider === 'azure' && c.service === 'vm')!.payment).toBe(expected);
+    expect(serviceCalls().find(c => c.provider === 'azure' && c.service === 'compute')!.payment).toBe(expected);
   });
 
   it('never falls back to upfront when a payment select has no matching option at Save', async () => {
@@ -193,7 +250,7 @@ describe('Settings Save payment tokens (issue #545)', () => {
     expect((document.getElementById('azure-vm-payment') as HTMLSelectElement).value).toBe('');
     await saveGlobalSettings(new Event('submit'));
 
-    expect(serviceCalls().find(c => c.provider === 'azure' && c.service === 'vm')!.payment).toBe('monthly');
+    expect(serviceCalls().find(c => c.provider === 'azure' && c.service === 'compute')!.payment).toBe('monthly');
   });
 
   it('counts only AWS services when asking to propagate the default payment', async () => {
