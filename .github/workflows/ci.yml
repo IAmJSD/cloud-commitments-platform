@@ -256,11 +256,12 @@ jobs:
         # file, no per-finding ignore, no only-new-issues. Every medium and
         # high finding the pedantic persona surfaces fails this job, and the
         # injection class this job exists to catch scores high. Below the line
-        # sit 106 findings, none above low: 66 template-injection on values
-        # #1649 already assessed as non-injectable (github.actor, github.sha
-        # and similar), plus undocumented-permissions, concurrency-limits and
-        # anonymous-definition. Clearing those means rewriting the deploy
-        # workflows, so they are left to a follow-up rather than silenced here.
+        # sit 35 findings with the pinned zizmor, none above low: 24
+        # undocumented-permissions and 11 concurrency-limits. zizmor 1.31 adds
+        # a self-repository audit, which reports 4 more low findings on the
+        # local reusable-workflow calls in deploy-all.yml. template-injection
+        # is at zero since #155 moved every expression out of run: blocks into
+        # env:. The rest are left to a follow-up rather than silenced here.
         run: |
           set -euo pipefail
           # `pipx run --spec` rather than `pipx install`: it pins the version in
@@ -943,7 +944,9 @@ jobs:
         run: bash scripts/test-govulncheck-retry.sh
 
       - name: Scan the shipped image for Go advisories
-        run: bash scripts/scan-shipped-image.sh cudly:${{ github.sha }}
+        env:
+          IMAGE: cudly:${{ github.sha }}
+        run: bash scripts/scan-shipped-image.sh "$IMAGE"
 
   # Terraform validation for all environments
   terraform-validate:
@@ -951,6 +954,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      CLOUD: ${{ matrix.cloud }}
     strategy:
       matrix:
         cloud: [aws, gcp, azure]
@@ -1049,7 +1054,7 @@ jobs:
         # Skips a cloud until it has a tests dir. The lock file is gitignored,
         # so no -lockfile=readonly.
         run: |
-          d=terraform/environments/${{ matrix.cloud }}/ci-cd-permissions
+          d="terraform/environments/$CLOUD/ci-cd-permissions"
           if [ -d "$d/tests" ]; then
             terraform -chdir="$d" init -backend=false -input=false
             terraform -chdir="$d" test
@@ -1057,17 +1062,17 @@ jobs:
 
       - name: Terraform Init
         run: |
-          cd terraform/environments/${{ matrix.cloud }}
+          cd "terraform/environments/$CLOUD"
           terraform init -backend=false
 
       - name: Terraform Validate
         run: |
-          cd terraform/environments/${{ matrix.cloud }}
+          cd "terraform/environments/$CLOUD"
           terraform validate
 
       - name: Validate environment tfvars files
         run: |
-          cd terraform/environments/${{ matrix.cloud }}
+          cd "terraform/environments/$CLOUD"
           for env in dev staging prod; do
             # Check local tfvars if present
             if [ -f "${env}.tfvars" ]; then
