@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -1761,6 +1762,57 @@ func TestPostgresStoreDB_TransitionExecutionStatusPinned(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "running", got.Status)
 	})
+}
+
+// TestPostgresStoreDB_TransitionExecutionStatusPinnedTx (issue #1052): the tx
+// variant commits or rolls back with the caller's transaction, and a lost pin,
+// a lost status CAS or a missing row is reported without aborting it.
+func TestPostgresStoreDB_TransitionExecutionStatusPinnedTx(t *testing.T) {
+	conn := setupTestContainerDB(t)
+	if conn == nil {
+		return
+	}
+	store := NewPostgresStore(conn)
+	ctx := context.Background()
+	plan := &PurchasePlan{Name: "pinned claim tx", Enabled: true, Services: map[string]ServiceConfig{}, RampSchedule: PresetRampSchedules["immediate"]}
+	require.NoError(t, store.CreatePurchasePlan(ctx, plan))
+	exec := &PurchaseExecution{PlanID: plan.ID, Status: "notified", StepNumber: 1, ScheduledDate: time.Now()}
+	require.NoError(t, store.SavePurchaseExecution(ctx, exec))
+	from := []string{"pending", "notified"}
+	status := func() string {
+		t.Helper()
+		reread, err := store.GetExecutionByID(ctx, exec.ExecutionID)
+		require.NoError(t, err)
+		return reread.Status
+	}
+
+	rollback := errors.New("caller's later write failed")
+	err := store.WithTx(ctx, func(tx pgx.Tx) error {
+		got, txErr := store.TransitionExecutionStatusPinnedTx(ctx, tx, exec.ExecutionID, from, "failed", nil, true)
+		require.NoError(t, txErr)
+		assert.Equal(t, "failed", got.Status)
+		return rollback
+	})
+	require.ErrorIs(t, err, rollback)
+	assert.Equal(t, "notified", status(), "the transition rolls back with the caller's transaction")
+
+	require.NoError(t, store.WithTx(ctx, func(tx pgx.Tx) error {
+		_, pinErr := store.TransitionExecutionStatusPinnedTx(ctx, tx, exec.ExecutionID, from, "failed", nil, false)
+		require.ErrorIs(t, pinErr, ErrExecutionNotInExpectedStatus, "a lost pin is a lost CAS")
+		_, goneErr := store.TransitionExecutionStatusPinnedTx(ctx, tx, uuid.NewString(), from, "failed", nil, true)
+		require.ErrorIs(t, goneErr, ErrNotFound)
+		got, txErr := store.TransitionExecutionStatusPinnedTx(ctx, tx, exec.ExecutionID, from, "failed", nil, true)
+		require.NoError(t, txErr, "the rejections did not abort the transaction")
+		assert.Equal(t, "failed", got.Status)
+		return nil
+	}))
+	assert.Equal(t, "failed", status())
+
+	require.NoError(t, store.WithTx(ctx, func(tx pgx.Tx) error {
+		_, casErr := store.TransitionExecutionStatusPinnedTx(ctx, tx, exec.ExecutionID, from, "failed", nil, true)
+		require.ErrorIs(t, casErr, ErrExecutionNotInExpectedStatus)
+		return nil
+	}))
 }
 
 // TestPostgresStoreDB_TransitionExecutionStatusTokenPinned (issue #590): the

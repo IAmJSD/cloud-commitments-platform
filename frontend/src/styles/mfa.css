@@ -1,0 +1,78 @@
+/* Two-factor authentication panels in the profile modal and the login MFA
+ * step (auth.ts). These used inline style="" attributes, which the CSP
+ * (`style-src 'self'`) blocks, so in the deployed app the panels rendered
+ * with no border, no monospace codes and bulleted recovery codes. */
+
+/* Divider between the password form and the 2FA section. */
+.profile-section-divider {
+    border: none;
+    border-top: 1px solid var(--cudly-border);
+    margin: var(--cudly-sp-5) 0;
+}
+
+/* One step of an enroll / disable / regenerate flow. */
+.mfa-panel {
+    margin-top: var(--cudly-sp-3);
+    padding: var(--cudly-sp-4);
+    background: var(--cudly-surface);
+    border: 1px solid var(--cudly-border-strong);
+    border-radius: var(--cudly-r-md);
+}
+
+.mfa-panel h4 {
+    margin-bottom: var(--cudly-sp-2);
+}
+
+/* The recovery-codes step is shown once and must not be missed. */
+.mfa-panel-emphasis {
+    border: 2px solid var(--cudly-primary);
+}
+
+.mfa-qr {
+    display: flex;
+    justify-content: center;
+    padding: var(--cudly-sp-2);
+}
+
+.mfa-qr img {
+    max-width: 200px;
+}
+
+/* Manual-entry secret with its Copy button. */
+.mfa-secret {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--cudly-sp-2);
+    margin-bottom: var(--cudly-sp-4);
+    padding: var(--cudly-sp-2) var(--cudly-sp-3);
+    background: var(--cudly-surface-muted);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-sm);
+    font-family: var(--cudly-font-mono);
+    overflow-wrap: anywhere; /* break between the 4-char groups first */
+}
+
+.mfa-secret button {
+    flex-shrink: 0;
+}
+
+/* One-time / recovery code entry. Monospace with tracking so digits are
+ * easy to compare against the authenticator app. */
+.code-input {
+    font-family: var(--cudly-font-mono);
+    letter-spacing: 0.2em;
+}
+
+.recovery-codes {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+    gap: var(--cudly-sp-1) var(--cudly-sp-4);
+    list-style: none;
+    margin: var(--cudly-sp-3) 0;
+    padding: var(--cudly-sp-3);
+    background: var(--cudly-surface-muted);
+    border: 1px solid var(--cudly-border);
+    border-radius: var(--cudly-r-sm);
+    font-family: var(--cudly-font-mono);
+}

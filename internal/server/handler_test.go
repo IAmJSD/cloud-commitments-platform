@@ -18,9 +18,13 @@ import (
 // mockTaskLocker implements TaskLocker for testing.
 type mockTaskLocker struct {
 	err         error
+	heldErr     error
 	lockCalls   int
 	unlockCalls int
+	heldCalls   int
+	heldFor     time.Duration
 	acquired    bool
+	heldFound   bool
 }
 
 func (m *mockTaskLocker) TryAdvisoryLock(_ context.Context, _ int64) (bool, error) {
@@ -30,6 +34,11 @@ func (m *mockTaskLocker) TryAdvisoryLock(_ context.Context, _ int64) (bool, erro
 
 func (m *mockTaskLocker) ReleaseAdvisoryLock(_ context.Context, _ int64) {
 	m.unlockCalls++
+}
+
+func (m *mockTaskLocker) AdvisoryLockHeldFor(_ context.Context, _ int64) (time.Duration, bool, error) {
+	m.heldCalls++
+	return m.heldFor, m.heldFound, m.heldErr
 }
 
 func TestHandleScheduledTask(t *testing.T) {

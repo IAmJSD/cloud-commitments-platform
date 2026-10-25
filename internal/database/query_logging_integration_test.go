@@ -37,13 +37,13 @@ func (b *queryLogBuffer) take() string {
 
 func TestQueryLogging_RedactsBoundSecretsOnFailure(t *testing.T) {
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
+	// Empty, not migrated: the test creates the one table it needs.
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	var output queryLogBuffer
 	previousOutput := logging.SetOutput(&output)
 	previousLevel := logging.GetLevel()
 	logging.SetLevelValue(logging.LevelDebug)
 	t.Cleanup(func() {
-		assert.NoError(t, container.Cleanup(context.Background()))
 		logging.SetOutput(previousOutput)
 		logging.SetLevelValue(previousLevel)
 	})
