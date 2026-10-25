@@ -558,3 +558,58 @@ func (s *PostgresStore) ClearCollectionStarted(ctx context.Context, token string
 	}
 	return nil
 }
+
+// ClaimCollectionInvocation re-stamps the collection in-flight marker with a
+// fresh, invocation-scoped owner token (issue #84). The scheduler calls it
+// once a token-carrying collect run has WON the task advisory lock, before it
+// starts collecting.
+//
+// The token MarkCollectionStarted hands out identifies the marker, not the
+// run that serves it: Lambda's async delivery is at-least-once, so a
+// duplicate delivery of the same event carries the same token. Without the
+// re-stamp, a duplicate that is skipped by the advisory lock clears the
+// marker with that shared token while the lock winner is still collecting.
+// After the re-stamp only the winner's new token matches, so the duplicate's
+// skip-path clear is a no-op and the winner's deferred clear (with the new
+// token) is the one that releases the marker.
+//
+// The marker is taken when it is still owned by markerToken (started_at is
+// kept as MarkCollectionStarted set it) or when it is free or stale under the
+// same 5-minute rule as MarkCollectionStarted (started_at is set to NOW()).
+// The second case covers the window between the winner taking the lock and
+// running this UPDATE, in which a lock-skipped duplicate may already have
+// cleared the marker: the lock winner is the run actually collecting, so it
+// re-establishes the marker rather than collecting with none. It also covers
+// a late redelivery after the original run already finished and cleared.
+//
+// Returns the new token and true when the caller now owns the marker. Returns
+// ("", false, nil) when a different run holds a fresh marker; the caller then
+// owns nothing and must not clear. An empty markerToken is a boundary error,
+// as in ClearCollectionStarted.
+func (s *PostgresStore) ClaimCollectionInvocation(ctx context.Context, markerToken string) (token string, ok bool, err error) {
+	if markerToken == "" {
+		return "", false, fmt.Errorf("marker token must not be empty")
+	}
+	token = uuid.New().String()
+	tag, err := s.db.Exec(ctx, `
+		UPDATE recommendations_state
+		   SET last_collection_started_at = CASE
+		           WHEN last_collection_owner_id = $1 THEN last_collection_started_at
+		           ELSE NOW()
+		       END,
+		       last_collection_owner_id    = $2
+		 WHERE id = 1
+		   AND (
+		           last_collection_owner_id = $1
+		        OR last_collection_started_at IS NULL
+		        OR last_collection_started_at < NOW() - INTERVAL '5 minutes'
+		       )
+	`, markerToken, token)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to claim collection invocation: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return "", false, nil
+	}
+	return token, true, nil
+}

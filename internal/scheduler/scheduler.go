@@ -158,7 +158,9 @@ func cacheTTLFromEnv() time.Duration {
 // the cron EventBridge rule or by an async self-invoke from the POST
 // /api/recommendations/refresh handler. In the async case,
 // MarkCollectionStarted has already set last_collection_started_at and
-// returned the token that ownerToken carries here; kickColdStartCollection's
+// returned the token that ownerToken carries here (in Lambda, re-stamped to
+// an invocation-scoped token once the run won the task advisory lock, see
+// ClaimCollectionInvocation, issue #84); kickColdStartCollection's
 // background collect does too (issue #106), for the same reason. The cron
 // case calls with an empty ownerToken since it never wins a marker of its
 // own (it coordinates via the advisory lock instead, see
