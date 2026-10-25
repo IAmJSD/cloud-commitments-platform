@@ -208,6 +208,10 @@ func (m *mockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses 
 	return nil, nil
 }
 
+func (m *mockConfigStore) HistorySummaryAggregate(ctx context.Context, filter config.HistorySummaryFilter) (*config.HistorySummaryGroups, error) {
+	return &config.HistorySummaryGroups{}, nil
+}
+
 func (m *mockConfigStore) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string, since time.Time) (map[string]config.ExecutionStatusCounts, error) {
 	return nil, nil
 }
@@ -315,6 +319,10 @@ func (m *mockConfigStore) TransitionExecutionStatusPinned(ctx context.Context, e
 	return nil, nil
 }
 
+func (m *mockConfigStore) TransitionExecutionStatusPinnedTx(ctx context.Context, tx pgx.Tx, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStore) TransitionExecutionStatusTokenPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, rawToken string) (*config.PurchaseExecution, error) {
 	return nil, nil
 }
@@ -372,6 +380,9 @@ func (m *mockConfigStore) GetRIExchangeRecordByToken(ctx context.Context, token 
 	return nil, nil
 }
 func (m *mockConfigStore) GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]config.RIExchangeRecord, error) {
+	return nil, nil
+}
+func (m *mockConfigStore) GetRIExchangeHistoryForAccounts(ctx context.Context, since time.Time, limit int, accountIDs []string) ([]config.RIExchangeRecord, error) {
 	return nil, nil
 }
 func (m *mockConfigStore) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*config.RIExchangeRecord, error) {
@@ -478,9 +489,6 @@ func (m *mockConfigStore) TransitionRegistrationStatus(_ context.Context, _ *con
 	return nil
 }
 func (m *mockConfigStore) DeleteAccountRegistration(_ context.Context, _ string) error {
-	return nil
-}
-func (m *mockConfigStore) ReplaceRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord) error {
 	return nil
 }
 func (m *mockConfigStore) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []config.SuccessfulCollect) error {

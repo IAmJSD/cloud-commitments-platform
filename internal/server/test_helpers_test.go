@@ -98,6 +98,10 @@ func (m *mockConfigStoreForHealth) GetExecutionsByStatuses(ctx context.Context, 
 	return nil, nil
 }
 
+func (m *mockConfigStoreForHealth) HistorySummaryAggregate(ctx context.Context, filter config.HistorySummaryFilter) (*config.HistorySummaryGroups, error) {
+	return &config.HistorySummaryGroups{}, nil
+}
+
 func (m *mockConfigStoreForHealth) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string, since time.Time) (map[string]config.ExecutionStatusCounts, error) {
 	return nil, nil
 }
@@ -166,6 +170,10 @@ func (m *mockConfigStoreForHealth) TransitionExecutionStatusPinned(ctx context.C
 	return nil, nil
 }
 
+func (m *mockConfigStoreForHealth) TransitionExecutionStatusPinnedTx(ctx context.Context, tx pgx.Tx, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*config.PurchaseExecution, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStoreForHealth) TransitionExecutionStatusTokenPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, rawToken string) (*config.PurchaseExecution, error) {
 	return nil, nil
 }
@@ -223,6 +231,9 @@ func (m *mockConfigStoreForHealth) GetRIExchangeRecordByToken(ctx context.Contex
 	return nil, nil
 }
 func (m *mockConfigStoreForHealth) GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]config.RIExchangeRecord, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) GetRIExchangeHistoryForAccounts(ctx context.Context, since time.Time, limit int, accountIDs []string) ([]config.RIExchangeRecord, error) {
 	return nil, nil
 }
 func (m *mockConfigStoreForHealth) TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*config.RIExchangeRecord, error) {
@@ -329,9 +340,6 @@ func (m *mockConfigStoreForHealth) TransitionRegistrationStatus(_ context.Contex
 	return nil
 }
 func (m *mockConfigStoreForHealth) DeleteAccountRegistration(_ context.Context, _ string) error {
-	return nil
-}
-func (m *mockConfigStoreForHealth) ReplaceRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord) error {
 	return nil
 }
 func (m *mockConfigStoreForHealth) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []config.SuccessfulCollect) error {

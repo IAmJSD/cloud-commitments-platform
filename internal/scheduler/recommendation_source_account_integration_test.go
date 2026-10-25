@@ -4,12 +4,10 @@ package scheduler
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -17,12 +15,7 @@ import (
 
 func TestAWSRecommendationSourceAccountPersistence(t *testing.T) {
 	ctx := context.Background()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { container.Cleanup(ctx) })
-	migrationPath, err := filepath.Abs("../database/postgres/migrations")
-	require.NoError(t, err)
-	require.NoError(t, migrations.RunMigrations(ctx, container.DB.Pool(), migrationPath, "", ""))
+	container := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 	store := config.NewPostgresStore(container.DB)
 	collector := uuid.NewString()
 	require.NoError(t, store.CreateCloudAccount(ctx, &config.CloudAccount{

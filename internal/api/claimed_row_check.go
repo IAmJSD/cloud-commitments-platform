@@ -21,10 +21,14 @@ import (
 // without touching the row. A post-claim refusal ends the row "failed" with
 // no_submission set (see purchase.ClaimedRowCheck).
 
-// runNowClaimCheck is runPlannedPurchase's execute:purchases Constraints
-// check, against the claimed row.
+// runNowClaimCheck is runPlannedPurchase's update-any / creator check
+// (issue #1129) and execute:purchases Constraints check, against the claimed
+// row.
 func (h *Handler) runNowClaimCheck(session *Session) purchase.ClaimedRowCheck {
 	return func(ctx context.Context, claimed *config.PurchaseExecution) error {
+		if err := h.authorizeClaimedRowManagement(ctx, session, claimed); err != nil {
+			return err
+		}
 		return h.enforcePurchaseConstraints(ctx, session, "execute", claimed.Recommendations)
 	}
 }
