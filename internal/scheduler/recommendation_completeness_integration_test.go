@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,7 +19,6 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/provider"
 	awsprovider "github.com/LeanerCloud/cloud-commitments-go/providers/aws"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/google/uuid"
@@ -210,12 +208,7 @@ func TestAWSRecommendationCompletenessPersistence(t *testing.T) {
 			var diagnostics bytes.Buffer
 			previous := logging.SetOutput(&diagnostics)
 			t.Cleanup(func() { logging.SetOutput(previous) })
-			container, err := testhelpers.SetupPostgresContainer(ctx, t)
-			require.NoError(t, err)
-			t.Cleanup(func() { container.Cleanup(ctx) })
-			migrationPath, err := filepath.Abs("../database/postgres/migrations")
-			require.NoError(t, err)
-			require.NoError(t, migrations.RunMigrations(ctx, container.DB.Pool(), migrationPath, "", ""))
+			container := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 			store := config.NewPostgresStore(container.DB)
 			factory := new(MockProviderFactory)
 			fixture := &completenessHTTP{resourceType: "db.t3.medium", details: tc.details, fallback: tc.fallback, failScope: tc.failScope, spMode: tc.spMode, spFallback: tc.spFallback}

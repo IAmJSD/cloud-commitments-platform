@@ -20,10 +20,10 @@ test('unknown upfront remains unknown through history and inventory amortization
 
   await page.goto('/purchases/history');
   const history = page.locator('#history-list tbody tr').first();
-  await expect(history.locator('td').nth(8)).toHaveText('--');
+  await expect(history.locator('td').nth(8)).toHaveText('\u2014');
   await expect(history.locator('td').nth(9)).toHaveText('$50');
   await page.locator('#history-amortize-checkbox').check();
-  await expect(history.locator('td').nth(9)).toHaveText('-');
+  await expect(history.locator('td').nth(9)).toHaveText('\u2014');
   await page.locator('#history-amortize-checkbox').uncheck();
   await expect(history.locator('td').nth(9)).toHaveText('$50');
 
