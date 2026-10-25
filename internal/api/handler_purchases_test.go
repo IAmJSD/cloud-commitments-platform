@@ -5697,11 +5697,13 @@ func TestHandler_scheduleApprovedExecution_HappyPath(t *testing.T) {
 	mockConfig := new(MockConfigStore)
 	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled", mock.Anything).
 		Return(transitioned, nil)
-	mockConfig.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+	// The stamp is guarded on "scheduled" (issue #835); the mock falls back to
+	// SavePurchaseExecution without a guarded expectation, so this pins it.
+	mockConfig.On("SaveExecutionIfStatus", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
 		return e.ExecutionID == execID &&
 			e.ScheduledExecutionAt != nil &&
 			*e.ApprovedBy == "actor@example.com"
-	})).Return(nil)
+	}), []string{"scheduled"}).Return(nil)
 
 	handler := &Handler{config: mockConfig}
 
@@ -5735,6 +5737,34 @@ func TestApproveWithDelay_CASLostMaps409(t *testing.T) {
 	require.True(t, ok, "CAS-lost error must be a ClientError")
 	assert.Equal(t, 409, ce.code, "concurrent cancel CAS race must map to 409, not 500")
 	mockConfig.AssertExpectations(t)
+}
+
+// TestApproveWithDelay_StampLostToRevokeMaps409 covers issue #835: the CAS to
+// scheduled wins, then a revoke flips the row to canceled before the
+// scheduled_execution_at stamp. The stamp is guarded on "scheduled", so it
+// writes nothing and the approver gets the same 409 as a lost CAS, instead of
+// an unguarded upsert putting "scheduled" back for the scheduler to buy.
+func TestApproveWithDelay_StampLostToRevokeMaps409(t *testing.T) {
+	ctx := context.Background()
+	execID := "exec-stamp-409"
+	exec := &config.PurchaseExecution{ExecutionID: execID, Status: "pending"}
+	transitioned := &config.PurchaseExecution{ExecutionID: execID, Status: "scheduled"}
+	revoked := fmt.Errorf("%w: execution %s is %q, expected one of [scheduled]",
+		config.ErrExecutionNotInExpectedStatus, execID, config.StatusCanceled)
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled", mock.Anything).
+		Return(transitioned, nil)
+	mockConfig.On("SaveExecutionIfStatus", ctx, transitioned, []string{"scheduled"}).Return(revoked).Once()
+
+	handler := &Handler{config: mockConfig}
+
+	_, err := handler.approveWithDelay(ctx, exec, 48*time.Hour, "actor@example.com", nil, "")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "a stamp lost to a revoke must be a ClientError, got %v", err)
+	assert.Equal(t, 409, ce.code)
+	mockConfig.AssertExpectations(t)
+	mockConfig.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 }
 
 // ---------------------------------------------------------------------------
@@ -5919,8 +5949,10 @@ func TestHandler_revokePurchase_ExpiredToken(t *testing.T) {
 	past := time.Now().Add(-1 * time.Hour)
 
 	exec := &config.PurchaseExecution{
-		ExecutionID:            execID,
-		ApprovalToken:          token,
+		ExecutionID: execID,
+		// Stored at rest as the hash (issue #103), so the token really matches
+		// and the expiry is what rejects it (the hash is compared first, issue #1190).
+		ApprovalToken:          config.HashApprovalToken(token),
 		ApprovalTokenExpiresAt: &past,
 		Status:                 "completed",
 		Recommendations: []config.RecommendationRecord{

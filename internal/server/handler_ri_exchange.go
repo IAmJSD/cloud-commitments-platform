@@ -149,7 +149,7 @@ func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *confi
 		RIs:            riInfos,
 		Utilization:    utilInfos,
 		Config: exchange.RIExchangeConfig{
-			Mode:                     cfg.RIExchangeMode,
+			Mode:                     fourEyesExchangeMode(cfg, cfg.RIExchangeMode),
 			UtilizationThreshold:     cfg.RIExchangeUtilizationThreshold,
 			MaxPaymentPerExchangeUSD: cfg.RIExchangeMaxPerExchangeUSD,
 			MaxPaymentDailyUSD:       cfg.RIExchangeMaxDailyUSD,

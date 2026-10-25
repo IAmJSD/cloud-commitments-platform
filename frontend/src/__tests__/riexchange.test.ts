@@ -1419,6 +1419,25 @@ describe('RI Exchange global filter scoping (issue #871)', () => {
     expect(recsEl.textContent).toContain('not available for Azure');
   });
 
+  it('lets a user who can preview purchases select Azure reservations for an exchange (issue #81)', async () => {
+    stateMod().getCurrentProvider.mockReturnValue('azure');
+    // An Administrators-group member (admin:* covers view:purchases).
+    (jest.requireMock('../state') as { getCurrentUser: jest.Mock }).getCurrentUser
+      .mockReturnValue({ id: 'u', email: 'u@example.com', groups: ['00000000-0000-5000-8000-000000000001'] });
+    (api.listExchangeableAzureRIs as jest.Mock).mockResolvedValue([
+      { reservation_order_id: 'o1', reservation_id: 'r1', sku: 'Standard_D2s_v3', quantity: 2, region: 'eastus', term: 'P1Y', instance_flexibility: 'On', billing_scope_id: '/subscriptions/s1' },
+      { reservation_order_id: 'o2', reservation_id: 'r2', sku: 'Standard_E2s_v3', quantity: 1, region: 'eastus', term: 'P1Y', instance_flexibility: 'On', billing_scope_id: '/subscriptions/s1' },
+    ]);
+    await loadRIExchange();
+    expect(instancesEl.querySelectorAll('tbody input.azure-ri-select')).toHaveLength(2);
+    expect(instancesEl.querySelectorAll('thead th')).toHaveLength(7);
+    // The checkbox column's header has an accessible name, visually hidden.
+    const selectHeader = instancesEl.querySelector('thead th')!;
+    expect(selectHeader.querySelector('.sr-only')?.textContent).toBe('Select for exchange');
+    const btn = instancesEl.querySelector<HTMLButtonElement>('#azure-exchange-selected-btn')!;
+    expect(btn.disabled).toBe(true);
+  });
+
   it('shows a provider-aware empty state for Azure with no reservations', async () => {
     stateMod().getCurrentProvider.mockReturnValue('azure');
     stateMod().getCurrentAccountIDs.mockReturnValue(['uuid-az']);

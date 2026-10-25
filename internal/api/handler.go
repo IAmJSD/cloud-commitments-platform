@@ -712,13 +712,21 @@ func (h *Handler) withRegisteredAccountNames(ctx context.Context, scope auth.Acc
 }
 
 // setSecurityHeaders adds comprehensive security headers to the response.
+// HSTSHeaderValue is the Strict-Transport-Security value for every response
+// path: API responses here, and the HTTP-mode static, Lambda static and
+// health responses in internal/server. One constant keeps the modes from
+// drifting apart again (issue #14: Lambda mode had dropped "preload").
+// "preload" only makes the domain eligible for the browser preload list;
+// submitting it to hstspreload.org is a separate, manual step.
+const HSTSHeaderValue = "max-age=31536000; includeSubDomains; preload"
+
 func setSecurityHeaders(headers map[string]string) map[string]string {
 	// Content Security Policy - restrictive for API responses
 	// Only allow connections to same origin, block all other resources
 	headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
 
 	// Strict Transport Security - enforce HTTPS for 1 year including subdomains
-	headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+	headers["Strict-Transport-Security"] = HSTSHeaderValue
 
 	// Permissions Policy - disable all browser features
 	headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"

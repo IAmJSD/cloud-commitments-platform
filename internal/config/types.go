@@ -114,6 +114,9 @@ type GlobalConfig struct {
 	// a standard SOX / SOC2 segregation-of-duties control. Default: false.
 	// Admins who created an execution and need to approve it must disable this
 	// mode first (the admin wildcard is NOT exempt from the restriction).
+	// While it is on, unattended RI exchange runs (RIExchangeMode "auto" and
+	// ladder reshapes) run as "manual" and only raise pending records
+	// (issue #679).
 	RequireDifferentApprover bool `json:"require_different_approver" dynamodbav:"require_different_approver"`
 }
 

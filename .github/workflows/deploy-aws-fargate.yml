@@ -115,8 +115,10 @@ jobs:
 
       - name: Set image tag
         id: set-tag
+        env:
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          echo "tag=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
   # Deploy with Terraform
   deploy:
@@ -354,12 +356,16 @@ jobs:
         continue-on-error: true
 
       - name: Post summary
+        env:
+          TARGET_ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          TEST_RESULT: ${{ needs.test-deployment.result }}
         run: |
           {
             echo "## AWS Fargate Deployment Summary"
             echo ""
-            echo "**Environment:** ${{ needs.prepare.outputs.target_environment }}"
-            echo "**Deploy Status:** ${{ needs.deploy.result }}"
+            echo "**Environment:** $TARGET_ENVIRONMENT"
+            echo "**Deploy Status:** $DEPLOY_RESULT"
             echo ""
 
             if [ -f deployment-info.json ]; then
@@ -371,10 +377,10 @@ jobs:
 
             echo ""
             echo "### Job Results"
-            echo "- Deploy: ${{ needs.deploy.result }}"
-            echo "- Test: ${{ needs.test-deployment.result }}"
+            echo "- Deploy: $DEPLOY_RESULT"
+            echo "- Test: $TEST_RESULT"
 
-            if [ "${{ needs.deploy.result }}" == "success" ] && [ "${{ needs.test-deployment.result }}" == "success" ]; then
+            if [ "$DEPLOY_RESULT" == "success" ] && [ "$TEST_RESULT" == "success" ]; then
               echo ""
               echo "**Deployment successful!**"
             else
