@@ -537,6 +537,14 @@ func (m *mockConfigStore) UpdatePurchaseHistoryListing(_ context.Context, _, _, 
 	return nil
 }
 
+func (m *mockConfigStore) GetMarketplaceListingAttempt(_ context.Context, _ string) (*config.MarketplaceListingAttempt, error) {
+	return nil, nil
+}
+
+func (m *mockConfigStore) ResolveMarketplaceListingAttempt(_ context.Context, _ string, _ config.MarketplaceListingAttempt, _, _ string) (bool, error) {
+	return false, nil
+}
+
 func (m *mockConfigStore) ClaimMarketplaceListingSlot(_ context.Context, _, _ string, _ []byte) (*config.MarketplaceListingClaim, error) {
 	return &config.MarketplaceListingClaim{}, nil
 }
@@ -887,9 +895,6 @@ func (m *mockConfigStore) RecoverReapedExecutionTx(ctx context.Context, _ pgx.Tx
 	return m.SavePurchaseExecution(ctx, e)
 }
 func (m *mockConfigStore) ListRecentSubmitsTx(ctx context.Context, _ pgx.Tx, _ string, _ time.Time) ([]config.PurchaseExecution, error) {
-	return m.GetPendingExecutions(ctx)
-}
-func (m *mockConfigStore) GetPendingExecutionsTx(ctx context.Context, _ pgx.Tx) ([]config.PurchaseExecution, error) {
 	return m.GetPendingExecutions(ctx)
 }
 func (m *mockConfigStore) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error { return fn(nil) }

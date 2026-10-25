@@ -282,16 +282,13 @@ jobs:
           cd terraform/environments/azure
           terraform apply -auto-approve tfplan 2>&1 | tee "${RUNNER_TEMP}/tf-apply.log"
 
-          # Get app URL
-          APP_URL=$(terraform output -raw container_app_url 2>/dev/null | grep -v '::' || echo "")
-          echo "app_url=$APP_URL" >> "$GITHUB_OUTPUT"
-
-          # Get app name
-          APP_NAME=$(terraform output -raw container_app_name 2>/dev/null | grep -v '::' || echo "")
-          echo "app_name=$APP_NAME" >> "$GITHUB_OUTPUT"
-
-          RESOURCE_GROUP_NAME=$(terraform output -raw resource_group_name 2>/dev/null | grep -v '::' || echo "")
-          echo "resource_group_name=$RESOURCE_GROUP_NAME" >> "$GITHUB_OUTPUT"
+          # A missing or unreadable output fails this step with terraform's own
+          # error, instead of passing an empty value on to test-deployment
+          # (#438). The script still drops setup-terraform's `::debug::` lines.
+          bash "${GITHUB_WORKSPACE}/scripts/read-tf-outputs.sh" \
+            app_url=container_app_url \
+            app_name=container_app_name \
+            resource_group_name=resource_group_name
 
       # The provider fails the data read outright when the custom role is absent,
       # so a Terraform precondition can never run for this case. Issue #1794: the
@@ -413,6 +410,7 @@ jobs:
 
     steps:
       - name: Azure Login
+        id: azure-login
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -472,14 +470,21 @@ jobs:
           HEALTH_INTERVAL_SECONDS: "5"
         run: bash scripts/wait-for-healthy.sh "$APP_URL"
 
+      # Runs when an earlier step failed too (#438): a failed readiness or smoke
+      # gate is exactly when the logs are needed. It still needs a working
+      # Azure login. Missing outputs only warn here, because build-and-deploy
+      # now fails at the source when it cannot read them, so this job never
+      # starts without them; failing here would only bury the real error. An
+      # az lookup error still fails the step (#217).
       - name: Check Container App logs
+        if: always() && steps.azure-login.outcome == 'success'
         env:
           APP_NAME: ${{ needs.build-and-deploy.outputs.app_name }}
           RESOURCE_GROUP_NAME: ${{ needs.build-and-deploy.outputs.resource_group_name }}
         run: |
           if [ -z "$APP_NAME" ] || [ -z "$RESOURCE_GROUP_NAME" ]; then
-            echo "::error::Terraform outputs missing: app_name='$APP_NAME' resource_group_name='$RESOURCE_GROUP_NAME'"
-            exit 1
+            echo "::warning::No Container App to read logs from: app_name='$APP_NAME' resource_group_name='$RESOURCE_GROUP_NAME'"
+            exit 0
           fi
           echo "Recent Container App logs:"
           az containerapp logs show \

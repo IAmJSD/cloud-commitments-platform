@@ -708,13 +708,21 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 		}
 		return false, fmt.Errorf("failed to transition stranded execution %s to failed: %w", exec.ExecutionID, txErr)
 	}
-	// This sweep won the CAS, so it is the one writer that notifies (#1195).
+	// This sweep won the CAS, so it is the one writer that notifies (#1195),
+	// unless the guarded stamp below finds the row already recovered: then the
+	// in-memory failed row is stale and a failure email would be false.
 	// The interrupted run may already have bought, so the email reports an
 	// unknown outcome rather than a failure to retry (#1415).
-	defer m.notifyOutcomeUnknown(ctx, updated)
+	notify := true
+	defer func() {
+		if notify {
+			m.notifyOutcomeUnknown(ctx, updated)
+		}
+	}()
 
 	updated.Error = strandedRecoveryError(exec)
 	if saveErr := m.config.SaveExecutionIfStatus(ctx, updated, []string{config.StatusFailed}); saveErr != nil {
+		notify = !errors.Is(saveErr, config.ErrExecutionNotInExpectedStatus)
 		// Guarded on "failed" (issue #835): the stamp lands only while the row
 		// is still in the status this CAS set, never over a later writer's.
 		// The atomic flip to "failed" already landed via TransitionExecutionStatus;

@@ -465,6 +465,9 @@ type RecommendationsResponse struct {
 	Recommendations []config.RecommendationRecord `json:"recommendations"`
 	Regions         []string                      `json:"regions"`
 	Summary         RecommendationsSummary        `json:"summary"`
+	// NextCursor is set only on a paginated request (limit or cursor sent)
+	// that has more rows; pass it back as ?cursor= for the next page.
+	NextCursor string `json:"next_cursor,omitempty"`
 }
 
 // UsagePoint is a single sample in the per-recommendation usage time
@@ -500,7 +503,7 @@ type RecommendationDetailResponse struct {
 	ProvenanceNote   string       `json:"provenance_note"`
 	// HiddenBy is non-nil when the rec is filtered out by an account-service
 	// override (issue #214). Each element names one failing dimension:
-	// "enabled=false", "engine", "region", or "resource_type". The frontend
+	// "enabled=false", "engine", "region", "resource_type" or "min_count". The frontend
 	// renders a "hidden by your override" banner when this field is present.
 	// Absent (null) means the rec is fully visible.
 	HiddenBy []string `json:"hidden_by,omitempty"`
@@ -555,9 +558,14 @@ type PermissionEntry struct {
 // the user's groups; for a user API key, the key's permissions intersected
 // with its owner's (issue #62); for the admin API key, {admin, *}.
 // IsAdmin mirrors whether that effective set contains the {admin, *} wildcard.
+// UnrestrictedAccountAccess reports whether the caller's account scope covers
+// every account, which global actions such as POST
+// /api/recommendations/refresh require (issue #619). Like the permission
+// entries it is for UX gating only; the backend still enforces the scope.
 type UserPermissionsResponse struct {
-	Permissions []PermissionEntry `json:"permissions"`
-	IsAdmin     bool              `json:"is_admin"`
+	Permissions               []PermissionEntry `json:"permissions"`
+	IsAdmin                   bool              `json:"is_admin"`
+	UnrestrictedAccountAccess bool              `json:"unrestricted_account_access"`
 }
 
 // MFA enrollment + lifecycle DTOs (issue #497). Passwords carried by
@@ -647,9 +655,11 @@ type DashboardSummaryResponse struct {
 	TotalRecommendations    int                       `json:"total_recommendations"`
 	ActiveCommitments       int                       `json:"active_commitments"`
 	CommittedMonthly        float64                   `json:"committed_monthly"`
-	CurrentCoverage         float64                   `json:"current_coverage"`
-	TargetCoverage          float64                   `json:"target_coverage"`
-	YTDSavings              float64                   `json:"ytd_savings"`
+	// CurrentCoverage is null when there is neither committed nor potential
+	// savings to measure (0/0), instead of a fabricated 100% (issue #72).
+	CurrentCoverage *float64 `json:"current_coverage"`
+	TargetCoverage  float64  `json:"target_coverage"`
+	YTDSavings      float64  `json:"ytd_savings"`
 }
 
 // ServiceSavings holds savings data for a service.

@@ -1400,3 +1400,26 @@ func TestManager_ApproveAndExecute_FourEyesOn_SystemCreated(t *testing.T) {
 	require.ErrorIs(t, gate(nil, "  ", nil), ErrFourEyesDenied, "anonymous actor")
 	require.ErrorIs(t, gate(&creatorID, "", &creatorID), ErrFourEyesDenied, "flag must not override a creator")
 }
+
+// TestMaskActor pins the PII mask written to the approval logs: everything
+// before the first '@' is hidden, a non-email keeps only its last 4 bytes,
+// and an empty actor is "<anon>".
+func TestMaskActor(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", "<anon>"},
+		{"approver@example.com", "***@example.com"},
+		{"a@b", "***@b"},
+		{"@example.com", "***@example.com"},
+		{"trailing@", "***@"},
+		{"first@second@example.com", "***@second@example.com"},
+		{"josé@example.com", "***@example.com"},
+		{"\xff\xfe@example.com", "***@example.com"},
+		{"a", "****"},
+		{"abcd", "****"},
+		{"abcde", "...bcde"},
+		{"service-account", "...ount"},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, maskActor(tc.in), "maskActor(%q)", tc.in)
+	}
+}
