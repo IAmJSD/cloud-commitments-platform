@@ -40,7 +40,9 @@ linters:
         hugeParam:
           sizeThreshold: 1024
     gocyclo:
-      min-complexity: 15
+      # Same threshold as the standalone `gocyclo -over 10` gates in ci.yml and
+      # the Makefile, so `make lint` flags what CI fails (issue #349).
+      min-complexity: 10
     gosec:
       excludes:
         - G104

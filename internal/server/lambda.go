@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/api"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 )
@@ -163,7 +164,7 @@ func (app *Application) handleLambdaHTTPEvent(ctx context.Context, rawEvent json
 // unprotected.
 func lambdaSecurityHeaders() map[string]string {
 	return map[string]string{
-		"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+		"Strict-Transport-Security": api.HSTSHeaderValue,
 		"X-Content-Type-Options":    "nosniff",
 		"X-Frame-Options":           "DENY",
 		"Referrer-Policy":           "strict-origin-when-cross-origin",

@@ -41,6 +41,16 @@ COPY go.mod go.sum ./
 # Download dependencies
 RUN go mod download
 
+# Build in single-module mode. `go mod download` above runs before go.work is
+# copied in, so it fills the module cache for the root module only. With the
+# repo's go.work in /app, `go build` would switch to workspace mode, which loads
+# the module graph differently and asks for modules that download did not fetch
+# (e.g. github.com/envoyproxy/go-control-plane). The cache is root-owned (and
+# so is the go_modules volume seeded from it), so the non-root dev user cannot
+# fetch them and Air's build fails before compiling. tests/e2e is a separate
+# stdlib-only module; work on it from its own directory.
+ENV GOWORK=off
+
 # Copy source code
 COPY . .
 
@@ -49,16 +59,30 @@ RUN if [ ! -f .air.toml ]; then air init; fi
 
 EXPOSE 8080
 
-# Create non-root user for security; grant ownership of app dir and Go paths.
-# uid/gid are pinned explicitly rather than left to `adduser -S`, which picks
-# the first free system id and so varies with the base image's existing users.
-# A numeric USER below needs a value that is known here, not discovered later.
-RUN addgroup -g 1001 devuser && \
-    adduser -D -u 1001 -G devuser devuser && \
-    chown -R devuser:devuser /app /root/go /root/.cache 2>/dev/null || true
+# Create the non-root dev user and give it the app dir.
+#
+# BIND-MOUNT CONSTRAINT: docker-compose.yml mounts the checkout over /app, which
+# hides the chown below. On Linux the mounted files keep the HOST user's
+# uid/gid, and Air must write ./tmp/main into that mount on every reload, so
+# this user's uid/gid have to match the host user's or hot reload stops
+# (issue #158). Hence build args instead of a fixed id: docker-compose.yml
+# passes DEV_UID/DEV_GID (set them to `id -u`/`id -g`, see docs/DEVELOPMENT.md).
+# The 1000:1000 default is the usual first Linux account; Docker Desktop on
+# macOS remaps bind-mount ownership, so macOS works with any value.
+#
+# The ids are pinned explicitly rather than left to `adduser -S`, which picks
+# the first free system id. A host gid that already names a group in the base
+# image (e.g. macOS's 20, `dialout` here) is reused instead of re-created. No
+# `|| true`: a uid that is already taken must fail the build, not leave USER
+# pointing at an account that does not exist.
+ARG DEV_UID=1000
+ARG DEV_GID=1000
+RUN if ! getent group "${DEV_GID}" >/dev/null; then addgroup -g "${DEV_GID}" devuser; fi && \
+    adduser -D -u "${DEV_UID}" -G "$(getent group "${DEV_GID}" | cut -d: -f1)" devuser && \
+    chown -R "${DEV_UID}:${DEV_GID}" /app
 
 # Numeric form so the identity is resolvable without the image's /etc/passwd.
-USER 1001:1001
+USER ${DEV_UID}:${DEV_GID}
 
 # Start with Air for hot reload
 CMD ["air", "-c", ".air.toml"]

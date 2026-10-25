@@ -37,6 +37,7 @@ import { createIcon, iconSvg } from './icons';
 import { applyReadOnlySettings, isPermissionDeniedError } from './settings';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
+import { attachAzureExchangeToolbar, buildAzureSelectCell, buildAzureSelectHeader, canPreviewAzureExchange } from './riexchange-azure';
 
 // Module state
 let currentRIs: ConvertibleRI[] = [];
@@ -478,8 +479,9 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
  * entirely via DOM construction / textContent — never innerHTML — so any
  * Azure-derived field (SKU, display name, region) cannot inject markup.
  *
- * Azure reservations are listed read-only here; the quote/execute modal is
- * AWS-specific (offering-UUID flow), so no per-row Exchange button is shown.
+ * Users who can preview an exchange get a selection column and an
+ * "Exchange selected" action that opens the Azure exchange modal
+ * (riexchange-azure.ts, issue #81).
  */
 function renderAzureRIsTable(
   container: HTMLElement,
@@ -496,10 +498,13 @@ function renderAzureRIsTable(
 
   container.textContent = '';
   const table = document.createElement('table');
+  const canExchange = canPreviewAzureExchange();
 
   const thead = document.createElement('thead');
   const headerRow = document.createElement('tr');
-  for (const label of ['Reservation', 'SKU', 'Quantity', 'Region', 'Term', 'Expiry']) {
+  const labels = ['Reservation', 'SKU', 'Quantity', 'Region', 'Term', 'Expiry'];
+  if (canExchange) headerRow.appendChild(buildAzureSelectHeader());
+  for (const label of labels) {
     const th = document.createElement('th');
     th.textContent = label;
     headerRow.appendChild(th);
@@ -508,11 +513,14 @@ function renderAzureRIsTable(
   table.appendChild(thead);
 
   const tbody = document.createElement('tbody');
-  for (const r of reservations) {
-    tbody.appendChild(buildAzureRIRow(r));
-  }
+  reservations.forEach((r, i) => {
+    const tr = buildAzureRIRow(r);
+    if (canExchange) tr.prepend(buildAzureSelectCell(r, i));
+    tbody.appendChild(tr);
+  });
   table.appendChild(tbody);
   container.appendChild(table);
+  if (canExchange) attachAzureExchangeToolbar(container, table, reservations, () => { void loadRIExchange(); });
 }
 
 function buildAzureRIRow(r: ExchangeableAzureRI): HTMLTableRowElement {

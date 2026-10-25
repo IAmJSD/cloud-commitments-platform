@@ -837,8 +837,6 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 	app.Auth = authSvc
 
 	dbRL := api.NewDBRateLimiter(dbConn.Pool())
-	// Periodic cleanup also evicts expired keys with no subsequent allowed request.
-	app.startRateLimiterCleanup(dbRL)
 	app.RateLimiter = dbRL
 	log.Println("Initialized database-backed rate limiter with shared replica counters")
 
@@ -942,6 +940,11 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 	if app.API == nil {
 		return fmt.Errorf("failed to create API handler")
 	}
+
+	// Periodic cleanup also evicts expired keys with no subsequent allowed
+	// request. Started last: on any earlier error ensureDB closes the pool, and
+	// a worker started before that would keep ticking against it.
+	app.startRateLimiterCleanup(dbRL)
 
 	return nil
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 )
 
@@ -21,7 +22,8 @@ type suppressionBucket struct {
 // behavior, which over-suppresses (under-buys) rather than leaving the
 // purchased capacity on show. The purchase paths reject such recs before
 // they get here (RecIdentityKey reads the same Details), so this is a
-// fallback, not a path in normal use.
+// fallback, not a path in normal use. An AWS EC2 rec (service ec2 or compute) with no
+// platform or tenancy (legacy, no Details) is treated the same way (issue #1232).
 func suppressionBucketOf(rec *RecommendationRecord) suppressionBucket {
 	accountID := ""
 	if rec.CloudAccountID != nil {
@@ -38,6 +40,15 @@ func suppressionBucketOf(rec *RecommendationRecord) suppressionBucket {
 	v, err := rec.SuppressionVariant()
 	if err != nil {
 		logging.Warnf("suppression for %s/%s/%s: %v; suppressing the whole 6-tuple", rec.Provider, rec.Region, rec.ResourceType, err)
+		b.unknownVariant = true
+		return b
+	}
+	isAWSEC2 := rec.Provider == string(common.ProviderAWS) &&
+		(rec.Service == string(common.ServiceEC2) || rec.Service == string(common.ServiceCompute))
+	if isAWSEC2 && v.Platform == "" && v.Tenancy == "" {
+		// Saved before Details existed (#453) and retried without re-matching:
+		// the bought platform/tenancy is unknown, so a known {az,"",""} would
+		// leave the real variant unsuppressed (double-buy). Wildcard instead.
 		b.unknownVariant = true
 		return b
 	}
