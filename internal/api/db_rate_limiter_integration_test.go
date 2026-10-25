@@ -10,24 +10,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// setupRateLimitIntegration spins up a testcontainers Postgres, runs
-// the full migration chain (so the rate_limits table from migration
-// 000004 is present), and returns the pool + cleanup. Mirrors the
-// helper in ri_utilization_cache_integration_test.go.
-func setupRateLimitIntegration(ctx context.Context, t *testing.T) (*pgxpool.Pool, func()) {
+// setupRateLimitIntegration returns the pool of a fully migrated database of
+// the test's own (so the rate_limits table from migration 000004 is present)
+// on the package's shared Postgres server. It is dropped when t ends. Mirrors
+// the helper in ri_utilization_cache_integration_test.go.
+func setupRateLimitIntegration(ctx context.Context, t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
-	return container.DB.Pool(), func() { _ = container.Cleanup(ctx) }
+	return testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath()).DB.Pool()
 }
 
 // TestDBRateLimiter_ConcurrentFirstRequest pins the contract that the
@@ -41,8 +36,7 @@ func setupRateLimitIntegration(ctx context.Context, t *testing.T) (*pgxpool.Pool
 // allow/deny return — no INSERT collision, no spurious 500.
 func TestDBRateLimiter_ConcurrentFirstRequest(t *testing.T) {
 	ctx := context.Background()
-	pool, cleanup := setupRateLimitIntegration(ctx, t)
-	defer cleanup()
+	pool := setupRateLimitIntegration(ctx, t)
 
 	rl := NewDBRateLimiter(pool)
 	// Set a high MaxAttempts so all N goroutines are allowed and we
@@ -86,8 +80,7 @@ func TestDBRateLimiter_ConcurrentFirstRequest(t *testing.T) {
 // call must reset count to 1 and push reset_time forward.
 func TestDBRateLimiter_WindowExpiry_AtomicReset(t *testing.T) {
 	ctx := context.Background()
-	pool, cleanup := setupRateLimitIntegration(ctx, t)
-	defer cleanup()
+	pool := setupRateLimitIntegration(ctx, t)
 
 	rl := NewDBRateLimiter(pool)
 	const winSecs = 60
@@ -125,8 +118,7 @@ func TestDBRateLimiter_WindowExpiry_AtomicReset(t *testing.T) {
 // MaxAttempts after the burst, which is documented behavior.
 func TestDBRateLimiter_ExceedsLimitDenies(t *testing.T) {
 	ctx := context.Background()
-	pool, cleanup := setupRateLimitIntegration(ctx, t)
-	defer cleanup()
+	pool := setupRateLimitIntegration(ctx, t)
 
 	rl := NewDBRateLimiter(pool)
 	const max = 3

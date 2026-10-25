@@ -131,6 +131,24 @@ if run "unknown argument" 2 bash "$SCRIPT_DIR/run-gosec.sh" -exclude=G104; then
   pass "extra gosec flags such as -exclude are rejected"
 fi
 
+# CI keys its gosec result and binary caches on these lines, so they must name
+# the pin, the Go version and the directory the binary is really cached in.
+if run "print versions" 0 bash "$SCRIPT_DIR/run-gosec.sh" --print-versions; then
+  want="$(printf 'gosec_version=%s\ngo_version=%s\nbin_dir=%s' \
+    "$gosec_version" "$(go env GOVERSION)" "$fake_dir")"
+  if [[ "$(cat "$work/out.txt")" == "$want" ]]; then
+    pass "--print-versions names the pin, Go version and binary cache dir"
+  else
+    failed "--print-versions names the pin, Go version and binary cache dir"
+    printf '    want:\n%s\n    got:\n%s\n' "$want" "$(cat "$work/out.txt")"
+  fi
+  expect_calls "--print-versions runs no scan"
+fi
+
+if run "print versions with extra arguments" 2 bash "$SCRIPT_DIR/run-gosec.sh" --print-versions --sarif-dir x; then
+  pass "--print-versions takes no other arguments"
+fi
+
 # --- pre-commit hook -----------------------------------------------------------
 
 # Invoked through run (below), which shellcheck cannot see.

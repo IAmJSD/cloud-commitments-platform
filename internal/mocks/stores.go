@@ -2,6 +2,7 @@ package mocks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -1945,6 +1946,31 @@ func executionSortsBefore(a, b *config.PurchaseExecution, now time.Time) bool {
 		return a.ScheduledDate.Before(b.ScheduledDate)
 	}
 	return a.ScheduledDate.After(b.ScheduledDate)
+}
+
+// ErrHistorySummaryAggregateNotStubbed is HistorySummaryAggregate's default
+// error. The History handler treats an aggregate error as "totals unavailable"
+// and falls back to summarizing the rows it fetched, so tests written before
+// the aggregate existed (issue #675) keep asserting the page summary without
+// registering an expectation.
+var ErrHistorySummaryAggregateNotStubbed = errors.New("mock: HistorySummaryAggregate not stubbed")
+
+// HistorySummaryAggregate mocks the HistorySummaryAggregate operation. With no
+// expectation registered it returns ErrHistorySummaryAggregateNotStubbed.
+func (m *MockConfigStore) HistorySummaryAggregate(ctx context.Context, filter config.HistorySummaryFilter) (*config.HistorySummaryGroups, error) {
+	m.record("HistorySummaryAggregate", ctx, filter)
+	if !isExpected(&m.Mock, "HistorySummaryAggregate") {
+		return nil, ErrHistorySummaryAggregateNotStubbed
+	}
+	args := m.Called(ctx, filter)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.HistorySummaryGroups)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.HistorySummaryGroups, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
 }
 
 // CountExecutionsByPlanAndStatus mocks the CountExecutionsByPlanAndStatus operation.
