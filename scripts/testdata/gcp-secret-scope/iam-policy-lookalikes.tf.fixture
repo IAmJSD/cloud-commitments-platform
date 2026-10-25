@@ -1,0 +1,28 @@
+# Fixture (issue #150, negative direction): types whose names share words with
+# the rejected authoritative-policy types, and a comment naming one, must not
+# be rejected. Only google_{project,folder,organization}_iam_policy and
+# google_iam_policy are. Must exit 0.
+
+# A comment may say google_project_iam_policy or data "google_iam_policy".
+// So may a // comment: google_organization_iam_policy.
+
+resource "google_secret_manager_secret_iam_policy" "secret" {
+  project     = var.project_id
+  secret_id   = var.secret_id
+  policy_data = var.secret_policy_data
+}
+
+resource "google_storage_bucket_iam_policy" "bucket" {
+  bucket      = var.bucket_name
+  policy_data = var.bucket_policy_data
+}
+
+resource "google_project_iam_member" "viewer" {
+  project = var.project_id
+  role    = "roles/viewer"
+  member  = "serviceAccount:workload@example.iam.gserviceaccount.com"
+}
+
+locals {
+  my_google_iam_policy_name = "not-a-data-source"
+}

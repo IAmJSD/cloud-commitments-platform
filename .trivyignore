@@ -109,3 +109,7 @@ GCP-0015
 # build artifacts -- including source maps (*.map, produced by hidden-source-map
 # in webpack.config.js) -- are uploaded to any GCS bucket.
 GCP-0001
+
+# Go dependency vulnerability (trivy fs) suppressions live in
+# .trivyignore.yaml, where each entry is scoped to one module by purl.
+# Keep this file for config-scan IDs only.

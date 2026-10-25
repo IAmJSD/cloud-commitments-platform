@@ -10,6 +10,7 @@
 
 import { getFederationIaC } from './api';
 import { showToast } from './toast';
+import { createIcon } from './icons';
 
 // ---------------------------------------------------------------------------
 // Download helper
@@ -102,12 +103,12 @@ function makeFormatButton(opt: FormatOption, target: string, source: string): HT
   // .btn-download class together signal the click action).
   btn.setAttribute('aria-label', `Download ${opt.label} (${opt.sublabel}) for ${target.toUpperCase()}`);
 
-  // A leading ↓ glyph communicates "download" visually. aria-hidden so
-  // screen readers rely on the aria-label above, not the glyph.
+  // A leading download icon communicates "download" visually. aria-hidden
+  // so screen readers rely on the aria-label above, not the icon.
   const iconSpan = document.createElement('span');
   iconSpan.className = 'download-icon';
   iconSpan.setAttribute('aria-hidden', 'true');
-  iconSpan.textContent = '↓';
+  iconSpan.appendChild(createIcon('download'));
   btn.appendChild(iconSpan);
 
   const labelSpan = document.createElement('span');

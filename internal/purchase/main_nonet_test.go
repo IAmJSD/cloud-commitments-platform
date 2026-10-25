@@ -8,6 +8,12 @@ import (
 	"testing"
 )
 
+// afterTests is teardown that TestMain runs once m.Run returns. A package has
+// one TestMain and this file owns it in every build, so build-tagged files
+// register their teardown here from init instead: main_integration_test.go
+// stops the Postgres server the integration tests share.
+var afterTests []func()
+
 // TestMain routes every proxy-aware HTTP client in this test binary (Go's
 // default transport and the AWS SDK clients, which honor HTTP(S)_PROXY) into a
 // local listener that counts and drops connections. If any non-loopback
@@ -41,6 +47,9 @@ func TestMain(m *testing.M) {
 		_ = os.Setenv(k, v)
 	}
 	code := m.Run()
+	for _, teardown := range afterTests {
+		teardown()
+	}
 	_ = ln.Close()
 	if n := attempts.Load(); n > 0 {
 		fmt.Fprintf(os.Stderr, "FAIL: purchase tests attempted %d outbound network connection(s)\n", n)
