@@ -494,7 +494,10 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 	// hold this verb; Plan Authors (create/update/delete:plans only)
 	// do not, closing issue #1406 / #1418. The prior gate ("create","plans")
 	// incorrectly admitted Plan Authors because they hold create:plans.
-	session, err := h.requirePermission(ctx, httpReq, "update", "purchases")
+	// Scheduled rows are stamped with resolveCreatorUserID(session); a
+	// creator-less row could never be approved under 4-eyes, so that case
+	// is refused here (issue #677).
+	session, err := h.requirePurchaseCreatingPermission(ctx, httpReq, "update", "purchases")
 	if err != nil {
 		return nil, err
 	}
