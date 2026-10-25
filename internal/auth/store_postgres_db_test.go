@@ -174,16 +174,8 @@ func TestIntegration_CreateAdminIfNone_ConcurrentBootstrapOnce(t *testing.T) {
 // up as several winners in a round rather than depending on two callers
 // happening to interleave, and the test shows the lock holds when every pool
 // connection is taken by a contender.
-//
-// It takes its database from the binary's shared container
-// (testhelpers.RequireMigratedDatabase, stopped by TestMain) rather than
-// starting a container of its own.
 func TestIntegration_CreateAdminIfNone_ConcurrentBootstrapOnce_Stress(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	db := testhelpers.RequireMigratedDatabase(ctx, t, getAuthTestMigrationsPath()).DB
-	requireConcurrentBootstrapOnce(t, db, 50, 10)
+	requireConcurrentBootstrapOnce(t, setupAuthTestDB(t), 50, 10)
 }
 
 // bootstrapOutcome is what each concurrent CreateAdminIfNone caller reports
