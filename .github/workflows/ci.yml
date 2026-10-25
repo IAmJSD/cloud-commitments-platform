@@ -1094,6 +1094,16 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Assert the gosec version is pinned only in .gosec-version
+        # Issue #347: the version used to be hard-coded in four files, so a
+        # bump that missed one left local scans and this job's SARIF upload on
+        # different gosec rule sets. Fast (git grep only). always(): a finding
+        # here must not skip the scanners below; the job still fails.
+        if: always() && steps.checkout.outcome == 'success'
+        run: |
+          bash scripts/check-gosec-pin.sh
+          bash scripts/test-check-gosec-pin.sh
+
       - name: Run govulncheck CVE scanner (all modules)
         # always(): each scanner step below is independent evidence for the
         # Security tab. Without this, one scanner failing (e.g. a live npm
@@ -1218,12 +1228,12 @@ jobs:
             rm -f "$merged"
           fi
 
-          # scripts/run-gosec.sh owns the pinned gosec version, toolchain,
-          # module list and rule set, shared with the pre-commit hook and
-          # `make security-scan-go` (issue #340). It installs gosec with the
-          # job's existing setup-go: the securego/gosec Docker action bundles
-          # its own Go toolchain, which cannot satisfy the module's go
-          # directive.
+          # scripts/run-gosec.sh owns the toolchain, module list and rule set,
+          # shared with the pre-commit hook and `make security-scan-go` (issue
+          # #340), and installs the gosec version in .gosec-version (issue
+          # #347). It installs gosec with the job's existing setup-go: the
+          # securego/gosec Docker action bundles its own Go toolchain, which
+          # cannot satisfy the module's go directive.
           #
           # gosec exits non-zero both for real findings and for a processing
           # error. The script still scans every module after a failure, and

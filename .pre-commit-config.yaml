@@ -169,8 +169,9 @@ repos:
         # their owning module (root or tests/e2e).
         # Fast: never whole-repo, always per-changed-package.
         #
-        # Version, toolchain and rule set (no excludes) live in
-        # scripts/run-gosec.sh, shared with `make security-scan-go` and CI.
+        # Toolchain and rule set (no excludes) live in scripts/run-gosec.sh,
+        # shared with `make security-scan-go` and CI; it installs the gosec
+        # version in .gosec-version.
         entry: bash scripts/gosec-hook.sh
         language: system
         pass_filenames: true
