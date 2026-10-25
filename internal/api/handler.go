@@ -782,7 +782,7 @@ func (h *Handler) buildResponseHeaders() map[string]string {
 
 	if h.corsAllowedOrigin != "" {
 		corsHeaders["Access-Control-Allow-Origin"] = h.corsAllowedOrigin
-		corsHeaders["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+		corsHeaders["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 		corsHeaders["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key, Authorization, X-Authorization, X-CSRF-Token"
 		corsHeaders["Access-Control-Allow-Credentials"] = "true"
 	}
