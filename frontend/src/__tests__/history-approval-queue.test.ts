@@ -15,9 +15,9 @@
  *      api.approvePurchase → showToast → reload.
  *   4. Cancel click on a queue row goes through confirmDialog →
  *      api.cancelPurchase → showToast → reload.
- *   5. The SAME fixture row renders in BOTH the queue card and the
- *      history table, proving the helper extraction kept the two
- *      views in sync rather than dropping one.
+ *   5. The queue is the only approval surface (issue #183): the same
+ *      pending row stays in the history table, which links to the queue
+ *      row instead of repeating Approve / Cancel.
  */
 
 import { loadHistory } from '../history';
@@ -41,6 +41,7 @@ jest.mock('../navigation', () => ({
 }));
 
 jest.mock('../utils', () => ({
+  NO_VALUE: '\u2014',
   formatCurrency: jest.fn((val) => `$${val || 0}`),
   formatDate: jest.fn((val) => (val ? new Date(val).toLocaleDateString() : '')),
   formatTerm: jest.fn((years) => (years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`)),
@@ -86,6 +87,7 @@ jest.mock('../recommendations', () => ({
 import * as api from '../api';
 import { confirmDialog } from '../confirmDialog';
 import { showToast } from '../toast';
+import * as state from '../state';
 import { getCurrentUser } from '../state';
 import { getAccountName } from '../recommendations';
 import { ADMINISTRATORS_GROUP_ID } from '../permissions';
@@ -271,24 +273,76 @@ describe('Approval queue card (issue #340 sub-task)', () => {
     }
   });
 
-  test('pending row appears in BOTH the queue card and the history table (extraction did not drop a view)', async () => {
+  test('pending row stays in the history table but its actions live only in the queue (issue #183)', async () => {
     (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
     (api.getHistory as jest.Mock).mockResolvedValue({
       summary: {},
-      purchases: [makeRow({ purchase_id: 'p-pending', status: 'pending', created_by_user_id: ADMIN_USER.id })],
+      purchases: [
+        makeRow({ purchase_id: 'p-pending', status: 'pending', created_by_user_id: ADMIN_USER.id }),
+        makeRow({ purchase_id: 'p-done', status: 'completed', created_by_user_id: ADMIN_USER.id }),
+      ],
     });
 
     await loadHistory();
 
     const queue = document.getElementById('purchases-approval-queue')!;
     const list = document.getElementById('history-list')!;
-    const queueRow = queue.querySelector('tr[data-execution-id="p-pending"]');
-    const listRow = list.querySelector('tr[data-execution-id="p-pending"]');
-    expect(queueRow).toBeTruthy();
+    expect(queue.querySelector('tr[data-execution-id="p-pending"]')).toBeTruthy();
+    const listRow = list.querySelector('tr[data-execution-id="p-pending"]')!;
     expect(listRow).toBeTruthy();
-    // Approve button in BOTH views.
     expect(queue.querySelectorAll('.history-approve-btn[data-approve-id="p-pending"]').length).toBe(1);
-    expect(list.querySelectorAll('.history-approve-btn[data-approve-id="p-pending"]').length).toBe(1);
+    expect(queue.querySelectorAll('.history-cancel-btn[data-cancel-id="p-pending"]').length).toBe(1);
+    expect(list.querySelectorAll('.history-approve-btn, .history-cancel-btn')).toHaveLength(0);
+    expect(listRow.querySelector('.history-queue-link[data-queue-id="p-pending"]')).toBeTruthy();
+    expect(list.querySelector('tr[data-execution-id="p-done"] .history-queue-link')).toBeNull();
+  });
+
+  test('a pending row the session cannot act on gets no queue link', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(null);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: 'p-pending', status: 'pending', plan_name: 'Weekly EC2' })],
+    });
+
+    await loadHistory();
+
+    const list = document.getElementById('history-list')!;
+    expect(list.querySelector('.history-queue-link')).toBeNull();
+    expect(list.textContent).toContain('Weekly EC2');
+  });
+
+  describe('history queue link', () => {
+    let scrollIntoView: jest.Mock;
+    beforeEach(() => {
+      scrollIntoView = jest.fn();
+      Element.prototype.scrollIntoView = scrollIntoView as unknown as typeof Element.prototype.scrollIntoView;
+      const section = document.createElement('section');
+      section.id = 'purchases-approval-queue-section';
+      document.body.appendChild(section);
+      (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+      (api.getHistory as jest.Mock).mockResolvedValue({
+        summary: {},
+        purchases: [makeRow({ purchase_id: 'p-pending', status: 'pending', created_by_user_id: ADMIN_USER.id })],
+      });
+    });
+
+    test('jumps to the queue row, highlights it and focuses its Approve button', async () => {
+      await loadHistory();
+      document.querySelector<HTMLButtonElement>('#history-list .history-queue-link')!.click();
+      const queueRow = document.querySelector<HTMLElement>('#purchases-approval-queue tr[data-execution-id="p-pending"]')!;
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toBe(queueRow);
+      expect(queueRow.classList.contains('history-row-highlight')).toBe(true);
+      expect(document.activeElement).toBe(queueRow.querySelector('.history-approve-btn'));
+    });
+
+    test('falls back to the queue card when a queue filter hides the row', async () => {
+      (state.getApprovalQueueColumnFilters as jest.Mock).mockReturnValueOnce({ service: { kind: 'set', values: ['rds'] } });
+      await loadHistory();
+      expect(document.querySelector('#purchases-approval-queue tr[data-execution-id="p-pending"]')).toBeNull();
+      document.querySelector<HTMLButtonElement>('#history-list .history-queue-link')!.click();
+      expect(scrollIntoView.mock.contexts[0]).toBe(document.getElementById('purchases-approval-queue-section'));
+    });
   });
 
   // Issue #704 — new column tests

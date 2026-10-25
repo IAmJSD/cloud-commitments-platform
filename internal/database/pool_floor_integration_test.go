@@ -65,8 +65,9 @@ func runLockedTasks(t *testing.T, db *database.Connection, tasks int) int {
 // connections and every task waits on itself until its deadline.
 func TestPoolSizeFloorForAdvisoryLockedTasks(t *testing.T) {
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { _ = container.Cleanup(context.Background()) })
+	// Empty, not migrated. The limit under test is the client pool's size, not
+	// the server's max_connections, so the shared server is fine.
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 
 	cases := []struct {
 		name        string

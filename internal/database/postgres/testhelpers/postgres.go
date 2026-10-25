@@ -23,20 +23,42 @@ type PostgresContainer struct {
 }
 
 // SetupPostgresContainer creates and starts a PostgreSQL test container.
+//
+// Prefer RequireMigratedDatabase or RequireEmptyDatabase in tests. Each call
+// here starts a server of its own, about 2s before the test has even migrated
+// it, where those hand out a fresh database on one server per test binary in
+// milliseconds. A dedicated server is still right when a test changes or
+// depends on server-wide state: roles, ALTER SYSTEM or other server settings,
+// terminating other sessions' backends, connection limits, or stopping the
+// server. Say why next to the call. Tests should go through
+// RequirePostgresContainer, which only skips when Docker is unusable; this
+// function remains for the shared server itself and for that wrapper.
+//
+// Not marked Deprecated: the shared server is built on it and the dedicated
+// cases above are legitimate, so a staticcheck SA1019 warning on every call
+// would be noise rather than guidance.
 func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContainer, error) {
+	t.Helper()
+	return setupPostgresContainer(ctx, t)
+}
+
+// setupPostgresContainer is SetupPostgresContainer with extra container
+// options, applied after the defaults; the shared server uses it to raise
+// max_connections.
+func setupPostgresContainer(ctx context.Context, t *testing.T, extra ...testcontainers.ContainerCustomizer) (*PostgresContainer, error) {
 	t.Helper()
 
 	// Create PostgreSQL container
-	postgresContainer, err := postgres.Run(ctx,
-		"postgres:16-alpine",
+	opts := append([]testcontainers.ContainerCustomizer{
 		postgres.WithDatabase("cudly_test"),
 		postgres.WithUsername("cudly_test"),
 		postgres.WithPassword("test_password"),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
 				WithOccurrence(2).
-				WithStartupTimeout(30*time.Second)),
-	)
+				WithStartupTimeout(30 * time.Second)),
+	}, extra...)
+	postgresContainer, err := postgres.Run(ctx, "postgres:16-alpine", opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start postgres container: %w", err)
 	}
@@ -121,6 +143,10 @@ func terminateAfterError(ctx context.Context, c testcontainers.Container, stage 
 // present but unhealthy skips too, rather than failing.
 //
 // Callers remain responsible for Cleanup, matching SetupPostgresContainer.
+//
+// Prefer RequireMigratedDatabase or RequireEmptyDatabase, which share one
+// server per test binary. Use this only for a test that needs a server to
+// itself (see SetupPostgresContainer for when), with a comment saying why.
 func RequirePostgresContainer(ctx context.Context, t *testing.T) *PostgresContainer {
 	t.Helper()
 
