@@ -142,9 +142,8 @@ func (app *Application) resolveLadderAccount(ctx context.Context) (accountID, re
 }
 
 // defaultLadderAccountResolver resolves the Lambda's own AWS account ID via STS
-// STRICTLY: unlike resolveAccountID (which returns the "unknown" sentinel for
-// audit-only use in the RI-exchange path), this returns an error when the
-// account cannot be determined. The ladder path uses the account ID to SCOPE
+// STRICTLY, like resolveAccountID in the RI-exchange path: this returns an
+// error when the account cannot be determined. The ladder path uses the account ID to SCOPE
 // which configs run, so a fabricated/"unknown" value is unsafe: it would skip
 // every config as multi-account and report a false success.
 func defaultLadderAccountResolver(ctx context.Context) (accountID, region string, err error) {

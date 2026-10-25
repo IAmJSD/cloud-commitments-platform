@@ -283,8 +283,9 @@ func (app *Application) handleSendNotifications(ctx context.Context) (*purchase.
 func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[string]int64, error) {
 	log.Println("Cleaning up expired records...")
 
+	// No sessions_deleted counter: CleanupExpiredSessions reports no count,
+	// so it could only ever be a fabricated 0 (#326).
 	result := map[string]int64{
-		"sessions_deleted":   0,
 		"executions_deleted": 0,
 	}
 
@@ -312,7 +313,7 @@ func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[st
 		}
 	}
 
-	log.Printf("Cleanup complete: %d sessions, %d executions deleted", result["sessions_deleted"], result["executions_deleted"])
+	log.Printf("Cleanup complete: %d executions deleted", result["executions_deleted"])
 	return result, nil
 }
 
@@ -381,11 +382,11 @@ func (app *Application) handleFinalizeRevocations(ctx context.Context) (*purchas
 func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]any, error) {
 	log.Println("Refreshing analytics...")
 
+	// No partition counters: this task never creates or drops partitions
+	// (handleCollectAnalytics does), so they could only be fabricated zeros.
 	result := map[string]any{
-		"status":             "success",
-		"views_refreshed":    0,
-		"partitions_created": 0,
-		"partitions_dropped": 0,
+		"status":          "success",
+		"views_refreshed": 0,
 	}
 
 	// Refresh materialized views if analytics store is available.
@@ -402,6 +403,9 @@ func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]
 			log.Println("Materialized views refreshed successfully")
 		}
 	} else {
+		// Nothing ran, so this is not a success; handleCollectAnalytics
+		// reports the same condition as "skipped" (#326).
+		result["status"] = "skipped"
 		log.Println("Analytics store not available, skipping materialized view refresh")
 	}
 

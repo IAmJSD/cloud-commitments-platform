@@ -2,12 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
@@ -54,6 +54,10 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
+	accountID, err := resolveAccountID(ctx, sts.NewFromConfig(awsCfg))
+	if err != nil {
+		return nil, fmt.Errorf("RI exchange reshape aborted: %w", err)
+	}
 
 	ec2Client := awsprovider.NewEC2ClientDirect(awsCfg)
 	clients := riExchangeClients{
@@ -66,7 +70,7 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 		},
 		exchangeClient: exchange.NewExchangeClient(awsCfg),
 		lookupOffering: newConvertibleOfferingLookup(ec2Client),
-		accountID:      resolveAccountID(ctx, awsCfg),
+		accountID:      accountID,
 		region:         awsCfg.Region,
 	}
 
@@ -129,6 +133,11 @@ func newConvertibleOfferingLookup(finder convertibleOfferingFinder) exchange.Loo
 // executeRIExchangeReshape contains the core exchange logic, separated from AWS
 // client construction for testability.
 func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *config.GlobalConfig, clients riExchangeClients) (*exchange.AutoExchangeResult, error) {
+	// Every record the run creates carries this account ID for the audit
+	// trail, so a run without one stops before touching AWS or the store.
+	if clients.accountID == "" {
+		return nil, errors.New("no AWS account ID resolved for the RI exchange audit trail")
+	}
 	instances, err := clients.listConvertibleRIs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list convertible RIs: %w", err)
@@ -176,19 +185,26 @@ func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *confi
 	return result, nil
 }
 
-// resolveAccountID fetches the AWS account ID via STS. Returns "unknown" on failure
-// since account_id is stored for audit trail only and is not used to scope queries.
-func resolveAccountID(ctx context.Context, awsCfg aws.Config) string {
-	stsClient := sts.NewFromConfig(awsCfg)
-	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+// callerIdentityGetter is the slice of the STS client resolveAccountID needs.
+// Satisfied by *sts.Client.
+type callerIdentityGetter interface {
+	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
+}
+
+// resolveAccountID fetches the caller's AWS account ID via STS and fails when
+// it cannot be determined. The ID is written onto every RI exchange record the
+// run creates, so a placeholder such as "unknown" would put a fabricated
+// account on the audit trail of a money action (#326); the run is aborted
+// instead, as defaultLadderAccountResolver does.
+func resolveAccountID(ctx context.Context, client callerIdentityGetter) (string, error) {
+	identity, err := client.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
-		log.Printf("Warning: failed to get AWS account ID via STS: %v (using 'unknown')", err)
-		return "unknown"
+		return "", fmt.Errorf("resolve caller AWS account via STS: %w", err)
 	}
-	if identity.Account != nil {
-		return *identity.Account
+	if identity == nil || identity.Account == nil || *identity.Account == "" {
+		return "", errors.New("STS GetCallerIdentity returned no account ID")
 	}
-	return "unknown"
+	return *identity.Account, nil
 }
 
 // sendExchangeNotification sends email notifications based on the exchange result.

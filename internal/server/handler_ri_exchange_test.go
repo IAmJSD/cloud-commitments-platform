@@ -534,6 +534,7 @@ func TestExecuteRIExchangeReshape_ListRIsFailure(t *testing.T) {
 		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
 			return nil, errors.New("EC2 API throttled")
 		},
+		accountID: "123456789",
 	}
 
 	_, err := app.executeRIExchangeReshape(ctx, cfg, clients)
@@ -562,6 +563,7 @@ func TestExecuteRIExchangeReshape_UtilizationFailure(t *testing.T) {
 		getRIUtilization: func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
 			return nil, errors.New("Cost Explorer unavailable")
 		},
+		accountID: "123456789",
 	}
 
 	_, err := app.executeRIExchangeReshape(ctx, cfg, clients)
