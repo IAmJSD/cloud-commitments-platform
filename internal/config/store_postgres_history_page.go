@@ -105,27 +105,6 @@ func historyKeysetCondition(tsCol, idCol string, src HistorySource, after *Histo
 	return fmt.Sprintf("(%s < $%d OR (%s = $%d AND %s < $%d::uuid))", tsCol, ts, tsCol, ts, idCol, len(args)), args
 }
 
-// purchaseHistoryPageConds builds the WHERE conditions for a
-// PurchaseHistoryFilter. They are the same conditions GetPurchaseHistoryFiltered
-// applies (TestIntegration_ListPurchaseHistoryPage_MatchesFilteredFetch guards
-// that), so a page never lists a row the filtered fetch would not.
-func purchaseHistoryPageConds(filter *PurchaseHistoryFilter) (conds []string, args []any) {
-	if filter.Provider != "" {
-		args = append(args, filter.Provider)
-		conds = append(conds, fmt.Sprintf("provider = $%d", len(args)))
-	}
-	conds, args = appendAccountPredicate(conds, args, filter.AccountIDs, filter.ExternalIDsByProvider)
-	if filter.Start != nil {
-		args = append(args, *filter.Start)
-		conds = append(conds, fmt.Sprintf("timestamp >= $%d", len(args)))
-	}
-	if filter.End != nil {
-		args = append(args, *filter.End)
-		conds = append(conds, fmt.Sprintf("timestamp <= $%d", len(args)))
-	}
-	return conds, args
-}
-
 // whereClause joins conditions into a WHERE clause with a leading space, or
 // "" when there are none.
 func whereClause(conds []string) string {
@@ -135,16 +114,28 @@ func whereClause(conds []string) string {
 	return " WHERE " + strings.Join(conds, " AND ")
 }
 
+// andWhere adds cond to a WHERE clause built by whereClause or
+// purchaseHistoryFilterWhere ("" or " WHERE ...").
+func andWhere(where, cond string) string {
+	if where == "" {
+		return " WHERE " + cond
+	}
+	return where + " AND " + cond
+}
+
 // ListPurchaseHistoryPage returns up to filter.Limit purchase_history rows
 // matching filter, in History stream order (timestamp DESC, id DESC),
 // starting after `after` (nil starts at the newest row). See
 // StoreInterface.ListPurchaseHistoryPage.
 func (s *PostgresStore) ListPurchaseHistoryPage(ctx context.Context, filter PurchaseHistoryFilter, after *HistoryPageKey) ([]PurchaseHistoryPageRow, error) {
-	conds, args := purchaseHistoryPageConds(&filter)
+	// The filter predicate is purchaseHistoryFilterWhere, the one builder
+	// GetPurchaseHistoryFiltered and HistorySummaryAggregate share, so a page
+	// lists exactly the rows the summary counts (issue #675).
+	where, args := purchaseHistoryFilterWhere(filter)
 	if after != nil {
 		var cond string
 		cond, args = historyKeysetCondition("timestamp", "id", HistorySourcePurchase, after, args)
-		conds = append(conds, cond)
+		where = andWhere(where, cond)
 	}
 	args = append(args, clampHistoryPageLimit(filter.Limit))
 	query := fmt.Sprintf(`
@@ -156,7 +147,7 @@ func (s *PostgresStore) ListPurchaseHistoryPage(ctx context.Context, filter Purc
 		FROM purchase_history%s
 		ORDER BY timestamp DESC, id DESC
 		LIMIT $%d
-	`, whereClause(conds), len(args))
+	`, where, len(args))
 
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
@@ -199,7 +190,10 @@ func (s *PostgresStore) ListHistoryExecutionsPage(ctx context.Context, q History
 		return nil, nil
 	}
 	args := []any{q.Statuses}
-	conds := []string{"status = ANY($1)", "NOT (status = 'completed' AND COALESCE(error, '') = '')"}
+	// historyExecutionsPredicate is shared with GetExecutionsByStatuses and
+	// HistorySummaryAggregate, so the stream and the summary select the same
+	// executions (issue #675).
+	conds := []string{historyExecutionsPredicate}
 	if q.Start != nil {
 		args = append(args, *q.Start)
 		conds = append(conds, fmt.Sprintf("scheduled_date >= $%d", len(args)))
