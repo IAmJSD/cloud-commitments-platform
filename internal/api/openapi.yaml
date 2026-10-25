@@ -294,6 +294,30 @@ paths:
           schema:
             type: string
         - $ref: '#/components/parameters/AccountID'
+        - name: limit
+          in: query
+          description: >-
+            Opt-in maximum page size in rows (1-1000). When neither limit nor
+            cursor is present, every matching recommendation is returned in
+            one response (legacy behavior); a present but empty value is a
+            400. When either is sent, rows are returned in ascending id order,
+            one page at a time, and a page can hold fewer than limit rows
+            (follow next_cursor, not the row count) because each page is also
+            capped at 4 MiB of serialized JSON. A single row larger than that
+            is returned alone. summary and regions still describe the full
+            filtered set.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: cursor
+          in: query
+          description: >-
+            Opaque next_cursor value from the previous page. Implies
+            pagination; the page size defaults to 500 when limit is omitted.
+          schema:
+            type: string
+            maxLength: 1024
       responses:
         '200':
           description: Recommendations list
@@ -301,6 +325,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RecommendationsResponse'
+        '400':
+          description: >
+            Invalid query parameter: a limit that is empty, not an integer or
+            outside 1-1000; a cursor that is empty, longer than 1024
+            characters or not a cursor this endpoint issued; or an invalid
+            provider, service, region, account_ids, min_savings_usd or
+            min_savings_pct filter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -3535,11 +3570,33 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RecommendationRecord'
-        total_savings:
-          type: number
-          format: double
-        count:
-          type: integer
+        regions:
+          type: array
+          items:
+            type: string
+        summary:
+          type: object
+          description: Totals over the full filtered set, not just the returned page.
+          properties:
+            total_count:
+              type: integer
+            total_monthly_savings:
+              type: number
+              format: double
+            total_upfront_cost:
+              type: number
+              format: double
+            avg_payback_months:
+              type: number
+              format: double
+        next_cursor:
+          type: string
+          description: >-
+            Present only on a paginated request that has more rows; pass it as
+            the cursor query parameter to fetch the next page. Its absence is
+            the only end-of-list signal: a page with fewer rows than limit is
+            not necessarily the last one, because each page is also capped by
+            serialized size.
 
     RecommendationRecord:
       type: object
