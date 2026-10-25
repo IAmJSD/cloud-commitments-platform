@@ -85,6 +85,7 @@ async function openQuote(page: Page) {
   await page.locator('.modal-exchange-target-select').selectOption(offering);
   await page.getByRole('button', { name: 'Get Quote', exact: true }).click();
   await expect(page.locator('#modal-exchange-result')).toContainText('Valid Exchange');
+  await expect(page.locator('#modal-exchange-result')).toContainText('Hourly Price Change:-0.0200 USD/hr, about -14.60 USD/month');
 }
 
 const execute = (page: Page) => page.locator('#ri-exchange-modal').getByRole('button', { name: 'Execute Exchange', exact: true });
@@ -115,6 +116,7 @@ for (const multiple of [false, true]) {
     await expect(confirm(page)).toBeFocused();
     await confirm(page).click();
     await expect(page.locator('#modal-exchange-result')).toContainText('Exchange completed. ID: synthetic-exchange');
+    await expect(page.locator('.toast--success')).toContainText('Exchange ID: synthetic-exchange');
     expect(state.requests).toEqual([{ path: '/api/ri-exchange/execute', body: {
       ri_ids: [ri], ...(multiple ? { targets: [{ offering_id: offering, count: 2 }, { offering_id: secondOffering, count: 3 }] } : { target_offering_id: offering, target_count: 2 }),
       max_payment_due_usd: quotedPayment, region: 'us-east-1',
@@ -134,7 +136,8 @@ for (const action of ['Execute', 'Approve']) {
       if (action === 'Approve') {
         await expect(dialog(page)).toContainText('Previously quoted payment: USD 123.456789');
         await expect(dialog(page)).toContainText('fresh quote');
-        await expect(dialog(page)).toContainText(`1 × ${offering}`);
+        await expect(dialog(page)).toContainText(`2 × m5.large (${ri})`);
+        await expect(dialog(page)).toContainText(`1 × m5.xlarge (offering ${offering})`);
       }
       if (dismissal === 'Escape') await page.keyboard.press('Escape');
       else if (dismissal === 'backdrop') await dialog(page).click({ position: { x: 2, y: 2 } });
@@ -148,7 +151,7 @@ for (const action of ['Execute', 'Approve']) {
       await expect.poll(() => state.requests.length).toBe(1);
       if (action === 'Approve') {
         expect(state.requests[0]).toEqual({ path: `/api/ri-exchange/approve/${state.history.id}`, body: null });
-        await expect(page.locator('#ri-exchange-history-list')).toContainText('completed');
+        await expect(page.locator('#ri-exchange-history-list')).toContainText('Completed');
       }
       expect(state.errors).toEqual([]);
     });
@@ -212,10 +215,11 @@ for (const reopenBeforeResponse of [false, true]) {
       release();
       await expect(page.locator('#modal-exchange-result')).toContainText('Exchange completed');
     }
-    await page.locator('#ri-exchange-modal').getByRole('button', { name: 'Cancel', exact: true }).click();
+    // A completed exchange keeps its receipt open and offers Close instead of Cancel.
+    await page.locator('#ri-exchange-modal').getByRole('button', { name: reopenBeforeResponse ? 'Cancel' : 'Close', exact: true }).click();
     await page.locator(`[data-action="quote-ri"][data-ri-id="${otherRI}"]`).click();
     if (reopenBeforeResponse) release();
-    await expect(page.locator('#ri-exchange-history-list')).toContainText('completed');
+    await expect(page.locator('#ri-exchange-history-list')).toContainText('Completed');
     await expect(page.locator(`[data-action="quote-ri"][data-ri-id="${ri}"]`)).toHaveCount(0);
     await page.waitForTimeout(2200);
     await expect(page.locator('#ri-exchange-modal')).toBeVisible();
@@ -292,4 +296,21 @@ test('approval handles missing and zero record amounts without inventing money',
   await expect(dialog(page).locator('img')).toHaveCount(0);
   await confirm(page).click();
   await expect.poll(() => state.requests.length).toBe(1);
+});
+
+test('a completed exchange keeps its ID on screen and links to the history', async ({ page }) => {
+  const state = await setup(page);
+  await openQuote(page);
+  await execute(page).click();
+  await confirm(page).click();
+  const result = page.locator('#modal-exchange-result');
+  await expect(result).toHaveAttribute('role', 'status');
+  await expect(result).toContainText('Exchange completed. ID: synthetic-exchange');
+  await page.waitForTimeout(2500);
+  await expect(page.locator('#ri-exchange-modal')).toBeVisible();
+  await expect(page.locator('#ri-exchange-modal').getByRole('button', { name: 'Close', exact: true })).toBeFocused();
+  await page.locator('.toast--success').getByRole('button', { name: 'View history', exact: true }).click();
+  await expect(page.locator('#ri-exchange-modal')).toBeHidden();
+  await expect(page.locator('#ri-exchange-history-list')).toBeFocused();
+  expect(state.errors).toEqual([]);
 });
