@@ -512,7 +512,7 @@ func (s *SMTPSender) SendRIExchangePendingApproval(ctx context.Context, data RIE
 
 // SendRIExchangeCompleted sends an RI exchange completion email via SMTP.
 func (s *SMTPSender) SendRIExchangeCompleted(ctx context.Context, data RIExchangeNotificationData) error {
-	subject := fmt.Sprintf("CUDly - RI Exchanges Completed (%d exchanges)", len(data.Exchanges))
+	subject := riExchangeCompletedSubject(data)
 	body, err := RenderRIExchangeCompletedEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render ri exchange completed email: %w", err)
