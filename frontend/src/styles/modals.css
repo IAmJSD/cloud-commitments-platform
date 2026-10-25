@@ -263,7 +263,7 @@
 #archera-page-container {
     position: fixed;
     inset: 0;
-    background: #fff;
+    background: var(--cudly-surface);
     /* 1100 sits above .modal/.modal-overlay (z-index: 1000) so the education
        page renders on top of open modals, which is how the overlay gets
        launched (user clicks the CTA link inside a modal). */
@@ -351,7 +351,7 @@
 .archera-signup-btn {
     display: inline-block;
     background: #1a73e8;
-    color: #fff;
+    color: var(--cudly-primary-fg);
     text-decoration: none;
     padding: 0.65rem 1.5rem;
     border-radius: 4px;
@@ -362,7 +362,7 @@
 
 .archera-signup-btn:hover {
     background: #1557b0;
-    color: #fff;
+    color: var(--cudly-primary-fg);
     text-decoration: none;
 }
 
@@ -447,7 +447,7 @@
 }
 
 .archera-offer-skip {
-    background: #fff;
+    background: var(--cudly-surface);
     color: #444;
     border: 1px solid #d0d7de;
     border-radius: 4px;
@@ -465,7 +465,7 @@
 .archera-offer-signup {
     display: inline-block;
     background: #1a73e8;
-    color: #fff;
+    color: var(--cudly-primary-fg);
     text-decoration: none;
     padding: 0.55rem 1.1rem;
     border-radius: 4px;
@@ -476,7 +476,7 @@
 
 .archera-offer-signup:hover {
     background: #1557b0;
-    color: #fff;
+    color: var(--cudly-primary-fg);
     text-decoration: none;
 }
 

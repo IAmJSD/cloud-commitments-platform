@@ -8,6 +8,7 @@ import * as state from '../state';
 import { formatTrendAxisTick, upsertChart } from './chart-utils';
 import { formatCompactCurrency, formatCurrency } from '../utils';
 import { setChartSummary, renderChartTable, removeChartTable } from '../lib/chart-a11y';
+import { applyChartDefaults, chartColor, withAlpha } from '../lib/chart-theme';
 
 // Register Chart.js components
 Chart.register(...registerables);
@@ -402,13 +403,15 @@ function renderSavingsChart(
     const axisMaxMs = periodEnd ? periodEnd.getTime() : nowMs;
 
     const label = cumulative ? 'Cumulative Savings' : 'Period Savings';
+    const periodColor = chartColor('--cudly-chart-2');
+    const cumulativeColor = chartColor('--cudly-chart-cumulative');
     const dataset = cumulative
         ? {
             type: 'line' as const,
             label,
             data: points,
-            borderColor: '#4285f4',
-            backgroundColor: 'rgba(66, 133, 244, 0.1)',
+            borderColor: cumulativeColor,
+            backgroundColor: withAlpha(cumulativeColor, 0.1),
             fill: true,
             tension: 0.3,
             pointRadius: dataPoints.length > 50 ? 0 : 3,
@@ -418,8 +421,8 @@ function renderSavingsChart(
             type: 'bar' as const,
             label,
             data: points,
-            backgroundColor: 'rgba(52, 168, 83, 0.7)',
-            borderColor: '#34a853',
+            backgroundColor: withAlpha(periodColor, 0.7),
+            borderColor: periodColor,
             borderWidth: 1,
             maxBarThickness: 24,
         };
@@ -445,6 +448,7 @@ function renderSavingsChart(
         ]),
     });
 
+    applyChartDefaults(Chart.defaults);
     // #747: update in place so a period or unit change doesn't replay the
     // entry animation. Switching the series (#749) changes the chart type,
     // which upsertChart handles by recreating the chart.
@@ -484,7 +488,7 @@ function renderSavingsChart(
                     position: 'left',
                     beginAtZero: true,
                     grid: {
-                        color: 'rgba(0, 0, 0, 0.05)',
+                        color: chartColor('--cudly-chart-grid-faint'),
                     },
                     ticks: {
                         maxTicksLimit: 6,

@@ -93,7 +93,7 @@
 .usage-sparkline {
     display: block;
     margin: auto;
-    color: var(--cudly-primary, #2563eb);
+    color: var(--cudly-primary);
 }
 /* Planned purchases card (issue #753): filter rows of label-above-control
  * groups, one stat line, and muted footnotes. */
@@ -117,7 +117,7 @@
 .ladder-timeline-note { margin: 0 0 var(--cudly-sp-2); font-size: var(--cudly-fs-sm); color: var(--cudly-text-muted); }
 .ladder-timeline-chart { height: 320px; margin: 1rem 0; }
 #ladder-purchase-timeline [data-table] { overflow-x: auto; }
-.ladder-selected { outline: 2px solid #2563eb; outline-offset: -2px; }
+.ladder-selected { outline: 2px solid var(--cudly-primary); outline-offset: -2px; }
 .ladder-event-editor form { padding: 1rem; }
 
 /* "View as table" text alternative under each chart (#744). Collapsed by

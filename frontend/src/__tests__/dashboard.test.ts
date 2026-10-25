@@ -1781,11 +1781,11 @@ describe('Dashboard Module', () => {
     // Import the public helpers from dashboard. The module is already
     // loaded above via the jest.mock chain, so we can import directly.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { renderSavingsByService, computeServiceStats, computeServiceStatsFromRecs, SAVINGS_LAYER_COLORS } = require('../dashboard') as {
+    const { renderSavingsByService, computeServiceStats, computeServiceStatsFromRecs, savingsLayerColors } = require('../dashboard') as {
       renderSavingsByService: (recs: unknown[], byService?: Record<string, { potential_savings: number; current_savings: number }>, filterDesc?: string) => void;
       computeServiceStats: (dataPoints: unknown[]) => Map<string, { min: number; max: number; sum: number; count: number; samples: number[] }>;
       computeServiceStatsFromRecs: (recs: unknown[]) => Map<string, { min: number; max: number; sum: number; count: number; samples: number[]; minLabel?: string; maxLabel?: string }>;
-      SAVINGS_LAYER_COLORS: { current: string; lowestOption: string; upside: string };
+      savingsLayerColors: () => { current: string; lowestOption: string; upside: string };
     };
 
     function buildDOM(): void {
@@ -2056,6 +2056,19 @@ describe('Dashboard Module', () => {
             expect(d.borderColor).toBe('#ffffff');
           }
         });
+
+        test('the segment gap follows a themed --cudly-surface (#699)', () => {
+          buildDOM();
+          document.documentElement.style.setProperty('--cudly-surface', '#1f2937');
+          try {
+            renderSavingsByService([rec('ec2', 100), rec('ec2', 300, 3)], { ec2: { potential_savings: 300, current_savings: 40 } });
+            const calls = (Chart as unknown as jest.Mock).mock.calls;
+            const datasets = (calls[calls.length - 1]?.[1] as { data: { datasets: { borderColor: string }[] } }).data.datasets;
+            for (const d of datasets) expect(d.borderColor).toBe('#1f2937');
+          } finally {
+            document.documentElement.style.removeProperty('--cudly-surface');
+          }
+        });
       });
 
       test('shows empty state and hides canvas when no recommendations', () => {
@@ -2158,9 +2171,9 @@ describe('Dashboard Module', () => {
           const cfg = lastCfg();
           const colours = Object.fromEntries(cfg.data.datasets.map((d) => [d.label, d.backgroundColor]));
           expect(colours).toEqual({
-            'Current / Committed': SAVINGS_LAYER_COLORS.current,
-            'Lowest option': SAVINGS_LAYER_COLORS.lowestOption,
-            Upside: SAVINGS_LAYER_COLORS.upside,
+            'Current / Committed': savingsLayerColors().current,
+            'Lowest option': savingsLayerColors().lowestOption,
+            Upside: savingsLayerColors().upside,
           });
           // A single string (not a per-bar array) is what Chart.js's default
           // legend draws, so swatch and bars cannot diverge.
@@ -2169,7 +2182,7 @@ describe('Dashboard Module', () => {
         });
 
         test('the three layers use three distinct colours', () => {
-          expect(new Set(Object.values(SAVINGS_LAYER_COLORS)).size).toBe(3);
+          expect(new Set(Object.values(savingsLayerColors())).size).toBe(3);
         });
 
         test('colours do not change when a service changes rank', () => {
