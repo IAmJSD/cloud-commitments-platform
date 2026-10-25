@@ -9,8 +9,10 @@
 # peering address FIRST, then `gcloud services vpc-peerings delete` on the
 # literal network `cudly-staging-vpc` with `2>/dev/null || echo ...`. A failed
 # or misdirected delete therefore reported success and left a live peering no
-# state tracked. Fourth sibling of test-ecr-delete-selection.sh,
-# test-rds-deletion-protection-scope.sh and test-cloud-sql-delete-scope.sh.
+# state tracked. It also asserts that a failed peering delete still lets
+# `terraform destroy` run and still fails the job. Fourth sibling of
+# test-ecr-delete-selection.sh, test-rds-deletion-protection-scope.sh and
+# test-cloud-sql-delete-scope.sh.
 #
 # Exits 0 when all cases pass; exits 1 on any failure.
 
@@ -120,6 +122,143 @@ awk_check "destroy-gcp runs Cloud SQL delete, then the peering delete, then terr
       if (name == "Terraform Destroy") destroy = n
     }
     END { exit !(sql > 0 && peer == sql + 1 && destroy == peer + 1) }'
+
+# --- Wiring: a failed peering delete still destroys, and still fails the job --
+#
+# Before the peering step existed, a failed peering delete only cost the
+# network: `terraform destroy` had already removed everything else. A plain
+# failing step would skip the destroy and leave the whole stack up (and
+# billing). So the peering step is continue-on-error, and a later step fails
+# the job on its outcome, so the failure is not swallowed. The script itself
+# leaves the address in state on a failed delete (the behavior cases below).
+#
+# simulate_destroy_gcp FILE FAILING_STEP_NAMES -> one "ran NAME" / "skipped
+# NAME" per destroy-gcp step, then "job success|failure". A small model of the
+# runner's step semantics, for the subset of `if:` this job may use:
+# success(), failure(), always(), cancelled(), !cancelled() and
+# steps.ID.outcome|conclusion ==/!= 'VALUE', joined by `&&`. An `if:` with no
+# status function gets the runner's implicit success(). A step fails when it
+# is named in FAILING_STEP_NAMES (`|`-separated) or when the last code line of
+# its run block is `exit 1`. continue-on-error makes a failed step's
+# conclusion success while its outcome stays failure. Anything outside that
+# subset (an `||`, a multi-line `if:`, an unknown function) is an error, so
+# the model cannot silently misread a changed condition.
+simulate_destroy_gcp() {
+  FAILING="$2" awk -v SQ="'" "${AWK_CODE_FUNCS}"'
+    function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+    function unsupported(what) { print "unsupported: " what; bad = 1; exit 2 }
+    function value_of(line) { sub(/^[[:space:]]*(-[[:space:]]+)?[A-Za-z_-]+:[[:space:]]*/, "", line); return trim(code_of(line)) }
+    /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { in_job = ($0 ~ /^  destroy-gcp:/); in_run = 0; next }
+    !in_job { next }
+    /^      -[[:space:]]/ { n++; in_run = 0 }
+    n == 0 { next }
+    in_run && /^[[:space:]]*$/ { next }
+    in_run && /^          / { c = trim(code_of($0)); if (c != "") last[n] = c; next }
+    { in_run = 0 }
+    /^      -[[:space:]]+name:/ || /^        name:/ { name[n] = value_of($0) }
+    /^        id:/ { id[n] = value_of($0) }
+    /^        if:/ { cond[n] = value_of($0); if (cond[n] ~ /^[|>]/) unsupported("multi-line if: in step " n) }
+    /^        continue-on-error:/ {
+      v = value_of($0)
+      if (v != "true" && v != "false") unsupported("continue-on-error: " v)
+      coe[n] = (v == "true")
+    }
+    /^        run:[[:space:]]*[|]/ { in_run = 1; next }
+    /^        run:/ { last[n] = value_of($0) }
+    END {
+      if (bad) exit 2
+      nf = split(ENVIRON["FAILING"], f, "|")
+      for (i = 1; i <= nf; i++) failing[f[i]] = 1
+      job_ok = 1
+      for (i = 1; i <= n; i++) {
+        e = cond[i]
+        sub(/^[$][{][{]/, "", e); sub(/[}][}]$/, "", e); e = trim(e)
+        run = 1; has_status = 0
+        if (e != "") {
+          nt = split(e, t, /&&/)
+          for (k = 1; k <= nt; k++) {
+            term = trim(t[k])
+            if (term == "success()") { has_status = 1; r = job_ok }
+            else if (term == "failure()") { has_status = 1; r = !job_ok }
+            else if (term == "always()") { has_status = 1; r = 1 }
+            else if (term == "!cancelled()") { has_status = 1; r = 1 }
+            else if (term == "cancelled()") { has_status = 1; r = 0 }
+            else if (term ~ ("^steps[.][A-Za-z0-9_-]+[.](outcome|conclusion)[[:space:]]*[!=]=[[:space:]]*" SQ "(success|failure|skipped|cancelled)" SQ "$")) {
+              split(term, ref, /[.]/); sid = ref[2]
+              field = (term ~ /[.]outcome/) ? "outcome" : "conclusion"
+              want = term; sub("^[^" SQ "]*" SQ, "", want); sub(SQ "$", "", want)
+              got = (field == "outcome") ? out_by_id[sid] : concl_by_id[sid]
+              r = (term ~ /!=/) ? (got != want) : (got == want)
+            }
+            else unsupported("if term: " term)
+            run = run && r
+          }
+        }
+        if (!has_status) run = run && job_ok
+        if (run) {
+          fails = (name[i] in failing) || (last[i] ~ /^exit[[:space:]]+1$/)
+          o = fails ? "failure" : "success"
+          cl = (fails && !coe[i]) ? "failure" : "success"
+          if (cl == "failure") job_ok = 0
+          print "ran " name[i]
+        } else {
+          o = "skipped"; cl = "skipped"
+          print "skipped " name[i]
+        }
+        if (id[i] != "") { out_by_id[id[i]] = o; concl_by_id[id[i]] = cl }
+      }
+      print "job " (job_ok ? "success" : "failure")
+    }' "$1"
+}
+
+# destroy_gcp_failure_handling_rc FILE -> 0 when every scenario below holds.
+destroy_gcp_failure_handling_rc() {
+  local file="$1" out
+  # Nothing fails: the job passes and destroy runs.
+  out="$(simulate_destroy_gcp "$file" "")" || return 1
+  [[ "$out" == *$'\nran Terraform Destroy\n'* && "$out" == *$'\njob success' ]] || return 1
+  # The peering delete fails: destroy still runs, and the job fails.
+  out="$(simulate_destroy_gcp "$file" "$STEP")" || return 1
+  [[ "$out" == *$'\nran Terraform Destroy\n'* && "$out" == *$'\njob failure' ]] || return 1
+  # Both fail: the job still fails (the reporting step is not skipped by the
+  # destroy failure, so the peering failure stays named in the log).
+  out="$(simulate_destroy_gcp "$file" "${STEP}|Terraform Destroy")" || return 1
+  [[ "$out" == *$'\njob failure' && "$(grep -c '^ran ' <<<"$out")" -eq "$(grep -c '^ran \|^skipped ' <<<"$out")" ]] || return 1
+  # The Cloud SQL delete fails: destroy stays skipped (it deadlocks while the
+  # instance exists), so the fix above did not become an `always()` on destroy.
+  out="$(simulate_destroy_gcp "$file" "$SQL_STEP")" || return 1
+  [[ "$out" == *$'\nskipped Terraform Destroy\n'* && "$out" == *$'\njob failure' ]] || return 1
+}
+
+check "destroy-gcp: a failed peering delete still runs Terraform Destroy and still fails the job" \
+  "$(destroy_gcp_failure_handling_rc "$CLEANUP" && echo 0 || echo 1)" \
+  "simulated: none -> $(simulate_destroy_gcp "$CLEANUP" "" | tr '\n' ';') peering -> $(simulate_destroy_gcp "$CLEANUP" "$STEP" | tr '\n' ';')"
+
+# The model, against mutants of the real workflow, so the check above cannot
+# pass vacuously. Each mutant is one plausible regression.
+MUTANT_DIR="$(mktemp -d)"
+mutant_flagged() {
+  local label="$1" program="$2" m="${MUTANT_DIR}/cleanup-staging.yml"
+  awk "$program" "$CLEANUP" >"$m"
+  if cmp -s "$m" "$CLEANUP"; then
+    check "mutant flagged: ${label}" 1 "the mutation did not change the workflow; update the mutation"
+    return
+  fi
+  check "mutant flagged: ${label}" "$(destroy_gcp_failure_handling_rc "$m" && echo 1 || echo 0)" \
+    "the mutant passed: $(simulate_destroy_gcp "$m" "$STEP" | tr '\n' ';')"
+}
+# awk rather than sed: `a\` and in-place forms differ between GNU and BSD sed.
+mutant_flagged "peering step without continue-on-error (destroy skipped)" \
+  '$0 != "        continue-on-error: true"'
+mutant_flagged "failure-reporting step removed (failure swallowed)" \
+  '$0 == "      - name: Fail if the peering delete failed" { stop = 1 } !stop'
+mutant_flagged "peering step id renamed (reporting step never fires)" \
+  '{ if ($0 == "        id: delete-peering") $0 = "        id: peering"; print }'
+mutant_flagged "reporting step on the implicit success() (silent when destroy also fails)" \
+  '{ sub(/[!]cancelled[(][)] && /, ""); print }'
+mutant_flagged "Terraform Destroy on always() (runs over a live Cloud SQL instance)" \
+  '{ print } $0 == "      - name: Terraform Destroy" { print "        if: always()" }'
+rm -rf "$MUTANT_DIR"
 
 # --- The script, statically -------------------------------------------------
 #
