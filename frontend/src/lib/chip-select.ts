@@ -24,14 +24,16 @@
  *   Enter / Space / Down on the trigger → open
  *   Esc on the menu → close + focus trigger
  *   Arrow Up / Down → move highlight
- *   Enter on highlighted option → select + close
+ *   Enter on highlighted option → select + close + focus trigger
  *   Tab on menu → close (and let focus continue)
  *
  * Search-filter input appears at top of popover when options.length > 8.
  *
  * ARIA: the trigger uses `aria-haspopup="listbox"` + `aria-expanded`. The
  * menu is `role="listbox"` with `role="option"` children; the active
- * option carries `aria-selected="true"`.
+ * option carries `aria-selected="true"`. `aria-activedescendant` (the
+ * highlighted option) lives on whichever element holds focus while the menu
+ * is open: the search input when it renders, otherwise the trigger.
  */
 
 export interface ChipSelectOption {
@@ -148,6 +150,18 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
 
   // Stable id prefix for this instance, used for aria-activedescendant.
   const idPrefix = `chip-select-opt-${cfg.label.toLowerCase().replace(/\s+/g, '-')}`;
+  optionsList.id = `${idPrefix}-listbox`;
+  search.setAttribute('aria-controls', optionsList.id);
+
+  /**
+   * The element that owns focus while the menu is open, and so the one that
+   * must carry aria-activedescendant: screen readers only follow it on the
+   * focused element (issue #729). With the search input showing, focus is
+   * in the input, so a trigger-side reference was never announced.
+   */
+  function activeDescendantHost(): HTMLElement {
+    return menu.contains(search) ? search : trigger;
+  }
 
   function renderOptions(): void {
     while (optionsList.firstChild) optionsList.removeChild(optionsList.firstChild);
@@ -176,11 +190,15 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
       });
       optionsList.appendChild(li);
     });
-    // Keep aria-activedescendant in sync with the highlighted option.
+    // Keep aria-activedescendant in sync with the highlighted option, on the
+    // focused element only.
+    const host = activeDescendantHost();
+    const other = host === search ? trigger : search;
+    other.removeAttribute('aria-activedescendant');
     if (activeOptId !== null) {
-      trigger.setAttribute('aria-activedescendant', activeOptId);
+      host.setAttribute('aria-activedescendant', activeOptId);
     } else {
-      trigger.removeAttribute('aria-activedescendant');
+      host.removeAttribute('aria-activedescendant');
     }
     // Empty-result hint when filter doesn't match anything.
     if (visible.length === 0) {
@@ -197,9 +215,15 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
   }
 
   function selectByValue(value: string): void {
+    // A pick from the search input hides the element holding focus, which
+    // would drop it to <body>; return it to the trigger (issue #729). Mouse
+    // picks keep focus on the trigger already (option mousedown is
+    // preventDefault'ed), so this is a no-op for them.
+    const focusWasInside = root.contains(document.activeElement);
     currentValue = value;
     renderTrigger();
     closeMenu();
+    if (focusWasInside) trigger.focus();
     cfg.onChange(value);
   }
 
@@ -259,6 +283,7 @@ export function createChipSelect(cfg: ChipSelectConfig): ChipSelectHandle {
     menu.classList.add('hidden');
     trigger.setAttribute('aria-expanded', 'false');
     trigger.removeAttribute('aria-activedescendant');
+    search.removeAttribute('aria-activedescendant');
     if (outsideListener) {
       document.removeEventListener('mousedown', outsideListener);
       outsideListener = null;

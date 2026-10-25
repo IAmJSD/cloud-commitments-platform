@@ -39,8 +39,9 @@ import (
 // the lock in the first place.
 func TestReleaseAdvisoryLock_DetachesFromCanceledCallerContext(t *testing.T) {
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { _ = container.Cleanup(context.Background()) })
+	// Empty, not migrated: advisory lock keys are per database, so another
+	// database on the shared server cannot hold this one's lock.
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 
 	const lockID int64 = 424242424242
 

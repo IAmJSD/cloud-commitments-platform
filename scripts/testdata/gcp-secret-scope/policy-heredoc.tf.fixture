@@ -1,6 +1,8 @@
 # Fixture: an authoritative project policy given as a JSON heredoc. The role is
 # heredoc text, and the JSON's own column-0 braces must not end the scan of it.
-# Must exit 1.
+# Since issue #150 the guard refuses google_project_iam_policy outright, so this
+# file exits 2; test-gcp-secret-scope.sh also runs a copy retyped to a per-secret
+# _iam_policy, which keeps the heredoc scan itself covered (exit 1).
 
 resource "google_project_iam_policy" "project" {
   project     = var.project_id

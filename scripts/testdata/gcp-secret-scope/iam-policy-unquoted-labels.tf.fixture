@@ -1,0 +1,8 @@
+# Fixture (issue #150): HCL accepts bare identifiers as block labels, so the
+# resource type need not be quoted. Matching only `resource "google_..._policy"`
+# would miss this. Must exit 2.
+
+resource google_project_iam_policy project {
+  project     = var.project_id
+  policy_data = var.project_policy_data
+}

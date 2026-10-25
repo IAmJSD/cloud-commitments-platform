@@ -66,8 +66,9 @@ func validateMaxPurchaseAmount(permIndex int, p Permission) error {
 // validateExplicitZeroCap refuses a permission whose JSON carried an explicit
 // max_amount of 0 (issue #133). Zero stays "no cap" when the field is absent
 // or null, but typing 0 into a cap field reads as "spend nothing" and silently
-// granting unlimited spend is the opposite. Applied to group writes; the HTTP
-// API-key path erases an explicit 0 before it gets here (#980).
+// granting unlimited spend is the opposite. Applied to group writes and to
+// API-key creation, whose handler decodes straight into APICreateAPIKeyRequest
+// so the explicit 0 survives to this check (#980).
 func validateExplicitZeroCap(permIndex int, p APIPermission) error {
 	if p.Constraints == nil || !p.Constraints.maxAmountSet || p.Constraints.MaxAmount != 0 {
 		return nil
