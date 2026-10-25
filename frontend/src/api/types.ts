@@ -120,6 +120,13 @@ export interface UpcomingPurchase {
   created_by_user_id?: string;
 }
 
+// GET /api/dashboard/upcoming wraps the rows in an object (#1189). The Go
+// handler builds the slice with `var upcoming []UpcomingPurchase`, so an
+// empty result serializes as `purchases: null`, not `[]`.
+export interface UpcomingPurchasesResponse {
+  purchases: UpcomingPurchase[] | null;
+}
+
 // Recommendation types
 export interface Recommendation {
   id: string;
@@ -294,6 +301,8 @@ export interface HistoryFilters {
   provider?: Provider;
   planId?: string;
   account_ids?: string[];
+  /** next_cursor from the previous page, to fetch the rows after it. */
+  cursor?: string;
 }
 
 // Config types
@@ -666,12 +675,24 @@ export interface SavingsAnalyticsResponse {
   data_points: SavingsDataPoint[];
 }
 
+// Mirrors the Go HistorySummary that GET /history/analytics actually sends
+// (internal/api/types.go). The previous total_period_savings /
+// average_savings_per_period / peak_savings keys belonged to an unused Go
+// struct and never arrived on the wire (issue #276). Average and peak have no
+// server-side counterpart; the client derives them from data_points.
 export interface SavingsAnalyticsSummary {
-  total_period_savings: number;
-  total_upfront_spent: number;
-  purchase_count: number;
-  average_savings_per_period: number;
-  peak_savings: number;
+  total_purchases: number;
+  total_completed: number;
+  total_pending: number;
+  total_in_progress: number;
+  total_failed: number;
+  total_expired: number;
+  total_revoked: number;
+  // null when any purchase in the window has an unknown upfront cost.
+  total_upfront: number | null;
+  // Sum of per-bucket total_savings over the window, in monthly dollars.
+  total_monthly_savings: number;
+  total_annual_savings: number;
 }
 
 export interface SavingsDataPoint {
@@ -750,6 +771,9 @@ export interface OfferingOption {
   instance_type: string;
   offering_id: string;
   effective_monthly_cost: number;
+  // ISO-4217 currency effective_monthly_cost is denominated in. Omitted
+  // by the backend when unknown (pkg/exchange.OfferingOption).
+  currency_code?: string;
 }
 
 // TargetOffering is one valid exchange target returned by
@@ -815,11 +839,9 @@ export interface ExchangeQuoteSummary {
   TargetRemainingUpfrontRaw: string;
   TargetRemainingTotalRaw: string;
   OutputReservedInstancesExp?: string;
-  // Region the backend's SDK chain resolved for this quote (issue #238).
-  // Echo it back unchanged on the paired execute call: execute requires
-  // a region and refuses to default it, since exchanges are financially
-  // irreversible.
-  Region?: string;
+  // Region the quote was priced in; the backend always sets it. Execute
+  // must send this same region back (ExchangeExecuteRequest.region).
+  Region: string;
 }
 
 // ExchangeExecuteRequest: same `targets[]` vs legacy singleton
@@ -833,7 +855,9 @@ export interface ExchangeExecuteRequest {
   target_offering_id?: string;
   target_count?: number;
   max_payment_due_usd: string;
-  region?: string;
+  // Required: the backend rejects an execute without a region rather than
+  // defaulting one, since exchanges are irreversible. Pass the quote's Region.
+  region: string;
 }
 
 export interface ExchangeResult {
@@ -942,6 +966,10 @@ export interface ApiError extends Error {
   // See internal/api/handler.go for the flattening — keys are
   // promoted to the top level of the JSON body.
   details?: Record<string, unknown>;
+  // Raw technical text behind a user-facing message (e.g. "HTTP 502 from
+  // /api/x", "timed out after 90000ms", the browser's fetch error), kept
+  // for the console and support while `message` stays readable (#748).
+  detail?: string;
 }
 
 export interface RequestOptions extends RequestInit {

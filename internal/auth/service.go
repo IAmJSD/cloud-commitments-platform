@@ -71,6 +71,10 @@ type ServiceConfig struct {
 	DashboardURL     string
 	CSRFKey          []byte
 	SessionDuration  time.Duration
+	// BcryptCost lowers the bcrypt work factor for tests that build the
+	// service through other packages. Zero, the only value production
+	// uses, keeps bcryptCost (12) and the fixed cost-12 timing sentinel.
+	BcryptCost int
 }
 
 // NewService creates a new auth service.
@@ -124,6 +128,8 @@ func NewService(cfg ServiceConfig) *Service {
 		dashboardURL:     cfg.DashboardURL,
 		onPasswordChange: cfg.OnPasswordChange,
 		csrfKey:          csrfKey,
+		// Zero leaves the production cost in hashPassword and Login.
+		bcryptCostOverride: cfg.BcryptCost,
 	}
 }
 
@@ -162,7 +168,7 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResponse, 
 		// user is indistinguishable from a wrong-password attempt on a real
 		// account. Without this, the missing-row path returns immediately
 		// (no bcrypt), leaking account existence via timing (issue #416).
-		s.verifyPassword(req.Password, dummyPasswordHash)
+		s.verifyPassword(req.Password, s.dummyHashForCompare())
 		return nil, err
 	}
 

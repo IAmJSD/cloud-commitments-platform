@@ -115,7 +115,13 @@ describe('regression: saving a group with every permission row removed (#237)', 
 
     expect(api.updateGroup).not.toHaveBeenCalled();
     expect(showSuccess).not.toHaveBeenCalled();
-    expect(showError).toHaveBeenCalledWith(expect.stringContaining('at least one permission'));
+    // Issue #213: the placeholder row is refused in place (note under the
+    // row, controls aria-invalid) instead of being dropped and then hitting
+    // the empty-list refusal.
+    expect(actionSelect.getAttribute('aria-invalid')).toBe('true');
+    expect(resourceSelect.getAttribute('aria-invalid')).toBe('true');
+    expect(document.querySelector('.permission-item .field-error')?.textContent)
+      .toContain('no action and no resource');
   });
 
   test('creating a new group with no permission rows also refuses to save', async () => {

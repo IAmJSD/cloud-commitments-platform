@@ -24,8 +24,9 @@ import (
 // the lock it is asking about.
 func TestAdvisoryLockHeldFor(t *testing.T) {
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { _ = container.Cleanup(context.Background()) })
+	// Empty, not migrated: advisory locks and pg_locks need no schema, and both
+	// are scoped to the current database, so the shared server is fine.
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 
 	dsn := container.Config.DSN(container.Config.Password)
 	holder, err := pgx.Connect(ctx, dsn)

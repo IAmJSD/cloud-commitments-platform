@@ -25,13 +25,12 @@ import (
 // This test therefore exercises the "Admin user created" log path, which
 // is emitted on the first cold-start bootstrap and must reach stderr.
 func TestAdminBootstrap_LogsToStderr_NotStdout(t *testing.T) {
+	// Not parallel: it swaps os.Stdout and the standard logger, which other tests write to.
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 	const adminEmail = "stderr-bootstrap@test.example"
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	readStdout := captureStdout(t)
