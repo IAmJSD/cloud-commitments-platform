@@ -31,6 +31,7 @@ import (
 // CUDLY_FORCE_MIGRATION_VERSION. Per-migration re-run safety is therefore not
 // an invariant that auto-heal depends on, and is tracked separately.
 func TestMigrations_FullStackIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

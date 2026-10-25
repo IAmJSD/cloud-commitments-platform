@@ -18,6 +18,7 @@ import (
 // its own up against the schema the later migrations left behind; a down that
 // assumes an object a later migration removed leaves the DB dirty (issue #205).
 func TestMigrations_DownAllRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

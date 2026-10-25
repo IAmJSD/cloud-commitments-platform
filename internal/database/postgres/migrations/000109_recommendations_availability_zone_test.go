@@ -26,6 +26,7 @@ const insertRecForMigration109 = `
 // both payload shapes, the 8-column index is kept so the current upsert still
 // works, and rollback removes the column and the new index.
 func TestMigration_RecommendationsAvailabilityZone(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

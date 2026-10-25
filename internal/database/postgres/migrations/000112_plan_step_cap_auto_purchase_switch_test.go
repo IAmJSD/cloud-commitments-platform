@@ -19,6 +19,7 @@ import (
 // switch defaults to FALSE, the CHECK rejects a non-positive cap, and the down
 // migration removes both columns.
 func TestMigration_PlanStepCapAndAutoPurchaseSwitch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

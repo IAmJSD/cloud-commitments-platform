@@ -27,7 +27,8 @@ import (
 // One mutex covers all of it. Holding it while the container starts and the
 // template migrates makes concurrent first callers wait for the one setup
 // instead of racing to do their own, and holding it across CREATE DATABASE
-// keeps clones of one template from contending with each other.
+// keeps clones of one template from contending with each other. Drops take it
+// too, so TerminateSharedPostgres cannot pull the server out from under one.
 type sharedServer struct {
 	mu        sync.Mutex
 	admin     *PostgresContainer // connected to the maintenance database, never handed to a test
@@ -86,7 +87,13 @@ func RequireEmptyDatabase(ctx context.Context, t *testing.T) *PostgresContainer 
 func requireSharedDatabase(ctx context.Context, t *testing.T, migrationsPath string) *PostgresContainer {
 	t.Helper()
 
-	testcontainers.SkipIfProviderIsNotHealthy(t)
+	// Probe Docker only until the shared server is up. Once it is, the server
+	// answering is the evidence that matters, and a probe that times out under
+	// load would otherwise skip a test whose database is reachable, the false
+	// green #1597 is about.
+	if !shared.running() {
+		providerProbe(t)
+	}
 
 	name, cfg, err := shared.newDatabase(ctx, t, migrationsPath)
 	require.NoError(t, err,
@@ -101,6 +108,17 @@ func requireSharedDatabase(ctx context.Context, t *testing.T, migrationsPath str
 	t.Cleanup(conn.Close) // runs before the drop: cleanups are last in, first out
 
 	return &PostgresContainer{Config: cfg, DB: conn}
+}
+
+// providerProbe skips t when Docker is unusable. A variable so a test can
+// observe when it runs.
+var providerProbe = testcontainers.SkipIfProviderIsNotHealthy
+
+// running reports whether the shared server is up.
+func (s *sharedServer) running() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.admin != nil
 }
 
 // TerminateSharedPostgres stops the shared container if one was started. Call
@@ -162,9 +180,22 @@ func (s *sharedServer) start(ctx context.Context, t *testing.T) error {
 	}
 	// Detached from ctx: the container outlives the test that happened to be
 	// first, so that test's deadline or cancellation must not reach it.
-	s.admin, s.startErr = SetupPostgresContainer(context.WithoutCancel(ctx), t)
+	s.admin, s.startErr = setupPostgresContainer(context.WithoutCancel(ctx), t,
+		testcontainers.WithCmdArgs("-c", fmt.Sprintf("max_connections=%d", sharedMaxConnections)))
 	return s.startErr
 }
+
+// sharedMaxConnections is the shared server's max_connections, raised from
+// PostgreSQL's default of 100 because tests on it may run in parallel
+// (t.Parallel), up to -parallel (GOMAXPROCS by default) at once. Each running
+// test can hold a pool of up to 10 connections (MaxConnections in
+// SetupPostgresContainer) plus the migrator's own connection and a spare
+// session or two, about 13 at worst, and the admin pool adds up to 10 more.
+// 500 covers that worst case up to -parallel=36. Real use is far lower, since
+// pools only open what they need: the migrations package peaked at 50
+// connections with -parallel=16 and 21 with -parallel=4. Raising the server limit instead of
+// shrinking the per-database pool leaves every test's pool exactly as it was.
+const sharedMaxConnections = 500
 
 // templateKey identifies the migrations directory a template was built from.
 // It is absolute so that "../database/postgres/migrations" and a
@@ -188,10 +219,19 @@ func (s *sharedServer) template(ctx context.Context, migrationsPath string) (str
 		s.templates = map[string]templateDB{}
 	}
 	tmpl := templateDB{name: fmt.Sprintf("cudly_template_%d", len(s.templates)+1)}
-	tmpl.err = s.buildTemplate(ctx, tmpl.name, key)
+	// Detached from ctx, like the container in start: the outcome is cached for
+	// every later caller, so the first caller's cancellation or deadline must
+	// not be what decides it. templateBuildTimeout still bounds a hung build.
+	buildCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), templateBuildTimeout)
+	defer cancel()
+	tmpl.err = s.buildTemplate(buildCtx, tmpl.name, key)
 	s.templates[key] = tmpl
 	return tmpl.name, tmpl.err
 }
+
+// templateBuildTimeout bounds one template build. The full chain takes seconds;
+// this is a backstop against a hang, generous enough for a loaded CI runner.
+const templateBuildTimeout = 10 * time.Minute
 
 // buildTemplate creates name, applies every migration under migrationsPath to
 // it, and then closes it to connections.
@@ -219,7 +259,17 @@ func (s *sharedServer) buildTemplate(ctx context.Context, name, migrationsPath s
 
 // dropDatabase removes a per-test database. FORCE ends any connection the test
 // leaked, which would otherwise block the drop and leave the database behind.
+//
+// It holds s.mu so TerminateSharedPostgres cannot close the admin connection
+// mid-drop. With no server left there is nothing to drop: terminating the
+// container took every database on it along.
 func (s *sharedServer) dropDatabase(t *testing.T, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.admin == nil {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -229,12 +279,14 @@ func (s *sharedServer) dropDatabase(t *testing.T, name string) {
 }
 
 // configFor returns a copy of the shared container's config pointed at name.
+// Callers hold s.mu.
 func (s *sharedServer) configFor(name string) *database.Config {
 	cfg := *s.admin.Config
 	cfg.Database = name
 	return &cfg
 }
 
+// exec runs sql on the admin connection. Callers hold s.mu.
 func (s *sharedServer) exec(ctx context.Context, sql string) error {
 	_, err := s.admin.DB.Exec(ctx, sql)
 	return err

@@ -17,6 +17,7 @@ import (
 // purchase_history: existing rows have no unresolved attempt, and the down
 // migration removes both columns.
 func TestMigration_PurchaseHistoryListingAttempt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

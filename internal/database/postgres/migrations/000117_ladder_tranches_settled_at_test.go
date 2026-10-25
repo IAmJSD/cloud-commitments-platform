@@ -22,6 +22,7 @@ import (
 // row still works (the ON DELETE SET NULL updates re-evaluate the CHECK), and
 // the up statement is idempotent.
 func TestMigration_LadderTranchesSettledAt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := getMigrationsPath()
 	container := testhelpers.RequireEmptyDatabase(ctx, t)

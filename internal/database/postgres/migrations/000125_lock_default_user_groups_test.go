@@ -12,6 +12,7 @@ import (
 )
 
 func TestMigration_LockDefaultUserGroups(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool, path := container.DB.Pool(), getMigrationsPath()

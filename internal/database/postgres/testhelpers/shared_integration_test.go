@@ -192,6 +192,66 @@ func TestRequireMigratedDatabase_ConcurrentFirstUse(t *testing.T) {
 	assert.Len(t, shared.templates, 1, "concurrent first callers must share one template")
 }
 
+// TestRequireMigratedDatabase_CanceledFirstCallerDoesNotPoisonTemplate has the
+// caller that triggers the template build arrive with its context already
+// canceled. The build's outcome is cached for the whole binary, so it must not
+// depend on that caller's context: later callers get a migrated database.
+func TestRequireMigratedDatabase_CanceledFirstCallerDoesNotPoisonTemplate(t *testing.T) {
+	require.NoError(t, TerminateSharedPostgres(), "reset to a cold start, so this caller builds the template")
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	// The caller's own CREATE DATABASE may fail on its dead context; that
+	// failure is the caller's alone and is not what this test is about.
+	if name, _, err := shared.newDatabase(canceled, t, sharedTestMigrationsPath()); err == nil {
+		t.Cleanup(func() { shared.dropDatabase(t, name) })
+	}
+
+	shared.mu.Lock()
+	tmpl, built := shared.templates[templateKey(sharedTestMigrationsPath())]
+	shared.mu.Unlock()
+	require.True(t, built, "the canceled first caller must still have built the template")
+	require.NoError(t, tmpl.err, "a canceled first caller must not cache a failed template")
+
+	ctx, stop := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer stop()
+	db := RequireMigratedDatabase(ctx, t, sharedTestMigrationsPath())
+	requireFullyMigrated(ctx, t, db.DB, latestMigrationVersion(t))
+}
+
+// TestRequireEmptyDatabase_CleanupAfterTerminate stops the shared server while
+// a test still holds a database on it, as a TestMain teardown racing a late
+// cleanup would. The cleanup must find nothing to drop, not fail or panic.
+func TestRequireEmptyDatabase_CleanupAfterTerminate(t *testing.T) {
+	passed := t.Run("terminates the server mid-test", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		db := RequireEmptyDatabase(ctx, t)
+		require.NoError(t, db.DB.Ping(ctx))
+		require.NoError(t, TerminateSharedPostgres())
+	})
+	assert.True(t, passed, "cleanup after the shared server stopped must not fail the test")
+}
+
+// TestRequireSharedDatabase_ProbesDockerOnlyUntilServerIsUp pins that the
+// Docker probe runs on a cold start but not once the server is up. A probe
+// that times out under load would skip a test whose database is reachable,
+// a false green.
+func TestRequireSharedDatabase_ProbesDockerOnlyUntilServerIsUp(t *testing.T) {
+	require.NoError(t, TerminateSharedPostgres(), "reset to a cold start")
+	probes := 0
+	orig := providerProbe
+	providerProbe = func(t *testing.T) { probes++; orig(t) }
+	t.Cleanup(func() { providerProbe = orig })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	RequireEmptyDatabase(ctx, t)
+	assert.Equal(t, 1, probes, "a cold start must probe Docker before starting the server")
+	RequireEmptyDatabase(ctx, t)
+	assert.Equal(t, 1, probes, "a running server must not be probed again")
+}
+
 // connString points cfg's server and credentials at dbName.
 func connString(cfg *database.Config, dbName string) string {
 	u := url.URL{

@@ -32,6 +32,7 @@ import (
 // shape): provider/service total = AVG(250, 400) = 325. The pre-fix flat AVG
 // returned 650/6 = 108.33.
 func TestAnalyticsNestedRollup_COR02(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 

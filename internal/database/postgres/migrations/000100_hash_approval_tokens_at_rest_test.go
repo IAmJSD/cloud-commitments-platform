@@ -112,6 +112,7 @@ func runUpSQL(ctx context.Context, t *testing.T, pool *pgxpool.Pool, migrationsP
 // destroying migrated hashes; and the no-op down keeps the hashes so a
 // down-then-up is lossless.
 func TestMigration_HashApprovalTokensAtRest(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
@@ -184,6 +185,7 @@ func TestMigration_HashApprovalTokensAtRest(t *testing.T) {
 // or execution history, pending lists and the scheduler break. A row the new
 // store writes must also stay readable by pre-#103 code.
 func TestMigration_HashApprovalTokensAtRest_StoreReadsTokenlessRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
