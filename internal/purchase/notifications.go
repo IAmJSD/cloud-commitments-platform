@@ -236,7 +236,10 @@ func (m *Manager) getOrCreateExecution(ctx context.Context, plan *config.Purchas
 	if txErr != nil {
 		return nil, "", false, txErr
 	}
-	if step.failedNew {
+	if step.failedNew != nil {
+		// Notified only once the claim's transaction committed the row; the
+		// plan lock lets one tick record it (issue #1195).
+		m.notifyExecutionFailure(ctx, step.failedNew)
 		return nil, "", false, bareStepFailure(plan.ID, step.number, step.failureReason)
 	}
 	if step.targetMet {
@@ -268,7 +271,7 @@ type stepClaim struct {
 	existing      *config.PurchaseExecution
 	emptyRoot     *config.PurchaseExecution
 	blocked       error
-	failedNew     bool
+	failedNew     *config.PurchaseExecution
 	targetMet     bool
 	failureReason string
 }
@@ -318,6 +321,9 @@ func (m *Manager) failExistingPlanStep(ctx context.Context, exec *config.Purchas
 		return fmt.Errorf("failed to fail plan step %d of plan %s: %w", exec.StepNumber, exec.PlanID, err)
 	}
 	logFailedPlanStep(failed)
+	// Notified only once the transaction committed the failed row: a lost CAS
+	// or an error before commit leaves it pending and quiet (issue #1195).
+	m.notifyExecutionFailure(ctx, failed)
 	return bareStepFailure(failed.PlanID, failed.StepNumber, reason)
 }
 

@@ -291,11 +291,9 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 	saveCtx, cancelSave := ctxutil.DetachedWithTimeout(ctx, m.budgets.terminalSaveTimeout())
 	defer cancelSave()
 	// Operators hear about every failed or partial row (issue #714), even
-	// when the terminal save below fails. A fan-out root is skipped: each
-	// per-account row notified for itself in executeForAccount.
-	if !isFanOutOutcome(execErr) {
-		defer m.notifyExecutionFailure(saveCtx, exec)
-	}
+	// when the terminal save below fails. A fan-out root logs the alarm
+	// marker without an email (issue #1195; see notifyRootFailure).
+	defer m.notifyRootFailure(saveCtx, exec, execErr)
 	if err := m.saveOrRecoverTerminal(saveCtx, exec, execErr); err != nil {
 		logging.Errorf("AUDIT LOSS: failed to save execution status: %v", err)
 		// Wrap with ErrAuditLoss regardless of whether executePurchase itself
@@ -708,6 +706,8 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 		}
 		return false, fmt.Errorf("failed to transition stranded execution %s to failed: %w", exec.ExecutionID, txErr)
 	}
+	// This sweep won the CAS, so it is the one writer that notifies (#1195).
+	defer m.notifyExecutionFailure(ctx, updated)
 
 	updated.Error = strandedRecoveryError(exec)
 	if saveErr := m.config.SavePurchaseExecution(ctx, updated); saveErr != nil {

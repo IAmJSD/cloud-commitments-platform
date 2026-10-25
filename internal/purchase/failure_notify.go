@@ -30,20 +30,23 @@ const failureNotifyTimeout = 30 * time.Second
 // purchase-failed email listing the selected recommendations that did not
 // purchase. A completed (or any non-terminal) row is a no-op.
 //
-// It runs after the terminal status is decided, once per row: the root row in
-// executeAndFinalize (single-account and pre-fan-out failures) and each
-// per-account row in executeForAccount (multi-account fan-out, whose root never
-// carries per-rec Purchased flags). Every caller holds the row's "running"
-// claim, so concurrent workers cannot both notify for the same row.
+// It runs after the terminal status is decided, once per row, from every
+// writer that ends a row failed or partially_completed (issue #1195):
+//   - executeAndFinalize, for the root row (single-account and pre-fan-out
+//     failures; a fan-out root gets the marker only, see notifyRootFailure);
+//   - executeForAccount, for each per-account fan-out row;
+//   - failClaimedBeforeSubmission, for a claimed row refused before submission;
+//   - safeFail and the reaper, for stranded rows the sweeps fail;
+//   - failExistingPlanStep and getOrCreateExecution, for a plan step that is
+//     failed without ever reaching the executor.
+//
+// Each of them notifies only after winning the row: the "running" claim, or the
+// compare-and-set (or plan lock) that moved it to failed, so concurrent workers
+// cannot both notify for the same row.
 //
 // Best effort: a send failure is logged and never changes the purchase outcome.
 func (m *Manager) notifyExecutionFailure(ctx context.Context, exec *config.PurchaseExecution) {
-	if exec.Status != "failed" && exec.Status != "partially_completed" {
-		return
-	}
-	logging.Errorf("%s execution_id=%s plan_id=%s status=%s",
-		PurchaseFailedLogMarker, exec.ExecutionID, exec.PlanID, exec.Status)
-	if m.email == nil {
+	if !logExecutionFailure(exec) || m.email == nil {
 		return
 	}
 	ctx, cancel := ctxutil.DetachedWithTimeout(ctx, failureNotifyTimeout)
@@ -81,10 +84,35 @@ func (m *Manager) buildPurchaseFailedData(ctx context.Context, exec *config.Purc
 	return data
 }
 
+// logExecutionFailure logs PurchaseFailedLogMarker, the alarm source, when exec
+// ended failed or partially_completed, and reports whether it did.
+func logExecutionFailure(exec *config.PurchaseExecution) bool {
+	if exec.Status != "failed" && exec.Status != "partially_completed" {
+		return false
+	}
+	logging.Errorf("%s execution_id=%s plan_id=%s status=%s",
+		PurchaseFailedLogMarker, exec.ExecutionID, exec.PlanID, exec.Status)
+	return true
+}
+
+// notifyRootFailure is executeAndFinalize's notification for the root row. A
+// fan-out root always logs the marker but sends no email: the per-account rows
+// email for themselves, and the root could not list the failed recs (it never
+// carries per-rec Purchased flags). The marker cannot be left to the children,
+// because a child can fail without reaching its own notification: the fan-out
+// skips an account once the context is done, and a panicking child is
+// recovered with its row still non-terminal (issue #1195).
+func (m *Manager) notifyRootFailure(ctx context.Context, exec *config.PurchaseExecution, execErr error) {
+	if isFanOutOutcome(execErr) {
+		logExecutionFailure(exec)
+		return
+	}
+	m.notifyExecutionFailure(ctx, exec)
+}
+
 // isFanOutOutcome reports whether execErr is the aggregate of a multi-account
-// fan-out. Each per-account row already notified for itself, so the root row
-// must not notify again (and could not list the failed recs: the root never
-// carries per-rec Purchased flags).
+// fan-out, whose root row gets the failure marker but no email (see
+// notifyRootFailure).
 func isFanOutOutcome(execErr error) bool {
 	var partial *multiAccountPartialError
 	return errors.Is(execErr, errAllAccountsFailed) || errors.As(execErr, &partial)

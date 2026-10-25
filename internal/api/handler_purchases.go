@@ -956,8 +956,10 @@ func concealExecutionDenial(err error) error {
 
 // tokenActionError maps the email-link approve/cancel failures that are the
 // caller's fault to a 4xx: a wrong token is 403 (as on the RI exchange
-// approve path), an expired token is 410, and an execution
-// whose status no longer allows the action is 409. Anything else stays a server error.
+// approve path), as is a token rotated or expired between the snapshot check
+// and the status CAS (config.ErrApprovalTokenChanged, issue #1190), an expired
+// token is 410, and an execution whose status no longer allows the action is
+// 409. Anything else stays a server error.
 func tokenActionError(err error) error {
 	switch {
 	case errors.Is(err, config.ErrAuditLoss):
@@ -966,7 +968,7 @@ func tokenActionError(err error) error {
 		return claimedRowRefusalError(nil, err)
 	case errors.Is(err, purchase.ErrStaleAzurePricing):
 		return NewClientError(409, err.Error())
-	case errors.Is(err, purchase.ErrInvalidApprovalToken):
+	case errors.Is(err, purchase.ErrInvalidApprovalToken), errors.Is(err, config.ErrApprovalTokenChanged):
 		return NewClientError(403, "invalid approval token")
 	case errors.Is(err, purchase.ErrApprovalTokenExpired):
 		return NewClientError(410, "approval token has expired")
@@ -1961,13 +1963,23 @@ func checkRevokableStatus(execution *config.PurchaseExecution) error {
 }
 
 // validateRevokeToken checks that the execution carries a non-empty
-// ApprovalToken, that the token has not expired, that the revocation window
-// has not closed (config.RevocationWindow after CompletedAt), and that the
-// token matches using constant-time comparison. Pre-migration rows without an
-// ApprovalTokenExpiresAt pass the expiry check (legacy backward compat).
+// ApprovalToken that matches the supplied token (constant-time comparison),
+// then that the token has not expired and that the revocation window has not
+// closed (config.RevocationWindow after CompletedAt). Pre-migration rows
+// without an ApprovalTokenExpiresAt pass the expiry check (legacy backward
+// compat).
+//
+// The token is compared first, as on the approve path (ValidateApprovalToken):
+// a wrong token must get the same "invalid" answer whatever the row's expiry or
+// window, or the expiry/window message tells a token guesser that the link
+// exists and has lapsed (issue #1190).
 // Extracted from revokeViaEmailToken to keep that function under the cyclomatic limit.
 func validateRevokeToken(execution *config.PurchaseExecution, token string) error {
-	if execution.ApprovalToken == "" {
+	// execution.ApprovalToken is the SHA-256 hex digest stored at rest
+	// (issue #103), not the raw secret; config.ApprovalTokenMatches hashes
+	// the supplied token and compares digests in constant time, and is false
+	// for an empty stored or supplied token.
+	if !config.ApprovalTokenMatches(execution.ApprovalToken, token) {
 		return NewClientError(403, "invalid revocation token")
 	}
 	if execution.ApprovalTokenExpiresAt != nil && time.Now().After(*execution.ApprovalTokenExpiresAt) {
@@ -1977,16 +1989,7 @@ func validateRevokeToken(execution *config.PurchaseExecution, token string) erro
 	// Enforce the 24-hour revocation window (issue #291 Finding #6).
 	// Use CompletedAt as the reference timestamp; fall back to ExecutedAt
 	// for direct-execute rows which may not have a CompletedAt yet.
-	if windowErr := checkRevocationWindow(execution); windowErr != nil {
-		return windowErr
-	}
-	// execution.ApprovalToken is the SHA-256 hex digest stored at rest
-	// (issue #103), not the raw secret; config.ApprovalTokenMatches hashes
-	// the supplied token and compares digests in constant time.
-	if !config.ApprovalTokenMatches(execution.ApprovalToken, token) {
-		return NewClientError(403, "invalid revocation token")
-	}
-	return nil
+	return checkRevocationWindow(execution)
 }
 
 // checkRevocationWindow returns a 403 ClientError when the 24-hour revocation
