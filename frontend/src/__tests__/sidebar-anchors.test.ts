@@ -88,14 +88,15 @@ describe('Sidebar nav - issue #462 anchor markup', () => {
   });
 
   test.each(EXPECTED_NAV)(
-    '$tab is rendered as anchor at $href with role=tab',
+    '$tab is rendered as a plain link at $href (no ARIA tab role, issue #730)',
     ({ tab, href }) => {
       document.body.innerHTML = html;
       const el = document.querySelector(`.app-sidebar-nav [data-tab="${tab}"]`);
       expect(el).toBeTruthy();
       expect(el?.tagName).toBe('A');
       expect((el as HTMLAnchorElement).getAttribute('href')).toBe(href);
-      expect(el?.getAttribute('role')).toBe('tab');
+      expect(el?.hasAttribute('role')).toBe(false);
+      expect(el?.hasAttribute('aria-selected')).toBe(false);
     },
   );
 
@@ -119,7 +120,6 @@ describe('Sidebar nav click handling - issue #462', () => {
     a.className = 'tab-btn';
     a.setAttribute('href', '/opportunities');
     a.setAttribute('data-tab', 'opportunities');
-    a.setAttribute('role', 'tab');
     a.textContent = 'Opportunities';
     document.body.appendChild(a);
     setupEventListeners();
@@ -134,7 +134,7 @@ describe('Sidebar nav click handling - issue #462', () => {
     });
     link.dispatchEvent(evt);
     expect(evt.defaultPrevented).toBe(true);
-    expect(switchTab).toHaveBeenCalledWith('opportunities');
+    expect(switchTab).toHaveBeenCalledWith('opportunities', { focusContent: true });
   });
 
   test('Ctrl-click falls through to the browser (no preventDefault, no switchTab)', () => {
