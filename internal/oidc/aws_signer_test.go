@@ -78,7 +78,7 @@ func TestAWSKMSSignerRoundTrip(t *testing.T) {
 
 // TestAWSKMSSignerRejectsWrongCurve guards against a misconfigured KMS
 // key (e.g. ECC_NIST_P384 instead of the required ECC_NIST_P256) being
-// accepted silently. resolveOnce must fail fast with a clear error
+// accepted silently. fetchPublicKey must fail fast with a clear error
 // instead of caching a wrong-curve public key that only breaks later
 // at JWKS-publish or signing time.
 func TestAWSKMSSignerRejectsWrongCurve(t *testing.T) {

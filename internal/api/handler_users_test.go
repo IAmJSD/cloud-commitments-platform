@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"testing"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
@@ -312,4 +313,47 @@ func TestHandler_updateUser_InvalidJSON(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "invalid request body")
+}
+
+// Issue #78: a contradictory view-only + write-capable membership refused by
+// the auth service must reach a non-UI API consumer as a 400 carrying the
+// explanation, on both the create and the update path, not as a generic 500.
+func TestHandler_users_ContradictoryGroupsMapTo400(t *testing.T) {
+	ctx := context.Background()
+	adminSession := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com"}
+	refusal := fmt.Errorf(`%w: "Viewers" is view-only but "Plan Authors" grants write permissions; assign a view-only group or write-capable groups, not both`,
+		auth.ErrContradictoryGroups)
+	groups := `["00000000-0000-5000-8000-000000000004", "00000000-0000-5000-8000-000000000003"]`
+	headers := map[string]string{"Authorization": "Bearer admin-token"}
+
+	calls := map[string]func(h *Handler, m *MockAuthService) (any, error){
+		"create": func(h *Handler, m *MockAuthService) (any, error) {
+			m.On("CreateUserAPI", ctx, adminSession.UserID, mock.Anything).Return(nil, refusal).Once()
+			password := base64.StdEncoding.EncodeToString([]byte("password123"))
+			return h.createUser(ctx, &events.LambdaFunctionURLRequest{Headers: headers,
+				Body: `{"email": "new@example.com", "password": "` + password + `", "groups": ` + groups + `}`})
+		},
+		"update": func(h *Handler, m *MockAuthService) (any, error) {
+			const userID = "11111111-1111-1111-1111-111111111111"
+			m.On("UpdateUserAPI", ctx, adminSession.UserID, userID, mock.Anything).Return(nil, refusal).Once()
+			return h.updateUser(ctx, &events.LambdaFunctionURLRequest{Headers: headers, Body: `{"groups": ` + groups + `}`}, userID)
+		},
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			mockAuth := new(MockAuthService)
+			t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+			mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
+			mockAuth.grantAdmin()
+
+			result, err := call(&Handler{auth: mockAuth}, mockAuth)
+
+			require.Error(t, err)
+			assert.Nil(t, result)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "a contradictory combination must map to a client error, not a 500")
+			assert.Equal(t, 400, ce.code)
+			assert.Contains(t, err.Error(), `"Viewers" is view-only`)
+		})
+	}
 }
