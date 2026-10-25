@@ -142,3 +142,39 @@ test('a row with no coverage figure renders no bar rather than an empty 0% bar',
   await expect(placeholder).toHaveCount(1);
   await expect(placeholder).toHaveText('N/A');
 });
+
+/**
+ * Issue #726: the fill was success-green at every value, so 0% read like
+ * 100%. With a known target (the /api/config default here) the fill is
+ * neutral on track, red far below target, and a tick marks the target.
+ */
+test('the bar colour follows distance from the coverage target, with a target tick', async ({ page }) => {
+  await seedAuth(page);
+  await mockApi(page);
+  await page.route('**/api/config', (route) => route.fulfill({ json: { global: { default_coverage: 80 }, services: [] } }));
+  await page.goto('/inventory/coverage');
+  const rows = page.locator(`${AWS_TABLE} tbody tr`);
+  await expect(rows).toHaveCount(COVERAGE.providers[0]!.services!.length);
+
+  const fills: string[] = [];
+  for (const [index, service] of NUMERIC_ROWS.entries()) {
+    const track = rows.nth(index).locator('.coverage-bar');
+    fills.push((await painted(track.locator('.coverage-bar-fill'))).background);
+
+    // The tick sits at 80% of the track and stands taller than it.
+    const trackBox = (await track.boundingBox())!;
+    const tickBox = (await track.locator('.coverage-bar-target').boundingBox())!;
+    const tickCentre = ((tickBox.x + tickBox.width / 2 - trackBox.x) / trackBox.width) * 100;
+    expect(tickCentre, `${service.service}: tick position`).toBeCloseTo(80, 0);
+    expect(tickBox.height, `${service.service}: tick height`).toBeGreaterThan(trackBox.height);
+    await expect(track).toHaveAttribute('aria-label', new RegExp(`target 80%`));
+  }
+
+  const [full, mid, zero] = fills;
+  // 100% and 62.5% (0.78 of target) are on track and share the neutral fill;
+  // 0% is far below and must look different.
+  expect(mid).toBe(full);
+  expect(zero).not.toBe(full);
+  // None of them is the old success green (--cudly-success #15803d).
+  expect(fills).not.toContain('rgb(21, 128, 61)');
+});
