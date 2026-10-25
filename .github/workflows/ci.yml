@@ -462,7 +462,89 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          # The caches below replace setup-go's. Its one entry is shared by
+          # every job, keyed on go.sum and saved by whichever job finishes
+          # first, so it never holds this job's -race -tags=integration
+          # coverage build: every leg compiled cold, minutes per leg.
+          cache: false
+
+      # Each leg restores its own build cache (GOCACHE), as each compiles a
+      # different set of packages, and the legs share one module cache
+      # (GOMODCACHE). Restore and save are separate steps, as in the
+      # security-scan job, so that a red run still warms the build cache.
+      - name: Compute Go cache keys
+        id: go_cache
+        run: |
+          set -euo pipefail
+          go_version=$(go env GOVERSION)
+          # sha256sum lines carry each path as well as its content, so a
+          # renamed file changes the hash too. The sources are every Go file
+          # plus everything under cmd/, internal/ and iac/, which covers the
+          # go:embed inputs (openapi.yaml, IaC templates). Including too much
+          # only costs a partial hit and a save.
+          hash_files() {
+            git ls-files -z -- "$@" | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
+          }
+          mod_hash=$(hash_files go.work go.work.sum '*go.mod' '*go.sum')
+          src_hash=$(hash_files go.work go.work.sum '*go.mod' '*go.sum' '*.go' cmd internal iac)
+          build_any="integration-gobuild-${RUNNER_OS}-${RUNNER_ARCH}-${go_version}-"
+          {
+            echo "gocache=$(go env GOCACHE)"
+            echo "gomodcache=$(go env GOMODCACHE)"
+            echo "mod_prefix=integration-gomod-${RUNNER_OS}-${RUNNER_ARCH}-"
+            echo "mod_key=integration-gomod-${RUNNER_OS}-${RUNNER_ARCH}-${mod_hash}"
+            echo "build_any_prefix=${build_any}"
+            echo "build_prefix=${build_any}shard-${SHARD}-src-"
+            echo "build_key=${build_any}shard-${SHARD}-src-${src_hash}"
+          } | tee -a "$GITHUB_OUTPUT"
+
+      - name: Restore Go module cache
+        id: go_mod_cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.go_cache.outputs.gomodcache }}
+          key: ${{ steps.go_cache.outputs.mod_key }}
+          # An older module set still saves most downloads; go fetches the
+          # rest.
+          restore-keys: ${{ steps.go_cache.outputs.mod_prefix }}
+
+      - name: Restore Go build cache
+        id: go_build_cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.go_cache.outputs.gocache }}
+          key: ${{ steps.go_cache.outputs.build_key }}
+          # On a miss, this shard's latest entry (a PR's own, else main's),
+          # then any shard's (a renamed or new shard still gets the shared
+          # dependencies). Go's build cache is content-addressed: an entry
+          # from other sources is used only where it still matches, so a
+          # stale cache recompiles just what changed.
+          restore-keys: |
+            ${{ steps.go_cache.outputs.build_prefix }}
+            ${{ steps.go_cache.outputs.build_any_prefix }}
+
+      - name: Mark restored build cache entries unused
+        # Go moves an entry's mtime to now when it uses an entry that is over
+        # an hour old. Backdating every restored entry by two hours (well
+        # inside Go's own 5-day trim) lets the prune step below drop exactly
+        # the entries this run did not use, so a cache restored from an older
+        # key or from another shard does not keep growing.
+        env:
+          GOCACHE_DIR: ${{ steps.go_cache.outputs.gocache }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GOCACHE_DIR"
+          find "$GOCACHE_DIR" -mindepth 2 -maxdepth 2 -type f -print0 |
+            xargs -0 -r touch -m -d '2 hours ago'
+          touch "$RUNNER_TEMP/go-build-restored"
+          echo "Restored $(find "$GOCACHE_DIR" -mindepth 2 -maxdepth 2 -type f | wc -l) build cache entries, $(du -sh "$GOCACHE_DIR" | cut -f1)"
+
+      - name: Download the modules of every shard
+        id: go_mod_download
+        # Only on the leg that saves the module cache, and only on a miss, so
+        # the saved set covers every leg, not just this one's packages.
+        if: strategy.job-index == 0 && steps.go_mod_cache.outputs.cache-hit != 'true'
+        run: go list -deps -test -tags=integration ./... > /dev/null
 
       - name: Install golang-migrate
         run: |
@@ -521,6 +603,7 @@ jobs:
           cut -f1 "$RUNNER_TEMP/shard.tsv" | sed 's/^/  /'
 
       - name: Run integration tests
+        id: integration_tests
         env:
           DB_HOST: localhost
           DB_PORT: 5432
@@ -541,7 +624,11 @@ jobs:
           selected=$(awk -F'\t' '{ n += $3 } END { print n + 0 }' "$RUNNER_TEMP/shard.tsv")
           status=0
           echo "==> integration tests: ${pkgs[*]}"
-          if ! go test -v -race -tags=integration -timeout=20m \
+          # -count=1: with the build cache restored, go test would otherwise
+          # replay an earlier run's results. -run, -v, -timeout and
+          # -coverprofile are all cacheable test flags, and go test cannot
+          # see that the tests depend on the database.
+          if ! go test -count=1 -v -race -tags=integration -timeout=20m \
                   -run "$run_regex" \
                   -coverprofile="$profile" \
                   "${pkgs[@]}" 2>&1 | tee "$log"; then
@@ -573,6 +660,35 @@ jobs:
         if: ${{ !cancelled() && matrix.e2e-typecheck }}
         working-directory: tests/e2e
         run: go vet -tags=e2e ./...
+
+      - name: Drop build cache entries this run did not use
+        id: go_build_prune
+        # Whenever the tests ran, pass or fail, so a red run still warms the
+        # cache. Not on an exact hit: that key is already saved.
+        if: ${{ !cancelled() && steps.go_build_cache.outputs.cache-hit != 'true' && (steps.integration_tests.outcome == 'success' || steps.integration_tests.outcome == 'failure') }}
+        env:
+          GOCACHE_DIR: ${{ steps.go_cache.outputs.gocache }}
+        run: |
+          set -euo pipefail
+          # Entries still older than the marker were restored and never used
+          # (see "Mark restored build cache entries unused").
+          dropped=$(find "$GOCACHE_DIR" -mindepth 2 -maxdepth 2 -type f \
+            ! -newer "$RUNNER_TEMP/go-build-restored" -print -delete | wc -l)
+          echo "Dropped $dropped unused entries; saving $(find "$GOCACHE_DIR" -mindepth 2 -maxdepth 2 -type f | wc -l), $(du -sh "$GOCACHE_DIR" | cut -f1)"
+
+      - name: Save Go build cache
+        if: ${{ !cancelled() && steps.go_build_prune.outcome == 'success' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.go_cache.outputs.gocache }}
+          key: ${{ steps.go_cache.outputs.build_key }}
+
+      - name: Save Go module cache
+        if: ${{ !cancelled() && steps.go_mod_download.outcome == 'success' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.go_cache.outputs.gomodcache }}
+          key: ${{ steps.go_cache.outputs.mod_key }}
 
       - name: Upload integration coverage
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
