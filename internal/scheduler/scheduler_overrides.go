@@ -42,8 +42,9 @@ func (s *Scheduler) applyAccountOverrides(ctx context.Context, recs []config.Rec
 }
 
 // filterRecsByResolvedConfigs drops recs whose resolved per-account
-// ServiceConfig says enabled=false, or whose engine / region / resource_type
-// is rejected by the resolved include/exclude lists.
+// ServiceConfig says enabled=false, whose engine / region / resource_type
+// is rejected by the resolved include/exclude lists, or whose count is below
+// the min_count floor (see overrideDimensions).
 //
 // Recs without a CloudAccountID use global configuration. Recs whose triple
 // has no resolved entry pass through unfiltered.
@@ -65,24 +66,68 @@ func filterRecsByResolvedConfigs(
 			out = append(out, rec)
 			continue
 		}
-		if !cfg.Enabled {
-			continue
-		}
-		if !engineMatches(rec.Engine, cfg) {
-			continue
-		}
-		if !inListRule(rec.Region, cfg.IncludeRegions, cfg.ExcludeRegions) {
-			continue
-		}
-		if !inListRule(rec.ResourceType, cfg.IncludeTypes, cfg.ExcludeTypes) {
-			continue
-		}
-		if !common.IsSavingsPlan(common.ServiceType(rec.Service)) && !meetsMinCount(rec.Count, cfg) {
+		if !passesOverrideDimensions(&rec, cfg) {
 			continue
 		}
 		out = append(out, rec)
 	}
 	return out
+}
+
+// overrideDimension is one axis of the account-service override filter:
+// passes reports whether rec survives it under cfg, and reason is the
+// hidden_by string the rec-detail view reports when it does not.
+type overrideDimension struct {
+	passes func(rec *config.RecommendationRecord, cfg *config.ServiceConfig) bool
+	reason string
+}
+
+// overrideDimensions is the single list both the list filter
+// (filterRecsByResolvedConfigs) and the rec-detail explainer
+// (overrideHiddenReasons) walk, so a rec the list hides always carries a
+// reason in hidden_by. Add a new filter dimension here, never to only one of
+// the two callers: min_count was once added to the filter alone, and a
+// min-count-filtered rec then opened with an empty hidden_by (#120).
+var overrideDimensions = []overrideDimension{
+	{reason: "enabled=false", passes: func(_ *config.RecommendationRecord, cfg *config.ServiceConfig) bool {
+		return cfg.Enabled
+	}},
+	{reason: "engine", passes: func(rec *config.RecommendationRecord, cfg *config.ServiceConfig) bool {
+		return engineMatches(rec.Engine, cfg)
+	}},
+	{reason: "region", passes: func(rec *config.RecommendationRecord, cfg *config.ServiceConfig) bool {
+		return inListRule(rec.Region, cfg.IncludeRegions, cfg.ExcludeRegions)
+	}},
+	{reason: "resource_type", passes: func(rec *config.RecommendationRecord, cfg *config.ServiceConfig) bool {
+		return inListRule(rec.ResourceType, cfg.IncludeTypes, cfg.ExcludeTypes)
+	}},
+	{reason: "min_count", passes: func(rec *config.RecommendationRecord, cfg *config.ServiceConfig) bool {
+		return common.IsSavingsPlan(common.ServiceType(rec.Service)) || meetsMinCount(rec.Count, cfg)
+	}},
+}
+
+// passesOverrideDimensions reports whether rec survives every override
+// dimension under cfg, stopping at the first failure.
+func passesOverrideDimensions(rec *config.RecommendationRecord, cfg *config.ServiceConfig) bool {
+	for _, d := range overrideDimensions {
+		if !d.passes(rec, cfg) {
+			return false
+		}
+	}
+	return true
+}
+
+// overrideHiddenReasons returns a non-empty slice when rec would be dropped by
+// the given resolved ServiceConfig, naming each failing dimension in
+// overrideDimensions order.
+func overrideHiddenReasons(rec *config.RecommendationRecord, cfg *config.ServiceConfig) []string {
+	var reasons []string
+	for _, d := range overrideDimensions {
+		if !d.passes(rec, cfg) {
+			reasons = append(reasons, d.reason)
+		}
+	}
+	return reasons
 }
 
 // meetsMinCount implements the read-time half of the GUI/CLI --min-count

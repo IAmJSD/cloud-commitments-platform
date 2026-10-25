@@ -2075,8 +2075,9 @@ func TestPGXMock_GetAccountCredential_NotFound(t *testing.T) {
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(errNoRows())
 
+	// #120: a missing row is ErrNotFound, distinct from an empty stored blob.
 	blob, err := store.GetAccountCredential(ctx, "acct-1", "aws_access_keys")
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNotFound)
 	assert.Equal(t, "", blob)
 }
 
