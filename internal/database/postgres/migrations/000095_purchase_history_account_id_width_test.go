@@ -106,11 +106,11 @@ func accountIDMaxLength(ctx context.Context, t *testing.T, pool *pgxpool.Pool) i
 // 22001, which is precisely how the audit row for an already-billed commitment
 // is lost. After 000095 both succeed and round-trip untruncated.
 func TestMigration095_PurchaseHistoryAccountIDWidth(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 
 	pool := container.DB.Pool()
 
@@ -195,11 +195,11 @@ func TestMigration095_PurchaseHistoryAccountIDWidth(t *testing.T) {
 // must actually happen. Without this the ALTER branch after the guard is never
 // executed by any test and a typo in it would ship green.
 func TestMigration095_DownNarrowsWhenSafe(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 
 	pool := container.DB.Pool()
 
@@ -231,11 +231,11 @@ func TestMigration095_DownNarrowsWhenSafe(t *testing.T) {
 // VARCHAR(20) with an Azure subscription GUID present would destroy the audit
 // trail this table exists to provide, so the down migration must refuse.
 func TestMigration095_DownRefusesToTruncate(t *testing.T) {
+	t.Parallel()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 
 	pool := container.DB.Pool()
 
