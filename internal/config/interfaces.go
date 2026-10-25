@@ -155,6 +155,16 @@ type StoreInterface interface {
 	// this method's status filter) to avoid accidental double-processing of
 	// failed / expired rows.
 	GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error)
+	// ListHistoryExecutionsPage and ListPurchaseHistoryPage read one keyset
+	// page each of the History view's paged stream (issue #674): rows strictly
+	// after q.After / after (nil starts at the top) in the stream order of
+	// HistoryPageKey, capped at the limit. The executions half excludes clean
+	// completed rows like GetExecutionsByStatuses and bounds scheduled_date
+	// inclusively; the purchase_history half applies GetPurchaseHistoryFiltered's
+	// predicate. Rows inserted or changed between two page reads never shift
+	// the rows a later page returns.
+	ListHistoryExecutionsPage(ctx context.Context, q HistoryExecutionsPageQuery) ([]PurchaseExecution, error)
+	ListPurchaseHistoryPage(ctx context.Context, filter PurchaseHistoryFilter, after *HistoryPageKey) ([]PurchaseHistoryPageRow, error)
 	// CountExecutionsByPlanAndStatus returns, keyed by plan ID, the exact
 	// number of executions in each of the supplied statuses that last
 	// changed state (updated_at) at or after `since` -- not those merely

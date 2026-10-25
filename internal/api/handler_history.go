@@ -4,7 +4,6 @@ package api
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -38,24 +37,33 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 	// folded in here so fetchPurchaseHistory sees a single unified account set.
 	h.resolveHistoryAccountFilter(ctx, &filters)
 
-	completed, err := h.fetchPurchaseHistory(ctx, filters)
+	// The paged stream: completed purchases and terminal executions, newest
+	// first, filters.Limit rows the caller may see, starting after
+	// filters.Cursor (issue #674, see handler_history_page.go).
+	page, err := h.fetchHistoryPage(ctx, session, &filters)
 	if err != nil {
 		return nil, err
 	}
-	for i := range completed {
-		completed[i].Status = purchaseHistoryRowStatus
+
+	// The account scope is resolved once per request and applied to the
+	// actionable rows and the summary (issue #675). The paged stream applies
+	// the same rule per batch (markOutOfScope).
+	scope, err := h.loadHistoryScope(ctx, session)
+	if err != nil {
+		return nil, err
 	}
 
-	// Pull non-completed executions so the user can see (and cancel) their
-	// own in-flight approvals without waiting for the email, AND see the
-	// ones that never made it out (failed) or that sat unapproved past the
-	// 7-day cutoff (expired). Executions live in a separate table
-	// (purchase_executions) from the completed purchase_history rows, so we
-	// merge after the fact. A failure to list executions must not hide
-	// completed history — log, skip, continue. The same filter set is applied
-	// here (in-memory against the synthesized row's recommendations and
-	// scheduled_date) so the two halves of the merged response are
-	// consistently scoped (issue #701).
+	// Pull the actionable executions so the user can see (and cancel) their
+	// own in-flight approvals without waiting for the email. Executions live
+	// in a separate table (purchase_executions) from the completed
+	// purchase_history rows, so we merge after the fact. They are not paged:
+	// the first page lists the whole class (up to its own cap) whatever the
+	// page size, and later pages leave it out, so paging can never push a
+	// pending approval off the first page. A failure to list them must not
+	// hide completed history — log, skip, continue, and flag the response.
+	// The same filter set is applied here (in-memory against the synthesized
+	// row's recommendations and scheduled_date) so the two halves of the
+	// merged response are consistently scoped (issue #701).
 	//
 	// Stale pending/notified executions are expired AFTER the response is
 	// assembled so the GET handler is a pure read (issue #1032): the caller
@@ -65,48 +73,55 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 	// freezes once the response is out (issue #1170). The sweep is deferred so
 	// it also runs after the summary aggregate below: on Lambda a synchronous
 	// sweep before it would make the cards count as "expired" the rows the
-	// list still shows as pending (issue #675).
-	extra, staleExecs, executionsCapped := h.fetchExecutionsAsHistory(ctx, filters)
+	// list still shows as pending (issue #675). Pages fetched with a cursor
+	// do not list the actionable class, so they do not sweep it either.
+	var extra []config.PurchaseHistoryRecord
+	var staleExecs []config.PurchaseExecution
+	actionableIncomplete := false
+	if filters.Cursor == nil {
+		extra, staleExecs, actionableIncomplete = h.fetchExecutionsAsHistory(ctx, filters)
+		extra = scope.filter(extra)
+	}
 	defer h.expireStaleExecutions(staleExecs)
 
-	all := make([]config.PurchaseHistoryRecord, 0, len(completed)+len(extra))
-	all = append(all, completed...)
+	all := make([]config.PurchaseHistoryRecord, 0, len(page.rows)+len(extra))
+	all = append(all, page.rows...)
 	all = append(all, extra...)
-
-	scope, err := h.loadHistoryScope(ctx, session)
-	if err != nil {
-		return nil, err
-	}
-	all = scope.filter(all)
 
 	// Newest first across both sources so pending items don't get buried at
 	// the bottom just because their synthetic records were appended last.
+	// The stream rows are already in order and the sort is stable, so their
+	// relative order (and the cursor's position) is unchanged.
 	sort.SliceStable(all, func(i, j int) bool {
 		return all[i].Timestamp.After(all[j].Timestamp)
 	})
 
 	// The summary covers every row matching the filters and the caller's
-	// account scope, not just the capped page (issue #675). It falls back to the
-	// page when the aggregate query fails, and SummaryComplete says which.
+	// account scope, not just this page (issue #675), so it is the same on
+	// every page. It falls back to the page when the aggregate query fails,
+	// and SummaryComplete says which.
 	summary, summaryComplete := h.historySummary(ctx, filters, scope, all)
 
-	// Truncation is judged on the raw fetches (before the in-memory and scope
-	// filters) because the cap drops rows before they run. It is a single
-	// boolean: a count would reveal other tenants' row volume to a scoped user.
+	// Truncated is a single boolean: a count would reveal other tenants' row
+	// volume to a scoped user. has_more is judged on the rows the caller may
+	// see, so it is never set by rows outside the caller's scope.
 	return HistoryResponse{
 		Summary:                   summary,
 		SummaryComplete:           summaryComplete,
 		Purchases:                 all,
-		Truncated:                 len(completed) >= filters.Limit || executionsCapped,
+		Truncated:                 page.nextCursor != "" || page.incomplete || actionableIncomplete,
 		Limit:                     filters.Limit,
-		ExecutionsLimit:           config.DefaultListLimit,
+		ExecutionsLimit:           filters.Limit,
 		ActionableExecutionsLimit: config.MaxListLimit,
+		HasMore:                   page.nextCursor != "",
+		NextCursor:                page.nextCursor,
 	}, nil
 }
 
 // actionableExecutionStatuses are the PurchaseExecution statuses a user can still
 // act on or that are in flight. They are fetched separately from the terminal
-// class so newer terminal rows cannot push them out of the capped listing.
+// class so newer terminal rows cannot push them out of the capped listing, and
+// they are not paged: the first page lists them all (issue #674).
 //
 // Issue #372 assumed approval executes synchronously (approved -> completed/failed inside one
 // HTTP request) and so excluded "approved"; issue #621 showed that
@@ -125,9 +140,9 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 var actionableExecutionStatuses = []string{"pending", "notified", "scheduled", "approved", "running", "paused"}
 
 // terminalExecutionStatuses are the finished PurchaseExecution statuses the
-// History view loads alongside completed purchases.
+// History view pages through alongside completed purchases (fetchHistoryPage).
 //
-// "completed" is also loaded, but fetchExecutionsAsHistory synthesizes a
+// "completed" is also loaded, but the stream synthesizes a
 // row for it ONLY when the execution carries a non-empty Error — the
 // audit-gap case where the purchase succeeded but its purchase_history
 // write failed (issue #621 secondary path). A normal completed execution
@@ -155,7 +170,7 @@ var terminalExecutionStatuses = []string{"completed", "partially_completed", "fa
 // approval link is stale.
 const approvalExpiryWindow = 7 * 24 * time.Hour
 
-// fetchExecutionsAsHistory returns non-completed PurchaseExecutions as
+// fetchExecutionsAsHistory returns the actionable PurchaseExecutions as
 // synthetic PurchaseHistoryRecord entries so the /api/history response is a
 // single flat list. Execution-level aggregates (TotalUpfrontCost /
 // EstimatedSavings) become the row's cost fields; provider/service collapse
@@ -166,18 +181,19 @@ const approvalExpiryWindow = 7 * 24 * time.Hour
 // call returns (see expireStaleExecutions) so the GET is a pure read:
 // the response rows carry the pre-transition status and the next request
 // sees the updated state. A listing error is logged and skipped — completed
-// history must still render.
+// history must still render. Terminal executions are read by the paged
+// stream instead (fetchHistoryPage).
 //
 // The filter set (issue #701) is applied in Go against the synthetic row:
 // provider via the recs' collapsed provider, account via CloudAccountID,
 // date via ScheduledDate.
 //
-// The third return value reports that executions may be missing: either class
-// reached its cap (actionable at MaxListLimit, terminal at DefaultListLimit) so
-// older executions may have been dropped before the filters ran, or a class
-// listing failed (issue #686).
+// The third return value reports that actionable executions may be missing:
+// the class reached its MaxListLimit cap, so older executions may have been
+// dropped before the filters ran, or its listing failed (issue #686).
 func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyFilters) ([]config.PurchaseHistoryRecord, []config.PurchaseExecution, bool) {
-	executions, incomplete := h.fetchExecutionClasses(ctx)
+	executions, ok := h.fetchExecutionsByClass(ctx, actionableExecutionStatuses, config.MaxListLimit)
+	incomplete := !ok || len(executions) >= config.MaxListLimit
 	if len(executions) == 0 {
 		return nil, nil, incomplete
 	}
@@ -185,21 +201,8 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyF
 	userEmailCache := h.resolveUserEmails(ctx, executions)
 	out := make([]config.PurchaseHistoryRecord, 0, len(executions))
 	var staleExecs []config.PurchaseExecution
-	// Terminal-class rows surfaced; drives the terminal cap signal.
-	terminalSurfaced := 0
 	for _rvc := range executions {
 		exec := executions[_rvc]
-		// Dedup: a normal completed execution is already represented by its
-		// purchase_history rows. Skip it here so it shows exactly once. Only
-		// completed executions carrying an audit-gap Error (history write
-		// failed after a successful purchase, issue #621) are synthesized —
-		// those have no purchase_history row to collide with.
-		if exec.Status == "completed" && exec.Error == "" {
-			continue
-		}
-		if isTerminalExecutionStatus(exec.Status) {
-			terminalSurfaced++
-		}
 		// Collect stale pending/notified executions for the post-assembly
 		// expire sweep. We do NOT mutate status here to keep the GET
 		// read-only: the response reflects current DB state; the sweep
@@ -210,29 +213,9 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyF
 		if !filters.matchesExecution(exec) {
 			continue
 		}
-		var createdByEmail string
-		if exec.CreatedByUserID != nil {
-			createdByEmail = userEmailCache[*exec.CreatedByUserID]
-		}
-		out = append(out, executionToHistoryRow(exec, approver, createdByEmail))
+		out = append(out, executionToHistoryRow(exec, approver, createdByEmail(userEmailCache, &exec)))
 	}
-	capped := incomplete || terminalSurfaced >= config.DefaultListLimit
-	return out, staleExecs, capped
-}
-
-// fetchExecutionClasses lists the actionable and terminal classes, each with
-// its own cap, and returns them concatenated (actionable first). incomplete
-// reports that rows may be missing before the filters run: a class listing
-// failed, or the actionable class reached its MaxListLimit cap. The terminal
-// cap is judged by the caller on the rows it actually surfaces.
-func (h *Handler) fetchExecutionClasses(ctx context.Context) ([]config.PurchaseExecution, bool) {
-	actionable, actionableOK := h.fetchExecutionsByClass(ctx, actionableExecutionStatuses, config.MaxListLimit)
-	terminal, terminalOK := h.fetchExecutionsByClass(ctx, terminalExecutionStatuses, config.DefaultListLimit)
-	executions := make([]config.PurchaseExecution, 0, len(actionable)+len(terminal))
-	executions = append(executions, actionable...)
-	executions = append(executions, terminal...)
-	incomplete := !actionableOK || !terminalOK || len(actionable) >= config.MaxListLimit
-	return executions, incomplete
+	return out, staleExecs, incomplete
 }
 
 // fetchExecutionsByClass lists one status class. A listing error is logged and
@@ -246,10 +229,6 @@ func (h *Handler) fetchExecutionsByClass(ctx context.Context, statuses []string,
 		return nil, false
 	}
 	return rows, true
-}
-
-func isTerminalExecutionStatus(status string) bool {
-	return slices.Contains(terminalExecutionStatuses, status)
 }
 
 // isStaleExecution reports whether the execution is a pending/notified
@@ -745,6 +724,9 @@ type historyFilters struct {
 	AccountIDs            []string
 	Limit                 int
 	HasDate               bool
+	// Cursor is the stream position the page starts after (issue #674); nil
+	// for the first page.
+	Cursor *config.HistoryPageKey
 }
 
 // parseHistoryFilters validates and normalises the /api/history query string.
@@ -793,6 +775,12 @@ func parseHistoryFilters(params map[string]string) (historyFilters, error) {
 		limit = config.MaxListLimit
 	}
 	f.Limit = limit
+
+	cursor, pagingErr := parseHistoryPaging(params)
+	if pagingErr != nil {
+		return f, pagingErr
+	}
+	f.Cursor = cursor
 
 	return f, nil
 }
@@ -1008,25 +996,23 @@ func stringInSlice(needle string, haystack []string) bool {
 // direct-execute/ambient row. Grouping the external ids by provider keeps a
 // reused external number across providers from leaking the wrong rows.
 //
-// The no-filter case still uses GetAllPurchaseHistory as a fast path. The
-// legacy singular account_id (LegacyAccountID) is resolved to the same dual-
-// column inputs by the caller (getHistory) and arrives here folded into
-// AccountIDs/ExternalIDsByProvider, so there is no longer a separate
-// single-column legacy path to coerce identifiers through.
-func (h *Handler) fetchPurchaseHistory(ctx context.Context, filters historyFilters) ([]config.PurchaseHistoryRecord, error) {
-	noFilters := !filters.HasDate && filters.Provider == "" &&
-		len(filters.AccountIDs) == 0 && len(filters.ExternalIDsByProvider) == 0
-	if noFilters {
-		return h.config.GetAllPurchaseHistory(ctx, filters.Limit)
-	}
-
-	return h.config.GetPurchaseHistoryFiltered(ctx, filters.purchaseHistoryFilter())
+// It reads one keyset batch of the History stream: up to limit rows after
+// `after` (nil starts at the newest row), in stream order (issue #674). An
+// empty filter set selects every row. The legacy singular account_id
+// (LegacyAccountID) is resolved to the same dual-column inputs by the caller
+// (getHistory) and arrives here folded into AccountIDs/ExternalIDsByProvider,
+// so there is no longer a separate single-column legacy path to coerce
+// identifiers through.
+func (h *Handler) fetchPurchaseHistory(ctx context.Context, filters *historyFilters, after *config.HistoryPageKey, limit int) ([]config.PurchaseHistoryPageRow, error) {
+	filter := filters.purchaseHistoryFilter()
+	filter.Limit = limit
+	return h.config.ListPurchaseHistoryPage(ctx, filter, after)
 }
 
 // purchaseHistoryFilter maps the parsed filters onto the store filter. Both the
 // History row fetch and the summary aggregate use it, so they hand the store
 // the same predicate inputs. An empty historyFilters maps to an empty store
-// filter, which selects every row like GetAllPurchaseHistory does.
+// filter, which selects every row.
 func (f historyFilters) purchaseHistoryFilter() config.PurchaseHistoryFilter {
 	out := config.PurchaseHistoryFilter{
 		Provider:              f.Provider,

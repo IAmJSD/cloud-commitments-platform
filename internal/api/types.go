@@ -983,16 +983,27 @@ type HistoryResponse struct {
 	// and when an execution class listing failed, so its rows are missing.
 	// It can be a false positive when exactly a cap's worth of rows exist.
 	Truncated bool `json:"truncated"`
-	// Limit is the row cap on completed purchase_history rows for this request.
+	// Limit is the page size: the most completed purchase_history rows and
+	// terminal executions (failed, expired, canceled, ...) together that one
+	// response lists (issue #674).
 	Limit int `json:"limit"`
-	// ExecutionsLimit is the row cap on terminal executions (failed, expired,
-	// canceled, ...), fixed regardless of the request's limit parameter.
+	// ExecutionsLimit is the row cap on terminal executions. They share the
+	// page with completed purchases, so it equals Limit.
 	// Actionable executions (pending, approved, ...) use ActionableExecutionsLimit.
 	ExecutionsLimit int `json:"executions_limit"`
 	// ActionableExecutionsLimit is the row cap on actionable executions
 	// (pending, notified, scheduled, approved, running, paused), fixed at
 	// config.MaxListLimit regardless of the request's limit parameter.
+	// Actionable executions are not paged: the first page lists them all, up
+	// to this cap, and pages fetched with a cursor leave them out.
 	ActionableExecutionsLimit int `json:"actionable_executions_limit"`
+	// HasMore is true when more completed purchases or terminal executions the
+	// caller may see follow this page; pass NextCursor as the cursor parameter
+	// to fetch them (issue #674). Truncated is also true then.
+	HasMore bool `json:"has_more"`
+	// NextCursor is the opaque position after the last paged row of this
+	// response, set only when HasMore is true.
+	NextCursor string `json:"next_cursor,omitempty"`
 }
 
 // HistorySummary provides aggregate statistics for purchase history.
