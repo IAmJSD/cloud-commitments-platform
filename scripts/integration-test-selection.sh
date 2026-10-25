@@ -157,19 +157,21 @@ select_tests() {
   local pkg pdir files
   while IFS=$'\t' read -r pkg pdir files; do
     [[ -n "$pkg" ]] || continue
+    # File names are bare (go list prints them relative to the package
+    # directory, and Go file names have no spaces); the scan runs in $pdir.
     local plain=" " f integ="" common="" all=()
     plain+="$(awk -F'\t' -v p="$pkg" '$1 == p { print $3 }' <<<"$untagged") "
     for f in $files; do
-      all+=("$pdir/$f")
+      all+=("$f")
       if [[ "$plain" == *" $f "* ]]; then
-        common+=" $pdir/$f"
+        common+=" $f"
       else
-        integ+=" $pdir/$f"
+        integ+=" $f"
       fi
     done
     [[ ${#all[@]} -gt 0 ]] || continue
     local found regex
-    found="$({
+    found="$(cd "$pdir" && {
       [[ -z "$integ" ]] || scan_tests 1 "$integ" "${all[@]}"
       [[ -z "$common" ]] || scan_tests 0 "$common" "${all[@]}"
     } | LC_ALL=C sort -u)"
