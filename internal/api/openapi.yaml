@@ -2571,6 +2571,125 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /api/ri-exchange/resolve/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: resolveRIExchange
+      tags: [RIExchange]
+      summary: Record an operator's outcome for a stale processing RI exchange
+      description: >
+        A run that crashed between the provider call and its ledger write
+        leaves the exchange processing, holding its reserved ceiling against
+        the daily cap. After checking AWS, an operator records whether the
+        exchange happened. `failed` releases the hold and requires
+        `acknowledge_unknown_outcome`; `completed` keeps the reserved amount
+        on today's books and may name the provider `exchange_id`. Requires
+        `execute:ri-exchange`, checked against the permission's constraints
+        with `checked_region` as the region, and a signed-in user or user API
+        key (the admin API key is refused). The store refuses a row that a
+        running writer may still settle, and a repeat of the same request
+        returns the stored result with `replayed: true`.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [outcome, reason, cloud_check]
+              properties:
+                outcome:
+                  type: string
+                  enum: [failed, completed]
+                reason:
+                  type: string
+                  minLength: 10
+                  maxLength: 300
+                  description: Free text, trimmed, without control characters.
+                exchange_id:
+                  type: string
+                  pattern: '^[A-Za-z0-9-]{1,100}$'
+                  description: Provider exchange id. Only allowed with outcome completed.
+                acknowledge_unknown_outcome:
+                  type: boolean
+                  description: Must be true when outcome is failed.
+                cloud_check:
+                  type: object
+                  additionalProperties: false
+                  required: [checked_account_id, checked_region, checked_at]
+                  description: >
+                    Where the operator verified the exchange at AWS. The store
+                    requires the exchange's own account and region and a time
+                    after its last change.
+                  properties:
+                    checked_account_id:
+                      type: string
+                      pattern: '^\d{12}$'
+                    checked_region:
+                      type: string
+                      pattern: '^[a-z0-9-]{1,32}$'
+                    checked_at:
+                      type: string
+                      format: date-time
+      responses:
+        '200':
+          description: Exchange resolved, or the same resolve replayed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  status:
+                    type: string
+                  payment_due:
+                    type: string
+                  note:
+                    type: string
+                  replayed:
+                    type: boolean
+        '400':
+          description: >
+            Invalid id or body: body over 4096 bytes, unknown fields, a
+            missing or invalid field, or a cloud check that does not match
+            the exchange.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >
+            CSRF validation failed, the session lacks `execute:ri-exchange` or
+            fails its constraints, or the caller is the admin API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: No such exchange, or the deployment's AWS account is outside the session's allowed accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: The exchange is not a stale processing row this request can resolve.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: RI exchange resolve storage is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   # ---- History ------------------------------------------------------------
   /api/history:
     get:
