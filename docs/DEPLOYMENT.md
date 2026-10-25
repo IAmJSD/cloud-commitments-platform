@@ -601,8 +601,9 @@ The server's `cleanup` task deletes expired sessions and, via `CleanupOldExecuti
 - **CloudFormation (opt-in):** set the `EnableCleanupSchedule` stack parameter to `true` (default `false`; `CleanupSchedule` defaults to `rate(1 day)`) on `cloudformation/stacks/CUDly`. The same backlog warning applies.
 - **AWS Fargate:** nothing schedules it yet. The `terraform/modules/compute/aws/cleanup-lambda/` module is not consumed by any environment.
 - **GCP:** nothing schedules it. The `terraform/modules/compute/gcp/cleanup-function/` module is not consumed by any environment.
+- **AKS (opt-in):** set `enable_cleanup_schedule = true` (default false; `cleanup_schedule` defaults to `0 3 * * *`) on the AKS module. Like the module's other scheduled tasks, it runs as a Kubernetes CronJob (`terraform/modules/compute/azure/aks/scheduled-tasks.tf`) only when `deploy_kubernetes_resources` is true.
 
-AKS has no scheduler (#893). Scheduling for AWS Fargate, CloudFormation and GCP is tracked by #712.
+Scheduling for AWS Fargate, CloudFormation and GCP is tracked by #712.
 
 Alternatively, use pg_cron for database-native scheduling.
 

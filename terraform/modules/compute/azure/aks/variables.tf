@@ -229,3 +229,137 @@ variable "archera_api_key_secret_name" {
   type        = string
   default     = ""
 }
+
+# Scheduled server tasks (#893), run as CronJobs when
+# deploy_kubernetes_resources is true. Schedules are 5-field cron in UTC.
+variable "enable_scheduled_tasks" {
+  description = "Schedule the collect_recommendations task."
+  type        = bool
+  default     = true
+}
+
+variable "recommendation_schedule" {
+  description = "Cron schedule for collect_recommendations."
+  type        = string
+  default     = "0 2 * * *"
+}
+
+variable "enable_reap_stuck_purchases_schedule" {
+  description = "Schedule the reap_stuck_purchases sweep (backstop for purchases stuck in approved/running, #678)."
+  type        = bool
+  default     = true
+}
+
+variable "reap_stuck_purchases_schedule" {
+  description = "Cron schedule for reap_stuck_purchases. Keep it more frequent than PURCHASE_APPROVED_REAP_AFTER (default 10m)."
+  type        = string
+  default     = "*/5 * * * *"
+}
+
+variable "enable_analytics_collect_schedule" {
+  description = "Schedule the analytics_collect task (savings snapshot, partition maintenance, retention, view refresh)."
+  type        = bool
+  default     = true
+}
+
+variable "analytics_collect_schedule" {
+  description = "Cron schedule for analytics_collect."
+  type        = string
+  default     = "0 4 * * *"
+}
+
+variable "enable_fire_scheduled_purchases_schedule" {
+  description = "Schedule the fire_scheduled_purchases sweep, which fires delayed auto-approved purchases. Opt-in: default false."
+  type        = bool
+  default     = false
+}
+
+variable "fire_scheduled_purchases_schedule" {
+  description = "Cron schedule for fire_scheduled_purchases."
+  type        = string
+  default     = "*/15 * * * *"
+}
+
+variable "enable_process_scheduled_purchases_schedule" {
+  description = "Schedule the process_scheduled_purchases sweep (proposes purchases that are due). Opt-in: default false."
+  type        = bool
+  default     = false
+}
+
+variable "process_scheduled_purchases_schedule" {
+  description = "Cron schedule for process_scheduled_purchases."
+  type        = string
+  default     = "0 * * * *"
+}
+
+variable "enable_send_notifications_schedule" {
+  description = "Schedule the send_notifications sweep. Opt-in: default false; enable it together with process_scheduled_purchases."
+  type        = bool
+  default     = false
+}
+
+variable "send_notifications_schedule" {
+  description = "Cron schedule for send_notifications."
+  type        = string
+  default     = "0 8 * * *"
+}
+
+variable "enable_finalize_revocations_schedule" {
+  description = "Schedule the finalize_revocations sweep (idempotent audit repair of revoked purchases)."
+  type        = bool
+  default     = true
+}
+
+variable "finalize_revocations_schedule" {
+  description = "Cron schedule for finalize_revocations."
+  type        = string
+  default     = "30 * * * *"
+}
+
+variable "enable_cleanup_schedule" {
+  description = "Schedule the server cleanup sweep. Opt-in: default false. It deletes expired sessions and, via CleanupOldExecutions(30), purchase_executions that are completed with scheduled_date older than 30 days, canceled with updated_at older than 30 days, or in a status outside failed/canceled with expires_at older than 30 days. The first run deletes the whole backlog, so export any history you want to keep first."
+  type        = bool
+  default     = false
+}
+
+variable "cleanup_schedule" {
+  description = "Cron schedule for cleanup."
+  type        = string
+  default     = "0 3 * * *"
+}
+
+variable "enable_ri_exchange_schedule" {
+  description = "Schedule the ri_exchange_reshape task (RI exchange automation). Opt-in: default false, as on the other platforms."
+  type        = bool
+  default     = false
+}
+
+variable "ri_exchange_schedule" {
+  # Standard 5-field cron: 0 */6 * * * runs at 00:00, 06:00, 12:00, 18:00 UTC.
+  description = "Cron schedule for ri_exchange_reshape."
+  type        = string
+  default     = "0 */6 * * *"
+}
+
+variable "enable_ladder_run_schedule" {
+  description = "Schedule the ladder_run task (commitment-ladder planning run). Opt-in: default false until laddering is promoted to GA, as on AWS."
+  type        = bool
+  default     = false
+}
+
+variable "ladder_run_schedule" {
+  description = "Cron schedule for ladder_run."
+  type        = string
+  default     = "0 2 * * *"
+}
+
+variable "task_timeout" {
+  description = "Seconds a scheduled task may run (TASK_TIMEOUT). The Job is killed 300 seconds after that."
+  type        = number
+  default     = 900
+
+  validation {
+    condition     = var.task_timeout >= 60 && floor(var.task_timeout) == var.task_timeout
+    error_message = "task_timeout must be a whole number of seconds, at least 60."
+  }
+}
