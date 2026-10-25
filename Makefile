@@ -159,14 +159,10 @@ complexity-report:
 # Security scanning
 security-scan: security-scan-go security-scan-docker security-scan-terraform
 
+# scripts/run-gosec.sh owns the gosec pin, module list and rule set, shared
+# with the pre-commit hook and the CI gosec step (issue #340).
 security-scan-go:
-	@echo "Running gosec..."
-	@if command -v gosec > /dev/null; then \
-		gosec -fmt=json -out=gosec-report.json -exclude=G101,G104,G115,G204,G301,G304,G402,G505 ./...; \
-		echo "✓ Go security scan complete: gosec-report.json"; \
-	else \
-		echo "gosec not installed. Install: make install-dev-tools"; \
-	fi
+	@scripts/run-gosec.sh
 
 security-scan-docker:
 	@echo "Running trivy..."

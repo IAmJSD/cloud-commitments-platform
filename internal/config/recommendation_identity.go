@@ -64,3 +64,16 @@ func RecIdentityKey(rec *RecommendationRecord) (string, error) {
 		rec.AvailabilityZone, ci.Platform, ci.Tenancy,
 	}, "\x1f"), nil
 }
+
+// SuppressionVariant is the rec's availability zone, platform and tenancy as
+// the purchase suppression key carries them (issue #816): the same AZ field and
+// the same Details read (ComputeIdentity) as RecIdentityKey, so the write side
+// (BuildSuppressions) and the read side (the scheduler's subtraction pass)
+// cannot drift from the identity key or from each other.
+func (r *RecommendationRecord) SuppressionVariant() (SuppressionVariant, error) {
+	ci, err := r.ComputeIdentity()
+	if err != nil {
+		return SuppressionVariant{}, err
+	}
+	return SuppressionVariant{AvailabilityZone: r.AvailabilityZone, Platform: ci.Platform, Tenancy: ci.Tenancy}, nil
+}

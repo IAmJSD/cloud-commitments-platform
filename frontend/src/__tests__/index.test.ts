@@ -31,12 +31,17 @@ jest.mock('../auth', () => ({
   logout: jest.fn()
 }));
 
+jest.mock('../lib/table-scroll', () => ({
+  initTableScroll: jest.fn()
+}));
+
 import * as app from '../app';
 import * as plans from '../plans';
 import * as recommendations from '../recommendations';
 import * as history from '../history';
 import * as settings from '../settings';
 import * as auth from '../auth';
+import * as tableScroll from '../lib/table-scroll';
 
 describe('Index Module', () => {
   beforeEach(() => {
@@ -117,5 +122,11 @@ describe('Index Module', () => {
       expect(app.init).toHaveBeenCalled();
       resolve(undefined);
     }, 10));
+  });
+
+  test('wires the wide-table scroll affordances on DOMContentLoaded (#185)', () => {
+    require('../index');
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+    expect(tableScroll.initTableScroll).toHaveBeenCalled();
   });
 });

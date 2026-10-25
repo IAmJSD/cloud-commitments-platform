@@ -15,12 +15,11 @@ import (
 // Migration 000104 adds users.mfa_last_totp_counter. Existing rows start at 0
 // (no code accepted yet), and the down migration removes the column.
 func TestMigration_UserMFALastTOTPCounter(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 104)))
@@ -32,6 +31,6 @@ func TestMigration_UserMFALastTOTPCounter(t *testing.T) {
 	assert.Zero(t, counter, "an existing user must start with no accepted code")
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 104)))
-	err = pool.QueryRow(ctx, `SELECT mfa_last_totp_counter FROM users WHERE id = $1`, userID).Scan(&counter)
+	err := pool.QueryRow(ctx, `SELECT mfa_last_totp_counter FROM users WHERE id = $1`, userID).Scan(&counter)
 	require.Error(t, err, "the down migration must drop the column")
 }

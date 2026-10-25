@@ -291,7 +291,7 @@ func TestAttach_ManualPlanRequiresExplicitRootAndHonorsOptionalCap(t *testing.T)
 			store.On("CreateSuppressionTx", mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 			failed := root
 			failed.Status = "failed"
-			store.On("TransitionExecutionStatusPinned", mock.Anything, root.ExecutionID, []string{"pending", "notified"}, "failed", (*string)(nil), true).Return(&failed, nil).Maybe()
+			store.On("TransitionExecutionStatusPinnedTx", mock.Anything, mock.Anything, root.ExecutionID, []string{"pending", "notified"}, "failed", (*string)(nil), true).Return(&failed, nil).Maybe()
 			store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil).Maybe()
 			exec, _, _, err := m.getOrCreateExecution(context.Background(), plan)
 			if tc.wantAttach {
@@ -342,9 +342,9 @@ func TestManualDueStepCleanupWithoutEmailAfterLongDowntime(t *testing.T) {
 			failed.Status = "failed"
 			if !tc.future {
 				if tc.lostClaim {
-					store.On("TransitionExecutionStatusPinned", ctx, root.ExecutionID, []string{"pending", "notified"}, "failed", (*string)(nil), true).Return(nil, config.ErrExecutionNotInExpectedStatus).Once()
+					store.On("TransitionExecutionStatusPinnedTx", ctx, mock.Anything, root.ExecutionID, []string{"pending", "notified"}, "failed", (*string)(nil), true).Return(nil, config.ErrExecutionNotInExpectedStatus).Once()
 				} else {
-					store.On("TransitionExecutionStatusPinned", ctx, root.ExecutionID, []string{"pending", "notified"}, "failed", (*string)(nil), true).Return(&failed, nil).Once()
+					store.On("TransitionExecutionStatusPinnedTx", ctx, mock.Anything, root.ExecutionID, []string{"pending", "notified"}, "failed", (*string)(nil), true).Return(&failed, nil).Once()
 					store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(row *config.PurchaseExecution) bool {
 						return row.ExecutionID == root.ExecutionID && row.NoSubmission && row.Status == "failed" && len(row.Recommendations) == 0 && row.ScheduledDate.Equal(root.ScheduledDate)
 					})).Return(nil).Once()

@@ -42,14 +42,14 @@ func queryAdminGroupIDs(t *testing.T, ctx context.Context, pool *pgxpool.Pool, e
 // drift must self-heal on the next boot, and operator-customized
 // group_ids must be preserved.
 func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 	const adminEmail = "admin@test.example"
 
 	t.Run("fresh insert no password", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, adminEmail, ""))
@@ -60,9 +60,8 @@ func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
 	})
 
 	t.Run("fresh insert with password", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, adminEmail, "TestPass!9aF"))
@@ -73,6 +72,7 @@ func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
 	})
 
 	t.Run("re-run with existing correct admin (post-057 idempotency)", func(t *testing.T) {
+		t.Parallel()
 		// Migration 000057 added a CHECK constraint (users_min_one_group)
 		// that prevents group_ids from being NULL or empty, so the
 		// pre-057 drift scenario (empty group_ids on an existing admin row)
@@ -80,9 +80,7 @@ func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
 		// re-running RunMigrations when the admin already exists with the
 		// correct group_ids is a no-op that neither fails nor doubles the
 		// group entry (issue #945).
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// First pass: create admin via the normal path (migrations + bootstrap).
@@ -103,9 +101,8 @@ func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
 	})
 
 	t.Run("idempotency", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Two consecutive RunMigrations calls must not duplicate the
@@ -121,9 +118,8 @@ func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
 	})
 
 	t.Run("operator customisation preserved", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// First pass: create the admin via the normal path.
@@ -135,7 +131,7 @@ func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
 		// subsequent boots (issue body: "leave existing group_ids
 		// alone").
 		const customGroupID = "11111111-1111-5111-8111-111111111111"
-		_, err = pool.Exec(ctx, `
+		_, err := pool.Exec(ctx, `
 			INSERT INTO groups (id, name, description, permissions, allowed_accounts)
 			VALUES ($1::UUID, 'OperatorCustom', 'test', '[]'::jsonb, ARRAY['*'])
 			ON CONFLICT DO NOTHING

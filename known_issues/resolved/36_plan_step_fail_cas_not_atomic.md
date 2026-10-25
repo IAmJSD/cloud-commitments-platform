@@ -1,6 +1,6 @@
 # Known Issues: plan step failure is not atomic with its stamp and suppression release
 
-> **Audit status (2026-10-17):** `1 needs triage · 0 resolved`
+> **Audit status (2026-10-20):** `0 needs triage · 1 resolved`
 
 ## LOW: crash between the failed CAS and the stamp tx strands the row
 
@@ -27,4 +27,9 @@ CAS, the stamp and `DeleteSuppressionsByExecutionTx` commit together.
 **Why deferred:** out of scope for the retention-ledger runtime change (#905);
 the window is a crash between two statements and the failure mode is safe.
 
-**Status:** Open. Tracked in #1052.
+**Status:** Resolved in #1052. `TransitionExecutionStatusPinnedTx` runs the
+pinned CAS in a caller transaction, and `failExistingPlanStep` now commits the
+CAS, the `Error`/`NoSubmission` stamp and the suppression release together. An
+error before commit leaves the row pending for the next tick. Real-Postgres
+integration tests inject an error at the release and race the fail against an
+approval, a cancel and a second tick.
