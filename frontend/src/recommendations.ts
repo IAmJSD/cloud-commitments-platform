@@ -4396,6 +4396,13 @@ export interface FanOutBucket {
   capacityPercent: number;
   recs: LocalRecommendation[]; // scaled by capacityPercent
   paymentSource: 'override' | 'toolbar';
+  /**
+   * Identity within one modal open (issue #757), unique across opens.
+   * getFanOutBuckets() hands out copies, so the submit path needs this to
+   * map a POST result back to its bucket and section after a partial
+   * failure, and to tell whether that modal is still the open one.
+   */
+  id?: string;
 }
 
 // Fan-out modal state. app.ts's Send-for-Approval click reads these
@@ -4423,6 +4430,18 @@ export function getFanOutBuckets(): FanOutBucket[] | null {
 
 export function clearFanOutBuckets(): void {
   currentFanOutBuckets = null;
+}
+
+/**
+ * Narrows the fan-out modal to the buckets with the given ids (issue #757):
+ * after a partial failure only the failed buckets stay submittable, so a
+ * retry cannot resubmit the ones that already went through. Re-renders the
+ * modal header so the email count and totals describe the retry.
+ */
+export function retainFanOutBuckets(ids: ReadonlySet<string>): void {
+  if (!currentFanOutBuckets) return;
+  currentFanOutBuckets = currentFanOutBuckets.filter((b) => b.id !== undefined && ids.has(b.id));
+  refreshFanOutSummary();
 }
 
 // currentExecuteMode holds the mode selected by the execute-mode toggle in
@@ -4562,7 +4581,7 @@ async function openFanOutModal(
 
   const buckets: FanOutBucket[] = bucketEntries
     .filter(([_key, recs]) => recs.length > 0)
-    .map(([_key, recs]) => {
+    .map(([_key, recs], index) => {
       const r = recs[0]!;
       const seed = resolveBucketPaymentSeed(recs, toolbar, overridesByAccount);
       // SP buckets carry the canonical bucket key as `service` so the
@@ -4607,6 +4626,9 @@ async function openFanOutModal(
         paymentSource: resolvedPaymentSource,
         capacityPercent: toolbar.capacity,
         recs: resolvedRecs,
+        // Unique per open, so results that settle after this modal closed
+        // cannot match the sections of a newer one.
+        id: `bucket-${openToken}-${index}`,
       };
     });
   currentFanOutBuckets = buckets;
@@ -4730,6 +4752,7 @@ function computeFanOutTotals(buckets: FanOutBucket[]): { totalCount: number; tot
 function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   const section = document.createElement('section');
   section.className = 'fanout-bucket form-section';
+  if (b.id) section.dataset['bucketId'] = b.id;
 
   // Service label: SP bucket → "Savings Plans (Compute + SageMaker)"
   // listing only the plan types actually present in this bucket;

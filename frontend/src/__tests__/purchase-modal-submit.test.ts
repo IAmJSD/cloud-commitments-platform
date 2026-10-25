@@ -202,6 +202,33 @@ describe('Issue #331: Escape discards purchase state like the explicit close but
     expect(body[0]!['id']).toBe('single-only');
   });
 
+  test('each fan-out modal open gets fresh bucket ids, so results from an earlier open cannot match it (issue #757)', async () => {
+    const [ec2Rec, rdsRec] = fanOutEligibleRows();
+    (api.getConfig as jest.Mock).mockResolvedValue({ global: { default_payment: 'no-upfront' } });
+    (api.getRecommendations as jest.Mock).mockResolvedValue({
+      summary: {}, recommendations: [ec2Rec, rdsRec], regions: [],
+    });
+    (state.getRecommendations as jest.Mock).mockReturnValue([ec2Rec, rdsRec]);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue([ec2Rec, rdsRec]);
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['fo-ec2', 'fo-rds']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    const first = getFanOutBuckets()!.map((b) => b.id);
+    lastRegisteredOnClose()();
+
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await flush();
+    const second = getFanOutBuckets()!.map((b) => b.id);
+
+    expect(first).toHaveLength(2);
+    expect(second).toHaveLength(2);
+    expect(new Set([...first, ...second]).size).toBe(4);
+    const rendered = [...document.querySelectorAll<HTMLElement>('section.fanout-bucket')].map((s) => s.dataset['bucketId']);
+    expect(rendered).toEqual(second);
+  });
+
   test('Escape on a single-bucket modal discards its selection too (reverse direction)', async () => {
     const staleRec = buildRows()[0]!; // v-3-all
     await openPurchaseModal([staleRec]);
