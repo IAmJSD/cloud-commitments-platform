@@ -589,6 +589,14 @@ type StoreInterface interface {
 	// someone else); an empty token is a boundary error, since only a
 	// caller that actually owns a marker should ever call Clear.
 	ClearCollectionStarted(ctx context.Context, token string) error
+	// ClaimCollectionInvocation is called by a token-carrying collect run
+	// once it holds the task advisory lock (issue #84). It re-stamps the
+	// marker with a fresh invocation-scoped token when the marker is still
+	// owned by markerToken, or free/stale, so a lock-skipped duplicate
+	// delivery of the same event (same markerToken) can no longer clear
+	// it. Returns the new token and true when the caller now owns the
+	// marker; ("", false, nil) when another run holds a fresh marker.
+	ClaimCollectionInvocation(ctx context.Context, markerToken string) (token string, ok bool, err error)
 
 	// RI utilization cache. Postgres-backed TTL cache for Cost Explorer
 	// GetReservationUtilization; shared across Lambda containers so
