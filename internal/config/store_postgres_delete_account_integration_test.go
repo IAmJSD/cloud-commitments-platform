@@ -306,3 +306,184 @@ func TestDeleteCloudAccount_DisablesPlanThatGainedAccountConcurrently(t *testing
 	assert.Zero(t, n)
 	assert.False(t, enabled, "the plan's only account is gone, so it must be disabled")
 }
+
+// waitForLockWaiters blocks until at least n backends wait on a lock.
+func waitForLockWaiters(ctx context.Context, t *testing.T, store *PostgresStore, n int) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var got int
+		err := store.db.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&got)
+		return err == nil && got >= n
+	}, 15*time.Second, 20*time.Millisecond, "want %d lock waiters", n)
+}
+
+// Two deletes of the two accounts of one plan, running at once, must leave the
+// plan disabled. Each delete locks only its own account row, so without the
+// plan lock both decide while the other's plan_accounts row is still
+// committed, neither disables the plan, and both cascades commit. A gate
+// holding the plan's plan_accounts rows stops each delete at its cascade,
+// after it has decided, so the race is forced on every run.
+func TestDeleteCloudAccount_ConcurrentDeletesOfOnePlansAccounts(t *testing.T) {
+	ctx := context.Background()
+	store := setupLadderStore(ctx, t)
+	a, b := seedDeleteAccount(ctx, t, store), seedDeleteAccount(ctx, t, store)
+	plan := seedDeletePlan(ctx, t, store, true, a, b)
+
+	gate, err := store.db.Begin(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = gate.Rollback(context.Background()) })
+	_, err = gate.Exec(ctx, `SELECT 1 FROM plan_accounts WHERE plan_id = $1 FOR UPDATE`, plan)
+	require.NoError(t, err)
+
+	doneA, doneB := make(chan error, 1), make(chan error, 1)
+	go func() { doneA <- store.DeleteCloudAccount(ctx, a) }()
+	go func() { doneB <- store.DeleteCloudAccount(ctx, b) }()
+	waitForLockWaiters(ctx, t, store, 2)
+	require.NoError(t, gate.Rollback(ctx))
+	require.NoError(t, testhelpers.Await(t, doneA))
+	require.NoError(t, testhelpers.Await(t, doneB))
+
+	enabled, n, _ := storedPlanState(ctx, t, store, plan)
+	assert.Zero(t, n)
+	assert.False(t, enabled, "both accounts are gone, so the plan must be disabled")
+}
+
+// SetPlanAccounts narrowing {A, B} to {A} while A is deleted: whichever
+// commits first, the plan never ends up enabled with no accounts, and the two
+// never deadlock (both lock the plan row before the account row).
+func TestDeleteCloudAccount_ConcurrentSetPlanAccounts(t *testing.T) {
+	ctx := context.Background()
+	store := setupLadderStore(ctx, t)
+	for i := 0; i < 20; i++ {
+		a, b := seedDeleteAccount(ctx, t, store), seedDeleteAccount(ctx, t, store)
+		plan := seedDeletePlan(ctx, t, store, true, a, b)
+
+		start := make(chan struct{})
+		delDone, setDone := make(chan error, 1), make(chan error, 1)
+		go func() { <-start; delDone <- store.DeleteCloudAccount(ctx, a) }()
+		go func() { <-start; setDone <- store.SetPlanAccounts(ctx, plan, []string{a}) }()
+		close(start)
+		delErr, setErr := testhelpers.Await(t, delDone), testhelpers.Await(t, setDone)
+
+		for _, e := range []error{delErr, setErr} {
+			var pgErr *pgconn.PgError
+			if errors.As(e, &pgErr) {
+				require.NotEqual(t, "40P01", pgErr.Code, "iteration %d: deadlock: %v", i, e)
+			}
+		}
+		require.NoError(t, delErr, "iteration %d", i)
+		enabled, n, _ := storedPlanState(ctx, t, store, plan)
+		if enabled {
+			require.NotZero(t, n, "iteration %d: plan enabled with no accounts (set err: %v)", i, setErr)
+		}
+	}
+}
+
+// An editor-managed ramp plan (dates_managed, #631) is disabled like any
+// other, and only its enabled flag changes: the schedule, baseline, ledger
+// state, services and next execution date are left as they were.
+func TestDeleteCloudAccount_DisablesManagedRampPlanKeepingSchedule(t *testing.T) {
+	ctx := context.Background()
+	store := setupLadderStore(ctx, t)
+	acct := seedDeleteAccount(ctx, t, store)
+	var plan string
+	require.NoError(t, store.db.QueryRow(ctx, `
+		INSERT INTO purchase_plans (name, enabled, auto_purchase, services, ramp_schedule, next_execution_date)
+		VALUES ('managed-264', true, false,
+		        '{"azure:vm":{"provider":"azure","service":"vm","enabled":true,"term":1,"payment":"upfront"}}',
+		        '{"type":"linear","total_steps":3,"current_step":1,"step_interval_days":30,"percent_per_step":33,"dates_managed":true}',
+		        NOW() + INTERVAL '10 days')
+		RETURNING id::text`).Scan(&plan))
+	_, err := store.db.Exec(ctx, `INSERT INTO plan_accounts (plan_id, account_id) VALUES ($1, $2)`, plan, acct)
+	require.NoError(t, err)
+
+	const scheduleCols = `SELECT ramp_schedule::text, COALESCE(ramp_baseline::text, ''), ramp_ledger_state,
+		services::text, next_execution_date::text FROM purchase_plans WHERE id = $1`
+	before := make([]string, 5)
+	require.NoError(t, store.db.QueryRow(ctx, scheduleCols, plan).Scan(&before[0], &before[1], &before[2], &before[3], &before[4]))
+
+	require.NoError(t, store.DeleteCloudAccount(ctx, acct))
+
+	enabled, _, _ := storedPlanState(ctx, t, store, plan)
+	assert.False(t, enabled, "a managed plan left with no accounts must be disabled")
+	after := make([]string, 5)
+	require.NoError(t, store.db.QueryRow(ctx, scheduleCols, plan).Scan(&after[0], &after[1], &after[2], &after[3], &after[4]))
+	assert.Equal(t, before, after, "only enabled may change on a managed plan")
+	assert.Contains(t, after[0], `"dates_managed": true`)
+}
+
+// lockWaiters counts backends waiting on a lock in a statement matching like.
+func lockWaiters(ctx context.Context, store *PostgresStore, like string) int {
+	var n int
+	if err := store.db.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+		WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE $1`, like).Scan(&n); err != nil {
+		return -1
+	}
+	return n
+}
+
+// A plan that gains account A while the delete of A waits on A's row must be
+// relocked before the delete decides. Here a writer moves plan P from {B} to
+// {A, C} the way SetPlanAccounts does (plan FOR SHARE, then the rows), and A
+// and C are deleted while it is still open. Neither delete's first plan lock
+// sees P through the new rows. Once the writer commits, the delete of C locks
+// P, decides to keep it ({A, C}) and is held at its cascade by a gate. The
+// delete of A must then wait for P and re-read it after C commits; deciding on
+// {A, C} instead would leave P enabled with no accounts.
+func TestDeleteCloudAccount_RelocksPlanThatGainedAccountDuringWait(t *testing.T) {
+	ctx := context.Background()
+	store := setupLadderStore(ctx, t)
+	a, b, c, d := seedDeleteAccount(ctx, t, store), seedDeleteAccount(ctx, t, store),
+		seedDeleteAccount(ctx, t, store), seedDeleteAccount(ctx, t, store)
+	plan := seedDeletePlan(ctx, t, store, true, b)
+	gatePlan := seedDeletePlan(ctx, t, store, true, c, d)
+
+	gate, err := store.db.Begin(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = gate.Rollback(context.Background()) })
+	_, err = gate.Exec(ctx, `SELECT 1 FROM plan_accounts WHERE plan_id = $1 AND account_id = $2 FOR UPDATE`, gatePlan, c)
+	require.NoError(t, err)
+
+	writer, err := store.db.Begin(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = writer.Rollback(context.Background()) })
+	_, err = writer.Exec(ctx, `SELECT 1 FROM purchase_plans WHERE id = $1 FOR SHARE`, plan)
+	require.NoError(t, err)
+	_, err = writer.Exec(ctx, `DELETE FROM plan_accounts WHERE plan_id = $1`, plan)
+	require.NoError(t, err)
+	_, err = writer.Exec(ctx, `INSERT INTO plan_accounts (plan_id, account_id) VALUES ($1, $2), ($1, $3)`, plan, a, c)
+	require.NoError(t, err)
+
+	doneA, doneC := make(chan error, 1), make(chan error, 1)
+	go func() { doneA <- store.DeleteCloudAccount(ctx, a) }()
+	go func() { doneC <- store.DeleteCloudAccount(ctx, c) }()
+	waitForLockWaiters(ctx, t, store, 2)
+	require.NoError(t, writer.Commit(ctx))
+
+	// C waits at its cascade (behind the gate) and A either waits for P or,
+	// without the relock, has already finished.
+	var errA error
+	finishedA := false
+	require.Eventually(t, func() bool {
+		if !finishedA {
+			select {
+			case errA = <-doneA:
+				finishedA = true
+			default:
+			}
+		}
+		return lockWaiters(ctx, store, "%DELETE FROM cloud_accounts%") >= 1 &&
+			(finishedA || lockWaiters(ctx, store, "%FOR UPDATE OF p%") >= 1)
+	}, 15*time.Second, 20*time.Millisecond, "delete of C must reach its cascade")
+	require.NoError(t, gate.Rollback(ctx))
+	require.NoError(t, testhelpers.Await(t, doneC))
+	if !finishedA {
+		errA = testhelpers.Await(t, doneA)
+	}
+	require.NoError(t, errA)
+
+	enabled, n, _ := storedPlanState(ctx, t, store, plan)
+	assert.Zero(t, n)
+	assert.False(t, enabled, "A and C are both gone, so the plan must be disabled")
+}

@@ -294,6 +294,30 @@ paths:
           schema:
             type: string
         - $ref: '#/components/parameters/AccountID'
+        - name: limit
+          in: query
+          description: >-
+            Opt-in maximum page size in rows (1-1000). When neither limit nor
+            cursor is present, every matching recommendation is returned in
+            one response (legacy behavior); a present but empty value is a
+            400. When either is sent, rows are returned in ascending id order,
+            one page at a time, and a page can hold fewer than limit rows
+            (follow next_cursor, not the row count) because each page is also
+            capped at 4 MiB of serialized JSON. A single row larger than that
+            is returned alone. summary and regions still describe the full
+            filtered set.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: cursor
+          in: query
+          description: >-
+            Opaque next_cursor value from the previous page. Implies
+            pagination; the page size defaults to 500 when limit is omitted.
+          schema:
+            type: string
+            maxLength: 1024
       responses:
         '200':
           description: Recommendations list
@@ -301,6 +325,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RecommendationsResponse'
+        '400':
+          description: >
+            Invalid query parameter: a limit that is empty, not an integer or
+            outside 1-1000; a cursor that is empty, longer than 1024
+            characters or not a cursor this endpoint issued; or an invalid
+            provider, service, region, account_ids, min_savings_usd or
+            min_savings_pct filter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -567,7 +602,16 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >
+            CSRF validation failed, the caller lacks permission or access to
+            the plan, or 4-eyes mode is on and the caller has no attributable
+            user (the admin API key). Rows scheduled that way could never be
+            approved under 4-eyes, so the request is refused; sign in or use a
+            per-user API key instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -608,7 +652,17 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >
+            CSRF validation failed, the caller lacks permission or exceeds its
+            Constraints, 4-eyes mode rejects a direct execute, or 4-eyes mode is
+            on and the caller has no attributable user (the admin API key). An
+            execution created that way could never be approved under 4-eyes,
+            so it is refused before anything is written; sign in or use a
+            per-user API key instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '409':
           description: >
             One of two conflict families. Idempotency: an identical submit
@@ -1123,11 +1177,19 @@ paths:
       operationId: listConvertibleRIs
       tags: [RIExchange]
       summary: List convertible Reserved Instances eligible for exchange
+      description: >
+        Requires `view:purchases` permission. Lists the convertible RIs of the
+        deployment's own AWS account. When that account is outside the
+        session's allowed accounts, the response is a 200 with an empty
+        `instances` list rather than a 403 or 404. An `account_id` that names
+        a different account also yields an empty list.
       parameters:
         - $ref: '#/components/parameters/AccountID'
       responses:
         '200':
-          description: Convertible RI list
+          description: >
+            Convertible RI list. Empty when the deployment's AWS account is
+            outside the session's allowed accounts.
           content:
             application/json:
               schema:
@@ -1151,6 +1213,11 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  reservations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AzureExchangeableReservation'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1231,7 +1298,11 @@ paths:
         client-supplied session is never trusted. Execution is refused when
         the fresh quote carries policy errors, omits a net payable amount,
         is denominated in a different currency than requested, or exceeds
-        `max_payment_due`.
+        `max_payment_due`. A source whose applied scope cannot be carried onto
+        the purchased reservation (see `applied_scope_type` on
+        AzureExchangeableReservation), or sources with different applied
+        scopes, are refused with 422 before any Azure call; the same holds
+        for the compatible-offerings preview.
         Submits are deduplicated for 15 minutes on a fingerprint of
         `subscription_id` plus the sources and targets with their quantities,
         so a retry after a client timeout returns 409 rather than committing
@@ -1294,8 +1365,27 @@ paths:
       operationId: listTargetOfferings
       tags: [RIExchange]
       summary: List available RI offerings to exchange into
+      description: >
+        Requires `view:purchases` permission. Looks up the source RI in the
+        deployment's own AWS account. When that account is outside the
+        session's allowed accounts the response is 404, the same as for an
+        unknown `source_ri_id`, so a scoped caller cannot tell which RIs
+        exist. That check runs before `source_ri_id` is validated, so such a
+        caller gets 404 even with no `source_ri_id`.
       parameters:
         - $ref: '#/components/parameters/AccountID'
+        - name: source_ri_id
+          in: query
+          required: true
+          description: ID of the convertible RI to exchange from.
+          schema:
+            type: string
+        - name: region
+          in: query
+          required: false
+          description: AWS region of the source RI. Defaults to the region the deployment's AWS SDK chain resolves.
+          schema:
+            type: string
       responses:
         '200':
           description: Target offering list
@@ -1303,19 +1393,50 @@ paths:
             application/json:
               schema:
                 type: object
+        '400':
+          description: '`source_ri_id` is missing.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          description: >
+            The deployment's AWS account is outside the session's allowed
+            accounts, or no convertible RI with `source_ri_id` exists in the
+            region. The two cases are indistinguishable to a scoped caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: >
+            The source RI's scope and availability zone disagree (a zonal RI
+            with no availability zone, or a regional RI that names one), so no
+            offering lookup is made.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /api/ri-exchange/utilization:
     get:
       operationId: getRIUtilization
       tags: [RIExchange]
       summary: Get utilization metrics for Reserved Instances
+      description: >
+        Requires `view:purchases` permission. Reads the deployment's own AWS
+        account. When that account is outside the session's allowed accounts,
+        the response is a 200 with an empty `utilization` list rather than a
+        403 or 404.
       responses:
         '200':
-          description: RI utilization data
+          description: >
+            RI utilization data. Empty when the deployment's AWS account is
+            outside the session's allowed accounts.
           content:
             application/json:
               schema:
@@ -1330,9 +1451,16 @@ paths:
       operationId: getReshapeRecommendations
       tags: [RIExchange]
       summary: Get reshape recommendations for convertible RIs
+      description: >
+        Requires `view:purchases` permission. Reads the deployment's own AWS
+        account. When that account is outside the session's allowed accounts,
+        the response is a 200 with an empty `recommendations` list rather
+        than a 403 or 404.
       responses:
         '200':
-          description: Reshape recommendation list
+          description: >
+            Reshape recommendation list. Empty when the deployment's AWS
+            account is outside the session's allowed accounts.
           content:
             application/json:
               schema:
@@ -1363,7 +1491,9 @@ paths:
       summary: Get a quote for an RI exchange before executing
       description: >
         Requires `view:purchases` permission. Returns the exchange valuation
-        without committing any financial transaction.
+        without committing any financial transaction. The quote reads the
+        deployment's own AWS account, so a session whose allowed accounts do
+        not cover that account gets 403.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -1384,7 +1514,14 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >
+            CSRF validation failed, the session lacks `view:purchases`, or the
+            deployment's AWS account is outside the session's allowed
+            accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /api/ri-exchange/execute:
     post:
@@ -1404,6 +1541,11 @@ paths:
         not part of that fingerprint: raising the cap does not make it a
         different purchase. See the 409 response: it does not assert that the
         earlier submit succeeded, only that it claimed the window.
+        The exchange runs in the deployment's own AWS account, so a session
+        whose allowed accounts do not cover that account gets 403.
+        A quote that is not denominated in USD, or names no currency, is
+        refused with 422 before the exchange is accepted, because
+        `max_payment_due_usd` cannot be enforced against it.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -1437,9 +1579,19 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >
+            CSRF validation failed, the session lacks `execute:ri-exchange` or
+            fails its constraints, 4-eyes approval mode is on (direct execution
+            is disabled), or the deployment's AWS account is outside the
+            session's allowed accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
 
   /api/ri-exchange/config:
     get:
@@ -2721,6 +2873,62 @@ components:
           minimum: 1
           description: Number of instances to hand back.
 
+    AzureExchangeableReservation:
+      type: object
+      description: >
+        One Azure VM reservation eligible for exchange, as listed by
+        GET /api/ri-exchange/azure-instances. An exchange buys its
+        replacement reservations with the source's applied scope.
+      required: [reservation_order_id, reservation_id, sku, quantity, instance_flexibility]
+      properties:
+        reservation_order_id:
+          type: string
+          description: GUID of the parent reservation order.
+        reservation_id:
+          type: string
+          description: Full ARM resource id of the reservation item.
+        billing_scope_id:
+          type: string
+          description: >
+            ARM scope charged for the reservation, e.g. /subscriptions/{id}.
+            Omitted when Azure did not report one; such a reservation cannot
+            be exchanged.
+        applied_scope_type:
+          type: string
+          description: >
+            Who receives the reservation's discount. Only Shared and Single
+            can be carried through an exchange; a source with any other
+            value, or with none, is refused with 422 on compatible-offerings
+            and execute. Omitted when Azure did not report one.
+          example: Shared
+        applied_scopes:
+          type: array
+          items:
+            type: string
+          description: >
+            ARM scopes a Single-scoped reservation applies to (exactly one
+            for an exchange). Omitted for Shared.
+        sku:
+          type: string
+          description: VM size, e.g. Standard_D2s_v3.
+        quantity:
+          type: integer
+          format: int32
+          description: Number of VM instances covered.
+        region:
+          type: string
+          description: ARM region name. May be omitted for Shared reservations.
+        term:
+          type: string
+          description: Reservation term (P1Y, P3Y or P5Y).
+        expiry_date:
+          type: string
+          format: date-time
+        instance_flexibility:
+          type: string
+        display_name:
+          type: string
+
     AzureExchangeTarget:
       type: object
       description: One Azure VM reservation to acquire in an exchange.
@@ -3079,8 +3287,8 @@ components:
           exclusiveMinimum: true
           description: >-
             Spend cap per purchase. Omit for no cap. An explicit 0 is rejected
-            with 400 on group writes (create and update); API-key creation
-            over HTTP does not enforce this yet.
+            with 400 on group writes (create and update) and on API-key
+            creation.
 
     # -- API Keys -----------------------------------------------------------
     CreateAPIKeyRequest:
@@ -3432,11 +3640,33 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RecommendationRecord'
-        total_savings:
-          type: number
-          format: double
-        count:
-          type: integer
+        regions:
+          type: array
+          items:
+            type: string
+        summary:
+          type: object
+          description: Totals over the full filtered set, not just the returned page.
+          properties:
+            total_count:
+              type: integer
+            total_monthly_savings:
+              type: number
+              format: double
+            total_upfront_cost:
+              type: number
+              format: double
+            avg_payback_months:
+              type: number
+              format: double
+        next_cursor:
+          type: string
+          description: >-
+            Present only on a paginated request that has more rows; pass it as
+            the cursor query parameter to fetch the next page. Its absence is
+            the only end-of-list signal: a page with fewer rows than limit is
+            not necessarily the last one, because each page is also capped by
+            serialized size.
 
     RecommendationRecord:
       type: object
@@ -3932,6 +4162,14 @@ components:
       properties:
         summary:
           $ref: '#/components/schemas/HistorySummary'
+        summary_complete:
+          type: boolean
+          description: >-
+            True when summary counts and sums every row matching the request's
+            filters and the caller's account scope, including rows beyond the
+            row caps. False only when that aggregate failed and summary fell
+            back to the rows in purchases, which under-reports when truncated
+            is true.
         purchases:
           type: array
           items:
@@ -3940,7 +4178,8 @@ components:
           type: boolean
           description: >-
             True when a fetch reached its row cap, so older rows (and possibly
-            pending approvals) may be missing from purchases and summary. May
+            pending approvals) may be missing from purchases. summary still
+            counts them while summary_complete is true. May
             be a false positive when exactly `limit` or `executions_limit` rows exist.
             Also true when the actionable executions class (pending, approved,
             running, ...) reached its own cap of 1000 rows.
@@ -3956,8 +4195,25 @@ components:
 
     HistorySummary:
       type: object
+      description: >-
+        Counts and dollar totals. Dollar totals cover completed, non-revoked
+        rows only; audit-gap and partially completed execution rows count as
+        completed without dollars, and canceled rows count only toward
+        total_purchases.
       properties:
         total_purchases:
+          type: integer
+        total_completed:
+          type: integer
+        total_pending:
+          type: integer
+        total_in_progress:
+          type: integer
+        total_failed:
+          type: integer
+        total_expired:
+          type: integer
+        total_revoked:
           type: integer
         total_upfront:
           type: number

@@ -56,7 +56,7 @@ Terraform automatically handles: Docker image build/push (via build module), fro
 
 - Docker with buildx support
 - Terraform >= 1.6.0
-- Go 1.26.9+
+- Go 1.26.10+
 - Cloud CLI configured: `aws`, `az`, or `gcloud`
 
 ---
@@ -145,20 +145,22 @@ lambda_architecture        = "arm64"
 lambda_memory_size         = 512
 lambda_timeout             = 300 # 300-900: covers the 270s exchange/purchase budget
 
-# Database configuration (Aurora Serverless v2)
-database_engine_version       = "16.4"
-database_name                 = "cudly"
-database_username             = "cudly"
-database_min_capacity         = 0.5
-database_max_capacity         = 2.0
+# Database configuration (RDS PostgreSQL)
+database_engine_version        = "16" # major only; see variables.tf
+database_name                  = "cudly"
+database_username              = "cudly"
+database_instance_class        = "db.t4g.micro"
 database_backup_retention_days = 7
 
 # Admin user
 admin_email = "admin@example.com"
 
-# Frontend (optional)
-enable_frontend_build       = true
-frontend_price_class        = "PriceClass_100"
+# Docker image build (false: deploy the pre-built image_uri instead)
+enable_docker_build = true
+
+# Frontend CDN (optional; the frontend itself is built into the image)
+enable_cdn           = false
+frontend_price_class = "PriceClass_100"
 ```
 
 ### State Management

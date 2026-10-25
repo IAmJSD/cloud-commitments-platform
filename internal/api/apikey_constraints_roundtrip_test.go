@@ -37,7 +37,7 @@ type realAPIKeyAuth struct {
 	service *auth.Service
 }
 
-func (a *realAPIKeyAuth) CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error) {
+func (a *realAPIKeyAuth) CreateAPIKeyAPI(ctx context.Context, userID string, req auth.APICreateAPIKeyRequest) (any, error) {
 	return a.service.CreateAPIKeyAPI(ctx, userID, req)
 }
 

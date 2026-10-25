@@ -114,9 +114,9 @@ func utc(s string) time.Time {
 // created under any session TimeZone span UTC months, and partitions that the
 // old function cut at local midnight are rebuilt with their rows re-routed.
 func TestMigration_SavingsPartitionUTCBounds(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool, path := container.DB.Pool(), getMigrationsPath()
 	prev := previousMigrationVersion(t, utcPartitionBoundsVersion)
 
@@ -207,9 +207,9 @@ func TestMigration_SavingsPartitionUTCBounds(t *testing.T) {
 // not committed, waits and then succeeds instead of failing with "relation
 // already exists".
 func TestMigration_SavingsPartitionConcurrentCreate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, getMigrationsPath(), utcPartitionBoundsVersion))
 
