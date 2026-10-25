@@ -7,7 +7,7 @@
  * the user in or surfaces `invalid_mfa_code` without resetting the
  * step.
  */
-import { showLoginModal } from '../auth';
+import { showLoginModal, MFA_PENDING_TTL_MS } from '../auth';
 import { reloadPage } from '../utils';
 
 jest.mock('../utils', () => ({
@@ -133,5 +133,53 @@ describe('Login two-step MFA flow', () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(document.getElementById('login-email')).not.toBeNull();
     expect(document.getElementById('mfa-code')).toBeNull();
+  });
+  test('a terminal MFA-step error drops the password and returns to the first step', async () => {
+    const MFALoginErrorCtor = (api as unknown as { MFALoginError: typeof Error }).MFALoginError as new (c: string) => Error;
+    (api.login as jest.Mock)
+      .mockRejectedValueOnce(new MFALoginErrorCtor('mfa_required'))
+      .mockRejectedValueOnce(new Error('Too many login attempts'));
+    await showLoginModal();
+    await submitLogin('user@x.com', 'pw');
+    await submitMFACode('123456');
+    await new Promise((r) => setTimeout(r, 0));
+    // Back on email/password, with the server message shown there.
+    expect(document.getElementById('mfa-code')).toBeNull();
+    expect(document.getElementById('login-email')).not.toBeNull();
+    const err = document.getElementById('login-error');
+    expect(err?.classList.contains('hidden')).toBe(false);
+    expect(err?.textContent).toBe('Too many login attempts');
+    expect(reloadPage).not.toHaveBeenCalled();
+  });
+
+  test('an abandoned MFA prompt expires and clears the pending credentials', async () => {
+    const MFALoginErrorCtor = (api as unknown as { MFALoginError: typeof Error }).MFALoginError as new (c: string) => Error;
+    (api.login as jest.Mock).mockRejectedValueOnce(new MFALoginErrorCtor('mfa_required'));
+    const timeoutSpy = jest.spyOn(global, 'setTimeout');
+    await showLoginModal();
+    await submitLogin('user@x.com', 'pw');
+    const ttlCall = timeoutSpy.mock.calls.find((c) => c[1] === MFA_PENDING_TTL_MS);
+    expect(ttlCall).toBeDefined();
+    (ttlCall![0] as () => void)();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(document.getElementById('mfa-code')).toBeNull();
+    expect(document.getElementById('login-email')).not.toBeNull();
+    expect(document.getElementById('login-error')?.textContent).toMatch(/expired/i);
+  });
+
+  test('a successful MFA login cancels the expiry timer', async () => {
+    const MFALoginErrorCtor = (api as unknown as { MFALoginError: typeof Error }).MFALoginError as new (c: string) => Error;
+    (api.login as jest.Mock)
+      .mockRejectedValueOnce(new MFALoginErrorCtor('mfa_required'))
+      .mockResolvedValueOnce({ token: 'tok' });
+    const timeoutSpy = jest.spyOn(global, 'setTimeout');
+    const clearSpy = jest.spyOn(global, 'clearTimeout');
+    await showLoginModal();
+    await submitLogin('user@x.com', 'pw');
+    const ttlIndex = timeoutSpy.mock.calls.findIndex((c) => c[1] === MFA_PENDING_TTL_MS);
+    const handle = timeoutSpy.mock.results[ttlIndex]!.value;
+    await submitMFACode('123456');
+    expect(clearSpy).toHaveBeenCalledWith(handle);
+    expect(reloadPage).toHaveBeenCalled();
   });
 });

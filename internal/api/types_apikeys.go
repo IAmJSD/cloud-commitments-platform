@@ -1,15 +1,5 @@
 package api //nolint:revive // var-naming: package name "api" is intentional for this handler package
 
-import "time"
-
-// CreateAPIKeyRequest represents a request to create a new API key.
-type CreateAPIKeyRequest struct {
-	ExpiresAt   *time.Time   `json:"expires_at,omitempty"`
-	Name        string       `json:"name"`
-	Password    string       `json:"password"` //nolint:gosec // G117: intentional credential field in request struct -- base64-encoded like the login/MFA password fields, decoded by the handler and never re-stored
-	Permissions []Permission `json:"permissions,omitempty"`
-}
-
 // CreateAPIKeyResponse returns the newly created API key (only shown once).
 type CreateAPIKeyResponse struct {
 	Info   *APIKeyInfo `json:"info"`

@@ -2,8 +2,11 @@ package api
 
 import (
 	"context"
+	"errors"
+	"sync/atomic"
 	"testing"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/exchange"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
@@ -115,11 +118,10 @@ func TestRIExchangeCarveOut_AdminKeepsNonCarvedVerbs(t *testing.T) {
 // (handler.go's requireSessionPermission), and executeExchange returns it
 // unwrapped (handler_ri_exchange.go:1713-1716). Asserting substrings of the
 // message ("execute", "ri-exchange") is fragile in the wrong direction: if
-// the carve-out is dropped, executeExchange proceeds into
-// exchange.ExecuteExchange, which builds its own AWS clients from ambient
-// credentials and fails at AWS credential/STS resolution before ever
-// touching the store -- an error whose wording has nothing to do with
-// permissions. A prior version of this test relied on that STS error's
+// the carve-out is dropped, executeExchange proceeds past the gate into
+// cloud account scope resolution and then the AWS exchange call, and fails
+// there with an error whose wording has nothing to do with permissions.
+// A prior version of this test relied on that STS error's
 // message happening not to contain "execute"/"ri-exchange", which discovers
 // a regression only by accident and stops working the moment that wording
 // changes. Asserting the 403 ClientError identity instead means the test
@@ -133,17 +135,22 @@ func TestRIExchangeCarveOut_AdminKeepsNonCarvedVerbs(t *testing.T) {
 // this handler and does not discriminate the mutation. It stays in case a
 // future change routes this handler through the store.
 //
-// t.Setenv("AWS_EC2_METADATA_DISABLED", "true") bounds the AWS SDK client
-// construction inside exchange.ExecuteExchange, reached only if the
-// carve-out regresses (#1644), to fail fast against an unreachable
-// credential source instead of depending on what credentials happen to be
-// configured in whichever environment re-runs this test (tracked more
-// broadly as #1760: executeExchange builds AWS clients from ambient
-// credentials with no injected seam, unlike internal/server's
-// riExchangeClients).
+// The test stays offline even when the carve-out regresses (#175). Past the
+// permission gate, executeExchange resolves the deployment's cloud account
+// (authorizeAWSExchangeExecution -> resolveReshapeCloudAccountID) and, with
+// no resolver injected, that runs a live sts:GetCallerIdentity from ambient
+// credentials. AWS_EC2_METADATA_DISABLED only cut off the IMDS fallback; on a
+// machine with credentials in the environment the mutated test still called
+// STS for real. So the test injects the handler's own seams instead:
+//
+//   - reshapeAccountResolver records that it was reached and returns
+//     errGateBypassed, so a regressed handler stops at the first step past
+//     the gate with no network I/O and the test fails on gateBypassed
+//     below, not on a timeout or a mock panic.
+//   - executeExchangeFn fails the test if called. It is unreachable while the
+//     resolver errors, and stays as a backstop in case a future change moves
+//     scope resolution after the AWS call.
 func TestExecuteExchange_PlainAdminIsRefused(t *testing.T) {
-	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
-
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockAuth := new(MockAuthService)
@@ -153,7 +160,20 @@ func TestExecuteExchange_PlainAdminIsRefused(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "exchange-token").Return(session, nil)
 	mockAuth.grantPermissions([]auth.Permission{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}})
 
-	h := &Handler{config: mockStore, auth: mockAuth}
+	errGateBypassed := errors.New("test stub: cloud account scope resolved past the execute:ri-exchange gate")
+	var gateBypassed atomic.Bool
+	h := &Handler{
+		config: mockStore,
+		auth:   mockAuth,
+		reshapeAccountResolver: func(context.Context) (string, error) {
+			gateBypassed.Store(true)
+			return "", errGateBypassed
+		},
+		executeExchangeFn: func(context.Context, exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
+			t.Error("executeExchange reached the AWS exchange executor for a plain admin (#1644)")
+			return "", nil, errGateBypassed
+		},
+	}
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"Authorization": "Bearer exchange-token"},
 		Body:    `{"ri_ids":["ri-1"],"target_offering_id":"off-1","region":"us-east-1","target_count":1,"max_payment_due_usd":"100.00"}`,
@@ -163,8 +183,10 @@ func TestExecuteExchange_PlainAdminIsRefused(t *testing.T) {
 
 	require.Error(t, err, "a plain admin must not be able to execute an RI exchange (#1644)")
 	assert.Nil(t, result)
+	assert.False(t, gateBypassed.Load(), "a plain admin got past the execute:ri-exchange gate into cloud account scope resolution (#1644)")
+	assert.NotErrorIs(t, err, errGateBypassed, "the refusal must come from the permission gate, not from a step behind it")
 	ce, ok := IsClientError(err)
-	require.True(t, ok, "a carve-out denial must be a client error, not a downstream AWS failure")
+	require.True(t, ok, "a carve-out denial must be a client error, not a downstream failure")
 	assert.Equal(t, 403, ce.code, "must be refused at the permission gate, not fail later for an unrelated reason")
 	mockStore.AssertNotCalled(t, "SaveRIExchangeRecord", mock.Anything, mock.Anything)
 }

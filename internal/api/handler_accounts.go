@@ -335,6 +335,9 @@ func (h *Handler) createAccount(ctx context.Context, httpReq *events.LambdaFunct
 	if err := validateCloudAccountRequest(req); err != nil {
 		return nil, err
 	}
+	if err := h.requireHostForEmptyRoleARN(ctx, "(new)", &req); err != nil {
+		return nil, err
+	}
 
 	now := time.Now()
 	account := cloudAccountFromRequest(req)
@@ -590,6 +593,11 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 
 	existing, err := h.requireAccountAccess(ctx, session, id)
 	if err != nil {
+		return nil, err
+	}
+	// After the access check, so an out-of-scope caller gets the 404
+	// without triggering an STS call.
+	if err := h.requireHostForEmptyRoleARN(ctx, id, &req); err != nil {
 		return nil, err
 	}
 

@@ -57,7 +57,9 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 		}
 	}
 
-	var createReq CreateAPIKeyRequest
+	// Decode straight into the auth wire type so an explicit max_amount of 0
+	// reaches the explicit-zero check instead of being erased (issue #980).
+	var createReq auth.APICreateAPIKeyRequest
 	err = json.Unmarshal([]byte(req.Body), &createReq)
 	if err != nil {
 		return nil, NewClientError(400, "invalid request body")

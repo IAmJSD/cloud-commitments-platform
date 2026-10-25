@@ -1121,7 +1121,7 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	// The parent ctx governs the overall Lambda budget; this per-rec deadline
 	// is always the shorter of the two.
 	recTuple := fmt.Sprintf("%s/%s/%s/%s", rec.Provider, rec.Service, rec.Region, rec.ResourceType)
-	recCtx, recCancel := context.WithTimeout(ctx, 30*time.Second)
+	recCtx, recCancel := context.WithTimeout(ctx, m.budgets.perRecTimeout())
 	defer recCancel()
 
 	// Create the provider
