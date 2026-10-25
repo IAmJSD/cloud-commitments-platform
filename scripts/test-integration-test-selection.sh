@@ -359,5 +359,51 @@ else
   bad "escaped text is a literal match in Go's regexp"
 fi
 
+# ---------------------------------------------------------------------------
+# Shards: every selected package in exactly one shard.
+
+sel="$WORK/selection.tsv"
+printf '%s\t^(A)$\t1\n' "$M/a" "$M/b" "$M/c" "$M/d" >"$sel"
+export INTEGRATION_MODULE="$M"
+
+shard_case() { # label expected_exit spec shard [expected stdout | stderr text]
+  local label="$1" want_rc="$2" spec="$3" shard="$4" want="${5:-}" out rc=0
+  out="$(INTEGRATION_SHARDS="$spec" bash "$SELECT" --shard "$shard" "$sel" 2>&1)" || rc=$?
+  if [[ "$rc" -ne "$want_rc" ]]; then
+    bad "$label (expected exit $want_rc, got $rc: $out)"
+  elif [[ "$want_rc" -eq 0 && "$out" != "$want" ]]; then
+    bad "$label (got: $out)"
+  elif [[ "$want_rc" -ne 0 && "$out" != *"$want"* ]]; then
+    bad "$label (output missing '$want': $out)"
+  else
+    ok "$label"
+  fi
+}
+
+good="first a
+second b *"
+shard_case "named shard gets its packages" 0 "$good" first "$M/a	^(A)\$	1"
+shard_case "catch-all shard gets its own plus every unnamed package" 0 "$good" second \
+  "$(printf '%s\t^(A)$\t1\n' "$M/b" "$M/c" "$M/d")"
+shard_case "a package in two shards fails" 1 "first a
+second a *" first "$M/a is in shard first and shard second"
+shard_case "a package in no shard fails (no catch-all)" 1 "first a
+second b" first "exactly one *"
+shard_case "two catch-alls fail" 1 "first a *
+second b *" first "exactly one *"
+shard_case "a named package without integration tests fails" 1 "first a gone
+second b *" first "$M/gone (shard first) has no integration tests"
+shard_case "a shard left with no packages fails" 1 "first a
+second b
+third *
+fourth" first "shard fourth names no packages"
+shard_case "an unknown shard name fails" 1 "$good" third "shard third is not in the spec"
+rc=0
+INTEGRATION_SHARDS="$good" INTEGRATION_MODULE="$M
+$M/other" bash "$SELECT" --shard first "$sel" >/dev/null 2>&1 || rc=$?
+if [[ "$rc" -eq 2 ]]; then ok "a multi-line module path is rejected"; else bad "a multi-line module path is rejected (exit $rc)"; fi
+shard_case "a duplicated shard name fails" 1 "first a
+first b *" first "shard first is defined twice"
+
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
