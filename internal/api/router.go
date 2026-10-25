@@ -321,6 +321,9 @@ func (r *Router) registerRoutes() {
 		{ExactPath: "/api/ri-exchange/history", Method: "GET", Handler: r.getRIExchangeHistoryHandler, Auth: AuthUser},
 		{PathPrefix: "/api/ri-exchange/approve/", Method: "POST", Handler: r.approveRIExchangeHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/ri-exchange/reject/", Method: "POST", Handler: r.rejectRIExchangeHandler, Auth: AuthPublic},
+		// Operator resolve of a stale processing exchange (#692). AuthUser, so the
+		// outer middleware enforces the session and CSRF.
+		{PathPrefix: "/api/ri-exchange/resolve/", Method: "POST", Handler: r.resolveRIExchangeHandler, Auth: AuthUser},
 
 		// Commitment Laddering endpoints (flag-gated default-off, issue #1336).
 		// GET returns all per-account ladder configs; PUT inserts or updates one.
@@ -906,6 +909,10 @@ func (r *Router) rejectRIExchangeHandler(ctx context.Context, req *events.Lambda
 		return nil, err
 	}
 	return r.h.rejectRIExchange(ctx, params["id"], req.QueryStringParameters["token"])
+}
+
+func (r *Router) resolveRIExchangeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.resolveRIExchange(ctx, req, params["id"])
 }
 
 // Cloud Account route wrappers.

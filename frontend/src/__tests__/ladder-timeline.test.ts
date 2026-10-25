@@ -5,7 +5,7 @@ jest.mock('../permissions', () => ({ canAccess: jest.fn(() => true) }));
 
 import { listAccountsMinimal } from '../api/accounts';
 import { getLadderEvents, getLadderRuns, amendLadderEvent, type LadderEvent, type LadderRun } from '../api/ladder';
-import { initLadderTimeline } from '../ladder-timeline';
+import { initLadderTimeline, refreshLadderTimeline, disposeLadderTimeline } from '../ladder-timeline';
 import { canAccess } from '../permissions';
 import { Chart } from 'chart.js';
 
@@ -359,4 +359,93 @@ test('editor labels each row by its basis and keeps the native amount', async ()
   expect(open('m1')).toBe('Planning budget (commitment $/hr)|5.000000');
   expect(open('m2')).toBe('Planning budget (on-demand-equivalent $/hr)|2.000000');
   expect(open('m3')).toBe('Planning budget (on-demand-equivalent $/hr)|1.000000');
+});
+
+test('refreshLadderTimeline re-evaluates the state after a config save and a kill-switch toggle (issue #728)', async () => {
+  await initLadderTimeline(document.getElementById('timeline')!, [], false);
+  const state = (): string => document.querySelector('[data-state]')!.textContent ?? '';
+  expect(state()).toContain('No ladder configuration');
+
+  const cfg = { cloud_account_id: 'account', provider: 'aws', enabled: true } as unknown as Parameters<typeof refreshLadderTimeline>[0][number];
+  refreshLadderTimeline([cfg]);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(state()).toContain('Ladder planning is disabled');
+
+  refreshLadderTimeline([cfg], true);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(state()).toContain('Timeline loaded');
+  expect(getLadderEvents).toHaveBeenCalledTimes(3);
+});
+
+describe('planned purchases layout and UTC date filters (issue #753)', () => {
+  const date = (edge: 'from' | 'to'): HTMLInputElement => document.querySelector<HTMLInputElement>(`[data-date="${edge}"]`)!;
+  const type = (edge: 'from' | 'to', value: string): void => { date(edge).value = value; date(edge).dispatchEvent(new Event('change')); };
+  const error = (): HTMLElement => document.getElementById('ladder-timeline-date-error')!;
+  const summary = (): string => document.querySelector('[data-summary]')!.textContent ?? '';
+
+  test('renders its own card with labelled controls and plain-text UTC dates', async () => {
+    await initLadderTimeline(document.getElementById('timeline')!, [], false);
+    const card = document.querySelector('#timeline > fieldset.settings-category')!;
+    expect(card.querySelector('legend')).toHaveTextContent('Planned purchases');
+    card.querySelectorAll('.ladder-timeline-controls select, .ladder-timeline-controls input').forEach(control => {
+      expect(card.querySelector(`label[for="${control.id}"]`)).not.toBeNull();
+      expect(control.closest('.form-group')).not.toBeNull();
+    });
+    expect(card.querySelector('input[type="datetime-local"]')).toBeNull();
+    expect(date('from').type).toBe('text');
+    expect(date('from').value).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/);
+    expect(date('to')).toHaveAttribute('placeholder', 'YYYY-MM-DD HH:MM');
+    expect(card.querySelector('[data-reset]')).toHaveClass('btn-tertiary');
+  });
+
+  test('valid dates filter and normalize; invalid dates are flagged and ignored until cleared', async () => {
+    await initLadderTimeline(document.getElementById('timeline')!, [], false);
+    type('from', '');
+    type('to', '2029-12-31');
+    expect(date('to').value).toBe('2029-12-31 23:59:59');
+    expect(summary()).toContain('0 of 1');
+    type('to', '2030-01-01');
+    expect(summary()).toContain('1 of 1');
+    type('to', '01.01.2029');
+    expect(date('to')).toHaveAttribute('aria-invalid', 'true');
+    expect(error()).not.toHaveClass('hidden');
+    expect(error()).toHaveTextContent('To date "01.01.2029" is not a valid UTC date');
+    expect(summary()).toContain('1 of 1');
+    document.querySelector<HTMLButtonElement>('#timeline [data-reset]')!.click();
+    expect(date('to')).not.toHaveAttribute('aria-invalid');
+    expect(error()).toHaveClass('hidden');
+    expect(date('to').value).toBe('');
+  });
+});
+
+describe('chart teardown on navigation (issue #667)', () => {
+  const chartInstance = (index: number): { destroy: jest.Mock } => jest.mocked(Chart).mock.results[index]!.value as { destroy: jest.Mock };
+
+  test('dispose destroys the chart, stops pending loads and init builds a fresh one', async () => {
+    await initLadderTimeline(document.getElementById('timeline')!, [], false);
+    expect(Chart).toHaveBeenCalledTimes(1);
+    let release!: (value: LadderEvent[]) => void;
+    jest.mocked(getLadderEvents).mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    document.querySelector<HTMLButtonElement>('[data-reload]')!.click();
+    disposeLadderTimeline();
+    expect(chartInstance(0).destroy).toHaveBeenCalled();
+    release([event]);
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    expect(Chart).toHaveBeenCalledTimes(1);
+    disposeLadderTimeline();
+    await initLadderTimeline(document.getElementById('timeline')!, [], false);
+    expect(Chart).toHaveBeenCalledTimes(2);
+  });
+
+  test('a hidden section is not initialized and releases the previous chart', async () => {
+    await initLadderTimeline(document.getElementById('timeline')!, [], false);
+    document.body.classList.add('hidden');
+    const calls = jest.mocked(getLadderEvents).mock.calls.length;
+    await initLadderTimeline(document.getElementById('timeline')!, [], false);
+    document.body.classList.remove('hidden');
+    expect(chartInstance(0).destroy).toHaveBeenCalled();
+    expect(Chart).toHaveBeenCalledTimes(1);
+    expect(listAccountsMinimal).toHaveBeenCalledTimes(1);
+    expect(getLadderEvents).toHaveBeenCalledTimes(calls);
+  });
 });

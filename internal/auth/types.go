@@ -259,6 +259,9 @@ type Session struct {
 	UserAgent string    `json:"user_agent,omitempty" dynamodbav:"UserAgent"`
 	IPAddress string    `json:"ip_address,omitempty" dynamodbav:"IPAddress"`
 	CSRFToken string    `json:"csrf_token,omitempty" dynamodbav:"CSRFToken"`
+	// PasswordVersion is the user's User.PasswordVersion read by the login that
+	// issued the session; ValidateSession rejects the session once they differ.
+	PasswordVersion int64 `json:"-" dynamodbav:"PasswordVersion"`
 }
 
 // LoginRequest represents a login attempt.
