@@ -34,3 +34,12 @@ func (h *Handler) awsExchangeExecutor() func(context.Context, exchange.ExchangeE
 	}
 	return exchange.ExecuteExchange
 }
+
+// awsExchangeQuoter returns the AWS RI exchange quote function: the
+// test-injected exchangeQuoteFn when set, exchange.GetExchangeQuote otherwise.
+func (h *Handler) awsExchangeQuoter() func(context.Context, exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error) {
+	if h.exchangeQuoteFn != nil {
+		return h.exchangeQuoteFn
+	}
+	return exchange.GetExchangeQuote
+}

@@ -176,6 +176,27 @@ cp "$REPO_ROOT/terraform/modules/compute/aws/lambda/main.tf" "$FIX15/terraform/m
 printf '%s\n' '    "Resource": "*",' >> "$FIX15/terraform/modules/compute/aws/lambda/main.tf"
 run_case "Resource \"*\" is not treated as an action wildcard" 0 --root "$FIX15"
 
+# Case 16 (#69): the pre-fix shape - all three runtime copies grant the unused
+# organizations:DescribeAccount / DescribeOrganization. Parity holds, so only
+# the runtime organizations allowlist catches it.
+FIX16="$TMP_BASE/dead-runtime-org-grants"
+seed_fixture "$FIX16"
+sed 's/^\( *\)- organizations:ListAccounts$/&\
+\1- organizations:DescribeAccount\
+\1- organizations:DescribeOrganization/' \
+  "$REPO_ROOT/cloudformation/stacks/CUDly/template.yaml" \
+  > "$FIX16/cloudformation/stacks/CUDly/template.yaml"
+for f in terraform/modules/compute/aws/lambda/main.tf terraform/modules/compute/aws/fargate/main.tf; do
+  sed 's/^\( *\)"organizations:ListAccounts",$/&\
+\1"organizations:DescribeAccount",\
+\1"organizations:DescribeOrganization",/' \
+    "$REPO_ROOT/$f" > "$FIX16/$f"
+done
+for f in cloudformation/stacks/CUDly/template.yaml terraform/modules/compute/aws/lambda/main.tf terraform/modules/compute/aws/fargate/main.tf; do
+  grep -q 'organizations:DescribeOrganization' "$FIX16/$f" || { echo "FAIL: case 16 fixture did not inject into $f"; (( fail++ )) || true; }
+done
+run_case "runtime grants unused organizations actions in all three copies exits 1" 1 --root "$FIX16"
+
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."
 [[ "$fail" -eq 0 ]]

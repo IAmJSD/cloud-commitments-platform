@@ -21,7 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 )
 
@@ -56,12 +55,9 @@ func seedSystemCreatedExchange(ctx context.Context, t *testing.T, store *config.
 
 func setupSystemExchangeHandler(ctx context.Context, t *testing.T, fourEyes bool) (*Handler, *config.PostgresStore, *int) {
 	t.Helper()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = container.Cleanup(context.Background()) })
-	require.NoError(t, migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", ""))
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 	store := config.NewPostgresStore(container.DB)
-	_, err = store.UpdateGlobalConfigAtomic(ctx, func(c *config.GlobalConfig) error {
+	_, err := store.UpdateGlobalConfigAtomic(ctx, func(c *config.GlobalConfig) error {
 		c.RequireDifferentApprover = fourEyes
 		return nil
 	})

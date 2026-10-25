@@ -17,7 +17,6 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/require"
 )
@@ -52,14 +51,9 @@ func (f *fakeReshapeRecs) GetRIUtilization(_ context.Context, _ int, _ string) (
 	return f.utilization, nil
 }
 
-func setupReshapeHandlerIntegration(ctx context.Context, t *testing.T) (*config.PostgresStore, func()) {
+func setupReshapeHandlerIntegration(ctx context.Context, t *testing.T) *config.PostgresStore {
 	t.Helper()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
-	store := config.NewPostgresStore(container.DB)
-	return store, func() { _ = container.Cleanup(ctx) }
+	return config.NewPostgresStore(testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath()).DB)
 }
 
 // buildReshapeHandler constructs a Handler with only the fields the
@@ -122,8 +116,7 @@ func seedRecsForRegion(ctx context.Context, t *testing.T, store *config.Postgres
 // calls.
 func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupReshapeHandlerIntegration(ctx, t)
-	defer cleanup()
+	store := setupReshapeHandlerIntegration(ctx, t)
 
 	// Seed cross-family recs in us-east-1. Same-family seed uses a
 	// different SIZE (m5.2xlarge) than the primary target (m5.large)
@@ -196,8 +189,7 @@ func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 // utilization fetcher is TTL-cached.
 func TestReshapeRecommendations_Integration_SecondCallHitsCache(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupReshapeHandlerIntegration(ctx, t)
-	defer cleanup()
+	store := setupReshapeHandlerIntegration(ctx, t)
 
 	seedRecsForRegion(ctx, t, store, []config.RecommendationRecord{
 		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "c5.large", Term: 1, MonthlyCost: aws.Float64(40)},
@@ -234,8 +226,7 @@ func TestReshapeRecommendations_Integration_SecondCallHitsCache(t *testing.T) {
 // region yet" rather than blanking the page.
 func TestReshapeRecommendations_Integration_NoCachedRecsReturnsPrimaryOnly(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupReshapeHandlerIntegration(ctx, t)
-	defer cleanup()
+	store := setupReshapeHandlerIntegration(ctx, t)
 
 	// Note: NO seedRecsForRegion call — table starts empty.
 
@@ -306,8 +297,7 @@ func seedCloudAccount(ctx context.Context, t *testing.T, store *config.PostgresS
 // through bug) would have shipped undetected.
 func TestReshapeRecommendations_Integration_ScopedAccount_FiltersToAccount(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupReshapeHandlerIntegration(ctx, t)
-	defer cleanup()
+	store := setupReshapeHandlerIntegration(ctx, t)
 
 	// Two registered accounts, distinct AWS account numbers. The recs
 	// scope filter compares against the CloudAccount UUID (not the AWS

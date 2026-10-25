@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/exchange"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -151,29 +152,31 @@ func TestListActiveCommitments_ScopedCallerInScopeAccountFilterReachesStore(t *t
 	store.AssertExpectations(t)
 }
 
-// quoteHandler scopes the caller to scopedInAccount; the failing credentials
-// keep a request that slips past the gate from calling EC2.
-func quoteHandler(t *testing.T, deploymentAccount string) *Handler {
+// quoteHandler scopes the caller to scopedInAccount. The injected quote stub
+// records every request and fails, so a request that slips past the gate is
+// counted instead of reaching EC2, and the test never resolves AWS credentials
+// or probes IMDS (#855).
+func quoteHandler(t *testing.T, deploymentAccount string) (*Handler, *[]exchange.ExchangeQuoteRequest) {
 	h, store := scopedHandler(t, scopedInAccount)
 	store.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{inScopeAccount(), outOfScopeAccount()}, nil
 	}
 	h.reshapeAccountResolver = func(_ context.Context) (string, error) { return deploymentAccount, nil }
-	h.awsCfgOnce.Do(func() {
-		h.awsCfg = aws.Config{
-			Region: "eu-west-1",
-			Credentials: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
-				return aws.Credentials{}, errors.New("test: no AWS credentials")
-			}),
-		}
-	})
-	return h
+	// Sealing the once keeps getBaseAWSConfig off LoadDefaultConfig; only the
+	// region is read on this path.
+	h.awsCfgOnce.Do(func() { h.awsCfg = aws.Config{Region: "eu-west-1"} })
+	var quotes []exchange.ExchangeQuoteRequest
+	h.exchangeQuoteFn = func(_ context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error) {
+		quotes = append(quotes, req)
+		return nil, errors.New("test: quote stub")
+	}
+	return h, &quotes
 }
 
 const quoteBody = `{"ri_ids":["ri-123"],"target_offering_id":"4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91","target_count":1}`
 
 func TestGetExchangeQuote_OutOfScopeDeploymentAccountReturns403(t *testing.T) {
-	h := quoteHandler(t, scopedOutAccount)
+	h, quotes := quoteHandler(t, scopedOutAccount)
 
 	_, err := h.getExchangeQuote(context.Background(), &events.LambdaFunctionURLRequest{
 		Headers: scopedRequest("").Headers, Body: quoteBody,
@@ -184,15 +187,19 @@ func TestGetExchangeQuote_OutOfScopeDeploymentAccountReturns403(t *testing.T) {
 	require.True(t, ok, "expected a ClientError, got: %v", err)
 	assert.Equal(t, 403, ce.code)
 	assert.Contains(t, ce.Error(), "allowed accounts")
+	assert.Empty(t, *quotes, "an out-of-scope caller must not reach the AWS quote call")
 }
 
 func TestGetExchangeQuote_InScopeDeploymentAccountPassesGate(t *testing.T) {
-	h := quoteHandler(t, scopedInAccount)
+	h, quotes := quoteHandler(t, scopedInAccount)
 
 	_, err := h.getExchangeQuote(context.Background(), &events.LambdaFunctionURLRequest{
 		Headers: scopedRequest("").Headers, Body: quoteBody,
 	})
 
-	require.Error(t, err, "the test AWS credentials fail, so the quote itself cannot succeed")
+	require.Error(t, err, "the quote stub fails, so the quote itself cannot succeed")
 	assert.Contains(t, err.Error(), "exchange quote failed", "an in-scope caller must reach the AWS quote call")
+	require.Len(t, *quotes, 1, "an in-scope caller must reach the AWS quote call exactly once")
+	assert.Equal(t, "eu-west-1", (*quotes)[0].Region, "the quote must use the region resolved from the AWS config")
+	assert.Equal(t, []string{"ri-123"}, (*quotes)[0].ReservedIDs)
 }

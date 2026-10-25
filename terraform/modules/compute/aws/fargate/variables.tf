@@ -328,7 +328,7 @@ variable "cross_account_target_account_ids" {
 }
 
 variable "enable_org_discovery" {
-  description = "Grant the task role organizations:ListAccounts / DescribeOrganization so CUDly can enumerate accounts in an AWS Organizations management / delegated account."
+  description = "Grant the task role organizations:ListAccounts so CUDly can enumerate accounts in an AWS Organizations management / delegated account."
   type        = bool
   default     = false
 }
