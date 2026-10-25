@@ -650,11 +650,6 @@ type StoreInterface interface {
 	SaveExecutionIfStatusTx(ctx context.Context, tx pgx.Tx, execution *PurchaseExecution, expected []string) error
 	RecoverReapedExecutionTx(ctx context.Context, tx pgx.Tx, execution *PurchaseExecution) error
 
-	// GetPendingExecutionsTx is the tx-accepting variant of
-	// GetPendingExecutions. It row-locks the pending rows it returns; it does
-	// not serialize concurrent inserts (see ListRecentSubmitsTx).
-	GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) ([]PurchaseExecution, error)
-
 	// ListRecentSubmitsTx takes a per-creator transaction-scoped lock and
 	// returns the creator's web-submitted executions scheduled at or after
 	// since that are pending, in flight or bought. executePurchase's

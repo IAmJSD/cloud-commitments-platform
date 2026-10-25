@@ -1800,35 +1800,6 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 	return s.queryExecutions(ctx, query)
 }
 
-// GetPendingExecutionsTx is the tx-accepting variant of GetPendingExecutions.
-// Running the read inside the same transaction as the subsequent insert makes
-// duplicate-detection and execution creation atomic, closing the TOCTOU race
-// in executePurchase (issue #643).
-func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) ([]PurchaseExecution, error) {
-	const query = `
-		SELECT plan_id, execution_id, status, step_number, scheduled_date,
-		       notification_sent, approval_token_hash, recommendations,
-		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, COALESCE(canceled_by, cancelled_by) AS cancelled_by, capacity_percent,
-		       created_by_user_id, retry_execution_id, retry_attempt_n,
-		       approval_token_expires_at,
-		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
-		FROM purchase_executions
-		WHERE status IN ('pending', 'notified')
-		  AND (expires_at IS NULL OR expires_at > NOW())
-		ORDER BY scheduled_date ASC
-		LIMIT 1000
-		FOR UPDATE
-	`
-	rows, err := tx.Query(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query pending executions in tx: %w", err)
-	}
-	defer rows.Close()
-	return scanExecutionRows(rows)
-}
-
 // planStepProviderLockPrefix namespaces the per-provider plan-step advisory lock.
 const planStepProviderLockPrefix = "cudly:planstep:"
 
@@ -2114,7 +2085,7 @@ func applyNullTimesToExecution(exec *PurchaseExecution, notifSent, completedAt, 
 }
 
 // scanExecutionRows scans a pgx.Rows cursor into a slice of PurchaseExecution.
-// It is used by queryExecutions (pool query) and GetPendingExecutionsTx (tx
+// It is used by queryExecutions (pool query) and ListRecentSubmitsTx (tx
 // query) so the scan logic lives in one place.
 func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 	executions := make([]PurchaseExecution, 0)
