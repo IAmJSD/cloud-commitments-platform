@@ -13,6 +13,7 @@ import (
 )
 
 func TestMigration_PurchasePlanUpdateToken(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := getMigrationsPath()
 	container := testhelpers.RequireMigratedDatabase(ctx, t, path)

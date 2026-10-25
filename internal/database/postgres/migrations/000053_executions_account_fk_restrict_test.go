@@ -18,6 +18,7 @@ import (
 // purchase_executions.cloud_account_id FK must be ON DELETE RESTRICT after
 // the migration runs. Issue #606 — silent-orphan regression guard.
 func TestMigration_ExecutionsAccountFKRestrict(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
@@ -99,6 +100,7 @@ func TestMigration_ExecutionsAccountFKRestrict(t *testing.T) {
 // emergency rollback re-introduces the (documented) silent-orphan
 // behavior rather than leaving the database in an indeterminate state.
 func TestMigration_ExecutionsAccountFKRestrict_Rollback(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

@@ -42,11 +42,13 @@ func queryAdminGroupIDs(t *testing.T, ctx context.Context, pool *pgxpool.Pool, e
 // drift must self-heal on the next boot, and operator-customized
 // group_ids must be preserved.
 func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 	const adminEmail = "admin@test.example"
 
 	t.Run("fresh insert no password", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
@@ -58,6 +60,7 @@ func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
 	})
 
 	t.Run("fresh insert with password", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
@@ -69,6 +72,7 @@ func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
 	})
 
 	t.Run("re-run with existing correct admin (post-057 idempotency)", func(t *testing.T) {
+		t.Parallel()
 		// Migration 000057 added a CHECK constraint (users_min_one_group)
 		// that prevents group_ids from being NULL or empty, so the
 		// pre-057 drift scenario (empty group_ids on an existing admin row)
@@ -97,6 +101,7 @@ func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
 	})
 
 	t.Run("idempotency", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
@@ -113,6 +118,7 @@ func TestEnsureAdminUser_GroupAssignment(t *testing.T) {
 	})
 
 	t.Run("operator customisation preserved", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 

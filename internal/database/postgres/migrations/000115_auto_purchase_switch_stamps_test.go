@@ -20,6 +20,7 @@ import (
 // NULL stamps, the up statement is idempotent, and the down migration drops
 // the three columns.
 func TestMigration_AutoPurchaseSwitchStamps(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

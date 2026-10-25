@@ -24,6 +24,7 @@ import (
 // re-run migrations with NO admin email so only the SQL migration can repair
 // the row. A pass therefore proves the migration (not the Go path) did it.
 func TestMigration_BackfillAdminGroupIDs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 	const adminEmail = "restore-path@test.example"

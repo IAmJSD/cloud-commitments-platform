@@ -31,10 +31,12 @@ const riExchangerGroupIDTest = "00000000-0000-5000-8000-000000000008"
 // (#942), by running ON CONFLICT DO NOTHING onto an already-occupied UUID.
 // These assertions exist so that failure is loud.
 func TestMigration_SeedRIExchangerGroup(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
 	t.Run("RI Exchanger seeded, system-managed, granting execute:ri-exchange", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireMigratedDatabase(ctx, t, migrationsPath)
 		pool := container.DB.Pool()
 
@@ -70,6 +72,7 @@ func TestMigration_SeedRIExchangerGroup(t *testing.T) {
 	})
 
 	t.Run("admin-backfill: Administrators members land in RI Exchanger", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
@@ -98,6 +101,7 @@ func TestMigration_SeedRIExchangerGroup(t *testing.T) {
 	})
 
 	t.Run("backfill is idempotent and leaves no duplicate entry", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireMigratedDatabase(ctx, t, migrationsPath)
 		pool := container.DB.Pool()
 

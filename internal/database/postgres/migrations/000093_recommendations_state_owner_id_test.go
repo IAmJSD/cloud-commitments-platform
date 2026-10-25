@@ -18,6 +18,7 @@ import (
 // column (issue #261's compare-and-clear guard), and the down migration
 // removes it cleanly.
 func TestMigration_RecommendationsStateOwnerID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

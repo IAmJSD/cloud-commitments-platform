@@ -13,6 +13,7 @@ import (
 
 // TestMigration_PurchaseExecutionsCreatedBySystem covers 000130 up, down and the CHECK (#233).
 func TestMigration_PurchaseExecutionsCreatedBySystem(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool, path := container.DB.Pool(), getMigrationsPath()

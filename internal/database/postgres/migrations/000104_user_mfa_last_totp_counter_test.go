@@ -15,6 +15,7 @@ import (
 // Migration 000104 adds users.mfa_last_totp_counter. Existing rows start at 0
 // (no code accepted yet), and the down migration removes the column.
 func TestMigration_UserMFALastTOTPCounter(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

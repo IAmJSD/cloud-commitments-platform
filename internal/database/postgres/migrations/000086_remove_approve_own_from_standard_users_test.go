@@ -38,10 +38,12 @@ func standardUsersHasPurchaseVerb(t *testing.T, ctx context.Context, pool *pgxpo
 // virtue of ownership. The removal must be surgical -- the sibling own-scoped
 // verbs (cancel-own, retry-own) seeded alongside it in 000057 must be retained.
 func TestMigration_RemoveApproveOwnFromStandardUsers(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
 	t.Run("approve-own removed, sibling own-verbs retained", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
@@ -75,6 +77,7 @@ func TestMigration_RemoveApproveOwnFromStandardUsers(t *testing.T) {
 	})
 
 	t.Run("down migration restores approve-own", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 

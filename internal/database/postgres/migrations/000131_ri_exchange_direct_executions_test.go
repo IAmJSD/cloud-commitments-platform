@@ -21,6 +21,7 @@ import (
 // idempotent, the approval flow's ri_exchange_history is untouched, and the
 // down migration drops the table.
 func TestMigration_RIExchangeDirectExecutions(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
