@@ -7,22 +7,31 @@
  *                          /api/inventory/commitments
  *   - coverage           — per-provider coverage breakdowns backed by
  *                          /api/inventory/coverage (issue #754)
+ *   - trends             — savings-snapshot history backed by
+ *                          /api/analytics/trends (issue #30, trends.ts)
  *   - ri-exchange        — hosts the existing RI Exchange UI unchanged
  */
 
 import * as api from './api';
 import type { ProviderCoverageSection, CoverageServiceRow } from './api';
 import { loadRIExchange } from './riexchange';
+import { loadTrends } from './trends';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import {
+  buildCoverageBar, coverageTargetFor, coverageTargetsFromConfig, type CoverageTargets,
+} from './lib/coverage-bar';
 import { formatCurrency, formatDate, amortizedMonthly } from './utils';
 import * as state from './state';
 import { switchInventorySubTab } from './navigation';
+import { syncTabStops } from './lib/tablist';
+import { ownValue } from './lib/own-property';
 
-type InventorySubSection = 'active-commitments' | 'coverage' | 'ri-exchange';
+type InventorySubSection = 'active-commitments' | 'coverage' | 'trends' | 'ri-exchange';
 
 const SUB_SECTION_IDS: Record<InventorySubSection, string> = {
   'active-commitments': 'inventory-active-commitments',
   'coverage': 'inventory-coverage',
+  'trends': 'inventory-trends',
   'ri-exchange': 'inventory-ri-exchange',
 };
 
@@ -37,7 +46,7 @@ let listenersWired = false;
  * segment without duplicating the closed set.
  */
 export function isValidInventorySubSection(name: string): name is InventorySubSection {
-  return name === 'active-commitments' || name === 'coverage' || name === 'ri-exchange';
+  return name === 'active-commitments' || name === 'coverage' || name === 'trends' || name === 'ri-exchange';
 }
 
 /**
@@ -64,6 +73,7 @@ export function switchInventorySubSection(name: string): InventorySubSection {
     btn.classList.toggle('active', isActive);
     btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
   });
+  syncTabStops(document.querySelector('#inventory-tab [role="tablist"]'));
 
   for (const key of Object.keys(SUB_SECTION_IDS) as InventorySubSection[]) {
     const el = document.getElementById(SUB_SECTION_IDS[key]);
@@ -76,6 +86,8 @@ export function switchInventorySubSection(name: string): InventorySubSection {
     void loadActiveCommitments();
   } else if (target === 'coverage') {
     void loadCoverageBreakdown();
+  } else if (target === 'trends') {
+    void loadTrends();
   }
 
   currentSubSection = target;
@@ -374,8 +386,14 @@ export async function loadCoverageBreakdown(): Promise<void> {
   showSkeletonRows(container, 3, 1);
 
   try {
-    const data = await api.getCoverageBreakdown({ provider: provider || undefined, accountID });
-    renderCoverageBreakdown(container, data.providers, provider || undefined, accountID);
+    // The config supplies each service's coverage target for the bars
+    // (issue #726). It is optional: a failed read only drops the target tick.
+    const [data, cfg] = await Promise.all([
+      api.getCoverageBreakdown({ provider: provider || undefined, accountID }),
+      Promise.resolve().then(() => api.getConfig()).catch(() => null),
+    ]);
+    const targets = coverageTargetsFromConfig(cfg);
+    renderCoverageBreakdown(container, data.providers, targets, provider || undefined, accountID);
   } catch (error) {
     teardownSkeleton(container);
     const err = error as Error;
@@ -402,6 +420,7 @@ function wireCoverageRefreshButton(): void {
 function renderCoverageBreakdown(
   container: HTMLElement,
   providers: ProviderCoverageSection[],
+  targets: CoverageTargets,
   activeProvider?: string,
   activeAccountID?: string,
 ): void {
@@ -413,12 +432,13 @@ function renderCoverageBreakdown(
   }
 
   for (const section of providers) {
-    container.appendChild(buildProviderSection(section, activeProvider, activeAccountID));
+    container.appendChild(buildProviderSection(section, targets, activeProvider, activeAccountID));
   }
 }
 
 function buildProviderSection(
   section: ProviderCoverageSection,
+  targets: CoverageTargets,
   activeProvider?: string,
   activeAccountID?: string,
 ): HTMLElement {
@@ -429,7 +449,7 @@ function buildProviderSection(
   const header = document.createElement('div');
   header.className = 'section-header';
 
-  const providerLabel = PROVIDER_DISPLAY_NAMES[section.provider] ?? section.provider.toUpperCase();
+  const providerLabel = ownValue(PROVIDER_DISPLAY_NAMES, section.provider) ?? section.provider.toUpperCase();
 
   const title = document.createElement('h3');
   title.textContent = providerLabel;
@@ -452,11 +472,14 @@ function buildProviderSection(
     return card;
   }
 
-  card.appendChild(buildServiceTable(section.services));
+  card.appendChild(buildServiceTable(section.services, (service) => coverageTargetFor(targets, section.provider, service)));
   return card;
 }
 
-function buildServiceTable(rows: CoverageServiceRow[]): HTMLTableElement {
+function buildServiceTable(
+  rows: CoverageServiceRow[],
+  targetFor: (service: string) => number | null,
+): HTMLTableElement {
   const table = document.createElement('table');
   table.className = 'coverage-service-table';
 
@@ -475,13 +498,13 @@ function buildServiceTable(rows: CoverageServiceRow[]): HTMLTableElement {
 
   const tbody = document.createElement('tbody');
   for (const row of rows) {
-    tbody.appendChild(buildServiceRow(row));
+    tbody.appendChild(buildServiceRow(row, targetFor(row.service)));
   }
   table.appendChild(tbody);
   return table;
 }
 
-function buildServiceRow(row: CoverageServiceRow): HTMLTableRowElement {
+function buildServiceRow(row: CoverageServiceRow, target: number | null): HTMLTableRowElement {
   const tr = document.createElement('tr');
 
   appendCell(tr, row.service);
@@ -494,18 +517,7 @@ function buildServiceRow(row: CoverageServiceRow): HTMLTableRowElement {
   const barTd = document.createElement('td');
   barTd.className = 'coverage-bar-cell';
   if (row.coverage_pct !== null && row.coverage_pct !== undefined) {
-    const bar = document.createElement('div');
-    bar.className = 'coverage-bar';
-    // The bar carries no text, so screen readers need the value spelled out.
-    bar.setAttribute('role', 'img');
-    bar.setAttribute('aria-label', `${row.coverage_pct.toFixed(1)}% covered`);
-    const fill = document.createElement('div');
-    fill.className = 'coverage-bar-fill';
-    // Clamp to [0, 100] so a misconfigured value can't overflow.
-    const pct = Math.min(100, Math.max(0, row.coverage_pct));
-    fill.style.width = `${pct}%`;
-    bar.appendChild(fill);
-    barTd.appendChild(bar);
+    barTd.appendChild(buildCoverageBar(row.coverage_pct, target));
   } else {
     // No coverage figure: say so rather than leaving the cell blank, which
     // reads as a rendering failure. A 0%-width bar is not an option -- it
@@ -616,6 +628,8 @@ function wireChipSubscriptions(): void {
         void loadActiveCommitments();
       } else if (currentSubSection === 'coverage') {
         void loadCoverageBreakdown();
+      } else if (currentSubSection === 'trends') {
+        void loadTrends();
       }
     });
   };
