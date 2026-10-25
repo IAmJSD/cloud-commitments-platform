@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/commitmentopts"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,17 +23,12 @@ func getMigrationsPath() string {
 	return filepath.Join(filepath.Dir(filename), "..", "database", "postgres", "migrations")
 }
 
-// setupStore stands up a fresh Postgres container and returns a store
-// bound to it. The container is torn down via t.Cleanup.
+// setupStore returns a store bound to a fresh, migrated database of its own on
+// the package's shared Postgres server. The helper drops the database when the
+// test ends.
 func setupStore(ctx context.Context, t *testing.T) *commitmentopts.PostgresStore {
 	t.Helper()
-
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { container.Cleanup(ctx) })
-
-	require.NoError(t, migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", ""))
-	return commitmentopts.NewPostgresStore(container.DB)
+	return commitmentopts.NewPostgresStore(testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath()).DB)
 }
 
 func TestPostgresStore_HasData_EmptyIsFalse(t *testing.T) {
