@@ -72,9 +72,16 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 		}
 	}
 
+	// last_collected_at only moves forward (issue #111). Two collections can
+	// overlap (cron and a user refresh), and the one that started first can
+	// commit last; an unconditional SET would then move freshness backwards
+	// and make the next read kick another full collection. GREATEST ignores
+	// the NULL of a never-collected row. Under READ COMMITTED a writer that
+	// waited on the row lock re-evaluates GREATEST against the committed
+	// value, so concurrent commits keep the newest timestamp.
 	if _, err := tx.Exec(ctx, `
 		UPDATE recommendations_state
-		   SET last_collected_at       = $1,
+		   SET last_collected_at       = GREATEST(last_collected_at, $1),
 		       last_collection_error   = NULL,
 		       last_collection_partial = NULL
 		 WHERE id = 1

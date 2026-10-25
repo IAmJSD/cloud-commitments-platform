@@ -22,22 +22,7 @@ exclude:
     - '**/.terraform/**'
     - '**/migrations/**'
 
-# Severity thresholds
-failOnSeverity: high
-
-# License policy
-license:
-  # Allow these licenses
-  allow:
-    - MIT
-    - Apache-2.0
-    - BSD-2-Clause
-    - BSD-3-Clause
-    - ISC
-    - MPL-2.0
-
-  # Deny these licenses
-  deny:
-    - GPL-2.0
-    - GPL-3.0
-    - AGPL-3.0
+# No severity threshold or license policy here: the Snyk CLI does not read
+# such keys from this file (issue #349). The threshold is passed on the
+# command line (`--severity-threshold=high` in ci.yml and the Makefile), and a
+# license policy has to be set in the Snyk organization's settings.

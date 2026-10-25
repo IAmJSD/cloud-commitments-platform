@@ -29,6 +29,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
+      # The `.:/app` bind mount below keeps the host's file ownership on Linux,
+      # and Air writes ./tmp/main into it, so the container user must have the
+      # host user's uid/gid (issue #158). On Linux, when `id -u`/`id -g` are not
+      # 1000, set DEV_UID/DEV_GID to them in .env and rebuild with
+      # `docker compose build app`. macOS needs nothing: Docker Desktop remaps
+      # bind-mount ownership. See docs/DEVELOPMENT.md "Linux: match your uid".
+      args:
+        DEV_UID: ${DEV_UID:-1000}
+        DEV_GID: ${DEV_GID:-1000}
     container_name: cudly-app
     depends_on:
       postgres:

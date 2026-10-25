@@ -1800,35 +1800,6 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 	return s.queryExecutions(ctx, query)
 }
 
-// GetPendingExecutionsTx is the tx-accepting variant of GetPendingExecutions.
-// Running the read inside the same transaction as the subsequent insert makes
-// duplicate-detection and execution creation atomic, closing the TOCTOU race
-// in executePurchase (issue #643).
-func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) ([]PurchaseExecution, error) {
-	const query = `
-		SELECT plan_id, execution_id, status, step_number, scheduled_date,
-		       notification_sent, approval_token_hash, recommendations,
-		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, COALESCE(canceled_by, cancelled_by) AS cancelled_by, capacity_percent,
-		       created_by_user_id, retry_execution_id, retry_attempt_n,
-		       approval_token_expires_at,
-		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
-		FROM purchase_executions
-		WHERE status IN ('pending', 'notified')
-		  AND (expires_at IS NULL OR expires_at > NOW())
-		ORDER BY scheduled_date ASC
-		LIMIT 1000
-		FOR UPDATE
-	`
-	rows, err := tx.Query(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query pending executions in tx: %w", err)
-	}
-	defer rows.Close()
-	return scanExecutionRows(rows)
-}
-
 // planStepProviderLockPrefix namespaces the per-provider plan-step advisory lock.
 const planStepProviderLockPrefix = "cudly:planstep:"
 
@@ -2114,7 +2085,7 @@ func applyNullTimesToExecution(exec *PurchaseExecution, notifSent, completedAt, 
 }
 
 // scanExecutionRows scans a pgx.Rows cursor into a slice of PurchaseExecution.
-// It is used by queryExecutions (pool query) and GetPendingExecutionsTx (tx
+// It is used by queryExecutions (pool query) and ListRecentSubmitsTx (tx
 // query) so the scan logic lives in one place.
 func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 	executions := make([]PurchaseExecution, 0)
@@ -2407,18 +2378,24 @@ func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *Purchas
 // succeeds (listing_id + listing_state="active") and by the status-poll path on
 // the later closed/canceled transitions.
 func (s *PostgresStore) UpdatePurchaseHistoryListing(ctx context.Context, purchaseID, listingID, listingState string) error {
+	// A listing recorded as canceled or closed is never marked live again
+	// (issue #525): a list request that lost a race with the cancel endpoint
+	// gets ErrMarketplaceListingEnded instead of reviving the canceled listing.
 	query := `
 		UPDATE purchase_history
 		SET listing_id = $1, listing_state = $2,
 		    listing_client_token = NULL, listing_price_schedule = NULL
 		WHERE purchase_id = $3
+		  AND NOT (COALESCE(listing_id, '') = $1
+		           AND lower(COALESCE(listing_state, '')) IN ($4, $5)
+		           AND lower($2) NOT IN ($4, $5))
 	`
-	tag, err := s.db.Exec(ctx, query, listingID, listingState, purchaseID)
+	tag, err := s.db.Exec(ctx, query, listingID, listingState, purchaseID, ListingStateCancelled, ListingStateClosed)
 	if err != nil {
 		return fmt.Errorf("failed to update listing state for purchase %s: %w", purchaseID, err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("purchase %s not found in history", purchaseID)
+		return s.listingEndedOrMissing(ctx, purchaseID)
 	}
 	return nil
 }
@@ -4265,6 +4242,9 @@ func (s *PostgresStore) SaveAccountCredential(ctx context.Context, accountID, cr
 }
 
 // GetAccountCredential returns the encrypted blob for an account credential.
+// A missing row returns ErrNotFound, never ("", nil): that is what an empty
+// stored blob returns, and a caller that read an empty result as "no
+// credential, use the ambient identity" would act in the wrong account (#120).
 func (s *PostgresStore) GetAccountCredential(ctx context.Context, accountID, credentialType string) (string, error) {
 	var blob string
 	err := s.db.QueryRow(ctx,
@@ -4273,7 +4253,7 @@ func (s *PostgresStore) GetAccountCredential(ctx context.Context, accountID, cre
 	).Scan(&blob)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", nil
+			return "", ErrNotFound
 		}
 		return "", fmt.Errorf("failed to get account credential: %w", err)
 	}
