@@ -20,6 +20,7 @@ import (
 // (no proof, fail closed), the up statement is idempotent, and the down
 // migration drops the column.
 func TestMigration_PurchaseExecutionsNoSubmission(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

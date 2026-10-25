@@ -27,6 +27,7 @@ const insertRecForMigration111 = `
 // upsert still works, the 11-column index is added, and rollback removes only
 // the new column pair and index.
 func TestMigration_RecommendationsPlatformTenancy(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

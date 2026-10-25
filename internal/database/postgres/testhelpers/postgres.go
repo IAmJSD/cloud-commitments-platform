@@ -39,18 +39,26 @@ type PostgresContainer struct {
 // would be noise rather than guidance.
 func SetupPostgresContainer(ctx context.Context, t *testing.T) (*PostgresContainer, error) {
 	t.Helper()
+	return setupPostgresContainer(ctx, t)
+}
+
+// setupPostgresContainer is SetupPostgresContainer with extra container
+// options, applied after the defaults; the shared server uses it to raise
+// max_connections.
+func setupPostgresContainer(ctx context.Context, t *testing.T, extra ...testcontainers.ContainerCustomizer) (*PostgresContainer, error) {
+	t.Helper()
 
 	// Create PostgreSQL container
-	postgresContainer, err := postgres.Run(ctx,
-		"postgres:16-alpine",
+	opts := append([]testcontainers.ContainerCustomizer{
 		postgres.WithDatabase("cudly_test"),
 		postgres.WithUsername("cudly_test"),
 		postgres.WithPassword("test_password"),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
 				WithOccurrence(2).
-				WithStartupTimeout(30*time.Second)),
-	)
+				WithStartupTimeout(30 * time.Second)),
+	}, extra...)
+	postgresContainer, err := postgres.Run(ctx, "postgres:16-alpine", opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start postgres container: %w", err)
 	}

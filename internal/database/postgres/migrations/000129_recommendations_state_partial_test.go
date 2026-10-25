@@ -19,6 +19,7 @@ import (
 // the logs), the seeded singleton row starts out NULL (= complete), and the
 // down migration removes the column cleanly.
 func TestMigration_RecommendationsStatePartial(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

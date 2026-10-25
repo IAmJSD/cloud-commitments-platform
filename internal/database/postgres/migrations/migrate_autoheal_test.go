@@ -47,6 +47,7 @@ func markDirty(ctx context.Context, t *testing.T, container *testhelpers.Postgre
 // conservative choice is to refuse to auto-clear and let an operator confirm
 // the schema state before forcing.
 func TestMigrations_AutoHealDirty(t *testing.T) {
+	// Not parallel: the subtests t.Setenv CUDLY_MIGRATION_AUTOHEAL, which RunMigrations reads process-wide.
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 

@@ -13,6 +13,7 @@ import (
 )
 
 func TestMigration_LadderTrancheAmendments(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := getMigrationsPath()
 	container := testhelpers.RequireEmptyDatabase(ctx, t)
@@ -87,6 +88,7 @@ func TestMigration_LadderTrancheAmendments(t *testing.T) {
 }
 
 func TestMigration_LadderTrancheAmendmentsRollbackWhenEmpty(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := getMigrationsPath()
 	container := testhelpers.RequireEmptyDatabase(ctx, t)

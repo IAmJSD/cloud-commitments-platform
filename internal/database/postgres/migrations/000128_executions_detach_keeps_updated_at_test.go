@@ -18,6 +18,7 @@ import (
 // account keeps updated_at, every other UPDATE still stamps NOW(), and the
 // down migration restores the stamp-everything trigger (issue #265).
 func TestMigration_ExecutionsDetachKeepsUpdatedAt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool, path := container.DB.Pool(), getMigrationsPath()

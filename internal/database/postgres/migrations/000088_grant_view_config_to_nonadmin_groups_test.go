@@ -38,10 +38,12 @@ func groupHasPermission(t *testing.T, ctx context.Context, pool *pgxpool.Pool, g
 // 403 for those groups. The grant must be surgical: no other permissions are
 // touched on either group, and the write-gating verb (update:config) is not added.
 func TestMigration_GrantViewConfigToNonAdminGroups(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
 	t.Run("view:config granted to Standard Users and Read-Only Users", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
@@ -66,6 +68,7 @@ func TestMigration_GrantViewConfigToNonAdminGroups(t *testing.T) {
 	})
 
 	t.Run("update:config is NOT granted (write gate is unaffected)", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
@@ -79,6 +82,7 @@ func TestMigration_GrantViewConfigToNonAdminGroups(t *testing.T) {
 	})
 
 	t.Run("sibling permissions on Standard Users are preserved", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
@@ -102,6 +106,7 @@ func TestMigration_GrantViewConfigToNonAdminGroups(t *testing.T) {
 	})
 
 	t.Run("down migration removes view:config from both groups", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
@@ -126,6 +131,7 @@ func TestMigration_GrantViewConfigToNonAdminGroups(t *testing.T) {
 	})
 
 	t.Run("idempotent: applying to a group already holding view:config is safe", func(t *testing.T) {
+		t.Parallel()
 		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 

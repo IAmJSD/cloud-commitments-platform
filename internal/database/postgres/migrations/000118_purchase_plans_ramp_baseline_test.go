@@ -19,6 +19,7 @@ import (
 // PostgreSQL: existing plans get a NULL baseline (no backfill), the up
 // statement is idempotent, and down removes the column.
 func TestMigration_PurchasePlansRampBaseline(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	path := getMigrationsPath()
 	container := testhelpers.RequireEmptyDatabase(ctx, t)

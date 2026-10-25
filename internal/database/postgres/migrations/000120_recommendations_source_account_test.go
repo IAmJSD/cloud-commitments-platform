@@ -16,6 +16,7 @@ import (
 )
 
 func TestMigration_RecommendationsSourceAccount(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
