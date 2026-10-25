@@ -5,7 +5,7 @@ import { mockApi, RECS, seedAuth, type MockHandle, type SmokeRec } from './fixtu
 async function openOpportunities(page: Page): Promise<void> {
   await seedAuth(page);
   await page.goto('/');
-  await page.getByRole('tab', { name: 'Opportunities' }).click();
+  await page.getByRole('link', { name: 'Opportunities', exact: true }).click();
   await expect(page.locator('.recommendations-filter-live')).toContainText(
     `Showing ${RECS.length} of ${RECS.length} recommendations`,
   );
@@ -42,12 +42,12 @@ test('filters rows by a numeric expression derived from the fixture', async ({ p
 test('shows loading and zero-result filter states without losing filter controls', async ({ page }) => {
   const api = await mockApi(page);
   await openOpportunities(page);
-  await page.getByRole('tab', { name: 'Home' }).click();
+  await page.getByRole('link', { name: 'Home', exact: true }).click();
   api.delayNextRecommendationsFetch(3_000);
 
   await Promise.all([
     expect(page.locator('#recommendations-list .skeleton-row')).toHaveCount(5),
-    page.getByRole('tab', { name: 'Opportunities' }).click(),
+    page.getByRole('link', { name: 'Opportunities', exact: true }).click(),
   ]);
   await expect(page.locator('.recommendations-filter-live')).toContainText(`Showing ${RECS.length}`);
 
@@ -58,9 +58,12 @@ test('shows loading and zero-result filter states without losing filter controls
   await expression.press('Enter');
 
   await expect(page.locator('#recommendations-list thead')).toBeVisible();
-  await expect(page.locator('#recommendations-list tbody .empty')).toHaveText(
+  // Issue #756: the hint now carries a Clear filters button as its next step.
+  await expect(page.locator('#recommendations-list tbody .empty')).toContainText(
     'No rows match these filters.',
   );
+  await expect(page.locator('#recommendations-list tbody .empty')
+    .getByRole('button', { name: 'Clear filters' })).toBeVisible();
   await expect(page.locator('#recommendations-action-summary')).toHaveText(
     '(0 visible — adjust filters)',
   );

@@ -71,6 +71,22 @@ func (s *Service) hashPassword(password string) (string, error) {
 	return string(hash), nil
 }
 
+// dummyHashForCompare returns the hash Login compares against when the
+// account cannot log in. Production always uses dummyPasswordHash, at the
+// same cost as real hashes. When a test lowers the cost with
+// bcryptCostOverride, the dummy hash uses that cost too, so the compare still
+// takes as long as a real one in that test instead of a full cost-12 compare.
+func (s *Service) dummyHashForCompare() string {
+	if s.bcryptCostOverride <= 0 {
+		return dummyPasswordHash
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte("timing-equalizer"), s.bcryptCostOverride)
+	if err != nil {
+		return dummyPasswordHash
+	}
+	return string(hash)
+}
+
 // verifyPassword verifies a password against a bcrypt hash.
 func (s *Service) verifyPassword(password, hash string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
