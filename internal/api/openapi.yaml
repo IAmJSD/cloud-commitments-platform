@@ -602,7 +602,16 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >
+            CSRF validation failed, the caller lacks permission or access to
+            the plan, or 4-eyes mode is on and the caller has no attributable
+            user (the admin API key). Rows scheduled that way could never be
+            approved under 4-eyes, so the request is refused; sign in or use a
+            per-user API key instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -643,7 +652,17 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >
+            CSRF validation failed, the caller lacks permission or exceeds its
+            Constraints, 4-eyes mode rejects a direct execute, or 4-eyes mode is
+            on and the caller has no attributable user (the admin API key). An
+            execution created that way could never be approved under 4-eyes,
+            so it is refused before anything is written; sign in or use a
+            per-user API key instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '409':
           description: >
             One of two conflict families. Idempotency: an identical submit
@@ -1158,11 +1177,19 @@ paths:
       operationId: listConvertibleRIs
       tags: [RIExchange]
       summary: List convertible Reserved Instances eligible for exchange
+      description: >
+        Requires `view:purchases` permission. Lists the convertible RIs of the
+        deployment's own AWS account. When that account is outside the
+        session's allowed accounts, the response is a 200 with an empty
+        `instances` list rather than a 403 or 404. An `account_id` that names
+        a different account also yields an empty list.
       parameters:
         - $ref: '#/components/parameters/AccountID'
       responses:
         '200':
-          description: Convertible RI list
+          description: >
+            Convertible RI list. Empty when the deployment's AWS account is
+            outside the session's allowed accounts.
           content:
             application/json:
               schema:
@@ -1329,8 +1356,27 @@ paths:
       operationId: listTargetOfferings
       tags: [RIExchange]
       summary: List available RI offerings to exchange into
+      description: >
+        Requires `view:purchases` permission. Looks up the source RI in the
+        deployment's own AWS account. When that account is outside the
+        session's allowed accounts the response is 404, the same as for an
+        unknown `source_ri_id`, so a scoped caller cannot tell which RIs
+        exist. That check runs before `source_ri_id` is validated, so such a
+        caller gets 404 even with no `source_ri_id`.
       parameters:
         - $ref: '#/components/parameters/AccountID'
+        - name: source_ri_id
+          in: query
+          required: true
+          description: ID of the convertible RI to exchange from.
+          schema:
+            type: string
+        - name: region
+          in: query
+          required: false
+          description: AWS region of the source RI. Defaults to the region the deployment's AWS SDK chain resolves.
+          schema:
+            type: string
       responses:
         '200':
           description: Target offering list
@@ -1338,19 +1384,50 @@ paths:
             application/json:
               schema:
                 type: object
+        '400':
+          description: '`source_ri_id` is missing.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          description: >
+            The deployment's AWS account is outside the session's allowed
+            accounts, or no convertible RI with `source_ri_id` exists in the
+            region. The two cases are indistinguishable to a scoped caller.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: >
+            The source RI's scope and availability zone disagree (a zonal RI
+            with no availability zone, or a regional RI that names one), so no
+            offering lookup is made.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /api/ri-exchange/utilization:
     get:
       operationId: getRIUtilization
       tags: [RIExchange]
       summary: Get utilization metrics for Reserved Instances
+      description: >
+        Requires `view:purchases` permission. Reads the deployment's own AWS
+        account. When that account is outside the session's allowed accounts,
+        the response is a 200 with an empty `utilization` list rather than a
+        403 or 404.
       responses:
         '200':
-          description: RI utilization data
+          description: >
+            RI utilization data. Empty when the deployment's AWS account is
+            outside the session's allowed accounts.
           content:
             application/json:
               schema:
@@ -1365,9 +1442,16 @@ paths:
       operationId: getReshapeRecommendations
       tags: [RIExchange]
       summary: Get reshape recommendations for convertible RIs
+      description: >
+        Requires `view:purchases` permission. Reads the deployment's own AWS
+        account. When that account is outside the session's allowed accounts,
+        the response is a 200 with an empty `recommendations` list rather
+        than a 403 or 404.
       responses:
         '200':
-          description: Reshape recommendation list
+          description: >
+            Reshape recommendation list. Empty when the deployment's AWS
+            account is outside the session's allowed accounts.
           content:
             application/json:
               schema:
@@ -1398,7 +1482,9 @@ paths:
       summary: Get a quote for an RI exchange before executing
       description: >
         Requires `view:purchases` permission. Returns the exchange valuation
-        without committing any financial transaction.
+        without committing any financial transaction. The quote reads the
+        deployment's own AWS account, so a session whose allowed accounts do
+        not cover that account gets 403.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -1419,7 +1505,14 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >
+            CSRF validation failed, the session lacks `view:purchases`, or the
+            deployment's AWS account is outside the session's allowed
+            accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /api/ri-exchange/execute:
     post:
@@ -1439,6 +1532,8 @@ paths:
         not part of that fingerprint: raising the cap does not make it a
         different purchase. See the 409 response: it does not assert that the
         earlier submit succeeded, only that it claimed the window.
+        The exchange runs in the deployment's own AWS account, so a session
+        whose allowed accounts do not cover that account gets 403.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -1472,7 +1567,15 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >
+            CSRF validation failed, the session lacks `execute:ri-exchange` or
+            fails its constraints, 4-eyes approval mode is on (direct execution
+            is disabled), or the deployment's AWS account is outside the
+            session's allowed accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '409':
           $ref: '#/components/responses/Conflict'
 
@@ -3989,6 +4092,14 @@ components:
       properties:
         summary:
           $ref: '#/components/schemas/HistorySummary'
+        summary_complete:
+          type: boolean
+          description: >-
+            True when summary counts and sums every row matching the request's
+            filters and the caller's account scope, including rows beyond the
+            row caps. False only when that aggregate failed and summary fell
+            back to the rows in purchases, which under-reports when truncated
+            is true.
         purchases:
           type: array
           items:
@@ -3997,7 +4108,8 @@ components:
           type: boolean
           description: >-
             True when a fetch reached its row cap, so older rows (and possibly
-            pending approvals) may be missing from purchases and summary. May
+            pending approvals) may be missing from purchases. summary still
+            counts them while summary_complete is true. May
             be a false positive when exactly `limit` or `executions_limit` rows exist.
             Also true when the actionable executions class (pending, approved,
             running, ...) reached its own cap of 1000 rows.
@@ -4013,8 +4125,25 @@ components:
 
     HistorySummary:
       type: object
+      description: >-
+        Counts and dollar totals. Dollar totals cover completed, non-revoked
+        rows only; audit-gap and partially completed execution rows count as
+        completed without dollars, and canceled rows count only toward
+        total_purchases.
       properties:
         total_purchases:
+          type: integer
+        total_completed:
+          type: integer
+        total_pending:
+          type: integer
+        total_in_progress:
+          type: integer
+        total_failed:
+          type: integer
+        total_expired:
+          type: integer
+        total_revoked:
           type: integer
         total_upfront:
           type: number

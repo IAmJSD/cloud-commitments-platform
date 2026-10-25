@@ -4,6 +4,7 @@
 
 import { apiRequest, getAuthHeaders, setAuthToken, setCsrfToken, clearAuth, addContentHashHeader, base64Encode, getApiBase } from './client';
 import type {
+  ApiError,
   LoginResponse,
   User,
   PermissionEntry,
@@ -14,6 +15,7 @@ import type {
   MFARecoveryCodesResponse,
   MFALoginErrorCode,
 } from './types';
+import { fetchOrNetworkError, readJson, responseError } from './errors';
 
 /**
  * Login error raised when the server returns one of the MFA-related
@@ -62,21 +64,21 @@ export async function login(email: string, password: string, mfaCode?: string): 
   // Add content hash for CloudFront OAC
   await addContentHashHeader(headers, body);
 
-  const response = await fetch(`${API_BASE}/auth/login`, {
+  const response = await fetchOrNetworkError(`${API_BASE}/auth/login`, {
     method: 'POST',
     headers,
     body
   });
 
   if (!response.ok) {
-    const data = await response.json().catch(() => ({})) as { error?: string };
-    if (isMFALoginErrorCode(data.error)) {
-      throw new MFALoginError(data.error);
+    const err = await responseError(response, 'Login failed');
+    if (isMFALoginErrorCode(err.message)) {
+      throw new MFALoginError(err.message);
     }
-    throw new Error(data.error || 'Login failed');
+    throw err;
   }
 
-  const data = await response.json() as LoginResponse & { csrf_token?: string };
+  const data = await readJson<LoginResponse & { csrf_token?: string }>(response);
   setAuthToken(data.token);
   // Store CSRF token if provided by server
   if (data.csrf_token) {
@@ -166,14 +168,13 @@ export async function requestPasswordReset(email: string): Promise<void> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   await addContentHashHeader(headers, body);
 
-  const response = await fetch(`${API_BASE}/auth/forgot-password`, {
+  const response = await fetchOrNetworkError(`${API_BASE}/auth/forgot-password`, {
     method: 'POST',
     headers,
     body
   });
   if (!response.ok) {
-    const data = await response.json().catch(() => ({})) as { error?: string };
-    throw new Error(data.error || 'Failed to send password reset email');
+    throw await responseError(response, 'Failed to send password reset email');
   }
 }
 
@@ -186,7 +187,7 @@ export async function resetPassword(token: string, newPassword: string): Promise
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   await addContentHashHeader(headers, body);
 
-  const response = await fetch(`${API_BASE}/auth/reset-password`, {
+  const response = await fetchOrNetworkError(`${API_BASE}/auth/reset-password`, {
     method: 'POST',
     headers,
     body
@@ -199,9 +200,7 @@ export async function resetPassword(token: string, newPassword: string): Promise
     // different one") never reached the toast and users saw the opaque
     // fallback. Read `error` first; keep `message` as a defensive
     // fallback for any other shape. See issue #459.
-    const data = await response.json().catch(() => ({})) as { error?: string; message?: string };
-    const msg = data.error || data.message;
-    throw new Error(msg || 'Failed to reset password');
+    throw await responseError(response, 'Failed to reset password');
   }
 }
 
@@ -286,18 +285,19 @@ export async function setupAdmin(key: string, email: string, password: string): 
   const headers: Record<string, string> = { 'X-API-Key': key, 'Content-Type': 'application/json' };
   await addContentHashHeader(headers, body);
 
-  const response = await fetch(`${API_BASE}/auth/setup-admin`, {
+  const response = await fetchOrNetworkError(`${API_BASE}/auth/setup-admin`, {
     method: 'POST',
     headers,
     body
   });
 
+  // A proxy 502 used to reach the user as "Unexpected token '<'" here
+  // because the error body was parsed with no catch (issue #748).
   if (!response.ok) {
-    const data = await response.json() as { error?: string };
-    throw new Error(data.error || 'Failed to create admin');
+    throw await responseError(response, 'Failed to create admin');
   }
 
-  const data = await response.json() as LoginResponse & { csrf_token?: string };
+  const data = await readJson<LoginResponse & { csrf_token?: string }>(response);
   setAuthToken(data.token);
   // Store CSRF token if provided by server
   if (data.csrf_token) {
@@ -412,10 +412,12 @@ export async function regenerateMFARecoveryCodes(code: string): Promise<MFARecov
 export async function getPublicInfo(): Promise<PublicInfo> {
   const API_BASE = getApiBase();
   const response = await fetch(`${API_BASE}/info`);
-  if (response.ok) {
-    return response.json() as Promise<PublicInfo>;
+  if (!response.ok) {
+    // Throw rather than fabricating `admin_exists: false`: a 502/503 must
+    // not route every visitor to the first-run admin-setup screen.
+    throw httpError('GET /api/info', response.status);
   }
-  return { version: '', admin_exists: false };
+  return response.json() as Promise<PublicInfo>;
 }
 
 /**
@@ -428,8 +430,14 @@ export async function getDeploymentInfo(): Promise<DeploymentInfo> {
   const response = await fetch(`${API_BASE}/info/deployment`, {
     headers: getAuthHeaders(),
   });
-  if (response.ok) {
-    return response.json() as Promise<DeploymentInfo>;
+  if (!response.ok) {
+    throw httpError('GET /api/info/deployment', response.status);
   }
-  return {};
+  return response.json() as Promise<DeploymentInfo>;
+}
+
+function httpError(what: string, status: number): ApiError {
+  const error: ApiError = new Error(`${what} failed with HTTP ${status}`);
+  error.status = status;
+  return error;
 }
