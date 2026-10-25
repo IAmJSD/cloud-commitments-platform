@@ -76,7 +76,7 @@ describe('renderApprovalDetailsBody', () => {
     const body = renderApprovalDetailsBody(details, accountsById);
 
     const stats = body.querySelectorAll('.approval-details-stat');
-    expect(stats.length).toBe(6);
+    expect(stats.length).toBe(8);
     const text = body.textContent || '';
     expect(text).toContain('Upfront');
     expect(text).toContain('$1,200');
@@ -87,6 +87,27 @@ describe('renderApprovalDetailsBody', () => {
     expect(text).toContain('Commitments');
     expect(text).toContain('Providers');
     expect(text).toContain('Accounts');
+  });
+
+  it('states the monthly recurring cost and the total over the term (issue #711)', () => {
+    const recs = [
+      makeRec({ id: 'r1', term: 3, payment: 'no-upfront', upfront_cost: 0, monthly_cost: 200 }),
+      makeRec({ id: 'r2', term: 1, payment: 'partial-upfront', upfront_cost: 600, monthly_cost: 50 }),
+    ];
+    const body = renderApprovalDetailsBody(makeDetails(recs), new Map());
+    const stats = Array.from(body.querySelectorAll('.approval-details-stat')).map((s) => s.textContent);
+    expect(stats.slice(0, 3)).toEqual(['Upfront$600', 'Monthly cost$250', 'Total over term$8,400']);
+  });
+
+  it('says the monthly cost is not reported instead of summing a partial monthly figure', () => {
+    const recs = [
+      makeRec({ id: 'r1', payment: 'no-upfront', upfront_cost: 0, monthly_cost: null }),
+      makeRec({ id: 'r2', monthly_cost: 50 }),
+    ];
+    const body = renderApprovalDetailsBody(makeDetails(recs), new Map());
+    const stats = Array.from(body.querySelectorAll('.approval-details-stat')).map((s) => s.textContent);
+    expect(stats[1]).toBe('Monthly costNot reported (monthly fees apply)');
+    expect(stats[2]).toBe('Total over termNot available');
   });
 
   it('renders the per-rec table with all 13 columns (Monthly cost added by issue #1112)', () => {
@@ -184,8 +205,8 @@ describe('renderApprovalDetailsBody', () => {
     const details = makeDetails(recs, { estimated_savings: 0.3 });
     const body = renderApprovalDetailsBody(details, new Map());
     const stats = body.querySelectorAll('.approval-details-stat');
-    // Stat index 2 is Annual savings.
-    expect(stats[2]?.getAttribute('title')).toBeNull();
+    // Stat index 4 is Annual savings.
+    expect(stats[4]?.getAttribute('title')).toBeNull();
   });
 
   it('annual-savings tooltip DOES fire when backend and per-row sum genuinely disagree', () => {
@@ -195,7 +216,7 @@ describe('renderApprovalDetailsBody', () => {
     const details = makeDetails(recs, { estimated_savings: 5 });
     const body = renderApprovalDetailsBody(details, new Map());
     const stats = body.querySelectorAll('.approval-details-stat');
-    expect(stats[2]?.getAttribute('title')).toBe('$120 from per-row sum');
+    expect(stats[4]?.getAttribute('title')).toBe('$120 from per-row sum');
   });
 
   it('counts distinct providers and accounts in the header', () => {
@@ -206,10 +227,10 @@ describe('renderApprovalDetailsBody', () => {
     ];
     const body = renderApprovalDetailsBody(makeDetails(recs), new Map());
     const stats = body.querySelectorAll('.approval-details-stat');
-    // Stat index 4 = Providers, index 5 = Accounts (post-Commitments).
-    expect(stats[3]?.querySelector('.approval-details-stat-value')?.textContent).toBe('3'); // Commitments
-    expect(stats[4]?.querySelector('.approval-details-stat-value')?.textContent).toBe('3'); // Providers
-    expect(stats[5]?.querySelector('.approval-details-stat-value')?.textContent).toBe('2'); // Accounts
+    // Stat index 6 = Providers, index 7 = Accounts (post-Commitments).
+    expect(stats[5]?.querySelector('.approval-details-stat-value')?.textContent).toBe('3'); // Commitments
+    expect(stats[6]?.querySelector('.approval-details-stat-value')?.textContent).toBe('3'); // Providers
+    expect(stats[7]?.querySelector('.approval-details-stat-value')?.textContent).toBe('2'); // Accounts
   });
 
   // Regression for CR pass-1 (PR #611): host-account rows must be
@@ -219,8 +240,8 @@ describe('renderApprovalDetailsBody', () => {
     delete rec.cloud_account_id;
     const body = renderApprovalDetailsBody(makeDetails([rec]), new Map(), '909626172446');
     const stats = body.querySelectorAll('.approval-details-stat');
-    // Stat index 5 = Accounts.
-    expect(stats[5]?.querySelector('.approval-details-stat-value')?.textContent).toBe('1');
+    // Stat index 7 = Accounts.
+    expect(stats[7]?.querySelector('.approval-details-stat-value')?.textContent).toBe('1');
   });
 
   it('counts "Accounts: 2" for a purchase with one host row and one named-account row', () => {
@@ -229,7 +250,7 @@ describe('renderApprovalDetailsBody', () => {
     const namedRec = makeRec({ id: 'r2', provider: 'aws', cloud_account_id: 'acct-uuid-1' });
     const body = renderApprovalDetailsBody(makeDetails([hostRec, namedRec]), new Map(), '909626172446');
     const stats = body.querySelectorAll('.approval-details-stat');
-    expect(stats[5]?.querySelector('.approval-details-stat-value')?.textContent).toBe('2');
+    expect(stats[7]?.querySelector('.approval-details-stat-value')?.textContent).toBe('2');
   });
 
   it('does NOT count an orphan row (cloud_account_id nil AND provider !== aws) in the Accounts total', () => {
@@ -237,7 +258,7 @@ describe('renderApprovalDetailsBody', () => {
     delete orphanRec.cloud_account_id;
     const body = renderApprovalDetailsBody(makeDetails([orphanRec]), new Map(), '909626172446');
     const stats = body.querySelectorAll('.approval-details-stat');
-    expect(stats[5]?.querySelector('.approval-details-stat-value')?.textContent).toBe('0');
+    expect(stats[7]?.querySelector('.approval-details-stat-value')?.textContent).toBe('0');
   });
 
   it('escapes user-controlled string values in the table', () => {
