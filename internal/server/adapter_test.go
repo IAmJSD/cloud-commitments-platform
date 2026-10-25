@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // hashSessionTokenForTest mirrors auth.hashSessionToken (private). Session
@@ -36,6 +37,9 @@ func createMockAuthService(t *testing.T) (*authServiceAdapter, *auth.MockStore) 
 		// random ephemeral key, so any test asserting a specific derived CSRF
 		// token (TestAuthServiceAdapter_ValidateCSRFToken) cannot reproduce it.
 		CSRFKey: auth.TestCSRFKey(),
+		// Hashing and Login's timing-equalizing compare run at the test
+		// cost; cost 12 takes seconds per call under -race.
+		BcryptCost: bcrypt.MinCost,
 	})
 	adapter := newAuthServiceAdapter(service)
 	return adapter, mockStore
@@ -582,6 +586,7 @@ func TestSetupAdminThenLogin_RoundTrip(t *testing.T) {
 		SessionDuration: time.Hour,
 		CSRFKey:         auth.TestCSRFKey(),
 		DashboardURL:    "http://localhost:3000",
+		BcryptCost:      bcrypt.MinCost,
 	})
 	adapter := newAuthServiceAdapter(realAuth)
 	handler := api.NewHandler(api.HandlerConfig{AuthService: adapter})

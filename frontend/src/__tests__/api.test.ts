@@ -36,7 +36,8 @@ import {
   getPublicInfo,
   getDeploymentInfo
 } from '../api';
-import type { CreatePlanRequest, Config, Recommendation } from '../api';
+import { base64Encode } from '../api/client';
+import type { CreatePlanRequest, Config, Recommendation, UpcomingPurchasesResponse } from '../api';
 
 describe('Authentication', () => {
   beforeEach(() => {
@@ -403,7 +404,12 @@ describe('API Requests', () => {
         status: 200,
         json: () => Promise.reject(new SyntaxError('Unexpected token in JSON at position 0')),
       });
-      await expect(apiRequest('/test')).rejects.toThrow(SyntaxError);
+      // Issue #748: rejects with friendly text, not "Unexpected token ...".
+      await expect(apiRequest('/test')).rejects.toMatchObject({
+        message: 'CUDly sent an unexpected response. Try again in a moment.',
+        status: 200,
+        detail: expect.stringContaining('Unexpected token in JSON'),
+      });
     });
 
     test('surfaces a timeout error when the backend hangs past timeoutMs (issue #20)', async () => {
@@ -418,7 +424,56 @@ describe('API Requests', () => {
         });
       }));
 
-      await expect(apiRequest('/test', { timeoutMs: 10 })).rejects.toThrow(/timed out after 10ms/);
+      // Issue #748: the user sees a sentence; the raw timing stays on detail.
+      await expect(apiRequest('/test', { timeoutMs: 10 })).rejects.toMatchObject({
+        message: 'CUDly took too long to respond. Try again in a moment.',
+        status: 0,
+        detail: 'Request to /test timed out after 10ms',
+      });
+    });
+
+    describe('friendly transport errors (issue #748)', () => {
+      test('a network failure becomes "Can\'t reach CUDly" with status 0', async () => {
+        fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+        await expect(apiRequest('/test')).rejects.toMatchObject({
+          message: "Can't reach CUDly. Check your connection and try again.",
+          status: 0,
+          detail: 'Request to /test failed: Failed to fetch',
+        });
+      });
+
+      test('a caller abort is rethrown untouched', async () => {
+        const controller = new AbortController();
+        fetchMock.mockImplementation(() => {
+          controller.abort();
+          const err = new Error('The operation was aborted.');
+          err.name = 'AbortError';
+          return Promise.reject(err);
+        });
+        await expect(apiRequest('/test', { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
+      });
+
+      test.each([
+        [502, 'CUDly is temporarily unavailable. Try again in a moment.'],
+        [503, 'CUDly is temporarily unavailable. Try again in a moment.'],
+        [504, 'CUDly took too long to respond. Try again in a moment.'],
+        [500, 'CUDly hit an unexpected error. Try again in a moment.'],
+        [403, "You don't have permission to do that."],
+        [418, 'The request could not be completed (error 418).'],
+      ])('HTTP %i with an HTML body says what it means, not "HTTP %i"', async (status, message) => {
+        fetchMock.mockResolvedValue({ ok: false, status, json: () => Promise.reject(new SyntaxError("Unexpected token '<'")) });
+        await expect(apiRequest('/test')).rejects.toMatchObject({ message, status, detail: `HTTP ${status} from /test` });
+      });
+
+      test('the backend catch-all "Internal server error" gets the friendly 500 text', async () => {
+        fetchMock.mockResolvedValue({ ok: false, status: 500, json: () => Promise.resolve({ error: 'Internal server error' }) });
+        await expect(apiRequest('/test')).rejects.toThrow('CUDly hit an unexpected error. Try again in a moment.');
+      });
+
+      test('a specific server message still wins over the status text', async () => {
+        fetchMock.mockResolvedValue({ ok: false, status: 503, json: () => Promise.resolve({ error: 'maintenance until 10:00 UTC' }) });
+        await expect(apiRequest('/test')).rejects.toThrow('maintenance until 10:00 UTC');
+      });
     });
 
     test('passes the caller-provided signal through alongside the timeout controller', async () => {
@@ -660,6 +715,55 @@ describe('API Requests', () => {
       // tab on the same origin inherits the session.
       expect(localStorageMock.setItem).toHaveBeenCalledWith('authToken', 'admin-token');
     });
+
+    // Issue #748: a proxy 502 with an HTML body used to surface as
+    // "Unexpected token '<'" because the error body was parsed uncaught.
+    test('a 502 HTML error page fails with friendly text, not a JSON parse error', async () => {
+      fetchMock.mockResolvedValue({ ok: false, status: 502, json: () => Promise.reject(new SyntaxError("Unexpected token '<'")) });
+      await expect(setupAdmin('api-key', 'admin@example.com', 'password'))
+        .rejects.toMatchObject({ message: 'CUDly is temporarily unavailable. Try again in a moment.', status: 502 });
+    });
+
+    test('a 400 keeps the server reason', async () => {
+      fetchMock.mockResolvedValue({ ok: false, status: 400, json: () => Promise.resolve({ error: 'admin already exists' }) });
+      await expect(setupAdmin('api-key', 'admin@example.com', 'password')).rejects.toThrow('admin already exists');
+    });
+
+    test('a network failure says the server cannot be reached', async () => {
+      fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+      await expect(setupAdmin('api-key', 'admin@example.com', 'password'))
+        .rejects.toThrow("Can't reach CUDly. Check your connection and try again.");
+    });
+
+    test('a JSON error body still surfaces the server message', async () => {
+      fetchMock.mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: () => Promise.resolve({ error: 'password too weak' }),
+      });
+
+      await expect(setupAdmin('api-key', 'admin@example.com', 'password')).rejects.toThrow('password too weak');
+    });
+  });
+
+  describe('base64Encode', () => {
+    test('Latin-1 passwords keep the exact bytes btoa has always sent', () => {
+      expect(base64Encode('password')).toBe(btoa('password'));
+      expect(base64Encode('caf\u00e9')).toBe(btoa('caf\u00e9'));
+    });
+
+    test('non-Latin-1 passwords are sent as UTF-8 instead of throwing', () => {
+      const pw = 'it\u2019s a \u5bc6\u7801 \u{1F511}';
+      const encoded = base64Encode(pw);
+      expect(Buffer.from(encoded, 'base64').toString('utf8')).toBe(pw);
+    });
+
+    test('login with a non-Latin-1 password reaches the network', async () => {
+      fetchMock.mockResolvedValue({ ok: true, json: () => Promise.resolve({ token: 't' }) });
+      await login('user@example.com', 'p\u00e4ss\u2014w\u00f6rd \u{1F600}');
+      const body = JSON.parse(fetchMock.mock.calls[fetchMock.mock.calls.length - 1][1].body as string) as { password: string };
+      expect(Buffer.from(body.password, 'base64').toString('utf8')).toBe('p\u00e4ss\u2014w\u00f6rd \u{1F600}');
+    });
   });
 });
 
@@ -697,6 +801,21 @@ describe('Dashboard API', () => {
         '/api/dashboard/upcoming',
         expect.anything()
       );
+    });
+
+    // #1189: the endpoint returns { purchases: [...] }, not a bare array. The
+    // annotation makes tsc (npm run typecheck) reject a regression to the
+    // old UpcomingPurchase[] return type.
+    test('resolves the { purchases } envelope the handler returns', async () => {
+      const row = {
+        execution_id: 'exec-1', plan_id: 'plan-1', plan_name: 'Plan', scheduled_date: '2026-11-01',
+        provider: 'aws', service: 'ec2', step_number: 1, total_steps: 2, estimated_savings: 10,
+        has_recommendations: true,
+      };
+      fetchMock.mockResolvedValueOnce({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve({ purchases: [row] }) });
+      const res: UpcomingPurchasesResponse = await getUpcomingPurchases();
+      expect(Array.isArray(res)).toBe(false);
+      expect(res.purchases).toEqual([row]);
     });
   });
 });
@@ -766,6 +885,31 @@ describe('Recommendations API', () => {
       expect(url).not.toContain('min_savings_pct=50');
       expect(url).not.toContain('min_savings_usd=20');
       expect(url).not.toContain('min_savings=');
+    });
+
+    // Issue #65: non-finite or non-positive savings floors must never reach
+    // the query string. The backend 400s on NaN/Infinity/negatives, which
+    // would turn a bad widget value into an opaque load error.
+    test.each([
+      ['NaN', NaN],
+      ['Infinity', Infinity],
+      ['-Infinity', -Infinity],
+      ['a negative value', -5],
+      ['zero', 0],
+    ])('drops min_savings_usd and min_savings_pct when the floor is %s', async (_label, value) => {
+      await getRecommendations({ provider: 'aws', minSavingsUsd: value, minSavingsPct: value });
+
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toBe('/api/recommendations?provider=aws');
+      expect(url).not.toContain('min_savings_usd');
+      expect(url).not.toContain('min_savings_pct');
+    });
+
+    test('a bad usd floor does not suppress a valid pct floor', async () => {
+      await getRecommendations({ minSavingsUsd: Infinity, minSavingsPct: 12.5 });
+
+      const url = fetchMock.mock.calls[0][0] as string;
+      expect(url).toBe('/api/recommendations?min_savings_pct=12.5');
     });
 
     test('applies other filters to query string', async () => {
@@ -1036,12 +1180,10 @@ describe('Public Info API', () => {
       expect(fetchMock).toHaveBeenCalledWith('/api/info');
     });
 
-    test('returns default values on error', async () => {
-      fetchMock.mockResolvedValue({ ok: false });
+    test('throws with the HTTP status on a non-OK response instead of fabricating admin_exists: false', async () => {
+      fetchMock.mockResolvedValue({ ok: false, status: 502 });
 
-      const info = await getPublicInfo();
-      expect(info.version).toBe('');
-      expect(info.admin_exists).toBe(false);
+      await expect(getPublicInfo()).rejects.toMatchObject({ status: 502, message: expect.stringContaining('HTTP 502') });
     });
   });
 
@@ -1061,12 +1203,10 @@ describe('Public Info API', () => {
       expect(fetchMock).toHaveBeenCalledWith('/api/info/deployment', expect.objectContaining({}));
     });
 
-    test('returns empty object on error', async () => {
-      fetchMock.mockResolvedValue({ ok: false });
+    test('throws with the HTTP status on a non-OK response', async () => {
+      fetchMock.mockResolvedValue({ ok: false, status: 401 });
 
-      const info = await getDeploymentInfo();
-      expect(info.api_key_secret_url).toBeUndefined();
-      expect(info.deployment_aws_account_id).toBeUndefined();
+      await expect(getDeploymentInfo()).rejects.toMatchObject({ status: 401 });
     });
   });
 });
