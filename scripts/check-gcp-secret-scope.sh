@@ -47,6 +47,17 @@
 # which role it becomes. Refusing it is the fail-closed answer; the fix is to
 # write the role name out.
 #
+# The one shape that breaks the premise above is refused outright (issue #150):
+# an authoritative policy (`google_project_iam_policy`, `google_folder_iam_policy`,
+# `google_organization_iam_policy`) and the `data "google_iam_policy"` source
+# that builds policy_data for one. policy_data can be read with file() from a
+# JSON file the guard does not scan, or handed in through a variable or module
+# output, so the role it grants need never appear as text here. It is also the
+# most dangerous shape: it REPLACES the scope's whole IAM policy. Any
+# non-comment mention of one of those type names exits 2 before the scan runs,
+# and no waiver applies. Correlating policy_data with its source is the work to
+# do if one is ever genuinely needed.
+#
 # WAIVERS. A deliberate scope-wide Secret Manager grant is permitted by a comment
 # on the line DIRECTLY above the mention it excuses, with a reason:
 #
@@ -61,7 +72,8 @@
 #
 # Exit 0 = no un-waived Secret Manager mention and no plan-time role name found.
 # Exit 1 = at least one found; each is printed to stderr.
-# Exit 2 = usage error, or a file this guard cannot read (JSON encoding).
+# Exit 2 = usage error, a file this guard cannot read (JSON encoding), or an
+#          authoritative IAM policy it cannot analyze (see above).
 #
 # LIMITATIONS. This is a textual guard, not a policy engine.
 #   - Values supplied from OUTSIDE the scanned tree are out of reach: `-var` on
@@ -75,6 +87,17 @@
 #   - The Terraform JSON encoding (`.tf.json`, `.tfvars.json`) is not parsed.
 #     Rather than report such a file as clean, the guard exits 2 if it finds one.
 #     None exist today.
+#   - The authoritative-policy shape (`google_{project,folder,organization}
+#     _iam_policy`, `data "google_iam_policy"`) is REJECTED with exit 2, not
+#     analyzed (issue #150). That includes a `google_iam_policy` data source
+#     feeding a per-secret `_iam_policy`, since the guard cannot tell where
+#     policy_data goes. None exist today.
+#   - Block tracking (which decides the per-secret exemption) counts braces and
+#     does not need `terraform fmt` layout to stay closed, but CI also runs
+#     `terraform fmt -check` over every SCAN_ROOTS entry, so unformatted code
+#     cannot land in the first place.
+#   - Resources inside modules sourced from outside the tree (registry, git)
+#     are not scanned.
 #
 # Usage:
 #   scripts/check-gcp-secret-scope.sh              # scan the default roots
@@ -145,6 +168,42 @@ fi
 
 if [[ ${#files[@]} -eq 0 ]]; then
   echo "ERROR: no Terraform files to scan" >&2
+  exit 2
+fi
+
+# Fail closed on the authoritative-policy shape (issue #150; see the header).
+# Matches the type name as a token anywhere in a non-comment line, so a quoted
+# or bare block label, any indentation, and references (`data.google_iam_policy.
+# x`, `moved`, `import`) are all caught. Heredoc bodies and descriptions are
+# not exempt here: over-reporting a name that should not be in the tree at all
+# is the safe direction.
+unsupported=$(
+  awk '
+    /^[[:space:]]*(#|\/\/)/ { next }
+    /(^|[^A-Za-z0-9_])google_(project|folder|organization)_iam_policy([^A-Za-z0-9_]|$)/ ||
+    /(^|[^A-Za-z0-9_])google_iam_policy([^A-Za-z0-9_]|$)/ {
+      t = $0
+      sub(/^[[:space:]]+/, "", t)
+      printf "%s:%d: %s\n", FILENAME, FNR, t
+    }
+  ' "${files[@]}"
+)
+if [[ -n "$unsupported" ]]; then
+  {
+    echo "ERROR: this guard cannot analyze an authoritative IAM policy, and will not"
+    echo "       report one as clean (issue #150). Found:"
+    while IFS= read -r finding; do
+      printf '         %s\n' "$finding"
+    done <<<"$unsupported"
+    echo ""
+    echo "       google_{project,folder,organization}_iam_policy replaces the scope's"
+    echo "       whole IAM policy with policy_data, which may come from file(), a"
+    echo "       variable or a module output the guard cannot follow, so it cannot say"
+    echo "       which roles are granted. Use google_{project,folder,organization}"
+    echo "       _iam_member for non-secret roles and google_secret_manager_secret"
+    echo "       _iam_member for secrets, or extend the guard to correlate policy_data"
+    echo "       with its source before adding one."
+  } >&2
   exit 2
 fi
 

@@ -197,55 +197,68 @@ func parseRouterEntries(routerPath string) ([]routeHandlerEntry, error) {
 	return entries, nil
 }
 
-// handlerFuncCallsRequirePermission returns true if any handler_*.go file in
-// srcDir contains a function whose name is fnName and whose body calls
+// permissionGatedHandlers scans every handler_*.go file in srcDir once and
+// returns the set of *Handler method names whose body calls
 // requirePermission.
-func handlerFuncCallsRequirePermission(srcDir, fnName string) (bool, error) {
+//
+// The scan reads each file a single time and records every gated method,
+// instead of re-reading all handler files for each route (which, with ~130
+// routes and ~75k handler lines, took about a minute under -race). The
+// per-method rule is the same: a method is gated when a line containing
+// requirePermission appears after its `func (h *Handler) name(` declaration
+// and before the next such declaration, or before its brace depth goes
+// negative.
+func permissionGatedHandlers(srcDir string) (map[string]bool, error) {
 	pattern := filepath.Join(srcDir, "handler_*.go")
 	files, err := filepath.Glob(pattern)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
 	// Match the exact function name as declared on *Handler.
 	reFunc := regexp.MustCompile(`^func \(h \*Handler\) (\w+)\(`)
 
+	gated := make(map[string]bool)
 	for _, fpath := range files {
-		f, err := os.Open(fpath)
-		if err != nil {
-			return false, err
+		if err := scanHandlerFileForPermission(fpath, reFunc, gated); err != nil {
+			return nil, err
 		}
-
-		scanner := bufio.NewScanner(f)
-		inTarget := false
-		braceDepth := 0
-
-		for scanner.Scan() {
-			line := scanner.Text()
-
-			if m := reFunc.FindStringSubmatch(line); m != nil {
-				inTarget = m[1] == fnName
-				braceDepth = 0
-			}
-
-			if inTarget {
-				braceDepth += strings.Count(line, "{") - strings.Count(line, "}")
-				if strings.Contains(line, "requirePermission") {
-					f.Close()
-					return true, nil
-				}
-				if braceDepth < 0 {
-					inTarget = false
-				}
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			f.Close()
-			return false, err
-		}
-		f.Close()
 	}
-	return false, nil
+	return gated, nil
+}
+
+// scanHandlerFileForPermission adds to gated the name of every *Handler
+// method in fpath whose body calls requirePermission.
+func scanHandlerFileForPermission(fpath string, reFunc *regexp.Regexp, gated map[string]bool) error {
+	f, err := os.Open(fpath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	current := ""
+	braceDepth := 0
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		if m := reFunc.FindStringSubmatch(line); m != nil {
+			current = m[1]
+			braceDepth = 0
+		}
+
+		if current != "" {
+			braceDepth += strings.Count(line, "{") - strings.Count(line, "}")
+			if strings.Contains(line, "requirePermission") {
+				gated[current] = true
+			}
+			if braceDepth < 0 {
+				current = ""
+			}
+		}
+	}
+	return scanner.Err()
 }
 
 // specPathsForRoute returns the set of spec routeKeys that the given router
@@ -299,6 +312,11 @@ func TestOpenAPI403OnPermissionGatedRoutes(t *testing.T) {
 	require.NoError(t, err, "failed to parse router.go")
 	require.NotEmpty(t, routerEntries, "parsed zero route entries from router.go")
 
+	// Index the permission-gated handlers once for all routes.
+	gatedHandlers, err := permissionGatedHandlers(pkgDir)
+	require.NoError(t, err, "failed to scan handler_*.go files")
+	require.NotEmpty(t, gatedHandlers, "found no handler that calls requirePermission")
+
 	var failures []string
 
 	for _, entry := range routerEntries {
@@ -308,12 +326,7 @@ func TestOpenAPI403OnPermissionGatedRoutes(t *testing.T) {
 		}
 
 		// Check if the delegate handler calls requirePermission.
-		callsPerm, err := handlerFuncCallsRequirePermission(pkgDir, entry.delegateFnName)
-		if err != nil {
-			t.Logf("warning: could not check handler %s: %v", entry.delegateFnName, err)
-			continue
-		}
-		if !callsPerm {
+		if !gatedHandlers[entry.delegateFnName] {
 			continue
 		}
 

@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestApplicationRateLimiter(t *testing.T) {
@@ -38,16 +38,17 @@ func TestApplicationRateLimiter(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 
 	for mode, isLambda := range []bool{false, true} {
 		t.Run(fmt.Sprintf("lambda=%t", isLambda), func(t *testing.T) {
 			cfg := ApplicationConfig{
 				IsLambda: isLambda, DashboardURL: "https://rate-limit.example.test",
 				DefaultTerm: 3, DefaultCoverage: 80,
+				// Each 401 login runs Login's timing-equalizing bcrypt
+				// compare, about 5s at cost 12 under -race. The limiter
+				// does not depend on the cost.
+				authBcryptCost: bcrypt.MinCost,
 			}
 			newApp := func() *Application {
 				app, appErr := NewApplicationFromDeps(ctx, cfg, ExternalDeps{
@@ -101,7 +102,7 @@ func TestApplicationRateLimiter(t *testing.T) {
 			checkCount := func(sourceIP, endpoint string, want int) {
 				t.Helper()
 				var count int
-				err = pg.DB.Pool().QueryRow(ctx, "SELECT count FROM rate_limits WHERE id = $1",
+				err := pg.DB.Pool().QueryRow(ctx, "SELECT count FROM rate_limits WHERE id = $1",
 					"IP#"+sourceIP+"#ENDPOINT#"+endpoint).Scan(&count)
 				assert.NoError(t, err)
 				assert.Equal(t, want, count)

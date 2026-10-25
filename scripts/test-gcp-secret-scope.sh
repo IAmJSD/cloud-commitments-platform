@@ -90,13 +90,15 @@ run_case "role passed as a module argument exits 1" 1 \
 run_case "role supplied by a tfvars file exits 1" 1 \
   "${FIXTURES}/roles.tfvars.fixture"
 
-run_case "dynamic binding in google_iam_policy over a local exits 1" 1 \
+# These three carried the authoritative-policy shape and exited 1 through the
+# role text alone. Since issue #150 that shape is refused outright (exit 2).
+run_case "dynamic binding in google_iam_policy over a local exits 2 (#150)" 2 \
   "${FIXTURES}/dynamic-iam-policy.tf.fixture"
 
-run_case "literal role in google_iam_policy data block exits 1" 1 \
+run_case "literal role in google_iam_policy data block exits 2 (#150)" 2 \
   "${FIXTURES}/iam-policy-data.tf.fixture"
 
-run_case "JSON heredoc policy_data on google_project_iam_policy exits 1" 1 \
+run_case "JSON heredoc policy_data on google_project_iam_policy exits 2 (#150)" 2 \
   "${FIXTURES}/policy-heredoc.tf.fixture"
 
 run_case "custom role carrying secretmanager.* permissions exits 1" 1 \
@@ -104,6 +106,42 @@ run_case "custom role carrying secretmanager.* permissions exits 1" 1 \
 
 run_case "block not laid out the way terraform fmt does exits 1" 1 \
   "${FIXTURES}/unformatted-block.tf.fixture"
+
+# Issue #150, part 1: the authoritative-policy shape is refused (exit 2) rather
+# than analyzed. Each of the first six exited 0 before #150, because the roles
+# it grants never appear as `secretmanager` text in a scanned file.
+run_case "google_project_iam_policy fed by file() exits 2 (#150)" 2 \
+  "${FIXTURES}/project-iam-policy-file.tf.fixture"
+
+run_case "google_folder_iam_policy fed by a variable exits 2 (#150)" 2 \
+  "${FIXTURES}/folder-iam-policy.tf.fixture"
+
+run_case "google_organization_iam_policy fed by jsonencode exits 2 (#150)" 2 \
+  "${FIXTURES}/org-iam-policy.tf.fixture"
+
+run_case "google_iam_policy data source exported as an output exits 2 (#150)" 2 \
+  "${FIXTURES}/iam-policy-data-output.tf.fixture"
+
+run_case "authoritative policy with bare block labels exits 2 (#150)" 2 \
+  "${FIXTURES}/iam-policy-unquoted-labels.tf.fixture"
+
+run_case "authoritative policy with a column-0 body exits 2 (#150)" 2 \
+  "${FIXTURES}/iam-policy-unindented.tf.fixture"
+
+run_case "rejected shape alongside a clean file still exits 2 (#150)" 2 \
+  "${FIXTURES}/clean.tf.fixture" "${FIXTURES}/project-iam-policy-file.tf.fixture"
+
+# Negative direction: lookalike type names and comments are not refused.
+run_case "lookalike IAM policy types and comments exit 0 (#150)" 0 \
+  "${FIXTURES}/iam-policy-lookalikes.tf.fixture"
+
+# Issue #150, part 2: a body laid out in column 0 must not end a block early
+# enough to drop a role, nor carry the per-secret exemption onward.
+run_case "scope-wide grant with a column-0 body exits 1 (#150)" 1 \
+  "${FIXTURES}/unindented-body.tf.fixture"
+
+run_case "column-0 per-secret body does not leak its exemption (#150)" 1 \
+  "${FIXTURES}/per-secret-unindented-body.tf.fixture"
 
 # Fail closed on role names the scanner cannot resolve.
 run_case "role assembled by interpolation exits 1" 1 \
@@ -169,6 +207,36 @@ if cmp -s "$DEPLOY_SA" "${WORK}/service_account.tf"; then
 fi
 run_case "ci-cd-permissions deploy SA grant fails without its waiver" 1 \
   "${WORK}/service_account.tf"
+
+# policy-heredoc now exits 2 on its resource type alone, which would hide a
+# regression in how heredoc bodies are scanned. Retyped to a per-secret
+# _iam_policy (not refused), the role inside the JSON heredoc must still be
+# reported: only a plain `role = "roles/secretmanager.X"` line is exempt.
+sed 's/google_project_iam_policy/google_secret_manager_secret_iam_policy/g' \
+  "${FIXTURES}/policy-heredoc.tf.fixture" > "${WORK}/per-secret-heredoc.tf"
+run_case "JSON heredoc role on a per-secret _iam_policy exits 1" 1 \
+  "${WORK}/per-secret-heredoc.tf"
+
+# Issue #150, part 2: the guard's block tracking was written against
+# `terraform fmt` layout, so CI must run `terraform fmt -check -recursive` over
+# every root the guard scans. Read the roots from the guard itself so adding one without a fmt gate
+# fails here.
+CI_YML="${REPO_ROOT}/.github/workflows/ci.yml"
+# shellcheck disable=SC2016  # ${REPO_ROOT} is matched literally, not expanded.
+roots=$(sed -n '/^SCAN_ROOTS=(/,/^)/s|^ *"\${REPO_ROOT}/\([^"]*\)"$|\1|p' "$CHECK")
+if [[ -z "$roots" ]]; then
+  echo "FAIL: could not read SCAN_ROOTS from $CHECK"
+  (( fail++ )) || true
+fi
+for root in $roots; do
+  if grep -Eq "^[[:space:]]*(run:[[:space:]]*)?terraform fmt -check -recursive ${root}/?[[:space:]]*$" "$CI_YML"; then
+    echo "PASS: CI runs terraform fmt -check over scan root ${root}/"
+    (( pass++ )) || true
+  else
+    echo "FAIL: CI has no 'terraform fmt -check -recursive ${root}/' step for scan root ${root}/"
+    (( fail++ )) || true
+  fi
+done
 
 # Default-root discovery: run a copy of the guard from a throwaway tree laid out
 # like the repo, so the cases below exercise which files it COLLECTS, not only

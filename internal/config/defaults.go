@@ -285,14 +285,10 @@ var DefaultSettings = []ConfigSetting{
 		Description: "Days to retain purchase history (3 years default)",
 		UpdatedAt:   time.Time{},
 	},
-	{
-		Key:         "retention.execution_history_days",
-		Value:       90,
-		Type:        "int",
-		Category:    "retention",
-		Description: "Days to retain execution history records",
-		UpdatedAt:   time.Time{},
-	},
+	// Execution history retention is deliberately not a setting: it is
+	// DefaultExecutionTTLDays (constants.go), passed to CleanupOldExecutions
+	// by internal/server/handler.go and shared with the plan health
+	// lookback window (internal/api/plan_health.go). See issue #88.
 	{
 		Key:         "retention.recommendation_cache_hours",
 		Value:       24,

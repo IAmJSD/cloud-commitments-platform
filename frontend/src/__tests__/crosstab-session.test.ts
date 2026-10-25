@@ -63,11 +63,18 @@ describe('cross-tab logout sync (issue #493)', () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
-  test('ignores events with null key (e.g. localStorage.clear())', () => {
+  test('localStorage.clear() in another tab (key === null) signs this tab out (#317)', () => {
     const { api, handler, reload } = loadAuth();
     api.setAuthToken('t');
     handler(evt(null, null));
-    expect(api.isAuthenticated()).toBe(true);
+    expect(api.isAuthenticated()).toBe(false);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  test('localStorage.clear() does not reload a tab that is already signed out', () => {
+    const { api, handler, reload } = loadAuth();
+    handler(evt(null, null));
+    expect(api.isAuthenticated()).toBe(false);
     expect(reload).not.toHaveBeenCalled();
   });
 
