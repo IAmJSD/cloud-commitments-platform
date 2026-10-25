@@ -19,12 +19,11 @@ import (
 // the logs), the seeded singleton row starts out NULL (= complete), and the
 // down migration removes the column cleanly.
 func TestMigration_RecommendationsStatePartial(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	const version = 129
@@ -50,7 +49,7 @@ func TestMigration_RecommendationsStatePartial(t *testing.T) {
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, version))
 
 	var dataType, isNullable string
-	err = pool.QueryRow(ctx, `
+	err := pool.QueryRow(ctx, `
 		SELECT data_type, is_nullable
 		  FROM information_schema.columns
 		 WHERE table_name = 'recommendations_state'

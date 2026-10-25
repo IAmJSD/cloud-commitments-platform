@@ -39,13 +39,13 @@
                 </span>
                 <h1>CUDly</h1>
             </div>
-            <div id="topbar-filters" class="app-topbar-filters" aria-label="Global filters"></div>
+            <div id="topbar-filters" class="app-topbar-filters" role="group" aria-label="Global filters"></div>
             <div id="user-info">
                 <button type="button" id="user-email-display" aria-label="Profile" hidden></button>
                 <span id="user-role-display" class="role-badge"></span>
-                <a href="/docs/" target="_blank" class="header-link">API Docs</a>
+                <a href="/docs/" target="_blank" rel="noopener noreferrer" class="header-link">API Docs</a>
                 <a id="feedback-link" href="#" class="header-link feedback-link">Feedback</a>
-                <button id="logout-btn">Logout</button>
+                <button id="logout-btn">Log out</button>
             </div>
         </header>
         <!-- Overlay: covers content when sidebar drawer is open on mobile.
@@ -56,49 +56,53 @@
                 <button class="app-sidebar-toggle" type="button" aria-label="Toggle sidebar" aria-expanded="true">
                     <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
                 </button>
-                <nav class="app-sidebar-nav" role="tablist" aria-label="Main navigation" aria-orientation="vertical">
+                <nav class="app-sidebar-nav" aria-label="Main navigation">
                     <!-- Sidebar items are real <a href> so the browser's
                          "Open Link in New Tab" affordance works (issue #462).
                          The SPA hijacks un-modified left clicks via
                          preventDefault in app.ts; modifier-key clicks fall
                          through to the browser default. -->
-                    <a class="tab-btn active" id="home-tab-btn" href="/home" data-tab="home" role="tab" aria-selected="true" aria-controls="home-tab" aria-label="Home">
+                    <a class="tab-btn active" id="home-tab-btn" href="/home" data-tab="home" aria-current="page" aria-label="Home">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><path d="M3 9.5L12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-7h-6v7H4a1 1 0 0 1-1-1z"/></svg>
                         <span class="sidebar-label">Home</span>
                     </a>
-                    <a class="tab-btn" id="opportunities-tab-btn" href="/opportunities" data-tab="opportunities" role="tab" aria-selected="false" aria-controls="opportunities-tab" aria-label="Opportunities">
+                    <a class="tab-btn" id="opportunities-tab-btn" href="/opportunities" data-tab="opportunities" aria-label="Opportunities">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><path d="M15 14c.97-.84 2-1.81 2-4a5 5 0 0 0-10 0c0 2.19 1.03 3.16 2 4"/><line x1="9" y1="18" x2="15" y2="18"/><line x1="10" y1="22" x2="14" y2="22"/></svg>
                         <span class="sidebar-label">Opportunities</span>
                     </a>
-                    <a class="tab-btn" id="plans-tab-btn" href="/plans" data-tab="plans" role="tab" aria-selected="false" aria-controls="plans-tab" aria-label="Plans">
+                    <a class="tab-btn" id="plans-tab-btn" href="/plans" data-tab="plans" aria-label="Plans">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12l2 2 4-4"/></svg>
                         <span class="sidebar-label">Plans</span>
                     </a>
-                    <a class="tab-btn requires-purchases" id="purchases-tab-btn" href="/purchases" data-tab="purchases" role="tab" aria-selected="false" aria-controls="purchases-tab" aria-label="Purchases">
+                    <a class="tab-btn requires-purchases" id="purchases-tab-btn" href="/purchases" data-tab="purchases" aria-label="Purchases">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
                         <span class="sidebar-label">Purchases</span>
                     </a>
-                    <a class="tab-btn requires-purchases" id="inventory-tab-btn" href="/inventory" data-tab="inventory" role="tab" aria-selected="false" aria-controls="inventory-tab" aria-label="Inventory &amp; Coverage">
+                    <a class="tab-btn requires-purchases" id="inventory-tab-btn" href="/inventory" data-tab="inventory" aria-label="Inventory &amp; Coverage">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27,6.96 12,12.01 20.73,6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
                         <span class="sidebar-label">Inventory &amp; Coverage</span>
                     </a>
-                    <a class="tab-btn admin-only" id="admin-tab-btn" href="/admin/general" data-tab="admin" role="tab" aria-selected="false" aria-controls="admin-tab" aria-label="Admin">
+                    <a class="tab-btn admin-only" id="admin-tab-btn" href="/admin/general" data-tab="admin" aria-label="Admin">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="sidebar-icon"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                         <span class="sidebar-label">Admin</span>
                     </a>
                 </nav>
                 <!-- Drawer slot for the topbar controls. Below the drawer
                      breakpoint the topbar has no room for the filter chips
-                     and the account actions, so app.ts:setupMobileNav()
-                     relocates #topbar-filters and #user-info in here, and
-                     back out again above it (issue #1779). Empty on
-                     desktop. -->
+                     and the account actions, so
+                     nav/mobile-nav.ts:setupMobileNav() relocates
+                     #topbar-filters and #user-info in here, and back out
+                     again above it (issue #1779). Empty on desktop. -->
                 <div class="app-sidebar-extras" id="sidebar-extras"></div>
             </aside>
             <main class="app-main" id="main-content">
             <!-- Home Tab. Provider/Account filters live in the topbar
                  (#topbar-filters); they're global across all sections. -->
-            <div id="home-tab" class="tab-content active" role="tabpanel" aria-labelledby="home-tab-btn">
+            <div id="home-tab" class="tab-content active">
+                <h2 class="sr-only page-heading" id="home-page-heading" tabindex="-1">Home</h2>
+                <!-- Issue #756: first-run onboarding card, filled by
+                     dashboard.ts:renderHomeOnboarding when nothing is loaded. -->
+                <section id="home-onboarding" class="hidden"></section>
                 <section id="summary"></section>
                 <section id="savings-trend-section" class="card chart-section">
                     <div class="section-header">
@@ -107,7 +111,9 @@
                             <button type="button" class="btn btn-small trend-range" data-range="7">7d</button>
                             <button type="button" class="btn btn-small trend-range" data-range="30">30d</button>
                             <button type="button" class="btn btn-small trend-range active" data-range="90">90d</button>
-                            <button type="button" class="btn btn-small trend-range" data-range="all">All</button>
+                            <!-- data-range="all" is the longest window the analytics API allows
+                                 (366-day cap), so the button says 1y, not All (#52). -->
+                            <button type="button" class="btn btn-small trend-range" data-range="all" title="Last 365 days">1y</button>
                         </div>
                     </div>
                     <canvas id="savings-trend-chart" role="img" aria-label="Line chart showing cumulative savings over time"></canvas>
@@ -115,7 +121,7 @@
                 </section>
                 <section id="savings-by-service-section" class="card chart-section">
                     <h3>Potential savings range per service</h3>
-                    <canvas id="savings-by-service-chart" role="img" aria-label="Bar chart showing the min-to-max potential savings range per service plus a darker current committed-savings bar per service"></canvas>
+                    <canvas id="savings-by-service-chart" role="img" aria-label="Bar chart showing the min-to-max potential savings range per service plus a current committed-savings layer per service"></canvas>
                     <p id="savings-by-service-empty" class="empty hidden">No positive potential savings found for current recommendations.</p>
                 </section>
                 <section id="upcoming-purchases">
@@ -125,7 +131,8 @@
             </div>
 
             <!-- Opportunities Tab (renamed from Recommendations in #340) -->
-            <div id="opportunities-tab" class="tab-content" role="tabpanel" aria-labelledby="opportunities-tab-btn">
+            <div id="opportunities-tab" class="tab-content">
+                <h2 class="sr-only page-heading" id="opportunities-page-heading" tabindex="-1">Opportunities</h2>
                 <section id="recommendations-summary"></section>
                 <!-- Issue #909: AWS lookback selector + scope tooltip.
                      Populated by recommendations.ts:renderLookbackToolbar on
@@ -143,7 +150,8 @@
             </div>
 
             <!-- Purchase Plans Tab -->
-            <div id="plans-tab" class="tab-content" role="tabpanel" aria-labelledby="plans-tab-btn">
+            <div id="plans-tab" class="tab-content">
+                <h2 class="sr-only page-heading" id="plans-page-heading" tabindex="-1">Plans</h2>
                 <section id="plans-header" class="card page-hero">
                     <h2>Purchase Plans</h2>
                     <!-- Provider/Account filters now live in the topbar
@@ -160,7 +168,8 @@
             </div>
 
             <!-- History Tab -->
-            <div id="purchases-tab" class="tab-content" role="tabpanel" aria-labelledby="purchases-tab-btn">
+            <div id="purchases-tab" class="tab-content">
+                <h2 class="sr-only page-heading" id="purchases-page-heading" tabindex="-1">Purchases</h2>
                 <!-- 4-eyes approval mode banner (issue #1005): shown when
                      require_different_approver is enabled in global config.
                      Hidden by default; history.ts toggles the 'hidden'
@@ -173,13 +182,14 @@
                      pending-approval purchases at the top of the Purchases
                      tab so users don't have to scan the full Purchase
                      History table for them. Rows render with inline
-                     Approve / Cancel buttons (issues #46 + #286) and the
-                     same click flow as the history table. Auto-loaded on
-                     tab switch via loadHistory(); also re-rendered after
-                     any Approve / Cancel from either view. -->
+                     Approve / Cancel buttons (issues #46 + #286). It is the
+                     only approval surface (issue #183): pending rows in the
+                     Purchase History table link here instead of repeating
+                     the buttons. Auto-loaded on tab switch via loadHistory();
+                     also re-rendered after any Approve / Cancel. -->
                 <section id="purchases-approval-queue-section" class="card page-hero">
                     <h2>Approval queue</h2>
-                    <p class="help-text page-hero-description">Purchases awaiting approval. Review and approve or cancel each one. The same actions are available from the Purchase History table below.</p>
+                    <p class="help-text page-hero-description">Purchases awaiting approval. Approve or cancel each one here. Purchase History below lists them as Pending and links back to this queue.</p>
                     <p id="purchases-truncation-notice" class="warning-message" role="status" hidden></p>
                     <section id="purchases-approval-queue"></section>
                 </section>
@@ -204,6 +214,12 @@
                                     <option value="yearly">Yearly</option>
                                 </select>
                             </label>
+                            <label>Show:
+                                <select id="savings-series">
+                                    <option value="period" selected>Savings per period</option>
+                                    <option value="cumulative">Cumulative savings</option>
+                                </select>
+                            </label>
                             <button id="refresh-savings-btn" class="btn-small">Refresh</button>
                         </div>
                     </div>
@@ -212,16 +228,16 @@
                     <div id="savings-stats" class="stats-grid">
                         <div class="stat-card">
                             <h4 id="period-savings-label">Period Savings</h4>
-                            <p id="period-savings" class="stat-value">$0.00</p>
+                            <p id="period-savings" class="stat-value">—</p>
                             <p class="stat-unit-context" id="period-savings-unit">shown in monthly equivalents</p>
                         </div>
                         <div class="stat-card">
                             <h4 id="avg-savings-label">Avg Monthly Savings</h4>
-                            <p id="avg-hourly-savings" class="stat-value">$0.00/mo</p>
+                            <p id="avg-hourly-savings" class="stat-value">—</p>
                         </div>
                         <div class="stat-card">
                             <h4 id="peak-savings-label">Peak Savings</h4>
-                            <p id="peak-savings" class="stat-value">$0.00/mo</p>
+                            <p id="peak-savings" class="stat-value">—</p>
                         </div>
                     </div>
 
@@ -253,15 +269,21 @@
                     <p id="history-truncation-notice" class="warning-message" role="status" hidden></p>
                     <section id="history-summary"></section>
                     <section id="history-list"></section>
+                    <!-- Load more (issue #676): shown only when the API reports has_more. -->
+                    <div id="history-load-more" class="history-load-more" hidden>
+                        <button type="button" id="history-load-more-btn" class="btn-secondary" aria-busy="false">Load more</button>
+                    </div>
                 </section>
             </div>
 
             <!-- Inventory & Coverage Tab (umbrella section folding in RI Exchange, issue #340 T4) -->
-            <div id="inventory-tab" class="tab-content" role="tabpanel" aria-labelledby="inventory-tab-btn">
+            <div id="inventory-tab" class="tab-content">
+                <h2 class="sr-only page-heading" id="inventory-page-heading" tabindex="-1">Inventory &amp; Coverage</h2>
                 <div class="inventory-subnav" role="tablist" aria-label="Inventory &amp; Coverage navigation">
-                    <button class="sub-tab-btn active" id="inv-subtab-active-commitments" data-inv-subtab="active-commitments" role="tab" aria-selected="true" aria-controls="inventory-active-commitments">Active commitments</button>
-                    <button class="sub-tab-btn" id="inv-subtab-coverage" data-inv-subtab="coverage" role="tab" aria-selected="false" aria-controls="inventory-coverage">Coverage</button>
-                    <button class="sub-tab-btn" id="inv-subtab-ri-exchange" data-inv-subtab="ri-exchange" role="tab" aria-selected="false" aria-controls="inventory-ri-exchange">RI Exchange</button>
+                    <button class="sub-tab-btn active" id="inv-subtab-active-commitments" data-inv-subtab="active-commitments" role="tab" aria-selected="true" tabindex="0" aria-controls="inventory-active-commitments">Active commitments</button>
+                    <button class="sub-tab-btn" id="inv-subtab-coverage" data-inv-subtab="coverage" role="tab" aria-selected="false" tabindex="-1" aria-controls="inventory-coverage">Coverage</button>
+                    <button class="sub-tab-btn" id="inv-subtab-trends" data-inv-subtab="trends" role="tab" aria-selected="false" tabindex="-1" aria-controls="inventory-trends">Trends</button>
+                    <button class="sub-tab-btn" id="inv-subtab-ri-exchange" data-inv-subtab="ri-exchange" role="tab" aria-selected="false" tabindex="-1" aria-controls="inventory-ri-exchange">RI Exchange</button>
                 </div>
 
                 <!-- Active commitments — per-commitment list backed by
@@ -298,13 +320,35 @@
                     <div id="coverage-providers"></div>
                 </section>
 
+                <!-- Trends — savings-snapshot history from /api/analytics/trends
+                     (issue #30). trends.ts renders into #trends-content. -->
+                <section id="inventory-trends" class="hidden" role="tabpanel" aria-labelledby="inv-subtab-trends">
+                    <section class="card page-hero">
+                        <div class="section-header">
+                            <h2>Savings trends</h2>
+                            <div class="section-header-actions">
+                                <label>Period:
+                                    <select id="trends-period">
+                                        <option value="3">Last 3 months</option>
+                                        <option value="6" selected>Last 6 months</option>
+                                        <option value="12">Last 12 months</option>
+                                    </select>
+                                </label>
+                                <button id="trends-refresh-btn" class="btn btn-small">Refresh</button>
+                            </div>
+                        </div>
+                        <p class="settings-description">Monthly savings run-rate and coverage from the snapshots CUDly collects of your active commitments, broken down by provider and by service.</p>
+                    </section>
+                    <div id="trends-content"></div>
+                </section>
+
                 <!-- RI Exchange — relocated from the former top-level ri-exchange-tab. -->
                 <section id="inventory-ri-exchange" class="hidden" role="tabpanel" aria-labelledby="inv-subtab-ri-exchange">
                     <section class="card page-hero">
                         <div class="section-header">
                             <h2>Convertible RI Exchange</h2>
                             <div class="section-header-actions">
-                                <button id="ri-exchange-settings-btn" class="btn btn-small" title="Jump to Exchange Automation settings in Admin → Purchasing policies">⚙︎ Exchange settings</button>
+                                <button id="ri-exchange-settings-btn" class="btn btn-small icon-label" title="Jump to Exchange Automation settings in Admin → Purchasing policies"><svg class="icon icon-settings" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span>Exchange settings</span></button>
                                 <button id="ri-exchange-refresh-btn" class="btn btn-small">Refresh</button>
                             </div>
                         </div>
@@ -331,12 +375,13 @@
             </div>
 
             <!-- Admin Tab (renamed from Settings in #340) -->
-            <div id="admin-tab" class="tab-content" role="tabpanel" aria-labelledby="admin-tab-btn">
+            <div id="admin-tab" class="tab-content">
+                <h2 class="sr-only page-heading" id="admin-page-heading" tabindex="-1">Admin</h2>
                 <div class="settings-tabs" role="tablist" aria-label="Admin navigation">
-                    <button class="sub-tab-btn active" id="admin-subtab-general" data-settings-tab="general" role="tab" aria-selected="true" aria-controls="settings-section">General</button>
-                    <button class="sub-tab-btn" id="admin-subtab-purchasing" data-settings-tab="purchasing" role="tab" aria-selected="false" aria-controls="purchasing-panel">Purchasing policies</button>
-                    <button class="sub-tab-btn admin-only" id="admin-subtab-accounts" data-settings-tab="accounts" role="tab" aria-selected="false" aria-controls="accounts-section">Accounts &amp; onboarding</button>
-                    <button class="sub-tab-btn admin-only" id="admin-subtab-users" data-settings-tab="users" role="tab" aria-selected="false" aria-controls="users-section">Users, roles &amp; API keys</button>
+                    <button class="sub-tab-btn active" id="admin-subtab-general" data-settings-tab="general" role="tab" aria-selected="true" tabindex="0" aria-controls="settings-section">General</button>
+                    <button class="sub-tab-btn" id="admin-subtab-purchasing" data-settings-tab="purchasing" role="tab" aria-selected="false" tabindex="-1" aria-controls="purchasing-panel">Purchasing policies</button>
+                    <button class="sub-tab-btn admin-only" id="admin-subtab-accounts" data-settings-tab="accounts" role="tab" aria-selected="false" tabindex="-1" aria-controls="accounts-section">Accounts &amp; onboarding</button>
+                    <button class="sub-tab-btn admin-only" id="admin-subtab-users" data-settings-tab="users" role="tab" aria-selected="false" tabindex="-1" aria-controls="users-section">Users, roles &amp; API keys</button>
                 </div>
                 <section id="settings-section" class="card page-hero" role="tabpanel" aria-labelledby="admin-subtab-general">
                     <h2>Global Configuration</h2>
@@ -352,7 +397,7 @@
                                          three checkboxes below. Use a span with an id that the grouping
                                          div references via aria-labelledby instead. -->
                                     <span id="enabled-providers-label" class="label-like">Enabled Providers</span>
-                                    <span class="info-icon">&#9432;<span class="tooltip-text">Select which cloud providers to monitor for commitment recommendations.</span></span>
+                                    <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">Select which cloud providers to monitor for commitment recommendations.</span></span>
                                 </div>
                                 <div class="setting-input" role="group" aria-labelledby="enabled-providers-label">
                                     <label><input type="checkbox" id="provider-aws" value="aws" checked> AWS</label>
@@ -363,7 +408,7 @@
                             <div class="setting-row">
                                 <div class="setting-info">
                                     <label for="setting-notification-email">Notification Email</label>
-                                    <span class="info-icon">&#9432;<span class="tooltip-text">Email address for purchase notifications and approval requests.</span></span>
+                                    <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">Email address for purchase notifications and approval requests.</span></span>
                                 </div>
                                 <div class="setting-input">
                                     <input type="email" id="setting-notification-email" placeholder="admin@example.com" required aria-label="Notification email address" autocomplete="email" autocapitalize="none" autocorrect="off">
@@ -376,7 +421,7 @@
                                          input and provides the click target. aria-labelledby on the input keeps
                                          the descriptive text as the toggle's accessible name. Issue #464. -->
                                     <span id="setting-auto-collect-label">Auto-collect Recommendations</span>
-                                    <span class="info-icon">&#9432;<span class="tooltip-text">Automatically fetch recommendations from cloud providers on a schedule.</span></span>
+                                    <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">Automatically fetch recommendations from cloud providers on a schedule.</span></span>
                                 </div>
                                 <div class="setting-input">
                                     <label class="toggle-label">
@@ -388,7 +433,7 @@
                             <div class="setting-row sub-setting" id="collection-schedule-row">
                                 <div class="setting-info">
                                     <label for="setting-collection-schedule">Collection Schedule</label>
-                                    <span class="info-icon">&#9432;<span class="tooltip-text">How often to automatically fetch recommendations.</span></span>
+                                    <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">How often to automatically fetch recommendations.</span></span>
                                 </div>
                                 <div class="setting-input">
                                     <select id="setting-collection-schedule">
@@ -401,7 +446,7 @@
                             <div class="setting-row">
                                 <div class="setting-info">
                                     <label for="setting-notification-days">Notification Days Before Purchase</label>
-                                    <span class="info-icon">&#9432;<span class="tooltip-text">How many days before a scheduled purchase to send email notification.</span></span>
+                                    <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">How many days before a scheduled purchase to send email notification.</span></span>
                                 </div>
                                 <div class="setting-input">
                                     <input type="number" id="setting-notification-days" value="3" min="1" max="30" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
@@ -410,7 +455,7 @@
                             <div class="setting-row">
                                 <div class="setting-info">
                                     <label for="setting-recs-stale-hours">Recommendations Cache Stale Threshold (hours)</label>
-                                    <span class="info-icon">&#9432;<span class="tooltip-text">Age (in hours) at which the recommendations cache is considered stale and a background refresh fires automatically. Set to 0 to disable automatic background refresh (the cron scheduler and manual Refresh button still work). Valid range: 0&ndash;8760 (up to one year). Default: 24.</span></span>
+                                    <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">Age (in hours) at which the recommendations cache is considered stale and a background refresh fires automatically. Set to 0 to disable automatic background refresh (the cron scheduler and manual Refresh button still work). Valid range: 0&ndash;8760 (up to one year). Default: 24.</span></span>
                                 </div>
                                 <div class="setting-input">
                                     <input type="number" id="setting-recs-stale-hours" value="24" min="0" max="8760" step="1" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
@@ -428,8 +473,25 @@
 
                 <!-- Purchasing Section -->
                 <section id="purchasing-panel" class="card page-hero hidden" role="tabpanel" aria-labelledby="admin-subtab-purchasing">
-                    <h2>Purchasing Settings</h2>
+                    <h2>Purchasing policies</h2>
                     <p class="settings-description">Configure purchase defaults, per-provider service terms, and RI exchange automation.</p>
+
+                    <!-- In-page section links (issue #190). Plain anchors so they
+                         work without JS; purchasing-nav.ts adds the scrolling,
+                         opens a collapsed provider block and hides links whose
+                         section is hidden (disabled provider, no access). -->
+                    <nav id="purchasing-section-nav" class="section-jump-nav" aria-label="Purchasing policy sections">
+                        <a href="#purchasing-global-defaults">Defaults</a>
+                        <a href="#purchasing-recommendations-lookback">Lookback</a>
+                        <a href="#purchasing-grace-period">Grace period</a>
+                        <a href="#ec2-ri-offering-class">RI class</a>
+                        <a href="#purchasing-four-eyes">Approvals</a>
+                        <a href="#aws-settings">AWS services</a>
+                        <a href="#azure-settings">Azure services</a>
+                        <a href="#gcp-settings">GCP services</a>
+                        <a href="#ri-exchange-automation-settings">Exchange automation</a>
+                        <a href="#commitment-laddering-settings">Laddering</a>
+                    </nav>
 
                     <fieldset class="settings-category" id="purchasing-global-defaults">
                         <legend>Global Purchase Defaults</legend>
@@ -473,7 +535,7 @@
                         <div class="setting-row">
                             <div class="setting-info">
                                 <label for="setting-recs-lookback-days"><span class="provider-badge aws">AWS</span> lookback period</label>
-                                <span class="info-icon">&#9432;<span class="tooltip-text">AWS Cost Explorer LookbackPeriodInDays. A longer window smooths out utilisation spikes but may under-represent recent workload changes. Default: 7 days.</span></span>
+                                <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">AWS Cost Explorer LookbackPeriodInDays. A longer window smooths out utilisation spikes but may under-represent recent workload changes. Default: 7 days.</span></span>
                             </div>
                             <div class="setting-input">
                                 <select id="setting-recs-lookback-days">
@@ -554,7 +616,10 @@
                                 <span class="credential-status configured" id="aws-creds-status">Configured (IAM Role)</span>
                             </div>
                         </div>
-                        <h4 class="subsection-title">Service Defaults</h4>
+                        <!-- Collapsed by default to keep the page short (issue #190); the
+                             fields stay in the form, so Save still reads them. -->
+                        <details class="service-defaults-details">
+                        <summary class="subsection-title">Per-service term and payment (9 services)</summary>
                         <div class="service-defaults-grid">
                             <div class="service-default-card">
                                 <h5>EC2 Reserved Instances</h5>
@@ -614,12 +679,16 @@
                                 <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-database-enabled" checked> Enabled</label>
                             </div>
                         </div>
+                        </details>
                     </fieldset>
 
                     <!-- Azure Settings -->
                     <fieldset class="settings-category provider-settings hidden" id="azure-settings">
                         <legend><span class="provider-badge azure">Azure</span> Service Defaults</legend>
-                        <h4 class="subsection-title">Service Defaults</h4>
+                        <!-- Collapsed by default to keep the page short (issue #190); the
+                             fields stay in the form, so Save still reads them. -->
+                        <details class="service-defaults-details">
+                        <summary class="subsection-title">Per-service term and payment (5 services)</summary>
                         <div class="service-defaults-grid">
                             <div class="service-default-card">
                                 <h5>Virtual Machine Reservations</h5>
@@ -647,12 +716,16 @@
                                 <label>Payment: <select id="azure-search-payment"><option value="upfront" selected>Upfront</option><option value="monthly">Monthly</option></select></label>
                             </div>
                         </div>
+                        </details>
                     </fieldset>
 
                     <!-- GCP Settings -->
                     <fieldset class="settings-category provider-settings hidden" id="gcp-settings">
                         <legend><span class="provider-badge gcp">GCP</span> Service Defaults</legend>
-                        <h4 class="subsection-title">Service Defaults</h4>
+                        <!-- Collapsed by default to keep the page short (issue #190); the
+                             fields stay in the form, so Save still reads them. -->
+                        <details class="service-defaults-details">
+                        <summary class="subsection-title">Per-service term (3 services)</summary>
                         <div class="service-defaults-grid">
                             <div class="service-default-card">
                                 <h5>Compute Engine CUDs</h5>
@@ -667,6 +740,7 @@
                                 <label>Term: <select id="gcp-memorystore-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                             </div>
                         </div>
+                        </details>
                     </fieldset>
 
                     <!-- RI Exchange Automation Settings (loaded dynamically) -->
@@ -698,7 +772,7 @@
                         <p class="settings-description">Download pre-populated IaC to onboard a new account via workload identity federation. No long-lived credentials needed.</p>
                         <div class="target-cloud-row">
                             <label>Target cloud:</label>
-                            <span class="info-icon">&#9432;<span class="tooltip-text">The cloud where the new account lives. The downloaded IaC will be pre-configured to trust CUDly's current deployment.</span></span>
+                            <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">The cloud where the new account lives. The downloaded IaC will be pre-configured to trust CUDly's current deployment.</span></span>
                             <div id="federation-target-cloud-pills" class="target-cloud-pills" role="group" aria-label="Target cloud"></div>
                         </div>
                         <div id="federation-setup-panel" class="federation-accounts"></div>
@@ -941,7 +1015,7 @@
                         <div class="setting-row">
                             <div class="setting-info">
                                 <label for="plan-auto-purchase">Auto-Purchase</label>
-                                <span class="info-icon">&#9432;<span class="tooltip-text">Automatically execute purchases according to the schedule. You'll receive email notifications before each purchase.</span></span>
+                                <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">Automatically execute purchases according to the schedule. You'll receive email notifications before each purchase.</span></span>
                             </div>
                             <div class="setting-input">
                                 <label class="toggle-label">
@@ -953,7 +1027,7 @@
                         <div class="setting-row">
                             <div class="setting-info">
                                 <label for="plan-notify-days">Notify Days Before</label>
-                                <span class="info-icon">&#9432;<span class="tooltip-text">Send email notification this many days before each scheduled purchase.</span></span>
+                                <span class="info-icon"><svg class="icon icon-info" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span class="tooltip-text">Send email notification this many days before each scheduled purchase.</span></span>
                             </div>
                             <div class="setting-input">
                                 <input type="number" id="plan-notify-days" value="3" min="1" max="30" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
@@ -1055,7 +1129,7 @@
         <div id="user-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="user-modal-title">
             <div class="modal-content">
                 <h2 id="user-modal-title">Create User</h2>
-                <form id="user-form">
+                <form id="user-form" novalidate>
                     <input type="hidden" id="user-id">
                     <div class="form-group">
                         <label for="user-email">Email</label>
@@ -1084,7 +1158,7 @@
         <div id="group-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="group-modal-title">
             <div class="modal-content modal-wide">
                 <h2 id="group-modal-title">Create Group</h2>
-                <form id="group-form">
+                <form id="group-form" novalidate>
                     <input type="hidden" id="group-id">
                     <div class="form-group">
                         <label for="group-name">Group Name</label>
@@ -1112,7 +1186,7 @@
             <div class="modal-content modal-wide">
                 <div class="modal-header-row">
                     <h2 id="group-duplicate-modal-title">Duplicate Group</h2>
-                    <button type="button" class="modal-close" id="close-group-duplicate-modal-btn" aria-label="Close">&times;</button>
+                    <button type="button" class="modal-close" id="close-group-duplicate-modal-btn" aria-label="Close"><svg class="icon icon-x" viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
                 </div>
                 <form id="group-duplicate-form">
                     <div class="form-group">
@@ -1149,7 +1223,7 @@
         <div id="account-overrides-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="account-overrides-modal-title">
             <div class="modal-content modal-wide">
                 <h2 id="account-overrides-modal-title">Service overrides</h2>
-                <p class="help-text">Per-account overrides take precedence over the global service defaults configured in Settings → Purchasing.</p>
+                <p class="help-text">Per-account overrides take precedence over the global service defaults configured in Admin → Purchasing policies.</p>
                 <div id="account-overrides-modal-body"></div>
                 <div class="modal-buttons">
                     <button type="button" id="close-account-overrides-modal-btn">Close</button>
@@ -1161,7 +1235,7 @@
         <div id="override-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="override-modal-title">
             <div class="modal-content">
                 <h2 id="override-modal-title">Add service override</h2>
-                <p class="help-text">Per-account override that takes precedence over the global service defaults. Only AWS services are supported today.</p>
+                <p class="help-text">Per-account override that takes precedence over the global service defaults. The services listed are the ones available for this account's cloud provider.</p>
                 <form id="override-form">
                     <input type="hidden" id="override-account-id">
                     <input type="hidden" id="override-provider" value="aws">
@@ -1304,7 +1378,7 @@
                         <h3>Azure Authentication</h3>
                         <label>Auth Mode:
                             <select id="account-azure-auth-mode">
-                                <option value="workload_identity_federation" selected title="Authenticate using an RSA certificate assertion — no client secrets stored in CUDly. Requires an App Registration with a certificate credential.">Workload Identity Federation (recommended)</option>
+                                <option value="workload_identity_federation" selected title="Authenticate with CUDly's OIDC identity through a federated identity credential on an App Registration. No client secret or certificate is stored in CUDly.">Workload Identity Federation (recommended)</option>
                                 <option value="managed_identity" title="Use the Azure Managed Identity of the host VM or container. Only works when CUDly itself runs on Azure.">Managed Identity (Azure-hosted CUDly only)</option>
                                 <option value="client_secret" title="Store an Azure AD client secret in CUDly. Simple to set up but stores a long-lived credential.">Client Secret</option>
                             </select>
