@@ -4,6 +4,7 @@
  *
  * plans.ts:renderPlannedPurchaseRow used to emit:
  *   <span class="status-badge …">${purchase.status}</span>
+ * (it now renders lib/status-badge.ts statusBadgeHtml, which escapes the label)
  *
  * An attacker-controlled status value such as `<script>alert(1)</script>`
  * would be parsed as HTML and could execute arbitrary JavaScript.  The fix
@@ -167,12 +168,12 @@ describe('XSS regression: purchase.status rendered as text node (#445)', () => {
     // No <img> element should have been injected as a real DOM node.
     expect(list!.querySelectorAll('img').length).toBe(0);
     // The payload literal appears only as escaped text, not as a live attribute.
-    const badge = list!.querySelector('.status-badge');
+    const badge = list!.querySelector('.badge');
     expect(badge).not.toBeNull();
     expect(badge!.textContent).toContain('onerror');
   });
 
-  test('valid status "pending" renders as plain text inside the status badge', async () => {
+  test('valid status "pending" renders as its plain-text label inside the badge', async () => {
     (api.getPlannedPurchases as jest.Mock).mockResolvedValue({
       purchases: [makePurchase('pending')],
     });
@@ -181,12 +182,12 @@ describe('XSS regression: purchase.status rendered as text node (#445)', () => {
 
     const list = document.getElementById('planned-purchases-list');
     expect(list).not.toBeNull();
-    const badge = list!.querySelector('.status-badge');
+    const badge = list!.querySelector('.badge');
     expect(badge).not.toBeNull();
-    expect(badge!.textContent).toBe('pending');
+    expect(badge!.textContent).toBe('Pending');
   });
 
-  test('valid status "paused" renders as plain text inside the status badge', async () => {
+  test('valid status "paused" renders as its plain-text label inside the badge', async () => {
     (api.getPlannedPurchases as jest.Mock).mockResolvedValue({
       purchases: [makePurchase('paused')],
     });
@@ -195,8 +196,8 @@ describe('XSS regression: purchase.status rendered as text node (#445)', () => {
 
     const list = document.getElementById('planned-purchases-list');
     expect(list).not.toBeNull();
-    const badge = list!.querySelector('.status-badge');
+    const badge = list!.querySelector('.badge');
     expect(badge).not.toBeNull();
-    expect(badge!.textContent).toBe('paused');
+    expect(badge!.textContent).toBe('Paused');
   });
 });

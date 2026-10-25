@@ -15,6 +15,7 @@ import {
   loadRecommendations,
   resetCachedGlobalConfig,
   resetAutoRefreshInFlight,
+  LOOKBACK_SCOPE_HINT,
 } from '../recommendations';
 import * as api from '../api';
 import { refreshRecommendations as refreshRecsAPI } from '../api/recommendations';
@@ -144,6 +145,26 @@ describe('Opportunities lookback selector (issue #909)', () => {
     const tip = document.querySelector('#recommendations-toolbar .tooltip-text')!;
     expect(tip.textContent).toContain('AWS recommendations only');
     expect(tip.textContent).toContain('Azure and GCP are unaffected');
+  });
+
+  // Issue #191: the scope is visible inline, not only in the hover tooltip.
+  test.each(['admin', 'user'])('shows a visible AWS-only scope hint tied to the select (%s)', async (role) => {
+    mockUser(role);
+    await loadRecommendations();
+    const select = getSelect()!;
+    const hint = document.getElementById('recs-lookback-scope')!;
+    expect(hint).not.toBeNull();
+    expect(hint.textContent).toBe(LOOKBACK_SCOPE_HINT);
+    expect(hint.textContent).toContain('AWS');
+    expect(hint.closest('.tooltip-text')).toBeNull();
+    expect(select.getAttribute('aria-describedby')).toBe('recs-lookback-scope');
+  });
+
+  test('re-rendering the toolbar keeps a single scope hint', async () => {
+    mockUser('admin');
+    await loadRecommendations();
+    await loadRecommendations();
+    expect(document.querySelectorAll('#recs-lookback-scope')).toHaveLength(1);
   });
 
   test.each(['user', 'readonly', null])('non-admin (%s) sees a disabled control with a permission tooltip', async (role) => {
