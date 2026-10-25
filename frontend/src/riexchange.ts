@@ -588,9 +588,18 @@ export function renderExcludedRIsNotice(excluded: ExcludedRI[] | undefined): voi
     notice.className = '';
     return;
   }
-  const n = excluded.length;
+  const byReason = new Map<string, string[]>();
+  for (const e of excluded) {
+    const reason = e.reason || 'AWS returned no term length';
+    const ids = byReason.get(reason);
+    if (ids) ids.push(e.ri_id);
+    else byReason.set(reason, [e.ri_id]);
+  }
   notice.className = 'freshness-banner warning';
-  notice.textContent = `${n} convertible RI${n === 1 ? ' was' : 's were'} left out because AWS returned no term length: ${excluded.map((e) => e.ri_id).join(', ')}`;
+  // textContent keeps server-provided reasons and ids inert.
+  notice.textContent = [...byReason]
+    .map(([reason, ids]) => `${ids.length} convertible RI${ids.length === 1 ? ' was' : 's were'} left out because ${reason}: ${ids.join(', ')}`)
+    .join('; ');
 }
 
 /**

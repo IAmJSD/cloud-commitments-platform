@@ -525,7 +525,7 @@ func (m *MockAuthService) GetAllowedAccountsAPI(ctx context.Context, userID stri
 }
 
 // API Key management mock methods.
-func (m *MockAuthService) CreateAPIKeyAPI(ctx context.Context, userID string, req interface{}) (interface{}, error) {
+func (m *MockAuthService) CreateAPIKeyAPI(ctx context.Context, userID string, req auth.APICreateAPIKeyRequest) (interface{}, error) {
 	args := m.Called(ctx, userID, req)
 	return args.Get(0), args.Error(1)
 }

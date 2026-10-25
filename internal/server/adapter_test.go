@@ -431,9 +431,9 @@ func TestAuthServiceAdapter_CreateAPIKeyAPI(t *testing.T) {
 	require.NotNil(t, result)
 }
 
-// The handler passes api.CreateAPIKeyRequest, whose constraint JSON tags
-// (accounts, max_amount) differ from auth.PermissionConstraints. Every
-// constraint field must reach the store; a dropped one widens the key's scope.
+// The wire constraint tags (accounts, max_amount) differ from
+// auth.PermissionConstraints. Every constraint field must reach the store; a
+// dropped one widens the key's scope.
 func TestAuthServiceAdapter_CreateAPIKeyAPI_KeepsPermissionConstraints(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
 	ctx := context.Background()
@@ -454,13 +454,13 @@ func TestAuthServiceAdapter_CreateAPIKeyAPI_KeepsPermissionConstraints(t *testin
 		Run(func(args mock.Arguments) { stored = args.Get(1).(*auth.UserAPIKey) }).Return(nil)
 
 	expiresAt := time.Now().Add(24 * time.Hour)
-	_, err := adapter.CreateAPIKeyAPI(ctx, "user-1", api.CreateAPIKeyRequest{
+	_, err := adapter.CreateAPIKeyAPI(ctx, "user-1", auth.APICreateAPIKeyRequest{
 		Name:      "scoped",
 		Password:  password,
 		ExpiresAt: &expiresAt,
-		Permissions: []api.Permission{{
+		Permissions: []auth.APIPermission{{
 			Action: auth.ActionView, Resource: auth.ResourceRecommendations,
-			Constraints: &api.PermissionConstraint{
+			Constraints: &auth.APIPermissionConstraint{
 				Accounts: []string{"123"}, Providers: []string{"aws"}, Services: []string{"ec2"},
 				Regions: []string{"us-east-1"}, MaxAmount: 500,
 			},
