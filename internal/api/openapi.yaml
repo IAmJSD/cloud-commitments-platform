@@ -3576,6 +3576,11 @@ components:
         current_coverage:
           type: number
           format: double
+          nullable: true
+          description: >-
+            Committed / (committed + potential) monthly savings, as a
+            percentage. Null when both are zero, so there is nothing to
+            measure.
         target_coverage:
           type: number
           format: double
