@@ -13,13 +13,11 @@ import (
 )
 
 func TestMigration_PurchasePlanUpdateToken(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, container.Cleanup(ctx)) })
-	pool := container.DB.Pool()
 	path := getMigrationsPath()
-	require.NoError(t, migrations.RunMigrations(ctx, pool, path, "", ""))
+	container := testhelpers.RequireMigratedDatabase(ctx, t, path)
+	pool := container.DB.Pool()
 
 	for _, future := range []bool{false, true} {
 		t.Run(map[bool]string{false: "current", true: "future"}[future], func(t *testing.T) {
