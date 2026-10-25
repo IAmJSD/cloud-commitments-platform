@@ -990,6 +990,17 @@ jobs:
             terraform -chdir="$d" test
           done
 
+      # With CloudFront in front of a Fargate ALB, the ALB must admit only
+      # CloudFront's origin-facing prefix list (#412).
+      - name: Test AWS ALB ingress guard
+        if: matrix.cloud == 'aws'
+        run: |
+          for d in terraform/modules/networking/aws terraform/environments/aws; do
+            terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
+            terraform -chdir="$d" fmt -check -recursive
+            terraform -chdir="$d" test
+          done
+
       # Failure alerts must fire on the markers the app logs (#714). GCP's
       # module tests run in the /health step below.
       - name: Test monitoring module
