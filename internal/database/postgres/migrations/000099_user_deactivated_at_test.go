@@ -51,12 +51,11 @@ func deactivatedAtOf(ctx context.Context, t *testing.T, pool *pgxpool.Pool, user
 // could self-reactivate via password reset regardless of how it went
 // inactive.
 func TestMigration_UserDeactivatedAtBackfill(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 99)))
