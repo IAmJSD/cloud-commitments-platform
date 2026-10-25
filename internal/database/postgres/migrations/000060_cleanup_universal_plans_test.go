@@ -33,12 +33,11 @@ import (
 // The down migration is a no-op by design (deleted rows cannot be recovered
 // from SQL alone), so no rollback assertion is made.
 func TestMigration_CleanupUniversalPlans(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	// Pin the DB at v59, seed fixtures, then apply 000060 in isolation.
@@ -47,7 +46,7 @@ func TestMigration_CleanupUniversalPlans(t *testing.T) {
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 59))
 
 	// Seed: two cloud accounts (needed for plan_accounts FK).
-	_, err = pool.Exec(ctx, `
+	_, err := pool.Exec(ctx, `
 		INSERT INTO cloud_accounts (id, name, provider, external_id)
 		VALUES
 		  ('aaaaaaaa-aaaa-aaaa-aaaa-000000000001', 'acct-1', 'aws', '111111111111'),
