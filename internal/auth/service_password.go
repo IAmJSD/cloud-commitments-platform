@@ -231,7 +231,10 @@ func (s *Service) checkCommonPasswords(password string) error {
 // attacker out (issue #102).
 //
 // Both cleanups are best-effort: failures are logged, not returned, because
-// the new password has already taken effect by the time this runs. Shared
+// the new password has already taken effect by the time this runs. They are
+// not what enforces the rotation: the password write bumps
+// users.password_version, and ValidateSession and ValidateUserAPIKey reject
+// any credential issued under an older version (issues #398, #402). Shared
 // by ChangePassword, ConfirmPasswordReset and UpdateUserProfile so the two
 // checks live in one place instead of three.
 func (s *Service) invalidateUserCredentialsBestEffort(ctx context.Context, userID, opName string) {
