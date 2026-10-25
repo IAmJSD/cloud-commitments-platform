@@ -85,8 +85,7 @@ func (identityEmail) SendNewRecommendationsNotification(context.Context, email.N
 
 func TestRecommendationIdentity_CollectionPostgresDetailAndPricing(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRICacheIntegration(ctx, t)
-	defer cleanup()
+	store := setupRICacheIntegration(ctx, t)
 	require.NoError(t, store.SaveGlobalConfig(ctx, &config.GlobalConfig{
 		EnabledProviders: []string{"aws"}, DefaultTerm: 1, DefaultPayment: "all-upfront",
 	}))

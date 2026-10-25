@@ -71,6 +71,22 @@ func (s *Service) hashPassword(password string) (string, error) {
 	return string(hash), nil
 }
 
+// dummyHashForCompare returns the hash Login compares against when the
+// account cannot log in. Production always uses dummyPasswordHash, at the
+// same cost as real hashes. When a test lowers the cost with
+// bcryptCostOverride, the dummy hash uses that cost too, so the compare still
+// takes as long as a real one in that test instead of a full cost-12 compare.
+func (s *Service) dummyHashForCompare() string {
+	if s.bcryptCostOverride <= 0 {
+		return dummyPasswordHash
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte("timing-equalizer"), s.bcryptCostOverride)
+	if err != nil {
+		return dummyPasswordHash
+	}
+	return string(hash)
+}
+
 // verifyPassword verifies a password against a bcrypt hash.
 func (s *Service) verifyPassword(password, hash string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
@@ -215,7 +231,10 @@ func (s *Service) checkCommonPasswords(password string) error {
 // attacker out (issue #102).
 //
 // Both cleanups are best-effort: failures are logged, not returned, because
-// the new password has already taken effect by the time this runs. Shared
+// the new password has already taken effect by the time this runs. They are
+// not what enforces the rotation: the password write bumps
+// users.password_version, and ValidateSession and ValidateUserAPIKey reject
+// any credential issued under an older version (issues #398, #402). Shared
 // by ChangePassword, ConfirmPasswordReset and UpdateUserProfile so the two
 // checks live in one place instead of three.
 func (s *Service) invalidateUserCredentialsBestEffort(ctx context.Context, userID, opName string) {
@@ -291,11 +310,24 @@ func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangeP
 // token stays valid: this prevents a griefing attack where an adversary who
 // knows the victim's email repeatedly requests resets to perpetually
 // invalidate the victim's legitimate link.
+//
+// The stored token is either a reset token (PasswordResetExpiry) or an invite
+// token (PasswordSetupExpiry), and only its expiry is stored. A reset token
+// never has more than PasswordResetExpiry left, so a longer remaining window
+// identifies an invite; deriving an invite's age from the reset lifetime made
+// it negative for the whole week, silently dropping every "re-send my setup
+// link" request (audit finding A03-009). A remaining window beyond even the
+// invite lifetime still yields a negative age, so it stays rate-limited.
 func resetRecentlyIssued(user *User, email string) bool {
 	if user.PasswordResetExpiry == nil {
 		return false
 	}
-	tokenAge := PasswordResetExpiry - time.Until(*user.PasswordResetExpiry)
+	remaining := time.Until(*user.PasswordResetExpiry)
+	lifetime := PasswordResetExpiry
+	if remaining > PasswordResetExpiry {
+		lifetime = PasswordSetupExpiry
+	}
+	tokenAge := lifetime - remaining
 	if tokenAge < PasswordResetRateLimit {
 		logging.Debugf("Password reset rate-limited for %s (token age %s < %s)",
 			redactEmail(email), tokenAge.Round(time.Second), PasswordResetRateLimit)

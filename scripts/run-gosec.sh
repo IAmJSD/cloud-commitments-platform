@@ -11,12 +11,18 @@
 # Usage:
 #   run-gosec.sh [--sarif-dir DIR] [--module MOD [PKG...]]...
 #   run-gosec.sh --list-modules
+#   run-gosec.sh --print-versions
 #
 # With no --module every module is scanned whole (./...). PKG paths are
 # relative to the module root (for example ./internal/api); default ./...
 # --sarif-dir writes DIR/gosec-<tag>.sarif instead of printing text findings,
 # where <tag> is "root" for the root module and the module path with slashes
 # turned into dashes otherwise (tests/e2e -> tests-e2e).
+#
+# --print-versions prints gosec_version=, go_version= and bin_dir= lines (the
+# pinned gosec, the effective Go version and the binary cache directory) and
+# exits without installing or scanning. CI keys its gosec caches on them, so
+# they are never duplicated in the workflow.
 #
 # Exit codes: 0 clean, 1 findings or a scan error, 2 setup/usage failure.
 #
@@ -35,6 +41,13 @@ MODULES=(. tests/e2e)
 if [[ "${1:-}" == "--list-modules" ]]; then
     printf '%s\n' "${MODULES[@]}"
     exit 0
+fi
+
+print_versions=0
+if [[ "${1:-}" == "--print-versions" ]]; then
+    [[ $# -eq 1 ]] || { echo "run-gosec: --print-versions takes no other arguments" >&2; exit 2; }
+    print_versions=1
+    shift
 fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -80,6 +93,11 @@ go_version=$(go env GOVERSION) || { echo "run-gosec: go env GOVERSION failed (is
 cache_root="${XDG_CACHE_HOME:-${HOME}/.cache}/gosec"
 gosec_dir="${cache_root}/${GOSEC_VERSION}-${go_version}"
 gosec_bin="${gosec_dir}/gosec"
+
+if [[ $print_versions -eq 1 ]]; then
+    printf 'gosec_version=%s\ngo_version=%s\nbin_dir=%s\n' "$GOSEC_VERSION" "$go_version" "$gosec_dir"
+    exit 0
+fi
 
 if [[ ! -x "$gosec_bin" ]]; then
     echo "run-gosec: installing gosec@${GOSEC_VERSION} (${go_version}) -> ${gosec_dir}" >&2

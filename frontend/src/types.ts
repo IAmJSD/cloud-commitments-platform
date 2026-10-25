@@ -37,25 +37,10 @@ export interface ServiceSavings {
   current_savings: number;
 }
 
-export interface UpcomingPurchase {
-  execution_id: string;
-  plan_id: string;
-  plan_name: string;
-  scheduled_date: string;
-  provider: api.Provider;
-  service: string;
-  step_number: number;
-  total_steps: number;
-  estimated_savings: number;
-  // false when the step carries no recommendations; estimated_savings is
-  // then a placeholder, not data (platform#609). Only an explicit false is bare.
-  has_recommendations?: boolean;
-  // created_by_user_id mirrors the field on api.UpcomingPurchase so the
-  // dashboard widget can apply the issue-#950 creator-scope ownership
-  // gate on the Cancel button. Optional: legacy / scheduler-tick rows
-  // ship NULL here.
-  created_by_user_id?: string;
-}
+// The dashboard renders the API rows as-is, so this is the API type rather
+// than a hand-kept copy that drifted from it and forced casts at the call
+// sites (#1189). Field notes live on api.UpcomingPurchase.
+export type UpcomingPurchase = api.UpcomingPurchase;
 
 // Recommendations types
 export interface RecommendationsResponse {
@@ -204,6 +189,18 @@ export interface HistoryResponse {
   limit?: number;
   /** Fixed row cap on non-completed executions. */
   executions_limit?: number;
+  /**
+   * Row cap on actionable executions (pending, approved, running, ...).
+   * They are not paged: the first page lists them all, up to this cap.
+   */
+  actionable_executions_limit?: number;
+  /**
+   * True when older rows follow this page (issue #674). Absent on servers
+   * that predate paging, which the UI treats as "cannot page".
+   */
+  has_more?: boolean;
+  /** Opaque position to pass back as `cursor`; set only with has_more. */
+  next_cursor?: string;
 }
 
 export interface HistorySummary {
@@ -327,12 +324,24 @@ export interface SavingsAnalyticsResponse {
   data_points: SavingsDataPoint[];
 }
 
+// Mirrors the Go HistorySummary that GET /history/analytics actually sends
+// (internal/api/types.go). The previous total_period_savings /
+// average_savings_per_period / peak_savings keys belonged to an unused Go
+// struct and never arrived on the wire (issue #276). Average and peak have no
+// server-side counterpart; the client derives them from data_points.
 export interface SavingsAnalyticsSummary {
-  total_period_savings: number;
-  total_upfront_spent: number;
-  purchase_count: number;
-  average_savings_per_period: number;
-  peak_savings: number;
+  total_purchases: number;
+  total_completed: number;
+  total_pending: number;
+  total_in_progress: number;
+  total_failed: number;
+  total_expired: number;
+  total_revoked: number;
+  // null when any purchase in the window has an unknown upfront cost.
+  total_upfront: number | null;
+  // Sum of per-bucket total_savings over the window, in monthly dollars.
+  total_monthly_savings: number;
+  total_annual_savings: number;
 }
 
 export interface SavingsDataPoint {
