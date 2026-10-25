@@ -74,7 +74,7 @@ func TestGCPKMSSignerEmitsRawES256(t *testing.T) {
 
 // TestGCPKMSSignerRejectsWrongCurve guards against a misconfigured KMS
 // key (e.g. EC_SIGN_P384_SHA384 instead of the required
-// EC_SIGN_P256_SHA256) being accepted silently. resolveOnce must fail
+// EC_SIGN_P256_SHA256) being accepted silently. fetchPublicKey must fail
 // fast instead of caching a wrong-curve public key.
 func TestGCPKMSSignerRejectsWrongCurve(t *testing.T) {
 	ctx := context.Background()

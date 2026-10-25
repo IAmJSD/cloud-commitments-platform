@@ -161,15 +161,21 @@ type CreateUserResult struct {
 	InviteEmailError string
 }
 
-// checkCreateUserCeiling applies the membership grant ceiling to a create
-// request's GroupIDs, skipping it for trusted internal callers. Extracted
-// from CreateUser to keep that function under gocyclo's complexity
-// threshold, the same reason guardDeactivation was pulled out of UpdateUser.
-func (s *Service) checkCreateUserCeiling(ctx context.Context, actorUserID string, groupIDs []string) error {
-	if actorUserID == "" {
-		return nil
+// checkCreateUserGroups applies the membership grant ceiling to a create
+// request's GroupIDs, skipping it for trusted internal callers, then the
+// issue #78 view-only/write-capable contradiction check, which applies to
+// every caller because it is about the membership rather than the actor. The
+// order matches guardGroupChange: access refusals (403) win over the
+// contradiction (400). Extracted from CreateUser to keep that function under
+// gocyclo's complexity threshold, the same reason guardDeactivation was
+// pulled out of UpdateUser.
+func (s *Service) checkCreateUserGroups(ctx context.Context, actorUserID string, groupIDs []string) error {
+	if actorUserID != "" {
+		if err := s.checkMembershipGrantCeiling(ctx, actorUserID, groupIDs); err != nil {
+			return err
+		}
 	}
-	return s.checkMembershipGrantCeiling(ctx, actorUserID, groupIDs)
+	return s.checkGroupCombination(ctx, groupIDs)
 }
 
 // CreateUser creates a new user (admin only).
@@ -197,7 +203,7 @@ func (s *Service) CreateUser(ctx context.Context, actorUserID string, req Create
 	if err := s.validateCreateUserRequest(ctx, req); err != nil {
 		return nil, err
 	}
-	if err := s.checkCreateUserCeiling(ctx, actorUserID, req.GroupIDs); err != nil {
+	if err := s.checkCreateUserGroups(ctx, actorUserID, req.GroupIDs); err != nil {
 		return nil, err
 	}
 
@@ -442,10 +448,26 @@ func applyDeactivatedAtTransition(user *User, reqActive *bool) {
 	}
 }
 
-// guardGroupChange enforces the issue #907 invariants for a group-membership
-// change: at least one group remains, the last Administrators-group member is
-// not removed, and a non-privileged actor cannot escalate their own access.
+// guardGroupChange enforces the invariants for a group-membership change:
+// the issue #907 / #226 access rules in guardGroupChangeAccess, then the issue
+// #78 check that the change does not leave a view-only group next to a
+// write-capable one. The contradiction check runs last so a refused
+// escalation is still reported as the escalation (403), and it runs for every
+// caller, trusted internal ones included, because it is about the resulting
+// membership rather than the actor. An unchanged membership is not
+// re-checked (see checkGroupMembershipChange).
 func (s *Service) guardGroupChange(ctx context.Context, actorUserID, targetUserID string, prior, next []string) error {
+	if err := s.guardGroupChangeAccess(ctx, actorUserID, targetUserID, prior, next); err != nil {
+		return err
+	}
+	return s.checkGroupMembershipChange(ctx, prior, next)
+}
+
+// guardGroupChangeAccess enforces the issue #907 invariants for a
+// group-membership change: at least one group remains, the last
+// Administrators-group member is not removed, and a non-privileged actor
+// cannot escalate their own access.
+func (s *Service) guardGroupChangeAccess(ctx context.Context, actorUserID, targetUserID string, prior, next []string) error {
 	if len(next) == 0 {
 		return ErrNoGroups
 	}
