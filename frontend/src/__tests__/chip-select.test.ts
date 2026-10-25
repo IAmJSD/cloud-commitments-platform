@@ -337,4 +337,63 @@ describe('createChipSelect', () => {
     expect(empty?.getAttribute('aria-disabled')).toBe('true');
     expect(empty?.getAttribute('aria-selected')).toBe('false');
   });
+
+  // Issue #729 (UX-31): with the search input showing, focus is in the input,
+  // so aria-activedescendant must be there (screen readers ignore it on an
+  // unfocused element), and a pick must hand focus back to the trigger.
+  describe('search-input focus model (issue #729)', () => {
+    function openLong(onChange: (v: string) => void = () => {}): {
+      root: HTMLElement; trigger: HTMLButtonElement; search: HTMLInputElement;
+    } {
+      const { root } = createChipSelect({ label: 'Account', options: LONG_OPTIONS, value: 'acct-2', onChange });
+      document.body.appendChild(root);
+      const trigger = root.querySelector<HTMLButtonElement>('.chip-select')!;
+      trigger.focus();
+      trigger.click();
+      const search = root.querySelector<HTMLInputElement>('.chip-select-search')!;
+      return { root, trigger, search };
+    }
+
+    test('aria-activedescendant lives on the focused search input, not the trigger', () => {
+      const { root, trigger, search } = openLong();
+      expect(document.activeElement).toBe(search);
+      expect(trigger.hasAttribute('aria-activedescendant')).toBe(false);
+      const listbox = root.querySelector('[role="listbox"]')!;
+      expect(search.getAttribute('aria-controls')).toBe(listbox.id);
+      expect(document.getElementById(search.getAttribute('aria-activedescendant')!)?.dataset['value']).toBe('acct-2');
+
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      expect(document.getElementById(search.getAttribute('aria-activedescendant')!)?.dataset['value']).toBe('acct-3');
+      expect(trigger.hasAttribute('aria-activedescendant')).toBe(false);
+    });
+
+    test('Enter on a highlighted option returns focus to the trigger', () => {
+      const onChange = jest.fn();
+      const { trigger, search } = openLong(onChange);
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      search.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      expect(onChange).toHaveBeenCalledWith('acct-3');
+      expect(document.activeElement).toBe(trigger);
+      expect(search.hasAttribute('aria-activedescendant')).toBe(false);
+    });
+
+    test('a mouse pick from the open search menu also returns focus to the trigger', () => {
+      const { root, trigger } = openLong();
+      const opt = root.querySelector<HTMLLIElement>('.chip-select-option[data-value="acct-5"]')!;
+      opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      expect(document.activeElement).toBe(trigger);
+    });
+
+    test('short lists keep aria-activedescendant on the trigger, which keeps focus', () => {
+      const { root } = createChipSelect({ label: 'Provider', options: SHORT_OPTIONS, value: 'aws', onChange: () => {} });
+      document.body.appendChild(root);
+      const trigger = root.querySelector<HTMLButtonElement>('.chip-select')!;
+      trigger.focus();
+      trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      expect(trigger.getAttribute('aria-activedescendant')).toBeTruthy();
+      trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      expect(document.activeElement).toBe(trigger);
+    });
+  });
 });

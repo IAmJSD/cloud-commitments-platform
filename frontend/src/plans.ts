@@ -5,8 +5,9 @@
 import * as api from './api';
 import * as state from './state';
 import { buildCommitmentSummary, withIntro } from './commitmentSummary';
-import { formatDate, formatTerm, getStatusBadge, escapeHtml, escapeHtmlAttr, formatCurrency, CURRENCY_DEFAULT_DIGITS, providerBadgeHtml } from './utils';
+import { formatDate, formatTerm, getStatusBadge, escapeHtml, escapeHtmlAttr, formatCurrency, CURRENCY_DEFAULT_DIGITS, NO_VALUE, providerBadgeHtml } from './utils';
 import { showToast } from './toast';
+import { iconSvg } from './icons';
 import { confirmDialog } from './confirmDialog';
 import type { PlansResponse, LocalPlan, SavePlanData } from './types';
 import { viewPlanHistory } from './history';
@@ -15,8 +16,15 @@ import { populateTermSelect, populatePaymentSelect, isValidCombination, normaliz
 import { openModal, closeModal } from './modal';
 import { showSkeletonTiles, showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 import { canAccess } from './permissions';
-import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
+import { applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
+import {
+  openColumnFilterPopover,
+  rebindColumnFilterPopover,
+  sortedDistinctValues,
+} from './lib/column-filter-popover';
 import { suggestedPurchaseStartDate } from './lib/calendar-date';
+import { badgeHtml, statusBadgeHtml } from './lib/status-badge';
+import { isPastScheduledDate } from './lib/purchase-row-guards';
 import { mountPlanEditorPanel } from './plan-editor-panel';
 
 // pendingPlanRecommendations holds the resolved plan target captured at
@@ -152,7 +160,7 @@ function renderPlannedPurchasesInternal(): void {
   const filterBtn = (column: state.PlansColumnId, lbl: string): string => {
     const active = filters[column] ? ' active' : '';
     const label = filters[column] ? `Filter ${lbl} \u2014 currently active` : `Filter ${lbl}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">\u26db</button>`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">${iconSvg('filter')}</button>`;
   };
 
   const tbody = filtered.length === 0
@@ -204,7 +212,7 @@ function renderPlannedPurchasesInternal(): void {
 
   // Re-anchor any open popover to the freshly-rendered trigger so the
   // popover survives table re-renders triggered by other state changes.
-  rebindOpenPlansPopoverAnchor();
+  rebindColumnFilterPopover(PLANS_POPOVER_SCOPE);
 }
 
 // ---------------------------------------------------------------------------
@@ -287,27 +295,17 @@ function roundForDisplay(n: number, precision: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// Plans column-filter popover (portal pattern — sibling of the one in
-// recommendations.ts). Lives appended to document.body so it survives the
-// table's innerHTML rewrite on every render.
+// Plans column-filter popover. The lifecycle (portal DOM, positioning,
+// outside click / Escape, re-sync after re-render) lives in the shared
+// lib/column-filter-popover.ts (issue #18); this table only supplies its
+// column metadata and state accessors.
 // ---------------------------------------------------------------------------
+
+const PLANS_POPOVER_SCOPE = 'plans';
 
 const PLANS_NUMERIC_COLUMNS: ReadonlySet<state.PlansColumnId> = new Set<state.PlansColumnId>([
   'count', 'upfront_cost', 'estimated_savings',
 ]);
-
-interface PlansPopoverState {
-  column: state.PlansColumnId;
-  el: HTMLDivElement;
-  checkboxes: Map<string, HTMLInputElement>;
-  input: HTMLInputElement | null;
-  errorEl: HTMLElement | null;
-}
-
-let openPlansPopover: PlansPopoverState | null = null;
-let plansOutsideClickHandler: ((e: MouseEvent) => void) | null = null;
-let plansEscKeyHandler: ((e: KeyboardEvent) => void) | null = null;
-let plansResizeHandler: (() => void) | null = null;
 
 function plansColumnLabel(column: state.PlansColumnId): string {
   switch (column) {
@@ -341,320 +339,21 @@ function getPlansColumnTriggerButton(column: state.PlansColumnId): HTMLButtonEle
   );
 }
 
-function positionPlansPopover(popover: HTMLElement, anchor: HTMLElement): void {
-  const rect = anchor.getBoundingClientRect();
-  popover.style.display = 'block';
-  const popRect = popover.getBoundingClientRect();
-  const margin = 8;
-
-  let top = rect.bottom + 4;
-  if (top + popRect.height > window.innerHeight - margin) {
-    top = Math.max(margin, rect.top - popRect.height - 4);
-  }
-  let left = rect.left;
-  if (left + popRect.width > window.innerWidth - margin) {
-    left = Math.max(margin, window.innerWidth - margin - popRect.width);
-  }
-  popover.style.position = 'absolute';
-  popover.style.top = `${top + window.scrollY}px`;
-  popover.style.left = `${left + window.scrollX}px`;
-}
-
-function plansDistinctValuesForColumn(
-  purchases: readonly PlannedPurchase[],
-  column: state.PlansColumnId,
-): string[] {
-  const seen = new Set<string>();
-  for (const p of purchases) {
-    seen.add(categoricalCellValueForPlan(p, column));
-  }
-  return Array.from(seen).sort((a, b) => {
-    if (a === '' && b !== '') return -1;
-    if (a !== '' && b === '') return 1;
-    return a.localeCompare(b);
-  });
-}
-
-function buildPlansPopoverContent(
-  column: state.PlansColumnId,
-  purchases: readonly PlannedPurchase[],
-): { el: HTMLDivElement; checkboxes: Map<string, HTMLInputElement>; input: HTMLInputElement | null; errorEl: HTMLElement | null } {
-  const popover = document.createElement('div');
-  popover.className = 'column-filter-popover';
-  popover.setAttribute('role', 'dialog');
-  popover.setAttribute('aria-modal', 'false');
-
-  const headingId = `plans-column-filter-heading-${column}`;
-  popover.setAttribute('aria-labelledby', headingId);
-
-  const heading = document.createElement('h3');
-  heading.id = headingId;
-  heading.className = 'column-filter-heading';
-  heading.textContent = `Filter ${plansColumnLabel(column)}`;
-  popover.appendChild(heading);
-
-  const checkboxes = new Map<string, HTMLInputElement>();
-  let input: HTMLInputElement | null = null;
-  let errorEl: HTMLElement | null = null;
-  let commitAllRef: ((target: boolean) => void) | null = null;
-
-  if (PLANS_NUMERIC_COLUMNS.has(column)) {
-    const label = document.createElement('label');
-    label.className = 'column-filter-numeric-label';
-    label.textContent = 'Expression';
-    input = document.createElement('input');
-    input.type = 'text';
-    input.className = 'column-filter-numeric-input';
-    input.placeholder = 'e.g. >100, 50..200, 5';
-    input.setAttribute('aria-describedby', `plans-column-filter-error-${column}`);
-    label.appendChild(input);
-    popover.appendChild(label);
-
-    errorEl = document.createElement('div');
-    errorEl.id = `plans-column-filter-error-${column}`;
-    errorEl.className = 'column-filter-error';
-    errorEl.setAttribute('role', 'status');
-    popover.appendChild(errorEl);
-
-    const commit = (): void => {
-      const expr = input!.value.trim();
-      if (expr === '') {
-        state.setPlansColumnFilter(column, null);
-        errorEl!.textContent = '';
-        rerenderPlannedPurchases();
-        return;
-      }
-      const parsed = parseNumericFilter(expr);
-      if (!parsed.ok) {
-        errorEl!.textContent = parsed.error;
-        return;
-      }
-      errorEl!.textContent = '';
-      state.setPlansColumnFilter(column, { kind: 'expr', expr });
-      rerenderPlannedPurchases();
-    };
-    input.addEventListener('blur', commit);
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        commit();
-      }
-    });
-  } else {
-    const distinct = plansDistinctValuesForColumn(purchases, column);
-
-    const allLabel = document.createElement('label');
-    allLabel.className = 'column-filter-all';
-    const allBox = document.createElement('input');
-    allBox.type = 'checkbox';
-    allBox.dataset['role'] = 'all';
-    allLabel.appendChild(allBox);
-    const allText = document.createElement('span');
-    allText.textContent = '(All)';
-    allLabel.appendChild(allText);
-    popover.appendChild(allLabel);
-
-    const list = document.createElement('div');
-    list.className = 'column-filter-list';
-    for (const value of distinct) {
-      const itemLabel = document.createElement('label');
-      itemLabel.className = 'column-filter-item';
-      const cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.dataset['value'] = value;
-      itemLabel.appendChild(cb);
-      const text = document.createElement('span');
-      text.textContent = plansCategoricalDisplayLabel(column, value);
-      itemLabel.appendChild(text);
-      list.appendChild(itemLabel);
-      checkboxes.set(value, cb);
-    }
-    popover.appendChild(list);
-
-    const updateAllTriState = (): void => {
-      const total = checkboxes.size;
-      let checked = 0;
-      checkboxes.forEach((cb) => { if (cb.checked) checked++; });
-      allBox.indeterminate = checked > 0 && checked < total;
-      allBox.checked = checked === total && total > 0;
-    };
-
-    const commit = (): void => {
-      const selected: string[] = [];
-      checkboxes.forEach((cb, value) => { if (cb.checked) selected.push(value); });
-      if (selected.length === checkboxes.size) {
-        state.setPlansColumnFilter(column, null);
-      } else {
-        state.setPlansColumnFilter(column, { kind: 'set', values: selected });
-      }
-      updateAllTriState();
-      rerenderPlannedPurchases();
-    };
-
-    const commitAll = (target: boolean): void => {
-      checkboxes.forEach((cb) => { cb.checked = target; });
-      if (target) {
-        state.setPlansColumnFilter(column, null);
-      } else {
-        state.setPlansColumnFilter(column, { kind: 'set', values: [] });
-      }
-      updateAllTriState();
-      rerenderPlannedPurchases();
-    };
-    commitAllRef = commitAll;
-
-    checkboxes.forEach((cb) => {
-      cb.addEventListener('change', commit);
-    });
-    allBox.addEventListener('change', () => {
-      commitAll(allBox.checked);
-    });
-  }
-
-  const footer = document.createElement('div');
-  footer.className = 'column-filter-footer';
-  const clearBtn = document.createElement('button');
-  clearBtn.type = 'button';
-  clearBtn.className = 'column-filter-clear';
-  clearBtn.textContent = 'Clear';
-  clearBtn.addEventListener('click', () => {
-    if (input) {
-      state.setPlansColumnFilter(column, null);
-      input.value = '';
-      if (errorEl) errorEl.textContent = '';
-      rerenderPlannedPurchases();
-    } else {
-      commitAllRef?.(false);
-    }
-  });
-  footer.appendChild(clearBtn);
-  popover.appendChild(footer);
-
-  return { el: popover, checkboxes, input, errorEl };
-}
-
-function resyncOpenPlansPopover(): void {
-  if (!openPlansPopover) return;
-  const f = state.getPlansColumnFilters()[openPlansPopover.column];
-  if (openPlansPopover.input) {
-    if (document.activeElement !== openPlansPopover.input) {
-      const expr = f && f.kind === 'expr' ? f.expr : '';
-      openPlansPopover.input.value = expr;
-      if (openPlansPopover.errorEl) openPlansPopover.errorEl.textContent = '';
-    }
-    return;
-  }
-  if (f == null) {
-    openPlansPopover.checkboxes.forEach((cb) => { cb.checked = true; });
-  } else {
-    const values: ReadonlySet<string> = f.kind === 'set' ? new Set(f.values) : new Set();
-    openPlansPopover.checkboxes.forEach((cb, value) => {
-      cb.checked = values.has(value);
-    });
-  }
-  const allBox = openPlansPopover.el.querySelector<HTMLInputElement>('input[data-role="all"]');
-  if (allBox) {
-    const total = openPlansPopover.checkboxes.size;
-    let checked = 0;
-    openPlansPopover.checkboxes.forEach((cb) => { if (cb.checked) checked++; });
-    allBox.indeterminate = checked > 0 && checked < total;
-    allBox.checked = checked === total && total > 0;
-  }
-}
-
-function attachPlansPopoverGlobalListeners(): void {
-  if (plansOutsideClickHandler) return;
-  plansOutsideClickHandler = (e: MouseEvent): void => {
-    if (!openPlansPopover) return;
-    const target = e.target as Node | null;
-    if (!target) return;
-    if (openPlansPopover.el.contains(target)) return;
-    if (target instanceof Element && target.closest('.column-filter-btn')) return;
-    closePlansPopover();
-  };
-  plansEscKeyHandler = (e: KeyboardEvent): void => {
-    if (!openPlansPopover) return;
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      closePlansPopover(true);
-    }
-  };
-  plansResizeHandler = (): void => {
-    if (!openPlansPopover) return;
-    const trigger = getPlansColumnTriggerButton(openPlansPopover.column);
-    if (!trigger) {
-      closePlansPopover();
-      return;
-    }
-    positionPlansPopover(openPlansPopover.el, trigger);
-  };
-  document.addEventListener('mousedown', plansOutsideClickHandler);
-  document.addEventListener('keydown', plansEscKeyHandler);
-  window.addEventListener('resize', plansResizeHandler);
-}
-
-function detachPlansPopoverGlobalListeners(): void {
-  if (plansOutsideClickHandler) document.removeEventListener('mousedown', plansOutsideClickHandler);
-  if (plansEscKeyHandler) document.removeEventListener('keydown', plansEscKeyHandler);
-  if (plansResizeHandler) window.removeEventListener('resize', plansResizeHandler);
-  plansOutsideClickHandler = null;
-  plansEscKeyHandler = null;
-  plansResizeHandler = null;
-}
-
 function openPlansColumnPopover(column: state.PlansColumnId, anchor: HTMLElement): void {
-  if (openPlansPopover && !openPlansPopover.el.isConnected) {
-    detachPlansPopoverGlobalListeners();
-    openPlansPopover = null;
-  }
-  if (openPlansPopover && openPlansPopover.column === column) {
-    closePlansPopover(true);
-    return;
-  }
-  if (openPlansPopover) closePlansPopover();
-
-  const built = buildPlansPopoverContent(column, lastLoadedPurchases);
-  document.body.appendChild(built.el);
-  openPlansPopover = {
+  openColumnFilterPopover({
+    scope: PLANS_POPOVER_SCOPE,
     column,
-    el: built.el,
-    checkboxes: built.checkboxes,
-    input: built.input,
-    errorEl: built.errorEl,
-  };
-  resyncOpenPlansPopover();
-  positionPlansPopover(built.el, anchor);
-  anchor.setAttribute('aria-expanded', 'true');
-  attachPlansPopoverGlobalListeners();
-
-  const firstFocusable = built.input
-    ?? built.el.querySelector<HTMLInputElement>('input[type="checkbox"]');
-  firstFocusable?.focus();
-}
-
-function closePlansPopover(restoreFocus = false): void {
-  if (!openPlansPopover) return;
-  const { column, el } = openPlansPopover;
-  el.remove();
-  openPlansPopover = null;
-  detachPlansPopoverGlobalListeners();
-  const trigger = getPlansColumnTriggerButton(column);
-  if (trigger) {
-    trigger.setAttribute('aria-expanded', 'false');
-    if (restoreFocus) trigger.focus();
-  }
-}
-
-function rebindOpenPlansPopoverAnchor(): void {
-  if (!openPlansPopover) return;
-  const trigger = getPlansColumnTriggerButton(openPlansPopover.column);
-  if (!trigger) {
-    closePlansPopover();
-    return;
-  }
-  trigger.setAttribute('aria-expanded', 'true');
-  positionPlansPopover(openPlansPopover.el, trigger);
-  resyncOpenPlansPopover();
+    label: plansColumnLabel(column),
+    kind: PLANS_NUMERIC_COLUMNS.has(column) ? 'numeric' : 'categorical',
+    distinctValues: sortedDistinctValues(lastLoadedPurchases, (p) => categoricalCellValueForPlan(p, column)),
+    displayLabel: (value) => plansCategoricalDisplayLabel(column, value),
+    getFilter: () => state.getPlansColumnFilters()[column],
+    onCommit: (filter) => {
+      state.setPlansColumnFilter(column, filter);
+      rerenderPlannedPurchases();
+    },
+    findTrigger: () => getPlansColumnTriggerButton(column),
+  }, anchor);
 }
 
 function rerenderPlannedPurchases(): void {
@@ -706,7 +405,7 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
   const resourceCell = hasNoRecommendations
     ? '<span class="no-recommendations" title="This step has no recommendations attached, so it cannot buy anything.">No recommendations attached</span>'
     : `${escapeHtml(purchase.resource_type)} (${escapeHtml(purchase.region)})`;
-  const countCell = hasNoRecommendations ? '—' : String(purchase.count);
+  const countCell = hasNoRecommendations ? '—' : escapeHtml(String(purchase.count ?? ''));
   const upfrontShown = hasNoRecommendations ? '—' : upfrontCell;
   const savingsCell = hasNoRecommendations ? '—' : `${formatCurrency(purchase.estimated_savings)}/mo`;
 
@@ -738,6 +437,15 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
     canAccess('cancel-own', 'purchases')
   );
 
+  // #181: a pending step whose date has passed did not run; "pending" alone
+  // reads as on schedule. Flag it and name the next action the user can take.
+  const overdue = isPending && isPastScheduledDate(purchase.scheduled_date);
+  const overdueHint = canRunPurchase ? 'Not run on its date. Run now or pause.' : 'Not run on its date.';
+  const overdueBadge = overdue
+    ? badgeHtml('danger', 'Overdue', 'Scheduled date has passed')
+    : '';
+  const overdueHintHtml = overdue ? `<div class="overdue-hint">${overdueHint}</div>` : '';
+
   return `
     <tr class="planned-purchase-row ${statusClass}">
       <td>
@@ -752,13 +460,13 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td>${termCell}</td>
       <td>${upfrontShown}</td>
       <td class="savings">${savingsCell}</td>
-      <td><span class="status-badge ${statusClass}">${escapeHtml(purchase.status)}</span></td>
+      <td><span class="status-badges">${statusBadgeHtml(purchase.status)}${overdueBadge}</span>${overdueHintHtml}</td>
       <td class="actions">
-        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary" title="Run now" aria-label="Run now">▶</button>` : ''}
-        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause" aria-label="Pause">⏸</button>` : ''}
-        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume" aria-label="Resume">⏵</button>` : ''}
-        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan" aria-label="Edit Plan">✎</button>` : ''}
-        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Cancel this purchase and disable its plan" aria-label="Cancel this purchase and disable its plan">✕</button>` : ''}
+        ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary icon-label" title="Run now" aria-label="Run now">${iconSvg('play')}<span>Run now</span></button>` : ''}
+        ${canPauseOrResumePurchase && isPending ? `<button data-action="pause" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Pause" aria-label="Pause">${iconSvg('pause')}</button>` : ''}
+        ${canPauseOrResumePurchase && isPaused ? `<button data-action="resume" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small" title="Resume" aria-label="Resume">${iconSvg('play')}</button>` : ''}
+        ${canEditPlan ? `<button data-action="edit" data-id="${escapeHtmlAttr(purchase.id)}" data-plan-id="${escapeHtmlAttr(purchase.plan_id)}" class="btn-small" title="Edit Plan" aria-label="Edit Plan">${iconSvg('edit')}</button>` : ''}
+        ${canDisablePlan ? `<button data-action="disable" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small danger" title="Cancel this purchase and disable its plan" aria-label="Cancel this purchase and disable its plan">${iconSvg('x')}</button>` : ''}
       </td>
     </tr>
   `;
@@ -920,7 +628,7 @@ interface BackendPlan {
 
 // Score bands for the per-plan health badge (issue #340 follow-up). Green
 // >= 80 (healthy), amber 50-79 (needs attention), red < 50 (action needed).
-// Reuses the existing status-badge palette (badge-success/badge-warning/
+// Reuses the shared .badge tones (badge-success/badge-warning/
 // badge-danger) already used elsewhere on this card rather than introducing
 // new CSS.
 const HEALTH_SCORE_GOOD_THRESHOLD = 80;
@@ -973,14 +681,14 @@ function healthBadgeHtml(plan: BackendPlan): string {
     // execution history, while a non-finite value means the number itself
     // arrived unusable. Naming only the first would send an operator
     // chasing a database problem that may not exist.
-    return `<span class="status-badge badge-muted" title="${escapeHtmlAttr('Plan health is unavailable: this plan\'s score could not be determined.')}">Health: unknown</span>`;
+    return `<span class="badge badge-muted" title="${escapeHtmlAttr('Plan health is unavailable: this plan\'s score could not be determined.')}">Health: unknown</span>`;
   }
   const factors = plan.health_factors || [];
   const factorLines = factors.length > 0
     ? factors.map(f => `-${f.penalty}: ${f.note}`)
     : ['No issues detected'];
   const tooltip = [`Plan health: ${plan.health_score}/100`, ...factorLines].join('\n');
-  return `<span class="status-badge ${healthBadgeClass(plan.health_score)}" title="${escapeHtmlAttr(tooltip)}">Health: ${plan.health_score}</span>`;
+  return `<span class="badge ${healthBadgeClass(plan.health_score)}" title="${escapeHtmlAttr(tooltip)}">Health: ${plan.health_score}</span>`;
 }
 
 // Pretty label for a service slug used inside the plan card.
@@ -1034,7 +742,7 @@ function extractPlanInfo(plan: BackendPlan): { provider: string | null; service:
           .map(s => planServiceLabel(s.service || '—'))
           .join(', ');
     // H-4: never fabricate provider/term/coverage when absent.
-    // Return null so callers can surface '--'/'Unknown' in the display
+    // Return null so callers can surface NO_VALUE/'Unknown' in the display
     // layer rather than silently committing to aws/3yr/80% defaults.
     return {
       provider: firstService.provider || null,
@@ -1057,16 +765,19 @@ function isPlanOverdue(plan: BackendPlan): boolean {
   return nextDate < today;
 }
 
-// Format ramp schedule from backend struct
+// Format ramp schedule from backend struct. A preset name is shown only when
+// type, percent AND interval match the preset, the same rule Edit uses
+// (rampRadioValue), so the list never says "Weekly 20%" for a plan Edit opens
+// as Custom 20% / 7 days, or hides a 14-day interval behind "Weekly 25%" (#1185).
 function formatBackendRampSchedule(ramp: BackendPlan['ramp_schedule']): string {
   if (!ramp) return 'Immediate';
-  switch (ramp.type) {
-    case 'immediate': return 'Immediate';
-    case 'weekly': return `Weekly ${ramp.percent_per_step}%`;
-    case 'monthly': return `Monthly ${ramp.percent_per_step}%`;
-    case 'custom': return `Custom ${ramp.percent_per_step}% every ${ramp.step_interval_days} days`;
-    default: return ramp.type || 'Unknown';
-  }
+  if (!['immediate', 'weekly', 'monthly', 'custom'].includes(ramp.type)) return ramp.type || 'Unknown';
+  const value = rampRadioValue(ramp);
+  if (value === 'immediate') return 'Immediate';
+  const preset = PRESET_RAMPS.find(p => p.value === value);
+  if (preset) return preset.label;
+  const days = ramp.step_interval_days;
+  return days ? `Custom ${ramp.percent_per_step}% every ${days} day${days === 1 ? '' : 's'}` : `Custom ${ramp.percent_per_step}%`;
 }
 
 async function loadPlanAccountNames(planId: string, cardEl: Element): Promise<void> {
@@ -1090,6 +801,13 @@ async function loadPlanAccountNames(planId: string, cardEl: Element): Promise<vo
 // actions that require an account (Add Purchases, Edit) are suppressed
 // — only History and Delete remain — and a read-only "Unassigned" badge
 // is shown so operators can identify and re-scope the plan.
+/** "n/m steps", or NO_VALUE when the step count is missing or not positive (#136). */
+function formatRampProgress(ramp: { current_step?: number; total_steps?: number }): string {
+  const total = ramp.total_steps;
+  if (typeof total !== 'number' || !Number.isFinite(total) || total <= 0) return NO_VALUE;
+  return `${ramp.current_step || 0}/${total} steps`;
+}
+
 function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan: boolean, canAddPurchases: boolean): string {
   const info = extractPlanInfo(plan);
   const status = getStatusBadge(plan.enabled, plan.auto_purchase);
@@ -1099,7 +817,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
   // visible implies the plan will still run on that date, which it won't.
   const showNextDate = Boolean(plan.next_execution_date) && plan.enabled;
   const overdueBadge = overdue && plan.enabled
-    ? '<span class="status-badge badge-danger" title="Next purchase date is in the past">Overdue</span>'
+    ? '<span class="badge badge-danger" title="Next purchase date is in the past">Overdue</span>'
     : '';
   // Read-only mode: unassigned plans cannot be purchased against until an
   // operator re-assigns them to at least one account.
@@ -1110,7 +828,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
       <div class="plan-header">
         <h3>${escapeHtml(plan.name)}</h3>
         <div class="plan-status">
-          <span class="status-badge ${status.class}">${status.label}</span>
+          <span class="badge badge-${status.class}">${status.label}</span>
           ${healthBadgeHtml(plan)}
           ${overdueBadge}
           ${canManagePlan && !isUnassigned ? `
@@ -1133,11 +851,11 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Term</span>
-            <span class="plan-detail-value">${info.term !== null ? formatTerm(info.term) : '--'}</span>
+            <span class="plan-detail-value">${info.term !== null ? formatTerm(info.term) : NO_VALUE}</span>
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Coverage</span>
-            <span class="plan-detail-value">${info.coverage !== null ? `${info.coverage}%` : '--'}</span>
+            <span class="plan-detail-value">${info.coverage !== null ? `${info.coverage}%` : NO_VALUE}</span>
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Ramp Schedule</span>
@@ -1145,7 +863,7 @@ function renderPlanCard(plan: BackendPlan, canManagePlan: boolean, canDeletePlan
           </div>
           <div class="plan-detail">
             <span class="plan-detail-label">Progress</span>
-            <span class="plan-detail-value">${rampSchedule.current_step || 0}/${rampSchedule.total_steps || 1} steps</span>
+            <span class="plan-detail-value">${formatRampProgress(rampSchedule)}</span>
           </div>
           ${showNextDate ? `
           <div class="plan-detail">
@@ -1274,9 +992,9 @@ function openPlanForm(modal: HTMLElement, restartsFromToday = false): void {
 
 // Presets mirror config.PresetRampSchedules; any other stored ramp is shown as
 // custom so Edit never rewrites it to a different schedule on Save (#1156).
-const PRESET_RAMPS: ReadonlyArray<{ value: string; type: string; percent: number; intervalDays: number }> = [
-  { value: 'weekly-25pct', type: 'weekly', percent: 25, intervalDays: 7 },
-  { value: 'monthly-10pct', type: 'monthly', percent: 10, intervalDays: 30 },
+const PRESET_RAMPS: ReadonlyArray<{ value: string; label: string; type: string; percent: number; intervalDays: number }> = [
+  { value: 'weekly-25pct', label: 'Weekly 25%', type: 'weekly', percent: 25, intervalDays: 7 },
+  { value: 'monthly-10pct', label: 'Monthly 10%', type: 'monthly', percent: 10, intervalDays: 30 },
 ];
 
 function rampRadioValue(ramp: { type?: string; percent_per_step?: number; step_interval_days?: number }): string {
@@ -1879,11 +1597,13 @@ function generatePlanName(rampSchedule: string, customStepPercent?: number, cust
       return `${serviceUpper} Monthly 10% Ramp-up (10 months)`;
     case 'custom':
       if (customStepPercent && customIntervalDays) {
-        const totalSteps = Math.ceil(100 / customStepPercent);
+        // Same count as the backend (buildCustomRampSchedule) and the schedule
+        // preview: whole steps only, at least one. 30% is 3 steps, not 4 (#1185).
+        const totalSteps = Math.max(1, Math.floor(100 / customStepPercent));
         const intervalLabel = customIntervalDays === 7 ? 'weekly' :
                               customIntervalDays === 30 ? 'monthly' :
                               `every ${customIntervalDays} days`;
-        return `${serviceUpper} Custom ${customStepPercent}% ${intervalLabel} (${totalSteps} steps)`;
+        return `${serviceUpper} Custom ${customStepPercent}% ${intervalLabel} (${totalSteps} step${totalSteps === 1 ? '' : 's'})`;
       }
       return `${serviceUpper} Custom Ramp-up Plan`;
     default:
@@ -2232,7 +1952,7 @@ export async function openAddPurchasesModal(planId: string, planName: string, no
         <p class="help-text">Schedule additional purchases for <strong>${escapeHtml(planName)}</strong></p>
 
         <form id="add-purchases-form">
-          <input type="hidden" id="add-purchases-plan-id" value="${planId}">
+          <input type="hidden" id="add-purchases-plan-id" value="${escapeHtmlAttr(planId)}">
 
           <label>Number of Purchases:
             <input type="number" id="add-purchases-count" min="1" max="52" value="1" required>

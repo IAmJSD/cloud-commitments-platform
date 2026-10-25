@@ -52,7 +52,7 @@ async function changePeriod(page: Page, period: string) {
 test.use({ timezoneId: 'UTC' });
 
 for (const [period, count, average, totalFull] of [
-  ['24h', 24, '$70.00/mo', '$240.00'], ['7d', 168, '$10.00/mo', '$1.68K'],
+  ['24h', 24, '$70.00/mo', '$240.00'], ['7d', 168, '$10.00/mo', '$1,680.00'],
   ['30d', 30, '$56.00/mo', '$300.00'], ['90d', 90, '$18.67/mo', '$900.00'],
 ] as const) {
   test(period + ' averages the requested window regardless of missing zero buckets', async ({ page }) => {
@@ -66,7 +66,7 @@ for (const [period, count, average, totalFull] of [
       await changePeriod(page, period);
       await expect(page.locator('#avg-savings-label')).toHaveText('Avg Monthly Savings');
       await expect(page.locator('#avg-hourly-savings')).toHaveText(mode === 'full' ? '$10.00/mo' : average);
-      await expect(page.locator('#period-savings')).toHaveText(mode === 'full' ? totalFull : '$1.68K');
+      await expect(page.locator('#period-savings')).toHaveText(mode === 'full' ? totalFull : '$1,680.00');
       await expect(page.locator('#peak-savings')).toHaveText(mode === 'full' ? '$10.00/mo' : '$560.00/mo');
       const request = fixture.requests[fixture.requests.length - 1]!;
       const ms = period === '24h' || period === '7d' ? 3600000 : 86400000;
@@ -84,8 +84,8 @@ test('unit switches, refresh and empty/error states work on a narrow screen', as
   await changePeriod(page, '7d');
   for (const [unit, label, average, total, peak] of [
     ['hourly', 'Hourly', '$0.01/hr', '$2.30', '$0.77/hr'],
-    ['yearly', 'Yearly', '$120.00/yr', '$20.16K', '$6.72K/yr'],
-    ['monthly', 'Monthly', '$10.00/mo', '$1.68K', '$560.00/mo'],
+    ['yearly', 'Yearly', '$120.00/yr', '$20,160.00', '$6,720.00/yr'],
+    ['monthly', 'Monthly', '$10.00/mo', '$1,680.00', '$560.00/mo'],
   ]) {
     await page.locator('#savings-unit').selectOption(unit!);
     await expect(page.locator('#avg-savings-label')).toHaveText('Avg ' + label + ' Savings');
@@ -93,6 +93,12 @@ test('unit switches, refresh and empty/error states work on a narrow screen', as
     await expect(page.locator('#period-savings')).toHaveText(total!);
     await expect(page.locator('#peak-savings')).toHaveText(peak!);
   }
+  // Issue #749: the running total is its own view, re-queried on change.
+  const reload = page.waitForResponse(value => value.url().includes('/history/analytics?'));
+  await page.locator('#savings-series').selectOption('cumulative');
+  await reload;
+  await expect(page.locator('#savings-history-chart')).toBeVisible();
+  await page.locator('#savings-series').selectOption('period');
   fixture.mode = 'zero';
   await page.locator('#refresh-savings-btn').click();
   await expect(page.locator('#avg-hourly-savings')).toHaveText('$0.00/mo');
