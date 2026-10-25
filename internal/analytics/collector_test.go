@@ -208,6 +208,10 @@ func (m *mockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses 
 	return nil, nil
 }
 
+func (m *mockConfigStore) HistorySummaryAggregate(ctx context.Context, filter config.HistorySummaryFilter) (*config.HistorySummaryGroups, error) {
+	return &config.HistorySummaryGroups{}, nil
+}
+
 func (m *mockConfigStore) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string, since time.Time) (map[string]config.ExecutionStatusCounts, error) {
 	return nil, nil
 }

@@ -963,9 +963,17 @@ type CreatePlannedPurchasesResponse struct {
 // HistoryResponse represents the response from the history API.
 type HistoryResponse struct {
 	Purchases []config.PurchaseHistoryRecord `json:"purchases"`
-	Summary   HistorySummary                 `json:"summary"`
+	// Summary covers every row matching the request's filters and the caller's
+	// account scope, including rows beyond the row caps (issue #675), unless
+	// SummaryComplete is false.
+	Summary HistorySummary `json:"summary"`
+	// SummaryComplete is true when Summary was computed over every matching
+	// row. It is false only when that aggregate failed and Summary fell back
+	// to the rows in Purchases, which under-reports when Truncated is true.
+	SummaryComplete bool `json:"summary_complete"`
 	// Truncated is true when a fetch reached its row cap, so older rows (and
-	// possibly pending approvals) may be missing from Purchases and Summary.
+	// possibly pending approvals) may be missing from Purchases. Summary still
+	// counts them while SummaryComplete is true.
 	// It also fires when the actionable execution class hits its MaxListLimit cap.
 	// It can be a false positive when exactly a cap's worth of rows exist.
 	Truncated bool `json:"truncated"`
