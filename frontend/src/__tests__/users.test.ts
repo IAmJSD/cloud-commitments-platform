@@ -1135,6 +1135,13 @@ describe('users/userActions', () => {
       );
     });
 
+    it('shows the server reason when the delete fails (issue #748)', async () => {
+      (api.deleteUser as jest.Mock).mockRejectedValueOnce(new Error('cannot delete the last administrator'));
+      await userActions.deleteUser('1');
+
+      expect(document.querySelector('.toast-error')?.textContent).toContain('Failed to delete user: cannot delete the last administrator');
+    });
+
     it('should reload users after deletion', async () => {
       await userActions.deleteUser('1');
 
@@ -2103,33 +2110,18 @@ describe('users/handlers', () => {
       expect(api.updateUser).not.toHaveBeenCalled();
     });
 
-    it('should set up bulk group handler', async () => {
-      const mockUsers = [{ id: '1', email: 'test@test.com', groups: [], mfa_enabled: false }];
-      userState.setAllUsers(mockUsers as any);
+    it('never falls back to a native prompt() for bulk add to group (#705)', async () => {
       userState.addSelectedUserId('1');
-      (global.prompt as jest.Mock).mockReturnValue('admins');
 
       userHandlers.setupUserHandlers();
 
-      const bulkGroupBtn = document.getElementById('bulk-group-btn');
-      bulkGroupBtn?.click();
+      // A stray legacy #bulk-group-btn must stay inert: the dropdown is the
+      // only bulk add-to-group path.
+      document.getElementById('bulk-group-btn')?.click();
 
       await new Promise(resolve => setTimeout(resolve, 0));
 
-      expect(api.updateUser).toHaveBeenCalled();
-    });
-
-    it('should handle cancelled group prompt', async () => {
-      userState.addSelectedUserId('1');
-      (global.prompt as jest.Mock).mockReturnValue(null);
-
-      userHandlers.setupUserHandlers();
-
-      const bulkGroupBtn = document.getElementById('bulk-group-btn');
-      bulkGroupBtn?.click();
-
-      await new Promise(resolve => setTimeout(resolve, 0));
-
+      expect(global.prompt).not.toHaveBeenCalled();
       expect(api.updateUser).not.toHaveBeenCalled();
     });
   });
