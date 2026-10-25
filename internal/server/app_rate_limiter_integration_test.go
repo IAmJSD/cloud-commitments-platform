@@ -15,6 +15,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestApplicationRateLimiter(t *testing.T) {
@@ -44,6 +45,10 @@ func TestApplicationRateLimiter(t *testing.T) {
 			cfg := ApplicationConfig{
 				IsLambda: isLambda, DashboardURL: "https://rate-limit.example.test",
 				DefaultTerm: 3, DefaultCoverage: 80,
+				// Each 401 login runs Login's timing-equalizing bcrypt
+				// compare, about 5s at cost 12 under -race. The limiter
+				// does not depend on the cost.
+				authBcryptCost: bcrypt.MinCost,
 			}
 			newApp := func() *Application {
 				app, appErr := NewApplicationFromDeps(ctx, cfg, ExternalDeps{
