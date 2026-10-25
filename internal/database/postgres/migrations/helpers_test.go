@@ -14,22 +14,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/require"
 )
-
-// TestMain stops the PostgreSQL container that tests using
-// testhelpers.RequireMigratedDatabase share (issue #982). Tests that start a
-// container of their own are unaffected.
-func TestMain(m *testing.M) {
-	code := m.Run()
-	if err := testhelpers.TerminateSharedPostgres(); err != nil {
-		// Ryuk reaps the container anyway, so a teardown hiccup does not
-		// overrule the tests' own verdict.
-		log.Printf("terminate shared postgres container: %v", err)
-	}
-	os.Exit(code)
-}
 
 // getMigrationsPath resolves the migrations directory relative to this test
 // file so that migration test files can locate the SQL files regardless of
