@@ -5,7 +5,7 @@ package auth
 
 // store_postgres_db_test.go - DB-backed integration tests for the
 // security-critical PostgresStore bootstrap paths (TEST-01, issue #1153).
-// These run the real SQL against a migrated PostgreSQL testcontainer,
+// These run the real SQL against a migrated PostgreSQL database,
 // proving the 19-column bootstrap INSERT, the NOT EXISTS guard and its
 // agreement with AdminExists (active-membership semantics), and the
 // insert-once guarantee under concurrent CreateAdminIfNone calls (two
@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,29 +31,24 @@ func getAuthTestMigrationsPath() string {
 	return filepath.Join(filepath.Dir(filename), "..", "database", "postgres", "migrations")
 }
 
-// setupAuthTestDB starts a PostgreSQL container and runs all migrations
-// without seeding a bootstrap admin (empty adminEmail), so tests start from
-// the "fresh deployment, no admin yet" state CreateAdminIfNone exists for.
+// setupAuthTestDB gives the test a fresh database of its own, with every
+// migration applied, on the PostgreSQL server this package's integration tests
+// share (issue #982). No bootstrap admin is seeded (the template is migrated
+// with an empty adminEmail), so tests start from the "fresh deployment, no
+// admin yet" state CreateAdminIfNone exists for. The database is dropped when
+// the test ends.
+//
+// A migration that will not apply fails the test rather than skipping it: it
+// is a broken schema, and skipping would report the suite green on exactly the
+// defect it exists to catch (issue #1597). RequireMigratedDatabase skips only
+// when Docker itself is unusable.
 func setupAuthTestDB(t *testing.T) *database.Connection {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() {
-		container.Cleanup(context.Background())
-	})
-
-	// Migrating is the thing under test here, not a precondition of it: a
-	// migration that will not apply is a broken schema, and skipping on it would
-	// report the whole suite green on exactly the defect it exists to catch
-	// (issue #1597).
-	require.NoError(t,
-		migrations.RunMigrations(ctx, container.DB.Pool(), getAuthTestMigrationsPath(), "", ""),
-		"migrations failed to apply to a fresh database")
-
-	return container.DB
+	return testhelpers.RequireMigratedDatabase(ctx, t, getAuthTestMigrationsPath()).DB
 }
 
 // resetUsers wipes the users table between scenarios. TRUNCATE is used

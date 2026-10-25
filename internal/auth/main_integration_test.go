@@ -11,11 +11,10 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 )
 
-// TestMain stops the PostgreSQL container shared by the integration tests in
-// this package that take their database from testhelpers.RequireMigratedDatabase
-// (issue #982). Each such test still gets a freshly migrated database of its
-// own; only the container and the migrated template it is cloned from outlive
-// a single test.
+// TestMain stops the PostgreSQL container that every integration test in this
+// package shares (issue #982). Each test still gets a freshly migrated database
+// of its own from testhelpers.RequireMigratedDatabase; only the container and
+// the migrated template it is cloned from outlive a single test.
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if err := testhelpers.TerminateSharedPostgres(); err != nil {

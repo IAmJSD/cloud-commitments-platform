@@ -71,6 +71,10 @@ type ServiceConfig struct {
 	DashboardURL     string
 	CSRFKey          []byte
 	SessionDuration  time.Duration
+	// BcryptCost lowers the bcrypt work factor for tests that build the
+	// service through other packages. Zero, the only value production
+	// uses, keeps bcryptCost (12) and the fixed cost-12 timing sentinel.
+	BcryptCost int
 }
 
 // NewService creates a new auth service.
@@ -124,6 +128,8 @@ func NewService(cfg ServiceConfig) *Service {
 		dashboardURL:     cfg.DashboardURL,
 		onPasswordChange: cfg.OnPasswordChange,
 		csrfKey:          csrfKey,
+		// Zero leaves the production cost in hashPassword and Login.
+		bcryptCostOverride: cfg.BcryptCost,
 	}
 }
 
@@ -162,7 +168,7 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResponse, 
 		// user is indistinguishable from a wrong-password attempt on a real
 		// account. Without this, the missing-row path returns immediately
 		// (no bcrypt), leaking account existence via timing (issue #416).
-		s.verifyPassword(req.Password, dummyPasswordHash)
+		s.verifyPassword(req.Password, s.dummyHashForCompare())
 		return nil, err
 	}
 
@@ -343,14 +349,8 @@ func (s *Service) ValidateSession(ctx context.Context, token string) (*Session, 
 		return nil, fmt.Errorf("session expired")
 	}
 
-	// UpdateUser revokes sessions on deactivation; this rejects any session that
-	// outlives that (a failed delete, or Active flipped another way). Issue #89.
-	user, err := s.loadUser(ctx, session.UserID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load session user: %w", err)
-	}
-	if !user.Active {
-		return nil, fmt.Errorf("session not found")
+	if err := s.checkSessionUser(ctx, session); err != nil {
+		return nil, err
 	}
 
 	// Return a copy of the session with the original token (not the hash) for client use.
@@ -358,6 +358,27 @@ func (s *Service) ValidateSession(ctx context.Context, token string) (*Session, 
 	result := *session
 	result.Token = token
 	return &result, nil
+}
+
+// checkSessionUser rejects a session whose user can no longer use it.
+func (s *Service) checkSessionUser(ctx context.Context, session *Session) error {
+	// UpdateUser revokes sessions on deactivation; this rejects any session that
+	// outlives that (a failed delete, or Active flipped another way). Issue #89.
+	user, err := s.loadUser(ctx, session.UserID)
+	if err != nil {
+		return fmt.Errorf("failed to load session user: %w", err)
+	}
+	if !user.Active {
+		return fmt.Errorf("session not found")
+	}
+	// A password change deletes sessions only best-effort, and a login that
+	// verified the old password can insert its session after that delete.
+	// The version bump in the password write itself is what revokes them
+	// (issue #398).
+	if session.PasswordVersion != user.PasswordVersion {
+		return ErrSessionPasswordRotated
+	}
+	return nil
 }
 
 // ValidateCSRFToken validates the CSRF token for a session.
