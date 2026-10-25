@@ -820,13 +820,89 @@ jobs:
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success'
         run: bash scripts/test-run-gosec.sh
 
+      # gosec result cache. A full scan re-parses and type-checks every package
+      # and dependency from source (about 300s), even when no Go input changed,
+      # as on a frontend-only PR. gosec's verdict depends only on the inputs
+      # hashed below, so a run whose inputs exactly match an earlier clean scan
+      # would reach the same verdict. That run reuses the clean scan's merged
+      # SARIF instead.
+      - name: Compute gosec cache keys
+        id: gosec_key
+        # An optimisation only: if this step breaks, the restores and saves
+        # below are skipped and gosec scans exactly as it would uncached.
+        continue-on-error: true
+        if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success'
+        run: |
+          set -euo pipefail
+          # Pinned gosec, effective Go version and binary cache dir, read from
+          # scripts/run-gosec.sh so the pin lives in one place.
+          versions=$(scripts/run-gosec.sh --print-versions)
+          printf '%s\n' "$versions" | tee -a "$GITHUB_OUTPUT"
+          gosec_version=$(printf '%s\n' "$versions" | sed -n 's/^gosec_version=//p')
+          go_version=$(printf '%s\n' "$versions" | sed -n 's/^go_version=//p')
+          # Every input to gosec's verdict: all Go sources (both scanned modules
+          # and anything else on disk, testdata included), every go.mod/go.sum
+          # (go.sum pins dependency content), go.work/go.work.sum, the wrapper
+          # (pin, rule set, exclude dirs) and this workflow (the SARIF merge
+          # below). sha256sum lines carry the path as well as the content, so a
+          # moved or renamed file changes the key; hashFiles() would not.
+          # Including too much only costs a miss.
+          inputs_hash=$(
+            {
+              find . -path ./.git -prune -o -type f \( -name '*.go' -o -name go.mod \
+                -o -name go.sum -o -name go.work -o -name go.work.sum \) -print0
+              printf '%s\0' scripts/run-gosec.sh .github/workflows/ci.yml
+            } | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
+          )
+          echo "results_key=gosec-sarif-${RUNNER_OS}-${RUNNER_ARCH}-${gosec_version}-${go_version}-${inputs_hash}" | tee -a "$GITHUB_OUTPUT"
+          echo "bin_key=gosec-bin-${RUNNER_OS}-${RUNNER_ARCH}-${gosec_version}-${go_version}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Restore gosec results
+        id: gosec_results
+        # Exact key only (no restore-keys): a result from different inputs is
+        # never reused. A miss or a cache service error leaves no file, and the
+        # scan below runs as usual.
+        if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec_key.outcome == 'success'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/gosec-results.sarif
+          key: ${{ steps.gosec_key.outputs.results_key }}
+
+      # Split restore/save rather than the combined actions/cache, whose save
+      # is a post step gated on `post-if: success()`: any failing scanner in
+      # this job would stop the binary being saved. Not needed on a results
+      # hit, which runs no gosec.
+      - name: Restore gosec binary
+        id: gosec_bin
+        if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec_key.outcome == 'success' && steps.gosec_results.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.gosec_key.outputs.bin_dir }}
+          key: ${{ steps.gosec_key.outputs.bin_key }}
+
       - name: Run gosec Security Scanner
         id: gosec
         # always(): don't let an earlier scanner's failure (e.g. npm audit)
         # skip Go SAST coverage. The job still fails if gosec itself fails.
         # Still requires checkout and Go setup to have succeeded.
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success'
+        env:
+          RESULTS_CACHE_HIT: ${{ steps.gosec_results.outputs.cache-hit }}
         run: |
+          # On an exact results-cache hit the restored SARIF is the merged
+          # output of a clean scan of identical inputs (only clean scans are
+          # saved, see "Save gosec results"), so hand it to the upload step
+          # as-is. If it is unreadable, fall through to a real scan.
+          merged="$RUNNER_TEMP/gosec-results.sarif"
+          if [ "$RESULTS_CACHE_HIT" = "true" ]; then
+            if jq -e '.runs | length > 0' "$merged" >/dev/null 2>&1; then
+              echo "Go inputs match a clean gosec scan: reusing its SARIF ($(jq '.runs | length' "$merged") runs)"
+              exit 0
+            fi
+            echo "::warning::restored gosec SARIF is missing or unreadable; scanning instead"
+            rm -f "$merged"
+          fi
+
           # scripts/run-gosec.sh owns the pinned gosec version, toolchain,
           # module list and rule set, shared with the pre-commit hook and
           # `make security-scan-go` (issue #340). It installs gosec with the
@@ -836,11 +912,17 @@ jobs:
           #
           # gosec exits non-zero both for real findings and for a processing
           # error. The script still scans every module after a failure, and
-          # `|| status=1` exempts it from errexit so the merge below always
+          # `|| rc=$?` exempts it from errexit so the merge below always
           # runs (issue #1717); `status` records whether the job should still
           # fail at the end.
           status=0
-          scripts/run-gosec.sh --sarif-dir "$RUNNER_TEMP" || status=1
+          rc=0
+          scripts/run-gosec.sh --sarif-dir "$RUNNER_TEMP" || rc=$?
+          [ "$rc" -eq 0 ] || status=1
+          # run-gosec.sh exits 2 only on a setup failure (a failed install
+          # included). Any other exit means the binary is in its cache dir,
+          # ready for "Save gosec binary".
+          [ "$rc" -eq 2 ] || echo "binary_ready=true" >> "$GITHUB_OUTPUT"
           shopt -s nullglob
           for out in "$RUNNER_TEMP"/gosec-*.sarif; do
             tag=$(basename "$out" .sarif)
@@ -867,6 +949,9 @@ jobs:
           jq -s '{version: "2.1.0", "$schema": "https://json.schemastore.org/sarif-2.1.0.json", runs: [.[].runs[]]}' \
             "${sarif_files[@]}" > "$merged"
           echo "Merged $(jq '.runs | length' "$merged") SARIF runs"
+          # Only a clean scan (exit 0, SARIF merged) may be cached, so a
+          # finding or a scan error is never replayed from the cache.
+          [ "$status" -ne 0 ] || echo "clean_scan=true" >> "$GITHUB_OUTPUT"
           exit "$status"
 
       - name: Upload gosec results to GitHub Security
@@ -878,6 +963,25 @@ jobs:
         uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
         with:
           sarif_file: ${{ runner.temp }}/gosec-results.sarif
+
+      - name: Save gosec results
+        # Only after a clean scan of these exact inputs (never a hit, a
+        # finding or a scan error). A pull_request run saves to its own
+        # merge-ref scope, which main and other PRs cannot restore from.
+        if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec_key.outcome == 'success' && steps.gosec.outputs.clean_scan == 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/gosec-results.sarif
+          key: ${{ steps.gosec_key.outputs.results_key }}
+
+      - name: Save gosec binary
+        # Saved even when gosec reports findings: the binary depends only on
+        # the gosec and Go versions in the key, not on the scan.
+        if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec_key.outcome == 'success' && steps.gosec_bin.outputs.cache-hit != 'true' && steps.gosec.outputs.binary_ready == 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.gosec_key.outputs.bin_dir }}
+          key: ${{ steps.gosec_key.outputs.bin_key }}
 
       - name: Run Trivy vulnerability scanner (filesystem)
         id: trivy_fs
