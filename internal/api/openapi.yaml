@@ -567,7 +567,16 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >
+            CSRF validation failed, the caller lacks permission or access to
+            the plan, or 4-eyes mode is on and the caller has no attributable
+            user (the admin API key). Rows scheduled that way could never be
+            approved under 4-eyes, so the request is refused; sign in or use a
+            per-user API key instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
@@ -608,7 +617,17 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >
+            CSRF validation failed, the caller lacks permission or exceeds its
+            Constraints, 4-eyes mode rejects a direct execute, or 4-eyes mode is
+            on and the caller has no attributable user (the admin API key). An
+            execution created that way could never be approved under 4-eyes,
+            so it is refused before anything is written; sign in or use a
+            per-user API key instead.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '409':
           description: >
             One of two conflict families. Idempotency: an identical submit
@@ -3163,8 +3182,8 @@ components:
           exclusiveMinimum: true
           description: >-
             Spend cap per purchase. Omit for no cap. An explicit 0 is rejected
-            with 400 on group writes (create and update); API-key creation
-            over HTTP does not enforce this yet.
+            with 400 on group writes (create and update) and on API-key
+            creation.
 
     # -- API Keys -----------------------------------------------------------
     CreateAPIKeyRequest:
@@ -4016,6 +4035,14 @@ components:
       properties:
         summary:
           $ref: '#/components/schemas/HistorySummary'
+        summary_complete:
+          type: boolean
+          description: >-
+            True when summary counts and sums every row matching the request's
+            filters and the caller's account scope, including rows beyond the
+            row caps. False only when that aggregate failed and summary fell
+            back to the rows in purchases, which under-reports when truncated
+            is true.
         purchases:
           type: array
           items:
@@ -4024,7 +4051,8 @@ components:
           type: boolean
           description: >-
             True when a fetch reached its row cap, so older rows (and possibly
-            pending approvals) may be missing from purchases and summary. May
+            pending approvals) may be missing from purchases. summary still
+            counts them while summary_complete is true. May
             be a false positive when exactly `limit` or `executions_limit` rows exist.
             Also true when the actionable executions class (pending, approved,
             running, ...) reached its own cap (`actionable_executions_limit`),
@@ -4048,8 +4076,25 @@ components:
 
     HistorySummary:
       type: object
+      description: >-
+        Counts and dollar totals. Dollar totals cover completed, non-revoked
+        rows only; audit-gap and partially completed execution rows count as
+        completed without dollars, and canceled rows count only toward
+        total_purchases.
       properties:
         total_purchases:
+          type: integer
+        total_completed:
+          type: integer
+        total_pending:
+          type: integer
+        total_in_progress:
+          type: integer
+        total_failed:
+          type: integer
+        total_expired:
+          type: integer
+        total_revoked:
           type: integer
         total_upfront:
           type: number
