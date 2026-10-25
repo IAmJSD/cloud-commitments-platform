@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
@@ -21,10 +20,7 @@ import (
 
 func TestConfigInfrastructureKeyHTTP(t *testing.T) {
 	ctx := context.Background()
-	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pg.Cleanup(ctx)) })
-	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 	store := config.NewPostgresStore(pg.DB)
 	authService := new(MockAuthService)
 	handler := NewHandler(HandlerConfig{ConfigStore: store, AuthService: authService})

@@ -69,6 +69,7 @@ func previousMigrationVersion(t *testing.T, version uint) uint {
 
 // captureStdout redirects os.Stdout to a pipe and returns a function that
 // closes the pipe, restores stdout, and returns everything written to it.
+// os.Stdout is process-wide, so a test using it must not call t.Parallel.
 //
 // Mirrors the helper of the same name in migrate_security_test.go; the
 // duplication is forced by the package boundary (that file lives in
@@ -93,7 +94,9 @@ func captureStdout(t *testing.T) func() string {
 }
 
 // captureLogOutput redirects the standard logger to a buffer for the duration
-// of the test, restoring the original flags and writer on cleanup.
+// of the test, restoring the original flags and writer on cleanup. Every
+// RunMigrations call logs through that logger, so a test using it must not
+// call t.Parallel.
 //
 // Mirrors the helper of the same name in migrate_security_test.go for the
 // same package-boundary reason described on captureStdout.

@@ -22,16 +22,16 @@ import (
 
 // migrationDB returns a pool on a fresh, empty database so each test controls
 // its own schema_migrations state. CUDLY_TEST_ADMIN_DSN points at an existing
-// server (used where Docker is unavailable); otherwise a container is started.
+// server (used where Docker is unavailable); otherwise the test gets an empty
+// database on the package's shared container.
 func migrationDB(t *testing.T) (*pgxpool.Pool, string) {
 	t.Helper()
 	ctx := context.Background()
 
 	adminDSN := os.Getenv("CUDLY_TEST_ADMIN_DSN")
 	if adminDSN == "" {
-		c := testhelpers.RequirePostgresContainer(ctx, t)
-		t.Cleanup(func() { _ = c.Cleanup(ctx) })
-		adminDSN = fmt.Sprintf("postgres://cudly_test:test_password@%s:%d/cudly_test?sslmode=disable", c.Config.Host, c.Config.Port)
+		c := testhelpers.RequireEmptyDatabase(ctx, t)
+		return c.DB.Pool(), c.Config.Database
 	}
 
 	admin, err := pgxpool.New(ctx, adminDSN)
@@ -100,6 +100,7 @@ func requireNoBackend(t *testing.T, pool *pgxpool.Pool, db, prefix string) {
 }
 
 func TestRunMigrations_DeadlineStopsMigrationSQLBlockedByForeignLock(t *testing.T) {
+	// Not parallel: asserts a 1s deadline is honored within fixed wall-clock bounds.
 	pool, db := migrationDB(t)
 	ctx := context.Background()
 	_, err := pool.Exec(ctx, "CREATE TABLE locktarget (id int)")
@@ -137,6 +138,7 @@ func TestRunMigrations_DeadlineStopsMigrationSQLBlockedByForeignLock(t *testing.
 }
 
 func TestRunMigrations_DeadlineStopsAdvisoryLockWait(t *testing.T) {
+	// Not parallel: asserts a 1s deadline is honored within a fixed wall-clock bound.
 	pool, db := migrationDB(t)
 	ctx := context.Background()
 
@@ -160,6 +162,7 @@ func TestRunMigrations_DeadlineStopsAdvisoryLockWait(t *testing.T) {
 }
 
 func TestRunMigrations_CancelStopsSetupBlockedOnVersionTable(t *testing.T) {
+	// Not parallel: asserts a 1s deadline is honored within a fixed wall-clock bound.
 	pool, db := migrationDB(t)
 	ctx := context.Background()
 	_, err := pool.Exec(ctx, "CREATE TABLE schema_migrations (version bigint NOT NULL PRIMARY KEY, dirty boolean NOT NULL)")
@@ -181,6 +184,7 @@ func TestRunMigrations_CancelStopsSetupBlockedOnVersionTable(t *testing.T) {
 }
 
 func TestRunMigrations_CompletesWithinDeadline(t *testing.T) {
+	// Not parallel: asserts the run finishes inside a fixed wall-clock deadline.
 	pool, _ := migrationDB(t)
 	dir := migrationDir(t, "CREATE TABLE widgets (id int);")
 
@@ -198,6 +202,7 @@ func TestRunMigrations_CompletesWithinDeadline(t *testing.T) {
 // is a clean no-op, so the replacement for migrate.New changes nothing for the
 // normal path.
 func TestRunMigrations_AppliesFullSchemaThroughCancelableMigrator(t *testing.T) {
+	t.Parallel()
 	pool, _ := migrationDB(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
