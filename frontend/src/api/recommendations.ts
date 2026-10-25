@@ -6,6 +6,17 @@ import { apiRequest } from './client';
 import type { Recommendation, RecommendationFilters } from './types';
 
 /**
+ * Savings floors are only sent when they are a usable floor. A plain
+ * truthiness check let Infinity, -Infinity and negative values through as
+ * `min_savings_usd=Infinity` / `=-5`, which the backend rejects with a 400
+ * (parseMinSavingsParam) and the user sees as an opaque load error. Dropping
+ * them falls back to the unfiltered list, the same as an unset (or 0) floor.
+ */
+function isPositiveFinite(value: number | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+/**
  * Get recommendations
  */
 export async function getRecommendations(filters: RecommendationFilters = {}): Promise<Recommendation[]> {
@@ -14,9 +25,9 @@ export async function getRecommendations(filters: RecommendationFilters = {}): P
   if (filters.service) params.set('service', filters.service);
   if (filters.region) params.set('region', filters.region);
   // min_savings_usd: absolute dollar floor (distinct from the CLI --min-savings-pct percentage filter)
-  if (filters.minSavingsUsd) params.set('min_savings_usd', String(filters.minSavingsUsd));
+  if (isPositiveFinite(filters.minSavingsUsd)) params.set('min_savings_usd', String(filters.minSavingsUsd));
   // min_savings_pct: percentage floor (mirrors the CLI --min-savings-pct semantics)
-  if (filters.minSavingsPct) params.set('min_savings_pct', String(filters.minSavingsPct));
+  if (isPositiveFinite(filters.minSavingsPct)) params.set('min_savings_pct', String(filters.minSavingsPct));
   if (filters.account_ids && filters.account_ids.length > 0) params.set('account_ids', filters.account_ids.join(','));
 
   const queryString = params.toString();

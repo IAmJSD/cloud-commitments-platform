@@ -21,9 +21,8 @@ import (
 
 func TestNullablePurchaseCostPostgres(t *testing.T) {
 	ctx := context.Background()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, container.Cleanup(ctx)) })
+	// Empty, not migrated: the test walks the chain to 100 and then 101 itself.
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 	path := filepath.Join("..", "database", "postgres", "migrations")
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 100))

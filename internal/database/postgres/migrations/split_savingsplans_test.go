@@ -19,6 +19,7 @@ import (
 // #71's sagemaker row, and fresh install. Round-trips up/down to verify
 // no row identity is lost in the lossy down migration.
 func TestMigration_SplitSavingsPlans(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
@@ -54,9 +55,8 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 	}
 
 	t.Run("scenario 1: umbrella only", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin the DB at 000039 (just below the migration under test) and
@@ -66,7 +66,7 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 		require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 39))
 
 		// Seed: a single umbrella row with non-default values.
-		_, err = pool.Exec(ctx, `
+		_, err := pool.Exec(ctx, `
 			INSERT INTO service_configs (provider, service, enabled, term, payment, coverage, ramp_schedule)
 			VALUES ('aws', 'savings-plans', true, 1, 'no-upfront', 90.50, 'weekly-25pct')`)
 		require.NoError(t, err)
@@ -113,9 +113,8 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 	})
 
 	t.Run("scenario 2: umbrella + PR #71 sagemaker row (different values)", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin the DB at 000039, just below the migration under test.
@@ -123,7 +122,7 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 
 		// Seed both rows with intentionally divergent term/payment so
 		// we can verify which value wins per slot.
-		_, err = pool.Exec(ctx, `
+		_, err := pool.Exec(ctx, `
 			INSERT INTO service_configs (provider, service, enabled, term, payment, coverage)
 			VALUES ('aws', 'savings-plans', true, 3, 'all-upfront', 80.00)`)
 		require.NoError(t, err)
@@ -162,9 +161,8 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 	})
 
 	t.Run("scenario 3: fresh install (no SP rows)", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin the DB at 000039, just below the migration under test.
@@ -195,12 +193,11 @@ func TestMigration_SplitSavingsPlans(t *testing.T) {
 // source key should be removed. Plans without an SP entry should be
 // untouched.
 func TestMigration_SplitSavingsPlans_PurchasePlansJSONB(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	// Pin the DB at 000039, just below the migration under test.
@@ -209,7 +206,7 @@ func TestMigration_SplitSavingsPlans_PurchasePlansJSONB(t *testing.T) {
 	// Seed two plans: one with the umbrella SP key, one with only RDS
 	// (untouched control). Both have a non-SP key (aws:rds) that must
 	// pass through unchanged.
-	_, err = pool.Exec(ctx, `
+	_, err := pool.Exec(ctx, `
 		INSERT INTO purchase_plans (id, name, services) VALUES
 		('11111111-1111-1111-1111-111111111111', 'sp-plan',
 		 '{"aws:savings-plans": {"term": "1yr", "payment": "all-upfront"}, "aws:rds": {"term": "3yr"}}'::jsonb),

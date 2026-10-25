@@ -56,7 +56,7 @@ Terraform automatically handles: Docker image build/push (via build module), fro
 
 - Docker with buildx support
 - Terraform >= 1.6.0
-- Go 1.26.9+
+- Go 1.26.10+
 - Cloud CLI configured: `aws`, `az`, or `gcloud`
 - PostgreSQL 15 or later. The migrations use PostgreSQL 15 features
   (`UNIQUE NULLS NOT DISTINCT`), so each environment's version input rejects
