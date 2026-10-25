@@ -12,6 +12,17 @@
 #   - Pull requests to main/develop
 #   - Pushes to main/develop
 #   - Manual workflow dispatch
+#
+# Runners: the Go and Docker heavy jobs (lint, unit, integration, the
+# selection self-test, security scanning, e2e) run on ubuntu-24.04-arm.
+# On main's runs the same cold Dockerfile build took 124-142s there against
+# 201-207s on ubuntu-latest, and `go install govulncheck` under 3s against
+# 12-16s. arm64 is also what the AWS deploys run (Graviton). The amd64 image
+# leg stays on ubuntu-latest, as GCP and Azure run amd64. Snyk (a Docker
+# action), Terraform (provider lock files) and the jobs that finish in
+# seconds stay there too: nothing to gain. Every cache key in this file
+# includes the runner architecture, so neither architecture restores the
+# other's Go build cache or binaries.
 
 name: CI - Build & Test
 
@@ -34,7 +45,7 @@ jobs:
   # Go code linting
   lint:
     name: Lint Code
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
     steps:
@@ -254,7 +265,7 @@ jobs:
   # Unit tests with race detection
   unit-tests:
     name: Unit Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
     steps:
@@ -391,7 +402,7 @@ jobs:
   # leg fails or is cancelled.
   integration-tests:
     name: Integration Tests (${{ matrix.title }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
     strategy:
@@ -767,7 +778,7 @@ jobs:
   # fixtures are stdlib-only, so no module cache.
   integration-test-selection:
     name: Integration test selection self-test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
 
@@ -1049,7 +1060,7 @@ jobs:
   # Security scanning
   security-scan:
     name: Security Scanning
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       security-events: write
       contents: read
@@ -1377,7 +1388,7 @@ jobs:
   # compose invocation needs --profile test (issue #1180).
   e2e-tests:
     name: E2E Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
 
