@@ -447,6 +447,14 @@ func resolveGCPWIFCredential(
 	return loadStoredGCPTokenSource(ctx, account, store, CredTypeGCPWIFConfig)
 }
 
+// gcpStoredJSONTypes pins the one Google credential JSON "type" each stored
+// slot may hold, matching what the API accepts into it (#80): any other type
+// fails to parse instead of becoming a token source.
+var gcpStoredJSONTypes = map[string]google.CredentialsType{
+	CredTypeGCPServiceAccount: google.ServiceAccount,
+	CredTypeGCPWIFConfig:      google.ExternalAccount,
+}
+
 // loadStoredGCPTokenSource reads a stored JSON credential of the
 // given type and returns a TokenSource. Shared by both the
 // service_account_key and legacy workload_identity_federation paths.
@@ -456,6 +464,10 @@ func loadStoredGCPTokenSource(
 	store CredentialStore,
 	credType string,
 ) (oauth2.TokenSource, error) {
+	jsonType, ok := gcpStoredJSONTypes[credType]
+	if !ok {
+		return nil, fmt.Errorf("credentials: no gcp credential json type pinned for %q (account %s)", credType, account.ID)
+	}
 	if store == nil {
 		return nil, fmt.Errorf("credentials: credential store required for gcp account %s", account.ID)
 	}
@@ -466,7 +478,7 @@ func loadStoredGCPTokenSource(
 	if raw == nil {
 		return nil, fmt.Errorf("credentials: no gcp credentials stored for account %s", account.ID)
 	}
-	creds, err := google.CredentialsFromJSON(ctx, raw, gcpCloudPlatformScope) //nolint:staticcheck // SA1019: google.CredentialsFromJSON: replacement API requires GCP SDK upgrade; credentials are operator-controlled bytes
+	creds, err := google.CredentialsFromJSONWithType(ctx, raw, jsonType, gcpCloudPlatformScope)
 	if err != nil {
 		return nil, fmt.Errorf("credentials: parse gcp credentials for account %s: %w", account.ID, err)
 	}

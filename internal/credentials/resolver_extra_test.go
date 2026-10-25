@@ -413,7 +413,7 @@ func TestResolveAzureTokenCredential_ManagedIdentity(t *testing.T) {
 
 func TestResolveGCPTokenSource_WIF_WithStoredConfig(t *testing.T) {
 	// Exercises the WIF branch where CredTypeGCPWIFConfig is used as the key.
-	// The JSON is intentionally invalid so google.CredentialsFromJSON fails,
+	// The JSON is intentionally invalid so google.CredentialsFromJSONWithType fails,
 	// but we cover the credType selection branch.
 	store := newMockStore()
 	store.data["acct1/gcp_workload_identity_config"] = []byte("not valid json")
@@ -428,7 +428,7 @@ func TestResolveGCPTokenSource_WIF_WithStoredConfig(t *testing.T) {
 }
 
 func TestResolveGCPTokenSource_ServiceAccountKey_ValidJSON(t *testing.T) {
-	// A minimal valid GCP service account JSON that google.CredentialsFromJSON accepts.
+	// A minimal valid GCP service account JSON that google.CredentialsFromJSONWithType accepts.
 	saJSON := []byte(`{
 		"type": "service_account",
 		"project_id": "test-project",
