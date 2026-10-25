@@ -888,6 +888,7 @@ jobs:
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success'
         env:
           RESULTS_CACHE_HIT: ${{ steps.gosec_results.outputs.cache-hit }}
+          GOSEC_BIN_DIR: ${{ steps.gosec_key.outputs.bin_dir }}
         run: |
           # On an exact results-cache hit the restored SARIF is the merged
           # output of a clean scan of identical inputs (only clean scans are
@@ -919,10 +920,14 @@ jobs:
           rc=0
           scripts/run-gosec.sh --sarif-dir "$RUNNER_TEMP" || rc=$?
           [ "$rc" -eq 0 ] || status=1
-          # run-gosec.sh exits 2 only on a setup failure (a failed install
-          # included). Any other exit means the binary is in its cache dir,
-          # ready for "Save gosec binary".
-          [ "$rc" -eq 2 ] || echo "binary_ready=true" >> "$GITHUB_OUTPUT"
+          # run-gosec.sh exits 2 on a setup failure (a failed install
+          # included), but an early mkdir/mktemp failure can stop it with 1
+          # before gosec exists. Mark the binary ready for "Save gosec binary"
+          # only when the executable is really in its cache dir; findings and
+          # scan errors (exit 1 with the binary present) still save it.
+          if [ "$rc" -ne 2 ] && [ -n "${GOSEC_BIN_DIR:-}" ] && [ -x "$GOSEC_BIN_DIR/gosec" ]; then
+            echo "binary_ready=true" >> "$GITHUB_OUTPUT"
+          fi
           shopt -s nullglob
           for out in "$RUNNER_TEMP"/gosec-*.sarif; do
             tag=$(basename "$out" .sarif)
