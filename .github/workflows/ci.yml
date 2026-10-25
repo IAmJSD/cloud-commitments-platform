@@ -401,20 +401,37 @@ jobs:
       matrix:
         # Same shards, same order as INTEGRATION_SHARDS below; the guard step
         # fails on any difference.
+        #
+        # Balanced on PR #1402's first run (package test times under -race
+        # in the three-leg layout): api 87s, config 85s, auth 62s, server
+        # 55s, purchase 53s, migrations 64s, and the rest 95s together
+        # (testhelpers 32s, cleanup-lambda 15s, database 15s, scheduler 12s,
+        # analytics 12s, commitmentopts 9s). api is the floor, as one package
+        # is never split; migrations and the rest run side by side within it.
         include:
-          - shard: migrations
-            title: migrations
-          - shard: api-purchase-config
-            title: api, purchase, config
-          - shard: auth-server-rest
-            title: auth, server, rest
+          - shard: api
+            title: api
+          - shard: config
+            title: config
+          - shard: purchase
+            title: purchase
+          - shard: auth
+            title: auth
+          - shard: server
+            title: server
+          - shard: migrations-rest
+            title: migrations, rest
             e2e-typecheck: true
     env:
       # <shard> <package path relative to the module> ... ; `*` = the rest.
+      # Shard names also go into cache keys and artifact names.
       INTEGRATION_SHARDS: |
-        migrations internal/database/postgres/migrations
-        api-purchase-config internal/api internal/purchase internal/config
-        auth-server-rest internal/auth internal/server *
+        api internal/api
+        config internal/config
+        purchase internal/purchase
+        auth internal/auth
+        server internal/server
+        migrations-rest internal/database/postgres/migrations *
       SHARD: ${{ matrix.shard }}
 
     services:

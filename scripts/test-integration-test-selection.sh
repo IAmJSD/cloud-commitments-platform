@@ -404,6 +404,16 @@ $M/other" bash "$SELECT" --shard first "$sel" >/dev/null 2>&1 || rc=$?
 if [[ "$rc" -eq 2 ]]; then ok "a multi-line module path is rejected"; else bad "a multi-line module path is rejected (exit $rc)"; fi
 shard_case "a duplicated shard name fails" 1 "first a
 first b *" first "shard first is defined twice"
+shard_case "a shard name unfit for a cache key fails" 1 "first,x a
+second b *" second "shard name first,x may only use"
+# The layout ci.yml uses: one package per shard, and a catch-all shard that
+# also names one, which it runs alongside every unnamed package.
+six="api a
+config b
+migrations-rest c *"
+shard_case "a one-package shard gets only its package" 0 "$six" config "$M/b	^(A)\$	1"
+shard_case "a catch-all shard that names a package gets it and the rest" 0 "$six" migrations-rest \
+  "$(printf '%s\t^(A)$\t1\n' "$M/c" "$M/d")"
 
 echo "$pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

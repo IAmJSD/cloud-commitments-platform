@@ -43,10 +43,12 @@
 #       one shard, then prints SELECTION_FILE's lines for shard NAME. The
 #       spec has one shard per line, a name then package import paths
 #       relative to the module path in $INTEGRATION_MODULE; `*` stands for
-#       every selected package no other shard names:
+#       every selected package no other shard names. Names are letters,
+#       digits, `.`, `_` and `-`, as CI puts them in cache keys and artifact
+#       names:
 #
-#         migrations internal/database/postgres/migrations
-#         rest internal/auth *
+#         api internal/api
+#         migrations-rest internal/database/postgres/migrations *
 #
 # Sourcing the script defines its functions without running anything (used by
 # scripts/test-integration-test-selection.sh).
@@ -197,6 +199,7 @@ select_shard() {
         nf = split(lines[i], w, " ")
         if (nf == 0) continue
         if (w[1] in shard_seen) { err = err "\n  shard " w[1] " is defined twice"; continue }
+        if (w[1] !~ /^[A-Za-z0-9._-]+$/) err = err "\n  shard name " w[1] " may only use letters, digits, ., _ and -"
         shard_seen[w[1]] = 1
         if (nf == 1) { err = err "\n  shard " w[1] " names no packages" }
         for (j = 2; j <= nf; j++) {
