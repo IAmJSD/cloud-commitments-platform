@@ -12,9 +12,9 @@ import (
 )
 
 func TestMigration_LockDefaultUserGroups(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool, path := container.DB.Pool(), getMigrationsPath()
 	ids := []string{
 		"00000000-0000-5000-8000-000000000005", // Standard Users
