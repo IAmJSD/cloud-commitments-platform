@@ -965,7 +965,12 @@ jobs:
           terraform_version: 1.10.5
 
       - name: Terraform Format Check
-        run: terraform fmt -check -recursive terraform/
+        # Must cover every SCAN_ROOTS entry in scripts/check-gcp-secret-scope.sh,
+        # whose block tracking was written against fmt layout (#150). The
+        # guard's self-test fails if a scan root has no line here.
+        run: |
+          terraform fmt -check -recursive terraform/
+          terraform fmt -check -recursive iac/
 
       - name: Test Azure federation identity guards
         if: matrix.cloud == 'azure'
