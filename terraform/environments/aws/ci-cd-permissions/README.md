@@ -13,6 +13,7 @@ CI/CD pipeline uses to deploy infrastructure on AWS. It optionally sets up keyle
 | `aws_iam_policy.compute` | ECS services/tasks, ECR, CloudWatch Logs, SSM |
 | `aws_iam_policy.compute_b` | Overflow for `aws_iam_policy.compute`, which is close to the 6144-character managed-policy limit |
 | `aws_iam_policy.data` | RDS, ElastiCache, S3 (state bucket), Secrets Manager |
+| `aws_iam_policy.monitoring` | SNS alerts topic, CloudWatch dashboard, log metric filters and Logs Insights queries for `modules/monitoring/aws` (#714); re-apply before setting `enable_monitoring = true` |
 | `aws_iam_policy.iam` | IAM role creation and policy attachment, gated on the permissions boundary below (#1705) |
 | `aws_iam_policy.workload_boundary` | `cudly-deploy-boundary`: the permissions ceiling every role the deploy role creates must carry |
 | `aws_iam_openid_connect_provider.github` | GitHub Actions OIDC provider (conditional on `github_repo`) |
@@ -104,6 +105,7 @@ After applying, retrieve the outputs used in GitHub Actions:
 ```bash
 terraform output role_arn               # → AWS_ROLE_TO_ASSUME
 terraform output oidc_provider_arn      # informational; AWS uses this internally
+terraform output -json policy_arns      # every managed policy attached to the role, for audits or teardown
 ```
 
 ## Importing an existing role

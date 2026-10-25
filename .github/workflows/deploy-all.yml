@@ -110,8 +110,10 @@ jobs:
 
       - name: Set cloud providers
         id: set-clouds
+        env:
+          DEPLOY_TO_INPUT: ${{ inputs.deploy_to || 'all' }}
         run: |
-          DEPLOY_TO="${{ inputs.deploy_to || 'all' }}"
+          DEPLOY_TO="$DEPLOY_TO_INPUT"
 
           # AWS Lambda
           if [[ "$DEPLOY_TO" == "all" ]] || \
@@ -147,18 +149,25 @@ jobs:
           fi
 
       - name: Display deployment plan
+        env:
+          ENVIRONMENT: ${{ steps.set-env.outputs.environment }}
+          DEPLOY_TO: ${{ inputs.deploy_to || 'all' }}
+          DEPLOY_AWS_LAMBDA: ${{ steps.set-clouds.outputs.deploy-aws-lambda }}
+          DEPLOY_AWS_FARGATE: ${{ steps.set-clouds.outputs.deploy-aws-fargate }}
+          DEPLOY_GCP: ${{ steps.set-clouds.outputs.deploy-gcp }}
+          DEPLOY_AZURE: ${{ steps.set-clouds.outputs.deploy-azure }}
         run: |
           {
             echo "## Deployment Plan"
             echo ""
-            echo "**Environment:** ${{ steps.set-env.outputs.environment }}"
-            echo "**Deploy Strategy:** ${{ inputs.deploy_to || 'all' }}"
+            echo "**Environment:** $ENVIRONMENT"
+            echo "**Deploy Strategy:** $DEPLOY_TO"
             echo ""
             echo "### Clouds"
-            echo "- AWS Lambda: ${{ steps.set-clouds.outputs.deploy-aws-lambda }}"
-            echo "- AWS Fargate: ${{ steps.set-clouds.outputs.deploy-aws-fargate }}"
-            echo "- GCP Cloud Run: ${{ steps.set-clouds.outputs.deploy-gcp }}"
-            echo "- Azure Container Apps: ${{ steps.set-clouds.outputs.deploy-azure }}"
+            echo "- AWS Lambda: $DEPLOY_AWS_LAMBDA"
+            echo "- AWS Fargate: $DEPLOY_AWS_FARGATE"
+            echo "- GCP Cloud Run: $DEPLOY_GCP"
+            echo "- Azure Container Apps: $DEPLOY_AZURE"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Deploy to AWS Lambda
@@ -174,6 +183,7 @@ jobs:
       environment: ${{ needs.determine-deployment.outputs.environment }}
     secrets:
       ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      ALERT_EMAILS: ${{ secrets.ALERT_EMAILS }}
       DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
       FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
       TF_BACKEND_AWS: ${{ secrets.TF_BACKEND_AWS }}
@@ -191,6 +201,7 @@ jobs:
       environment: ${{ needs.determine-deployment.outputs.environment }}
     secrets:
       ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      ALERT_EMAILS: ${{ secrets.ALERT_EMAILS }}
       TF_BACKEND_AWS: ${{ secrets.TF_BACKEND_AWS }}
 
   # Deploy to GCP Cloud Run
@@ -206,6 +217,7 @@ jobs:
       environment: ${{ needs.determine-deployment.outputs.environment }}
     secrets:
       ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      ALERT_EMAILS: ${{ secrets.ALERT_EMAILS }}
       TF_BACKEND_GCP: ${{ secrets.TF_BACKEND_GCP }}
 
   # Deploy to Azure Container Apps
@@ -234,6 +246,7 @@ jobs:
       environment: ${{ needs.determine-deployment.outputs.environment }}
     secrets:
       ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
+      ALERT_EMAILS: ${{ secrets.ALERT_EMAILS }}
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -252,6 +265,19 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # DEPLOY_<CLOUD> is determine-deployment's true/false selection output;
+    # DEPLOY_<CLOUD>_RESULT is the deploy-<cloud> job's result.
+    env:
+      ENVIRONMENT: ${{ needs.determine-deployment.outputs.environment }}
+      DETERMINE_DEPLOYMENT_RESULT: ${{ needs.determine-deployment.result }}
+      DEPLOY_AWS_LAMBDA: ${{ needs.determine-deployment.outputs.deploy-aws-lambda }}
+      DEPLOY_AWS_LAMBDA_RESULT: ${{ needs.deploy-aws-lambda.result }}
+      DEPLOY_AWS_FARGATE: ${{ needs.determine-deployment.outputs.deploy-aws-fargate }}
+      DEPLOY_AWS_FARGATE_RESULT: ${{ needs.deploy-aws-fargate.result }}
+      DEPLOY_GCP: ${{ needs.determine-deployment.outputs.deploy-gcp }}
+      DEPLOY_GCP_RESULT: ${{ needs.deploy-gcp.result }}
+      DEPLOY_AZURE: ${{ needs.determine-deployment.outputs.deploy-azure }}
+      DEPLOY_AZURE_RESULT: ${{ needs.deploy-azure.result }}
 
     steps:
       - name: Aggregate results
@@ -259,7 +285,7 @@ jobs:
           {
             echo "## Multi-Cloud Deployment Results"
             echo ""
-            echo "**Environment:** ${{ needs.determine-deployment.outputs.environment }}"
+            echo "**Environment:** $ENVIRONMENT"
             echo "**Timestamp:** $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo ""
 
@@ -267,44 +293,44 @@ jobs:
             echo ""
 
             # AWS Lambda
-            if [[ "${{ needs.determine-deployment.outputs.deploy-aws-lambda }}" == "true" ]]; then
-              if [[ "${{ needs.deploy-aws-lambda.result }}" == "success" ]]; then
+            if [[ "$DEPLOY_AWS_LAMBDA" == "true" ]]; then
+              if [[ "$DEPLOY_AWS_LAMBDA_RESULT" == "success" ]]; then
                 echo "- ✅ AWS Lambda: Success"
               else
-                echo "- ❌ AWS Lambda: ${{ needs.deploy-aws-lambda.result }}"
+                echo "- ❌ AWS Lambda: $DEPLOY_AWS_LAMBDA_RESULT"
               fi
             else
               echo "- ⏭️ AWS Lambda: Skipped"
             fi
 
             # AWS Fargate
-            if [[ "${{ needs.determine-deployment.outputs.deploy-aws-fargate }}" == "true" ]]; then
-              if [[ "${{ needs.deploy-aws-fargate.result }}" == "success" ]]; then
+            if [[ "$DEPLOY_AWS_FARGATE" == "true" ]]; then
+              if [[ "$DEPLOY_AWS_FARGATE_RESULT" == "success" ]]; then
                 echo "- ✅ AWS Fargate: Success"
               else
-                echo "- ❌ AWS Fargate: ${{ needs.deploy-aws-fargate.result }}"
+                echo "- ❌ AWS Fargate: $DEPLOY_AWS_FARGATE_RESULT"
               fi
             else
               echo "- ⏭️ AWS Fargate: Skipped"
             fi
 
             # GCP
-            if [[ "${{ needs.determine-deployment.outputs.deploy-gcp }}" == "true" ]]; then
-              if [[ "${{ needs.deploy-gcp.result }}" == "success" ]]; then
+            if [[ "$DEPLOY_GCP" == "true" ]]; then
+              if [[ "$DEPLOY_GCP_RESULT" == "success" ]]; then
                 echo "- ✅ GCP Cloud Run: Success"
               else
-                echo "- ❌ GCP Cloud Run: ${{ needs.deploy-gcp.result }}"
+                echo "- ❌ GCP Cloud Run: $DEPLOY_GCP_RESULT"
               fi
             else
               echo "- ⏭️ GCP Cloud Run: Skipped"
             fi
 
             # Azure
-            if [[ "${{ needs.determine-deployment.outputs.deploy-azure }}" == "true" ]]; then
-              if [[ "${{ needs.deploy-azure.result }}" == "success" ]]; then
+            if [[ "$DEPLOY_AZURE" == "true" ]]; then
+              if [[ "$DEPLOY_AZURE_RESULT" == "success" ]]; then
                 echo "- ✅ Azure Container Apps: Success"
               else
-                echo "- ❌ Azure Container Apps: ${{ needs.deploy-azure.result }}"
+                echo "- ❌ Azure Container Apps: $DEPLOY_AZURE_RESULT"
               fi
             else
               echo "- ⏭️ Azure Container Apps: Skipped"
@@ -315,25 +341,23 @@ jobs:
         run: |
           FAILED=false
 
-          # determine-deployment is checked for anything other than success, not
-          # just "failure". When it stops the run the four deploy jobs are
-          # SKIPPED rather than failed, so testing only those would report "all
-          # deployments completed successfully" for a run that deployed nothing.
-          #
-          # The four deploy jobs are deliberately still tested for "failure"
-          # only. A CANCELLED run leaves them `cancelled` and reaches the
-          # success line, which is the same false report. That predates this
-          # change, so it is tracked in #1810 rather than fixed here.
-          #
-          # Note this step is the only success-by-default check in the repo. All
-          # four per-cloud `summary` jobs allowlist on `== "success"` instead,
-          # so an unenumerated result falls to their failure branch and errs
-          # safe. This denylist is the outlier, not the pattern.
-          if [[ "${{ needs.determine-deployment.result }}" != "success" ]] || \
-             [[ "${{ needs.deploy-aws-lambda.result }}" == "failure" ]] || \
-             [[ "${{ needs.deploy-aws-fargate.result }}" == "failure" ]] || \
-             [[ "${{ needs.deploy-gcp.result }}" == "failure" ]] || \
-             [[ "${{ needs.deploy-azure.result }}" == "failure" ]]; then
+          # Allowlist, not denylist: determine-deployment must be "success". A
+          # selected deploy job must be "success"; "skipped" is only ok for a
+          # job that was not selected. Anything else, including "cancelled",
+          # counts as a failed run.
+          check_job() {
+            local selected="$1" result="$2"
+            if [[ "$selected" == "true" ]]; then
+              [[ "$result" == "success" ]]
+            else
+              [[ "$result" == "skipped" || "$result" == "success" ]]
+            fi
+          }
+          check_job "$DEPLOY_AWS_LAMBDA" "$DEPLOY_AWS_LAMBDA_RESULT" || FAILED=true
+          check_job "$DEPLOY_AWS_FARGATE" "$DEPLOY_AWS_FARGATE_RESULT" || FAILED=true
+          check_job "$DEPLOY_GCP" "$DEPLOY_GCP_RESULT" || FAILED=true
+          check_job "$DEPLOY_AZURE" "$DEPLOY_AZURE_RESULT" || FAILED=true
+          if [[ "$DETERMINE_DEPLOYMENT_RESULT" != "success" ]]; then
             FAILED=true
           fi
 

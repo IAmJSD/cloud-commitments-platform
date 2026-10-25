@@ -11,7 +11,6 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/mock"
@@ -21,10 +20,7 @@ import (
 func TestLadderTimelineAmendmentRoutedPersistence(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", ""))
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 	store := config.NewPostgresStore(container.DB)
 	account := &config.CloudAccount{Name: "Ladder fixture", Provider: "aws", ExternalID: "111111111111", Enabled: true}
 	require.NoError(t, store.CreateCloudAccount(ctx, account))

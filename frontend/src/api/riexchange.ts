@@ -6,6 +6,10 @@ import { apiRequest } from './client';
 import type {
   ConvertibleRI,
   ExchangeableAzureRI,
+  AzureCompatibleOfferingsRequest,
+  AzureCompatibleOfferingsResponse,
+  AzureExecuteExchangeRequest,
+  AzureExecuteExchangeResponse,
   RIUtilization,
   ReshapeRecommendation,
   ExchangeQuoteRequest,
@@ -44,6 +48,39 @@ export async function listExchangeableAzureRIs(subscriptionID?: string): Promise
 }
 
 /**
+ * Price a proposed Azure RI exchange without committing anything (issue #81):
+ * returns the compatible offerings plus the net payable / refunds / purchases
+ * preview and any Azure policy errors.
+ */
+export async function getAzureCompatibleOfferings(req: AzureCompatibleOfferingsRequest): Promise<AzureCompatibleOfferingsResponse> {
+  return apiRequest<AzureCompatibleOfferingsResponse>('/ri-exchange/azure-instances/compatible-offerings', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  });
+}
+
+/**
+ * Client timeout for executeAzureExchange. The backend runs the submit and
+ * its long-running-operation poll on a detached 4-minute budget
+ * (riExchangeExecutionTimeout), so the default 90s timeout would report many
+ * slow but successful exchanges as an unknown outcome.
+ */
+const AZURE_EXCHANGE_EXECUTE_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Execute an Azure RI exchange (issue #81). The backend re-quotes and refuses
+ * with a 422 when the fresh quote has policy errors, no net payable, another
+ * currency, or a net payable above max_payment_due.
+ */
+export async function executeAzureExchange(req: AzureExecuteExchangeRequest): Promise<AzureExecuteExchangeResponse> {
+  return apiRequest<AzureExecuteExchangeResponse>('/ri-exchange/azure-instances/exchange', {
+    method: 'POST',
+    body: JSON.stringify(req),
+    timeoutMs: AZURE_EXCHANGE_EXECUTE_TIMEOUT_MS,
+  });
+}
+
+/**
  * Get per-RI utilization from Cost Explorer
  */
 export async function getRIUtilization(lookbackDays?: number): Promise<RIUtilization[]> {
@@ -61,8 +98,15 @@ export async function getRIUtilization(lookbackDays?: number): Promise<RIUtiliza
  * recs_collected_at carries the raw ISO-8601 timestamp so the banner
  * can display a relative-time label ("last collected 23h ago").
  */
+export interface ExcludedRI {
+  ri_id: string;
+  reason: string;
+}
+
 export interface ReshapeRecommendationsResponse {
   recommendations: ReshapeRecommendation[];
+  /** RIs left out of cost-based analysis (no recommendation); omitted when none. */
+  excluded_ris?: ExcludedRI[];
   recs_staleness?: string;
   recs_collected_at?: string | null;
 }

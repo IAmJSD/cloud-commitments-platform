@@ -81,8 +81,17 @@ clean: ## Clean Terraform cache and state files (preserves .terraform.lock.hcl)
 	@find terraform/environments -name "*.tfstate.backup" -type f -delete 2>/dev/null || true
 	@echo "✅ Clean complete"
 
-clean-locks: ## Delete .terraform.lock.hcl files (causes provider re-resolution on next init)
+# The lock files are the committed provider checksum pins, so deleting them is
+# a supply-chain change: the next init picks whatever the version constraints
+# admit today. Hence the explicit opt-in (issue #349).
+clean-locks: ## Delete .terraform.lock.hcl files (needs CONFIRM_CLEAN_LOCKS=yes)
+	@if [ "$(CONFIRM_CLEAN_LOCKS)" != "yes" ]; then \
+		echo "Refusing to delete the .terraform.lock.hcl provider pins without CONFIRM_CLEAN_LOCKS=yes." >&2; \
+		echo "The next terraform init re-resolves providers to the newest builds the constraints allow." >&2; \
+		exit 1; \
+	fi
 	@echo "⚠️  Deleting lock files — run terraform init to re-resolve providers"
+	@echo "⚠️  Review the regenerated .terraform.lock.hcl diffs as a provider supply-chain change before committing them"
 	@find terraform/environments -name ".terraform.lock.hcl" -type f -delete 2>/dev/null || true
 	@echo "✅ Lock files deleted"
 

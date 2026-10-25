@@ -205,10 +205,11 @@ func (m *Manager) handleCancelMessage(ctx context.Context, msg *AsyncMessage) er
 //  1. Reject the message outright if actor_email is empty — legacy /
 //     replayed payloads land here and must NOT fall through to a
 //     tokenless approval.
-//  2. Load the execution by ID and validate the approval token using
-//     constant-time compare, mirroring ApproveExecution / CancelExecution
-//     so a token mismatch fails fast with the same error shape and we
-//     don't leak whether the actor or the token was wrong.
+//  2. Load the execution by ID and validate the approval token (constant-
+//     time compare plus TTL) through ValidateApprovalToken, the same
+//     helper ApproveExecution / CancelExecution use, so a bad or expired
+//     token fails fast with the same error shape and we don't leak
+//     whether the actor or the token was wrong.
 //  3. Resolve the per-account contact_email approver list from the
 //     execution's recommendations and assert actor_email matches one
 //     of them (case-insensitive, trimmed). Empty approver list is a
@@ -229,7 +230,8 @@ func (m *Manager) verifyAsyncApprovalActor(ctx context.Context, msg *AsyncMessag
 }
 
 // loadAsyncExecutionForApproval fetches the execution targeted by an
-// async approve/cancel message and validates the approval token. Split
+// async approve/cancel message and validates the approval token,
+// including its expiry, via ValidateApprovalToken. Split
 // out from verifyAsyncApprovalActor so the parent stays under the
 // repo's gocyclo threshold.
 func (m *Manager) loadAsyncExecutionForApproval(ctx context.Context, msg *AsyncMessage) (*config.PurchaseExecution, error) {
@@ -240,14 +242,11 @@ func (m *Manager) loadAsyncExecutionForApproval(ctx context.Context, msg *AsyncM
 	if err != nil {
 		return nil, fmt.Errorf("failed to get execution: %w", err)
 	}
-	if execution.ApprovalToken == "" || msg.Token == "" {
-		return nil, fmt.Errorf("invalid approval token")
-	}
-	// execution.ApprovalToken is the SHA-256 hex digest stored at rest
-	// (issue #103); config.ApprovalTokenMatches hashes msg.Token and
-	// compares digests in constant time.
-	if !config.ApprovalTokenMatches(execution.ApprovalToken, msg.Token) {
-		return nil, fmt.Errorf("invalid approval token")
+	// Same check as ApproveExecution and loadCancelableExecution (issue
+	// #268): non-empty token, constant-time digest compare against the
+	// SHA-256 hash stored at rest (issue #103), and the TTL (issue #397).
+	if err := ValidateApprovalToken(execution, msg.Token); err != nil {
+		return nil, err
 	}
 	return execution, nil
 }

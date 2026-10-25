@@ -132,6 +132,13 @@ describe('Plans page permission gating (issue #365)', () => {
       expect(html).toContain('data-action="pause"');
       expect(html).toContain('data-action="edit"');
       expect(html).toContain('data-action="disable"');
+      const buttons = Array.from(pp.querySelectorAll('td.actions button'));
+      expect(buttons.length).toBeGreaterThanOrEqual(4);
+      for (const b of buttons) expect(b.getAttribute('aria-label')).toBeTruthy();
+      // Issue #751: actions use the shared SVG icon set, not platform-font
+      // glyphs, and the money-triggering Run now action carries a text label.
+      for (const b of buttons) expect(b.querySelector('svg.icon')).not.toBeNull();
+      expect(pp.querySelector('button[data-action="run"]')?.textContent?.trim()).toBe('Run now');
     });
   });
 

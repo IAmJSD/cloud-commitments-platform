@@ -134,11 +134,14 @@ func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.Purchas
 		return fmt.Errorf("some purchases failed: %v", purchaseErrors)
 	}
 
-	// At least one rec committed (full or partial success): the confirmation
-	// must go out for the recs that purchased. buildPurchaseConfirmationData
-	// only lists Purchased recs, so a partial run notifies on exactly those.
-	if notifyErr := m.sendPurchaseNotification(ctx, exec, plan, totalSavings, totalUpfront); notifyErr != nil {
-		logging.Errorf("Failed to send confirmation: %v", notifyErr)
+	// Confirm only when at least one rec committed (full or partial success).
+	// buildPurchaseConfirmationData only lists Purchased recs, so a partial run
+	// notifies on exactly those, and a run with nothing selected (it never
+	// reached a cloud API) sends no "purchase confirmed" email for $0 (#339).
+	if anyRecPurchased(exec.Recommendations) {
+		if notifyErr := m.sendPurchaseNotification(ctx, exec, plan, totalSavings, totalUpfront); notifyErr != nil {
+			logging.Errorf("Failed to send confirmation: %v", notifyErr)
+		}
 	}
 
 	if len(purchaseErrors) > 0 {
@@ -295,6 +298,9 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	recs := make([]config.RecommendationRecord, len(baseExec.Recommendations))
 	copy(recs, baseExec.Recommendations)
 	acctExec.Recommendations = recs
+	// Runs on every return path below, once the row's terminal status is
+	// stamped; a no-op unless it ended failed or partially_completed (#714).
+	defer m.notifyExecutionFailure(ctx, &acctExec)
 
 	provCfg, err := m.resolveAccountProvider(ctx, account)
 	if err != nil {
@@ -326,7 +332,7 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 
 	// Resolve the final status/error/completion stamp from the per-rec outcome
 	// (#642), and learn whether any rec committed (#1014).
-	partial, committed := applyAccountOutcome(&acctExec, purchaseErrors)
+	_, committed = applyAccountOutcome(&acctExec, purchaseErrors)
 
 	if saveErr := m.config.SavePurchaseExecution(ctx, &acctExec); saveErr != nil {
 		return committed, fmt.Errorf("AUDIT LOSS: failed to save execution record for account %s: %w", account.ID, saveErr)
@@ -334,8 +340,10 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 
 	// Send the confirmation whenever at least one rec committed (full or
 	// partial success). buildPurchaseConfirmationData only lists Purchased
-	// recs, so a partial run notifies on exactly the recs that fired.
-	if len(purchaseErrors) == 0 || partial {
+	// recs, so a partial run notifies on exactly the recs that fired. Gating on
+	// committed rather than "no errors" keeps an account with nothing selected
+	// from getting a "purchase confirmed" email for $0 (#339).
+	if committed {
 		if err := m.sendPurchaseNotification(ctx, &acctExec, plan, totalSavings, totalUpfront); err != nil {
 			logging.Errorf("Failed to send confirmation for account %s: %v", account.ID, err)
 		}
@@ -1099,7 +1107,7 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	// The parent ctx governs the overall Lambda budget; this per-rec deadline
 	// is always the shorter of the two.
 	recTuple := fmt.Sprintf("%s/%s/%s/%s", rec.Provider, rec.Service, rec.Region, rec.ResourceType)
-	recCtx, recCancel := context.WithTimeout(ctx, 30*time.Second)
+	recCtx, recCancel := context.WithTimeout(ctx, m.budgets.perRecTimeout())
 	defer recCancel()
 
 	// Create the provider
@@ -1180,6 +1188,8 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	// (which the AWS SDK retries up to 3× × 30s by default) versus
 	// something earlier in the flow — issue #667.
 	tCall := time.Now()
+	// go's Redshift dedupe needs the dispatch time to bound its DescribeReservedNodes match window.
+	opts.RequestedAt = time.Now().UTC()
 	result, err := serviceClient.PurchaseCommitment(recCtx, recommendation, opts)
 	elapsed := time.Since(tCall)
 	if err != nil {

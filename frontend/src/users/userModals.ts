@@ -15,8 +15,9 @@ import {
   availableGroups
 } from './state';
 import { escapeHtml, showError, showSuccess, validateGroupCombination } from './utils';
-import { loadUsers } from './userActions';
+import { loadUsers, refreshCurrentUserAccess } from './userActions';
 import { openModal, closeModal } from '../modal';
+import { clearFieldErrors, showFieldError } from '../lib/field-errors';
 
 /**
  * Open create user modal
@@ -31,6 +32,7 @@ export function openCreateUserModal(): void {
 
   title.textContent = 'Create User';
   form.reset();
+  clearFieldErrors(form);
   (document.getElementById('user-id') as HTMLInputElement).value = '';
 
   // Show password field for new user. Password is optional: leaving it
@@ -63,6 +65,7 @@ export async function openEditUserModal(userId: string): Promise<void> {
     if (!modal || !title || !form) return;
 
     title.textContent = 'Edit User';
+    clearFieldErrors(form);
     (document.getElementById('user-id') as HTMLInputElement).value = user.id;
     (document.getElementById('user-email') as HTMLInputElement).value = user.email;
     // role field no longer exists in the API response (PR #912).
@@ -105,25 +108,65 @@ export function closeUserModal(): void {
  */
 export async function saveUser(e: Event): Promise<void> {
   e.preventDefault();
+  const submitBtn = document.querySelector<HTMLButtonElement>('#user-form button[type="submit"]');
+  if (submitBtn) submitBtn.disabled = true;
+  try {
+    await submitUserForm();
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
 
-  const email = (document.getElementById('user-email') as HTMLInputElement).value;
-  const password = (document.getElementById('user-password') as HTMLInputElement).value;
+interface FieldProblem {
+  control: HTMLElement;
+  message: string;
+  /** Also toast it (the pre-#727 behavior these messages already had). */
+  toast: boolean;
+}
+
+/**
+ * Every reason the form cannot be saved, in field order (issue #727,
+ * UX-33). #user-form is novalidate, so this is the only gate: the browser's
+ * own bubbles vanish on the next click and never reached the group checks.
+ */
+function userFormProblems(email: HTMLInputElement, password: HTMLInputElement,
+  groupsSelect: HTMLSelectElement, selectedGroups: string[]): FieldProblem[] {
+  const problems: FieldProblem[] = [];
+  if (email.value.trim() === '') {
+    problems.push({ control: email, message: 'Enter an email address.', toast: false });
+  } else if (email.validity?.typeMismatch) {
+    problems.push({ control: email, message: 'Enter a valid email address, like name@example.com.', toast: false });
+  }
+  // Password is optional on create (blank emails an invite) and hidden on edit.
+  if (!currentEditingUser && password.value) {
+    const requirementError = describePasswordValidationError(password.value);
+    if (requirementError) problems.push({ control: password, message: requirementError, toast: true });
+  }
+  // Enforce >= 1 group on the client side so the user gets a clear
+  // validation message rather than a 400 from the backend. Then reject
+  // contradictory combinations (view-only + write-capable).
+  const groupProblem = selectedGroups.length === 0
+    ? 'At least one group is required. Select one or more groups for this user.'
+    : validateGroupCombination(selectedGroups, availableGroups);
+  if (groupProblem) problems.push({ control: groupsSelect, message: groupProblem, toast: true });
+  return problems;
+}
+
+async function submitUserForm(): Promise<void> {
+  const emailInput = document.getElementById('user-email') as HTMLInputElement;
+  const passwordInput = document.getElementById('user-password') as HTMLInputElement;
+  const email = emailInput.value;
+  const password = passwordInput.value;
   // role selector removed: PR #912 drops the role column.
   const groupsSelect = document.getElementById('user-groups') as HTMLSelectElement;
   const selectedGroups = Array.from(groupsSelect.selectedOptions).map(opt => opt.value);
 
-  // Enforce >= 1 group on the client side so the user gets a clear
-  // validation message rather than a 400 from the backend.
-  if (selectedGroups.length === 0) {
-    showError('At least one group is required. Select one or more groups for this user.');
-    return;
-  }
-
-  // Reject contradictory group combinations (view-only + write-capable)
-  // before hitting the API so the user gets an actionable message.
-  const groupConflict = validateGroupCombination(selectedGroups, availableGroups);
-  if (groupConflict) {
-    showError(groupConflict);
+  const problems = userFormProblems(emailInput, passwordInput, groupsSelect, selectedGroups);
+  if (problems.length > 0) {
+    for (const p of problems) showFieldError(p.control, p.message);
+    const toast = problems.find(p => p.toast);
+    if (toast) showError(toast.message);
+    problems[0]!.control.focus();
     return;
   }
 
@@ -134,19 +177,12 @@ export async function saveUser(e: Event): Promise<void> {
         email,
         groups: selectedGroups
       });
+      await refreshCurrentUserAccess([currentEditingUser.id]);
       showSuccess('User updated successfully');
     } else {
       // Create new user. Password is optional: if blank, the backend
       // emails an invite that lets the user pick their own password on
-      // first login. Only run client-side strength checks when a
-      // password was actually entered.
-      if (password) {
-        const requirementError = describePasswordValidationError(password);
-        if (requirementError) {
-          showError(requirementError);
-          return;
-        }
-      }
+      // first login. Strength checks ran in userFormProblems.
       const result = await api.createUser({
         email,
         password,

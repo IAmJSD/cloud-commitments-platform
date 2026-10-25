@@ -5,6 +5,7 @@
 #
 # Required GitHub Secrets:
 #   - ADMIN_EMAIL: Admin email for notifications
+#   - ALERT_EMAILS: Optional, comma-separated addresses that receive monitoring alerts (#714)
 #
 # Required GitHub Variables:
 #   - GCP_REGION: GCP region (e.g., us-central1)
@@ -48,6 +49,8 @@ on:
     secrets:
       ADMIN_EMAIL:
         required: true
+      ALERT_EMAILS:
+        required: false
       TF_BACKEND_GCP:
         required: true
 
@@ -190,18 +193,22 @@ jobs:
 
       - name: Terraform Plan
         env:
+          TARGET_ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_alert_emails: ${{ secrets.ALERT_EMAILS }}
         run: |
           cd terraform/environments/gcp
           terraform plan \
-            -var-file="github-${{ needs.prepare.outputs.target_environment }}.tfvars" \
-            -var="project_id=${{ vars.GCP_PROJECT_ID }}" \
+            -var-file="github-${TARGET_ENVIRONMENT}.tfvars" \
+            -var="project_id=${GCP_PROJECT_ID}" \
             -out=tfplan
 
       - name: Terraform Apply
         id: deploy
         env:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
+          TF_VAR_alert_emails: ${{ secrets.ALERT_EMAILS }}
         run: |
           cd terraform/environments/gcp
           terraform apply -auto-approve tfplan
@@ -258,8 +265,10 @@ jobs:
     steps:
       - name: Get Service URL
         id: get-url
+        env:
+          DEPLOY_SERVICE_URL: ${{ needs.build-and-deploy.outputs.service_url }}
         run: |
-          SERVICE_URL="${{ needs.build-and-deploy.outputs.service_url }}"
+          SERVICE_URL="$DEPLOY_SERVICE_URL"
           if [ -z "$SERVICE_URL" ]; then
             echo "Failed to get service URL from deploy outputs"
             exit 1
@@ -323,12 +332,16 @@ jobs:
         continue-on-error: true
 
       - name: Post summary
+        env:
+          TARGET_ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
+          DEPLOY_RESULT: ${{ needs.build-and-deploy.result }}
+          TEST_RESULT: ${{ needs.test-deployment.result }}
         run: |
           {
             echo "## GCP Cloud Run Deployment Summary"
             echo ""
-            echo "**Environment:** ${{ needs.prepare.outputs.target_environment }}"
-            echo "**Region:** ${{ env.GCP_REGION }}"
+            echo "**Environment:** $TARGET_ENVIRONMENT"
+            echo "**Region:** $GCP_REGION"
             echo ""
 
             if [ -f deployment-info.json ]; then
@@ -340,10 +353,10 @@ jobs:
 
             echo ""
             echo "### Job Results"
-            echo "- Deploy: ${{ needs.build-and-deploy.result }}"
-            echo "- Test: ${{ needs.test-deployment.result }}"
+            echo "- Deploy: $DEPLOY_RESULT"
+            echo "- Test: $TEST_RESULT"
 
-            if [ "${{ needs.build-and-deploy.result }}" == "success" ] && [ "${{ needs.test-deployment.result }}" == "success" ]; then
+            if [ "$DEPLOY_RESULT" == "success" ] && [ "$TEST_RESULT" == "success" ]; then
               echo ""
               echo "✅ **Deployment successful!**"
             else

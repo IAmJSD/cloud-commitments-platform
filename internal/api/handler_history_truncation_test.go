@@ -118,6 +118,16 @@ func TestHandler_getHistory_ExecutionsLimitIsFixed(t *testing.T) {
 	assert.Equal(t, true, body["truncated"])
 }
 
+// The actionable class (pending, approved, ...) has its own, larger cap. The
+// response must expose it so the truncation banner can quote the cap that was
+// actually hit instead of the terminal-class cap (issue #686).
+func TestHandler_getHistory_ActionableExecutionsLimitExposed(t *testing.T) {
+	body := runAdminHistory(t, nil, pendingExecutions(config.MaxListLimit), map[string]string{})
+	assert.Equal(t, true, body["truncated"])
+	assert.EqualValues(t, config.MaxListLimit, body["actionable_executions_limit"])
+	assert.EqualValues(t, config.DefaultListLimit, body["executions_limit"])
+}
+
 func TestHandler_getHistory_TruncatedHonorsCustomLimit(t *testing.T) {
 	body := runAdminHistory(t, historyRows(5), nil, map[string]string{"limit": "5"})
 	assert.Equal(t, true, body["truncated"])

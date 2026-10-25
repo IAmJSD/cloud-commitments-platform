@@ -113,7 +113,7 @@ describe('groups/groupList', () => {
       groupList.renderGroups([]);
 
       const container = document.getElementById('groups-list');
-      expect(container?.innerHTML).toContain('No groups found');
+      expect(container?.innerHTML).toContain('No groups yet');
       expect(container?.querySelector('.empty')).toBeTruthy();
     });
 
@@ -242,12 +242,18 @@ describe('groups/groupList', () => {
       groupList.renderGroups([xssGroup]);
 
       const container = document.getElementById('groups-list');
-      // Verify script tag is escaped (not executable)
-      expect(container?.innerHTML).not.toContain('<script>');
-      expect(container?.innerHTML).toContain('&lt;script&gt;');
-      // Verify img tag is escaped (not executable)
-      expect(container?.innerHTML).not.toContain('<img');
-      expect(container?.innerHTML).toContain('&lt;img');
+      // The name and description must stay text: no element is created
+      // from them anywhere in the card.
+      expect(container?.querySelector('script, img')).toBeNull();
+      expect(container?.querySelector('h4')?.textContent).toBe(xssGroup.name);
+      expect(container?.querySelector('.group-description')?.textContent).toBe(xssGroup.description);
+      // The icon buttons carry the name in aria-label. The attribute must
+      // round-trip the raw string, so a quote cannot end it early. (innerHTML
+      // serialises attribute values without escaping < and >, which is why
+      // this checks the DOM rather than the serialised markup.)
+      const edit = container?.querySelector('.edit-group-btn');
+      expect(edit?.getAttribute('aria-label')).toBe(`Edit group ${xssGroup.name}`);
+      expect(edit?.getAttributeNames().sort()).toEqual(['aria-label', 'class', 'data-group-id', 'title']);
     });
 
     it('should not render if container not found', () => {
@@ -671,7 +677,7 @@ describe('groups/groupModals', () => {
       });
     });
 
-    it('should skip permissions without action', async () => {
+    it('refuses a permission row without an action instead of dropping it', async () => {
       document.body.innerHTML = `
         <div id="group-modal">
           <form id="group-form">
@@ -694,9 +700,12 @@ describe('groups/groupModals', () => {
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await groupModals.saveGroup(event);
 
-      expect(api.createGroup).toHaveBeenCalledWith(expect.objectContaining({
-        permissions: [{ action: 'execute', resource: '*' }],
-      }));
+      // Issue #213: dropping an authorization row silently is not
+      // acceptable; the row is refused with a note until fixed or removed.
+      expect(api.createGroup).not.toHaveBeenCalled();
+      expect(document.querySelector('.perm-action')?.getAttribute('aria-invalid')).toBe('true');
+      expect(document.querySelector('.permission-item .field-error')?.textContent)
+        .toContain('This permission has no action');
     });
 
     it('includes permissions with default resource value', async () => {
@@ -907,7 +916,7 @@ describe('groups/groupActions', () => {
 
       await groupActions.deleteGroup('group-1');
 
-      expect(document.querySelector('.toast-error')?.textContent).toContain('Failed to delete group');
+      expect(document.querySelector('.toast-error')?.textContent).toContain('Failed to delete group: Server error');
     });
   });
 
@@ -1260,38 +1269,6 @@ describe('groups/groupModals — duplicate', () => {
 describe('11-M3 max_amount validation in collectPermissions', () => {
   // Access collectPermissions indirectly via saveGroup and observe API call.
 
-  it('rejects Infinity max_amount (does not forward it to API)', async () => {
-    const modal = document.createElement('div');
-    modal.id = 'group-modal';
-    modal.innerHTML = `
-      <input id="group-id" value="">
-      <input id="group-name" value="Test">
-      <textarea id="group-description"></textarea>
-      <div id="permissions-list">
-        <div class="permission-item">
-          <select class="perm-action"><option value="view" selected>View</option></select>
-          <select class="perm-resource"><option value="plans" selected>Plans</option></select>
-          <input class="perm-providers" value="">
-          <input class="perm-services" value="">
-          <input class="perm-regions" value="">
-          <input class="perm-max-amount" type="number" min="0" value="Infinity">
-        </div>
-      </div>
-    `;
-    document.body.appendChild(modal);
-
-    (api.createGroup as jest.Mock).mockResolvedValue({ id: 'new-id', name: 'Test', description: '', permissions: [] });
-
-    const event = new Event('submit', { cancelable: true });
-    await groupModals.saveGroup(event);
-
-    expect(api.createGroup).toHaveBeenCalled();
-    const call = (api.createGroup as jest.Mock).mock.calls[0][0] as { permissions: Array<{ constraints?: { max_amount?: number } }> };
-    // max_amount must not be Infinity (non-finite rejected).
-    const maxAmount = call.permissions[0]?.constraints?.max_amount;
-    expect(maxAmount).toBeUndefined();
-  });
-
   it('accepts a valid positive max_amount', async () => {
     document.body.innerHTML = '';
     const modal = document.createElement('div');
@@ -1348,8 +1325,58 @@ describe('11-M3 max_amount validation in collectPermissions', () => {
     const event = new Event('submit', { cancelable: true });
     await groupModals.saveGroup(event);
 
-    const call = (api.createGroup as jest.Mock).mock.calls[0][0] as { permissions: Array<{ constraints?: { max_amount?: number } }> };
-    // Negative value must be silently skipped.
-    expect(call.permissions[0]?.constraints?.max_amount).toBeUndefined();
+    // Negative value must be refused, not silently dropped (#133).
+    expect(api.createGroup).not.toHaveBeenCalled();
+    expect(document.querySelector('.toast-error')?.textContent).toContain(
+      'Max Amount must be greater than 0; leave it blank for no limit (permission 0).'
+    );
+    expect(document.querySelector('.toast-error')?.textContent).not.toContain('Repair');
+  });
+
+  const maxAmountForm = (attrs: string): string => `
+      <input id="group-id" value="">
+      <input id="group-name" value="Test">
+      <textarea id="group-description"></textarea>
+      <div id="permissions-list">
+        <div class="permission-item">
+          <select class="perm-action"><option value="view" selected>View</option></select>
+          <select class="perm-resource"><option value="plans" selected>Plans</option></select>
+          <input class="perm-max-amount" type="number" min="0" ${attrs}>
+        </div>
+      </div>
+    `;
+  const MAX_AMOUNT_MESSAGE = 'Max Amount must be greater than 0; leave it blank for no limit (permission 0).';
+
+  it.each(['0', '-100'])('refuses max_amount %s instead of saving without the cap (#133)', async raw => {
+    document.body.innerHTML = maxAmountForm(`value="${raw}"`);
+    await groupModals.saveGroup(new Event('submit', { cancelable: true }));
+    expect(api.createGroup).not.toHaveBeenCalled();
+    expect(document.querySelector('.toast-error')?.textContent).toContain(MAX_AMOUNT_MESSAGE);
+    expect(document.querySelector('.toast-error')?.textContent).not.toContain('Repair');
+  });
+
+  // Browsers report unparsable text ("abc", "1e", "1e999") as value "" with
+  // validity.badInput set; without that check the cap would be silently dropped.
+  it('refuses unparsable number-input text (badInput) instead of saving without the cap (#133)', async () => {
+    document.body.innerHTML = maxAmountForm('');
+    const input = document.querySelector('.perm-max-amount') as HTMLInputElement;
+    Object.defineProperty(input, 'validity', { value: { badInput: true } });
+    expect(input.value).toBe('');
+    await groupModals.saveGroup(new Event('submit', { cancelable: true }));
+    expect(api.createGroup).not.toHaveBeenCalled();
+    expect(document.querySelector('.toast-error')?.textContent).toContain(MAX_AMOUNT_MESSAGE);
+  });
+
+  it('still saves a blank max_amount as no cap', async () => {
+    document.body.innerHTML = maxAmountForm('');
+    (api.createGroup as jest.Mock).mockResolvedValue({ id: 'x', name: 'Test', description: '', permissions: [] });
+    await groupModals.saveGroup(new Event('submit', { cancelable: true }));
+    expect(api.createGroup).toHaveBeenCalled();
+  });
+
+  it('shows a stored max_amount of 0 in the edit form (#133)', () => {
+    document.body.innerHTML = '<div id="permissions-list"></div>';
+    groupModals.addPermission({ action: 'execute', resource: 'purchases', constraints: { max_amount: 0 } });
+    expect((document.querySelector('.perm-max-amount') as HTMLInputElement).value).toBe('0');
   });
 });

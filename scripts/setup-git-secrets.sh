@@ -93,22 +93,97 @@ git secrets --register-aws
 echo ""
 echo "Adding custom secret patterns..."
 
+# git-secrets scans with a hard-coded `grep -w` (git grep -nwHEI, or grep -nwHEI
+# for file arguments), so a match only counts if it starts and ends on a word
+# boundary. Most detectors below don't on real text: a DSN detector's match ends
+# at the "@", right before the first letter of the host, and "password" in
+# db_password starts after "_". Those lines scanned clean (#328). So each
+# detector is registered with the word characters around it taken in, which
+# always reach a boundary: the registered form fires wherever the detector
+# itself matches.
+#
+# A pattern written as (^|...)...(...|$) spells out its own bounds, so it is
+# registered as is: wrapping it would match the same lines, but the extra
+# leading [A-Za-z0-9_]* makes macOS's regex engine noticeably slower.
+word_chars='[A-Za-z0-9_]*'
 # `git secrets --add` exits 1 when the pattern is already registered, which under
 # `set -e` aborted a re-run at the first custom pattern and skipped the rest.
 # Skip patterns already present so the script is idempotent; a real failure
-# (for example an invalid regex) still stops it.
+# (for example an invalid regex) still stops it. A clone set up before #328 has
+# the bare detector registered; drop it, since the wrapped form covers it.
 add_pattern() {
-    if git config --get-all secrets.patterns | grep -qxF -- "$1"; then
+    local pattern="${word_chars}($1)${word_chars}"
+    case "$1" in
+        '(^|'*'|$)') pattern="$1" ;;
+    esac
+    if [ "${pattern}" != "$1" ] \
+        && git config --local --get-all secrets.patterns | grep -qxF -- "$1"; then
+        git config --local --unset-all --fixed-value secrets.patterns "$1"
+    fi
+    if git config --get-all secrets.patterns | grep -qxF -- "${pattern}"; then
         return 0
     fi
-    git secrets --add "$1"
+    git secrets --add "${pattern}"
 }
 
 # AWS patterns
 add_pattern 'AKIA[0-9A-Z]{16}'                                    # AWS Access Key ID
-# (No bare 40-character "secret access key" pattern: the former negated-class form
-# matched any run of 41 non-alphanumeric characters, i.e. box-drawing and dash
-# banner lines, never a key. --register-aws above already covers AWS secret keys.)
+
+# AWS Secret Access Key on its own (#295). --register-aws and the "AWS Credentials"
+# pattern below only match a key assigned to an aws/secret-style name, so a bare key
+# (a pasted credential, an unquoted YAML value) needs its own detector.
+#
+# A key is exactly 40 characters from [A-Za-z0-9/+]. Matching just that is too noisy:
+# commit SHAs, long CamelCase test names and paths fill this repo with such runs. A
+# random key almost always has an upper-case letter next to, or one character away
+# from, a digit (about 0.3% of keys do not, and slip through), and those runs rarely
+# do, so a match must contain that pair, inside a 3-character "trio". ERE has no
+# lookahead, so "40 characters that contain a trio" means spelling out where the trio
+# sits. One pattern per possible trio position is slow under BSD grep -w (macOS), so
+# each pattern covers a 5-position window: fixed-length key characters before and
+# after the window, and inside it the trio at each of the window's offsets. Every
+# pattern still matches exactly 40 characters.
+#
+# The run must be bounded by a non-key character or the line edge. "=" may precede
+# it (token=KEY) but not follow it, which keeps padded base64 out; "_" and "(" do not
+# count as bounds, so identifiers such as Test_Name(...) never match. Each pattern
+# also takes in the word around those bounds, because git-secrets greps with -w and
+# would otherwise reject a match whose bound follows a word character (the "=" in
+# token=KEY).
+key_char='[A-Za-z0-9/+]'
+key_pair='([A-Z][0-9]|[0-9][A-Z])'
+key_trio="(${key_char}${key_pair}|${key_pair}${key_char}|[A-Z]${key_char}[0-9]|[0-9]${key_char}[A-Z])"
+key_start='(^|[A-Za-z0-9_]*[^A-Za-z0-9/+_])'
+key_end='([^A-Za-z0-9/+=_(][A-Za-z0-9_]*|$)'
+# key_chars N: exactly N key characters (nothing for 0).
+key_chars() {
+    if [ "$1" -gt 0 ]; then
+        printf '%s{%d}' "${key_char}" "$1"
+    fi
+}
+# The trio starts at offset 0 to 37 of the 40 characters.
+for window_start in 0 5 10 15 20 25 30 35; do
+    window_end=$((window_start + 4))
+    if [ "${window_end}" -gt 37 ]; then
+        window_end=37
+    fi
+    span=$((window_end - window_start))
+    trio_at=''
+    for ((lead = 0; lead <= span; lead++)); do
+        trio_at="${trio_at}|$(key_chars "${lead}")${key_trio}$(key_chars $((span - lead)))"
+    done
+    add_pattern "${key_start}$(key_chars "${window_start}")(${trio_at#|})$(key_chars $((37 - window_end)))${key_end}"
+done
+
+# Clones set up before #813 still carry the old negated-class "secret access key"
+# pattern, which matched runs of 41 non-key characters (box-drawing and dash banner
+# lines) and never a key. Re-running this script removes it from the repo's config,
+# where the old version of this script registered it.
+legacy_secret_key_pattern='[^A-Za-z0-9/+=]{40}[^A-Za-z0-9/+=]'
+if git config --local --get-all secrets.patterns | grep -qxF -- "${legacy_secret_key_pattern}"; then
+    git config --local --unset-all --fixed-value secrets.patterns "${legacy_secret_key_pattern}"
+fi
+
 add_pattern 'aws(.{0,20})?['\''"][0-9a-zA-Z/+]{40}['\''"]'       # AWS Credentials
 
 # GCP patterns
@@ -123,10 +198,32 @@ add_pattern 'api[_-]?key[[:space:]]*[=:][[:space:]]*['\''"][^'\''"]{8,}'        
 add_pattern 'secret[_-]?key[[:space:]]*[=:][[:space:]]*['\''"][^'\''"]{8,}'      # Secret key with quoted value
 add_pattern 'BEGIN[[:space:]]((RSA|DSA|EC|OPENSSH|ENCRYPTED)[[:space:]])?PRIVATE[[:space:]]KEY-----'  # PEM private keys
 
-# Database connection strings
-add_pattern 'postgres://[^:]+:[^@]+@'                           # PostgreSQL
-add_pattern 'mysql://[^:]+:[^@]+@'                              # MySQL
-add_pattern 'mongodb(\+srv)?://[^:]+:[^@]+@'                    # MongoDB
+# Database connection strings (#368). A DSN detector covers each scheme a client
+# accepts for that database: libpq's postgresql:// as well as postgres://, the
+# pgx/pgx4/pgx5 schemes golang-migrate uses (this repo's migrations use pgx5://),
+# and SQLAlchemy-style "+driver" suffixes. The user name may be empty
+# (scheme://:password@host is a valid DSN), so it is [^:]* rather than [^:]+.
+# URL-encoded credentials and IPv6 hosts need nothing extra: the match ends at
+# the "@" before the host. The last detector catches a password passed as a
+# query parameter instead of in the user info (?password=, &password=), which
+# libpq and the JDBC drivers accept.
+add_pattern '(postgres(ql)?|pgx[45]?)(\+[A-Za-z0-9]+)?://[^:]*:[^@]+@'  # PostgreSQL
+add_pattern '(mysql|mariadb)(\+[A-Za-z0-9]+)?://[^:]*:[^@]+@'         # MySQL
+add_pattern 'mongodb(\+srv)?://[^:]*:[^@]+@'                         # MongoDB
+add_pattern '(postgres(ql)?|pgx[45]?|mysql|mariadb)(\+[A-Za-z0-9]+)?://[^[:space:]'\''"]*[?&]password=[^&[:space:]'\''"]+'  # DSN password query parameter
+
+# Clones set up before #368 still carry the narrower DSN detectors, bare (before
+# #328) or word-wrapped. Each matches a subset of what its replacement above
+# matches, so a re-run drops them instead of scanning for both. Each scheme is
+# split into two adjacent quoted strings so this line does not match the
+# detectors it names.
+for legacy_dsn in 'postgres:''//[^:]+:[^@]+@' 'mysql:''//[^:]+:[^@]+@' 'mongodb(\+srv)?:''//[^:]+:[^@]+@'; do
+    for legacy_form in "${legacy_dsn}" "${word_chars}(${legacy_dsn})${word_chars}"; do
+        if git config --local --get-all secrets.patterns | grep -qxF -- "${legacy_form}"; then
+            git config --local --unset-all --fixed-value secrets.patterns "${legacy_form}"
+        fi
+    done
+done
 
 # Allowed patterns live in .gitallowed (versioned, applied by every scan, including CI).
 # They are matched against the whole "path:line:content" scanner output line, so an entry

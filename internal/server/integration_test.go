@@ -7,9 +7,11 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync/atomic"
 	"testing"
-	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/scheduler"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/testutil"
 )
@@ -23,14 +25,20 @@ func TestServerIntegration(t *testing.T) {
 
 	ctx := testutil.TestContext(t)
 
-	// Set up PostgreSQL container
-	pgContainer, err := testutil.SetupPostgresContainer(ctx, t)
-	if err != nil {
-		t.Fatalf("Failed to start postgres container: %v", err)
-	}
+	// An empty database of its own on the package's shared PostgreSQL server:
+	// nothing here reads the schema yet, only the connection settings.
+	pg := testhelpers.RequireEmptyDatabase(ctx, t)
+	dbCfg := pg.Config
 
 	// Set environment variables for database connection
-	for key, value := range pgContainer.Config() {
+	for key, value := range map[string]string{
+		"DB_HOST":     dbCfg.Host,
+		"DB_PORT":     strconv.Itoa(dbCfg.Port),
+		"DB_NAME":     dbCfg.Database,
+		"DB_USER":     dbCfg.User,
+		"DB_PASSWORD": dbCfg.Password,
+		"DB_SSL_MODE": dbCfg.SSLMode,
+	} {
 		testutil.SetEnv(t, key, value)
 	}
 
@@ -41,8 +49,11 @@ func TestServerIntegration(t *testing.T) {
 	// }
 	// defer app.Close()
 
-	// For now, just verify container is running
-	t.Logf("PostgreSQL container running at: %s", pgContainer.ConnectionString())
+	// For now, just verify the database is reachable
+	if err := pg.DB.Pool().Ping(ctx); err != nil {
+		t.Fatalf("Failed to reach postgres database: %v", err)
+	}
+	t.Logf("PostgreSQL database %s running at %s:%d", dbCfg.Database, dbCfg.Host, dbCfg.Port)
 }
 
 // TestHealthCheckIntegration tests the health check endpoint.
@@ -81,11 +92,13 @@ func TestScheduledTaskIntegration(t *testing.T) {
 
 	ctx := testutil.TestContext(t)
 
-	// Create application with mock dependencies
+	// Create application with mock dependencies. The task runs synchronously,
+	// so counting calls replaces the old 100ms "simulate actual work" sleep,
+	// which slowed the test without checking anything (issue #36).
+	var collects atomic.Int32
 	mockScheduler := &testutil.MockScheduler{
 		CollectRecommendationsFunc: func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
-			// Simulate actual work
-			time.Sleep(100 * time.Millisecond)
+			collects.Add(1)
 			return &scheduler.CollectResult{}, nil
 		},
 	}
@@ -98,6 +111,7 @@ func TestScheduledTaskIntegration(t *testing.T) {
 	result, err := app.HandleScheduledTask(ctx, TaskCollectRecommendations, ScheduledTaskParams{})
 	testutil.AssertNoError(t, err)
 	testutil.AssertTrue(t, result != nil, "Result should not be nil")
+	testutil.AssertEqual(t, int32(1), collects.Load())
 
 	t.Logf("Scheduled task completed successfully")
 }

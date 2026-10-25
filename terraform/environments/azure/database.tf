@@ -23,6 +23,7 @@ module "database" {
   private_dns_zone_id          = module.networking.postgres_private_dns_zone_id
   enable_diagnostics           = true
   log_analytics_workspace_id   = module.networking.log_analytics_workspace_id
+  deletion_protection          = var.database_deletion_protection
 
   server_parameters = {
     "azure.extensions" = "UUID-OSSP,PG_TRGM"

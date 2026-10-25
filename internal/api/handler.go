@@ -140,6 +140,13 @@ type Handler struct {
 	// can be exercised end-to-end without live AWS credentials or a real RI.
 	executeExchangeFn func(ctx context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error)
 
+	// exchangeQuoteFn is the RI exchange quote function injected by tests.
+	// When nil (the production default), awsExchangeQuoter returns
+	// exchange.GetExchangeQuote, which builds its own EC2/STS clients from the
+	// ambient AWS SDK chain. Tests inject a stub so getExchangeQuote never
+	// resolves credentials, probes IMDS or calls EC2 (#855).
+	exchangeQuoteFn func(ctx context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error)
+
 	// encryptionKeySource is the env var name that resolved the credential
 	// encryption key. Empty when no credStore is configured. Read only by the
 	// /health credential_store check, which keeps it out of the public body
@@ -227,6 +234,8 @@ func NewHandler(cfg HandlerConfig) *Handler {
 	// not under production load.
 	assertRateLimitKeysKnown(
 		"login",
+		"forgot_password",
+		"forgot_password_ip",
 		"setup_admin",
 		"reset_password",
 		"change_password",
@@ -703,13 +712,21 @@ func (h *Handler) withRegisteredAccountNames(ctx context.Context, scope auth.Acc
 }
 
 // setSecurityHeaders adds comprehensive security headers to the response.
+// HSTSHeaderValue is the Strict-Transport-Security value for every response
+// path: API responses here, and the HTTP-mode static, Lambda static and
+// health responses in internal/server. One constant keeps the modes from
+// drifting apart again (issue #14: Lambda mode had dropped "preload").
+// "preload" only makes the domain eligible for the browser preload list;
+// submitting it to hstspreload.org is a separate, manual step.
+const HSTSHeaderValue = "max-age=31536000; includeSubDomains; preload"
+
 func setSecurityHeaders(headers map[string]string) map[string]string {
 	// Content Security Policy - restrictive for API responses
 	// Only allow connections to same origin, block all other resources
 	headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
 
 	// Strict Transport Security - enforce HTTPS for 1 year including subdomains
-	headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+	headers["Strict-Transport-Security"] = HSTSHeaderValue
 
 	// Permissions Policy - disable all browser features
 	headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
@@ -765,7 +782,7 @@ func (h *Handler) buildResponseHeaders() map[string]string {
 
 	if h.corsAllowedOrigin != "" {
 		corsHeaders["Access-Control-Allow-Origin"] = h.corsAllowedOrigin
-		corsHeaders["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+		corsHeaders["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 		corsHeaders["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key, Authorization, X-Authorization, X-CSRF-Token"
 		corsHeaders["Access-Control-Allow-Credentials"] = "true"
 	}

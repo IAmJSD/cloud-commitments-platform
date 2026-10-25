@@ -3,7 +3,6 @@
 package scheduler
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -20,10 +18,7 @@ import (
 
 func TestGlobalFiltersPersistedAmbientAndRegistered(t *testing.T) {
 	ctx := t.Context()
-	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 	store := config.NewPostgresStore(pg.DB)
 	account := uuid.NewString()
 	require.NoError(t, store.CreateCloudAccount(ctx, &config.CloudAccount{ID: account, Name: "registered", Provider: "aws", ExternalID: "111111111111", Enabled: true}))
@@ -38,7 +33,7 @@ func TestGlobalFiltersPersistedAmbientAndRegistered(t *testing.T) {
 	}
 	require.NoError(t, store.UpsertRecommendations(ctx, time.Now(), records, nil))
 	s := &Scheduler{config: store, isLambda: true}
-	_, err = store.GetServiceConfig(ctx, "aws", "rds")
+	_, err := store.GetServiceConfig(ctx, "aws", "rds")
 	require.ErrorIs(t, err, config.ErrNotFound)
 	all, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
 	require.NoError(t, err)
@@ -51,7 +46,10 @@ func TestGlobalFiltersPersistedAmbientAndRegistered(t *testing.T) {
 	}{
 		{"disabled", config.ServiceConfig{}, nil, "enabled=false"},
 		{"enabled", config.ServiceConfig{Enabled: true}, []string{"1", "10", "11", "sibling"}, ""},
-		{"minimum", config.ServiceConfig{Enabled: true, MinCount: 10}, []string{"10", "11", "sibling"}, ""},
+		// The list drops count-1 recs under the floor, so their detail must say
+		// why, like every other dimension in this table (#120). min_count is
+		// only ever set on the service config (overrides have no MinCount).
+		{"minimum", config.ServiceConfig{Enabled: true, MinCount: 10}, []string{"10", "11", "sibling"}, "min_count"},
 		{"include engine", config.ServiceConfig{Enabled: true, IncludeEngines: []string{"postgres"}}, []string{"sibling"}, "engine"},
 		{"exclude engine", config.ServiceConfig{Enabled: true, ExcludeEngines: []string{"mysql"}}, []string{"sibling"}, "engine"},
 		{"include region", config.ServiceConfig{Enabled: true, IncludeRegions: []string{"us-west-2"}}, []string{"sibling"}, "region"},
@@ -109,10 +107,7 @@ func TestGlobalFiltersPersistedAmbientAndRegistered(t *testing.T) {
 // the whole 500-row batch lands, siblings included.
 func TestPersistCollectionMultiAZInOneBatch(t *testing.T) {
 	ctx := t.Context()
-	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 	store := config.NewPostgresStore(pg.DB)
 
 	zonal := func(az string) config.RecommendationRecord {
@@ -156,10 +151,7 @@ func TestPersistCollectionMultiAZInOneBatch(t *testing.T) {
 // generated platform and tenancy columns is the one production writes.
 func TestPersistCollectionPlatformTenancyInOneBatch(t *testing.T) {
 	ctx := t.Context()
-	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 	store := config.NewPostgresStore(pg.DB)
 	s := &Scheduler{config: store}
 
