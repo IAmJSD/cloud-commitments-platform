@@ -2587,20 +2587,34 @@ func newFourEyesExecuteExchangeHandler(t *testing.T, store *MockConfigStore) *Ha
 	}
 }
 
+// spyOnAWSExchange installs an executeExchangeFn that counts calls and
+// reports success, so a 4-eyes test asserts that no exchange was submitted.
+// The real executor would fail on missing AWS credentials, so an error alone
+// would not prove the gate held (issue #679).
+func spyOnAWSExchange(h *Handler) *int {
+	calls := 0
+	h.executeExchangeFn = func(context.Context, exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
+		calls++
+		return "exch-must-not-run", &exchange.ExchangeQuoteSummary{PaymentDueUSDStr: "0"}, nil
+	}
+	return &calls
+}
+
 // TestExecuteExchange_FourEyesRefusesDirectExecute pins issue #517: with
 // RequireDifferentApprover on, the direct AWS execute endpoint must refuse
-// before any exchange is attempted. The handler has no exchange client or
-// idempotency store wired, so any code path past the gate would panic.
+// before any exchange is attempted. A spy executor records any exchange call.
 func TestExecuteExchange_FourEyesRefusesDirectExecute(t *testing.T) {
 	ctx := context.Background()
 	store := &MockConfigStore{}
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{RequireDifferentApprover: true}, nil)
 	h := newFourEyesExecuteExchangeHandler(t, store)
+	exchangeCalls := spyOnAWSExchange(h)
 
 	_, err := h.executeExchange(ctx, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer exchange-token"},
 		Body:    fourEyesExchangeBody,
 	})
+	assert.Equal(t, 0, *exchangeCalls, "no exchange may be submitted while 4-eyes is on")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a ClientError, got: %v", err)
@@ -2615,11 +2629,13 @@ func TestExecuteExchange_FourEyesPolicyLookupErrorFailsClosed(t *testing.T) {
 	store := &MockConfigStore{}
 	store.On("GetGlobalConfig", mock.Anything).Return(nil, errors.New("db down"))
 	h := newFourEyesExecuteExchangeHandler(t, store)
+	exchangeCalls := spyOnAWSExchange(h)
 
 	_, err := h.executeExchange(ctx, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer exchange-token"},
 		Body:    fourEyesExchangeBody,
 	})
+	assert.Equal(t, 0, *exchangeCalls, "an unreadable 4-eyes policy must not let the exchange run")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "4-eyes policy check")
 	_, isClient := IsClientError(err)

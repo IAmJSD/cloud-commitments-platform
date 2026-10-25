@@ -2403,7 +2403,11 @@ paths:
       operationId: updateRIExchangeConfig
       tags: [RIExchange]
       summary: Update RI exchange configuration
-      description: Requires `update:config` permission.
+      description: >-
+        Requires `update:config` permission. While 4-eyes approval mode
+        (`require_different_approver`) is on, the scheduler runs `auto` mode
+        as `manual`: it only raises pending exchanges, which need approval.
+        The stored mode is not changed.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
