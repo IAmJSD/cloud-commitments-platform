@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -825,6 +826,43 @@ func TestHandler_updateServiceConfig_CommitmentOptsAccept(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "updated", result.Status)
+}
+
+// A Validate error other than ErrNoData must fail the save closed with a 503
+// rather than persist a combo nobody checked (issue #243, A02-022).
+func TestHandler_updateServiceConfig_CommitmentOptsErrorRefusesSave(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+	}, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, nil)
+
+	handler := &Handler{
+		config: mockStore,
+		auth:   mockAuth,
+		commitmentOpts: &stubCommitmentOpts{
+			validateFn: func(context.Context, string, string, int, string) (bool, error) {
+				return false, errors.New("read commitmentopts store: connection refused")
+			},
+		},
+	}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"enabled": true, "term": 3, "payment": "no-upfront", "coverage": 80}`,
+	}
+	result, err := handler.updateServiceConfig(ctx, req, "aws/rds")
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 503, ce.code)
+	mockStore.AssertNotCalled(t, "SaveServiceConfig", mock.Anything, mock.Anything)
 }
 
 func TestHandler_updateServiceConfig_NoSlash(t *testing.T) {
