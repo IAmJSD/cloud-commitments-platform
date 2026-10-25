@@ -85,7 +85,8 @@ func TestHttpToLambdaRequest(t *testing.T) {
 			}
 
 			// Convert to Lambda request
-			lambdaReq := httpToLambdaRequest(req)
+			lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req)
+			testutil.AssertNoError(t, err)
 
 			// Verify conversion
 			testutil.AssertEqual(t, tt.expectedMethod, lambdaReq.RequestContext.HTTP.Method)

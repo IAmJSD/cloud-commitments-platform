@@ -1,0 +1,90 @@
+# Trivy ignore file for Go dependency vulnerabilities (trivy fs, gomod
+# analyzer) -- issue #3.
+#
+# Config-scan (misconfiguration) suppressions stay in the plain .trivyignore,
+# which `trivy config` (CI's IaC step and the pre-commit hook) reads by
+# default. This file is YAML so every entry can be scoped by purl: an entry
+# suppresses its advisory ID only for the named Go module, not for every
+# package Trivy finds it in. For example, CVE-2026-41567 also covers
+# github.com/moby/moby/v2 below 2.0.0-beta.14, which has a fix, so it must
+# still be reported there.
+#
+# Who reads this file: only CI's "Run Trivy vulnerability scanner
+# (filesystem)" step in .github/workflows/ci.yml, via its `trivyignores:`
+# input. That step runs Trivy's default fs scanners (vuln, secret), so it
+# does not need the misconfiguration entries in .trivyignore. Its SARIF
+# carries every severity (trivy-action drops `severity:` for SARIF unless
+# `limit-severities-for-sarif` is set), so all five entries below affect the
+# Security tab. Local `make security-scan` / scripts/security-scan.sh runs
+# read the default .trivyignore and still list these advisories; add
+# `--ignorefile .trivyignore.yaml` for a vuln-only local scan that matches CI.
+#
+# `expired_at` is the review date. After it passes, Trivy stops honoring the
+# entry and the finding reappears in the Security tab. It does not fail CI:
+# the fs step uses the default exit-code 0. Last reviewed 2026-10-20 against
+# the trivy DB of that day and OSV.
+#
+# Reachability is not only asserted here: CI's govulncheck step (source mode,
+# both modules, via scripts/govulncheck-retry.sh) exits 3 and fails the
+# Security Scanning job if any of these advisories' vulnerable symbols
+# becomes called. So these ignores silence the go.mod-level Trivy report
+# only, never a reachable call.
+
+vulnerabilities:
+  # github.com/docker/docker v28.5.1+incompatible (go.mod, indirect).
+  # Why unreachable: no package of this module is compiled into anything in
+  # this repo, not even a test. `go list -deps ./...` and
+  # `go list -test -deps ./...` (with and without -tags integration) return
+  # no github.com/docker/docker/... package. The requirement exists only in
+  # the module graph: golang-migrate's own pgx/v5 test imports
+  # github.com/dhui/dktest, which imports docker/docker. Our testcontainers
+  # use goes through github.com/moby/moby/client instead. All four
+  # advisories are in the Docker daemon (github.com/docker/docker/daemon or
+  # the plugin privilege check), which a client-side Go module cannot run.
+  # Why no fix: OSV publishes no `fixed` event for the github.com/docker/docker
+  # module path (CVE-2026-41567, -41568, -42306 have last_affected=28.5.2;
+  # the fixes ship only as github.com/moby/moby/v2 >= 2.0.0-beta.8/-beta.14).
+  # Trivy's "fixed in 29.3.1" for CVE-2026-33997 is the Docker Engine
+  # release, which has no github.com/docker/docker Go module version (the
+  # newest is v28.5.2+incompatible). golang-migrate v4.20.1 still requires
+  # docker/docker v28.5.2+incompatible, so a bump cannot remove it either.
+  # Review: drop these when golang-migrate/dktest move to github.com/moby/moby.
+  # The purl has no version, so it matches any github.com/docker/docker
+  # version; none has a fix for these IDs.
+  - id: CVE-2026-41567
+    purls:
+      - pkg:golang/github.com/docker/docker
+    statement: Unreachable daemon-side advisory; no fixed github.com/docker/docker module version. See the comment above.
+    expired_at: 2027-04-20
+  - id: CVE-2026-42306
+    purls:
+      - pkg:golang/github.com/docker/docker
+    statement: Unreachable daemon-side advisory; no fixed github.com/docker/docker module version. See the comment above.
+    expired_at: 2027-04-20
+  - id: CVE-2026-41568
+    purls:
+      - pkg:golang/github.com/docker/docker
+    statement: Unreachable daemon-side advisory; no fixed github.com/docker/docker module version. See the comment above.
+    expired_at: 2027-04-20
+  - id: CVE-2026-33997
+    purls:
+      - pkg:golang/github.com/docker/docker
+    statement: Unreachable daemon-side advisory; no fixed github.com/docker/docker module version. See the comment above.
+    expired_at: 2027-04-20
+
+  # golang.org/x/crypto (openpgp subpackages), GO-2026-5932.
+  # Why unreachable: the advisory covers only golang.org/x/crypto/openpgp and
+  # its subpackages (armor, clearsign, elgamal, errors, packet, s2k). Nothing
+  # in this repo imports any of them: `go list -deps` and `go list -test -deps`
+  # (with and without -tags integration, both modules) return no
+  # golang.org/x/crypto/openpgp package; the x/crypto packages actually built
+  # are bcrypt, ssh, pkcs12, hkdf and their internal dependencies.
+  # Why no fix: the package is frozen and unmaintained; OSV lists
+  # introduced=0 with no fixed event, so no x/crypto version clears it.
+  # scripts/scan-shipped-image.sh already tolerates it in /app/cudly for the
+  # same reason.
+  - id: GO-2026-5932
+    purls:
+      - pkg:golang/golang.org/x/crypto
+    statement: Frozen openpgp subpackages, not imported anywhere; no fixed x/crypto version. See the comment above.
+    expired_at: 2027-04-20

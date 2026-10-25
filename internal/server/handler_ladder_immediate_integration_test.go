@@ -225,7 +225,10 @@ func TestLadderB1_NextRunNetsImmediateRowWithinGrace(t *testing.T) {
 }
 
 // Fixed point: re-running daily for 40 days (nothing fires: no executor) never
-// leaves more live commitment than target-E, and ends at the target.
+// leaves more live commitment than target-E, and ends at the target. Each ramp
+// step is floored to the six-decimal column (#1182), never rounded up, so the
+// fixed point can sit at most one micro-dollar per ramp step below the target
+// (far under the provider's five-decimal precision) and never above it.
 func TestLadderB1_DailyRerunNeverExceedsTarget(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -233,9 +236,10 @@ func TestLadderB1_DailyRerunNeverExceedsTarget(t *testing.T) {
 	for day := 0; day <= 40; day++ {
 		e.run(ctx, t, e.start.Add(time.Duration(day)*24*time.Hour))
 		live := e.live(ctx, t)
-		require.LessOrEqual(t, live, ladderB1Target+1e-6, "day %d over-plans: live=%v", day, live)
+		require.LessOrEqual(t, live, ladderB1Target, "day %d over-plans: live=%v", day, live)
 	}
-	assert.InDelta(t, ladderB1Target, e.live(ctx, t), 1e-6)
+	floorSlack := float64(len(ladderB1TwoStep))*1e-6 + 1e-9 // + float8 noise on the summed NUMERIC
+	assert.GreaterOrEqual(t, e.live(ctx, t), ladderB1Target-floorSlack)
 }
 
 // completeBeforeStaleE completes a tranche inside GetLayerStates and then

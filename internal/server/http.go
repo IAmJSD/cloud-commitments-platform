@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os/signal"
@@ -231,7 +230,11 @@ func (app *Application) handleOIDCHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	lambdaReq := httpToLambdaRequest(r)
+	lambdaReq, err := httpToLambdaRequest(w, r)
+	if err != nil {
+		writeBodyReadError(w, err)
+		return
+	}
 	resp, handled := app.API.HandleOIDC(ctx, lambdaReq)
 	if !handled {
 		// Path matched /oidc/ prefix but is not a recognized OIDC endpoint.
@@ -255,7 +258,7 @@ const htmlCSP = "default-src 'self'; script-src 'self'; style-src 'self'; img-sr
 // to come from the server since static files are served directly from the container.
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+		w.Header().Set("Strict-Transport-Security", api.HSTSHeaderValue)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -279,7 +282,11 @@ func (app *Application) handleHTTPRequest(w http.ResponseWriter, r *http.Request
 	}
 
 	// Convert HTTP request to Lambda Function URL request format
-	lambdaReq := httpToLambdaRequest(r)
+	lambdaReq, err := httpToLambdaRequest(w, r)
+	if err != nil {
+		writeBodyReadError(w, err)
+		return
+	}
 
 	// Call the API handler
 	lambdaResp, err := app.API.HandleRequest(ctx, lambdaReq)
@@ -303,7 +310,12 @@ func (app *Application) handleVersion(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	lambdaResp, err := app.API.HandleRequest(ctx, httpToLambdaRequest(r))
+	lambdaReq, err := httpToLambdaRequest(w, r)
+	if err != nil {
+		writeBodyReadError(w, err)
+		return
+	}
+	lambdaResp, err := app.API.HandleRequest(ctx, lambdaReq)
 	if err != nil {
 		log.Printf("Version handler error: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -393,18 +405,13 @@ func (app *Application) handleScheduledHTTP(w http.ResponseWriter, r *http.Reque
 	}
 }
 
-// httpToLambdaRequest converts a standard HTTP request to Lambda Function URL request format.
-func httpToLambdaRequest(r *http.Request) *events.LambdaFunctionURLRequest {
-	// Read body with size limit to prevent memory exhaustion
-	body := ""
-	if r.Body != nil {
-		defer r.Body.Close()
-		const maxBodySize = 10 << 20 // 10 MB
-		limited := io.LimitReader(r.Body, maxBodySize)
-		bodyBytes, err := io.ReadAll(limited)
-		if err == nil && len(bodyBytes) > 0 {
-			body = string(bodyBytes)
-		}
+// httpToLambdaRequest converts a standard HTTP request to Lambda Function URL
+// request format. It fails when the body cannot be read whole; answer that
+// with writeBodyReadError.
+func httpToLambdaRequest(w http.ResponseWriter, r *http.Request) (*events.LambdaFunctionURLRequest, error) {
+	body, err := readRequestBody(w, r)
+	if err != nil {
+		return nil, err
 	}
 
 	// Convert headers - lowercase all keys to match Lambda Function URL behavior.
@@ -451,7 +458,7 @@ func httpToLambdaRequest(r *http.Request) *events.LambdaFunctionURLRequest {
 		QueryStringParameters: queryParams,
 		Body:                  body,
 		IsBase64Encoded:       false,
-	}
+	}, nil
 }
 
 // safeHeaderNames is a whitelist of headers that are safe to pass through from Lambda responses.

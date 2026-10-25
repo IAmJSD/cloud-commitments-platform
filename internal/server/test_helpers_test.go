@@ -9,6 +9,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/mocks"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -206,6 +207,10 @@ func (m *mockConfigStoreForHealth) CancelExecutionAtomic(ctx context.Context, tx
 	return false, "", nil
 }
 
+func (m *mockConfigStoreForHealth) CancelExecutionAtomicTokenPinned(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string, rawToken string) (bool, string, error) {
+	return false, "", nil
+}
+
 func (m *mockConfigStoreForHealth) CancelScheduledExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
 	return false, "", nil
 }
@@ -342,9 +347,6 @@ func (m *mockConfigStoreForHealth) TransitionRegistrationStatus(_ context.Contex
 func (m *mockConfigStoreForHealth) DeleteAccountRegistration(_ context.Context, _ string) error {
 	return nil
 }
-func (m *mockConfigStoreForHealth) ReplaceRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord) error {
-	return nil
-}
 func (m *mockConfigStoreForHealth) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []config.SuccessfulCollect) error {
 	return nil
 }
@@ -365,6 +367,9 @@ func (m *mockConfigStoreForHealth) MarkCollectionStarted(_ context.Context) (str
 }
 func (m *mockConfigStoreForHealth) ClearCollectionStarted(_ context.Context, _ string) error {
 	return nil
+}
+func (m *mockConfigStoreForHealth) ClaimCollectionInvocation(_ context.Context, _ string) (string, bool, error) {
+	return mocks.MockInvocationToken, true, nil
 }
 func (m *mockConfigStoreForHealth) GetRIUtilizationCache(_ context.Context, _ string, _ int) (*config.RIUtilizationCacheEntry, error) {
 	return nil, nil
@@ -411,9 +416,6 @@ func (m *mockConfigStoreForHealth) RecoverReapedExecutionTx(ctx context.Context,
 	return m.SavePurchaseExecution(ctx, e)
 }
 func (m *mockConfigStoreForHealth) ListRecentSubmitsTx(ctx context.Context, _ pgx.Tx, _ string, _ time.Time) ([]config.PurchaseExecution, error) {
-	return m.GetPendingExecutions(ctx)
-}
-func (m *mockConfigStoreForHealth) GetPendingExecutionsTx(ctx context.Context, _ pgx.Tx) ([]config.PurchaseExecution, error) {
 	return m.GetPendingExecutions(ctx)
 }
 func (m *mockConfigStoreForHealth) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
@@ -484,6 +486,12 @@ func (m *mockConfigStoreForHealth) UpdateGlobalConfigAtomic(_ context.Context, a
 }
 func (m *mockConfigStoreForHealth) UpdatePurchaseHistoryListing(_ context.Context, _, _, _ string) error {
 	return nil
+}
+func (m *mockConfigStoreForHealth) GetMarketplaceListingAttempt(_ context.Context, _ string) (*config.MarketplaceListingAttempt, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) ResolveMarketplaceListingAttempt(_ context.Context, _ string, _ config.MarketplaceListingAttempt, _, _ string) (bool, error) {
+	return false, nil
 }
 func (m *mockConfigStoreForHealth) ClaimMarketplaceListingSlot(_ context.Context, _, _ string, _ []byte) (*config.MarketplaceListingClaim, error) {
 	return &config.MarketplaceListingClaim{}, nil

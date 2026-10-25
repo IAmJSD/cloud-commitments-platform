@@ -1,6 +1,7 @@
 package database
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -28,12 +29,17 @@ type Config struct {
 	AutoMigrate       bool
 }
 
-// LoadFromEnv loads database configuration from environment variables.
+// LoadFromEnv loads database configuration from environment variables. A set
+// but malformed numeric, boolean or duration variable is an error, like an
+// out-of-range one: falling back to the default would let a typo such as
+// DB_MAX_CONNECTIONS="100 " run the pool at a quarter of its intended size
+// with nothing in the logs (#120).
 func LoadFromEnv() (*Config, error) {
+	env := &envParser{}
 	config := &Config{
 		// Required fields
 		Host:     getEnv("DB_HOST", "localhost"),
-		Port:     getEnvInt("DB_PORT", 5432),
+		Port:     env.getEnvInt("DB_PORT", 5432),
 		Database: getEnv("DB_NAME", "cudly"),
 		User:     getEnv("DB_USER", "cudly"),
 
@@ -45,19 +51,22 @@ func LoadFromEnv() (*Config, error) {
 		SSLMode: getEnv("DB_SSL_MODE", "require"),
 
 		// Connection pool defaults
-		MaxConnections:    getEnvInt("DB_MAX_CONNECTIONS", 25),
-		MinConnections:    getEnvInt("DB_MIN_CONNECTIONS", 2),
-		MaxConnLifetime:   getEnvDuration("DB_MAX_CONN_LIFETIME", time.Hour),
-		MaxConnIdleTime:   getEnvDuration("DB_MAX_CONN_IDLE_TIME", 30*time.Minute),
-		HealthCheckPeriod: getEnvDuration("DB_HEALTH_CHECK_PERIOD", time.Minute),
-		ConnectTimeout:    getEnvDuration("DB_CONNECT_TIMEOUT", 10*time.Second),
+		MaxConnections:    env.getEnvInt("DB_MAX_CONNECTIONS", 25),
+		MinConnections:    env.getEnvInt("DB_MIN_CONNECTIONS", 2),
+		MaxConnLifetime:   env.getEnvDuration("DB_MAX_CONN_LIFETIME", time.Hour),
+		MaxConnIdleTime:   env.getEnvDuration("DB_MAX_CONN_IDLE_TIME", 30*time.Minute),
+		HealthCheckPeriod: env.getEnvDuration("DB_HEALTH_CHECK_PERIOD", time.Minute),
+		ConnectTimeout:    env.getEnvDuration("DB_CONNECT_TIMEOUT", 10*time.Second),
 
 		// Migrations
-		AutoMigrate:    getEnvBool("DB_AUTO_MIGRATE", false),
+		AutoMigrate:    env.getEnvBool("DB_AUTO_MIGRATE", false),
 		MigrationsPath: getEnv("DB_MIGRATIONS_PATH", "internal/database/postgres/migrations"),
 
 		// Logging
 		LogLevel: getEnv("DB_LOG_LEVEL", "info"),
+	}
+	if err := errors.Join(env.errs...); err != nil {
+		return nil, err
 	}
 
 	// Validate configuration
@@ -192,29 +201,52 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-func getEnvInt(key string, defaultValue int) int {
-	if value := os.Getenv(key); value != "" {
-		if intVal, err := strconv.Atoi(value); err == nil {
-			return intVal
-		}
-	}
-	return defaultValue
+// envParser reads typed environment variables. An unset variable yields the
+// default; a set one that does not parse also yields the default but records
+// an error, so LoadFromEnv can refuse to start and name every bad variable.
+type envParser struct {
+	errs []error
 }
 
-func getEnvBool(key string, defaultValue bool) bool {
-	if value := os.Getenv(key); value != "" {
-		if boolVal, err := strconv.ParseBool(value); err == nil {
-			return boolVal
-		}
-	}
-	return defaultValue
+func (p *envParser) invalid(key, value string, err error) {
+	p.errs = append(p.errs, fmt.Errorf("invalid %s %q: %w", key, value, err))
 }
 
-func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
-	if value := os.Getenv(key); value != "" {
-		if duration, err := time.ParseDuration(value); err == nil {
-			return duration
-		}
+func (p *envParser) getEnvInt(key string, defaultValue int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
 	}
-	return defaultValue
+	intVal, err := strconv.Atoi(value)
+	if err != nil {
+		p.invalid(key, value, err)
+		return defaultValue
+	}
+	return intVal
+}
+
+func (p *envParser) getEnvBool(key string, defaultValue bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	boolVal, err := strconv.ParseBool(value)
+	if err != nil {
+		p.invalid(key, value, err)
+		return defaultValue
+	}
+	return boolVal
+}
+
+func (p *envParser) getEnvDuration(key string, defaultValue time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		p.invalid(key, value, err)
+		return defaultValue
+	}
+	return duration
 }

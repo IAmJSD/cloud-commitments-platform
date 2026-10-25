@@ -126,8 +126,13 @@ func RenderPurchaseConfirmationEmail(data NotificationData) (string, error) {
 	return renderTextTemplate("confirmation", purchaseConfirmationTemplate, data)
 }
 
-// RenderPurchaseFailedEmail renders the plain-text purchase failed email template.
+// RenderPurchaseFailedEmail renders the plain-text purchase failed email
+// template, or its outcome-unknown variant when data.OutcomeUnknown is set
+// (issue #1415).
 func RenderPurchaseFailedEmail(data NotificationData) (string, error) {
+	if data.OutcomeUnknown {
+		return renderTextTemplate("outcome-unknown", purchaseOutcomeUnknownTemplate, data)
+	}
 	return renderTextTemplate("failed", purchaseFailedTemplate, data)
 }
 
@@ -150,6 +155,29 @@ func RenderRIExchangePendingApprovalEmailHTML(data RIExchangeNotificationData) (
 // RenderRIExchangeCompletedEmail renders the plain-text RI exchange completed email template.
 func RenderRIExchangeCompletedEmail(data RIExchangeNotificationData) (string, error) {
 	return renderTextTemplate("ri-exchange-completed", riExchangeCompletedTemplate, data)
+}
+
+// ReconciliationExchanges returns the exchanges whose outcome at AWS is
+// unknown (OutcomeUnknown set). The completed email lists them in their own
+// group, apart from the completed exchanges and the definite failures.
+func (d RIExchangeNotificationData) ReconciliationExchanges() []RIExchangeItem {
+	var out []RIExchangeItem
+	for i := range d.Exchanges {
+		if d.Exchanges[i].OutcomeUnknown {
+			out = append(out, d.Exchanges[i])
+		}
+	}
+	return out
+}
+
+// riExchangeCompletedSubject is the subject of the completed email, shared by
+// the SNS/SES and SMTP senders. A run with an unknown-outcome exchange must
+// not arrive under a plain "Completed" subject.
+func riExchangeCompletedSubject(data RIExchangeNotificationData) string {
+	if n := len(data.ReconciliationExchanges()); n > 0 {
+		return fmt.Sprintf("CUDly - RI Exchanges Need Reconciliation (%d of %d exchanges)", n, len(data.Exchanges))
+	}
+	return fmt.Sprintf("CUDly - RI Exchanges Completed (%d exchanges)", len(data.Exchanges))
 }
 
 // RenderPurchaseApprovalRequestEmail renders the plain-text purchase

@@ -231,7 +231,10 @@ func (s *Service) checkCommonPasswords(password string) error {
 // attacker out (issue #102).
 //
 // Both cleanups are best-effort: failures are logged, not returned, because
-// the new password has already taken effect by the time this runs. Shared
+// the new password has already taken effect by the time this runs. They are
+// not what enforces the rotation: the password write bumps
+// users.password_version, and ValidateSession and ValidateUserAPIKey reject
+// any credential issued under an older version (issues #398, #402). Shared
 // by ChangePassword, ConfirmPasswordReset and UpdateUserProfile so the two
 // checks live in one place instead of three.
 func (s *Service) invalidateUserCredentialsBestEffort(ctx context.Context, userID, opName string) {
@@ -245,15 +248,9 @@ func (s *Service) invalidateUserCredentialsBestEffort(ctx context.Context, userI
 
 // ChangePassword allows a user to change their password.
 func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangePasswordRequest) error {
-	user, err := s.store.GetUserByID(ctx, userID)
+	user, err := s.loadUser(ctx, userID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("user not found")
-		}
 		return err
-	}
-	if user == nil {
-		return fmt.Errorf("user not found")
 	}
 
 	// Verify current password
@@ -307,11 +304,24 @@ func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangeP
 // token stays valid: this prevents a griefing attack where an adversary who
 // knows the victim's email repeatedly requests resets to perpetually
 // invalidate the victim's legitimate link.
+//
+// The stored token is either a reset token (PasswordResetExpiry) or an invite
+// token (PasswordSetupExpiry), and only its expiry is stored. A reset token
+// never has more than PasswordResetExpiry left, so a longer remaining window
+// identifies an invite; deriving an invite's age from the reset lifetime made
+// it negative for the whole week, silently dropping every "re-send my setup
+// link" request (audit finding A03-009). A remaining window beyond even the
+// invite lifetime still yields a negative age, so it stays rate-limited.
 func resetRecentlyIssued(user *User, email string) bool {
 	if user.PasswordResetExpiry == nil {
 		return false
 	}
-	tokenAge := PasswordResetExpiry - time.Until(*user.PasswordResetExpiry)
+	remaining := time.Until(*user.PasswordResetExpiry)
+	lifetime := PasswordResetExpiry
+	if remaining > PasswordResetExpiry {
+		lifetime = PasswordSetupExpiry
+	}
+	tokenAge := lifetime - remaining
 	if tokenAge < PasswordResetRateLimit {
 		logging.Debugf("Password reset rate-limited for %s (token age %s < %s)",
 			redactEmail(email), tokenAge.Round(time.Second), PasswordResetRateLimit)
@@ -507,7 +517,10 @@ func (s *Service) ResetTokenStatus(ctx context.Context, token string) (ResetToke
 		return ResetTokenStateUsed, ResetTokenFlowReset, nil
 	}
 
-	// Constant-time comparison after fetch to close the SQL-equality timing oracle.
+	// Store-integrity check, not a timing defense (issue #313): the row was
+	// selected by `WHERE password_reset_token = $1` on tokenHash, so this only
+	// fails if the store returned a row for a different token. See the note
+	// in ValidateSession on why the lookup's equality timing is harmless.
 	if subtle.ConstantTimeCompare([]byte(user.PasswordResetToken), []byte(tokenHash)) != 1 {
 		return ResetTokenStateUsed, ResetTokenFlowReset, nil
 	}
@@ -540,7 +553,10 @@ func (s *Service) validateResetToken(ctx context.Context, token string) (*User, 
 		return nil, ErrInvalidResetToken
 	}
 
-	// Constant-time comparison after fetch to close the SQL-equality timing oracle.
+	// Store-integrity check, not a timing defense (issue #313): the row was
+	// selected by `WHERE password_reset_token = $1` on tokenHash, so this only
+	// fails if the store returned a row for a different token. See the note
+	// in ValidateSession on why the lookup's equality timing is harmless.
 	if subtle.ConstantTimeCompare([]byte(user.PasswordResetToken), []byte(tokenHash)) != 1 {
 		return nil, ErrInvalidResetToken
 	}
