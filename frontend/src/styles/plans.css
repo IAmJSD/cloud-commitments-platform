@@ -15,11 +15,12 @@
 /* Plan cards */
 .plan-card {
     background: var(--cudly-surface);
+    border: 1px solid var(--cudly-border); /* the shared card surface (#743) */
     border-radius: var(--cudly-r-md);
     box-shadow: var(--cudly-shadow-sm);
     margin-bottom: 1rem;
     overflow: hidden;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    transition: transform var(--cudly-dur-fast) var(--cudly-ease), box-shadow var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .plan-card:hover {
@@ -70,7 +71,7 @@
 }
 
 .plan-detail-value {
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     color: var(--cudly-text);
 }
 
@@ -100,12 +101,13 @@
        (issue #1776). */
     gap: var(--cudly-sp-4);
     background: var(--cudly-surface);
+    border: 1px solid var(--cudly-border); /* shared card surface (#743); accent below */
     padding: var(--cudly-sp-4) var(--cudly-sp-5);
     border-radius: var(--cudly-r-md);
     box-shadow: var(--cudly-shadow-sm);
     margin-bottom: var(--cudly-sp-3);
     border-left: 4px solid var(--cudly-primary);
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    transition: transform var(--cudly-dur-fast) var(--cudly-ease), box-shadow var(--cudly-dur-fast) var(--cudly-ease);
 }
 
 .upcoming-card:hover {
@@ -126,7 +128,7 @@
 
 .upcoming-date .day {
     font-size: 1.5rem;
-    font-weight: bold;
+    font-weight: var(--cudly-fw-bold);
     color: var(--cudly-primary);
 }
 
@@ -162,7 +164,7 @@
 
 .upcoming-savings .amount {
     font-size: 1.25rem;
-    font-weight: bold;
+    font-weight: var(--cudly-fw-bold);
     color: var(--cudly-success);
 }
 
@@ -171,7 +173,8 @@
     color: var(--cudly-text-muted);
 }
 
-/* Ramp schedule options */
+/* Ramp schedule options. The only copy: forms.css used to repeat this block
+ * verbatim, so editing one left the other stale (issue #725). */
 .ramp-options {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -186,7 +189,7 @@
     border: 2px solid var(--cudly-border-strong);
     border-radius: 8px;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: border-color var(--cudly-dur) var(--cudly-ease), background-color var(--cudly-dur) var(--cudly-ease), box-shadow var(--cudly-dur) var(--cudly-ease);
 }
 
 .ramp-option:hover {
@@ -217,7 +220,7 @@
 }
 
 .ramp-label {
-    font-weight: 600;
+    font-weight: var(--cudly-fw-semibold);
     color: var(--cudly-text);
     margin-bottom: 0.25rem;
 }
@@ -272,7 +275,7 @@
 #plan-editor-panel p { line-height: 1.5; margin: 12px 0; }
 #plan-editor-panel .editor-draft-notice { padding: 12px; background: var(--cudly-info-bg); border-radius: 8px; }
 #plan-editor-panel .editor-help { margin-bottom: 16px; }
-#plan-editor-panel .editor-status { font-weight: 600; min-height: 1.5em; }
+#plan-editor-panel .editor-status { font-weight: var(--cudly-fw-semibold); min-height: 1.5em; }
 #plan-editor-panel .schedule-preview-scroll { min-height: 372px; }
 #plan-editor-panel .schedule-preview-scroll[hidden] { display: none; }
 #plan-editor-panel [data-editor="changes"] { margin-top: 16px; border-top: 1px solid var(--cudly-border); }

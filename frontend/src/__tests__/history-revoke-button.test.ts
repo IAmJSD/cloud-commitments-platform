@@ -18,6 +18,8 @@
  *   4. already-revoked Azure row (revoked_at set) -> hidden.
  *   5. non-Azure (aws/gcp) row with a window stamped -> hidden.
  *   6. anonymous (no current user cached) -> hidden.
+ *   7. scheduled row on any provider (aws/gcp/azure) with a future window ->
+ *      shown; a scheduled row whose fire time has passed -> hidden (#924).
  */
 
 import { loadHistory } from '../history';
@@ -34,6 +36,7 @@ jest.mock('../navigation', () => ({
 }));
 
 jest.mock('../utils', () => ({
+  NO_VALUE: '\u2014',
   formatCurrency: jest.fn((val) => `$${val || 0}`),
   formatDate: jest.fn((val) => (val ? new Date(val).toLocaleDateString() : '')),
   formatTerm: jest.fn((years) => (years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`)),
@@ -88,6 +91,17 @@ const NON_REVOKER_USER = {
   groups: [],
   effectivePermissions: [
     { action: 'view', resource: 'history' },
+  ],
+};
+
+// revoke-own only (the default User grant), no admin group (#320).
+const REVOKE_OWN_USER = {
+  id: 'own-uuid',
+  email: 'own@example.com',
+  groups: [],
+  effectivePermissions: [
+    { action: 'view', resource: 'history' },
+    { action: 'revoke-own', resource: 'purchases' },
   ],
 };
 
@@ -304,6 +318,101 @@ describe('History inline Revoke button (issue #290)', () => {
     await loadHistory();
 
     expect(revokeIds()).toContain('commit-scheduled');
+  });
+
+  // #320: a scheduled row is an execution, and the backend's revoke-own path
+  // for executions (authorizeRevokeOwnExecution) requires the creator. Completed
+  // purchase_history rows have no creator and stay account-scoped server-side.
+  test('revoke-own shows Revoke only on its own scheduled rows, and on completed rows', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(REVOKE_OWN_USER);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [
+        makeRow({ status: 'scheduled', purchase_id: 'sched-own', created_by_user_id: 'own-uuid', revocation_window_closes_at: FUTURE }),
+        makeRow({ status: 'scheduled', purchase_id: 'sched-other', created_by_user_id: 'other-uuid', revocation_window_closes_at: FUTURE }),
+        makeRow({ status: 'scheduled', purchase_id: 'sched-legacy', revocation_window_closes_at: FUTURE }),
+        makeRow({ status: 'completed', purchase_id: 'completed-row', revocation_window_closes_at: FUTURE }),
+      ],
+    });
+
+    await loadHistory();
+
+    expect(revokeIds().sort()).toEqual(['completed-row', 'sched-own']);
+  });
+});
+
+// issue #924: a scheduled row has not called any cloud SDK yet, so the backend
+// cancels it for free on every provider. The Azure-only rule applies to
+// completed rows (returns) only.
+describe('History Revoke on scheduled rows of every provider (issue #924)', () => {
+  beforeEach(() => {
+    setupDOM();
+    jest.clearAllMocks();
+    (getCurrentUser as jest.Mock).mockReturnValue(ADMIN_USER);
+  });
+
+  test.each(['aws', 'gcp', 'azure'])('shows Revoke for a scheduled %s row with a future fire time', async (provider) => {
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: `exec-${provider}`, provider, status: 'scheduled', revocation_window_closes_at: FUTURE })],
+    });
+
+    await loadHistory();
+
+    expect(revokeIds()).toEqual([`exec-${provider}`]);
+  });
+
+  test.each(['aws', 'gcp'])('still hides Revoke for a completed %s row', async (provider) => {
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: `commit-${provider}`, provider, status: 'completed', revocation_window_closes_at: FUTURE })],
+    });
+
+    await loadHistory();
+
+    expect(revokeIds()).toEqual([]);
+  });
+
+  test('hides Revoke on a scheduled AWS row once its fire time has passed', async () => {
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: 'exec-aws-late', provider: 'aws', status: 'scheduled', revocation_window_closes_at: PAST })],
+    });
+
+    await loadHistory();
+
+    expect(revokeIds()).toEqual([]);
+  });
+
+  test('hides Revoke on a scheduled GCP row without revoke permission', async () => {
+    (getCurrentUser as jest.Mock).mockReturnValue(NON_REVOKER_USER);
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: 'exec-gcp', provider: 'gcp', status: 'scheduled', revocation_window_closes_at: FUTURE })],
+    });
+
+    await loadHistory();
+
+    expect(revokeIds()).toEqual([]);
+  });
+
+  test('scheduled AWS revoke: free cancel with provider-neutral copy, no quote', async () => {
+    (api.getHistory as jest.Mock).mockResolvedValue({
+      summary: {},
+      purchases: [makeRow({ purchase_id: 'exec-aws', provider: 'aws', status: 'scheduled', revocation_window_closes_at: FUTURE })],
+    });
+    (confirmDialog as jest.Mock).mockResolvedValue(true);
+    (api.revokePurchase as jest.Mock).mockResolvedValue({ status: 'canceled' });
+
+    await loadHistory();
+    document.querySelector<HTMLButtonElement>('.history-revoke-btn')!.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const body = (confirmDialog as jest.Mock).mock.calls[0][0].body as string;
+    expect(body).toContain('cancel the scheduled purchase');
+    expect(body).not.toContain('Azure');
+    expect(api.getRevokeQuote).not.toHaveBeenCalled();
+    expect(api.revokePurchase).toHaveBeenCalledWith('exec-aws', undefined);
   });
 });
 

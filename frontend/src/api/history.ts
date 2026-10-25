@@ -21,6 +21,7 @@ export async function getHistory(filters: HistoryFilters = {}): Promise<Purchase
   if (filters.provider) params.set('provider', filters.provider);
   if (filters.planId) params.set('plan_id', filters.planId);
   if (filters.account_ids && filters.account_ids.length > 0) params.set('account_ids', filters.account_ids.join(','));
+  if (filters.cursor) params.set('cursor', filters.cursor);
 
   const queryString = params.toString();
   return apiRequest<PurchaseHistory[]>(`/history${queryString ? '?' + queryString : ''}`);

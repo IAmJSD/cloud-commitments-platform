@@ -8,6 +8,8 @@ package main
 
 import (
 	"context"
+	"log"
+	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -17,7 +19,6 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/require"
 )
@@ -33,14 +34,27 @@ var (
 	cleanupKept = []string{"pending", "notified", "approved", "running", "scheduled", "paused", "failed", "canceled", config.LegacyStatusCanceled}
 )
 
+// TestMain stops the PostgreSQL container that every test in this package shares
+// (issue #982). Each test still gets a fresh database of its own from
+// testhelpers.RequireMigratedDatabase; only the container and the migrated
+// template it is cloned from outlive a single test. It lives here rather than in
+// a file of its own because .gitignore's "cleanup-lambda" (the built binary)
+// also matches this directory, so a new file would silently stay untracked.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if err := testhelpers.TerminateSharedPostgres(); err != nil {
+		// Ryuk reaps the container anyway, so a teardown hiccup does not
+		// overrule the tests' own verdict.
+		log.Printf("terminate shared postgres container: %v", err)
+	}
+	os.Exit(code)
+}
+
 func cleanupTestDB(ctx context.Context, t *testing.T) *database.Connection {
 	t.Helper()
-	c := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { _ = c.Cleanup(context.Background()) })
 	_, file, _, _ := runtime.Caller(0)
 	path := filepath.Join(filepath.Dir(file), "..", "..", "internal", "database", "postgres", "migrations")
-	require.NoError(t, migrations.RunMigrations(ctx, c.DB.Pool(), path, "", ""))
-	return c.DB
+	return testhelpers.RequireMigratedDatabase(ctx, t, path).DB
 }
 
 // insertExecution adds a plan-less execution whose expires_at is offset from

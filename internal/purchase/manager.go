@@ -59,6 +59,9 @@ type Manager struct {
 	oidcIssuerURL   string
 	notifyDays      int
 	resolver        stepResolver
+	// budgets lets tests shorten purchase deadlines. Production leaves it
+	// zero, which means the default durations below.
+	budgets purchaseBudgets
 }
 
 // PurchaseDefaults holds default purchase settings.
@@ -233,7 +236,31 @@ const (
 	// #913).
 	purchaseExecutionTimeout = 4 * time.Minute
 	terminalSaveTimeout      = 30 * time.Second
+	// perRecPurchaseTimeout caps one recommendation's provider calls; see
+	// executeSinglePurchase.
+	perRecPurchaseTimeout = 30 * time.Second
 )
+
+// purchaseBudgets overrides deadlines for tests. A zero field means the
+// production default, so a Manager built by NewManager uses the constants.
+type purchaseBudgets struct {
+	terminalSave time.Duration
+	perRec       time.Duration
+}
+
+func (b purchaseBudgets) terminalSaveTimeout() time.Duration {
+	if b.terminalSave > 0 {
+		return b.terminalSave
+	}
+	return terminalSaveTimeout
+}
+
+func (b purchaseBudgets) perRecTimeout() time.Duration {
+	if b.perRec > 0 {
+		return b.perRec
+	}
+	return perRecPurchaseTimeout
+}
 
 // executeAndFinalize runs a purchase and handles status updates, record saving, and progress.
 //
@@ -261,7 +288,7 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 	if execErr != nil {
 		logging.Errorf("Failed to execute purchase %s: %v", exec.ExecutionID, execErr)
 	}
-	saveCtx, cancelSave := ctxutil.DetachedWithTimeout(ctx, terminalSaveTimeout)
+	saveCtx, cancelSave := ctxutil.DetachedWithTimeout(ctx, m.budgets.terminalSaveTimeout())
 	defer cancelSave()
 	// Operators hear about every failed or partial row (issue #714), even
 	// when the terminal save below fails. A fan-out root logs the alarm
