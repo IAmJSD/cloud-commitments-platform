@@ -70,11 +70,12 @@ repos:
         name: Check for merge conflicts
       - id: detect-private-key
         name: Detect private keys
-        # Audit (PR5): internal/credentials/resolver.go contains zero
-        # private-key-shaped patterns (verified by grep). The exclusion
-        # was a historical artifact; removing it tightens the gate
-        # without breaking any legitimate code.
-        exclude: '(_test\.go|frontend/src/index\.html)$'
+        # No exclusions: no tracked file contains a private-key header, so
+        # the former `_test\.go` and `frontend/src/index.html` exclusions
+        # exempted nothing while letting a key pasted into any Go test
+        # fixture through (#299). A test that genuinely needs a PEM literal
+        # should assemble it at runtime (as scripts/test-git-secrets-allowlist.sh
+        # does) or add a narrow per-file exclude with a written reason.
       - id: check-case-conflict
         name: Check for case conflicts
 
