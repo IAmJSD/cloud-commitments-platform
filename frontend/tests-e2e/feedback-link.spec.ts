@@ -28,7 +28,7 @@ test('feedback uses the current SPA route and time on mouse, keyboard, focus and
   await page.route('**/api/history?*', route => route.fulfill({ json: [] }));
   await page.route('**/api/history/analytics?*', route => route.fulfill({ json: {
     start: '2026-10-01T00:00:00Z', end: '2026-10-14T00:00:00Z', interval: 'day',
-    summary: { total_period_savings: 0, total_upfront_spent: 0, purchase_count: 0, average_savings_per_period: 0, peak_savings: 0 },
+    summary: { total_purchases: 0, total_upfront: 0, total_monthly_savings: 0, total_annual_savings: 0 },
     data_points: [],
   } }));
   await page.route('**/api/purchases/planned', route => route.fulfill({ json: { purchases: [] } }));

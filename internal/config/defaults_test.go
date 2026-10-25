@@ -218,7 +218,6 @@ func TestDefaultSettings_Retention(t *testing.T) {
 		expectedValue int
 	}{
 		{"retention.purchase_history_days", 1095},
-		{"retention.execution_history_days", 90},
 		{"retention.recommendation_cache_hours", 24},
 	}
 
@@ -231,6 +230,18 @@ func TestDefaultSettings_Retention(t *testing.T) {
 			assert.Equal(t, "retention", setting.Category)
 		})
 	}
+}
+
+// Execution retention is not a setting. It is the compile-time constant
+// DefaultExecutionTTLDays, which the cleanup handler passes to
+// CleanupOldExecutions and which the plan health lookback window reuses.
+// A "retention.execution_history_days" default (90, against a live value
+// of 30) once sat here with no reader, and it was cited as the retention
+// policy in review (issue #88). Keep it from coming back as an unwired key.
+func TestDefaultSettings_NoExecutionRetentionKey(t *testing.T) {
+	assert.Nil(t, GetDefaultSetting("retention.execution_history_days"),
+		"execution retention is DefaultExecutionTTLDays; a settings key for it would have no reader")
+	assert.Equal(t, 30, DefaultExecutionTTLDays)
 }
 
 func TestDefaultSettings_API(t *testing.T) {

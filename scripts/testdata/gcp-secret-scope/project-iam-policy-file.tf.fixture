@@ -1,0 +1,9 @@
+# Fixture (issue #150): an authoritative project policy whose policy_data is read
+# from a JSON file. The roles live in the .json file, which the guard does not
+# scan, so no `secretmanager` text appears anywhere it looks. The guard cannot
+# analyze this shape and must refuse it rather than report it clean. Must exit 2.
+
+resource "google_project_iam_policy" "project" {
+  project     = var.project_id
+  policy_data = file("${path.module}/project-policy.json")
+}
