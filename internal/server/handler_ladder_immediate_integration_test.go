@@ -36,10 +36,7 @@ func ladderB1Conn(ctx context.Context, t *testing.T) *database.Connection {
 	t.Helper()
 	dsn := os.Getenv("LADDER_B1_TEST_DATABASE_URL")
 	if dsn == "" {
-		c := testhelpers.RequirePostgresContainer(ctx, t)
-		t.Cleanup(func() { _ = c.Cleanup(context.Background()) })
-		require.NoError(t, migrations.RunMigrations(ctx, c.DB.Pool(), "../database/postgres/migrations", "", ""))
-		return c.DB
+		return testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations").DB
 	}
 	u, err := url.Parse(dsn)
 	require.NoError(t, err)
