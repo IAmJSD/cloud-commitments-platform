@@ -397,7 +397,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
 		mockAuth.grantAdmin()
 		created := func() map[string]string { return map[string]string{"key_id": "key-1"} }
-		mockAuth.On("CreateAPIKeyAPI", ctx, "user-1", CreateAPIKeyRequest{Name: "My Key", Password: "pass123"}).Return(created(), nil)
+		mockAuth.On("CreateAPIKeyAPI", ctx, "user-1", auth.APICreateAPIKeyRequest{Name: "My Key", Password: "pass123"}).Return(created(), nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)

@@ -115,12 +115,15 @@ func TestSelfCarvedOutGrant_OrdinaryGroupStillAllowed(t *testing.T) {
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	svc := createTestService(mockStore, new(MockEmailSender))
 
-	readOnly := &Group{
+	// Write-capable on purpose: a view-only group next to Administrators is
+	// refused as a contradictory combination (issue #78), which is not what
+	// this control is about.
+	ordinary := &Group{
 		ID:          "77777777-7777-4777-8777-777777777777",
-		Name:        "Read-Only Users",
-		Permissions: []Permission{{Action: ActionView, Resource: ResourcePlans}},
+		Name:        "Plan Authors",
+		Permissions: []Permission{{Action: ActionCreate, Resource: ResourcePlans}},
 	}
-	stubSelfActor(ctx, mockStore, []string{adminGroupID}, adminGroupRow(), readOnly)
+	stubSelfActor(ctx, mockStore, []string{adminGroupID}, adminGroupRow(), ordinary)
 
 	var saved *User
 	mockStore.On("UpdateUserAdminFields", ctx, mock.AnythingOfType("*auth.User"), mock.Anything, mock.Anything, mock.Anything).
@@ -131,12 +134,12 @@ func TestSelfCarvedOutGrant_OrdinaryGroupStillAllowed(t *testing.T) {
 		}).Return(nil).Once()
 
 	_, err := svc.UpdateUser(ctx, selfActorID, selfActorID, UpdateUserRequest{
-		GroupIDs: []string{adminGroupID, readOnly.ID},
+		GroupIDs: []string{adminGroupID, ordinary.ID},
 	})
 
 	require.NoError(t, err)
 	require.NotNil(t, saved)
-	assert.Equal(t, []string{adminGroupID, readOnly.ID}, saved.GroupIDs)
+	assert.Equal(t, []string{adminGroupID, ordinary.ID}, saved.GroupIDs)
 }
 
 // Negative control 2: a user who ALREADY holds the money verbs is not blocked
@@ -229,18 +232,19 @@ func TestSelfCarvedOutGrant_AdminMayAddAnotherUserToOrdinaryGroup(t *testing.T) 
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	svc := createTestService(mockStore, new(MockEmailSender))
 
-	readOnly := &Group{
+	// Write-capable for the same reason as in OrdinaryGroupStillAllowed.
+	ordinary := &Group{
 		ID:          "99999999-9999-4999-8999-999999999999",
-		Name:        "Read-Only Users",
-		Permissions: []Permission{{Action: ActionView, Resource: ResourcePlans}},
+		Name:        "Plan Authors",
+		Permissions: []Permission{{Action: ActionCreate, Resource: ResourcePlans}},
 	}
 	mockStore.On("GetUserByID", ctx, otherUserID).
 		Return(&User{ID: otherUserID, Active: true, GroupIDs: []string{adminGroupID}}, nil)
-	stubSelfActor(ctx, mockStore, []string{adminGroupID}, adminGroupRow(), readOnly)
+	stubSelfActor(ctx, mockStore, []string{adminGroupID}, adminGroupRow(), ordinary)
 	mockStore.On("UpdateUserAdminFields", ctx, mock.AnythingOfType("*auth.User"), mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	_, err := svc.UpdateUser(ctx, selfActorID, otherUserID, UpdateUserRequest{
-		GroupIDs: []string{adminGroupID, readOnly.ID},
+		GroupIDs: []string{adminGroupID, ordinary.ID},
 	})
 	require.NoError(t, err)
 }
@@ -255,6 +259,11 @@ func TestSelfCarvedOutGrant_InternalCallerUnaffected(t *testing.T) {
 
 	mockStore.On("GetUserByID", ctx, selfActorID).
 		Return(&User{ID: selfActorID, Active: true, GroupIDs: []string{adminGroupID}}, nil)
+	// The issue #78 combination check reads the groups for every caller.
+	// Both are write-capable, so it passes; the carve-out check, were it to
+	// run, would still refuse execute:purchases and fail this test.
+	mockStore.On("GetGroup", ctx, adminGroupID).Return(adminGroupRow(), nil)
+	mockStore.On("GetGroup", ctx, purchaserGroup).Return(purchaserGroupRow(), nil)
 	mockStore.On("UpdateUserAdminFields", ctx, mock.AnythingOfType("*auth.User"), mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	_, err := svc.UpdateUser(ctx, "", selfActorID, UpdateUserRequest{

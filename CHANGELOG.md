@@ -38,7 +38,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   name identifies (and reject names that identify none or several), and
   migration 000135 rewrites existing name entries whose account predates the
   grant; entries it cannot bind stop granting access (#1034)
-- Group writes reject an explicit `max_amount: 0` spend cap with a 400 instead of storing it as no cap; omit the field for no limit. API-key creation over HTTP is not covered yet (#980) (#133)
+- API-key creation over HTTP rejects an explicit `max_amount: 0` spend cap with a 400 instead of minting the key with no cap, matching group writes (#980)
+- Group writes reject an explicit `max_amount: 0` spend cap with a 400 instead of storing it as no cap; omit the field for no limit (#133)
 - Remove debug console.log from frontend recommendation handler
 - Align pre-commit gocyclo threshold (10) with CI pipeline
 - Pin tool versions in GitHub Actions for reproducible builds

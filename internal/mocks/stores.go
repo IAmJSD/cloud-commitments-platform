@@ -1612,15 +1612,6 @@ func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDay
 // don't set expectations for them. Tests that want to assert on these paths
 // register an explicit expectation via .On(...).Return(...).
 
-func (m *MockConfigStore) ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord) error {
-	m.record("ReplaceRecommendations", ctx, collectedAt, recs)
-	if !isExpected(&m.Mock, "ReplaceRecommendations") {
-		return nil
-	}
-	args := m.Called(ctx, collectedAt, recs)
-	return args.Error(0)
-}
-
 func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect) error {
 	m.record("UpsertRecommendations", ctx, collectedAt, recs, successfulCollects)
 	if !isExpected(&m.Mock, "UpsertRecommendations") {

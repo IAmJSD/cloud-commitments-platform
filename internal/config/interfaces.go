@@ -555,20 +555,20 @@ type StoreInterface interface {
 
 	// Recommendations cache (ADR: store recommendations in Postgres so the
 	// dashboard serves provider-switch clicks from SQL instead of live cloud
-	// API calls). ReplaceRecommendations is the "force full resync" path;
-	// UpsertRecommendations is the steady-state write path and takes a list
-	// of (provider, account) pairs that successfully collected this cycle.
-	// Stale-row eviction is scoped to that union so a partially-failed
+	// API calls). UpsertRecommendations is the only write path and takes a
+	// list of (provider, account) pairs that successfully collected this
+	// cycle. Stale-row eviction is scoped to that union so a partially-failed
 	// provider preserves the failed accounts' previous-cycle rows. See
-	// SuccessfulCollect for the per-row semantics.
-	ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord) error
+	// SuccessfulCollect for the per-row semantics. There is deliberately no
+	// unscoped "replace everything" method (issue #159).
 	UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect) error
 	ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error)
 	GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error)
 	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error
 	// SetRecommendationsCollectionPartial records (or, with nil, clears) the
-	// most recent collection's incomplete-sweep summary. Upsert/Replace
-	// clear it, so a later complete collection drops the marker.
+	// most recent collection's incomplete-sweep summary.
+	// UpsertRecommendations clears it, so a later complete collection drops
+	// the marker.
 	SetRecommendationsCollectionPartial(ctx context.Context, partial *RecommendationsCollectionPartial) error
 	// MarkCollectionStarted atomically sets last_collection_started_at = now
 	// only when no in-flight collection is running (last_collection_started_at IS NULL
