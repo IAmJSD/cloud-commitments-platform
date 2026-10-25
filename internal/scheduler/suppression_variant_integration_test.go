@@ -3,12 +3,10 @@
 package scheduler
 
 import (
-	"context"
 	"testing"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -26,10 +24,7 @@ import (
 // variant of its 6-tuple.
 func TestSuppressionsScopedToPurchasedVariant_RealPostgres(t *testing.T) {
 	ctx := t.Context()
-	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 	store := config.NewPostgresStore(pg.DB)
 
 	rec := func(id, resourceType, az, platform, tenancy string) config.RecommendationRecord {
@@ -58,7 +53,7 @@ func TestSuppressionsScopedToPurchasedVariant_RealPostgres(t *testing.T) {
 	require.NoError(t, store.WithTx(ctx, func(tx pgx.Tx) error { return store.CreateSuppressionTx(ctx, tx, &sups[0]) }))
 
 	// The insert old code issues: 6-tuple only, variant columns left NULL.
-	_, err = pg.DB.Pool().Exec(ctx, `
+	_, err := pg.DB.Pool().Exec(ctx, `
 		INSERT INTO purchase_suppressions (execution_id, account_id, provider, service, region,
 		                                   resource_type, engine, suppressed_count, expires_at)
 		VALUES ($1, '', 'aws', 'ec2', 'us-east-1', 'c5.large', '', 1, NOW() + INTERVAL '1 day')`, uuid.NewString())
