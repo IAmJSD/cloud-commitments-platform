@@ -72,10 +72,11 @@ jest.mock('../confirmDialog', () => ({
 }));
 
 jest.mock('../utils', () => ({
+  NO_VALUE: '\u2014',
   formatDate: jest.fn((v) => v ?? ''),
   formatTerm: jest.fn((y) => `${y}yr`),
   formatRampSchedule: jest.fn((v) => v ?? ''),
-  getStatusBadge: jest.fn(() => ({ class: 'active', label: 'Active' })),
+  getStatusBadge: jest.fn(() => ({ class: 'success', label: 'Active' })),
   escapeHtml: jest.fn((s) => s ?? ''),
   escapeHtmlAttr: jest.fn((str: string | null | undefined) => {
     if (str == null) return '';
