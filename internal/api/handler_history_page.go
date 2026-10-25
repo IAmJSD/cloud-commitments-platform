@@ -238,7 +238,7 @@ func (st *historyStream) fetchPurchases(ctx context.Context, after *config.Histo
 	rows := make([]historyStreamRow, len(recs))
 	for i := range recs {
 		rows[i] = historyStreamRow{key: recs[i].Key(), row: recs[i].PurchaseHistoryRecord, visible: true}
-		rows[i].row.Status = "completed"
+		rows[i].row.Status = purchaseHistoryRowStatus
 	}
 	return rows, st.h.markOutOfScope(ctx, st.session, rows)
 }
