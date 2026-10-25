@@ -1976,7 +1976,7 @@ func (m *MockConfigStore) HistorySummaryAggregate(ctx context.Context, filter co
 	}
 	v, ok := args.Get(0).(*config.HistorySummaryGroups)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *config.HistorySummaryGroups, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("HistorySummaryAggregate", "*config.HistorySummaryGroups", args.Get(0))
 	}
 	return v, args.Error(1)
 }
