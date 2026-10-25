@@ -12,9 +12,9 @@ import (
 )
 
 func TestMigration_LadderTrancheAmountProvenance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool, path := container.DB.Pool(), getMigrationsPath()
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 120))
 	var id string

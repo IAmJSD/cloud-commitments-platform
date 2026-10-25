@@ -252,7 +252,8 @@ describe('regression: group edit no longer drops/widens unrepresentable permissi
       const resourceSelect = document.querySelector('.perm-resource') as HTMLSelectElement;
 
       // No breakout payload parsed as a live element anywhere in the modal.
-      expect(document.querySelectorAll('img, script, svg, iframe, style').length).toBe(0);
+      // svg.icon is the Remove button's own trash icon (src/icons.ts), not injected markup.
+      expect(document.querySelectorAll('img, script, svg:not(.icon), iframe, style').length).toBe(0);
 
       // No extra <option> was smuggled in via the closing-tag breakout: the
       // action select is ALL_ACTIONS + the empty placeholder + the one
@@ -485,7 +486,8 @@ describe('regression: group edit preserves constraints.accounts (#1629)', () => 
     group.permissions = [{ action: 'view', resource: 'history', constraints: { accounts: [payload] } }];
     await openEdit(group);
 
-    expect(document.querySelectorAll('img, script, svg, iframe, style').length).toBe(0);
+    // svg.icon is the Remove button's own trash icon (src/icons.ts), not injected markup.
+    expect(document.querySelectorAll('img, script, svg:not(.icon), iframe, style').length).toBe(0);
     expect(accountsInput().value).toBe(payload);
 
     await clickSave();
