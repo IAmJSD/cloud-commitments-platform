@@ -157,6 +157,11 @@ jobs:
           fi
           echo "✅ All functions have acceptable cyclomatic complexity (≤10)"
 
+      - name: Run Makefile gate self-tests
+        # The local lint, scanner and terraform-validate targets must fail
+        # when their tool is missing or fails (#349). Stub tools only.
+        run: bash scripts/test-make-gates.sh
+
   # GitHub Actions workflow linting
   #
   # Nothing else in this repo reads .github/workflows/ for defects. govulncheck
@@ -1067,12 +1072,12 @@ jobs:
             # Check local tfvars if present
             if [ -f "${env}.tfvars" ]; then
               echo "Checking ${env}.tfvars syntax..."
-              terraform fmt -check "${env}.tfvars" || echo "Note: ${env}.tfvars may need formatting"
+              terraform fmt -check "${env}.tfvars"
             fi
             # Check GitHub CI/CD tfvars
             if [ -f "github-${env}.tfvars" ]; then
               echo "Checking github-${env}.tfvars syntax..."
-              terraform fmt -check "github-${env}.tfvars" || echo "Note: github-${env}.tfvars may need formatting"
+              terraform fmt -check "github-${env}.tfvars"
             fi
           done
 
