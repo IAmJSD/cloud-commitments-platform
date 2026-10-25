@@ -31,7 +31,7 @@ Runs comprehensive quality checks on every pull request and push to main branch.
 
 1. **Lint** - golangci-lint, go vet
 2. **Unit Tests** - Go tests with race detection, coverage reporting
-3. **Integration Tests** - Tests with real PostgreSQL
+3. **Integration Tests** - Tests with real PostgreSQL: `integration`-tagged tests and tests that skip under `-short`, sharded across parallel runners (selected by `scripts/integration-test-selection.sh`)
 4. **Docker Build** - Build, check and scan the Docker image natively for linux/amd64 and linux/arm64
 5. **Terraform Validate** - Validate all Terraform configs (AWS, GCP, Azure)
 6. **Security Scan** - gosec, trivy, tfsec
@@ -52,7 +52,7 @@ Runs comprehensive quality checks on every pull request and push to main branch.
 
 ### Required Variables
 
-- `GO_VERSION` (default: 1.26.9)
+- `GO_VERSION` (default: 1.26.10)
 
 ### Example
 
