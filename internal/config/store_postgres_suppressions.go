@@ -1,7 +1,7 @@
 package config
 
 // store_postgres_suppressions.go — CRUD + transaction-accepting variants
-// for the purchase_suppressions table (migration 000037) plus the
+// for the purchase_suppressions table (migrations 000037, 000134) plus the
 // WithTx helper used by executePurchase and cancelExecution to commit
 // the execution row + suppression rows atomically.
 
@@ -103,16 +103,24 @@ func (s *PostgresStore) CreateSuppressionTx(ctx context.Context, tx pgx.Tx, sup 
 		sup.ID = uuid.New().String()
 	}
 
+	// A nil Variant writes NULL into all three variant columns (a legacy,
+	// 6-tuple-wide row); otherwise all three are written, empty strings included
+	// (migration 000134 keeps them all-NULL or all-set).
+	var az, platform, tenancy *string
+	if sup.Variant != nil {
+		az, platform, tenancy = &sup.Variant.AvailabilityZone, &sup.Variant.Platform, &sup.Variant.Tenancy
+	}
 	const q = `
 		INSERT INTO purchase_suppressions (
 			id, execution_id, account_id, provider, service, region,
-			resource_type, engine, suppressed_count, expires_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			resource_type, engine, suppressed_count, expires_at,
+			availability_zone, platform, tenancy
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`
 	if _, err := tx.Exec(ctx, q,
 		sup.ID, sup.ExecutionID, sup.AccountID, sup.Provider, sup.Service,
 		sup.Region, sup.ResourceType, sup.Engine, sup.SuppressedCount,
-		sup.ExpiresAt,
+		sup.ExpiresAt, az, platform, tenancy,
 	); err != nil {
 		return fmt.Errorf("failed to insert purchase suppression: %w", err)
 	}
@@ -144,12 +152,15 @@ func (s *PostgresStore) DeleteSuppressionsByExecutionTx(ctx context.Context, tx 
 
 // ListActiveSuppressions returns every suppression row whose expiry
 // hasn't passed. The scheduler groups these by the 6-tuple key
-// (account, provider, service, region, resource_type, engine) to
-// subtract cumulative suppressed counts from its rec-list output.
+// (account, provider, service, region, resource_type, engine) and
+// matches each row's variant (availability zone, platform, tenancy;
+// issue #816) to subtract cumulative suppressed counts from its rec-list
+// output. A row with NULL variant columns comes back with a nil Variant.
 func (s *PostgresStore) ListActiveSuppressions(ctx context.Context) ([]PurchaseSuppression, error) {
 	const q = `
 		SELECT id, execution_id, account_id, provider, service, region,
-		       resource_type, engine, suppressed_count, expires_at, created_at
+		       resource_type, engine, suppressed_count, expires_at, created_at,
+		       availability_zone, platform, tenancy
 		FROM purchase_suppressions
 		WHERE expires_at > NOW()
 	`
@@ -162,17 +173,31 @@ func (s *PostgresStore) ListActiveSuppressions(ctx context.Context) ([]PurchaseS
 	var out []PurchaseSuppression
 	for rows.Next() {
 		var sup PurchaseSuppression
+		var az, platform, tenancy *string
 		if err := rows.Scan(
 			&sup.ID, &sup.ExecutionID, &sup.AccountID, &sup.Provider,
 			&sup.Service, &sup.Region, &sup.ResourceType, &sup.Engine,
 			&sup.SuppressedCount, &sup.ExpiresAt, &sup.CreatedAt,
+			&az, &platform, &tenancy,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan suppression row: %w", err)
 		}
+		sup.Variant = suppressionVariantFromColumns(az, platform, tenancy)
 		out = append(out, sup)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed to iterate suppression rows: %w", err)
 	}
 	return out, nil
+}
+
+// suppressionVariantFromColumns rebuilds a row's variant from its nullable
+// columns. The 000134 CHECK keeps them all-NULL or all-set; a row with any
+// NULL is read as having no variant (a 6-tuple-wide wildcard), which
+// over-suppresses rather than over-shows.
+func suppressionVariantFromColumns(az, platform, tenancy *string) *SuppressionVariant {
+	if az == nil || platform == nil || tenancy == nil {
+		return nil
+	}
+	return &SuppressionVariant{AvailabilityZone: *az, Platform: *platform, Tenancy: *tenancy}
 }

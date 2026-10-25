@@ -8,7 +8,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
@@ -62,6 +61,7 @@ func countActiveAdmins(t *testing.T, ctx context.Context, pool *pgxpool.Pool) in
 // error string and would pass even if the SQL were wrong), this test runs the
 // actual migration SQL against a real PostgreSQL instance.
 func TestMigration_EnforceMinOneAdmin_ConcurrentRace(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
@@ -73,12 +73,8 @@ func TestMigration_EnforceMinOneAdmin_ConcurrentRace(t *testing.T) {
 	// arbitration. It returns how many of the two transactions committed and the
 	// number of active admins left afterwards.
 	runConcurrentRace := func(t *testing.T, mutateSQL string) (commits, remainingAdmins int) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		container := testhelpers.RequireMigratedDatabase(ctx, t, migrationsPath)
 		pool := container.DB.Pool()
-
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 
 		adminA := seedActiveAdmin(t, ctx, pool, "race-admin-a@test.example")
 		adminB := seedActiveAdmin(t, ctx, pool, "race-admin-b@test.example")
@@ -147,16 +143,19 @@ func TestMigration_EnforceMinOneAdmin_ConcurrentRace(t *testing.T) {
 	}
 
 	t.Run("concurrent deactivation never removes the last admin", func(t *testing.T) {
+		t.Parallel()
 		commits, remaining := runConcurrentRace(t, `UPDATE users SET active = false WHERE id = $1`)
 		assertRaceSafe(t, commits, remaining, "deactivations")
 	})
 
 	t.Run("concurrent deletion never removes the last admin", func(t *testing.T) {
+		t.Parallel()
 		commits, remaining := runConcurrentRace(t, `DELETE FROM users WHERE id = $1`)
 		assertRaceSafe(t, commits, remaining, "deletions")
 	})
 
 	t.Run("concurrent group removal never removes the last admin", func(t *testing.T) {
+		t.Parallel()
 		commits, remaining := runConcurrentRace(t, `UPDATE users SET group_ids = '{}'::uuid[] WHERE id = $1`)
 		assertRaceSafe(t, commits, remaining, "group removals")
 	})
@@ -168,6 +167,7 @@ func TestMigration_EnforceMinOneAdmin_ConcurrentRace(t *testing.T) {
 // removal that leaves another active admin must succeed. This pins the
 // trigger's COUNT/active semantics against the real migration SQL.
 func TestMigration_EnforceMinOneAdmin_BlocksLastAdminRemoval(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
@@ -175,15 +175,13 @@ func TestMigration_EnforceMinOneAdmin_BlocksLastAdminRemoval(t *testing.T) {
 	// from a clean admin count.
 	freshPool := func(t *testing.T) *pgxpool.Pool {
 		t.Helper()
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = container.Cleanup(ctx) })
+		container := testhelpers.RequireMigratedDatabase(ctx, t, migrationsPath)
 		pool := container.DB.Pool()
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 		return pool
 	}
 
 	t.Run("deactivating the sole admin is rejected", func(t *testing.T) {
+		t.Parallel()
 		pool := freshPool(t)
 		id := seedActiveAdmin(t, ctx, pool, "sole-admin@test.example")
 		require.Equal(t, 1, countActiveAdmins(t, ctx, pool))
@@ -197,6 +195,7 @@ func TestMigration_EnforceMinOneAdmin_BlocksLastAdminRemoval(t *testing.T) {
 	})
 
 	t.Run("deleting the sole admin is rejected", func(t *testing.T) {
+		t.Parallel()
 		pool := freshPool(t)
 		id := seedActiveAdmin(t, ctx, pool, "sole-admin-del@test.example")
 		require.Equal(t, 1, countActiveAdmins(t, ctx, pool))
@@ -210,6 +209,7 @@ func TestMigration_EnforceMinOneAdmin_BlocksLastAdminRemoval(t *testing.T) {
 	})
 
 	t.Run("removing one of two admins succeeds", func(t *testing.T) {
+		t.Parallel()
 		pool := freshPool(t)
 		a := seedActiveAdmin(t, ctx, pool, "two-admins-a@test.example")
 		_ = seedActiveAdmin(t, ctx, pool, "two-admins-b@test.example")

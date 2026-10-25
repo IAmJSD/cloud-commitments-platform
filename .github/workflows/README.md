@@ -31,8 +31,8 @@ Runs comprehensive quality checks on every pull request and push to main branch.
 
 1. **Lint** - golangci-lint, go vet
 2. **Unit Tests** - Go tests with race detection, coverage reporting
-3. **Integration Tests** - Tests with real PostgreSQL
-4. **Docker Build** - Build and test Docker image
+3. **Integration Tests** - Tests with real PostgreSQL: `integration`-tagged tests and tests that skip under `-short`, sharded across parallel runners (selected by `scripts/integration-test-selection.sh`)
+4. **Docker Build** - Build, check and scan the Docker image natively for linux/amd64 and linux/arm64
 5. **Terraform Validate** - Validate all Terraform configs (AWS, GCP, Azure)
 6. **Security Scan** - gosec, trivy, tfsec
 7. **Snyk Scan** - Dependency vulnerability scanning
@@ -52,7 +52,7 @@ Runs comprehensive quality checks on every pull request and push to main branch.
 
 ### Required Variables
 
-- `GO_VERSION` (default: 1.26.9)
+- `GO_VERSION` (default: 1.26.10)
 
 ### Example
 
@@ -341,13 +341,13 @@ gh workflow run database-migration.yml \
   -f direction=down \
   -f steps=2
 
-# Rollback 1 migration on AWS prod (requires typed confirmation)
+# Rollback 1 migration on AWS prod (the confirmation repeats the step count)
 gh workflow run database-migration.yml \
   -f cloud=aws \
   -f environment=prod \
   -f direction=down \
   -f steps=1 \
-  -f confirm=rollback-prod
+  -f confirm=rollback-prod-1
 
 # Apply to all clouds
 gh workflow run database-migration.yml \
@@ -360,8 +360,9 @@ gh workflow run database-migration.yml \
 
 - **Validation** - Checks migration files exist before running
 - **Explicit steps required** - `direction=down` requires an explicit positive `steps` value; `steps=0` (the default, which would run `down -all` and drop the entire schema) is rejected
-- **Production confirmation** - `direction=down` on `environment=prod` additionally requires typing `rollback-prod` in the `confirm` input; omitting or mistyping it blocks the run
-- **Defense in depth** - each migrate job independently re-validates the positive-steps constraint, so a future validate regression cannot reach `down -all`
+- **Bounded steps** - `direction=down` also rejects any `steps` at or above the number of migrations in the tree, in every environment. golang-migrate does not refuse a `down N` larger than what is applied: it rolls back everything that remains and only then reports a short limit, so `steps=99999999` is `down -all` (#68)
+- **Production confirmation** - `direction=down` on `environment=prod` additionally requires typing `rollback-prod-<steps>` (for example `rollback-prod-1` with `steps=1`) in the `confirm` input, so the confirmation restates how many migrations are being dropped; omitting it, mistyping it, or a count that differs from `steps` blocks the run
+- **Defense in depth** - each migrate job runs the same gate (`scripts/check-migration-down-request.sh`) again right before calling migrate, so a future validate regression cannot reach `down -all`
 - **Audit Trail** - Records all migrations in the step summary
 
 ---

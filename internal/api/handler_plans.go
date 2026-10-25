@@ -395,9 +395,11 @@ func mergeUpdatedPlan(existingPlan *config.PurchasePlan, req *PlanRequest, planI
 // carried over; a rebuild has no way to know either and would otherwise
 // wipe them. CurrentStep, StartDate, and NextExecutionDate are carried
 // over when the requested ramp schedule has the same shape as the existing
-// one (same type/percent/interval/step-count): an unrelated field edit
-// (rename, target coverage, ...) resubmits the same schedule and must not
-// restart it. A different shape is refused once a step has completed,
+// one (see rampScheduleShapeUnchanged): an unrelated field edit (rename,
+// target coverage, ...) resubmits the same schedule and must not restart it.
+// The stored type label is kept too, so resubmitting a non-preset weekly or
+// monthly ramp as the equal custom one leaves the plan as it was (issue
+// #1184). A different shape is refused once a step has completed,
 // because the rebuilt schedule would restart at step zero and forget the
 // percentage already bought (issue #386); before the first step it is a
 // plain schedule change.
@@ -406,6 +408,7 @@ func preserveRampProgress(existingPlan, plan *config.PurchasePlan) error {
 	plan.LastNotificationSent = existingPlan.LastNotificationSent
 
 	if rampScheduleShapeUnchanged(existingPlan.RampSchedule, plan.RampSchedule) {
+		plan.RampSchedule.Type = existingPlan.RampSchedule.Type
 		plan.RampSchedule.CurrentStep = existingPlan.RampSchedule.CurrentStep
 		plan.RampSchedule.StartDate = existingPlan.RampSchedule.StartDate
 		// Editor-owned markers the request cannot express; dropping them hands
@@ -428,11 +431,31 @@ func preserveRampProgress(existingPlan, plan *config.PurchasePlan) error {
 // excluding the progress fields CurrentStep and StartDate, to tell apart
 // "the update resubmitted the same schedule" from "the update picked a
 // genuinely different one".
+//
+// The type must match, except that weekly, monthly and custom are only labels
+// for the same step-based behavior (nothing downstream branches on them; only
+// "immediate" is special). The UI can send just the presets or "custom", so a
+// stored weekly 20%/7d ramp comes back as custom 20%/7d, and treating that as
+// a change refused every edit of such a plan once a step had run (issue #1184).
 func rampScheduleShapeUnchanged(a, b config.RampSchedule) bool {
-	return a.Type == b.Type &&
+	return rampTypesEquivalent(a.Type, b.Type) &&
 		a.PercentPerStep == b.PercentPerStep &&
 		a.StepIntervalDays == b.StepIntervalDays &&
 		a.TotalSteps == b.TotalSteps
+}
+
+// rampTypesEquivalent reports whether two ramp type labels describe the same
+// behavior: identical labels, or two of the step-based weekly/monthly/custom.
+// "immediate" and any unrecognized label must match exactly.
+func rampTypesEquivalent(a, b string) bool {
+	if a == b {
+		return true
+	}
+	return isStepBasedRampType(a) && isStepBasedRampType(b)
+}
+
+func isStepBasedRampType(t string) bool {
+	return t == "weekly" || t == "monthly" || t == "custom"
 }
 
 func (h *Handler) deletePlan(ctx context.Context, req *events.LambdaFunctionURLRequest, planID string) (any, error) {
@@ -471,7 +494,10 @@ func (h *Handler) createPlannedPurchases(ctx context.Context, httpReq *events.La
 	// hold this verb; Plan Authors (create/update/delete:plans only)
 	// do not, closing issue #1406 / #1418. The prior gate ("create","plans")
 	// incorrectly admitted Plan Authors because they hold create:plans.
-	session, err := h.requirePermission(ctx, httpReq, "update", "purchases")
+	// Scheduled rows are stamped with resolveCreatorUserID(session); a
+	// creator-less row could never be approved under 4-eyes, so that case
+	// is refused here (issue #677).
+	session, err := h.requirePurchaseCreatingPermission(ctx, httpReq, "update", "purchases")
 	if err != nil {
 		return nil, err
 	}
