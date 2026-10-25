@@ -19,12 +19,11 @@ import (
 // switch defaults to FALSE, the CHECK rejects a non-positive cap, and the down
 // migration removes both columns.
 func TestMigration_PlanStepCapAndAutoPurchaseSwitch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 112)))
@@ -34,7 +33,7 @@ func TestMigration_PlanStepCapAndAutoPurchaseSwitch(t *testing.T) {
 		INSERT INTO purchase_plans (name, enabled, auto_purchase, notification_days_before, services, ramp_schedule)
 		VALUES ('pre-existing', true, true, 3, '{}'::jsonb, '{}'::jsonb)
 		RETURNING id`).Scan(&planID))
-	_, err = pool.Exec(ctx, `INSERT INTO global_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING`)
+	_, err := pool.Exec(ctx, `INSERT INTO global_config (id) VALUES (1) ON CONFLICT (id) DO NOTHING`)
 	require.NoError(t, err)
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 112))

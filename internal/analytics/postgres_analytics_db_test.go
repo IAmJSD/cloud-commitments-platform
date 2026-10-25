@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/analytics"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,9 +24,9 @@ import (
 // skipIfDBTestsOptedOut honors the SKIP_DB_TESTS opt-out. It was called
 // skipIfNoDocker, which is what a reader of #1597 would flag: the name promised
 // a Docker probe, so a suite that silently reported nothing looked accounted
-// for. It never probed anything. Docker is probed by RequirePostgresContainer,
-// which each of these tests calls, and which fails rather than skips once the
-// daemon answers a health check.
+// for. It never probed anything. Docker is probed by RequireMigratedDatabase
+// (or RequireEmptyDatabase), which each of these tests calls, and which fails
+// rather than skips once the daemon answers a health check.
 //
 // The remaining exposure is the opt-out itself: setting SKIP_DB_TESTS zeroes
 // this suite without failing. That is deliberate and it is the caller's
@@ -57,13 +56,8 @@ func TestPostgresAnalyticsStore_SaveSnapshot_DB(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Setup test container
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
-
-	// Run migrations
-	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
+	// A fresh migrated database of its own, on the package's shared server
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 
 	// Create store
 	store := analytics.NewPostgresAnalyticsStore(container.DB)
@@ -138,13 +132,8 @@ func TestPostgresAnalyticsStore_QuerySavings_DB(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Setup test container
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
-
-	// Run migrations
-	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
+	// A fresh migrated database of its own, on the package's shared server
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 
 	// Create store
 	store := analytics.NewPostgresAnalyticsStore(container.DB)
@@ -269,13 +258,8 @@ func TestPostgresAnalyticsStore_QueryByProvider_DB(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Setup test container
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
-
-	// Run migrations
-	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
+	// A fresh migrated database of its own, on the package's shared server
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 
 	// Create store
 	store := analytics.NewPostgresAnalyticsStore(container.DB)
@@ -358,13 +342,8 @@ func TestPostgresAnalyticsStore_QueryByService_DB(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Setup test container
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
-
-	// Run migrations
-	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
+	// A fresh migrated database of its own, on the package's shared server
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 
 	// Create store
 	store := analytics.NewPostgresAnalyticsStore(container.DB)
@@ -420,13 +399,8 @@ func TestPostgresAnalyticsStore_BulkInsertSnapshots_DB(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Setup test container
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
-
-	// Run migrations
-	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
+	// A fresh migrated database of its own, on the package's shared server
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 
 	// Create store
 	store := analytics.NewPostgresAnalyticsStore(container.DB)
@@ -480,13 +454,8 @@ func TestPostgresAnalyticsStore_PartitionManagement_DB(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Setup test container
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
-
-	// Run migrations
-	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
+	// A fresh migrated database of its own, on the package's shared server
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 
 	// Create store
 	store := analytics.NewPostgresAnalyticsStore(container.DB)
@@ -523,13 +492,8 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals_DB(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Setup test container
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
-
-	// Run migrations
-	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
+	// A fresh migrated database of its own, on the package's shared server
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 
 	// Create store
 	store := analytics.NewPostgresAnalyticsStore(container.DB)
@@ -552,12 +516,12 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals_DB(t *testing.T) {
 	}
 
 	for _, snapshot := range testSnapshots {
-		err = store.SaveSnapshot(ctx, snapshot)
+		err := store.SaveSnapshot(ctx, snapshot)
 		require.NoError(t, err)
 	}
 
 	// Refresh materialized views so data is available
-	err = store.RefreshMaterializedViews(ctx)
+	err := store.RefreshMaterializedViews(ctx)
 	require.NoError(t, err)
 
 	t.Run("query monthly totals from materialized view", func(t *testing.T) {
@@ -589,13 +553,8 @@ func TestPostgresAnalyticsStore_RefreshMaterializedViews_DB(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Setup test container
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
-
-	// Run migrations
-	err := migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
+	// A fresh migrated database of its own, on the package's shared server
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 
 	// Create store
 	store := analytics.NewPostgresAnalyticsStore(container.DB)
@@ -612,9 +571,8 @@ func TestPostgresAnalyticsStore_Close_DB(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	// Setup test container
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	defer container.Cleanup(ctx)
+	// Empty database: Close needs a connection, not a schema
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 
 	// Create store
 	store := analytics.NewPostgresAnalyticsStore(container.DB)
