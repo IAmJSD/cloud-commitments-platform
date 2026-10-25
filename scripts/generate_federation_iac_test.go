@@ -434,13 +434,9 @@ func TestGenerator_ValidationPrecedesTemplateRead(t *testing.T) {
 }
 
 // TestGenerator_AcceptsValidOIDCSubjectClaim is the positive control: without
-// it, a validator that rejected everything would pass every test above.
-//
-// It uses --format cf-params rather than the default tfvars output because the
-// script's iacData is missing the CUDlyAPIURL / SourceAccountID / ContactEmail
-// fields the tfvars templates reference, so every tfvars path fails to render
-// on main today. That drift predates this change and is tracked in #1690; the
-// cf-params path renders end to end.
+// it, a validator that rejected everything would pass every test above. It
+// checks the cf-params output because that is where the claim is easiest to
+// read back exactly; the tfvars and bundle paths are covered elsewhere.
 func TestGenerator_AcceptsValidOIDCSubjectClaim(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -482,23 +478,22 @@ func TestGenerator_AcceptsValidOIDCSubjectClaim(t *testing.T) {
 // the new requirement. target=aws with source=aws is the cross-account
 // (external ID) path: it renders aws-cross-account.tfvars.tmpl, which has no
 // OIDC trust policy at all, so demanding a subject claim there would break a
-// working combination.
-//
-// It asserts only on stderr, not on the exit code, because that invocation
-// currently fails for an unrelated pre-existing reason: iacData is missing the
-// SourceAccountID / CUDlyAPIURL / ContactEmail / OIDCIssuerHost fields the
-// tfvars and deploy-script templates reference, so no tfvars path of this
-// script renders on main today. That drift is tracked in #1690; once it is
-// fixed this can also assert exitCode == 0.
+// working combination. It asserts a successful render, not just the absence of
+// a complaint, so a regression that breaks the path outright also fails (#153).
 func TestGenerator_CrossAccountDoesNotRequireSubjectClaim(t *testing.T) {
 	res := runGenerator(t,
 		"--target", "aws",
 		"--source", "aws",
 		"--account-name", "tgt",
 		"--account-id", "999888777666",
+		"--source-account-id", "111122223333",
 		"--output", "-",
 	)
-	if strings.Contains(res.stderr, "--oidc-subject-claim") {
-		t.Errorf("the aws->aws cross-account path must not require --oidc-subject-claim, got:\n%s", res.stderr)
+	if res.exitCode != 0 {
+		t.Fatalf("the aws->aws cross-account path must render without --oidc-subject-claim (exit %d); stderr:\n%s",
+			res.exitCode, res.stderr)
+	}
+	if !strings.Contains(res.stdout, "999888777666") {
+		t.Errorf("rendered cross-account tfvars must carry the target account ID, got:\n%s", res.stdout)
 	}
 }

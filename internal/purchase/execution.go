@@ -295,6 +295,9 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	recs := make([]config.RecommendationRecord, len(baseExec.Recommendations))
 	copy(recs, baseExec.Recommendations)
 	acctExec.Recommendations = recs
+	// Runs on every return path below, once the row's terminal status is
+	// stamped; a no-op unless it ended failed or partially_completed (#714).
+	defer m.notifyExecutionFailure(ctx, &acctExec)
 
 	provCfg, err := m.resolveAccountProvider(ctx, account)
 	if err != nil {
@@ -1099,7 +1102,7 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	// The parent ctx governs the overall Lambda budget; this per-rec deadline
 	// is always the shorter of the two.
 	recTuple := fmt.Sprintf("%s/%s/%s/%s", rec.Provider, rec.Service, rec.Region, rec.ResourceType)
-	recCtx, recCancel := context.WithTimeout(ctx, 30*time.Second)
+	recCtx, recCancel := context.WithTimeout(ctx, m.budgets.perRecTimeout())
 	defer recCancel()
 
 	// Create the provider
@@ -1180,6 +1183,8 @@ func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.Recommen
 	// (which the AWS SDK retries up to 3× × 30s by default) versus
 	// something earlier in the flow — issue #667.
 	tCall := time.Now()
+	// go's Redshift dedupe needs the dispatch time to bound its DescribeReservedNodes match window.
+	opts.RequestedAt = time.Now().UTC()
 	result, err := serviceClient.PurchaseCommitment(recCtx, recommendation, opts)
 	elapsed := time.Since(tCall)
 	if err != nil {

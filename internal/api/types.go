@@ -245,7 +245,9 @@ type AuthServiceInterface interface {
 	// Account access - returns the union of allowed_accounts from all user groups (empty = all access)
 	GetAllowedAccountsAPI(ctx context.Context, userID string) ([]string, error)
 	// API Key management
-	CreateAPIKeyAPI(ctx context.Context, userID string, req any) (any, error)
+	// CreateAPIKeyAPI takes the auth wire type directly: re-encoding a local
+	// copy erased an explicit max_amount of 0 (issue #980).
+	CreateAPIKeyAPI(ctx context.Context, userID string, req auth.APICreateAPIKeyRequest) (any, error)
 	ListUserAPIKeysAPI(ctx context.Context, userID string) (any, error)
 	// GetAPIKeysUsageStatsAPI returns the section-level usage summary
 	// (active count, fixed-window/lifetime request totals, top-3 most
@@ -441,9 +443,10 @@ type StatusResponse struct {
 }
 
 // DeletePlannedPurchaseResponse is the body of DELETE /api/purchases/planned/{id}.
-// PlanDisabled is omitted when the execution has no plan, true when the plan
-// was disabled, and false when the plan was left enabled because it spans
-// accounts outside the caller's scope (issue #520).
+// PlanDisabled is omitted when the execution has no plan and true when the
+// plan was disabled. A plan the caller may not disable fails the request
+// (403 before the cancel, 409 if the plan changed after it) instead of
+// reporting false (issues #520, #623).
 type DeletePlannedPurchaseResponse struct {
 	Status       string `json:"status"`
 	PlanDisabled *bool  `json:"plan_disabled,omitempty"`
@@ -462,6 +465,9 @@ type RecommendationsResponse struct {
 	Recommendations []config.RecommendationRecord `json:"recommendations"`
 	Regions         []string                      `json:"regions"`
 	Summary         RecommendationsSummary        `json:"summary"`
+	// NextCursor is set only on a paginated request (limit or cursor sent)
+	// that has more rows; pass it back as ?cursor= for the next page.
+	NextCursor string `json:"next_cursor,omitempty"`
 }
 
 // UsagePoint is a single sample in the per-recommendation usage time
@@ -497,7 +503,7 @@ type RecommendationDetailResponse struct {
 	ProvenanceNote   string       `json:"provenance_note"`
 	// HiddenBy is non-nil when the rec is filtered out by an account-service
 	// override (issue #214). Each element names one failing dimension:
-	// "enabled=false", "engine", "region", or "resource_type". The frontend
+	// "enabled=false", "engine", "region", "resource_type" or "min_count". The frontend
 	// renders a "hidden by your override" banner when this field is present.
 	// Absent (null) means the rec is fully visible.
 	HiddenBy []string `json:"hidden_by,omitempty"`
@@ -552,9 +558,14 @@ type PermissionEntry struct {
 // the user's groups; for a user API key, the key's permissions intersected
 // with its owner's (issue #62); for the admin API key, {admin, *}.
 // IsAdmin mirrors whether that effective set contains the {admin, *} wildcard.
+// UnrestrictedAccountAccess reports whether the caller's account scope covers
+// every account, which global actions such as POST
+// /api/recommendations/refresh require (issue #619). Like the permission
+// entries it is for UX gating only; the backend still enforces the scope.
 type UserPermissionsResponse struct {
-	Permissions []PermissionEntry `json:"permissions"`
-	IsAdmin     bool              `json:"is_admin"`
+	Permissions               []PermissionEntry `json:"permissions"`
+	IsAdmin                   bool              `json:"is_admin"`
+	UnrestrictedAccountAccess bool              `json:"unrestricted_account_access"`
 }
 
 // MFA enrollment + lifecycle DTOs (issue #497). Passwords carried by
@@ -644,9 +655,11 @@ type DashboardSummaryResponse struct {
 	TotalRecommendations    int                       `json:"total_recommendations"`
 	ActiveCommitments       int                       `json:"active_commitments"`
 	CommittedMonthly        float64                   `json:"committed_monthly"`
-	CurrentCoverage         float64                   `json:"current_coverage"`
-	TargetCoverage          float64                   `json:"target_coverage"`
-	YTDSavings              float64                   `json:"ytd_savings"`
+	// CurrentCoverage is null when there is neither committed nor potential
+	// savings to measure (0/0), instead of a fabricated 100% (issue #72).
+	CurrentCoverage *float64 `json:"current_coverage"`
+	TargetCoverage  float64  `json:"target_coverage"`
+	YTDSavings      float64  `json:"ytd_savings"`
 }
 
 // ServiceSavings holds savings data for a service.
@@ -955,18 +968,31 @@ type CreatePlannedPurchasesResponse struct {
 // HistoryResponse represents the response from the history API.
 type HistoryResponse struct {
 	Purchases []config.PurchaseHistoryRecord `json:"purchases"`
-	Summary   HistorySummary                 `json:"summary"`
+	// Summary covers every row matching the request's filters and the caller's
+	// account scope, including rows beyond the row caps (issue #675), unless
+	// SummaryComplete is false.
+	Summary HistorySummary `json:"summary"`
+	// SummaryComplete is true when Summary was computed over every matching
+	// row. It is false only when that aggregate failed and Summary fell back
+	// to the rows in Purchases, which under-reports when Truncated is true.
+	SummaryComplete bool `json:"summary_complete"`
 	// Truncated is true when a fetch reached its row cap, so older rows (and
-	// possibly pending approvals) may be missing from Purchases and Summary.
-	// It also fires when the actionable execution class hits its MaxListLimit cap.
+	// possibly pending approvals) may be missing from Purchases. Summary still
+	// counts them while SummaryComplete is true.
+	// It also fires when the actionable execution class hits its MaxListLimit cap,
+	// and when an execution class listing failed, so its rows are missing.
 	// It can be a false positive when exactly a cap's worth of rows exist.
 	Truncated bool `json:"truncated"`
 	// Limit is the row cap on completed purchase_history rows for this request.
 	Limit int `json:"limit"`
 	// ExecutionsLimit is the row cap on terminal executions (failed, expired,
 	// canceled, ...), fixed regardless of the request's limit parameter.
-	// Actionable executions (pending, approved, ...) use config.MaxListLimit.
+	// Actionable executions (pending, approved, ...) use ActionableExecutionsLimit.
 	ExecutionsLimit int `json:"executions_limit"`
+	// ActionableExecutionsLimit is the row cap on actionable executions
+	// (pending, notified, scheduled, approved, running, paused), fixed at
+	// config.MaxListLimit regardless of the request's limit parameter.
+	ActionableExecutionsLimit int `json:"actionable_executions_limit"`
 }
 
 // HistorySummary provides aggregate statistics for purchase history.

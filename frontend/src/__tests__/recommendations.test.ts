@@ -1,7 +1,7 @@
 /**
  * Recommendations module tests
  */
-import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, displaySavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS, isHomogeneousSelection, renderUsageSparkline, loadColumnFilters, saveColumnFilters, resetColumnFiltersState, spGroupKey, groupSpCellKeys, formatCapacity } from '../recommendations';
+import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, displaySavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS, isHomogeneousSelection, renderUsageSparkline, loadColumnFilters, saveColumnFilters, resetColumnFiltersState, spGroupKey, groupSpCellKeys, formatCapacity, scaleRecForCapacity, weightedDisplaySavingsPct } from '../recommendations';
 import type { CostPeriod } from '../state';
 
 // Mock the api module
@@ -99,7 +99,12 @@ jest.mock('../state', () => ({
 
 // Mock utils
 jest.mock('../utils', () => ({
-  formatCurrency: jest.fn((val) => `$${val || 0}`),
+  // Explicit digits (the non-monthly cost periods) render fixed decimals;
+  // null/undefined render the shared NO_VALUE placeholder like the real one.
+  formatCurrency: jest.fn((val, _currency = '$', digits?: number) => (
+    val === null || val === undefined ? '\u2014' : digits ? `$${Number(val).toFixed(digits)}` : `$${val || 0}`
+  )),
+  NO_VALUE: '\u2014',
   formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   escapeHtml: jest.fn((str) => str || ''),
   populateAccountFilter: jest.fn(() => Promise.resolve()),
@@ -114,6 +119,24 @@ jest.mock('../utils', () => ({
 import * as api from '../api';
 import * as state from '../state';
 import * as recsApi from '../api/recommendations';
+
+// Issue #803: setup.ts's jest.clearAllMocks() clears recorded calls but keeps
+// any mockReturnValue / mockResolvedValue / mockImplementation a test
+// installed, so an override (cost period, column filters, selection, user,
+// account overrides, ...) leaked into whichever test jest ran next and the
+// file failed under --randomize. Snapshot every module mock's factory default
+// once, and restore it before each test, so each test starts from the
+// defaults above whatever order the tests run in.
+const mockFactoryDefaults = [...[api, state, recsApi].flatMap((mod) => Object.values(mod)), mockShowToast]
+  .filter((fn): fn is jest.Mock => jest.isMockFunction(fn))
+  .map((fn) => [fn, fn.getMockImplementation()] as const);
+
+beforeEach(() => {
+  for (const [fn, factoryDefault] of mockFactoryDefaults) {
+    fn.mockReset();
+    if (factoryDefault) fn.mockImplementation(factoryDefault);
+  }
+});
 
 describe('Recommendations Module', () => {
   beforeEach(() => {
@@ -335,6 +358,11 @@ describe('Recommendations Module', () => {
       };
       expect(cardValue()).toContain('$300');
       expect(cardValue()).toContain('$400');
+      // #180: unfiltered, the card covers every loaded row (same scope as
+      // Home), so it carries no "Filtered" scope line.
+      const scopeLine = (): string | null =>
+        document.querySelector('#recommendations-summary [data-testid="savings-scope"]')?.textContent ?? null;
+      expect(scopeLine()).toBeNull();
 
       // Apply a real column filter restricting to service=ec2 (cell1
       // only). renderRecommendationsList re-runs applyColumnFilters
@@ -352,12 +380,58 @@ describe('Recommendations Module', () => {
       expect(cardValue()).toContain('$150');
       expect(cardValue()).not.toContain('$300');
       expect(cardValue()).not.toContain('$400');
+      // #180: the narrowed scope is labeled so it can't be mistaken for
+      // Home's all-recommendations figure.
+      expect(scopeLine()).toBe('Filtered: 2 of 4 recommendations');
 
       // Restore the filter mock to empty so the leaked return value
       // doesn't bleed into subsequent tests in this file. jest.clearAllMocks
       // resets mock.calls but not .mockReturnValue, so we have to undo
       // explicitly.
       (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    });
+
+    test('savings card is labeled Filtered when the service filter is pushed to the server (#180)', async () => {
+      // A single-value service filter is sent as ?service= (#162) and the
+      // backend returns only matching rows, so the visible and loaded counts
+      // are equal. The card must still say it is filtered; otherwise it shows
+      // a smaller total than Home with no explanation.
+      const ec2Recs = [
+        { id: 'cell1-cheap',  provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'no-upfront',  savings: 100, upfront_cost: 0 },
+        { id: 'cell1-pricey', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment_option: 'all-upfront', savings: 150, upfront_cost: 1000 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 2, total_monthly_savings: 250, total_upfront_cost: 1000, avg_payback_months: 1 },
+        recommendations: ec2Recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(ec2Recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(ec2Recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+        service: { kind: 'set', values: ['ec2'] },
+      });
+      const scopeLine = (): string | null =>
+        document.querySelector('#recommendations-summary [data-testid="savings-scope"]')?.textContent ?? null;
+
+      try {
+        await loadRecommendations();
+
+        expect(api.getRecommendations).toHaveBeenLastCalledWith(expect.objectContaining({ service: 'ec2' }));
+        expect(scopeLine()).toBe('Filtered: 2 recommendations (Service: ec2)');
+
+        // A further client-side filter is counted, not named.
+        (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({
+          service: { kind: 'set', values: ['ec2'] },
+          term: { kind: 'set', values: ['1'] },
+        });
+        document.querySelector<HTMLTableCellElement>('th[data-sort="service"]')?.click();
+        expect(scopeLine()).toBe('Filtered: 2 recommendations (Service: ec2, +1 more filter)');
+      } finally {
+        // Reload unfiltered so the pushed-down scope doesn't leak into later tests.
+        (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+        await loadRecommendations();
+      }
+      expect(scopeLine()).toBeNull();
     });
 
     test('summary cards narrow to selection in real time (closes #279)', async () => {
@@ -531,6 +605,83 @@ describe('Recommendations Module', () => {
       expect(cardValue(/Upfront/)).toMatch(/^\$1,?000$/);
       // Recommendations card must show "1 selected".
       expect(cardValue(/Recommendations/)).toBe('1');
+    });
+
+    test('row checkboxes carry distinct accessible names (issue #746)', async () => {
+      const recs = [
+        { id: 'rec-a', provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, payment: 'no-upfront', savings: 150, upfront_cost: 1000 },
+        { id: 'rec-b', provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.t3', region: 'eu-west-1', count: 1, term: 3, payment: 'all-upfront', savings: 200, upfront_cost: 0 },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 2, total_monthly_savings: 350, total_upfront_cost: 1000, avg_payback_months: 1 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      await loadRecommendations();
+
+      const label = (id: string) =>
+        document.querySelector<HTMLInputElement>(`input[data-rec-id="${id}"]`)?.getAttribute('aria-label') ?? '';
+      expect(label('rec-a')).toContain('ec2');
+      expect(label('rec-a')).toContain('t3.medium');
+      expect(label('rec-a')).toContain('us-east-1');
+      expect(label('rec-b')).toContain('rds');
+      expect(label('rec-a')).not.toBe(label('rec-b'));
+    });
+
+    test('variants differing only by payment get distinct checkbox names (issue #746)', async () => {
+      const base = { provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 150, upfront_cost: 1000 };
+      const recs = [
+        { ...base, id: 'rec-np', payment: 'no-upfront' },
+        { ...base, id: 'rec-au', payment: 'all-upfront' },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 2, total_monthly_savings: 300, total_upfront_cost: 2000, avg_payback_months: 1 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      await loadRecommendations();
+      document.querySelector<HTMLButtonElement>('.rec-cell-chevron')!.click();
+
+      const label = (id: string) =>
+        document.querySelector<HTMLInputElement>(`input[data-rec-id="${id}"]`)?.getAttribute('aria-label') ?? '';
+      expect(label('rec-np')).toContain('No Upfront');
+      expect(label('rec-au')).toContain('All Upfront');
+      expect(label('rec-np')).not.toBe(label('rec-au'));
+    });
+
+    test('engine-only rows get distinct and unmapped-payment rows get clean checkbox names (issue #746)', async () => {
+      const base = { provider: 'aws', cloud_account_id: 'a1', service: 'rds', resource_type: 'db.r5.large', region: 'us-east-1', count: 1, term: 1, savings: 150, upfront_cost: 0 };
+      const recs = [
+        { ...base, id: 'rec-my', engine: 'mysql', payment: 'no-upfront' },
+        { ...base, id: 'rec-pg', engine: 'postgresql', payment: 'no-upfront' },
+        { ...base, id: 'rec-x', payment: 'weird-option' },
+        { ...base, id: 'rec-none', resource_type: 'db.r5.xlarge' },
+      ];
+      (api.getRecommendations as jest.Mock).mockResolvedValue({
+        summary: { total_count: 4, total_monthly_savings: 600, total_upfront_cost: 0, avg_payback_months: 1 },
+        recommendations: recs,
+        regions: [],
+      });
+      (state.getRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getVisibleRecommendations as jest.Mock).mockReturnValue(recs);
+      (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+      await loadRecommendations();
+      document.querySelectorAll<HTMLButtonElement>('.rec-cell-chevron').forEach(b => b.click());
+
+      const label = (id: string) =>
+        document.querySelector<HTMLInputElement>(`input[data-rec-id="${id}"]`)?.getAttribute('aria-label') ?? '';
+      expect(label('rec-my')).toContain('db.r5.large (mysql)');
+      expect(label('rec-my')).not.toBe(label('rec-pg'));
+      expect(label('rec-x')).not.toContain('weird-option');
+      for (const id of ['rec-my', 'rec-pg', 'rec-x', 'rec-none']) {
+        expect(label(id)).not.toMatch(/\s{2,}|\s$/);
+      }
     });
 
     test('select-all change event updates summary cards in place (PR #283 CR pass-2)', async () => {
@@ -783,10 +934,11 @@ describe('Recommendations Module', () => {
       expect(capCell('rec-nocap')).toBe('—');
     });
 
-    test('shows empty-state message when no recommendations', async () => {
-      // Issue #700: zero rows now render an empty <tbody> with a hint cell
-      // rather than replacing the entire table with a <p>. The <thead> stays
-      // so column headers remain visible. The hint text lives inside the tbody.
+    test('shows the first-run empty state when nothing is loaded and no filter is set', async () => {
+      // Issue #756: zero loaded rows with no column filter is a first run, not
+      // a filter miss, so the "No rows match these filters." table hint
+      // (issue #700, still used for filtered-to-zero) is replaced by an
+      // onboarding card. The filtered case is covered by the #700 test below.
       (api.getRecommendations as jest.Mock).mockResolvedValue({
         summary: {},
         recommendations: [],
@@ -796,12 +948,9 @@ describe('Recommendations Module', () => {
       await loadRecommendations();
 
       const list = document.getElementById('recommendations-list');
-      // The table (including <thead>) must still be rendered.
-      expect(list?.querySelector('thead')).not.toBeNull();
-      // The hint cell must be present inside the tbody.
-      const emptyCell = list?.querySelector('tbody td.empty');
-      expect(emptyCell).not.toBeNull();
-      expect(emptyCell?.textContent).toMatch(/No rows match/);
+      expect(list?.querySelector('thead')).toBeNull();
+      expect(list?.querySelector('.first-run-empty-state')).not.toBeNull();
+      expect(list?.textContent).not.toMatch(/No rows match/);
     });
 
     test('stores recommendations in state', async () => {
@@ -1140,6 +1289,49 @@ describe('Recommendations Module', () => {
       // The default sort is savings desc → that header shows an active ▼.
       const savingsHeader = list?.querySelector('th[data-sort="savings"]');
       expect(savingsHeader?.innerHTML).toContain('active');
+    });
+
+    describe('header keyboard semantics (issue #755)', () => {
+      test('header is a plain th with aria-sort and sibling sort and filter buttons', async () => {
+        await loadRecommendations();
+        const savings = document.querySelector<HTMLTableCellElement>('th[data-sort="savings"]');
+        expect(savings?.getAttribute('role')).toBeNull();
+        expect(savings?.hasAttribute('tabindex')).toBe(false);
+        expect(savings?.getAttribute('aria-sort')).toBe('descending');
+        expect(document.querySelector('th[data-sort="upfront_cost"]')?.hasAttribute('aria-sort')).toBe(false);
+        const sortBtn = savings?.querySelector('button.sort-btn');
+        const filterBtn = savings?.querySelector('button.column-filter-btn');
+        expect(sortBtn?.textContent).toContain('Savings');
+        expect(filterBtn).not.toBeNull();
+        expect(sortBtn?.contains(filterBtn ?? null)).toBe(false);
+      });
+
+      test('Enter on a column-filter button does not sort', async () => {
+        await loadRecommendations();
+        (state.setRecommendationsSort as jest.Mock).mockClear();
+        const filterBtn = document.querySelector<HTMLButtonElement>('th[data-sort="service"] .column-filter-btn');
+        filterBtn?.focus();
+        const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+        filterBtn?.dispatchEvent(enter);
+        expect(enter.defaultPrevented).toBe(false);
+        expect(state.setRecommendationsSort).not.toHaveBeenCalled();
+        // Native Enter activation of a <button> is a click, which opens the popover.
+        filterBtn?.click();
+        expect(document.querySelector('.column-filter-popover')).not.toBeNull();
+        expect(state.setRecommendationsSort).not.toHaveBeenCalled();
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      });
+
+      test('activating the sort button sorts and keeps focus on the re-rendered sort button', async () => {
+        await loadRecommendations();
+        const sortBtn = document.querySelector<HTMLButtonElement>('th[data-sort="upfront_cost"] .sort-btn');
+        sortBtn?.focus();
+        sortBtn?.click();
+        expect(state.setRecommendationsSort).toHaveBeenCalledWith({ column: 'upfront_cost', direction: 'asc' });
+        const active = document.activeElement;
+        expect(active?.classList.contains('sort-btn')).toBe(true);
+        expect(active?.closest('th')?.getAttribute('data-sort')).toBe('upfront_cost');
+      });
     });
 
     test('clicking a sortable header calls setRecommendationsSort', async () => {
@@ -2030,14 +2222,48 @@ describe('Recommendations Module', () => {
       });
 
       test('totals row weighted effective % uses on_demand_cost when monthly_cost is null', async () => {
+        const azureVm = { provider: 'azure' as const, service: 'compute', payment: 'monthly' };
+        const recs = [
+          { ...makeRec('ta', { savings: 100, upfront_cost: 0, monthly_cost: null, on_demand_cost: 200 }), ...azureVm },
+          { ...makeRec('tb', { savings: 100, upfront_cost: 0, monthly_cost: 50 }), ...azureVm },
+        ];
+        await openPurchaseModal(recs);
+
+        // ta: 100/200; tb (Azure, reconstructed): 100/(50+100+0) -> 200 + 150 baseline.
+        const pctCell = document.getElementById('purchase-modal-total-eff-pct');
+        expect(pctCell?.textContent).toContain('57.1%');
+      });
+
+      test('totals Eff. % skips AWS rows whose own Eff. % is an em-dash (#136)', async () => {
+        // tb is AWS with no on_demand_cost: its row shows an em-dash, so the
+        // discredited reconstruction must not leak into the total.
         const recs = [
           makeRec('ta', { savings: 100, upfront_cost: 0, monthly_cost: null, on_demand_cost: 200 }),
           makeRec('tb', { savings: 100, upfront_cost: 0, monthly_cost: 50 }),
         ];
         await openPurchaseModal(recs);
 
-        const pctCell = document.getElementById('purchase-modal-total-eff-pct');
-        expect(pctCell?.textContent).toContain('57.1%');
+        const rowPcts = Array.from(document.querySelectorAll('#purchase-details tbody tr'))
+          .map((tr) => tr.querySelector('td:nth-last-child(3)')?.textContent);
+        expect(rowPcts).toEqual(['50.0%', '—']);
+        expect(document.getElementById('purchase-modal-total-eff-pct')?.textContent).toBe('50.0%');
+      });
+
+      test('totals Eff. % is an em-dash when no selected row has a known Eff. %', async () => {
+        await openPurchaseModal([makeRec('tb', { savings: 100, upfront_cost: 0, monthly_cost: 50 })]);
+
+        expect(document.getElementById('purchase-modal-total-eff-pct')?.textContent).toBe('—');
+      });
+
+      test('totals Eff. % uses the provider savings_percentage the rows display', async () => {
+        const recs = [
+          { ...makeRec('ta', { savings: 30, upfront_cost: 0, monthly_cost: 70 }), savings_percentage: 30 },
+          { ...makeRec('tb', { savings: 50, upfront_cost: 0, monthly_cost: null, on_demand_cost: 100 }), savings_percentage: 50 },
+        ];
+        await openPurchaseModal(recs);
+
+        // ta implied baseline 100 at 30%, tb baseline 100 at 50% -> 40%.
+        expect(document.getElementById('purchase-modal-total-eff-pct')?.textContent).toBe('40.0%');
       });
 
       test('clearPurchaseModalRecommendations also clears checked state', async () => {
@@ -3284,6 +3510,19 @@ describe('Bundle B: sticky bottom action box', () => {
     expect(hint.textContent).toContain('Plans require one provider, service, term, and payment');
   });
 
+  test.each([
+    [33.33, '100'],
+    [50, '50'],
+    [150, '100'],
+    [0, '100'],
+    ['abc', '100'],
+  ])('stored bulk-purchase capacity %p seeds the Capacity input as %s (#136)', async (stored, expected) => {
+    localStorageMock.getItem.mockImplementation((key: string) =>
+      key === 'cudly.recommendations.bulkPurchase.v1' ? JSON.stringify({ capacity: stored }) : null);
+    await loadRecommendations();
+    expect((document.getElementById('bulk-purchase-capacity') as HTMLInputElement).value).toBe(expected);
+  });
+
   test('Capacity input value persists across re-render (mount-once-then-update)', async () => {
     await loadRecommendations();
     const cap = document.getElementById('bulk-purchase-capacity') as HTMLInputElement;
@@ -3356,6 +3595,27 @@ describe('Bundle B: term-aware bucketing in the Purchase flow', () => {
     const b1 = buckets![1]!;
     expect(b0.recs.every((r) => r.term === b0.term)).toBe(true);
     expect(b1.recs.every((r) => r.term === b1.term)).toBe(true);
+  });
+
+  it('keeps a single monthly GCP rec on the single-bucket modal (#1131)', async () => {
+    const gcp = [
+      { id: 'g', provider: 'gcp', cloud_account_id: 'g1', service: 'gce', resource_type: 'n2-standard-2', region: 'us-central1', count: 1, term: 1, payment: 'monthly', savings: 100, upfront_cost: 0 },
+    ];
+    (api.getRecommendations as jest.Mock).mockResolvedValue({ summary: {}, recommendations: gcp, regions: [] });
+    (state.getRecommendations as jest.Mock).mockReturnValue(gcp);
+    (state.getVisibleRecommendations as jest.Mock).mockReturnValue(gcp);
+    (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
+    (state.getSelectedRecommendationIDs as jest.Mock).mockReturnValue(new Set(['g']));
+
+    await loadRecommendations();
+    (document.getElementById('bulk-purchase-btn') as HTMLButtonElement).click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const { getFanOutBuckets } = await import('../recommendations');
+    // GCP no longer supports the all-upfront toolbar default; the rec's own
+    // monthly payment must keep it off the fan-out path.
+    expect(getFanOutBuckets()).toBeNull();
   });
 });
 
@@ -8366,5 +8626,31 @@ describe('Issue #1419: Opportunities Account column shows display name via listA
     const html = list?.innerHTML ?? '';
     // No matching entry: falls back to the raw ID.
     expect(html).toContain('acct-uuid-no-match');
+  });
+});
+
+describe('capacity scaling keeps Eff. % invariant (#136)', () => {
+  const rec = {
+    id: 'cap', provider: 'azure', service: 'vm', resource_type: 'D2s_v3', region: 'eastus',
+    count: 4, term: 1, payment: 'no-upfront', savings: 900, upfront_cost: 0,
+    monthly_cost: 1000, on_demand_cost: 1900,
+  } as unknown as LocalRecommendation;
+
+  test('on_demand_cost scales with count like savings and upfront', () => {
+    const scaled = scaleRecForCapacity(rec, 50)!;
+    expect(scaled.count).toBe(2);
+    expect(scaled.savings).toBe(450);
+    expect(scaled.on_demand_cost).toBe(950);
+  });
+
+  test.each([25, 50, 75, 100])('Eff. %% at %i%% capacity equals the unscaled 47.4%%', (capacity) => {
+    const scaled = scaleRecForCapacity(rec, capacity)!;
+    expect(displaySavingsPct(scaled)!.toFixed(1)).toBe('47.4');
+    expect(weightedDisplaySavingsPct([scaled])!.toFixed(1)).toBe('47.4');
+  });
+
+  test('an absent on_demand_cost stays absent', () => {
+    const scaled = scaleRecForCapacity({ ...rec, on_demand_cost: null } as LocalRecommendation, 50)!;
+    expect(scaled.on_demand_cost).toBeNull();
   });
 });

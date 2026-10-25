@@ -23,7 +23,6 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -39,22 +38,15 @@ func rampMigrationsPath() string {
 	return filepath.Join(filepath.Dir(filename), "..", "database", "postgres", "migrations")
 }
 
-// rampStepStore stands up a fresh Postgres container with all migrations
-// applied and returns a production store bound to it, plus the pool so a test
-// can drive its own transaction alongside the store's.
+// rampStepStore gives the test a fresh database with all migrations applied,
+// on the Postgres server the package's integration tests share, and returns a
+// production store bound to it, plus the pool so a test can drive its own
+// transaction alongside the store's.
 func rampStepStore(ctx context.Context, t *testing.T) (*config.PostgresStore, *pgxpool.Pool) {
 	t.Helper()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if cleanupErr := container.Cleanup(ctx); cleanupErr != nil {
-			t.Logf("container cleanup: %v", cleanupErr)
-		}
-	})
-
-	require.NoError(t, migrations.RunMigrations(ctx, container.DB.Pool(), rampMigrationsPath(), "", ""))
-	return config.NewPostgresStore(container.DB), container.DB.Pool()
+	db := testhelpers.RequireMigratedDatabase(ctx, t, rampMigrationsPath())
+	return config.NewPostgresStore(db.DB), db.DB.Pool()
 }
 
 // rampStepFixture is the world a ramp-step test runs against: a plan sitting at
@@ -63,6 +55,7 @@ func rampStepStore(ctx context.Context, t *testing.T) (*config.PostgresStore, *p
 type rampStepFixture struct {
 	store    *config.PostgresStore
 	manager  *Manager
+	email    *MockEmailSender
 	plan     *config.PurchasePlan
 	accounts []config.CloudAccount
 
@@ -141,6 +134,7 @@ func newRampStepFixture(ctx context.Context, t *testing.T) *rampStepFixture {
 	f := &rampStepFixture{store: store, plan: plan, accounts: accounts}
 
 	mockEmail := new(MockEmailSender)
+	f.email = mockEmail
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
@@ -591,7 +585,8 @@ func TestCompletePlanStepBlocksOnTheRowLockAndSeesTheWinner(t *testing.T) {
 		var blocked int
 		if qErr := pool.QueryRow(ctx, `
 			SELECT count(*) FROM pg_stat_activity
-			 WHERE wait_event_type = 'Lock'
+			 WHERE datname = current_database()
+			   AND wait_event_type = 'Lock'
 			   AND state = 'active'
 			   AND pid <> pg_backend_pid()
 			   AND query ILIKE '%purchase_plans%FOR UPDATE%'`,

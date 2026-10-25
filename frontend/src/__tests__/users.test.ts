@@ -1135,6 +1135,13 @@ describe('users/userActions', () => {
       );
     });
 
+    it('shows the server reason when the delete fails (issue #748)', async () => {
+      (api.deleteUser as jest.Mock).mockRejectedValueOnce(new Error('cannot delete the last administrator'));
+      await userActions.deleteUser('1');
+
+      expect(document.querySelector('.toast-error')?.textContent).toContain('Failed to delete user: cannot delete the last administrator');
+    });
+
     it('should reload users after deletion', async () => {
       await userActions.deleteUser('1');
 
@@ -1243,6 +1250,24 @@ describe('users/userActions', () => {
       await userActions.bulkDeleteUsers();
 
       expect(document.querySelector('.toast-error')).toBeTruthy();
+    });
+
+    it('deselects only the deleted users, reloads, and names the survivors (#275)', async () => {
+      userState.addSelectedUserId('1');
+      userState.addSelectedUserId('2');
+      userState.addSelectedUserId('3');
+      (api.deleteUser as jest.Mock)
+        .mockResolvedValueOnce({})
+        .mockRejectedValueOnce(new Error('409'))
+        .mockResolvedValueOnce({});
+      (api.listUsers as jest.Mock).mockClear();
+
+      await userActions.bulkDeleteUsers();
+
+      expect(Array.from(userState.selectedUserIds)).toEqual(['2']);
+      expect(api.listUsers).toHaveBeenCalledTimes(1);
+      expect(document.querySelector('.toast-error')?.textContent).toContain('1 of 3');
+      expect(document.querySelector('.toast-success')).toBeNull();
     });
   });
 
@@ -2085,33 +2110,18 @@ describe('users/handlers', () => {
       expect(api.updateUser).not.toHaveBeenCalled();
     });
 
-    it('should set up bulk group handler', async () => {
-      const mockUsers = [{ id: '1', email: 'test@test.com', groups: [], mfa_enabled: false }];
-      userState.setAllUsers(mockUsers as any);
+    it('never falls back to a native prompt() for bulk add to group (#705)', async () => {
       userState.addSelectedUserId('1');
-      (global.prompt as jest.Mock).mockReturnValue('admins');
 
       userHandlers.setupUserHandlers();
 
-      const bulkGroupBtn = document.getElementById('bulk-group-btn');
-      bulkGroupBtn?.click();
+      // A stray legacy #bulk-group-btn must stay inert: the dropdown is the
+      // only bulk add-to-group path.
+      document.getElementById('bulk-group-btn')?.click();
 
       await new Promise(resolve => setTimeout(resolve, 0));
 
-      expect(api.updateUser).toHaveBeenCalled();
-    });
-
-    it('should handle cancelled group prompt', async () => {
-      userState.addSelectedUserId('1');
-      (global.prompt as jest.Mock).mockReturnValue(null);
-
-      userHandlers.setupUserHandlers();
-
-      const bulkGroupBtn = document.getElementById('bulk-group-btn');
-      bulkGroupBtn?.click();
-
-      await new Promise(resolve => setTimeout(resolve, 0));
-
+      expect(global.prompt).not.toHaveBeenCalled();
       expect(api.updateUser).not.toHaveBeenCalled();
     });
   });
@@ -3182,5 +3192,200 @@ describe('contradictory group combination validation (issue #1405)', () => {
       );
       expect(document.querySelector('.toast-error')).toBeFalsy();
     });
+  });
+});
+
+describe('synthetic current-user row (issue #274)', () => {
+  const real = { id: '1', email: 'a@test.com', groups: [], mfa_enabled: true };
+  const synthetic = { id: 'current', email: 'me@test.com', groups: [], mfa_enabled: false };
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="users-list"></div><div id="user-stats"></div>';
+    userState.setAllUsers([synthetic, real] as any);
+    userState.setFilteredUsers([synthetic, real] as any);
+    userState.clearSelectedUserIds();
+  });
+
+  it('disables select, Edit and Delete on the synthetic row only', () => {
+    userList.renderUsers([synthetic, real] as any);
+    const row = (id: string) => document.querySelector(`tr.user-row[data-user-id="${id}"]`)!;
+    expect(row('current').querySelector<HTMLInputElement>('.user-checkbox')!.disabled).toBe(true);
+    expect(row('current').querySelector<HTMLButtonElement>('.edit-user-btn')!.disabled).toBe(true);
+    expect(row('current').querySelector<HTMLButtonElement>('.delete-user-btn')!.disabled).toBe(true);
+    expect(row('1').querySelector<HTMLButtonElement>('.edit-user-btn')!.disabled).toBe(false);
+  });
+
+  it('select-all skips the synthetic row', () => {
+    userList.renderUsers([synthetic, real] as any);
+    const all = document.getElementById('select-all-users') as HTMLInputElement;
+    all.checked = true;
+    all.dispatchEvent(new Event('change'));
+    expect([...userState.selectedUserIds]).toEqual(['1']);
+  });
+
+  it('carries the session user mfa_enabled into the synthetic row and the MFA stat', async () => {
+    require('../state').setCurrentUser({ id: 'u9', email: 'me@test.com', groups: [], mfa_enabled: true });
+    (api.listUsers as jest.Mock).mockResolvedValue({ users: [{ ...real, mfa_enabled: false }] });
+    (api.listGroups as jest.Mock).mockResolvedValue({ groups: [] });
+    await userActions.loadUsers();
+    const row = document.querySelector('tr.user-row[data-user-id="current"]')!;
+    expect(row.textContent).toContain('Enabled');
+    const card = [...document.querySelectorAll('.stat-card')].find(c => c.textContent!.includes('MFA Enabled'))!;
+    expect(card.querySelector('.stat-value')!.textContent).toBe('1');
+  });
+});
+
+describe('users table checkbox names (issue #746)', () => {
+  it('labels select-all and each row checkbox with the user email', () => {
+    document.body.innerHTML = '<div id="users-list"></div>';
+    const users = [
+      { id: 'u1', email: 'a@test.com', groups: [], mfa_enabled: false },
+      { id: 'u2', email: 'b@test.com', groups: [], mfa_enabled: false },
+    ];
+    userList.renderUsers(users as any);
+    expect(document.getElementById('select-all-users')!.getAttribute('aria-label')).toBe('Select all users');
+    const labels = [...document.querySelectorAll('.user-checkbox')].map(c => c.getAttribute('aria-label'));
+    expect(labels).toEqual(['Select a@test.com', 'Select b@test.com']);
+  });
+});
+
+describe('group toggle confirmation (issue #736)', () => {
+  const ADMIN = '00000000-0000-5000-8000-000000000001';
+  const users = [
+    { id: '1', email: 'me@test.com', groups: [ADMIN], mfa_enabled: false },
+    { id: '2', email: 'bob@test.com', groups: [ADMIN], mfa_enabled: false },
+  ];
+  const groups = [{ id: ADMIN, name: 'Administrators', permissions: [], description: '', allowed_accounts: [] }];
+
+  const toggle = async (userId: string, checked: boolean) => {
+    document.querySelector<HTMLButtonElement>(`.user-expand-btn[data-user-id="${userId}"]`)!.click();
+    const cb = document.querySelector<HTMLInputElement>(`.group-assign-checkbox[data-user-id="${userId}"]`)!;
+    cb.checked = checked;
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    return cb;
+  };
+
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="users-list"></div>';
+    userState.setAllUsers(users as any);
+    userState.setFilteredUsers(users as any);
+    userState.setAvailableGroups(groups as any);
+    (api.updateUser as jest.Mock).mockReset().mockResolvedValue({});
+    mockConfirmDialog.mockReset().mockResolvedValue(true);
+    require('../state').setCurrentUser({ id: '1', email: 'me@test.com', groups: [ADMIN] });
+    userList.renderUsers(users as any);
+  });
+
+  it('asks before changing membership and skips the API when declined', async () => {
+    mockConfirmDialog.mockResolvedValueOnce(false);
+    const cb = await toggle('2', false);
+    expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
+    expect(api.updateUser).not.toHaveBeenCalled();
+    expect(cb.checked).toBe(true);
+  });
+
+  it('applies the change once confirmed', async () => {
+    await toggle('2', false);
+    expect(api.updateUser).toHaveBeenCalledWith('2', { groups: [] });
+  });
+
+  it('warns when the admin removes their own Administrators membership', async () => {
+    await toggle('1', false);
+    expect(mockConfirmDialog.mock.calls[0]![0]).toMatchObject({
+      body: expect.stringContaining('removing yourself'),
+      destructive: true,
+    });
+  });
+
+  it('detects self-demotion by user id, not email', async () => {
+    require('../state').setCurrentUser({ id: '1', email: 'ME@test.com', groups: [ADMIN] });
+    await toggle('1', false);
+    expect(mockConfirmDialog.mock.calls[0]![0]).toMatchObject({ body: expect.stringContaining('removing yourself') });
+  });
+
+  it('saves against the groups current after the confirm resolves', async () => {
+    let release!: (v: boolean) => void;
+    mockConfirmDialog.mockReturnValueOnce(new Promise<boolean>((r) => { release = r; }));
+    document.querySelector<HTMLButtonElement>('.user-expand-btn[data-user-id="2"]')!.click();
+    const cb = document.querySelector<HTMLInputElement>('.group-assign-checkbox[data-user-id="2"]')!;
+    cb.checked = false;
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+    userState.setAllUsers(users.map(u => (u.id === '2' ? { ...u, groups: [ADMIN, 'g-new'] } : u)) as any);
+    release(true);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(api.updateUser).toHaveBeenCalledWith('2', { groups: ['g-new'] });
+  });
+});
+
+describe('group toggle re-validation after confirm (issue #736)', () => {
+  const viewOnly = { id: 'v1', name: 'Viewers', permissions: [{ action: 'view', resource: 'aws' }], description: '', allowed_accounts: [] };
+  const writer = { id: 'w1', name: 'Editors', permissions: [{ action: 'create', resource: 'aws' }], description: '', allowed_accounts: [] };
+  const user = { id: '2', email: 'bob@test.com', groups: [], mfa_enabled: false };
+
+  it('refuses to save when a concurrent change makes the combination contradictory', async () => {
+    document.body.innerHTML = '<div id="users-list"></div>';
+    userState.setAllUsers([user] as any);
+    userState.setFilteredUsers([user] as any);
+    userState.setAvailableGroups([viewOnly, writer] as any);
+    (api.updateUser as jest.Mock).mockReset().mockResolvedValue({});
+    let release!: (v: boolean) => void;
+    mockConfirmDialog.mockReset().mockReturnValueOnce(new Promise<boolean>((r) => { release = r; }));
+    userList.renderUsers([user] as any);
+    document.querySelector<HTMLButtonElement>('.user-expand-btn[data-user-id="2"]')!.click();
+    const cb = document.querySelector<HTMLInputElement>('.group-assign-checkbox[data-user-id="2"][data-group-id="w1"]')!;
+    cb.checked = true;
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+    userState.setAllUsers([{ ...user, groups: ['v1'] }] as any);
+    release(true);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(api.updateUser).not.toHaveBeenCalled();
+    expect(cb.checked).toBe(false);
+    expect(document.querySelector('.toast-error .toast-message')?.textContent).toContain('Contradictory');
+  });
+});
+
+describe('select-all with only the synthetic current-user row (issue #274)', () => {
+  it('disables the select-all checkbox when no row is selectable', () => {
+    document.body.innerHTML = '<div id="users-list"></div>';
+    userList.renderUsers([{ id: 'current', email: 'me@test.com', groups: [], mfa_enabled: false }] as any);
+    expect((document.getElementById('select-all-users') as HTMLInputElement).disabled).toBe(true);
+  });
+});
+
+describe('saveUser submit button (issue #735)', () => {
+  it('disables Save User while the request is in flight and re-enables it after', async () => {
+    document.body.innerHTML = `
+      <div id="user-modal" class="hidden">
+        <h2 id="user-modal-title"></h2>
+        <form id="user-form">
+          <input type="hidden" id="user-id" />
+          <input type="email" id="user-email" />
+          <div id="password-fields"><input type="password" id="user-password" /></div>
+          <select id="user-groups" multiple></select>
+          <button type="submit">Save</button>
+        </form>
+      </div>
+      <div id="users-list"></div><div id="groups-list"></div><div id="user-stats"></div>`;
+    userState.setAvailableGroups([{ id: 'users', name: 'Users', permissions: [], description: '' }] as any);
+    userState.setCurrentEditingUser(null);
+    userModals.openCreateUserModal();
+    const btn = document.querySelector<HTMLButtonElement>('#user-form button[type="submit"]')!;
+    (document.getElementById('user-email') as HTMLInputElement).value = 'new@test.com';
+    (document.getElementById('user-password') as HTMLInputElement).value = 'SecurePass123!';
+    const gs = document.getElementById('user-groups') as HTMLSelectElement;
+    if (gs.options.length > 0) gs.options[0]!.selected = true;
+    let resolve!: (v: unknown) => void;
+    (api.createUser as jest.Mock).mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+    (api.listUsers as jest.Mock).mockResolvedValue({ users: [] });
+    (api.listGroups as jest.Mock).mockResolvedValue({ groups: [] });
+
+    const event = new Event('submit');
+    event.preventDefault = jest.fn();
+    const pending = userModals.saveUser(event);
+    expect(btn.disabled).toBe(true);
+    resolve({});
+    await pending;
+    expect(btn.disabled).toBe(false);
   });
 });

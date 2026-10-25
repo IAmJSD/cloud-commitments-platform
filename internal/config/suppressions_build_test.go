@@ -68,3 +68,138 @@ func TestBuildSuppressions_SkipsZeroCountRecs(t *testing.T) {
 
 	assert.Empty(t, sups, "zero-count recs don't produce suppression rows")
 }
+
+// TestBuildSuppressions_SeparatesVariants pins issue #816: recs on one 6-tuple
+// that differ only by availability zone, platform or tenancy get one row each,
+// carrying the rec's variant; recs with the same variant are still summed.
+func TestBuildSuppressions_SeparatesVariants(t *testing.T) {
+	ec2 := func(az, platform, tenancy string, count int) RecommendationRecord {
+		return RecommendationRecord{
+			Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large",
+			Count: count, CloudAccountID: strPtr("acct-1"), AvailabilityZone: az,
+			Details: []byte(`{"platform":"` + platform + `","tenancy":"` + tenancy + `"}`),
+		}
+	}
+	sups := BuildSuppressions([]RecommendationRecord{
+		ec2("us-east-1a", "Linux/UNIX", "default", 1),
+		ec2("us-east-1a", "Linux/UNIX", "default", 2),
+		ec2("us-east-1b", "Linux/UNIX", "default", 3),
+		ec2("", "Linux/UNIX", "default", 4),
+		ec2("us-east-1a", "Windows", "default", 5),
+		ec2("us-east-1a", "Linux/UNIX", "dedicated", 6),
+	}, "exec-1", &GlobalConfig{}, time.Now())
+
+	require.Len(t, sups, 5)
+	want := []struct {
+		variant SuppressionVariant
+		count   int
+	}{
+		{SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}, 3},
+		{SuppressionVariant{"us-east-1b", "Linux/UNIX", "default"}, 3},
+		{SuppressionVariant{"", "Linux/UNIX", "default"}, 4},
+		{SuppressionVariant{"us-east-1a", "Windows", "default"}, 5},
+		{SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated"}, 6},
+	}
+	for i, w := range want {
+		require.NotNil(t, sups[i].Variant, "row %d", i)
+		assert.Equal(t, w.variant, *sups[i].Variant, "row %d", i)
+		assert.Equal(t, w.count, sups[i].SuppressedCount, "row %d", i)
+	}
+}
+
+// TestBuildSuppressions_NonComputeVariantIsKnownEmpty: a rec without platform
+// or tenancy (non-EC2, no Details) gets an empty but known variant, not a
+// legacy wildcard.
+func TestBuildSuppressions_NonComputeVariantIsKnownEmpty(t *testing.T) {
+	sups := BuildSuppressions([]RecommendationRecord{
+		{Provider: "aws", Service: "rds", Region: "us-east-1", ResourceType: "db.t4g.micro", Engine: "postgres", Count: 1},
+	}, "exec-1", &GlobalConfig{}, time.Now())
+	require.Len(t, sups, 1)
+	assert.Equal(t, &SuppressionVariant{}, sups[0].Variant)
+}
+
+// TestBuildSuppressions_UnreadableDetailsFallBackToWildcard: a rec whose
+// Details cannot be read gets no variant, so its row suppresses the whole
+// 6-tuple (pre-#816 behavior) instead of nothing.
+func TestBuildSuppressions_UnreadableDetailsFallBackToWildcard(t *testing.T) {
+	sups := BuildSuppressions([]RecommendationRecord{
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large", Count: 2,
+			AvailabilityZone: "us-east-1a", Details: []byte(`{"platform":42}`)},
+		{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large", Count: 1,
+			AvailabilityZone: "us-east-1a", Details: []byte(`{"platform":"Linux/UNIX","tenancy":"default"}`)},
+	}, "exec-1", &GlobalConfig{}, time.Now())
+	require.Len(t, sups, 2)
+	assert.Nil(t, sups[0].Variant)
+	assert.Equal(t, 2, sups[0].SuppressedCount)
+	require.NotNil(t, sups[1].Variant)
+	assert.Equal(t, 1, sups[1].SuppressedCount)
+}
+
+// TestPurchaseSuppression_AppliesTo pins the match rule shared by the
+// scheduler: exact variant match, legacy rows and unknown rec variants are
+// wildcards.
+func TestPurchaseSuppression_AppliesTo(t *testing.T) {
+	v := SuppressionVariant{AvailabilityZone: "us-east-1a", Platform: "Linux/UNIX", Tenancy: "default"}
+	scoped := PurchaseSuppression{Variant: &v}
+	legacy := PurchaseSuppression{}
+
+	assert.True(t, scoped.AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}))
+	assert.False(t, scoped.AppliesTo(&SuppressionVariant{"us-east-1b", "Linux/UNIX", "default"}))
+	assert.False(t, scoped.AppliesTo(&SuppressionVariant{"", "Linux/UNIX", "default"}))
+	assert.False(t, scoped.AppliesTo(&SuppressionVariant{"us-east-1a", "Windows", "default"}))
+	assert.False(t, scoped.AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated"}))
+	assert.True(t, scoped.AppliesTo(nil), "an unreadable rec variant matches every row")
+	assert.True(t, legacy.AppliesTo(&SuppressionVariant{"us-east-1b", "Windows", "dedicated"}), "a legacy row is a wildcard")
+	assert.True(t, legacy.AppliesTo(nil))
+}
+
+// TestBuildSuppressions_LegacyEC2WithoutDetailsIsWildcard: an EC2 rec saved
+// before Details existed has an unknown platform and tenancy, so it must
+// suppress every variant (issue #1232). Non-EC2 and fully detailed recs keep
+// their known variant.
+func TestBuildSuppressions_LegacyEC2WithoutDetailsIsWildcard(t *testing.T) {
+	base := RecommendationRecord{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large", Count: 1, AvailabilityZone: "us-east-1a"}
+	for name, details := range map[string][]byte{"nil": nil, "empty": {}, "null": []byte(`null`), "no keys": []byte(`{}`)} {
+		t.Run(name, func(t *testing.T) {
+			rec := base
+			rec.Details = details
+			sups := BuildSuppressions([]RecommendationRecord{rec}, "exec-1", &GlobalConfig{}, time.Now())
+			require.Len(t, sups, 1)
+			assert.Nil(t, sups[0].Variant)
+			assert.True(t, sups[0].AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}))
+		})
+	}
+
+	full := base
+	full.Details = []byte(`{"platform":"Linux/UNIX","tenancy":"default"}`)
+	sups := BuildSuppressions([]RecommendationRecord{full}, "exec-1", &GlobalConfig{}, time.Now())
+	require.Len(t, sups, 1)
+	assert.Equal(t, &SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}, sups[0].Variant)
+}
+
+// TestBuildSuppressions_ComputeSlugEC2: AWS EC2 recs under the canonical
+// "compute" slug follow the same wildcard rule as "ec2"; a rec with only a
+// platform or only a tenancy keeps its narrow variant.
+func TestBuildSuppressions_ComputeSlugEC2(t *testing.T) {
+	base := RecommendationRecord{Provider: "aws", Service: "compute", Region: "us-east-1", ResourceType: "m5.large", Count: 1, AvailabilityZone: "us-east-1a"}
+	sups := BuildSuppressions([]RecommendationRecord{base}, "exec-1", &GlobalConfig{}, time.Now())
+	require.Len(t, sups, 1)
+	assert.Nil(t, sups[0].Variant)
+	assert.True(t, sups[0].AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}))
+
+	for name, tc := range map[string]struct {
+		details []byte
+		want    SuppressionVariant
+	}{
+		"platform only": {[]byte(`{"platform":"Linux/UNIX"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", ""}},
+		"tenancy only":  {[]byte(`{"tenancy":"default"}`), SuppressionVariant{"us-east-1a", "", "default"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := base
+			rec.Details = tc.details
+			sups := BuildSuppressions([]RecommendationRecord{rec}, "exec-1", &GlobalConfig{}, time.Now())
+			require.Len(t, sups, 1)
+			assert.Equal(t, &tc.want, sups[0].Variant)
+		})
+	}
+}

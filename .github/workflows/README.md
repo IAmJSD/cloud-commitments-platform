@@ -31,8 +31,8 @@ Runs comprehensive quality checks on every pull request and push to main branch.
 
 1. **Lint** - golangci-lint, go vet
 2. **Unit Tests** - Go tests with race detection, coverage reporting
-3. **Integration Tests** - Tests with real PostgreSQL
-4. **Docker Build** - Build and test Docker image
+3. **Integration Tests** - Tests with real PostgreSQL: `integration`-tagged tests and tests that skip under `-short`, sharded across parallel runners (selected by `scripts/integration-test-selection.sh`)
+4. **Docker Build** - Build, check and scan the Docker image natively for linux/amd64 and linux/arm64
 5. **Terraform Validate** - Validate all Terraform configs (AWS, GCP, Azure)
 6. **Security Scan** - gosec, trivy, tfsec
 7. **Snyk Scan** - Dependency vulnerability scanning
@@ -52,7 +52,7 @@ Runs comprehensive quality checks on every pull request and push to main branch.
 
 ### Required Variables
 
-- `GO_VERSION` (default: 1.26.9)
+- `GO_VERSION` (default: 1.26.10)
 
 ### Example
 
@@ -89,11 +89,16 @@ Deploy CUDly to AWS Lambda with Function URL. Serverless, event-driven platform.
 
 ### Required Secrets
 
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
+- `ADMIN_EMAIL`
+- `TF_BACKEND_AWS`
+- `ALERT_EMAILS`, `FROM_EMAIL`, `DASHBOARD_URL` (optional)
+
+No AWS access keys are stored. `configure-aws-credentials` assumes `AWS_ROLE_TO_ASSUME` with the
+job's GitHub OIDC token (see the AWS part of the [Setup Guide](#setup-guide)).
 
 ### Required Variables
 
+- `AWS_ROLE_TO_ASSUME` (ARN of the deploy role)
 - `AWS_REGION` (default: us-east-1)
 - `AWS_ACCOUNT_ID`
 - `ECR_REPOSITORY` (default: cudly)
@@ -169,10 +174,17 @@ Deploy CUDly to GCP Cloud Run. Serverless container platform.
 
 ### Required Secrets
 
-- `GCP_SA_KEY` (Service Account JSON with permissions)
+- `ADMIN_EMAIL`
+- `TF_BACKEND_GCP`
+- `ALERT_EMAILS` (optional)
+
+No service-account key is stored. `google-github-actions/auth` exchanges the job's GitHub OIDC
+token through Workload Identity Federation (see the GCP part of the [Setup Guide](#setup-guide)).
 
 ### Required Variables
 
+- `GCP_WORKLOAD_IDENTITY_PROVIDER` (full resource name of the Workload Identity provider)
+- `GCP_SERVICE_ACCOUNT` (email of the deploy service account)
 - `GCP_PROJECT_ID`
 - `GCP_REGION` (default: us-central1)
 - `ARTIFACT_REGISTRY_REPO` (default: cudly)
@@ -205,17 +217,26 @@ Deploy CUDly to Azure Container Apps. Serverless container platform with built-i
 
 ### Triggers
 
+- Push to `main` (deploys to dev)
 - Manual dispatch
 - Called by deploy-all.yml
 
 ### Required Secrets
 
-- `AZURE_CREDENTIALS` (Service Principal JSON)
+- `AZURE_CLIENT_ID` (client ID of the deploy app registration)
+- `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
+- `ADMIN_EMAIL`
+- `TF_BACKEND_AZURE`
+- `ALERT_EMAILS` (optional)
+
+No client secret or service-principal JSON is stored. `azure/login` swaps the job's GitHub OIDC
+token for a short-lived Azure token through a federated identity credential (see the Azure part of
+the [Setup Guide](#setup-guide)).
 
 ### Required Variables
 
-- `AZURE_LOCATION` (default: eastus)
+- `AZURE_LOCATION` (default: westus2)
 - `ACR_NAME` (default: cudlyacr)
 
 ### Example
@@ -341,13 +362,13 @@ gh workflow run database-migration.yml \
   -f direction=down \
   -f steps=2
 
-# Rollback 1 migration on AWS prod (requires typed confirmation)
+# Rollback 1 migration on AWS prod (the confirmation repeats the step count)
 gh workflow run database-migration.yml \
   -f cloud=aws \
   -f environment=prod \
   -f direction=down \
   -f steps=1 \
-  -f confirm=rollback-prod
+  -f confirm=rollback-prod-1
 
 # Apply to all clouds
 gh workflow run database-migration.yml \
@@ -360,8 +381,9 @@ gh workflow run database-migration.yml \
 
 - **Validation** - Checks migration files exist before running
 - **Explicit steps required** - `direction=down` requires an explicit positive `steps` value; `steps=0` (the default, which would run `down -all` and drop the entire schema) is rejected
-- **Production confirmation** - `direction=down` on `environment=prod` additionally requires typing `rollback-prod` in the `confirm` input; omitting or mistyping it blocks the run
-- **Defense in depth** - each migrate job independently re-validates the positive-steps constraint, so a future validate regression cannot reach `down -all`
+- **Bounded steps** - `direction=down` also rejects any `steps` at or above the number of migrations in the tree, in every environment. golang-migrate does not refuse a `down N` larger than what is applied: it rolls back everything that remains and only then reports a short limit, so `steps=99999999` is `down -all` (#68)
+- **Production confirmation** - `direction=down` on `environment=prod` additionally requires typing `rollback-prod-<steps>` (for example `rollback-prod-1` with `steps=1`) in the `confirm` input, so the confirmation restates how many migrations are being dropped; omitting it, mistyping it, or a count that differs from `steps` blocks the run
+- **Defense in depth** - each migrate job runs the same gate (`scripts/check-migration-down-request.sh`) again right before calling migrate, so a future validate regression cannot reach `down -all`
 - **Audit Trail** - Records all migrations in the step summary
 
 ---
@@ -414,7 +436,10 @@ gh workflow run rollback.yml \
 
 ### Safety Features
 
-- **Image Verification** - Confirms image exists before deploying
+- **Image Verification** - Confirms image exists before deploying. For AWS,
+  the check parses the account, region and repository out of the exact image
+  URI Terraform deploys, refuses to run if that account is not the account of
+  `AWS_ROLE_TO_ASSUME`, and pins the lookup to that registry
 - **Audit Trail** - Records all rollbacks (365 day retention)
 - **Reason Tracking** - Requires reason for accountability
 - **Manual Only** - Cannot be triggered automatically
@@ -438,49 +463,118 @@ az acr repository show-tags --name cudlyacr --repository cudly
 
 ### 1. Configure GitHub Secrets
 
+No cloud uses a long-lived key. Each workflow exchanges the job's GitHub OIDC token (issuer
+`https://token.actions.githubusercontent.com`) for short-lived cloud credentials. The cloud-side
+trust and deploy identities come from the bootstrap modules in
+`terraform/environments/{aws,gcp,azure}/ci-cd-permissions/`, which a privileged operator applies by
+hand; no workflow applies them.
+
+This repository has GitHub's immutable OIDC subject enabled, so every `sub` claim starts with
+`repo:LeanerCloud@86753534/cloud-commitments-platform@1391259743`, not
+`repo:LeanerCloud/cloud-commitments-platform`. Check the current prefix with
+`gh api repos/LeanerCloud/cloud-commitments-platform/actions/oidc/customization/sub`. The AWS and
+Azure modules build each subject as `repo:<github_repo>:...`, so their `github_repo` input must be
+that `owner@id/repo@id` form; the plain-name default produces subjects no token presents. GCP does
+not match on `sub` and is unaffected.
+
 **AWS:**
 
+The bootstrap module creates the GitHub OIDC provider and the `cudly-terraform-deploy` role. Every
+`aws-actions/configure-aws-credentials` step reads the role ARN from a repository variable:
+
 ```bash
-# Create secrets
-gh secret set AWS_ACCESS_KEY_ID
-gh secret set AWS_SECRET_ACCESS_KEY
+# Run from terraform/environments/aws/ci-cd-permissions/ after it has been applied
+gh variable set AWS_ROLE_TO_ASSUME -b"$(terraform output -raw role_arn)"
 gh secret set DB_PASSWORD_AWS
 ```
 
+The role's trust policy accepts:
+
+| Field | Value |
+| --- | --- |
+| Issuer (OIDC provider URL) | `https://token.actions.githubusercontent.com` |
+| Audience (`aud`) | `sts.amazonaws.com` |
+| Subject (`sub`) | exact match (`StringEquals`) against the literal list in `role.tf` |
+
+Every job that assumes the role is bound to a GitHub Environment, so it presents an
+`environment:<name>` subject:
+
+| Environment | Jobs that present it |
+| --- | --- |
+| `dev`, `staging`, `prod` | `deploy-aws-lambda.yml` (`build-and-deploy`, `test-deployment`), `rollback.yml` (`rollback-aws-lambda`), `cleanup-staging.yml` (`destroy-aws-lambda`, `destroy-aws-fargate`, `staging` only), `destroy-fargate-dev.yml` (`destroy`, `dev` only) |
+| `aws-fargate-dev`, `aws-fargate-staging`, `aws-fargate-prod` | `deploy-aws-fargate.yml` (`deploy`), `rollback.yml` (`rollback-aws-fargate`) |
+| `aws-db-dev`, `aws-db-staging`, `aws-db-prod` | `database-migration.yml` (`migrate-aws`) |
+
+`role.tf` lists all of these, plus `ref:refs/heads/main`, which no current AWS job presents.
+
 **GCP:**
 
+The bootstrap module creates the `cudly-terraform-deploy` service account, a Workload Identity pool
+and provider, and the `roles/iam.workloadIdentityUser` binding that lets this repository's tokens
+impersonate the service account. Every `google-github-actions/auth` step reads two repository
+variables:
+
 ```bash
-# Create service account and download JSON
-gcloud iam service-accounts create cudly-cicd --project=<project-id>
-
-# Grant permissions
-gcloud projects add-iam-policy-binding <project-id> \
-  --member="serviceAccount:cudly-cicd@<project-id>.iam.gserviceaccount.com" \
-  --role="roles/run.admin"
-
-# Create and download key
-gcloud iam service-accounts keys create key.json \
-  --iam-account=cudly-cicd@<project-id>.iam.gserviceaccount.com
-
-# Set secrets
-gh secret set GCP_SA_KEY < key.json
+# Run from terraform/environments/gcp/ci-cd-permissions/ after it has been applied
+gh variable set GCP_WORKLOAD_IDENTITY_PROVIDER -b"$(terraform output -raw workload_identity_provider)"
+gh variable set GCP_SERVICE_ACCOUNT -b"$(terraform output -raw service_account_email)"
+gh variable set GCP_PROJECT_ID -b"<project-id>"
 gh secret set DB_PASSWORD_GCP
-
-# Set variables
-gh variable set GCP_PROJECT_ID --body "<project-id>"
 ```
+
+| Field | Value |
+| --- | --- |
+| Issuer | `https://token.actions.githubusercontent.com` |
+| Audience | the provider's default (no `allowed_audiences` set), which `google-github-actions/auth` requests by default |
+| Attribute condition | `repository_owner_id` and `repository_id` equal the module's `github_owner_id` / `github_repo_id`, and `ref` equals `deploy_ref` (default `refs/heads/main`) |
+
+The condition ignores `sub`, so the GCP jobs (`deploy-gcp.yml` `build-and-deploy`, `rollback.yml`
+`rollback-gcp`, `cleanup-staging.yml` `destroy-gcp`, `database-migration.yml` `migrate-gcp`)
+authenticate only when the run's ref is `deploy_ref`, whatever environment they bind.
+
+The deploy service account's project roles, `roles/run.admin` among them, are the
+`local.deploy_roles` list in the module's `service_account.tf` (`terraform output roles` prints
+them). Change that list and re-apply the module instead of granting roles by hand.
 
 **Azure:**
 
-```bash
-# Create service principal
-az ad sp create-for-rbac --name cudly-cicd --sdk-auth > azure-credentials.json
+Azure authenticates with OIDC, so no client secret or `--sdk-auth` JSON is created or stored. The
+deploy app registration, its service principal and its federated identity credentials come from the
+bootstrap module `terraform/environments/azure/ci-cd-permissions/`, which a privileged operator
+applies by hand (see its [README](../../terraform/environments/azure/ci-cd-permissions/README.md)).
+Every `azure/login` step reads the same three secrets:
 
-# Set secrets
-gh secret set AZURE_CREDENTIALS < azure-credentials.json
+```bash
+# Run from terraform/environments/azure/ci-cd-permissions/ after it has been applied
+gh secret set AZURE_CLIENT_ID -b"$(terraform output -raw client_id)"
+gh secret set AZURE_TENANT_ID -b"$(terraform output -raw tenant_id)"
 gh secret set AZURE_SUBSCRIPTION_ID -b"<subscription-id>"
 gh secret set DB_PASSWORD_AZURE
 ```
+
+Each federated identity credential on the app registration must use:
+
+| Field | Value |
+| --- | --- |
+| Issuer | `https://token.actions.githubusercontent.com` |
+| Audience | `api://AzureADTokenExchange` |
+| Subject | `repo:LeanerCloud@86753534/cloud-commitments-platform@1391259743:environment:<name>` (see the immutable-subject note above) |
+
+Every job that runs `azure/login` is bound to a GitHub Environment, so its token carries the
+`environment:<name>` subject, not a branch subject, even when it runs on `main`. Azure allows no
+wildcards, so each environment name needs its own credential:
+
+| Environment | Jobs that present it |
+| --- | --- |
+| `dev`, `staging`, `prod` | `deploy-azure.yml` (`build-and-deploy`, `test-deployment`), `rollback.yml` (`rollback-azure`), `cleanup-staging.yml` (`destroy-azure`, `staging` only) |
+| `azure-db-dev`, `azure-db-staging`, `azure-db-prod` | `database-migration.yml` (`migrate-azure`) |
+
+The bootstrap module creates one credential per name in its `github_environments` variable
+(default `dev`, `staging`, `prod`). It does not yet create the `azure-db-*` credentials, so
+`migrate-azure` fails with `AADSTS70021` until those environments exist with protection rules and
+are added to `github_environments`. The module also creates a `ref:refs/heads/main` credential; no
+current Azure job presents that subject. The environment subject does not encode the branch, so
+restrict branches with each environment's deployment branch policy (step 3 below).
 
 **Optional:**
 
@@ -602,12 +696,11 @@ docker push <account>.dkr.ecr.us-east-1.amazonaws.com/cudly:latest
 ```bash
 # Check service account permissions
 gcloud projects get-iam-policy <project-id>
-
-# Grant missing roles
-gcloud projects add-iam-policy-binding <project-id> \
-  --member="serviceAccount:<sa>@<project>.iam.gserviceaccount.com" \
-  --role="roles/run.admin"
 ```
+
+The deploy service account's roles come from `local.deploy_roles` in
+`terraform/environments/gcp/ci-cd-permissions/service_account.tf`. If a role is missing, add it
+there and re-apply that bootstrap module rather than granting it by hand.
 
 **Azure - Resource not found:**
 

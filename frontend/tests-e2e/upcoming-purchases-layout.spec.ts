@@ -250,3 +250,19 @@ test('the savings label keeps one line without overflowing the card', async ({ p
     }
   }
 });
+
+// Issue #695: the row's Cancel was a filled red block, the loudest element on
+// Home. It stays visibly destructive (red border and text) but is outlined,
+// so the paint check below runs against the real stylesheet, not the class.
+test('the row Cancel button is an outlined destructive action, not a filled block', async ({ page }) => {
+  await openHome(page);
+  const cancel = page.locator('.upcoming-card [data-action="cancel-purchase"]').first();
+  const paint = await cancel.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return { bg: cs.backgroundColor, fg: cs.color, border: cs.borderTopColor };
+  });
+  const filledRed = 'rgb(217, 48, 37)'; // --cudly-error
+  expect(paint.bg).not.toBe(filledRed);
+  expect(paint.fg).not.toBe('rgb(255, 255, 255)');
+  expect(paint.border).toBe(filledRed);
+});

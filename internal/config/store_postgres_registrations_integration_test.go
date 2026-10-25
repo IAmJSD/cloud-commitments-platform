@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 )
 
@@ -28,9 +27,7 @@ func newPendingRegistration(token, externalID string) *AccountRegistration {
 
 func TestCreateAccountRegistration_UniquenessPostgres(t *testing.T) {
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { assert.NoError(t, container.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, container.DB.Pool(), getTestMigrationsPath(), "", ""))
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getTestMigrationsPath())
 	store := NewPostgresStore(container.DB)
 
 	first := newPendingRegistration("tok-137-a", "111111111111")

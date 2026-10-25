@@ -5,10 +5,7 @@ package server
 import (
 	"context"
 	"math/big"
-	"net/url"
-	"os"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,33 +13,20 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRIExchangeAutoWorkers_ConcreteStoreAndFixtureClient(t *testing.T) {
-	dsn := os.Getenv("RI_EXCHANGE_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("set RI_EXCHANGE_TEST_DATABASE_URL to a dedicated issue41 test database")
-	}
-	parsed, err := url.Parse(dsn)
-	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(strings.TrimPrefix(parsed.Path, "/"), "issue41_"))
-	port, err := strconv.Atoi(parsed.Port())
-	require.NoError(t, err)
-	password, _ := parsed.User.Password()
+	// A fresh migrated database on the package's shared container, not an
+	// opt-in DSN, so this runs in CI (#724). It skips only when Docker is
+	// unavailable; a container or migration failure fails the test (#1597).
+	setupCtx, setupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer setupCancel()
+	conn := testhelpers.RequireMigratedDatabase(setupCtx, t, "../database/postgres/migrations").DB
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	conn, err := database.NewConnection(ctx, &database.Config{
-		Host: parsed.Hostname(), Port: port, Database: strings.TrimPrefix(parsed.Path, "/"),
-		User: parsed.User.Username(), Password: password, SSLMode: "disable", MaxConnections: 5,
-		HealthCheckPeriod: time.Minute, MaxConnLifetime: time.Hour, MaxConnIdleTime: 30 * time.Minute,
-	}, nil)
-	require.NoError(t, err)
-	defer conn.Close()
-	require.NoError(t, migrations.RunMigrations(ctx, conn.Pool(), "../database/postgres/migrations", "", ""))
 	var testRunID string
 	require.NoError(t, conn.QueryRow(ctx, "SELECT gen_random_uuid()::text").Scan(&testRunID))
 	standaloneRIID, ladderRIID := "ri-standalone-"+testRunID, "ri-ladder-"+testRunID

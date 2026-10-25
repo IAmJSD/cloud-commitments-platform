@@ -5,12 +5,30 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
 	"github.com/aws/aws-lambda-go/lambda"
 )
 
 const defaultDomain = "leanercloud.com"
+
+// forgotPasswordEndpoint is the rate-limit endpoint whose per-email rows this
+// function clears (see internal/api/rate_limiter.go).
+const forgotPasswordEndpoint = "forgot_password"
+
+// likeEscaper escapes the LIKE metacharacters (and the escape character
+// itself) so a value matches only itself inside a pattern that is used with
+// ESCAPE '\'.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// forgotPasswordPattern is the LIKE pattern for every forgot_password row of
+// one email domain. Only the email's local part is a wildcard: the domain and
+// endpoint are escaped, so RATE_LIMIT_DOMAIN=% matches a literal "%" domain
+// instead of every domain, and an "_" matches only "_" (issue #357).
+func forgotPasswordPattern(domain string) string {
+	return "EMAIL#%@" + likeEscaper.Replace(domain) + "#ENDPOINT#" + likeEscaper.Replace(forgotPasswordEndpoint)
+}
 
 func getDomain() string {
 	if domain := os.Getenv("RATE_LIMIT_DOMAIN"); domain != "" {
@@ -35,11 +53,15 @@ func clearRateLimit(ctx context.Context) (Response, error) {
 	}
 	defer db.Close()
 
-	// Clear rate limits for forgot_password endpoint
-	domain := getDomain()
+	return clearForgotPasswordLimits(ctx, db, getDomain())
+}
+
+// clearForgotPasswordLimits deletes the forgot_password rate-limit rows of
+// every email at domain and reports how many rate-limit rows remain.
+func clearForgotPasswordLimits(ctx context.Context, db *database.Connection, domain string) (Response, error) {
 	tag, err := db.Exec(ctx,
-		"DELETE FROM rate_limits WHERE id LIKE $1",
-		"EMAIL#%@"+domain+"#ENDPOINT#forgot_password")
+		`DELETE FROM rate_limits WHERE id LIKE $1 ESCAPE '\'`,
+		forgotPasswordPattern(domain))
 	if err != nil {
 		return Response{}, fmt.Errorf("failed to delete rate limits: %w", err)
 	}

@@ -9,8 +9,9 @@ import { availableGroups } from '../users/state';
 import { escapeHtml, showError, showSuccess } from '../users/utils';
 import { loadUsers } from '../users/userActions';
 import { openModal, closeModal } from '../modal';
-import { ALL_ACTIONS, ALL_RESOURCES } from '../permissions';
-import type { Action, Resource } from '../permissions';
+import { iconSvg } from '../icons';
+import { clearGroupFormValidation, validateGroupForm } from './groupFormValidation';
+import { buildActionOptions, buildResourceOptions } from './permissionOptions';
 
 // Module-level state for the duplicate modal — holds the source group so
 // saveDuplicateGroup doesn't need another lookup.
@@ -29,6 +30,7 @@ export function openCreateGroupModal(): void {
 
   title.textContent = 'Create Group';
   form.reset();
+  clearGroupFormValidation();
   (document.getElementById('group-id') as HTMLInputElement).value = '';
 
   // Clear permissions list
@@ -55,6 +57,7 @@ export async function openEditGroupModal(groupId: string): Promise<void> {
     if (!modal || !title || !form) return;
 
     title.textContent = 'Edit Group';
+    clearGroupFormValidation();
     (document.getElementById('group-id') as HTMLInputElement).value = group.id;
     (document.getElementById('group-name') as HTMLInputElement).value = group.name;
     (document.getElementById('group-description') as HTMLTextAreaElement).value = group.description || '';
@@ -86,6 +89,11 @@ export function closeGroupModal(): void {
 export async function saveGroup(e: Event): Promise<void> {
   e.preventDefault();
 
+  // Issue #213: a blank name or a row with no action/resource is refused
+  // with a note under the field, never dropped or widened (#group-form is
+  // novalidate, so this is the only gate).
+  if (validateGroupForm()) return;
+
   // Refuse rather than widen. A stored constraint value this form cannot
   // carry unchanged is flagged when the row is rendered; saving anyway would
   // re-submit a materially different permission set than the one loaded, and
@@ -102,14 +110,21 @@ export async function saveGroup(e: Event): Promise<void> {
     return;
   }
 
+  const badAmounts = maxAmountInputErrors();
+  if (badAmounts.length > 0) {
+    showError(
+      `Max Amount must be greater than 0; leave it blank for no limit (${badAmounts.join(', ')}).`
+    );
+    return;
+  }
+
   const name = (document.getElementById('group-name') as HTMLInputElement).value;
   const description = (document.getElementById('group-description') as HTMLTextAreaElement).value;
   const permissions = collectPermissions();
 
-  // Refuse an empty permission list rather than submit it. collectPermissions
-  // silently drops any row left on the "Select Action"/"Select Resource"
-  // placeholder, so removing every real row (or leaving only a placeholder
-  // row) collects as []. The update API treats an empty list as "not sent"
+  // Refuse an empty permission list rather than submit it. Rows left on a
+  // placeholder are refused above, so this is reached by removing every
+  // row. The update API treats an empty list as "not sent"
   // and leaves the group's stored permissions untouched (issue #237), so
   // submitting would show "Group updated successfully" while silently
   // keeping the group's old privileges -- there is no way for this form to
@@ -150,83 +165,6 @@ export async function saveGroup(e: Event): Promise<void> {
   }
 }
 
-// Human-readable <option> labels for the action/resource vocabulary.
-// Falls back to a generic title-case of the raw value ("cancel-own" ->
-// "Cancel Own") for every entry that doesn't need a special-cased
-// override; only acronyms and the symbolic "*" need one.
-const ACTION_LABEL_OVERRIDES: Partial<Record<Action, string>> = {
-  admin: 'Admin (full)',
-};
-
-const RESOURCE_LABEL_OVERRIDES: Partial<Record<Resource, string>> = {
-  '*': 'All (*)',
-  'api-keys': 'API Keys',
-  'ri-exchange': 'RI Exchange',
-};
-
-function titleCase(value: string): string {
-  return value
-    .split('-')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-}
-
-function actionOptionLabel(action: string): string {
-  return ACTION_LABEL_OVERRIDES[action as Action] ?? titleCase(action);
-}
-
-function resourceOptionLabel(resource: string): string {
-  return RESOURCE_LABEL_OVERRIDES[resource as Resource] ?? titleCase(resource);
-}
-
-// Builds the <option> list for the perm-action / perm-resource <select>
-// elements (issue #1629). This list used to be hardcoded to 7 of the 20
-// actions and 9 of the 11 resources the backend can store. A stored
-// permission carrying one of the missing values had no matching <option>,
-// so the browser fell back to the first entry in the list -- silently
-// DROPPING the permission on the action select (index 0 was the empty
-// "Select Action" placeholder; collectPermissions() skips a falsy action)
-// and silently WIDENING it to the `*` wildcard on the resource select
-// (index 0 there was "All (*)"). Editing any group that held one of those
-// permissions and clicking Save re-submitted a materially different
-// permission list than the one shown, with no error.
-//
-// Building the lists from permissions.ts's ALL_ACTIONS / ALL_RESOURCES
-// (which mirror the backend's full vocabulary, and are exhaustiveness
-// -checked against it at compile time) closes that gap for every value
-// currently known to the frontend. `currentValue` is still handled
-// defensively beyond the known list: if a stored permission's value isn't
-// one of them (a future backend verb this form hasn't been taught yet, or
-// legacy/foreign data), an extra option is appended for that *exact*
-// value, selected and visibly flagged, instead of silently falling back
-// to a different one. The select then still represents -- and
-// round-trips unchanged through collectPermissions() -- the real stored
-// permission rather than corrupting it.
-function buildActionOptions(currentValue: string | undefined): string {
-  const options = ['<option value="">Select Action</option>'];
-  for (const action of ALL_ACTIONS) {
-    const selected = currentValue === action ? ' selected' : '';
-    options.push(`<option value="${escapeHtml(action)}"${selected}>${escapeHtml(actionOptionLabel(action))}</option>`);
-  }
-  if (currentValue && !(ALL_ACTIONS as readonly string[]).includes(currentValue)) {
-    options.push(`<option value="${escapeHtml(currentValue)}" selected>⚠ ${escapeHtml(currentValue)} (not recognized by this form)</option>`);
-  }
-  return options.join('');
-}
-
-function buildResourceOptions(currentValue: string | undefined): string {
-  const options: string[] = [];
-  for (const resource of ALL_RESOURCES) {
-    const isDefault = !currentValue && resource === '*';
-    const selected = currentValue === resource || isDefault ? ' selected' : '';
-    options.push(`<option value="${escapeHtml(resource)}"${selected}>${escapeHtml(resourceOptionLabel(resource))}</option>`);
-  }
-  if (currentValue && !(ALL_RESOURCES as readonly string[]).includes(currentValue)) {
-    options.push(`<option value="${escapeHtml(currentValue)}" selected>⚠ ${escapeHtml(currentValue)} (not recognized by this form)</option>`);
-  }
-  return options.join('');
-}
-
 /**
  * Add a new permission to the form
  */
@@ -260,7 +198,7 @@ export function addPermission(permission?: Permission): void {
           ${buildResourceOptions(permission?.resource)}
         </select>
       </label>
-      <button type="button" class="btn-small btn-danger remove-permission-btn">Remove</button>
+      <button type="button" class="btn-small btn-danger icon-btn remove-permission-btn" aria-label="Remove permission" title="Remove permission">${iconSvg('trash-2')}</button>
     </div>
     <div class="constraints-section">
       <h4>Constraints (Optional)</h4>
@@ -282,7 +220,7 @@ export function addPermission(permission?: Permission): void {
           <input type="text" class="perm-regions" value="${escapeHtml(permission?.constraints?.regions?.join(', ') || '')}" placeholder="us-east-1, us-west-2">
         </label>
         <label>Max Amount ($):
-          <input type="number" class="perm-max-amount" value="${escapeHtml(String(permission?.constraints?.max_amount || ''))}" placeholder="10000" min="0">
+          <input type="number" class="perm-max-amount" value="${escapeHtml(String(permission?.constraints?.max_amount ?? ''))}" placeholder="10000" min="0">
         </label>
       </div>
     </div>
@@ -401,6 +339,29 @@ function unrepresentablePermissionErrors(): string[] {
   return errors;
 }
 
+// Max Amount is typed by the admin, unlike the stored-value problems above, so
+// its message tells them how to fix the field instead of pointing at the API.
+// 0 would read as "no cap" at enforcement, so it is refused rather than sent.
+function maxAmountInputErrors(): string[] {
+  const errors: string[] = [];
+  document.querySelectorAll('#permissions-list .permission-item').forEach((item, index) => {
+    const input = item.querySelector('.perm-max-amount') as HTMLInputElement | null;
+    // A number input reports unparsable text ("abc", "1e") as value "", which
+    // would read as blank and save with no cap; badInput is the only signal.
+    if (input?.validity?.badInput) {
+      errors.push(`permission ${index}`);
+      return;
+    }
+    const raw = input?.value ?? '';
+    if (raw.trim() === '') return;
+    const amount = Number(raw);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      errors.push(`permission ${index}`);
+    }
+  });
+  return errors;
+}
+
 /**
  * Render permissions list
  */
@@ -463,17 +424,7 @@ function collectPermissions(): Permission[] {
       if (providersList.length > 0) permission.constraints.providers = providersList;
       if (servicesList.length > 0) permission.constraints.services = servicesList;
       if (regionsList.length > 0) permission.constraints.regions = regionsList;
-      if (maxAmount) {
-        const parsed = parseFloat(maxAmount);
-        // Reject non-finite or negative values (feedback_nullable_not_zero).
-        // A malformed entry is silently skipped so the rest of the constraints
-        // still reach the API; the input's type="number" min="0" already
-        // prevents browser submission of non-numeric values, but the JS
-        // path must guard too.
-        if (Number.isFinite(parsed) && parsed >= 0) {
-          permission.constraints.max_amount = parsed;
-        }
-      }
+      if ((maxAmount ?? '').trim() !== '') permission.constraints.max_amount = Number(maxAmount);
       // Nothing survived: the permission carries no restriction, so send no
       // constraints object rather than an empty one.
       if (Object.keys(permission.constraints).length === 0) {

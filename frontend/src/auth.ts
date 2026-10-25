@@ -6,6 +6,7 @@ import * as api from './api';
 import * as state from './state';
 import { escapeHtml, reloadPage } from './utils';
 import { openModal, closeModal } from './modal';
+import { openAuthDialog } from './authDialog';
 import { isAdmin as permissionsIsAdmin, canAccess } from './permissions';
 import { showToast } from './toast';
 
@@ -121,7 +122,7 @@ function renderResetForm(modal: HTMLElement, token: string, flow: string): void 
             </div>
           </label>
 
-          <div id="reset-error" class="error-message hidden"></div>
+          <div id="reset-error" class="error-message hidden" role="alert"></div>
           <div id="reset-success" class="success-message hidden"></div>
           <button type="submit" class="primary">${submitLabel}</button>
         </form>
@@ -143,6 +144,7 @@ function renderResetForm(modal: HTMLElement, token: string, flow: string): void 
   }
 
   setupPasswordToggle(modal);
+  openAuthDialog(modal, '#new-password');
 }
 
 // renderExpiredView replaces the reset modal with a "link expired"
@@ -176,6 +178,7 @@ function renderExpiredView(modal: HTMLElement, flow: string): void {
     e.preventDefault();
     void closeResetModalAndShowLogin();
   });
+  openAuthDialog(modal, '#reset-expired-request-new');
 }
 
 // renderUsedView covers both consumed and never-existed tokens (the
@@ -207,6 +210,7 @@ function renderUsedView(modal: HTMLElement, flow: string): void {
     e.preventDefault();
     void openForgotPasswordFromExpired();
   });
+  openAuthDialog(modal, '#reset-used-go-to-login');
 }
 
 async function closeResetModalAndShowLogin(): Promise<void> {
@@ -454,7 +458,7 @@ export async function showAdminSetupModal(apiKeyHint?: string): Promise<void> {
             </div>
           </label>
 
-          <div id="setup-error" class="error-message hidden"></div>
+          <div id="setup-error" class="error-message hidden" role="alert"></div>
           <button type="submit" class="primary">Create Admin Account</button>
         </form>
         <p class="help-text"><a href="#" id="admin-setup-login-link">Already have an account? Log in</a></p>
@@ -486,6 +490,7 @@ export async function showAdminSetupModal(apiKeyHint?: string): Promise<void> {
   }
 
   setupPasswordToggle(modal);
+  openAuthDialog(modal, '#setup-api-key');
 }
 
 async function handleAdminSetupSubmit(e: Event): Promise<void> {
@@ -541,9 +546,10 @@ async function handleAdminSetupSubmit(e: Event): Promise<void> {
 }
 
 /**
- * Show login modal
+ * Show login modal. `notice`, when given, is shown in the form's error line
+ * on open (e.g. the API could not be reached during startup).
  */
-export async function showLoginModal(): Promise<void> {
+export async function showLoginModal(notice?: string): Promise<void> {
   // Remove any existing login modal to prevent duplicates
   document.getElementById('login-modal')?.remove();
 
@@ -571,7 +577,7 @@ export async function showLoginModal(): Promise<void> {
           </label>
           <p class="help-text"><a href="#" id="forgot-password-link">Forgot password?</a></p>
 
-          <div id="login-error" class="error-message hidden"></div>
+          <div id="login-error" class="error-message hidden" role="alert"></div>
           <button type="submit" class="primary">Login</button>
         </form>
       </div>
@@ -580,6 +586,8 @@ export async function showLoginModal(): Promise<void> {
   document.body.appendChild(modal);
 
   setupLoginModalHandlers(modal);
+  openAuthDialog(modal, '#login-email');
+  if (notice) showLoginError(notice);
 }
 
 function setupLoginModalHandlers(modal: HTMLElement): void {
@@ -671,13 +679,42 @@ function showLoginError(message: string): void {
 // Pending-MFA closure (issue #497). When the server responds with
 // `mfa_required` on the first POST /api/auth/login, we keep the
 // email + password in memory ONLY for the resubmit. Cleared on
-// success, cancel, or modal close. Never persisted.
+// success, cancel, any terminal error, or after MFA_PENDING_TTL_MS so an
+// abandoned prompt does not keep the plaintext password reachable for the
+// rest of the page's life. Never persisted.
 let pendingMFAEmail = '';
 let pendingMFAPassword = '';
+let pendingMFATimer: ReturnType<typeof setTimeout> | undefined;
+export const MFA_PENDING_TTL_MS = 5 * 60 * 1000;
 
 function clearPendingMFA(): void {
   pendingMFAEmail = '';
   pendingMFAPassword = '';
+  if (pendingMFATimer !== undefined) {
+    clearTimeout(pendingMFATimer);
+    pendingMFATimer = undefined;
+  }
+}
+
+function stashPendingMFA(email: string, password: string): void {
+  clearPendingMFA();
+  pendingMFAEmail = email;
+  pendingMFAPassword = password;
+  pendingMFATimer = setTimeout(() => {
+    pendingMFATimer = undefined;
+    if (document.getElementById('mfa-code')) {
+      restartLogin('The two-factor prompt expired. Log in again.');
+    } else {
+      clearPendingMFA();
+    }
+  }, MFA_PENDING_TTL_MS);
+}
+
+/** Drop the pending credentials and return to the email/password step. */
+function restartLogin(notice?: string): void {
+  clearPendingMFA();
+  document.getElementById('login-modal')?.remove();
+  void showLoginModal(notice);
 }
 
 async function handleLogin(e: Event): Promise<void> {
@@ -717,8 +754,7 @@ async function handleLogin(e: Event): Promise<void> {
       // First-leg success: password is correct, server wants the
       // TOTP code. Stash credentials in the closure and swap the
       // form to the MFA code prompt.
-      pendingMFAEmail = email;
-      pendingMFAPassword = password;
+      stashPendingMFA(email, password);
       showMFACodeStep();
       return;
     }
@@ -752,26 +788,26 @@ function showMFACodeStep(): void {
         autocomplete="one-time-code"
         pattern="[0-9A-Za-z\\-]{6,16}"
         maxlength="16"
-        style="font-family: monospace; letter-spacing: 0.2em;"
+        class="code-input"
         autofocus
       >
     </label>
-    <div id="login-error" class="error-message hidden"></div>
+    <div id="login-error" class="error-message hidden" role="alert"></div>
     <button type="submit" class="primary" id="mfa-submit-btn">Verify</button>
     <p><a href="#" id="mfa-cancel-link">Back to login</a></p>
   `;
   document.getElementById('mfa-cancel-link')?.addEventListener('click', (e) => {
     e.preventDefault();
-    clearPendingMFA();
     // Easiest re-render: tear down and re-open the modal.
-    document.getElementById('login-modal')?.remove();
-    void showLoginModal();
+    restartLogin();
   });
   // Re-bind submit to handleMFACodeSubmit (the form's submit
   // listener attached to handleLogin still fires; replace the form's
   // listener via a fresh handler).
   form.removeEventListener('submit', handleLoginSubmitListener);
   form.addEventListener('submit', handleMFACodeSubmitListener);
+  // The swap destroyed the focused field; keep focus inside the dialog (#731).
+  document.getElementById('mfa-code')?.focus();
 }
 
 // Stored listener references so we can swap them on the form
@@ -780,6 +816,10 @@ function showMFACodeStep(): void {
 // same Function — arrow IIFEs would create a new function each time.
 const handleLoginSubmitListener = (e: Event): void => { void handleLogin(e); };
 const handleMFACodeSubmitListener = (e: Event): void => { void handleMFACodeSubmit(e); };
+const handlePasswordResetSubmitListener = (e: Event): void => {
+  e.preventDefault();
+  void handlePasswordReset();
+};
 
 async function handleMFACodeSubmit(e: Event): Promise<void> {
   e.preventDefault();
@@ -807,8 +847,10 @@ async function handleMFACodeSubmit(e: Event): Promise<void> {
       showLoginError('Two-factor code required');
       return;
     }
+    // Any other failure ends this attempt: a resubmit cannot succeed
+    // without the password, so drop it and restart at the first step.
     const message = error instanceof Error ? error.message : String(error);
-    showLoginError(mapServerLoginError(message));
+    restartLogin(mapServerLoginError(message));
   }
 }
 
@@ -822,16 +864,21 @@ function showForgotPasswordForm(modal: HTMLElement): void {
       <input type="email" id="reset-email" placeholder="Your email address" autocomplete="email" autocapitalize="none" autocorrect="off" required>
     </label>
     <p class="help-text">We'll send you a link to reset your password.</p>
-    <div id="login-error" class="error-message hidden"></div>
-    <button type="button" id="send-reset-btn" class="primary">Send Reset Link</button>
+    <div id="login-error" class="error-message hidden" role="alert"></div>
+    <button type="submit" id="send-reset-btn" class="primary">Send Reset Link</button>
     <p><a href="#" id="back-to-login-link">Back to login</a></p>
   `;
 
-  document.getElementById('send-reset-btn')?.addEventListener('click', () => void handlePasswordReset());
+  // Keep the inline "enter your email" message instead of the native bubble.
+  (form as HTMLFormElement).noValidate = true;
+  form.removeEventListener('submit', handleLoginSubmitListener);
+  form.addEventListener('submit', handlePasswordResetSubmitListener);
   document.getElementById('back-to-login-link')?.addEventListener('click', (e) => {
     e.preventDefault();
     reloadPage();
   });
+  // The swap destroyed the focused link; keep focus inside the dialog (#731).
+  document.getElementById('reset-email')?.focus();
 }
 
 async function handlePasswordReset(): Promise<void> {
@@ -850,6 +897,8 @@ async function handlePasswordReset(): Promise<void> {
     return;
   }
 
+  const sendBtn = document.getElementById('send-reset-btn') as HTMLButtonElement | null;
+  if (sendBtn) sendBtn.disabled = true;
   try {
     await api.requestPasswordReset(email);
     // Issue #457: previously this surfaced as an alert() that, when
@@ -864,6 +913,7 @@ async function handlePasswordReset(): Promise<void> {
       errorDiv.textContent = 'Failed to send reset email. Please try again.';
       errorDiv.classList.remove('hidden');
     }
+    if (sendBtn) sendBtn.disabled = false;
   }
 }
 
@@ -890,6 +940,7 @@ function showResetEmailConfirmation(): void {
     // (same exit-path as the existing back-to-login-link).
     reloadPage();
   });
+  document.getElementById('reset-confirmation-close')?.focus();
 }
 
 /**
@@ -907,6 +958,8 @@ export function updateUserUI(): void {
     // Update the user email display with click-to-edit functionality
     if (userEmailEl) {
       userEmailEl.textContent = currentUser.email;
+      userEmailEl.removeAttribute('aria-label');
+      userEmailEl.hidden = false;
       userEmailEl.title = 'Click to edit your profile';
       userEmailEl.classList.add('cursor-pointer');
       // Replace element to avoid duplicate listeners on repeated calls
@@ -951,6 +1004,9 @@ export function updateUserUI(): void {
     }
     if (roleEl) {
       roleEl.classList.add('hidden');
+    }
+    if (userEmailEl) {
+      userEmailEl.hidden = true;
     }
   }
 
@@ -1047,7 +1103,7 @@ async function openProfileModal(): Promise<void> {
             <button type="submit" class="primary">Save Changes</button>
           </div>
         </form>
-        <hr style="margin: 24px 0;">
+        <hr class="profile-section-divider">
         <div id="profile-mfa-section">
           <!-- Populated by renderMFASection() on open -->
         </div>
@@ -1083,6 +1139,7 @@ async function openProfileModal(): Promise<void> {
   // (Re-)render the MFA section so its state reflects whatever the
   // user's mfa_enabled flag is right now (could have flipped since
   // the modal was last opened). See renderMFASection below.
+  setProfileSecretPending(false);
   renderMFASection();
 
   // Reset live indicators and any stale error so the previous open
@@ -1173,13 +1230,13 @@ function renderMFAEnrollPasswordStep(): void {
   const host = getMFAFlowHost();
   if (!host) return;
   host.innerHTML = `
-    <div style="margin-top: 12px; padding: 12px; border: 1px solid var(--border-color, #ddd); border-radius: 4px;">
+    <div class="mfa-panel">
       <h4>Confirm password</h4>
       <p class="help-text">Re-enter your password to begin setting up two-factor authentication.</p>
       <label>Password:
         <input type="password" id="mfa-enroll-password" autocomplete="current-password">
       </label>
-      <div id="mfa-flow-error" class="error-message hidden"></div>
+      <div id="mfa-flow-error" class="error-message hidden" role="alert"></div>
       <div class="modal-buttons">
         <button type="button" id="mfa-enroll-cancel">Cancel</button>
         <button type="button" id="mfa-enroll-continue" class="primary">Continue</button>
@@ -1216,16 +1273,16 @@ async function renderMFAEnrollQRStep(secret: string, provisioningURI: string): P
   const host = getMFAFlowHost();
   if (!host) return;
   host.innerHTML = `
-    <div style="margin-top: 12px; padding: 12px; border: 1px solid var(--border-color, #ddd); border-radius: 4px;">
+    <div class="mfa-panel">
       <h4>Scan QR code</h4>
       <p class="help-text">Scan this code with your authenticator app (Google Authenticator, Authy, Bitwarden, 1Password, etc.).</p>
-      <div id="mfa-qr" style="display: flex; justify-content: center; padding: 8px;"></div>
+      <div id="mfa-qr" class="mfa-qr"></div>
       <p class="help-text">Can't scan? Enter this secret manually:</p>
-      <div style="font-family: monospace; padding: 8px; background: var(--bg-subtle, #f5f5f5); border-radius: 4px; word-break: break-all;">
+      <div class="mfa-secret">
         <span id="mfa-secret-display">${escapeHtml(formatSecretForDisplay(secret))}</span>
-        <button type="button" id="mfa-secret-copy" style="margin-left: 8px;">Copy</button>
+        <button type="button" id="mfa-secret-copy">Copy</button>
       </div>
-      <label style="margin-top: 12px;">Enter the 6-digit code shown in your app:
+      <label>Enter the 6-digit code shown in your app:
         <input
           type="text"
           id="mfa-enroll-code"
@@ -1233,10 +1290,10 @@ async function renderMFAEnrollQRStep(secret: string, provisioningURI: string): P
           autocomplete="one-time-code"
           pattern="[0-9]{6}"
           maxlength="6"
-          style="font-family: monospace; letter-spacing: 0.2em;"
+          class="code-input"
         >
       </label>
-      <div id="mfa-flow-error" class="error-message hidden"></div>
+      <div id="mfa-flow-error" class="error-message hidden" role="alert"></div>
       <div class="modal-buttons">
         <button type="button" id="mfa-qr-cancel">Cancel</button>
         <button type="button" id="mfa-qr-verify" class="primary">Verify and enable</button>
@@ -1260,7 +1317,6 @@ async function renderMFAEnrollQRStep(secret: string, provisioningURI: string): P
       const img = document.createElement('img');
       img.src = dataUrl;
       img.alt = 'Two-factor authentication QR code';
-      img.style.maxWidth = '200px';
       container.appendChild(img);
     }
   } catch (err) {
@@ -1298,6 +1354,18 @@ async function handleMFAEnrollVerify(): Promise<void> {
   }
 }
 
+function setProfileSecretPending(pending: boolean): void {
+  const modal = document.getElementById('profile-modal');
+  if (modal) {
+    if (pending) modal.dataset.requireAck = 'true';
+    else delete modal.dataset.requireAck;
+  }
+  const cancel = document.getElementById('profile-cancel') as HTMLButtonElement | null;
+  if (cancel) cancel.disabled = pending;
+  const save = document.querySelector<HTMLButtonElement>('#profile-form button[type="submit"]');
+  if (save) save.disabled = pending;
+}
+
 /**
  * Step 3 of enrollment: display the plaintext recovery codes. Shown
  * exactly once; backend stores only bcrypt hashes. Offers a download
@@ -1307,12 +1375,12 @@ async function handleMFAEnrollVerify(): Promise<void> {
 function renderMFAEnrollCodesStep(codes: string[]): void {
   const host = getMFAFlowHost();
   if (!host) return;
-  const codesList = codes.map((c) => `<li style="font-family: monospace; padding: 2px 0;">${escapeHtml(c)}</li>`).join('');
+  const codesList = codes.map((c) => `<li>${escapeHtml(c)}</li>`).join('');
   host.innerHTML = `
-    <div style="margin-top: 12px; padding: 12px; border: 2px solid var(--accent-color, #2563eb); border-radius: 4px;">
+    <div class="mfa-panel mfa-panel-emphasis">
       <h4>Save your recovery codes</h4>
       <p class="help-text"><strong>Each code can be used once</strong> if you lose access to your authenticator app. Save them somewhere safe — this is the only time they'll be shown.</p>
-      <ul style="list-style: none; padding: 8px; background: var(--bg-subtle, #f5f5f5); border-radius: 4px;">
+      <ul class="recovery-codes" aria-label="Recovery codes">
         ${codesList}
       </ul>
       <div class="modal-buttons">
@@ -1321,10 +1389,12 @@ function renderMFAEnrollCodesStep(codes: string[]): void {
       </div>
     </div>
   `;
+  setProfileSecretPending(true);
   document.getElementById('mfa-codes-download')?.addEventListener('click', () => downloadRecoveryCodes(codes));
   document.getElementById('mfa-codes-done')?.addEventListener('click', () => {
     // Acknowledged — re-render the section so it now shows the
     // Enabled view (Disable / Regenerate buttons).
+    setProfileSecretPending(false);
     renderMFASection();
   });
 }
@@ -1356,23 +1426,23 @@ function renderMFADisableFlow(): void {
   const host = getMFAFlowHost();
   if (!host) return;
   host.innerHTML = `
-    <div style="margin-top: 12px; padding: 12px; border: 1px solid var(--border-color, #ddd); border-radius: 4px;">
+    <div class="mfa-panel">
       <h4>Disable two-factor authentication</h4>
       <p class="help-text">Enter your password and a current code (or a recovery code) to disable.</p>
       <label>Password:
         <input type="password" id="mfa-disable-password" autocomplete="current-password">
       </label>
-      <label style="margin-top: 8px;">Authenticator code or recovery code:
+      <label>Authenticator code or recovery code:
         <input
           type="text"
           id="mfa-disable-code"
           inputmode="numeric"
           autocomplete="one-time-code"
           maxlength="16"
-          style="font-family: monospace; letter-spacing: 0.2em;"
+          class="code-input"
         >
       </label>
-      <div id="mfa-flow-error" class="error-message hidden"></div>
+      <div id="mfa-flow-error" class="error-message hidden" role="alert"></div>
       <div class="modal-buttons">
         <button type="button" id="mfa-disable-cancel">Cancel</button>
         <button type="button" id="mfa-disable-submit" class="primary">Disable</button>
@@ -1411,7 +1481,7 @@ function renderMFARegenerateFlow(): void {
   const host = getMFAFlowHost();
   if (!host) return;
   host.innerHTML = `
-    <div style="margin-top: 12px; padding: 12px; border: 1px solid var(--border-color, #ddd); border-radius: 4px;">
+    <div class="mfa-panel">
       <h4>Regenerate recovery codes</h4>
       <p class="help-text">Enter a current 6-digit code from your authenticator app. Existing recovery codes will stop working.</p>
       <label>Code:
@@ -1422,10 +1492,10 @@ function renderMFARegenerateFlow(): void {
           autocomplete="one-time-code"
           pattern="[0-9]{6}"
           maxlength="6"
-          style="font-family: monospace; letter-spacing: 0.2em;"
+          class="code-input"
         >
       </label>
-      <div id="mfa-flow-error" class="error-message hidden"></div>
+      <div id="mfa-flow-error" class="error-message hidden" role="alert"></div>
       <div class="modal-buttons">
         <button type="button" id="mfa-regen-cancel">Cancel</button>
         <button type="button" id="mfa-regen-submit" class="primary">Regenerate</button>
@@ -1456,6 +1526,7 @@ async function handleMFARegenerateSubmit(): Promise<void> {
  */
 async function saveProfile(e: Event): Promise<void> {
   e.preventDefault();
+  if (document.getElementById('profile-modal')?.dataset.requireAck === 'true') return;
 
   const email = (document.getElementById('profile-email') as HTMLInputElement).value;
   const currentPassword = (document.getElementById('profile-current-password') as HTMLInputElement).value;

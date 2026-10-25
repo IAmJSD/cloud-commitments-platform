@@ -1437,13 +1437,14 @@ func TestMatchConstraints(t *testing.T) {
 //
 // Regions is the only dimension a single request legitimately spans several
 // values on: an Azure RI exchange submits every target location at once
-// (api.targetLocations). Under the generic containsAny rule the other
-// dimensions use, a caller permitted only in eastus could attach a westus
-// target -- containsAny finds eastus in the permitted set, returns true, and
-// the irreversible exchange executes in BOTH regions. Every case below is
-// asserted through matchConstraints, not matchAllRegionsConstraint directly,
-// so re-wiring the Regions dimension back to matchStringListConstraints
-// fails these tests rather than leaving them vacuously green.
+// (api.targetLocations). Under an any-match rule, a caller permitted only in
+// eastus could attach a westus target -- any-match finds eastus in the
+// permitted set, returns true, and the irreversible exchange executes in BOTH
+// regions. Every case below is asserted through matchConstraints, not
+// matchAllRegionsConstraint directly, so re-wiring the Regions dimension to an
+// any-match helper fails these tests rather than leaving them vacuously
+// green; re-wiring it to matchStringListConstraints (all-match since issue
+// #138, but exact) fails the casing and whitespace cases.
 func TestMatchConstraints_RegionsRequireEveryRequestedRegion(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -235,6 +235,72 @@ describe('Recommendations action-box permission gating (issue #365)', () => {
     expect(banners.length).toBe(0);
   });
 
+  // Issue #20: mountBottomActionBox returns early once the box exists, so
+  // gating evaluated there was a first-render snapshot. A permission change
+  // made in-session must show up on the next render without a reload.
+  describe('re-syncs gating when permissions change between renders (#20)', () => {
+    const purchaserPerms = [
+      { action: 'execute', resource: 'purchases' },
+      { action: 'create', resource: 'plans' },
+      { action: 'view', resource: 'recommendations' },
+    ];
+    const viewerPerms = [{ action: 'view', resource: 'recommendations' }];
+    const customGid = '00000000-0000-5000-8000-00000000abcd';
+    const banners = () =>
+      document.getElementById('recommendations-action-box')!.querySelectorAll('.info-banner');
+    const purchase = () => document.getElementById('bulk-purchase-btn') as HTMLButtonElement;
+    const plan = () => document.getElementById('create-plan-btn') as HTMLButtonElement;
+
+    test('gaining execute:purchases reveals Purchase and drops the banner', async () => {
+      mockUserWithGroups([ADMINISTRATORS_GROUP_ID]);
+      await loadRecommendations();
+      const box = document.getElementById('recommendations-action-box');
+      expect(purchase().hidden).toBe(true);
+      expect(banners()).toHaveLength(1);
+
+      mockUserWithGroups([ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID], [{ action: 'admin', resource: '*' }, ...purchaserPerms]);
+      await loadRecommendations();
+
+      // Same box: the fix must not rebuild the DOM (that would drop an
+      // in-progress Capacity value).
+      expect(document.getElementById('recommendations-action-box')).toBe(box);
+      expect(purchase().hidden).toBe(false);
+      expect(banners()).toHaveLength(0);
+    });
+
+    test('losing execute:purchases hides Purchase and shows exactly one banner', async () => {
+      mockUserWithGroups([customGid], purchaserPerms);
+      await loadRecommendations();
+      expect(purchase().hidden).toBe(false);
+      expect(banners()).toHaveLength(0);
+
+      mockUserWithGroups([customGid], [{ action: 'create', resource: 'plans' }, ...viewerPerms]);
+      await loadRecommendations();
+      expect(purchase().hidden).toBe(true);
+      expect(banners()).toHaveLength(1);
+
+      // A further render with the same permissions must not stack banners.
+      await loadRecommendations();
+      expect(banners()).toHaveLength(1);
+      // The banner sits right after the Purchase button, where it was before.
+      expect(purchase().nextElementSibling).toBe(banners()[0]);
+    });
+
+    test('Create Plan follows create:plans across renders', async () => {
+      mockUserWithGroups([customGid], viewerPerms);
+      await loadRecommendations();
+      expect(plan().hidden).toBe(true);
+
+      mockUserWithGroups([customGid], [...viewerPerms, { action: 'create', resource: 'plans' }]);
+      await loadRecommendations();
+      expect(plan().hidden).toBe(false);
+
+      mockUserWithGroups([customGid], viewerPerms);
+      await loadRecommendations();
+      expect(plan().hidden).toBe(true);
+    });
+  });
+
   test('the action-box capacity input stays visible for all sessions', async () => {
     // Non-mutating elements stay visible regardless of group membership;
     // only the action CTAs gate on permissions.

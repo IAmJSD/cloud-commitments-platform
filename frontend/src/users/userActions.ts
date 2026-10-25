@@ -3,7 +3,7 @@
  */
 
 import * as api from '../api';
-import { getCurrentUser } from '../state';
+import { getCurrentUser, setCurrentUser } from '../state';
 import { isAdmin, isPurchaser, PURCHASER_GROUP_ID } from '../permissions';
 import {
   allUsers,
@@ -11,15 +11,16 @@ import {
   selectedUserIds,
   setAllUsers,
   setAvailableGroups,
-  clearSelectedUserIds,
   removeSelectedUserId
 } from './state';
 import { showError, showSuccess, validateGroupCombination } from './utils';
 import { confirmDialog } from '../confirmDialog';
+import { friendlyError } from '../api/errors';
 import { applyFilters } from './filters';
 import { renderUsers, renderUserStats, populateBulkGroupSelect } from './userList';
 import { renderGroups } from '../groups/groupList';
 import { renderPermissionMatrix } from './permissionMatrix';
+import { clearUserSectionsStatus, renderUserSectionsError, showUserSectionsLoading } from './loadStatus';
 
 /**
  * Defence-in-depth normaliser for the API contract. The backend's TS-typed
@@ -60,15 +61,36 @@ function withCurrentUser(users: api.APIUser[]): api.APIUser[] {
     id: 'current',
     email: current.email,
     groups: Array.isArray(current.groups) ? current.groups : [],
-    mfa_enabled: false,
+    mfa_enabled: current.mfa_enabled === true,
   };
   return [synthetic, ...users];
+}
+
+/**
+ * Re-read the signed-in user's groups and effective permissions after a
+ * group-membership change that includes them, so permission-gated UI (e.g.
+ * the Opportunities Purchase button and no-Purchaser banner) reflects the
+ * change on its next render instead of after a reload (#20). Best-effort:
+ * a failed fetch keeps the old state, which is no worse than before.
+ */
+export async function refreshCurrentUserAccess(changedUserIds: readonly string[]): Promise<void> {
+  const current = getCurrentUser();
+  if (!current || !changedUserIds.includes(current.id)) return;
+  try {
+    const [me, perms] = await Promise.all([api.getCurrentUser(), api.getUserPermissions()]);
+    setCurrentUser({ ...me, effectivePermissions: perms.permissions });
+  } catch (err) {
+    console.warn('Failed to refresh current user permissions:', err);
+  }
 }
 
 /**
  * Load and display users and groups
  */
 export async function loadUsers(): Promise<void> {
+  // Issue #182: skeletons while the lists load, so an empty box is never
+  // mistaken for "no users" (no-op where a list is already on screen).
+  showUserSectionsLoading();
   try {
     const [usersResponse, groupsResponse] = await Promise.all([
       api.listUsers(),
@@ -84,6 +106,7 @@ export async function loadUsers(): Promise<void> {
 
     setAvailableGroups(groups);
     setAllUsers(withCurrentUser(users));
+    clearUserSectionsStatus();
 
     // Apply current filters
     applyFilters();
@@ -125,6 +148,10 @@ export async function loadUsers(): Promise<void> {
   } catch (error) {
     console.error('Failed to load users/groups:', error);
     showError('Failed to load users and groups');
+    // Issue #182: the toast fades; leave an inline error with a Retry in
+    // each section that has nothing else to show.
+    const detail = error instanceof Error ? error.message : '';
+    renderUserSectionsError(detail, () => { void loadUsers(); });
   }
 }
 
@@ -149,7 +176,7 @@ export async function deleteUser(userId: string): Promise<void> {
     showSuccess('User deleted successfully');
   } catch (error) {
     console.error('Failed to delete user:', error);
-    showError('Failed to delete user');
+    showError(`Failed to delete user: ${friendlyError(error)}`);
   }
 }
 
@@ -168,18 +195,26 @@ export async function bulkDeleteUsers(): Promise<void> {
   });
   if (!ok) return;
 
-  try {
-    // Delete users in parallel
-    await Promise.all(
-      Array.from(selectedUserIds).map(userId => api.deleteUser(userId))
-    );
+  const ids = Array.from(selectedUserIds);
+  const labels = new Map(allUsers.map(u => [u.id, u.email]));
+  const results = await Promise.allSettled(ids.map(userId => api.deleteUser(userId)));
 
-    clearSelectedUserIds();
-    await loadUsers();
+  const failed: string[] = [];
+  results.forEach((result, i) => {
+    if (result.status === 'fulfilled') {
+      removeSelectedUserId(ids[i]!);
+    } else {
+      console.error('Failed to delete user:', ids[i], result.reason);
+      failed.push(labels.get(ids[i]!) ?? ids[i]!);
+    }
+  });
+
+  await loadUsers();
+
+  if (failed.length > 0) {
+    showError(`Failed to delete ${failed.length} of ${ids.length} user(s): ${failed.join(', ')}`);
+  } else {
     showSuccess(`Successfully deleted ${count} user(s)`);
-  } catch (error) {
-    console.error('Failed to delete users:', error);
-    showError('Failed to delete some users');
   }
 }
 
@@ -246,6 +281,7 @@ export async function bulkAddToGroup(groupId: string): Promise<void> {
     // Deselect only the successfully-applied users so any skipped
     // (contradictory) users stay selected for the admin to fix.
     applicable.forEach(({ userId }) => removeSelectedUserId(userId));
+    await refreshCurrentUserAccess(applicable.map(({ userId }) => userId));
     await loadUsers();
     showSuccess(`Successfully added ${applicable.length} user(s) to group`);
   } catch (error) {

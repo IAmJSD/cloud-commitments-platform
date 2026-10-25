@@ -651,6 +651,69 @@ func TestSavingsPlansProber_DedupedAcrossProductTypes(t *testing.T) {
 	assert.Len(t, compute, 1, "duplicate (dur, pay) must collapse to one Combo")
 }
 
+// TestSavingsPlansProber_DuplicatesAndNormalizedCollisionsPinned pins the
+// exact, ordered output for one plan type whose pages repeat raw
+// (durationSeconds, payment) pairs and also carry different raw spellings
+// that normalize to the same (term, payment). collect() alone is the dedupe:
+// the output keeps the first occurrence of each normalized pair, in page
+// order, and drops unknown durations and legacy utilization tokens. Issue
+// #325 removed a raw-pair pre-dedupe that ran before collect(); this test
+// shows the output is unchanged without it.
+func TestSavingsPlansProber_DuplicatesAndNormalizedCollisionsPinned(t *testing.T) {
+	const twoYearSeconds = 2 * 31536000
+	sp := func(dur int64, pay string) savingsplanstypes.SavingsPlanOffering {
+		return spOffering(dur, savingsplanstypes.SavingsPlanPaymentOption(pay))
+	}
+	pages := [][]savingsplanstypes.SavingsPlanOffering{
+		{
+			sp(threeYearSeconds, "No Upfront"),
+			sp(oneYearSeconds, "All Upfront"),
+			sp(oneYearSeconds, "All Upfront"), // exact raw duplicate
+			sp(oneYearSeconds, "ALL_UPFRONT"), // normalizes to (1, all-upfront)
+			sp(twoYearSeconds, "All Upfront"), // unknown term: dropped
+			sp(twoYearSeconds, "All Upfront"), // duplicate of a dropped pair
+			sp(oneYearSeconds, "Heavy Utilization"),
+			sp(oneYearSeconds, "Heavy Utilization"),
+		},
+		{
+			sp(threeYearSeconds, "no-upfront"),      // normalized collision across pages
+			sp(oneYearSeconds, "All Upfront"),       // exact raw duplicate across pages
+			sp(oneYearSeconds, "Partial Upfront"),   // first new pair on page 2
+			sp(threeYearSeconds, "NO_UPFRONT"),      // another normalized collision
+			sp(oneYearSeconds, "partial_upfront"),   // collides with the pair above
+			sp(threeYearSeconds, "Partial Upfront"), // second new pair on page 2
+		},
+	}
+	calls := 0
+	fake := &fakeSavingsPlans{
+		fn: func(in *savingsplans.DescribeSavingsPlansOfferingsInput) (*savingsplans.DescribeSavingsPlansOfferingsOutput, error) {
+			if in.PlanTypes[0] != savingsplanstypes.SavingsPlanTypeCompute {
+				return &savingsplans.DescribeSavingsPlansOfferingsOutput{}, nil
+			}
+			out := &savingsplans.DescribeSavingsPlansOfferingsOutput{SearchResults: pages[calls]}
+			calls++
+			if calls < len(pages) {
+				out.NextToken = aws.String("page-2")
+			}
+			return out, nil
+		},
+	}
+	p := &SavingsPlansProber{NewClient: func(_ aws.Config) SavingsPlansDescribeOfferings { return fake }}
+
+	got, err := p.Probe(context.Background(), aws.Config{})
+	require.NoError(t, err)
+	require.Equal(t, len(pages), calls, "both Compute pages must be read")
+
+	const svc = "savings-plans-compute"
+	want := []Combo{
+		{Provider: "aws", Service: svc, TermYears: 3, Payment: "no-upfront"},
+		{Provider: "aws", Service: svc, TermYears: 1, Payment: "all-upfront"},
+		{Provider: "aws", Service: svc, TermYears: 1, Payment: "partial-upfront"},
+		{Provider: "aws", Service: svc, TermYears: 3, Payment: "partial-upfront"},
+	}
+	assert.Equal(t, want, got, "first occurrence of each normalized pair, in page order")
+}
+
 // TestDefaultProbers_IncludesSavingsPlans verifies that SavingsPlansProber is
 // registered in DefaultProbers.
 func TestDefaultProbers_IncludesSavingsPlans(t *testing.T) {

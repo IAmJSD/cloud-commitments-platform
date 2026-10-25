@@ -974,7 +974,7 @@ func TestGetReshapeRecommendations_EmptyRegionUsesConfigRegion(t *testing.T) {
 		reshapeEC2Factory: func(_ aws.Config) reshapeEC2Client {
 			return &fakeReshapeEC2Stub{
 				instances: []ec2svc.ConvertibleRI{
-					{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, CurrencyCode: "USD"},
+					{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, CurrencyCode: "USD", Duration: 31536000},
 				},
 			}
 		},
@@ -1060,7 +1060,7 @@ func TestGetReshapeRecommendations_AlternativeCurrencyFromRIs(t *testing.T) {
 				auth:   &mockAuthForExchange{},
 				reshapeEC2Factory: func(_ aws.Config) reshapeEC2Client {
 					return &fakeReshapeEC2Stub{instances: []ec2svc.ConvertibleRI{
-						{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, CurrencyCode: tc.riCurrency},
+						{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, CurrencyCode: tc.riCurrency, Duration: 31536000},
 					}}
 				},
 				reshapeRecsFactory: func(_ aws.Config) reshapeRecsClient {
@@ -1422,7 +1422,7 @@ func TestListExchangeableAzureRIs_SubscriptionIDFiltersToOwnRows(t *testing.T) {
 	}
 }
 
-// --- Azure credential-resolution path tests (issue #871) ---
+// --- Azure credential-resolution path tests (issue LeanerCloud/cloud-commitments-cli#932) ---
 //
 // These tests exercise the production path of buildAzureExchangeClient, which
 // was previously hardcoded to azidentity.NewDefaultAzureCredential. The fix
@@ -1440,8 +1440,9 @@ func TestListExchangeableAzureRIs_SubscriptionIDFiltersToOwnRows(t *testing.T) {
 // TestListExchangeableAzureRIs_NoAzureAccountRegistered verifies that when no
 // Azure CloudAccount is registered for the requested subscription, the handler
 // returns an empty reservations list (graceful empty state) rather than a 500.
-// This is the fix for issue #871: Lambda has no ambient Azure identity so the
-// old DefaultAzureCredential call failed, producing an opaque 500.
+// This is the fix for issue LeanerCloud/cloud-commitments-cli#932: Lambda has no
+// ambient Azure identity so the old DefaultAzureCredential call failed,
+// producing an opaque 500.
 func TestListExchangeableAzureRIs_NoAzureAccountRegistered(t *testing.T) {
 	mockStore := &MockConfigStore{}
 	// GetCloudAccountByExternalID returns (nil, nil) — no account for this sub.
@@ -1642,7 +1643,7 @@ func (m *mockAuthForExchange) HasPermissionForConstraintsAPI(_ context.Context, 
 func (m *mockAuthForExchange) GetUserPermissionsAPI(_ context.Context, _ string) (any, error) {
 	return nil, nil
 }
-func (m *mockAuthForExchange) CreateAPIKeyAPI(_ context.Context, _ string, _ any) (any, error) {
+func (m *mockAuthForExchange) CreateAPIKeyAPI(_ context.Context, _ string, _ auth.APICreateAPIKeyRequest) (any, error) {
 	return nil, nil
 }
 func (m *mockAuthForExchange) ListUserAPIKeysAPI(_ context.Context, _ string) (any, error) {
@@ -1806,32 +1807,26 @@ func TestGetExchangeQuote_InvalidOfferingIDFormat(t *testing.T) {
 }
 
 func TestGetExchangeQuote_ValidOfferingIDPassesFormat(t *testing.T) {
-	// A well-formed UUID should pass the format check. The AWS call will
-	// fail because there's no real EC2 client wired -- but the test
-	// exercises that the regex guard does NOT fire on a valid UUID.
-	// We stub the handler to short-circuit before the AWS call.
-	called := false
-	stub := &stubTargetOfferingsEC2{
-		instances: []ec2svc.ConvertibleRI{},
+	// A well-formed UUID should pass the format check and reach the quote
+	// call. The quote function is stubbed so the test never resolves AWS
+	// credentials or calls EC2 (#855).
+	var quotes []exchange.ExchangeQuoteRequest
+	h := &Handler{
+		auth: &mockAuthForExchange{},
+		exchangeQuoteFn: func(_ context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error) {
+			quotes = append(quotes, req)
+			return &exchange.ExchangeQuoteSummary{IsValidExchange: true}, nil
+		},
 	}
-	_ = stub
-	_ = called
+	h.awsCfgOnce.Do(func() { h.awsCfg = aws.Config{Region: "us-east-1"} })
 
-	h := &Handler{auth: &mockAuthForExchange{}}
-
-	// The handler calls exchange.GetExchangeQuote next; that will fail
-	// with a config error in test (no real AWS cred). We only care that
-	// the regex guard doesn't block a valid UUID -- so any error after
-	// passing the UUID check is acceptable.
 	_, err := h.getExchangeQuote(context.Background(), &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer test-token"},
 		Body:    `{"ri_ids":["ri-123"],"targets":[{"offering_id":"4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91","count":1}]}`,
 	})
-	// Must NOT be the UUID format error
-	if err != nil {
-		assert.NotContains(t, err.Error(), "offering UUID",
-			"a valid UUID must not be rejected by the format check")
-	}
+	require.NoError(t, err, "a valid UUID must not be rejected by the format check")
+	require.Len(t, quotes, 1, "a valid UUID must reach the quote call")
+	assert.Equal(t, "4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91", quotes[0].Targets[0].OfferingID)
 }
 
 func TestValidateExecuteExchangeBody_InvalidOfferingIDFormat(t *testing.T) {
@@ -2211,34 +2206,34 @@ func TestExecuteExchange_SessionScopeLookupErrorFailsClosed(t *testing.T) {
 // getExchangeQuote must resolve the region from the AWS SDK chain when
 // the caller omits it, matching getReshapeRecommendations, instead of
 // hardcoding us-east-1. We pre-seal awsCfgOnce with a non-default region
-// and verify the quote call receives that region (the call fails because
-// there is no real AWS SDK, but the region check happens first via body
-// validation passing; here we verify no 400 for missing region).
+// and verify the (stubbed, #855) quote call receives that region and the
+// response echoes it.
 func TestGetExchangeQuote_EmptyRegionResolvesFromSDK(t *testing.T) {
 	const cfgRegion = "eu-west-1"
-	h := &Handler{auth: &mockAuthForExchange{}}
+	var quotes []exchange.ExchangeQuoteRequest
+	h := &Handler{
+		auth: &mockAuthForExchange{},
+		exchangeQuoteFn: func(_ context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error) {
+			quotes = append(quotes, req)
+			return &exchange.ExchangeQuoteSummary{IsValidExchange: true}, nil
+		},
+	}
 	// Pre-seal awsCfgOnce so loadAWSConfigWithRegion returns cfgRegion
 	// without making a real SDK call.
 	h.awsCfgOnce.Do(func() {
 		h.awsCfg = aws.Config{Region: cfgRegion}
 	})
 
-	// The quote call will fail (no real AWS endpoint), but it must NOT fail
-	// with a 400 "region is required" — region resolution from the SDK is
-	// the accepted path for quote (non-mutation). The error will be a 500
-	// from exchange.GetExchangeQuote failing against no real AWS.
-	_, err := h.getExchangeQuote(context.Background(), &events.LambdaFunctionURLRequest{
+	resp, err := h.getExchangeQuote(context.Background(), &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer test-token"},
-		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"off-1"}`,
+		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"off-1","target_count":1}`,
 	})
-	// We expect either no error or a 500 from the AWS call — never a 400
-	// complaining about a missing region.
-	if err != nil {
-		ce, ok := IsClientError(err)
-		require.True(t, ok, "expected ClientError, got: %v", err)
-		assert.NotEqual(t, 400, ce.code,
-			"getExchangeQuote must not return 400 for a missing region; it must resolve from the SDK chain")
-	}
+	require.NoError(t, err, "getExchangeQuote must not reject a missing region; it must resolve from the SDK chain")
+	require.Len(t, quotes, 1)
+	assert.Equal(t, cfgRegion, quotes[0].Region, "the quote must use the SDK-resolved region")
+	typed, ok := resp.(ExchangeQuoteResponse)
+	require.True(t, ok, "expected ExchangeQuoteResponse, got %T", resp)
+	assert.Equal(t, cfgRegion, typed.Region, "the response must echo the SDK-resolved region")
 }
 
 // TestExchangeQuoteResponse_MarshalsRegionAlongsideSummaryFields pins
@@ -2592,20 +2587,34 @@ func newFourEyesExecuteExchangeHandler(t *testing.T, store *MockConfigStore) *Ha
 	}
 }
 
+// spyOnAWSExchange installs an executeExchangeFn that counts calls and
+// reports success, so a 4-eyes test asserts that no exchange was submitted.
+// The real executor would fail on missing AWS credentials, so an error alone
+// would not prove the gate held (issue #679).
+func spyOnAWSExchange(h *Handler) *int {
+	calls := 0
+	h.executeExchangeFn = func(context.Context, exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
+		calls++
+		return "exch-must-not-run", &exchange.ExchangeQuoteSummary{PaymentDueUSDStr: "0"}, nil
+	}
+	return &calls
+}
+
 // TestExecuteExchange_FourEyesRefusesDirectExecute pins issue #517: with
 // RequireDifferentApprover on, the direct AWS execute endpoint must refuse
-// before any exchange is attempted. The handler has no exchange client or
-// idempotency store wired, so any code path past the gate would panic.
+// before any exchange is attempted. A spy executor records any exchange call.
 func TestExecuteExchange_FourEyesRefusesDirectExecute(t *testing.T) {
 	ctx := context.Background()
 	store := &MockConfigStore{}
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{RequireDifferentApprover: true}, nil)
 	h := newFourEyesExecuteExchangeHandler(t, store)
+	exchangeCalls := spyOnAWSExchange(h)
 
 	_, err := h.executeExchange(ctx, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer exchange-token"},
 		Body:    fourEyesExchangeBody,
 	})
+	assert.Equal(t, 0, *exchangeCalls, "no exchange may be submitted while 4-eyes is on")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a ClientError, got: %v", err)
@@ -2620,11 +2629,13 @@ func TestExecuteExchange_FourEyesPolicyLookupErrorFailsClosed(t *testing.T) {
 	store := &MockConfigStore{}
 	store.On("GetGlobalConfig", mock.Anything).Return(nil, errors.New("db down"))
 	h := newFourEyesExecuteExchangeHandler(t, store)
+	exchangeCalls := spyOnAWSExchange(h)
 
 	_, err := h.executeExchange(ctx, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer exchange-token"},
 		Body:    fourEyesExchangeBody,
 	})
+	assert.Equal(t, 0, *exchangeCalls, "an unreadable 4-eyes policy must not let the exchange run")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "4-eyes policy check")
 	_, isClient := IsClientError(err)
@@ -2717,4 +2728,89 @@ func TestExecuteApprovedExchange_ReservationInfrastructureError_HidesDetail(t *t
 	require.NoError(t, err)
 	assert.Equal(t, "daily spending cap check failed", resp.(map[string]any)["reason"])
 	assert.False(t, called)
+}
+
+// A convertible RI with a non-positive Duration has no computable monthly
+// cost. Converting it to MonthlyCost=0 would make reshape's pricing gate
+// treat it as free and skip the dollar-units check, so it must be excluded.
+func TestConvertToExchangeTypes_ExcludesNonPositiveDuration(t *testing.T) {
+	valid := ec2svc.ConvertibleRI{
+		ReservedInstanceID: "ri-valid", InstanceType: "m5.large", InstanceCount: 2,
+		NormalizationFactor: 4, FixedPrice: 8760, UsagePrice: 0.01, Duration: 31536000, CurrencyCode: "USD",
+	}
+	instances := []ec2svc.ConvertibleRI{
+		{ReservedInstanceID: "ri-zero", InstanceType: "m5.large", InstanceCount: 1, FixedPrice: 8760, Duration: 0},
+		valid,
+		{ReservedInstanceID: "ri-neg", InstanceType: "c5.large", InstanceCount: 1, FixedPrice: 8760, Duration: -1},
+	}
+
+	riInfos, _, excluded := convertToExchangeTypes(instances, nil)
+
+	require.Len(t, riInfos, 1)
+	assert.Equal(t, "ri-valid", riInfos[0].ID)
+	assert.InDelta(t, (8760.0/8760+0.01)*730, riInfos[0].MonthlyCost, 1e-6)
+	assert.Equal(t, int64(31536000), riInfos[0].TermSeconds)
+	require.Len(t, excluded, 2)
+	assert.Equal(t, "ri-zero", excluded[0].RIID)
+	assert.Equal(t, "ri-neg", excluded[1].RIID)
+	assert.Contains(t, excluded[0].Reason, "term length")
+}
+
+// The reshape response must name RIs left out of cost-based analysis so the
+// UI can show them instead of silently giving them no recommendation.
+func TestGetReshapeRecommendations_ReportsExcludedRIs(t *testing.T) {
+	mockStore := &MockConfigStore{}
+	mockStore.On("ListStoredRecommendations", mock.Anything, mock.Anything).
+		Return([]config.RecommendationRecord(nil), nil)
+	h := &Handler{
+		config: mockStore,
+		auth:   &mockAuthForExchange{},
+		reshapeEC2Factory: func(_ aws.Config) reshapeEC2Client {
+			return &fakeReshapeEC2Stub{instances: []ec2svc.ConvertibleRI{
+				{ReservedInstanceID: "ri-bad", InstanceType: "m5.xlarge", InstanceCount: 1, FixedPrice: 8760, Duration: 0, CurrencyCode: "USD"},
+				{ReservedInstanceID: "ri-ok", InstanceType: "m5.xlarge", InstanceCount: 1, FixedPrice: 8760, Duration: 31536000, CurrencyCode: "USD"},
+			}}
+		},
+		reshapeRecsFactory: func(_ aws.Config) reshapeRecsClient {
+			return &fakeReshapeRecsStub{utilization: []recommendations.RIUtilization{
+				{ReservedInstanceID: "ri-bad", UtilizationPercent: 50.0},
+				{ReservedInstanceID: "ri-ok", UtilizationPercent: 50.0},
+			}}
+		},
+		reshapeAccountResolver: func(_ context.Context) (string, error) { return "", nil },
+	}
+	h.awsCfgOnce.Do(func() { h.awsCfg = aws.Config{Region: "us-east-1"} })
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer test-token"},
+		QueryStringParameters: map[string]string{"lookback_days": "30", "threshold": "95.0"},
+	}
+	out, err := h.getReshapeRecommendations(context.Background(), req)
+	require.NoError(t, err)
+	resp, ok := out.(*ReshapeRecommendationsResponse)
+	require.True(t, ok)
+
+	require.Len(t, resp.ExcludedRIs, 1)
+	assert.Equal(t, "ri-bad", resp.ExcludedRIs[0].RIID)
+	assert.NotEmpty(t, resp.ExcludedRIs[0].Reason)
+	require.NotEmpty(t, resp.Recommendations)
+	for _, r := range resp.Recommendations {
+		assert.NotEqual(t, "ri-bad", r.SourceRIID)
+	}
+	assert.Contains(t, resp.Recommendations[0].SourceRIID, "ri-ok")
+
+	raw, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"excluded_ris":[{"ri_id":"ri-bad"`)
+}
+
+func TestMonthlyCostFromConvertibleRI_NonPositiveDurationErrors(t *testing.T) {
+	for _, d := range []int64{0, -1} {
+		_, err := monthlyCostFromConvertibleRI(ec2svc.ConvertibleRI{ReservedInstanceID: "ri-x", FixedPrice: 100, Duration: d})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "ri-x")
+	}
+	cost, err := monthlyCostFromConvertibleRI(ec2svc.ConvertibleRI{FixedPrice: 8760, Duration: 31536000})
+	require.NoError(t, err)
+	assert.InDelta(t, 730.0, cost, 1e-6)
 }

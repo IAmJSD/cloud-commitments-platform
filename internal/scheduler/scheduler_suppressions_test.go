@@ -244,3 +244,117 @@ func TestApplySuppressionIndex_DoesNotMutateCallerSlice(t *testing.T) {
 
 // Suppress unused-import warning in case this is the only file that imports pgx.
 var _ pgx.Tx = (pgx.Tx)(nil)
+
+// ec2VariantRec is a zonal or regional EC2 rec whose platform and tenancy live
+// in Details, as the collector stores them.
+func ec2VariantRec(id, az, platform, tenancy string) config.RecommendationRecord {
+	return config.RecommendationRecord{
+		ID: id, Provider: "aws", Service: "ec2", Region: "us-east-1",
+		ResourceType: "m5.large", Count: 5, CloudAccountID: strPtr("acct-1"),
+		AvailabilityZone: az,
+		Details:          []byte(`{"availability_zone":"` + az + `","platform":"` + platform + `","tenancy":"` + tenancy + `"}`),
+	}
+}
+
+// TestApplySuppressions_OnlyThePurchasedVariant is the issue #816 regression:
+// buying the us-east-1a Linux/default variant must reduce only that rec. Before
+// the fix the 6-tuple key subtracted the purchase from the us-east-1b,
+// regional, Windows and dedicated siblings too, hiding them for the whole
+// grace window. The suppressions come from the real BuildSuppressions, so the
+// write and read sides are exercised together.
+func TestApplySuppressions_OnlyThePurchasedVariant(t *testing.T) {
+	ctx := context.Background()
+	bought := ec2VariantRec("bought", "us-east-1a", "Linux/UNIX", "default")
+	siblings := []config.RecommendationRecord{
+		ec2VariantRec("other-az", "us-east-1b", "Linux/UNIX", "default"),
+		ec2VariantRec("regional", "", "Linux/UNIX", "default"),
+		ec2VariantRec("windows", "us-east-1a", "Windows", "default"),
+		ec2VariantRec("dedicated", "us-east-1a", "Linux/UNIX", "dedicated"),
+	}
+	purchase := bought
+	purchase.Count = 3
+	sups := config.BuildSuppressions([]config.RecommendationRecord{purchase}, "e1",
+		&config.GlobalConfig{GracePeriodDays: map[string]int{"aws": 7}}, time.Now())
+	require.Len(t, sups, 1)
+
+	store := &mockSuppressionStore{recs: append([]config.RecommendationRecord{bought}, siblings...), sups: sups}
+	s := &Scheduler{config: store}
+
+	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	require.NoError(t, err)
+	got := map[string]config.RecommendationRecord{}
+	for _, r := range recs {
+		got[r.ID] = r
+	}
+	require.Len(t, got, 5, "no sibling may be hidden by the purchase")
+	assert.Equal(t, 2, got["bought"].Count, "5 - 3 on the purchased variant")
+	assert.Equal(t, 3, got["bought"].SuppressedCount)
+	for _, sib := range siblings {
+		assert.Equal(t, 5, got[sib.ID].Count, "%s must keep its full count", sib.ID)
+		assert.Zero(t, got[sib.ID].SuppressedCount, "%s must carry no suppression badge", sib.ID)
+		assert.Nil(t, got[sib.ID].PrimarySuppressionExecutionID, sib.ID)
+	}
+}
+
+// TestApplySuppressions_LegacyRowIsAWildcard pins the expand/contract rule of
+// issue #816: a row without a variant (written before migration 000134, or by
+// pre-#816 code during a rolling deploy) still applies to every rec on its
+// 6-tuple, as before, while a variant row applies only to its own variant and
+// adds to the legacy count there.
+func TestApplySuppressions_LegacyRowIsAWildcard(t *testing.T) {
+	future := time.Now().Add(24 * time.Hour)
+	legacy := config.PurchaseSuppression{ExecutionID: "legacy", AccountID: "acct-1", Provider: "aws",
+		Service: "ec2", Region: "us-east-1", ResourceType: "m5.large", SuppressedCount: 1, ExpiresAt: future}
+	scoped := legacy
+	scoped.ExecutionID = "scoped"
+	scoped.SuppressedCount = 2
+	scoped.Variant = &config.SuppressionVariant{AvailabilityZone: "us-east-1a", Platform: "Linux/UNIX", Tenancy: "default"}
+
+	recs := []config.RecommendationRecord{
+		ec2VariantRec("a-linux", "us-east-1a", "Linux/UNIX", "default"),
+		ec2VariantRec("b-linux", "us-east-1b", "Linux/UNIX", "default"),
+	}
+	out := applySuppressionIndex(recs, aggregateSuppressions([]config.PurchaseSuppression{legacy, scoped}))
+	require.Len(t, out, 2)
+	assert.Equal(t, 2, out[0].Count, "a-linux: 5 - 1 legacy - 2 scoped")
+	assert.Equal(t, 3, out[0].SuppressedCount)
+	require.NotNil(t, out[0].PrimarySuppressionExecutionID)
+	assert.Equal(t, "scoped", *out[0].PrimarySuppressionExecutionID)
+	assert.Equal(t, 4, out[1].Count, "b-linux: only the legacy wildcard applies")
+	require.NotNil(t, out[1].PrimarySuppressionExecutionID)
+	assert.Equal(t, "legacy", *out[1].PrimarySuppressionExecutionID)
+}
+
+// TestApplySuppressions_NonComputeVariantMatches: a non-EC2 rec has an empty
+// variant (empty AZ, platform and tenancy), which is a known value and must match
+// the row its own purchase wrote, exactly as the 6-tuple did before #816.
+func TestApplySuppressions_NonComputeVariantMatches(t *testing.T) {
+	rds := config.RecommendationRecord{ID: "rds", Provider: "aws", Service: "rds", Region: "us-east-1",
+		ResourceType: "db.t4g.micro", Engine: "postgres", Count: 5, CloudAccountID: strPtr("acct-1"),
+		Details: []byte(`{"engine":"postgres","deployment_option":"single-az"}`)}
+	purchase := rds
+	purchase.Count = 2
+	sups := config.BuildSuppressions([]config.RecommendationRecord{purchase}, "e1", &config.GlobalConfig{}, time.Now())
+	require.Len(t, sups, 1)
+	require.NotNil(t, sups[0].Variant)
+
+	out := applySuppressionIndex([]config.RecommendationRecord{rds}, aggregateSuppressions(sups))
+	require.Len(t, out, 1)
+	assert.Equal(t, 3, out[0].Count)
+}
+
+// TestApplySuppressions_UnreadableRecDetailsMatchEveryRow: a rec whose Details
+// cannot be read has no known variant, so every row on its 6-tuple applies
+// (the pre-#816 behavior: over-suppress, never over-show).
+func TestApplySuppressions_UnreadableRecDetailsMatchEveryRow(t *testing.T) {
+	future := time.Now().Add(24 * time.Hour)
+	sup := config.PurchaseSuppression{ExecutionID: "e1", AccountID: "acct-1", Provider: "aws",
+		Service: "ec2", Region: "us-east-1", ResourceType: "m5.large", SuppressedCount: 2, ExpiresAt: future,
+		Variant: &config.SuppressionVariant{AvailabilityZone: "us-east-1a", Platform: "Linux/UNIX", Tenancy: "default"}}
+	rec := ec2VariantRec("broken", "us-east-1b", "Windows", "default")
+	rec.Details = []byte(`{"platform":42}`)
+
+	out := applySuppressionIndex([]config.RecommendationRecord{rec}, aggregateSuppressions([]config.PurchaseSuppression{sup}))
+	require.Len(t, out, 1)
+	assert.Equal(t, 3, out[0].Count)
+}
