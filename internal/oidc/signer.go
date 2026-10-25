@@ -30,6 +30,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"sync"
 )
 
 // p256SigComponentLen is the fixed byte length of each of the R and S
@@ -55,7 +56,8 @@ type Signer interface {
 	Sign(ctx context.Context, digest []byte) ([]byte, error)
 
 	// PublicKey returns the public key corresponding to the signer.
-	// Cached after the first call per implementation. Returns
+	// Cached after the first successful call per implementation; a failed
+	// lookup is returned and retried on the next call. Returns
 	// *ecdsa.PublicKey for ES256 signers.
 	PublicKey(ctx context.Context) (crypto.PublicKey, error)
 
@@ -192,6 +194,56 @@ func (s *LocalSigner) PublicKey(_ context.Context) (crypto.PublicKey, error) {
 // KeyID returns the stable identifier for this local signer.
 func (s *LocalSigner) KeyID(_ context.Context) (string, error) {
 	return s.kid, nil
+}
+
+// publicKeyCache memoizes a KMS-backed signer's public key and kid.
+//
+// Only a successful resolution is cached. A failed fetch (a throttle, a
+// network blip, or a caller whose ctx was already canceled) is returned to
+// that caller and the next call fetches again; caching the error as well, as
+// the earlier sync.Once did, poisoned the process-wide signer until the
+// instance recycled (audit finding A03-014). The mutex serializes first
+// callers, so concurrent callers never issue parallel fetches and a success
+// is fetched exactly once.
+type publicKeyCache struct {
+	pubKey *ecdsa.PublicKey
+	kid    string
+	mu     sync.Mutex
+}
+
+// get returns the cached key and kid, calling fetch to resolve them when
+// nothing has been cached yet.
+func (c *publicKeyCache) get(ctx context.Context, fetch func(context.Context) (*ecdsa.PublicKey, error)) (*ecdsa.PublicKey, string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pubKey != nil {
+		return c.pubKey, c.kid, nil
+	}
+	pub, err := fetch(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	kid, err := ComputeKeyID(pub)
+	if err != nil {
+		return nil, "", err
+	}
+	c.pubKey, c.kid = pub, kid
+	return pub, kid, nil
+}
+
+// publicKey adapts get to Signer.PublicKey, returning an untyped nil on error.
+func (c *publicKeyCache) publicKey(ctx context.Context, fetch func(context.Context) (*ecdsa.PublicKey, error)) (crypto.PublicKey, error) {
+	pub, _, err := c.get(ctx, fetch)
+	if err != nil {
+		return nil, err
+	}
+	return pub, nil
+}
+
+// keyID adapts get to Signer.KeyID.
+func (c *publicKeyCache) keyID(ctx context.Context, fetch func(context.Context) (*ecdsa.PublicKey, error)) (string, error) {
+	_, kid, err := c.get(ctx, fetch)
+	return kid, err
 }
 
 // ComputeKeyID returns a stable kid for a public key.

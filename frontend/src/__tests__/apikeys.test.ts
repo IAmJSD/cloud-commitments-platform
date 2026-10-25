@@ -874,7 +874,7 @@ describe('API Keys Module', () => {
       jest.useRealTimers();
     });
 
-    test('copy button shows alert on clipboard error', async () => {
+    test('copy failure shows an inline error and selects the key, not a native alert (#705)', async () => {
       const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
       const writeTextMock = jest.fn().mockRejectedValue(new Error('Clipboard error'));
       Object.defineProperty(navigator, 'clipboard', {
@@ -885,12 +885,24 @@ describe('API Keys Module', () => {
 
       showKeyCreatedModal('test-api-key');
 
-      const copyBtn = document.getElementById('copy-apikey-btn');
-      copyBtn?.click();
+      const copyError = document.getElementById('apikey-copy-error') as HTMLElement;
+      expect(copyError.getAttribute('role')).toBe('alert');
+      expect(copyError.classList.contains('hidden')).toBe(true);
+
+      document.getElementById('copy-apikey-btn')?.click();
 
       await new Promise(resolve => setTimeout(resolve, 0));
 
-      expect(window.alert).toHaveBeenCalledWith('Failed to copy to clipboard. Please copy manually.');
+      expect(window.alert).not.toHaveBeenCalled();
+      expect(copyError.classList.contains('hidden')).toBe(false);
+      expect(copyError.textContent).toContain('The key is selected');
+      expect(window.getSelection()?.toString()).toBe('test-api-key');
+
+      // A later successful copy clears the error again.
+      writeTextMock.mockResolvedValueOnce(undefined);
+      document.getElementById('copy-apikey-btn')?.click();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(copyError.classList.contains('hidden')).toBe(true);
       consoleError.mockRestore();
     });
 
@@ -950,7 +962,7 @@ describe('API Keys Module', () => {
 
       await revokeApiKey('key-1');
 
-      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to revoke API key');
+      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to revoke API key: Revoke failed');
       expect(document.getElementById('create-apikey-error')?.classList.contains('hidden')).toBe(true);
       consoleError.mockRestore();
     });
@@ -965,7 +977,7 @@ describe('API Keys Module', () => {
       await revokeApiKey('key-1');
 
       expect(consoleError).toHaveBeenCalledWith('Failed to revoke API key:', expect.any(Error));
-      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to revoke API key');
+      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to revoke API key: Revoke failed');
       consoleError.mockRestore();
     });
   });
@@ -1019,7 +1031,7 @@ describe('API Keys Module', () => {
       await deleteApiKey('key-1');
 
       expect(consoleError).toHaveBeenCalledWith('Failed to delete API key:', expect.any(Error));
-      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to delete API key');
+      expect(document.querySelector('.toast-error')?.querySelector('.toast-message')?.textContent).toBe('Failed to delete API key: Delete failed');
       consoleError.mockRestore();
     });
   });
@@ -1219,6 +1231,24 @@ describe('API Keys Module', () => {
 
       const container = document.getElementById('apikeys-list');
       expect(container?.innerHTML).toContain('Never');
+    });
+
+    test('one malformed last_used_at degrades to one cell instead of blanking the table (#136)', async () => {
+      const mockKeys = [
+        { id: 'key-bad', name: 'Bad Timestamp', key_prefix: 'bad111', is_active: true,
+          created_at: '2024-01-15T10:00:00Z', last_used_at: 'not-a-date' },
+        { id: 'key-ok', name: 'Leaked Key', key_prefix: 'ok2222', is_active: true,
+          created_at: '2024-01-15T10:00:00Z', last_used_at: '2024-01-16T15:30:00Z' },
+      ];
+
+      (api.getApiKeys as jest.Mock).mockResolvedValue({ api_keys: mockKeys });
+      await loadApiKeys();
+
+      const container = document.getElementById('apikeys-list');
+      const rows = container?.querySelectorAll('tbody tr');
+      expect(rows).toHaveLength(2);
+      expect(rows?.[0]?.textContent).toContain('--');
+      expect(container?.querySelectorAll('.revoke-key-btn')).toHaveLength(2);
     });
 
     // #492: populated last_used_at renders relative time with ISO title for hover
