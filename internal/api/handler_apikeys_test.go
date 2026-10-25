@@ -332,9 +332,8 @@ func TestHandler_createAPIKey_PasswordDecodedBeforeForwarding(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
 	mockAuth.grantAdmin()
 	mockRateLimiter.On("AllowWithUser", ctx, "user-123", "admin").Return(true, nil)
-	mockAuth.On("CreateAPIKeyAPI", ctx, "user-123", mock.MatchedBy(func(req any) bool {
-		ckReq, ok := req.(CreateAPIKeyRequest)
-		return ok && ckReq.Password == "correct-horse"
+	mockAuth.On("CreateAPIKeyAPI", ctx, "user-123", mock.MatchedBy(func(req auth.APICreateAPIKeyRequest) bool {
+		return req.Password == "correct-horse"
 	})).Return(map[string]string{"api_key": "new-key-value", "key_id": "key-123"}, nil)
 
 	handler := &Handler{auth: mockAuth, rateLimiter: mockRateLimiter}
