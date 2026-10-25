@@ -110,18 +110,21 @@ export function applyColumnFilters<TRow, TColumnId extends string>(
   const entries = Object.entries(filters) as Array<[TColumnId, ColumnFilterKind]>;
   if (entries.length === 0) return [...rows];
 
-  return rows.filter((row) => {
-    for (const [col, filter] of entries) {
-      if (filter.kind === 'set') {
-        const cellValue = cellExtractors.categorical(row, col);
-        if (!filter.values.includes(cellValue)) return false;
-      } else {
-        const parsed = parseNumericFilter(filter.expr);
-        if (!parsed.ok) continue; // ignore broken expressions; UI shows the error
-        const cellNum = cellExtractors.numeric(row, col);
-        if (!parsed.predicate(cellNum)) return false;
-      }
+  // Build one row predicate per active filter up front, so each numeric
+  // expression is parsed once per call rather than once per row (#319).
+  // Broken numeric expressions are dropped here; the UI shows the error.
+  const checks: Array<(row: TRow) => boolean> = [];
+  for (const [col, filter] of entries) {
+    if (filter.kind === 'set') {
+      const values = filter.values;
+      checks.push((row) => values.includes(cellExtractors.categorical(row, col)));
+    } else {
+      const parsed = parseNumericFilter(filter.expr);
+      if (!parsed.ok) continue;
+      const predicate = parsed.predicate;
+      checks.push((row) => predicate(cellExtractors.numeric(row, col)));
     }
-    return true;
-  });
+  }
+
+  return rows.filter((row) => checks.every((check) => check(row)));
 }

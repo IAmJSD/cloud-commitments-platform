@@ -18,12 +18,11 @@ import (
 // purchase_executions.cloud_account_id FK must be ON DELETE RESTRICT after
 // the migration runs. Issue #606 — silent-orphan regression guard.
 func TestMigration_ExecutionsAccountFKRestrict(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	// Pin the schema at 000053 so the assertions exercise this migration's
@@ -33,7 +32,7 @@ func TestMigration_ExecutionsAccountFKRestrict(t *testing.T) {
 
 	// Verify the FK is RESTRICT after the migration.
 	var deleteAction string
-	err = pool.QueryRow(ctx, `
+	err := pool.QueryRow(ctx, `
 		SELECT confdeltype::text
 		FROM pg_constraint
 		WHERE conname = 'purchase_executions_cloud_account_id_fkey'
@@ -101,12 +100,11 @@ func TestMigration_ExecutionsAccountFKRestrict(t *testing.T) {
 // emergency rollback re-introduces the (documented) silent-orphan
 // behavior rather than leaving the database in an indeterminate state.
 func TestMigration_ExecutionsAccountFKRestrict_Rollback(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	// Pin the schema at 000053, then roll back exactly that migration. A
@@ -116,7 +114,7 @@ func TestMigration_ExecutionsAccountFKRestrict_Rollback(t *testing.T) {
 	require.NoError(t, migrations.RollbackMigrations(ctx, pool, migrationsPath, 1))
 
 	var deleteAction string
-	err = pool.QueryRow(ctx, `
+	err := pool.QueryRow(ctx, `
 		SELECT confdeltype::text
 		FROM pg_constraint
 		WHERE conname = 'purchase_executions_cloud_account_id_fkey'
