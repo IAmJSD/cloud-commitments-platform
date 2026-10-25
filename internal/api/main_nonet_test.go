@@ -19,10 +19,11 @@ import (
 // netGuard is the no-network guard TestMain installs for this package (#855).
 var netGuard *noNetworkGuard
 
-// afterAllTests runs after every test in the package has finished. The
-// integration build registers the shared PostgreSQL container's teardown here
-// (main_integration_test.go).
-var afterAllTests []func()
+// afterTests is teardown that TestMain runs once m.Run returns. A package has
+// one TestMain and this file owns it in every build, so build-tagged files
+// register their teardown here from init instead: main_integration_test.go
+// stops the Postgres server the integration tests share.
+var afterTests []func()
 
 // TestMain keeps this package's tests hermetic (#855). Before any test runs it:
 //
@@ -50,8 +51,8 @@ func TestMain(m *testing.M) {
 	}
 	netGuard = g
 	code := m.Run()
-	for _, f := range afterAllTests {
-		f()
+	for _, teardown := range afterTests {
+		teardown()
 	}
 	if blocked := g.stop(); len(blocked) > 0 {
 		fmt.Fprintf(os.Stderr, "FAIL: internal/api tests attempted %d outbound network call(s); stub the client instead (#855):\n  %s\n",

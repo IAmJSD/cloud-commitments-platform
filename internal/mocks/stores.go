@@ -2,6 +2,7 @@ package mocks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -19,6 +20,11 @@ import (
 // returns when no expectation is registered, so existing tests that call it
 // implicitly keep getting a non-empty token to thread through.
 const MockOwnerToken = "mock-owner-token"
+
+// MockInvocationToken is the default token MockConfigStore.ClaimCollectionInvocation
+// returns when no expectation is registered. It differs from MockOwnerToken
+// so tests can tell the re-stamped invocation token from the marker token.
+const MockInvocationToken = "mock-invocation-token"
 
 // MockConfigStore is a shared testify-based mock for config.StoreInterface.
 //
@@ -1611,15 +1617,6 @@ func (m *MockConfigStore) CleanupOldExecutions(ctx context.Context, retentionDay
 // don't set expectations for them. Tests that want to assert on these paths
 // register an explicit expectation via .On(...).Return(...).
 
-func (m *MockConfigStore) ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord) error {
-	m.record("ReplaceRecommendations", ctx, collectedAt, recs)
-	if !isExpected(&m.Mock, "ReplaceRecommendations") {
-		return nil
-	}
-	args := m.Called(ctx, collectedAt, recs)
-	return args.Error(0)
-}
-
 func (m *MockConfigStore) UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []config.RecommendationRecord, successfulCollects []config.SuccessfulCollect) error {
 	m.record("UpsertRecommendations", ctx, collectedAt, recs, successfulCollects)
 	if !isExpected(&m.Mock, "UpsertRecommendations") {
@@ -2050,6 +2047,31 @@ func executionSortsBefore(a, b *config.PurchaseExecution, now time.Time) bool {
 	return a.ScheduledDate.After(b.ScheduledDate)
 }
 
+// ErrHistorySummaryAggregateNotStubbed is HistorySummaryAggregate's default
+// error. The History handler treats an aggregate error as "totals unavailable"
+// and falls back to summarizing the rows it fetched, so tests written before
+// the aggregate existed (issue #675) keep asserting the page summary without
+// registering an expectation.
+var ErrHistorySummaryAggregateNotStubbed = errors.New("mock: HistorySummaryAggregate not stubbed")
+
+// HistorySummaryAggregate mocks the HistorySummaryAggregate operation. With no
+// expectation registered it returns ErrHistorySummaryAggregateNotStubbed.
+func (m *MockConfigStore) HistorySummaryAggregate(ctx context.Context, filter config.HistorySummaryFilter) (*config.HistorySummaryGroups, error) {
+	m.record("HistorySummaryAggregate", ctx, filter)
+	if !isExpected(&m.Mock, "HistorySummaryAggregate") {
+		return nil, ErrHistorySummaryAggregateNotStubbed
+	}
+	args := m.Called(ctx, filter)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).(*config.HistorySummaryGroups)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected *config.HistorySummaryGroups, got %T", args.Get(0)))
+	}
+	return v, args.Error(1)
+}
+
 // CountExecutionsByPlanAndStatus mocks the CountExecutionsByPlanAndStatus operation.
 func (m *MockConfigStore) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string, since time.Time) (map[string]config.ExecutionStatusCounts, error) {
 	m.record("CountExecutionsByPlanAndStatus", ctx, statuses, since)
@@ -2144,6 +2166,19 @@ func (m *MockConfigStore) ClearCollectionStarted(ctx context.Context, token stri
 		return nil
 	}
 	return m.Called(ctx, token).Error(0)
+}
+
+// ClaimCollectionInvocation mocks the ClaimCollectionInvocation operation.
+// Defaults to (MockInvocationToken, true, nil) when no expectation is
+// registered, so a token-carrying collect run that wins the lock keeps
+// owning the marker under a distinct invocation token.
+func (m *MockConfigStore) ClaimCollectionInvocation(ctx context.Context, markerToken string) (token string, ok bool, err error) {
+	m.record("ClaimCollectionInvocation", ctx, markerToken)
+	if !isExpected(&m.Mock, "ClaimCollectionInvocation") {
+		return MockInvocationToken, true, nil
+	}
+	args := m.Called(ctx, markerToken)
+	return args.String(0), args.Bool(1), args.Error(2)
 }
 
 // StampRIExchangeApprovedBy mocks the StampRIExchangeApprovedBy operation.

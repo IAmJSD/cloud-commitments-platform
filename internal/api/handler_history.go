@@ -45,6 +45,14 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, err
 	}
 
+	// The account scope is resolved once per request and applied to the
+	// actionable rows and the summary (issue #675). The paged stream applies
+	// the same rule per batch (markOutOfScope).
+	scope, err := h.loadHistoryScope(ctx, session)
+	if err != nil {
+		return nil, err
+	}
+
 	// Pull the actionable executions so the user can see (and cancel) their
 	// own in-flight approvals without waiting for the email. Executions live
 	// in a separate table (purchase_executions) from the completed
@@ -62,18 +70,19 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 	// sees current DB state and the next History load reflects the updated
 	// status. On servers the transitions fire in a goroutine; on Lambda they
 	// run synchronously before returning because the execution environment
-	// freezes once the response is out (issue #1170).
+	// freezes once the response is out (issue #1170). The sweep is deferred so
+	// it also runs after the summary aggregate below: on Lambda a synchronous
+	// sweep before it would make the cards count as "expired" the rows the
+	// list still shows as pending (issue #675). Pages fetched with a cursor
+	// do not list the actionable class, so they do not sweep it either.
 	var extra []config.PurchaseHistoryRecord
+	var staleExecs []config.PurchaseExecution
 	actionableIncomplete := false
 	if filters.Cursor == nil {
-		var staleExecs []config.PurchaseExecution
 		extra, staleExecs, actionableIncomplete = h.fetchExecutionsAsHistory(ctx, filters)
-		h.expireStaleExecutions(staleExecs)
-		extra, err = h.filterPurchaseHistoryByAllowedAccounts(ctx, session, extra)
-		if err != nil {
-			return nil, err
-		}
+		extra = scope.filter(extra)
 	}
+	defer h.expireStaleExecutions(staleExecs)
 
 	all := make([]config.PurchaseHistoryRecord, 0, len(page.rows)+len(extra))
 	all = append(all, page.rows...)
@@ -87,11 +96,18 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 		return all[i].Timestamp.After(all[j].Timestamp)
 	})
 
+	// The summary covers every row matching the filters and the caller's
+	// account scope, not just this page (issue #675), so it is the same on
+	// every page. It falls back to the page when the aggregate query fails,
+	// and SummaryComplete says which.
+	summary, summaryComplete := h.historySummary(ctx, filters, scope, all)
+
 	// Truncated is a single boolean: a count would reveal other tenants' row
 	// volume to a scoped user. has_more is judged on the rows the caller may
 	// see, so it is never set by rows outside the caller's scope.
 	return HistoryResponse{
-		Summary:                   summarizePurchaseHistory(all),
+		Summary:                   summary,
+		SummaryComplete:           summaryComplete,
 		Purchases:                 all,
 		Truncated:                 page.nextCursor != "" || page.incomplete || actionableIncomplete,
 		Limit:                     filters.Limit,
@@ -859,6 +875,23 @@ func parseHistoryDateBounds(startStr, endStr string) (time.Time, time.Time, erro
 //   - Date: matches when ScheduledDate is within [Start, End]. Inclusive
 //     both sides; End is the end-of-day for YYYY-MM-DD inputs.
 func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
+	if !f.matchesExecutionProviderAndAccount(exec) {
+		return false
+	}
+	if f.HasDate {
+		if exec.ScheduledDate.Before(f.Start) || exec.ScheduledDate.After(f.End) {
+			return false
+		}
+	}
+	return true
+}
+
+// matchesExecutionProviderAndAccount is matchesExecution without the date
+// check. The History summary aggregate pushes the date bound into SQL
+// (scheduled_date between Start and End, inclusive) and applies this to each
+// execution group, so the row list and the totals share one provider and
+// account predicate.
+func (f historyFilters) matchesExecutionProviderAndAccount(exec config.PurchaseExecution) bool {
 	if f.Provider != "" {
 		if !executionHasProvider(exec, f.Provider) {
 			return false
@@ -866,11 +899,6 @@ func (f historyFilters) matchesExecution(exec config.PurchaseExecution) bool {
 	}
 	if len(f.AccountIDs) > 0 || len(f.ExternalIDsByProvider) > 0 {
 		if !accountMatchesFilters(exec, f.AccountIDs, f.ExternalIDsByProvider) {
-			return false
-		}
-	}
-	if f.HasDate {
-		if exec.ScheduledDate.Before(f.Start) || exec.ScheduledDate.After(f.End) {
 			return false
 		}
 	}
@@ -976,20 +1004,28 @@ func stringInSlice(needle string, haystack []string) bool {
 // so there is no longer a separate single-column legacy path to coerce
 // identifiers through.
 func (h *Handler) fetchPurchaseHistory(ctx context.Context, filters *historyFilters, after *config.HistoryPageKey, limit int) ([]config.PurchaseHistoryPageRow, error) {
-	var startPtr, endPtr *time.Time
-	if filters.HasDate {
-		s, e := filters.Start, filters.End
-		startPtr = &s
-		endPtr = &e
+	filter := filters.purchaseHistoryFilter()
+	filter.Limit = limit
+	return h.config.ListPurchaseHistoryPage(ctx, filter, after)
+}
+
+// purchaseHistoryFilter maps the parsed filters onto the store filter. Both the
+// History row fetch and the summary aggregate use it, so they hand the store
+// the same predicate inputs. An empty historyFilters maps to an empty store
+// filter, which selects every row.
+func (f historyFilters) purchaseHistoryFilter() config.PurchaseHistoryFilter {
+	out := config.PurchaseHistoryFilter{
+		Provider:              f.Provider,
+		AccountIDs:            f.AccountIDs,
+		ExternalIDsByProvider: f.ExternalIDsByProvider,
+		Limit:                 f.Limit,
 	}
-	return h.config.ListPurchaseHistoryPage(ctx, config.PurchaseHistoryFilter{
-		Provider:              filters.Provider,
-		AccountIDs:            filters.AccountIDs,
-		ExternalIDsByProvider: filters.ExternalIDsByProvider,
-		Start:                 startPtr,
-		End:                   endPtr,
-		Limit:                 limit,
-	}, after)
+	if f.HasDate {
+		s, e := f.Start, f.End
+		out.Start = &s
+		out.End = &e
+	}
+	return out
 }
 
 // resolveHistoryAccountFilter populates filters.AccountIDs /
@@ -1046,36 +1082,11 @@ func appendMissing(dst []string, vals ...string) []string {
 // another user's multi-account in-flight row (including CreatedByUserEmail PII
 // and dollar amounts) is not visible to unrelated scoped users.
 func (h *Handler) filterPurchaseHistoryByAllowedAccounts(ctx context.Context, session *Session, purchases []config.PurchaseHistoryRecord) ([]config.PurchaseHistoryRecord, error) {
-	allowed, err := h.getAccountScope(ctx, session)
+	scope, err := h.loadHistoryScope(ctx, session)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
+		return nil, err
 	}
-	if allowed.AllowsAll() {
-		return purchases, nil
-	}
-	accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list cloud accounts: %w", err)
-	}
-	filtered := make([]config.PurchaseHistoryRecord, 0, len(purchases))
-	for _rvc := range purchases {
-		p := purchases[_rvc]
-		// Empty AccountID: unattributed ambient/multi-account synthesized row.
-		// Pass through only when the requesting user created the row (issue
-		// #1032 / #621 regression + adversarial-review F1). Dropping rows
-		// owned by other users prevents PII (CreatedByUserEmail) and dollar
-		// amounts from leaking across user boundaries.
-		if p.AccountID == "" {
-			if p.CreatedByUserID == session.UserID {
-				filtered = append(filtered, p)
-			}
-			continue
-		}
-		if allowed.Allows(p.AccountID, historyRowAccountName(accounts, p)) {
-			filtered = append(filtered, p)
-		}
-	}
-	return filtered, nil
+	return scope.filter(purchases), nil
 }
 
 // historyRowAccountName returns the registered account name for a history row,
@@ -1109,74 +1120,87 @@ func historyRowAccountName(accounts []config.CloudAccount, p config.PurchaseHist
 }
 
 func summarizePurchaseHistory(purchases []config.PurchaseHistoryRecord) HistorySummary {
-	summary := HistorySummary{TotalPurchases: len(purchases), TotalUpfront: new(float64)}
-	for _rvc := range purchases {
-		p := purchases[_rvc]
-		// Revoked commitments are excluded from dollar KPIs regardless of their
-		// status: the provider has cancelled the commitment, so UpfrontCost and
-		// EstimatedSavings no longer represent active spend or realized savings.
-		// They count toward TotalPurchases (for auditability) and TotalRevoked
-		// (so the UI can surface the count), but not TotalCompleted.
-		// GetActivePurchaseHistory already excludes revoked rows via SQL; this
-		// guard handles the GetPurchaseHistoryFiltered path used by History.
-		if p.RevokedAt != nil {
-			summary.TotalRevoked++
-			continue
-		}
-		// Non-completed rows count toward TotalPurchases and their specific
-		// bucket (pending / in-progress / failed / expired / canceled) but
-		// are excluded from the dollar totals — the money hasn't been committed
-		// for any of those states. "completed" and unset (legacy DB rows that
-		// pre-date the status field) both count as completed.
-		switch p.Status {
-		case "pending", "notified", "scheduled":
-			// "scheduled" (issue #239) is a pre-purchase state like
-			// pending/notified (the cloud SDK has not been called yet;
-			// scheduled is revoked, not canceled). It must not
-			// fall through to the default TotalCompleted++ below, or the
-			// "Total Upfront Spent" card counts money not yet spent.
-			summary.TotalPending++
-			continue
-		case "approved", "running", "paused":
-			// In-flight (issue #621). Not yet confirmed final — keep out of the
-			// committed dollar totals so an interrupted approval can't inflate
-			// reported spend/savings.
-			summary.TotalInProgress++
-			continue
-		case "failed":
-			summary.TotalFailed++
-			continue
-		case "expired":
-			summary.TotalExpired++
-			continue
-		case config.StatusCanceled, config.LegacyStatusCanceled:
-			// A canceled purchase represents zero committed spend and zero
-			// realized savings (issue #736). Exclude from all dollar KPIs and
-			// from TotalCompleted -- the money was never committed. The legacy
-			// British spelling is matched alongside the US one during the
-			// expand-contract rename (migration 000089) so legacy rows can't
-			// inflate KPIs mid-deploy; the contract migration (#1278) drops it
-			// once the deploy is stable.
-			continue
-		}
-		summary.TotalCompleted++
-		// Audit-gap completed rows (issue #621) are synthesized execution rows
-		// whose purchase_history write failed. Count them as completed (the
-		// money WAS committed and they must stay visible) but exclude their
-		// execution-level dollars: a partially-saved multi-rec execution can
-		// have BOTH some purchase_history rows AND this synthesized row, and
-		// adding the full execution total here would double-count the recs that
-		// did save. The dollars are surfaced via the individual purchase_history
-		// rows that succeeded; the synthesized row is the audit flag, not a
-		// money source. IsAuditGap is the explicit marker: real purchase_history
-		// rows loaded from the DB always leave it false, so a future change that
-		// annotates completed DB rows can't silently drop them from the totals.
-		if p.IsAuditGap {
-			continue
-		}
-		summary.TotalUpfront = sumKnownCosts(summary.TotalUpfront, p.UpfrontCost)
-		summary.TotalMonthlySavings += p.EstimatedSavings
+	summary := HistorySummary{TotalUpfront: new(float64)}
+	for i := range purchases {
+		addHistoryRowToSummary(&summary, &purchases[i], 1)
 	}
 	summary.TotalAnnualSavings = summary.TotalMonthlySavings * 12
 	return summary
+}
+
+// addHistoryRowToSummary adds n rows shaped like p to the summary. The row
+// list (n == 1 per row) and the SQL aggregate (one call per group, with p
+// carrying the group's dollar sums) both go through it, so the totals use one
+// set of bucketing rules.
+func addHistoryRowToSummary(summary *HistorySummary, p *config.PurchaseHistoryRecord, n int) {
+	summary.TotalPurchases += n
+	// Revoked commitments are excluded from dollar KPIs regardless of their
+	// status: the provider has cancelled the commitment, so UpfrontCost and
+	// EstimatedSavings no longer represent active spend or realized savings.
+	// They count toward TotalPurchases (for auditability) and TotalRevoked
+	// (so the UI can surface the count), but not TotalCompleted.
+	// GetActivePurchaseHistory already excludes revoked rows via SQL; this
+	// guard handles the GetPurchaseHistoryFiltered path used by History.
+	if p.RevokedAt != nil {
+		summary.TotalRevoked += n
+		return
+	}
+	if addNonCompletedRowToSummary(summary, p.Status, n) {
+		return
+	}
+	summary.TotalCompleted += n
+	// Audit-gap completed rows (issue #621) are synthesized execution rows
+	// whose purchase_history write failed. Count them as completed (the
+	// money WAS committed and they must stay visible) but exclude their
+	// execution-level dollars: a partially-saved multi-rec execution can
+	// have BOTH some purchase_history rows AND this synthesized row, and
+	// adding the full execution total here would double-count the recs that
+	// did save. The dollars are surfaced via the individual purchase_history
+	// rows that succeeded; the synthesized row is the audit flag, not a
+	// money source. IsAuditGap is the explicit marker: real purchase_history
+	// rows loaded from the DB always leave it false, so a future change that
+	// annotates completed DB rows can't silently drop them from the totals.
+	if p.IsAuditGap {
+		return
+	}
+	summary.TotalUpfront = sumKnownCosts(summary.TotalUpfront, p.UpfrontCost)
+	summary.TotalMonthlySavings += p.EstimatedSavings
+}
+
+// addNonCompletedRowToSummary counts n rows in their non-completed bucket and
+// reports whether status was one. Non-completed rows count toward
+// TotalPurchases and their specific bucket (pending / in-progress / failed /
+// expired / canceled) but are excluded from the dollar totals: the money
+// hasn't been committed for any of those states. "completed" and unset
+// (legacy DB rows that pre-date the status field) both count as completed.
+func addNonCompletedRowToSummary(summary *HistorySummary, status string, n int) bool {
+	switch status {
+	case "pending", "notified", "scheduled":
+		// "scheduled" (issue #239) is a pre-purchase state like
+		// pending/notified (the cloud SDK has not been called yet;
+		// scheduled is revoked, not canceled). It must not
+		// fall through to TotalCompleted, or the
+		// "Total Upfront Spent" card counts money not yet spent.
+		summary.TotalPending += n
+	case "approved", "running", "paused":
+		// In-flight (issue #621). Not yet confirmed final — keep out of the
+		// committed dollar totals so an interrupted approval can't inflate
+		// reported spend/savings.
+		summary.TotalInProgress += n
+	case "failed":
+		summary.TotalFailed += n
+	case "expired":
+		summary.TotalExpired += n
+	case config.StatusCanceled, config.LegacyStatusCanceled:
+		// A canceled purchase represents zero committed spend and zero
+		// realized savings (issue #736). Exclude from all dollar KPIs and
+		// from TotalCompleted -- the money was never committed. The legacy
+		// British spelling is matched alongside the US one during the
+		// expand-contract rename (migration 000089) so legacy rows can't
+		// inflate KPIs mid-deploy; the contract migration (#1278) drops it
+		// once the deploy is stable.
+	default:
+		return false
+	}
+	return true
 }
