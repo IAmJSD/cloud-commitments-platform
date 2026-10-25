@@ -5,7 +5,7 @@
  * index.html. `loadRegistrations` reads that select and forwards the value
  * to the API, so on first paint the panel must request only pending rows.
  */
-import { loadRegistrations } from '../modules/registrations';
+import { initRegistrations, loadRegistrations } from '../modules/registrations';
 
 jest.mock('../api', () => ({
   listRegistrations: jest.fn(),
@@ -53,6 +53,21 @@ describe('loadRegistrations default filter', () => {
 
     await loadRegistrations();
 
+    expect(api.listRegistrations).toHaveBeenCalledWith(undefined);
+  });
+
+  test('repeated initRegistrations (one per Accounts visit) wires the filter only once', async () => {
+    buildDOM('pending');
+    (api.listRegistrations as jest.Mock).mockResolvedValue([]);
+    for (let i = 0; i < 5; i++) initRegistrations();
+    await Promise.resolve();
+    (api.listRegistrations as jest.Mock).mockClear();
+
+    const select = document.getElementById('registrations-status-filter') as HTMLSelectElement;
+    select.value = '';
+    select.dispatchEvent(new Event('change'));
+
+    expect(api.listRegistrations).toHaveBeenCalledTimes(1);
     expect(api.listRegistrations).toHaveBeenCalledWith(undefined);
   });
 });

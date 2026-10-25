@@ -19,12 +19,11 @@ import (
 // PostgreSQL: a pre-existing tranche gets a NULL reason, the up statement is
 // idempotent, and the down migration drops the column.
 func TestMigration_LadderTranchesStatusReason(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 114)))
