@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestLogin_AccountLockout_Bookkeeping(t *testing.T) {
@@ -112,6 +113,20 @@ func TestLogin_BookkeepingErrors(t *testing.T) {
 			store.AssertExpectations(t)
 		})
 	}
+}
+
+// Production compares against the fixed cost-12 sentinel. Only a test cost
+// override switches the timing-equalizing compare to a hash at that cost.
+func TestDummyHashForCompare_MatchesHashCost(t *testing.T) {
+	prod := (&Service{}).dummyHashForCompare()
+	assert.Equal(t, dummyPasswordHash, prod)
+	prodCost, err := bcrypt.Cost([]byte(prod))
+	require.NoError(t, err)
+	assert.Equal(t, bcryptCost, prodCost)
+
+	testCost, err := bcrypt.Cost([]byte(newTestService().dummyHashForCompare()))
+	require.NoError(t, err)
+	assert.Equal(t, bcrypt.MinCost, testCost)
 }
 
 // TestLogin_OWASPEnumerationInvariant guards against regression that re-introduces

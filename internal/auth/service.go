@@ -162,7 +162,7 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (*LoginResponse, 
 		// user is indistinguishable from a wrong-password attempt on a real
 		// account. Without this, the missing-row path returns immediately
 		// (no bcrypt), leaking account existence via timing (issue #416).
-		s.verifyPassword(req.Password, dummyPasswordHash)
+		s.verifyPassword(req.Password, s.dummyHashForCompare())
 		return nil, err
 	}
 
