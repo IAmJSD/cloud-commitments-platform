@@ -1,5 +1,16 @@
 # Frontend Deployment Modules
 
+> **Outdated:** most of this page describes an earlier design in
+> which these modules built the frontend with npm and uploaded it to
+> object storage. Today the frontend is compiled into the
+> application container image (the Dockerfile's `frontend-builder`
+> stage) and served by the compute endpoint. The `aws`, `azure` and
+> `gcp` modules here only provision the optional CDN in front of it
+> (CloudFront, Azure Front Door or CDN, Cloud CDN), created when
+> `enable_cdn = true`. There is no `enable_frontend_build` variable;
+> to skip the image build (and so the frontend build) set
+> `enable_docker_build = false` and supply `image_uri`.
+
 These Terraform modules handle **complete frontend deployment** including:
 
 1. Building the frontend (npm install + npm run build)
@@ -101,35 +112,7 @@ module "frontend" {
   bucket_name          = "cudly-dev-frontend"
   api_domain_name      = module.compute.lambda_function_url_domain
   cloudfront_secret    = random_password.cloudfront_secret.result
-
-  # Frontend build is enabled by default
-  # enable_frontend_build = true
 }
-```
-
-### Disable Frontend Build (Infrastructure Only)
-
-When making infrastructure-only changes (scaling, security, IAM), skip frontend build:
-
-```hcl
-module "frontend" {
-  source = "../../modules/frontend/aws"
-
-  # ... other configuration ...
-
-  # Skip frontend build for faster terraform apply
-  enable_frontend_build = false
-}
-```
-
-Or via variable:
-
-```bash
-# In terraform.tfvars
-enable_frontend_build = false
-
-# Or via command line
-terraform apply -var="enable_frontend_build=false"
 ```
 
 ### First-Time Setup
@@ -170,7 +153,6 @@ Terraform will:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `enable_frontend_build` | Enable/disable frontend build and deployment | `true` |
 | `project_name` | Project name for resource naming | Required |
 | `environment` | Environment (dev/staging/prod) | Required |
 
@@ -297,36 +279,13 @@ terraform taint 'module.frontend.terraform_data.frontend_build[0]'
 
 ## Performance Optimization
 
-### Skip Frontend for Infrastructure Changes
+### Skip the Build for Infrastructure Changes
 
-Frontend rebuild takes 30-60 seconds. When making infrastructure-only changes:
-
-```bash
-# Set in terraform.tfvars
-enable_frontend_build = false
-
-# Faster applies (5-10 seconds vs 30-60 seconds)
-terraform apply
-```
-
-### Parallel Builds (Advanced)
-
-For multiple environments, build once and reuse:
+The frontend is built as part of the container image, so skipping
+the image build skips it too. Deploy an already-pushed image:
 
 ```bash
-# 1. Build frontend once
-cd frontend
-npm run build
-
-# 2. Deploy to multiple environments with pre-built frontend
-cd ../terraform/environments/aws/dev
-terraform apply -var="enable_frontend_build=false"
-
-cd ../staging
-terraform apply -var="enable_frontend_build=false"
-
-cd ../prod
-terraform apply -var="enable_frontend_build=false"
+terraform apply -var="enable_docker_build=false" -var="image_uri=<registry>/<image>:<tag>"
 ```
 
 ## CI/CD Integration
@@ -448,7 +407,7 @@ Terraform Apply
 A: No, Terraform handles everything now. The CLI is optional for simplified workflows.
 
 **Q: What if I only want to deploy infrastructure?**
-A: Set `enable_frontend_build = false` in your terraform.tfvars.
+A: Set `enable_docker_build = false` and `image_uri` to an already-pushed image.
 
 **Q: How long does frontend deployment take?**
 A: First time: 60-90 seconds. Subsequent updates: 30-45 seconds.

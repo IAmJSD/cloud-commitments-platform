@@ -78,7 +78,8 @@ func TestHttpToLambdaRequest_XForwardedFor(t *testing.T) {
 	req.Header.Set("X-Forwarded-For", "1.2.3.4, 5.6.7.8")
 	req.Header.Set("User-Agent", "TestAgent/1.0")
 
-	lambdaReq := httpToLambdaRequest(req)
+	lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req)
+	testutil.AssertNoError(t, err)
 
 	testutil.AssertEqual(t, "5.6.7.8", lambdaReq.RequestContext.HTTP.SourceIP)
 	testutil.AssertEqual(t, "TestAgent/1.0", lambdaReq.RequestContext.HTTP.UserAgent)
@@ -88,7 +89,8 @@ func TestHttpToLambdaRequest_NilBody(t *testing.T) {
 	req := httptest.NewRequestWithContext(context.Background(), "GET", "/api/test", nil)
 	req.Body = nil
 
-	lambdaReq := httpToLambdaRequest(req)
+	lambdaReq, err := httpToLambdaRequest(httptest.NewRecorder(), req)
+	testutil.AssertNoError(t, err)
 
 	testutil.AssertEqual(t, "", lambdaReq.Body)
 }

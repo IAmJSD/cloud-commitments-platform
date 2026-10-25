@@ -126,8 +126,36 @@ func TestHandler_getHistory_ClassListingErrorKeepsOtherClass(t *testing.T) {
 			purchases := body["purchases"].([]any)
 			require.Len(t, purchases, 1)
 			assert.Equal(t, tt.wantID, purchases[0].(map[string]any)["purchase_id"])
+			assert.Equal(t, true, body["truncated"], "a failed class listing hides rows, so the response must flag incomplete results")
 		})
 	}
+}
+
+// TestHandler_getHistory_BothClassListingsFailSetTruncated covers the
+// no-executions early return: when both class listings fail the response
+// carries only completed history and must still flag incomplete results.
+func TestHandler_getHistory_BothClassListingsFailSetTruncated(t *testing.T) {
+	ctx := context.Background()
+	store := newStarvationStore(ctx)
+	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(nil, errors.New("listing failed"))
+
+	body := runStarvationHistory(t, ctx, store)
+
+	assert.Empty(t, body["purchases"])
+	assert.Equal(t, true, body["truncated"])
+}
+
+// TestHandler_getHistory_EmptyClassListingsNotTruncated guards the other side
+// of the listing-error signal: two successful but empty listings are a
+// complete result and must not raise the banner.
+func TestHandler_getHistory_EmptyClassListingsNotTruncated(t *testing.T) {
+	ctx := context.Background()
+	store := newStarvationStore(ctx)
+	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+
+	body := runStarvationHistory(t, ctx, store)
+
+	assert.Equal(t, false, body["truncated"])
 }
 
 func TestHandler_getHistory_TruncatedPerClass(t *testing.T) {

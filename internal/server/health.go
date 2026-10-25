@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/api"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
@@ -22,10 +23,24 @@ type HealthStatus struct {
 }
 
 // CheckResult represents the result of a health check.
+//
+// /health and /ready are unauthenticated, so Message is always a fixed string
+// and never carries a raw error: pgx and golang-migrate errors name the
+// database host, user, migration file and schema objects (issue #111). A
+// failed check sets Reason to a stable code instead, and the error itself goes
+// to the server log only.
 type CheckResult struct {
 	Status  string `json:"status"`
 	Message string `json:"message,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
+
+// Stable reason codes a failed health check reports in CheckResult.Reason.
+const (
+	healthReasonMigrationFailed = "migration_failed"
+	healthReasonDBUnreachable   = "db_unreachable"
+	healthReasonAuthUnreachable = "auth_store_unreachable"
+)
 
 // handleHealthCheck returns the liveness status of the application.
 //
@@ -160,7 +175,8 @@ func (app *Application) checkMigrations() CheckResult {
 	case finishedAt.IsZero():
 		return CheckResult{Status: "pending", Message: "migrations have not run yet"}
 	case err != nil:
-		return CheckResult{Status: "failed", Message: err.Error()}
+		// ensureDB logged the error when the run failed.
+		return CheckResult{Status: "failed", Message: "Database migrations failed", Reason: healthReasonMigrationFailed}
 	default:
 		return CheckResult{
 			Status:  "healthy",
@@ -203,9 +219,11 @@ func (app *Application) checkConfigStore(ctx context.Context, configStore config
 	// If using PostgreSQL, check database connection health
 	if db != nil {
 		if err := db.HealthCheck(ctx); err != nil {
+			log.Printf("health: database health check failed: %v", err)
 			return CheckResult{
 				Status:  "unhealthy",
-				Message: fmt.Sprintf("Database health check failed: %v", err),
+				Message: "Database health check failed",
+				Reason:  healthReasonDBUnreachable,
 			}
 		}
 	}
@@ -222,7 +240,7 @@ func setHealthResponseHeaders(w http.ResponseWriter, corsOrigin string) {
 	w.Header().Set("Content-Type", "application/json")
 
 	// Security headers
-	w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+	w.Header().Set("Strict-Transport-Security", api.HSTSHeaderValue)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("X-XSS-Protection", "1; mode=block")
@@ -252,9 +270,11 @@ func (app *Application) checkAuthStore(ctx context.Context, authService *auth.Se
 
 	// Ping the database to verify connection is healthy
 	if err := authService.Ping(ctx); err != nil {
+		log.Printf("health: auth store ping failed: %v", err)
 		return CheckResult{
 			Status:  "unhealthy",
-			Message: fmt.Sprintf("Auth store ping failed: %v", err),
+			Message: "Auth store ping failed",
+			Reason:  healthReasonAuthUnreachable,
 		}
 	}
 

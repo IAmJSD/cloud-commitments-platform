@@ -195,6 +195,10 @@ func TestConvertForAutoExchange(t *testing.T) {
 func TestConfigExchangeStoreAdapter(t *testing.T) {
 	savedRecord := (*config.RIExchangeRecord)(nil)
 	completedID := ""
+	// The adapter must pass both caps through unchanged and in order (#666):
+	// the store treats the first as the daily cap and the second as the
+	// per-exchange cap, so a swap would pass a mock that ignores them.
+	var gotDailyCap, gotPerExchangeCap string
 	mockStore := &mockConfigStoreForExchange{
 		saveRIExchangeRecordFunc: func(ctx context.Context, record *config.RIExchangeRecord) error {
 			savedRecord = record
@@ -202,6 +206,7 @@ func TestConfigExchangeStoreAdapter(t *testing.T) {
 			return nil
 		},
 		reserveRIExchangeFunc: func(ctx context.Context, record *config.RIExchangeRecord, dailyCapUSD, perExchangeCapUSD string) (string, error) {
+			gotDailyCap, gotPerExchangeCap = dailyCapUSD, perExchangeCapUSD
 			savedRecord = record
 			record.ID = "reserved-id"
 			record.PaymentDue = "10.000000"
@@ -258,6 +263,8 @@ func TestConfigExchangeStoreAdapter(t *testing.T) {
 		}
 		ceiling, err := adapter.ReserveRIExchange(context.Background(), record, "20", "10")
 		testutil.AssertNoError(t, err)
+		testutil.AssertEqual(t, "20", gotDailyCap)
+		testutil.AssertEqual(t, "10", gotPerExchangeCap)
 		testutil.AssertEqual(t, "10.000000", ceiling)
 		testutil.AssertEqual(t, "reserved-id", record.ID)
 		testutil.AssertEqual(t, ceiling, record.PaymentDue)
@@ -534,6 +541,7 @@ func TestExecuteRIExchangeReshape_ListRIsFailure(t *testing.T) {
 		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
 			return nil, errors.New("EC2 API throttled")
 		},
+		accountID: "123456789",
 	}
 
 	_, err := app.executeRIExchangeReshape(ctx, cfg, clients)
@@ -562,6 +570,7 @@ func TestExecuteRIExchangeReshape_UtilizationFailure(t *testing.T) {
 		getRIUtilization: func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
 			return nil, errors.New("Cost Explorer unavailable")
 		},
+		accountID: "123456789",
 	}
 
 	_, err := app.executeRIExchangeReshape(ctx, cfg, clients)

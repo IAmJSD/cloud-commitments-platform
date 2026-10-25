@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -230,4 +232,22 @@ func (sessionOnlyAuth) ValidateCSRFToken(_ context.Context, sessionToken, csrfTo
 		return errors.New("invalid CSRF token")
 	}
 	return nil
+}
+
+// TestSecurityHeaders_HSTSMatchesAcrossModes pins every response path to the
+// same Strict-Transport-Security value (issue #14: Lambda mode had dropped
+// "preload" while HTTP mode sent it).
+func TestSecurityHeaders_HSTSMatchesAcrossModes(t *testing.T) {
+	testutil.AssertContains(t, api.HSTSHeaderValue, "preload")
+
+	testutil.AssertEqual(t, api.HSTSHeaderValue, lambdaSecurityHeaders()["Strict-Transport-Security"])
+
+	rec := httptest.NewRecorder()
+	securityHeaders(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	testutil.AssertEqual(t, api.HSTSHeaderValue, rec.Header().Get("Strict-Transport-Security"))
+
+	rec = httptest.NewRecorder()
+	setHealthResponseHeaders(rec, "")
+	testutil.AssertEqual(t, api.HSTSHeaderValue, rec.Header().Get("Strict-Transport-Security"))
 }
