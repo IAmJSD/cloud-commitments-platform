@@ -20,7 +20,6 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/analytics"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 )
 
@@ -56,10 +55,7 @@ type analyticsScopeDB struct {
 func setupAnalyticsScopeDB(t *testing.T) *analyticsScopeDB {
 	t.Helper()
 	ctx := t.Context()
-	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 
 	store := config.NewPostgresStore(pg.DB)
 	aws := &config.CloudAccount{Name: scopeAWSAccount, Provider: "aws", ExternalID: scopeSharedID, Enabled: true}
