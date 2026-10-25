@@ -116,6 +116,42 @@ export const COVERAGE = {
   ],
 };
 
+/**
+ * Savings-snapshot trends for Inventory & Coverage -> Trends (issue #30).
+ * Built relative to `now` so the rows always land inside the view's
+ * default 6-month window: the two most recent months carry data, the month
+ * before them is a gap (no snapshot), and the GCP rows carry no coverage.
+ */
+export function trendsFixture(now: Date = new Date()): unknown {
+  const month = (back: number): string =>
+    new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - back, 1)).toISOString();
+  const monthly = (back: number, provider: string, service: string, savings: number, coverage?: number) => ({
+    month: month(back), account_id: 'acct-001-external', provider, service,
+    total_savings: savings, snapshot_count: 30, ...(coverage === undefined ? {} : { avg_coverage: coverage }),
+  });
+  return {
+    start: month(5),
+    end: now.toISOString(),
+    months: 6,
+    monthly: [
+      monthly(0, 'aws', 'ec2', 1450, 72.5), monthly(0, 'aws', 'rds', 380, 64), monthly(0, 'gcp', 'compute', 210),
+      monthly(1, 'aws', 'ec2', 1320, 70), monthly(1, 'aws', 'rds', 350, 61), monthly(1, 'gcp', 'compute', 190),
+      monthly(3, 'aws', 'ec2', 980, 58), monthly(4, 'aws', 'ec2', 760, 52), monthly(5, 'aws', 'ec2', 540, 47),
+    ],
+    by_provider: [
+      { provider: 'aws', service: 'ec2', total_savings: 1012, avg_coverage: 60.1 },
+      { provider: 'aws', service: 'rds', total_savings: 365, avg_coverage: 62.5 },
+      { provider: 'gcp', service: 'compute', total_savings: 200 },
+    ],
+    by_service: [
+      { service: 'ec2', region: 'us-east-1', total_savings: 702, avg_coverage: 63.4 },
+      { service: 'ec2', region: 'eu-west-1', total_savings: 310, avg_coverage: 55 },
+      { service: 'rds', region: 'us-east-1', total_savings: 365, avg_coverage: 62.5 },
+      { service: 'compute', region: 'us-central1', total_savings: 200 },
+    ],
+  };
+}
+
 export const SUMMARY = {
   total_recommendations: RECS.length,
   total_upfront_cost: RECS.reduce((s, r) => s + r.upfront_cost, 0),
@@ -257,6 +293,11 @@ export async function mockApi(page: Page): Promise<MockHandle> {
     if (provider && provider !== 'all' && provider !== '') {
       rows = RECS.filter((r) => r.provider === provider);
     }
+    // Like the backend, apply the single-value service/region pushdown (#162).
+    const service = u.searchParams.get('service');
+    if (service) rows = rows.filter((r) => r.service === service);
+    const region = u.searchParams.get('region');
+    if (region) rows = rows.filter((r) => r.region === region);
     if (pendingDelayMs > 0) {
       const wait = pendingDelayMs;
       pendingDelayMs = 0;
@@ -336,6 +377,12 @@ export async function mockApi(page: Page): Promise<MockHandle> {
   await page.route('**/api/inventory/commitments**', async (route) => {
     record(route);
     await jsonRoute(route, { commitments: [] });
+  });
+
+  // Savings-snapshot trends (Inventory & Coverage -> Trends, issue #30).
+  await page.route('**/api/analytics/trends**', async (route) => {
+    record(route);
+    await jsonRoute(route, trendsFixture());
   });
 
   // Per-id detail — covers the row-click drawer. Returns a benign empty

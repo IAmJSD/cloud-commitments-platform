@@ -14,6 +14,7 @@ export type {
   LoginResponse,
   DashboardSummary,
   UpcomingPurchase,
+  UpcomingPurchasesResponse,
   Recommendation,
   RecommendationFilters,
   Plan,
@@ -191,6 +192,16 @@ export {
   listActiveCommitments,
   getCoverageBreakdown
 } from './inventory';
+
+// Re-export savings-snapshot trends (issue #30)
+export type {
+  AnalyticsTrendsResponse,
+  AnalyticsTrendsFilter,
+  TrendsMonthlyRow,
+  TrendsProviderRow,
+  TrendsServiceRow
+} from './analytics';
+export { getAnalyticsTrends } from './analytics';
 
 // Re-export RI exchange functions
 export type { ReshapeRecommendationsResponse, ExcludedRI } from './riexchange';

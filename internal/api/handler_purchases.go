@@ -2505,6 +2505,14 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 	// "successor" is a footgun we want to remove at the source.
 	copiedRecs := append([]config.RecommendationRecord(nil), failedExec.Recommendations...)
 
+	// The successor is stamped with the retrying session's creator below. A
+	// creator-less successor under 4-eyes could never be approved, and the
+	// linkage written in the same tx would also block retrying the original
+	// again, so refuse before anything is written (issue #677).
+	if err := h.requireAttributablePurchaseCreator(ctx, session); err != nil {
+		return nil, "", err
+	}
+
 	// Generate a crypto/rand-backed approval token for the retry execution
 	// (issue #408). uuid.New().String() was used here previously, which only
 	// provides 122 bits of entropy in a known format; common.GenerateApprovalToken
@@ -2924,7 +2932,9 @@ type ExecutePurchaseRequest struct {
 // the per-rec validation, for the response to surface to the caller (#1503
 // follow-up); it is empty/nil when every rec was already canonical.
 func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *events.LambdaFunctionURLRequest) (ExecutePurchaseRequest, *Session, []PaymentAdjustment, error) {
-	session, err := h.requirePermission(ctx, req, "execute", "purchases")
+	// Refuses a creator-less submit under 4-eyes before anything is
+	// persisted, on both the approval-email and direct-execute paths (#677).
+	session, err := h.requirePurchaseCreatingPermission(ctx, req, "execute", "purchases")
 	if err != nil {
 		return ExecutePurchaseRequest{}, nil, nil, err
 	}
@@ -3209,6 +3219,52 @@ func resolveCreatorUserID(session *Session) *string {
 	}
 	uid := session.UserID
 	return &uid
+}
+
+// requireAttributablePurchaseCreator refuses, while 4-eyes mode is on, any
+// request that would mint a pending purchase execution with no recorded
+// creator (issue #677). resolveCreatorUserID stores NULL for a session whose
+// UserID is not a user UUID, which in practice is the stateless admin API
+// key. Under 4-eyes, requireDifferentApprover and the manager's
+// checkDifferentApprover deny a NULL-creator row that is not
+// created_by_system for every approver, so such a row could only sit pending
+// until it expired (and, on the direct-execute path, be refused after it was
+// already written). Refusing up front gives the caller a clear error instead.
+// The key is never stamped with a human creator on its behalf: that would let
+// that human's colleague "approve" a purchase no human requested, or let the
+// key holder approve their own request.
+//
+// Sessions with a user UUID (signed-in users and per-user API keys) pass
+// without a config read. A config-load failure denies (fail closed), matching
+// requireDifferentApprover. A nil config means 4-eyes is off, also matching it.
+func (h *Handler) requireAttributablePurchaseCreator(ctx context.Context, session *Session) error {
+	if resolveCreatorUserID(session) != nil {
+		return nil
+	}
+	cfg, err := h.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("4-eyes policy check: failed to load global config: %w", err)
+	}
+	if cfg == nil || !cfg.RequireDifferentApprover {
+		return nil
+	}
+	logging.Warnf("4-eyes: mode on; refusing to create a purchase execution with no attributable creator")
+	return NewClientError(403, "4-eyes approval mode is enabled and this request has no attributable user (for example the admin API key), so the purchase it creates could never be approved; sign in or use a per-user API key instead")
+}
+
+// requirePurchaseCreatingPermission is requirePermission for endpoints that
+// mint pending purchase executions: after the RBAC check it applies
+// requireAttributablePurchaseCreator so no NULL-creator row is created while
+// 4-eyes mode is on (issue #677).
+func (h *Handler) requirePurchaseCreatingPermission(ctx context.Context, req *events.LambdaFunctionURLRequest, action, resource string) (*Session, error) {
+	session, err := h.requirePermission(ctx, req, action, resource)
+	if err != nil {
+		return nil, err
+	}
+	if err := h.requireAttributablePurchaseCreator(ctx, session); err != nil {
+		return nil, err
+	}
+	return session, nil
 }
 
 // fourEyesActorIdentity returns the identity string passed as the actor to

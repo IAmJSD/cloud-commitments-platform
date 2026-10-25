@@ -113,7 +113,7 @@ describe('groups/groupList', () => {
       groupList.renderGroups([]);
 
       const container = document.getElementById('groups-list');
-      expect(container?.innerHTML).toContain('No groups found');
+      expect(container?.innerHTML).toContain('No groups yet');
       expect(container?.querySelector('.empty')).toBeTruthy();
     });
 
@@ -242,12 +242,18 @@ describe('groups/groupList', () => {
       groupList.renderGroups([xssGroup]);
 
       const container = document.getElementById('groups-list');
-      // Verify script tag is escaped (not executable)
-      expect(container?.innerHTML).not.toContain('<script>');
-      expect(container?.innerHTML).toContain('&lt;script&gt;');
-      // Verify img tag is escaped (not executable)
-      expect(container?.innerHTML).not.toContain('<img');
-      expect(container?.innerHTML).toContain('&lt;img');
+      // The name and description must stay text: no element is created
+      // from them anywhere in the card.
+      expect(container?.querySelector('script, img')).toBeNull();
+      expect(container?.querySelector('h4')?.textContent).toBe(xssGroup.name);
+      expect(container?.querySelector('.group-description')?.textContent).toBe(xssGroup.description);
+      // The icon buttons carry the name in aria-label. The attribute must
+      // round-trip the raw string, so a quote cannot end it early. (innerHTML
+      // serialises attribute values without escaping < and >, which is why
+      // this checks the DOM rather than the serialised markup.)
+      const edit = container?.querySelector('.edit-group-btn');
+      expect(edit?.getAttribute('aria-label')).toBe(`Edit group ${xssGroup.name}`);
+      expect(edit?.getAttributeNames().sort()).toEqual(['aria-label', 'class', 'data-group-id', 'title']);
     });
 
     it('should not render if container not found', () => {
@@ -671,7 +677,7 @@ describe('groups/groupModals', () => {
       });
     });
 
-    it('should skip permissions without action', async () => {
+    it('refuses a permission row without an action instead of dropping it', async () => {
       document.body.innerHTML = `
         <div id="group-modal">
           <form id="group-form">
@@ -694,9 +700,12 @@ describe('groups/groupModals', () => {
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await groupModals.saveGroup(event);
 
-      expect(api.createGroup).toHaveBeenCalledWith(expect.objectContaining({
-        permissions: [{ action: 'execute', resource: '*' }],
-      }));
+      // Issue #213: dropping an authorization row silently is not
+      // acceptable; the row is refused with a note until fixed or removed.
+      expect(api.createGroup).not.toHaveBeenCalled();
+      expect(document.querySelector('.perm-action')?.getAttribute('aria-invalid')).toBe('true');
+      expect(document.querySelector('.permission-item .field-error')?.textContent)
+        .toContain('This permission has no action');
     });
 
     it('includes permissions with default resource value', async () => {
@@ -907,7 +916,7 @@ describe('groups/groupActions', () => {
 
       await groupActions.deleteGroup('group-1');
 
-      expect(document.querySelector('.toast-error')?.textContent).toContain('Failed to delete group');
+      expect(document.querySelector('.toast-error')?.textContent).toContain('Failed to delete group: Server error');
     });
   });
 
