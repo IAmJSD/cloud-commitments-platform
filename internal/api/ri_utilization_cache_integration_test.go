@@ -14,7 +14,6 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/providers/aws/recommendations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/require"
 )
@@ -28,17 +27,12 @@ func getMigrationsPath() string {
 	return filepath.Join(filepath.Dir(filename), "..", "database", "postgres", "migrations")
 }
 
-func setupRICacheIntegration(ctx context.Context, t *testing.T) (*config.PostgresStore, func()) {
+// setupRICacheIntegration returns a store over a fully migrated database of
+// the test's own on the package's shared Postgres server, so the test uses the
+// same schema production does. The database is dropped when t ends.
+func setupRICacheIntegration(ctx context.Context, t *testing.T) *config.PostgresStore {
 	t.Helper()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	// Migration 000027 was made idempotent in commit F — the full
-	// migration chain now runs cleanly on fresh containers, so the
-	// test uses the same schema production does.
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
-	store := config.NewPostgresStore(container.DB)
-	return store, func() { _ = container.Cleanup(ctx) }
+	return config.NewPostgresStore(testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath()).DB)
 }
 
 // TestRIUtilizationCache_Integration_ColdReadFetchesAndPersists verifies
@@ -46,8 +40,7 @@ func setupRICacheIntegration(ctx context.Context, t *testing.T) (*config.Postgre
 // persists the result in ri_utilization_cache.
 func TestRIUtilizationCache_Integration_ColdReadFetchesAndPersists(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRICacheIntegration(ctx, t)
-	defer cleanup()
+	store := setupRICacheIntegration(ctx, t)
 
 	cache := newRIUtilizationCache(store, false)
 	fetched := []recommendations.RIUtilization{
@@ -81,8 +74,7 @@ func TestRIUtilizationCache_Integration_ColdReadFetchesAndPersists(t *testing.T)
 // invoking the fetcher.
 func TestRIUtilizationCache_Integration_FreshHitNoFetch(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRICacheIntegration(ctx, t)
-	defer cleanup()
+	store := setupRICacheIntegration(ctx, t)
 
 	cache := newRIUtilizationCache(store, false)
 	fetched := []recommendations.RIUtilization{{ReservedInstanceID: "ri-fresh-1"}}
@@ -108,8 +100,7 @@ func TestRIUtilizationCache_Integration_FreshHitNoFetch(t *testing.T) {
 // refresh fires, Postgres row is updated within a short window.
 func TestRIUtilizationCache_Integration_StaleNonLambdaServesStaleAndRefreshes(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRICacheIntegration(ctx, t)
-	defer cleanup()
+	store := setupRICacheIntegration(ctx, t)
 
 	staleData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-stale"}}
 	freshData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-fresh"}}
@@ -151,8 +142,7 @@ func TestRIUtilizationCache_Integration_StaleNonLambdaServesStaleAndRefreshes(t 
 // non-Lambda: the caller blocks until fresh data arrives.
 func TestRIUtilizationCache_Integration_HardExpiredSyncRefetch(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRICacheIntegration(ctx, t)
-	defer cleanup()
+	store := setupRICacheIntegration(ctx, t)
 
 	staleData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-stale"}}
 	freshData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-fresh"}}

@@ -212,8 +212,17 @@ purchaseDefaults := config.GetDefaultsByCategory("purchase_defaults")
 ### Data Retention
 
 - `retention.purchase_history_days`: `1095` (int) - 3 years
-- `retention.execution_history_days`: `90` (int)
 - `retention.recommendation_cache_hours`: `24` (int)
+
+Execution history retention is not a setting. It is the compile-time
+constant `DefaultExecutionTTLDays` (`constants.go`, 30 days), which
+`internal/server/handler.go` passes to `CleanupOldExecutions` on each
+cleanup run. That sweep deletes completed executions by `scheduled_date`
+and canceled ones by `updated_at` once they are older than the horizon,
+plus rows whose own `expires_at` lapsed that long ago (except statuses
+the health score counts). It never deletes failed executions. The plan health score's lookback window
+(`planHealthLookbackDays` in `internal/api/plan_health.go`) is the same
+constant, so changing one changes both.
 
 ### API Settings
 
