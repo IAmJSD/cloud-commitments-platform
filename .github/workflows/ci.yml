@@ -6,12 +6,23 @@
 # Required GitHub Secrets: None (all checks run without cloud credentials)
 #
 # Required GitHub Variables:
-#   - GO_VERSION: Go version to use (default: 1.26.9)
+#   - GO_VERSION: Go version to use (default: 1.26.10)
 #
 # Triggered by:
 #   - Pull requests to main/develop
 #   - Pushes to main/develop
 #   - Manual workflow dispatch
+#
+# Runners: the Go and Docker heavy jobs (lint, unit, integration, the
+# selection self-test, security scanning, e2e) run on ubuntu-24.04-arm.
+# On main's runs the same cold Dockerfile build took 124-142s there against
+# 201-207s on ubuntu-latest, and `go install govulncheck` under 3s against
+# 12-16s. arm64 is also what the AWS deploys run (Graviton). The amd64 image
+# leg stays on ubuntu-latest, as GCP and Azure run amd64. Snyk (a Docker
+# action), Terraform (provider lock files) and the jobs that finish in
+# seconds stay there too: nothing to gain. Every cache key in this file
+# includes the runner architecture, so neither architecture restores the
+# other's Go build cache or binaries.
 
 name: CI - Build & Test
 
@@ -26,7 +37,7 @@ on:
   workflow_dispatch:
 
 env:
-  GO_VERSION: '1.26.9'
+  GO_VERSION: '1.26.10'
   DOCKER_BUILDKIT: 1
   COMPOSE_DOCKER_CLI_BUILD: 1
 
@@ -34,7 +45,7 @@ jobs:
   # Go code linting
   lint:
     name: Lint Code
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
     steps:
@@ -257,7 +268,7 @@ jobs:
   # Unit tests with race detection
   unit-tests:
     name: Unit Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
     steps:
@@ -378,12 +389,64 @@ jobs:
             echo "::warning::Coverage is below 80% (current: ${coverage}%)"
           fi
 
-  # Integration tests with real PostgreSQL
+  # Integration tests with real PostgreSQL, sharded across parallel runners.
+  #
+  # Only the tests the Unit Tests job does not run are run here: those in
+  # `//go:build integration` files, plus untagged tests that skip themselves
+  # under -short. scripts/integration-test-selection.sh finds them and prints a
+  # `-run` regex per package; packages with none are not even compiled. Before
+  # that, this job re-ran every unit test under -tags=integration as well.
+  #
+  # Each leg runs the packages INTEGRATION_SHARDS gives its shard; `*` marks
+  # the catch-all shard, which takes every package with integration tests that
+  # no other shard names, so a new package is never silently skipped. Balance
+  # the shards by the per-package "ok ... <time>" lines in the test step's log.
+  # `needs: integration-tests` waits for every leg, so ci-success fails if any
+  # leg fails or is cancelled.
   integration-tests:
-    name: Integration Tests
-    runs-on: ubuntu-latest
+    name: Integration Tests (${{ matrix.title }})
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
+    strategy:
+      # One shard failing must not cancel the others: their results are what
+      # tell a real failure from a flaky one.
+      fail-fast: false
+      matrix:
+        # Same shards, same order as INTEGRATION_SHARDS below; the guard step
+        # fails on any difference.
+        #
+        # Balanced on PR #1402's first run (package test times under -race
+        # in the three-leg layout): api 87s, config 85s, auth 62s, server
+        # 55s, purchase 53s, migrations 64s, and the rest 95s together
+        # (testhelpers 32s, cleanup-lambda 15s, database 15s, scheduler 12s,
+        # analytics 12s, commitmentopts 9s). api is the floor, as one package
+        # is never split; migrations and the rest run side by side within it.
+        include:
+          - shard: api
+            title: api
+          - shard: config
+            title: config
+          - shard: purchase
+            title: purchase
+          - shard: auth
+            title: auth
+          - shard: server
+            title: server
+          - shard: migrations-rest
+            title: migrations, rest
+            e2e-typecheck: true
+    env:
+      # <shard> <package path relative to the module> ... ; `*` = the rest.
+      # Shard names also go into cache keys and artifact names.
+      INTEGRATION_SHARDS: |
+        api internal/api
+        config internal/config
+        purchase internal/purchase
+        auth internal/auth
+        server internal/server
+        migrations-rest internal/database/postgres/migrations *
+      SHARD: ${{ matrix.shard }}
 
     services:
       postgres:
@@ -413,7 +476,89 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          # The caches below replace setup-go's. Its one entry is shared by
+          # every job, keyed on go.sum and saved by whichever job finishes
+          # first, so it never holds this job's -race -tags=integration
+          # coverage build: every leg compiled cold, minutes per leg.
+          cache: false
+
+      # Each leg restores its own build cache (GOCACHE), as each compiles a
+      # different set of packages, and the legs share one module cache
+      # (GOMODCACHE). Restore and save are separate steps, as in the
+      # security-scan job, so that a red run still warms the build cache.
+      - name: Compute Go cache keys
+        id: go_cache
+        run: |
+          set -euo pipefail
+          go_version=$(go env GOVERSION)
+          # sha256sum lines carry each path as well as its content, so a
+          # renamed file changes the hash too. The sources are every Go file
+          # plus everything under cmd/, internal/ and iac/, which covers the
+          # go:embed inputs (openapi.yaml, IaC templates). Including too much
+          # only costs a partial hit and a save.
+          hash_files() {
+            git ls-files -z -- "$@" | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
+          }
+          mod_hash=$(hash_files go.work go.work.sum '*go.mod' '*go.sum')
+          src_hash=$(hash_files go.work go.work.sum '*go.mod' '*go.sum' '*.go' cmd internal iac)
+          build_any="integration-gobuild-${RUNNER_OS}-${RUNNER_ARCH}-${go_version}-"
+          {
+            echo "gocache=$(go env GOCACHE)"
+            echo "gomodcache=$(go env GOMODCACHE)"
+            echo "mod_prefix=integration-gomod-${RUNNER_OS}-${RUNNER_ARCH}-"
+            echo "mod_key=integration-gomod-${RUNNER_OS}-${RUNNER_ARCH}-${mod_hash}"
+            echo "build_any_prefix=${build_any}"
+            echo "build_prefix=${build_any}shard-${SHARD}-src-"
+            echo "build_key=${build_any}shard-${SHARD}-src-${src_hash}"
+          } | tee -a "$GITHUB_OUTPUT"
+
+      - name: Restore Go module cache
+        id: go_mod_cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.go_cache.outputs.gomodcache }}
+          key: ${{ steps.go_cache.outputs.mod_key }}
+          # An older module set still saves most downloads; go fetches the
+          # rest.
+          restore-keys: ${{ steps.go_cache.outputs.mod_prefix }}
+
+      - name: Restore Go build cache
+        id: go_build_cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.go_cache.outputs.gocache }}
+          key: ${{ steps.go_cache.outputs.build_key }}
+          # On a miss, this shard's latest entry (a PR's own, else main's),
+          # then any shard's (a renamed or new shard still gets the shared
+          # dependencies). Go's build cache is content-addressed: an entry
+          # from other sources is used only where it still matches, so a
+          # stale cache recompiles just what changed.
+          restore-keys: |
+            ${{ steps.go_cache.outputs.build_prefix }}
+            ${{ steps.go_cache.outputs.build_any_prefix }}
+
+      - name: Mark restored build cache entries unused
+        # Go moves an entry's mtime to now when it uses an entry that is over
+        # an hour old. Backdating every restored entry by two hours (well
+        # inside Go's own 5-day trim) lets the prune step below drop exactly
+        # the entries this run did not use, so a cache restored from an older
+        # key or from another shard does not keep growing.
+        env:
+          GOCACHE_DIR: ${{ steps.go_cache.outputs.gocache }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GOCACHE_DIR"
+          find "$GOCACHE_DIR" -mindepth 2 -maxdepth 2 -type f -print0 |
+            xargs -0 -r touch -m -d '2 hours ago'
+          touch "$RUNNER_TEMP/go-build-restored"
+          echo "Restored $(find "$GOCACHE_DIR" -mindepth 2 -maxdepth 2 -type f | wc -l) build cache entries, $(du -sh "$GOCACHE_DIR" | cut -f1)"
+
+      - name: Download the modules of every shard
+        id: go_mod_download
+        # Only on the leg that saves the module cache, and only on a miss, so
+        # the saved set covers every leg, not just this one's packages.
+        if: strategy.job-index == 0 && steps.go_mod_cache.outputs.cache-hit != 'true'
+        run: go list -deps -test -tags=integration ./... > /dev/null
 
       - name: Install golang-migrate
         run: |
@@ -440,7 +585,39 @@ jobs:
               up
           fi
 
+      - name: Select integration tests
+        run: |
+          set -euo pipefail
+          bash scripts/integration-test-selection.sh ./... > "$RUNNER_TEMP/selection.tsv"
+          echo "Packages with integration tests (top-level tests selected):"
+          awk -F'\t' '{ printf "  %s (%d)\n", $1, $3 }' "$RUNNER_TEMP/selection.tsv"
+
+      - name: Check every package with integration tests is in exactly one shard
+        env:
+          SHARD_INDEX: ${{ strategy.job-index }}
+          SHARD_TOTAL: ${{ strategy.job-total }}
+        run: |
+          set -euo pipefail
+          # The matrix and INTEGRATION_SHARDS must list the same shards in the
+          # same order. job-index is unique per leg, so each spec shard then
+          # has exactly one leg, and no leg runs a shard the spec lacks.
+          mapfile -t names < <(awk 'NF { print $1 }' <<<"$INTEGRATION_SHARDS")
+          if [ "${#names[@]}" -ne "$SHARD_TOTAL" ] || [ "${names[$SHARD_INDEX]:-}" != "$SHARD" ]; then
+            echo "::error::matrix leg $((SHARD_INDEX + 1)) of $SHARD_TOTAL is shard '$SHARD', but INTEGRATION_SHARDS line $((SHARD_INDEX + 1)) of ${#names[@]} is '${names[$SHARD_INDEX]:-}'"
+            exit 1
+          fi
+          # Fails if a package lands in no shard or in two, if a named package
+          # has no integration tests left, or if a shard is left empty.
+          # From go.mod, not `go list -m`: the checked-in go.work makes that
+          # print tests/e2e's module path as well.
+          INTEGRATION_MODULE="$(awk '$1 == "module" { print $2; exit }' go.mod)" \
+            bash scripts/integration-test-selection.sh \
+              --shard "$SHARD" "$RUNNER_TEMP/selection.tsv" > "$RUNNER_TEMP/shard.tsv"
+          echo "Shard $SHARD runs:"
+          cut -f1 "$RUNNER_TEMP/shard.tsv" | sed 's/^/  /'
+
       - name: Run integration tests
+        id: integration_tests
         env:
           DB_HOST: localhost
           DB_PORT: 5432
@@ -449,51 +626,146 @@ jobs:
           DB_PASSWORD: test_password  # CI-only throwaway password — not used in any real environment
           DB_SSL_MODE: disable
         run: |
-          # Integration tests run in the root module; E2E gets its own tag.
           set -uo pipefail
+          log="$RUNNER_TEMP/integration-${SHARD}.log"
+          profile="$RUNNER_TEMP/coverage-integration-${SHARD}.out"
+          mapfile -t pkgs < <(cut -f1 "$RUNNER_TEMP/shard.tsv")
+          # One go test for the whole shard, so its packages still build and
+          # run in parallel. -run is the per-package regexes joined by |; a
+          # name only matches that name, so another package in the shard runs
+          # extra tests only if it has a test of the same name (counted below).
+          run_regex="$(cut -f2 "$RUNNER_TEMP/shard.tsv" | paste -sd'|' -)"
+          selected=$(awk -F'\t' '{ n += $3 } END { print n + 0 }' "$RUNNER_TEMP/shard.tsv")
           status=0
-          for mod in . tests/e2e; do
-            tag=$(echo "$mod" | tr './' '--' | sed 's/^-/root/')
-            log="$RUNNER_TEMP/integration-${tag}.log"
-            # See the unit job: tests/e2e has no package to test without its own
-            # tag, so it gets a type-check here too rather than a run.
-            if [ "$mod" = "tests/e2e" ]; then
-              echo "==> type-check $mod under -tags=e2e (tests run in the e2e-tests job)"
-              if ! (cd "$mod" && go vet -tags=e2e ./...) 2>&1 | tee "$log"; then
-                echo "::error::$mod failed to type-check under -tags=e2e"
-                status=1
-              fi
-              continue
-            fi
-            echo "==> integration tests in $mod"
-            if ! (cd "$mod" && go test -v -race -tags=integration -timeout=20m \
-                    -coverprofile="$RUNNER_TEMP/coverage-integration-${tag}.out" \
-                    ./...) 2>&1 | tee "$log"; then
-              echo "::error::integration tests failed in $mod"
-              status=1
-            fi
-            ran=$(grep -cE '^--- (PASS|FAIL|SKIP)' "$log" || true)
-            echo "==> $mod ran $ran top-level test(s)"
-            if [ "$ran" -eq 0 ]; then
-              echo "::error::$mod ran zero tests -- it is in the loop but asserting nothing"
-              status=1
-            fi
-          done
+          echo "==> integration tests: ${pkgs[*]}"
+          # -count=1: with the build cache restored, go test would otherwise
+          # replay an earlier run's results. -run, -v, -timeout and
+          # -coverprofile are all cacheable test flags, and go test cannot
+          # see that the tests depend on the database.
+          if ! go test -count=1 -v -race -tags=integration -timeout=20m \
+                  -run "$run_regex" \
+                  -coverprofile="$profile" \
+                  "${pkgs[@]}" 2>&1 | tee "$log"; then
+            echo "::error::integration tests failed in shard $SHARD"
+            status=1
+          fi
+          # Every selected test reports exactly one top-level result line
+          # (subtests are indented). Fewer means the selection named tests
+          # that did not run; zero is the #1751 shape, asserting nothing.
+          ran=$(grep -cE '^--- (PASS|FAIL|SKIP)' "$log" || true)
+          echo "==> shard $SHARD ran $ran of $selected selected top-level test(s)"
+          if [ "$ran" -eq 0 ] || [ "$ran" -lt "$selected" ]; then
+            echo "::error::shard $SHARD ran $ran top-level test(s), $selected were selected"
+            status=1
+          elif [ "$ran" -gt "$selected" ]; then
+            echo "::warning::shard $SHARD ran $ran top-level tests for $selected selected: a selected name also names a unit test in another package of this shard, which therefore ran twice"
+          fi
+          if [ ! -s "$profile" ]; then
+            echo "::error::shard $SHARD produced no integration coverage profile" >&2
+            status=1
+          fi
+          exit "$status"
 
-          # Merge per-module profiles for the upload step (see the unit job).
+      - name: Type-check tests/e2e under -tags=e2e
+        # tests/e2e holds only //go:build e2e files in a module of its own, so
+        # it has no package to test here; its tests run in the e2e-tests job.
+        # One leg is enough for a type-check. It runs even when the tests
+        # failed, as both results were reported side by side before.
+        if: ${{ !cancelled() && matrix.e2e-typecheck }}
+        working-directory: tests/e2e
+        run: go vet -tags=e2e ./...
+
+      - name: Drop build cache entries this run did not use
+        id: go_build_prune
+        # Whenever the tests ran, pass or fail, so a red run still warms the
+        # cache. Not on an exact hit: that key is already saved.
+        if: ${{ !cancelled() && steps.go_build_cache.outputs.cache-hit != 'true' && (steps.integration_tests.outcome == 'success' || steps.integration_tests.outcome == 'failure') }}
+        env:
+          GOCACHE_DIR: ${{ steps.go_cache.outputs.gocache }}
+        run: |
+          set -euo pipefail
+          # Entries still older than the marker were restored and never used
+          # (see "Mark restored build cache entries unused").
+          dropped=$(find "$GOCACHE_DIR" -mindepth 2 -maxdepth 2 -type f \
+            ! -newer "$RUNNER_TEMP/go-build-restored" -print -delete | wc -l)
+          echo "Dropped $dropped unused entries; saving $(find "$GOCACHE_DIR" -mindepth 2 -maxdepth 2 -type f | wc -l), $(du -sh "$GOCACHE_DIR" | cut -f1)"
+
+      - name: Save Go build cache
+        if: ${{ !cancelled() && steps.go_build_prune.outcome == 'success' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.go_cache.outputs.gocache }}
+          key: ${{ steps.go_cache.outputs.build_key }}
+
+      - name: Save Go module cache
+        if: ${{ !cancelled() && steps.go_mod_download.outcome == 'success' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.go_cache.outputs.gomodcache }}
+          key: ${{ steps.go_cache.outputs.mod_key }}
+
+      - name: Upload integration coverage
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          # One artifact per shard; the integration-coverage job below merges
+          # them into the single artifact this job used to upload. Short
+          # retention: only the merged one is kept for 30 days.
+          name: integration-coverage-${{ matrix.shard }}
+          path: ${{ runner.temp }}/coverage-integration-${{ matrix.shard }}.out
+          if-no-files-found: error
+          retention-days: 1
+
+  # Rebuild the integration-coverage artifact (coverage-integration.out) the
+  # unsharded job used to upload. That job ran the unit tests too, so its
+  # profile covered both suites; the shards run only integration tests, so
+  # the unit job's profile is merged back in and the artifact keeps its
+  # meaning (81.6% total on main's run 40153816430, 81.6% for the same merge
+  # on this layout). Nothing in CI reads it: Codecov and the 80% coverage
+  # warning use the unit job's own profile. Produced only when every shard
+  # and the unit job passed.
+  integration-coverage:
+    name: Merge integration coverage
+    needs: [unit-tests, integration-tests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download shard coverage
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: integration-coverage-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: true
+
+      - name: Download unit coverage
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: coverage-report
+          path: ${{ runner.temp }}/unit
+
+      - name: Merge profiles
+        run: |
+          set -euo pipefail
           shopt -s nullglob
-          profiles=("$RUNNER_TEMP"/coverage-integration-*.out)
+          profiles=("$RUNNER_TEMP"/shards/coverage-integration-*.out)
           if [ "${#profiles[@]}" -eq 0 ]; then
-            echo "::error::no module produced an integration coverage profile" >&2
+            echo "::error::no integration shard produced a coverage profile" >&2
             exit 1
           fi
+          profiles+=("$RUNNER_TEMP/unit/coverage.out")
+          # Same merge as the unit job: one "mode:" header, then every
+          # profile's blocks. All are atomic (-race); a block present in
+          # more than one profile is summed by go tool cover when read.
           merged="$RUNNER_TEMP/coverage-integration.out"
           head -n 1 "${profiles[0]}" > "$merged"
           for p in "${profiles[@]}"; do
+            if [ "$(head -n 1 "$p")" != "$(head -n 1 "$merged")" ]; then
+              echo "::error::$p has '$(head -n 1 "$p")', expected '$(head -n 1 "$merged")'" >&2
+              exit 1
+            fi
             tail -n +2 "$p" >> "$merged"
           done
-          echo "Merged ${#profiles[@]} integration coverage profile(s)"
-          exit "$status"
+          echo "Merged ${#profiles[@]} coverage profile(s), $(( $(wc -l < "$merged") - 1 )) block(s)"
 
       - name: Upload integration coverage
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -501,6 +773,32 @@ jobs:
           name: integration-coverage
           path: ${{ runner.temp }}/coverage-integration.out
           retention-days: 30
+
+  # Self-test for scripts/integration-test-selection.sh, which decides what the
+  # Integration Tests job runs. A selector that drops a test drops it from CI
+  # entirely, as the Unit Tests job skips integration files, so the suite
+  # asserts both directions over fixture packages. Needs Go (go list); the
+  # fixtures are stdlib-only, so no module cache.
+  integration-test-selection:
+    name: Integration test selection self-test
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: false
+
+      - name: Run selection self-tests
+        run: bash scripts/test-integration-test-selection.sh
 
   # Docker image build test, once per architecture the image ships for.
   #
@@ -765,7 +1063,7 @@ jobs:
   # Security scanning
   security-scan:
     name: Security Scanning
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       security-events: write
       contents: read
@@ -823,13 +1121,90 @@ jobs:
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success'
         run: bash scripts/test-run-gosec.sh
 
+      # gosec result cache. A full scan re-parses and type-checks every package
+      # and dependency from source (about 300s), even when no Go input changed,
+      # as on a frontend-only PR. gosec's verdict depends only on the inputs
+      # hashed below, so a run whose inputs exactly match an earlier clean scan
+      # would reach the same verdict. That run reuses the clean scan's merged
+      # SARIF instead.
+      - name: Compute gosec cache keys
+        id: gosec_key
+        # An optimisation only: if this step breaks, the restores and saves
+        # below are skipped and gosec scans exactly as it would uncached.
+        continue-on-error: true
+        if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success'
+        run: |
+          set -euo pipefail
+          # Pinned gosec, effective Go version and binary cache dir, read from
+          # scripts/run-gosec.sh so the pin lives in one place.
+          versions=$(scripts/run-gosec.sh --print-versions)
+          printf '%s\n' "$versions" | tee -a "$GITHUB_OUTPUT"
+          gosec_version=$(printf '%s\n' "$versions" | sed -n 's/^gosec_version=//p')
+          go_version=$(printf '%s\n' "$versions" | sed -n 's/^go_version=//p')
+          # Every input to gosec's verdict: all Go sources (both scanned modules
+          # and anything else on disk, testdata included), every go.mod/go.sum
+          # (go.sum pins dependency content), go.work/go.work.sum, the wrapper
+          # (pin, rule set, exclude dirs) and this workflow (the SARIF merge
+          # below). sha256sum lines carry the path as well as the content, so a
+          # moved or renamed file changes the key; hashFiles() would not.
+          # Including too much only costs a miss.
+          inputs_hash=$(
+            {
+              find . -path ./.git -prune -o -type f \( -name '*.go' -o -name go.mod \
+                -o -name go.sum -o -name go.work -o -name go.work.sum \) -print0
+              printf '%s\0' scripts/run-gosec.sh .github/workflows/ci.yml
+            } | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1
+          )
+          echo "results_key=gosec-sarif-${RUNNER_OS}-${RUNNER_ARCH}-${gosec_version}-${go_version}-${inputs_hash}" | tee -a "$GITHUB_OUTPUT"
+          echo "bin_key=gosec-bin-${RUNNER_OS}-${RUNNER_ARCH}-${gosec_version}-${go_version}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Restore gosec results
+        id: gosec_results
+        # Exact key only (no restore-keys): a result from different inputs is
+        # never reused. A miss or a cache service error leaves no file, and the
+        # scan below runs as usual.
+        if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec_key.outcome == 'success'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/gosec-results.sarif
+          key: ${{ steps.gosec_key.outputs.results_key }}
+
+      # Split restore/save rather than the combined actions/cache, whose save
+      # is a post step gated on `post-if: success()`: any failing scanner in
+      # this job would stop the binary being saved. Not needed on a results
+      # hit, which runs no gosec.
+      - name: Restore gosec binary
+        id: gosec_bin
+        if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec_key.outcome == 'success' && steps.gosec_results.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.gosec_key.outputs.bin_dir }}
+          key: ${{ steps.gosec_key.outputs.bin_key }}
+
       - name: Run gosec Security Scanner
         id: gosec
         # always(): don't let an earlier scanner's failure (e.g. npm audit)
         # skip Go SAST coverage. The job still fails if gosec itself fails.
         # Still requires checkout and Go setup to have succeeded.
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success'
+        env:
+          RESULTS_CACHE_HIT: ${{ steps.gosec_results.outputs.cache-hit }}
+          GOSEC_BIN_DIR: ${{ steps.gosec_key.outputs.bin_dir }}
         run: |
+          # On an exact results-cache hit the restored SARIF is the merged
+          # output of a clean scan of identical inputs (only clean scans are
+          # saved, see "Save gosec results"), so hand it to the upload step
+          # as-is. If it is unreadable, fall through to a real scan.
+          merged="$RUNNER_TEMP/gosec-results.sarif"
+          if [ "$RESULTS_CACHE_HIT" = "true" ]; then
+            if jq -e '.runs | length > 0' "$merged" >/dev/null 2>&1; then
+              echo "Go inputs match a clean gosec scan: reusing its SARIF ($(jq '.runs | length' "$merged") runs)"
+              exit 0
+            fi
+            echo "::warning::restored gosec SARIF is missing or unreadable; scanning instead"
+            rm -f "$merged"
+          fi
+
           # scripts/run-gosec.sh owns the pinned gosec version, toolchain,
           # module list and rule set, shared with the pre-commit hook and
           # `make security-scan-go` (issue #340). It installs gosec with the
@@ -839,11 +1214,21 @@ jobs:
           #
           # gosec exits non-zero both for real findings and for a processing
           # error. The script still scans every module after a failure, and
-          # `|| status=1` exempts it from errexit so the merge below always
+          # `|| rc=$?` exempts it from errexit so the merge below always
           # runs (issue #1717); `status` records whether the job should still
           # fail at the end.
           status=0
-          scripts/run-gosec.sh --sarif-dir "$RUNNER_TEMP" || status=1
+          rc=0
+          scripts/run-gosec.sh --sarif-dir "$RUNNER_TEMP" || rc=$?
+          [ "$rc" -eq 0 ] || status=1
+          # run-gosec.sh exits 2 on a setup failure (a failed install
+          # included), but an early mkdir/mktemp failure can stop it with 1
+          # before gosec exists. Mark the binary ready for "Save gosec binary"
+          # only when the executable is really in its cache dir; findings and
+          # scan errors (exit 1 with the binary present) still save it.
+          if [ "$rc" -ne 2 ] && [ -n "${GOSEC_BIN_DIR:-}" ] && [ -x "$GOSEC_BIN_DIR/gosec" ]; then
+            echo "binary_ready=true" >> "$GITHUB_OUTPUT"
+          fi
           shopt -s nullglob
           for out in "$RUNNER_TEMP"/gosec-*.sarif; do
             tag=$(basename "$out" .sarif)
@@ -870,6 +1255,9 @@ jobs:
           jq -s '{version: "2.1.0", "$schema": "https://json.schemastore.org/sarif-2.1.0.json", runs: [.[].runs[]]}' \
             "${sarif_files[@]}" > "$merged"
           echo "Merged $(jq '.runs | length' "$merged") SARIF runs"
+          # Only a clean scan (exit 0, SARIF merged) may be cached, so a
+          # finding or a scan error is never replayed from the cache.
+          [ "$status" -ne 0 ] || echo "clean_scan=true" >> "$GITHUB_OUTPUT"
           exit "$status"
 
       - name: Upload gosec results to GitHub Security
@@ -881,6 +1269,25 @@ jobs:
         uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
         with:
           sarif_file: ${{ runner.temp }}/gosec-results.sarif
+
+      - name: Save gosec results
+        # Only after a clean scan of these exact inputs (never a hit, a
+        # finding or a scan error). A pull_request run saves to its own
+        # merge-ref scope, which main and other PRs cannot restore from.
+        if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec_key.outcome == 'success' && steps.gosec.outputs.clean_scan == 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/gosec-results.sarif
+          key: ${{ steps.gosec_key.outputs.results_key }}
+
+      - name: Save gosec binary
+        # Saved even when gosec reports findings: the binary depends only on
+        # the gosec and Go versions in the key, not on the scan.
+        if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec_key.outcome == 'success' && steps.gosec_bin.outputs.cache-hit != 'true' && steps.gosec.outputs.binary_ready == 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ steps.gosec_key.outputs.bin_dir }}
+          key: ${{ steps.gosec_key.outputs.bin_key }}
 
       - name: Run Trivy vulnerability scanner (filesystem)
         id: trivy_fs
@@ -984,7 +1391,7 @@ jobs:
   # compose invocation needs --profile test (issue #1180).
   e2e-tests:
     name: E2E Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     permissions:
       contents: read
 
@@ -1311,6 +1718,8 @@ jobs:
       - workflow-lint
       - unit-tests
       - integration-tests
+      - integration-coverage
+      - integration-test-selection
       - docker-build
       - terraform-validate
       - security-scan

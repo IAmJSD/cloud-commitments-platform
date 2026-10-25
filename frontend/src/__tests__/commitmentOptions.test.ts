@@ -171,6 +171,20 @@ describe('commitmentOptions', () => {
         expect(config.terms).toHaveLength(2);
         expect(config.payments).toHaveLength(3);
       });
+
+      // #320: plain record[key] lookups resolved prototype members, so
+      // getCommitmentConfig('constructor', 'name') returned "Object".
+      it.each([
+        ['constructor', 'name'],
+        ['__proto__', 'constructor'],
+        ['aws', 'constructor'],
+        ['aws', '__proto__'],
+      ])('ignores prototype members as provider/service (%s, %s)', (provider, service) => {
+        const config = getCommitmentConfig(provider, service);
+
+        expect(config.terms).toHaveLength(2);
+        expect(config.payments).toHaveLength(3);
+      });
     });
   });
 
@@ -788,6 +802,20 @@ describe('commitmentOptions', () => {
       await fetchAndPopulateCommitmentOptions(fetchMock);
 
       expect(isValidCombination('aws', 'rds', 3, 'no-upfront')).toBe(false);
+    });
+
+    // #320: a "__proto__" service key in the response must not replace the
+    // prototype of the AWS config table; the other keys still apply.
+    it('skips a __proto__ service key from the server', async () => {
+      const body = JSON.parse('{"status":"ok","aws":{"__proto__":[{"term":1,"payment":"all-upfront"}],"rds":[{"term":1,"payment":"all-upfront"}]}}');
+      const fetchMock = jest.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve(body) } as Response);
+
+      await fetchAndPopulateCommitmentOptions(fetchMock);
+
+      expect(isValidCombination('aws', 'rds', 1, 'partial-upfront')).toBe(false);
+      const config = getCommitmentConfig('aws', 'terms');
+      expect(config.terms).toHaveLength(2);
+      expect(config.invalidCombinations).toBeUndefined();
     });
 
     it('clears invalidCombinations when server reports full support', async () => {
