@@ -35,7 +35,7 @@ func constraintsCover(held, req *PermissionConstraints) bool {
 // Comparison is EXACT for every dimension. An earlier version normalised
 // (trim + lower-case) and justified it as "matching matchAllRegionsConstraint"
 // -- true for Regions only. AccountIDs, Providers and Services are enforced by
-// containsAny, an exact case-sensitive lookup, so normalising made the ceiling
+// containsAll, an exact case-sensitive lookup, so normalising made the ceiling
 // LOOSER than enforcement there: a holder constrained to ["ACCT-1"] could
 // grant ["acct-1"], a value they cannot themselves use.
 //

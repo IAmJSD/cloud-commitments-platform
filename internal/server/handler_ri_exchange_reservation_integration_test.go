@@ -13,23 +13,18 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/providers/aws/recommendations"
 	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRIExchangeAutoWorkers_ConcreteStoreAndFixtureClient(t *testing.T) {
-	// A dedicated container, not an opt-in DSN, so this runs in CI (#724). It
-	// skips only when Docker is unavailable; a container or migration failure
-	// fails the test (#1597).
+	// A fresh migrated database on the package's shared container, not an
+	// opt-in DSN, so this runs in CI (#724). It skips only when Docker is
+	// unavailable; a container or migration failure fails the test (#1597).
 	setupCtx, setupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer setupCancel()
-	container := testhelpers.RequirePostgresContainer(setupCtx, t)
-	t.Cleanup(func() { _ = container.Cleanup(context.Background()) })
-	conn := container.DB
-	require.NoError(t, migrations.RunMigrations(setupCtx, conn.Pool(), "../database/postgres/migrations", "", ""),
-		"migrations failed to apply to a fresh database")
+	conn := testhelpers.RequireMigratedDatabase(setupCtx, t, "../database/postgres/migrations").DB
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	var testRunID string

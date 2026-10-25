@@ -52,6 +52,7 @@ jest.mock('../navigation', () => ({
 }));
 
 jest.mock('../utils', () => ({
+  NO_VALUE: '\u2014',
   formatCurrency: jest.fn((val: number) => `$${val || 0}`),
   formatDate: jest.fn((val: string) => (val ? new Date(val).toLocaleDateString() : '')),
   formatTerm: jest.fn((years: number) => (years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`)),

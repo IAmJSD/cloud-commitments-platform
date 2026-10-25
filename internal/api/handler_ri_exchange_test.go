@@ -1646,7 +1646,7 @@ func (m *mockAuthForExchange) HasPermissionForConstraintsAPI(_ context.Context, 
 func (m *mockAuthForExchange) GetUserPermissionsAPI(_ context.Context, _ string) (any, error) {
 	return nil, nil
 }
-func (m *mockAuthForExchange) CreateAPIKeyAPI(_ context.Context, _ string, _ any) (any, error) {
+func (m *mockAuthForExchange) CreateAPIKeyAPI(_ context.Context, _ string, _ auth.APICreateAPIKeyRequest) (any, error) {
 	return nil, nil
 }
 func (m *mockAuthForExchange) ListUserAPIKeysAPI(_ context.Context, _ string) (any, error) {
@@ -1810,32 +1810,26 @@ func TestGetExchangeQuote_InvalidOfferingIDFormat(t *testing.T) {
 }
 
 func TestGetExchangeQuote_ValidOfferingIDPassesFormat(t *testing.T) {
-	// A well-formed UUID should pass the format check. The AWS call will
-	// fail because there's no real EC2 client wired -- but the test
-	// exercises that the regex guard does NOT fire on a valid UUID.
-	// We stub the handler to short-circuit before the AWS call.
-	called := false
-	stub := &stubTargetOfferingsEC2{
-		instances: []ec2svc.ConvertibleRI{},
+	// A well-formed UUID should pass the format check and reach the quote
+	// call. The quote function is stubbed so the test never resolves AWS
+	// credentials or calls EC2 (#855).
+	var quotes []exchange.ExchangeQuoteRequest
+	h := &Handler{
+		auth: &mockAuthForExchange{},
+		exchangeQuoteFn: func(_ context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error) {
+			quotes = append(quotes, req)
+			return &exchange.ExchangeQuoteSummary{IsValidExchange: true}, nil
+		},
 	}
-	_ = stub
-	_ = called
+	h.awsCfgOnce.Do(func() { h.awsCfg = aws.Config{Region: "us-east-1"} })
 
-	h := &Handler{auth: &mockAuthForExchange{}}
-
-	// The handler calls exchange.GetExchangeQuote next; that will fail
-	// with a config error in test (no real AWS cred). We only care that
-	// the regex guard doesn't block a valid UUID -- so any error after
-	// passing the UUID check is acceptable.
 	_, err := h.getExchangeQuote(context.Background(), &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer test-token"},
 		Body:    `{"ri_ids":["ri-123"],"targets":[{"offering_id":"4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91","count":1}]}`,
 	})
-	// Must NOT be the UUID format error
-	if err != nil {
-		assert.NotContains(t, err.Error(), "offering UUID",
-			"a valid UUID must not be rejected by the format check")
-	}
+	require.NoError(t, err, "a valid UUID must not be rejected by the format check")
+	require.Len(t, quotes, 1, "a valid UUID must reach the quote call")
+	assert.Equal(t, "4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91", quotes[0].Targets[0].OfferingID)
 }
 
 func TestValidateExecuteExchangeBody_InvalidOfferingIDFormat(t *testing.T) {
@@ -2215,34 +2209,34 @@ func TestExecuteExchange_SessionScopeLookupErrorFailsClosed(t *testing.T) {
 // getExchangeQuote must resolve the region from the AWS SDK chain when
 // the caller omits it, matching getReshapeRecommendations, instead of
 // hardcoding us-east-1. We pre-seal awsCfgOnce with a non-default region
-// and verify the quote call receives that region (the call fails because
-// there is no real AWS SDK, but the region check happens first via body
-// validation passing; here we verify no 400 for missing region).
+// and verify the (stubbed, #855) quote call receives that region and the
+// response echoes it.
 func TestGetExchangeQuote_EmptyRegionResolvesFromSDK(t *testing.T) {
 	const cfgRegion = "eu-west-1"
-	h := &Handler{auth: &mockAuthForExchange{}}
+	var quotes []exchange.ExchangeQuoteRequest
+	h := &Handler{
+		auth: &mockAuthForExchange{},
+		exchangeQuoteFn: func(_ context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error) {
+			quotes = append(quotes, req)
+			return &exchange.ExchangeQuoteSummary{IsValidExchange: true}, nil
+		},
+	}
 	// Pre-seal awsCfgOnce so loadAWSConfigWithRegion returns cfgRegion
 	// without making a real SDK call.
 	h.awsCfgOnce.Do(func() {
 		h.awsCfg = aws.Config{Region: cfgRegion}
 	})
 
-	// The quote call will fail (no real AWS endpoint), but it must NOT fail
-	// with a 400 "region is required" — region resolution from the SDK is
-	// the accepted path for quote (non-mutation). The error will be a 500
-	// from exchange.GetExchangeQuote failing against no real AWS.
-	_, err := h.getExchangeQuote(context.Background(), &events.LambdaFunctionURLRequest{
+	resp, err := h.getExchangeQuote(context.Background(), &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer test-token"},
-		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"off-1"}`,
+		Body:    `{"ri_ids":["ri-123"],"target_offering_id":"off-1","target_count":1}`,
 	})
-	// We expect either no error or a 500 from the AWS call — never a 400
-	// complaining about a missing region.
-	if err != nil {
-		ce, ok := IsClientError(err)
-		require.True(t, ok, "expected ClientError, got: %v", err)
-		assert.NotEqual(t, 400, ce.code,
-			"getExchangeQuote must not return 400 for a missing region; it must resolve from the SDK chain")
-	}
+	require.NoError(t, err, "getExchangeQuote must not reject a missing region; it must resolve from the SDK chain")
+	require.Len(t, quotes, 1)
+	assert.Equal(t, cfgRegion, quotes[0].Region, "the quote must use the SDK-resolved region")
+	typed, ok := resp.(ExchangeQuoteResponse)
+	require.True(t, ok, "expected ExchangeQuoteResponse, got %T", resp)
+	assert.Equal(t, cfgRegion, typed.Region, "the response must echo the SDK-resolved region")
 }
 
 // TestExchangeQuoteResponse_MarshalsRegionAlongsideSummaryFields pins
