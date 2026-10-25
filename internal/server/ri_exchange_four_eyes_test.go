@@ -80,7 +80,7 @@ func newFourEyesExchangeFixture(globalCfg *config.GlobalConfig, globalCfgErr err
 		lookupOffering: func(context.Context, exchange.LookupOfferingParams) (string, error) {
 			return "offering-456", nil
 		},
-		accountID: "acct-four-eyes",
+		accountID: "123456789012",
 		region:    "us-east-1",
 	}
 	return f
@@ -171,7 +171,11 @@ func TestExecuteRIExchangeReshape_FourEyesOffAutoStillExecutes(t *testing.T) {
 func TestExchangeRunnerAdapter_FourEyesDowngradesLadderReshape(t *testing.T) {
 	ctx := testutil.TestContext(t)
 	f := newFourEyesExchangeFixture(&config.GlobalConfig{RequireDifferentApprover: true}, nil)
-	adapter := &exchangeRunnerAdapter{app: &Application{Config: f.store}, region: "us-east-1", accountID: "acct-four-eyes"}
+	adapter := &exchangeRunnerAdapter{
+		app:       &Application{Config: f.store},
+		region:    "us-east-1",
+		accountID: "123456789012",
+	}
 	ladderRunID := "ladder-run-1"
 
 	result, err := adapter.run(ctx, ladderExchangeConfig(), f.clients, &ladderRunID, false)
@@ -186,7 +190,11 @@ func TestExchangeRunnerAdapter_FourEyesDowngradesLadderReshape(t *testing.T) {
 func TestExchangeRunnerAdapter_FourEyesOffLadderStillExecutes(t *testing.T) {
 	ctx := testutil.TestContext(t)
 	f := newFourEyesExchangeFixture(&config.GlobalConfig{}, nil)
-	adapter := &exchangeRunnerAdapter{app: &Application{Config: f.store}, region: "us-east-1", accountID: "acct-four-eyes"}
+	adapter := &exchangeRunnerAdapter{
+		app:       &Application{Config: f.store},
+		region:    "us-east-1",
+		accountID: "123456789012",
+	}
 	ladderRunID := "ladder-run-1"
 
 	result, err := adapter.run(ctx, ladderExchangeConfig(), f.clients, &ladderRunID, false)
@@ -202,7 +210,11 @@ func TestExchangeRunnerAdapter_FourEyesOffLadderStillExecutes(t *testing.T) {
 func TestExchangeRunnerAdapter_PolicyLookupErrorFailsClosed(t *testing.T) {
 	ctx := testutil.TestContext(t)
 	f := newFourEyesExchangeFixture(nil, errors.New("db down"))
-	adapter := &exchangeRunnerAdapter{app: &Application{Config: f.store}, region: "us-east-1", accountID: "acct-four-eyes"}
+	adapter := &exchangeRunnerAdapter{
+		app:       &Application{Config: f.store},
+		region:    "us-east-1",
+		accountID: "123456789012",
+	}
 
 	result, err := adapter.run(ctx, ladderExchangeConfig(), f.clients, nil, false)
 	require.Error(t, err)
