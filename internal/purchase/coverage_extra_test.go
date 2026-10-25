@@ -412,7 +412,8 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	// mistake) would mismatch the mock expectation and fail the test.
 	plan := &config.PurchasePlan{ID: planID, Name: "test-plan"}
 	mockStore.On("GetPurchasePlan", mock.Anything, planID).Return(plan, nil)
-	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
+	// Nothing is selected, so nothing is bought and no "purchase confirmed"
+	// email goes out (#339).
 	mockStore.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	mockStore.On("CompletePlanStep", mock.Anything, planID, 1).Return(nil)
 
@@ -425,6 +426,7 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	err := manager.ProcessMessage(ctx, `{"type":"approve","execution_id":"exec-appv","token":"correct-token","actor_email":"owner@example.com"}`)
 	require.NoError(t, err)
 	mockStore.AssertExpectations(t)
+	mockEmail.AssertNotCalled(t, "SendPurchaseConfirmation", mock.Anything, mock.Anything)
 	mockEmail.AssertExpectations(t)
 }
 
@@ -585,7 +587,8 @@ func TestProcessMessage_ApproveFourEyesOn_DifferentApproverSucceeds(t *testing.T
 	mockStore.On("TransitionExecutionStatusTokenPinned", ctx, "exec-appv-diff", []string{"pending", "notified"}, "running", (*string)(nil), "correct-token").Return(approved, nil)
 	plan := &config.PurchasePlan{ID: planID, Name: "test-plan"}
 	mockStore.On("GetPurchasePlan", mock.Anything, planID).Return(plan, nil)
-	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
+	// Nothing is selected, so nothing is bought and no "purchase confirmed"
+	// email goes out (#339).
 	mockStore.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	mockStore.On("CompletePlanStep", mock.Anything, planID, 1).Return(nil)
 
@@ -598,6 +601,7 @@ func TestProcessMessage_ApproveFourEyesOn_DifferentApproverSucceeds(t *testing.T
 	err := manager.ProcessMessage(ctx, `{"type":"approve","execution_id":"exec-appv-diff","token":"correct-token","actor_email":"approver@example.com"}`)
 	require.NoError(t, err)
 	mockStore.AssertExpectations(t)
+	mockEmail.AssertNotCalled(t, "SendPurchaseConfirmation", mock.Anything, mock.Anything)
 	mockEmail.AssertExpectations(t)
 }
 

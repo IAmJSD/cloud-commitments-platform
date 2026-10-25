@@ -114,10 +114,10 @@ func (app *Application) collectHealth(ctx context.Context) HealthStatus {
 	// pointers when the mutex is free, and while initialization holds it
 	// report both stores as pending rather than race on half-written state.
 	if app.dbMu.TryLock() {
-		configStore, authService, db := app.Config, app.Auth, app.DB
+		configStore, authService, db, connected := app.Config, app.Auth, app.DB, app.dbConnected
 		app.dbMu.Unlock()
 
-		health.Checks["config_store"] = app.checkConfigStore(ctx, configStore, db)
+		health.Checks["config_store"] = app.checkConfigStore(ctx, configStore, db, connected)
 		if health.Checks["config_store"].Status != "healthy" {
 			health.Status = "degraded"
 		}
@@ -185,10 +185,10 @@ func (app *Application) checkMigrations() CheckResult {
 	}
 }
 
-// checkConfigStore checks the health of the configuration store. The store and
-// connection come in as a snapshot taken under dbMu by collectHealth, so this
-// function never reads pointers ensureDB may be rewriting.
-func (app *Application) checkConfigStore(ctx context.Context, configStore config.StoreInterface, db *database.Connection) CheckResult {
+// checkConfigStore checks the health of the configuration store. The store,
+// connection and connected flag come in as a snapshot taken under dbMu by
+// collectHealth, so this function never reads state ensureDB may be rewriting.
+func (app *Application) checkConfigStore(ctx context.Context, configStore config.StoreInterface, db *database.Connection, connected bool) CheckResult {
 	// Check if config store exists
 	if configStore == nil {
 		// If using PostgreSQL with lazy initialization, DB might not be connected yet
@@ -201,6 +201,18 @@ func (app *Application) checkConfigStore(ctx context.Context, configStore config
 		return CheckResult{
 			Status:  "unhealthy",
 			Message: "Config store not initialized",
+		}
+	}
+
+	// With lazy PostgreSQL init the store is only usable once ensureDB has
+	// finished. reinitializeAfterConnect sets app.Config before steps that can
+	// still fail; ensureDB then closes the pool and clears app.DB but leaves
+	// app.Config over the closed pool. Without this check that state reported
+	// healthy (#339). ensureDB retries on the next request.
+	if app.dbConfig != nil && !connected {
+		return CheckResult{
+			Status:  "unhealthy",
+			Message: "Database initialization did not complete; config store is not connected",
 		}
 	}
 

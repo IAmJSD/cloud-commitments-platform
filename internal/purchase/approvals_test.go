@@ -283,7 +283,9 @@ func TestManager_ApproveAndExecute_EmptyPlanID(t *testing.T) {
 	}
 	store.On("TransitionExecutionStatus", ctx, "exec-direct-1", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	// No GetPurchasePlan / GetPlanAccounts / UpdatePurchasePlan calls — see AssertNotCalled below.
-	sender.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
+	// No recommendations, so nothing is bought and no "purchase confirmed"
+	// email goes out (#339): with no SendPurchaseConfirmation expectation
+	// registered, a send fails the test.
 	store.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
 	_, _, err := manager.ApproveAndExecute(ctx, "exec-direct-1", "operator@example.com", nil, nil)
