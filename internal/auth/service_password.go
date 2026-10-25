@@ -307,11 +307,24 @@ func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangeP
 // token stays valid: this prevents a griefing attack where an adversary who
 // knows the victim's email repeatedly requests resets to perpetually
 // invalidate the victim's legitimate link.
+//
+// The stored token is either a reset token (PasswordResetExpiry) or an invite
+// token (PasswordSetupExpiry), and only its expiry is stored. A reset token
+// never has more than PasswordResetExpiry left, so a longer remaining window
+// identifies an invite; deriving an invite's age from the reset lifetime made
+// it negative for the whole week, silently dropping every "re-send my setup
+// link" request (audit finding A03-009). A remaining window beyond even the
+// invite lifetime still yields a negative age, so it stays rate-limited.
 func resetRecentlyIssued(user *User, email string) bool {
 	if user.PasswordResetExpiry == nil {
 		return false
 	}
-	tokenAge := PasswordResetExpiry - time.Until(*user.PasswordResetExpiry)
+	remaining := time.Until(*user.PasswordResetExpiry)
+	lifetime := PasswordResetExpiry
+	if remaining > PasswordResetExpiry {
+		lifetime = PasswordSetupExpiry
+	}
+	tokenAge := lifetime - remaining
 	if tokenAge < PasswordResetRateLimit {
 		logging.Debugf("Password reset rate-limited for %s (token age %s < %s)",
 			redactEmail(email), tokenAge.Round(time.Second), PasswordResetRateLimit)
