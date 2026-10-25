@@ -180,9 +180,22 @@ func (s *sharedServer) start(ctx context.Context, t *testing.T) error {
 	}
 	// Detached from ctx: the container outlives the test that happened to be
 	// first, so that test's deadline or cancellation must not reach it.
-	s.admin, s.startErr = SetupPostgresContainer(context.WithoutCancel(ctx), t)
+	s.admin, s.startErr = setupPostgresContainer(context.WithoutCancel(ctx), t,
+		testcontainers.WithCmdArgs("-c", fmt.Sprintf("max_connections=%d", sharedMaxConnections)))
 	return s.startErr
 }
+
+// sharedMaxConnections is the shared server's max_connections, raised from
+// PostgreSQL's default of 100 because tests on it may run in parallel
+// (t.Parallel), up to -parallel (GOMAXPROCS by default) at once. Each running
+// test can hold a pool of up to 10 connections (MaxConnections in
+// SetupPostgresContainer) plus the migrator's own connection and a spare
+// session or two, about 13 at worst, and the admin pool adds up to 10 more.
+// 500 covers that worst case up to -parallel=36. Real use is far lower, since
+// pools only open what they need: the migrations package peaked at 50
+// connections with -parallel=16 and 21 with -parallel=4. Raising the server limit instead of
+// shrinking the per-database pool leaves every test's pool exactly as it was.
+const sharedMaxConnections = 500
 
 // templateKey identifies the migrations directory a template was built from.
 // It is absolute so that "../database/postgres/migrations" and a
