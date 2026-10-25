@@ -47,12 +47,11 @@ const (
 //
 //nolint:misspell // test body deliberately exercises the legacy British DB spelling under test -- see migration 000089
 func TestMigration_000089_RollbackWithCanceledRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	// Apply exactly 000089. The dual-accept constraint and canceled_by column
@@ -65,7 +64,7 @@ func TestMigration_000089_RollbackWithCanceledRows(t *testing.T) {
 		execID    = "78787878-7878-7878-7878-000000000001"
 		execActor = "canceler@test.example"
 	)
-	_, err = pool.Exec(ctx, `
+	_, err := pool.Exec(ctx, `
 		INSERT INTO purchase_executions
 		    (id, execution_id, status, step_number, scheduled_date, canceled_by)
 		VALUES (
@@ -166,12 +165,11 @@ func TestMigration_000089_RollbackWithCanceledRows(t *testing.T) {
 //
 //nolint:misspell // test body deliberately exercises the legacy British DB spelling under test -- see migration 000089
 func TestMigration_000089_UpIsAdditiveAndDualCompatible(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	// Pin just below 000089 and seed a legacy 'cancelled' row + cancelled_by so
@@ -182,7 +180,7 @@ func TestMigration_000089_UpIsAdditiveAndDualCompatible(t *testing.T) {
 		execID    = "77777777-7777-7777-7777-000000000001"
 		execActor = "legacy-canceler@test.example"
 	)
-	_, err = pool.Exec(ctx, `
+	_, err := pool.Exec(ctx, `
 		INSERT INTO purchase_executions
 		    (id, execution_id, status, step_number, scheduled_date, cancelled_by)
 		VALUES (
