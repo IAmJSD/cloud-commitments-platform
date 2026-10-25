@@ -109,10 +109,10 @@ func TestProcessMessage_ExpiredTokenRejectedBeforeApproverLookup(t *testing.T) {
 			require.ErrorIs(t, err, ErrApprovalTokenExpired)
 			mockStore.AssertNumberOfCalls(t, "GetExecutionByID", 1)
 			mockStore.AssertNotCalled(t, "GetCloudAccount", mock.Anything, mock.Anything)
-			mockStore.AssertNotCalled(t, "TransitionExecutionStatus",
+			mockStore.AssertNotCalled(t, "TransitionExecutionStatusTokenPinned",
+				mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			mockStore.AssertNotCalled(t, "CancelExecutionAtomicTokenPinned",
 				mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-			mockStore.AssertNotCalled(t, "CancelExecutionAtomic",
-				mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 			mockStore.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 			mockStore.AssertExpectations(t)
 		})

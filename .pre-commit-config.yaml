@@ -1,6 +1,7 @@
 # Pre-commit hooks configuration
 # Install: pip install pre-commit
-# Setup: pre-commit install
+# Setup: pre-commit install  (installs both the pre-commit and pre-push
+#        git hooks via default_install_hook_types below)
 
 repos:
   # Go formatting and module checks
@@ -29,8 +30,14 @@ repos:
         files: \.go$
 
   # Terraform formatting
+  #
+  # Third-party hook repos are pinned to full commit SHAs with the release tag
+  # as a trailing comment, the same convention as the SHA-pinned Actions: a tag
+  # can be moved upstream, and these hooks run arbitrary code in the CI job
+  # (issue #349). To bump one: `git ls-remote <repo> refs/tags/<tag>`, or
+  # `pre-commit autoupdate --freeze`.
   - repo: https://github.com/antonbabenko/pre-commit-terraform
-    rev: v1.105.0
+    rev: d0e12caebb2ab0ee8bf98181c8bfe9702bca103d  # frozen: v1.105.0
     hooks:
       - id: terraform_fmt
         name: Terraform format
@@ -43,7 +50,7 @@ repos:
 
   # General file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
     hooks:
       - id: trailing-whitespace
         name: Trim trailing whitespace
@@ -51,7 +58,9 @@ repos:
         name: Fix end of files
       - id: check-yaml
         name: Check YAML syntax
-        exclude: '^(docker-compose.*\.yml|\.github/workflows/.*|cloudformation/.*|iac/.*/cloudformation/.*)$'
+        # Workflows are checked too (issue #349): a workflow GitHub cannot
+        # parse is not run at all, with no failing check to show for it.
+        exclude: '^(docker-compose.*\.yml|cloudformation/.*|iac/.*/cloudformation/.*)$'
       - id: check-json
         name: Check JSON syntax
       - id: check-added-large-files
@@ -61,11 +70,12 @@ repos:
         name: Check for merge conflicts
       - id: detect-private-key
         name: Detect private keys
-        # Audit (PR5): internal/credentials/resolver.go contains zero
-        # private-key-shaped patterns (verified by grep). The exclusion
-        # was a historical artifact; removing it tightens the gate
-        # without breaking any legitimate code.
-        exclude: '(_test\.go|frontend/src/index\.html)$'
+        # No exclusions: no tracked file contains a private-key header, so
+        # the former `_test\.go` and `frontend/src/index.html` exclusions
+        # exempted nothing while letting a key pasted into any Go test
+        # fixture through (#299). A test that genuinely needs a PEM literal
+        # should assemble it at runtime (as scripts/test-git-secrets-allowlist.sh
+        # does) or add a narrow per-file exclude with a written reason.
       - id: check-case-conflict
         name: Check for case conflicts
 
@@ -137,7 +147,7 @@ repos:
 
   # Markdown linting
   - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.47.0
+    rev: 76b3d32d3f4b965e1d6425253c59407420ae2c43  # frozen: v0.47.0
     hooks:
       - id: markdownlint
         name: Lint Markdown files
@@ -168,8 +178,9 @@ repos:
         # their owning module (root or tests/e2e).
         # Fast: never whole-repo, always per-changed-package.
         #
-        # Version, toolchain and rule set (no excludes) live in
-        # scripts/run-gosec.sh, shared with `make security-scan-go` and CI.
+        # Toolchain and rule set (no excludes) live in scripts/run-gosec.sh,
+        # shared with `make security-scan-go` and CI; it installs the gosec
+        # version in .gosec-version.
         entry: bash scripts/gosec-hook.sh
         language: system
         pass_filenames: true
@@ -237,12 +248,13 @@ repos:
   #                                     on every PR touching frontend/**;
   #                                     the sentinel re-runs it post-merge.
   #
-  # Moving them to the pre-push stage keeps the local safety net (devs
-  # who run `pre-commit install --hook-type pre-push` still get these
-  # tests on `git push`) while letting the CI pre-commit workflow stay
-  # focused on style/security/syntax. Pre-commit's default stage filter
-  # is `pre-commit`, so the CI workflow's `pre-commit run --all-files`
-  # skips these hooks automatically.
+  # Moving them to the pre-push stage keeps the local safety net (a plain
+  # `pre-commit install` also arms the pre-push git hook, see
+  # default_install_hook_types at the bottom of this file, so devs still
+  # get these tests on `git push`) while letting the CI pre-commit
+  # workflow stay focused on style/security/syntax. Pre-commit's default
+  # stage filter is `pre-commit`, so the CI workflow's
+  # `pre-commit run --all-files` skips these hooks automatically.
   - repo: local
     hooks:
       - id: go-test
@@ -271,4 +283,7 @@ repos:
 
 # Global configuration
 default_stages: [pre-commit, pre-push]
+# Make a plain `pre-commit install` wire both git hooks; without this it
+# only installs the pre-commit hook and the pre-push stage never runs.
+default_install_hook_types: [pre-commit, pre-push]
 fail_fast: false

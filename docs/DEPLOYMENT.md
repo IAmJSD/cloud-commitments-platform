@@ -145,20 +145,22 @@ lambda_architecture        = "arm64"
 lambda_memory_size         = 512
 lambda_timeout             = 300 # 300-900: covers the 270s exchange/purchase budget
 
-# Database configuration (Aurora Serverless v2)
-database_engine_version       = "16.4"
-database_name                 = "cudly"
-database_username             = "cudly"
-database_min_capacity         = 0.5
-database_max_capacity         = 2.0
+# Database configuration (RDS PostgreSQL)
+database_engine_version        = "16" # major only; see variables.tf
+database_name                  = "cudly"
+database_username              = "cudly"
+database_instance_class        = "db.t4g.micro"
 database_backup_retention_days = 7
 
 # Admin user
 admin_email = "admin@example.com"
 
-# Frontend (optional)
-enable_frontend_build       = true
-frontend_price_class        = "PriceClass_100"
+# Docker image build (false: deploy the pre-built image_uri instead)
+enable_docker_build = true
+
+# Frontend CDN (optional; the frontend itself is built into the image)
+enable_cdn           = false
+frontend_price_class = "PriceClass_100"
 ```
 
 ### State Management
@@ -592,11 +594,12 @@ Each cloud provider has lifecycle policies configured via Terraform (`terraform/
 
 ### Database Cleanup Jobs
 
-The server's `cleanup` task deletes expired sessions and, via `CleanupOldExecutions(30)`, purchase executions that are completed with `scheduled_date` older than 30 days, canceled with `updated_at` older than 30 days, or in any status other than failed or canceled with `expires_at` older than 30 days. Failed executions are kept. Azure Container Apps schedules it by default; AWS Lambda can schedule it on request:
+The server's `cleanup` task deletes expired sessions and, via `CleanupOldExecutions(30)`, purchase executions that are completed with `scheduled_date` older than 30 days, canceled with `updated_at` older than 30 days, or in any status other than failed or canceled with `expires_at` older than 30 days. Failed executions are kept. Azure Container Apps schedules it by default; AWS Lambda and CloudFormation can schedule it on request:
 
 - **Azure Container Apps (when `enable_scheduled_tasks` is true):** a Logic App calls `/api/scheduled/cleanup` daily (`terraform/modules/compute/azure/container-apps/scheduled-tasks.tf`)
 - **AWS Lambda (opt-in):** set `enable_cleanup_schedule = true` (default false; `cleanup_schedule` defaults to `rate(1 day)`) in `terraform/environments/aws`. The first run deletes the whole backlog older than 30 days, so export any history you want to keep first.
-- **AWS Fargate and CloudFormation:** nothing schedules it yet. The `terraform/modules/compute/aws/cleanup-lambda/` module is not consumed by any environment.
+- **CloudFormation (opt-in):** set the `EnableCleanupSchedule` stack parameter to `true` (default `false`; `CleanupSchedule` defaults to `rate(1 day)`) on `cloudformation/stacks/CUDly`. The same backlog warning applies.
+- **AWS Fargate:** nothing schedules it yet. The `terraform/modules/compute/aws/cleanup-lambda/` module is not consumed by any environment.
 - **GCP:** nothing schedules it. The `terraform/modules/compute/gcp/cleanup-function/` module is not consumed by any environment.
 - **AKS (opt-in):** set `enable_cleanup_schedule = true` (default false; `cleanup_schedule` defaults to `0 3 * * *`) on the AKS module. Like the module's other scheduled tasks, it runs as a Kubernetes CronJob (`terraform/modules/compute/azure/aks/scheduled-tasks.tf`) only when `deploy_kubernetes_resources` is true.
 

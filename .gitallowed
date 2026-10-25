@@ -92,8 +92,8 @@
 ^terraform/environments/(aws|azure|gcp)/dev\.tfvars\.example:[0-9]+:[[:space:]]*#[[:space:]]+admin_passwor[d][[:space:]]+=[[:space:]]+"YourSecurePassword123!"[[:space:]]*$
 ^terraform/modules/secrets/azure/main\.tf:[0-9]+:[[:space:]]*value[[:space:]]+=[[:space:]]+var\.smtp_passwor[d][[:space:]]+!=[[:space:]]+null[[:space:]]+\?[[:space:]]+var\.smtp_passwor[d][[:space:]]+:[[:space:]]+"PLACEHOLDER_GENERATE_IN_AZURE_PORTAL"[[:space:]]*$
 ^terraform/modules/secrets/gcp/main\.tf:[0-9]+:[[:space:]]*secret_data[[:space:]]+=[[:space:]]+var\.sendgrid_api_ke[y][[:space:]]+!=[[:space:]]+null[[:space:]]+\?[[:space:]]+var\.sendgrid_api_ke[y][[:space:]]+:[[:space:]]+"PLACEHOLDER_REPLACE_ME"[[:space:]]*$
-^terraform/profiles/README\.md:[0-9]+:[[:space:]]*export[[:space:]]+TF_VAR_database_passwor[d]="secret123"[[:space:]]*$
-^terraform/profiles/README\.md:[0-9]+:[[:space:]]*database_passwor[d][[:space:]]+=[[:space:]]+"secret123"[[:space:]]*$
+^terraform/profiles/README\.md:[0-9]+:[[:space:]]*export[[:space:]]+TF_VAR_admin_passwor[d]="secret123"[[:space:]]*$
+^terraform/profiles/README\.md:[0-9]+:[[:space:]]*admin_passwor[d][[:space:]]+=[[:space:]]+"secret123"[[:space:]]*$
 
 # One-off fixture lines a real scan flags (a synthetic placeholder account ID,
 # a throwaway test password, a credential-less test DSN). Each entry pins the
@@ -160,6 +160,7 @@
 ^internal/server/migrations_bounded_real_runner_test\.go:[0-9]+:[[:space:]]*cfg,[[:space:]]+err[[:space:]]+:=[[:space:]]+pgxpool\.ParseConfig\("postgre[s]://u:p@"[[:space:]]+\+[[:space:]]+ln\.Addr\(\)\.String\(\)[[:space:]]+\+[[:space:]]+"/db\?sslmode=disable"\)[[:space:]]*$
 ^scripts/generate-federation-iac_test\.go:[0-9]+:[[:space:]]*`aws_account_id[[:space:]]+=[[:space:]]+"111[1]222[2]333[3]"`,[[:space:]]*$
 ^scripts/generate-federation-iac_test\.go:[0-9]+:[[:space:]]*accountID:[[:space:]]+"000[0]111[1]222[2]",[[:space:]]*$
+^terraform/environments/aws/tests/fargate_cdn_alb\.tftest\.hcl:[0-9]+:[[:space:]]*account_id[[:space:]]+=[[:space:]]+"123[4]567[8]901[2]"[[:space:]]*$
 
 # The bare AWS secret access key detector (#295) flags this line, which holds no
 # secret: an IAM OIDC thumbprint (a public certificate hash, upper-case hex) in a

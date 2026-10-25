@@ -9,7 +9,7 @@
 > schedules cleanup on AWS. The same holds for the Terraform behind the
 > "matches what the cleanup-lambda Terraform actually configures" sentence
 > under "Original problem". Only Azure Container Apps schedules cleanup today. Retention
-> scheduling is tracked by #712; retention is scheduled via the server `cleanup` task on AWS Lambda when opted in.
+> scheduling is tracked by #712; retention is scheduled via the server `cleanup` task on AWS Lambda and CloudFormation when opted in.
 
 ## Resolution
 
@@ -21,6 +21,9 @@
   `terraform/modules/compute/aws/cleanup-lambda/main.tf:98`~~ (unconsumed module, see amendment)
 - **AWS Lambda (opt-in):** the `enable_cleanup_schedule` / `cleanup_schedule`
   sweep `<stack>-sweep-cleanup` runs the server cleanup task.
+- **CloudFormation (opt-in):** the `EnableCleanupSchedule` /
+  `CleanupSchedule` stack parameters add a `<stack>-Cleanup` rule that runs
+  the server cleanup task.
 - **Azure Container Apps:** a Logic App calls `/api/scheduled/cleanup` daily
   when `enable_scheduled_tasks` is true. (The `azure/cleanup-function` module
   is not consumed by any environment.)
@@ -31,7 +34,7 @@
 The `CleanupOldExecutions` Postgres implementation in
 `internal/config/store_postgres.go` runs the expected
 `DELETE FROM purchase_executions WHERE …`, so the table is bounded
-only where that task is scheduled (Azure Container Apps by default, AWS Lambda when opted in, see amendment).
+only where that task is scheduled (Azure Container Apps by default, AWS Lambda and CloudFormation when opted in, see amendment).
 
 ## Original problem (historical context)
 

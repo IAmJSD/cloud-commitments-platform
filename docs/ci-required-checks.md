@@ -6,7 +6,7 @@ CUDly repository and the admin commands needed to enforce them.
 ## Context
 
 PR #232 (merged 2026-05-03) added `.github/workflows/frontend-build.yml`,
-which runs `npm ci`, `npm run typecheck`, and `npm run build` on every PR
+which runs `npm ci`, `npm run typecheck`, and `npm run build` for PRs
 touching `frontend/**`. The workflow shipped, but the corresponding
 `Build frontend` check was never added to the branch-protection
 required-checks list. A PR that breaks the frontend build can currently be
@@ -21,6 +21,28 @@ trigger was removed in the commit that merged that branch into `main`
 > is named `Frontend build (PR)` but its single job is named `Build frontend`,
 > so the context GitHub reports (and that must be entered here) is
 > `Build frontend`.
+
+### Why the workflow has no `paths:` filter
+
+A required check must report a status on **every** PR. A workflow with a
+`paths:` filter reports nothing at all on a PR that touches none of its
+paths, so with `Build frontend` required, every backend-only,
+Terraform-only or docs-only PR would sit at "Expected - Waiting for status
+to be reported" and could never be merged, with no failing check to point
+at.
+
+`frontend-build.yml` therefore triggers on every PR to `main`, and the
+`Build frontend` job's first step (`Detect frontend changes`) diffs the
+PR's test-merge commit against its base. When nothing under `frontend/`
+(or the workflow file itself) changed, the job skips its build steps and
+passes in seconds; otherwise it runs the full build. If the changed files
+cannot be listed, it runs the build rather than skipping it.
+
+Do not "optimize" this back into a `paths:` filter, and do not add a second
+job or workflow named `Build frontend` to fill the gap: on a PR that touches
+both frontend and other files, both would report under the same name, and
+the requirement must never be satisfiable by the stand-in's pass while the
+real build is failing.
 
 ## Required checks -- canonical list
 
@@ -88,6 +110,12 @@ The output should include `"Build frontend"`.
 
 Open a draft PR with a deliberate TypeScript error in `frontend/` and confirm
 that the `Build frontend` check turns red and the merge button is blocked.
+
+Then confirm the other half: on any PR that touches nothing under
+`frontend/` (a docs-only change will do), `Build frontend` must still
+report, pass, and log "No frontend changes in this PR; skipping the
+frontend build." A PR stuck at "Expected - Waiting for status to be
+reported" means the trigger has been path-filtered again.
 
 ## Notes
 
