@@ -1728,6 +1728,26 @@ jobs:
       - name: Run down-migration gate self-tests
         run: bash scripts/test-migration-down-gate.sh
 
+  # Assert that scripts/gcp-import-dev-state.sh takes the GCP project and the
+  # state backend from GCP_PROJECT_ID and TF_BACKEND_GCP with no default, and
+  # refuses to start without them (#305). Runs the script end to end against
+  # stubbed terraform and gcloud; nothing reaches GCP. Fast (shell only), so it
+  # always runs.
+  gcp-import-dev-state:
+    name: GCP dev state import configuration
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run import script self-tests
+        run: bash scripts/test-gcp-import-dev-state.sh
+
   # Summary job - all checks must pass
   ci-success:
     name: CI Success
@@ -1754,6 +1774,7 @@ jobs:
       - rollback-ecr-registry
       - azure-kv-access-policy
       - migration-down-gate
+      - gcp-import-dev-state
     if: always()
     permissions:
       contents: read
