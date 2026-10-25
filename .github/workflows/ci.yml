@@ -1714,6 +1714,12 @@ jobs:
       - name: Run state namespace self-tests
         run: bash scripts/test-aws-tfstate-platform-key.sh
 
+      # scripts/init-backend.sh must write the same state key the deploy
+      # workflows build, for the flat AWS root (#306). Runs the script against
+      # a stubbed aws CLI in a temp copy of the root; no AWS access.
+      - name: Run init-backend.sh self-test
+        run: bash scripts/test-init-backend.sh
+
   # Assert that every job writing the Azure or GCP Terraform state carries the
   # shared concurrency group for that state (`azure-tfstate-<env>`,
   # `gcp-tfstate-<env>`), with the suffix taken from the same literal or
