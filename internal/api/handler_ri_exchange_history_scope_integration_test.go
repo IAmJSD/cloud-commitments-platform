@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -23,9 +22,7 @@ import (
 func TestRIExchangeHistory_ScopedUserSeesOlderOwnRows_Integration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", ""))
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 	store := config.NewPostgresStore(container.DB)
 
 	acctA := &config.CloudAccount{Name: "exchange-a", Provider: "aws", ExternalID: "111122223333", Enabled: true}

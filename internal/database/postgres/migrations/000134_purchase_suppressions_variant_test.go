@@ -45,9 +45,9 @@ func requireUniqueViolation134(t *testing.T, err error, constraint string) {
 // execution and 6-tuple), old-code inserts still working, and a down that
 // merges variant rows back into one row per execution and 6-tuple.
 func TestMigration_PurchaseSuppressionsVariant(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool, path := container.DB.Pool(), getMigrationsPath()
 	prev := previousMigrationVersion(t, 134)
 
