@@ -8,8 +8,11 @@
 @import './forms.css';
 @import './tables.css';
 @import './modals.css';
+@import './mfa.css';
 @import './tabs.css';
 @import './charts.css';
+@import './icons.css';
 @import './plans.css';
 @import './settings.css';
+@import './ladder-form.css';
 @import './responsive.css';
