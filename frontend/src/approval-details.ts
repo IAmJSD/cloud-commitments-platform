@@ -7,9 +7,9 @@
  *
  * This module fetches `/api/purchases/{id}` + `/api/accounts` and builds
  * an HTMLElement carrying:
- *   - An aggregate header (total upfront, total monthly + annual
- *     savings, recommendation count, distinct providers, distinct
- *     accounts touched).
+ *   - An aggregate header (total upfront, monthly recurring cost, total
+ *     over the term, total monthly + annual savings, recommendation
+ *     count, distinct providers, distinct accounts touched).
  *   - A per-recommendation table: account / provider / service /
  *     resource type / engine / region / count / term + payment /
  *     upfront / monthly savings / effective savings % when the rec
@@ -28,6 +28,7 @@ import type { CloudAccount } from './api/accounts';
 import type { PurchaseDetails, Recommendation } from './api/types';
 import { escapeHtml, formatCurrency, formatTerm, amortizedMonthly } from './utils';
 import { getAmortizeUpfront } from './state';
+import { commitmentLine, formatCommitmentTotals } from './commitmentSummary';
 
 /**
  * accountsById maps the internal CloudAccount UUID (the value carried
@@ -91,8 +92,8 @@ function renderApprovalDetailsHeader(details: PurchaseDetails, recs: Recommendat
   }
   const totalAnnual = totalMonthly * 12;
 
-  // M-3: show '--' for absent total_upfront_cost rather than $0, which would
-  // falsely imply no upfront charge applies. formatCurrency handles null -> '--'.
+  // M-3: show NO_VALUE for absent total_upfront_cost rather than $0, which would
+  // falsely imply no upfront charge applies. formatCurrency handles null -> NO_VALUE.
   const upfront = details.total_upfront_cost ?? null;
   // estimated_savings on the response is monthly; aggregating the
   // per-rec savings field above is identical math but lets the
@@ -107,7 +108,13 @@ function renderApprovalDetailsHeader(details: PurchaseDetails, recs: Recommendat
   // sub-cent level, well below the precision formatCurrency renders.
   const annualMismatch = Math.abs(totalAnnual - monthly * 12) > 0.005;
 
+  // Issue #711: an approver must see the recurring charge and what the
+  // whole term costs, not only the upfront (which is $0 for no-upfront).
+  const termText = formatCommitmentTotals(recs.map((r) => commitmentLine(r)), 0);
+
   header.appendChild(headerStat('Upfront', formatCurrency(upfront)));
+  header.appendChild(headerStat('Monthly cost', termText.monthly));
+  header.appendChild(headerStat('Total over term', termText.termTotal));
   header.appendChild(headerStat('Monthly savings', formatCurrency(monthly)));
   header.appendChild(headerStat('Annual savings', formatCurrency(monthly * 12), undefined, annualMismatch ? `${formatCurrency(totalAnnual)} from per-row sum` : undefined));
   header.appendChild(headerStat('Commitments', String(recs.length)));
