@@ -10,7 +10,6 @@ import (
 	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscreds "github.com/aws/aws-sdk-go-v2/credentials"
@@ -37,10 +36,7 @@ func (s *failFirstListingWriteStore) UpdatePurchaseHistoryListing(ctx context.Co
 
 func TestMarketplaceListCancelFailureKeepsListingRecorded(t *testing.T) {
 	ctx := t.Context()
-	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 	store := config.NewPostgresStore(pg.DB)
 
 	account := uuid.NewString()
@@ -66,7 +62,7 @@ func TestMarketplaceListCancelFailureKeepsListingRecorded(t *testing.T) {
 		marketplaceEC2Factory: func(_ aws.Config) marketplaceEC2Client { return ec2 }}
 	h.awsCfgOnce.Do(func() { h.awsCfg = hostAWSConfig() })
 
-	_, err = h.marketplaceList(ctx, marketplaceReq(), row.PurchaseID)
+	_, err := h.marketplaceList(ctx, marketplaceReq(), row.PurchaseID)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "%v", err)
@@ -141,10 +137,7 @@ func newCompensationAuth() *MockAuthService {
 
 func TestMarketplaceListCancelFailureAfterContextCanceledStillRecordsListing(t *testing.T) {
 	ctx := t.Context()
-	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 	store := config.NewPostgresStore(pg.DB)
 	row := setupCompensationRow(t, store)
 
@@ -157,7 +150,7 @@ func TestMarketplaceListCancelFailureAfterContextCanceledStillRecordsListing(t *
 		marketplaceEC2Factory: func(_ aws.Config) marketplaceEC2Client { return ec2 }}
 	h.awsCfgOnce.Do(func() { h.awsCfg = hostAWSConfig() })
 
-	_, err = h.marketplaceList(reqCtx, marketplaceReq(), row.PurchaseID)
+	_, err := h.marketplaceList(reqCtx, marketplaceReq(), row.PurchaseID)
 	require.Error(t, err)
 
 	stored, err := store.GetPurchaseHistoryByPurchaseID(ctx, row.PurchaseID)
@@ -168,10 +161,7 @@ func TestMarketplaceListCancelFailureAfterContextCanceledStillRecordsListing(t *
 
 func TestMarketplaceListCancelFailureRecordsEmptyAWSStateAsPending(t *testing.T) {
 	ctx := t.Context()
-	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 	store := config.NewPostgresStore(pg.DB)
 	row := setupCompensationRow(t, store)
 
@@ -187,7 +177,7 @@ func TestMarketplaceListCancelFailureRecordsEmptyAWSStateAsPending(t *testing.T)
 		marketplaceEC2Factory: func(_ aws.Config) marketplaceEC2Client { return ec2 }}
 	h.awsCfgOnce.Do(func() { h.awsCfg = hostAWSConfig() })
 
-	_, err = h.marketplaceList(ctx, marketplaceReq(), row.PurchaseID)
+	_, err := h.marketplaceList(ctx, marketplaceReq(), row.PurchaseID)
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "%v", err)
 	assert.Contains(t, ce.message, "needs reconciliation")
