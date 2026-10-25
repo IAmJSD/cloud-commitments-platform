@@ -208,6 +208,10 @@ func (m *mockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses 
 	return nil, nil
 }
 
+func (m *mockConfigStore) HistorySummaryAggregate(ctx context.Context, filter config.HistorySummaryFilter) (*config.HistorySummaryGroups, error) {
+	return &config.HistorySummaryGroups{}, nil
+}
+
 func (m *mockConfigStore) CountExecutionsByPlanAndStatus(ctx context.Context, statuses []string, since time.Time) (map[string]config.ExecutionStatusCounts, error) {
 	return nil, nil
 }
@@ -485,9 +489,6 @@ func (m *mockConfigStore) TransitionRegistrationStatus(_ context.Context, _ *con
 	return nil
 }
 func (m *mockConfigStore) DeleteAccountRegistration(_ context.Context, _ string) error {
-	return nil
-}
-func (m *mockConfigStore) ReplaceRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord) error {
 	return nil
 }
 func (m *mockConfigStore) UpsertRecommendations(_ context.Context, _ time.Time, _ []config.RecommendationRecord, _ []config.SuccessfulCollect) error {

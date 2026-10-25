@@ -55,9 +55,8 @@ func stagedMigrations(t *testing.T) (dir string, addTarget func()) {
 
 func TestMigration_NeverStartedLegacyRampsBecomeNew(t *testing.T) {
 	ctx := context.Background()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = container.Cleanup(ctx) })
+	// Empty, not migrated: the test applies the staged chain itself, then the target.
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	dir, addTarget := stagedMigrations(t)
 	require.NoError(t, migrations.RunMigrations(ctx, container.DB.Pool(), dir, "", ""))
 	store, pool := config.NewPostgresStore(container.DB), container.DB.Pool()
@@ -73,7 +72,7 @@ func TestMigration_NeverStartedLegacyRampsBecomeNew(t *testing.T) {
 		return p.ID
 	}
 	withExec := clone("b-has-execution", 4, 0)
-	_, err = pool.Exec(ctx, `INSERT INTO purchase_executions
+	_, err := pool.Exec(ctx, `INSERT INTO purchase_executions
 		(plan_id, execution_id, status, no_submission, step_number, scheduled_date)
 		VALUES ($1, $2, $3, $4, $5, $6)`, withExec, uuid.NewString(), config.StatusFailed, true, 1, time.Now())
 	require.NoError(t, err)
