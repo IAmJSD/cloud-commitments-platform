@@ -36,9 +36,11 @@ const failureNotifyTimeout = 30 * time.Second
 //     failures; a fan-out root gets the marker only, see notifyRootFailure);
 //   - executeForAccount, for each per-account fan-out row;
 //   - failClaimedBeforeSubmission, for a claimed row refused before submission;
-//   - safeFail and the reaper, for stranded rows the sweeps fail;
 //   - failExistingPlanStep and getOrCreateExecution, for a plan step that is
 //     failed without ever reaching the executor.
+//
+// The sweeps that fail an interrupted run (safeFail, failClaimedRedrive and the
+// reaper) use notifyOutcomeUnknown instead.
 //
 // Each of them notifies only after winning the row: the "running" claim, or the
 // compare-and-set (or plan lock) that moved it to failed, so concurrent workers
@@ -46,19 +48,38 @@ const failureNotifyTimeout = 30 * time.Second
 //
 // Best effort: a send failure is logged and never changes the purchase outcome.
 func (m *Manager) notifyExecutionFailure(ctx context.Context, exec *config.PurchaseExecution) {
+	m.sendFailureNotice(ctx, exec, false)
+}
+
+// notifyOutcomeUnknown is notifyExecutionFailure for a row a recovery sweep
+// failed because its purchase run was interrupted: safeFail and
+// failClaimedRedrive (stranded approved rows) and the reaper (stuck approved
+// or running rows). It logs the same marker, so the alarm fires as before, but
+// sends the outcome-unknown email: the run may have bought before it stopped,
+// so the email asks the operator to verify in the cloud console and never to
+// retry, which could buy the commitment twice (issue #1415).
+func (m *Manager) notifyOutcomeUnknown(ctx context.Context, exec *config.PurchaseExecution) {
+	m.sendFailureNotice(ctx, exec, true)
+}
+
+// sendFailureNotice logs the marker and sends the purchase-failed email,
+// flagged outcome-unknown when outcomeUnknown is set.
+func (m *Manager) sendFailureNotice(ctx context.Context, exec *config.PurchaseExecution, outcomeUnknown bool) {
 	if !logExecutionFailure(exec) || m.email == nil {
 		return
 	}
 	ctx, cancel := ctxutil.DetachedWithTimeout(ctx, failureNotifyTimeout)
 	defer cancel()
 	data := m.buildPurchaseFailedData(ctx, exec)
+	data.OutcomeUnknown = outcomeUnknown
 	if err := m.email.SendPurchaseFailedNotification(ctx, data); err != nil {
 		logging.Errorf("Failed to send purchase-failed notification for execution %s: %v", exec.ExecutionID, err)
 	}
 }
 
 // buildPurchaseFailedData lists the selected recommendations that did not
-// purchase and addresses the email to the global notification address (the
+// purchase (or, for an outcome-unknown row, whose purchase is unconfirmed) and
+// addresses the email to the global notification address (the
 // same recipient the scheduled-purchase notice uses). An empty recipient lets
 // the sender fall back to its broadcast channel.
 func (m *Manager) buildPurchaseFailedData(ctx context.Context, exec *config.PurchaseExecution) email.NotificationData {

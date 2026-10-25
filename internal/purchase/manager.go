@@ -707,7 +707,9 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 		return false, fmt.Errorf("failed to transition stranded execution %s to failed: %w", exec.ExecutionID, txErr)
 	}
 	// This sweep won the CAS, so it is the one writer that notifies (#1195).
-	defer m.notifyExecutionFailure(ctx, updated)
+	// The interrupted run may already have bought, so the email reports an
+	// unknown outcome rather than a failure to retry (#1415).
+	defer m.notifyOutcomeUnknown(ctx, updated)
 
 	updated.Error = strandedRecoveryError(exec)
 	if saveErr := m.config.SavePurchaseExecution(ctx, updated); saveErr != nil {
