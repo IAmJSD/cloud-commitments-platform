@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/api"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
@@ -227,7 +228,7 @@ func setHealthResponseHeaders(w http.ResponseWriter, corsOrigin string) {
 	w.Header().Set("Content-Type", "application/json")
 
 	// Security headers
-	w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+	w.Header().Set("Strict-Transport-Security", api.HSTSHeaderValue)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("X-XSS-Protection", "1; mode=block")
