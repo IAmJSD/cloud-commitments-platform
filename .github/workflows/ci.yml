@@ -1703,6 +1703,31 @@ jobs:
       - name: Run state namespace self-tests
         run: bash scripts/test-aws-tfstate-platform-key.sh
 
+  # Assert that every job writing the Azure or GCP Terraform state carries the
+  # shared concurrency group for that state (`azure-tfstate-<env>`,
+  # `gcp-tfstate-<env>`), with the suffix taken from the same literal or
+  # expression as the state key. The group is a hand-written string in each
+  # writer, so a new writer without it, or a typo in the prefix, runs green and
+  # just stops serializing (#195). Checked over a GLOB of .github/workflows,
+  # real writers named first so a scan that recognizes nothing cannot pass.
+  # Fast (shell only), so it always runs.
+  tfstate-concurrency-group:
+    name: Azure/GCP Terraform state concurrency groups
+    runs-on: ubuntu-latest
+    # Same shape as ecr-delete-selection above: this job checks out the tree and
+    # runs a shell script against it, so `contents: read` is all it needs.
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run state concurrency group self-tests
+        run: bash scripts/test-tfstate-concurrency-group.sh
+
   # Run the AWS rollback jobs' "Verify image exists" step, lifted out of
   # rollback.yml, against a stubbed aws CLI (#142). IMAGE_URI names the
   # AWS_ACCOUNT_ID registry while the step runs as AWS_ROLE_TO_ASSUME, so the
@@ -1819,6 +1844,7 @@ jobs:
       - rds-deletion-protection-scope
       - cloud-sql-delete-scope
       - aws-tfstate-platform-key
+      - tfstate-concurrency-group
       - rollback-ecr-registry
       - azure-kv-access-policy
       - migration-down-gate
