@@ -91,9 +91,18 @@ func TestPostCASSave_ConcurrentStatusChangeSurvives(t *testing.T) {
 			require.NoError(t, f.store.RecoverReapedExecution(ctx, late))
 		})
 
+		// safeFail's flip to failed lands before the late recovery, so it alerts
+		// as a terminal-failure writer (#1245). The rows below are what this test
+		// pins; the alert's content is pinned in failure_notify*_test.go.
+		sender, ok := f.manager.email.(*MockEmailSender)
+		require.True(t, ok)
+		failedMail := &failedEmailRecorder{}
+		failedMail.expect(sender)
+
 		counted, err := f.manager.safeFail(ctx, rowStatusCopy(row))
 
 		require.NoError(t, err)
+		assert.LessOrEqual(t, len(failedMail.all()), 1, "the race must not alert twice for one row")
 		assert.True(t, counted, "the flip to failed landed, so the sweep still counts it")
 		got := rowStatus(ctx, t, f, row.ExecutionID)
 		assert.Equal(t, config.StatusCompleted, got.Status, "the recovered purchase must not be reverted to failed")
