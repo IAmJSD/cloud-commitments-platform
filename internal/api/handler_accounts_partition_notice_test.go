@@ -126,7 +126,11 @@ func TestListAccounts_PartitionNotices(t *testing.T) {
 				listResult:      []config.CloudAccount{cn, commercial, self, azure},
 			}}
 			handler.sourceIdentityOnce.Do(func() {
-				handler.sourceID = &sourceIdentity{Provider: "aws", AccountID: "111111111111", Partition: tc.hostPartition}
+				handler.sourceID = &sourceIdentity{
+					Provider:  "aws",
+					AccountID: "111111111111",
+					Partition: tc.hostPartition,
+				}
 			})
 
 			result, err := handler.listAccounts(ctx, adminRequest(""))
