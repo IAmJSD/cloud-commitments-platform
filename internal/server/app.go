@@ -150,6 +150,9 @@ type ApplicationConfig struct {
 	// SQS event source mapping's function_response_types actually includes
 	// "ReportBatchItemFailures" (issue #108 follow-up).
 	ReportSQSBatchItemFailures bool
+	// authBcryptCost is passed to auth.ServiceConfig.BcryptCost. Only tests
+	// in this package set it; zero keeps the production bcrypt cost.
+	authBcryptCost int
 }
 
 // ExternalDeps holds pre-built external dependencies that require infrastructure.
@@ -521,6 +524,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		EmailSender:     deps.EmailSender,
 		SessionDuration: 24 * time.Hour,
 		DashboardURL:    cfg.DashboardURL,
+		BcryptCost:      cfg.authBcryptCost,
 	})
 
 	// Sensitive requests pass ensureDB, which replaces this temporary limiter
@@ -769,6 +773,7 @@ func (app *Application) initAuthService(authStore *auth.PostgresStore, encKey []
 		DashboardURL:     app.appConfig.DashboardURL,
 		OnPasswordChange: buildAdminPasswordSyncCallback(authStore, app.secretResolver),
 		CSRFKey:          csrfKey,
+		BcryptCost:       app.appConfig.authBcryptCost,
 	})
 	if svc == nil {
 		return nil, fmt.Errorf("failed to create auth service")

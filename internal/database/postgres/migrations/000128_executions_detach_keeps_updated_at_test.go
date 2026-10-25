@@ -18,9 +18,9 @@ import (
 // account keeps updated_at, every other UPDATE still stamps NOW(), and the
 // down migration restores the stamp-everything trigger (issue #265).
 func TestMigration_ExecutionsDetachKeepsUpdatedAt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool, path := container.DB.Pool(), getMigrationsPath()
 
 	const acct = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"

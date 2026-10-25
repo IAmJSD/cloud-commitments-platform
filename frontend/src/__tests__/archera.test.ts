@@ -162,6 +162,10 @@ describe('openArcheraPage', () => {
       '#archera-page-container a.archera-signup-btn',
     );
     expect(link).not.toBeNull();
+    // Literal pin (issue #49): comparing only against the imported constant
+    // would pass if ARCHERA_SIGNUP_URL itself drifted to a wrong destination.
+    expect(link!.href).toBe('https://www.archera.ai/cudly');
+    // And the link is built from the exported constant, not a second copy.
     expect(link!.href).toBe(ARCHERA_SIGNUP_URL);
     expect(link!.target).toBe('_blank');
     expect(link!.rel).toBe('noopener noreferrer');
@@ -243,6 +247,10 @@ describe('openArcheraOfferModal', () => {
       '#archera-offer-modal-container a.archera-offer-signup',
     );
     expect(link).not.toBeNull();
+    // Literal pin (issue #49): comparing only against the imported constant
+    // would pass if ARCHERA_SIGNUP_URL itself drifted to a wrong destination.
+    expect(link!.href).toBe('https://www.archera.ai/cudly');
+    // And the link is built from the exported constant, not a second copy.
     expect(link!.href).toBe(ARCHERA_SIGNUP_URL);
     expect(link!.target).toBe('_blank');
     expect(link!.rel).toBe('noopener noreferrer');

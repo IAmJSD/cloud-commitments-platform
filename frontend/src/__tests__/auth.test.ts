@@ -440,7 +440,7 @@ describe('Auth Module', () => {
       document.body.innerHTML = `
         <div id="user-info" class="hidden">
           <span id="user-email-display"></span>
-          <button id="logout-btn">Logout</button>
+          <button id="logout-btn">Log out</button>
         </div>
         <div class="admin-only hidden">Admin content</div>
         <a class="requires-purchases" id="purchases-tab-btn">Purchases</a>
