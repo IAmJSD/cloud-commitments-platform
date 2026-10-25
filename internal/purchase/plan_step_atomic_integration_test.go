@@ -50,7 +50,8 @@ func TestGetOrCreateExecution_ConcurrentTicksMintOneRow(t *testing.T) {
 	store, _ := rampStepStore(ctx, t)
 	plan := atomicStepPlan(ctx, t, store)
 	// No max_step_commitment on the plan: the cap refuses the step, giving it one failed row.
-	m := &Manager{config: store, resolver: &fakeResolver{recs: []config.RecommendationRecord{attachRec("rec-a", 1)}}}
+	sender := newCountingSender(ctx)
+	m := &Manager{config: store, email: sender, resolver: &fakeResolver{recs: []config.RecommendationRecord{attachRec("rec-a", 1)}}}
 
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
@@ -65,6 +66,41 @@ func TestGetOrCreateExecution_ConcurrentTicksMintOneRow(t *testing.T) {
 	rows := stepRowsInDB(ctx, t, store, plan.ID)
 	require.Len(t, rows, 1, "concurrent ticks must mint exactly one row for the step")
 	assert.Equal(t, "failed", rows[0].Status)
+	assert.Equal(t, 1, sender.failedSends, "only the tick that recorded the failed row reports it (issue #1195)")
+}
+
+// Issue #1195: ticks racing to fail the same pre-created step row report it
+// once. The compare-and-set lets one of them fail the row; the others lose it
+// and stay quiet.
+func TestFailExistingPlanStep_ConcurrentTicksReportOnce(t *testing.T) {
+	ctx := context.Background()
+	store, _ := rampStepStore(ctx, t)
+	attachGlobal(ctx, t, store)
+	plan := atomicStepPlan(ctx, t, store)
+	root := &config.PurchaseExecution{PlanID: plan.ID, ExecutionID: uuid.New().String(), Status: "pending",
+		StepNumber: 1, ScheduledDate: *plan.NextExecutionDate}
+	require.NoError(t, store.SavePurchaseExecution(ctx, root))
+	sender := newCountingSender(ctx)
+	m := &Manager{config: store, email: sender}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			stale := *root
+			<-start
+			_ = m.failExistingPlanStep(ctx, &stale, "no recommendations")
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	rows := stepRowsInDB(ctx, t, store, plan.ID)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "failed", rows[0].Status)
+	assert.Equal(t, 1, sender.failedSends, "one purchase-failed email for the one row")
 }
 
 // E1: a settled root (failed here; partially_completed is the same branch)

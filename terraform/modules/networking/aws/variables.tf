@@ -73,6 +73,20 @@ variable "create_alb_security_group" {
   default     = false
 }
 
+variable "restrict_alb_ingress_to_cloudfront" {
+  description = <<-EOT
+    When true (and create_alb_security_group is true), the ALB security group
+    admits only HTTP from AWS's CloudFront origin-facing managed prefix list
+    (com.amazonaws.global.cloudfront.origin-facing) instead of HTTP/HTTPS from
+    0.0.0.0/0 and ::/0, so traffic cannot reach the ALB without going through
+    CloudFront. Set it only when a CloudFront distribution fronts the ALB over
+    HTTP; anything that calls the ALB directly (its DNS name or an alias that
+    points at it) stops connecting. See #412.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "enable_flow_logs" {
   description = "Enable VPC Flow Logs for debugging"
   type        = bool

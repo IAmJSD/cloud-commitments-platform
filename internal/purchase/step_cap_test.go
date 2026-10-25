@@ -111,6 +111,8 @@ func TestScheduler_RefusesBeforeClaim(t *testing.T) {
 		{"NULL cap", capped(nil), dueRecExec("notified", upfrontRec(10)), autoPurchaseOnCfg(), nil, 1},
 		{"over cap", capped(f64(5)), dueRecExec("notified", upfrontRec(10)), autoPurchaseOnCfg(), nil, 1},
 		{"zero commitment", capped(f64(1000)), dueRecExec("notified", upfrontRec(0)), autoPurchaseOnCfg(), nil, 1},
+		// The store interface permits (nil, nil); the gate must refuse, not panic (A05-013).
+		{"plan missing", nil, dueRecExec("notified", upfrontRec(10)), autoPurchaseOnCfg(), nil, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -140,6 +142,7 @@ func TestSQSExecutePath_RefusesBeforeClaim(t *testing.T) {
 		{"NULL cap", capped(nil), dueRecExec("notified", upfrontRec(10)), autoPurchaseOnCfg(), nil},
 		{"over cap", capped(f64(5)), dueRecExec("notified", upfrontRec(10)), autoPurchaseOnCfg(), nil},
 		{"zero commitment", capped(f64(1000)), dueRecExec("notified", upfrontRec(0)), autoPurchaseOnCfg(), nil},
+		{"plan missing", nil, dueRecExec("notified", upfrontRec(10)), autoPurchaseOnCfg(), nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,4 +232,25 @@ func TestSendUpcomingPurchaseNotifications_KillSwitch(t *testing.T) {
 		_, err := manager.SendUpcomingPurchaseNotifications(ctx)
 		require.Error(t, err)
 	})
+}
+
+// A direct-execute row (no PlanID) left pending is never auto-purchased, and
+// the gate must not hand "" to the store: Postgres rejects it with SQLSTATE
+// 22P02, which every tick would count as a failure (issue #243).
+func TestScheduler_DirectExecuteRowSkippedWithoutPlanLookup(t *testing.T) {
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	exec := dueRecExec("pending", upfrontRec(10))
+	exec.PlanID = ""
+	store.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+	store.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{exec}, nil)
+	store.On("GetPurchasePlan", ctx, "").Return(nil, errors.New(`ERROR: invalid input syntax for type uuid: "" (SQLSTATE 22P02)`))
+	manager := &Manager{config: store, email: new(MockEmailSender)}
+
+	result, err := manager.ProcessScheduledPurchases(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 0, result.Failed, "a plan-less row must not poison the tick's failure count: %v", result.Errors)
+	assert.Equal(t, 0, result.Processed)
+	store.AssertNotCalled(t, "GetPurchasePlan", mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
