@@ -271,33 +271,43 @@ func (m *Manager) reapOne(ctx context.Context, exec *config.PurchaseExecution, r
 	// the reaper attribution. Bump Errored so ops can track it.
 	//
 	// "safe to retry" is only appended when every recommendation in the
-	// execution uses an idempotent provider API. Azure savings-plans use a
-	// timestamp-based alias name with no server-side idempotency key, so
-	// retrying a reaped Azure SP row risks creating a duplicate commitment.
+	// execution uses an idempotent provider API. Azure savings-plans are not
+	// confirmed to deduplicate a repeat order-alias PUT (RedriveRefusalReason),
+	// so retrying a reaped Azure SP row risks creating a duplicate commitment.
 	safeMsg := ""
 	if allRecsSafeToRedrive(exec) {
 		safeMsg = "; safe to retry"
 	}
 	transitioned.Error = fmt.Sprintf("reaped after %dm in %s state — executor did not complete%s",
 		ageMinutes, prevStatus, safeMsg)
-	if saveErr := m.config.SaveExecutionIfStatus(ctx, transitioned, []string{failedStatus}); saveErr != nil {
-		if errors.Is(saveErr, config.ErrExecutionNotInExpectedStatus) {
-			// The executor finished late and recovered the row (completed), so
-			// the annotation must not overwrite it. The reap itself succeeded.
-			logging.Infof("purchase reaper: execution %s left failed before the reap annotation; leaving it as is: %v",
-				exec.ExecutionID, saveErr)
-			result.Reaped++
-			return
-		}
-		logging.Errorf("purchase reaper: failed to persist canonical error for execution %s (already flipped to failed): %v",
-			exec.ExecutionID, saveErr)
-		result.Errored++
-		// Still count as Reaped — the status flip succeeded, only the
-		// error-message annotation failed. Otherwise Reaped would
-		// undercount real recoveries.
-		result.Reaped++
-		return
+	if m.annotateReapedRow(ctx, transitioned, result) {
+		// The won CAS makes this sweep the one writer that notifies (#1195).
+		m.notifyExecutionFailure(ctx, transitioned)
 	}
+}
 
+// annotateReapedRow persists the reap reason on the row the CAS failed and
+// counts the reap. It reports whether the row is still failed: false only when
+// the executor finished late and recovered the row before the annotation, so
+// the reap must not be reported as a failed purchase.
+func (m *Manager) annotateReapedRow(ctx context.Context, transitioned *config.PurchaseExecution, result *ReapResult) bool {
+	// Counted as Reaped on every path: the status flip succeeded, only the
+	// annotation may not have. Otherwise Reaped would undercount real recoveries.
 	result.Reaped++
+	saveErr := m.config.SaveExecutionIfStatus(ctx, transitioned, []string{failedStatus})
+	switch {
+	case saveErr == nil:
+		return true
+	case errors.Is(saveErr, config.ErrExecutionNotInExpectedStatus):
+		// The executor finished late and recovered the row (completed), so
+		// the annotation must not overwrite it. The reap itself succeeded.
+		logging.Infof("purchase reaper: execution %s left failed before the reap annotation; leaving it as is: %v",
+			transitioned.ExecutionID, saveErr)
+		return false
+	default:
+		logging.Errorf("purchase reaper: failed to persist canonical error for execution %s (already flipped to failed): %v",
+			transitioned.ExecutionID, saveErr)
+		result.Errored++
+		return true
+	}
 }

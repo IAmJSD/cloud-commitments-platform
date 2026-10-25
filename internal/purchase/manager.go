@@ -291,11 +291,9 @@ func (m *Manager) executeAndFinalize(ctx context.Context, exec *config.PurchaseE
 	saveCtx, cancelSave := ctxutil.DetachedWithTimeout(ctx, m.budgets.terminalSaveTimeout())
 	defer cancelSave()
 	// Operators hear about every failed or partial row (issue #714), even
-	// when the terminal save below fails. A fan-out root is skipped: each
-	// per-account row notified for itself in executeForAccount.
-	if !isFanOutOutcome(execErr) {
-		defer m.notifyExecutionFailure(saveCtx, exec)
-	}
+	// when the terminal save below fails. A fan-out root logs the alarm
+	// marker without an email (issue #1195; see notifyRootFailure).
+	defer m.notifyRootFailure(saveCtx, exec, execErr)
 	if err := m.saveOrRecoverTerminal(saveCtx, exec, execErr); err != nil {
 		logging.Errorf("AUDIT LOSS: failed to save execution status: %v", err)
 		// Wrap with ErrAuditLoss regardless of whether executePurchase itself
@@ -413,7 +411,9 @@ func (m *Manager) recordRampAdvanceRefusal(ctx context.Context, exec *config.Pur
 	}
 	logging.Errorf("Failed to update plan progress: %v", cause)
 	exec.Error = appendErrNote(exec.Error, fmt.Sprintf("ramp not advanced: %v", cause))
-	if saveErr := m.config.SavePurchaseExecution(ctx, exec); saveErr != nil {
+	// Guarded on the terminal status this run just wrote, so the full-row
+	// write cannot put back a status another writer set since (issue #835).
+	if saveErr := m.config.SaveExecutionIfStatus(ctx, exec, []string{exec.Status}); saveErr != nil {
 		logging.Errorf("AUDIT LOSS: failed to persist ramp-advance refusal for execution %s: %v",
 			exec.ExecutionID, saveErr)
 	}
@@ -512,10 +512,14 @@ func armedRedriveRefusal(exec *config.PurchaseExecution) error {
 //     purchase APIs take no client token, so a lost response may have bought the
 //     commitment and a second attempt would buy another (MON-02). The provider
 //     sends the call once and reports "purchase outcome unknown".
-//   - Azure savings-plans: the OrderAlias API uses time.Now().UnixNano() as
-//     the alias name; there is no server-side idempotency key and no
-//     tag-based lookup implemented yet. Re-driving would create a duplicate
-//     savings plan.
+//   - Azure savings-plans: the pinned client names the order alias after the
+//     idempotency token when one is set (a timestamp name only on the
+//     empty-token CLI path), but no test or provider doc here confirms that a
+//     repeat PUT of the same alias collapses onto the first order, and there
+//     is no tag-based lookup. Until that is verified, a re-drive is treated as
+//     able to buy a duplicate savings plan. The refusal covers exactly the
+//     slugs that dispatch to the Azure savings-plans client (pinned by
+//     TestRedriveGuardReachMatchesDispatchReach).
 //   - Any provider this function does not recognize, rather than assuming a
 //     guard exists.
 //
@@ -556,9 +560,10 @@ func recRedriveRefusalReason(rec config.RecommendationRecord) string {
 		}
 		return ""
 	case "azure":
-		// Azure savings-plans uses a timestamp-based alias name and has no
-		// server-side idempotency key, so a re-drive would create a duplicate.
-		// All other Azure services use DoIdempotentPurchaseTwoStep (#729).
+		// Azure savings-plans: a repeat order-alias PUT is not confirmed to
+		// collapse onto the first order (see RedriveRefusalReason), so a
+		// re-drive may create a duplicate. All other Azure services use
+		// DoIdempotentPurchaseTwoStep (#729).
 		if rec.Service == "savingsplans" || rec.Service == "savings-plans" {
 			return "Azure savings plans have no provider-side duplicate guard, so re-driving this purchase would buy a second savings plan that cannot be canceled"
 		}
@@ -708,9 +713,21 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 		}
 		return false, fmt.Errorf("failed to transition stranded execution %s to failed: %w", exec.ExecutionID, txErr)
 	}
+	// This sweep won the CAS, so it is the one writer that notifies (#1195),
+	// unless the guarded stamp below finds the row already recovered: then the
+	// in-memory failed row is stale and a failure email would be false.
+	notify := true
+	defer func() {
+		if notify {
+			m.notifyExecutionFailure(ctx, updated)
+		}
+	}()
 
 	updated.Error = strandedRecoveryError(exec)
-	if saveErr := m.config.SavePurchaseExecution(ctx, updated); saveErr != nil {
+	if saveErr := m.config.SaveExecutionIfStatus(ctx, updated, []string{config.StatusFailed}); saveErr != nil {
+		notify = !errors.Is(saveErr, config.ErrExecutionNotInExpectedStatus)
+		// Guarded on "failed" (issue #835): the stamp lands only while the row
+		// is still in the status this CAS set, never over a later writer's.
 		// The atomic flip to "failed" already landed via TransitionExecutionStatus;
 		// only the explanatory error string failed to persist. Log loudly but
 		// still count the recovery - the row is no longer stranded in "approved".
@@ -737,9 +754,10 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 // Retry step required by the old safe-fail path. See allRecsSafeToRedrive for
 // which provider/service combinations are eligible.
 //
-// Safe-fail path: Azure savings-plans recs are excluded because the OrderAlias
-// API uses a timestamp-based alias name with no idempotency key. Executions
-// without a stable ExecutionID (legacy rows) also fall through because
+// Safe-fail path: Azure savings-plans recs are excluded because a repeat
+// order-alias PUT is not confirmed to be deduplicated (see
+// RedriveRefusalReason). Executions without a stable ExecutionID (legacy
+// rows) also fall through because
 // idempotencyLineageKey(exec) falls back to "" for them and
 // DeriveIdempotencyToken("", i) would produce the same token set for every
 // such row. These fall through to the original behavior: the row is atomically
@@ -799,8 +817,9 @@ func (m *Manager) RecoverStrandedApprovals(ctx context.Context) (int, error) {
 //     wait for the token-link approval path; the scheduler and SQS paths must
 //     never bypass that gate.
 //   - All other pending/notified rows require the owning plan to have
-//     AutoPurchase=true. A plan-fetch error is propagated so the caller can
-//     fail closed rather than defaulting to "execute".
+//     AutoPurchase=true. A plan-fetch error, or a missing plan, is propagated
+//     so the caller can fail closed rather than defaulting to "execute". A
+//     direct-execute row (no PlanID) is never eligible and is not an error.
 //   - The global kill switch (GlobalConfig.AutoPurchaseEnabled) must be on. A
 //     read error is propagated. Only AutoPurchase plans reach this check, so
 //     manual purchases are unaffected.
@@ -820,11 +839,11 @@ func (m *Manager) executableByScheduler(ctx context.Context, exec *config.Purcha
 	if exec.Source == common.PurchaseSourceWeb {
 		return false, nil
 	}
-	plan, err := m.config.GetPurchasePlan(ctx, exec.PlanID)
+	plan, err := m.autoPurchasePlan(ctx, exec)
 	if err != nil {
-		return false, fmt.Errorf("failed to fetch plan %s for AutoPurchase gate: %w", exec.PlanID, err)
+		return false, err
 	}
-	if !plan.AutoPurchase {
+	if plan == nil {
 		return false, nil
 	}
 	enabled, err := m.autoPurchaseEnabled(ctx)
@@ -844,6 +863,33 @@ func (m *Manager) executableByScheduler(ctx context.Context, exec *config.Purcha
 		return false, err
 	}
 	return true, nil
+}
+
+// autoPurchasePlan returns the plan that owns exec when that plan has
+// AutoPurchase=true, nil when the row cannot be auto-purchased, and an error
+// when the plan cannot be read (the caller fails closed).
+//
+// A direct-execute row (PlanID == "") has no plan to arm it, so it is never
+// auto-purchased. Short-circuit it before the store: the Postgres UUID column
+// rejects "" with SQLSTATE 22P02, which every scheduler tick would otherwise
+// count as a failure for as long as the row stays pending (issue #243). A nil
+// plan with no error is refused as not found, as executePurchase does, rather
+// than dereferenced.
+func (m *Manager) autoPurchasePlan(ctx context.Context, exec *config.PurchaseExecution) (*config.PurchasePlan, error) {
+	if exec.PlanID == "" {
+		return nil, nil
+	}
+	plan, err := m.config.GetPurchasePlan(ctx, exec.PlanID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch plan %s for AutoPurchase gate: %w", exec.PlanID, err)
+	}
+	if plan == nil {
+		return nil, fmt.Errorf("plan %s not found for AutoPurchase gate", exec.PlanID)
+	}
+	if !plan.AutoPurchase {
+		return nil, nil
+	}
+	return plan, nil
 }
 
 // autoPurchaseEnabled reads the global auto-purchase kill switch. It fails

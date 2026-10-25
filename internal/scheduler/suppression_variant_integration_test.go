@@ -71,3 +71,34 @@ func TestSuppressionsScopedToPurchasedVariant_RealPostgres(t *testing.T) {
 		"legacy-a": 4, "legacy-b": 4,
 	}, counts)
 }
+
+// TestLegacyEC2RetrySuppressesBoughtVariant_RealPostgres is the issue #1232
+// regression: a retried execution persisted before Details existed carries an
+// EC2 rec with no platform or tenancy. Its suppression must wildcard the
+// 6-tuple, so the later Linux/UNIX recommendation that was actually bought is
+// filtered instead of re-offered.
+func TestLegacyEC2RetrySuppressesBoughtVariant_RealPostgres(t *testing.T) {
+	ctx := t.Context()
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
+	store := config.NewPostgresStore(pg.DB)
+
+	later := config.RecommendationRecord{
+		ID: "later", Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large",
+		Count: 3, Term: 1, Payment: "all-upfront", AvailabilityZone: "us-east-1a",
+		Details: []byte(`{"availability_zone":"us-east-1a","platform":"Linux/UNIX","tenancy":"default"}`),
+	}
+	require.NoError(t, store.UpsertRecommendations(ctx, time.Now(), []config.RecommendationRecord{later}, nil))
+
+	legacy := later
+	legacy.ID = "legacy"
+	legacy.Count = 3
+	legacy.Details = nil
+	sups := config.BuildSuppressions([]config.RecommendationRecord{legacy}, uuid.NewString(), &config.GlobalConfig{}, time.Now())
+	require.Len(t, sups, 1)
+	require.NoError(t, store.WithTx(ctx, func(tx pgx.Tx) error { return store.CreateSuppressionTx(ctx, tx, &sups[0]) }))
+
+	s := &Scheduler{config: store, isLambda: true}
+	got, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	require.NoError(t, err)
+	assert.Empty(t, got, "the bought variant must be fully suppressed")
+}

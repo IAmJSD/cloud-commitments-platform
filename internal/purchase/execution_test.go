@@ -1168,15 +1168,20 @@ func TestExecuteMultiAccount_PartialFailure_IsolatesAccounts(t *testing.T) {
 // proves per-account error isolation but would still pass if executeMultiAccount
 // were refactored to a serial for-loop. This test fails on a serial loop.
 //
-// Mechanics: two accounts, each with valid credentials. Each account's
-// PurchaseCommitment call waits at a two-party barrier until the other
-// account's call has started too. A parallel fan-out meets there at once; a
-// serial loop never does, so its first call gives up after barrierLimit and
-// the test fails on the overlap count. This replaces a sleep-and-measure
-// check against an elapsed-time bound (issue #36): barrierLimit only bounds
-// how long the serial case takes to fail, it is not a timing assertion.
+// Mechanics: two accounts, each with valid credentials. Parallelism is
+// asserted structurally, not by elapsed wall time (issue #38): each
+// PurchaseCommitment call bumps an atomic in-flight counter, records the
+// peak, then waits at a barrier until both accounts' calls have arrived.
+// Under a parallel fan-out both calls are in flight together, so the barrier
+// opens at once and the peak is 2 regardless of runner load. Under a serial
+// loop the second call cannot start until the first returns, so the first
+// waits out barrierTimeout alone and the peak stays 1, failing the assertion.
+// barrierTimeout only bounds that failure path; a passing run never waits on it.
 func TestExecuteMultiAccount_RunsAccountsInParallel(t *testing.T) {
-	const barrierLimit = 10 * time.Second
+	const (
+		accountCount   = 2
+		barrierTimeout = 2 * time.Second
+	)
 
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -1237,24 +1242,34 @@ func TestExecuteMultiAccount_RunsAccountsInParallel(t *testing.T) {
 	mockFactory.On("CreateAndValidateProvider", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), "aws", mock.Anything).Return(mockProviderInst, nil).Twice()
 	mockProviderInst.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil).Twice()
 
-	var arrived sync.WaitGroup
-	arrived.Add(2)
-	bothStarted := make(chan struct{})
-	go func() {
-		arrived.Wait()
-		close(bothStarted)
-	}()
-	var overlapped atomic.Int32
+	// Each PurchaseCommitment call counts itself in flight, then waits at the
+	// barrier for the other account's call. The barrier makes the overlap
+	// deterministic instead of relying on two sleeps happening to coincide.
+	var inflight, peak, arrived atomic.Int32
+	var barrierTimedOut atomic.Bool
+	allArrived := make(chan struct{})
+	updatePeak := func(cur int32) {
+		for {
+			p := peak.Load()
+			if cur <= p || peak.CompareAndSwap(p, cur) {
+				return
+			}
+		}
+	}
 	mockServiceClient.On("PurchaseCommitment", mock.MatchedBy(hasPerRecDeadline(30*time.Second)),
 		mock.AnythingOfType("common.Recommendation"),
 		mock.AnythingOfType("common.PurchaseOptions"),
 	).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-parallel"}, nil).
 		Run(func(_ mock.Arguments) {
-			arrived.Done()
+			updatePeak(inflight.Add(1))
+			defer inflight.Add(-1)
+			if arrived.Add(1) == accountCount {
+				close(allArrived)
+			}
 			select {
-			case <-bothStarted:
-				overlapped.Add(1)
-			case <-time.After(barrierLimit):
+			case <-allArrived:
+			case <-time.After(barrierTimeout):
+				barrierTimedOut.Store(true)
 			}
 		}).Twice()
 
@@ -1279,11 +1294,14 @@ func TestExecuteMultiAccount_RunsAccountsInParallel(t *testing.T) {
 	require.NoError(t, err, "both accounts have valid credentials and should succeed")
 	require.Len(t, savedExecs, 2, "exactly two SavePurchaseExecution calls expected — one per account")
 
-	// The core parallelism assertion: both accounts' purchase calls were in
-	// flight at the same time. A serial loop leaves the first call alone at
-	// the barrier until it gives up, so at most one call sees the other.
-	assert.Equal(t, int32(2), overlapped.Load(),
-		"executeMultiAccount must run accounts in parallel: both accounts' PurchaseCommitment calls must be in flight together")
+	// The core parallelism assertion: both accounts' PurchaseCommitment calls
+	// were in flight at the same time. A serial loop peaks at 1.
+	assert.GreaterOrEqual(t, peak.Load(), int32(accountCount),
+		"executeMultiAccount must run accounts in parallel: peak in-flight PurchaseCommitment calls was %d, want %d",
+		peak.Load(), accountCount)
+	assert.False(t, barrierTimedOut.Load(),
+		"a PurchaseCommitment call waited %v at the barrier without the other account's call arriving: accounts ran serially",
+		barrierTimeout)
 
 	mockStore.AssertExpectations(t)
 	mockEmail.AssertExpectations(t)

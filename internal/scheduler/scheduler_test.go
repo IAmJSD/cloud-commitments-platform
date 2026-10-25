@@ -468,6 +468,10 @@ func TestScheduler_CollectRecommendations_ParallelProviders(t *testing.T) {
 	})
 }
 
+// TestScheduler_CollectRecommendations_UnknownProvider pins issue #111: a
+// provider name the scheduler does not recognize (wrong case, trailing space)
+// must be reported as a failed provider and recorded in
+// last_collection_error, not as a clean collection of zero recommendations.
 func TestScheduler_CollectRecommendations_UnknownProvider(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -475,10 +479,14 @@ func TestScheduler_CollectRecommendations_UnknownProvider(t *testing.T) {
 	mockFactory := new(MockProviderFactory)
 
 	globalCfg := &config.GlobalConfig{
-		EnabledProviders: []string{"unknown_provider"},
+		EnabledProviders: []string{"AWS", "azure "},
 	}
 
 	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
+	var recordedErr string
+	mockStore.On("SetRecommendationsCollectionError", mock.Anything, mock.AnythingOfType("string")).
+		Run(func(args mock.Arguments) { recordedErr = args.String(1) }).
+		Return(nil).Once()
 
 	scheduler := &Scheduler{
 		config:          mockStore,
@@ -491,6 +499,12 @@ func TestScheduler_CollectRecommendations_UnknownProvider(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, result.Recommendations)
+	assert.Empty(t, result.SuccessfulProviders, "an unknown provider was never contacted, so it must not count as successful")
+	assert.Contains(t, result.FailedProviders, "AWS")
+	assert.Contains(t, result.FailedProviders, "azure ")
+	mockStore.AssertCalled(t, "SetRecommendationsCollectionError", mock.Anything, mock.AnythingOfType("string"))
+	assert.Contains(t, recordedErr, `unknown provider "AWS"`)
+	assert.Contains(t, recordedErr, `unknown provider "azure "`)
 }
 
 func TestScheduler_CollectAWSRecommendations(t *testing.T) {
@@ -578,10 +592,10 @@ func TestScheduler_CollectProviderRecommendations(t *testing.T) {
 		provider    string
 		expectError bool
 	}{
-		{"aws", true},    // ambient fallback fails via factory error
-		{"azure", false}, // no accounts → nil, nil
-		{"gcp", false},   // no accounts → nil, nil
-		{"unknown", false},
+		{"aws", true},     // ambient fallback fails via factory error
+		{"azure", false},  // no accounts → nil, nil
+		{"gcp", false},    // no accounts → nil, nil
+		{"unknown", true}, // not a provider the scheduler can collect (#111)
 	}
 
 	for _, tt := range tests {
@@ -1297,9 +1311,12 @@ func TestScheduler_ListRecommendations_ColdStart_NonLambda_KicksBackgroundCollec
 // it is parked there and every worker it started has entered fn, nothing else
 // can start until the test releases, so the in-flight count read then is the
 // bound itself, with no wall-clock wait (issue #36): a missing limit never
-// parks (the Eventually times out) and a wrong one parks at another count.
+// parks (the Eventually times out) and a wrong one parks at another count. The
+// final peak must equal the limit exactly, so a serial or under-limit fan-out
+// fails too (issue #38, audit A16-011).
 func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
-	t.Setenv("CUDLY_MAX_ACCOUNT_PARALLELISM", "3")
+	const limit = 3
+	t.Setenv("CUDLY_MAX_ACCOUNT_PARALLELISM", fmt.Sprint(limit))
 
 	// 20 accounts to make the bound observable.
 	accounts := make([]config.CloudAccount, 20)
@@ -1350,7 +1367,7 @@ func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
 		atBound = n
 		return parked && int(n) == workers
 	}, 10*time.Second, time.Millisecond, "fanOutPerAccount never blocked waiting for a free slot: no parallelism limit")
-	assert.Equal(t, int32(3), atBound, "in-flight calls while the fan-out waits for a slot must equal CUDLY_MAX_ACCOUNT_PARALLELISM")
+	assert.Equal(t, int32(limit), atBound, "in-flight calls while the fan-out waits for a slot must equal CUDLY_MAX_ACCOUNT_PARALLELISM")
 
 	releaseAll()
 	var res fanOutResult
@@ -1360,7 +1377,7 @@ func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
 		t.Fatal("fanOutPerAccount did not finish after its calls were released")
 	}
 	assert.Len(t, res.out, len(accounts), "all accounts contribute one record")
-	assert.Equal(t, int32(3), peak.Load(), "peak in-flight must reach, and never exceed, CUDLY_MAX_ACCOUNT_PARALLELISM")
+	assert.Equal(t, int32(limit), peak.Load(), "peak in-flight must reach, and never exceed, CUDLY_MAX_ACCOUNT_PARALLELISM")
 	assert.Equal(t, len(accounts), res.outcome.SucceededCount)
 	assert.Zero(t, res.outcome.FailedCount)
 }
