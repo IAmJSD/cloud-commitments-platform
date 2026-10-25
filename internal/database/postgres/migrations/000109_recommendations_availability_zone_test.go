@@ -26,12 +26,11 @@ const insertRecForMigration109 = `
 // both payload shapes, the 8-column index is kept so the current upsert still
 // works, and rollback removes the column and the new index.
 func TestMigration_RecommendationsAvailabilityZone(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 108))
@@ -50,7 +49,7 @@ func TestMigration_RecommendationsAvailabilityZone(t *testing.T) {
 		"no-details": `{"service":"ec2"}`,
 	}
 	for resourceType, payload := range legacy {
-		_, err = pool.Exec(ctx, insertRecForMigration109, resourceType, payload)
+		_, err := pool.Exec(ctx, insertRecForMigration109, resourceType, payload)
 		require.NoError(t, err)
 	}
 

@@ -57,12 +57,11 @@ func stepNumberOf(ctx context.Context, t *testing.T, pool *pgxpool.Pool, execID 
 // steps) are retargeted at the step they will actually complete, while
 // correctly-stamped rows and terminal rows are left alone.
 func TestMigration_BackfillExecutionStepNumber(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	// Pin just below 000098 so the assertions exercise this migration's direct
