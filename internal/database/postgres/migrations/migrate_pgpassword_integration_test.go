@@ -44,7 +44,10 @@ func hostilePasswords() map[string]string {
 //
 // A wrong PGPASSWORD must fail, proving the server really checks it.
 func TestPGPasswordAndKeywordDSN_ConnectWithHostilePassword(t *testing.T) {
+	// Not parallel: t.Setenv("PGPASSWORD") changes the process environment.
 	ctx := context.Background()
+	// Dedicated server: ALTER ROLE ... PASSWORD changes the cluster-wide role that
+	// every shared-server test database logs in as.
 	container, err := testhelpers.SetupPostgresContainer(ctx, t)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = container.Cleanup(ctx) })
