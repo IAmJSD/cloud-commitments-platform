@@ -62,7 +62,8 @@ func TestExecutePurchase_SingleAccount_NothingSelected_SendsNoConfirmation(t *te
 func TestExecuteForAccount_NothingSelected_SendsNoConfirmation(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockEmail := allowFailedNotification(new(MockEmailSender))
+	mockEmail := new(MockEmailSender)
+	allowFailedNotification(mockEmail)
 	mockFactory := new(MockProviderFactory)
 
 	const acctID = "aaaaaaaa-0000-0000-0000-000000000339"
