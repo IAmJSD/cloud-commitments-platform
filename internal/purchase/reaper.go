@@ -282,7 +282,9 @@ func (m *Manager) reapOne(ctx context.Context, exec *config.PurchaseExecution, r
 		ageMinutes, prevStatus, safeMsg)
 	if m.annotateReapedRow(ctx, transitioned, result) {
 		// The won CAS makes this sweep the one writer that notifies (#1195).
-		m.notifyExecutionFailure(ctx, transitioned)
+		// The stuck executor may already have bought, so the email reports
+		// an unknown outcome rather than a failure to retry (#1415).
+		m.notifyOutcomeUnknown(ctx, transitioned)
 	}
 }
 

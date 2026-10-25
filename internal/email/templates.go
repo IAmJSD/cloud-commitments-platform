@@ -477,7 +477,7 @@ func (s *Sender) SendPurchaseFailedNotification(ctx context.Context, data Notifi
 		return fmt.Errorf("failed to render purchase failed email: %w", err)
 	}
 
-	subject := "CUDly - Purchase Failed - Action Required"
+	subject := purchaseFailedSubject(data, "CUDly - Purchase Failed - Action Required")
 	if data.RecipientEmail != "" {
 		return s.SendToEmailWithCC(ctx, data.RecipientEmail, data.CCEmails, subject, body)
 	}

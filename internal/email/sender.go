@@ -602,6 +602,11 @@ type NotificationData struct {
 	// the purchase). Used in the post-execution notification body.
 	// Empty omits the field.
 	ExecutedBy string
+	// OutcomeUnknown switches the purchase-failed email to the outcome-unknown
+	// variant, for a row a recovery sweep failed after its purchase run was
+	// interrupted: the commitment may already exist, so the email asks the
+	// operator to verify in the cloud console instead of retrying (issue #1415).
+	OutcomeUnknown bool
 }
 
 // RecommendationSummary is a simplified recommendation for email display.

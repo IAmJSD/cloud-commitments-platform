@@ -716,10 +716,12 @@ func (m *Manager) safeFail(ctx context.Context, exec *config.PurchaseExecution) 
 	// This sweep won the CAS, so it is the one writer that notifies (#1195),
 	// unless the guarded stamp below finds the row already recovered: then the
 	// in-memory failed row is stale and a failure email would be false.
+	// The interrupted run may already have bought, so the email reports an
+	// unknown outcome rather than a failure to retry (#1415).
 	notify := true
 	defer func() {
 		if notify {
-			m.notifyExecutionFailure(ctx, updated)
+			m.notifyOutcomeUnknown(ctx, updated)
 		}
 	}()
 

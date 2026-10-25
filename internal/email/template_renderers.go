@@ -126,8 +126,13 @@ func RenderPurchaseConfirmationEmail(data NotificationData) (string, error) {
 	return renderTextTemplate("confirmation", purchaseConfirmationTemplate, data)
 }
 
-// RenderPurchaseFailedEmail renders the plain-text purchase failed email template.
+// RenderPurchaseFailedEmail renders the plain-text purchase failed email
+// template, or its outcome-unknown variant when data.OutcomeUnknown is set
+// (issue #1415).
 func RenderPurchaseFailedEmail(data NotificationData) (string, error) {
+	if data.OutcomeUnknown {
+		return renderTextTemplate("outcome-unknown", purchaseOutcomeUnknownTemplate, data)
+	}
 	return renderTextTemplate("failed", purchaseFailedTemplate, data)
 }
 
