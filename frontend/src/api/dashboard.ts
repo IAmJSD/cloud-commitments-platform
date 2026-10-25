@@ -3,7 +3,7 @@
  */
 
 import { apiRequest } from './client';
-import type { DashboardSummary, UpcomingPurchase, Provider } from './types';
+import type { DashboardSummary, UpcomingPurchasesResponse, Provider } from './types';
 
 /**
  * Get dashboard summary
@@ -15,8 +15,9 @@ export async function getDashboardSummary(provider: Provider | '' = '', accountI
 }
 
 /**
- * Get upcoming purchases
+ * Get upcoming purchases. The endpoint returns `{ purchases: [...] }`, not a
+ * bare array (#1189).
  */
-export async function getUpcomingPurchases(): Promise<UpcomingPurchase[]> {
-  return apiRequest<UpcomingPurchase[]>('/dashboard/upcoming');
+export async function getUpcomingPurchases(): Promise<UpcomingPurchasesResponse> {
+  return apiRequest<UpcomingPurchasesResponse>('/dashboard/upcoming');
 }

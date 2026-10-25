@@ -31,6 +31,7 @@ jest.mock('../navigation', () => ({
 }));
 
 jest.mock('../utils', () => ({
+  NO_VALUE: '\u2014',
   formatCurrency: jest.fn((val) => `$${val || 0}`),
   formatDate: jest.fn((val) => (val ? new Date(val).toLocaleDateString() : '')),
   formatTerm: jest.fn((years) => (years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`)),
@@ -173,7 +174,7 @@ describe('History Cancel button permission gating (issue #158)', () => {
 
     await loadHistory();
 
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     const ids = Array.from(list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn'))
       .map((b) => b.dataset['cancelId']);
     expect(ids).toEqual(expect.arrayContaining(['exec-mine', 'exec-other', 'exec-legacy']));
@@ -194,7 +195,7 @@ describe('History Cancel button permission gating (issue #158)', () => {
 
     await loadHistory();
 
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     const ids = Array.from(list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn'))
       .map((b) => b.dataset['cancelId']);
     expect(ids).toEqual(expect.arrayContaining(['exec-mine', 'exec-other', 'exec-legacy']));
@@ -215,7 +216,7 @@ describe('History Cancel button permission gating (issue #158)', () => {
 
     await loadHistory();
 
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     const ids = Array.from(list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn'))
       .map((b) => b.dataset['cancelId']);
     expect(ids).toEqual(['exec-mine']);
@@ -233,7 +234,7 @@ describe('History Cancel button permission gating (issue #158)', () => {
 
     await loadHistory();
 
-    const list = document.getElementById('history-list')!;
+    const list = document.getElementById('purchases-approval-queue')!;
     const buttons = list.querySelectorAll<HTMLButtonElement>('.history-cancel-btn');
     expect(buttons).toHaveLength(0);
   });
