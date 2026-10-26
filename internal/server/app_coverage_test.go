@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
@@ -121,6 +122,75 @@ func TestBuildAdminPasswordSyncCallback_AdminEmailMatches(t *testing.T) {
 	cb(context.Background(), "user-123", "newpass")
 	testutil.AssertEqual(t, "arn:aws:secret", resolver.putKey)
 	testutil.AssertEqual(t, "newpass", resolver.putValue)
+}
+
+// #199: a failed write (for example a 403 because the runtime identity has
+// read-only access to the vault) leaves the secret manager copy stale while
+// the database already holds the new password. That must be an ERROR naming
+// the secret, not a WARN that reads as harmless.
+func TestBuildAdminPasswordSyncCallback_PutSecretFailureLogsError(t *testing.T) {
+	testutil.SetEnv(t, "ADMIN_PASSWORD_SECRET", "admin-password")
+	testutil.SetEnv(t, "ADMIN_EMAIL", "admin@example.com")
+	logs := captureLogs(t)
+
+	store := &mockAuthStoreWithUser{
+		user: &auth.User{ID: "user-123", Email: "admin@example.com"},
+	}
+	resolver := &mockSecretResolver{putErr: errors.New("403 Forbidden: setSecret not permitted")}
+
+	cb := buildAdminPasswordSyncCallback(store, resolver)
+	cb(context.Background(), "user-123", "newpass")
+
+	testutil.AssertEqual(t, "admin-password", resolver.putKey)
+	errs := errorLines(logs.String())
+	testutil.AssertEqual(t, 1, len(errs))
+	testutil.AssertContains(t, errs[0], `"admin-password"`)
+	testutil.AssertContains(t, errs[0], "403 Forbidden")
+	testutil.AssertContains(t, errs[0], "no longer matches the database password")
+	testutil.AssertFalse(t, strings.Contains(logs.String(), "newpass"), "the password must never be logged")
+	testutil.AssertFalse(t, strings.Contains(logs.String(), "[WARN]"), "the failure must not be downgraded to WARN")
+	testutil.AssertFalse(t, strings.Contains(logs.String(), "synced to secret manager"), "a failed sync must not also report success")
+}
+
+// #199: when the user lookup fails the callback cannot tell whether the admin
+// changed their password, so it must say the copy may be stale instead of
+// returning silently.
+func TestBuildAdminPasswordSyncCallback_UserLookupFailureLogsError(t *testing.T) {
+	testutil.SetEnv(t, "ADMIN_PASSWORD_SECRET", "admin-password")
+	testutil.SetEnv(t, "ADMIN_EMAIL", "admin@example.com")
+	logs := captureLogs(t)
+
+	store := &mockAuthStoreWithUser{err: errors.New("connection reset")}
+	resolver := &mockSecretResolver{}
+
+	cb := buildAdminPasswordSyncCallback(store, resolver)
+	cb(context.Background(), "user-123", "newpass")
+
+	testutil.AssertEqual(t, "", resolver.putKey)
+	errs := errorLines(logs.String())
+	testutil.AssertEqual(t, 1, len(errs))
+	testutil.AssertContains(t, errs[0], "user-123")
+	testutil.AssertContains(t, errs[0], "connection reset")
+	testutil.AssertContains(t, errs[0], `"admin-password"`)
+	testutil.AssertFalse(t, strings.Contains(logs.String(), "newpass"), "the password must never be logged")
+}
+
+// The quiet paths stay quiet: a successful sync and a non-admin user log no
+// ERROR, so the new ERROR lines keep meaning "the copies diverged".
+func TestBuildAdminPasswordSyncCallback_QuietPathsLogNoError(t *testing.T) {
+	testutil.SetEnv(t, "ADMIN_PASSWORD_SECRET", "admin-password")
+	testutil.SetEnv(t, "ADMIN_EMAIL", "admin@example.com")
+	logs := captureLogs(t)
+
+	admin := &mockAuthStoreWithUser{user: &auth.User{ID: "user-123", Email: "admin@example.com"}}
+	other := &mockAuthStoreWithUser{user: &auth.User{ID: "user-456", Email: "other@example.com"}}
+
+	buildAdminPasswordSyncCallback(admin, &mockSecretResolver{})(context.Background(), "user-123", "newpass")
+	buildAdminPasswordSyncCallback(other, &mockSecretResolver{})(context.Background(), "user-456", "newpass")
+	buildAdminPasswordSyncCallback(&mockAuthStoreForHealth{}, &mockSecretResolver{})(context.Background(), "user-789", "newpass")
+
+	testutil.AssertEqual(t, 0, len(errorLines(logs.String())))
+	testutil.AssertContains(t, logs.String(), "Admin password synced to secret manager")
 }
 
 // ----- Close with nil DB (already covered in app_test.go; duplicate here for clarity) -----
