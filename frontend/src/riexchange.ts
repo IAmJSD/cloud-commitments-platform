@@ -999,14 +999,12 @@ function renderRecommendations(container: HTMLElement): void {
           <tr>
             <td class="monospace">${escapeHtml(rec.source_ri_id)}</td>
             <td>${rec.source_count}x ${escapeHtml(rec.source_instance_type)}</td>
-            <td>${rec.target_count}x ${escapeHtml(rec.target_instance_type)}</td>
+            <td>${renderSuggestedCell(rec)}</td>
             <td>${altCell}</td>
             <td class="${utilClass}">${utilPct === null ? '—' : `${utilPct.toFixed(1)}%`}</td>
             <td>${rec.normalized_used.toFixed(1)} / ${rec.normalized_purchased.toFixed(1)}</td>
             <td>${escapeHtml(rec.reason)}</td>
-            ${canExchange ? `<td>
-              <button class="btn-small" data-action="fill-quote" data-index="${idx}">Exchange</button>
-            </td>` : ''}
+            ${canExchange ? `<td>${renderReshapeExchangeButton(rec, idx)}</td>` : ''}
           </tr>`;
         }).join('')}
       </tbody>
@@ -1068,8 +1066,44 @@ function renderAlternativesCell(alternatives: OfferingOption[] | undefined): str
     .join(' ');
 }
 
+// hasReshapeTarget reports whether a reshape recommendation names a primary
+// exchange target. The analyzer emits target_instance_type "" and
+// target_count 0 when it has none, for example for a completely unused RI
+// or one whose target would exceed the units the account owns (#1410).
+function hasReshapeTarget(rec: ReshapeRecommendation): boolean {
+  return Boolean(rec.target_instance_type) && rec.target_count > 0;
+}
+
+// canExchangeReshape reports whether the row's Exchange button has anything
+// to offer: a primary target, or cross-family alternatives the modal's picker
+// can preselect from.
+function canExchangeReshape(rec: ReshapeRecommendation): boolean {
+  return hasReshapeTarget(rec) || (rec.alternative_targets?.length ?? 0) > 0;
+}
+
+function renderSuggestedCell(rec: ReshapeRecommendation): string {
+  if (!hasReshapeTarget(rec)) {
+    return '<span class="text-muted">No exchange target</span>';
+  }
+  return `${rec.target_count}x ${escapeHtml(rec.target_instance_type)}`;
+}
+
+// renderReshapeExchangeButton renders the row's Exchange action. A row with
+// nothing to exchange into gets a disabled button with no data-action, so no
+// click handler is attached and the reason is still discoverable on hover.
+function renderReshapeExchangeButton(rec: ReshapeRecommendation, idx: number): string {
+  if (!canExchangeReshape(rec)) {
+    const why = 'No exchange target available for this RI';
+    return `<button type="button" class="btn-small" disabled title="${why}" aria-label="Exchange: ${why}">Exchange</button>`;
+  }
+  return `<button type="button" class="btn-small" data-action="fill-quote" data-index="${idx}">Exchange</button>`;
+}
+
 function fillQuoteFromRecommendation(rec: ReshapeRecommendation): void {
-  openExchangeModal(rec.source_ri_id, rec.target_count, rec.target_instance_type, rec.alternative_targets);
+  // With no primary target the modal opens on an empty target row for the
+  // alternatives; a count of 0 would only fail validation.
+  const count = hasReshapeTarget(rec) ? rec.target_count : 1;
+  openExchangeModal(rec.source_ri_id, count, rec.target_instance_type, rec.alternative_targets);
 }
 
 export function fillQuoteFromRI(riId: string, count: number): void {
