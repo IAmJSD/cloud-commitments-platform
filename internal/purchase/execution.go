@@ -12,12 +12,11 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/provider"
-	azureprovider "github.com/LeanerCloud/cloud-commitments-go/providers/azure"
-	gcpprovider "github.com/LeanerCloud/cloud-commitments-go/providers/gcp"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/execution"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/providerfactory"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
@@ -100,7 +99,7 @@ func (m *Manager) executePurchase(ctx context.Context, exec *config.PurchaseExec
 // plain error when nothing committed. Split out of executePurchase to keep that
 // function under the gocyclo budget.
 func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan) error {
-	provCfg, targetAccountID, err := m.prepareSingleAccountSubmission(ctx, exec)
+	provCfg, target, err := m.prepareSingleAccountSubmission(ctx, exec)
 	if err != nil {
 		return err
 	}
@@ -110,7 +109,7 @@ func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.Purchas
 	// Azure / GCP). Only fall back to the ambient AWS STS identity when no
 	// target account could be identified (truly-ambient AWS single-account
 	// execution where credentials are inherited from the host).
-	accountID := targetAccountID
+	accountID := target.externalID
 	if accountID == "" {
 		// Fall back to the ambient AWS STS identity for logging/tagging.
 		// getAWSAccountID returns ("", error) on failure so the caller
@@ -124,7 +123,7 @@ func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.Purchas
 		}
 	}
 
-	totalSavings, totalUpfront, purchaseErrors, procErr := m.processPurchaseRecommendations(ctx, exec, plan, accountID, provCfg)
+	totalSavings, totalUpfront, purchaseErrors, procErr := m.processPurchaseRecommendations(ctx, exec, plan, accountID, provCfg, target.awsPartition)
 	if procErr != nil {
 		return procErr
 	}
@@ -134,11 +133,14 @@ func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.Purchas
 		return fmt.Errorf("some purchases failed: %v", purchaseErrors)
 	}
 
-	// At least one rec committed (full or partial success): the confirmation
-	// must go out for the recs that purchased. buildPurchaseConfirmationData
-	// only lists Purchased recs, so a partial run notifies on exactly those.
-	if notifyErr := m.sendPurchaseNotification(ctx, exec, plan, totalSavings, totalUpfront); notifyErr != nil {
-		logging.Errorf("Failed to send confirmation: %v", notifyErr)
+	// Confirm only when at least one rec committed (full or partial success).
+	// buildPurchaseConfirmationData only lists Purchased recs, so a partial run
+	// notifies on exactly those, and a run with nothing selected (it never
+	// reached a cloud API) sends no "purchase confirmed" email for $0 (#339).
+	if anyRecPurchased(exec.Recommendations) {
+		if notifyErr := m.sendPurchaseNotification(ctx, exec, plan, totalSavings, totalUpfront); notifyErr != nil {
+			logging.Errorf("Failed to send confirmation: %v", notifyErr)
+		}
 	}
 
 	if len(purchaseErrors) > 0 {
@@ -157,18 +159,29 @@ func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.Purchas
 // (issue #97; see fan_out_shape.go). Every error it returns is before
 // submission. Split out of executeSingleAccount to keep that function under
 // the gocyclo budget.
-func (m *Manager) prepareSingleAccountSubmission(ctx context.Context, exec *config.PurchaseExecution) (*provider.ProviderConfig, string, error) {
+func (m *Manager) prepareSingleAccountSubmission(ctx context.Context, exec *config.PurchaseExecution) (*provider.ProviderConfig, purchaseTarget, error) {
 	if err := requireRecsMatchRowAccount(exec); err != nil {
-		return nil, "", beforeSubmission(err)
+		return nil, purchaseTarget{}, beforeSubmission(err)
 	}
-	provCfg, targetAccountID, err := m.resolveSingleAccountProvider(ctx, exec)
+	provCfg, target, err := m.resolveSingleAccountProvider(ctx, exec)
 	if err != nil {
-		return nil, "", beforeSubmission(err)
+		return nil, purchaseTarget{}, beforeSubmission(err)
 	}
 	if err := m.pinLineageShape(ctx, exec, config.FanOutShapeSingle); err != nil {
-		return nil, "", err // already beforeSubmission
+		return nil, purchaseTarget{}, err // already beforeSubmission
 	}
-	return provCfg, targetAccountID, nil
+	return provCfg, target, nil
+}
+
+// purchaseTarget identifies the account a single-account execution buys for.
+// The zero value means no target account was identified (ambient credentials).
+type purchaseTarget struct {
+	// externalID is the provider-appropriate account identifier stamped on
+	// purchase_history (#646).
+	externalID string
+	// awsPartition is the account's AWS partition from its role ARN, used to
+	// refuse aws-cn Savings Plans before any AWS call (issue #1194).
+	awsPartition string
 }
 
 // anyRecPurchased reports whether at least one recommendation in the slice
@@ -319,7 +332,7 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 	}
 
 	accountID := account.ExternalID
-	totalSavings, totalUpfront, purchaseErrors, procErr := m.processPurchaseRecommendations(ctx, &acctExec, plan, accountID, provCfg)
+	totalSavings, totalUpfront, purchaseErrors, procErr := m.processPurchaseRecommendations(ctx, &acctExec, plan, accountID, provCfg, account.AWSPartition())
 	if procErr != nil {
 		acctExec.Status = "failed"
 		acctExec.Error = procErr.Error()
@@ -329,7 +342,7 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 
 	// Resolve the final status/error/completion stamp from the per-rec outcome
 	// (#642), and learn whether any rec committed (#1014).
-	partial, committed := applyAccountOutcome(&acctExec, purchaseErrors)
+	_, committed = applyAccountOutcome(&acctExec, purchaseErrors)
 
 	if saveErr := m.config.SavePurchaseExecution(ctx, &acctExec); saveErr != nil {
 		return committed, fmt.Errorf("AUDIT LOSS: failed to save execution record for account %s: %w", account.ID, saveErr)
@@ -337,8 +350,10 @@ func (m *Manager) executeForAccount(ctx context.Context, baseExec *config.Purcha
 
 	// Send the confirmation whenever at least one rec committed (full or
 	// partial success). buildPurchaseConfirmationData only lists Purchased
-	// recs, so a partial run notifies on exactly the recs that fired.
-	if len(purchaseErrors) == 0 || partial {
+	// recs, so a partial run notifies on exactly the recs that fired. Gating on
+	// committed rather than "no errors" keeps an account with nothing selected
+	// from getting a "purchase confirmed" email for $0 (#339).
+	if committed {
 		if err := m.sendPurchaseNotification(ctx, &acctExec, plan, totalSavings, totalUpfront); err != nil {
 			logging.Errorf("Failed to send confirmation for account %s: %v", account.ID, err)
 		}
@@ -406,15 +421,17 @@ func applyAccountOutcome(acctExec *config.PurchaseExecution, purchaseErrors []st
 }
 
 // resolveSingleAccountProvider derives per-account credentials for the
-// single-account execution path. Returns (nil, "", nil) when no account can be
-// identified (ambient credentials are used in that case), or when no recs are
-// selected (approval-only flows where credentials are not needed).
+// single-account execution path. Returns (nil, purchaseTarget{}, nil) when no
+// account can be identified (ambient credentials are used in that case), or
+// when no recs are selected (approval-only flows where credentials are not
+// needed).
 //
-// The second return value is the resolved target account's ExternalID — the
-// provider-appropriate account identifier (AWS account number, Azure
+// The second return value carries the resolved target account's ExternalID —
+// the provider-appropriate account identifier (AWS account number, Azure
 // subscription, GCP project) that the caller stamps onto purchase_history
-// (#646). It is "" when no target account could be identified, signaling the
-// caller to fall back to the ambient AWS STS identity.
+// (#646) — and its AWS partition (issue #1194). The ExternalID is "" when no
+// target account could be identified, signaling the caller to fall back to
+// the ambient AWS STS identity.
 //
 // The account is taken from exec.CloudAccountID when set (plan-with-single-
 // account executions), or derived from the shared cloud_account_id of the
@@ -428,13 +445,13 @@ func applyAccountOutcome(acctExec *config.PurchaseExecution, purchaseErrors []st
 // resolved (lookup failed, the account does not exist, or credentials could
 // not be derived); the caller must NOT fall back to ambient credentials on
 // error, as that would purchase/stamp against the wrong account (#646).
-func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config.PurchaseExecution) (*provider.ProviderConfig, string, error) {
+func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config.PurchaseExecution) (*provider.ProviderConfig, purchaseTarget, error) {
 	// Skip credential resolution when nothing is selected. Approval-only
 	// flows may carry an account ID on the recs solely for the contact-email
 	// gate; attempting resolution there would fail on accounts with no
 	// provider field set and add a pointless DB round-trip.
 	if len(selectedIndices(exec.Recommendations)) == 0 {
-		return nil, "", nil
+		return nil, purchaseTarget{}, nil
 	}
 
 	cloudAccountID := exec.CloudAccountID
@@ -442,16 +459,16 @@ func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config
 		var scopeErr error
 		cloudAccountID, scopeErr = SingleCloudAccountIDFromRecs(exec.Recommendations)
 		if scopeErr != nil {
-			return nil, "", fmt.Errorf("execution %s: %w", exec.ExecutionID, scopeErr)
+			return nil, purchaseTarget{}, fmt.Errorf("execution %s: %w", exec.ExecutionID, scopeErr)
 		}
 	}
 	if cloudAccountID == nil {
-		return nil, "", nil
+		return nil, purchaseTarget{}, nil
 	}
 
 	account, err := m.config.GetCloudAccount(ctx, *cloudAccountID)
 	if err != nil {
-		return nil, "", fmt.Errorf("credential resolution failed for account %s: %w", *cloudAccountID, err)
+		return nil, purchaseTarget{}, fmt.Errorf("credential resolution failed for account %s: %w", *cloudAccountID, err)
 	}
 	if account == nil {
 		// A target account was identified but does not exist in config.
@@ -459,13 +476,13 @@ func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config
 		// credentials and purchase/stamp against the wrong account (#646), so
 		// surface an error instead; the contract above forbids ambient
 		// fallback once a target account ID is known.
-		return nil, "", fmt.Errorf("credential resolution failed for account %s: account not found", *cloudAccountID)
+		return nil, purchaseTarget{}, fmt.Errorf("credential resolution failed for account %s: account not found", *cloudAccountID)
 	}
 	provCfg, err := m.resolveAccountProvider(ctx, *account)
 	if err != nil {
-		return nil, "", fmt.Errorf("credential resolution failed for account %s: %w", *cloudAccountID, err)
+		return nil, purchaseTarget{}, fmt.Errorf("credential resolution failed for account %s: %w", *cloudAccountID, err)
 	}
-	return provCfg, account.ExternalID, nil
+	return provCfg, purchaseTarget{externalID: account.ExternalID, awsPartition: account.AWSPartition()}, nil
 }
 
 // partialPurchaseError is the sentinel returned by the single-account
@@ -546,13 +563,12 @@ func (m *Manager) resolveAzureProvider(ctx context.Context, account config.Cloud
 			account.ID, time.Since(t0), err)
 		return nil, fmt.Errorf("credentials: resolve Azure for account %s (%s): %w", account.ID, account.Name, err)
 	}
-	azProv, err := azureprovider.NewAzureProvider(&provider.ProviderConfig{Profile: account.AzureSubscriptionID})
+	azProv, err := providerfactory.NewAzure(account.AzureSubscriptionID, azCred)
 	if err != nil {
 		logging.Errorf("purchase[resolveAzureProvider]: Azure provider construction failed for account=%s after %s: %v",
 			account.ID, time.Since(t0), err)
 		return nil, fmt.Errorf("credentials: create Azure provider for account %s (%s): %w", account.ID, account.Name, err)
 	}
-	azProv.SetCredential(azCred)
 	logging.Infof("purchase[resolveAzureProvider]: Azure credentials resolved for account=%s in %s",
 		account.ID, time.Since(t0))
 	return &provider.ProviderConfig{ProviderOverride: azProv}, nil
@@ -580,7 +596,12 @@ func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAc
 			account.ID, time.Since(t0))
 		return nil, nil
 	}
-	gcpProv := gcpprovider.NewProviderWithCredentials(ctx, account.GCPProjectID, gcpTS)
+	gcpProv, err := providerfactory.NewGCP(account.GCPProjectID, gcpTS)
+	if err != nil {
+		logging.Errorf("purchase[resolveGCPProvider]: GCP provider construction failed for account=%s after %s: %v",
+			account.ID, time.Since(t0), err)
+		return nil, fmt.Errorf("credentials: create GCP provider for account %s (%s): %w", account.ID, account.Name, err)
+	}
 	logging.Infof("purchase[resolveGCPProvider]: GCP credentials resolved for account=%s in %s",
 		account.ID, time.Since(t0))
 	return &provider.ProviderConfig{ProviderOverride: gcpProv}, nil
@@ -603,7 +624,7 @@ type recPurchaseOutcome struct {
 	index    int
 }
 
-func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig) (totalSavings, totalUpfront float64, purchaseErrors []string, procErr error) {
+func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig, awsPartition string) (totalSavings, totalUpfront float64, purchaseErrors []string, procErr error) {
 	// ExecutionID is carried into PurchaseOptions so executeSinglePurchase
 	// can tag every per-rec log line with the owning exec UUID. Without
 	// this, CloudWatch filtering by exec ID returns zero hits and a stuck
@@ -668,6 +689,12 @@ func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *conf
 				return recPurchaseOutcome{}, fmt.Errorf("fan-out index %d out of range for %d recommendations", i, len(exec.Recommendations))
 			}
 			rec := exec.Recommendations[i]
+			// Refused before any provider is built, so no AWS call is made
+			// for an aws-cn Savings Plans rec (issue #1194).
+			if partitionErr := m.rejectUnsupportedPartition(&rec, awsPartition); partitionErr != nil {
+				logging.Warnf("purchase[%s]: %s/%s rec %d not purchased: %v", exec.ExecutionID, rec.Provider, rec.Service, i, partitionErr)
+				return recPurchaseOutcome{index: i, err: partitionErr}, nil
+			}
 			logging.Infof("Purchasing: %dx %s in %s (%s/%s)", rec.Count, rec.ResourceType, rec.Region, rec.Provider, rec.Service)
 			// Derive a deterministic per-rec idempotency token from the
 			// execution's STABLE lineage key (not its mutable ExecutionID)
@@ -1272,16 +1299,24 @@ func mapServiceSlug(service string) (common.ServiceType, bool) {
 		"cache":          common.ServiceCache,
 		"search":         common.ServiceSearch,
 		"data-warehouse": common.ServiceDataWarehouse,
-		// Legacy AWS-only slugs.
-		"ec2":         common.ServiceEC2,
-		"rds":         common.ServiceRDS,
-		"elasticache": common.ServiceElastiCache,
-		"opensearch":  common.ServiceOpenSearch,
-		"redshift":    common.ServiceRedshift,
-		"memorydb":    common.ServiceMemoryDB,
 	}
-	svc, ok := slugs[service]
+	if svc, ok := slugs[service]; ok {
+		return svc, true
+	}
+	svc, ok := legacyAWSServiceSlugs[service]
 	return svc, ok
+}
+
+// legacyAWSServiceSlugs are the AWS-only slugs. A new alias must also be added
+// to config.awsLegacyServiceSlugs, else suppressions miss it (#1420); a test
+// ranges over this map to enforce that.
+var legacyAWSServiceSlugs = map[string]common.ServiceType{
+	"ec2":         common.ServiceEC2,
+	"rds":         common.ServiceRDS,
+	"elasticache": common.ServiceElastiCache,
+	"opensearch":  common.ServiceOpenSearch,
+	"redshift":    common.ServiceRedshift,
+	"memorydb":    common.ServiceMemoryDB,
 }
 
 // mapSavingsPlansSlug normalizes both the canonical hyphenated SP slugs and

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -52,9 +53,9 @@ func TestHandler_createGroup_Success(t *testing.T) {
 		Email:  "admin@example.com",
 	}
 
-	createdGroup := map[string]interface{}{
-		"id":   "33333333-3333-3333-3333-333333333333",
-		"name": "New Group",
+	createdGroup := &auth.APIGroup{
+		ID:   "33333333-3333-3333-3333-333333333333",
+		Name: "New Group",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)
@@ -115,9 +116,9 @@ func TestHandler_updateGroup_Success(t *testing.T) {
 		Email:  "admin@example.com",
 	}
 
-	updatedGroup := map[string]interface{}{
-		"id":   "11111111-1111-1111-1111-111111111111",
-		"name": "Updated Group",
+	updatedGroup := &auth.APIGroup{
+		ID:   "11111111-1111-1111-1111-111111111111",
+		Name: "Updated Group",
 	}
 
 	mockAuth.On("ValidateSession", ctx, "admin-token").Return(adminSession, nil)

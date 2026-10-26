@@ -30,11 +30,11 @@ type realGroupAuth struct {
 	svc *auth.Service
 }
 
-func (a *realGroupAuth) CreateGroupAPI(ctx context.Context, actor string, req any) (any, error) {
+func (a *realGroupAuth) CreateGroupAPI(ctx context.Context, actor string, req auth.APICreateGroupRequest) (*auth.APIGroup, error) {
 	return a.svc.CreateGroupAPI(ctx, actor, req)
 }
 
-func (a *realGroupAuth) UpdateGroupAPI(ctx context.Context, actor, id string, req any) (any, error) {
+func (a *realGroupAuth) UpdateGroupAPI(ctx context.Context, actor, id string, req auth.APIUpdateGroupRequest) (*auth.APIGroup, error) {
 	return a.svc.UpdateGroupAPI(ctx, actor, id, req)
 }
 

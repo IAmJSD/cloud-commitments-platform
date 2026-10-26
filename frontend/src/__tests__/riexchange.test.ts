@@ -1419,6 +1419,25 @@ describe('RI Exchange global filter scoping (issue #871)', () => {
     expect(recsEl.textContent).toContain('not available for Azure');
   });
 
+  it('lets a user who can preview purchases select Azure reservations for an exchange (issue #81)', async () => {
+    stateMod().getCurrentProvider.mockReturnValue('azure');
+    // An Administrators-group member (admin:* covers view:purchases).
+    (jest.requireMock('../state') as { getCurrentUser: jest.Mock }).getCurrentUser
+      .mockReturnValue({ id: 'u', email: 'u@example.com', groups: ['00000000-0000-5000-8000-000000000001'] });
+    (api.listExchangeableAzureRIs as jest.Mock).mockResolvedValue([
+      { reservation_order_id: 'o1', reservation_id: 'r1', sku: 'Standard_D2s_v3', quantity: 2, region: 'eastus', term: 'P1Y', instance_flexibility: 'On', billing_scope_id: '/subscriptions/s1' },
+      { reservation_order_id: 'o2', reservation_id: 'r2', sku: 'Standard_E2s_v3', quantity: 1, region: 'eastus', term: 'P1Y', instance_flexibility: 'On', billing_scope_id: '/subscriptions/s1' },
+    ]);
+    await loadRIExchange();
+    expect(instancesEl.querySelectorAll('tbody input.azure-ri-select')).toHaveLength(2);
+    expect(instancesEl.querySelectorAll('thead th')).toHaveLength(7);
+    // The checkbox column's header has an accessible name, visually hidden.
+    const selectHeader = instancesEl.querySelector('thead th')!;
+    expect(selectHeader.querySelector('.sr-only')?.textContent).toBe('Select for exchange');
+    const btn = instancesEl.querySelector<HTMLButtonElement>('#azure-exchange-selected-btn')!;
+    expect(btn.disabled).toBe(true);
+  });
+
   it('shows a provider-aware empty state for Azure with no reservations', async () => {
     stateMod().getCurrentProvider.mockReturnValue('azure');
     stateMod().getCurrentAccountIDs.mockReturnValue(['uuid-az']);
@@ -1594,10 +1613,38 @@ describe('excluded RIs notice', () => {
     await loadReshapeRecommendations();
 
     const notice = document.getElementById('ri-exchange-recommendations-excluded');
-    expect(notice?.textContent).toContain('2 convertible RIs were left out because AWS returned no term length');
+    expect(notice?.textContent).toContain('2 convertible RIs were left out because no term');
     expect(notice?.textContent).toContain('ri-0');
     expect(notice?.textContent).toContain('<img src=x onerror=alert(1)>');
     expect(notice?.querySelector('img')).toBeNull();
+  });
+
+  it('shows each excluded RI\'s server reason, grouped by reason', () => {
+    renderExcludedRIsNotice([
+      { ri_id: 'ri-dur', reason: 'non-positive duration' },
+      { ri_id: 'ri-price', reason: 'no pricing available' },
+    ]);
+    const text = document.getElementById('ri-exchange-recommendations-excluded')?.textContent ?? '';
+    expect(text).toContain('1 convertible RI was left out because non-positive duration: ri-dur');
+    expect(text).toContain('1 convertible RI was left out because no pricing available: ri-price');
+    expect(text).not.toContain('no term length');
+  });
+
+  it('falls back to the term-length text when reason is empty or missing', () => {
+    renderExcludedRIsNotice([
+      { ri_id: 'ri-a', reason: '' },
+      { ri_id: 'ri-b' } as unknown as { ri_id: string; reason: string },
+    ]);
+    expect(document.getElementById('ri-exchange-recommendations-excluded')?.textContent).toContain(
+      '2 convertible RIs were left out because AWS returned no term length: ri-a, ri-b',
+    );
+  });
+
+  it('renders a reason containing HTML special characters as text', () => {
+    renderExcludedRIsNotice([{ ri_id: 'ri-x', reason: '<b>bad</b> & "quoted"' }]);
+    const notice = document.getElementById('ri-exchange-recommendations-excluded');
+    expect(notice?.textContent).toContain('<b>bad</b> & "quoted"');
+    expect(notice?.querySelector('b')).toBeNull();
   });
 
   it('shows no notice when excluded_ris is empty or absent, and clears a stale one', () => {

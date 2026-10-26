@@ -2,12 +2,16 @@ terraform {
   required_version = ">= 1.5"
   required_providers {
     google = {
+      # The ceiling admits google 8.x although our lock resolves 7.x: this
+      # bundle ships without its lock file, so customers who onboarded after
+      # google 8.0 came out already run 8.x, and a < 8.0 ceiling would force
+      # them to downgrade. It still stops an unreviewed 9.x (#12).
       source  = "hashicorp/google"
-      version = ">= 5.0"
+      version = ">= 5.0, < 9.0"
     }
     http = {
       source  = "hashicorp/http"
-      version = ">= 3.4"
+      version = ">= 3.4, < 4.0"
     }
   }
 }
