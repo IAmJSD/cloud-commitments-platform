@@ -262,3 +262,37 @@ func TestBuildSuppressions_CanonicalisesAWSEC2Slug(t *testing.T) {
 	assert.Equal(t, "compute", sups[1].Service)
 	assert.Equal(t, "azure", sups[1].Provider)
 }
+
+// TestBuildSuppressions_LegacyShapesCanonicalised pins the two legacy EC2
+// shapes of issue #1232: Details tenancy "shared" (pre-2026-05-20) is the same
+// capacity as "default", and an AZ stored only in Details is used when the AZ
+// field is empty (the field wins when both are set).
+func TestBuildSuppressions_LegacyShapesCanonicalised(t *testing.T) {
+	mk := func(service, field, details string) RecommendationRecord {
+		return RecommendationRecord{Provider: "aws", Service: service, Region: "us-east-1", ResourceType: "m5.large",
+			Count: 1, AvailabilityZone: field, Details: []byte(details)}
+	}
+	for name, tc := range map[string]struct {
+		rec  RecommendationRecord
+		want SuppressionVariant
+	}{
+		"legacy shared tenancy":   {mk("ec2", "us-east-1a", `{"platform":"Linux/UNIX","tenancy":"shared"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}},
+		"compute slug shared":     {mk("compute", "", `{"platform":"Linux/UNIX","tenancy":"shared"}`), SuppressionVariant{"", "Linux/UNIX", "default"}},
+		"AZ only in details":      {mk("ec2", "", `{"availability_zone":"us-east-1a","platform":"Linux/UNIX","tenancy":"default"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}},
+		"field wins over details": {mk("ec2", "us-east-1b", `{"availability_zone":"us-east-1a","platform":"Linux/UNIX","tenancy":"default"}`), SuppressionVariant{"us-east-1b", "Linux/UNIX", "default"}},
+		"modern rec unchanged":    {mk("ec2", "us-east-1a", `{"availability_zone":"us-east-1a","platform":"Linux/UNIX","tenancy":"dedicated"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated"}},
+		"non-EC2 untouched":       {RecommendationRecord{Provider: "aws", Service: "rds", Region: "r", ResourceType: "db", Count: 1, Details: []byte(`{"availability_zone":"us-east-1a","tenancy":"shared"}`)}, SuppressionVariant{"", "", "shared"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sups := BuildSuppressions([]RecommendationRecord{tc.rec}, "exec-1", &GlobalConfig{}, time.Now())
+			require.Len(t, sups, 1)
+			assert.Equal(t, &tc.want, sups[0].Variant)
+		})
+	}
+}
+
+func TestPurchaseSuppression_AppliesTo_LegacySharedTenancy(t *testing.T) {
+	stored := PurchaseSuppression{Variant: &SuppressionVariant{"us-east-1a", "Linux/UNIX", "shared"}}
+	assert.True(t, stored.AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}), "old stored shared row must match a default rec")
+	assert.False(t, stored.AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated"}))
+}

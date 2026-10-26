@@ -402,3 +402,40 @@ func TestApplySuppressions_AWSLegacySlugSpellings(t *testing.T) {
 		})
 	}
 }
+
+// TestApplySuppressions_LegacyEC2Shapes covers the two legacy shapes of issue
+// #1232 end to end: a suppression stored with tenancy "shared", or built from a
+// rec whose AZ lives only in Details, must still hide the modern rec.
+func TestApplySuppressions_LegacyEC2Shapes(t *testing.T) {
+	modern := ec2VariantRec("modern", "us-east-1a", "Linux/UNIX", "default")
+	azOnlyInDetails := modern
+	azOnlyInDetails.AvailabilityZone = ""
+	sharedPurchase := ec2VariantRec("p", "us-east-1a", "Linux/UNIX", "shared")
+	exp := time.Now().Add(time.Hour)
+	for name, tc := range map[string]struct {
+		rec  config.RecommendationRecord
+		sups []config.PurchaseSuppression
+		want int
+	}{
+		"stored shared row vs default rec": {modern, []config.PurchaseSuppression{{ExecutionID: "e", AccountID: "acct-1", Provider: "aws", Service: "compute", Region: "us-east-1",
+			ResourceType: "m5.large", SuppressedCount: 2, ExpiresAt: exp, Variant: &config.SuppressionVariant{AvailabilityZone: "us-east-1a", Platform: "Linux/UNIX", Tenancy: "shared"}}}, 3},
+		"built from shared rec": {modern, config.BuildSuppressions([]config.RecommendationRecord{withCount(sharedPurchase, 2)}, "e",
+			&config.GlobalConfig{GracePeriodDays: map[string]int{"aws": 7}}, time.Now()), 3},
+		"rec AZ only in details, row has AZ": {azOnlyInDetails, config.BuildSuppressions([]config.RecommendationRecord{withCount(modern, 2)}, "e",
+			&config.GlobalConfig{GracePeriodDays: map[string]int{"aws": 7}}, time.Now()), 3},
+		"purchase AZ only in details": {modern, config.BuildSuppressions([]config.RecommendationRecord{withCount(azOnlyInDetails, 2)}, "e",
+			&config.GlobalConfig{GracePeriodDays: map[string]int{"aws": 7}}, time.Now()), 3},
+	} {
+		t.Run(name, func(t *testing.T) {
+			index := aggregateSuppressions(tc.sups)
+			out := applySuppressionIndex([]config.RecommendationRecord{tc.rec}, index)
+			require.Len(t, out, 1)
+			assert.Equal(t, tc.want, out[0].Count)
+		})
+	}
+}
+
+func withCount(r config.RecommendationRecord, n int) config.RecommendationRecord {
+	r.Count = n
+	return r
+}

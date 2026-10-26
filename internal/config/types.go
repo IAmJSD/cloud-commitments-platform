@@ -794,7 +794,12 @@ func CanonicalSuppressionService(provider, service string) string {
 // matches every row: both fall back to the pre-#816 6-tuple match, which
 // over-suppresses (under-buys) rather than over-shows.
 func (s *PurchaseSuppression) AppliesTo(v *SuppressionVariant) bool {
-	return s.Variant == nil || v == nil || *s.Variant == *v
+	if s.Variant == nil || v == nil {
+		return true
+	}
+	a, b := *s.Variant, *v
+	a.Tenancy, b.Tenancy = canonicalSuppressionTenancy(a.Tenancy), canonicalSuppressionTenancy(b.Tenancy)
+	return a == b
 }
 
 // RecommendationFilter parameterises ListStoredRecommendations and the
