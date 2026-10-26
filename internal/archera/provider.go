@@ -116,8 +116,8 @@ func (p *Provider) Format(s fmt.State, _ rune) {
 func (p *Provider) PlanID() string { return p.settings.PlanID }
 
 // Client returns the lazily built client. A failure is not cached: the next
-// call retries. A caller waiting on another caller's build returns ctx.Err()
-// when its own ctx ends.
+// call retries. A caller whose own ctx ends, while waiting for another build
+// or during its own, gets ctx.Err() rather than ErrKeyUnavailable.
 func (p *Provider) Client(ctx context.Context) (insurance.QuoteClient, error) {
 	if p == nil {
 		return nil, fmt.Errorf("%w: missing %v", ErrNotConfigured, Settings{}.Missing())
@@ -136,11 +136,28 @@ func (p *Provider) Client(ctx context.Context) (insurance.QuoteClient, error) {
 	if c := p.client.Load(); c != nil {
 		return c, nil
 	}
+	c, err := p.build(ctx)
+	if err != nil {
+		return nil, err
+	}
+	p.client.Store(c)
+	return c, nil
+}
+
+// build resolves the key and constructs the client. A secret lookup that fails
+// because the caller's ctx ended is returned as ctx.Err(), not a credential
+// fault. NewClient takes no ctx, so its failures are always ErrKeyUnavailable.
+func (p *Provider) build(ctx context.Context) (*insurance.Client, error) {
 	if p.resolver == nil {
 		return nil, ErrKeyUnavailable
 	}
 	key, err := p.resolver.GetSecret(ctx, p.settings.KeySecretRef)
 	if err != nil {
+		// Check ctx itself: some backends' errors do not wrap the ctx error.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			logging.Info("archera: client build abandoned: request context ended")
+			return nil, ctxErr
+		}
 		logging.Warn("archera: credential resolution failed")
 		return nil, ErrKeyUnavailable
 	}
@@ -149,7 +166,6 @@ func (p *Provider) Client(ctx context.Context) (insurance.QuoteClient, error) {
 		logging.Warn("archera: client initialization failed")
 		return nil, ErrKeyUnavailable
 	}
-	p.client.Store(c)
 	return c, nil
 }
 

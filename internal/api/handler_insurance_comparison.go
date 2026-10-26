@@ -16,6 +16,9 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/archera"
 )
 
+// insuranceTimeoutMessage is the 504 text for a request whose deadline ended.
+const insuranceTimeoutMessage = "Archera comparison timed out"
+
 // maxComparisonResponseBytes bounds the JSON returned to the browser. A larger
 // comparison fails loudly rather than dropping rows.
 const maxComparisonResponseBytes = 5 << 20
@@ -61,6 +64,9 @@ func (h *Handler) insuranceClient(ctx context.Context) (insurance.QuoteClient, e
 	if err != nil {
 		if errors.Is(err, archera.ErrNotConfigured) {
 			return nil, notConfiguredError(h.insurance.Status().Missing)
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, NewClientError(504, insuranceTimeoutMessage)
 		}
 		return nil, NewClientError(503, "Archera API key could not be resolved from "+archera.EnvKeySecret)
 	}

@@ -1,12 +1,15 @@
 package archera
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/stretchr/testify/require"
 )
 
@@ -131,4 +134,98 @@ func TestClient_ConcurrentCallersShareOneBuild(t *testing.T) {
 	for i := range got {
 		require.Same(t, got[0], got[i])
 	}
+}
+
+// ctxBlockedResolver parks until the caller's ctx ends, then returns the
+// ctx-wrapped error a real backend would.
+type ctxBlockedResolver struct {
+	flakyResolver
+	entered chan struct{}
+}
+
+func (r *ctxBlockedResolver) GetSecret(ctx context.Context, _ string) (string, error) {
+	r.calls.Add(1)
+	r.entered <- struct{}{}
+	<-ctx.Done()
+	return "", fmt.Errorf("synthetic backend: %w", ctx.Err())
+}
+
+func captureWarnings(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var logs bytes.Buffer
+	prevOut, prevLevel := logging.SetOutput(&logs), logging.GetLevel()
+	t.Cleanup(func() {
+		logging.SetOutput(prevOut)
+		logging.SetLevelValue(prevLevel)
+	})
+	logging.SetLevelValue(logging.LevelWarn)
+	return &logs
+}
+
+func TestClient_CancelDuringResolveReportsCancellationAndCachesNothing(t *testing.T) {
+	logs := captureWarnings(t)
+	r := &ctxBlockedResolver{entered: make(chan struct{}, 1)}
+	p := NewProvider(fullSettings(), r, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { _, err := p.Client(ctx); done <- err }()
+	<-r.entered
+	cancel()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+		require.NotErrorIs(t, err, ErrKeyUnavailable)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Client did not return after its ctx was canceled")
+	}
+	require.Empty(t, logs.String(), "a canceled build is not a credential failure")
+	require.Nil(t, p.client.Load())
+	require.Zero(t, len(p.sem))
+
+	p.resolver = &flakyResolver{}
+	c, err := p.Client(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, c)
+}
+
+// badKeyDoneCtxResolver returns an unusable key while the caller's ctx is
+// already done.
+type badKeyDoneCtxResolver struct {
+	flakyResolver
+	cancel context.CancelFunc
+}
+
+func (r *badKeyDoneCtxResolver) GetSecret(context.Context, string) (string, error) {
+	r.cancel()
+	return testKey + "\x01suffix", nil
+}
+
+func TestClient_ConstructionFailureUnderDoneCtxStaysKeyUnavailable(t *testing.T) {
+	logs := captureWarnings(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	p := NewProvider(fullSettings(), &badKeyDoneCtxResolver{cancel: cancel}, nil)
+	_, err := p.Client(ctx)
+	require.ErrorIs(t, err, ErrKeyUnavailable)
+	require.NotErrorIs(t, err, context.Canceled)
+	require.Contains(t, logs.String(), "archera: client initialization failed")
+	require.Nil(t, p.client.Load())
+}
+
+func TestClient_ResolverErrorWithLiveCtxStaysKeyUnavailable(t *testing.T) {
+	logs := captureWarnings(t)
+	p := NewProvider(fullSettings(), &flakyResolver{fails: 1}, nil)
+	_, err := p.Client(context.Background())
+	require.ErrorIs(t, err, ErrKeyUnavailable)
+	require.NotErrorIs(t, err, context.Canceled)
+	require.Contains(t, logs.String(), "archera: credential resolution failed")
+}
+
+type panickingResolver struct{ flakyResolver }
+
+func (*panickingResolver) GetSecret(context.Context, string) (string, error) { panic("synthetic") }
+
+func TestClient_PanicInResolverReleasesTheSlot(t *testing.T) {
+	p := NewProvider(fullSettings(), &panickingResolver{}, nil)
+	require.Panics(t, func() { _, _ = p.Client(context.Background()) })
+	require.Zero(t, len(p.sem), "a panic must not leak the build slot")
 }
