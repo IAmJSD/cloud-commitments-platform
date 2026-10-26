@@ -3798,7 +3798,17 @@ paths:
               schema:
                 $ref: '#/components/schemas/Group'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: >
+            Invalid request, or a permission change that would give a member
+            both a view-only and a write-capable group (for example adding a
+            write permission to a group whose members also belong to a
+            view-only group). The message names the group and how many
+            members conflict. Members who already held such a combination do
+            not block the update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
