@@ -12,12 +12,11 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/provider"
-	azureprovider "github.com/LeanerCloud/cloud-commitments-go/providers/azure"
-	gcpprovider "github.com/LeanerCloud/cloud-commitments-go/providers/gcp"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/execution"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/providerfactory"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
@@ -564,13 +563,12 @@ func (m *Manager) resolveAzureProvider(ctx context.Context, account config.Cloud
 			account.ID, time.Since(t0), err)
 		return nil, fmt.Errorf("credentials: resolve Azure for account %s (%s): %w", account.ID, account.Name, err)
 	}
-	azProv, err := azureprovider.NewAzureProvider(&provider.ProviderConfig{Profile: account.AzureSubscriptionID})
+	azProv, err := providerfactory.NewAzure(account.AzureSubscriptionID, azCred)
 	if err != nil {
 		logging.Errorf("purchase[resolveAzureProvider]: Azure provider construction failed for account=%s after %s: %v",
 			account.ID, time.Since(t0), err)
 		return nil, fmt.Errorf("credentials: create Azure provider for account %s (%s): %w", account.ID, account.Name, err)
 	}
-	azProv.SetCredential(azCred)
 	logging.Infof("purchase[resolveAzureProvider]: Azure credentials resolved for account=%s in %s",
 		account.ID, time.Since(t0))
 	return &provider.ProviderConfig{ProviderOverride: azProv}, nil
@@ -598,7 +596,12 @@ func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAc
 			account.ID, time.Since(t0))
 		return nil, nil
 	}
-	gcpProv := gcpprovider.NewProviderWithCredentials(ctx, account.GCPProjectID, gcpTS)
+	gcpProv, err := providerfactory.NewGCP(account.GCPProjectID, gcpTS)
+	if err != nil {
+		logging.Errorf("purchase[resolveGCPProvider]: GCP provider construction failed for account=%s after %s: %v",
+			account.ID, time.Since(t0), err)
+		return nil, fmt.Errorf("credentials: create GCP provider for account %s (%s): %w", account.ID, account.Name, err)
+	}
 	logging.Infof("purchase[resolveGCPProvider]: GCP credentials resolved for account=%s in %s",
 		account.ID, time.Since(t0))
 	return &provider.ProviderConfig{ProviderOverride: gcpProv}, nil
