@@ -11,7 +11,6 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
@@ -24,7 +23,7 @@ type adminUserUpdateAuth struct {
 	marketplaceAuthFixture
 }
 
-func (a *adminUserUpdateAuth) UpdateUserAPI(ctx context.Context, actorUserID, userID string, req any) (any, error) {
+func (a *adminUserUpdateAuth) UpdateUserAPI(ctx context.Context, actorUserID, userID string, req auth.APIUpdateUserRequest) (*auth.APIUser, error) {
 	return a.service.UpdateUserAPI(ctx, actorUserID, userID, req)
 }
 
@@ -49,10 +48,7 @@ func (s *afterReadStore) GetUserByID(ctx context.Context, id string) (*auth.User
 // columns it never meant to change.
 func TestAdminUpdateUserHTTPKeepsConcurrentMFA(t *testing.T) {
 	ctx := t.Context()
-	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 	authStore := auth.NewPostgresStore(pg.DB)
 	csrfKey := []byte(strings.Repeat("u", 32))
 	view := []auth.Permission{{Action: auth.ActionView, Resource: "recommendations"}}

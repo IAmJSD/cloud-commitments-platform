@@ -19,7 +19,7 @@ func TestSetSecurityHeaders(t *testing.T) {
 	assert.Equal(t, "DENY", headers["X-Frame-Options"], "X-Frame-Options should be DENY")
 	// X-XSS-Protection has been removed: it is deprecated and a no-op in modern browsers
 	assert.Empty(t, headers["X-XSS-Protection"], "X-XSS-Protection should not be set")
-	assert.Equal(t, "max-age=31536000; includeSubDomains", headers["Strict-Transport-Security"], "HSTS should be set with 1 year max-age")
+	assert.Equal(t, "max-age=31536000; includeSubDomains; preload", headers["Strict-Transport-Security"], "HSTS should be set with 1 year max-age")
 	assert.Equal(t, "strict-origin-when-cross-origin", headers["Referrer-Policy"], "Referrer-Policy should be strict-origin-when-cross-origin")
 	assert.Equal(t, "default-src 'none'; frame-ancestors 'none'", headers["Content-Security-Policy"], "CSP should be restrictive")
 	assert.Equal(t, "geolocation=(), microphone=(), camera=()", headers["Permissions-Policy"], "Permissions-Policy should disable browser features")
@@ -62,7 +62,7 @@ func TestHandleRequest_SecurityHeaders(t *testing.T) {
 	assert.Equal(t, "DENY", resp.Headers["X-Frame-Options"])
 	// X-XSS-Protection has been removed: deprecated and no-op in modern browsers
 	assert.Empty(t, resp.Headers["X-XSS-Protection"])
-	assert.Equal(t, "max-age=31536000; includeSubDomains", resp.Headers["Strict-Transport-Security"])
+	assert.Equal(t, "max-age=31536000; includeSubDomains; preload", resp.Headers["Strict-Transport-Security"])
 	assert.Equal(t, "strict-origin-when-cross-origin", resp.Headers["Referrer-Policy"])
 	assert.Equal(t, "default-src 'none'; frame-ancestors 'none'", resp.Headers["Content-Security-Policy"])
 	assert.Equal(t, "geolocation=(), microphone=(), camera=()", resp.Headers["Permissions-Policy"])
@@ -90,7 +90,7 @@ func TestHandleRequest_SecurityHeaders_OPTIONS(t *testing.T) {
 	// Verify security headers are present in OPTIONS response
 	assert.Equal(t, "nosniff", resp.Headers["X-Content-Type-Options"])
 	assert.Equal(t, "DENY", resp.Headers["X-Frame-Options"])
-	assert.Equal(t, "max-age=31536000; includeSubDomains", resp.Headers["Strict-Transport-Security"])
+	assert.Equal(t, "max-age=31536000; includeSubDomains; preload", resp.Headers["Strict-Transport-Security"])
 }
 
 // TestHandleRequest_SecurityHeaders_ErrorResponse verifies error responses include security headers.
@@ -117,7 +117,7 @@ func TestHandleRequest_SecurityHeaders_ErrorResponse(t *testing.T) {
 	// Verify security headers are present even in error responses
 	assert.Equal(t, "nosniff", resp.Headers["X-Content-Type-Options"])
 	assert.Equal(t, "DENY", resp.Headers["X-Frame-Options"])
-	assert.Equal(t, "max-age=31536000; includeSubDomains", resp.Headers["Strict-Transport-Security"])
+	assert.Equal(t, "max-age=31536000; includeSubDomains; preload", resp.Headers["Strict-Transport-Security"])
 	assert.Equal(t, "default-src 'none'; frame-ancestors 'none'", resp.Headers["Content-Security-Policy"])
 	assert.Equal(t, "geolocation=(), microphone=(), camera=()", resp.Headers["Permissions-Policy"])
 }
@@ -154,7 +154,7 @@ func TestServeDocsUI_RelaxedCSP(t *testing.T) {
 	// Other security headers stay strict.
 	assert.Equal(t, "nosniff", resp.Headers["X-Content-Type-Options"])
 	assert.Equal(t, "DENY", resp.Headers["X-Frame-Options"])
-	assert.Equal(t, "max-age=31536000; includeSubDomains", resp.Headers["Strict-Transport-Security"])
+	assert.Equal(t, "max-age=31536000; includeSubDomains; preload", resp.Headers["Strict-Transport-Security"])
 }
 
 func TestDocsHandler_HEAD_ReturnsHeaders(t *testing.T) {
@@ -331,5 +331,5 @@ func TestHandleRequest_SecurityHeaders_RequestTooLarge(t *testing.T) {
 
 	// Verify security headers are present in 413 response
 	assert.Equal(t, "nosniff", resp.Headers["X-Content-Type-Options"])
-	assert.Equal(t, "max-age=31536000; includeSubDomains", resp.Headers["Strict-Transport-Security"])
+	assert.Equal(t, "max-age=31536000; includeSubDomains; preload", resp.Headers["Strict-Transport-Security"])
 }

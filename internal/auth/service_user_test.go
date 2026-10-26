@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
 )
 
 func TestService_SetupAdmin(t *testing.T) {
@@ -633,6 +632,8 @@ func TestService_UpdateUser(t *testing.T) {
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(existingUser, nil).Once()
+		// Two view-only groups: a consistent combination (issue #78).
+		stubViewOnlyGroups(ctx, mockStore, "group-2", "group-3")
 		mockStore.On("UpdateUserAdminFields", ctx, mock.AnythingOfType("*auth.User"), mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 		req := UpdateUserRequest{
@@ -1045,6 +1046,8 @@ func TestService_CreateUser_EdgeCases(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		mockStore.On("GetUserByEmail", ctx, "newuser@example.com").Return(nil, nil).Once()
+		// Two view-only groups: a consistent combination (issue #78).
+		stubViewOnlyGroups(ctx, mockStore, "group-1", "group-2")
 		mockStore.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
 
 		req := CreateUserRequest{
@@ -1191,18 +1194,19 @@ func TestService_SetupAdmin_EdgeCases(t *testing.T) {
 // Test TOTP functions.
 func TestService_UpdateUserProfile(t *testing.T) {
 	ctx := context.Background()
+	// Hashed once at MinCost: the subtests only need a hash that
+	// verifyPassword accepts, not the production work factor.
+	oldHash := TestPasswordHash(t, "OldPassword123")
 
 	t.Run("update email and password successfully", func(t *testing.T) {
 		mockStore := new(MockStore)
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		// Create user with bcrypt hash for UpdateUserProfile test
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 			CreatedAt:    time.Now(),
 		}
@@ -1224,11 +1228,10 @@ func TestService_UpdateUserProfile(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 		}
 
@@ -1252,11 +1255,10 @@ func TestService_UpdateUserProfile(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 		}
 		otherUser := &User{
@@ -1280,11 +1282,10 @@ func TestService_UpdateUserProfile(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 		}
 
@@ -1302,11 +1303,10 @@ func TestService_UpdateUserProfile(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 		}
 
@@ -1337,11 +1337,10 @@ func TestService_UpdateUserProfile(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 		}
 

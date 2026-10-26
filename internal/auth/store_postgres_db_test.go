@@ -5,10 +5,11 @@ package auth
 
 // store_postgres_db_test.go - DB-backed integration tests for the
 // security-critical PostgresStore bootstrap paths (TEST-01, issue #1153).
-// These run the real SQL against a migrated PostgreSQL testcontainer,
+// These run the real SQL against a migrated PostgreSQL database,
 // proving the 19-column bootstrap INSERT, the NOT EXISTS guard and its
 // agreement with AdminExists (active-membership semantics), and the
-// insert-once guarantee under two concurrent CreateAdminIfNone calls.
+// insert-once guarantee under concurrent CreateAdminIfNone calls (two
+// callers, and a 50-caller stress variant).
 
 import (
 	"context"
@@ -19,7 +20,6 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,29 +31,24 @@ func getAuthTestMigrationsPath() string {
 	return filepath.Join(filepath.Dir(filename), "..", "database", "postgres", "migrations")
 }
 
-// setupAuthTestDB starts a PostgreSQL container and runs all migrations
-// without seeding a bootstrap admin (empty adminEmail), so tests start from
-// the "fresh deployment, no admin yet" state CreateAdminIfNone exists for.
+// setupAuthTestDB gives the test a fresh database of its own, with every
+// migration applied, on the PostgreSQL server this package's integration tests
+// share (issue #982). No bootstrap admin is seeded (the template is migrated
+// with an empty adminEmail), so tests start from the "fresh deployment, no
+// admin yet" state CreateAdminIfNone exists for. The database is dropped when
+// the test ends.
+//
+// A migration that will not apply fails the test rather than skipping it: it
+// is a broken schema, and skipping would report the suite green on exactly the
+// defect it exists to catch (issue #1597). RequireMigratedDatabase skips only
+// when Docker itself is unusable.
 func setupAuthTestDB(t *testing.T) *database.Connection {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() {
-		container.Cleanup(context.Background())
-	})
-
-	// Migrating is the thing under test here, not a precondition of it: a
-	// migration that will not apply is a broken schema, and skipping on it would
-	// report the whole suite green on exactly the defect it exists to catch
-	// (issue #1597).
-	require.NoError(t,
-		migrations.RunMigrations(ctx, container.DB.Pool(), getAuthTestMigrationsPath(), "", ""),
-		"migrations failed to apply to a fresh database")
-
-	return container.DB
+	return testhelpers.RequireMigratedDatabase(ctx, t, getAuthTestMigrationsPath()).DB
 }
 
 // resetUsers wipes the users table between scenarios. TRUNCATE is used
@@ -165,48 +160,87 @@ func TestIntegration_CreateAdminIfNone_Bootstrap(t *testing.T) {
 // TestIntegration_CreateAdminIfNone_ConcurrentBootstrapOnce proves the
 // insert-once semantics under two concurrent CreateAdminIfNone calls: exactly
 // one caller wins and exactly one admin row exists afterwards, across
-// repeated barrier-synchronized attempts.
+// repeated barrier-synchronized attempts. Two callers is the production case
+// (two operators bootstrapping at once) and keeps this the cheap fast path.
 func TestIntegration_CreateAdminIfNone_ConcurrentBootstrapOnce(t *testing.T) {
-	db := setupAuthTestDB(t)
-	store := NewPostgresStore(db)
-	ctx := context.Background()
+	requireConcurrentBootstrapOnce(t, setupAuthTestDB(t), 2, 25)
+}
 
-	const iterations = 25
+// TestIntegration_CreateAdminIfNone_ConcurrentBootstrapOnce_Stress is the
+// high-fanout variant (issue #64): 50 barrier-synchronized callers per
+// iteration. Fifty callers queue on the test pool's 10 connections as well as
+// on the bootstrap advisory lock, so a change that weakens the lock (dropping
+// it, or switching to pg_try_advisory_xact_lock and ignoring the result) shows
+// up as several winners in a round rather than depending on two callers
+// happening to interleave, and the test shows the lock holds when every pool
+// connection is taken by a contender.
+func TestIntegration_CreateAdminIfNone_ConcurrentBootstrapOnce_Stress(t *testing.T) {
+	requireConcurrentBootstrapOnce(t, setupAuthTestDB(t), 50, 10)
+}
+
+// bootstrapOutcome is what each concurrent CreateAdminIfNone caller reports
+// back to the test goroutine. Workers only send these; every assertion runs on
+// the test goroutine.
+type bootstrapOutcome struct {
+	created bool
+	err     error
+}
+
+// requireConcurrentBootstrapOnce runs iterations rounds of callers concurrent
+// CreateAdminIfNone calls, released together by a barrier against an empty
+// users table, and requires exactly one winner, no errors, and exactly one
+// admin row after each round.
+func requireConcurrentBootstrapOnce(t *testing.T, db *database.Connection, callers, iterations int) {
+	t.Helper()
+
+	store := NewPostgresStore(db)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 
 	for i := 0; i < iterations; i++ {
 		resetUsers(t, db)
 
-		type outcome struct {
-			created bool
-			err     error
-		}
-		results := make(chan outcome, 2)
-		start := make(chan struct{})
-
-		for n := 0; n < 2; n++ {
-			user := newBootstrapCandidate(fmt.Sprintf("admin-%d-%d@example.com", i, n))
-			go func(u *User) {
-				<-start
-				created, err := store.CreateAdminIfNone(ctx, u)
-				results <- outcome{created: created, err: err}
-			}(user)
-		}
-		close(start)
+		outcomes := runBootstrapRound(ctx, store, callers, i)
 
 		winners := 0
-		for n := 0; n < 2; n++ {
-			r := <-results
-			require.NoError(t, r.err, "iteration %d", i)
+		for n, r := range outcomes {
+			require.NoError(t, r.err, "iteration %d, caller %d", i, n)
 			if r.created {
 				winners++
 			}
 		}
 		require.Equal(t, 1, winners,
-			"iteration %d: exactly one of two concurrent bootstrap calls must win", i)
+			"iteration %d: exactly one of %d concurrent bootstrap calls must win", i, callers)
 
 		count, err := store.CountGroupMembers(ctx, DefaultAdminGroupID)
 		require.NoError(t, err)
 		require.Equal(t, 1, count,
-			"iteration %d: exactly one admin row must exist after concurrent bootstrap", i)
+			"iteration %d: exactly one admin row must exist after %d concurrent bootstrap calls", i, callers)
 	}
+}
+
+// runBootstrapRound starts callers goroutines that each wait on a shared
+// barrier and then call CreateAdminIfNone with a distinct email, and returns
+// every caller's outcome once all of them have finished. Collecting all of
+// them before asserting means no worker is still using the pool when the test
+// fails and its cleanup closes the connection.
+func runBootstrapRound(ctx context.Context, store *PostgresStore, callers, iteration int) []bootstrapOutcome {
+	results := make(chan bootstrapOutcome, callers)
+	start := make(chan struct{})
+
+	for n := 0; n < callers; n++ {
+		user := newBootstrapCandidate(fmt.Sprintf("admin-%d-%d@example.com", iteration, n))
+		go func(u *User) {
+			<-start
+			created, err := store.CreateAdminIfNone(ctx, u)
+			results <- bootstrapOutcome{created: created, err: err}
+		}(user)
+	}
+	close(start)
+
+	outcomes := make([]bootstrapOutcome, 0, callers)
+	for n := 0; n < callers; n++ {
+		outcomes = append(outcomes, <-results)
+	}
+	return outcomes
 }

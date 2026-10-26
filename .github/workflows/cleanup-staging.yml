@@ -350,10 +350,10 @@ jobs:
     # GCP: the WIF provider keys on assertion.repository_owner_id,
     # assertion.repository_id and assertion.ref (gcp/ci-cd-permissions/
     # github_oidc.tf), and the impersonation binding is on
-    # attribute.repository_id -- nothing reads the subject. So this
-    # binding does NOT affect whether the token mints; it is here for parity
-    # and so protection rules can apply once they exist. GCP therefore stays
-    # main-only via assertion.ref regardless.
+    # attribute.repository_id_ref (repo id + ref) -- nothing reads the
+    # subject. So this binding does NOT affect whether the token mints; it
+    # is here for parity and so protection rules can apply once they exist.
+    # GCP therefore stays main-only via assertion.ref regardless.
     environment: staging
     env:
       GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}

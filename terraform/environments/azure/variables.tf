@@ -206,13 +206,13 @@ variable "credential_encryption_key" {
 # ==============================================
 
 variable "postgres_version" {
-  description = "PostgreSQL version"
+  description = "PostgreSQL major version. The migrations need 15 or later (UNIQUE NULLS NOT DISTINCT, #1233)."
   type        = string
   default     = "16"
 
   validation {
-    condition     = contains(["11", "12", "13", "14", "15", "16"], var.postgres_version)
-    error_message = "PostgreSQL version must be 11, 12, 13, 14, 15, or 16."
+    condition     = contains(["15", "16"], var.postgres_version)
+    error_message = "PostgreSQL version must be 15 or 16: the migrations use PostgreSQL 15+ features (UNIQUE NULLS NOT DISTINCT)."
   }
 }
 
@@ -397,7 +397,7 @@ variable "additional_env_vars" {
 }
 
 variable "enable_scheduled_tasks" {
-  description = "Enable scheduled tasks via Logic Apps"
+  description = "Enable scheduled tasks (Logic Apps on Container Apps; on AKS, the collect_recommendations CronJob)"
   type        = bool
   default     = true
 }
@@ -408,14 +408,15 @@ variable "recommendation_schedule" {
     hour field is parsed (the Azure module converts it to Logic Apps
     frequency=Day + interval=1 + startTime=<hour>:00). Sub-daily,
     day-of-week, and day-of-month patterns are silently ignored;
-    use daily-at-hour-N values only.
+    use daily-at-hour-N values only. On AKS the full expression is
+    the collect_recommendations CronJob schedule.
   EOT
   type        = string
   default     = "0 2 * * *" # Daily at 02:00 UTC
 }
 
 variable "enable_ri_exchange_schedule" {
-  description = "Enable scheduled RI exchange automation via Logic Apps"
+  description = "Enable scheduled RI exchange automation (a Logic App on Container Apps, a CronJob on AKS)"
   type        = bool
   default     = false
 }

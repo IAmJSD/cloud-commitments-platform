@@ -2,10 +2,11 @@ package api
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -166,29 +167,66 @@ func TestSetSecurityHeaders_AllHeaders(t *testing.T) {
 	assert.Contains(t, result["Cache-Control"], "no-store")
 }
 
-// Tests for router handlers that are wrappers
+// Tests for router handlers that are wrappers.
+//
+// Each subtest pins two things (issue #116):
+//   - the collaborator call: mocks come from strictAuthMock (or register an
+//     equivalent t.Cleanup), so an expectation the handler stops consuming
+//     fails the subtest, and expectations match the exact forwarded
+//     arguments rather than mock.Anything where the handler builds them;
+//   - the response: the returned value is compared with what the handler must
+//     produce, not merely checked for non-nil. Fixtures are built by a func so
+//     the expected value is a fresh copy: comparing against the very pointer
+//     or map handed to the mock would also pass if the handler mutated it in
+//     place (say, cleared LoginResponse.Token).
+//
+// grantAdmin registrations are .Maybe() by design: they model the caller's
+// permission state for handlers that consult it, not a call the handler is
+// required to make, so AssertExpectations does not demand them. Session-only
+// handlers (getCurrentUser, updateProfile, changePassword) consult no
+// permission and do not call grantAdmin.
+
+// strictAuthMock returns a MockAuthService whose non-.Maybe() expectations
+// must all have been consumed when the subtest ends.
+func strictAuthMock(t *testing.T) *MockAuthService {
+	t.Helper()
+	m := new(MockAuthService)
+	t.Cleanup(func() { m.AssertExpectations(t) })
+	return m
+}
 
 func TestRouter_Handlers_Coverage(t *testing.T) {
 	ctx := context.Background()
+	const testID = "11111111-1111-1111-1111-111111111111"
 
 	t.Run("loginHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
-		mockAuth.On("Login", ctx, mock.Anything).Return(&LoginResponse{Token: "tok"}, nil)
+		mockAuth := strictAuthMock(t)
+		want := func() *LoginResponse {
+			return &LoginResponse{
+				Token:     "tok",
+				ExpiresAt: "2026-01-01T00:00:00Z",
+				User:      &UserInfo{ID: "user-1", Email: "test@example.com"},
+				CSRFToken: "csrf-tok",
+			}
+		}
+		// The handler must forward the email and the DECODED password.
+		mockAuth.On("Login", ctx, LoginRequest{Email: "test@example.com", Password: "pass123"}).Return(want(), nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
-			Body: `{"email": "test@example.com", "password": "pass"}`,
+			Body: `{"email": "test@example.com", "password": "` + b64("pass123") + `"}`,
 		}
 
 		result, err := router.loginHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, want(), result)
 	})
 
 	t.Run("logoutHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
+		// Required: a logout that skips auth.Logout leaves the session live.
 		mockAuth.On("Logout", ctx, "test-token").Return(nil)
 
 		h := &Handler{auth: mockAuth}
@@ -200,14 +238,18 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 		result, err := router.logoutHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, map[string]string{"status": "logged out"}, result)
 	})
 
 	t.Run("getCurrentUserHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
-		mockAuth.grantAdmin()
-		mockAuth.On("GetUser", ctx, "user-1").Return(&User{ID: "user-1", Email: "test@example.com"}, nil)
+		mockAuth.On("GetUser", ctx, "user-1").Return(&User{
+			ID:         "user-1",
+			Email:      "test@example.com",
+			Groups:     []string{"group-1"},
+			MFAEnabled: true,
+		}, nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
@@ -218,11 +260,16 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 		result, err := router.getCurrentUserHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, &CurrentUserResponse{
+			ID:         "user-1",
+			Email:      "test@example.com",
+			Groups:     []string{"group-1"},
+			MFAEnabled: true,
+		}, result)
 	})
 
 	t.Run("checkAdminExistsHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("CheckAdminExists", ctx).Return(true, nil)
 
 		h := &Handler{auth: mockAuth}
@@ -230,30 +277,35 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 		result, err := router.checkAdminExistsHandler(ctx, nil, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, &AdminExistsResponse{AdminExists: true}, result)
 	})
 
 	t.Run("setupAdminHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
-		mockAuth.On("SetupAdmin", ctx, mock.Anything).Return(&LoginResponse{Token: "admin-tok"}, nil)
+		mockAuth := strictAuthMock(t)
+		want := func() *LoginResponse {
+			return &LoginResponse{Token: "admin-tok", User: &UserInfo{ID: "admin-1", Email: "admin@example.com"}}
+		}
+		// Password must be base64-encoded, exactly as the frontend encodes it
+		// (issue #224) - setupAdmin decodes it before forwarding to auth.
+		mockAuth.On("SetupAdmin", ctx, SetupAdminRequest{Email: "admin@example.com", Password: "pass123"}).Return(want(), nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
 
-		// Password must be base64-encoded, exactly as the frontend encodes it
-		// (issue #224) - setupAdmin decodes it before forwarding to auth.
-		encodedPassword := base64.StdEncoding.EncodeToString([]byte("pass123"))
 		req := &events.LambdaFunctionURLRequest{
-			Body: `{"email": "admin@example.com", "password": "` + encodedPassword + `"}`,
+			Body: `{"email": "admin@example.com", "password": "` + b64("pass123") + `"}`,
 		}
 
 		result, err := router.setupAdminHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, want(), result)
 	})
 
 	t.Run("forgotPasswordHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
+		// The response is identical whether or not a reset was requested (no
+		// email enumeration), so the expectation is the only thing proving the
+		// handler actually asked for one.
 		mockAuth.On("RequestPasswordReset", ctx, "test@example.com").Return(nil)
 
 		h := &Handler{auth: mockAuth}
@@ -265,30 +317,30 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 		result, err := router.forgotPasswordHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, map[string]string{"status": "if the email exists, a reset link has been sent"}, result)
 	})
 
 	t.Run("resetPasswordHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
-		mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).Return(nil)
+		mockAuth := strictAuthMock(t)
+		// The token and the DECODED new password must reach the service (#356).
+		mockAuth.On("ConfirmPasswordReset", ctx, PasswordResetConfirm{Token: "reset-token", NewPassword: "newpass"}).Return(nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
-			Body: `{"token": "reset-token", "password": "newpass"}`,
+			Body: `{"token": "reset-token", "new_password": "` + b64("newpass") + `"}`,
 		}
 
 		result, err := router.resetPasswordHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, map[string]string{"status": "password reset successful"}, result)
 	})
 
 	t.Run("updateProfileHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
-		mockAuth.grantAdmin()
-		mockAuth.On("UpdateUserProfile", ctx, "user-1", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+		mockAuth.On("UpdateUserProfile", ctx, "user-1", "newemail@example.com", "", "").Return(nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
@@ -300,15 +352,12 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 		result, err := router.updateProfileHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, map[string]string{"status": "profile updated"}, result)
 	})
 
 	t.Run("changePasswordHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
-		mockAuth.grantAdmin()
-		// Passwords need to be base64 encoded
-		// "oldpass" -> "b2xkcGFzcw==", "newpass" -> "bmV3cGFzcw=="
 		mockAuth.On("ChangePasswordAPI", ctx, "user-1", "oldpass", "newpass").Return(nil)
 
 		h := &Handler{auth: mockAuth}
@@ -316,19 +365,20 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 		req := &events.LambdaFunctionURLRequest{
 			Headers: map[string]string{"Authorization": "Bearer test-token"},
-			Body:    `{"current_password": "b2xkcGFzcw==", "new_password": "bmV3cGFzcw=="}`,
+			Body:    `{"current_password": "` + b64("oldpass") + `", "new_password": "` + b64("newpass") + `"}`,
 		}
 
 		result, err := router.changePasswordHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, map[string]string{"status": "password changed"}, result)
 	})
 
 	t.Run("listAPIKeysHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
 		mockAuth.grantAdmin()
-		mockAuth.On("ListUserAPIKeysAPI", ctx, "user-1").Return([]interface{}{}, nil)
+		keys := func() []interface{} { return []interface{}{map[string]string{"id": "key-1", "name": "My Key"}} }
+		mockAuth.On("ListUserAPIKeysAPI", ctx, "user-1").Return(keys(), nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
@@ -339,33 +389,34 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 		result, err := router.listAPIKeysHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, keys(), result)
 	})
 
 	t.Run("createAPIKeyHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
 		mockAuth.grantAdmin()
-		mockAuth.On("CreateAPIKeyAPI", ctx, "user-1", mock.Anything).Return(map[string]string{"key_id": "key-1"}, nil)
+		created := func() map[string]string { return map[string]string{"key_id": "key-1"} }
+		mockAuth.On("CreateAPIKeyAPI", ctx, "user-1", auth.APICreateAPIKeyRequest{Name: "My Key", Password: "pass123"}).Return(created(), nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
 			Headers: map[string]string{"Authorization": "Bearer test-token"},
-			Body:    `{"name": "My Key"}`,
+			Body:    `{"name": "My Key", "password": "` + b64("pass123") + `"}`,
 		}
 
 		result, err := router.createAPIKeyHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, created(), result)
 	})
 
 	t.Run("deleteAPIKeyHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
 		mockAuth.grantAdmin()
-		mockAuth.On("DeleteAPIKeyAPI", ctx, "user-1", "11111111-1111-1111-1111-111111111111").Return(nil)
+		mockAuth.On("DeleteAPIKeyAPI", ctx, "user-1", testID).Return(nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
@@ -374,21 +425,21 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 			Headers: map[string]string{"Authorization": "Bearer test-token"},
 			RequestContext: events.LambdaFunctionURLRequestContext{
 				HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
-					Path: "/api/api-keys/11111111-1111-1111-1111-111111111111",
+					Path: "/api/api-keys/" + testID,
 				},
 			},
 		}
 
 		result, err := router.deleteAPIKeyHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, map[string]string{"status": "deleted"}, result)
 	})
 
 	t.Run("revokeAPIKeyHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
 		mockAuth.grantAdmin()
-		mockAuth.On("RevokeAPIKeyAPI", ctx, "user-1", "11111111-1111-1111-1111-111111111111").Return(nil)
+		mockAuth.On("RevokeAPIKeyAPI", ctx, "user-1", testID).Return(nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
@@ -397,21 +448,22 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 			Headers: map[string]string{"Authorization": "Bearer test-token"},
 			RequestContext: events.LambdaFunctionURLRequestContext{
 				HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
-					Path: "/api/api-keys/11111111-1111-1111-1111-111111111111/revoke",
+					Path: "/api/api-keys/" + testID + "/revoke",
 				},
 			},
 		}
 
 		result, err := router.revokeAPIKeyHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, map[string]string{"status": "revoked"}, result)
 	})
 
 	t.Run("listUsersHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
 		mockAuth.grantAdmin()
-		mockAuth.On("ListUsersAPI", ctx).Return([]interface{}{}, nil)
+		users := func() []interface{} { return []interface{}{map[string]string{"id": "user-1"}} }
+		mockAuth.On("ListUsersAPI", ctx).Return(users(), nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
@@ -422,34 +474,44 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 		result, err := router.listUsersHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, map[string]any{"users": users()}, result)
 	})
 
 	t.Run("createUserHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
 		mockAuth.grantAdmin()
-		mockAuth.On("CreateUserAPI", ctx, mock.Anything, mock.Anything).Return(map[string]string{"id": "new-user"}, nil)
+		const groupID = "00000000-0000-5000-8000-000000000005"
+		created := func() *auth.APICreateUserResponse {
+			return &auth.APICreateUserResponse{APIUser: &auth.APIUser{ID: "new-user"}}
+		}
+		// The actor is the session user (grant ceiling, #226) and the password
+		// arrives decoded.
+		mockAuth.On("CreateUserAPI", ctx, "admin", auth.APICreateUserRequest{
+			Email:    "newuser@example.com",
+			Password: "pass123",
+			Groups:   []string{groupID},
+		}).Return(created(), nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
 
-		// Password needs to be base64 encoded: "pass123" -> "cGFzczEyMw=="
 		req := &events.LambdaFunctionURLRequest{
 			Headers: map[string]string{"Authorization": "Bearer admin-token"},
-			Body:    `{"email": "newuser@example.com", "password": "cGFzczEyMw==", "groups": ["00000000-0000-5000-8000-000000000005"]}`,
+			Body:    `{"email": "newuser@example.com", "password": "` + b64("pass123") + `", "groups": ["` + groupID + `"]}`,
 		}
 
 		result, err := router.createUserHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, created(), result)
 	})
 
 	t.Run("getUserHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
 		mockAuth.grantAdmin()
-		mockAuth.On("GetUser", ctx, "11111111-1111-1111-1111-111111111111").Return(&User{ID: "11111111-1111-1111-1111-111111111111"}, nil)
+		user := func() *User { return &User{ID: testID, Email: "user@example.com"} }
+		mockAuth.On("GetUser", ctx, testID).Return(user(), nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
@@ -457,18 +519,19 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		req := &events.LambdaFunctionURLRequest{
 			Headers: map[string]string{"Authorization": "Bearer admin-token"},
 		}
-		params := map[string]string{"id": "11111111-1111-1111-1111-111111111111"}
+		params := map[string]string{"id": testID}
 
 		result, err := router.getUserHandler(ctx, req, params)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, user(), result)
 	})
 
 	t.Run("updateUserHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
 		mockAuth.grantAdmin()
-		mockAuth.On("UpdateUserAPI", ctx, "admin", "11111111-1111-1111-1111-111111111111", mock.Anything).Return(map[string]string{}, nil)
+		updated := func() *auth.APIUser { return &auth.APIUser{ID: testID, Email: "updated@example.com"} }
+		mockAuth.On("UpdateUserAPI", ctx, "admin", testID, auth.APIUpdateUserRequest{Email: "updated@example.com"}).Return(updated(), nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
@@ -477,18 +540,19 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 			Headers: map[string]string{"Authorization": "Bearer admin-token"},
 			Body:    `{"email": "updated@example.com"}`,
 		}
-		params := map[string]string{"id": "11111111-1111-1111-1111-111111111111"}
+		params := map[string]string{"id": testID}
 
 		result, err := router.updateUserHandler(ctx, req, params)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, updated(), result)
 	})
 
 	t.Run("listGroupsHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
 		mockAuth.grantAdmin()
-		mockAuth.On("ListGroupsAPI", ctx).Return([]interface{}{}, nil)
+		groups := func() []interface{} { return []interface{}{map[string]string{"id": "group-1"}} }
+		mockAuth.On("ListGroupsAPI", ctx).Return(groups(), nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
@@ -499,14 +563,15 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 		result, err := router.listGroupsHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, map[string]any{"groups": groups()}, result)
 	})
 
 	t.Run("createGroupHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
 		mockAuth.grantAdmin()
-		mockAuth.On("CreateGroupAPI", ctx, "admin", mock.Anything).Return(map[string]string{"id": "new-group"}, nil)
+		created := func() *auth.APIGroup { return &auth.APIGroup{ID: "new-group"} }
+		mockAuth.On("CreateGroupAPI", ctx, "admin", auth.APICreateGroupRequest{Name: "New Group"}).Return(created(), nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
@@ -518,14 +583,15 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 		result, err := router.createGroupHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, created(), result)
 	})
 
 	t.Run("getGroupHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
 		mockAuth.grantAdmin()
-		mockAuth.On("GetGroupAPI", ctx, "11111111-1111-1111-1111-111111111111").Return(map[string]interface{}{"id": "11111111-1111-1111-1111-111111111111"}, nil)
+		group := func() map[string]interface{} { return map[string]interface{}{"id": testID, "name": "Group"} }
+		mockAuth.On("GetGroupAPI", ctx, testID).Return(group(), nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
@@ -533,18 +599,19 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		req := &events.LambdaFunctionURLRequest{
 			Headers: map[string]string{"Authorization": "Bearer admin-token"},
 		}
-		params := map[string]string{"id": "11111111-1111-1111-1111-111111111111"}
+		params := map[string]string{"id": testID}
 
 		result, err := router.getGroupHandler(ctx, req, params)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, group(), result)
 	})
 
 	t.Run("updateGroupHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
 		mockAuth.grantAdmin()
-		mockAuth.On("UpdateGroupAPI", ctx, "admin", "11111111-1111-1111-1111-111111111111", mock.Anything).Return(map[string]string{}, nil)
+		updated := func() *auth.APIGroup { return &auth.APIGroup{ID: testID, Name: "Updated Group"} }
+		mockAuth.On("UpdateGroupAPI", ctx, "admin", testID, auth.APIUpdateGroupRequest{Name: "Updated Group"}).Return(updated(), nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
@@ -553,18 +620,18 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 			Headers: map[string]string{"Authorization": "Bearer admin-token"},
 			Body:    `{"name": "Updated Group"}`,
 		}
-		params := map[string]string{"id": "11111111-1111-1111-1111-111111111111"}
+		params := map[string]string{"id": testID}
 
 		result, err := router.updateGroupHandler(ctx, req, params)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, updated(), result)
 	})
 
 	t.Run("deleteGroupHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{UserID: "admin"}, nil)
 		mockAuth.grantAdmin()
-		mockAuth.On("DeleteGroup", ctx, "11111111-1111-1111-1111-111111111111").Return(nil)
+		mockAuth.On("DeleteGroup", ctx, testID).Return(nil)
 
 		h := &Handler{auth: mockAuth}
 		router := NewRouter(h)
@@ -572,15 +639,15 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		req := &events.LambdaFunctionURLRequest{
 			Headers: map[string]string{"Authorization": "Bearer admin-token"},
 		}
-		params := map[string]string{"id": "11111111-1111-1111-1111-111111111111"}
+		params := map[string]string{"id": testID}
 
 		result, err := router.deleteGroupHandler(ctx, req, params)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, map[string]string{"status": "group deleted"}, result)
 	})
 
 	t.Run("getPublicInfoHandler", func(t *testing.T) {
-		mockAuth := new(MockAuthService)
+		mockAuth := strictAuthMock(t)
 		mockAuth.On("CheckAdminExists", ctx).Return(true, nil)
 
 		h := &Handler{auth: mockAuth}
@@ -596,38 +663,76 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 		result, err := router.getPublicInfoHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, &PublicInfoResponse{Version: "1.0.0", AdminExists: true}, result)
 	})
 
 	t.Run("getHistoryAnalyticsHandler", func(t *testing.T) {
 		mockAuth, req := adminAnalyticsReq(ctx)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockClient := new(MockAnalyticsClient)
-		mockClient.On("QueryHistory", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return([]HistoryDataPoint{}, (*HistorySummary)(nil), nil)
+		t.Cleanup(func() { mockClient.AssertExpectations(t) })
+		points := func() []HistoryDataPoint {
+			return []HistoryDataPoint{{
+				Timestamp:     time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+				TotalSavings:  100,
+				PurchaseCount: 2,
+			}}
+		}
+		summary := func() *HistorySummary { return &HistorySummary{TotalPurchases: 2, TotalCompleted: 2} }
+		// No account_id: an unrestricted caller aggregates every account (nil
+		// filters), no provider filter, and the default "hourly" interval.
+		mockClient.On("QueryHistory", ctx, []string(nil), map[string][]string(nil), "", mock.Anything, mock.Anything, "hourly").
+			Return(points(), summary(), nil)
 
 		h := &Handler{auth: mockAuth, analyticsClient: mockClient}
 		router := NewRouter(h)
 
 		result, err := router.getHistoryAnalyticsHandler(ctx, req, map[string]string{})
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		resp, ok := result.(*AnalyticsResponse)
+		require.True(t, ok, "result type %T", result)
+		assert.Equal(t, "hourly", resp.Interval)
+		assert.Equal(t, points(), resp.DataPoints)
+		assert.Equal(t, summary(), resp.Summary)
+		// The reported window is the one that was queried.
+		require.Len(t, mockClient.Calls, 1)
+		args := mockClient.Calls[0].Arguments
+		assert.Equal(t, args.Get(4).(time.Time).Format(time.RFC3339), resp.Start)
+		assert.Equal(t, args.Get(5).(time.Time).Format(time.RFC3339), resp.End)
 	})
 
 	t.Run("getHistoryBreakdownHandler", func(t *testing.T) {
 		mockAuth, req := adminAnalyticsReq(ctx)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockClient := new(MockAnalyticsClient)
-		mockClient.On("QueryBreakdown", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(map[string]BreakdownValue{}, nil)
+		t.Cleanup(func() { mockClient.AssertExpectations(t) })
+		data := func() map[string]BreakdownValue {
+			return map[string]BreakdownValue{"ec2": {TotalSavings: 50, PurchaseCount: 1, Percentage: 100}}
+		}
+		// No dimension param: the handler defaults to "service".
+		mockClient.On("QueryBreakdown", ctx, []string(nil), map[string][]string(nil), mock.Anything, mock.Anything, "service").
+			Return(data(), nil)
 
 		h := &Handler{auth: mockAuth, analyticsClient: mockClient}
 		router := NewRouter(h)
 
 		result, err := router.getHistoryBreakdownHandler(ctx, req, map[string]string{})
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		resp, ok := result.(*BreakdownResponse)
+		require.True(t, ok, "result type %T", result)
+		assert.Equal(t, "service", resp.Dimension)
+		assert.Equal(t, data(), resp.Data)
+		require.Len(t, mockClient.Calls, 1)
+		args := mockClient.Calls[0].Arguments
+		assert.Equal(t, args.Get(3).(time.Time).Format(time.RFC3339), resp.Start)
+		assert.Equal(t, args.Get(4).(time.Time).Format(time.RFC3339), resp.End)
 	})
 
 	t.Run("triggerAnalyticsCollectionHandler", func(t *testing.T) {
 		mockAuth, req := adminAnalyticsReq(ctx)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 		mockCollector := new(MockAnalyticsCollector)
+		t.Cleanup(func() { mockCollector.AssertExpectations(t) })
 		mockCollector.On("Collect", ctx).Return(nil)
 
 		h := &Handler{auth: mockAuth, analyticsCollector: mockCollector}
@@ -635,7 +740,10 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 
 		result, err := router.triggerAnalyticsCollectionHandler(ctx, req, nil)
 		require.NoError(t, err)
-		assert.NotNil(t, result)
+		assert.Equal(t, map[string]string{
+			"status":  "success",
+			"message": "Analytics collection completed",
+		}, result)
 	})
 }
 

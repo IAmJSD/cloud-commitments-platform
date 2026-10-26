@@ -8,13 +8,13 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/providers/aws/recommendations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/require"
 )
@@ -28,17 +28,12 @@ func getMigrationsPath() string {
 	return filepath.Join(filepath.Dir(filename), "..", "database", "postgres", "migrations")
 }
 
-func setupRICacheIntegration(ctx context.Context, t *testing.T) (*config.PostgresStore, func()) {
+// setupRICacheIntegration returns a store over a fully migrated database of
+// the test's own on the package's shared Postgres server, so the test uses the
+// same schema production does. The database is dropped when t ends.
+func setupRICacheIntegration(ctx context.Context, t *testing.T) *config.PostgresStore {
 	t.Helper()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	// Migration 000027 was made idempotent in commit F — the full
-	// migration chain now runs cleanly on fresh containers, so the
-	// test uses the same schema production does.
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
-	store := config.NewPostgresStore(container.DB)
-	return store, func() { _ = container.Cleanup(ctx) }
+	return config.NewPostgresStore(testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath()).DB)
 }
 
 // TestRIUtilizationCache_Integration_ColdReadFetchesAndPersists verifies
@@ -46,8 +41,7 @@ func setupRICacheIntegration(ctx context.Context, t *testing.T) (*config.Postgre
 // persists the result in ri_utilization_cache.
 func TestRIUtilizationCache_Integration_ColdReadFetchesAndPersists(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRICacheIntegration(ctx, t)
-	defer cleanup()
+	store := setupRICacheIntegration(ctx, t)
 
 	cache := newRIUtilizationCache(store, false)
 	fetched := []recommendations.RIUtilization{
@@ -81,8 +75,7 @@ func TestRIUtilizationCache_Integration_ColdReadFetchesAndPersists(t *testing.T)
 // invoking the fetcher.
 func TestRIUtilizationCache_Integration_FreshHitNoFetch(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRICacheIntegration(ctx, t)
-	defer cleanup()
+	store := setupRICacheIntegration(ctx, t)
 
 	cache := newRIUtilizationCache(store, false)
 	fetched := []recommendations.RIUtilization{{ReservedInstanceID: "ri-fresh-1"}}
@@ -105,11 +98,12 @@ func TestRIUtilizationCache_Integration_FreshHitNoFetch(t *testing.T) {
 
 // TestRIUtilizationCache_Integration_StaleNonLambdaServesStaleAndRefreshes
 // verifies SWR end-to-end: stale row served synchronously, background
-// refresh fires, Postgres row is updated within a short window.
+// refresh fires, Postgres row is updated. The fetcher blocks until the test
+// releases it, so getOrFetch returning proves the stale read did not wait for
+// the refresh, without an elapsed-time bound (issue #36).
 func TestRIUtilizationCache_Integration_StaleNonLambdaServesStaleAndRefreshes(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRICacheIntegration(ctx, t)
-	defer cleanup()
+	store := setupRICacheIntegration(ctx, t)
 
 	staleData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-stale"}}
 	freshData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-fresh"}}
@@ -120,30 +114,33 @@ func TestRIUtilizationCache_Integration_StaleNonLambdaServesStaleAndRefreshes(t 
 	require.NoError(t, store.UpsertRIUtilizationCache(ctx, "us-east-1", 30, stalePayload, time.Now().Add(-200*time.Millisecond)))
 
 	cache := newRIUtilizationCache(store, false) // non-Lambda
-	fetch := func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseFetch := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseFetch)
+	//nolint:unparam // fetcher signature is fixed by getOrFetch; this refresh path never errors
+	fetch := func(_ context.Context, _ int) ([]recommendations.RIUtilization, error) {
+		<-release
 		return freshData, nil
 	}
 
-	start := time.Now()
-	got, err := cache.getOrFetch(ctx, "us-east-1", 30, 50*time.Millisecond, time.Hour, fetch)
-	require.NoError(t, err)
-	require.Less(t, time.Since(start), 100*time.Millisecond, "stale-read must return synchronously, not wait for background fetch")
+	got := getOrFetchWithin(t, 10*time.Second, func() ([]recommendations.RIUtilization, error) {
+		return cache.getOrFetch(ctx, "us-east-1", 30, 50*time.Millisecond, time.Hour, fetch)
+	}, "stale-read must return synchronously, not wait for background fetch")
+	require.Len(t, got, 1)
 	require.Equal(t, "ri-stale", got[0].ReservedInstanceID, "first call must return the stale copy")
 
-	// Wait for the background refresh to land the fresh data.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	// Let the background refresh finish and wait for it to land the fresh data.
+	releaseFetch()
+	require.Eventually(t, func() bool {
 		entry, err := store.GetRIUtilizationCache(ctx, "us-east-1", 30)
-		if err == nil && entry != nil {
-			var round []recommendations.RIUtilization
-			_ = json.Unmarshal(entry.Payload, &round)
-			if len(round) == 1 && round[0].ReservedInstanceID == "ri-fresh" {
-				return
-			}
+		if err != nil || entry == nil {
+			return false
 		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("background refresh did not update the ri_utilization_cache row within 2s")
+		var round []recommendations.RIUtilization
+		_ = json.Unmarshal(entry.Payload, &round)
+		return len(round) == 1 && round[0].ReservedInstanceID == "ri-fresh"
+	}, 10*time.Second, 20*time.Millisecond, "background refresh did not update the ri_utilization_cache row")
 }
 
 // TestRIUtilizationCache_Integration_HardExpiredSyncRefetch verifies
@@ -151,8 +148,7 @@ func TestRIUtilizationCache_Integration_StaleNonLambdaServesStaleAndRefreshes(t 
 // non-Lambda: the caller blocks until fresh data arrives.
 func TestRIUtilizationCache_Integration_HardExpiredSyncRefetch(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRICacheIntegration(ctx, t)
-	defer cleanup()
+	store := setupRICacheIntegration(ctx, t)
 
 	staleData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-stale"}}
 	freshData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-fresh"}}

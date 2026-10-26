@@ -5,26 +5,82 @@
 # missing from the Terraform github-dev state in GCS.
 #
 # Usage:
+#   export GCP_PROJECT_ID=<project-id>
+#   export TF_BACKEND_GCP='bucket = "<state-bucket>"'
 #   export GOOGLE_APPLICATION_CREDENTIALS=~/.config/gcloud/cudly-terraform-deploy.json
 #   cd <repo-root>
 #   bash scripts/gcp-import-dev-state.sh
 #
+# GCP_PROJECT_ID and TF_BACKEND_GCP are required and have no defaults. They
+# take the same values deploy-gcp.yml reads from vars.GCP_PROJECT_ID and
+# secrets.TF_BACKEND_GCP: TF_BACKEND_GCP is the backend-config body (at least
+# a `bucket = "..."` line), and this script appends `prefix = "github-dev"`
+# exactly as the deploy workflow does. The project is also exported as
+# TF_VAR_project_id so terraform and gcloud cannot disagree about it.
+#
 # Prerequisites:
 #   - gcloud CLI authenticated (or GOOGLE_APPLICATION_CREDENTIALS set)
 #   - terraform >= 1.10
-#   - Access to gs://cudly-terraform-state-cloudprowess
+#   - Access to the state bucket named in TF_BACKEND_GCP
 
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-PROJECT="serene-bazaar-666"
+usage() {
+  cat >&2 <<'USAGE'
+usage: GCP_PROJECT_ID=<project-id> TF_BACKEND_GCP='bucket = "<state-bucket>"' \
+         bash scripts/gcp-import-dev-state.sh
+
+  GCP_PROJECT_ID  GCP project whose cudly-dev resources are imported
+                  (same value as the GCP_PROJECT_ID repository variable)
+  TF_BACKEND_GCP  GCS backend config containing a bucket = "..." line
+                  (same value as the TF_BACKEND_GCP repository secret);
+                  prefix = "github-dev" is appended by this script
+USAGE
+}
+
+# die MESSAGE: print the error and usage, then exit 2 before anything touches
+# terraform, gcloud or the backend.
+die() {
+  echo "ERROR: $*" >&2
+  usage
+  exit 2
+}
+
+PROJECT="${GCP_PROJECT_ID:-}"
+TF_BACKEND="${TF_BACKEND_GCP:-}"
+
+[ -n "$PROJECT" ] || die "GCP_PROJECT_ID is not set"
+[ -n "$TF_BACKEND" ] || die "TF_BACKEND_GCP is not set"
+
+# Validate the shape, not merely non-emptiness (same rule as
+# delete-owned-cloud-sql-instance.sh). [[ =~ ]] matches the whole string, so a
+# value with an embedded newline is rejected too.
+[[ "$PROJECT" =~ ^[a-z][a-z0-9-]{5,29}$ ]] ||
+  die "GCP_PROJECT_ID is malformed ('${PROJECT}')"
+
+# Without a bucket the GCS backend cannot initialise; with its own prefix the
+# appended prefix line would be a duplicate attribute and terraform would
+# reject the file. Fail on both here, before init runs.
+grep -Eq '^[[:space:]]*bucket[[:space:]]*=' <<<"$TF_BACKEND" ||
+  die 'TF_BACKEND_GCP has no bucket = "..." line'
+if grep -Eq '^[[:space:]]*prefix[[:space:]]*=' <<<"$TF_BACKEND"; then
+  die 'TF_BACKEND_GCP must not set prefix; this script always uses prefix = "github-dev"'
+fi
+
+# Terraform reads the project from var.project_id, gcloud from --project. A
+# TF_VAR_project_id left over in the environment for another project would
+# send imports into config for a different project than the one queried.
+if [ -n "${TF_VAR_project_id:-}" ] && [ "$TF_VAR_project_id" != "$PROJECT" ]; then
+  die "TF_VAR_project_id ('${TF_VAR_project_id}') does not match GCP_PROJECT_ID ('${PROJECT}')"
+fi
+export TF_VAR_project_id="$PROJECT"
+
 REGION="us-central1"
 SERVICE_NAME="cudly-dev"
 TF_DIR="$(cd "$(dirname "$0")/.." && pwd)/terraform/environments/gcp"
-BACKEND_CONFIG="bucket = \"cudly-terraform-state-cloudprowess\"\nprefix = \"github-dev\""
-BACKEND_FILE="/tmp/gcp-dev-backend.tfbackend"
 
 export GOOGLE_APPLICATION_CREDENTIALS="${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/cudly-terraform-deploy.json}"
 
@@ -61,7 +117,12 @@ echo "TF_DIR: $TF_DIR"
 echo "Credentials: $GOOGLE_APPLICATION_CREDENTIALS"
 [ -f "$GOOGLE_APPLICATION_CREDENTIALS" ] || { echo "ERROR: credentials file not found"; exit 1; }
 
-printf '%b\n' "$BACKEND_CONFIG" > "$BACKEND_FILE"
+# The backend config now comes from the TF_BACKEND_GCP secret, so write it to a
+# private mktemp file (mode 0600, unique name) rather than a fixed /tmp path,
+# and remove it on exit. terraform init copies what it needs into .terraform/.
+BACKEND_FILE="$(mktemp "${TMPDIR:-/tmp}/gcp-dev-backend.XXXXXX")"
+trap 'rm -f "$BACKEND_FILE"' EXIT
+printf '%s\nprefix = "github-dev"\n' "$TF_BACKEND" > "$BACKEND_FILE"
 echo "Backend file written to $BACKEND_FILE"
 
 cd "$TF_DIR"
@@ -338,10 +399,6 @@ if [ -n "$SA_CLOUDRUN_EXISTS" ]; then
   import_if_missing \
     "module.compute_cloud_run[0].google_project_iam_member.secret_accessor" \
     "${PROJECT} roles/secretmanager.secretAccessor ${SA_MEMBER}"
-
-  import_if_missing \
-    "module.compute_cloud_run[0].google_project_iam_member.compute_viewer" \
-    "${PROJECT} roles/compute.viewer ${SA_MEMBER}"
 
   import_if_missing \
     "module.compute_cloud_run[0].google_project_iam_member.compute_commitment_admin" \

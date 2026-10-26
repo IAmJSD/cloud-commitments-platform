@@ -2,7 +2,6 @@ package mocks
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/stretchr/testify/mock"
@@ -11,6 +10,9 @@ import (
 // MockSNSClient is a mock implementation of SNS client.
 type MockSNSClient struct { //nolint:revive // exported: doc comment style intentional
 	mock.Mock
+	// reporter fails the registered test on a mistyped .Return value. See
+	// report.go.
+	reporter testReporter
 }
 
 // Publish mocks the Publish operation.
@@ -21,7 +23,7 @@ func (m *MockSNSClient) Publish(ctx context.Context, input *sns.PublishInput, op
 	}
 	v, ok := args.Get(0).(*sns.PublishOutput)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *sns.PublishOutput, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("Publish", "*sns.PublishOutput", args.Get(0))
 	}
 	return v, args.Error(1)
 }

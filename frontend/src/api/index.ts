@@ -14,6 +14,7 @@ export type {
   LoginResponse,
   DashboardSummary,
   UpcomingPurchase,
+  UpcomingPurchasesResponse,
   Recommendation,
   RecommendationFilters,
   Plan,
@@ -50,6 +51,14 @@ export type {
   SavingsAnalyticsFilters,
   ConvertibleRI,
   ExchangeableAzureRI,
+  AzureExchangeSource,
+  AzureExchangeTarget,
+  AzureCompatibleOfferingsRequest,
+  AzureExecuteExchangeRequest,
+  AzureCompatibleOffering,
+  AzureExchangePreview,
+  AzureCompatibleOfferingsResponse,
+  AzureExecuteExchangeResponse,
   RIUtilization,
   ReshapeRecommendation,
   OfferingOption,
@@ -192,11 +201,23 @@ export {
   getCoverageBreakdown
 } from './inventory';
 
+// Re-export savings-snapshot trends (issue #30)
+export type {
+  AnalyticsTrendsResponse,
+  AnalyticsTrendsFilter,
+  TrendsMonthlyRow,
+  TrendsProviderRow,
+  TrendsServiceRow
+} from './analytics';
+export { getAnalyticsTrends } from './analytics';
+
 // Re-export RI exchange functions
 export type { ReshapeRecommendationsResponse, ExcludedRI } from './riexchange';
 export {
   listConvertibleRIs,
   listExchangeableAzureRIs,
+  getAzureCompatibleOfferings,
+  executeAzureExchange,
   getRIUtilization,
   getReshapeRecommendations,
   getExchangeQuote,

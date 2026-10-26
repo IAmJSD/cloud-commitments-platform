@@ -31,8 +31,12 @@ func TestHandleCleanupExpiredRecords_WithAuthAndConfig(t *testing.T) {
 	result, err := app.handleCleanupExpiredRecords(ctx)
 	testutil.AssertNoError(t, err)
 	testutil.AssertTrue(t, result != nil, "expected non-nil result map")
+	// CleanupExpiredSessions reports no count, so the result must not carry a
+	// sessions_deleted counter that is always 0 (#326, A06-018).
 	_, hasSessionsKey := result["sessions_deleted"]
-	testutil.AssertTrue(t, hasSessionsKey, "expected sessions_deleted key")
+	testutil.AssertTrue(t, !hasSessionsKey, "sessions_deleted is never populated and must not be reported")
+	_, hasExecutionsKey := result["executions_deleted"]
+	testutil.AssertTrue(t, hasExecutionsKey, "expected executions_deleted key")
 }
 
 func TestHandleCleanupExpiredRecords_NilAuthAndConfig(t *testing.T) {
@@ -97,6 +101,19 @@ func TestHandleRefreshAnalytics_Success(t *testing.T) {
 	result, err := app.handleRefreshAnalytics(ctx)
 	testutil.AssertNoError(t, err)
 	testutil.AssertEqual(t, "success", result["status"])
+	testutil.AssertEqual(t, 1, result["views_refreshed"])
+	assertNoPartitionCounters(t, result)
+}
+
+// assertNoPartitionCounters checks that handleRefreshAnalytics does not report
+// partition counters: it never creates or drops partitions, so they could only
+// ever be fabricated zeros (#326, A06-018).
+func assertNoPartitionCounters(t *testing.T, result map[string]any) {
+	t.Helper()
+	for _, key := range []string{"partitions_created", "partitions_dropped"} {
+		_, ok := result[key]
+		testutil.AssertTrue(t, !ok, key+" is never populated and must not be reported")
+	}
 }
 
 func TestHandleRefreshAnalytics_RefreshError(t *testing.T) {
@@ -117,6 +134,11 @@ func TestHandleRefreshAnalytics_NilAnalytics(t *testing.T) {
 	result, err := app.handleRefreshAnalytics(ctx)
 	testutil.AssertNoError(t, err)
 	testutil.AssertTrue(t, result != nil, "expected non-nil result")
+	// Nothing was refreshed, so the run must not report success (#326,
+	// A06-018); handleCollectAnalytics reports "skipped" for the same case.
+	testutil.AssertEqual(t, "skipped", result["status"])
+	testutil.AssertEqual(t, 0, result["views_refreshed"])
+	assertNoPartitionCounters(t, result)
 }
 
 // ----- configExchangeStoreAdapter — CompleteRIExchange / FailRIExchange -----
