@@ -1,4 +1,4 @@
--- 000147: keep an unknown cost unknown through the savings rollups (#151).
+-- 000143: keep an unknown cost unknown through the savings rollups (#151).
 --
 -- savings_snapshots.total_usage (000067, H2) and total_commitment (000101)
 -- are nullable on purpose: the collector writes NULL when no provider figure

@@ -14,10 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const rollupsUnknownVersion = 147
+const rollupsUnknownVersion = 143
 
-// snapshotRow147 is one savings_snapshots row; a nil cost is an unknown one.
-type snapshotRow147 struct {
+// snapshotRow143 is one savings_snapshots row; a nil cost is an unknown one.
+type snapshotRow143 struct {
 	account    string
 	at         time.Time
 	region     string
@@ -25,14 +25,14 @@ type snapshotRow147 struct {
 	commitment *float64
 }
 
-// rollup147 is what the two views report for one account.
-type rollup147 struct {
+// rollup143 is what the two views report for one account.
+type rollup143 struct {
 	monthlyUsage, monthlyCommitment, providerCommitment *float64
 }
 
-func cost147(v float64) *float64 { return &v }
+func cost143(v float64) *float64 { return &v }
 
-func insertSnapshots147(ctx context.Context, t *testing.T, pool *pgxpool.Pool, rows []snapshotRow147) {
+func insertSnapshots143(ctx context.Context, t *testing.T, pool *pgxpool.Pool, rows []snapshotRow143) {
 	t.Helper()
 	for _, r := range rows {
 		_, err := pool.Exec(ctx, `INSERT INTO savings_snapshots
@@ -44,9 +44,9 @@ func insertSnapshots147(ctx context.Context, t *testing.T, pool *pgxpool.Pool, r
 	}
 }
 
-func readRollup147(ctx context.Context, t *testing.T, pool *pgxpool.Pool, account string) rollup147 {
+func readRollup143(ctx context.Context, t *testing.T, pool *pgxpool.Pool, account string) rollup143 {
 	t.Helper()
-	var got rollup147
+	var got rollup143
 	require.NoError(t, pool.QueryRow(ctx, `SELECT total_usage::float8, total_commitment::float8
 		FROM monthly_savings_summary WHERE account_id = $1`, account).
 		Scan(&got.monthlyUsage, &got.monthlyCommitment), "monthly row for %s", account)
@@ -56,9 +56,9 @@ func readRollup147(ctx context.Context, t *testing.T, pool *pgxpool.Pool, accoun
 	return got
 }
 
-// requireRollup147 checks every column against want, where nil means the view
+// requireRollup143 checks every column against want, where nil means the view
 // must report NULL (unknown) and a value means that exact known figure.
-func requireRollup147(t *testing.T, label string, want *float64, got rollup147) {
+func requireRollup143(t *testing.T, label string, want *float64, got rollup143) {
 	t.Helper()
 	for name, v := range map[string]*float64{
 		"monthly total_usage":       got.monthlyUsage,
@@ -75,7 +75,7 @@ func requireRollup147(t *testing.T, label string, want *float64, got rollup147) 
 	}
 }
 
-// TestMigration_SavingsRollupsPropagateUnknown locks down migration 000147
+// TestMigration_SavingsRollupsPropagateUnknown locks down migration 000143
 // (issue #151): monthly_savings_summary and provider_savings_summary report an
 // unknown total_usage / total_commitment as NULL instead of summing or
 // averaging past it, keep a known zero as 0, keep the H5 sum-then-average
@@ -89,27 +89,27 @@ func TestMigration_SavingsRollupsPropagateUnknown(t *testing.T) {
 	prev := previousMigrationVersion(t, rollupsUnknownVersion)
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, prev))
-	prevDefs := viewDefs147(ctx, t, pool)
+	prevDefs := viewDefs143(ctx, t, pool)
 
 	// Two collection instants inside the current month, whose partition the
 	// migrations create, and inside provider_savings_summary's 90-day window.
 	now := time.Now().UTC()
 	t1 := time.Date(now.Year(), now.Month(), 1, 1, 0, 0, 0, time.UTC)
 	t2 := t1.Add(time.Hour)
-	insertSnapshots147(ctx, t, pool, []snapshotRow147{
+	insertSnapshots143(ctx, t, pool, []snapshotRow143{
 		// One region known, one with no provider figure at the same instant.
-		{"acct-mixed", t1, "us-east-1", cost147(4000), cost147(4000)},
+		{"acct-mixed", t1, "us-east-1", cost143(4000), cost143(4000)},
 		{"acct-mixed", t1, "eu-west-1", nil, nil},
 		// A real, known zero in every row.
-		{"acct-zero", t1, "us-east-1", cost147(0), cost147(0)},
-		{"acct-zero", t1, "eu-west-1", cost147(0), cost147(0)},
+		{"acct-zero", t1, "us-east-1", cost143(0), cost143(0)},
+		{"acct-zero", t1, "eu-west-1", cost143(0), cost143(0)},
 		// Fully known: AVG(100+50, 200+100) = 225.
-		{"acct-known", t1, "us-east-1", cost147(100), cost147(100)},
-		{"acct-known", t1, "eu-west-1", cost147(50), cost147(50)},
-		{"acct-known", t2, "us-east-1", cost147(200), cost147(200)},
-		{"acct-known", t2, "eu-west-1", cost147(100), cost147(100)},
+		{"acct-known", t1, "us-east-1", cost143(100), cost143(100)},
+		{"acct-known", t1, "eu-west-1", cost143(50), cost143(50)},
+		{"acct-known", t2, "us-east-1", cost143(200), cost143(200)},
+		{"acct-known", t2, "eu-west-1", cost143(100), cost143(100)},
 		// Known at the first instant, unknown at the second.
-		{"acct-later", t1, "us-east-1", cost147(100), cost147(100)},
+		{"acct-later", t1, "us-east-1", cost143(100), cost143(100)},
 		{"acct-later", t2, "us-east-1", nil, nil},
 	})
 
@@ -117,29 +117,29 @@ func TestMigration_SavingsRollupsPropagateUnknown(t *testing.T) {
 	_, err := pool.Exec(ctx, `REFRESH MATERIALIZED VIEW monthly_savings_summary;
 		REFRESH MATERIALIZED VIEW provider_savings_summary`)
 	require.NoError(t, err)
-	requireRollup147(t, "before, mixed", cost147(4000), readRollup147(ctx, t, pool, "acct-mixed"))
-	requireRollup147(t, "before, later", cost147(100), readRollup147(ctx, t, pool, "acct-later"))
+	requireRollup143(t, "before, mixed", cost143(4000), readRollup143(ctx, t, pool, "acct-mixed"))
+	requireRollup143(t, "before, later", cost143(100), readRollup143(ctx, t, pool, "acct-later"))
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, rollupsUnknownVersion))
 	// The production refresh path (CONCURRENTLY) still works on the new views.
 	_, err = pool.Exec(ctx, `SELECT refresh_savings_materialized_views()`)
 	require.NoError(t, err)
 
-	requireRollup147(t, "mixed", nil, readRollup147(ctx, t, pool, "acct-mixed"))
-	requireRollup147(t, "later", nil, readRollup147(ctx, t, pool, "acct-later"))
-	requireRollup147(t, "zero", cost147(0), readRollup147(ctx, t, pool, "acct-zero"))
-	requireRollup147(t, "known", cost147(225), readRollup147(ctx, t, pool, "acct-known"))
+	requireRollup143(t, "mixed", nil, readRollup143(ctx, t, pool, "acct-mixed"))
+	requireRollup143(t, "later", nil, readRollup143(ctx, t, pool, "acct-later"))
+	requireRollup143(t, "zero", cost143(0), readRollup143(ctx, t, pool, "acct-zero"))
+	requireRollup143(t, "known", cost143(225), readRollup143(ctx, t, pool, "acct-known"))
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, prev))
-	assert.Equal(t, prevDefs, viewDefs147(ctx, t, pool), "down must restore the previous view definitions")
-	requireRollup147(t, "after down, mixed", cost147(4000), readRollup147(ctx, t, pool, "acct-mixed"))
+	assert.Equal(t, prevDefs, viewDefs143(ctx, t, pool), "down must restore the previous view definitions")
+	requireRollup143(t, "after down, mixed", cost143(4000), readRollup143(ctx, t, pool, "acct-mixed"))
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, rollupsUnknownVersion))
-	requireRollup147(t, "up again, mixed", nil, readRollup147(ctx, t, pool, "acct-mixed"))
+	requireRollup143(t, "up again, mixed", nil, readRollup143(ctx, t, pool, "acct-mixed"))
 }
 
-// viewDefs147 returns the two views' definitions and unique indexes.
-func viewDefs147(ctx context.Context, t *testing.T, pool *pgxpool.Pool) map[string]string {
+// viewDefs143 returns the two views' definitions and unique indexes.
+func viewDefs143(ctx context.Context, t *testing.T, pool *pgxpool.Pool) map[string]string {
 	t.Helper()
 	defs := map[string]string{}
 	for _, view := range []string{"monthly_savings_summary", "provider_savings_summary"} {
@@ -154,7 +154,7 @@ func viewDefs147(ctx context.Context, t *testing.T, pool *pgxpool.Pool) map[stri
 
 // TestMigration_SavingsRollupsPropagateUnknown_ConcurrentRefresh covers the
 // deploy-time race: the collector's refresh_savings_materialized_views() runs
-// while 000147 is dropping and recreating the views. The refresh must wait for
+// while 000143 is dropping and recreating the views. The refresh must wait for
 // the migration and then refresh the new views, not fail on the dropped ones.
 func TestMigration_SavingsRollupsPropagateUnknown_ConcurrentRefresh(t *testing.T) {
 	ctx := context.Background()
@@ -165,8 +165,8 @@ func TestMigration_SavingsRollupsPropagateUnknown_ConcurrentRefresh(t *testing.T
 
 	now := time.Now().UTC()
 	t1 := time.Date(now.Year(), now.Month(), 1, 1, 0, 0, 0, time.UTC)
-	insertSnapshots147(ctx, t, pool, []snapshotRow147{
-		{"acct-mixed", t1, "us-east-1", cost147(4000), cost147(4000)},
+	insertSnapshots143(ctx, t, pool, []snapshotRow143{
+		{"acct-mixed", t1, "us-east-1", cost143(4000), cost143(4000)},
 		{"acct-mixed", t1, "eu-west-1", nil, nil},
 	})
 
@@ -182,7 +182,7 @@ func TestMigration_SavingsRollupsPropagateUnknown_ConcurrentRefresh(t *testing.T
 	go func() { migrated <- migrations.MigrateToVersion(ctx, pool, path, rollupsUnknownVersion) }()
 	// pg_stat_activity keeps only the start of the migration's text, so match
 	// on its header comment.
-	testhelpers.WaitForLockWait(ctx, t, pool, "-- 000147:%")
+	testhelpers.WaitForLockWait(ctx, t, pool, "-- 000143:%")
 
 	refreshed := make(chan error, 1)
 	go func() {
@@ -194,5 +194,5 @@ func TestMigration_SavingsRollupsPropagateUnknown_ConcurrentRefresh(t *testing.T
 	require.NoError(t, blocker.Rollback(ctx))
 	require.NoError(t, testhelpers.Await(t, migrated))
 	require.NoError(t, testhelpers.Await(t, refreshed), "a refresh queued behind the migration must succeed")
-	requireRollup147(t, "after racing refresh", nil, readRollup147(ctx, t, pool, "acct-mixed"))
+	requireRollup143(t, "after racing refresh", nil, readRollup143(ctx, t, pool, "acct-mixed"))
 }

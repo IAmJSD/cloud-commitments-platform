@@ -1,4 +1,4 @@
--- 000147 down: restore the definitions that SUM/AVG over the nullable cost
+-- 000143 down: restore the definitions that SUM/AVG over the nullable cost
 -- columns and so skip unknown rows: monthly_savings_summary as 000078 left
 -- it, provider_savings_summary as 000074 left it, with the plain-column
 -- NULLS NOT DISTINCT unique indexes from 000076.
