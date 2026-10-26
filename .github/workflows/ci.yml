@@ -1905,6 +1905,27 @@ jobs:
       - name: Assert Make artifacts are gitignored
         run: bash scripts/test-gitignore-make-artifacts.sh
 
+  # Execute scripts/tf-deploy.sh and the Makefile.terraform targets that drive
+  # it against a stub `terraform` that only records its argv (#59): every
+  # state-changing target goes through the script, so it gets the profile
+  # check, environment bootstrap and `terraform init`, and extra args such as
+  # -target=module.frontend reach terraform verbatim. Fast (shell only), so it
+  # always runs.
+  tf-deploy-wrapper:
+    name: Terraform deploy wrapper
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run tf-deploy.sh self-tests
+        run: bash scripts/test-tf-deploy.sh
+
   # Summary job - all checks must pass
   ci-success:
     name: CI Success
@@ -1935,6 +1956,7 @@ jobs:
       - migration-down-gate
       - gcp-import-dev-state
       - gitignore-make-artifacts
+      - tf-deploy-wrapper
     if: always()
     permissions:
       contents: read
