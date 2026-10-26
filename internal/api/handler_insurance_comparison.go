@@ -37,6 +37,9 @@ func (h *Handler) getInsuranceComparison(ctx context.Context, req *events.Lambda
 	}
 	cmp, err := client.Comparison(ctx, insurance.ComparisonRequest{PlanID: h.insurance.PlanID()})
 	if err != nil {
+		if isContextEnded(err) {
+			return nil, NewClientError(504, insuranceTimeoutMessage)
+		}
 		return nil, mapInsuranceError(err)
 	}
 	dto, err := archera.BuildComparison(cmp)
@@ -65,12 +68,20 @@ func (h *Handler) insuranceClient(ctx context.Context) (insurance.QuoteClient, e
 		if errors.Is(err, archera.ErrNotConfigured) {
 			return nil, notConfiguredError(h.insurance.Status().Missing)
 		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if isContextEnded(err) {
 			return nil, NewClientError(504, insuranceTimeoutMessage)
 		}
 		return nil, NewClientError(503, "Archera API key could not be resolved from "+archera.EnvKeySecret)
 	}
 	return client, nil
+}
+
+// isContextEnded reports whether err carries a context deadline or
+// cancellation. It is answered with the 504 timeout status, not as a vendor or
+// credential failure, whether it ends the key build or the vendor call (issue
+// #1498).
+func isContextEnded(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func notConfiguredError(missing []string) error {
