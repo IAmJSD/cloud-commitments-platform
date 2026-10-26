@@ -431,7 +431,7 @@ variable "send_notifications_schedule" {
 }
 
 variable "enable_finalize_revocations_schedule" {
-  description = "Enable the scheduled finalize_revocations sweep (idempotent audit repair)."
+  description = "Enable the scheduled finalize_revocations sweep (idempotent audit repair, plus the RI Marketplace listing poll, which has no schedule of its own: disabling this also stops recording listing sales and proceeds)."
   type        = bool
   default     = true
 }

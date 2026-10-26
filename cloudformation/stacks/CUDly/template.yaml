@@ -166,7 +166,7 @@ Parameters:
     AllowedValues:
       - "true"
       - "false"
-    Description: Run the finalize_revocations task on a schedule (idempotent audit repair of revoked purchases)
+    Description: Run the finalize_revocations task on a schedule (idempotent audit repair of revoked purchases, plus the RI Marketplace listing poll, which has no schedule of its own; disabling this also stops recording listing sales and proceeds)
 
   FinalizeRevocationsSchedule:
     Type: String

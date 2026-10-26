@@ -612,6 +612,15 @@ Scheduling for AWS Fargate, CloudFormation and GCP is tracked by #712.
 
 Alternatively, use pg_cron for database-native scheduling.
 
+### RI Marketplace Listing Poll
+
+CUDly learns that an RI listed on the AWS Reserved Instance Marketplace sold, closed or was canceled on AWS, and records its estimated proceeds and AWS fee, only through the marketplace listing poll. The poll has no schedule of its own: it runs inside the server's `finalize_revocations` task, after the revocation repair. It therefore runs only where `finalize_revocations` is scheduled, and turning that schedule off also stops the poll:
+
+- **AWS Lambda:** hourly by default. `enable_finalize_revocations_schedule` (default `true`) and `finalize_revocations_schedule` (default `rate(1 hour)`) in `terraform/environments/aws`.
+- **CloudFormation:** hourly by default. The `EnableFinalizeRevocationsSchedule` (default `true`) and `FinalizeRevocationsSchedule` (default `rate(1 hour)`) stack parameters on `cloudformation/stacks/CUDly`.
+- **AKS:** hourly by default, as a Kubernetes CronJob, when `deploy_kubernetes_resources` is true. `enable_finalize_revocations_schedule` (default `true`) and `finalize_revocations_schedule` (default `30 * * * *`) on the AKS module.
+- **AWS Fargate, GCP Cloud Run, GKE and Azure Container Apps:** nothing schedules `finalize_revocations`, so the poll does not run and listings stay as the list and cancel endpoints recorded them. Until #712 wires the task there, call `POST /api/scheduled/finalize_revocations` (authenticated like the other `/api/scheduled/` tasks) from your own scheduler, about hourly.
+
 ---
 
 ## Troubleshooting
