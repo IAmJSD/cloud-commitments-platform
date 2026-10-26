@@ -206,13 +206,13 @@ variable "credential_encryption_key" {
 # ==============================================
 
 variable "postgres_version" {
-  description = "PostgreSQL version"
+  description = "PostgreSQL major version. The migrations need 15 or later (UNIQUE NULLS NOT DISTINCT, #1233)."
   type        = string
   default     = "16"
 
   validation {
-    condition     = contains(["11", "12", "13", "14", "15", "16"], var.postgres_version)
-    error_message = "PostgreSQL version must be 11, 12, 13, 14, 15, or 16."
+    condition     = contains(["15", "16"], var.postgres_version)
+    error_message = "PostgreSQL version must be 15 or 16: the migrations use PostgreSQL 15+ features (UNIQUE NULLS NOT DISTINCT)."
   }
 }
 
@@ -277,6 +277,18 @@ variable "database_standby_availability_zone" {
   description = "Standby availability zone (for ZoneRedundant HA)"
   type        = string
   default     = null
+}
+
+variable "database_deletion_protection" {
+  description = <<-EOT
+    Put a CanNotDelete management lock on the PostgreSQL Flexible Server.
+    Default is true so production cannot be deleted out of band, matching
+    the AWS and GCP environments. Ephemeral dev and staging tfvars override
+    it to false. Creating the lock needs Microsoft.Authorization/locks/*,
+    granted by ci-cd-permissions (re-apply that bootstrap first).
+  EOT
+  type        = bool
+  default     = true
 }
 
 # ==============================================
@@ -385,7 +397,7 @@ variable "additional_env_vars" {
 }
 
 variable "enable_scheduled_tasks" {
-  description = "Enable scheduled tasks via Logic Apps"
+  description = "Enable scheduled tasks (Logic Apps on Container Apps; on AKS, the collect_recommendations CronJob)"
   type        = bool
   default     = true
 }
@@ -396,14 +408,15 @@ variable "recommendation_schedule" {
     hour field is parsed (the Azure module converts it to Logic Apps
     frequency=Day + interval=1 + startTime=<hour>:00). Sub-daily,
     day-of-week, and day-of-month patterns are silently ignored;
-    use daily-at-hour-N values only.
+    use daily-at-hour-N values only. On AKS the full expression is
+    the collect_recommendations CronJob schedule.
   EOT
   type        = string
   default     = "0 2 * * *" # Daily at 02:00 UTC
 }
 
 variable "enable_ri_exchange_schedule" {
-  description = "Enable scheduled RI exchange automation via Logic Apps"
+  description = "Enable scheduled RI exchange automation (a Logic App on Container Apps, a CronJob on AKS)"
   type        = bool
   default     = false
 }
@@ -575,4 +588,28 @@ variable "archera_api_key_secret_name" {
   description = "Name of the platform Key Vault secret holding the Archera API key (created out-of-band). Empty disables the Archera comparison."
   type        = string
   default     = ""
+}
+
+# ==============================================
+# Monitoring and Alerts
+# ==============================================
+
+variable "enable_monitoring" {
+  description = "Create the monitoring module (action group, metric alerts, availability test, log-query failure alerts). Container Apps only."
+  type        = bool
+  default     = false
+}
+
+variable "alert_emails" {
+  description = "Comma-separated email addresses that receive alerts. Supplied by the deploy workflow from the ALERT_EMAILS secret; never commit real addresses."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = alltrue([
+      for e in split(",", var.alert_emails) :
+      trimspace(e) == "" || can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", trimspace(e)))
+    ])
+    error_message = "alert_emails must be a comma-separated list of email addresses."
+  }
 }

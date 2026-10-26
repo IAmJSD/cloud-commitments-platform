@@ -164,22 +164,6 @@ func (s *PostgresStore) UpdateAPIKey(ctx context.Context, key *UserAPIKey) error
 	return nil
 }
 
-// UpdateAPIKeyLastUsed atomically updates the last_used_at timestamp for an
-// API key. Retained for backwards compatibility with callers that only need
-// the timestamp update -- production code routes through RecordAPIKeyUsage,
-// which additionally maintains the usage counters from migration 000094.
-func (s *PostgresStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error {
-	query := `UPDATE api_keys SET last_used_at = NOW() WHERE id = $1`
-	result, err := s.db.Exec(ctx, query, keyID)
-	if err != nil {
-		return fmt.Errorf("failed to update API key last used: %w", err)
-	}
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("API key not found: %s", keyID)
-	}
-	return nil
-}
-
 // RecordAPIKeyUsage atomically updates last_used_at, adds delta to
 // request_count_total, and adds-or-resets request_count_window based on
 // whether the current window is still within apiKeyUsageWindow of its start.

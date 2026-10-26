@@ -297,7 +297,7 @@ func TestManager_ProcessScheduledPurchases_CancelledExecution(t *testing.T) {
 func TestManager_ProcessScheduledPurchases_ExecutionFails(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockEmail := new(MockEmailSender)
+	mockEmail := allowFailedNotification(new(MockEmailSender))
 
 	pastDate := time.Now().Add(-1 * time.Hour)
 	executions := []config.PurchaseExecution{
@@ -525,6 +525,8 @@ func TestManager_RecoverStrandedApprovals_FailsStrandedRow(t *testing.T) {
 	mockStore.On("SavePurchaseExecution", ctx, mock.AnythingOfType("*config.PurchaseExecution")).
 		Run(func(args mock.Arguments) { saved = args.Get(1).(*config.PurchaseExecution) }).
 		Return(nil)
+	// The failed row reaches operators (issue #1195).
+	mockEmail.On("SendPurchaseFailedNotification", mock.Anything, mock.Anything).Return(nil)
 
 	manager := &Manager{
 		config:          mockStore,
@@ -536,6 +538,7 @@ func TestManager_RecoverStrandedApprovals_FailsStrandedRow(t *testing.T) {
 	recovered, err := manager.RecoverStrandedApprovals(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, recovered)
+	mockEmail.AssertNumberOfCalls(t, "SendPurchaseFailedNotification", 1)
 
 	require.NotNil(t, saved)
 	assert.Equal(t, "failed", saved.Status, "stranded Azure Savings Plans row must become terminally failed, never stay approved")
@@ -1173,7 +1176,7 @@ func TestManager_RecoverStrandedApprovals_AWSRedrive_PersistenceFailurePropagate
 func TestManager_RecoverStrandedApprovals_AWSRedrive_ExecAndPersistBothFail(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockEmail := new(MockEmailSender)
+	mockEmail := allowFailedNotification(new(MockEmailSender))
 
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	t.Cleanup(func() { mockEmail.AssertExpectations(t) })

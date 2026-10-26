@@ -40,12 +40,17 @@ func captureIdempotencyTokens(t *testing.T, exec *config.PurchaseExecution) map[
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
+	t.Cleanup(func() { mockProviderInst.AssertExpectations(t) })
+	t.Cleanup(func() { mockServiceClient.AssertExpectations(t) })
 
 	plan := &config.PurchasePlan{Name: "Direct purchase"}
 
 	mockStore.SavePurchaseExecutionFn = func(_ context.Context, _ *config.PurchaseExecution) error { return nil }
 	mockStore.On("SavePurchaseHistory", ctx, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	// No SendPurchaseConfirmation expectation: processPurchaseRecommendations
+	// never sends it (its callers do), so mockEmail must see no call at all.
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil)
@@ -71,7 +76,7 @@ func captureIdempotencyTokens(t *testing.T, exec *config.PurchaseExecution) map[
 
 	// provCfg is nil: the mock factory matches mock.Anything for it and the
 	// real factory is never reached.
-	_, _, errs, procErr := manager.processPurchaseRecommendations(ctx, exec, plan, "111111111111", nil)
+	_, _, errs, procErr := manager.processPurchaseRecommendations(ctx, exec, plan, "111111111111", nil, "")
 	require.NoError(t, procErr, "processPurchaseRecommendations must not fail in the happy path")
 	require.Empty(t, errs, "all recs must commit so the captured token reflects a real purchase")
 	return tokens
@@ -101,6 +106,10 @@ func TestOfferingClassStampedOnHistoryMatchesPurchase(t *testing.T) {
 			mockFactory := new(MockProviderFactory)
 			mockProviderInst := new(MockProvider)
 			mockServiceClient := new(MockServiceClient)
+			t.Cleanup(func() { mockStore.AssertExpectations(t) })
+			t.Cleanup(func() { mockFactory.AssertExpectations(t) })
+			t.Cleanup(func() { mockProviderInst.AssertExpectations(t) })
+			t.Cleanup(func() { mockServiceClient.AssertExpectations(t) })
 
 			mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{OfferingClass: tc.configured}, nil)
 			var history *config.PurchaseHistoryRecord
@@ -124,7 +133,7 @@ func TestOfferingClassStampedOnHistoryMatchesPurchase(t *testing.T) {
 				},
 			}
 
-			_, _, errs, procErr := manager.processPurchaseRecommendations(ctx, exec, &config.PurchasePlan{Name: "Direct purchase"}, "111111111111", nil)
+			_, _, errs, procErr := manager.processPurchaseRecommendations(ctx, exec, &config.PurchasePlan{Name: "Direct purchase"}, "111111111111", nil, "")
 			require.NoError(t, procErr)
 			require.Empty(t, errs)
 			require.NotNil(t, history)
@@ -141,6 +150,7 @@ func TestUnknownOfferingClassRefusesBeforePurchase(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockFactory := new(MockProviderFactory)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{OfferingClass: "Standard"}, nil)
 
 	manager := &Manager{config: mockStore, providerFactory: mockFactory}
@@ -151,7 +161,7 @@ func TestUnknownOfferingClassRefusesBeforePurchase(t *testing.T) {
 		},
 	}
 
-	_, _, errs, procErr := manager.processPurchaseRecommendations(ctx, exec, &config.PurchasePlan{Name: "Direct purchase"}, "111111111111", nil)
+	_, _, errs, procErr := manager.processPurchaseRecommendations(ctx, exec, &config.PurchasePlan{Name: "Direct purchase"}, "111111111111", nil, "")
 	require.ErrorIs(t, procErr, errUnknownOfferingClass)
 	assert.Nil(t, errs)
 	mockFactory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
@@ -233,6 +243,11 @@ func TestMultiAccountSeedsStablePerAccountKey(t *testing.T) {
 		mockFactory := new(MockProviderFactory)
 		mockProviderInst := new(MockProvider)
 		mockServiceClient := new(MockServiceClient)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		t.Cleanup(func() { mockEmail.AssertExpectations(t) })
+		t.Cleanup(func() { mockFactory.AssertExpectations(t) })
+		t.Cleanup(func() { mockProviderInst.AssertExpectations(t) })
+		t.Cleanup(func() { mockServiceClient.AssertExpectations(t) })
 
 		baseExec := &config.PurchaseExecution{
 			ExecutionID:    "root-exec",
@@ -299,10 +314,16 @@ func TestSQSRedeliveryDoesNotDoubleExecute(t *testing.T) {
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockEmail.AssertExpectations(t) })
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
+	t.Cleanup(func() { mockProviderInst.AssertExpectations(t) })
+	t.Cleanup(func() { mockServiceClient.AssertExpectations(t) })
 
 	newPending := func() *config.PurchaseExecution {
 		return &config.PurchaseExecution{
 			ExecutionID:    "exec-dup",
+			PlanID:         "plan-dup", // a plan-less row is never auto-executed
 			IdempotencyKey: "lineage-dup",
 			Status:         "notified",
 			Recommendations: []config.RecommendationRecord{
@@ -369,10 +390,15 @@ func TestSQSRedeliveryDoesNotDoubleExecute(t *testing.T) {
 func TestMultiAccountPartialSuccessIsAcked(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockEmail := new(MockEmailSender)
+	mockEmail := allowFailedNotification(new(MockEmailSender))
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockEmail.AssertExpectations(t) })
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
+	t.Cleanup(func() { mockProviderInst.AssertExpectations(t) })
+	t.Cleanup(func() { mockServiceClient.AssertExpectations(t) })
 
 	accounts := []config.CloudAccount{
 		{ID: "acct-ok", Name: "OK", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys"},
@@ -472,10 +498,13 @@ func TestMultiAccountPartialSuccessIsAcked(t *testing.T) {
 func TestExecuteForAccount_CommittedButUnsavedIsAcked(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockEmail := new(MockEmailSender)
+	mockEmail := allowFailedNotification(new(MockEmailSender))
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	t.Cleanup(func() { mockFactory.AssertExpectations(t) })
+	t.Cleanup(func() { mockProviderInst.AssertExpectations(t) })
 
 	accounts := []config.CloudAccount{
 		// role_arn with no STS client wired fails credential resolution
@@ -525,7 +554,9 @@ func TestExecuteForAccount_CommittedButUnsavedIsAcked(t *testing.T) {
 		return nil
 	}
 	mockStore.On("SavePurchaseHistory", mock.Anything, mock.AnythingOfType("*config.PurchaseHistoryRecord")).Return(nil)
-	mockEmail.On("SendPurchaseConfirmation", ctx, mock.AnythingOfType("email.NotificationData")).Return(nil)
+	// No SendPurchaseConfirmation expectation: acct-unsaved's row never saves,
+	// so executeForAccount returns AUDIT LOSS before sendPurchaseNotification,
+	// and acct-bad never commits. No confirmation goes out on this run.
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProviderInst, nil)
 	mockProviderInst.On("GetServiceClient", mock.Anything, common.ServiceEC2, mock.Anything).Return(mockServiceClient, nil)

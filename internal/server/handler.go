@@ -8,6 +8,7 @@ import (
 	"hash/fnv"
 	"log"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
@@ -25,6 +26,10 @@ const skippedCollectionMarkerClearTimeout = 5 * time.Second
 type TaskLocker interface {
 	TryAdvisoryLock(ctx context.Context, lockID int64) (bool, error)
 	ReleaseAdvisoryLock(ctx context.Context, lockID int64)
+	// AdvisoryLockHeldFor reports how long the current holder has held
+	// lockID; found is false when nobody holds it or the age is unknown.
+	// Used to tell a genuinely running task from a stuck lock (issue #394).
+	AdvisoryLockHeldFor(ctx context.Context, lockID int64) (heldFor time.Duration, found bool, err error)
 }
 
 // ScheduledTaskType represents different types of scheduled tasks.
@@ -90,10 +95,17 @@ var scheduledEventActions = map[string]ScheduledTaskType{
 	"ladder_run":                  TaskLadderRun,
 }
 
-// HandleScheduledTask processes a scheduled task by type.
+// runScheduledTask runs a scheduled task by type.
 // It acquires a PostgreSQL advisory lock to prevent concurrent execution of the same task.
-func (app *Application) HandleScheduledTask(ctx context.Context, taskType ScheduledTaskType, params ScheduledTaskParams) (any, error) {
+func (app *Application) runScheduledTask(ctx context.Context, taskType ScheduledTaskType, params ScheduledTaskParams) (any, error) {
 	log.Printf("Handling scheduled task: %q", taskType) // #nosec G706 -- taskType is looked up from a known-value map; %q quotes the value to prevent CR/LF log injection
+
+	// Reject an unknown task before connecting or taking an advisory lock
+	// keyed on its name. The Lambda and HTTP transports already validate at
+	// their boundary; this covers the --task CLI and any future caller (#111).
+	if _, err := ParseScheduledTaskType(string(taskType)); err != nil {
+		return nil, err
+	}
 
 	if err := app.ensureDB(ctx); err != nil {
 		return nil, fmt.Errorf("database connection failed: %w", err)
@@ -109,9 +121,13 @@ func (app *Application) HandleScheduledTask(ctx context.Context, taskType Schedu
 		if !acquired {
 			log.Printf("Task %q already running (advisory lock held), skipping", taskType) // #nosec G706 -- taskType is looked up from a known-value map; %q quotes the value to prevent CR/LF log injection
 			app.releaseSkippedCollectionMarker(taskType, params.OwnerToken)
+			if err := stuckTaskLockError(ctx, locker, taskType, lockID); err != nil {
+				return nil, err
+			}
 			return map[string]string{"status": "skipped", "reason": "already_running"}, nil
 		}
 		defer locker.ReleaseAdvisoryLock(ctx, lockID)
+		params = app.claimCollectionInvocation(ctx, taskType, params)
 	}
 
 	return app.dispatchTask(ctx, taskType, params)
@@ -136,22 +152,10 @@ func (app *Application) HandleScheduledTask(ctx context.Context, taskType Schedu
 // lets the Lambda async-invoke retry the same event (same owner token) and
 // still run the collect, so the marker must survive that path.
 //
-// Known residual gap: the token identifies the MARKER, not the invocation, so
-// this cannot distinguish "the lock is held by a tokenless cron run" (release
-// is required, or the marker strands for the full 5-minute window) from "the
-// lock is held by a concurrent duplicate delivery of my own event" (release is
-// premature, since that sibling carries the same token and is still
-// collecting). Lambda's async invocation is at-least-once, so the second case
-// is reachable, and there it clears the marker mid-run: the frontend banner
-// drops early and a refresh issued during the remainder wins a fresh marker
-// only to be lock-skipped and released again, returning 202 without collecting.
-// It is bounded and self-healing (the next refresh after the run completes
-// behaves normally) and touches no purchase or money path. Releasing is still
-// strictly better than not releasing, because the cron-overlap case is routine
-// while duplicate delivery is rare. Closing it properly needs an
-// invocation-scoped identity distinct from the marker token (e.g. the lock
-// winner re-stamping last_collection_owner_id with a fresh token), which is a
-// design change deliberately left out of this PR.
+// A lock held by a duplicate delivery of this same event (Lambda async invoke
+// is at-least-once, so it carries the same token) is safe too: that winner
+// re-stamped the marker with its own invocation token on taking the lock
+// (claimCollectionInvocation, issue #84), so this clear no longer matches it.
 //
 // Scoped by ownerToken, so this can only ever release the marker this run
 // owns, never a concurrent run's. Callers that never won MarkCollectionStarted
@@ -248,7 +252,13 @@ func (app *Application) handleProcessScheduledPurchases(ctx context.Context) (*p
 		log.Printf("Failed to process scheduled purchases: %v", err)
 		return nil, err
 	}
-	log.Printf("Purchases processed: %d processed, %d executed, %d stranded-approvals recovered", result.Processed, result.Executed, result.Recovered)
+	log.Printf("Purchases processed: %d processed, %d executed, %d failed, %d stranded-approvals recovered", result.Processed, result.Executed, result.Failed, result.Recovered)
+	if result.Failed > 0 {
+		// A partial failure must not read as success to the scheduler (#714).
+		// The result still goes back for callers that want the counts.
+		return result, fmt.Errorf("%w: %d failed (%d processed, %d executed): %s",
+			ErrScheduledPurchasesFailed, result.Failed, result.Processed, result.Executed, strings.Join(result.Errors, "; "))
+	}
 	return result, nil
 }
 
@@ -273,8 +283,9 @@ func (app *Application) handleSendNotifications(ctx context.Context) (*purchase.
 func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[string]int64, error) {
 	log.Println("Cleaning up expired records...")
 
+	// No sessions_deleted counter: CleanupExpiredSessions reports no count,
+	// so it could only ever be a fabricated 0 (#326).
 	result := map[string]int64{
-		"sessions_deleted":   0,
 		"executions_deleted": 0,
 	}
 
@@ -302,7 +313,7 @@ func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[st
 		}
 	}
 
-	log.Printf("Cleanup complete: %d sessions, %d executions deleted", result["sessions_deleted"], result["executions_deleted"])
+	log.Printf("Cleanup complete: %d executions deleted", result["executions_deleted"])
 	return result, nil
 }
 
@@ -371,11 +382,11 @@ func (app *Application) handleFinalizeRevocations(ctx context.Context) (*purchas
 func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]any, error) {
 	log.Println("Refreshing analytics...")
 
+	// No partition counters: this task never creates or drops partitions
+	// (handleCollectAnalytics does), so they could only be fabricated zeros.
 	result := map[string]any{
-		"status":             "success",
-		"views_refreshed":    0,
-		"partitions_created": 0,
-		"partitions_dropped": 0,
+		"status":          "success",
+		"views_refreshed": 0,
 	}
 
 	// Refresh materialized views if analytics store is available.
@@ -392,6 +403,9 @@ func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]
 			log.Println("Materialized views refreshed successfully")
 		}
 	} else {
+		// Nothing ran, so this is not a success; handleCollectAnalytics
+		// reports the same condition as "skipped" (#326).
+		result["status"] = "skipped"
 		log.Println("Analytics store not available, skipping materialized view refresh")
 	}
 

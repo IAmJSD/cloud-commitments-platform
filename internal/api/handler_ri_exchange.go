@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/big"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -29,6 +30,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/ctxutil"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/ricost"
 )
 
 // reshapeEC2Client is the narrow slice of the EC2 client that
@@ -256,6 +258,18 @@ func (h *Handler) buildAzureExchangeClient(ctx context.Context, subscriptionID s
 	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
 	if err != nil {
 		return nil, fmt.Errorf("azure: look up account for subscription %q: %w", subscriptionID, err)
+	}
+	return h.azureExchangeClientForAccount(ctx, subscriptionID, account)
+}
+
+// azureExchangeClientForAccount is buildAzureExchangeClient for a caller that
+// has already resolved the CloudAccount registered for subscriptionID (nil
+// when none is), so the same row is not fetched again (issue #311). The
+// injected factory still wins, and a nil account still yields the graceful
+// (nil, nil) empty state.
+func (h *Handler) azureExchangeClientForAccount(ctx context.Context, subscriptionID string, account *config.CloudAccount) (azureExchangeClient, error) {
+	if h.azureExchangeFactory != nil {
+		return h.azureExchangeFactory(subscriptionID), nil
 	}
 	if account == nil {
 		// No Azure account registered for this subscription.
@@ -848,14 +862,44 @@ func (h *Handler) requireAzureSubscriptionScope(ctx context.Context, session *Se
 	if allowed.AllowsAll() {
 		return nil
 	}
-	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
+	account, err := h.lookupAzureAccount(ctx, subscriptionID)
 	if err != nil {
-		return fmt.Errorf("failed to resolve cloud account scope: %w", err)
+		return err
 	}
+	return azureAccountInScope(allowed, account)
+}
+
+// requireAzureAccountScope is requireAzureSubscriptionScope for a caller
+// that has already resolved the subscription's CloudAccount (nil when none
+// is registered), with the same errNotFound denials.
+func (h *Handler) requireAzureAccountScope(ctx context.Context, session *Session, account *config.CloudAccount) error {
+	allowed, err := h.getAccountScope(ctx, session)
+	if err != nil {
+		return fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if allowed.AllowsAll() {
+		return nil
+	}
+	return azureAccountInScope(allowed, account)
+}
+
+// azureAccountInScope refuses, with errNotFound, an unregistered account and
+// one outside the session's scope alike, so the two are indistinguishable.
+func azureAccountInScope(allowed auth.AccountScope, account *config.CloudAccount) error {
 	if account == nil || !allowed.Allows(account.ID, account.Name) {
 		return errNotFound
 	}
 	return nil
+}
+
+// lookupAzureAccount returns the CloudAccount registered for subscriptionID,
+// or nil when none is.
+func (h *Handler) lookupAzureAccount(ctx context.Context, subscriptionID string) (*config.CloudAccount, error) {
+	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve cloud account scope: %w", err)
+	}
+	return account, nil
 }
 
 // requireAzureSourceOwnership refuses any source reservation that is not
@@ -1029,7 +1073,15 @@ const azureMaxPurchaseAmountCurrency = "USD"
 //     It also sharpens exchangeRegions: every source reaching it is
 //     known-owned, so unknownRegionConstraint means only "owned, but Azure
 //     reported no region" rather than doubling as "not yours" or "not real".
-func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *Session, body AzureExecuteExchangeRequestBody, maxRat *big.Rat) (azureExchangeClient, []azurecompute.ExchangeableReservation, error) {
+func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *Session, body AzureExecuteExchangeRequestBody, maxRat *big.Rat) (azureExchangeClient, []azurecompute.ExchangeableReservation, string, error) {
+	// The subscription's CloudAccount is resolved once and that one row
+	// feeds the scope check, the client's credentials and the constraint
+	// AccountIDs (issue #311), so the three cannot see different rows.
+	account, err := h.lookupAzureAccount(ctx, body.SubscriptionID)
+	if err != nil {
+		return nil, nil, "", err
+	}
+
 	// Scope check MUST precede building the client (mirrors
 	// getAzureCompatibleOfferings): otherwise an unregistered subscription
 	// (distinguishable 404: "no Azure account registered...") and a
@@ -1037,53 +1089,44 @@ func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *
 	// enumeration signal to a scoped caller about which subscriptions exist,
 	// and credentials for an out-of-scope account could be resolved before
 	// the denial.
-	if scopeErr := h.requireAzureSubscriptionScope(ctx, session, body.SubscriptionID); scopeErr != nil {
-		return nil, nil, scopeErr
+	if scopeErr := h.requireAzureAccountScope(ctx, session, account); scopeErr != nil {
+		return nil, nil, "", scopeErr
 	}
 
-	client, err := h.buildAzureExchangeClient(ctx, body.SubscriptionID)
+	client, err := h.azureExchangeClientForAccount(ctx, body.SubscriptionID, account)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to build Azure exchange client: %w", err)
+		return nil, nil, "", fmt.Errorf("failed to build Azure exchange client: %w", err)
 	}
 	if client == nil {
-		return nil, nil, NewClientError(404, fmt.Sprintf("no Azure account registered for subscription %q", body.SubscriptionID))
+		return nil, nil, "", NewClientError(404, fmt.Sprintf("no Azure account registered for subscription %q", body.SubscriptionID))
 	}
 
 	owned, err := listOwnedAzureReservations(ctx, client)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
 
 	if ownErr := requireAzureSourceOwnership(owned, body.Sources, body.SubscriptionID); ownErr != nil {
-		return nil, nil, ownErr
+		return nil, nil, "", ownErr
 	}
 
-	accountID, err := h.resolveAzureExchangeAccountID(ctx, body.SubscriptionID)
-	if err != nil {
-		return nil, nil, err
-	}
-
+	accountID := azureExchangeAccountID(account)
 	if err := h.checkAzureExecuteConstraints(ctx, session, body, accountID, maxRat, exchangeRegions(body.Targets, body.Sources, owned)); err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
-	return client, toAzureExchangeSources(body.Sources, owned), nil
+	return client, toAzureExchangeSources(body.Sources, owned), accountID, nil
 }
 
-// resolveAzureExchangeAccountID looks up the CloudAccount registered for
-// subscriptionID and returns its ID, or unattributedAccountConstraint when
-// no account is registered (so an AccountIDs-constrained permission still
-// fails closed against an unattributed request). Extracted from
-// authorizeAzureExchangeExecution to keep that function under the gocyclo
-// limit.
-func (h *Handler) resolveAzureExchangeAccountID(ctx context.Context, subscriptionID string) (string, error) {
-	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve cloud account scope: %w", err)
-	}
+// azureExchangeAccountID returns the resolved CloudAccount's ID, or
+// unattributedAccountConstraint when no account is registered (so an
+// AccountIDs-constrained permission still fails closed against an
+// unattributed request). Only the injected azureExchangeFactory path gets
+// this far with a nil account: production refuses it with a 404 earlier.
+func azureExchangeAccountID(account *config.CloudAccount) string {
 	if account != nil {
-		return account.ID, nil
+		return account.ID
 	}
-	return unattributedAccountConstraint, nil
+	return unattributedAccountConstraint
 }
 
 // checkAzureExecuteConstraints enforces the execute:ri-exchange permission
@@ -1236,7 +1279,7 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 	// authorizeAzureExchangeExecution applies every gate: allowed_accounts
 	// scope, source ownership (issue #1527) and the execute:ri-exchange
 	// Constraints, all before the pricing call below.
-	client, sources, err := h.authorizeAzureExchangeExecution(ctx, session, body, maxRat)
+	client, sources, accountID, err := h.authorizeAzureExchangeExecution(ctx, session, body, maxRat)
 	if err != nil {
 		return nil, err
 	}
@@ -1262,13 +1305,16 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 		return nil, err
 	}
 
-	// Submit-time idempotency (#1642). The re-quote above mints a FRESH
-	// session on every request, so Azure's own session-level replay
-	// protection cannot see two POSTs of one logical exchange as duplicates:
-	// without this claim a client that times out mid-LRO and retries commits
-	// the exchange twice, each half individually under the cap. Taken here,
-	// last, so no gate rejection ever leaves a claim behind.
-	err = h.claimExchangeSubmit(ctx, azureExchangeIdempotencyKey(body))
+	// Audit trail (#82), then submit-time idempotency (#1642). The re-quote
+	// above mints a FRESH session on every request, so Azure's own
+	// session-level replay protection cannot see two POSTs of one logical
+	// exchange as duplicates: without the claim a client that times out
+	// mid-LRO and retries commits the exchange twice, each half individually
+	// under the cap. Taken here, last, so no gate rejection ever leaves a
+	// claim behind.
+	auditID, err := h.beginDirectExchange(ctx,
+		azureDirectExchangeAudit(session, accountID, body, maxRat, preview),
+		azureExchangeIdempotencyKey(body))
 	if err != nil {
 		return nil, err
 	}
@@ -1285,11 +1331,14 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 		// budget mid-poll looks identical to a call that never reached Azure
 		// (a request cancel no longer reaches execCtx). Say so rather than
 		// reporting a flat failure that invites the retry this claim now
-		// refuses (#1642).
-		return nil, mapAzureExchangeError(
+		// refuses (#1642). The audit row records the same ambiguity.
+		mapped := mapAzureExchangeError(
 			"exchange execution failed and may already have been submitted to Azure; "+
 				"verify the reservation state in the Azure portal before retrying", err)
+		h.finalizeDirectExchange(ctx, auditID, azureDirectExchangeOutcome(nil, err, mapped))
+		return nil, mapped
 	}
+	h.finalizeDirectExchange(ctx, auditID, azureDirectExchangeOutcome(result, nil, nil))
 
 	logging.Infof("azure ri-exchange executed: subscription=%s session=%s status=%s", body.SubscriptionID, result.SessionID, result.Status)
 
@@ -1305,11 +1354,15 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 
 // mapAzureExchangeError converts an error from an Azure RI exchange
 // client-layer call to a ClientError with the appropriate HTTP status.
-// Azure 4xx client faults (via isAzureClientError) produce a 400 with the
-// Azure error message preserved; any other error produces a 500 using the
-// opMsg fallback -- the same contract mapAWSExchangeError applies to the
-// AWS exchange endpoints.
+// A cloud-commitments-go exchange refusal (exchangeRefusalError) produces a
+// 422 with its message; Azure 4xx client faults (via isAzureClientError)
+// produce a 400 with the Azure error message preserved; any other error
+// produces a 500 using the opMsg fallback -- the same contract
+// mapAWSExchangeError applies to the AWS exchange endpoints.
 func mapAzureExchangeError(opMsg string, err error) error {
+	if refusal := exchangeRefusalError(err); refusal != nil {
+		return refusal
+	}
 	if isAzureClientError(err) {
 		return NewClientError(400, err.Error())
 	}
@@ -1592,48 +1645,41 @@ func parseThresholdParam(params map[string]string) (float64, error) {
 	return f, nil
 }
 
-// monthlyCostFromConvertibleRI computes the per-instance per-month
-// effective cost from an RI's pricing fields, matching the same
-// formula effectiveMonthlyCost uses for offerings:
-//
-//	monthly = (FixedPrice / hours_per_term + UsagePrice + recurring_hourly) × 730
-//
-// 730 is AWS's canonical hours-per-month constant. Returns zero when
-// Duration is zero (defensive — would otherwise divide by zero).
-//
-// Used to populate exchange.RIInfo.MonthlyCost so the cross-family
-// dollar-units pre-filter can compare against per-target offering
-// costs computed with the same formula.
-func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) float64 {
-	if ri.Duration <= 0 {
-		return 0
-	}
-	hoursPerTerm := float64(ri.Duration) / 3600
-	if hoursPerTerm <= 0 {
-		return 0
-	}
-	return ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730
+// monthlyCostFromConvertibleRI delegates to ricost.MonthlyCostFromConvertibleRI,
+// the single implementation of the convertible RI monthly cost formula shared
+// with internal/server.
+func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
+	return ricost.MonthlyCostFromConvertibleRI(ri)
 }
 
 // convertToExchangeTypes converts provider-specific types to the exchange package types.
-func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recommendations.RIUtilization) ([]exchange.RIInfo, []exchange.UtilizationInfo) {
-	riInfos := make([]exchange.RIInfo, len(instances))
+// RIs whose monthly cost cannot be computed are returned as excluded rather
+// than dropped silently, so the response can surface them.
+func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recommendations.RIUtilization) ([]exchange.RIInfo, []exchange.UtilizationInfo, []ExcludedRI) {
+	var excluded []ExcludedRI
+	riInfos := make([]exchange.RIInfo, 0, len(instances))
 	for i := range instances {
 		inst := instances[i]
-		riInfos[i] = exchange.RIInfo{
+		monthlyCost, err := monthlyCostFromConvertibleRI(inst)
+		if err != nil {
+			logging.Warnf("convertToExchangeTypes: excluding RI from reshape: %v", err)
+			excluded = append(excluded, ExcludedRI{RIID: inst.ReservedInstanceID, Reason: "AWS returned no term length (duration), so its monthly cost cannot be computed"})
+			continue
+		}
+		riInfos = append(riInfos, exchange.RIInfo{
 			ID:                  inst.ReservedInstanceID,
 			InstanceType:        inst.InstanceType,
 			InstanceCount:       inst.InstanceCount,
 			OfferingClass:       "convertible",
 			NormalizationFactor: inst.NormalizationFactor,
-			MonthlyCost:         monthlyCostFromConvertibleRI(inst),
+			MonthlyCost:         monthlyCost,
 			CurrencyCode:        inst.CurrencyCode,
 			// Plumb the AWS-reported RI duration straight through —
 			// reshape's term-match guard rejects alternatives whose
 			// TermSeconds differs from the source so a 3y RI never
 			// surfaces as an alternative to a 1y commitment.
 			TermSeconds: inst.Duration,
-		}
+		})
 	}
 
 	utilInfos := make([]exchange.UtilizationInfo, len(utilData))
@@ -1644,7 +1690,7 @@ func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recomme
 		}
 	}
 
-	return riInfos, utilInfos
+	return riInfos, utilInfos, excluded
 }
 
 // reshapeRequestParams groups parsed query parameters for getReshapeRecommendations.
@@ -1723,7 +1769,7 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 		return nil, fmt.Errorf("failed to get RI utilization: %w", err)
 	}
 
-	riInfos, utilInfos := convertToExchangeTypes(instances, utilData)
+	riInfos, utilInfos, excluded := convertToExchangeTypes(instances, utilData)
 	// Cross-family alternatives are sourced from the cached AWS Cost
 	// Explorer purchase recommendations table in Postgres — no per-rec
 	// DescribeReservedInstancesOfferings fan-out, no hand-curated
@@ -1742,7 +1788,7 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	lookup := purchaseRecLookupFromStore(h.config, cloudAccountID)
 	recs := exchange.AnalyzeReshapingWithRecs(ctx, riInfos, utilInfos, p.threshold, p.region, currencyCode, lookup)
 
-	resp := &ReshapeRecommendationsResponse{Recommendations: recs}
+	resp := &ReshapeRecommendationsResponse{Recommendations: recs, ExcludedRIs: excluded}
 	h.attachReshapeStaleness(ctx, resp)
 	return resp, nil
 }
@@ -1859,7 +1905,7 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 	}
 	region := cfg.Region
 
-	quote, err := exchange.GetExchangeQuote(ctx, exchange.ExchangeQuoteRequest{
+	quote, err := h.awsExchangeQuoter()(ctx, exchange.ExchangeQuoteRequest{
 		Region:           region,
 		ReservedIDs:      body.RIIDs,
 		Targets:          toExchangeTargets(body.Targets),
@@ -1952,12 +1998,15 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 		return nil, err
 	}
 
-	// Submit-time idempotency (#1642). AcceptReservedInstancesExchangeQuote
-	// carries no ClientToken, so AWS will happily accept the same exchange
-	// twice; a client that times out and retries otherwise double-spends with
-	// each half individually under the cap. Taken last, after every gate, so
-	// no rejected request leaves a claim behind.
-	err = h.claimExchangeSubmit(ctx, awsExchangeIdempotencyKey(cloudAccountID, body))
+	// Audit trail (#82), then submit-time idempotency (#1642).
+	// AcceptReservedInstancesExchangeQuote carries no ClientToken, so AWS will
+	// happily accept the same exchange twice; a client that times out and
+	// retries otherwise double-spends with each half individually under the
+	// cap. Taken last, after every gate, so no rejected request leaves a
+	// claim behind.
+	auditID, err := h.beginDirectExchange(ctx,
+		awsDirectExchangeAudit(session, cloudAccountID, body, maxRat),
+		awsExchangeIdempotencyKey(cloudAccountID, body))
 	if err != nil {
 		return nil, err
 	}
@@ -1976,8 +2025,11 @@ func (h *Handler) executeExchange(ctx context.Context, req *events.LambdaFunctio
 	})
 	if err != nil {
 		logging.Errorf("exchange execution failed: %v", err)
-		return nil, mapAWSExchangeError("exchange execution failed", err)
+		mapped := mapAWSExchangeError("exchange execution failed", err)
+		h.finalizeDirectExchange(ctx, auditID, awsDirectExchangeOutcome(exchangeID, quote, err, mapped))
+		return nil, mapped
 	}
+	h.finalizeDirectExchange(ctx, auditID, awsDirectExchangeOutcome(exchangeID, quote, nil, nil))
 
 	return &ExchangeExecuteResponse{
 		ExchangeID: exchangeID,
@@ -2000,10 +2052,14 @@ var awsExchangeClientFaultCodes = map[string]bool{
 
 // mapAWSExchangeError converts an AWS SDK error from an RI exchange
 // operation to a ClientError with the appropriate HTTP status code.
-// AWS 4xx client-fault errors produce a 400 with the original AWS
-// message preserved. Any other error produces a 500 (generic server
-// failure) using the provided opMsg fallback.
+// A cloud-commitments-go exchange refusal (exchangeRefusalError) produces
+// a 422 with its message. AWS 4xx client-fault errors produce a 400 with
+// the original AWS message preserved. Any other error produces a 500
+// (generic server failure) using the provided opMsg fallback.
 func mapAWSExchangeError(opMsg string, err error) error {
+	if refusal := exchangeRefusalError(err); refusal != nil {
+		return refusal
+	}
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) && awsExchangeClientFaultCodes[apiErr.ErrorCode()] {
 		return NewClientError(400, apiErr.ErrorMessage())
@@ -2040,6 +2096,15 @@ type ReshapeRecommendationsResponse struct {
 	RecsCollectedAt *time.Time                       `json:"recs_collected_at,omitempty"`
 	RecsStaleness   string                           `json:"recs_staleness,omitempty"`
 	Recommendations []exchange.ReshapeRecommendation `json:"recommendations"`
+	// ExcludedRIs lists RIs left out of cost-based analysis (and so have no
+	// recommendation) because their monthly cost could not be computed.
+	ExcludedRIs []ExcludedRI `json:"excluded_ris,omitempty"`
+}
+
+// ExcludedRI names a convertible RI omitted from reshape analysis and why.
+type ExcludedRI struct {
+	RIID   string `json:"ri_id"`
+	Reason string `json:"reason"`
 }
 
 // reshapeSoftStaleThreshold is the age at which the reshape recs banner
@@ -2216,32 +2281,9 @@ func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFu
 		return nil, err
 	}
 
-	since := time.Now().AddDate(-1, 0, 0)
-	records, err := h.config.GetRIExchangeHistory(ctx, since, 500)
+	records, err := h.loadRIExchangeHistory(ctx, session)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load exchange history: %w", err)
-	}
-
-	// RI exchange records carry the 12-digit AWS account id from STS, so
-	// resolve it to its single registered AWS account and match the scope by
-	// that account's UUID or name. An unregistered or ambiguous id matches
-	// only a literal entry in the allow-list. A lookup failure errors out.
-	allowed, err := h.getAccountScope(ctx, session)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
-	}
-	if !allowed.AllowsAll() {
-		accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to list cloud accounts for exchange history scope: %w", err)
-		}
-		filtered := records[:0]
-		for i := range records {
-			if exchangeRecordInScope(allowed, accounts, records[i].AccountID) {
-				filtered = append(filtered, records[i])
-			}
-		}
-		records = filtered
+		return nil, err
 	}
 
 	// Strip approval tokens — single-use secrets must not be included in
@@ -2251,6 +2293,79 @@ func (h *Handler) getRIExchangeHistory(ctx context.Context, req *events.LambdaFu
 	}
 
 	return &RIExchangeHistoryResponse{Records: records}, nil
+}
+
+// riExchangeHistoryLimit caps how many exchange records one history request
+// returns. For a scoped caller it applies after the account restriction.
+const riExchangeHistoryLimit = 500
+
+// loadRIExchangeHistory returns the past year of exchange records the session
+// may see, newest first. A scoped caller's account restriction is pushed into
+// the store query so the limit counts only that caller's records: filtering
+// the newest records of every account afterwards could leave a scoped user
+// with a truncated or empty history (issue #308).
+//
+// RI exchange records carry the 12-digit AWS account id from STS, so it is
+// resolved to its single registered AWS account and the scope is matched by
+// that account's UUID or name. An unregistered or ambiguous id matches only a
+// literal entry in the allow-list. A lookup failure errors out.
+func (h *Handler) loadRIExchangeHistory(ctx context.Context, session *Session) ([]config.RIExchangeRecord, error) {
+	allowed, err := h.getAccountScope(ctx, session)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	since := time.Now().AddDate(-1, 0, 0)
+	if allowed.AllowsAll() {
+		records, loadErr := h.config.GetRIExchangeHistory(ctx, since, riExchangeHistoryLimit)
+		if loadErr != nil {
+			return nil, fmt.Errorf("failed to load exchange history: %w", loadErr)
+		}
+		return records, nil
+	}
+
+	accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list cloud accounts for exchange history scope: %w", err)
+	}
+	ids := exchangeAccountIDsInScope(allowed, accounts)
+	records, err := h.config.GetRIExchangeHistoryForAccounts(ctx, since, riExchangeHistoryLimit, ids)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load exchange history: %w", err)
+	}
+	// Defense in depth: re-check every returned row against the scope, so a
+	// store that ignored the account restriction still cannot leak another
+	// account's exchanges.
+	filtered := make([]config.RIExchangeRecord, 0, len(records))
+	for i := range records {
+		if exchangeRecordInScope(allowed, accounts, records[i].AccountID) {
+			filtered = append(filtered, records[i])
+		}
+	}
+	return filtered, nil
+}
+
+// exchangeAccountIDsInScope returns, sorted, every STS account id whose
+// exchange records the scope covers under exchangeRecordInScope. A covered id
+// is either a registered account's external id or a literal allow-list entry,
+// so testing those candidates finds them all. Literal entries that are
+// not STS ids (a UUID or a name) are kept too: they match no stored record,
+// and keeping them makes the set exactly what exchangeRecordInScope accepts.
+func exchangeAccountIDsInScope(allowed auth.AccountScope, accounts []config.CloudAccount) []string {
+	candidates := make(map[string]struct{}, len(allowed.Accounts)+len(accounts))
+	for _, a := range allowed.Accounts {
+		candidates[a] = struct{}{}
+	}
+	for i := range accounts {
+		candidates[accounts[i].ExternalID] = struct{}{}
+	}
+	ids := make([]string, 0, len(candidates))
+	for id := range candidates {
+		if exchangeRecordInScope(allowed, accounts, id) {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // exchangeRecordInScope reports whether the scope covers an exchange record's

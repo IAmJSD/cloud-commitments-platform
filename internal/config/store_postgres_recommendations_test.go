@@ -11,21 +11,19 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func setupRecommendationsStore(ctx context.Context, t *testing.T) (*config.PostgresStore, func()) {
+// setupRecommendationsStore returns a store on a freshly migrated database of
+// the test's own, cloned on the package's shared container (issue #982). The
+// database is dropped when the test ends.
+func setupRecommendationsStore(ctx context.Context, t *testing.T) *config.PostgresStore {
 	t.Helper()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	err = migrations.RunMigrations(ctx, container.DB.Pool(), getMigrationsPath(), "", "")
-	require.NoError(t, err)
-	store := config.NewPostgresStore(container.DB)
-	return store, func() { container.Cleanup(ctx) }
+	return config.NewPostgresStore(testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath()).DB)
 }
 
 // seedRecommendationCloudAccount registers a cloud account so that
@@ -60,39 +58,18 @@ func awsRec(id, service, region, resourceType string, savings float64) config.Re
 	}
 }
 
-func TestPostgresStore_ReplaceRecommendations(t *testing.T) {
-	ctx := context.Background()
-	store, cleanup := setupRecommendationsStore(ctx, t)
-	defer cleanup()
-
-	now := time.Now().UTC().Truncate(time.Second)
-
-	initial := []config.RecommendationRecord{
-		awsRec("a1", "ec2", "us-east-1", "m5.large", 10),
-		awsRec("a2", "rds", "us-east-1", "db.r5.large", 20),
-	}
-	require.NoError(t, store.ReplaceRecommendations(ctx, now, initial))
-
-	got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
-	require.NoError(t, err)
-	assert.Len(t, got, 2)
-
-	// Replace with a new snapshot — original rows must be gone.
-	replacement := []config.RecommendationRecord{
-		awsRec("b1", "ec2", "eu-west-1", "m5.xlarge", 50),
-	}
-	require.NoError(t, store.ReplaceRecommendations(ctx, now.Add(time.Minute), replacement))
-
-	got, err = store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, "eu-west-1", got[0].Region)
+// wipeRecommendations empties the recommendations table between subtests that
+// share one test database. Test-only: production code has no unscoped delete on
+// this table (issue #159).
+func wipeRecommendations(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `DELETE FROM recommendations`)
+	require.NoError(t, err, "wiping recommendations between subtests failed")
 }
 
 func TestPostgresStore_UpsertRecommendations_PartialCollect(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRecommendationsStore(ctx, t)
-	defer cleanup()
+	store := setupRecommendationsStore(ctx, t)
 
 	t0 := time.Now().UTC().Truncate(time.Second)
 
@@ -137,8 +114,7 @@ func TestPostgresStore_UpsertRecommendations_PartialCollect(t *testing.T) {
 
 func TestPostgresStore_UpsertRecommendations_EvictsStaleInSuccessfulProvider(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRecommendationsStore(ctx, t)
-	defer cleanup()
+	store := setupRecommendationsStore(ctx, t)
 
 	t0 := time.Now().UTC().Truncate(time.Second)
 
@@ -169,8 +145,7 @@ func TestPostgresStore_UpsertRecommendations_EvictsStaleInSuccessfulProvider(t *
 
 func TestPostgresStore_ListStoredRecommendations_FilterPushdown(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRecommendationsStore(ctx, t)
-	defer cleanup()
+	store := setupRecommendationsStore(ctx, t)
 
 	now := time.Now().UTC().Truncate(time.Second)
 
@@ -179,7 +154,7 @@ func TestPostgresStore_ListStoredRecommendations_FilterPushdown(t *testing.T) {
 		awsRec("a2", "rds", "us-east-1", "db.r5.large", 30),
 		{ID: "z1", Provider: "azure", Service: "vm", Region: "eastus", ResourceType: "Standard_D2", Savings: 20},
 	}
-	require.NoError(t, store.ReplaceRecommendations(ctx, now, recs))
+	require.NoError(t, store.UpsertRecommendations(ctx, now, recs, nil))
 
 	// Filter by provider.
 	got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{Provider: "aws"})
@@ -200,8 +175,7 @@ func TestPostgresStore_ListStoredRecommendations_FilterPushdown(t *testing.T) {
 
 func TestPostgresStore_Freshness_RoundTrip(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRecommendationsStore(ctx, t)
-	defer cleanup()
+	store := setupRecommendationsStore(ctx, t)
 
 	// Fresh migration: LastCollectedAt is nil.
 	fr, err := store.GetRecommendationsFreshness(ctx)
@@ -210,7 +184,7 @@ func TestPostgresStore_Freshness_RoundTrip(t *testing.T) {
 	assert.Nil(t, fr.LastCollectionError)
 
 	now := time.Now().UTC().Truncate(time.Second)
-	require.NoError(t, store.ReplaceRecommendations(ctx, now, nil))
+	require.NoError(t, store.UpsertRecommendations(ctx, now, nil, nil))
 
 	fr, err = store.GetRecommendationsFreshness(ctx)
 	require.NoError(t, err)
@@ -230,12 +204,11 @@ func TestPostgresStore_Freshness_RoundTrip(t *testing.T) {
 // TestPostgresStore_CollectionPartial_RecordedAndCleared pins issue #87: a
 // partial sweep's summary round-trips through recommendations_state, survives
 // an error write (both can be true of one run), and is cleared by the next
-// Upsert or Replace -- i.e. by the next persisted collection, which re-sets
-// it only if that collection was partial too.
+// Upsert -- i.e. by the next persisted collection, which re-sets it only if
+// that collection was partial too.
 func TestPostgresStore_CollectionPartial_RecordedAndCleared(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRecommendationsStore(ctx, t)
-	defer cleanup()
+	store := setupRecommendationsStore(ctx, t)
 
 	fr, err := store.GetRecommendationsFreshness(ctx)
 	require.NoError(t, err)
@@ -272,12 +245,6 @@ func TestPostgresStore_CollectionPartial_RecordedAndCleared(t *testing.T) {
 	assert.Nil(t, fr.LastCollectionError)
 
 	recordPartial()
-	require.NoError(t, store.ReplaceRecommendations(ctx, now.Add(time.Minute), nil))
-	fr, err = store.GetRecommendationsFreshness(ctx)
-	require.NoError(t, err)
-	assert.Nil(t, fr.LastCollectionPartial, "a full resync must clear the marker too")
-
-	recordPartial()
 	require.NoError(t, store.SetRecommendationsCollectionPartial(ctx, nil))
 	fr, err = store.GetRecommendationsFreshness(ctx)
 	require.NoError(t, err)
@@ -298,8 +265,7 @@ func TestPostgresStore_CollectionPartial_RecordedAndCleared(t *testing.T) {
 // setupRecommendationsStore helper runs the full migration chain.
 func TestPostgresStore_UpsertRecommendations_StoresAllTermVariants(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRecommendationsStore(ctx, t)
-	defer cleanup()
+	store := setupRecommendationsStore(ctx, t)
 
 	now := time.Now().UTC().Truncate(time.Second)
 
@@ -339,8 +305,7 @@ func TestPostgresStore_UpsertRecommendations_StoresAllTermVariants(t *testing.T)
 // scoped to (provider) only and would wipe the failed account's rows.
 func TestPostgresStore_UpsertRecommendations_AccountScopedEviction(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRecommendationsStore(ctx, t)
-	defer cleanup()
+	store := setupRecommendationsStore(ctx, t)
 
 	// Two registered Azure accounts; valid UUIDs because the
 	// account_key generated column is UUID-typed. The accounts must exist
@@ -402,8 +367,7 @@ func TestPostgresStore_UpsertRecommendations_AccountScopedEviction(t *testing.T)
 // must not touch the ambient row.
 func TestPostgresStore_UpsertRecommendations_AmbientAndRegisteredCoexist(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRecommendationsStore(ctx, t)
-	defer cleanup()
+	store := setupRecommendationsStore(ctx, t)
 
 	// The registered account must exist in cloud_accounts:
 	// recommendations.cloud_account_id carries an FK (migration 000030).
@@ -468,11 +432,8 @@ func TestPostgresStore_UpsertRecommendations_AmbientAndRegisteredCoexist(t *test
 // TestScheduler_CollectRecommendations_EmptyTokenSkipsClear.
 func TestPostgresStore_ClearCollectionStarted_CompareAndClear(t *testing.T) {
 	ctx := context.Background()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 	pool := container.DB.Pool()
-	require.NoError(t, migrations.RunMigrations(ctx, pool, getMigrationsPath(), "", ""))
 	store := config.NewPostgresStore(container.DB)
 
 	// Run A wins the race and is stamped with a fresh owner token.
@@ -536,12 +497,7 @@ func TestPostgresStore_ClearCollectionStarted_CompareAndClear(t *testing.T) {
 // exists to close.
 func TestPostgresStore_SetRecommendationsCollectionError_DoesNotClearOwnerMarker(t *testing.T) {
 	ctx := context.Background()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
-	pool := container.DB.Pool()
-	require.NoError(t, migrations.RunMigrations(ctx, pool, getMigrationsPath(), "", ""))
-	store := config.NewPostgresStore(container.DB)
+	store := setupRecommendationsStore(ctx, t)
 
 	// Owner run A wins the race and is stamped with a fresh owner token.
 	tokenA, okA, err := store.MarkCollectionStarted(ctx)
@@ -570,8 +526,7 @@ func float64Ptr(f float64) *float64 { return &f }
 
 func TestPostgresStore_UpsertRecommendations_ReplacesAzureWrongUnits(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRecommendationsStore(ctx, t)
-	defer cleanup()
+	store := setupRecommendationsStore(ctx, t)
 	rec := config.RecommendationRecord{ID: "old-units", Provider: "azure", Service: "compute", Region: "westeurope", ResourceType: "Standard_D2s_v3", Count: 1, Term: 3, Payment: "all-upfront", UpfrontCost: 70, MonthlyCost: float64Ptr(10), Savings: 50}
 	collects := []config.SuccessfulCollect{{Provider: "azure"}}
 	now := time.Now().UTC()
@@ -603,11 +558,8 @@ func zonalAWSRec(az string, savings float64) config.RecommendationRecord {
 // TestPostgresStore_UpsertRecommendations_MultiAZBatch (PR2c).
 func TestPostgresStore_UpsertRecommendations_AZArbiter(t *testing.T) {
 	ctx := context.Background()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 	pool := container.DB.Pool()
-	require.NoError(t, migrations.RunMigrations(ctx, pool, getMigrationsPath(), "", ""))
 	store := config.NewPostgresStore(container.DB)
 	t0 := time.Now().UTC().Truncate(time.Second)
 	collect := []config.SuccessfulCollect{{Provider: "aws"}}
@@ -626,7 +578,7 @@ func TestPostgresStore_UpsertRecommendations_AZArbiter(t *testing.T) {
 	})
 
 	t.Run("regional row unchanged", func(t *testing.T) {
-		require.NoError(t, store.ReplaceRecommendations(ctx, t0, nil))
+		wipeRecommendations(ctx, t, pool)
 		require.NoError(t, store.UpsertRecommendations(ctx, t0, []config.RecommendationRecord{awsRec("r1", "ec2", "us-east-1", "c5.large", 10)}, collect))
 		require.NoError(t, store.UpsertRecommendations(ctx, t0.Add(time.Hour), []config.RecommendationRecord{awsRec("r1", "ec2", "us-east-1", "c5.large", 30)}, collect))
 		got, err := store.ListStoredRecommendations(ctx, config.RecommendationFilter{})
@@ -637,7 +589,7 @@ func TestPostgresStore_UpsertRecommendations_AZArbiter(t *testing.T) {
 	})
 
 	t.Run("row written by pre-PR2b code is found and updated", func(t *testing.T) {
-		require.NoError(t, store.ReplaceRecommendations(ctx, t0, nil))
+		wipeRecommendations(ctx, t, pool)
 		// What the old code stored: AZ, platform and tenancy only inside details (the
 		// collector always sets all three on a zonal EC2 rec), 8-column semantics.
 		_, err := pool.Exec(ctx, `
@@ -666,11 +618,8 @@ func TestPostgresStore_UpsertRecommendations_AZArbiter(t *testing.T) {
 // index drop (migration 000119).
 func TestPostgresStore_UpsertRecommendations_PlatformTenancyArbiter(t *testing.T) {
 	ctx := context.Background()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 	pool := container.DB.Pool()
-	require.NoError(t, migrations.RunMigrations(ctx, pool, getMigrationsPath(), "", ""))
 	store := config.NewPostgresStore(container.DB)
 	t0 := time.Now().UTC().Truncate(time.Second)
 	collect := []config.SuccessfulCollect{{Provider: "aws"}}
@@ -701,7 +650,7 @@ func TestPostgresStore_UpsertRecommendations_PlatformTenancyArbiter(t *testing.T
 	})
 
 	t.Run("regional non-EC2 row has empty platform and tenancy and updates in place", func(t *testing.T) {
-		require.NoError(t, store.ReplaceRecommendations(ctx, t0, nil))
+		wipeRecommendations(ctx, t, pool)
 		rds := awsRec("r1", "rds", "us-east-1", "db.m5.large", 10)
 		require.NoError(t, store.UpsertRecommendations(ctx, t0, []config.RecommendationRecord{rds}, collect))
 		rds.Savings = 30
@@ -717,7 +666,7 @@ func TestPostgresStore_UpsertRecommendations_PlatformTenancyArbiter(t *testing.T
 	})
 
 	t.Run("row written by pre-PR-C code is found and updated", func(t *testing.T) {
-		require.NoError(t, store.ReplaceRecommendations(ctx, t0, nil))
+		wipeRecommendations(ctx, t, pool)
 		// What the old code stored: platform and tenancy only inside details.
 		_, err := pool.Exec(ctx, `
 			INSERT INTO recommendations
@@ -740,11 +689,8 @@ func TestPostgresStore_UpsertRecommendations_PlatformTenancyArbiter(t *testing.T
 // cannot affect row a second time", and both rows persist.
 func TestPostgresStore_UpsertRecommendations_MultiAZBatch(t *testing.T) {
 	ctx := context.Background()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 	pool := container.DB.Pool()
-	require.NoError(t, migrations.RunMigrations(ctx, pool, getMigrationsPath(), "", ""))
 	store := config.NewPostgresStore(container.DB)
 	t0 := time.Now().UTC().Truncate(time.Second)
 	collect := []config.SuccessfulCollect{{Provider: "aws"}}
@@ -786,12 +732,6 @@ func TestPostgresStore_UpsertRecommendations_MultiAZBatch(t *testing.T) {
 		require.NoError(t, store.UpsertRecommendations(ctx, t0.Add(2*time.Hour), batch, collect))
 		assert.Equal(t, map[string]float64{"us-east-1a": 12, "us-east-1b": 21, "": 30}, savingsByAZ(t))
 	})
-
-	t.Run("ReplaceRecommendations stores the same AZ pair", func(t *testing.T) {
-		batch := []config.RecommendationRecord{zonalAWSRec("us-east-1a", 1), zonalAWSRec("us-east-1b", 2)}
-		require.NoError(t, store.ReplaceRecommendations(ctx, t0.Add(3*time.Hour), batch))
-		assert.Equal(t, map[string]float64{"us-east-1a": 1, "us-east-1b": 2}, savingsByAZ(t))
-	})
 }
 
 // Issue #806, PR-E: once migration 000119 drops the 9-column index, EC2 recs
@@ -799,11 +739,8 @@ func TestPostgresStore_UpsertRecommendations_MultiAZBatch(t *testing.T) {
 // persistCollection writes) without a unique violation, and both rows persist.
 func TestPostgresStore_UpsertRecommendations_PlatformTenancyBatch(t *testing.T) {
 	ctx := context.Background()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
 	pool := container.DB.Pool()
-	require.NoError(t, migrations.RunMigrations(ctx, pool, getMigrationsPath(), "", ""))
 	store := config.NewPostgresStore(container.DB)
 	t0 := time.Now().UTC().Truncate(time.Second)
 	collect := []config.SuccessfulCollect{{Provider: "aws"}}
@@ -830,7 +767,7 @@ func TestPostgresStore_UpsertRecommendations_PlatformTenancyBatch(t *testing.T) 
 	}
 	reset := func(t *testing.T) {
 		t.Helper()
-		require.NoError(t, store.ReplaceRecommendations(ctx, t0, nil))
+		wipeRecommendations(ctx, t, pool)
 	}
 
 	t.Run("two rows differing only by platform in one batch both persist", func(t *testing.T) {

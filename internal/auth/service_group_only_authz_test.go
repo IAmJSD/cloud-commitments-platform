@@ -248,7 +248,7 @@ func TestUpdateUser_SelfEscalationDenied(t *testing.T) {
 	mockStore.On("GetGroup", ctx, viewerGroup().ID).Return(viewerGroup(), nil)
 	// Permissive write stub, deliberately: without it, removing the
 	// self-escalation guard kills this test by panicking on an unstubbed
-	// UpdateUser -- a kill that disappears the moment someone adds a stub
+	// UpdateUserAdminFields -- a kill that disappears the moment someone adds a stub
 	// while tidying fixtures. With it, the removal is caught by the
 	// AssertNotCalled below, which is the actual security property.
 	mockStore.On("UpdateUserAdminFields", ctx, mock.AnythingOfType("*auth.User"), mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -276,15 +276,22 @@ func TestUpdateUser_AdminEditingSelfAllowed(t *testing.T) {
 	admin := &User{ID: "adm", GroupIDs: []string{DefaultAdminGroupID}, Active: true}
 	// GetUserByID is hit by UpdateUser (target) and by HasPermission (actor).
 	mockStore.On("GetUserByID", ctx, "adm").Return(admin, nil)
+	// A write-capable group: adding a view-only group next to Administrators
+	// would be refused as a contradictory combination (issue #78).
+	planAuthors := &Group{
+		ID:          "00000000-0000-5000-8000-000000000003",
+		Name:        "Plan Authors",
+		Permissions: []Permission{{Action: ActionCreate, Resource: ResourcePlans}},
+	}
 	mockStore.On("GetGroup", ctx, DefaultAdminGroupID).Return(adminGroup(), nil)
-	mockStore.On("GetGroup", ctx, viewerGroup().ID).Return(viewerGroup(), nil)
+	mockStore.On("GetGroup", ctx, planAuthors.ID).Return(planAuthors, nil)
 	mockStore.On("UpdateUserAdminFields", ctx, mock.AnythingOfType("*auth.User"), mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
-	// Admin adds a viewer group to themselves while KEEPING Administrators, so
+	// Admin adds another group to themselves while KEEPING Administrators, so
 	// the last-admin branch is not triggered and the self-escalation guard
 	// passes because the actor holds {admin, *} (i.e. manage-users).
 	updated, err := svc.UpdateUser(ctx, "adm", "adm",
-		UpdateUserRequest{GroupIDs: []string{DefaultAdminGroupID, viewerGroup().ID}})
+		UpdateUserRequest{GroupIDs: []string{DefaultAdminGroupID, planAuthors.ID}})
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{DefaultAdminGroupID, viewerGroup().ID}, updated.GroupIDs)
+	assert.ElementsMatch(t, []string{DefaultAdminGroupID, planAuthors.ID}, updated.GroupIDs)
 }

@@ -90,6 +90,10 @@ export interface AccountServiceOverride {
   exclude_regions?: string[];
   include_types?: string[];
   exclude_types?: string[];
+  // Row timestamps from account_service_overrides; the list endpoint returns
+  // the full row. updated_at moves on every save (issue #8).
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface AccountServiceOverrideRequest {

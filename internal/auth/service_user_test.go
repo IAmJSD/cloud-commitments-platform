@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
 )
 
 func TestService_SetupAdmin(t *testing.T) {
@@ -460,7 +459,7 @@ func TestService_DeleteUser_ConcurrentLastTwoAdmins(t *testing.T) {
 // simultaneously deactivate the last two active admins. Both read count == 2
 // and pass the soft check. The 000065 deferred trigger now counts only *active*
 // members and serializes via an advisory xact lock, so exactly one commit is
-// rejected. We simulate the DB outcome by having the second UpdateUser return
+// rejected. We simulate the DB outcome by having the second UpdateUserAdminFields return
 // the trigger violation, and assert the invariant: never zero active admins.
 func TestService_UpdateUser_ConcurrentDeactivateLastTwoAdmins(t *testing.T) {
 	ctx := context.Background()
@@ -476,7 +475,7 @@ func TestService_UpdateUser_ConcurrentDeactivateLastTwoAdmins(t *testing.T) {
 	mockStore.On("GetUserByID", ctx, "admin-b").Return(adminB, nil).Once()
 	mockStore.On("CountGroupMembers", ctx, DefaultAdminGroupID).Return(2, nil).Twice()
 
-	// Session revocation now happens only after store.UpdateUser succeeds,
+	// Session revocation now happens only after store.UpdateUserAdminFields succeeds,
 	// so only admin-a (whose commit succeeds below) gets DeleteUserSessions;
 	// admin-b hits the deferred trigger and must not be logged out for a
 	// deactivation that never actually took effect.
@@ -633,6 +632,8 @@ func TestService_UpdateUser(t *testing.T) {
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(existingUser, nil).Once()
+		// Two view-only groups: a consistent combination (issue #78).
+		stubViewOnlyGroups(ctx, mockStore, "group-2", "group-3")
 		mockStore.On("UpdateUserAdminFields", ctx, mock.AnythingOfType("*auth.User"), mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 		req := UpdateUserRequest{
@@ -899,7 +900,7 @@ func TestService_UpdateUser(t *testing.T) {
 		// Soft check passes: two admins visible at read time.
 		mockStore.On("GetUserByID", ctx, "admin-1").Return(adminUser, nil).Once()
 		mockStore.On("CountGroupMembers", ctx, DefaultAdminGroupID).Return(2, nil).Once()
-		// UpdateUser hits the deferred trigger at commit time.
+		// UpdateUserAdminFields hits the deferred trigger at commit time.
 		triggerErr := fmt.Errorf("last_admin_constraint_violation: at least one member of the Administrators group must remain")
 		mockStore.On("UpdateUserAdminFields", ctx, mock.AnythingOfType("*auth.User"), mock.Anything, mock.Anything, mock.Anything).Return(triggerErr).Once()
 
@@ -986,7 +987,7 @@ func TestService_UpdateUser(t *testing.T) {
 		triggerErr := fmt.Errorf("last_admin_constraint_violation: at least one active member of the Administrators group must remain")
 		mockStore.On("UpdateUserAdminFields", ctx, mock.AnythingOfType("*auth.User"), mock.Anything, mock.Anything, mock.Anything).Return(triggerErr).Once()
 		// DeleteUserSessions must NOT be called: session revocation now
-		// happens only after store.UpdateUser succeeds, so a request that
+		// happens only after store.UpdateUserAdminFields succeeds, so a request that
 		// hits the deferred trigger must not log the user out for a change
 		// that never actually took effect.
 
@@ -1045,6 +1046,8 @@ func TestService_CreateUser_EdgeCases(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		mockStore.On("GetUserByEmail", ctx, "newuser@example.com").Return(nil, nil).Once()
+		// Two view-only groups: a consistent combination (issue #78).
+		stubViewOnlyGroups(ctx, mockStore, "group-1", "group-2")
 		mockStore.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
 
 		req := CreateUserRequest{
@@ -1191,18 +1194,19 @@ func TestService_SetupAdmin_EdgeCases(t *testing.T) {
 // Test TOTP functions.
 func TestService_UpdateUserProfile(t *testing.T) {
 	ctx := context.Background()
+	// Hashed once at MinCost: the subtests only need a hash that
+	// verifyPassword accepts, not the production work factor.
+	oldHash := TestPasswordHash(t, "OldPassword123")
 
 	t.Run("update email and password successfully", func(t *testing.T) {
 		mockStore := new(MockStore)
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		// Create user with bcrypt hash for UpdateUserProfile test
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 			CreatedAt:    time.Now(),
 		}
@@ -1224,11 +1228,10 @@ func TestService_UpdateUserProfile(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 		}
 
@@ -1252,11 +1255,10 @@ func TestService_UpdateUserProfile(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 		}
 		otherUser := &User{
@@ -1280,11 +1282,10 @@ func TestService_UpdateUserProfile(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 		}
 
@@ -1302,11 +1303,10 @@ func TestService_UpdateUserProfile(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 		}
 
@@ -1337,11 +1337,10 @@ func TestService_UpdateUserProfile(t *testing.T) {
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
 
-		hash, _ := bcrypt.GenerateFromPassword([]byte("OldPassword123"), bcrypt.DefaultCost)
 		testUser := &User{
 			ID:           "user-123",
 			Email:        "old@example.com",
-			PasswordHash: string(hash),
+			PasswordHash: oldHash,
 			Active:       true,
 		}
 

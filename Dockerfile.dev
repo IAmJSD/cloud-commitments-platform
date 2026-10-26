@@ -1,11 +1,14 @@
 # Development Dockerfile with hot reload using Air
 # Image pinned to a SHA256 digest for reproducible builds; a registry
 # tag mutation (Docker Hub allows re-tagging) cannot poison this build.
-# To refresh: `docker buildx imagetools inspect golang:1.26.9-alpine3.24`
+# To refresh: `docker buildx imagetools inspect golang:1.26.10-alpine3.24`
 # (or use the Docker Hub API tags endpoint) and update the digest below.
 # A Renovate / Dependabot config can automate this if desired.
-# Keep this digest in sync with the builder stage in Dockerfile.
-FROM golang:1.26.9-alpine3.24@sha256:cdfd4fe2da6b225d8b40c6b7a105736e548e83ff56d5d8f9394446eeb5eb84e0 AS development
+# Keep this digest in sync with the builder stage in Dockerfile; the
+# golang-migrate binary below is built on it, and
+# internal/database/postgres/migrations/dockerfile_migrate_test.go fails when
+# the two drift.
+FROM golang:1.26.10-alpine3.24@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS development
 
 # Install development tools and Air for hot reload
 RUN apk add --no-cache \
@@ -18,21 +21,6 @@ RUN apk add --no-cache \
 # Set shell with pipefail for safer pipe operations
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
-# Install golang-migrate for database migrations (architecture-aware, checksum-verified)
-ARG TARGETARCH
-RUN MIGRATE_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
-    if [ "$MIGRATE_ARCH" = "arm64" ]; then \
-      MIGRATE_SHA256="9c95441cc430ffdac89276d14de5e2f18bfafca00796c2895490d62e3776d104"; \
-    else \
-      MIGRATE_SHA256="26c53c9162c9c4aaa84c47cd12455d4a9ac725befbe82850a5937b5ec1e7b8e6"; \
-    fi && \
-    curl -Lo migrate.tar.gz "https://github.com/golang-migrate/migrate/releases/download/v4.17.0/migrate.linux-${MIGRATE_ARCH}.tar.gz" && \
-    echo "${MIGRATE_SHA256}  migrate.tar.gz" | sha256sum -c - && \
-    tar xvzf migrate.tar.gz && \
-    mv migrate /usr/local/bin/migrate && \
-    chmod +x /usr/local/bin/migrate && \
-    rm migrate.tar.gz
-
 WORKDIR /app
 
 # Copy go mod files
@@ -40,6 +28,34 @@ COPY go.mod go.sum ./
 
 # Download dependencies
 RUN go mod download
+
+# Build golang-migrate from source on this image's pinned Go toolchain, exactly
+# as the builder stage in Dockerfile does; see the comment there for why (a
+# prebuilt release tarball carries upstream's toolchain and dependency pins,
+# and -tags=pgx5 keeps lib/pq out of the binary). The version comes from
+# go.mod. The RUN instruction is kept identical to Dockerfile's, so the dev
+# container runs the same migrate binary as production, and
+# internal/database/postgres/migrations/dockerfile_migrate_test.go fails if
+# the two diverge. Issue #203.
+ARG TARGETARCH
+ARG TARGETOS=linux
+RUN MIGRATE_VERSION="$(go list -m -f '{{.Version}}' github.com/golang-migrate/migrate/v4)" && \
+    echo "Building golang-migrate ${MIGRATE_VERSION} for ${TARGETOS}/${TARGETARCH}" && \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+      -tags=pgx5 \
+      -ldflags="-s -w -X main.Version=${MIGRATE_VERSION}" \
+      -o /usr/local/bin/migrate \
+      github.com/golang-migrate/migrate/v4/cmd/migrate
+
+# Build in single-module mode. `go mod download` above runs before go.work is
+# copied in, so it fills the module cache for the root module only. With the
+# repo's go.work in /app, `go build` would switch to workspace mode, which loads
+# the module graph differently and asks for modules that download did not fetch
+# (e.g. github.com/envoyproxy/go-control-plane). The cache is root-owned (and
+# so is the go_modules volume seeded from it), so the non-root dev user cannot
+# fetch them and Air's build fails before compiling. tests/e2e is a separate
+# stdlib-only module; work on it from its own directory.
+ENV GOWORK=off
 
 # Copy source code
 COPY . .
@@ -49,16 +65,30 @@ RUN if [ ! -f .air.toml ]; then air init; fi
 
 EXPOSE 8080
 
-# Create non-root user for security; grant ownership of app dir and Go paths.
-# uid/gid are pinned explicitly rather than left to `adduser -S`, which picks
-# the first free system id and so varies with the base image's existing users.
-# A numeric USER below needs a value that is known here, not discovered later.
-RUN addgroup -g 1001 devuser && \
-    adduser -D -u 1001 -G devuser devuser && \
-    chown -R devuser:devuser /app /root/go /root/.cache 2>/dev/null || true
+# Create the non-root dev user and give it the app dir.
+#
+# BIND-MOUNT CONSTRAINT: docker-compose.yml mounts the checkout over /app, which
+# hides the chown below. On Linux the mounted files keep the HOST user's
+# uid/gid, and Air must write ./tmp/main into that mount on every reload, so
+# this user's uid/gid have to match the host user's or hot reload stops
+# (issue #158). Hence build args instead of a fixed id: docker-compose.yml
+# passes DEV_UID/DEV_GID (set them to `id -u`/`id -g`, see docs/DEVELOPMENT.md).
+# The 1000:1000 default is the usual first Linux account; Docker Desktop on
+# macOS remaps bind-mount ownership, so macOS works with any value.
+#
+# The ids are pinned explicitly rather than left to `adduser -S`, which picks
+# the first free system id. A host gid that already names a group in the base
+# image (e.g. macOS's 20, `dialout` here) is reused instead of re-created. No
+# `|| true`: a uid that is already taken must fail the build, not leave USER
+# pointing at an account that does not exist.
+ARG DEV_UID=1000
+ARG DEV_GID=1000
+RUN if ! getent group "${DEV_GID}" >/dev/null; then addgroup -g "${DEV_GID}" devuser; fi && \
+    adduser -D -u "${DEV_UID}" -G "$(getent group "${DEV_GID}" | cut -d: -f1)" devuser && \
+    chown -R "${DEV_UID}:${DEV_GID}" /app
 
 # Numeric form so the identity is resolvable without the image's /etc/passwd.
-USER 1001:1001
+USER ${DEV_UID}:${DEV_GID}
 
 # Start with Air for hot reload
 CMD ["air", "-c", ".air.toml"]

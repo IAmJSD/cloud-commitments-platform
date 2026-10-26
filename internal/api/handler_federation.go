@@ -525,7 +525,11 @@ func buildFederationBundle(data federationIaCData, target, source, slug string) 
 		return nil, "", err
 	}
 
-	readme := buildBundleReadme(data, target, source)
+	providerNote, noteErr := bundleProviderReadmeSection(target, source)
+	if noteErr != nil {
+		return nil, "", fmt.Errorf("bundle: %w", noteErr)
+	}
+	readme := buildBundleReadme(data, target, source) + providerNote
 	if err := addStringToZip(zw, "README.txt", readme); err != nil {
 		return nil, "", fmt.Errorf("bundle: write readme: %w", err)
 	}

@@ -26,13 +26,8 @@ func (s *azurePricingPostgresStore) ListStoredRecommendations(ctx context.Contex
 
 func TestApproveAzurePricingRequiresMigrationAndRecollection(t *testing.T) {
 	ctx := context.Background()
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		if cleanupErr := container.Cleanup(ctx); cleanupErr != nil {
-			t.Logf("container cleanup: %v", cleanupErr)
-		}
-	})
+	// Empty, not migrated: the test walks the chain to 105, 106 and 129 itself.
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, rampMigrationsPath(), 105))
 	pricing := config.NewPostgresStore(container.DB)

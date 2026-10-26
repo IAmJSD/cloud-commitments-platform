@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -113,7 +114,7 @@ func TestHandleRequest_ApproveViaToken_NonPendingExecutionIs409(t *testing.T) {
 	exec := &config.PurchaseExecution{Status: "completed", ApprovalToken: config.HashApprovalToken(tokenErrRawToken), ApprovalTokenExpiresAt: &future}
 	h := tokenErrHandler(t, exec, nil)
 	store := h.config.(*MockConfigStore)
-	store.On("TransitionExecutionStatus", mock.Anything, tokenErrExecID, mock.Anything, "running", mock.Anything).
+	store.On("TransitionExecutionStatusTokenPinned", mock.Anything, tokenErrExecID, mock.Anything, "running", mock.Anything, tokenErrRawToken).
 		Return(nil, config.ErrExecutionNotInExpectedStatus)
 
 	resp, err := h.HandleRequest(context.Background(), tokenErrRequest("approve", tokenErrRawToken))
@@ -133,10 +134,80 @@ func TestHandleRequest_CancelViaToken_LostCASIs409(t *testing.T) {
 	exec := &config.PurchaseExecution{Status: "pending", ApprovalToken: config.HashApprovalToken(tokenErrRawToken), ApprovalTokenExpiresAt: &future}
 	h := tokenErrHandler(t, exec, nil)
 	store := h.config.(*MockConfigStore)
-	store.On("CancelExecutionAtomic", mock.Anything, mock.Anything, tokenErrExecID, mock.Anything).
+	store.On("CancelExecutionAtomicTokenPinned", mock.Anything, mock.Anything, tokenErrExecID, mock.Anything, tokenErrRawToken).
 		Return(false, "approved", nil)
 
 	resp, err := h.HandleRequest(context.Background(), tokenErrRequest("cancel", tokenErrRawToken))
 	require.NoError(t, err)
 	assert.Equal(t, 409, resp.StatusCode, resp.Body)
+}
+
+// Issue #1190: the email-link approve and cancel pin the approval token inside
+// the status CAS. A token rotated (re-notification) between the snapshot check
+// and the CAS loses the pin with config.ErrApprovalTokenChanged, which is the
+// caller's fault (their link is no longer the current one), so it answers 403
+// "invalid approval token" like a wrong token, not a 500.
+func TestHandleRequest_TokenActions_TokenRotatedBeforeCASIs403(t *testing.T) {
+	future := time.Now().Add(time.Hour)
+	rotated := fmt.Errorf("approve: %w: execution %s", config.ErrApprovalTokenChanged, tokenErrExecID)
+	for _, action := range []string{"approve", "cancel"} {
+		t.Run(action, func(t *testing.T) {
+			exec := &config.PurchaseExecution{Status: "notified", ApprovalToken: config.HashApprovalToken(tokenErrRawToken), ApprovalTokenExpiresAt: &future}
+			h := tokenErrHandler(t, exec, nil)
+			store := h.config.(*MockConfigStore)
+			store.On("TransitionExecutionStatusTokenPinned", mock.Anything, tokenErrExecID, []string{"pending", "notified"}, "running", (*string)(nil), tokenErrRawToken).
+				Return(nil, rotated).Maybe()
+			store.On("CancelExecutionAtomicTokenPinned", mock.Anything, mock.Anything, tokenErrExecID, mock.Anything, tokenErrRawToken).
+				Return(false, "notified", rotated).Maybe()
+
+			resp, err := h.HandleRequest(context.Background(), tokenErrRequest(action, tokenErrRawToken))
+			require.NoError(t, err)
+			assert.Equal(t, 403, resp.StatusCode, resp.Body)
+			assert.Contains(t, resp.Body, "invalid approval token")
+			if action == "approve" {
+				store.AssertCalled(t, "TransitionExecutionStatusTokenPinned", mock.Anything, tokenErrExecID, []string{"pending", "notified"}, "running", (*string)(nil), tokenErrRawToken)
+			} else {
+				store.AssertCalled(t, "CancelExecutionAtomicTokenPinned", mock.Anything, mock.Anything, tokenErrExecID, mock.Anything, tokenErrRawToken)
+			}
+			store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			store.AssertNotCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		})
+	}
+}
+
+// Issue #1190: the revoke endpoint compares the token before the link's expiry
+// and the revocation window, as approve does, so a wrong token gets the same
+// 403 "invalid revocation token" whether the row's link is live, expired or
+// past its window; only the right token learns that the link has lapsed.
+func TestHandleRequest_RevokeViaEmail_WrongTokenOnLapsedRowIsInvalid(t *testing.T) {
+	past := time.Now().Add(-time.Hour)
+	future := time.Now().Add(time.Hour)
+	longAgo := time.Now().Add(-2 * config.RevocationWindow)
+	hash := config.HashApprovalToken(tokenErrRawToken)
+	cases := []struct {
+		name      string
+		exec      config.PurchaseExecution
+		token     string
+		want      int
+		wantInMsg string
+	}{
+		{"wrong token on an expired link", config.PurchaseExecution{Status: "completed", ApprovalToken: hash, ApprovalTokenExpiresAt: &past}, "wrong", 403, "invalid revocation token"},
+		{"wrong token past the revocation window", config.PurchaseExecution{Status: "completed", ApprovalToken: hash, ApprovalTokenExpiresAt: &future, CompletedAt: &longAgo}, "wrong", 403, "invalid revocation token"},
+		{"right token on an expired link", config.PurchaseExecution{Status: "completed", ApprovalToken: hash, ApprovalTokenExpiresAt: &past}, tokenErrRawToken, 410, "expired"},
+		{"right token past the revocation window", config.PurchaseExecution{Status: "completed", ApprovalToken: hash, ApprovalTokenExpiresAt: &future, CompletedAt: &longAgo}, tokenErrRawToken, 403, "revocation window has closed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := tc.exec
+			h := tokenErrHandler(t, &exec, nil)
+			resp, err := h.HandleRequest(context.Background(), tokenErrRequest("revoke", tc.token))
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, resp.StatusCode, resp.Body)
+			assert.Contains(t, resp.Body, tc.wantInMsg)
+			if tc.token != tokenErrRawToken {
+				assert.NotContains(t, resp.Body, "expired")
+				assert.NotContains(t, resp.Body, "window")
+			}
+		})
+	}
 }
