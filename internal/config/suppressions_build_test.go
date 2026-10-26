@@ -292,7 +292,43 @@ func TestBuildSuppressions_LegacyShapesCanonicalised(t *testing.T) {
 }
 
 func TestPurchaseSuppression_AppliesTo_LegacySharedTenancy(t *testing.T) {
-	stored := PurchaseSuppression{Variant: &SuppressionVariant{"us-east-1a", "Linux/UNIX", "shared"}}
-	assert.True(t, stored.AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}), "old stored shared row must match a default rec")
-	assert.False(t, stored.AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated"}))
+	def := &SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}
+	variant := &SuppressionVariant{"us-east-1a", "Linux/UNIX", "shared"}
+	for name, tc := range map[string]struct {
+		provider, service string
+		want              bool
+	}{
+		"aws ec2 stored-side shared": {"aws", "ec2", true},
+		"aws compute slug":           {"aws", "compute", true},
+		"aws rds untouched":          {"aws", "rds", false},
+		"azure compute untouched":    {"azure", "compute", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stored := PurchaseSuppression{Provider: tc.provider, Service: tc.service, Variant: variant}
+			assert.Equal(t, tc.want, stored.AppliesTo(def))
+		})
+	}
+	ec2 := PurchaseSuppression{Provider: "aws", Service: "ec2", Variant: variant}
+	assert.False(t, ec2.AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated"}))
+}
+
+func TestRecommendationRecord_SuppressionVariant_DetailsAZ(t *testing.T) {
+	for name, tc := range map[string]struct{ details, want string }{
+		"padded AZ is trimmed":   {`{"availability_zone":" us-east-1a "}`, "us-east-1a"},
+		"non-string AZ is empty": {`{"availability_zone":5}`, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := RecommendationRecord{Provider: "aws", Service: "ec2", Details: []byte(tc.details)}
+			v, err := rec.SuppressionVariant()
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, v.AvailabilityZone)
+		})
+	}
+}
+
+func TestCanonicalSuppressionTenancy(t *testing.T) {
+	assert.Equal(t, "default", canonicalSuppressionTenancy(" Shared "))
+	assert.Equal(t, "default", canonicalSuppressionTenancy("shared"))
+	assert.Equal(t, "Dedicated", canonicalSuppressionTenancy("Dedicated"))
+	assert.Equal(t, "default", canonicalSuppressionTenancy("default"))
 }
