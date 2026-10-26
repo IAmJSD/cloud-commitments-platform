@@ -40,12 +40,28 @@ func (m *Manager) claimRunning(ctx context.Context, executionID string, from []s
 	return m.config.TransitionExecutionStatus(ctx, executionID, from, "running", actor)
 }
 
+// claimRunningForApprove is claimRunning for transitionApproveAndExecute. A
+// non-empty approvalToken (the email-link and SQS token approve) is pinned in
+// the same UPDATE as the claim: the row's stored token hash must still match
+// it and be unexpired, so a re-notification that rotated the token after
+// ApproveExecution validated its snapshot refuses the claim with
+// config.ErrApprovalTokenChanged instead of letting the old, revoked token buy
+// (issue #1190, the immediate-approve side of #590). Session, direct-execute
+// and run-now callers pass "" and are not token-gated.
+func (m *Manager) claimRunningForApprove(ctx context.Context, executionID string, from []string, actor *string, approvalToken string) (*config.PurchaseExecution, error) {
+	if approvalToken == "" {
+		return m.claimRunning(ctx, executionID, from, actor)
+	}
+	return m.config.TransitionExecutionStatusTokenPinned(ctx, executionID, from, "running", actor, approvalToken)
+}
+
 // claimAndCheck claims the row for transitionApproveAndExecute and then runs
 // check against the claimed row. A lost claim returns (nil, err). A refused
 // check fails the claimed row before submission and returns (row, err), with
 // err satisfying errors.Is(err, ErrClaimedRowRefused); nothing is bought.
-func (m *Manager) claimAndCheck(ctx context.Context, executionID string, from []string, actor *string, check ClaimedRowCheck, t0 time.Time) (*config.PurchaseExecution, error) {
-	updated, err := m.claimRunning(ctx, executionID, from, actor)
+// approvalToken is pinned inside the claim; see claimRunningForApprove.
+func (m *Manager) claimAndCheck(ctx context.Context, executionID string, from []string, actor *string, approvalToken string, check ClaimedRowCheck, t0 time.Time) (*config.PurchaseExecution, error) {
+	updated, err := m.claimRunningForApprove(ctx, executionID, from, actor, approvalToken)
 	if err != nil {
 		logging.Errorf("purchase[%s]: transitionApproveAndExecute status transition failed after %s: %v",
 			executionID, time.Since(t0), err)
@@ -58,4 +74,35 @@ func (m *Manager) claimAndCheck(ctx context.Context, executionID string, from []
 		return updated, m.failClaimedBeforeSubmission(ctx, updated, fmt.Errorf("%w: %w", ErrClaimedRowRefused, checkErr))
 	}
 	return updated, nil
+}
+
+// errClaimLostBeforePurchase marks a run that stopped before any provider call
+// because its post-claim audit stamp found the row no longer "running": another
+// writer moved it on (or it vanished) after the claim, so this run no longer
+// owns it and must not buy (issue #835). It wraps the store's lost-guard error,
+// so errors.Is(err, config.ErrExecutionNotInExpectedStatus) (or ErrNotFound)
+// still holds for callers that map those to a 409 or a race loss.
+var errClaimLostBeforePurchase = errors.New("claim lost before the purchase; nothing was bought")
+
+// stampClaimedAudit persists the audit fields (approved_by, executed_at, ...)
+// the caller set on its freshly claimed row, guarded on "running" so a stale
+// copy never rewrites a status another writer set.
+//
+// Losing the guard is fail-closed: it returns errClaimLostBeforePurchase and
+// the caller must stop before the provider call, because the guard has just
+// proved the claim is gone (issue #835). Any other save error stays
+// best-effort, as before: the claim is still this run's, the terminal save is
+// guarded on "running" too, and missing attribution must not block a purchase.
+// what names the fields for the AUDIT GAP log line.
+func (m *Manager) stampClaimedAudit(ctx context.Context, exec *config.PurchaseExecution, what string) error {
+	err := m.config.SaveExecutionIfStatus(ctx, exec, executorOwnedStatuses)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, config.ErrExecutionNotInExpectedStatus) || errors.Is(err, config.ErrNotFound) {
+		logging.Warnf("purchase[%s]: %s stamp found the claim gone; not purchasing: %v", exec.ExecutionID, what, err)
+		return fmt.Errorf("%w: %w", errClaimLostBeforePurchase, err)
+	}
+	logging.Errorf("AUDIT GAP: failed to stamp %s on %s: %v", what, exec.ExecutionID, err)
+	return nil
 }

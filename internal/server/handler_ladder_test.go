@@ -1119,6 +1119,96 @@ func TestBuildTrancheDBRows_MalformedAmount_Errors(t *testing.T) {
 	assert.Nil(t, rows, "no rows may be returned when any tranche amount is malformed")
 }
 
+// Issue #1182: the planner's exact amount is floored to the six-decimal
+// tranche column, never rounded to the nearest float64 (which can land on or
+// above the next decimal and so above what the plan asked for).
+func TestBuildTrancheDBRows_FloorsAmountToStoredScale(t *testing.T) {
+	cfgID := "cfg-1"
+	for planned, want := range map[string]float64{
+		"12345999999999999/100000000000000000": 0.123459, // nearest float64 is 0.12346
+		"9999999999999/10000000":               999999.999999,
+		"1/3":                                  0.333333,
+		"3/2":                                  1.5,
+	} {
+		rows, err := buildTrancheDBRows([]pkgladder.Tranche{{
+			ID: "tr-1", RunID: "run-1", Layer: pkgladder.LayerComputeSP,
+			Term: pkgladder.Term1Year, PaymentOption: pkgladder.PaymentNoUpfront,
+			Status: pkgladder.TrancheStatusScheduled, AmountUSDPerHour: planned,
+			CommitmentRate: "1", FireAfter: time.Now(),
+		}}, "run-1", &cfgID)
+		require.NoError(t, err, planned)
+		require.Len(t, rows, 1)
+		assert.Equal(t, want, rows[0].AmountUSDHr, planned)
+	}
+}
+
+func flooringTestTranche(id string, layer pkgladder.LayerType, amount string, fireAfter time.Time) pkgladder.Tranche {
+	return pkgladder.Tranche{
+		ID: id, RunID: "run-1", Layer: layer,
+		Term: pkgladder.Term1Year, PaymentOption: pkgladder.PaymentNoUpfront,
+		Status: pkgladder.TrancheStatusScheduled, AmountUSDPerHour: amount,
+		CommitmentRate: "1", FireAfter: fireAfter,
+	}
+}
+
+// Issue #1199 review: a positive planned amount below 0.000001 floors to 0 at
+// the stored scale. It must be dropped, never persisted as a $0 scheduled
+// tranche; 0.000001 itself is kept.
+func TestBuildTrancheDBRows_DropsAmountFlooringToZero(t *testing.T) {
+	cfgID := "cfg-1"
+	now := time.Now()
+	rows, err := buildTrancheDBRows([]pkgladder.Tranche{
+		flooringTestTranche("tr-tiny", pkgladder.LayerComputeSP, "1/10000000", now),
+		flooringTestTranche("tr-under", pkgladder.LayerComputeSP, "9/10000000", now),
+		flooringTestTranche("tr-micro", pkgladder.LayerComputeSP, "1/1000000", now),
+		flooringTestTranche("tr-big", pkgladder.LayerComputeSP, "3/2", now),
+	}, "run-1", &cfgID)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	assert.Equal(t, "tr-micro", rows[0].ID)
+	assert.Equal(t, 1e-6, rows[0].AmountUSDHr)
+	assert.Equal(t, "tr-big", rows[1].ID)
+	assert.Equal(t, 1.5, rows[1].AmountUSDHr)
+	for i := range rows {
+		assert.Positive(t, rows[i].AmountUSDHr, rows[i].ID)
+	}
+}
+
+// A zero or negative planned amount is a broken tranche (BuildTranches never
+// emits one): fail loud rather than write a $0 or negative row.
+func TestBuildTrancheDBRows_NonPositiveAmountErrors(t *testing.T) {
+	cfgID := "cfg-1"
+	for _, amount := range []string{"0", "-1/2", "-1/10000000"} {
+		rows, err := buildTrancheDBRows([]pkgladder.Tranche{
+			flooringTestTranche("tr-bad", pkgladder.LayerComputeSP, amount, time.Now()),
+		}, "run-1", &cfgID)
+		require.ErrorContains(t, err, "tr-bad", amount)
+		assert.Nil(t, rows, amount)
+	}
+}
+
+// The display plan's immediate amounts are the floored amounts the rows store,
+// so plan_json never shows more than the rows netting reads; a layer whose
+// immediate tranches all floor to 0 gets no purchase amount.
+func TestImmediateTrancheAmounts_SumsStoredAmounts(t *testing.T) {
+	now := time.Now()
+	sums, err := immediateTrancheAmounts([]pkgladder.Tranche{
+		flooringTestTranche("tr-a", pkgladder.LayerComputeSP, "1/3", now),
+		flooringTestTranche("tr-b", pkgladder.LayerComputeSP, "1/3", now.Add(-time.Minute)),
+		flooringTestTranche("tr-later", pkgladder.LayerComputeSP, "5", now.Add(24*time.Hour)),
+		flooringTestTranche("tr-tiny", pkgladder.LayerConvertibleRI, "9/10000000", now),
+	}, now)
+	require.NoError(t, err)
+	require.Len(t, sums, 1, "a layer whose immediate amount floors to 0 has no entry")
+	require.NotNil(t, sums[pkgladder.LayerComputeSP])
+	assert.Equal(t, "0.666666", sums[pkgladder.LayerComputeSP].FloatString(6), "two floored 1/3 tranches, not 2/3")
+
+	_, err = immediateTrancheAmounts([]pkgladder.Tranche{
+		flooringTestTranche("tr-zero", pkgladder.LayerComputeSP, "0", now),
+	}, now)
+	require.ErrorContains(t, err, "tr-zero")
+}
+
 // ============================================================
 // ratToFloat64Ptr: nil stays nil, non-nil converts correctly
 // ============================================================
