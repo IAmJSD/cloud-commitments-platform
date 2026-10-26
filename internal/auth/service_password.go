@@ -281,7 +281,6 @@ func (s *Service) ChangePassword(ctx context.Context, userID string, req ChangeP
 	user.PasswordHistory = addToPasswordHistory(user.PasswordHash, user.PasswordHistory)
 
 	// Set new password
-	user.Salt = "" // Not used anymore
 	user.PasswordHash = passwordHash
 
 	if err := s.store.UpdateUserCredentials(ctx, user, user.Email, readPasswordHash); err != nil {
@@ -586,7 +585,6 @@ func (s *Service) processPasswordReset(user *User, newPassword string) error {
 		user.PasswordHistory = addToPasswordHistory(user.PasswordHash, user.PasswordHistory)
 	}
 
-	user.Salt = ""
 	user.PasswordHash = passwordHash
 	return nil
 }

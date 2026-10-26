@@ -66,8 +66,9 @@ func (m *MockRow) Scan(dest ...interface{}) error {
 
 // Helper function to create a mock row that returns a user
 // The scan order matches scanUser() in store_postgres.go (issue #89 added
-// deactivated_at, so there are now 20 destinations):
-// id, email, password_hash, salt, group_ids, active,
+// deactivated_at; the unused salt column was dropped from the SELECT in
+// issue #313, so the first 19 destinations are populated here):
+// id, email, password_hash, group_ids, active,
 // mfa_enabled, mfa_secret (NullString), mfa_pending_secret (NullString),
 // mfa_pending_secret_expires_at (NullTime), mfa_recovery_codes ([]string),
 // reset_token (NullString), reset_expiry (NullTime),
@@ -77,67 +78,66 @@ func createMockRowWithUser(user *User) *MockRow {
 	return &MockRow{
 		scanFunc: func(dest ...interface{}) error {
 			// Populate destination pointers with user data
-			if len(dest) >= 20 {
+			if len(dest) >= 19 {
 				*dest[0].(*string) = user.ID
 				*dest[1].(*string) = user.Email
 				*dest[2].(*string) = user.PasswordHash
-				*dest[3].(*string) = user.Salt
-				*dest[4].(*[]string) = user.GroupIDs
-				*dest[5].(*bool) = user.Active
-				*dest[6].(*bool) = user.MFAEnabled
-				// dest[7] is sql.NullString for MFASecret
+				*dest[3].(*[]string) = user.GroupIDs
+				*dest[4].(*bool) = user.Active
+				*dest[5].(*bool) = user.MFAEnabled
+				// dest[6] is sql.NullString for MFASecret
 				if user.MFASecret != "" {
-					*dest[7].(*sql.NullString) = sql.NullString{String: user.MFASecret, Valid: true}
+					*dest[6].(*sql.NullString) = sql.NullString{String: user.MFASecret, Valid: true}
+				} else {
+					*dest[6].(*sql.NullString) = sql.NullString{Valid: false}
+				}
+				// dest[7] is sql.NullString for MFAPendingSecret
+				if user.MFAPendingSecret != "" {
+					*dest[7].(*sql.NullString) = sql.NullString{String: user.MFAPendingSecret, Valid: true}
 				} else {
 					*dest[7].(*sql.NullString) = sql.NullString{Valid: false}
 				}
-				// dest[8] is sql.NullString for MFAPendingSecret
-				if user.MFAPendingSecret != "" {
-					*dest[8].(*sql.NullString) = sql.NullString{String: user.MFAPendingSecret, Valid: true}
-				} else {
-					*dest[8].(*sql.NullString) = sql.NullString{Valid: false}
-				}
-				// dest[9] is sql.NullTime for MFAPendingSecretExpiresAt
+				// dest[8] is sql.NullTime for MFAPendingSecretExpiresAt
 				if user.MFAPendingSecretExpiresAt != nil {
-					*dest[9].(*sql.NullTime) = sql.NullTime{Time: *user.MFAPendingSecretExpiresAt, Valid: true}
+					*dest[8].(*sql.NullTime) = sql.NullTime{Time: *user.MFAPendingSecretExpiresAt, Valid: true}
 				} else {
-					*dest[9].(*sql.NullTime) = sql.NullTime{Valid: false}
+					*dest[8].(*sql.NullTime) = sql.NullTime{Valid: false}
 				}
-				// dest[10] is []string for MFARecoveryCodes
-				*dest[10].(*[]string) = user.MFARecoveryCodes
-				// dest[11] is sql.NullString for PasswordResetToken
+				// dest[9] is []string for MFARecoveryCodes
+				*dest[9].(*[]string) = user.MFARecoveryCodes
+				// dest[10] is sql.NullString for PasswordResetToken
 				if user.PasswordResetToken != "" {
-					*dest[11].(*sql.NullString) = sql.NullString{String: user.PasswordResetToken, Valid: true}
+					*dest[10].(*sql.NullString) = sql.NullString{String: user.PasswordResetToken, Valid: true}
 				} else {
-					*dest[11].(*sql.NullString) = sql.NullString{Valid: false}
+					*dest[10].(*sql.NullString) = sql.NullString{Valid: false}
 				}
-				// dest[12] is sql.NullTime for PasswordResetExpiry
+				// dest[11] is sql.NullTime for PasswordResetExpiry
 				if user.PasswordResetExpiry != nil {
-					*dest[12].(*sql.NullTime) = sql.NullTime{Time: *user.PasswordResetExpiry, Valid: true}
+					*dest[11].(*sql.NullTime) = sql.NullTime{Time: *user.PasswordResetExpiry, Valid: true}
 				} else {
-					*dest[12].(*sql.NullTime) = sql.NullTime{Valid: false}
+					*dest[11].(*sql.NullTime) = sql.NullTime{Valid: false}
 				}
-				*dest[13].(*int) = user.FailedLoginAttempts
-				// dest[14] is sql.NullTime for LockedUntil
+				*dest[12].(*int) = user.FailedLoginAttempts
+				// dest[13] is sql.NullTime for LockedUntil
 				if user.LockedUntil != nil {
-					*dest[14].(*sql.NullTime) = sql.NullTime{Time: *user.LockedUntil, Valid: true}
+					*dest[13].(*sql.NullTime) = sql.NullTime{Time: *user.LockedUntil, Valid: true}
 				} else {
-					*dest[14].(*sql.NullTime) = sql.NullTime{Valid: false}
+					*dest[13].(*sql.NullTime) = sql.NullTime{Valid: false}
 				}
-				*dest[15].(*[]string) = user.PasswordHistory
-				*dest[16].(*time.Time) = user.CreatedAt
-				*dest[17].(*time.Time) = user.UpdatedAt
-				// dest[18] is sql.NullTime for LastLoginAt
+				*dest[14].(*[]string) = user.PasswordHistory
+				*dest[15].(*time.Time) = user.CreatedAt
+				*dest[16].(*time.Time) = user.UpdatedAt
+				// dest[17] is sql.NullTime for LastLoginAt
 				if user.LastLoginAt != nil {
-					*dest[18].(*sql.NullTime) = sql.NullTime{Time: *user.LastLoginAt, Valid: true}
+					*dest[17].(*sql.NullTime) = sql.NullTime{Time: *user.LastLoginAt, Valid: true}
+				} else {
+					*dest[17].(*sql.NullTime) = sql.NullTime{Valid: false}
+				}
+				// dest[18] is sql.NullTime for DeactivatedAt
+				if user.DeactivatedAt != nil {
+					*dest[18].(*sql.NullTime) = sql.NullTime{Time: *user.DeactivatedAt, Valid: true}
 				} else {
 					*dest[18].(*sql.NullTime) = sql.NullTime{Valid: false}
-				}
-				// dest[19] is sql.NullTime for DeactivatedAt
-				if user.DeactivatedAt != nil {
-					*dest[19].(*sql.NullTime) = sql.NullTime{Time: *user.DeactivatedAt, Valid: true}
-				} else {
-					*dest[19].(*sql.NullTime) = sql.NullTime{Valid: false}
 				}
 			}
 			return nil

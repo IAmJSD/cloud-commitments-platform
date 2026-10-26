@@ -19,7 +19,6 @@ type User struct {
 	DeactivatedAt       *time.Time `json:"deactivated_at,omitempty" dynamodbav:"DeactivatedAt"`
 	MFASecret           string     `json:"-" dynamodbav:"MFASecret,omitempty"`
 	PasswordResetToken  string     `json:"-" dynamodbav:"PasswordResetToken,omitempty"`
-	Salt                string     `json:"-" dynamodbav:"Salt"`
 	ID                  string     `json:"id" dynamodbav:"PK"`
 	MFAPendingSecret    string     `json:"-" dynamodbav:"MFAPendingSecret,omitempty"`
 	PasswordHash        string     `json:"-" dynamodbav:"PasswordHash"`

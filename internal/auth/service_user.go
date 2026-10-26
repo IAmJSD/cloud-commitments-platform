@@ -48,7 +48,6 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 		ID:           uuid.New().String(),
 		Email:        req.Email,
 		PasswordHash: passwordHash,
-		Salt:         "", // Not used anymore, but kept for backward compatibility
 		GroupIDs:     []string{DefaultAdminGroupID},
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -232,7 +231,6 @@ func (s *Service) CreateUser(ctx context.Context, actorUserID string, req Create
 		ID:           uuid.New().String(),
 		Email:        req.Email,
 		PasswordHash: passwordHash,
-		Salt:         "", // Not used anymore, but kept for backward compatibility
 		GroupIDs:     req.GroupIDs,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -869,7 +867,6 @@ func (s *Service) updateUserPassword(user *User, newPassword string) (bool, erro
 		user.PasswordHistory = addToPasswordHistory(user.PasswordHash, user.PasswordHistory)
 	}
 
-	user.Salt = ""
 	user.PasswordHash = hash
 	return true, nil
 }
