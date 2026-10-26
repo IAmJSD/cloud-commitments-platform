@@ -86,9 +86,10 @@ func TestAnalyticsAccountIDs_SumsSelectedAccountsOnly_DB(t *testing.T) {
 		assert.InDelta(t, tc.want, got.Summary.TotalMonthlySavings, 1e-9, tc.ids)
 	}
 
-	// A scoped user sees the sum of their accounts; a foreign id in the list
-	// refuses the whole request (404), never a partial or all-account total.
-	scoped := newHandler([]string{"a", "b"})
+	// A scoped user (scope entries are account IDs, #1034) sees the sum of
+	// their accounts; a foreign id in the list refuses the whole request
+	// (404), never a partial or all-account total.
+	scoped := newHandler([]string{ids["a"], ids["b"]})
 	got, err := query(scoped, ids["a"]+","+ids["b"])
 	require.NoError(t, err)
 	assert.InDelta(t, 30, got.Summary.TotalMonthlySavings, 1e-9)

@@ -214,7 +214,7 @@ func historyPagingHandlers(env *historyPagingEnv) (admin, scoped *Handler) {
 	scopedAuth := new(MockAuthService)
 	scopedAuth.On("ValidateSession", mock.Anything, scopedToken).Return(&Session{UserID: scopedUserID}, nil).Maybe()
 	scopedAuth.On("GetUser", mock.Anything, mock.Anything).Return(&User{Email: "creator@example.com"}, nil).Maybe()
-	scopedAuth.grantScoped(env.tenantA.Name)
+	scopedAuth.grantScoped(env.tenantA.ID)
 	adminAuth := new(MockAuthService)
 	adminAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{UserID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}, nil).Maybe()
 	adminAuth.On("GetUser", mock.Anything, mock.Anything).Return(&User{Email: "creator@example.com"}, nil).Maybe()

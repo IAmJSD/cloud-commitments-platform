@@ -82,7 +82,7 @@ func newPlanFilterEnv(ctx context.Context, t *testing.T) *planFilterEnv {
 	scopedAuth := new(MockAuthService)
 	scopedAuth.On("ValidateSession", mock.Anything, scopedToken).Return(&Session{UserID: scopedUserID}, nil).Maybe()
 	scopedAuth.On("GetUser", mock.Anything, mock.Anything).Return(&User{Email: "creator@example.com"}, nil).Maybe()
-	scopedAuth.grantScoped(e.tenantA.Name)
+	scopedAuth.grantScoped(e.tenantA.ID)
 	adminAuth := new(MockAuthService)
 	adminAuth.On("GetUser", mock.Anything, mock.Anything).Return(&User{Email: "creator@example.com"}, nil).Maybe()
 	adminAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{UserID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}, nil).Maybe()

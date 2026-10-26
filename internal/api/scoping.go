@@ -170,6 +170,12 @@ func (h *Handler) requireAccountsAccess(ctx context.Context, session *Session, a
 // Admin / unrestricted sessions pass through. Recommendations with a nil
 // CloudAccountID are rejected when the session is scoped — we can't
 // attribute them, and silently letting them through would bypass the filter.
+//
+// The decision is on CloudAccountID itself, the internal account ID the
+// purchase resolves its credentials from (GetCloudAccount), and never on a
+// display name looked up for it. External IDs are free text an account editor
+// sets, so a name keyed by identifier can belong to a different account than
+// the one the purchase acts on.
 func (h *Handler) validatePurchaseRecommendationScope(ctx context.Context, session *Session, recs []config.RecommendationRecord) error {
 	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
@@ -178,14 +184,13 @@ func (h *Handler) validatePurchaseRecommendationScope(ctx context.Context, sessi
 	if allowed.AllowsAll() {
 		return nil
 	}
-	nameByID := h.resolveAccountNamesByID(ctx)
 	for i := range recs {
 		rec := recs[i]
 		if rec.CloudAccountID == nil {
 			return NewClientError(400, fmt.Sprintf("recommendation %d has no cloud_account_id; scoped users cannot execute unattributed recommendations", i))
 		}
 		id := *rec.CloudAccountID
-		if !allowed.Allows(id, nameByID[id]) {
+		if !allowed.Allows(id, "") {
 			return NewClientError(403, fmt.Sprintf("recommendation %d targets account %s which is outside your allowed_accounts", i, id))
 		}
 	}
@@ -321,9 +326,9 @@ func (h *Handler) lookupCloudAccount(ctx context.Context, id string) (config.Clo
 // filter. purchase_history rows carry either the UUID FK (cloud_account_id) or
 // the cloud-provider external number (account_id) and frequently only one of
 // them, so a UUID-only WHERE silently drops the external-only rows. This
-// resolver loads cloud_accounts once (reusing ListCloudAccounts, the same source
-// as resolveAccountNamesByID), then returns the UUIDs unchanged plus the matched
-// accounts' external ids grouped by provider.
+// resolver loads cloud_accounts once (reusing ListCloudAccounts), then returns
+// the UUIDs unchanged plus the matched accounts' external ids grouped by
+// provider.
 //
 // The external ids are grouped by provider so the downstream predicate compares
 // each external number only against rows of its own provider
@@ -538,32 +543,4 @@ func intersectDualColumnScope(
 		}
 	}
 	return uuids, externalIDsByProvider
-}
-
-// a map from account identifier → display name. The map is keyed by BOTH
-// the internal UUID (CloudAccount.ID) and the cloud-provider external ID
-// (CloudAccount.ExternalID, e.g. an AWS account number or Azure subscription
-// ID). Dual-keying is necessary because different record types use different
-// identifiers: recommendation records carry the UUID (cloud_account_id FK)
-// while legacy purchase_history rows carry the external ID (account_id
-// VARCHAR). Without both keys, the name lookup always misses for one path.
-//
-// Returns an empty map on error; callers fall through to ID-only matching,
-// which is still safe (AccountScope.Allows falls back to ID comparison when
-// the name is empty).
-func (h *Handler) resolveAccountNamesByID(ctx context.Context) map[string]string {
-	accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
-	if err != nil {
-		return map[string]string{}
-	}
-	// Allocate 2x capacity since each account contributes up to two keys.
-	nameByID := make(map[string]string, len(accounts)*2)
-	for _rvc := range accounts {
-		a := accounts[_rvc]
-		nameByID[a.ID] = a.Name
-		if a.ExternalID != "" {
-			nameByID[a.ExternalID] = a.Name
-		}
-	}
-	return nameByID
 }

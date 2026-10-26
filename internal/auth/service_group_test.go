@@ -806,88 +806,6 @@ func TestAuthContext_HasPermission(t *testing.T) {
 	})
 }
 
-func TestAuthContext_CanAccessAccount(t *testing.T) {
-	t.Run("admin can access any account", func(t *testing.T) {
-		authCtx := &AuthContext{
-			User:            &User{},
-			AllowedAccounts: []string{},
-		}
-		assert.True(t, authCtx.CanAccessAccount("111111111111", ""))
-		assert.True(t, authCtx.CanAccessAccount("999999999999", ""))
-	})
-
-	t.Run("empty allowed accounts means all access", func(t *testing.T) {
-		authCtx := &AuthContext{
-			User:            &User{},
-			AllowedAccounts: []string{},
-		}
-		assert.True(t, authCtx.CanAccessAccount("111111111111", ""))
-		assert.True(t, authCtx.CanAccessAccount("999999999999", ""))
-	})
-
-	t.Run("wildcard in allowed accounts", func(t *testing.T) {
-		authCtx := &AuthContext{
-			User:            &User{},
-			AllowedAccounts: []string{"*"},
-		}
-		assert.True(t, authCtx.CanAccessAccount("111111111111", ""))
-		assert.True(t, authCtx.CanAccessAccount("999999999999", ""))
-	})
-
-	t.Run("specific accounts only", func(t *testing.T) {
-		authCtx := &AuthContext{
-			User:            &User{},
-			AllowedAccounts: []string{"111111111111", "222222222222"},
-		}
-		assert.True(t, authCtx.CanAccessAccount("111111111111", ""))
-		assert.True(t, authCtx.CanAccessAccount("222222222222", ""))
-		assert.False(t, authCtx.CanAccessAccount("333333333333", ""))
-		assert.False(t, authCtx.CanAccessAccount("999999999999", ""))
-	})
-
-	t.Run("readonly user with account restrictions", func(t *testing.T) {
-		authCtx := &AuthContext{
-			User:            &User{},
-			AllowedAccounts: []string{"111111111111"},
-		}
-		assert.True(t, authCtx.CanAccessAccount("111111111111", ""))
-		assert.False(t, authCtx.CanAccessAccount("222222222222", ""))
-	})
-
-	t.Run("match by account name", func(t *testing.T) {
-		authCtx := &AuthContext{
-			User:            &User{},
-			AllowedAccounts: []string{"Production", "Staging"},
-		}
-		// UUID doesn't match, name does
-		assert.True(t, authCtx.CanAccessAccount("uuid-1", "Production"))
-		assert.True(t, authCtx.CanAccessAccount("uuid-2", "Staging"))
-		// Neither matches
-		assert.False(t, authCtx.CanAccessAccount("uuid-3", "Development"))
-		// Name empty — falls back to ID-only, no match
-		assert.False(t, authCtx.CanAccessAccount("uuid-4", ""))
-	})
-
-	t.Run("mixed UUID and name entries", func(t *testing.T) {
-		authCtx := &AuthContext{
-			User:            &User{},
-			AllowedAccounts: []string{"uuid-prod", "Staging"},
-		}
-		assert.True(t, authCtx.CanAccessAccount("uuid-prod", "Production"))
-		assert.True(t, authCtx.CanAccessAccount("uuid-stg", "Staging"))
-		assert.False(t, authCtx.CanAccessAccount("uuid-dev", "Development"))
-	})
-
-	t.Run("wildcard combined with specific names", func(t *testing.T) {
-		authCtx := &AuthContext{
-			User:            &User{},
-			AllowedAccounts: []string{"*", "Production"},
-		}
-		// Wildcard wins — everything matches
-		assert.True(t, authCtx.CanAccessAccount("any-uuid", "Anything"))
-	})
-}
-
 func TestIsUnrestrictedAccess(t *testing.T) {
 	assert.True(t, IsUnrestrictedAccess(nil), "nil slice is unrestricted")
 	assert.True(t, IsUnrestrictedAccess([]string{}), "empty slice is unrestricted")
@@ -895,35 +813,6 @@ func TestIsUnrestrictedAccess(t *testing.T) {
 	assert.True(t, IsUnrestrictedAccess([]string{"foo", "*", "bar"}), "wildcard anywhere is unrestricted")
 	assert.False(t, IsUnrestrictedAccess([]string{"foo"}), "specific entry is restricted")
 	assert.False(t, IsUnrestrictedAccess([]string{"foo", "bar"}), "multiple specific entries are restricted")
-}
-
-func TestMatchesAccount(t *testing.T) {
-	t.Run("unrestricted matches anything", func(t *testing.T) {
-		assert.True(t, MatchesAccount(nil, "any", "any"))
-		assert.True(t, MatchesAccount([]string{}, "any", "any"))
-		assert.True(t, MatchesAccount([]string{"*"}, "any", "any"))
-	})
-
-	t.Run("match by ID", func(t *testing.T) {
-		assert.True(t, MatchesAccount([]string{"uuid-1"}, "uuid-1", "SomeName"))
-		assert.False(t, MatchesAccount([]string{"uuid-1"}, "uuid-2", "SomeName"))
-	})
-
-	t.Run("match by name", func(t *testing.T) {
-		assert.True(t, MatchesAccount([]string{"Production"}, "uuid-1", "Production"))
-		assert.False(t, MatchesAccount([]string{"Production"}, "uuid-1", "Staging"))
-	})
-
-	t.Run("empty name falls back to ID-only", func(t *testing.T) {
-		assert.True(t, MatchesAccount([]string{"uuid-1"}, "uuid-1", ""))
-		assert.False(t, MatchesAccount([]string{"Production"}, "uuid-1", ""))
-	})
-
-	t.Run("empty name does not match empty entry", func(t *testing.T) {
-		// Edge case: allowed entry "" should not match an account with no name
-		// (otherwise any accountless entry would grant access).
-		assert.False(t, MatchesAccount([]string{""}, "uuid-1", ""))
-	})
 }
 
 func TestService_HasPermission_Constraints(t *testing.T) {

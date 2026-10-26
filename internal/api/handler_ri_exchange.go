@@ -1409,8 +1409,7 @@ func (h *Handler) reshapeCloudAccountInScope(ctx context.Context, session *Sessi
 	if aErr != nil {
 		return false, fmt.Errorf("failed to resolve cloud account scope: %w", aErr)
 	}
-	nameByID := h.resolveAccountNamesByID(ctx)
-	return allowed.Allows(cloudAccountID, nameByID[cloudAccountID]), nil
+	return allowed.Allows(cloudAccountID, ""), nil
 }
 
 // requireReshapeAccountScope enforces the session's allowed_accounts scope for
@@ -2317,8 +2316,8 @@ const riExchangeHistoryLimit = 500
 //
 // RI exchange records carry the 12-digit AWS account id from STS, so it is
 // resolved to its single registered AWS account and the scope is matched by
-// that account's UUID or name. An unregistered or ambiguous id matches only a
-// literal entry in the allow-list. A lookup failure errors out.
+// that account's UUID. An unregistered or ambiguous id matches only a literal
+// entry in the allow-list. A lookup failure errors out.
 func (h *Handler) loadRIExchangeHistory(ctx context.Context, session *Session) ([]config.RIExchangeRecord, error) {
 	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {

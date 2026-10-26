@@ -66,7 +66,7 @@ func activeRow(purchaseID, provider, accountID string) config.PurchaseHistoryRec
 
 // Issue #520: external ids are unique per (provider, external_id) only. The
 // inventory account name was keyed by external id alone, so with two accounts
-// sharing an id the name on a row (and the name-scope decision made with it)
+// sharing an id the name on a row (and the scope decision made with it)
 // depended on the order the accounts were listed in.
 func TestHandleRequest_Inventory_SameExternalIDAcrossProviders(t *testing.T) {
 	t.Parallel()
@@ -81,12 +81,12 @@ func TestHandleRequest_Inventory_SameExternalIDAcrossProviders(t *testing.T) {
 	for order, accounts := range bothOrders {
 		t.Run("scope names aws account, "+order, func(t *testing.T) {
 			t.Parallel()
-			got := inventoryNames(t, []string{"dev"}, accounts, rows)
+			got := inventoryNames(t, []string{"u-aws"}, accounts, rows)
 			assert.Equal(t, map[string]string{"123:aws-row": "dev"}, got)
 		})
 		t.Run("scope names azure account, "+order, func(t *testing.T) {
 			t.Parallel()
-			got := inventoryNames(t, []string{"prod"}, accounts, rows)
+			got := inventoryNames(t, []string{"u-az"}, accounts, rows)
 			assert.Equal(t, map[string]string{"123:az-row": "prod"}, got)
 		})
 		t.Run("unrestricted sees each row under its own account name, "+order, func(t *testing.T) {
@@ -123,7 +123,7 @@ func TestHandleRequest_Inventory_ResolutionOrder(t *testing.T) {
 }
 
 // Two accounts of one provider sharing an external id are ambiguous: the row
-// is attributed to neither, so a name-scoped user does not see it and an
+// is attributed to neither, so a scoped user does not see it and an
 // unrestricted user sees it without a name.
 func TestHandleRequest_Inventory_SameProviderAmbiguousExternalID(t *testing.T) {
 	t.Parallel()
@@ -131,7 +131,7 @@ func TestHandleRequest_Inventory_SameProviderAmbiguousExternalID(t *testing.T) {
 	b := config.CloudAccount{ID: "u-b", Name: "prod", Provider: "aws", ExternalID: "123"}
 	rows := []config.PurchaseHistoryRecord{activeRow("amb", "aws", "123")}
 	for _, accounts := range [][]config.CloudAccount{{a, b}, {b, a}} {
-		for _, scope := range []string{"dev", "prod"} {
+		for _, scope := range []string{"u-a", "u-b"} {
 			assert.Empty(t, inventoryNames(t, []string{scope}, accounts, rows), scope)
 		}
 		assert.Equal(t, map[string]string{"123:amb": ""}, inventoryNames(t, nil, accounts, rows))

@@ -46,7 +46,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 		return nil, fmt.Errorf("failed to get recommendations: %w", err)
 	}
 
-	recommendations = h.filterDashboardRecommendations(ctx, scope, recommendations)
+	recommendations = filterDashboardRecommendations(scope, recommendations)
 
 	// Issue #196 — cap the headline "potential savings" by the per-account
 	// coverage target. Without this scaling the dashboard always reports
@@ -179,19 +179,18 @@ func (h *Handler) resolveAllowedAccountScope(ctx context.Context, session *Sessi
 // (already resolved into allowed) to the recommendations list before
 // aggregation so scoped users don't see cross-account totals.
 // Admin/unrestricted sessions pass through unchanged.
-func (h *Handler) filterDashboardRecommendations(ctx context.Context, allowed auth.AccountScope, recs []config.RecommendationRecord) []config.RecommendationRecord {
+func filterDashboardRecommendations(allowed auth.AccountScope, recs []config.RecommendationRecord) []config.RecommendationRecord {
 	if allowed.AllowsAll() {
 		return recs
 	}
 
-	nameByID := h.resolveAccountNamesByID(ctx)
 	filtered := make([]config.RecommendationRecord, 0, len(recs))
 	for _rvc := range recs {
 		if recs[_rvc].CloudAccountID == nil {
 			continue
 		}
 		id := *recs[_rvc].CloudAccountID
-		if allowed.Allows(id, nameByID[id]) {
+		if allowed.Allows(id, "") {
 			filtered = append(filtered, recs[_rvc])
 		}
 	}

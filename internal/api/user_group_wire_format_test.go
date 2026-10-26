@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -198,7 +199,13 @@ func TestUserGroupWrites_WireFormat(t *testing.T) {
 				Run(func(args mock.Arguments) { gotReq = args.Get(reqIdx) }).
 				Return(tc.response, nil).Once()
 
-			h := &Handler{auth: mockAuth}
+			// Group writes bind allowed_accounts entries to registered
+			// accounts (issue #1034), so the wire account must exist.
+			store := new(MockConfigStore)
+			store.ListCloudAccountsFn = func(context.Context, config.CloudAccountFilter) ([]config.CloudAccount, error) {
+				return []config.CloudAccount{{ID: wireAccountID, Name: "Wire"}}, nil
+			}
+			h := &Handler{auth: mockAuth, config: store}
 			resp, err := h.HandleRequest(context.Background(), &events.LambdaFunctionURLRequest{
 				Headers: map[string]string{
 					"Authorization": "Bearer " + wireToken,
