@@ -1571,15 +1571,23 @@ func (s *PostgresStore) CancelScheduledExecutionAtomic(ctx context.Context, tx p
 // already represented by their purchase_history rows, so returning them would
 // only consume the cap (the History handler skips them anyway).
 func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error) {
-	if len(statuses) == 0 {
+	return s.GetExecutionsByStatusesFiltered(ctx, ExecutionsByStatusesQuery{Statuses: statuses, Limit: limit})
+}
+
+// GetExecutionsByStatusesFiltered is GetExecutionsByStatuses with the History
+// filters and account scope in q applied in SQL, before the limit (issue
+// #632). Order and the clean-completed exclusion are GetExecutionsByStatuses'.
+func (s *PostgresStore) GetExecutionsByStatusesFiltered(ctx context.Context, q ExecutionsByStatusesQuery) ([]PurchaseExecution, error) {
+	if len(q.Statuses) == 0 {
 		return nil, nil
 	}
+	limit := q.Limit
 	if limit <= 0 {
 		limit = DefaultListLimit
 	}
-	if limit > MaxListLimit {
-		limit = MaxListLimit
-	}
+	limit = min(limit, MaxListLimit)
+	conds, args := executionsByStatusesWhere(&q)
+	args = append(args, limit)
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token_hash, recommendations,
@@ -1590,13 +1598,12 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
 		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
-		WHERE ` + historyExecutionsPredicate + `
+		WHERE ` + strings.Join(conds, "\n\t\t  AND ") + `
 		ORDER BY (status = 'pending' AND scheduled_date > now()) ASC,
 		         CASE WHEN status = 'pending' AND scheduled_date > now() THEN scheduled_date END ASC,
 		         scheduled_date DESC
-		LIMIT $2
-	`
-	return s.queryExecutions(ctx, query, statuses, limit)
+		LIMIT $` + fmt.Sprint(len(args))
+	return s.queryExecutions(ctx, query, args...)
 }
 
 // CountExecutionsByPlanAndStatus returns, keyed by plan ID, the exact number

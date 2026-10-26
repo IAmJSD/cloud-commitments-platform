@@ -1907,6 +1907,27 @@ func (m *MockConfigStore) WithTx(ctx context.Context, fn func(tx pgx.Tx) error) 
 	return fn(nil)
 }
 
+// GetExecutionsByStatusesFiltered mocks the GetExecutionsByStatusesFiltered
+// operation. Without an expectation for it, it answers from the
+// GetExecutionsByStatuses expectation: the unfiltered rows are a superset of
+// the filtered ones, and the History handler re-applies every filter in Go, so
+// tests written against GetExecutionsByStatuses keep working.
+func (m *MockConfigStore) GetExecutionsByStatusesFiltered(ctx context.Context, q config.ExecutionsByStatusesQuery) ([]config.PurchaseExecution, error) {
+	if !isExpected(&m.Mock, "GetExecutionsByStatusesFiltered") {
+		return m.GetExecutionsByStatuses(ctx, q.Statuses, q.Limit)
+	}
+	m.record("GetExecutionsByStatusesFiltered", ctx, q)
+	args := m.Called(ctx, q)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).([]config.PurchaseExecution)
+	if !ok {
+		m.reporter.wrongReturnType("GetExecutionsByStatusesFiltered", "[]config.PurchaseExecution", args.Get(0))
+	}
+	return filterExecutionsLikeStore(v, q.Statuses, q.Limit), args.Error(1)
+}
+
 // GetExecutionsByStatuses mocks the GetExecutionsByStatuses operation.
 func (m *MockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]config.PurchaseExecution, error) {
 	m.record("GetExecutionsByStatuses", ctx, statuses, limit)
