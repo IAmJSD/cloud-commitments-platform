@@ -94,14 +94,17 @@ func (h *Handler) submitRegistration(ctx context.Context, req *events.LambdaFunc
 		GCPClientEmail:      body.GCPClientEmail,
 		GCPAuthMode:         body.GCPAuthMode,
 		GCPWIFAudience:      body.GCPWIFAudience,
-		RegCredentialType:   body.CredentialType,
 	}
 
 	encrypted, encErr := h.encryptRegistrationCredential(body.CredentialPayload)
 	if encErr != nil {
 		return nil, fmt.Errorf("registrations: encrypt credential: %w", encErr)
 	}
-	reg.RegCredentialPayload = encrypted
+	if encrypted != "" {
+		// Without a credential store nothing is kept, so record no type either.
+		reg.RegCredentialType = body.CredentialType
+		reg.RegCredentialPayload = encrypted
+	}
 
 	if err := h.insertRegistration(ctx, reg); err != nil {
 		return nil, err
@@ -234,22 +237,6 @@ func (h *Handler) setReviewMetadata(ctx context.Context, reg *config.AccountRegi
 	}
 }
 
-// storeRegistrationCredentials decrypts and stores credentials from the registration
-// record into the account_credentials table. Errors are logged, not propagated.
-func (h *Handler) storeRegistrationCredentials(ctx context.Context, reg *config.AccountRegistration, accountID string) {
-	if reg.RegCredentialPayload == "" || reg.RegCredentialType == "" || h.credStore == nil {
-		return
-	}
-	plaintext, err := h.credStore.DecryptPayload(reg.RegCredentialPayload)
-	if err != nil {
-		logging.Warnf("registration %s: failed to decrypt credential payload: %v", reg.ID, err)
-		return
-	}
-	if err := h.credStore.SaveCredential(ctx, accountID, reg.RegCredentialType, plaintext); err != nil {
-		logging.Warnf("registration %s: failed to store credential: %v", reg.ID, err)
-	}
-}
-
 // encryptRegistrationCredential encrypts the credential payload for storage in the
 // registration table. Returns empty string if no credential is provided.
 func (h *Handler) encryptRegistrationCredential(payload string) (string, error) {
@@ -279,15 +266,9 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 		return nil, err
 	}
 
-	var acctReq CloudAccountRequest
-	if err := json.Unmarshal([]byte(httpReq.Body), &acctReq); err != nil {
-		return nil, NewClientError(400, "invalid account request body")
-	}
-	if err := validateCloudAccountRequest(acctReq); err != nil {
-		return nil, err
-	}
-	// Before the transition, so a rejected config leaves the registration pending.
-	if err := h.requireHostForEmptyRoleARN(ctx, "(registration "+reg.ID+")", &acctReq); err != nil {
+	// Before the transition, so a rejected request leaves the registration pending.
+	acctReq, regCred, err := h.parseApprovalRequest(ctx, reg, httpReq)
+	if err != nil {
 		return nil, err
 	}
 
@@ -313,7 +294,7 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	// KMS-backed federated. Without this, every federated-path
 	// approval leaves the account disabled and the operator has to
 	// follow up with a manual PUT enabled=true.
-	account.Enabled = reg.RegCredentialPayload != "" || accountHasCredentialFreePath(account)
+	account.Enabled = regCred != nil || accountHasCredentialFreePath(account)
 	account.CreatedAt = now
 	account.UpdatedAt = now
 
@@ -322,7 +303,7 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	}
 
 	// Auto-store credentials if the registration included them.
-	h.storeRegistrationCredentials(ctx, reg, account.ID)
+	h.storeRegistrationCredentials(ctx, reg, account.ID, regCred)
 
 	// Link the cloud account and wipe the credential payload from the registration record.
 	reg.CloudAccountID = &account.ID
@@ -337,6 +318,25 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	})
 
 	return account, nil
+}
+
+// parseApprovalRequest reads and checks an approval body for reg: the
+// CloudAccountRequest itself, the host-account rule for an empty role ARN, and
+// the credential stored with the registration (see registrationCredential).
+// It returns the request and the checked credential, nil when there is none.
+func (h *Handler) parseApprovalRequest(ctx context.Context, reg *config.AccountRegistration, httpReq *events.LambdaFunctionURLRequest) (CloudAccountRequest, []byte, error) {
+	var acctReq CloudAccountRequest
+	if err := json.Unmarshal([]byte(httpReq.Body), &acctReq); err != nil {
+		return acctReq, nil, NewClientError(400, "invalid account request body")
+	}
+	if err := validateCloudAccountRequest(acctReq); err != nil {
+		return acctReq, nil, err
+	}
+	if err := h.requireHostForEmptyRoleARN(ctx, "(registration "+reg.ID+")", &acctReq); err != nil {
+		return acctReq, nil, err
+	}
+	regCred, err := h.registrationCredential(reg, acctReq.Provider)
+	return acctReq, regCred, err
 }
 
 // accountHasCredentialFreePath returns true when the account's auth
@@ -433,7 +433,9 @@ func (h *Handler) deleteRegistration(ctx context.Context, id string) (any, error
 const maxAccountNameLen = 256
 
 // validateRegistrationRequest checks required fields for a registration
-// submission. It also normalizes account_name in place: CR/LF characters are
+// submission, and the optional credential with parseRegistrationCredential,
+// replacing credential_payload in place with the checked encoding. It also
+// normalizes account_name in place: CR/LF characters are
 // stripped (defense-in-depth against email header injection at the data
 // source, complementing sanitizeHeader on the email subject path) and the
 // result is length-capped.
@@ -467,6 +469,11 @@ func validateRegistrationRequest(req *RegistrationRequest) error {
 		return err
 	}
 	req.ContactEmail = contactEmail
+	credential, err := parseRegistrationCredential(req.Provider, req.CredentialType, req.CredentialPayload)
+	if err != nil {
+		return err
+	}
+	req.CredentialPayload = string(credential)
 	return nil
 }
 

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -2349,6 +2350,32 @@ func TestExecuteAzureExchange_FourEyesRefusesDirectExecute(t *testing.T) {
 	require.True(t, ok, "expected a ClientError, got: %v", err)
 	assert.Equal(t, 403, ce.code)
 	assert.Equal(t, "direct RI exchange execution is disabled while 4-eyes approval mode is on; use the approval flow", ce.Error())
+	opsClient.AssertNotCalled(t, "ExecuteExchange", mock.Anything, mock.Anything)
+	opsClient.AssertNotCalled(t, "CalculateExchange", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestExecuteAzureExchange_FourEyesPolicyLookupErrorFailsClosed (issue #679):
+// an unreadable global config must not be treated as "4-eyes off". The
+// handler returns a server error before any quote or exchange call.
+func TestExecuteAzureExchange_FourEyesPolicyLookupErrorFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := newAzureExecuteSourceGateHandler(t, opsClient)
+	store, ok := h.config.(*MockConfigStore)
+	require.True(t, ok)
+	store.On("GetGlobalConfig", mock.Anything).Return(nil, errors.New("db down"))
+
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "4-eyes policy check")
+	_, isClient := IsClientError(err)
+	assert.False(t, isClient, "a lookup failure is a server error, not a client refusal")
 	opsClient.AssertNotCalled(t, "ExecuteExchange", mock.Anything, mock.Anything)
 	opsClient.AssertNotCalled(t, "CalculateExchange", mock.Anything, mock.Anything, mock.Anything)
 }

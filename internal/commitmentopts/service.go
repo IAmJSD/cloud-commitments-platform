@@ -125,14 +125,22 @@ func (s *Service) probeAndPersist(ctx context.Context) (Options, error) {
 
 // findAWSAccount returns the first enabled AWS account, or nil if none
 // exist. Nil + nil error is the "no AWS connected" signal.
+//
+// The filter asks for enabled accounts only, as Scheduler.enabledAccounts
+// does: a disabled (for example decommissioned) account listed first would
+// otherwise be probed with revoked credentials, and the failed probe would
+// leave validation permissive while a healthy account sat later in the list
+// (issue #243). The loop re-checks both fields so an AccountLister that
+// ignores the filter cannot reintroduce that.
 func (s *Service) findAWSAccount(ctx context.Context) (*config.CloudAccount, error) {
 	provider := "aws"
-	accounts, err := s.accounts.ListCloudAccounts(ctx, config.CloudAccountFilter{Provider: &provider})
+	enabled := true
+	accounts, err := s.accounts.ListCloudAccounts(ctx, config.CloudAccountFilter{Provider: &provider, Enabled: &enabled})
 	if err != nil {
 		return nil, fmt.Errorf("list cloud accounts: %w", err)
 	}
 	for i := range accounts {
-		if accounts[i].Provider == "aws" {
+		if accounts[i].Provider == provider && accounts[i].Enabled {
 			return &accounts[i], nil
 		}
 	}

@@ -807,6 +807,22 @@ func TestConfidenceBucketFor(t *testing.T) {
 		{"medium on savings alone", 60, 1, "medium"},
 		{"low when neither threshold is met", 10, 1, "low"},
 		{"count clamped to >=1 — savings still drives bucket", 60, 0, "medium"},
+		// Exact boundaries, pinned with literals so a change to the named
+		// thresholds fails here (#343). Values match pkg/exchange's
+		// ConfidenceHighSavingsUSD / ConfidenceHighMinCount /
+		// ConfidenceMediumSavingsUSD.
+		{"high at both thresholds", 200, 3, "high"},
+		{"just below high savings", 199.99, 3, "medium"},
+		{"just below high count", 200, 2, "medium"},
+		{"medium at threshold", 50, 1, "medium"},
+		{"just below medium", 49.99, 1, "low"},
+		{"zero savings", 0, 10, "low"},
+		// Count-0 handling: the badge clamps a missing count to 1 instead of
+		// going neutral like the exchange ranking does, so high savings with
+		// no count is medium (never high) and low savings stays low.
+		{"count zero with high savings is medium, not high", 10000, 0, "medium"},
+		{"count zero with low savings is low", 10, 0, "low"},
+		{"negative count is clamped like zero", 10000, -5, "medium"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

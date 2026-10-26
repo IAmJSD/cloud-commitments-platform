@@ -6,6 +6,10 @@ import { apiRequest } from './client';
 import type {
   ConvertibleRI,
   ExchangeableAzureRI,
+  AzureCompatibleOfferingsRequest,
+  AzureCompatibleOfferingsResponse,
+  AzureExecuteExchangeRequest,
+  AzureExecuteExchangeResponse,
   RIUtilization,
   ReshapeRecommendation,
   ExchangeQuoteRequest,
@@ -41,6 +45,39 @@ export async function listExchangeableAzureRIs(subscriptionID?: string): Promise
   const qs = subscriptionID ? `?subscription_id=${encodeURIComponent(subscriptionID)}` : '';
   const resp = await apiRequest<{ reservations: ExchangeableAzureRI[] }>(`/ri-exchange/azure-instances${qs}`);
   return resp.reservations ?? [];
+}
+
+/**
+ * Price a proposed Azure RI exchange without committing anything (issue #81):
+ * returns the compatible offerings plus the net payable / refunds / purchases
+ * preview and any Azure policy errors.
+ */
+export async function getAzureCompatibleOfferings(req: AzureCompatibleOfferingsRequest): Promise<AzureCompatibleOfferingsResponse> {
+  return apiRequest<AzureCompatibleOfferingsResponse>('/ri-exchange/azure-instances/compatible-offerings', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  });
+}
+
+/**
+ * Client timeout for executeAzureExchange. The backend runs the submit and
+ * its long-running-operation poll on a detached 4-minute budget
+ * (riExchangeExecutionTimeout), so the default 90s timeout would report many
+ * slow but successful exchanges as an unknown outcome.
+ */
+const AZURE_EXCHANGE_EXECUTE_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Execute an Azure RI exchange (issue #81). The backend re-quotes and refuses
+ * with a 422 when the fresh quote has policy errors, no net payable, another
+ * currency, or a net payable above max_payment_due.
+ */
+export async function executeAzureExchange(req: AzureExecuteExchangeRequest): Promise<AzureExecuteExchangeResponse> {
+  return apiRequest<AzureExecuteExchangeResponse>('/ri-exchange/azure-instances/exchange', {
+    method: 'POST',
+    body: JSON.stringify(req),
+    timeoutMs: AZURE_EXCHANGE_EXECUTE_TIMEOUT_MS,
+  });
 }
 
 /**

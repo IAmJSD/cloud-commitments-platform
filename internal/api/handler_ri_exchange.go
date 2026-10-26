@@ -30,6 +30,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/ctxutil"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/ricost"
 )
 
 // reshapeEC2Client is the narrow slice of the EC2 client that
@@ -1353,11 +1354,15 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 
 // mapAzureExchangeError converts an error from an Azure RI exchange
 // client-layer call to a ClientError with the appropriate HTTP status.
-// Azure 4xx client faults (via isAzureClientError) produce a 400 with the
-// Azure error message preserved; any other error produces a 500 using the
-// opMsg fallback -- the same contract mapAWSExchangeError applies to the
-// AWS exchange endpoints.
+// A cloud-commitments-go exchange refusal (exchangeRefusalError) produces a
+// 422 with its message; Azure 4xx client faults (via isAzureClientError)
+// produce a 400 with the Azure error message preserved; any other error
+// produces a 500 using the opMsg fallback -- the same contract
+// mapAWSExchangeError applies to the AWS exchange endpoints.
 func mapAzureExchangeError(opMsg string, err error) error {
+	if refusal := exchangeRefusalError(err); refusal != nil {
+		return refusal
+	}
 	if isAzureClientError(err) {
 		return NewClientError(400, err.Error())
 	}
@@ -1640,25 +1645,11 @@ func parseThresholdParam(params map[string]string) (float64, error) {
 	return f, nil
 }
 
-// monthlyCostFromConvertibleRI computes the per-instance per-month
-// effective cost from an RI's pricing fields, matching the same
-// formula effectiveMonthlyCost uses for offerings:
-//
-//	monthly = (FixedPrice / hours_per_term + UsagePrice + recurring_hourly) × 730
-//
-// 730 is AWS's canonical hours-per-month constant. Returns an error when
-// Duration is non-positive: a zero cost would read as a free RI and skip
-// reshape's dollar-units pricing gate, so callers must exclude the RI.
-//
-// Used to populate exchange.RIInfo.MonthlyCost so the cross-family
-// dollar-units pre-filter can compare against per-target offering
-// costs computed with the same formula.
+// monthlyCostFromConvertibleRI delegates to ricost.MonthlyCostFromConvertibleRI,
+// the single implementation of the convertible RI monthly cost formula shared
+// with internal/server.
 func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
-	if ri.Duration <= 0 {
-		return 0, fmt.Errorf("convertible RI %s has non-positive duration %d: monthly cost is not computable", ri.ReservedInstanceID, ri.Duration)
-	}
-	hoursPerTerm := float64(ri.Duration) / 3600
-	return ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730, nil
+	return ricost.MonthlyCostFromConvertibleRI(ri)
 }
 
 // convertToExchangeTypes converts provider-specific types to the exchange package types.
@@ -2061,10 +2052,14 @@ var awsExchangeClientFaultCodes = map[string]bool{
 
 // mapAWSExchangeError converts an AWS SDK error from an RI exchange
 // operation to a ClientError with the appropriate HTTP status code.
-// AWS 4xx client-fault errors produce a 400 with the original AWS
-// message preserved. Any other error produces a 500 (generic server
-// failure) using the provided opMsg fallback.
+// A cloud-commitments-go exchange refusal (exchangeRefusalError) produces
+// a 422 with its message. AWS 4xx client-fault errors produce a 400 with
+// the original AWS message preserved. Any other error produces a 500
+// (generic server failure) using the provided opMsg fallback.
 func mapAWSExchangeError(opMsg string, err error) error {
+	if refusal := exchangeRefusalError(err); refusal != nil {
+		return refusal
+	}
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) && awsExchangeClientFaultCodes[apiErr.ErrorCode()] {
 		return NewClientError(400, apiErr.ErrorMessage())
