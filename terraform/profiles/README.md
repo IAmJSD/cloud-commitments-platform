@@ -14,19 +14,26 @@ deployment presets.
 ```text
 profiles/
 ├── aws/
-│   ├── dev.tfvars           # AWS development environment
-│   ├── staging.tfvars       # AWS staging environment
-│   └── prod.tfvars          # AWS production environment
+│   ├── dev.tfvars.example          # AWS Lambda development environment
+│   ├── fargate-dev.tfvars.example  # AWS Fargate development environment
+│   └── prod.tfvars.example         # AWS production environment
 ├── azure/
-│   ├── dev.tfvars           # Azure development environment
-│   └── prod.tfvars          # Azure production environment
-├── gcp/
-│   ├── dev.tfvars           # GCP development environment
-│   └── prod.tfvars          # GCP production environment
-└── common/
-    ├── defaults.tfvars      # Common defaults across all profiles
-    └── secrets.tfvars.example  # Example secrets file (gitignored)
+│   └── dev.tfvars.example          # Azure development environment
+└── gcp/
+    └── dev.tfvars.example          # GCP development environment
 ```
+
+Only the `.tfvars.example` files are tracked. Copy one to a
+`.tfvars` file (for example `aws/dev.tfvars`) before using it;
+`*.tfvars` is gitignored.
+
+Every variable a profile sets must be declared in the matching
+`terraform/environments/<provider>/variables.tf`. Terraform only
+warns about an undeclared variable in a `.tfvars` file and then
+ignores it, so a misspelled or removed variable would silently
+have no effect. `profile_vars_guard_test.go` in this directory
+checks the examples and the snippets in this README against
+those declarations (`go test ./terraform/profiles/`).
 
 ## Using Profiles
 
@@ -61,7 +68,7 @@ terraform apply -var-file="../../../profiles/aws/prod.tfvars"
 
 ```bash
 # Copy example profile
-cp profiles/aws/dev.tfvars profiles/aws/my-profile.tfvars
+cp profiles/aws/dev.tfvars.example profiles/aws/my-profile.tfvars
 
 # Edit with your settings
 vim profiles/aws/my-profile.tfvars
@@ -72,7 +79,8 @@ terraform apply -var-file="../../../profiles/aws/my-profile.tfvars"
 
 ## Profile Contents
 
-Each profile contains environment-specific variables:
+Each profile contains environment-specific variables. An excerpt
+of `aws/dev.tfvars.example`:
 
 ```hcl
 # profiles/aws/dev.tfvars
@@ -82,40 +90,44 @@ project_name = "cudly"
 environment  = "dev"
 
 # Cloud configuration
-region       = "us-east-1"
-provider     = "aws"
+region = "us-east-1"
+# aws_profile = "your-aws-profile"
 
 # Compute platform
 compute_platform = "lambda"
-architecture     = "arm64"
-memory_size      = 512
 
-# Database
-database_name          = "cudly"
-database_version       = "16.4"
-database_min_capacity  = 0.5
-database_max_capacity  = 2.0
+# Lambda configuration
+lambda_architecture = "arm64"
+lambda_memory_size  = 512
 
-# Frontend
-enable_frontend_build = true
+# Docker build settings
+enable_docker_build = true
+
+# Database (RDS PostgreSQL)
+database_name           = "cudly"
+database_engine_version = "16" # major-only pin; see variables.tf
 
 # Networking
 vpc_cidr = "10.0.0.0/16"
 
-# Feature flags
-enable_dashboard = true
-
-# Docker build (auto-generated)
-# skip_docker_build = false
-# skip_docker_push = false
-
-# Tags
-tags = {
-  Environment = "dev"
-  ManagedBy   = "terraform"
-  Project     = "cudly"
-}
+# Frontend
+enable_cdn = false
 ```
+
+The provider is chosen by the environment directory you run
+Terraform in (`terraform/environments/<provider>`), not by a
+variable.
+
+`enable_docker_build` is the only build switch a profile can set.
+With `true` (the AWS default; Azure and GCP default to `false`),
+`terraform apply` builds the container image and pushes it to the
+registry. With `false`, nothing is built and the deployment uses
+the pre-built image in `image_uri`.
+There is no option to build without pushing, and no separate
+frontend build switch: the frontend is compiled into the same
+container image by the Dockerfile's `frontend-builder` stage.
+`skip_docker_build`, `skip_docker_push` and `enable_frontend_build`
+are not root variables, so setting them in a profile does nothing.
 
 ## Common Patterns
 
@@ -123,58 +135,75 @@ tags = {
 
 ```hcl
 # profiles/aws/dev.tfvars
-environment             = "dev"
-database_min_capacity   = 0.5      # Minimum resources
-database_max_capacity   = 1.0
-enable_monitoring       = false    # Less monitoring
-database_deletion_protection = false
-database_skip_final_snapshot = true
+environment                    = "dev"
+lambda_memory_size             = 512   # Minimum resources
+az_count                       = 2
+enable_flow_logs               = false # Less auditing
+enable_monitoring              = false # No alarms
+database_deletion_protection   = false
+database_skip_final_snapshot   = true
+database_backup_retention_days = 7
 ```
 
 ### Staging Profile
 
+There is no staging example; a staging profile usually sits
+between the dev and prod examples:
+
 ```hcl
 # profiles/aws/staging.tfvars
-environment             = "staging"
-database_min_capacity   = 1.0      # More resources
-database_max_capacity   = 2.0
-enable_monitoring       = true     # Full monitoring
-database_deletion_protection = false
-database_skip_final_snapshot = false
+environment                    = "staging"
+lambda_memory_size             = 1024 # More resources
+az_count                       = 2
+enable_flow_logs               = true # Full auditing
+enable_monitoring              = true # Alarms and alert emails
+database_deletion_protection   = false
+database_skip_final_snapshot   = false
+database_backup_retention_days = 7
 ```
 
 ### Production Profile
 
 ```hcl
 # profiles/aws/prod.tfvars
-environment             = "prod"
-database_min_capacity   = 2.0      # Maximum resources
-database_max_capacity   = 8.0
-enable_monitoring       = true
-database_high_availability = true
-database_deletion_protection = true
-database_skip_final_snapshot = false
+environment                    = "prod"
+lambda_memory_size             = 1024 # More resources
+az_count                       = 3    # More AZs
+enable_flow_logs               = true
+database_performance_insights  = true
+enable_monitoring              = true # prod warns without it; see below
+database_deletion_protection   = true
+database_skip_final_snapshot   = false
 database_backup_retention_days = 30
 ```
+
+`enable_monitoring` (default `false` on all three providers)
+creates the monitoring module: alarms and alert notifications
+(on Azure only for Container Apps, on GCP only for Cloud Run).
+Alerts go to `alert_emails`, a comma-separated list. Don't commit
+real addresses in a profile: the deploy workflow passes them from
+the `ALERT_EMAILS` secret, and for a local run you can
+`export TF_VAR_alert_emails="ops@example.com"`. With
+`environment = "prod"`, each root prints a
+`prod_alerts_reach_someone` warning if monitoring is off or no
+address is set.
 
 ## Multi-Cloud Profiles
 
 ### AWS Lambda (Serverless)
 
 ```hcl
-# profiles/aws/lambda-dev.tfvars
-provider         = "aws"
-compute_platform = "lambda"
-region           = "us-east-1"
-architecture     = "arm64"
-memory_size      = 512
+# profiles/aws/dev.tfvars
+compute_platform    = "lambda"
+region              = "us-east-1"
+lambda_architecture = "arm64"
+lambda_memory_size  = 512
 ```
 
 ### AWS Fargate (Container)
 
 ```hcl
 # profiles/aws/fargate-dev.tfvars
-provider         = "aws"
 compute_platform = "fargate"
 region           = "us-east-1"
 fargate_cpu      = 512
@@ -185,18 +214,16 @@ fargate_memory   = 1024
 
 ```hcl
 # profiles/azure/dev.tfvars
-provider         = "azure"
 compute_platform = "container-apps"
 location         = "eastus"
 container_cpu    = 0.5
-container_memory = "1Gi"
+container_memory = "1.0Gi"
 ```
 
 ### GCP Cloud Run
 
 ```hcl
 # profiles/gcp/dev.tfvars
-provider         = "gcp"
 compute_platform = "cloud-run"
 region           = "us-central1"
 cloud_run_cpu    = "1"
@@ -211,8 +238,8 @@ cloud_run_memory = "512Mi"
 
 ```bash
 # Set secrets as environment variables
-export TF_VAR_database_password="secret123"
-export TF_VAR_admin_email="admin@example.com"
+export TF_VAR_admin_password="secret123"
+export TF_VAR_credential_encryption_key="$(openssl rand -hex 32)"
 
 # Terraform automatically picks them up
 terraform apply -var-file="../../../profiles/aws/dev.tfvars"
@@ -223,8 +250,8 @@ terraform apply -var-file="../../../profiles/aws/dev.tfvars"
 ```bash
 # Create secrets file (not tracked in git)
 cat > profiles/aws/secrets.tfvars <<EOF
-database_password = "secret123"
-admin_email       = "admin@example.com"
+admin_password            = "secret123"
+credential_encryption_key = "<64-char hex string>"
 EOF
 
 # Use both profile and secrets
@@ -233,21 +260,20 @@ terraform apply \
   -var-file="../../../profiles/aws/secrets.tfvars"
 ```
 
-> **Note:** Admin setup does not use a password variable.
-> After deployment, the admin account is bootstrapped through
+> **Note:** `admin_password` is optional. Without it,
+> after deployment, the admin account is bootstrapped through
 > the UI using an API key (stored in AWS Secrets Manager)
 > and the `/auth/setup-admin` endpoint. Alternatively, the
 > admin is created with the `ADMIN_EMAIL` env var during
 > database migration with no password set, requiring a
 > "Forgot Password" flow to set the initial password.
 
-### Using Secret Manager
+### Generated Secrets
 
-```hcl
-# profiles/aws/dev.tfvars
-# Reference secrets from AWS Secrets Manager
-database_password_secret_arn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:cudly-dev-db-pass"
-```
+The database password, JWT and session secrets are generated by
+Terraform and stored in the cloud's secret manager (AWS Secrets
+Manager, Azure Key Vault or GCP Secret Manager). A profile does
+not need to reference them.
 
 ## Profile Validation
 
@@ -255,11 +281,14 @@ Validate profile before applying:
 
 ```bash
 # Check syntax
-terraform validate -var-file="../../../profiles/aws/dev.tfvars"
+terraform validate
 
 # Dry run (plan)
 terraform plan -var-file="../../../profiles/aws/dev.tfvars"
 ```
+
+Treat any `Value for undeclared variable` warning from `plan` as
+an error: Terraform is ignoring that line of the profile.
 
 ## Best Practices
 
@@ -272,30 +301,19 @@ terraform plan -var-file="../../../profiles/aws/dev.tfvars"
   aws/prod.tfvars
 ```
 
-### 2. Inherit from Common Defaults
-
-```hcl
-# profiles/common/defaults.tfvars
-database_version       = "16.4"
-enable_monitoring      = true
-database_backup_retention_days = 7
-
-# profiles/aws/dev.tfvars inherits these
-```
-
-### 3. Document Custom Values
+### 2. Document Custom Values
 
 ```hcl
 # profiles/aws/dev.tfvars
 
-# Using t4g (ARM) for cost savings
-architecture = "arm64"
+# Using Graviton (ARM) for cost savings
+lambda_architecture = "arm64"
 
 # Reduced capacity for dev environment
-database_min_capacity = 0.5  # vs 2.0 in prod
+lambda_memory_size = 512 # vs 1024 in prod
 ```
 
-### 4. Version Control Profiles
+### 3. Version Control Profiles
 
 ```bash
 # Commit profiles (without secrets)
@@ -306,7 +324,7 @@ git add profiles/aws/prod.tfvars
 echo "profiles/**/secrets.tfvars" >> .gitignore
 ```
 
-### 5. Use Profile for Each Environment
+### 4. Use Profile for Each Environment
 
 ```text
 profiles/
@@ -331,9 +349,9 @@ cat ~/.cudly/deployment.yaml
 #     compute_platform: lambda
 #     region: us-east-1
 
-# Convert to Terraform profile
+# Convert to Terraform profile (the provider is the
+# terraform/environments/<provider> directory, not a variable)
 cat > profiles/aws/dev.tfvars <<EOF
-provider         = "aws"
 compute_platform = "lambda"
 region           = "us-east-1"
 environment      = "dev"

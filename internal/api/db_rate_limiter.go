@@ -3,6 +3,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,12 @@ type DBRateLimiter struct {
 
 // Verify that DBRateLimiter implements RateLimiterInterface.
 var _ RateLimiterInterface = (*DBRateLimiter)(nil)
+
+// ErrRateLimiterUnavailable is returned by a DBRateLimiter that has no
+// database pool. It cannot count attempts, so it reports an error instead of
+// allowing: checkRateLimitStrict then answers 503 on the credential endpoints
+// rather than silently dropping their brute-force protection (issue #104).
+var ErrRateLimiterUnavailable = errors.New("rate limiter has no database pool")
 
 // dbRateLimiterScheduledCleanupInterval is the period between scheduled
 // cleanup runs started by StartCleanupWorker. Separate from cleanupInterval
@@ -105,7 +112,7 @@ func (rl *DBRateLimiter) SetLimit(endpoint string, config RateLimitConfig) {
 // trade for atomicity and is acceptable for rate-limit semantics.
 func (rl *DBRateLimiter) Allow(ctx context.Context, key, endpoint string) (bool, error) {
 	if rl == nil || rl.pool == nil {
-		return true, nil
+		return false, ErrRateLimiterUnavailable
 	}
 
 	rl.limitsMu.RLock()

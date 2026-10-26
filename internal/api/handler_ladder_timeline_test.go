@@ -129,3 +129,22 @@ func TestLadderTimelineMalformedRateReturnsFixedError(t *testing.T) {
 	require.NotContains(t, clientErr.Error(), "row 9")
 	require.Nil(t, result)
 }
+
+// TestLadderTimelineNonUUIDAccountIDIs400 pins #1430 for both timeline reads:
+// an account_id that is not a UUID answers 400 instead of letting Postgres's
+// uuid syntax error surface as a 500.
+func TestLadderTimelineNonUUIDAccountIDIs400(t *testing.T) {
+	for _, path := range []string{"/api/ladder/tranches", "/api/ladder/runs"} {
+		t.Run(path, func(t *testing.T) {
+			h, original := ladderScopedHandler(t)
+			failNonUUIDLookups(original)
+			store := &timelineTestStore{MockConfigStore: original}
+			h.config = store
+			req := ladderScopedReq("")
+			req.QueryStringParameters = map[string]string{"account_id": ladderBadAccountID, "provider": "aws"}
+			result, err := NewRouter(h).Route(context.Background(), "GET", path, req)
+			requireInvalidAccountID(t, original, result, err)
+			require.False(t, store.called)
+		})
+	}
+}

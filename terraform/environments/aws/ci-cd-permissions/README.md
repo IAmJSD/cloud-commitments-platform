@@ -105,6 +105,7 @@ After applying, retrieve the outputs used in GitHub Actions:
 ```bash
 terraform output role_arn               # → AWS_ROLE_TO_ASSUME
 terraform output oidc_provider_arn      # informational; AWS uses this internally
+terraform output -json policy_arns      # every managed policy attached to the role, for audits or teardown
 ```
 
 ## Importing an existing role

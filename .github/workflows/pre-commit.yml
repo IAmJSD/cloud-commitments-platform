@@ -121,27 +121,26 @@ jobs:
           echo "tflint --init failed after 6 attempts — GitHub release API likely unavailable" >&2
           exit 1
 
-      # Cache the installed tool binaries (gosec, gocyclo). Keyed on the
-      # pinned version strings so a tool-version bump still triggers a
-      # fresh install. Both binaries land in ~/go/bin which setup-go@v6
-      # already adds to PATH. Restored BEFORE the install steps so the
-      # `if: cache-hit != 'true'` guards below can short-circuit them on
-      # cache-hit runs (the `go install` invocations cost ~3-5s each
-      # even when the module cache is warm; skipping them on cache-hit
-      # is worth the extra `if`).
-      - name: Cache Go-installed tools (gosec, gocyclo)
+      # Cache the installed tool binaries (gocyclo). Keyed on the pinned
+      # version string so a tool-version bump still triggers a fresh
+      # install. The binary lands in ~/go/bin which setup-go@v6 already
+      # adds to PATH. Restored BEFORE the install step so the
+      # `if: cache-hit != 'true'` guard below can short-circuit it on
+      # cache-hit runs (the `go install` invocation costs ~3-5s even
+      # when the module cache is warm; skipping it on cache-hit is worth
+      # the extra `if`).
+      #
+      # gosec is deliberately NOT installed here (issue #347): the `gosec`
+      # hook is SKIPped in this job (see the pre-commit step below), and
+      # the hook (via scripts/run-gosec.sh) installs its own copy under
+      # ~/.cache/gosec anyway, so a ~/go/bin/gosec was never run. ci.yml's
+      # Security Scanning job is the gosec gate.
+      - name: Cache Go-installed tools (gocyclo)
         id: cache-go-tools
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/go/bin
-          key: go-tools-${{ runner.os }}-gosec-v2.28.0-gocyclo-v0.6.0
-
-      - name: Install gosec
-        if: steps.cache-go-tools.outputs.cache-hit != 'true'
-        # Pinned to the same version ci.yml's `securego/gosec` Action uses,
-        # so an upstream gosec release with rule changes can't silently
-        # downgrade the gate between the two workflows.
-        run: go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+          key: go-tools-${{ runner.os }}-gocyclo-v0.6.0
 
       - name: Install gocyclo
         if: steps.cache-go-tools.outputs.cache-hit != 'true'
@@ -286,10 +285,11 @@ jobs:
           # modules at once, and gosec's whole-repo analysis exhausts the
           # runner's memory — the job dies with "The runner has received a
           # shutdown signal" at this step on every run. gosec is NOT dropped:
-          # the dedicated `Security Scanning` job in ci.yml runs gosec v2.28.0
-          # per-module (SARIF) as the authoritative gate, so this only removes
-          # the duplicate that OOMs CI — the same dedup rationale as the
-          # already-skipped `terraform_validate` (covered by Validate Terraform).
+          # the dedicated `Security Scanning` job in ci.yml runs gosec (the
+          # version in .gosec-version) per-module (SARIF) as the
+          # authoritative gate, so this only removes the duplicate that OOMs
+          # CI — the same dedup rationale as the already-skipped
+          # `terraform_validate` (covered by Validate Terraform).
           # Local developers still get the fast per-changed-package gosec hook.
           SKIP: terraform_validate,gosec
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

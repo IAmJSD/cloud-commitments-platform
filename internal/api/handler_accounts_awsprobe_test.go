@@ -239,6 +239,13 @@ func TestTestAccountCredentials_AWSFailuresAreClassified(t *testing.T) {
 			wantMsg: "aws_role_arn is empty but this account is not the CUDly host account; set aws_role_arn",
 		},
 		{
+			// #559: an STS outage is not the tenant's to fix, so it must not
+			// be reported as a non-host account that needs aws_role_arn.
+			name:    "role_arn without role ARN when the host identity check fails",
+			pc:      probeCase{acct: &config.CloudAccount{ExternalID: probeHostAcct, AWSAuthMode: "role_arn"}, stsFake: &probeSTS{transportErr: true}},
+			wantMsg: hostIdentityUnavailableMessage,
+		},
+		{
 			name:    "access_keys with incomplete stored payload",
 			pc:      probeCase{acct: &config.CloudAccount{ExternalID: probeTenantAcct, AWSAuthMode: "access_keys"}, payload: `{"access_key_id":"` + probeMemberKeyID + `"}`},
 			wantMsg: "credential configuration incomplete: aws_access_keys stored payload is missing secret_access_key",

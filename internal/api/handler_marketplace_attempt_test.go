@@ -77,6 +77,9 @@ func (f *fakeListingDB) UpdatePurchaseHistoryListing(_ context.Context, _, listi
 		f.failRecords--
 		return errors.New("db down")
 	}
+	if f.row.ListingID == listingID && isDeadListingState(f.row.ListingState) && !isDeadListingState(state) {
+		return config.ErrMarketplaceListingEnded
+	}
 	f.row.ListingID, f.row.ListingState = listingID, state
 	f.token, f.schedule = "", nil
 	return nil
@@ -137,6 +140,10 @@ func (a *fakeMarketplaceAWS) cancel(_ context.Context, id string) (ec2svc.Market
 	}
 	for _, l := range a.listings {
 		if l.id == id {
+			if isDeadListingState(l.state) {
+				// Like AWS, a listing that already ended cannot be canceled.
+				return ec2svc.MarketplaceListingResult{}, &marketplaceTestAPIError{code: "IncorrectState", message: "listing " + id + " is " + l.state, fault: smithy.FaultClient}
+			}
 			l.state = config.ListingStateCancelled
 		}
 	}
@@ -192,7 +199,7 @@ func newMarketplaceFixture(t *testing.T) *marketplaceFixture {
 		require.Equal(t, toAWSPriceSchedule(stored), req.PriceSchedule)
 		return fake.create(ctx, req)
 	}
-	stub := &stubMarketplaceEC2{createFn: create, cancelFn: fake.cancel}
+	stub := &stubMarketplaceEC2{createFn: create, cancelFn: fake.cancel, describeFn: fake.describe}
 	h := newMarketplaceHandler(db.MockConfigStore, authSvc, stub)
 	h.config = db
 	h.marketplaceFinderFactory = func(aws.Config) marketplaceListingFinder { return fake }

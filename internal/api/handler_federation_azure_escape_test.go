@@ -63,7 +63,7 @@ func evalShellWord(t *testing.T, bashPath, script string, env ...string) (out, d
 }
 
 var (
-	// registrationBlockRe matches deploy-azure.sh from the CONTACT_EMAIL
+	// registrationBlockRe matches a deploy script from the CONTACT_EMAIL
 	// assignment through the end of the PAYLOAD heredoc: the part that
 	// turns the pre-filled email into the registration JSON, stopping
 	// before the curl call.
@@ -84,11 +84,19 @@ type registration struct {
 // resulting CONTACT_EMAIL and the PAYLOAD heredoc parsed as JSON.
 func evalRegistration(t *testing.T, bashPath, script string, env ...string) registration {
 	t.Helper()
+	return evalRegistrationWith(t, bashPath,
+		"az() { printf '%s\\n' 00000000-0000-0000-0000-0000000000aa; }\n", script, env...)
+}
+
+// evalRegistrationWith is evalRegistration with the caller's prelude (stub
+// functions and the variables the block reads) in place of the az stub, so
+// the other generated scripts' registration blocks can run the same way.
+func evalRegistrationWith(t *testing.T, bashPath, prelude, script string, env ...string) registration {
+	t.Helper()
 	block := registrationBlockRe.FindString(script)
-	require.NotEmpty(t, block, "deploy-azure.sh must build the registration payload")
-	stub := "set -euo pipefail\naz() { printf '%s\\n' 00000000-0000-0000-0000-0000000000aa; }\n"
+	require.NotEmpty(t, block, "the script must build the registration payload")
 	out, dir := evalShellWord(t, bashPath,
-		stub+block+"\nprintf '%s\\0%s' \"$CONTACT_EMAIL\" \"$PAYLOAD\"", env...)
+		"set -euo pipefail\n"+prelude+block+"\nprintf '%s\\0%s' \"$CONTACT_EMAIL\" \"$PAYLOAD\"", env...)
 	email, payload, ok := strings.Cut(out, "\x00")
 	require.True(t, ok, "sandbox output must hold CONTACT_EMAIL and PAYLOAD: %q", out)
 	var fields map[string]string

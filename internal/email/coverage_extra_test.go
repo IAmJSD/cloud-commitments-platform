@@ -400,7 +400,7 @@ func TestSMTPSender_SendRIExchangePendingApproval_WithNotifyEmail(t *testing.T) 
 		port:        587,
 		fromEmail:   "from@example.com",
 		notifyEmail: "notify@example.com",
-		// useTLS is false so sendMailTLS is not called; smtp.SendMail will be attempted
+		// useTLS is false so STARTTLS is not required; a plain send will be attempted
 		// but fail — we just verify the method reaches the send path (not a no-op)
 		useTLS: false,
 	}
@@ -714,7 +714,7 @@ var _ SNSPublisher = (*mockSNSPublisher)(nil)
 var _ SESEmailSender = (*mockSESEmailSender)(nil)
 
 func TestSMTPSender_SendToEmail_AuthPath(t *testing.T) {
-	// A sender with username/password set but useTLS=false will use smtp.SendMail.
+	// A sender with username/password set but useTLS=false takes the plain (non-STARTTLS) send path.
 	// With a bogus host, it will fail at Dial — which still exercises the auth
 	// construction branch (auth != nil when username/password are both non-empty).
 	sender := &SMTPSender{
