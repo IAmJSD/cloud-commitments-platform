@@ -75,11 +75,13 @@ func TestFinalizePurchaseStatus_ApproveDuringEmailSend(t *testing.T) {
 	type outcome struct {
 		emailSent bool
 		status    string
+		err       error
 	}
 	done := make(chan outcome, 1)
 	go func() {
 		sent, reason, _ := h.sendPurchaseApprovalEmail(ctx, &events.LambdaFunctionURLRequest{}, exec, "raw-token", recs, 0, 0)
-		done <- outcome{sent, h.finalizePurchaseStatus(ctx, exec, sent, reason)}
+		status, err := h.finalizePurchaseStatus(ctx, exec, sent, reason)
+		done <- outcome{sent, status, err}
 	}()
 	select {
 	case <-notifier.entered:
@@ -96,6 +98,7 @@ func TestFinalizePurchaseStatus_ApproveDuringEmailSend(t *testing.T) {
 		t.Fatal("send + finalize did not finish")
 	}
 	assert.False(t, got.emailSent)
+	require.NoError(t, got.err)
 	assert.Equal(t, "running", got.status, "the response must report the row's real status")
 	row := storedStatus(t, store, exec.ExecutionID)
 	assert.Equal(t, "running", row.Status, "a failed email must not overwrite an approved, running row")
@@ -120,17 +123,18 @@ func TestFinalizePurchaseStatus_ConcurrentWithApproveClaim(t *testing.T) {
 
 		start := make(chan struct{})
 		var wg sync.WaitGroup
-		var claimErr error
+		var claimErr, finalizeErr error
 		var status string
 		wg.Add(2)
 		go func() { defer wg.Done(); <-start; claimErr = claimRunningLikeApprove(ctx, store, exec.ExecutionID) }()
 		go func() {
 			defer wg.Done()
 			<-start
-			status = h.finalizePurchaseStatus(ctx, exec, false, "send failed: ses throttled")
+			status, finalizeErr = h.finalizePurchaseStatus(ctx, exec, false, "send failed: ses throttled")
 		}()
 		close(start)
 		wg.Wait()
+		require.NoError(t, finalizeErr, "round %d: a lost guard is not a save failure", i)
 
 		row := storedStatus(t, store, exec.ExecutionID)
 		if claimErr == nil {
@@ -144,4 +148,36 @@ func TestFinalizePurchaseStatus_ConcurrentWithApproveClaim(t *testing.T) {
 		assert.Equal(t, "failed", status, "round %d", i)
 	}
 	t.Logf("approve claim won %d of %d rounds", claimWins, rounds)
+}
+
+// TestFinalizePurchaseStatus_SaveFailureSurfaces is issue #54 on real
+// Postgres: the approval email fails and the write recording that fails too
+// (here the request context is canceled before it, as when the Lambda deadline
+// hits). The row is left pending with no error text, indistinguishable from a
+// healthy pending request, so the response must be the 500 naming the
+// execution rather than "pending".
+func TestFinalizePurchaseStatus_SaveFailureSurfaces(t *testing.T) {
+	_, store := setupSubmitDB(t)
+	ctx := context.Background()
+	recs, key := submitFixture(t)
+	exec := newSubmitExecution(t, recs)
+	h := &Handler{config: store}
+	dup, err := h.persistExecutionAndSuppressions(ctx, exec, nil, "", key)
+	require.NoError(t, err)
+	require.Nil(t, dup)
+
+	sent, reason, _ := h.sendPurchaseApprovalEmail(ctx, &events.LambdaFunctionURLRequest{}, exec, "raw-token", recs, 0, 0)
+	require.False(t, sent, "no notifier is wired, so the send must fail")
+	require.NotEmpty(t, reason)
+
+	deadCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	status, err := h.finalizePurchaseStatus(deadCtx, exec, sent, reason)
+
+	assert.Empty(t, status)
+	requireEmailFailureNotRecorded(t, err, exec.ExecutionID, reason)
+	assert.ErrorIs(t, err, context.Canceled)
+	row := storedStatus(t, store, exec.ExecutionID)
+	assert.Equal(t, "pending", row.Status, "the failed write never landed")
+	assert.Empty(t, row.Error)
 }
