@@ -396,7 +396,13 @@ func (s *SMTPSender) sendMail(ctx context.Context, addr string, auth smtp.Auth, 
 	}
 	defer conn.Close()
 
-	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
+	stop := context.AfterFunc(ctx, func() {
+		// SetDeadline only fails on a closed connection, which has nothing
+		// left to unblock.
+		if err := conn.SetDeadline(time.Unix(1, 0)); err != nil {
+			logging.Debugf("SMTP: expire connection deadline: %v", err)
+		}
+	})
 	defer stop()
 
 	if err := smtpConverse(conn, host, s.useTLS, auth, from, to, msg); err != nil {

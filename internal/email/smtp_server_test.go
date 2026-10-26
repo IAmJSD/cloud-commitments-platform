@@ -720,7 +720,7 @@ func TestSMTPSender_SendHonorsContext(t *testing.T) {
 		{name: "starttls, stalls after EHLO", useTLS: true, greet: true, want: context.DeadlineExceeded},
 		{name: "plain, no greeting", want: context.DeadlineExceeded},
 		{name: "plain, stalls after EHLO", greet: true, want: context.DeadlineExceeded},
-		{name: "plain, cancelled", greet: true, cancel: true, want: context.Canceled},
+		{name: "plain, canceled", greet: true, cancel: true, want: context.Canceled},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			host, portStr, err := net.SplitHostPort(startStallingSMTPServer(t, tc.greet))
