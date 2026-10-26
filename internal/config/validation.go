@@ -302,7 +302,42 @@ func (c *GlobalConfig) Validate() error {
 	if err := validateOfferingClass(c.OfferingClass); err != nil {
 		return err
 	}
+	if err := c.validateRIExchangeLimits(); err != nil {
+		return err
+	}
 	return c.validateRecommendationsFields()
+}
+
+// MaxRIExchangeUtilizationThreshold is the upper bound of
+// ri_exchange_utilization_threshold, a percentage.
+const MaxRIExchangeUtilizationThreshold = 100.0
+
+// validateRIExchangeLimits rejects an RI-exchange money cap that is negative
+// or not finite, and a utilization threshold outside
+// [0, MaxRIExchangeUtilizationThreshold] (#120). PUT /api/config unmarshals
+// onto the whole GlobalConfig, so without this a negative daily cap reached
+// the store unchecked; the bounds match the ones the dedicated
+// PUT /api/ri-exchange/config body already enforces, so both routes accept
+// the same values. 0 stays valid for every field: a 0 cap is the "not
+// configured" state the exchange guard refuses to run under.
+func (c *GlobalConfig) validateRIExchangeLimits() error {
+	caps := []struct {
+		name  string
+		value float64
+	}{
+		{"ri_exchange_max_per_exchange_usd", c.RIExchangeMaxPerExchangeUSD},
+		{"ri_exchange_max_daily_usd", c.RIExchangeMaxDailyUSD},
+	}
+	for _, cp := range caps {
+		if math.IsNaN(cp.value) || math.IsInf(cp.value, 0) || cp.value < 0 {
+			return fmt.Errorf("%s must be a finite amount >= 0, got: %v", cp.name, cp.value)
+		}
+	}
+	t := c.RIExchangeUtilizationThreshold
+	if math.IsNaN(t) || t < 0 || t > MaxRIExchangeUtilizationThreshold {
+		return fmt.Errorf("ri_exchange_utilization_threshold must be between 0 and %v, got: %v", MaxRIExchangeUtilizationThreshold, t)
+	}
+	return nil
 }
 
 // validateScheduleAndNotifications validates collection_schedule and

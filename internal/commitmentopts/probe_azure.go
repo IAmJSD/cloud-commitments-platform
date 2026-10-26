@@ -163,9 +163,10 @@ func azureProbeCurrency(code string) (string, error) {
 // probeCombo calls ValidatePurchase for a single (term, billingPlan) pair and
 // returns true if the API considers it a valid offering.
 //
-// A response where any benefit has Valid=false is treated as "not offered"
-// (returns false, nil). Any other API error is returned as-is so the caller
-// can decide whether it is a transient failure or a configuration problem.
+// A response where any benefit has Valid=false, or where no benefit carries
+// Valid=true, is treated as "not offered" (returns false, nil). Any other API
+// error is returned as-is so the caller can decide whether it is a transient
+// failure or a configuration problem.
 func (p *AzureSPProber) probeCombo(
 	ctx context.Context,
 	client AzureSPValidateAPI,
@@ -210,15 +211,22 @@ func (p *AzureSPProber) probeCombo(
 		return false, err
 	}
 
-	// The API returns a per-benefit valid flag. If all reported benefits are
-	// valid (or the slice is empty, which can't happen for a single-item
-	// request in practice), the combo is available.
+	// The API returns a per-benefit valid flag. The combo counts as sold only
+	// on positive confirmation: at least one benefit with Valid=true and none
+	// with Valid=false. An empty Benefits slice or a nil flag says nothing, so
+	// it must not record a combo (such as a P5Y plan) as purchasable
+	// (issue #243, audit finding A05-012).
+	confirmed := false
 	for _, b := range resp.Benefits {
-		if b != nil && b.Valid != nil && !*b.Valid {
+		if b == nil || b.Valid == nil {
+			continue
+		}
+		if !*b.Valid {
 			return false, nil
 		}
+		confirmed = true
 	}
-	return true, nil
+	return confirmed, nil
 }
 
 func (p *AzureSPProber) client(cred azcore.TokenCredential) (AzureSPValidateAPI, error) {

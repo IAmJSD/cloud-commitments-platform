@@ -152,3 +152,80 @@ func TestPurchaseSuppression_AppliesTo(t *testing.T) {
 	assert.True(t, legacy.AppliesTo(&SuppressionVariant{"us-east-1b", "Windows", "dedicated"}), "a legacy row is a wildcard")
 	assert.True(t, legacy.AppliesTo(nil))
 }
+
+// TestBuildSuppressions_LegacyEC2WithoutDetailsIsWildcard: an EC2 rec saved
+// before Details existed has an unknown platform and tenancy, so it must
+// suppress every variant (issue #1232). Non-EC2 and fully detailed recs keep
+// their known variant.
+func TestBuildSuppressions_LegacyEC2WithoutDetailsIsWildcard(t *testing.T) {
+	base := RecommendationRecord{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large", Count: 1, AvailabilityZone: "us-east-1a"}
+	for name, details := range map[string][]byte{"nil": nil, "empty": {}, "null": []byte(`null`), "no keys": []byte(`{}`)} {
+		t.Run(name, func(t *testing.T) {
+			rec := base
+			rec.Details = details
+			sups := BuildSuppressions([]RecommendationRecord{rec}, "exec-1", &GlobalConfig{}, time.Now())
+			require.Len(t, sups, 1)
+			assert.Nil(t, sups[0].Variant)
+			assert.True(t, sups[0].AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}))
+		})
+	}
+
+	full := base
+	full.Details = []byte(`{"platform":"Linux/UNIX","tenancy":"default"}`)
+	sups := BuildSuppressions([]RecommendationRecord{full}, "exec-1", &GlobalConfig{}, time.Now())
+	require.Len(t, sups, 1)
+	assert.Equal(t, &SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}, sups[0].Variant)
+}
+
+// TestBuildSuppressions_ComputeSlugEC2: AWS EC2 recs under the canonical
+// "compute" slug follow the same wildcard rule as "ec2"; a rec with only a
+// platform or only a tenancy keeps its narrow variant.
+func TestBuildSuppressions_ComputeSlugEC2(t *testing.T) {
+	base := RecommendationRecord{Provider: "aws", Service: "compute", Region: "us-east-1", ResourceType: "m5.large", Count: 1, AvailabilityZone: "us-east-1a"}
+	sups := BuildSuppressions([]RecommendationRecord{base}, "exec-1", &GlobalConfig{}, time.Now())
+	require.Len(t, sups, 1)
+	assert.Nil(t, sups[0].Variant)
+	assert.True(t, sups[0].AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}))
+
+	for name, tc := range map[string]struct {
+		details []byte
+		want    SuppressionVariant
+	}{
+		"platform only": {[]byte(`{"platform":"Linux/UNIX"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", ""}},
+		"tenancy only":  {[]byte(`{"tenancy":"default"}`), SuppressionVariant{"us-east-1a", "", "default"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := base
+			rec.Details = tc.details
+			sups := BuildSuppressions([]RecommendationRecord{rec}, "exec-1", &GlobalConfig{}, time.Now())
+			require.Len(t, sups, 1)
+			assert.Equal(t, &tc.want, sups[0].Variant)
+		})
+	}
+}
+
+func TestCanonicalSuppressionService(t *testing.T) {
+	assert.Equal(t, "compute", CanonicalSuppressionService("aws", "ec2"))
+	assert.Equal(t, "compute", CanonicalSuppressionService("aws", "compute"))
+	assert.Equal(t, "rds", CanonicalSuppressionService("aws", "rds"))
+	assert.Equal(t, "compute", CanonicalSuppressionService("azure", "compute"))
+	assert.Equal(t, "ec2", CanonicalSuppressionService("azure", "ec2"))
+	assert.Equal(t, "compute", CanonicalSuppressionService("gcp", "compute"))
+}
+
+// Issue #1412: AWS "ec2" and "compute" recs in one request share a bucket and
+// are written under the canonical slug; Azure compute is untouched.
+func TestBuildSuppressions_CanonicalisesAWSEC2Slug(t *testing.T) {
+	now := time.Date(2026, 4, 24, 0, 0, 0, 0, time.UTC)
+	gp := &GlobalConfig{GracePeriodDays: map[string]int{"aws": 7, "azure": 7}}
+	sups := BuildSuppressions([]RecommendationRecord{
+		{Provider: "aws", Service: "ec2", Region: "r", ResourceType: "m5.large", Count: 3},
+		{Provider: "aws", Service: "compute", Region: "r", ResourceType: "m5.large", Count: 2},
+		{Provider: "azure", Service: "compute", Region: "r", ResourceType: "D2", Count: 1},
+	}, "exec-1", gp, now)
+	require.Len(t, sups, 2)
+	assert.Equal(t, "compute", sups[0].Service)
+	assert.Equal(t, 5, sups[0].SuppressedCount)
+	assert.Equal(t, "compute", sups[1].Service)
+	assert.Equal(t, "azure", sups[1].Provider)
+}

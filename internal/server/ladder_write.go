@@ -11,6 +11,7 @@ import (
 	pkgladder "github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 	awsprovider "github.com/LeanerCloud/cloud-commitments-go/providers/aws"
 	awsladder "github.com/LeanerCloud/cloud-commitments-go/providers/aws/ladder"
+	"github.com/LeanerCloud/cloud-commitments-go/providers/aws/recommendations"
 )
 
 // exchangeRunnerAdapter bridges internal/server wiring (exchange store, EC2 exchange
@@ -31,8 +32,7 @@ type exchangeRunnerAdapter struct {
 }
 
 // RunAutoExchange implements providers/aws/ladder.exchangeRunner. It constructs
-// fresh AWS clients, lists convertible RIs and utilization, converts them for the
-// exchange package, then delegates to exchange.RunAutoExchange.
+// fresh AWS clients and hands them to run.
 //
 // ladderRunID is forwarded to RunAutoExchangeParams.LadderRunID so exchange scopes
 // its pending-cancellation to the ladder origin (issue #1348 / gap G10). DryRun
@@ -46,12 +46,36 @@ func (a *exchangeRunnerAdapter) RunAutoExchange(ctx context.Context, cfg exchang
 
 	ec2Client := awsprovider.NewEC2ClientDirect(awsCfg)
 	recsClient := awsprovider.NewRecommendationsClientDirect(awsCfg)
+	clients := riExchangeClients{
+		listConvertibleRIs: ec2Client.ListConvertibleReservedInstances,
+		getRIUtilization: func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
+			return recsClient.GetRIUtilization(ctx, lookbackDays, a.region)
+		},
+		exchangeClient: exchange.NewExchangeClient(awsCfg),
+		lookupOffering: newConvertibleOfferingLookup(ec2Client),
+		accountID:      a.accountID,
+		region:         a.region,
+	}
+	return a.run(ctx, cfg, clients, ladderRunID, dryRun)
+}
 
-	instances, err := ec2Client.ListConvertibleReservedInstances(ctx)
+// run applies the 4-eyes policy to cfg.Mode, lists convertible RIs and
+// utilization, converts them for the exchange package, then delegates to
+// exchange.RunAutoExchange. The ladder always asks for auto mode; under 4-eyes
+// it runs as manual, so exchanges wait for approval (issue #679). A global
+// config that cannot be read fails closed: the run stops before any AWS call.
+func (a *exchangeRunnerAdapter) run(ctx context.Context, cfg exchange.RIExchangeConfig, clients riExchangeClients, ladderRunID *string, dryRun bool) (*exchange.AutoExchangeResult, error) {
+	globalCfg, err := a.app.Config.GetGlobalConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("exchangeRunnerAdapter: 4-eyes policy check: load global config: %w", err)
+	}
+	cfg.Mode = fourEyesExchangeMode(globalCfg, cfg.Mode)
+
+	instances, err := clients.listConvertibleRIs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("exchangeRunnerAdapter: list convertible RIs: %w", err)
 	}
-	utilData, err := recsClient.GetRIUtilization(ctx, cfg.LookbackDays, a.region)
+	utilData, err := clients.getRIUtilization(ctx, cfg.LookbackDays)
 	if err != nil {
 		return nil, fmt.Errorf("exchangeRunnerAdapter: get RI utilization: %w", err)
 	}
@@ -61,13 +85,13 @@ func (a *exchangeRunnerAdapter) RunAutoExchange(ctx context.Context, cfg exchang
 
 	return exchange.RunAutoExchange(ctx, exchange.RunAutoExchangeParams{
 		Store:          store,
-		ExchangeClient: exchange.NewExchangeClient(awsCfg),
-		LookupOffering: newConvertibleOfferingLookup(ec2Client),
+		ExchangeClient: clients.exchangeClient,
+		LookupOffering: clients.lookupOffering,
 		RIs:            riInfos,
 		Utilization:    utilInfos,
 		Config:         cfg,
-		AccountID:      a.accountID,
-		Region:         a.region,
+		AccountID:      clients.accountID,
+		Region:         clients.region,
 		DashboardURL:   a.app.appConfig.DashboardURL,
 		RIMetadata:     riMetadata,
 		LadderRunID:    ladderRunID,

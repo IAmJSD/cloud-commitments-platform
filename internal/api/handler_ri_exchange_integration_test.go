@@ -99,7 +99,7 @@ func reshapeRequest() *events.LambdaFunctionURLRequest {
 // the read-side mapping logic.
 func seedRecsForRegion(ctx context.Context, t *testing.T, store *config.PostgresStore, recs []config.RecommendationRecord) {
 	t.Helper()
-	require.NoError(t, store.ReplaceRecommendations(ctx, time.Now(), recs),
+	require.NoError(t, store.UpsertRecommendations(ctx, time.Now(), recs, nil),
 		"seeding recommendations into the test container failed")
 }
 
@@ -304,7 +304,7 @@ func TestReshapeRecommendations_Integration_ScopedAccount_FiltersToAccount(t *te
 	// scope filter is honored, only Tenant A's c5.large surfaces;
 	// otherwise both alternatives leak through (the regression we're
 	// guarding against).
-	require.NoError(t, store.ReplaceRecommendations(ctx, time.Now(), []config.RecommendationRecord{
+	require.NoError(t, store.UpsertRecommendations(ctx, time.Now(), []config.RecommendationRecord{
 		{
 			Provider:       "aws",
 			Service:        "ec2",
@@ -323,7 +323,7 @@ func TestReshapeRecommendations_Integration_ScopedAccount_FiltersToAccount(t *te
 			MonthlyCost:    aws.Float64(60),
 			CloudAccountID: &accountBID,
 		},
-	}), "seeding scoped recommendations failed")
+	}, nil), "seeding scoped recommendations failed")
 
 	ec2Fake := &fakeReshapeEC2{
 		instances: []ec2svc.ConvertibleRI{
