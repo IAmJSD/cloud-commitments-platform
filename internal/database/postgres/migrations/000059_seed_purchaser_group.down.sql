@@ -9,9 +9,10 @@
 -- Deleting it unconditionally destroyed Standard Users and stripped it from
 -- every member (issue #316, A04-010).
 --
--- Not reversed: 000059's admin backfill added ...0005 to every Administrators
--- member. Where ...0005 is Standard Users those memberships cannot be told
--- apart from deliberate ones, so they stay.
+-- Not reversed: before issue #316's fix, 000059's admin backfill added ...0005
+-- to every Administrators member. Where ...0005 is Standard Users those
+-- memberships cannot be told apart from deliberate ones, so they stay. The up
+-- now backfills only when ...0005 really is Purchaser.
 
 DO $$
 DECLARE
