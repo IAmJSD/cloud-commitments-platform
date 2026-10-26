@@ -2103,6 +2103,9 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 		// approval_token_hash is NULL on rows migration 000100 found with no
 		// raw token (every canceled row among them).
 		var approvalTokenHash sql.NullString
+		// error is nullable (migration 000001); one NULL row must not fail the
+		// whole list scan (issue #1465). exec.Error stays "" for those.
+		var errText sql.NullString
 
 		err := rows.Scan(
 			&planID,
@@ -2116,7 +2119,7 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 			&exec.TotalUpfrontCost,
 			&exec.EstimatedSavings,
 			&completedAt,
-			&exec.Error,
+			&errText,
 			&expiresAt,
 			&exec.CloudAccountID,
 			&exec.Source,
@@ -2146,6 +2149,7 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 			exec.IdempotencyKey = idempotencyKey.String
 		}
 		exec.ApprovalToken = approvalTokenHash.String
+		exec.Error = errText.String
 
 		// Unmarshal recommendations
 		if err := json.Unmarshal(recommendationsJSON, &exec.Recommendations); err != nil {
@@ -2906,9 +2910,11 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 
 // MarkPurchaseRevoked stamps revoked_at / revoked_via / support_case_id and
 // the refund-quote audit columns (calc_refund_amount, calc_refund_currency) on
-// the purchase_history row identified by purchaseID. The UPDATE is a no-op
-// when revoked_at is already non-null (idempotency guard). Returns a not-found
-// error when zero rows are affected and revoked_at was previously NULL.
+// the purchase_history row identified by purchaseID, and clears
+// revocation_in_flight as migration 000072 documents: a completed revocation
+// is no longer in flight (issue #316). The UPDATE is a no-op when revoked_at
+// is already non-null (idempotency guard). Returns a not-found error when zero
+// rows are affected and revoked_at was previously NULL.
 func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
 	var supportCaseIDPtr *string
 	if supportCaseID != "" {
@@ -2924,7 +2930,8 @@ func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID stri
 		       revoked_via           = $3,
 		       support_case_id       = $4,
 		       calc_refund_amount    = $5,
-		       calc_refund_currency  = $6
+		       calc_refund_currency  = $6,
+		       revocation_in_flight  = false
 		 WHERE purchase_id = $1
 		   AND revoked_at IS NULL
 	`, purchaseID, revokedAt, revokedVia, supportCaseIDPtr, calcRefundAmount, calcCurrencyPtr)
@@ -4394,7 +4401,10 @@ func (s *PostgresStore) validatePlanAccountProvidersTx(ctx context.Context, tx p
 	if len(accountIDs) == 0 {
 		return nil
 	}
-	expected := DerivePlanProviders(&PurchasePlan{Services: services})
+	expected, err := DerivePlanProviders(&PurchasePlan{Services: services})
+	if err != nil {
+		return fmt.Errorf("validate plan account providers: %w", err)
+	}
 	if len(expected) == 0 {
 		return nil
 	}

@@ -398,7 +398,9 @@ type StoreInterface interface {
 	// support_case_id on a purchase_history row identified by purchase_id.
 	// calcRefundAmount and calcRefundCurrency capture the Azure CalculateRefund
 	// quote for audit (migration 000071, Finding #4); both nil/empty for
-	// non-Azure paths or legacy rows written before the migration.
+	// non-Azure paths or legacy rows written before the migration. Also
+	// clears revocation_in_flight (migration 000072): a revoked row is no
+	// longer in flight.
 	// Returns a not-found error when no row matches. Idempotent: a second
 	// call for the same row is a no-op (revoked_at is not overwritten when
 	// it is already non-null). Used by the revoke endpoint (issue #290).
