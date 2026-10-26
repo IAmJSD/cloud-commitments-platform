@@ -53,7 +53,7 @@ on:
   release:
     types: [created]
 
-# None of the four `uses:` caller jobs below carries a `concurrency` group, and
+# None of the three `uses:` caller jobs below carries a `concurrency` group, and
 # that is deliberate (#1801, #1806). The Terraform state guard is the group on
 # each called workflow's own deploying job, which runs as a real job of THIS run
 # and is serialized there. Putting the same group on a caller job would deadlock:
@@ -71,7 +71,6 @@ jobs:
     outputs:
       environment: ${{ steps.set-env.outputs.environment }}
       deploy-aws-lambda: ${{ steps.set-clouds.outputs.deploy-aws-lambda }}
-      deploy-aws-fargate: ${{ steps.set-clouds.outputs.deploy-aws-fargate }}
       deploy-gcp: ${{ steps.set-clouds.outputs.deploy-gcp }}
       deploy-azure: ${{ steps.set-clouds.outputs.deploy-azure }}
 
@@ -96,7 +95,7 @@ jobs:
           fi
 
           # Every called workflow takes this value verbatim, so an empty or
-          # unknown value has to stop the fan-out here rather than reach four
+          # unknown value has to stop the fan-out here rather than reach three
           # deployments.
           case "$ENVIRONMENT" in
             dev|staging|prod) ;;
@@ -125,8 +124,11 @@ jobs:
             echo "deploy-aws-lambda=false" >> "$GITHUB_OUTPUT"
           fi
 
-          # AWS Fargate (optional, can be enabled separately)
-          echo "deploy-aws-fargate=false" >> "$GITHUB_OUTPUT"
+          # AWS Fargate is not part of this fan-out: AWS here always means
+          # Lambda. Deploy Fargate by dispatching deploy-aws-fargate.yml
+          # directly. The caller job removed in #314 was gated on a hard-coded
+          # `false`, so it could never run. Bringing Fargate back needs a
+          # `deploy_to` value that drives a real output.
 
           # GCP
           if [[ "$DEPLOY_TO" == "all" ]] || \
@@ -153,7 +155,6 @@ jobs:
           ENVIRONMENT: ${{ steps.set-env.outputs.environment }}
           DEPLOY_TO: ${{ inputs.deploy_to || 'all' }}
           DEPLOY_AWS_LAMBDA: ${{ steps.set-clouds.outputs.deploy-aws-lambda }}
-          DEPLOY_AWS_FARGATE: ${{ steps.set-clouds.outputs.deploy-aws-fargate }}
           DEPLOY_GCP: ${{ steps.set-clouds.outputs.deploy-gcp }}
           DEPLOY_AZURE: ${{ steps.set-clouds.outputs.deploy-azure }}
         run: |
@@ -165,7 +166,6 @@ jobs:
             echo ""
             echo "### Clouds"
             echo "- AWS Lambda: $DEPLOY_AWS_LAMBDA"
-            echo "- AWS Fargate: $DEPLOY_AWS_FARGATE"
             echo "- GCP Cloud Run: $DEPLOY_GCP"
             echo "- Azure Container Apps: $DEPLOY_AZURE"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -186,22 +186,6 @@ jobs:
       ALERT_EMAILS: ${{ secrets.ALERT_EMAILS }}
       DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
       FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
-      TF_BACKEND_AWS: ${{ secrets.TF_BACKEND_AWS }}
-
-  # Deploy to AWS Fargate
-  deploy-aws-fargate:
-    name: Deploy AWS Fargate
-    needs: determine-deployment
-    if: needs.determine-deployment.outputs.deploy-aws-fargate == 'true'
-    permissions:
-      id-token: write
-      contents: read
-    uses: ./.github/workflows/deploy-aws-fargate.yml
-    with:
-      environment: ${{ needs.determine-deployment.outputs.environment }}
-    secrets:
-      ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
-      ALERT_EMAILS: ${{ secrets.ALERT_EMAILS }}
       TF_BACKEND_AWS: ${{ secrets.TF_BACKEND_AWS }}
 
   # Deploy to GCP Cloud Run
@@ -258,7 +242,6 @@ jobs:
     needs:
       - determine-deployment
       - deploy-aws-lambda
-      - deploy-aws-fargate
       - deploy-gcp
       - deploy-azure
     if: always()
@@ -272,8 +255,6 @@ jobs:
       DETERMINE_DEPLOYMENT_RESULT: ${{ needs.determine-deployment.result }}
       DEPLOY_AWS_LAMBDA: ${{ needs.determine-deployment.outputs.deploy-aws-lambda }}
       DEPLOY_AWS_LAMBDA_RESULT: ${{ needs.deploy-aws-lambda.result }}
-      DEPLOY_AWS_FARGATE: ${{ needs.determine-deployment.outputs.deploy-aws-fargate }}
-      DEPLOY_AWS_FARGATE_RESULT: ${{ needs.deploy-aws-fargate.result }}
       DEPLOY_GCP: ${{ needs.determine-deployment.outputs.deploy-gcp }}
       DEPLOY_GCP_RESULT: ${{ needs.deploy-gcp.result }}
       DEPLOY_AZURE: ${{ needs.determine-deployment.outputs.deploy-azure }}
@@ -301,17 +282,6 @@ jobs:
               fi
             else
               echo "- ⏭️ AWS Lambda: Skipped"
-            fi
-
-            # AWS Fargate
-            if [[ "$DEPLOY_AWS_FARGATE" == "true" ]]; then
-              if [[ "$DEPLOY_AWS_FARGATE_RESULT" == "success" ]]; then
-                echo "- ✅ AWS Fargate: Success"
-              else
-                echo "- ❌ AWS Fargate: $DEPLOY_AWS_FARGATE_RESULT"
-              fi
-            else
-              echo "- ⏭️ AWS Fargate: Skipped"
             fi
 
             # GCP
@@ -354,7 +324,6 @@ jobs:
             fi
           }
           check_job "$DEPLOY_AWS_LAMBDA" "$DEPLOY_AWS_LAMBDA_RESULT" || FAILED=true
-          check_job "$DEPLOY_AWS_FARGATE" "$DEPLOY_AWS_FARGATE_RESULT" || FAILED=true
           check_job "$DEPLOY_GCP" "$DEPLOY_GCP_RESULT" || FAILED=true
           check_job "$DEPLOY_AZURE" "$DEPLOY_AZURE_RESULT" || FAILED=true
           if [[ "$DETERMINE_DEPLOYMENT_RESULT" != "success" ]]; then
