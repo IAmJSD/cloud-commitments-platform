@@ -929,6 +929,35 @@ func (m *MockConfigStore) ReleaseMarketplaceListingClaim(ctx context.Context, pu
 	return args.Error(0)
 }
 
+// ListMarketplaceListingsToPoll mocks the marketplace status poller's row scan (issue #27).
+func (m *MockConfigStore) ListMarketplaceListingsToPoll(ctx context.Context) ([]config.PurchaseHistoryRecord, error) {
+	m.record("ListMarketplaceListingsToPoll", ctx)
+	args := m.Called(ctx)
+	var rows []config.PurchaseHistoryRecord
+	if v := args.Get(0); v != nil {
+		r, ok := v.([]config.PurchaseHistoryRecord)
+		if !ok {
+			panic(fmt.Sprintf("mock: expected []config.PurchaseHistoryRecord, got %T", v))
+		}
+		rows = r
+	}
+	return rows, args.Error(1)
+}
+
+// RecordMarketplaceListingActive mocks stamping listed_at on an active listing (issue #27).
+func (m *MockConfigStore) RecordMarketplaceListingActive(ctx context.Context, purchaseID, listingID string, listedAt time.Time) (bool, error) {
+	m.record("RecordMarketplaceListingActive", ctx, purchaseID, listingID, listedAt)
+	args := m.Called(ctx, purchaseID, listingID, listedAt)
+	return args.Bool(0), args.Error(1)
+}
+
+// SettleMarketplaceListing mocks recording a closed or canceled listing (issue #27).
+func (m *MockConfigStore) SettleMarketplaceListing(ctx context.Context, settlement config.MarketplaceListingSettlement) (bool, error) {
+	m.record("SettleMarketplaceListing", ctx, settlement)
+	args := m.Called(ctx, settlement)
+	return args.Bool(0), args.Error(1)
+}
+
 // ClaimRIExchangeIdempotencyKey mocks the atomic RI exchange submit claim
 // (issue #1642). With no registered expectation it defaults to "this call won
 // the claim" so the many pre-existing execute-path tests, whose subject is a

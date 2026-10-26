@@ -67,7 +67,9 @@ const (
 	// These rows represent partial-success cases where the Azure Return API call
 	// succeeded but the subsequent DB write failed. The sweep ensures the audit
 	// record is eventually consistent without requiring the user to retry (which
-	// would be rejected by Azure). See issue #290 Finding #6.
+	// would be rejected by Azure). See issue #290 Finding #6. The same sweep
+	// also polls RI Marketplace listings for sales, proceeds and fees (issue
+	// #27, handleFinalizeSweep).
 	TaskFinalizeRevocations ScheduledTaskType = "finalize_revocations"
 	// TaskLadderRun runs the commitment-laddering planner for every enabled
 	// ladder_config. It computes a plan (Allocate + BuildTranches), persists the
@@ -202,7 +204,7 @@ func (app *Application) dispatchTask(ctx context.Context, taskType ScheduledTask
 		TaskFireScheduledPurchases: func(c context.Context, _ ScheduledTaskParams) (any, error) {
 			return app.handleFireScheduledPurchases(c)
 		},
-		TaskFinalizeRevocations: func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleFinalizeRevocations(c) },
+		TaskFinalizeRevocations: func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleFinalizeSweep(c) },
 		TaskLadderRun:           func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleLadderRun(c) },
 	}
 	handler, ok := handlers[taskType]
