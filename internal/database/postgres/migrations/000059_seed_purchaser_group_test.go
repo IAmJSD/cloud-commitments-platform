@@ -135,3 +135,104 @@ func TestMigration_SeedPurchaserGroup_Down(t *testing.T) {
 		assert.ElementsMatch(t, []string{seedGroupDownSlotTest}, queryGroupIDsByEmail(t, ctx, pool, only))
 	})
 }
+
+// groupsSnapshot is every group row, in id order, as "id|name|system_managed".
+func groupsSnapshot(ctx context.Context, t *testing.T, pool *pgxpool.Pool) []string {
+	t.Helper()
+	rows, err := pool.Query(ctx, `SELECT id::text || '|' || name || '|' || system_managed::text FROM groups ORDER BY id`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var row string
+		require.NoError(t, rows.Scan(&row))
+		out = append(out, row)
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
+// TestMigration_SeedPurchaserGroup_DownUpRoundTrip covers the round trip
+// tracked on issue #316: 000064's down is a no-op, so rolling back through
+// 000059 leaves Purchaser at ...0007, and re-applying 000059 refused because
+// a group named Purchaser already existed under an id other than ...0005.
+// The round trip must succeed and leave the groups, including the relocated
+// Purchaser's system_managed flag, and the users' memberships as they were:
+// an admin who is not in Standard Users must not be added to it by 000059's
+// admin backfill, which only ever meant Purchaser.
+func TestMigration_SeedPurchaserGroup_DownUpRoundTrip(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Standard Users at ...0005", func(t *testing.T) {
+		const admin, standard = "admin-059-roundtrip@test.example", "standard-059-roundtrip@test.example"
+		const lateAdmin = "late-admin-059-roundtrip@test.example"
+		pool := pinBeforeDown(ctx, t, 64, map[string][]string{
+			admin:     {adminGroupIDForPurchaserTest, seedGroupDownSlotTest, purchaserGroupIDTest},
+			standard:  {seedGroupDownSlotTest},
+			lateAdmin: {adminGroupIDForPurchaserTest, purchaserGroupIDTest},
+		})
+		assertSeedPurchaserRoundTrip(ctx, t, pool)
+		assert.ElementsMatch(t, []string{adminGroupIDForPurchaserTest, seedGroupDownSlotTest, purchaserGroupIDTest}, queryGroupIDsByEmail(t, ctx, pool, admin))
+		assert.ElementsMatch(t, []string{seedGroupDownSlotTest}, queryGroupIDsByEmail(t, ctx, pool, standard))
+		assert.ElementsMatch(t, []string{adminGroupIDForPurchaserTest, purchaserGroupIDTest}, queryGroupIDsByEmail(t, ctx, pool, lateAdmin),
+			"the re-applied backfill must not add an admin to Standard Users")
+	})
+
+	// With ...0005 free, the re-applied seed no longer hits its id conflict
+	// and would insert a second "Purchaser", which groups.name's UNIQUE
+	// constraint refuses.
+	t.Run("...0005 free", func(t *testing.T) {
+		const admin = "admin-059-roundtrip-free@test.example"
+		pool := pinBeforeDown(ctx, t, 64, map[string][]string{
+			admin: {adminGroupIDForPurchaserTest, purchaserGroupIDTest},
+		})
+		_, err := pool.Exec(ctx, `DELETE FROM groups WHERE id = $1`, seedGroupDownSlotTest)
+		require.NoError(t, err)
+		assertSeedPurchaserRoundTrip(ctx, t, pool)
+		_, ok := groupName(ctx, t, pool, seedGroupDownSlotTest)
+		assert.False(t, ok, "the re-applied seed must not create a group at ...0005")
+		assert.ElementsMatch(t, []string{adminGroupIDForPurchaserTest, purchaserGroupIDTest}, queryGroupIDsByEmail(t, ctx, pool, admin))
+	})
+}
+
+// The re-apply yields only to 000064's Purchaser at ...0007. A "Purchaser"
+// under any other id is still someone else's group, and 000059 still refuses
+// rather than silently skip its seed.
+func TestMigration_SeedPurchaserGroup_ForeignPurchaserStillRefused(t *testing.T) {
+	ctx := context.Background()
+	pool := pinBeforeDown(ctx, t, 64, nil)
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, getMigrationsPath(), previousMigrationVersion(t, 59)))
+	_, err := pool.Exec(ctx, `DELETE FROM groups WHERE id = $1`, purchaserGroupIDTest)
+	require.NoError(t, err)
+	_, err = pool.Exec(ctx, `
+		INSERT INTO groups (id, name, description, permissions, allowed_accounts)
+		VALUES ('00000000-0000-4000-8000-000000000316', 'Purchaser', 'operator-made', '[]'::jsonb, ARRAY['*'])`)
+	require.NoError(t, err)
+
+	err = migrations.MigrateToVersion(ctx, pool, getMigrationsPath(), 64)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "migration 000059: a group named 'Purchaser' already exists with a different id")
+}
+
+// assertSeedPurchaserRoundTrip rolls a database pinned at 000064 back through
+// 000059 and forward again, and checks every group came back unchanged.
+func assertSeedPurchaserRoundTrip(ctx context.Context, t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	name, ok := groupName(ctx, t, pool, purchaserGroupIDTest)
+	require.True(t, ok)
+	require.Equal(t, "Purchaser", name, "precondition: 000064 put Purchaser at ...0007")
+	groupsBefore := groupsSnapshot(ctx, t, pool)
+
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, getMigrationsPath(), previousMigrationVersion(t, 59)),
+		"rolling back through 000059 must succeed")
+	name, ok = groupName(ctx, t, pool, purchaserGroupIDTest)
+	require.True(t, ok, "precondition: 000064's no-op down leaves Purchaser at ...0007")
+	require.Equal(t, "Purchaser", name)
+
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, getMigrationsPath(), 64),
+		"re-applying 000059 after its rollback must succeed")
+	_, dirty, err := migrations.GetMigrationVersion(ctx, pool, getMigrationsPath())
+	require.NoError(t, err)
+	require.False(t, dirty)
+	assert.Equal(t, groupsBefore, groupsSnapshot(ctx, t, pool), "the round trip must leave every group as it was")
+}

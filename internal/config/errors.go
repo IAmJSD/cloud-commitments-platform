@@ -12,6 +12,12 @@ var ErrNotFound = errors.New("not found")
 // so an empty ID would be silently dropped after the first one (#774).
 var ErrEmptyPurchaseID = errors.New("purchase history record has no purchase id")
 
+// ErrPurchaseAlreadyRevoked is returned (wrapped) by
+// FlipPurchaseRevocationInFlight when the purchase_history row exists but is
+// already revoked: a concurrent revoke finished first, so the caller must not
+// start another provider return (issue #316).
+var ErrPurchaseAlreadyRevoked = errors.New("purchase is already revoked")
+
 // ErrPurchasePlanConflict means a plan changed after the caller read it.
 var ErrPurchasePlanConflict = errors.New("purchase plan changed")
 

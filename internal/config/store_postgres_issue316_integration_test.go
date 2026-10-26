@@ -6,6 +6,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -118,6 +119,91 @@ func TestMarkPurchaseRevoked_ClearsRevocationInFlight(t *testing.T) {
 		assert.Contains(t, stamps, got.RevokedAt.UTC(), "exactly one worker's stamp must land")
 		assert.False(t, got.RevocationInFlight)
 		assert.Zero(t, inFlightIndexed(ctx, t, store, id))
+	})
+}
+
+// TestFlipPurchaseRevocationInFlight_CompareAndSet covers the follow-up to
+// A04-013 tracked on issue #316: the flip was an unconditional UPDATE, so a
+// stale revoke request reaching it after another request's
+// MarkPurchaseRevoked set the flag again on a revoked row, and
+// MarkPurchaseRevoked (guarded on revoked_at IS NULL) never cleared it.
+func TestFlipPurchaseRevocationInFlight_CompareAndSet(t *testing.T) {
+	ctx := context.Background()
+	store := setupRampStepStore(ctx, t)
+
+	t.Run("a revoked row is refused and keeps the flag clear", func(t *testing.T) {
+		const id = "azure-flip-316-a"
+		seedRevocationRow(ctx, t, store, id)
+		require.NoError(t, store.FlipPurchaseRevocationInFlight(ctx, id))
+		require.NoError(t, store.MarkPurchaseRevoked(ctx, id, time.Now().UTC(), "direct-api", "", nil, ""))
+
+		err := store.FlipPurchaseRevocationInFlight(ctx, id)
+		require.ErrorIs(t, err, ErrPurchaseAlreadyRevoked)
+		assert.NotContains(t, err.Error(), "not found")
+
+		got, err := store.GetPurchaseHistoryByPurchaseID(ctx, id)
+		require.NoError(t, err)
+		require.NotNil(t, got.RevokedAt)
+		assert.False(t, got.RevocationInFlight, "a revoked row must not be flagged in flight again")
+		assert.Zero(t, inFlightIndexed(ctx, t, store, id))
+	})
+
+	t.Run("an unrevoked row still flips, idempotently", func(t *testing.T) {
+		const id = "azure-flip-316-b"
+		seedRevocationRow(ctx, t, store, id)
+		require.NoError(t, store.FlipPurchaseRevocationInFlight(ctx, id))
+		require.NoError(t, store.FlipPurchaseRevocationInFlight(ctx, id), "a second flip of an in-flight row is a no-op")
+		assert.Equal(t, 1, inFlightIndexed(ctx, t, store, id))
+	})
+
+	t.Run("a missing row is still not found", func(t *testing.T) {
+		err := store.FlipPurchaseRevocationInFlight(ctx, "azure-flip-316-missing")
+		require.ErrorContains(t, err, "not found")
+		assert.NotErrorIs(t, err, ErrPurchaseAlreadyRevoked)
+	})
+
+	// The race the guard closes: one request's MarkPurchaseRevoked against
+	// stale requests' flips on the same in-flight row. The row lock
+	// serializes them; a flip that waits on the mark re-checks
+	// revoked_at IS NULL on the committed row and matches nothing. Whatever
+	// the interleaving, the row ends revoked with the flag clear, and every
+	// flip either landed before the mark or reports the row revoked.
+	t.Run("stale flips racing a mark", func(t *testing.T) {
+		const rounds, flips = 20, 4
+		for round := range rounds {
+			id := fmt.Sprintf("azure-flip-316-race-%d", round)
+			seedRevocationRow(ctx, t, store, id)
+			require.NoError(t, store.FlipPurchaseRevocationInFlight(ctx, id))
+
+			errs := make([]error, flips+1)
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			for i := range flips + 1 {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start
+					if i == 0 {
+						errs[i] = store.MarkPurchaseRevoked(ctx, id, time.Now().UTC(), "direct-api", "", nil, "")
+						return
+					}
+					errs[i] = store.FlipPurchaseRevocationInFlight(ctx, id)
+				}()
+			}
+			close(start)
+			wg.Wait()
+
+			require.NoError(t, errs[0], "round %d: the mark", round)
+			for i, err := range errs[1:] {
+				if err != nil {
+					require.ErrorIs(t, err, ErrPurchaseAlreadyRevoked, "round %d: flip %d", round, i)
+				}
+			}
+			got, err := store.GetPurchaseHistoryByPurchaseID(ctx, id)
+			require.NoError(t, err)
+			require.NotNil(t, got.RevokedAt, "round %d", round)
+			require.False(t, got.RevocationInFlight, "round %d: a flip that lost to the mark must not re-flag the revoked row", round)
+		}
 	})
 }
 

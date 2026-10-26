@@ -47,3 +47,24 @@ func TestMigrations_DownAllRoundTrip(t *testing.T) {
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, latest),
 		"re-applying every migration after a full down must succeed")
 }
+
+// TestMigrations_DownToOneRoundTrip rolls back to version 1 rather than 0, so
+// the tables 000001 created survive with the rows later migrations seeded,
+// then re-applies everything. 000064's down is a no-op by design, so its
+// Purchaser at ...0007 is still there when 000059 re-runs, and 000059 refused
+// it as a foreign "Purchaser" (issue #316).
+func TestMigrations_DownToOneRoundTrip(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	migrationsPath := getMigrationsPath()
+	pool := testhelpers.RequireMigratedDatabase(ctx, t, migrationsPath).DB.Pool()
+	latest := migrationVersionsDesc(t)[0]
+
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 1), "roll back to version 1")
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, latest),
+		"re-applying every migration after a rollback to version 1 must succeed")
+	version, dirty, err := migrations.GetMigrationVersion(ctx, pool, migrationsPath)
+	require.NoError(t, err)
+	require.False(t, dirty)
+	require.Equal(t, latest, version)
+}

@@ -2974,21 +2974,39 @@ func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID stri
 // FlipPurchaseRevocationInFlight sets revocation_in_flight=true on the
 // purchase_history row for purchaseID. Called immediately before the Azure
 // Return API call to enable partial-success reconciliation (issue #290
-// Finding #6). Idempotent: already-true rows are not modified. Returns a
-// not-found error when no row matches.
+// Finding #6). Idempotent: an unrevoked row whose flag is already true is
+// left as it is.
+//
+// Compare-and-set on revoked_at IS NULL (issue #316): only an unrevoked row
+// can be flipped. A stale concurrent revoke request that reaches the flip
+// after another request's MarkPurchaseRevoked committed would otherwise set
+// the flag again on a revoked row, which MarkPurchaseRevoked (guarded on the
+// same predicate) then never clears. The row lock serializes the two
+// UPDATEs, and the flip re-checks the predicate on the committed row, so the
+// flag ends false whichever lands first. A revoked row returns an error
+// wrapping ErrPurchaseAlreadyRevoked; a missing row keeps the not-found
+// error.
 func (s *PostgresStore) FlipPurchaseRevocationInFlight(ctx context.Context, purchaseID string) error {
 	tag, err := s.db.Exec(ctx, `
 		UPDATE purchase_history
 		   SET revocation_in_flight = true
 		 WHERE purchase_id = $1
+		   AND revoked_at IS NULL
 	`, purchaseID)
 	if err != nil {
 		return fmt.Errorf("FlipPurchaseRevocationInFlight: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+	var exists bool
+	if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM purchase_history WHERE purchase_id = $1)`, purchaseID).Scan(&exists); err != nil {
+		return fmt.Errorf("FlipPurchaseRevocationInFlight existence check: %w", err)
+	}
+	if !exists {
 		return fmt.Errorf("FlipPurchaseRevocationInFlight: purchase_id %q not found", purchaseID)
 	}
-	return nil
+	return fmt.Errorf("FlipPurchaseRevocationInFlight: purchase_id %q: %w", purchaseID, ErrPurchaseAlreadyRevoked)
 }
 
 // ClearRevocationInFlight sets revocation_in_flight=false on a purchase_history
