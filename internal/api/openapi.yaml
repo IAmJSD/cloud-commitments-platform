@@ -3995,7 +3995,9 @@ paths:
         so the file can be imported into another tenant (issue #9). Requires
         view:accounts. JSON by default; format=csv returns the same rows as
         CSV (list cells are semicolon-separated, an empty cell is an unset
-        field).
+        field). A CSV text cell starting with = + - @ tab, CR or ' gets a '
+        prefix so a spreadsheet does not run it as a formula; import strips
+        that prefix again.
       parameters:
         - name: format
           in: query
@@ -4031,11 +4033,15 @@ paths:
         provider and account_external_id, and must be in the caller's account
         scope. A row sets every field of its override (an unset field clears
         it); overrides not in the file are left alone. Rows are validated with
-        the service-config rules and the commitment-option check of the PUT
-        endpoint. strict (default) writes nothing when any row is rejected
-        and answers 400 with the report under details.report; best_effort
-        writes the valid rows. dry_run reports without writing. Requires
-        update:accounts. Writes are upserts, so re-running an import is safe.
+        the service-config rules, the commitment-option check of the PUT
+        endpoint and the column bounds (ramp_schedule at most 32 characters,
+        coverage at most 2 decimal places, no control characters in
+        ramp_schedule or list values). strict (default) writes nothing when
+        any row is rejected and answers 400 with the report under
+        details.report; best_effort writes the valid rows. dry_run reports
+        without writing. The writes run in one transaction, so a store
+        failure writes nothing. Requires update:accounts. Writes are upserts,
+        so re-running an import is safe.
       requestBody:
         required: true
         content:
@@ -7710,6 +7716,7 @@ components:
           format: double
         ramp_schedule:
           type: string
+          maxLength: 32
         include_engines:
           type: array
           items:

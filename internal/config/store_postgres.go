@@ -4277,6 +4277,22 @@ func (s *PostgresStore) GetAccountServiceOverride(ctx context.Context, accountID
 
 // SaveAccountServiceOverride upserts an account service override.
 func (s *PostgresStore) SaveAccountServiceOverride(ctx context.Context, o *AccountServiceOverride) error {
+	return saveAccountServiceOverride(ctx, s.db, o)
+}
+
+// SaveAccountServiceOverrideTx upserts an account service override inside the
+// caller's transaction, so a batch of writes (the override import) commits or
+// rolls back as one.
+func (s *PostgresStore) SaveAccountServiceOverrideTx(ctx context.Context, tx pgx.Tx, o *AccountServiceOverride) error {
+	return saveAccountServiceOverride(ctx, tx, o)
+}
+
+// overrideExecutor is satisfied by both the pool and a pgx.Tx.
+type overrideExecutor interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func saveAccountServiceOverride(ctx context.Context, db overrideExecutor, o *AccountServiceOverride) error {
 	if o.ID == "" {
 		o.ID = uuid.New().String()
 	}
@@ -4302,7 +4318,7 @@ func (s *PostgresStore) SaveAccountServiceOverride(ctx context.Context, o *Accou
 			include_types = $14, exclude_types = $15,
 			updated_at = NOW()
 	`
-	_, err := s.db.Exec(ctx, query,
+	_, err := db.Exec(ctx, query,
 		o.ID, o.AccountID, o.Provider, o.Service,
 		o.Enabled, o.Term, o.Payment, o.Coverage, o.RampSchedule,
 		o.IncludeEngines, o.ExcludeEngines, o.IncludeRegions, o.ExcludeRegions,

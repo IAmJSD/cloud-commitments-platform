@@ -5,15 +5,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // maxOverrideImportRows bounds one import request.
 const maxOverrideImportRows = 5000
+
+// Column bounds of account_service_overrides (migration 000011): ramp_schedule
+// is VARCHAR(32) and coverage is DECIMAL(5,2). provider, service, payment and
+// term are bounded by the service-config rules. Rows outside a bound are
+// rejected at planning time, so the database never refuses an import write.
+const (
+	maxOverrideRampScheduleLen  = 32
+	maxOverrideCoverageDecimals = 2
+)
 
 // Import modes: strict applies nothing when any row is rejected; best_effort
 // applies the valid rows and reports the rest.
@@ -64,6 +78,7 @@ type OverrideImportReport struct {
 
 // plannedOverride is a validated row with the stored override it replaces.
 type plannedOverride struct {
+	rowNum   int
 	account  *config.CloudAccount
 	row      *OverrideTransferRow
 	existing *config.AccountServiceOverride
@@ -76,7 +91,8 @@ type plannedOverride struct {
 // the same rules as a service config, and compared with the stored override.
 // A row sets every field of its override; overrides not in the file are left
 // alone. A strict import with a rejected row answers 400 with the report and
-// writes nothing. Re-running an import is safe: writes are upserts.
+// writes nothing. The writes run in one transaction, so a store failure rolls
+// the whole import back. Re-running an import is safe: writes are upserts.
 func (h *Handler) importAccountServiceOverrides(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, err := h.requirePermission(ctx, req, "update", "accounts")
 	if err != nil {
@@ -194,7 +210,7 @@ func (h *Handler) planOverrideRow(ctx context.Context, idx *overrideAccountIndex
 	if err != nil {
 		return plannedOverride{}, err
 	}
-	p := plannedOverride{account: acct, row: row}
+	p := plannedOverride{rowNum: rowNum, account: acct, row: row}
 	key := acct.ID + "/" + row.Provider + "/" + row.Service
 	if first, dup := seen[key]; dup {
 		return p, rejectRow("duplicate of row %d", first)
@@ -204,11 +220,14 @@ func (h *Handler) planOverrideRow(ctx context.Context, idx *overrideAccountIndex
 }
 
 // validateOverrideRow applies the service-config rules (provider, service
-// name, term, provider-specific payment token, coverage) and the
-// commitment-option combination check the PUT endpoint runs.
+// name, term, provider-specific payment token, coverage), the column bounds
+// and the commitment-option combination check the PUT endpoint runs.
 func (h *Handler) validateOverrideRow(ctx context.Context, row *OverrideTransferRow) error {
 	if !serviceNameRegex.MatchString(row.Service) {
 		return rejectRow("invalid service name %q", row.Service)
+	}
+	if err := validateOverrideColumns(row); err != nil {
+		return err
 	}
 	cfg := config.ServiceConfig{Provider: row.Provider, Service: row.Service, Term: derefInt(row.Term), Payment: derefString(row.Payment)}
 	if row.Coverage != nil {
@@ -227,6 +246,55 @@ func (h *Handler) validateOverrideRow(ctx context.Context, row *OverrideTransfer
 		return err
 	}
 	return nil
+}
+
+// validateOverrideColumns checks the fields the service-config rules do not
+// cover against the column bounds: ramp_schedule length, coverage precision,
+// and no control characters (Postgres refuses a NUL in TEXT) in ramp_schedule
+// or any list value.
+func validateOverrideColumns(row *OverrideTransferRow) error {
+	if row.RampSchedule != nil {
+		if n := utf8.RuneCountInString(*row.RampSchedule); n > maxOverrideRampScheduleLen {
+			return rejectRow("ramp_schedule is %d characters; at most %d are allowed", n, maxOverrideRampScheduleLen)
+		}
+		if hasControlChar(*row.RampSchedule) {
+			return rejectRow("ramp_schedule must not contain control characters")
+		}
+	}
+	if row.Coverage != nil && decimalPlaces(*row.Coverage) > maxOverrideCoverageDecimals {
+		return rejectRow("coverage must have at most %d decimal places, got %v", maxOverrideCoverageDecimals, *row.Coverage)
+	}
+	return validateOverrideLists(row)
+}
+
+func validateOverrideLists(row *OverrideTransferRow) error {
+	lists := []struct {
+		name   string
+		values []string
+	}{
+		{"include_engines", row.IncludeEngines}, {"exclude_engines", row.ExcludeEngines},
+		{"include_regions", row.IncludeRegions}, {"exclude_regions", row.ExcludeRegions},
+		{"include_types", row.IncludeTypes}, {"exclude_types", row.ExcludeTypes},
+	}
+	for _, l := range lists {
+		for _, v := range l.values {
+			if hasControlChar(v) {
+				return rejectRow("%s must not contain control characters", l.name)
+			}
+		}
+	}
+	return nil
+}
+
+func hasControlChar(s string) bool {
+	return strings.IndexFunc(s, unicode.IsControl) >= 0
+}
+
+// decimalPlaces counts the digits after the point in v's shortest decimal
+// form, the text pgx sends to the DECIMAL column.
+func decimalPlaces(v float64) int {
+	_, frac, _ := strings.Cut(strconv.FormatFloat(v, 'f', -1, 64), ".")
+	return len(frac)
 }
 
 // findStoredOverride returns the stored override the row replaces, or nil.
@@ -248,19 +316,25 @@ func (h *Handler) findStoredOverride(ctx context.Context, cache map[string][]con
 	return nil, nil
 }
 
-// applyOverrideImport writes the insert and update rows. A store failure
-// stops the import part way; re-running it is safe because writes upsert.
+// applyOverrideImport writes the insert and update rows in one transaction:
+// either every planned row is written or, on any store failure, none is.
 func (h *Handler) applyOverrideImport(ctx context.Context, plan []plannedOverride) error {
 	now := time.Now()
-	for i, p := range plan {
-		o := &config.AccountServiceOverride{ID: uuid.New().String(), AccountID: p.account.ID, Provider: p.row.Provider, Service: p.row.Service, CreatedAt: now, UpdatedAt: now}
-		if p.existing != nil {
-			o.ID, o.CreatedAt = p.existing.ID, p.existing.CreatedAt
+	err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		for _, p := range plan {
+			o := &config.AccountServiceOverride{ID: uuid.New().String(), AccountID: p.account.ID, Provider: p.row.Provider, Service: p.row.Service, CreatedAt: now, UpdatedAt: now}
+			if p.existing != nil {
+				o.ID, o.CreatedAt = p.existing.ID, p.existing.CreatedAt
+			}
+			applyOverrideFieldsTo(o, p.row.fields())
+			if err := h.config.SaveAccountServiceOverrideTx(ctx, tx, o); err != nil {
+				return fmt.Errorf("row %d: %w", p.rowNum, err)
+			}
 		}
-		applyOverrideFieldsTo(o, p.row.fields())
-		if err := h.config.SaveAccountServiceOverride(ctx, o); err != nil {
-			return fmt.Errorf("accounts: import stopped after %d of %d writes: %w", i, len(plan), err)
-		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("accounts: import rolled back, nothing was written: %w", err)
 	}
 	return nil
 }

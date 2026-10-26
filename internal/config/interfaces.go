@@ -585,6 +585,9 @@ type StoreInterface interface {
 	// Account service overrides
 	GetAccountServiceOverride(ctx context.Context, accountID, provider, service string) (*AccountServiceOverride, error)
 	SaveAccountServiceOverride(ctx context.Context, override *AccountServiceOverride) error
+	// SaveAccountServiceOverrideTx is SaveAccountServiceOverride inside the
+	// caller's WithTx transaction.
+	SaveAccountServiceOverrideTx(ctx context.Context, tx pgx.Tx, override *AccountServiceOverride) error
 	DeleteAccountServiceOverride(ctx context.Context, accountID, provider, service string) error
 	ListAccountServiceOverrides(ctx context.Context, accountID string) ([]AccountServiceOverride, error)
 
