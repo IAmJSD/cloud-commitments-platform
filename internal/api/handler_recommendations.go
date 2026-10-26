@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/exchange"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/aws/aws-lambda-go/events"
@@ -386,27 +387,18 @@ func (h *Handler) buildRecommendationDetail(ctx context.Context, rec *config.Rec
 	}
 }
 
-// Confidence bucket cut-offs for the recommendation drawer badge. They must
-// stay equal to exchange.ConfidenceHighSavingsUSD, exchange.ConfidenceHighMinCount
-// and exchange.ConfidenceMediumSavingsUSD in cloud-commitments-go pkg/exchange,
-// which score the reshape ranking the badge accompanies. Those exported
-// constants are newer than the pkg version pinned in go.mod; once the pin is
-// bumped past them, alias these to the exchange constants (#343).
-const (
-	confidenceHighSavingsUSD   = 200.0 // USD per month, high bucket
-	confidenceHighMinCount     = 3     // instances, high bucket
-	confidenceMediumSavingsUSD = 50.0  // USD per month, medium bucket
-)
-
 // confidenceBucketFor mirrors the heuristic that previously lived
 // client-side in frontend/src/recommendations.ts. Centralizing it on
 // the server lets future provider-specific tuning land in one place
 // without a frontend deploy. Thresholds intentionally match the original
 // shim 1:1 so the drawer label doesn't visibly shift on rollout.
 //
-//	high   = savings >= confidenceHighSavingsUSD AND count >= confidenceHighMinCount
-//	medium = savings >= confidenceMediumSavingsUSD
+//	high   = savings >= exchange.ConfidenceHighSavingsUSD AND count >= exchange.ConfidenceHighMinCount
+//	medium = savings >= exchange.ConfidenceMediumSavingsUSD
 //	low    = otherwise
+//
+// The cut-offs come from pkg/exchange, which scores the reshape ranking the
+// badge accompanies, so the two cannot drift apart (#343).
 //
 // A count below 1 (missing) is clamped to 1, so savings alone decide between
 // medium and low. This deliberately differs from the exchange ranking, which
@@ -416,10 +408,10 @@ func confidenceBucketFor(savings float64, count int) string {
 	if count < 1 {
 		count = 1
 	}
-	if savings >= confidenceHighSavingsUSD && count >= confidenceHighMinCount {
+	if savings >= exchange.ConfidenceHighSavingsUSD && count >= exchange.ConfidenceHighMinCount {
 		return "high"
 	}
-	if savings >= confidenceMediumSavingsUSD {
+	if savings >= exchange.ConfidenceMediumSavingsUSD {
 		return "medium"
 	}
 	return "low"
