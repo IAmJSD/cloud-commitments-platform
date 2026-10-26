@@ -3420,7 +3420,8 @@ func (s *PostgresStore) GetRIExchangeHistoryForAccounts(ctx context.Context, sin
 
 // TransitionRIExchangeStatus atomically transitions an RI exchange record status.
 // Uses a single UPDATE...WHERE...RETURNING for atomicity, then diagnoses failure
-// only if zero rows are returned.
+// only if zero rows are returned (ErrRIExchangeExpired or
+// ErrRIExchangeNotInExpectedStatus, wrapped, for an existing record).
 // actor is the UUID of the user performing the transition (nil for system-initiated paths).
 func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id, fromStatus, toStatus string, actor *string) (*RIExchangeRecord, error) {
 	query := `
@@ -3463,9 +3464,9 @@ func (s *PostgresStore) diagnoseTransitionFailure(ctx context.Context, id, fromS
 		return fmt.Errorf("failed to diagnose transition failure: %w", err)
 	}
 	if expired {
-		return fmt.Errorf("ri exchange has expired")
+		return fmt.Errorf("%w: %s", ErrRIExchangeExpired, id)
 	}
-	return fmt.Errorf("ri exchange status transition failed: expected status %q but current status is %q", fromStatus, currentStatus)
+	return fmt.Errorf("%w: expected status %q but current status is %q", ErrRIExchangeNotInExpectedStatus, fromStatus, currentStatus)
 }
 
 // CompleteRIExchange marks an RI exchange as completed.

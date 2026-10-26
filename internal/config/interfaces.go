@@ -516,6 +516,8 @@ type StoreInterface interface {
 	GetRIExchangeHistoryForAccounts(ctx context.Context, since time.Time, limit int, accountIDs []string) ([]RIExchangeRecord, error)
 	// TransitionRIExchangeStatus atomically transitions an RI exchange record status.
 	// actor is the UUID of the user performing the transition (nil for system-initiated paths).
+	// A lost transition returns a wrapped ErrRIExchangeExpired when the record
+	// has expired, or ErrRIExchangeNotInExpectedStatus when its status moved on.
 	TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*RIExchangeRecord, error)
 	CompleteRIExchange(ctx context.Context, id string, exchangeID string) error
 	// CompleteRIExchangeWithPayment marks an RI exchange as completed and

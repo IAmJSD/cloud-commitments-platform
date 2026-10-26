@@ -1486,6 +1486,8 @@ func TestPGXMock_TransitionRIExchangeStatus_WrongStatus(t *testing.T) {
 	_, err := store.TransitionRIExchangeStatus(ctx, "ri-id", "pending", "processing", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expected status")
+	assert.ErrorIs(t, err, ErrRIExchangeNotInExpectedStatus, "the API maps this to 409 (issue #587)")
+	assert.NotErrorIs(t, err, ErrRIExchangeExpired)
 }
 
 func TestPGXMock_TransitionRIExchangeStatus_RecordNotFound(t *testing.T) {
@@ -1503,6 +1505,8 @@ func TestPGXMock_TransitionRIExchangeStatus_RecordNotFound(t *testing.T) {
 	_, err := store.TransitionRIExchangeStatus(ctx, "ri-id", "pending", "processing", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
+	assert.NotErrorIs(t, err, ErrRIExchangeExpired)
+	assert.NotErrorIs(t, err, ErrRIExchangeNotInExpectedStatus)
 }
 
 func TestPGXMock_TransitionRIExchangeStatus_Expired(t *testing.T) {
@@ -1521,6 +1525,8 @@ func TestPGXMock_TransitionRIExchangeStatus_Expired(t *testing.T) {
 	_, err := store.TransitionRIExchangeStatus(ctx, "ri-id", "pending", "processing", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expired")
+	assert.ErrorIs(t, err, ErrRIExchangeExpired, "the API maps this to 410 (issue #587)")
+	assert.NotErrorIs(t, err, ErrRIExchangeNotInExpectedStatus)
 }
 
 func TestPGXMock_TransitionRIExchangeStatus_Success(t *testing.T) {
