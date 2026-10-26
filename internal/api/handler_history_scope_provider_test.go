@@ -25,7 +25,7 @@ func historyScopeIDs(t *testing.T, scope []string, accounts []config.CloudAccoun
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, "u-1").Return(scope, nil)
 
 	store := new(MockConfigStore)
-	store.On("GetAllPurchaseHistory", mock.Anything, mock.Anything).Return(append([]config.PurchaseHistoryRecord(nil), rows...), nil)
+	store.On("ListPurchaseHistoryPage", mock.Anything, mock.Anything, mock.Anything).Return(append([]config.PurchaseHistoryRecord(nil), rows...), nil)
 	store.On("GetExecutionsByStatuses", mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	store.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return accounts, nil

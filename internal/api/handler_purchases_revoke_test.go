@@ -1605,16 +1605,6 @@ func TestRevocationWindowClosesAtFor_DSTCrossing(t *testing.T) {
 		"naive Add(168h) must land at a different time across DST -- confirming AddDate is needed")
 }
 
-// TestRevokePurchase_FourEyesApproval is a placeholder for the revoke+4-eyes
-// integration test. The 4-eyes approval gate for revocations is tracked in
-// issue #1005 and will be implemented in a follow-up PR.
-//
-// This test is intentionally skipped so the suite stays green while the
-// feature is in development; remove the t.Skip when #1005 lands.
-func TestRevokePurchase_FourEyesApproval(t *testing.T) {
-	t.Skip("placeholder until #1005 4-eyes revocation approval lands")
-}
-
 // TestRevokePurchase_GetExecutionByIDDBError_Returns500 guards that a genuine
 // DB error from GetExecutionByID surfaces as 500 rather than silently falling
 // through to the purchase_history lookup path (Finding C, second-wave CR).

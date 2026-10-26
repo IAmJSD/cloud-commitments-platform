@@ -95,6 +95,9 @@ func (h *Handler) getGroup(ctx context.Context, req *events.LambdaFunctionURLReq
 	}
 
 	group, err := h.auth.GetGroupAPI(ctx, groupID)
+	if errors.Is(err, auth.ErrGroupNotFound) {
+		return nil, NewClientError(404, "group not found")
+	}
 	if err != nil {
 		return nil, err
 	}

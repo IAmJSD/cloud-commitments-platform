@@ -11,7 +11,6 @@ type StoreInterface interface {
 	GetUserByID(ctx context.Context, userID string) (*User, error)
 	GetUserByEmail(ctx context.Context, email string) (*User, error)
 	CreateUser(ctx context.Context, user *User) error
-	UpdateUser(ctx context.Context, user *User) error
 	UpdateUserAdminFields(ctx context.Context, user *User, readEmail string, readGroupIDs []string, readActive bool) error
 	UpdateUserCredentials(ctx context.Context, user *User, readEmail, readPasswordHash string) error
 	SetPasswordResetToken(ctx context.Context, user *User, readExpiry *time.Time) error
@@ -65,7 +64,6 @@ type StoreInterface interface {
 	GetAPIKeyByHash(ctx context.Context, keyHash string) (*UserAPIKey, error)
 	ListAPIKeysByUser(ctx context.Context, userID string) ([]*UserAPIKey, error)
 	UpdateAPIKey(ctx context.Context, key *UserAPIKey) error
-	UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error
 	// RecordAPIKeyUsage atomically updates last_used_at and adds delta to
 	// request_count_total + request_count_window. delta is the number of
 	// requests in this flush (greater than 1 when concurrent requests were
@@ -85,6 +83,5 @@ type StoreInterface interface {
 // EmailSenderInterface defines the methods required for sending emails.
 type EmailSenderInterface interface {
 	SendPasswordResetEmail(ctx context.Context, email, resetURL string) error
-	SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error
 	SendUserInviteEmail(ctx context.Context, email, setupURL string) error
 }

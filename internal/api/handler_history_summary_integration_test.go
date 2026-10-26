@@ -81,6 +81,13 @@ func (e *historySummaryEnv) addPurchase(ctx context.Context, t *testing.T, c *te
 		rec.CloudAccountID = &acct.ID
 	}
 	require.NoError(t, e.store.SavePurchaseHistory(ctx, rec))
+	if legacy {
+		// SavePurchaseHistory now links a row to the registered account with
+		// the same external id (#1235); clear it so this stays a legacy row.
+		tag, err := c.DB.Pool().Exec(ctx, `UPDATE purchase_history SET cloud_account_id = NULL WHERE purchase_id = $1`, rec.PurchaseID)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), tag.RowsAffected())
+	}
 	row := summarySeedRow{tenant: tenant, bucket: "completed", dollars: true, upfront: upfront, savings: savings, at: at}
 	if revoked {
 		_, err := c.DB.Pool().Exec(ctx, `UPDATE purchase_history SET revoked_at = now() WHERE purchase_id = $1`, rec.PurchaseID)

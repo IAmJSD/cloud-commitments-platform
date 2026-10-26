@@ -2,6 +2,7 @@ package purchase
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
@@ -42,6 +43,11 @@ var finalizeRevocationBackoffs = []time.Duration{
 // are logged and counted in FinalizeResult.Errored but do not abort the
 // sweep — the sweep continues to the next row so a single stuck row does not
 // block finalization of all in-flight rows.
+//
+// Cancellation: the backoff between retries honors ctx. When ctx is done the
+// row being retried is counted as Errored, the counts so far are logged, and
+// the sweep returns them with an error wrapping ctx.Err(), so a Lambda near
+// its deadline stops instead of sleeping past it (issue #243).
 func (m *Manager) FinalizeInFlightRevocations(ctx context.Context) (*FinalizeResult, error) {
 	rows, err := m.config.GetPurchaseHistoryInFlight(ctx)
 	if err != nil {
@@ -52,15 +58,12 @@ func (m *Manager) FinalizeInFlightRevocations(ctx context.Context) (*FinalizeRes
 	now := time.Now().UTC()
 
 	for _, record := range rows {
-		markErr := m.config.MarkPurchaseRevoked(ctx, record.PurchaseID, now, "direct-api", "", nil, "")
-		for attempt, backoff := range finalizeRevocationBackoffs {
-			if markErr == nil {
-				break
-			}
-			logging.Warnf("finalize_revocations: MarkPurchaseRevoked attempt %d for %s failed: %v (retrying in %s)",
-				attempt+1, record.PurchaseID, markErr, backoff)
-			time.Sleep(backoff)
-			markErr = m.config.MarkPurchaseRevoked(ctx, record.PurchaseID, now, "direct-api", "", nil, "")
+		markErr, ctxErr := m.markRevokedWithRetry(ctx, record.PurchaseID, now)
+		if ctxErr != nil {
+			result.Errored++
+			logging.Errorf("finalize_revocations: sweep stopped at purchase_id=%s: %v (found=%d finalized=%d errored=%d)",
+				record.PurchaseID, ctxErr, result.Found, result.Finalized, result.Errored)
+			return result, fmt.Errorf("finalize_revocations: sweep canceled: %w", ctxErr)
 		}
 		if markErr != nil {
 			logging.Errorf("finalize_revocations: MarkPurchaseRevoked for %s failed after %d attempts: %v",
@@ -73,4 +76,27 @@ func (m *Manager) FinalizeInFlightRevocations(ctx context.Context) (*FinalizeRes
 	}
 
 	return result, nil
+}
+
+// markRevokedWithRetry calls MarkPurchaseRevoked, retrying after each
+// finalizeRevocationBackoffs delay. It returns the last MarkPurchaseRevoked
+// error, or a non-nil ctxErr when ctx was done during a backoff.
+func (m *Manager) markRevokedWithRetry(ctx context.Context, purchaseID string, now time.Time) (markErr, ctxErr error) {
+	markErr = m.config.MarkPurchaseRevoked(ctx, purchaseID, now, "direct-api", "", nil, "")
+	for attempt, backoff := range finalizeRevocationBackoffs {
+		if markErr == nil {
+			return nil, nil
+		}
+		logging.Warnf("finalize_revocations: MarkPurchaseRevoked attempt %d for %s failed: %v (retrying in %s)",
+			attempt+1, purchaseID, markErr, backoff)
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return markErr, ctx.Err()
+		case <-timer.C:
+		}
+		markErr = m.config.MarkPurchaseRevoked(ctx, purchaseID, now, "direct-api", "", nil, "")
+	}
+	return markErr, nil
 }

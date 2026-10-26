@@ -715,13 +715,21 @@ func (h *Handler) withRegisteredAccountNames(ctx context.Context, scope auth.Acc
 }
 
 // setSecurityHeaders adds comprehensive security headers to the response.
+// HSTSHeaderValue is the Strict-Transport-Security value for every response
+// path: API responses here, and the HTTP-mode static, Lambda static and
+// health responses in internal/server. One constant keeps the modes from
+// drifting apart again (issue #14: Lambda mode had dropped "preload").
+// "preload" only makes the domain eligible for the browser preload list;
+// submitting it to hstspreload.org is a separate, manual step.
+const HSTSHeaderValue = "max-age=31536000; includeSubDomains; preload"
+
 func setSecurityHeaders(headers map[string]string) map[string]string {
 	// Content Security Policy - restrictive for API responses
 	// Only allow connections to same origin, block all other resources
 	headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
 
 	// Strict Transport Security - enforce HTTPS for 1 year including subdomains
-	headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+	headers["Strict-Transport-Security"] = HSTSHeaderValue
 
 	// Permissions Policy - disable all browser features
 	headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
@@ -777,7 +785,7 @@ func (h *Handler) buildResponseHeaders() map[string]string {
 
 	if h.corsAllowedOrigin != "" {
 		corsHeaders["Access-Control-Allow-Origin"] = h.corsAllowedOrigin
-		corsHeaders["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+		corsHeaders["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 		corsHeaders["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key, Authorization, X-Authorization, X-CSRF-Token"
 		corsHeaders["Access-Control-Allow-Credentials"] = "true"
 	}
@@ -1157,25 +1165,5 @@ func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string,
 // attacker-controlled tokens into a JSON snippet the operator copy-
 // pastes into IAM.
 func parseArnPartition(arn string) string {
-	const prefix = "arn:"
-	if len(arn) <= len(prefix) || arn[:len(prefix)] != prefix {
-		return ""
-	}
-	rest := arn[len(prefix):]
-	end := -1
-	for i := 0; i < len(rest); i++ {
-		if rest[i] == ':' {
-			end = i
-			break
-		}
-	}
-	if end <= 0 {
-		return ""
-	}
-	switch rest[:end] {
-	case "aws", "aws-cn", "aws-us-gov":
-		return rest[:end]
-	default:
-		return ""
-	}
+	return config.AWSPartitionFromARN(arn)
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/mocks"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/testutil/goroutines"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/stretchr/testify/assert"
@@ -465,6 +468,10 @@ func TestScheduler_CollectRecommendations_ParallelProviders(t *testing.T) {
 	})
 }
 
+// TestScheduler_CollectRecommendations_UnknownProvider pins issue #111: a
+// provider name the scheduler does not recognize (wrong case, trailing space)
+// must be reported as a failed provider and recorded in
+// last_collection_error, not as a clean collection of zero recommendations.
 func TestScheduler_CollectRecommendations_UnknownProvider(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -472,10 +479,14 @@ func TestScheduler_CollectRecommendations_UnknownProvider(t *testing.T) {
 	mockFactory := new(MockProviderFactory)
 
 	globalCfg := &config.GlobalConfig{
-		EnabledProviders: []string{"unknown_provider"},
+		EnabledProviders: []string{"AWS", "azure "},
 	}
 
 	mockStore.On("GetGlobalConfig", ctx).Return(globalCfg, nil)
+	var recordedErr string
+	mockStore.On("SetRecommendationsCollectionError", mock.Anything, mock.AnythingOfType("string")).
+		Run(func(args mock.Arguments) { recordedErr = args.String(1) }).
+		Return(nil).Once()
 
 	scheduler := &Scheduler{
 		config:          mockStore,
@@ -488,6 +499,12 @@ func TestScheduler_CollectRecommendations_UnknownProvider(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, 0, result.Recommendations)
+	assert.Empty(t, result.SuccessfulProviders, "an unknown provider was never contacted, so it must not count as successful")
+	assert.Contains(t, result.FailedProviders, "AWS")
+	assert.Contains(t, result.FailedProviders, "azure ")
+	mockStore.AssertCalled(t, "SetRecommendationsCollectionError", mock.Anything, mock.AnythingOfType("string"))
+	assert.Contains(t, recordedErr, `unknown provider "AWS"`)
+	assert.Contains(t, recordedErr, `unknown provider "azure "`)
 }
 
 func TestScheduler_CollectAWSRecommendations(t *testing.T) {
@@ -575,10 +592,10 @@ func TestScheduler_CollectProviderRecommendations(t *testing.T) {
 		provider    string
 		expectError bool
 	}{
-		{"aws", true},    // ambient fallback fails via factory error
-		{"azure", false}, // no accounts → nil, nil
-		{"gcp", false},   // no accounts → nil, nil
-		{"unknown", false},
+		{"aws", true},     // ambient fallback fails via factory error
+		{"azure", false},  // no accounts → nil, nil
+		{"gcp", false},    // no accounts → nil, nil
+		{"unknown", true}, // not a provider the scheduler can collect (#111)
 	}
 
 	for _, tt := range tests {
@@ -1087,14 +1104,14 @@ func TestScheduler_ListRecommendations_LambdaSkipsBackgroundRefresh(t *testing.T
 		cacheTTL: time.Nanosecond,
 	}
 
+	mark := goroutines.NewMark()
 	_, err := scheduler.ListRecommendations(ctx, config.RecommendationFilter{})
 	require.NoError(t, err)
 
-	// Give any (wrongly-spawned) goroutine time to hit the store; none
-	// should fire, so no GetGlobalConfig call should be observed.
-	time.Sleep(20 * time.Millisecond)
-
-	mockStore.AssertNotCalled(t, "GetGlobalConfig", mock.Anything)
+	// No wall-clock wait (issue #36): a wrongly spawned refresh is either
+	// still alive and in the goroutine snapshot, or already done and in the
+	// GetGlobalConfig call log.
+	assertNoBackgroundCollect(t, mark, mockStore)
 	assert.False(t, scheduler.collecting.Load(), "collecting flag must stay unset on Lambda")
 }
 
@@ -1289,11 +1306,17 @@ func TestScheduler_ListRecommendations_ColdStart_NonLambda_KicksBackgroundCollec
 }
 
 // fanOutPerAccount bounds parallel in-flight calls to
-// CUDLY_MAX_ACCOUNT_PARALLELISM. Test with a fake fn that increments an
-// atomic counter on entry and decrements on exit, assert peak stays at
-// or below the limit.
+// CUDLY_MAX_ACCOUNT_PARALLELISM. Every fake fn call parks on release, so the
+// fan-out fills its slots and then blocks in errgroup.Go waiting for one. Once
+// it is parked there and every worker it started has entered fn, nothing else
+// can start until the test releases, so the in-flight count read then is the
+// bound itself, with no wall-clock wait (issue #36): a missing limit never
+// parks (the Eventually times out) and a wrong one parks at another count. The
+// final peak must equal the limit exactly, so a serial or under-limit fan-out
+// fails too (issue #38, audit A16-011).
 func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
-	t.Setenv("CUDLY_MAX_ACCOUNT_PARALLELISM", "3")
+	const limit = 3
+	t.Setenv("CUDLY_MAX_ACCOUNT_PARALLELISM", fmt.Sprint(limit))
 
 	// 20 accounts to make the bound observable.
 	accounts := make([]config.CloudAccount, 20)
@@ -1312,20 +1335,73 @@ func TestFanOutPerAccount_RespectsParallelismLimit(t *testing.T) {
 		}
 	}
 
-	fn := func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseAll)
+
+	//nolint:unparam // signature is fixed by fanOutPerAccount; these calls never report a gap or error
+	fn := func(_ context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
 		cur := inflight.Add(1)
 		updatePeak(cur)
-		// Small sleep so concurrent workers genuinely overlap.
-		time.Sleep(5 * time.Millisecond)
+		<-release
 		inflight.Add(-1)
 		return []config.RecommendationRecord{{ID: acct.ID}}, nil, nil
 	}
 
-	out, outcome := fanOutPerAccount(context.Background(), "Test", accounts, fn)
-	assert.Len(t, out, len(accounts), "all accounts contribute one record")
-	assert.LessOrEqual(t, peak.Load(), int32(3), "peak in-flight must not exceed CUDLY_MAX_ACCOUNT_PARALLELISM")
-	assert.Equal(t, len(accounts), outcome.SucceededCount)
-	assert.Zero(t, outcome.FailedCount)
+	type fanOutResult struct {
+		out     []config.RecommendationRecord
+		outcome accountOutcome
+	}
+	done := make(chan fanOutResult, 1)
+	mark := goroutines.NewMark()
+	go func() {
+		out, outcome := fanOutPerAccount(context.Background(), "Test", accounts, fn)
+		done <- fanOutResult{out, outcome}
+	}()
+
+	var atBound int32
+	require.Eventually(t, func() bool {
+		parked, workers := fanOutParkedOnLimit(mark)
+		n := inflight.Load()
+		atBound = n
+		return parked && int(n) == workers
+	}, 10*time.Second, time.Millisecond, "fanOutPerAccount never blocked waiting for a free slot: no parallelism limit")
+	assert.Equal(t, int32(limit), atBound, "in-flight calls while the fan-out waits for a slot must equal CUDLY_MAX_ACCOUNT_PARALLELISM")
+
+	releaseAll()
+	var res fanOutResult
+	select {
+	case res = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("fanOutPerAccount did not finish after its calls were released")
+	}
+	assert.Len(t, res.out, len(accounts), "all accounts contribute one record")
+	assert.Equal(t, int32(limit), peak.Load(), "peak in-flight must reach, and never exceed, CUDLY_MAX_ACCOUNT_PARALLELISM")
+	assert.Equal(t, len(accounts), res.outcome.SucceededCount)
+	assert.Zero(t, res.outcome.FailedCount)
+}
+
+// fanOutParkedOnLimit reports whether the goroutine the test started to run
+// fanOutPerAccount is blocked in errgroup.Go on the limit's semaphore, and how
+// many of the workers it started are alive. It runs inside require.Eventually,
+// so it identifies goroutines by creator rather than with mark.Spawned.
+func fanOutParkedOnLimit(mark goroutines.Mark) (parked bool, workers int) {
+	started := mark.Started()
+	var runner int64
+	for _, g := range started {
+		if strings.Contains(g.CreatedBy, "scheduler.TestFanOutPerAccount_RespectsParallelismLimit") &&
+			strings.Contains(g.Stack, "scheduler.fanOutPerAccount(") {
+			runner = g.ID
+			parked = strings.Contains(g.Stack, "[chan send") && strings.Contains(g.Stack, "errgroup.(*Group).Go(")
+		}
+	}
+	for _, g := range started {
+		if runner != 0 && g.CreatorID == runner {
+			workers++
+		}
+	}
+	return parked, workers
 }
 
 // TestFanOutPerAccount_AllAccountsFail pins the new accountOutcome
@@ -1697,6 +1773,26 @@ func TestScheduler_ConvertRecommendations_SavingsPercentage(t *testing.T) {
 
 	assert.Nil(t, records[2].SavingsPercentage,
 		"SavingsPercentage=0 from the provider must round-trip as nil, not as a pointer to 0.0")
+}
+
+// TestScheduler_ConvertRecommendations_CommitmentCurrency: the currency the
+// provider parser proved for the commitment legs is kept on the record, and
+// an unknown one stays empty rather than being defaulted to USD. The purchase
+// spend cap refuses a capped purchase of a rec that is not provably USD
+// (issue #361), so dropping it here would refuse every capped purchase.
+func TestScheduler_ConvertRecommendations_CommitmentCurrency(t *testing.T) {
+	scheduler := &Scheduler{}
+	rec := func(currency string) common.Recommendation {
+		return common.Recommendation{
+			Provider: common.ProviderAWS, Service: common.ServiceEC2, Region: "cn-north-1", ResourceType: "m5.large",
+			Count: 1, Term: "1yr", PaymentOption: "all-upfront", CommitmentCost: 5000, CommitmentCurrency: currency,
+		}
+	}
+	records := scheduler.convertRecommendations([]common.Recommendation{rec("CNY"), rec("USD"), rec("")}, "aws")
+	require.Len(t, records, 3)
+	assert.Equal(t, "CNY", records[0].CommitmentCurrency)
+	assert.Equal(t, "USD", records[1].CommitmentCurrency)
+	assert.Empty(t, records[2].CommitmentCurrency)
 }
 
 // TestScheduler_ConvertRecommendations_IDUniqueness pins issue #187 +

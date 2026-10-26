@@ -634,8 +634,12 @@ func TestHandler_validateExchangeApproval_RecordNotFound(t *testing.T) {
 
 	h := &Handler{config: mockStore}
 	_, err := h.validateExchangeApproval(ctx, "11111111-1111-1111-1111-111111111111", "some-token")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	// A missing record answers like a wrong token (issue #601).
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "want ClientError, got %v", err)
+	assert.Equal(t, 403, ce.code)
+	assert.Equal(t, "invalid approval token", ce.message)
 }
 
 func TestHandler_validateExchangeApproval_NoApprovalToken(t *testing.T) {
@@ -647,7 +651,8 @@ func TestHandler_validateExchangeApproval_NoApprovalToken(t *testing.T) {
 	h := &Handler{config: mockStore}
 	_, err := h.validateExchangeApproval(ctx, "11111111-1111-1111-1111-111111111111", "some-token")
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "does not support approval")
+	// Same answer as a wrong token or a missing record (issue #601).
+	assert.Contains(t, err.Error(), "invalid approval token")
 }
 
 func TestHandler_validateExchangeApproval_WrongToken(t *testing.T) {

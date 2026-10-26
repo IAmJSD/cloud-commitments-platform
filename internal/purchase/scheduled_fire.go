@@ -72,7 +72,9 @@ func (m *Manager) FireScheduledDelayedPurchases(ctx context.Context) (*FireResul
 
 // fireOneDue attempts to fire a single due scheduled execution. Returns
 // (true, false) on success, (false, true) when the CAS was lost to a
-// concurrent revoke, or (false, false) on a real error.
+// concurrent revoke or the claim was lost before the provider call (the
+// guarded audit stamp found the row no longer running), or (false, false) on
+// a real error.
 func (m *Manager) fireOneDue(ctx context.Context, exec *config.PurchaseExecution) (fired, raceLost bool) {
 	// CAS: scheduled -> running (the executor claim). If this fails with ErrExecutionNotInExpectedStatus
 	// the revoke handler already transitioned the row to "canceled" — that is
@@ -91,10 +93,10 @@ func (m *Manager) fireOneDue(ctx context.Context, exec *config.PurchaseExecution
 	// Stamp ApprovedBy for the audit trail before executing.
 	actor := "scheduler"
 	updated.ApprovedBy = &actor
-	if saveErr := m.config.SaveExecutionIfStatus(ctx, updated, executorOwnedStatuses); saveErr != nil {
-		// Best-effort audit stamp: attribution failure must not block the
-		// purchase from firing. Log loudly so the audit gap is visible.
-		logging.Errorf("AUDIT GAP: fireOneDue[%s]: failed to stamp approved_by: %v", exec.ExecutionID, saveErr)
+	// Guarded on "running". A store error stays best-effort, but a lost guard
+	// means the claim is gone, so nothing is bought (issue #835).
+	if stampErr := m.stampClaimedAudit(ctx, updated, "approved_by"); stampErr != nil {
+		return false, true
 	}
 
 	if execErr := m.executeAndFinalize(ctx, updated); execErr != nil {

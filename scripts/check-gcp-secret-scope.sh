@@ -5,6 +5,8 @@
 # folder or organization scope. Those scopes hand the member EVERY secret in the
 # scope, so a workload that needs one secret ends up able to read the credential
 # encryption key, the JWT/session secrets and the SendGrid API key alongside it.
+# It also fails when a per-secret grant carries a role wider than a workload
+# needs on one secret (issue #505): see shape 1 below.
 #
 # The supported pattern is a per-secret binding instead:
 #
@@ -32,7 +34,17 @@
 #   1. Inside a per-secret IAM resource
 #      (google_secret_manager_secret_iam_{member,binding,policy} and the
 #      _regional_ variants), and only as a plain `role = "roles/secretmanager.X"`
-#      attribute line. That is the supported pattern above.
+#      attribute line where X is secretAccessor (read a version) or
+#      secretVersionAdder (add one). That is the supported pattern above.
+#      Those are the two roles a workload needs on a single secret and the
+#      only two this repo grants. Any other `role =` line in such a resource
+#      is a finding (issue #505): a wider Secret Manager role such as admin or
+#      secretVersionManager (destroy versions, delete the secret, rewrite its
+#      IAM policy), a role from another service such as roles/owner, a
+#      reference whose value the guard cannot see, or a name that differs from
+#      an allowed one in case or suffix. Inside `_policy`, this covers role
+#      lines written inline in policy_data (e.g. jsonencode); see LIMITATIONS
+#      for policy_data from elsewhere.
 #   2. A comment line (`#` or `//` as the first non-blank characters). A trailing
 #      comment on a code line is NOT exempt; that is deliberate, so a `#` inside
 #      a string can never hide the role written after it.
@@ -58,8 +70,9 @@
 # and no waiver applies. Correlating policy_data with its source is the work to
 # do if one is ever genuinely needed.
 #
-# WAIVERS. A deliberate scope-wide Secret Manager grant is permitted by a comment
-# on the line DIRECTLY above the mention it excuses, with a reason:
+# WAIVERS. A deliberate scope-wide Secret Manager grant, or a per-secret grant
+# of a role outside the allowed two, is permitted by a comment on the line
+# DIRECTLY above the mention it excuses, with a reason:
 #
 #   # gcp-secret-scope: allow - <why this grant must be scope-wide>
 #   "roles/secretmanager.admin",
@@ -92,6 +105,11 @@
 #     analyzed (issue #150). That includes a `google_iam_policy` data source
 #     feeding a per-secret `_iam_policy`, since the guard cannot tell where
 #     policy_data goes. None exist today.
+#   - A per-secret `_iam_policy` whose policy_data is NOT written inline, e.g.
+#     from file(), a variable or a module output, is not analyzed: its roles
+#     never appear as `role =` lines here. One built from `data
+#     "google_iam_policy"` exits 2 (above). None exist today; the allowlist in
+#     shape 1 applies only to role lines the guard can see.
 #   - Block tracking (which decides the per-secret exemption) counts braces and
 #     does not need `terraform fmt` layout to stay closed, but CI also runs
 #     `terraform fmt -check` over every SCAN_ROOTS entry, so unformatted code
@@ -243,10 +261,17 @@ violations=$(
     function taint(s,    t) {
       t = tolower(s)
       gsub(/secretmanager\.googleapis\.com/, "", t)
-      if (t ~ /secretmanager/) {
-        if (allowed && s ~ /^[[:space:]]*role[[:space:]]*=[[:space:]]*"roles\/secretmanager\.[A-Za-z]+"[[:space:]]*$/) {
+      # Inside a per-secret IAM resource every `role =` line must name one of
+      # the two allowed roles as a literal (issue #505). Matched case-sensitively
+      # because IAM role names are. Anything else there, a wider Secret Manager
+      # role, a role from another service or a reference, is a finding.
+      if (allowed && s ~ /^[[:space:]]*role[[:space:]]*=/) {
+        if (s ~ /^[[:space:]]*role[[:space:]]*=[[:space:]]*"roles\/secretmanager\.(secretAccessor|secretVersionAdder)"[[:space:]]*$/) {
           return ""
         }
+        return "per-secret IAM role is not roles/secretmanager.secretAccessor or roles/secretmanager.secretVersionAdder"
+      }
+      if (t ~ /secretmanager/) {
         return "Secret Manager role or permission outside a per-secret IAM resource"
       }
       if (t ~ /"roles\/[^"]*([$][{]|%)/ || t ~ /"roles\/?"/) {
@@ -352,7 +377,7 @@ violations=$(
 
 if [[ -n "$violations" ]]; then
   {
-    echo "FAILED: possible scope-wide Secret Manager grant(s) found."
+    echo "FAILED: possible scope-wide or over-broad Secret Manager grant(s) found."
     echo ""
     echo "$violations"
     echo ""
@@ -367,10 +392,12 @@ if [[ -n "$violations" ]]; then
     echo "  }"
     echo ""
     echo "See terraform/modules/compute/gcp/cloud-run/main.tf for the reference shape."
-    echo "If the grant must be scope-wide, put a waiver with the reason on the line"
-    echo "directly above it:"
+    echo "A per-secret binding may grant only roles/secretmanager.secretAccessor or"
+    echo "roles/secretmanager.secretVersionAdder, written as a literal on its role line."
+    echo "If the grant must be scope-wide or needs another role, put a waiver with the"
+    echo "reason on the line directly above it:"
     echo ""
-    echo "  # gcp-secret-scope: allow - <why this grant must be scope-wide>"
+    echo "  # gcp-secret-scope: allow - <why this grant must be this wide>"
     echo ""
     echo "See the header of scripts/check-gcp-secret-scope.sh for what is exempt."
   } >&2
@@ -378,5 +405,6 @@ if [[ -n "$violations" ]]; then
 fi
 
 echo "OK: no un-waived Secret Manager role or permission outside a per-secret IAM" \
-     "resource, and no plan-time role name, in ${#files[@]} Terraform file(s)." \
+     "resource, no un-waived per-secret role other than secretAccessor or" \
+     "secretVersionAdder, and no plan-time role name, in ${#files[@]} Terraform file(s)." \
      "Values supplied from outside the scanned tree are not covered; see LIMITATIONS."
