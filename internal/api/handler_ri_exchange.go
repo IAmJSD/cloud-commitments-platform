@@ -2556,9 +2556,9 @@ func (h *Handler) fetchAndAuthorizeRIExchange(ctx context.Context, session *Sess
 		return nil, errNotFound
 	}
 
-	record, err := h.config.GetRIExchangeRecord(ctx, id)
+	record, err := h.getRIExchangeRecord(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to look up exchange record: %w", err)
+		return nil, err
 	}
 	if record == nil {
 		return nil, NewClientError(404, "exchange record not found")
@@ -2723,6 +2723,22 @@ func (h *Handler) requireDifferentRIExchangeApprover(ctx context.Context, sessio
 	return NewClientError(500, "4-eyes approval mode is enabled but no session could be resolved; sign in before approving")
 }
 
+// getRIExchangeRecord loads an exchange record for the approve and reject
+// routes. A missing record is (nil, nil) whether the store reports it as a
+// nil record or as a wrapped config.ErrNotFound (PostgresStore), so callers
+// answer it as a client error and not a 500 (issue #601). Any other store
+// error stays a server error.
+func (h *Handler) getRIExchangeRecord(ctx context.Context, id string) (*config.RIExchangeRecord, error) {
+	record, err := h.config.GetRIExchangeRecord(ctx, id)
+	if errors.Is(err, config.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to look up exchange record: %w", err)
+	}
+	return record, nil
+}
+
 // validateExchangeApproval validates ID, token, and record state for an exchange approval.
 func (h *Handler) validateExchangeApproval(ctx context.Context, id, token string) (*config.RIExchangeRecord, error) {
 	if err := validateUUID(id); err != nil {
@@ -2732,14 +2748,10 @@ func (h *Handler) validateExchangeApproval(ctx context.Context, id, token string
 		return nil, NewClientError(400, "approval token is required")
 	}
 
-	record, err := h.config.GetRIExchangeRecord(ctx, id)
+	record, err := h.getRIExchangeRecord(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to look up exchange record: %w", err)
+		return nil, err
 	}
-	if record == nil {
-		return nil, NewClientError(404, "exchange record not found")
-	}
-
 	if err := checkExchangeToken(record, token, "approval"); err != nil {
 		return nil, err
 	}
@@ -2753,20 +2765,23 @@ const (
 )
 
 // checkExchangeToken applies the emailed-token status mapping shared with the
-// purchase approve, cancel and revoke links (issue #587): a record without a
-// token, or a token that does not match, is 403, and a matching token on an
-// exchange past its expires_at is 410. The match is checked first, so only
-// the token holder learns that the exchange expired. kind is "approval" or
-// "rejection" and only shapes the 403 text.
+// purchase approve, cancel and revoke links (issue #587): a token that does
+// not match is 403, and a matching token on an exchange past its expires_at
+// is 410. The match is checked first, so only the token holder learns that
+// the exchange expired. kind is "approval" or "rejection" and only shapes the
+// 403 text.
+//
+// A missing record (nil) and a record without a token get the same 403 as a
+// wrong token (issue #601): the token alone authorizes these routes, so they
+// are open to callers with no session, and a distinct answer would tell such
+// a caller which exchange ids exist.
 //
 // record.ApprovalToken is the SHA-256 hex digest stored at rest (issue #103);
 // config.ApprovalTokenMatches hashes the supplied token and compares digests
-// in constant time, as everywhere else that validates one of these tokens.
+// in constant time, as everywhere else that validates one of these tokens,
+// and never matches an empty stored digest.
 func checkExchangeToken(record *config.RIExchangeRecord, token, kind string) error {
-	if record.ApprovalToken == "" {
-		return NewClientError(403, "this exchange record does not support "+kind)
-	}
-	if !config.ApprovalTokenMatches(record.ApprovalToken, token) {
+	if record == nil || !config.ApprovalTokenMatches(record.ApprovalToken, token) {
 		return NewClientError(403, "invalid "+kind+" token")
 	}
 	if record.ExpiresAt != nil && time.Now().After(*record.ExpiresAt) {
@@ -2943,14 +2958,10 @@ func (h *Handler) rejectRIExchange(ctx context.Context, id, token string) (any, 
 		return nil, NewClientError(400, "rejection token is required")
 	}
 
-	record, err := h.config.GetRIExchangeRecord(ctx, id)
+	record, err := h.getRIExchangeRecord(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to look up exchange record: %w", err)
+		return nil, err
 	}
-	if record == nil {
-		return nil, NewClientError(404, "exchange record not found")
-	}
-
 	if tokenErr := checkExchangeToken(record, token, "rejection"); tokenErr != nil {
 		return nil, tokenErr
 	}

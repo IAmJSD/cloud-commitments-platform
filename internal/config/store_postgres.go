@@ -3325,7 +3325,9 @@ func riExchangeUSD(micros *big.Int) string {
 	return fmt.Sprintf("%s.%06d", whole, fractional)
 }
 
-// GetRIExchangeRecord retrieves an RI exchange record by ID.
+// GetRIExchangeRecord retrieves an RI exchange record by ID. A missing record
+// is a wrapped ErrNotFound, so callers can tell it from a failed query and
+// answer it as a client error rather than a 500 (issue #601).
 func (s *PostgresStore) GetRIExchangeRecord(ctx context.Context, id string) (*RIExchangeRecord, error) {
 	query := `
 		SELECT id, account_id, exchange_id, region, source_ri_ids,
@@ -3344,7 +3346,7 @@ func (s *PostgresStore) GetRIExchangeRecord(ctx context.Context, id string) (*RI
 	}
 
 	if len(records) == 0 {
-		return nil, fmt.Errorf("ri exchange record not found: %s", id)
+		return nil, fmt.Errorf("ri exchange record %s: %w", id, ErrNotFound)
 	}
 
 	return &records[0], nil

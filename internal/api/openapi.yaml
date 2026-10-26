@@ -2490,8 +2490,10 @@ paths:
         present; a CSRF rejection never falls through. The token is read
         from the query string only. This route
         never returns 401: a request with no token and no usable session
-        fails CSRF validation with 403. A missing record (404) and a wrong
-        token (403) are distinguishable for unauthenticated callers.
+        fails CSRF validation with 403. The token alone authorizes, so the
+        route is open to callers without a session; token mode answers an
+        unknown exchange id with the same 403 as a wrong token, so it does
+        not reveal which ids exist.
       security:
         - bearerAuth: []
         - {}
@@ -2520,15 +2522,22 @@ paths:
           description: >
             CSRF validation failed (including a request with neither a token
             nor a valid session), the session lacks approve permission, the
-            token is invalid, the record does not support approval, or, when a
-            session exists, 4-eyes mode rejects the approver (for example the
-            creator approving their own exchange).
+            token is invalid, or, when a session exists, 4-eyes mode rejects
+            the approver (for example the creator approving their own
+            exchange). In token mode an unknown exchange id, an exchange with
+            no approval token and a wrong token get the same 403 and body.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          $ref: '#/components/responses/NotFound'
+          description: >
+            Session mode only, the exchange does not exist. Token mode answers
+            an unknown id with 403, like a wrong token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '409':
           description: >
             The exchange is no longer pending (already processed, or canceled
@@ -2568,9 +2577,9 @@ paths:
       summary: Reject a pending RI exchange (token-based, no session required)
       description: >
         Authorized by the rejection token in the query string alone. A session
-        is ignored and no CSRF check runs. A missing token is 400; a missing
-        record (404) and a wrong token (403) are distinguishable for
-        unauthenticated callers.
+        is ignored and no CSRF check runs. A missing token is 400. An unknown
+        exchange id gets the same 403 and body as a wrong token, so the route
+        does not reveal which ids exist.
       security: []
       parameters:
         - name: token
@@ -2588,13 +2597,13 @@ paths:
         '400':
           $ref: '#/components/responses/BadRequest'
         '403':
-          description: The rejection token is invalid, or the record does not support rejection.
+          description: >
+            The rejection token is invalid. An unknown exchange id and an
+            exchange with no token get the same answer.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/NotFound'
         '409':
           description: >
             The exchange is no longer pending (already processed or canceled),

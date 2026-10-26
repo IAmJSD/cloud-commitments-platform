@@ -895,7 +895,8 @@ func TestRejectRIExchange_EmptyStoredToken(t *testing.T) {
 	ce, ok := IsClientError(err)
 	assert.True(t, ok)
 	assert.Equal(t, 403, ce.code)
-	assert.Contains(t, err.Error(), "does not support rejection")
+	// Same answer as a wrong token or a missing record (issue #601).
+	assert.Contains(t, err.Error(), "invalid rejection token")
 
 	mockStore.AssertExpectations(t)
 }
