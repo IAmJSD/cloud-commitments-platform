@@ -20,11 +20,19 @@ repos:
         require_serial: true
         files: '(\.go$|(^|/)go\.(mod|sum)$)'
 
+  # The Go hooks (go-vet here, go-test below) list packages with `go list`
+  # and drop node_modules instead of passing ./... (issue #177). Go's ./...
+  # skips only vendor, testdata and `.`/`_` directories, so after `npm ci`
+  # (pre-commit.yml runs it before this hook) it also matches Go source that
+  # npm packages ship, such as frontend/node_modules/flatted/golang, and the
+  # hooks would gate on code this repo does not own. -e lists a broken
+  # node_modules package instead of failing on it; pipefail makes a failing
+  # `go list` fail the hook rather than run on an empty package list.
   - repo: local
     hooks:
       - id: go-vet
         name: Run go vet
-        entry: bash -c 'go vet ./...'
+        entry: bash -c 'set -euo pipefail; pkgs=$(go list -e ./... | grep -v "/node_modules/"); go vet $pkgs'
         language: system
         pass_filenames: false
         files: \.go$
@@ -259,7 +267,8 @@ repos:
     hooks:
       - id: go-test
         name: Run Go tests (pre-push only; CI covers via ci.yml)
-        entry: bash -c 'go test -short -race ./...'
+        # Same node_modules exclusion as the go-vet hook (issue #177).
+        entry: bash -c 'set -euo pipefail; pkgs=$(go list -e ./... | grep -v "/node_modules/"); go test -short -race $pkgs'
         language: system
         pass_filenames: false
         files: \.go$
