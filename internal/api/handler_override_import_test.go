@@ -52,8 +52,9 @@ func TestImportOverrides_MatchesAnotherTenantsRowsByExternalID(t *testing.T) {
 	store := newOverrideTransferStore()
 	h := transferHandler(t, store, nil)
 	rows := []OverrideTransferRow{{
-		AccountID: "99999999-9999-9999-9999-999999999999", AccountExternalID: "123456789012",
-		Provider: "aws", Service: "elasticache", Term: ptr(1), Payment: ptr("no-upfront"),
+		AccountID:         "f0000000-0000-4000-8000-00000000f00d",
+		AccountExternalID: "123456789012",
+		Provider:          "aws", Service: "elasticache", Term: ptr(1), Payment: ptr("no-upfront"),
 	}}
 
 	report, err := runImport(t, h, OverrideImportRequest{Overrides: rows})
