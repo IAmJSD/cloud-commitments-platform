@@ -29,7 +29,7 @@ var bypassConstructors = map[string]map[string]bool{
 }
 
 // No non-test file under cmd/ or internal/ may call the concrete Azure/GCP
-// provider constructors or set the deprecated ProviderConfig.Profile field.
+// provider constructors or set the deprecated provider.Config Profile field.
 func TestNoRegistryBypassInProductionCode(t *testing.T) {
 	root := filepath.Join("..", "..")
 	var violations []string
@@ -50,7 +50,7 @@ func TestNoRegistryBypassInProductionCode(t *testing.T) {
 	}
 	require.Greater(t, scanned, 100, "the walk must actually reach the production sources")
 	assert.Empty(t, violations,
-		"build credentialed Azure/GCP providers with providerfactory.NewAzure/NewGCP and use the typed ProviderConfig fields")
+		"build credentialed Azure/GCP providers with providerfactory.NewAzure/NewGCP and use the typed provider.Config fields")
 }
 
 // registryBypasses returns one entry per bypassing call or deprecated
@@ -80,7 +80,7 @@ func registryBypasses(t *testing.T, path string) []string {
 				out = append(out, fset.Position(node.Pos()).String()+": "+node.Sel.Name)
 			}
 		case *ast.CompositeLit:
-			if sel, ok := node.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "ProviderConfig" && selectorPkg(sel, imports) == providerPkg {
+			if sel, ok := node.Type.(*ast.SelectorExpr); ok && providerConfigTypes[sel.Sel.Name] && selectorPkg(sel, imports) == providerPkg {
 				out = append(out, profileKeys(fset, node)...)
 			}
 		}
@@ -88,6 +88,10 @@ func registryBypasses(t *testing.T, path string) []string {
 	})
 	return out
 }
+
+// providerConfigTypes are the names a provider.Config literal can be written
+// with: Config, and its deprecated alias ProviderConfig (go#603).
+var providerConfigTypes = map[string]bool{"Config": true, "ProviderConfig": true}
 
 func selectorPkg(sel *ast.SelectorExpr, imports map[string]string) string {
 	id, ok := sel.X.(*ast.Ident)
@@ -105,7 +109,7 @@ func profileKeys(fset *token.FileSet, lit *ast.CompositeLit) []string {
 			continue
 		}
 		if id, ok := kv.Key.(*ast.Ident); ok && id.Name == "Profile" {
-			out = append(out, fset.Position(kv.Pos()).String()+": ProviderConfig.Profile")
+			out = append(out, fset.Position(kv.Pos()).String()+": provider.Config.Profile")
 		}
 	}
 	return out

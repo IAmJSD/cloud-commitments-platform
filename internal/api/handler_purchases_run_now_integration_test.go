@@ -51,7 +51,7 @@ func (p *runNowProvider) GetServiceClient(context.Context, common.ServiceType, s
 
 type runNowFactory struct{ provider *runNowProvider }
 
-func (f runNowFactory) CreateAndValidateProvider(context.Context, string, *provider.ProviderConfig) (provider.Provider, error) {
+func (f runNowFactory) CreateAndValidateProvider(context.Context, string, *provider.Config) (provider.Provider, error) {
 	return f.provider, nil
 }
 

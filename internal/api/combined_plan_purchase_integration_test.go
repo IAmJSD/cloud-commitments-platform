@@ -86,7 +86,7 @@ func (p *combinedProvider) GetServiceClient(_ context.Context, service common.Se
 
 type combinedFactory struct{ provider *combinedProvider }
 
-func (f combinedFactory) CreateAndValidateProvider(_ context.Context, name string, _ *provider.ProviderConfig) (provider.Provider, error) {
+func (f combinedFactory) CreateAndValidateProvider(_ context.Context, name string, _ *provider.Config) (provider.Provider, error) {
 	if name != "azure" {
 		return nil, fmt.Errorf("fixture refuses unexpected provider %q", name)
 	}

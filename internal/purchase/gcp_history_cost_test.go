@@ -45,7 +45,7 @@ func (fakeCommitmentsService) Close() error { return nil }
 // cloud-commitments-go pin before a32fd1a returned the term total (1000 here).
 func TestSavePurchaseHistory_GCPRecordsNoUpfront(t *testing.T) {
 	ctx := context.Background()
-	client, err := computeengine.NewClient(ctx, "project", "us-central1")
+	client, err := computeengine.NewClient("project", "us-central1")
 	require.NoError(t, err)
 	client.SetCommitmentsService(fakeCommitmentsService{})
 
