@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # check-azure-kv-access-policy.sh
 #
-# Fails when any Terraform file declares a top-level
-# `azurerm_key_vault_access_policy` resource.
+# Fails when any Terraform file declares an Azure Key Vault access-policy grant,
+# in any of its three spellings:
+#
+#   resource "azurerm_key_vault_access_policy" "..." { ... }
+#   resource "azurerm_key_vault" "..." { access_policy { ... } }
+#   resource "azurerm_key_vault" "..." { dynamic "access_policy" { ... } }
 #
 # WHY A BLANKET BAN IS CORRECT HERE. This repo provisions exactly one Key Vault
 # (terraform/modules/secrets/azure/main.tf) and it hardcodes
@@ -33,27 +37,33 @@
 # a matching string in a sibling file is not evidence that a role or an action
 # is real (issue #1794).
 #
-# Exit 0 = no azurerm_key_vault_access_policy resource declared.
+# Exit 0 = no access-policy grant declared, in any of the three spellings.
 # Exit 1 = at least one found; each is printed to stderr.
-# Exit 2 = usage error, or a file this scanner cannot read.
+# Exit 2 = usage error, or a file this scanner cannot read or parse.
 #
-# LIMITATIONS. This is a textual guard, not a policy engine, and it bans exactly
-# one spelling of the grant: a `resource "azurerm_key_vault_access_policy"`
-# header, at any indentation and without requiring whitespace between the
-# tokens. That is the form the #1621 defect arrived in.
+# HOW IT DECIDES. The files are parsed with HashiCorp's HCL parser (the one
+# Terraform uses), by cmd/check-azure-kv-access-policy, rather than matched line
+# by line. An `access_policy` block is a Key Vault grant only when the resource
+# enclosing it is an `azurerm_key_vault`; other providers' resources
+# (azurerm_storage_share's acl, for one) have an unrelated block of that name,
+# and the parse names the enclosing type directly. It also means text inside a
+# comment or a heredoc is never read as a declaration, block headers are found
+# at any indentation and with any token spacing, and attributes such as
+# `access_policy_enabled = false` are not blocks at all. Four successive line
+# matchers each got one of those cases wrong (issue #204).
 #
-# It does NOT catch the nested spelling: an `access_policy { ... }` block (or its
-# `dynamic "access_policy"` equivalent) declared inside an `azurerm_key_vault`
-# resource, which expresses the same inert grant. Deciding whether such a header
-# is a real grant needs the type of the enclosing resource, which a line-oriented
-# matcher does not have -- three successive text matchers for it were each either
-# too narrow to see a real block or broad enough to fire on an unrelated
-# identifier. Issue #1839 tracks closing that gap with an HCL parse
-# (hclparse/hclsyntax, or `terraform show -json`) instead of a fourth regex.
-# Neither nested form appears anywhere under the scan roots today.
+# LIMITATIONS. Only the direct children of an azurerm_key_vault are checked,
+# which is where the provider schema puts access_policy. The attribute spelling
+# of the same argument (`access_policy = [...]`, the provider's
+# attributes-as-blocks mode, whose documented use is `= []` to clear every
+# policy) is not reported. Modules are checked as source files, not expanded.
 #
-# The Terraform JSON encoding (`.tf.json`) is not parsed; rather than
+# A file the parser rejects is reported as exit 2 (cannot check), never clean.
+# The Terraform JSON encoding (`.tf.json`) is not parsed either; rather than
 # report such a file as clean, the guard exits 2. None exist today.
+#
+# The parser needs Go on PATH (the version in go.mod); without it the guard
+# exits 2.
 #
 # Usage:
 #   scripts/check-azure-kv-access-policy.sh              # scan the default roots
@@ -73,8 +83,6 @@ SCAN_ROOTS=(
   "${REPO_ROOT}/terraform"
   "${REPO_ROOT}/iac"
 )
-
-BANNED_RESOURCE='azurerm_key_vault_access_policy'
 
 files=()
 if [[ $# -gt 0 ]]; then
@@ -124,34 +132,41 @@ if [[ ${#files[@]} -eq 0 ]]; then
   exit 2
 fi
 
-# Match the block header, tolerating leading whitespace and not requiring
-# whitespace between tokens: `resource"azurerm_key_vault_access_policy""x"{` is
-# valid HCL. The pre-commit `terraform_fmt` hook normalizes a top-level block
-# back to column 0, and it covers every .tf file in the repo (both scan roots)
-# because CI runs `pre-commit run --all-files` in
-# .github/workflows/pre-commit.yml. The guard does not lean on that gate:
-# tolerating indentation means narrowing it later cannot open a bypass here.
-# Anchoring on `resource` still means a mention of the type inside a comment
-# (this file's own guidance, for one) does not trip the guard.
-violations=$(
-  awk \
-    -v resource_pattern="^[[:space:]]*resource[[:space:]]*\"${BANNED_RESOURCE}\"" '
-    $0 ~ resource_pattern {
-      printf "%s:%d: %s\n", FILENAME, FNR, $0
-    }
-  ' "${files[@]}"
-)
+if ! command -v go >/dev/null 2>&1; then
+  echo "ERROR: go is not on PATH; the HCL parser this guard runs is a Go program" >&2
+  exit 2
+fi
 
-if [[ -n "$violations" ]]; then
+work_dir="$(mktemp -d)"
+trap 'rm -rf "$work_dir"' EXIT
+checker="${work_dir}/check-azure-kv-access-policy"
+if ! (cd "$REPO_ROOT" && go build -o "$checker" ./cmd/check-azure-kv-access-policy); then
+  echo "ERROR: could not build cmd/check-azure-kv-access-policy" >&2
+  exit 2
+fi
+
+# The checker prints one FILE:LINE: HEADER line per grant on stdout, and exits
+# 0 (none), 1 (found) or 2 (cannot check). Anything other than 0 or 1 is passed
+# on as 2, so a crash can never read as a pass or as a finding.
+checker_exit=0
+violations="$("$checker" "${files[@]}")" || checker_exit=$?
+case "$checker_exit" in
+  0|1) ;;
+  *) exit 2 ;;
+esac
+
+if [[ "$checker_exit" -eq 1 ]]; then
   {
-    echo "FAILED: azurerm_key_vault_access_policy resource declared."
+    echo "FAILED: Azure Key Vault access policy declared."
     echo ""
     echo "$violations"
     echo ""
     echo "This project's Key Vault sets enable_rbac_authorization = true"
     echo "(terraform/modules/secrets/azure/main.tf). An RBAC-enabled vault ignores"
     echo "access policies entirely, so the grant above applies cleanly and then"
-    echo "does nothing at runtime. Use an RBAC role assignment instead:"
+    echo "does nothing at runtime. That holds for a standalone resource and for an"
+    echo "access_policy block inside the vault alike. Remove it and use an RBAC"
+    echo "role assignment instead:"
     echo ""
     echo "  resource \"azurerm_role_assignment\" \"<name>\" {"
     echo "    scope                = var.key_vault_id"
@@ -166,5 +181,4 @@ if [[ -n "$violations" ]]; then
   exit 1
 fi
 
-echo "OK: no azurerm_key_vault_access_policy resource declared in ${#files[@]} Terraform file(s)."
-echo "    (a nested access_policy block is NOT checked -- see #1839)"
+echo "OK: no Key Vault access policy (resource or nested block) declared in ${#files[@]} Terraform file(s)."

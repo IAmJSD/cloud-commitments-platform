@@ -129,3 +129,59 @@ func TestSubmitRegistration_TokenCollision_GivesUpAs500(t *testing.T) {
 	assert.False(t, isClient)
 	store.AssertNumberOfCalls(t, "CreateAccountRegistration", maxReferenceTokenAttempts)
 }
+
+// The registration row and the admin notification both carry the bare
+// contact address, not the submitted display-name form (issue #311).
+func TestSubmitRegistration_StoresBareContactEmail(t *testing.T) {
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	var stored *config.AccountRegistration
+	store.On("CreateAccountRegistration", ctx, mock.Anything).Run(func(args mock.Arguments) {
+		stored = args.Get(1).(*config.AccountRegistration)
+	}).Return(nil).Once()
+	notifier := &capturingRegistrationNotifier{}
+	h := &Handler{config: store, emailNotifier: notifier}
+
+	_, err := h.submitRegistration(ctx, &events.LambdaFunctionURLRequest{
+		Body: `{"provider":"aws","external_id":"ext-123","account_name":"Prod",` +
+			`"contact_email":"Jane Doe <jane@example.com>"}`,
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "jane@example.com", stored.ContactEmail)
+	assert.Equal(t, "jane@example.com", notifier.contactEmail)
+}
+
+// A contact_email carrying a header after a line break is refused before
+// anything is stored or sent (issue #311).
+func TestSubmitRegistration_RejectsHeaderInjectionContactEmail(t *testing.T) {
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	store.On("CreateAccountRegistration", ctx, mock.Anything).Return(nil).Maybe()
+	notifier := &countingRegistrationNotifier{}
+	h := &Handler{config: store, emailNotifier: notifier}
+
+	_, err := h.submitRegistration(ctx, &events.LambdaFunctionURLRequest{
+		Body: `{"provider":"aws","external_id":"ext-123","account_name":"Prod",` +
+			`"contact_email":"a@b\r\nBcc: x@y"}`,
+	})
+
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "want a 400 client error, got %v", err)
+	assert.Equal(t, 400, ce.code)
+	store.AssertNotCalled(t, "CreateAccountRegistration", mock.Anything, mock.Anything)
+	assert.Zero(t, notifier.received)
+}
+
+// capturingRegistrationNotifier records the contact email of the admin
+// "registration received" notification.
+type capturingRegistrationNotifier struct {
+	stubEmailNotifier
+	contactEmail string
+}
+
+func (n *capturingRegistrationNotifier) SendRegistrationReceivedNotification(_ context.Context, data email.RegistrationNotificationData) error {
+	n.contactEmail = data.ContactEmail
+	return nil
+}

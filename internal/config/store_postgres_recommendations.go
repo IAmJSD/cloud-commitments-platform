@@ -23,42 +23,6 @@ const recommendationsBatchSize = 500
 
 const azurePricingMigrationVersion = 106
 
-// ReplaceRecommendations wipes the recommendations table and reinserts the
-// full snapshot inside a single transaction. Used for a force-full-resync
-// path; the steady-state write path (see commit 6) is UpsertRecommendations.
-// Atomic replace means concurrent readers either see the full old snapshot
-// or the full new one — never a partial mid-replace state.
-func (s *PostgresStore) ReplaceRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord) error {
-	tx, err := s.db.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to begin tx: %w", err)
-	}
-	defer rollbackTx(ctx, tx, "ReplaceRecommendations")
-
-	if _, err := tx.Exec(ctx, `DELETE FROM recommendations`); err != nil {
-		return fmt.Errorf("failed to wipe recommendations: %w", err)
-	}
-
-	if err := insertRecommendationsBatched(ctx, tx, collectedAt, recs, false); err != nil {
-		return err
-	}
-
-	if _, err := tx.Exec(ctx, `
-		UPDATE recommendations_state
-		   SET last_collected_at       = $1,
-		       last_collection_error   = NULL,
-		       last_collection_partial = NULL
-		 WHERE id = 1
-	`, collectedAt); err != nil {
-		return fmt.Errorf("failed to update state: %w", err)
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit replace: %w", err)
-	}
-	return nil
-}
-
 // UpsertRecommendations is the incremental write path: it upserts each row
 // by natural key (cloud_account_id, provider, service, region,
 // resource_type, engine, term, payment_option, availability_zone, platform, tenancy) and then evicts stale rows for the
@@ -87,7 +51,7 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 	}
 	defer rollbackTx(ctx, tx, "UpsertRecommendations")
 
-	if err := insertRecommendationsBatched(ctx, tx, collectedAt, recs, true); err != nil {
+	if err := insertRecommendationsBatched(ctx, tx, collectedAt, recs); err != nil {
 		return err
 	}
 
@@ -108,9 +72,16 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 		}
 	}
 
+	// last_collected_at only moves forward (issue #111). Two collections can
+	// overlap (cron and a user refresh), and the one that started first can
+	// commit last; an unconditional SET would then move freshness backwards
+	// and make the next read kick another full collection. GREATEST ignores
+	// the NULL of a never-collected row. Under READ COMMITTED a writer that
+	// waited on the row lock re-evaluates GREATEST against the committed
+	// value, so concurrent commits keep the newest timestamp.
 	if _, err := tx.Exec(ctx, `
 		UPDATE recommendations_state
-		   SET last_collected_at       = $1,
+		   SET last_collected_at       = GREATEST(last_collected_at, $1),
 		       last_collection_error   = NULL,
 		       last_collection_partial = NULL
 		 WHERE id = 1
@@ -147,18 +118,16 @@ func successfulCollectArrays(scs []SuccessfulCollect) (providers []string, accou
 	return providers, accountKeys, nil
 }
 
-// insertRecommendationsBatched performs a batched multi-row INSERT of recs
-// inside the given transaction. If onConflict is true, it appends an
-// ON CONFLICT DO UPDATE clause keyed by the natural key; if false, the
-// insert assumes the table was pre-wiped and conflicts can't occur (used
-// by ReplaceRecommendations).
-func insertRecommendationsBatched(ctx context.Context, tx pgx.Tx, collectedAt time.Time, recs []RecommendationRecord, onConflict bool) error {
+// insertRecommendationsBatched performs a batched multi-row upsert of recs
+// inside the given transaction: each batch carries an ON CONFLICT DO UPDATE
+// clause keyed by the natural key.
+func insertRecommendationsBatched(ctx context.Context, tx pgx.Tx, collectedAt time.Time, recs []RecommendationRecord) error {
 	for start := 0; start < len(recs); start += recommendationsBatchSize {
 		end := start + recommendationsBatchSize
 		if end > len(recs) {
 			end = len(recs)
 		}
-		if err := insertRecommendationsBatch(ctx, tx, collectedAt, recs[start:end], onConflict); err != nil {
+		if err := insertRecommendationsBatch(ctx, tx, collectedAt, recs[start:end]); err != nil {
 			return err
 		}
 	}
@@ -177,7 +146,7 @@ func insertRecommendationsBatched(ctx context.Context, tx pgx.Tx, collectedAt ti
 // every Azure term × payment variant per SKU instead of collapsing
 // onto the highest-savings one.
 // engine was added to distinguish MySQL vs Postgres RDS at the same SKU.
-func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time.Time, recs []RecommendationRecord, onConflict bool) error {
+func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time.Time, recs []RecommendationRecord) error {
 	if len(recs) == 0 {
 		return nil
 	}
@@ -222,19 +191,14 @@ func insertRecommendationsBatch(ctx context.Context, tx pgx.Tx, collectedAt time
 		     resource_type, engine, payload, upfront_cost, monthly_savings,
 		     term, payment_option)
 		VALUES %s
+		ON CONFLICT (account_key, provider, service, region, resource_type, engine, term, payment_option, availability_zone, platform, tenancy)
+		DO UPDATE SET
+		    payload         = EXCLUDED.payload,
+		    upfront_cost    = EXCLUDED.upfront_cost,
+		    monthly_savings = EXCLUDED.monthly_savings,
+		    collected_at    = EXCLUDED.collected_at,
+		    cloud_account_id = EXCLUDED.cloud_account_id
 	`, strings.Join(placeholders, ","))
-
-	if onConflict {
-		query += `
-			ON CONFLICT (account_key, provider, service, region, resource_type, engine, term, payment_option, availability_zone, platform, tenancy)
-			DO UPDATE SET
-			    payload         = EXCLUDED.payload,
-			    upfront_cost    = EXCLUDED.upfront_cost,
-			    monthly_savings = EXCLUDED.monthly_savings,
-			    collected_at    = EXCLUDED.collected_at,
-			    cloud_account_id = EXCLUDED.cloud_account_id
-		`
-	}
 
 	if _, err := tx.Exec(ctx, query, args...); err != nil {
 		return fmt.Errorf("failed to insert recommendations batch: %w", err)
@@ -577,8 +541,8 @@ func (s *PostgresStore) MarkCollectionStarted(ctx context.Context) (token string
 // token) so the frontend knows an async collection has finished. Called by
 // the scheduler on both success and failure paths. On the success path,
 // last_collected_at and last_collection_error are updated by
-// UpsertRecommendations/ReplaceRecommendations, so this method only touches
-// started_at and the owner column.
+// UpsertRecommendations, so this method only touches started_at and the
+// owner column.
 //
 // The clear is scoped to rows where last_collection_owner_id still matches
 // token (issue #261): a caller whose token no longer matches (another run
@@ -611,4 +575,59 @@ func (s *PostgresStore) ClearCollectionStarted(ctx context.Context, token string
 		logging.Debugf("ClearCollectionStarted: no-op, caller's token no longer owns the collection marker")
 	}
 	return nil
+}
+
+// ClaimCollectionInvocation re-stamps the collection in-flight marker with a
+// fresh, invocation-scoped owner token (issue #84). The scheduler calls it
+// once a token-carrying collect run has WON the task advisory lock, before it
+// starts collecting.
+//
+// The token MarkCollectionStarted hands out identifies the marker, not the
+// run that serves it: Lambda's async delivery is at-least-once, so a
+// duplicate delivery of the same event carries the same token. Without the
+// re-stamp, a duplicate that is skipped by the advisory lock clears the
+// marker with that shared token while the lock winner is still collecting.
+// After the re-stamp only the winner's new token matches, so the duplicate's
+// skip-path clear is a no-op and the winner's deferred clear (with the new
+// token) is the one that releases the marker.
+//
+// The marker is taken when it is still owned by markerToken (started_at is
+// kept as MarkCollectionStarted set it) or when it is free or stale under the
+// same 5-minute rule as MarkCollectionStarted (started_at is set to NOW()).
+// The second case covers the window between the winner taking the lock and
+// running this UPDATE, in which a lock-skipped duplicate may already have
+// cleared the marker: the lock winner is the run actually collecting, so it
+// re-establishes the marker rather than collecting with none. It also covers
+// a late redelivery after the original run already finished and cleared.
+//
+// Returns the new token and true when the caller now owns the marker. Returns
+// ("", false, nil) when a different run holds a fresh marker; the caller then
+// owns nothing and must not clear. An empty markerToken is a boundary error,
+// as in ClearCollectionStarted.
+func (s *PostgresStore) ClaimCollectionInvocation(ctx context.Context, markerToken string) (token string, ok bool, err error) {
+	if markerToken == "" {
+		return "", false, fmt.Errorf("marker token must not be empty")
+	}
+	token = uuid.New().String()
+	tag, err := s.db.Exec(ctx, `
+		UPDATE recommendations_state
+		   SET last_collection_started_at = CASE
+		           WHEN last_collection_owner_id = $1 THEN last_collection_started_at
+		           ELSE NOW()
+		       END,
+		       last_collection_owner_id    = $2
+		 WHERE id = 1
+		   AND (
+		           last_collection_owner_id = $1
+		        OR last_collection_started_at IS NULL
+		        OR last_collection_started_at < NOW() - INTERVAL '5 minutes'
+		       )
+	`, markerToken, token)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to claim collection invocation: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return "", false, nil
+	}
+	return token, true, nil
 }

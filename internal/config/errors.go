@@ -32,6 +32,18 @@ var ErrManagedPlanLiveExecutions = errors.New("managed plan still has active or 
 // distinguish this legitimate race-loss from a hard DB error.
 var ErrExecutionNotInExpectedStatus = errors.New("execution not in expected status")
 
+// ErrRIExchangeExpired is returned (wrapped) by TransitionRIExchangeStatus
+// when the record exists but its expires_at has passed, so the approval or
+// rejection window is closed. The HTTP layer answers it with 410, like an
+// expired purchase approval token (issue #587).
+var ErrRIExchangeExpired = errors.New("ri exchange has expired")
+
+// ErrRIExchangeNotInExpectedStatus is returned (wrapped) by
+// TransitionRIExchangeStatus when the record exists and has not expired but
+// its status is not the expected one: another writer, such as a concurrent
+// approve or reject, transitioned it first. The HTTP layer answers it with 409.
+var ErrRIExchangeNotInExpectedStatus = errors.New("ri exchange status transition failed")
+
 // ErrApprovalTokenChanged is returned (wrapped) by
 // TransitionExecutionStatusTokenPinned when the execution is still in an
 // allowed status but its stored approval token no longer matches the one the

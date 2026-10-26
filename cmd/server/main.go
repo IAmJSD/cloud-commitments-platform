@@ -105,10 +105,27 @@ func getTaskTimeout() time.Duration {
 }
 
 // determineRuntimeMode determines the runtime mode based on flags and environment.
+//
+// Precedence: the --mode flag, then an explicit RUNTIME_MODE, then Lambda
+// auto-detection. Explicit configuration outranks ambient detection (issue
+// #111): with RUNTIME_MODE=http under the Lambda Runtime Interface Emulator,
+// which sets AWS_LAMBDA_RUNTIME_API, the operator gets the HTTP server they
+// asked for rather than a silent Lambda start. RUNTIME_MODE=auto (the
+// Dockerfile default) or an empty value means auto-detect.
 func determineRuntimeMode(modeFlag string) string {
 	// If mode is explicitly set, use it
 	if modeFlag != "auto" {
 		return modeFlag
+	}
+
+	// Check for explicit RUNTIME_MODE environment variable
+	switch runtimeMode := os.Getenv("RUNTIME_MODE"); runtimeMode {
+	case "lambda", "http":
+		return runtimeMode
+	case "", "auto":
+		// Not set, or explicitly auto: fall through to detection below.
+	default:
+		log.Printf("Warning: unrecognized RUNTIME_MODE %q, falling back to auto-detection", runtimeMode) // #nosec G706 -- RUNTIME_MODE env var is operator-controlled; logged for diagnostics
 	}
 
 	// Auto-detect based on environment using the canonical runtime helper,
@@ -116,16 +133,6 @@ func determineRuntimeMode(modeFlag string) string {
 	// across all call sites (issue 04-M5).
 	if runtime.IsLambda() {
 		return "lambda"
-	}
-
-	// Check for explicit RUNTIME_MODE environment variable
-	if runtimeMode := os.Getenv("RUNTIME_MODE"); runtimeMode != "" {
-		switch runtimeMode {
-		case "lambda", "http":
-			return runtimeMode
-		default:
-			log.Printf("Warning: unrecognized RUNTIME_MODE %q, falling back to auto-detection", runtimeMode) // #nosec G706 -- RUNTIME_MODE env var is operator-controlled; logged for diagnostics
-		}
 	}
 
 	// Default to HTTP mode for containers (Fargate, Cloud Run, Container Apps)

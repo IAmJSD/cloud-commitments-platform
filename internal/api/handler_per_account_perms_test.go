@@ -300,7 +300,7 @@ func TestPerAccountPerms_History_ListFilter(t *testing.T) {
 	}
 
 	mockStore := new(MockConfigStore)
-	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).
 		Return([]config.PurchaseHistoryRecord{rowA, rowB}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 		Return([]config.PurchaseExecution{}, nil)

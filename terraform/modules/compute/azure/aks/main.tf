@@ -343,138 +343,23 @@ resource "kubernetes_deployment" "app" {
             protocol       = "TCP"
           }
 
-          env {
-            name  = "PORT"
-            value = "8080"
-          }
-
-          env {
-            name  = "ENVIRONMENT"
-            value = var.environment
-          }
-
-          env {
-            name  = "RUNTIME_MODE"
-            value = "http"
-          }
-
-          env {
-            name = "DB_HOST"
-            value_from {
-              secret_key_ref {
-                name = kubernetes_secret.database[0].metadata[0].name
-                key  = "host"
-              }
-            }
-          }
-
-          env {
-            name  = "DB_PORT"
-            value = "5432"
-          }
-
-          env {
-            name = "DB_NAME"
-            value_from {
-              secret_key_ref {
-                name = kubernetes_secret.database[0].metadata[0].name
-                key  = "name"
-              }
-            }
-          }
-
-          env {
-            name = "DB_USER"
-            value_from {
-              secret_key_ref {
-                name = kubernetes_secret.database[0].metadata[0].name
-                key  = "username"
-              }
-            }
-          }
-
-          env {
-            name = "DB_PASSWORD_SECRET"
-            value_from {
-              secret_key_ref {
-                name = kubernetes_secret.database[0].metadata[0].name
-                key  = "password_secret_name"
-              }
-            }
-          }
-
-          env {
-            name  = "DB_SSL_MODE"
-            value = "require"
-          }
-
-          env {
-            name  = "DB_CONNECT_TIMEOUT"
-            value = "8s"
-          }
-
-          env {
-            name  = "DB_AUTO_MIGRATE"
-            value = tostring(var.auto_migrate)
-          }
-
-          env {
-            name  = "DB_MIGRATIONS_PATH"
-            value = "/app/migrations"
-          }
-
-          env {
-            name  = "ADMIN_EMAIL"
-            value = var.admin_email
-          }
-
-          env {
-            name  = "ADMIN_PASSWORD_SECRET"
-            value = var.admin_password_secret_name
-          }
-
-          env {
-            name  = "SECRET_PROVIDER"
-            value = "azure"
-          }
-
-          env {
-            name  = "AZURE_KEY_VAULT_URL"
-            value = var.key_vault_uri
-          }
-
-          env {
-            name  = "AZURE_REGION"
-            value = var.location
-          }
-
-          env {
-            name  = "ALLOWED_ORIGINS"
-            value = join(",", var.allowed_origins)
-          }
-
-          # Scheduled-task auth — Azure stays on bearer mode (Logic Apps
-          # fetch the shared secret from Key Vault at invocation time;
-          # Logic Apps' HTTP Connector does not emit Entra OIDC tokens).
-          # Validated app-side via internal/server/scheduledauth.
-          env {
-            name  = "SCHEDULED_TASK_AUTH_MODE"
-            value = "bearer"
-          }
-
+          # The same list feeds the scheduled-task CronJobs in
+          # scheduled-tasks.tf, so a task pod sees exactly this environment.
           dynamic "env" {
-            for_each = local.archera_env
+            for_each = local.app_env
             content {
-              name  = env.key
-              value = env.value
-            }
-          }
+              name  = env.value.name
+              value = env.value.secret_ref == null ? env.value.value : null
 
-          dynamic "env" {
-            for_each = var.additional_env_vars
-            content {
-              name  = env.key
-              value = env.value
+              dynamic "value_from" {
+                for_each = env.value.secret_ref == null ? [] : [env.value.secret_ref]
+                content {
+                  secret_key_ref {
+                    name = kubernetes_secret.database[0].metadata[0].name
+                    key  = value_from.value
+                  }
+                }
+              }
             }
           }
 
@@ -842,5 +727,39 @@ locals {
     var.archera_org_id != "" ? { ARCHERA_ORG_ID = var.archera_org_id } : {},
     var.archera_plan_id != "" ? { ARCHERA_PLAN_ID = var.archera_plan_id } : {},
     var.archera_api_key_secret_name != "" ? { ARCHERA_API_KEY_SECRET = var.archera_api_key_secret_name } : {},
+  )
+
+  # Container environment of the API Deployment, shared with the
+  # scheduled-task CronJobs (#893). The order is the one the Deployment has
+  # always used, so moving it here changes nothing in the Deployment's spec.
+  # An entry with secret_ref reads that key of the database-credentials Secret.
+  app_env = concat(
+    [
+      { name = "PORT", value = "8080", secret_ref = null },
+      { name = "ENVIRONMENT", value = var.environment, secret_ref = null },
+      { name = "RUNTIME_MODE", value = "http", secret_ref = null },
+      { name = "DB_HOST", value = null, secret_ref = "host" },
+      { name = "DB_PORT", value = "5432", secret_ref = null },
+      { name = "DB_NAME", value = null, secret_ref = "name" },
+      { name = "DB_USER", value = null, secret_ref = "username" },
+      { name = "DB_PASSWORD_SECRET", value = null, secret_ref = "password_secret_name" },
+      { name = "DB_SSL_MODE", value = "require", secret_ref = null },
+      { name = "DB_CONNECT_TIMEOUT", value = "8s", secret_ref = null },
+      { name = "DB_AUTO_MIGRATE", value = tostring(var.auto_migrate), secret_ref = null },
+      { name = "DB_MIGRATIONS_PATH", value = "/app/migrations", secret_ref = null },
+      { name = "ADMIN_EMAIL", value = var.admin_email, secret_ref = null },
+      { name = "ADMIN_PASSWORD_SECRET", value = var.admin_password_secret_name, secret_ref = null },
+      { name = "SECRET_PROVIDER", value = "azure", secret_ref = null },
+      { name = "AZURE_KEY_VAULT_URL", value = var.key_vault_uri, secret_ref = null },
+      { name = "AZURE_REGION", value = var.location, secret_ref = null },
+      { name = "ALLOWED_ORIGINS", value = join(",", var.allowed_origins), secret_ref = null },
+      # Scheduled-task auth: Azure stays on bearer mode (Logic Apps fetch the
+      # shared secret from Key Vault at invocation time; Logic Apps' HTTP
+      # Connector does not emit Entra OIDC tokens). Validated app-side via
+      # internal/server/scheduledauth.
+      { name = "SCHEDULED_TASK_AUTH_MODE", value = "bearer", secret_ref = null },
+    ],
+    [for k, v in local.archera_env : { name = k, value = v, secret_ref = null }],
+    [for k, v in var.additional_env_vars : { name = k, value = v, secret_ref = null }],
   )
 }

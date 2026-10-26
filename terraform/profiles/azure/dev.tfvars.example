@@ -22,8 +22,9 @@ max_replicas     = 10
 enable_docker_build = true
 image_uri           = "placeholder" # Unused when enable_docker_build = true
 
-# Key Vault
-key_vault_name = "cudly-dev-kv" # REQUIRED: must be globally unique, 3-24 chars
+# Key Vault: the vault name is derived from project_name, environment
+# and a random suffix (terraform/environments/azure/secrets.tf), so a
+# profile cannot set it.
 
 # Database (PostgreSQL Flexible Server)
 database_sku_name              = "B_Standard_B1ms"

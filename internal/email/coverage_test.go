@@ -1023,6 +1023,7 @@ func TestSMTPSender_Port25NoTLS(t *testing.T) {
 // TestSender_VerificationPathWithEmailIdentityError tests the isEmailVerified error path in SendToEmail.
 func TestSender_SendToEmail_GetEmailIdentityError(t *testing.T) {
 	mockSES := new(MockSESClient)
+	t.Cleanup(func() { mockSES.AssertExpectations(t) })
 	// Return sandbox mode
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
 		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: false}, nil)
@@ -1290,6 +1291,7 @@ func TestSMTPSender_AllNotificationMethods_WithRealData(t *testing.T) {
 // TestSender_SendMethods_ErrorPaths tests error paths in Sender template methods.
 func TestSender_SendMethods_ErrorPaths(t *testing.T) {
 	mockSNS := new(MockSNSClient)
+	t.Cleanup(func() { mockSNS.AssertExpectations(t) })
 	mockSNS.On("Publish", mock.Anything, mock.Anything).Return(nil, assert.AnError)
 
 	sender := NewSenderWithClients(mockSNS, nil, SenderConfig{
@@ -1353,6 +1355,7 @@ func TestSender_SendMethods_ErrorPaths(t *testing.T) {
 // TestSender_SendToEmail_EmailVerificationCheck tests email verification check path.
 func TestSender_SendToEmail_EmailVerificationCheck(t *testing.T) {
 	mockSES := new(MockSESClient)
+	t.Cleanup(func() { mockSES.AssertExpectations(t) })
 
 	// Test case: sandbox mode, verification check fails but we still try to verify
 	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).

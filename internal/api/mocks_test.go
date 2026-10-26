@@ -271,14 +271,20 @@ func (m *MockAuthService) UpdateUserProfile(ctx context.Context, userID string, 
 }
 
 // User management mock methods.
-func (m *MockAuthService) CreateUserAPI(ctx context.Context, actorUserID string, req interface{}) (interface{}, error) {
+func (m *MockAuthService) CreateUserAPI(ctx context.Context, actorUserID string, req auth.APICreateUserRequest) (*auth.APICreateUserResponse, error) {
 	args := m.Called(ctx, actorUserID, req)
-	return args.Get(0), args.Error(1)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*auth.APICreateUserResponse), args.Error(1)
 }
 
-func (m *MockAuthService) UpdateUserAPI(ctx context.Context, actorUserID, userID string, req interface{}) (interface{}, error) {
+func (m *MockAuthService) UpdateUserAPI(ctx context.Context, actorUserID, userID string, req auth.APIUpdateUserRequest) (*auth.APIUser, error) {
 	args := m.Called(ctx, actorUserID, userID, req)
-	return args.Get(0), args.Error(1)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*auth.APIUser), args.Error(1)
 }
 
 func (m *MockAuthService) DeleteUser(ctx context.Context, userID string) error {
@@ -324,14 +330,20 @@ func (m *MockAuthService) MFARegenerateRecoveryCodesAPI(ctx context.Context, use
 }
 
 // Group management mock methods.
-func (m *MockAuthService) CreateGroupAPI(ctx context.Context, actorUserID string, req interface{}) (interface{}, error) {
+func (m *MockAuthService) CreateGroupAPI(ctx context.Context, actorUserID string, req auth.APICreateGroupRequest) (*auth.APIGroup, error) {
 	args := m.Called(ctx, actorUserID, req)
-	return args.Get(0), args.Error(1)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*auth.APIGroup), args.Error(1)
 }
 
-func (m *MockAuthService) UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, req interface{}) (interface{}, error) {
+func (m *MockAuthService) UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, req auth.APIUpdateGroupRequest) (*auth.APIGroup, error) {
 	args := m.Called(ctx, actorUserID, groupID, req)
-	return args.Get(0), args.Error(1)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*auth.APIGroup), args.Error(1)
 }
 
 func (m *MockAuthService) DeleteGroup(ctx context.Context, groupID string) error {
@@ -546,7 +558,7 @@ func (m *MockAuthService) GetAllowedAccountsAPI(ctx context.Context, userID stri
 }
 
 // API Key management mock methods.
-func (m *MockAuthService) CreateAPIKeyAPI(ctx context.Context, userID string, req interface{}) (interface{}, error) {
+func (m *MockAuthService) CreateAPIKeyAPI(ctx context.Context, userID string, req auth.APICreateAPIKeyRequest) (interface{}, error) {
 	args := m.Called(ctx, userID, req)
 	return args.Get(0), args.Error(1)
 }

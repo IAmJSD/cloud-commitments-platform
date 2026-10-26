@@ -1985,3 +1985,35 @@ func TestDeployPathWalkFailsClosed(t *testing.T) {
 		})
 	}
 }
+
+// TestDeployPolicyAllowsManagedPrefixListLookup pins the two read-only EC2
+// actions that data.aws_ec2_managed_prefix_list in modules/networking/aws
+// calls when a Fargate ALB is restricted to CloudFront (#412). Without either
+// one, plan and apply stay green for every current stack and the first
+// Fargate + enable_cdn plan fails with AccessDenied.
+func TestDeployPolicyAllowsManagedPrefixListLookup(t *testing.T) {
+	const networkingPolicyFile = "policy_networking.tf"
+	moduleMain := filepath.Join(modulesDir, "networking", "aws", "main.tf")
+	wantActions := []string{"ec2:DescribeManagedPrefixLists", "ec2:GetManagedPrefixListEntries"}
+
+	src, err := os.ReadFile(moduleMain)
+	if err != nil {
+		t.Fatalf("read %s: %v", moduleMain, err)
+	}
+	if !strings.Contains(string(src), `data "aws_ec2_managed_prefix_list"`) {
+		t.Fatalf("%s no longer declares data \"aws_ec2_managed_prefix_list\"; if the lookup is gone, drop %v from %s together with this test", moduleMain, wantActions, networkingPolicyFile)
+	}
+
+	stmts := findStatements(t, networkingPolicyFile, func(stmt string) bool {
+		return statementEffect(stmt) == "Allow"
+	})
+	allowed := make([]string, 0, len(stmts))
+	for _, stmt := range stmts {
+		allowed = append(allowed, statementActions(stmt)...)
+	}
+	for _, action := range wantActions {
+		if !actionPermitted(allowed, action) {
+			t.Errorf("%s does not allow %s, which data.aws_ec2_managed_prefix_list in %s needs; the first Fargate + enable_cdn plan would fail with AccessDenied (#412)", networkingPolicyFile, action, moduleMain)
+		}
+	}
+}

@@ -454,7 +454,7 @@ func TestHandler_approvePurchase_SessionApproveAny_PermissionConstraintsDenied(t
 		Status:          "pending",
 		CreatedByUserID: &otherCreator,
 		Recommendations: []config.RecommendationRecord{
-			{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000},
+			{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CommitmentCurrency: "USD"},
 		},
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
@@ -528,7 +528,7 @@ func TestHandler_approvePurchase_SessionApproveAny_TokenPresent_ConstraintsDenie
 		Status:          "pending",
 		CreatedByUserID: &otherCreator,
 		Recommendations: []config.RecommendationRecord{
-			{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CloudAccountID: &accountID},
+			{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CloudAccountID: &accountID, CommitmentCurrency: "USD"},
 		},
 	}
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil)
@@ -581,7 +581,7 @@ func TestHandler_authorizeSessionApprove_ApproveOwn_ConstraintsDenied(t *testing
 		ExecutionID:     "exec-1",
 		CreatedByUserID: &userID,
 		Recommendations: []config.RecommendationRecord{
-			{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000},
+			{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CommitmentCurrency: "USD"},
 		},
 	}
 
@@ -677,7 +677,7 @@ func TestHandler_approveViaToken_SessionApproveAny_ConstraintsDenied(t *testing.
 		ApprovalToken: "valid-token",
 		Status:        "pending",
 		Recommendations: []config.RecommendationRecord{
-			{ID: "r1", Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CloudAccountID: &accountID},
+			{ID: "r1", Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CloudAccountID: &accountID, CommitmentCurrency: "USD"},
 		},
 	}
 	// capped's own email is the account's registered contact_email, so
@@ -1711,7 +1711,7 @@ func TestHandler_runPlannedPurchase_ConstraintDenied(t *testing.T) {
 			Resource:    auth.ResourcePurchases,
 			Constraints: &auth.PermissionConstraints{MaxPurchaseAmount: 100},
 		},
-		[]config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000}},
+		[]config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CommitmentCurrency: "USD"}},
 	)
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
@@ -4257,7 +4257,7 @@ func TestHandler_retryPurchase_PermissionConstraintsDenied(t *testing.T) {
 		Error:           "send failed: transient SES throttle",
 		CreatedByUserID: &creator,
 		Recommendations: []config.RecommendationRecord{
-			{Provider: "aws", Service: "rds", Region: "us-east-1", Term: 1, UpfrontCost: 5000},
+			{Provider: "aws", Service: "rds", Region: "us-east-1", Term: 1, UpfrontCost: 5000, CommitmentCurrency: "USD"},
 		},
 	}
 	session := &Session{UserID: retryCallerID, Email: "capped@example.com"}
@@ -4485,6 +4485,7 @@ func setupDirectExecMocks(ctx context.Context, store *MockConfigStore) {
 	// #1905: directExecRecBody's rec-1 is now priced from the stored set.
 	expectStoredRecs(store, config.RecommendationRecord{
 		ID: "rec-1", Provider: "aws", Service: "ec2", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 500, Savings: 100,
+		CommitmentCurrency: "USD",
 	})
 }
 
@@ -4581,8 +4582,8 @@ func TestHandler_executePurchase_PermissionConstraintsDenied(t *testing.T) {
 		})).Return(false, nil)
 	// #1905: constraint sets are now built from the stored costs.
 	expectStoredRecs(mockStore,
-		config.RecommendationRecord{Provider: "aws", Service: "ec2", Region: "us-east-1", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 3000, Savings: 50},
-		config.RecommendationRecord{Provider: "aws", Service: "ec2", Region: "eu-west-1", Count: 2, Term: 1, Payment: "all-upfront", UpfrontCost: 2500, Savings: 100},
+		config.RecommendationRecord{Provider: "aws", Service: "ec2", Region: "us-east-1", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 3000, Savings: 50, CommitmentCurrency: "USD"},
+		config.RecommendationRecord{Provider: "aws", Service: "ec2", Region: "eu-west-1", Count: 2, Term: 1, Payment: "all-upfront", UpfrontCost: 2500, Savings: 100, CommitmentCurrency: "USD"},
 	)
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -4645,6 +4646,7 @@ func TestHandler_executePurchase_NoUpfrontBatch_TotalCommitmentEnforced(t *testi
 	expectStoredRecs(mockStore, config.RecommendationRecord{
 		Provider: "aws", Service: "ec2", Region: "us-east-1", Count: 1, Term: 3, Payment: "no-upfront",
 		UpfrontCost: 0, MonthlyCost: float64Ptr(600), Savings: 50,
+		CommitmentCurrency: "USD",
 	})
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -4707,6 +4709,7 @@ func TestHandler_executePurchase_UserAPIKeyConstraintsDenied(t *testing.T) {
 	// #1905: the constraint set is now built from the stored cost.
 	expectStoredRecs(mockStore, config.RecommendationRecord{
 		Provider: "aws", Service: "ec2", Region: "us-east-1", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 500, Savings: 50,
+		CommitmentCurrency: "USD",
 	})
 
 	handler := &Handler{config: mockStore, auth: mockAuth}
@@ -5130,7 +5133,7 @@ func TestHandler_authorizeSessionExecuteDirect_AdminGroupViaExecuteAny(t *testin
 	adminUserID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	creatorID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 	session := &Session{UserID: adminUserID}
-	recs := []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 500}}
+	recs := []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 500, CommitmentCurrency: "USD"}}
 
 	// Administrators-group wildcard {admin,*} covers execute-any.
 	mockAuth.On("HasPermissionAPI", ctx, adminUserID, "execute-any", "purchases").Return(true, nil)
@@ -5157,7 +5160,7 @@ func TestHandler_authorizeSessionExecuteDirect_ExecuteAny_ConstraintsDenied(t *t
 	userID := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	creatorID := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
 	session := &Session{UserID: userID}
-	recs := []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000}}
+	recs := []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CommitmentCurrency: "USD"}}
 
 	mockAuth.On("HasPermissionAPI", ctx, userID, "execute-any", "purchases").Return(true, nil)
 	mockAuth.On("HasPermissionForConstraintsAPI", ctx, userID, "execute-any", "purchases",
@@ -5183,7 +5186,7 @@ func TestHandler_authorizeSessionExecuteDirect_ExecuteOwn_ConstraintsDenied(t *t
 
 	userID := "cccccccc-cccc-cccc-cccc-cccccccccccc"
 	session := &Session{UserID: userID}
-	recs := []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000}}
+	recs := []config.RecommendationRecord{{Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: 50000, CommitmentCurrency: "USD"}}
 
 	mockAuth.On("HasPermissionAPI", ctx, userID, "execute-any", "purchases").Return(false, nil)
 	mockAuth.On("HasPermissionAPI", ctx, userID, "execute-own", "purchases").Return(true, nil)
@@ -5697,11 +5700,13 @@ func TestHandler_scheduleApprovedExecution_HappyPath(t *testing.T) {
 	mockConfig := new(MockConfigStore)
 	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled", mock.Anything).
 		Return(transitioned, nil)
-	mockConfig.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+	// The stamp is guarded on "scheduled" (issue #835); the mock falls back to
+	// SavePurchaseExecution without a guarded expectation, so this pins it.
+	mockConfig.On("SaveExecutionIfStatus", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
 		return e.ExecutionID == execID &&
 			e.ScheduledExecutionAt != nil &&
 			*e.ApprovedBy == "actor@example.com"
-	})).Return(nil)
+	}), []string{"scheduled"}).Return(nil)
 
 	handler := &Handler{config: mockConfig}
 
@@ -5735,6 +5740,34 @@ func TestApproveWithDelay_CASLostMaps409(t *testing.T) {
 	require.True(t, ok, "CAS-lost error must be a ClientError")
 	assert.Equal(t, 409, ce.code, "concurrent cancel CAS race must map to 409, not 500")
 	mockConfig.AssertExpectations(t)
+}
+
+// TestApproveWithDelay_StampLostToRevokeMaps409 covers issue #835: the CAS to
+// scheduled wins, then a revoke flips the row to canceled before the
+// scheduled_execution_at stamp. The stamp is guarded on "scheduled", so it
+// writes nothing and the approver gets the same 409 as a lost CAS, instead of
+// an unguarded upsert putting "scheduled" back for the scheduler to buy.
+func TestApproveWithDelay_StampLostToRevokeMaps409(t *testing.T) {
+	ctx := context.Background()
+	execID := "exec-stamp-409"
+	exec := &config.PurchaseExecution{ExecutionID: execID, Status: "pending"}
+	transitioned := &config.PurchaseExecution{ExecutionID: execID, Status: "scheduled"}
+	revoked := fmt.Errorf("%w: execution %s is %q, expected one of [scheduled]",
+		config.ErrExecutionNotInExpectedStatus, execID, config.StatusCanceled)
+
+	mockConfig := new(MockConfigStore)
+	mockConfig.On("TransitionExecutionStatus", ctx, execID, []string{"pending", "notified"}, "scheduled", mock.Anything).
+		Return(transitioned, nil)
+	mockConfig.On("SaveExecutionIfStatus", ctx, transitioned, []string{"scheduled"}).Return(revoked).Once()
+
+	handler := &Handler{config: mockConfig}
+
+	_, err := handler.approveWithDelay(ctx, exec, 48*time.Hour, "actor@example.com", nil, "")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "a stamp lost to a revoke must be a ClientError, got %v", err)
+	assert.Equal(t, 409, ce.code)
+	mockConfig.AssertExpectations(t)
+	mockConfig.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 }
 
 // ---------------------------------------------------------------------------
@@ -5907,8 +5940,9 @@ func TestHandler_revokePurchase_NotFound(t *testing.T) {
 }
 
 // TestHandler_revokePurchase_ExpiredToken verifies that a matching token whose
-// ApprovalTokenExpiresAt deadline has passed is rejected with 409, so a stale
-// completed execution cannot be marked revocation_requested via an old link.
+// ApprovalTokenExpiresAt deadline has passed is rejected with 410 (409 before
+// issue #587 aligned revoke with approve and cancel), so a stale completed
+// execution cannot be marked revocation_requested via an old link.
 // Regression test for the revoke-token expiry CR finding (PR #889).
 func TestHandler_revokePurchase_ExpiredToken(t *testing.T) {
 	ctx := context.Background()
@@ -5919,8 +5953,10 @@ func TestHandler_revokePurchase_ExpiredToken(t *testing.T) {
 	past := time.Now().Add(-1 * time.Hour)
 
 	exec := &config.PurchaseExecution{
-		ExecutionID:            execID,
-		ApprovalToken:          token,
+		ExecutionID: execID,
+		// Stored at rest as the hash (issue #103), so the token really matches
+		// and the expiry is what rejects it (the hash is compared first, issue #1190).
+		ApprovalToken:          config.HashApprovalToken(token),
 		ApprovalTokenExpiresAt: &past,
 		Status:                 "completed",
 		Recommendations: []config.RecommendationRecord{
@@ -5953,7 +5989,7 @@ func TestHandler_revokePurchase_ExpiredToken(t *testing.T) {
 	require.Error(t, err, "expired revocation token must be rejected")
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a client error")
-	assert.Equal(t, 409, ce.code)
+	assert.Equal(t, 410, ce.code)
 	assert.Contains(t, ce.message, "expired")
 }
 
@@ -6361,12 +6397,6 @@ func TestRevoke_NoTimestamp_Allowed(t *testing.T) {
 	}
 	err := validateRevokeToken(exec, "valid-token")
 	require.NoError(t, err, "legacy rows without timestamp must not be blocked by window check")
-}
-
-// TestRevoke_4EyesMode_TODO is a placeholder to surface the 4-eyes-mode
-// interaction once issue #1005 lands.
-func TestRevoke_4EyesMode_TODO(t *testing.T) {
-	t.Skip("placeholder until #1005 lands: verify that 4-eyes-mode approval flows interact correctly with the revocation window")
 }
 
 // TestRevokePurchase_GETRendersConfirmationPage_NoMutation verifies that a GET

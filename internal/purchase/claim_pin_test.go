@@ -143,7 +143,8 @@ func TestClaimPin_PostClaimPlanReadErrorFailsClosed(t *testing.T) {
 	var saved *config.PurchaseExecution
 	store.On("SavePurchaseExecutionTx", ctx, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { saved = args.Get(2).(*config.PurchaseExecution) }).Return(nil)
-	manager := &Manager{config: store, email: new(MockEmailSender), providerFactory: new(MockProviderFactory)}
+	sender := allowFailedNotification(new(MockEmailSender))
+	manager := &Manager{config: store, email: sender, providerFactory: new(MockProviderFactory)}
 
 	didClaim, err := manager.claimAndExecute(ctx, &exec)
 	require.True(t, didClaim)
@@ -151,6 +152,7 @@ func TestClaimPin_PostClaimPlanReadErrorFailsClosed(t *testing.T) {
 	assert.ErrorContains(t, err, "post-claim cap check")
 	require.NotNil(t, saved)
 	assert.Equal(t, "failed", saved.Status)
+	sender.AssertNumberOfCalls(t, "SendPurchaseFailedNotification", 1) // issue #1195
 	store.AssertCalled(t, "DeleteSuppressionsByExecutionTx", ctx, mock.Anything, exec.ExecutionID)
 }
 
