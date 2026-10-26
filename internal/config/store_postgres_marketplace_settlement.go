@@ -88,8 +88,11 @@ func (s *PostgresStore) RecordMarketplaceListingActive(ctx context.Context, purc
 // while the row still holds the listing, has no proceeds recorded, and is
 // active or already in the same terminal state. So proceeds are recorded once
 // however many polls race, a recorded cancel is never turned into a sale (or
-// the reverse), and a row that was relisted is left alone. It reports whether
-// the row was written.
+// the reverse), and a row that was relisted is left alone. The list paths
+// (UpdatePurchaseHistoryListing, ResolveMarketplaceListingAttempt) clear the
+// previous listing's settlement when they write a new listing id, so a relist
+// settles here even if it ends before any poll sees it active. It reports
+// whether the row was written.
 func (s *PostgresStore) SettleMarketplaceListing(ctx context.Context, st MarketplaceListingSettlement) (bool, error) {
 	state := strings.ToLower(st.State)
 	if state != ListingStateClosed && state != ListingStateCancelled {

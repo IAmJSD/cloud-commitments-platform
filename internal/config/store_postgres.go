@@ -2323,10 +2323,16 @@ func (s *PostgresStore) UpdatePurchaseHistoryListing(ctx context.Context, purcha
 	// A listing recorded as canceled or closed is never marked live again
 	// (issue #525): a list request that lost a race with the cancel endpoint
 	// gets ErrMarketplaceListingEnded instead of reviving the canceled listing.
+	// Writing a new listing id (a relist) drops the previous listing's
+	// listed_at and settlement in the same statement (issue #27), so the new
+	// listing can be settled even if it ends before the poller sees it active.
 	query := `
 		UPDATE purchase_history
 		SET listing_id = $1, listing_state = $2,
-		    listing_client_token = NULL, listing_price_schedule = NULL
+		    listing_client_token = NULL, listing_price_schedule = NULL,
+		    listed_at = CASE WHEN COALESCE(listing_id, '') = $1 THEN listed_at END,
+		    listing_proceeds_received = CASE WHEN COALESCE(listing_id, '') = $1 THEN listing_proceeds_received END,
+		    listing_fee_paid = CASE WHEN COALESCE(listing_id, '') = $1 THEN listing_fee_paid END
 		WHERE purchase_id = $3
 		  AND NOT (COALESCE(listing_id, '') = $1
 		           AND lower(COALESCE(listing_state, '')) IN ($4, $5)

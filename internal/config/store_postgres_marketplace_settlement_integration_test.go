@@ -24,7 +24,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// cancelWriteSQL is UpdatePurchaseHistoryListing's statement, run inside a
+// cancelWriteSQL is UpdatePurchaseHistoryListing's write for a cancel of the
+// listing the row already holds (so it keeps the settlement), run inside a
 // held transaction to stand in for a cancel that is committing.
 const cancelWriteSQL = `UPDATE purchase_history SET listing_id = $1, listing_state = $2,
 	listing_client_token = NULL, listing_price_schedule = NULL WHERE purchase_id = $3`
