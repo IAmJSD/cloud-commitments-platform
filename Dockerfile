@@ -128,10 +128,10 @@ RUN npm run build
 # Runtime stage - multi-arch base image
 # ==============================================
 # Image pinned to a SHA256 digest for reproducible builds.
-# To refresh: `docker buildx imagetools inspect alpine:3.24.1` and update the
+# To refresh: `docker buildx imagetools inspect alpine:3.24.2` and update the
 # digest below. This is the multi-arch index digest, not a per-platform one, so
 # it stays correct for every TARGETARCH this image is built for.
-FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
 # Re-declare args for use in this stage
 ARG TARGETARCH
