@@ -42,7 +42,10 @@ resource "google_kms_crypto_key" "signing" {
   # key before the old key goes (a region move), or, because Cloud KMS never
   # frees a key name, fails on the name collision before the old key is
   # touched (any in-place replacement). Either way the live key keeps signing
-  # until there is a working replacement (#324).
+  # until there is a working replacement (#324). Terraform also applies
+  # create_before_destroy to google_kms_key_ring.signing, which this key
+  # depends on, so a region move creates the new ring first as well. That is
+  # the intended order.
   #
   # There is deliberately no prevent_destroy. Terraform only accepts a literal
   # there, so it cannot vary per environment, and cleanup-staging.yml runs

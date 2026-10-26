@@ -29,7 +29,10 @@ fi
 # `terraform output -raw` fails when the output is missing (no state yet) or
 # null, and both mean "no deployed URL". hashicorp/setup-terraform's wrapper
 # adds ::debug:: lines to stdout, which are dropped the same way the deploy
-# workflow's "Get Terraform outputs" step drops them.
+# workflow's "Get Terraform outputs" step drops them. `|| true` also turns
+# any other `terraform output` failure, such as a transient state read
+# error, into "no URL". The plan then drops the Function URL origin, and the
+# deploy's post-apply CORS check warns that the live URL is not allowed.
 raw=$(terraform -chdir="$1" output -raw lambda_function_url 2>/dev/null | grep -v '::' || true)
 
 if [[ -z "$raw" ]]; then
