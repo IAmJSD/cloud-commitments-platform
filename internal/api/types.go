@@ -115,15 +115,6 @@ type HistoryDataPoint struct {
 	CumulativeSavings float64            `json:"cumulative_savings"`
 }
 
-// HistorySummaryAnalytics contains aggregated statistics for analytics.
-type HistorySummaryAnalytics struct {
-	TotalPeriodSavings      float64 `json:"total_period_savings"`
-	TotalUpfrontSpent       float64 `json:"total_upfront_spent"`
-	PurchaseCount           int     `json:"purchase_count"`
-	AverageSavingsPerPeriod float64 `json:"average_savings_per_period"`
-	PeakSavings             float64 `json:"peak_savings"`
-}
-
 // BreakdownValue represents savings breakdown by dimension.
 type BreakdownValue struct {
 	TotalSavings  float64  `json:"total_savings"`
@@ -170,6 +161,10 @@ type PurchaseManagerInterface interface {
 type SchedulerInterface interface {
 	CollectRecommendations(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error)
 	ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
+	// ScanRecommendations walks the same rows as ListRecommendations in
+	// byte-wise ID order, chunkSize store rows at a time, calling fn with
+	// each chunk's survivors (issue #981).
+	ScanRecommendations(ctx context.Context, filter config.RecommendationFilter, chunkSize int, fn func([]config.RecommendationRecord) error) error
 	// GetRecommendationByID fetches a single rec by its application-level id,
 	// bypassing account-override filtering so deep-linked URLs to override-
 	// hidden recs resolve. hiddenBy is non-nil when the rec would be dropped by

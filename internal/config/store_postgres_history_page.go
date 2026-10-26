@@ -68,6 +68,8 @@ type HistoryExecutionsPageQuery struct {
 	// Statuses the rows must have. Clean completed rows (status completed,
 	// empty error) are always excluded, as in GetExecutionsByStatuses.
 	Statuses []string
+	// PlanID matches purchase_executions.plan_id exactly; empty skips the clause.
+	PlanID string
 	// Start and End bound scheduled_date, inclusive; nil leaves a side open.
 	Start *time.Time
 	End   *time.Time
@@ -194,6 +196,10 @@ func (s *PostgresStore) ListHistoryExecutionsPage(ctx context.Context, q History
 	// HistorySummaryAggregate, so the stream and the summary select the same
 	// executions (issue #675).
 	conds := []string{historyExecutionsPredicate}
+	if q.PlanID != "" {
+		args = append(args, q.PlanID)
+		conds = append(conds, fmt.Sprintf("plan_id = $%d", len(args)))
+	}
 	if q.Start != nil {
 		args = append(args, *q.Start)
 		conds = append(conds, fmt.Sprintf("scheduled_date >= $%d", len(args)))

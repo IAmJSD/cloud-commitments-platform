@@ -59,7 +59,7 @@ func NewGCP(projectID string, ts oauth2.TokenSource) (provider.Provider, error) 
 func newAzure(reg *provider.Registry, subscriptionID string, cred azcore.TokenCredential) (provider.Provider, error) {
 	// A nil cred converts to a nil `any`, which the Azure factory treats as
 	// "no credential supplied".
-	return build(reg, azureName, &provider.ProviderConfig{
+	return build(reg, azureName, &provider.Config{
 		Name:                 azureName,
 		AzureSubscriptionID:  subscriptionID,
 		AzureTokenCredential: cred,
@@ -73,14 +73,14 @@ func newGCP(reg *provider.Registry, projectID string, ts oauth2.TokenSource) (pr
 	if ts == nil {
 		return nil, ErrMissingGCPTokenSource
 	}
-	return build(reg, gcpName, &provider.ProviderConfig{
+	return build(reg, gcpName, &provider.Config{
 		Name:           gcpName,
 		GCPProjectID:   projectID,
 		GCPTokenSource: ts,
 	})
 }
 
-func build(reg *provider.Registry, name string, cfg *provider.ProviderConfig) (provider.Provider, error) {
+func build(reg *provider.Registry, name string, cfg *provider.Config) (provider.Provider, error) {
 	prov, err := reg.GetProviderWithConfig(name, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("providerfactory: build %s provider: %w", name, err)

@@ -245,10 +245,10 @@ func (st *historyStream) fetchPurchases(ctx context.Context, after *config.Histo
 
 // fetchTerminalExecutions reads a batch of terminal executions and projects
 // the ones matching the request's filters into History rows. The date bound
-// is pushed into SQL as well as checked by matchesExecution; provider and
-// account are checked in Go only, like the actionable class.
+// is pushed into SQL as well as checked by matchesExecution; the plan is pushed into
+// SQL too; provider and account are checked in Go only, like the actionable class.
 func (st *historyStream) fetchTerminalExecutions(ctx context.Context, after *config.HistoryPageKey) ([]historyStreamRow, error) {
-	q := config.HistoryExecutionsPageQuery{Statuses: terminalExecutionStatuses, After: after, Limit: st.executions.batch}
+	q := config.HistoryExecutionsPageQuery{Statuses: terminalExecutionStatuses, PlanID: st.filters.PlanID, After: after, Limit: st.executions.batch}
 	if st.filters.HasDate {
 		start, end := st.filters.Start, st.filters.End
 		q.Start, q.End = &start, &end

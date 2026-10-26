@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/mocks"
 	"github.com/stretchr/testify/assert"
@@ -237,7 +238,7 @@ func TestCollectorCollect(t *testing.T) {
 		assert.Equal(t, "123456789012", s.AccountID)
 		assert.Equal(t, "aws", s.Provider)
 		assert.Equal(t, "rds", s.Service)
-		assert.Equal(t, "RI", s.CommitmentType)
+		assert.Equal(t, string(common.CommitmentReservedInstance), s.CommitmentType)
 		assert.Greater(t, s.TotalSavings, 0.0)
 		require.NotNil(t, s.TotalCommitment)
 		assert.Greater(t, *s.TotalCommitment, 0.0)
@@ -273,16 +274,35 @@ func TestCollectorCollect(t *testing.T) {
 		assert.Len(t, store.savedSnapshots, 3)
 	})
 
-	t.Run("sets SavingsPlan commitment type for SavingsPlans service", func(t *testing.T) {
+	// #339 (A06-019): the type comes from (provider, service). Purchase history
+	// stores Savings Plans as "savingsplans" or a per-plan-type slug, never the
+	// "SavingsPlans" the old mapper matched, and GCP purchases are CUDs.
+	t.Run("derives commitment type from provider and service", func(t *testing.T) {
 		store := &mockAnalyticsStore{}
 		cfgStore := &mockConfigStore{
 			getActivePurchaseHistoryFunc: func(ctx context.Context, asOf time.Time, accountIDs []string, externalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
-				return []config.PurchaseHistoryRecord{activeRecord("aws", "SavingsPlans", "us-east-1", 1, 500, 2000)}, nil
+				return []config.PurchaseHistoryRecord{
+					activeRecord("aws", "savingsplans", "us-east-1", 1, 500, 2000),
+					activeRecord("aws", "savings-plans-compute", "us-east-1", 1, 500, 2000),
+					activeRecord("gcp", "compute", "us-central1", 1, 300, 0),
+					activeRecord("azure", "compute", "eastus", 1, 200, 900),
+					activeRecord("aws", "ec2", "us-east-1", 1, 100, 400),
+				}, nil
 			},
 		}
 		require.NoError(t, newTestCollector(t, store, cfgStore).Collect(context.Background()))
-		require.Len(t, store.savedSnapshots, 1)
-		assert.Equal(t, "SavingsPlan", store.savedSnapshots[0].CommitmentType)
+		got := make(map[string]string, len(store.savedSnapshots))
+		for _, s := range store.savedSnapshots {
+			got[s.Provider+"/"+s.Service] = s.CommitmentType
+			require.NoError(t, validateCommitmentType(s.CommitmentType), "the store CHECK must admit what the collector emits")
+		}
+		assert.Equal(t, map[string]string{
+			"aws/savingsplans":          string(common.CommitmentSavingsPlan),
+			"aws/savings-plans-compute": string(common.CommitmentSavingsPlan),
+			"gcp/compute":               string(common.CommitmentCUD),
+			"azure/compute":             string(common.CommitmentReservedInstance),
+			"aws/ec2":                   string(common.CommitmentReservedInstance),
+		}, got)
 	})
 
 	t.Run("returns error when BulkInsertSnapshots fails", func(t *testing.T) {

@@ -2687,6 +2687,9 @@ func purchaseHistoryFilterWhere(filter PurchaseHistoryFilter) (where string, arg
 	if filter.Provider != "" {
 		add("provider = $%d", filter.Provider)
 	}
+	if filter.PlanID != "" {
+		add("plan_id = $%d", filter.PlanID)
+	}
 	conds, args = appendAccountPredicate(conds, args, filter.AccountIDs, filter.ExternalIDsByProvider)
 	if filter.Start != nil {
 		add("timestamp >= $%d", *filter.Start)

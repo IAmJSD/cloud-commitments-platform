@@ -162,7 +162,7 @@ func (p *fanoutProvider) GetRecommendationsClient(_ context.Context) (provider.R
 
 type fanoutProviderFactory struct{ prov *fanoutProvider }
 
-func (f *fanoutProviderFactory) CreateAndValidateProvider(_ context.Context, _ string, _ *provider.ProviderConfig) (provider.Provider, error) {
+func (f *fanoutProviderFactory) CreateAndValidateProvider(_ context.Context, _ string, _ *provider.Config) (provider.Provider, error) {
 	return f.prov, nil
 }
 

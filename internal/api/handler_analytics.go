@@ -4,6 +4,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/analytics"
@@ -44,7 +45,11 @@ func (h *Handler) getAnalyticsTrends(ctx context.Context, req *events.LambdaFunc
 	// session) into the dual-column filter inputs so rows carrying only the
 	// external account_id (cloud_account_id NULL) are matched. A scoped user can
 	// never widen to "all" (empty filters mean all-accessible).
-	accountUUIDs, accountExternalIDsByProvider, err := h.resolveAnalyticsAccountFilter(ctx, session, params["account_id"])
+	requested, err := requestedAnalyticsAccounts(params)
+	if err != nil {
+		return nil, err
+	}
+	accountUUIDs, accountExternalIDsByProvider, err := h.resolveAnalyticsAccountFilter(ctx, session, requested)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +157,11 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 	// top-bar chip UUID, a raw external id, or "" for all) resolves to the
 	// dual-column filter inputs so rows that carry only the external account_id
 	// (cloud_account_id NULL) are aggregated (issue #701/#498/#866).
-	accountUUIDs, accountExternalIDsByProvider, err := h.resolveAnalyticsAccountFilter(ctx, session, params["account_id"])
+	requested, err := requestedAnalyticsAccounts(params)
+	if err != nil {
+		return nil, err
+	}
+	accountUUIDs, accountExternalIDsByProvider, err := h.resolveAnalyticsAccountFilter(ctx, session, requested)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +205,11 @@ func (h *Handler) getHistoryBreakdown(ctx context.Context, req *events.LambdaFun
 	}
 
 	// Scope check plus account -> dual-column inputs; see getHistoryAnalytics.
-	accountUUIDs, accountExternalIDsByProvider, err := h.resolveAnalyticsAccountFilter(ctx, session, params["account_id"])
+	requested, err := requestedAnalyticsAccounts(params)
+	if err != nil {
+		return nil, err
+	}
+	accountUUIDs, accountExternalIDsByProvider, err := h.resolveAnalyticsAccountFilter(ctx, session, requested)
 	if err != nil {
 		return nil, err
 	}
@@ -220,36 +233,90 @@ func (h *Handler) getHistoryBreakdown(ctx context.Context, req *events.LambdaFun
 	}, nil
 }
 
+// requestedAnalyticsAccounts returns the accounts an analytics request names.
+// The plural account_ids (comma-separated UUIDs, validated and capped by
+// parseAccountIDs) wins when both it and the legacy singular account_id are
+// sent; the singular form stays for older clients and may be a raw external
+// id. Empty means no account filter.
+func requestedAnalyticsAccounts(params map[string]string) ([]string, error) {
+	ids, err := parseAccountIDs(params["account_ids"])
+	if err != nil {
+		return nil, NewClientError(400, err.Error())
+	}
+	if len(ids) > 0 {
+		return ids, nil
+	}
+	if id := params["account_id"]; id != "" {
+		return []string{id}, nil
+	}
+	return nil, nil
+}
+
 // resolveAnalyticsAccountFilter enforces the session's allowed_accounts scope
-// on the requested account_id and returns the dual-column filter the analytics
-// queries run with. Scoped users must name an account that their scope allows;
-// admin/unrestricted sessions pass through (account_id may be empty, meaning
-// all accounts) with the filter from resolveSingleAccountFilterIDs.
+// on the requested accounts and returns the union dual-column filter the
+// analytics queries run with. Scoped users must name at least one account and
+// every named account must be in their scope: one out-of-scope id refuses the
+// whole request with the same 404 a single out-of-scope account_id gets, so
+// the response neither narrows silently nor reveals whether the id exists.
+// Admin/unrestricted sessions pass through (no accounts means all accounts).
 //
 // For a scoped session the scope decision and the filter come from the same
-// cloud_accounts snapshot, so the filter always describes the account the
+// cloud_accounts snapshot, so the filter always describes the accounts the
 // decision allowed, even if another account is registered concurrently.
-func (h *Handler) resolveAnalyticsAccountFilter(ctx context.Context, session *Session, accountID string) (uuids []string, externalIDsByProvider map[string][]string, err error) {
+func (h *Handler) resolveAnalyticsAccountFilter(ctx context.Context, session *Session, accountIDs []string) (uuids []string, externalIDsByProvider map[string][]string, err error) {
 	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
-	if allowed.AllowsAll() {
-		uuids, externalIDsByProvider = h.resolveSingleAccountFilterIDs(ctx, accountID)
-		return uuids, externalIDsByProvider, nil
+	if allowed.AllowsAll() && len(accountIDs) == 0 {
+		return nil, nil, nil
 	}
-	if accountID == "" {
+	if len(accountIDs) == 0 {
 		return nil, nil, NewClientError(400, "account_id is required for scoped users")
 	}
 	accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
 	if err != nil {
+		if allowed.AllowsAll() {
+			// Unrestricted: no worse than treating the ids as external ids.
+			return nil, map[string][]string{"": accountIDs}, nil
+		}
 		return nil, nil, fmt.Errorf("failed to list cloud accounts: %w", err)
 	}
-	uuids, externalIDsByProvider, ok := scopedAnalyticsAccountFilter(allowed, accounts, accountID)
-	if !ok {
-		return nil, nil, errNotFound
+	for _, id := range accountIDs {
+		var u []string
+		var e map[string][]string
+		if allowed.AllowsAll() {
+			u, e = unscopedAccountFilter(accounts, id)
+		} else {
+			var ok bool
+			if u, e, ok = scopedAnalyticsAccountFilter(allowed, accounts, id); !ok {
+				return nil, nil, errNotFound
+			}
+		}
+		uuids, externalIDsByProvider = mergeAccountFilter(uuids, externalIDsByProvider, u, e)
 	}
 	return uuids, externalIDsByProvider, nil
+}
+
+// mergeAccountFilter unions one account's dual-column filter into the
+// accumulated one, dropping duplicates.
+func mergeAccountFilter(uuids []string, ext map[string][]string, addUUIDs []string, addExt map[string][]string) (mergedUUIDs []string, mergedExt map[string][]string) {
+	for _, u := range addUUIDs {
+		if !slices.Contains(uuids, u) {
+			uuids = append(uuids, u)
+		}
+	}
+	for provider, ids := range addExt {
+		if ext == nil {
+			ext = map[string][]string{}
+		}
+		for _, id := range ids {
+			if !slices.Contains(ext[provider], id) {
+				ext[provider] = append(ext[provider], id)
+			}
+		}
+	}
+	return uuids, ext
 }
 
 // scopedAnalyticsAccountFilter reports whether a restricted scope allows the
