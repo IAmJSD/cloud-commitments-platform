@@ -44,7 +44,7 @@ var _ StoreInterface = (*PostgresStore)(nil)
 // GetUserByID retrieves a user by ID.
 func (s *PostgresStore) GetUserByID(ctx context.Context, userID string) (*User, error) {
 	query := `
-		SELECT id, email, password_hash, salt, group_ids, active,
+		SELECT id, email, password_hash, group_ids, active,
 		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
 		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
 		       failed_login_attempts, locked_until, password_history,
@@ -59,7 +59,7 @@ func (s *PostgresStore) GetUserByID(ctx context.Context, userID string) (*User, 
 // GetUserByEmail retrieves a user by email.
 func (s *PostgresStore) GetUserByEmail(ctx context.Context, email string) (*User, error) {
 	query := `
-		SELECT id, email, password_hash, salt, group_ids, active,
+		SELECT id, email, password_hash, group_ids, active,
 		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
 		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
 		       failed_login_attempts, locked_until, password_history,
@@ -89,12 +89,12 @@ func (s *PostgresStore) CreateUser(ctx context.Context, user *User) error {
 
 	query := `
 		INSERT INTO users (
-			id, email, password_hash, salt, group_ids, active,
+			id, email, password_hash, group_ids, active,
 			mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
 			mfa_recovery_codes, password_reset_token, password_reset_expiry,
 			failed_login_attempts, locked_until, password_history,
 			created_at, updated_at, last_login_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 	`
 
 	// Substitute an empty slice for nil so the Postgres TEXT[] column
@@ -110,7 +110,6 @@ func (s *PostgresStore) CreateUser(ctx context.Context, user *User) error {
 		user.ID,
 		user.Email,
 		user.PasswordHash,
-		user.Salt,
 		user.GroupIDs,
 		user.Active,
 		user.MFAEnabled,
@@ -209,7 +208,7 @@ func (s *PostgresStore) ListUsers(ctx context.Context) ([]User, error) {
 	// LIMIT provides a safety cap against unbounded memory allocation on large installations.
 	// Pagination support should be added if this limit proves insufficient.
 	query := `
-		SELECT id, email, password_hash, salt, group_ids, active,
+		SELECT id, email, password_hash, group_ids, active,
 		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
 		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
 		       failed_login_attempts, locked_until, password_history,
@@ -248,7 +247,7 @@ func (s *PostgresStore) ListUsers(ctx context.Context) ([]User, error) {
 // as "used" instead of "expired" (QA bug 11.2).
 func (s *PostgresStore) GetUserByResetToken(ctx context.Context, token string) (*User, error) {
 	query := `
-		SELECT id, email, password_hash, salt, group_ids, active,
+		SELECT id, email, password_hash, group_ids, active,
 		       mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
 		       mfa_recovery_codes, password_reset_token, password_reset_expiry,
 		       failed_login_attempts, locked_until, password_history,
@@ -382,14 +381,14 @@ func (s *PostgresStore) CreateAdminIfNone(ctx context.Context, user *User) (bool
 	// breaking that contract.
 	query := `
 		INSERT INTO users (
-			id, email, password_hash, salt, group_ids, active,
+			id, email, password_hash, group_ids, active,
 			mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
 			mfa_recovery_codes, password_reset_token, password_reset_expiry,
 			failed_login_attempts, locked_until, password_history,
 			created_at, updated_at, last_login_at
 		)
-		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
-		WHERE NOT EXISTS (SELECT 1 FROM users WHERE group_ids @> ARRAY[$20::uuid] AND active = true)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+		WHERE NOT EXISTS (SELECT 1 FROM users WHERE group_ids @> ARRAY[$19::uuid] AND active = true)
 	`
 
 	// See CreateUser for the nil-slice substitution rationale. Force the
@@ -425,7 +424,7 @@ func (s *PostgresStore) CreateAdminIfNone(ctx context.Context, user *User) (bool
 	}
 
 	tag, err := tx.Exec(ctx, query,
-		user.ID, user.Email, user.PasswordHash, user.Salt,
+		user.ID, user.Email, user.PasswordHash,
 		groupIDs, user.Active, user.MFAEnabled, user.MFASecret,
 		user.MFAPendingSecret, user.MFAPendingSecretExpiresAt, recoveryCodes,
 		user.PasswordResetToken, user.PasswordResetExpiry,
@@ -737,7 +736,6 @@ func (s *PostgresStore) scanUser(scanner Scanner) (*User, error) {
 		&user.ID,
 		&user.Email,
 		&user.PasswordHash,
-		&user.Salt,
 		&groupIDs,
 		&user.Active,
 		&user.MFAEnabled,
