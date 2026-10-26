@@ -787,13 +787,8 @@ func (h *Handler) callAzureReturn(
 		return nil, quoteErr
 	}
 
-	// Partial-success guard (issue #290 Finding #6): flip the in-flight flag
-	// BEFORE calling Azure Return so that if the subsequent MarkPurchaseRevoked
-	// write fails, the row is visible to the finalize_revocations sweep rather
-	// than silently stuck. Best-effort: if the flip itself fails, log and
-	// continue — the in-flight flag is a safety net, not a hard precondition.
-	if flipErr := h.config.FlipPurchaseRevocationInFlight(ctx, record.PurchaseID); flipErr != nil {
-		logging.Warnf("revoke azure: FlipPurchaseRevocationInFlight for %s failed (continuing): %v", record.PurchaseID, flipErr)
+	if revoked := h.flipRevocationInFlight(ctx, record); revoked != nil {
+		return revoked, nil
 	}
 
 	// Step 2: Return (post the actual refund request).
@@ -813,6 +808,36 @@ func (h *Handler) callAzureReturn(
 	}
 
 	return h.persistAzureRevocation(ctx, record, calcRefundAmount, calcRefundCurrency)
+}
+
+// flipRevocationInFlight sets the in-flight flag BEFORE the Azure Return
+// (partial-success guard, issue #290 Finding #6) so that if the subsequent
+// MarkPurchaseRevoked write fails, the row is visible to the
+// finalize_revocations sweep rather than silently stuck. Best-effort: if the
+// flip itself fails, log and continue — the in-flight flag is a safety net,
+// not a hard precondition.
+//
+// The one exception is a row the flip found already revoked (issue #316): a
+// concurrent request finished the revocation after this one loaded the row,
+// so no second Return is posted and the caller answers already_revoked, as
+// the up-front idempotency check would have. The result is nil otherwise.
+func (h *Handler) flipRevocationInFlight(ctx context.Context, record *config.PurchaseHistoryRecord) *revokePurchaseResult {
+	flipErr := h.config.FlipPurchaseRevocationInFlight(ctx, record.PurchaseID)
+	if flipErr == nil {
+		return nil
+	}
+	if !errors.Is(flipErr, config.ErrPurchaseAlreadyRevoked) {
+		logging.Warnf("revoke azure: FlipPurchaseRevocationInFlight for %s failed (continuing): %v", record.PurchaseID, flipErr)
+		return nil
+	}
+	logging.Infof("revoke azure: purchase_id=%s was revoked by a concurrent request; not posting a second Return", record.PurchaseID)
+	result := &revokePurchaseResult{Status: "already_revoked"}
+	// Best-effort: the stamp only fills in the response.
+	if current, err := h.config.GetPurchaseHistoryByPurchaseID(ctx, record.PurchaseID); err == nil && current != nil && current.RevokedAt != nil {
+		result.RevokedAt = current.RevokedAt.Format(time.RFC3339)
+		result.RevokedVia = current.RevokedVia
+	}
+	return result
 }
 
 // checkConfirmedRefund is the TOCTOU-divergence check: the refund the user

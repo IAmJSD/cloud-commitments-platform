@@ -421,7 +421,9 @@ type StoreInterface interface {
 	// call so that the row can be identified by the finalize sweep if the
 	// subsequent MarkPurchaseRevoked DB write fails (partial-success reconciliation,
 	// issue #290 Finding #6, migration 000072). No-op when the flag is already
-	// true (idempotent). Returns a not-found error when no row matches.
+	// true (idempotent). Only an unrevoked row is flipped: a revoked one
+	// returns an error wrapping ErrPurchaseAlreadyRevoked (issue #316).
+	// Returns a not-found error when no row matches.
 	FlipPurchaseRevocationInFlight(ctx context.Context, purchaseID string) error
 
 	// ClearRevocationInFlight resets revocation_in_flight=false on a
