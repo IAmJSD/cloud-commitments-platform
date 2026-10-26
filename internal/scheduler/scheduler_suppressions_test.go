@@ -359,11 +359,11 @@ func TestApplySuppressions_UnreadableRecDetailsMatchEveryRow(t *testing.T) {
 	assert.Equal(t, 3, out[0].Count)
 }
 
-// TestApplySuppressions_EC2SlugSpellings is the issue #1412 regression: AWS
-// EC2 recs and suppressions can be stored as "ec2" or "compute", and a
+// TestApplySuppressions_AWSLegacySlugSpellings covers issues #1412 and #1420: AWS
+// recs and suppressions can be stored under a legacy or canonical slug, and a
 // suppression hides the rec whichever spelling each uses. Azure and GCP
 // "compute" stay distinct from "ec2".
-func TestApplySuppressions_EC2SlugSpellings(t *testing.T) {
+func TestApplySuppressions_AWSLegacySlugSpellings(t *testing.T) {
 	cases := []struct {
 		name, provider, recService, supService string
 		wantCount                              int
@@ -372,6 +372,16 @@ func TestApplySuppressions_EC2SlugSpellings(t *testing.T) {
 		{"aws ec2 sup hides compute rec", "aws", "compute", "ec2", 2},
 		{"aws same slug compute", "aws", "compute", "compute", 2},
 		{"aws unrelated service not hidden", "aws", "ec2", "rds", 5},
+		{"aws legacy rds sup hides relational-db rec", "aws", "relational-db", "rds", 2},
+		{"aws relational-db sup hides legacy rds rec", "aws", "rds", "relational-db", 2},
+		{"aws legacy elasticache sup hides cache rec", "aws", "cache", "elasticache", 2},
+		{"aws cache sup hides legacy elasticache rec", "aws", "elasticache", "cache", 2},
+		{"aws legacy opensearch sup hides search rec", "aws", "search", "opensearch", 2},
+		{"aws search sup hides legacy opensearch rec", "aws", "opensearch", "search", 2},
+		{"aws legacy redshift sup hides data-warehouse rec", "aws", "data-warehouse", "redshift", 2},
+		{"aws data-warehouse sup hides legacy redshift rec", "aws", "redshift", "data-warehouse", 2},
+		{"aws memorydb sup does not hide cache rec", "aws", "cache", "memorydb", 5},
+		{"azure legacy rds sup does not hide relational-db rec", "azure", "relational-db", "rds", 5},
 		{"azure compute sup hides compute rec", "azure", "compute", "compute", 2},
 		{"azure ec2 sup does not hide compute rec", "azure", "compute", "ec2", 5},
 		{"gcp compute sup does not hide ec2 rec", "gcp", "ec2", "compute", 5},

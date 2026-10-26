@@ -1299,7 +1299,8 @@ func mapServiceSlug(service string) (common.ServiceType, bool) {
 		"cache":          common.ServiceCache,
 		"search":         common.ServiceSearch,
 		"data-warehouse": common.ServiceDataWarehouse,
-		// Legacy AWS-only slugs.
+		// Legacy AWS-only slugs. A new legacy alias must also be added to
+		// config.awsLegacyServiceSlugs, else suppressions miss it (#1420).
 		"ec2":         common.ServiceEC2,
 		"rds":         common.ServiceRDS,
 		"elasticache": common.ServiceElastiCache,

@@ -760,15 +760,30 @@ type SuppressionVariant struct {
 	Tenancy          string `json:"tenancy"`
 }
 
-// CanonicalSuppressionService maps the legacy AWS EC2 slug "ec2" to the
-// canonical "compute" slug so a suppression and a rec match whichever spelling
-// each was stored under (issue #1412). Other providers' services, including
-// Azure and GCP "compute", are returned unchanged. It lives in config, the
-// lowest package both the scheduler and BuildSuppressions import; the pinned
+// awsLegacyServiceSlugs maps the AWS service slugs that rec rows persisted
+// before slug normalisation still carry to their canonical spelling.
+// memorydb has no canonical slug and is deliberately absent. Mirrors the legacy
+// entries of mapServiceSlug in internal/purchase/execution.go.
+var awsLegacyServiceSlugs = map[string]string{
+	"ec2":         "compute",
+	"rds":         "relational-db",
+	"elasticache": "cache",
+	"opensearch":  "search",
+	"redshift":    "data-warehouse",
+}
+
+// CanonicalSuppressionService maps legacy AWS service slugs to their canonical
+// slug so a suppression and a rec match whichever spelling each was stored
+// under (issues #1412, #1420). Other providers' services, including Azure and
+// GCP "compute", are returned unchanged. It lives in config, the lowest
+// package both the scheduler and BuildSuppressions import; the pinned
 // cloud-commitments-go common package has no such mapping.
 func CanonicalSuppressionService(provider, service string) string {
-	if provider == "aws" && service == "ec2" {
-		return "compute"
+	if provider != "aws" {
+		return service
+	}
+	if canonical, ok := awsLegacyServiceSlugs[service]; ok {
+		return canonical
 	}
 	return service
 }

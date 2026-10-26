@@ -205,12 +205,45 @@ func TestBuildSuppressions_ComputeSlugEC2(t *testing.T) {
 }
 
 func TestCanonicalSuppressionService(t *testing.T) {
-	assert.Equal(t, "compute", CanonicalSuppressionService("aws", "ec2"))
-	assert.Equal(t, "compute", CanonicalSuppressionService("aws", "compute"))
-	assert.Equal(t, "rds", CanonicalSuppressionService("aws", "rds"))
-	assert.Equal(t, "compute", CanonicalSuppressionService("azure", "compute"))
-	assert.Equal(t, "ec2", CanonicalSuppressionService("azure", "ec2"))
-	assert.Equal(t, "compute", CanonicalSuppressionService("gcp", "compute"))
+	cases := []struct{ provider, service, want string }{
+		{"aws", "ec2", "compute"},
+		{"aws", "rds", "relational-db"},
+		{"aws", "elasticache", "cache"},
+		{"aws", "opensearch", "search"},
+		{"aws", "redshift", "data-warehouse"},
+		{"aws", "compute", "compute"},
+		{"aws", "relational-db", "relational-db"},
+		{"aws", "cache", "cache"},
+		{"aws", "search", "search"},
+		{"aws", "data-warehouse", "data-warehouse"},
+		{"aws", "memorydb", "memorydb"},
+		{"azure", "compute", "compute"},
+		{"azure", "ec2", "ec2"},
+		{"azure", "rds", "rds"},
+		{"gcp", "compute", "compute"},
+		{"gcp", "redshift", "redshift"},
+		{"gcp", "elasticache", "elasticache"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.provider+"/"+tc.service, func(t *testing.T) {
+			got := CanonicalSuppressionService(tc.provider, tc.service)
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, got, CanonicalSuppressionService(tc.provider, got), "idempotent")
+		})
+	}
+}
+
+// Issue #1420: a legacy "rds" rec and a canonical "relational-db" rec for the
+// same tuple merge into one canonical suppression row with the summed count.
+func TestBuildSuppressions_MergesRDSAliases(t *testing.T) {
+	gp := &GlobalConfig{GracePeriodDays: map[string]int{"aws": 7}}
+	sups := BuildSuppressions([]RecommendationRecord{
+		{Provider: "aws", Service: "rds", Region: "r", ResourceType: "db.r5.large", Count: 3},
+		{Provider: "aws", Service: "relational-db", Region: "r", ResourceType: "db.r5.large", Count: 2},
+	}, "exec-1", gp, time.Now())
+	require.Len(t, sups, 1)
+	assert.Equal(t, "relational-db", sups[0].Service)
+	assert.Equal(t, 5, sups[0].SuppressedCount)
 }
 
 // Issue #1412: AWS "ec2" and "compute" recs in one request share a bucket and
