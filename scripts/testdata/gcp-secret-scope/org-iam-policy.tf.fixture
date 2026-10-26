@@ -1,0 +1,13 @@
+# Fixture (issue #150): an authoritative organization policy built with
+# jsonencode() from a role supplied by a variable with no in-tree default.
+# Must exit 2.
+
+resource "google_organization_iam_policy" "org" {
+  org_id = var.org_id
+  policy_data = jsonencode({
+    bindings = [{
+      role    = var.org_role
+      members = ["serviceAccount:workload@example.iam.gserviceaccount.com"]
+    }]
+  })
+}

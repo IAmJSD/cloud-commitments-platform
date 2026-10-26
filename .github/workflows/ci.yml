@@ -143,7 +143,10 @@ jobs:
           # Exclude _test.go files to stay consistent with .golangci.yml, which
           # excludes gocyclo on test files (test helpers/table-driven tests are
           # allowed higher complexity). Production code is still gated at >10.
-          COMPLEXITY_ISSUES=$(gocyclo -over 10 -ignore "_test\.go" . 2>&1 || true)
+          # Also exclude node_modules/ and vendor/ trees: the `.` walk would
+          # otherwise report third-party Go files that npm packages ship
+          # (e.g. frontend/node_modules/flatted) whenever deps are installed.
+          COMPLEXITY_ISSUES=$(gocyclo -over 10 -ignore "_test\.go|(^|/)(node_modules|vendor)/" . 2>&1 || true)
           if [ -n "$COMPLEXITY_ISSUES" ]; then
             echo "❌ Found functions with cyclomatic complexity over 10:"
             echo "$COMPLEXITY_ISSUES"
@@ -153,6 +156,11 @@ jobs:
             exit 1
           fi
           echo "✅ All functions have acceptable cyclomatic complexity (≤10)"
+
+      - name: Run Makefile gate self-tests
+        # The local lint, scanner and terraform-validate targets must fail
+        # when their tool is missing or fails (#349). Stub tools only.
+        run: bash scripts/test-make-gates.sh
 
   # GitHub Actions workflow linting
   #
@@ -248,11 +256,12 @@ jobs:
         # file, no per-finding ignore, no only-new-issues. Every medium and
         # high finding the pedantic persona surfaces fails this job, and the
         # injection class this job exists to catch scores high. Below the line
-        # sit 106 findings, none above low: 66 template-injection on values
-        # #1649 already assessed as non-injectable (github.actor, github.sha
-        # and similar), plus undocumented-permissions, concurrency-limits and
-        # anonymous-definition. Clearing those means rewriting the deploy
-        # workflows, so they are left to a follow-up rather than silenced here.
+        # sit 35 findings with the pinned zizmor, none above low: 24
+        # undocumented-permissions and 11 concurrency-limits. zizmor 1.31 adds
+        # a self-repository audit, which reports 4 more low findings on the
+        # local reusable-workflow calls in deploy-all.yml. template-injection
+        # is at zero since #155 moved every expression out of run: blocks into
+        # env:. The rest are left to a follow-up rather than silenced here.
         run: |
           set -euo pipefail
           # `pipx run --spec` rather than `pipx install`: it pins the version in
@@ -935,7 +944,9 @@ jobs:
         run: bash scripts/test-govulncheck-retry.sh
 
       - name: Scan the shipped image for Go advisories
-        run: bash scripts/scan-shipped-image.sh cudly:${{ github.sha }}
+        env:
+          IMAGE: cudly:${{ github.sha }}
+        run: bash scripts/scan-shipped-image.sh "$IMAGE"
 
   # Terraform validation for all environments
   terraform-validate:
@@ -943,6 +954,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    env:
+      CLOUD: ${{ matrix.cloud }}
     strategy:
       matrix:
         cloud: [aws, gcp, azure]
@@ -965,7 +978,12 @@ jobs:
           terraform_version: 1.10.5
 
       - name: Terraform Format Check
-        run: terraform fmt -check -recursive terraform/
+        # Must cover every SCAN_ROOTS entry in scripts/check-gcp-secret-scope.sh,
+        # whose block tracking was written against fmt layout (#150). The
+        # guard's self-test fails if a scan root has no line here.
+        run: |
+          terraform fmt -check -recursive terraform/
+          terraform fmt -check -recursive iac/
 
       - name: Test Azure federation identity guards
         if: matrix.cloud == 'azure'
@@ -980,6 +998,28 @@ jobs:
           for t in terraform/modules/compute/aws/*/tests; do
             [ -d "$t" ] || continue
             d=$(dirname "$t")
+            terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
+            terraform -chdir="$d" fmt -check -recursive
+            terraform -chdir="$d" test
+          done
+
+      - name: Test Azure compute modules
+        if: matrix.cloud == 'azure'
+        run: |
+          for t in terraform/modules/compute/azure/*/tests; do
+            [ -d "$t" ] || continue
+            d=$(dirname "$t")
+            terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
+            terraform -chdir="$d" fmt -check -recursive
+            terraform -chdir="$d" test
+          done
+
+      # With CloudFront in front of a Fargate ALB, the ALB must admit only
+      # CloudFront's origin-facing prefix list (#412).
+      - name: Test AWS ALB ingress guard
+        if: matrix.cloud == 'aws'
+        run: |
+          for d in terraform/modules/networking/aws terraform/environments/aws; do
             terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
             terraform -chdir="$d" fmt -check -recursive
             terraform -chdir="$d" test
@@ -1025,7 +1065,7 @@ jobs:
         # Skips a cloud until it has a tests dir. The lock file is gitignored,
         # so no -lockfile=readonly.
         run: |
-          d=terraform/environments/${{ matrix.cloud }}/ci-cd-permissions
+          d="terraform/environments/$CLOUD/ci-cd-permissions"
           if [ -d "$d/tests" ]; then
             terraform -chdir="$d" init -backend=false -input=false
             terraform -chdir="$d" test
@@ -1033,27 +1073,37 @@ jobs:
 
       - name: Terraform Init
         run: |
-          cd terraform/environments/${{ matrix.cloud }}
+          cd "terraform/environments/$CLOUD"
           terraform init -backend=false
 
       - name: Terraform Validate
         run: |
-          cd terraform/environments/${{ matrix.cloud }}
+          cd "terraform/environments/$CLOUD"
           terraform validate
+
+      # Environment input validation, e.g. the PostgreSQL 15+ floor the
+      # migrations need (#1233). Every provider is mocked. Skips a cloud
+      # until it has a tests dir.
+      - name: Test environment inputs
+        run: |
+          cd "terraform/environments/$CLOUD"
+          if [ -d tests ]; then
+            terraform test
+          fi
 
       - name: Validate environment tfvars files
         run: |
-          cd terraform/environments/${{ matrix.cloud }}
+          cd "terraform/environments/$CLOUD"
           for env in dev staging prod; do
             # Check local tfvars if present
             if [ -f "${env}.tfvars" ]; then
               echo "Checking ${env}.tfvars syntax..."
-              terraform fmt -check "${env}.tfvars" || echo "Note: ${env}.tfvars may need formatting"
+              terraform fmt -check "${env}.tfvars"
             fi
             # Check GitHub CI/CD tfvars
             if [ -f "github-${env}.tfvars" ]; then
               echo "Checking github-${env}.tfvars syntax..."
-              terraform fmt -check "github-${env}.tfvars" || echo "Note: github-${env}.tfvars may need formatting"
+              terraform fmt -check "github-${env}.tfvars"
             fi
           done
 
@@ -1077,6 +1127,16 @@ jobs:
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: ${{ env.GO_VERSION }}
+
+      - name: Assert the gosec version is pinned only in .gosec-version
+        # Issue #347: the version used to be hard-coded in four files, so a
+        # bump that missed one left local scans and this job's SARIF upload on
+        # different gosec rule sets. Fast (git grep only). always(): a finding
+        # here must not skip the scanners below; the job still fails.
+        if: always() && steps.checkout.outcome == 'success'
+        run: |
+          bash scripts/check-gosec-pin.sh
+          bash scripts/test-check-gosec-pin.sh
 
       - name: Run govulncheck CVE scanner (all modules)
         # always(): each scanner step below is independent evidence for the
@@ -1202,12 +1262,12 @@ jobs:
             rm -f "$merged"
           fi
 
-          # scripts/run-gosec.sh owns the pinned gosec version, toolchain,
-          # module list and rule set, shared with the pre-commit hook and
-          # `make security-scan-go` (issue #340). It installs gosec with the
-          # job's existing setup-go: the securego/gosec Docker action bundles
-          # its own Go toolchain, which cannot satisfy the module's go
-          # directive.
+          # scripts/run-gosec.sh owns the toolchain, module list and rule set,
+          # shared with the pre-commit hook and `make security-scan-go` (issue
+          # #340), and installs the gosec version in .gosec-version (issue
+          # #347). It installs gosec with the job's existing setup-go: the
+          # securego/gosec Docker action bundles its own Go toolchain, which
+          # cannot satisfy the module's go directive.
           #
           # gosec exits non-zero both for real findings and for a processing
           # error. The script still scans every module after a failure, and
@@ -1302,6 +1362,12 @@ jobs:
           # save working files in the repository root).
           output: '${{ runner.temp }}/trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
+          # Purl-scoped ignores for unreachable, unfixed Go dependency
+          # advisories (issue #3). With a single YAML file the action sets
+          # TRIVY_IGNOREFILE to it, so this step does not read .trivyignore;
+          # that file holds only config-scan IDs, which the default fs
+          # scanners (vuln, secret) never report.
+          trivyignores: '.trivyignore.yaml'
           # Pin the Trivy binary independently of the action SHA. v0.36.0 is
           # the latest trivy-action release but bundles Trivy v0.70.0, which
           # panics in adaptDefaultTags on terraform/environments/aws/main.tf
@@ -1625,6 +1691,35 @@ jobs:
       - name: Run Cloud SQL scope self-tests
         run: bash scripts/test-cloud-sql-delete-scope.sh
 
+  # Assert that cleanup-staging.yml's destroy-gcp job deletes the Service
+  # Networking peering on the network its state names (the `network_name`
+  # output, not a hardcoded `cudly-staging-vpc`), and removes the peering from
+  # state only after that delete succeeded, with nothing swallowed (#330). The
+  # step it replaces removed the module-qualified address from state first and
+  # swallowed the delete's failure, which left a live peering no state
+  # tracked. The suite runs scripts/delete-owned-vpc-peering.sh end to end
+  # against stubbed terraform and gcloud, asserts the step order inside
+  # destroy-gcp (Cloud SQL, then peering, then destroy), and sweeps every
+  # workflow plus a recursive glob of scripts/ so the script stays the only
+  # place that runs `gcloud services vpc-peerings delete`.
+  # Fast (shell only), so it always runs.
+  vpc-peering-delete-scope:
+    name: VPC peering delete scope
+    runs-on: ubuntu-latest
+    # Same shape as ecr-delete-selection above: this job checks out the tree and
+    # runs a shell script against it, so `contents: read` is all it needs.
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run VPC peering scope self-tests
+        run: bash scripts/test-vpc-peering-delete-scope.sh
+
   # Assert that every job applying a `compute_platform` writes the Terraform
   # state namespace that platform owns: `compute_platform=lambda` into
   # github-<env>/, `compute_platform=fargate` into github-fargate-<env>/. The
@@ -1658,6 +1753,37 @@ jobs:
       - name: Run state namespace self-tests
         run: bash scripts/test-aws-tfstate-platform-key.sh
 
+      # scripts/init-backend.sh must write the same state key the deploy
+      # workflows build, for the flat AWS root (#306). Runs the script against
+      # a stubbed aws CLI in a temp copy of the root; no AWS access.
+      - name: Run init-backend.sh self-test
+        run: bash scripts/test-init-backend.sh
+
+  # Assert that every job writing the Azure or GCP Terraform state carries the
+  # shared concurrency group for that state (`azure-tfstate-<env>`,
+  # `gcp-tfstate-<env>`), with the suffix taken from the same literal or
+  # expression as the state key. The group is a hand-written string in each
+  # writer, so a new writer without it, or a typo in the prefix, runs green and
+  # just stops serializing (#195). Checked over a GLOB of .github/workflows,
+  # real writers named first so a scan that recognizes nothing cannot pass.
+  # Fast (shell only), so it always runs.
+  tfstate-concurrency-group:
+    name: Azure/GCP Terraform state concurrency groups
+    runs-on: ubuntu-latest
+    # Same shape as ecr-delete-selection above: this job checks out the tree and
+    # runs a shell script against it, so `contents: read` is all it needs.
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run state concurrency group self-tests
+        run: bash scripts/test-tfstate-concurrency-group.sh
+
   # Run the AWS rollback jobs' "Verify image exists" step, lifted out of
   # rollback.yml, against a stubbed aws CLI (#142). IMAGE_URI names the
   # AWS_ACCOUNT_ID registry while the step runs as AWS_ROLE_TO_ASSUME, so the
@@ -1680,12 +1806,14 @@ jobs:
       - name: Run rollback verify-step self-tests
         run: bash scripts/test-rollback-ecr-registry.sh
 
-  # Assert that no Terraform file declares an azurerm_key_vault_access_policy
-  # resource. This project's only Key Vault sets enable_rbac_authorization =
-  # true, and an RBAC-enabled vault ignores access policies entirely, so such a
-  # grant applies cleanly and then does nothing at runtime (#1621). The nested
-  # `access_policy` block form is deliberately not covered; #1839 tracks it.
-  # Fast (shell only), so it always runs.
+  # Assert that no Terraform file declares a Key Vault access policy: neither
+  # an azurerm_key_vault_access_policy resource nor an access_policy block
+  # (static or dynamic) inside azurerm_key_vault. This project's only Key Vault
+  # sets enable_rbac_authorization = true, and an RBAC-enabled vault ignores
+  # access policies entirely, so such a grant applies cleanly and then does
+  # nothing at runtime (#1621). The files are parsed as HCL by a small Go
+  # program (cmd/check-azure-kv-access-policy, #204), so the job needs Go; it
+  # is still fast, so it always runs.
   azure-kv-access-policy:
     name: Azure Key Vault grant model
     runs-on: ubuntu-latest
@@ -1698,6 +1826,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
       - name: Assert no Key Vault access policies
         run: bash scripts/check-azure-kv-access-policy.sh
 
@@ -1706,6 +1840,9 @@ jobs:
 
       - name: Run smoke-gate self-test
         run: bash scripts/test-wait-for-healthy.sh
+
+      - name: Run Terraform output reader self-test
+        run: bash scripts/test-read-tf-outputs.sh
 
   # Execute database-migration.yml's down-migration gate (#68): the gate script
   # over adversarial inputs, then the workflow's own validate and migrate-* run
@@ -1727,6 +1864,67 @@ jobs:
 
       - name: Run down-migration gate self-tests
         run: bash scripts/test-migration-down-gate.sh
+
+  # Assert that scripts/gcp-import-dev-state.sh takes the GCP project and the
+  # state backend from GCP_PROJECT_ID and TF_BACKEND_GCP with no default, and
+  # refuses to start without them (#305). Runs the script end to end against
+  # stubbed terraform and gcloud; nothing reaches GCP. Fast (shell only), so it
+  # always runs.
+  gcp-import-dev-state:
+    name: GCP dev state import configuration
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run import script self-tests
+        run: bash scripts/test-gcp-import-dev-state.sh
+
+  # Assert that the files the documented Make targets write at the repo root
+  # (the `bootstrap` Lambda binary, coverage.html, the trivy/tfsec JSON reports,
+  # complexity-report.txt) are gitignored, and that the patterns stay
+  # root-anchored so same-named files elsewhere remain trackable (#279).
+  # Fast (shell only), so it always runs.
+  gitignore-make-artifacts:
+    name: Gitignore covers Make artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assert Make artifacts are gitignored
+        run: bash scripts/test-gitignore-make-artifacts.sh
+
+  # Execute scripts/tf-deploy.sh and the Makefile.terraform targets that drive
+  # it against a stub `terraform` that only records its argv (#59): every
+  # state-changing target goes through the script, so it gets the profile
+  # check, environment bootstrap and `terraform init`, and extra args such as
+  # -target=module.frontend reach terraform verbatim. Fast (shell only), so it
+  # always runs.
+  tf-deploy-wrapper:
+    name: Terraform deploy wrapper
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run tf-deploy.sh self-tests
+        run: bash scripts/test-tf-deploy.sh
 
   # Summary job - all checks must pass
   ci-success:
@@ -1750,10 +1948,15 @@ jobs:
       - ecr-delete-selection
       - rds-deletion-protection-scope
       - cloud-sql-delete-scope
+      - vpc-peering-delete-scope
       - aws-tfstate-platform-key
+      - tfstate-concurrency-group
       - rollback-ecr-registry
       - azure-kv-access-policy
       - migration-down-gate
+      - gcp-import-dev-state
+      - gitignore-make-artifacts
+      - tf-deploy-wrapper
     if: always()
     permissions:
       contents: read

@@ -1,0 +1,14 @@
+# Fixture (issue #150): a scope-wide grant whose body starts in column 0. The
+# nested condition block's closing brace is in column 0 too, so a scanner that
+# treats `^}` as the end of the resource stops attributing lines to it before
+# the role. The role must still be reported. Must exit 1.
+
+resource "google_project_iam_member" "unindented" {
+project = var.project_id
+condition {
+title      = "always"
+expression = "true"
+}
+role   = "roles/secretmanager.secretAccessor"
+member = "serviceAccount:workload@example.iam.gserviceaccount.com"
+}
