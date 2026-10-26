@@ -2240,6 +2240,9 @@ func (h *Handler) updateRIExchangeConfig(ctx context.Context, req *events.Lambda
 	if err := h.requireGlobalConfigScope(ctx, session); err != nil {
 		return nil, err
 	}
+	// Resolved before the transaction: the closure below runs while it holds a
+	// pooled connection and must not need a second one (issue #1517).
+	riExchangeGrant := h.resolveGrant(ctx, req, auth.ResourceRIExchange)
 
 	// Route through the serialized read-modify-write so this partial update
 	// (only the ri_exchange_* columns) shares the advisory lock with other
@@ -2264,7 +2267,7 @@ func (h *Handler) updateRIExchangeConfig(ctx context.Context, req *events.Lambda
 		existing.RIExchangeMaxDailyUSD = body.MaxPaymentDailyUSD
 		existing.RIExchangeLookbackDays = body.LookbackDays
 
-		return h.requireRIExchangeAutoModeGrant(ctx, req, before, riExchangeArmStateOf(existing))
+		return requireRIExchangeAutoModeGrant(before, riExchangeArmStateOf(existing), riExchangeGrant)
 	}); err != nil {
 		// A refused write is not a failed save. Surface the gate's 403 (and any
 		// other ClientError the closure raises) unwrapped, so the response says

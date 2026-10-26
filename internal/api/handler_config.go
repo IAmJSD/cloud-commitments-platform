@@ -84,6 +84,9 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 	if err := h.requireGlobalConfigScope(ctx, session); err != nil {
 		return nil, err
 	}
+	// Resolved before the transaction: the closure below runs while it holds a
+	// pooled connection and must not need a second one (issue #1517).
+	grants := h.resolveArmingGrants(ctx, req)
 
 	// Serialized read-modify-write: the store loads the stored config and
 	// applies this closure under an advisory-locked transaction, then upserts
@@ -121,10 +124,10 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		if vErr := existing.Validate(); vErr != nil {
 			return NewClientError(400, fmt.Sprintf("validation error: %s", vErr))
 		}
-		if gErr := h.requireRIExchangeAutoModeGrant(ctx, req, before, riExchangeArmStateOf(existing)); gErr != nil {
+		if gErr := requireRIExchangeAutoModeGrant(before, riExchangeArmStateOf(existing), grants.riExchange); gErr != nil {
 			return gErr
 		}
-		return h.requireSwitchGrants(ctx, req, session, switchBefore, ladderBefore, existing)
+		return requireSwitchGrants(ctx, session, grants.purchases, switchBefore, ladderBefore, existing)
 	})
 	if err != nil {
 		return nil, err
@@ -136,12 +139,13 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 }
 
 // requireSwitchGrants chains the arming gates of the two money-spending
-// switches: auto-purchase, then ladder execution.
-func (h *Handler) requireSwitchGrants(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session, autoBefore, ladderBefore bool, cfg *config.GlobalConfig) error {
-	if err := h.requireAutoPurchaseSwitchGrant(ctx, req, session, autoBefore, cfg); err != nil {
+// switches: auto-purchase, then ladder execution. purchasesGrant is the
+// pre-resolved execute:purchases outcome (armingGrants.purchases).
+func requireSwitchGrants(ctx context.Context, session *Session, purchasesGrant error, autoBefore, ladderBefore bool, cfg *config.GlobalConfig) error {
+	if err := requireAutoPurchaseSwitchGrant(ctx, session, purchasesGrant, autoBefore, cfg); err != nil {
 		return err
 	}
-	return h.requireLadderExecutionSwitchGrant(ctx, req, session, ladderBefore, cfg)
+	return requireLadderExecutionSwitchGrant(ctx, session, purchasesGrant, ladderBefore, cfg)
 }
 
 func (h *Handler) requireGlobalConfigScope(ctx context.Context, session *Session) error {

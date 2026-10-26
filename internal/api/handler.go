@@ -604,12 +604,14 @@ func (s riExchangeArmState) armed() bool {
 // threat the carve-out closed (issue #1765).
 //
 // Authorization goes through requirePermission, taking the same request the
-// caller was authenticated from, so the verb is evaluated against THE CREDENTIAL
-// PRESENTED rather than the owning user's group permissions. That distinction is
-// load-bearing: for a user API key, requirePermission routes to authorizeAPIKey
-// and checks the KEY's effective permissions. Checking the session's user id
-// instead let a CI key that is correctly denied execute:ri-exchange arm the
-// scheduler to execute every exchange -- the same inheritance bug
+// caller was authenticated from (resolved ahead of the transaction by
+// resolveGrant and passed in as grant), so the verb is evaluated against
+// THE CREDENTIAL PRESENTED rather than the owning user's group permissions.
+// That distinction is load-bearing: for a user API key, requirePermission
+// routes to authorizeAPIKey and checks the KEY's effective permissions.
+// Checking the session's user id instead let a CI key that is correctly
+// denied execute:ri-exchange arm the scheduler to execute every exchange --
+// the same inheritance bug
 // requirePermissionConstraints already guards against one function above, and
 // the reason this does not call requireSessionPermission directly. It also
 // gives the stateless admin API key the same answer here as on the direct
@@ -633,7 +635,12 @@ func (s riExchangeArmState) armed() bool {
 // these fields exactly as effectively as the dedicated PUT /api/ri-exchange/config
 // (updateRIExchangeConfig), so a gate on one alone would look complete and
 // would not be.
-func (h *Handler) requireRIExchangeAutoModeGrant(ctx context.Context, req *events.LambdaFunctionURLRequest, before, after riExchangeArmState) error {
+//
+// It runs inside the UpdateGlobalConfigAtomic closure, so it must not touch
+// the pool (issue #1517): grant is the outcome of that requirePermission call,
+// resolved before the transaction opened, and is returned only when the write
+// escalates.
+func requireRIExchangeAutoModeGrant(before, after riExchangeArmState, grant error) error {
 	if !after.armed() {
 		return nil
 	}
@@ -641,10 +648,7 @@ func (h *Handler) requireRIExchangeAutoModeGrant(ctx context.Context, req *event
 	if before.armed() && !raisesCap {
 		return nil
 	}
-	if _, err := h.requirePermission(ctx, req, auth.ActionExecute, auth.ResourceRIExchange); err != nil {
-		return err
-	}
-	return nil
+	return grant
 }
 
 // getAccountScope returns the auth.AccountScope describing which cloud
