@@ -955,6 +955,9 @@ type RIUtilizationCacheEntry struct {
 type PurchaseHistoryFilter struct {
 	// Provider matches purchase_history.provider exactly. Empty skips the clause.
 	Provider string
+	// PlanID matches purchase_history.plan_id exactly; HistorySummaryAggregate
+	// also applies it to purchase_executions.plan_id. Empty skips the clause.
+	PlanID string
 	// AccountIDs matches purchase_history.cloud_account_id (the cloud_accounts
 	// UUID FK) with ANY($). Empty/nil skips this half of the account predicate.
 	AccountIDs []string
