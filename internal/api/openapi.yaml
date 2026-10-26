@@ -6199,6 +6199,12 @@ components:
             account matches nothing.
           items:
             type: string
+        system_managed:
+          type: boolean
+          description: >
+            True for a built-in group seeded and maintained by migrations
+            (for example Administrators and Purchaser). Updating or deleting
+            it returns 403. Omitted when false.
         created_at:
           type: string
           format: date-time

@@ -44,6 +44,10 @@ type APIGroup struct {
 	UpdatedAt       string          `json:"updated_at,omitempty"`
 	Permissions     []APIPermission `json:"permissions"`
 	AllowedAccounts []string        `json:"allowed_accounts"`
+	// SystemManaged marks a group seeded and maintained by migrations. The
+	// API refuses to update or delete it (ErrSystemManagedGroup), and the
+	// dashboard reads this flag to hide Edit and Delete (issue #919).
+	SystemManaged bool `json:"system_managed,omitempty"`
 }
 
 // APIPermission is the permission type for API responses.
@@ -199,6 +203,7 @@ func groupToAPIGroup(g *Group) *APIGroup {
 		Description:     g.Description,
 		Permissions:     apiPerms,
 		AllowedAccounts: allowedAccounts,
+		SystemManaged:   g.SystemManaged,
 		CreatedAt:       g.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:       g.UpdatedAt.Format(time.RFC3339),
 	}
