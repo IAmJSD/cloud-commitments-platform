@@ -7,10 +7,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -118,6 +122,41 @@ func TestCFNBundle_OverridesMatchTemplateParameters(t *testing.T) {
 			require.NotContains(t, declared, "OIDCIssuerHost")
 			require.Contains(t, paramsKeys, "OIDCIssuerURL")
 			require.Contains(t, scriptKeys, "OIDCIssuerURL")
+		})
+	}
+}
+
+// TestCFNBundle_TemplatePassesCFNLint covers #1489's acceptance check on the
+// bundle a customer actually downloads, not only the in-repo evaluator in
+// iac/aws_target_cfn_trust_policy_test.go: the aws-target template once
+// rendered fine there yet could not be loaded by CloudFormation at all,
+// because its trust policy used intrinsic functions as map keys.
+//
+// The byte comparison always runs. It is what lets the cfn-lint pre-commit
+// hook, which lints the committed file, vouch for every downloaded bundle. The
+// cfn-lint run itself needs cfn-lint on PATH (pip install cfn-lint) and skips
+// without it, the same way the Terraform bundle test skips without terraform.
+// The aws-target template must lint with no findings at all, warnings
+// included.
+func TestCFNBundle_TemplatePassesCFNLint(t *testing.T) {
+	committed, err := os.ReadFile(awsTargetCFNTemplate)
+	require.NoError(t, err)
+	for _, source := range []string{"gcp", "azure"} {
+		t.Run(source, func(t *testing.T) {
+			template, _, _ := cfnBundleFiles(t, source)
+			require.Equal(t, string(committed), string(template),
+				"the bundle must ship the committed aws-target template byte for byte, so linting that file covers the download")
+
+			cfnLint, err := exec.LookPath("cfn-lint")
+			if err != nil {
+				t.Skip("cfn-lint not on PATH")
+			}
+			path := filepath.Join(t.TempDir(), "template.yaml")
+			require.NoError(t, os.WriteFile(path, template, 0o600))
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			out, err := exec.CommandContext(ctx, cfnLint, path).CombinedOutput()
+			require.NoError(t, err, "cfn-lint rejects the template in the %s-source AWS-target bundle:\n%s", source, out)
 		})
 	}
 }

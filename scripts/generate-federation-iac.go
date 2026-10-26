@@ -446,14 +446,15 @@ func displayClaim(claim string) string {
 // Excluded by construction are whitespace and $ * " ' ` \ ( ) { } ; & | < > ,
 // % and newlines.
 //
-// This is deliberately stricter than the AllowedPattern ^[^\s*$]+$ that the
-// CloudFormation template and the Terraform module enforce on the same value.
-// Those two run on a value that is already a typed parameter, so they only need
-// to reject what IAM itself mis-handles: '$' (IAM expands ${...} policy
-// variables inside Condition values) and '*' (compared literally by
-// StringEquals). This check runs earlier, on a value about to become shell,
-// JSON and HCL *source*, so it has to reject the metacharacters of those
-// grammars as well.
+// This is deliberately stricter than the checks the CloudFormation template and
+// the Terraform module apply to the same value. Those run on a value that is
+// already a typed parameter, so they only need to reject whitespace and what
+// IAM itself mis-handles: '$' (IAM expands ${...} policy variables inside
+// Condition values) and '*' (compared literally by StringEquals). The template
+// also rejects '"', '\' and control characters, because it substitutes the
+// value into its trust policy's JSON text (#1489). This check runs earlier, on
+// a value about to become shell, JSON and HCL *source*, so it has to reject the
+// metacharacters of those grammars as well.
 //
 // The practical cost of the extra strictness is nil here: awsOIDCIssuer emits
 // only login.microsoftonline.com, accounts.google.com, or "" for a source it

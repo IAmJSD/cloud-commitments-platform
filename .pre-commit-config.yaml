@@ -145,6 +145,28 @@ repos:
         types: [yaml]
         files: ^\.github/workflows/
 
+  # CloudFormation linting
+  #
+  # The aws-target federation template shipped to customers once used
+  # intrinsic functions as map keys, which CloudFormation cannot load at all
+  # (cfn-lint E0000), and the repo's own Go evaluator accepted it (#1489).
+  # check-yaml above excludes these directories because PyYAML cannot read the
+  # !Ref/!Sub short forms, so this hook is what checks they load. Local hook
+  # with the version pinned in additional_dependencies, like zizmor above.
+  #
+  # --non-zero-exit-code error: errors (templates CloudFormation rejects)
+  # fail the hook. Warnings do not fail it, because the
+  # cloudformation/stacks/CUDly and aws-cross-account templates carry a W3005
+  # (redundant DependsOn) that is not a load or deploy failure.
+  - repo: local
+    hooks:
+      - id: cfn-lint
+        name: Lint CloudFormation templates
+        language: python
+        additional_dependencies: ['cfn-lint==1.58.0']
+        entry: cfn-lint --non-zero-exit-code error
+        files: ^(cloudformation/stacks/[^/]+|iac/federation/[^/]+/cloudformation)/template\.ya?ml$
+
   # Markdown linting
   - repo: https://github.com/igorshubovych/markdownlint-cli
     rev: 76b3d32d3f4b965e1d6425253c59407420ae2c43  # frozen: v0.47.0
