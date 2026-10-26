@@ -11,13 +11,12 @@ import (
 	"testing"
 )
 
-// handRolledConfigStoreAllowlist lists the hand-rolled config.StoreInterface
-// copies that predate this guard and are still waiting to be folded onto
-// MockConfigStore (issue #76). It may only shrink: an entry whose type no
-// longer hand-rolls the interface fails the guard until it is removed here.
-var handRolledConfigStoreAllowlist = map[string]bool{
-	"internal/server.mockConfigStoreForHealth": true,
-}
+// handRolledConfigStoreAllowlist lists hand-rolled config.StoreInterface copies
+// that are still waiting to be folded onto MockConfigStore (issue #76). It is
+// empty now that internal/server.mockConfigStoreForHealth embeds
+// MockConfigStore, and it may only shrink: an entry whose type no longer
+// hand-rolls the interface fails the guard until it is removed here.
+var handRolledConfigStoreAllowlist = map[string]bool{}
 
 // TestNoHandRolledConfigStoreMocks keeps test doubles of config.StoreInterface
 // from being written out method by method. Every such copy needs a new stub for
