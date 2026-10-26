@@ -335,7 +335,7 @@ func TestSendRegistrationReceivedNotification_SubjectHeaderInjection(t *testing.
 // so that TLS 1.0/1.1 cannot be negotiated even if the server offers them.
 //
 // We cannot dial a live SMTP server in a unit test, so we verify the constant
-// directly and confirm the sendMailTLS helper passes a config that enforces
+// directly and confirm the sendMail STARTTLS path passes a config that enforces
 // the minimum version via a test-double net.Listener.
 func TestSMTPStartTLS_MinVersionTLS12(t *testing.T) {
 	// Verify the constant value matches Go's crypto/tls expectation.
@@ -344,7 +344,7 @@ func TestSMTPStartTLS_MinVersionTLS12(t *testing.T) {
 		t.Fatal("tls.VersionTLS12 is zero; build environment issue")
 	}
 
-	// Build the config the same way sendMailTLS does and confirm MinVersion.
+	// Build the config the same way smtpConverse does and confirm MinVersion.
 	cfg := &tls.Config{ServerName: "smtp.example.com", MinVersion: tls.VersionTLS12}
 	if cfg.MinVersion != tls.VersionTLS12 {
 		t.Errorf("TLS config MinVersion is %d; want tls.VersionTLS12 (%d) (regression of #410)",
