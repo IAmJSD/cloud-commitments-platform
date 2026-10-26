@@ -893,6 +893,8 @@ paths:
             execute_mode "direct" only. The claim was won and the purchase
             ran, but it failed or only partly completed. Money may have moved;
             the body details carry execution_id and the row's actual status.
+            A partially_completed run is revocable: the executed email with
+            its revocation link is sent as for a completed run.
             Check the execution in History before retrying.
           content:
             application/json:
@@ -1013,8 +1015,10 @@ paths:
             Session mode only. The claim was won and the purchase ran, but it
             failed or only partly completed (a failed or partially_completed
             run). Money may have moved; the body details carry execution_id
-            and the row's actual status. Check the execution in History
-            before retrying.
+            and the row's actual status. A partially_completed run is
+            revocable: the executed email with its revocation link is sent as
+            for a completed run. Check the execution in History before
+            retrying.
           content:
             application/json:
               schema:
