@@ -359,7 +359,7 @@ func TestApplySuppressions_UnreadableRecDetailsMatchEveryRow(t *testing.T) {
 	assert.Equal(t, 3, out[0].Count)
 }
 
-// TestApplySuppressions_AWSLegacySlugSpellings covers issues #1412 and #1420: AWS
+// TestApplySuppressions_AWSLegacySlugSpellings covers issues #1412, #1420 and #1422: AWS
 // recs and suppressions can be stored under a legacy or canonical slug, and a
 // suppression hides the rec whichever spelling each uses. Azure and GCP
 // "compute" stay distinct from "ec2".
@@ -381,6 +381,11 @@ func TestApplySuppressions_AWSLegacySlugSpellings(t *testing.T) {
 		{"aws legacy redshift sup hides data-warehouse rec", "aws", "data-warehouse", "redshift", 2},
 		{"aws data-warehouse sup hides legacy redshift rec", "aws", "redshift", "data-warehouse", 2},
 		{"aws memorydb sup does not hide cache rec", "aws", "cache", "memorydb", 5},
+		{"aws dash-free compute SP sup hides compute SP rec", "aws", "savings-plans-compute", "savingsplans-compute", 2},
+		{"aws compute SP sup hides dash-free compute SP rec", "aws", "savingsplans-compute", "savings-plans-compute", 2},
+		{"aws dash-free database SP sup hides database SP rec", "aws", "savings-plans-database", "savingsplans-database", 2},
+		{"aws umbrella SP sup does not hide compute SP rec", "aws", "savings-plans-compute", "savingsplans", 5},
+		{"aws compute SP sup does not hide sagemaker SP rec", "aws", "savings-plans-sagemaker", "savingsplans-compute", 5},
 		{"azure legacy rds sup does not hide relational-db rec", "azure", "relational-db", "rds", 5},
 		{"azure compute sup hides compute rec", "azure", "compute", "compute", 2},
 		{"azure ec2 sup does not hide compute rec", "azure", "compute", "ec2", 5},

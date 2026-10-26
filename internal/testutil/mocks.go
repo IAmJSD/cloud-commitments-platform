@@ -14,6 +14,7 @@ type MockScheduler struct {
 	CollectRecommendationsFunc func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error)
 	ListRecommendationsFunc    func(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
 	GetRecommendationByIDFunc  func(ctx context.Context, id string) (*config.RecommendationRecord, []string, error)
+	ScanRecommendationsFunc    func(ctx context.Context, filter config.RecommendationFilter, chunkSize int, fn func([]config.RecommendationRecord) error) error
 }
 
 func (m *MockScheduler) CollectRecommendations(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
@@ -28,6 +29,14 @@ func (m *MockScheduler) ListRecommendations(ctx context.Context, filter config.R
 		return m.ListRecommendationsFunc(ctx, filter)
 	}
 	return []config.RecommendationRecord{}, nil
+}
+
+// ScanRecommendations defaults to an empty cache: fn is never called.
+func (m *MockScheduler) ScanRecommendations(ctx context.Context, filter config.RecommendationFilter, chunkSize int, fn func([]config.RecommendationRecord) error) error {
+	if m.ScanRecommendationsFunc != nil {
+		return m.ScanRecommendationsFunc(ctx, filter, chunkSize, fn)
+	}
+	return nil
 }
 
 func (m *MockScheduler) GetRecommendationByID(ctx context.Context, id string) (*config.RecommendationRecord, []string, error) {

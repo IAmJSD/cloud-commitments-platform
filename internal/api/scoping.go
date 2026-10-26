@@ -407,8 +407,15 @@ func (h *Handler) resolveSingleAccountFilterIDs(ctx context.Context, accountID s
 	if err != nil {
 		return nil, map[string][]string{"": {accountID}}
 	}
-	for _rvc := range accounts {
-		a := accounts[_rvc]
+	return unscopedAccountFilter(accounts, accountID)
+}
+
+// unscopedAccountFilter is the pure half of resolveSingleAccountFilterIDs: it
+// maps one non-empty account identifier onto the dual-column filter using an
+// already-loaded cloud_accounts list.
+func unscopedAccountFilter(accounts []config.CloudAccount, accountID string) (uuids []string, externalIDsByProvider map[string][]string) {
+	for i := range accounts {
+		a := &accounts[i]
 		if a.ID == accountID {
 			// Known UUID: match cloud_account_id by UUID and, when present,
 			// account_id by the resolved external number scoped to its provider.

@@ -2537,10 +2537,17 @@ func (h *Handler) approveRIExchangeViaSession(ctx context.Context, req *events.L
 	return result, execErr
 }
 
-// fetchAndAuthorizeRIExchange looks up the pending exchange record by id, checks
-// that it is in "pending" state, and then verifies that session is authorized to
-// approve it. Extracted from approveRIExchangeViaSession to keep that function
-// under the cyclomatic-complexity limit.
+// fetchAndAuthorizeRIExchange looks up the exchange record by id, verifies that
+// session is authorized to approve it, and then checks that it is in "pending"
+// state. Extracted from approveRIExchangeViaSession to keep that function under
+// the cyclomatic-complexity limit.
+//
+// Ownership is checked before existence and status (issue #1428): an
+// approve-own session gets the same 403 for a missing id and for another
+// user's exchange, pending or not, so it cannot learn which ids exist or read
+// their status. The 403 also falls through to the email token like any other
+// ownership refusal. Approve-any sessions and the admin key may approve any
+// exchange, so they keep the 404/409 distinction.
 func (h *Handler) fetchAndAuthorizeRIExchange(ctx context.Context, session *Session, id string) (*config.RIExchangeRecord, error) {
 	if err := validateUUID(id); err != nil {
 		return nil, err
@@ -2560,16 +2567,14 @@ func (h *Handler) fetchAndAuthorizeRIExchange(ctx context.Context, session *Sess
 	if err != nil {
 		return nil, err
 	}
+	if err := h.authorizeSessionApproveRIExchange(ctx, session, record); err != nil {
+		return nil, err
+	}
 	if record == nil {
 		return nil, NewClientError(404, "exchange record not found")
 	}
-
 	if record.Status != "pending" {
 		return nil, NewClientError(409, fmt.Sprintf("exchange %s cannot be approved (status=%s)", id, record.Status))
-	}
-
-	if err := h.authorizeSessionApproveRIExchange(ctx, session, record); err != nil {
-		return nil, err
 	}
 
 	return record, nil
@@ -2612,6 +2617,10 @@ func (h *Handler) sessionHasApproveRight(ctx context.Context, session *Session) 
 // The RI exchange shares ResourcePurchases because approval is conceptually
 // "approving a purchase action on a different resource type" per the issue spec,
 // which prefers reusing the existing verbs to keep the matrix small.
+//
+// record may be nil (no such exchange). An approve-own session is refused for
+// it exactly as for another user's record (issue #1428); the admin key and
+// approve-any pass, and the caller answers 404.
 func (h *Handler) authorizeSessionApproveRIExchange(ctx context.Context, session *Session, record *config.RIExchangeRecord) error {
 	// Stateless admin API key: full access, no user row. Administrators-group
 	// users pass via the approve-any check below.
@@ -2638,8 +2647,9 @@ func (h *Handler) authorizeSessionApproveRIExchange(ctx context.Context, session
 		return NewClientError(403, "permission denied: requires approve-any or approve-own on purchases")
 	}
 
-	// approve-own: only allow if the session user created this exchange.
-	if record.CreatedByUserID == nil || *record.CreatedByUserID != session.UserID {
+	// approve-own: only allow if the session user created this exchange. A
+	// missing record answers the same, so the refusal is no existence oracle.
+	if record == nil || record.CreatedByUserID == nil || *record.CreatedByUserID != session.UserID {
 		return NewClientError(403, "permission denied: cannot approve another user's pending exchange")
 	}
 

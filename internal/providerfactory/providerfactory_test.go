@@ -36,11 +36,11 @@ func (f *fakeTokenSource) Token() (*oauth2.Token, error) {
 
 // recordingRegistry returns a private registry whose name factory records
 // the config it receives and returns want.
-func recordingRegistry(t *testing.T, name string, want provider.Provider, wantErr error) (*provider.Registry, *[]*provider.ProviderConfig) {
+func recordingRegistry(t *testing.T, name string, want provider.Provider, wantErr error) (*provider.Registry, *[]*provider.Config) {
 	t.Helper()
 	reg := provider.NewRegistry()
-	var got []*provider.ProviderConfig
-	require.NoError(t, reg.Register(name, func(cfg *provider.ProviderConfig) (provider.Provider, error) {
+	var got []*provider.Config
+	require.NoError(t, reg.Register(name, func(cfg *provider.Config) (provider.Provider, error) {
 		got = append(got, cfg)
 		return want, wantErr
 	}))
@@ -147,7 +147,7 @@ func TestBuild_PropagatesFactoryErrorsAndNilProviders(t *testing.T) {
 func TestNewAzure_MatchesLegacyConstruction(t *testing.T) {
 	cred := &fakeAzureCred{id: "legacy"}
 
-	legacy, err := azureprovider.NewAzureProvider(&provider.ProviderConfig{Profile: testSubscriptionID}) //nolint:staticcheck // SA1019: this is the legacy baseline being compared against
+	legacy, err := azureprovider.NewAzureProvider(&provider.Config{Profile: testSubscriptionID}) //nolint:staticcheck // SA1019: this is the legacy baseline being compared against
 	require.NoError(t, err)
 	legacy.SetCredential(cred)
 
