@@ -115,15 +115,6 @@ type HistoryDataPoint struct {
 	CumulativeSavings float64            `json:"cumulative_savings"`
 }
 
-// HistorySummaryAnalytics contains aggregated statistics for analytics.
-type HistorySummaryAnalytics struct {
-	TotalPeriodSavings      float64 `json:"total_period_savings"`
-	TotalUpfrontSpent       float64 `json:"total_upfront_spent"`
-	PurchaseCount           int     `json:"purchase_count"`
-	AverageSavingsPerPeriod float64 `json:"average_savings_per_period"`
-	PeakSavings             float64 `json:"peak_savings"`
-}
-
 // BreakdownValue represents savings breakdown by dimension.
 type BreakdownValue struct {
 	TotalSavings  float64  `json:"total_savings"`
