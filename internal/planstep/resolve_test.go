@@ -90,6 +90,22 @@ func TestResolveSizesAndPricesFromUnsuppressedRow(t *testing.T) {
 	assert.Equal(t, *stored.OnDemandCost*ratio, *got[0].OnDemandCost)
 }
 
+// The costs come from the stored row, so the currency must too: a shown row
+// that says USD cannot relabel a stored EUR price, and an unknown stored
+// currency stays unknown (issue #361).
+func TestResolveTakesCurrencyFromStoredRow(t *testing.T) {
+	for _, tc := range []struct{ stored, shown string }{{"EUR", "USD"}, {"", "USD"}, {"USD", ""}} {
+		stored := azureRec(20, 1000)
+		stored.CommitmentCurrency = tc.stored
+		shown := stored
+		shown.CommitmentCurrency = tc.shown
+		got, err := resolveStep1(t, fakeSource{shown: []config.RecommendationRecord{shown}}, fakeStore{rows: []config.RecommendationRecord{stored}}, azurePlan(80, 25), accts)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		assert.Equal(t, tc.stored, got[0].CommitmentCurrency)
+	}
+}
+
 func TestResolveFloorsProductFirst(t *testing.T) {
 	stored := azureRec(100, 1000)
 	// 0.7*0.1 as a ratio is 0.06999999999999999, which floors 7 to 6.
