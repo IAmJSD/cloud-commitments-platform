@@ -14,10 +14,14 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/commitmentopts"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -126,4 +130,76 @@ func TestUpdateServiceConfig_ConcurrentFirstSavesKeepBothKeys(t *testing.T) {
 		}
 	}
 	require.Zero(t, lost, "%d of %d rounds lost one of two concurrent first saves", lost, serviceConfigRaceRounds)
+}
+
+// settingsAWSServices are the AWS rows the Settings page saves, one PUT each,
+// in parallel (frontend/src/settings.ts, Promise.allSettled).
+var settingsAWSServices = []string{
+	"ec2", "rds", "elasticache", "opensearch", "redshift",
+	"savings-plans-compute", "savings-plans-ec2instance", "savings-plans-sagemaker", "savings-plans-database",
+}
+
+// TestUpdateServiceConfig_ParallelSettingsSaveDoesNotExhaustPool is the pool
+// deadlock from the #1509 review. Each PUT holds one pooled connection for its
+// locked transaction. If the commitment-option check inside it reads the
+// commitmentopts store through the same pool, then as many concurrent saves as
+// the pool has connections each hold one and wait for a second that never
+// frees: every save hangs until its deadline and the instance starves. The
+// pool here is the Fargate default (db_max_connections = 3), the probe cache is
+// warm, and the handler is wired as internal/server/app.go wires it.
+func TestUpdateServiceConfig_ParallelSettingsSaveDoesNotExhaustPool(t *testing.T) {
+	ctx := context.Background()
+	// The limit under test is this client pool's size, so the shared server
+	// is fine.
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
+	poolCfg := *pg.Config
+	poolCfg.MaxConnections, poolCfg.MinConnections = 3, 0
+	db, err := database.NewConnection(ctx, &poolCfg, nil)
+	require.NoError(t, err)
+	t.Cleanup(db.Close)
+
+	optsStore := commitmentopts.NewPostgresStore(db)
+	combos := make([]commitmentopts.Combo, 0, len(settingsAWSServices))
+	for _, svc := range settingsAWSServices {
+		combos = append(combos, commitmentopts.Combo{Provider: "aws", Service: svc, TermYears: 1, Payment: "no-upfront"})
+	}
+	require.NoError(t, optsStore.Save(ctx, combos, "123456789012"))
+
+	store := config.NewPostgresStore(db)
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com",
+	}, nil)
+	mockAuth.grantAdmin()
+	h := &Handler{config: store, auth: mockAuth, commitmentOpts: commitmentopts.New(optsStore, store, nil, nil)}
+
+	// Before the fix every save fails here at the deadline; after it the
+	// whole batch takes milliseconds.
+	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	start := make(chan struct{})
+	errs := make([]error, len(settingsAWSServices))
+	var wg sync.WaitGroup
+	for i, svc := range settingsAWSServices {
+		wg.Add(1)
+		go func(i int, svc string) {
+			defer wg.Done()
+			<-start
+			_, errs[i] = h.updateServiceConfig(reqCtx, &events.LambdaFunctionURLRequest{
+				Headers: map[string]string{"Authorization": "Bearer admin-token"},
+				Body:    `{"enabled":true,"term":1,"payment":"no-upfront","coverage":50}`,
+			}, "aws/"+svc)
+		}(i, svc)
+	}
+	began := time.Now()
+	close(start)
+	wg.Wait()
+	t.Logf("%d parallel saves on a pool of %d took %v", len(settingsAWSServices), poolCfg.MaxConnections, time.Since(began))
+
+	for i, svc := range settingsAWSServices {
+		require.NoError(t, errs[i], "PUT aws/%s", svc)
+		got, err := store.GetServiceConfig(ctx, "aws", svc)
+		require.NoError(t, err)
+		require.Equal(t, []any{true, 1, "no-upfront", 50.0}, []any{got.Enabled, got.Term, got.Payment, got.Coverage}, "aws/%s", svc)
+	}
 }

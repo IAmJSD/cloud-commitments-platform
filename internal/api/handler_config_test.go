@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/commitmentopts"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
@@ -847,6 +848,73 @@ func TestHandler_updateServiceConfig_MergesInsideAtomicUpdate(t *testing.T) {
 	store.AssertNotCalled(t, "SaveServiceConfig", mock.Anything, mock.Anything)
 }
 
+// TestHandler_updateServiceConfig_CommitmentOptsOutsideTransaction pins the
+// pool-deadlock fix for issue #1488: the commitment options are fetched before
+// UpdateServiceConfigAtomic opens its transaction, never from inside the merge
+// callback (which would need a second pooled connection while the transaction
+// holds one), and the callback checks the merged row against that snapshot.
+func TestHandler_updateServiceConfig_CommitmentOptsOutsideTransaction(t *testing.T) {
+	ctx := context.Background()
+	rdsOneYear := commitmentopts.Options{"aws": {"rds": {
+		{Provider: "aws", Service: "rds", TermYears: 1, Payment: "all-upfront"},
+	}}}
+	run := func(t *testing.T, stored *config.ServiceConfig, body string, getErr error) error {
+		t.Helper()
+		mockAuth := new(MockAuthService)
+		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
+			UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com",
+		}, nil)
+		mockAuth.grantAdmin()
+		// The mock's UpdateServiceConfigAtomic fallback reads the row through
+		// GetServiceConfig, then runs the merge callback, then saves: that
+		// read is the point where the real store has opened its transaction.
+		txOpened, gets := false, 0
+		store := new(MockConfigStore)
+		store.On("GetServiceConfig", ctx, "aws", "rds").Return(stored, nil).
+			Run(func(mock.Arguments) { txOpened = true })
+		store.On("SaveServiceConfig", ctx, mock.AnythingOfType("*config.ServiceConfig")).Return(nil)
+		h := &Handler{config: store, auth: mockAuth, commitmentOpts: &stubCommitmentOpts{
+			getFn: func(context.Context) (commitmentopts.Options, error) {
+				assert.False(t, txOpened, "commitment options read inside the transaction")
+				gets++
+				return rdsOneYear, getErr
+			},
+			validateFn: func(context.Context, string, string, int, string) (bool, error) {
+				t.Error("Validate reads the store; the PUT must check the prefetched snapshot")
+				return true, nil
+			},
+		}}
+		_, err := h.updateServiceConfig(ctx, &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"Authorization": "Bearer admin-token"}, Body: body,
+		}, "aws/rds")
+		assert.Equal(t, 1, gets, "options fetched exactly once, before the transaction")
+		return err
+	}
+	storedThreeYear := &config.ServiceConfig{Provider: "aws", Service: "rds", Enabled: true, Term: 3, Payment: "no-upfront", Coverage: 50}
+
+	t.Run("merged row checked against the snapshot", func(t *testing.T) {
+		// The body alone carries no term or payment; the stored 3yr no-upfront
+		// does, and the snapshot does not sell it.
+		err := run(t, storedThreeYear, `{"coverage":80}`, nil)
+		ce, ok := IsClientError(err)
+		require.True(t, ok, "got %v", err)
+		assert.Equal(t, 400, ce.code)
+		assert.Contains(t, ce.message, "3yr no-upfront")
+	})
+	t.Run("supported combo saves", func(t *testing.T) {
+		require.NoError(t, run(t, nil, `{"enabled":true,"term":1,"payment":"all-upfront","coverage":80}`, nil))
+	})
+	t.Run("read error refuses a save that needs the check", func(t *testing.T) {
+		err := run(t, storedThreeYear, `{"coverage":80}`, errors.New("connection refused"))
+		ce, ok := IsClientError(err)
+		require.True(t, ok, "got %v", err)
+		assert.Equal(t, 503, ce.code)
+	})
+	t.Run("read error does not block a save without a combo", func(t *testing.T) {
+		require.NoError(t, run(t, nil, `{"enabled":false,"coverage":80}`, errors.New("connection refused")))
+	})
+}
+
 // TestHandler_updateServiceConfig_StoredRowRead covers the two outcomes of the
 // in-transaction read: no stored row saves the body as the whole row, and any
 // other read error aborts the save.
@@ -930,17 +998,19 @@ func TestHandler_updateServiceConfig_CommitmentOptsReject(t *testing.T) {
 	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, nil)
 
 	// Probe data says RDS 3yr no-upfront doesn't exist. Save must 400.
-	// SaveServiceConfig is NOT set up — asserting it's never called.
+	// SaveServiceConfig is NOT set up — asserting it's never called. The PUT
+	// prefetches the options with Get before its transaction and checks the
+	// merged row against them inside it, so validateFn stays nil: calling the
+	// pool-touching Validate there would panic this test (issue #1488).
 	handler := &Handler{
 		config: mockStore,
 		auth:   mockAuth,
 		commitmentOpts: &stubCommitmentOpts{
-			validateFn: func(_ context.Context, provider, service string, term int, payment string) (bool, error) {
-				assert.Equal(t, "aws", provider)
-				assert.Equal(t, "rds", service)
-				assert.Equal(t, 3, term)
-				assert.Equal(t, "no-upfront", payment)
-				return false, nil
+			getFn: func(context.Context) (commitmentopts.Options, error) {
+				return commitmentopts.Options{"aws": {"rds": {
+					{Provider: "aws", Service: "rds", TermYears: 1, Payment: "all-upfront"},
+					{Provider: "aws", Service: "rds", TermYears: 3, Payment: "all-upfront"},
+				}}}, nil
 			},
 		},
 	}
@@ -979,8 +1049,10 @@ func TestHandler_updateServiceConfig_CommitmentOptsAccept(t *testing.T) {
 		config: mockStore,
 		auth:   mockAuth,
 		commitmentOpts: &stubCommitmentOpts{
-			validateFn: func(context.Context, string, string, int, string) (bool, error) {
-				return true, nil
+			getFn: func(context.Context) (commitmentopts.Options, error) {
+				return commitmentopts.Options{"aws": {"rds": {
+					{Provider: "aws", Service: "rds", TermYears: 1, Payment: "all-upfront"},
+				}}}, nil
 			},
 		},
 	}
@@ -1013,8 +1085,8 @@ func TestHandler_updateServiceConfig_CommitmentOptsErrorRefusesSave(t *testing.T
 		config: mockStore,
 		auth:   mockAuth,
 		commitmentOpts: &stubCommitmentOpts{
-			validateFn: func(context.Context, string, string, int, string) (bool, error) {
-				return false, errors.New("read commitmentopts store: connection refused")
+			getFn: func(context.Context) (commitmentopts.Options, error) {
+				return nil, errors.New("read commitmentopts store: connection refused")
 			},
 		},
 	}

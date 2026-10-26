@@ -154,6 +154,11 @@ func (s *Service) findAWSAccount(ctx context.Context) (*config.CloudAccount, err
 // successfully probed) Validate returns true so saves aren't blocked when
 // we can't verify. The frontend's hardcoded rules are the user-facing
 // gate; this check is belt-and-braces.
+//
+// Validate reads the store through its own pool connections and can probe
+// AWS on a cold cache, so it must not run while the caller holds a pooled
+// transaction. Such callers fetch the Options with Get first and check them
+// with ValidateCombo inside the transaction.
 func (s *Service) Validate(ctx context.Context, provider, service string, term int, payment string) (bool, error) {
 	opts, err := s.Get(ctx)
 	if err != nil {
@@ -162,12 +167,21 @@ func (s *Service) Validate(ctx context.Context, provider, service string, term i
 		}
 		return false, err
 	}
+	return ValidateCombo(opts, provider, service, term, payment), nil
+}
 
+// ValidateCombo reports whether (provider, service, term, payment) is a legal
+// combination according to opts, a snapshot returned by Get. It is pure: no
+// database or network access, so it is safe to call inside a transaction.
+//
+// It is permissive where opts has nothing to say: a provider with no combos,
+// or a service the probe returned no combos for, is treated as valid.
+func ValidateCombo(opts Options, provider, service string, term int, payment string) bool {
 	byService, ok := opts[provider]
 	if !ok {
 		// No combos for this provider at all — nothing to validate
 		// against. Permissive fallback keeps parity with ErrNoData.
-		return true, nil
+		return true
 	}
 	combos, ok := byService[service]
 	if !ok {
@@ -181,14 +195,14 @@ func (s *Service) Validate(ctx context.Context, provider, service string, term i
 		// rules are the primary user-facing gate.
 		logging.Warnf("commitmentopts: provider %q known in probe data but service %q absent; treating as valid (term=%d payment=%q)",
 			provider, service, term, payment)
-		return true, nil
+		return true
 	}
 	for _, c := range combos {
 		if c.TermYears == term && c.Payment == payment {
-			return true, nil
+			return true
 		}
 	}
-	return false, nil
+	return false
 }
 
 // buildOptions groups a flat Combo slice into the nested Options map the

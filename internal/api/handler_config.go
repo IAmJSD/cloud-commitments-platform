@@ -176,14 +176,70 @@ func (h *Handler) checkCommitmentOptionCombo(ctx context.Context, cfg config.Ser
 		return nil
 	}
 	if err != nil {
-		logging.Errorf("commitment-option validation error (refusing save): %v", err)
-		return NewClientError(503, "could not validate the commitment term and payment option; try again")
+		return commitmentComboUnverifiable(err)
 	}
 	if !ok {
-		return NewClientError(400, fmt.Sprintf(
-			"%s does not support %dyr %s commitments",
-			cfg.Service, cfg.Term, cfg.Payment,
-		))
+		return commitmentComboUnsupported(cfg)
+	}
+	return nil
+}
+
+// commitmentComboUnverifiable is the 503 a save gets when the commitment
+// options could not be read, so the combo could not be checked.
+func commitmentComboUnverifiable(err error) error {
+	logging.Errorf("commitment-option validation error (refusing save): %v", err)
+	return NewClientError(503, "could not validate the commitment term and payment option; try again")
+}
+
+// commitmentComboUnsupported is the 400 a save gets for a (term, payment)
+// combination the probe data says the service does not sell.
+func commitmentComboUnsupported(cfg config.ServiceConfig) error {
+	return NewClientError(400, fmt.Sprintf(
+		"%s does not support %dyr %s commitments",
+		cfg.Service, cfg.Term, cfg.Payment,
+	))
+}
+
+// commitmentOptsSnapshot is the commitment-option data a service-config PUT
+// checks its merged row against. It is fetched before the save opens its
+// transaction (issue #1488): Get reads the store through pooled connections
+// and can probe AWS on a cold cache, and doing that while the transaction
+// holds a pooled connection deadlocks the pool once as many saves run at
+// once as the pool has connections (the Settings page saves its rows in
+// parallel). check is pure, so it is safe inside the transaction.
+type commitmentOptsSnapshot struct {
+	opts commitmentopts.Options
+	err  error
+	// loaded is false when there is nothing to check against: no service is
+	// wired, the save is not AWS, or no probe data exists (ErrNoData).
+	loaded bool
+}
+
+// prefetchCommitmentOptions fetches the snapshot for a save of provider. A
+// read error is kept rather than returned, so it fails only a save whose
+// merged row actually needs the check, as checkCommitmentOptionCombo does.
+func (h *Handler) prefetchCommitmentOptions(ctx context.Context, provider string) commitmentOptsSnapshot {
+	if h.commitmentOpts == nil || provider != "aws" {
+		return commitmentOptsSnapshot{}
+	}
+	opts, err := h.commitmentOpts.Get(ctx)
+	if errors.Is(err, commitmentopts.ErrNoData) {
+		return commitmentOptsSnapshot{}
+	}
+	return commitmentOptsSnapshot{opts: opts, err: err, loaded: true}
+}
+
+// check applies checkCommitmentOptionCombo's rules to cfg against the
+// snapshot, without touching the database or the network.
+func (s commitmentOptsSnapshot) check(cfg config.ServiceConfig) error {
+	if !s.loaded || cfg.Provider != "aws" || cfg.Term <= 0 || cfg.Payment == "" {
+		return nil
+	}
+	if s.err != nil {
+		return commitmentComboUnverifiable(s.err)
+	}
+	if !commitmentopts.ValidateCombo(s.opts, cfg.Provider, cfg.Service, cfg.Term, cfg.Payment) {
+		return commitmentComboUnsupported(cfg)
 	}
 	return nil
 }
@@ -353,13 +409,18 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 		cfg.Service = parts[1]
 	}
 
+	// Fetch the commitment options before the transaction opens: the merge
+	// callback below runs while the transaction holds a pooled connection,
+	// so nothing in it may take another one (see commitmentOptsSnapshot).
+	combos := h.prefetchCommitmentOptions(ctx, cfg.Provider)
+
 	// Serialized read-merge-write (issue #1488): the store reads the stored
 	// row and writes the merged result in one locked transaction, so two
 	// admins saving different fields of this row at once cannot both merge
 	// onto the same stale base and lose one change. ClientErrors from the
 	// merge or validation propagate unchanged.
 	_, err := h.config.UpdateServiceConfigAtomic(ctx, cfg.Provider, cfg.Service, func(existing *config.ServiceConfig) (*config.ServiceConfig, error) {
-		return h.mergeAndValidateServiceConfig(ctx, existing, cfg, req.Body)
+		return mergeAndValidateServiceConfig(existing, cfg, req.Body, combos)
 	})
 	if err != nil {
 		return nil, err
@@ -373,8 +434,10 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 // field (the scalars and the recommendation filters) only when the body
 // carried its key, so a partial PUT never reverts or zeroes a field
 // (ramp_schedule, a filter set out-of-band) it didn't mean to touch, then
-// validates the merged row, not the partial body.
-func (h *Handler) mergeAndValidateServiceConfig(ctx context.Context, existing *config.ServiceConfig, cfg config.ServiceConfig, body string) (*config.ServiceConfig, error) {
+// validates the merged row, not the partial body, including its commitment
+// combo against the prefetched combos. It touches neither the database nor
+// the network: the transaction already holds a pooled connection.
+func mergeAndValidateServiceConfig(existing *config.ServiceConfig, cfg config.ServiceConfig, body string, combos commitmentOptsSnapshot) (*config.ServiceConfig, error) {
 	merged, err := mergeServiceConfig(existing, cfg, body)
 	if err != nil {
 		return nil, err
@@ -382,7 +445,7 @@ func (h *Handler) mergeAndValidateServiceConfig(ctx context.Context, existing *c
 	if err := merged.Validate(); err != nil {
 		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
 	}
-	if err := h.checkCommitmentOptionCombo(ctx, merged); err != nil {
+	if err := combos.check(merged); err != nil {
 		return nil, err
 	}
 	return &merged, nil
