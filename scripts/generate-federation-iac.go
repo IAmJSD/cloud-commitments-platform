@@ -128,11 +128,7 @@ type iacData struct {
 	SourceAccountID string
 	// AWS WIF / cross-account
 	OIDCIssuerURL string
-	// OIDCIssuerHost is OIDCIssuerURL without its https:// prefix, the form
-	// IAM uses in condition keys; aws-cfn-deploy.sh.tmpl passes it to
-	// CloudFormation. Derived the same way as the server does.
-	OIDCIssuerHost string
-	OIDCAudience   string
+	OIDCAudience  string
 	// OIDCSubjectClaim restricts the AWS trust policy to a single workload
 	// subject. Empty unless --oidc-subject-claim is passed; every AWS-WIF
 	// template requires it (no working subject-less default, see #1640).
@@ -673,7 +669,6 @@ func populateData(data *iacData, target, source, tenantID, projectID, saEmail, o
 	switch target {
 	case "aws":
 		data.OIDCIssuerURL = awsOIDCIssuer(source, tenantID)
-		data.OIDCIssuerHost = strings.TrimPrefix(data.OIDCIssuerURL, "https://")
 		data.OIDCAudience = awsOIDCAudience(source)
 		data.OIDCSubjectClaim = oidcSubjectClaim
 		if err := requireSourceAccountID(data, source, sourceAccountID,
