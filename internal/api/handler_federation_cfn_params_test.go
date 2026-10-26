@@ -25,7 +25,7 @@ var cfnOverrideRe = regexp.MustCompile(`(?m)^\s+"([A-Za-z][A-Za-z0-9]*)=`)
 // download.
 func cfnBundleFiles(t *testing.T, source string) (template []byte, paramsKeys, scriptKeys []string) {
 	t.Helper()
-	res, err := federationHandler().getFederationIaC(context.Background(), federationReq(map[string]string{
+	res, err := federationHandler(t).getFederationIaC(context.Background(), federationReq(map[string]string{
 		"target": "aws", "source": source, "format": "cfn",
 	}))
 	require.NoError(t, err)
