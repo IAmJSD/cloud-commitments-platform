@@ -26,6 +26,12 @@ type StoreInterface interface {
 	// Service configuration
 	GetServiceConfig(ctx context.Context, provider, service string) (*ServiceConfig, error)
 	SaveServiceConfig(ctx context.Context, config *ServiceConfig) error
+	// UpdateServiceConfigAtomic serializes a read-merge-write of one service
+	// config row under a locked transaction so concurrent partial PUTs of the
+	// same row cannot lose each other's updates. apply receives the stored row
+	// (nil when none exists) and returns the full row to write; its error
+	// aborts the write and is propagated.
+	UpdateServiceConfigAtomic(ctx context.Context, provider, service string, apply func(existing *ServiceConfig) (*ServiceConfig, error)) (*ServiceConfig, error)
 	ListServiceConfigs(ctx context.Context) ([]ServiceConfig, error)
 
 	// Purchase plans
