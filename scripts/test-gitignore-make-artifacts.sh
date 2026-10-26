@@ -15,12 +15,14 @@
 #     stay anchored to the root and cannot hide a tracked file or fixture of
 #     the same name elsewhere in the tree.
 #
-# Each artifact name must also still appear in the Makefile outside an `rm`
-# line. If a target is renamed or stops writing the file, this fails rather
-# than passing on a pattern that no longer guards anything; the `make clean`
-# rm lines are skipped because they can outlive the target that wrote the file
-# (as gosec-report.json did once `make security-scan-go` moved to
-# scripts/run-gosec.sh, #340).
+# Each artifact name must also still appear in the Makefile as an output: right
+# after `-o`, `--out`, `--output`, `tee` or a `>`/`>>` redirection. If a target
+# is renamed or stops writing the file, this fails rather than passing on a
+# pattern that no longer guards anything. Other mentions do not count: the
+# `make clean` rm lines can outlive the target that wrote the file (as
+# gosec-report.json did once `make security-scan-go` moved to
+# scripts/run-gosec.sh, #340), and the `@echo "...: <name>"` status lines can
+# outlive a renamed output.
 #
 # Exits 0 when all cases pass; exits 1 on any failure.
 
@@ -62,17 +64,22 @@ gitignore_rule_for() {
   fi
 }
 
-# Makefile lines that can write an artifact: everything except `rm` lines.
-makefile_writers="$(grep -vE '^[[:space:]]*@?rm[[:space:]]' "${REPO_ROOT}/Makefile")"
+# True when the Makefile writes $1: the name follows an output flag, `tee` or a
+# redirection, and ends at whitespace, `;`, a quote or the end of the line.
+makefile_writes() {
+  local name_re="${1//./\\.}"
+  grep -qE "((^|[[:space:]])(-o|--out|--output|tee)([[:space:]]+|=)|>>?[[:space:]]*)${name_re}([[:space:];\"']|$)" \
+    "${REPO_ROOT}/Makefile"
+}
 
 for entry in "${ARTIFACTS[@]}"; do
   name="${entry%%:*}"
   target="${entry#*:}"
 
-  if grep -qF -- "$name" <<<"$makefile_writers"; then
+  if makefile_writes "$name"; then
     ok "Makefile still writes ${name} (make ${target})"
   else
-    not_ok "Makefile no longer writes ${name} (only rm lines, if any, mention it); update this test and .gitignore together"
+    not_ok "Makefile no longer writes ${name} (no -o/--out/--output/tee/redirection names it); update this test and .gitignore together"
   fi
 
   rule="$(gitignore_rule_for "$name")"
