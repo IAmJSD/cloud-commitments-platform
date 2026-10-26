@@ -155,6 +155,10 @@ type StoreInterface interface {
 	// this method's status filter) to avoid accidental double-processing of
 	// failed / expired rows.
 	GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error)
+	// GetExecutionsByStatusesFiltered is GetExecutionsByStatuses with the
+	// History filters and account scope in q applied in SQL before the limit,
+	// so the cap counts only rows the caller can be shown (issue #632).
+	GetExecutionsByStatusesFiltered(ctx context.Context, q ExecutionsByStatusesQuery) ([]PurchaseExecution, error)
 	// ListHistoryExecutionsPage and ListPurchaseHistoryPage read one keyset
 	// page each of the History view's paged stream (issue #674): rows strictly
 	// after q.After / after (nil starts at the top) in the stream order of

@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/insurance"
@@ -90,12 +89,14 @@ type Provider struct {
 	// verbs such as %s, which would print the key.
 	client   atomic.Pointer[insurance.Client]
 	settings Settings
-	mu       sync.Mutex
+	// sem is a 1-slot semaphore serializing the build; unlike a mutex, a
+	// waiter can abandon it when its ctx ends.
+	sem chan struct{}
 }
 
 // NewProvider returns a Provider. hc must be nil in production.
 func NewProvider(settings Settings, resolver secrets.Resolver, hc *http.Client) *Provider {
-	return &Provider{settings: settings, resolver: resolver, hc: hc}
+	return &Provider{settings: settings, resolver: resolver, hc: hc, sem: make(chan struct{}, 1)}
 }
 
 // Status reports setting presence without any outbound call or secret read.
@@ -115,7 +116,8 @@ func (p *Provider) Format(s fmt.State, _ rune) {
 func (p *Provider) PlanID() string { return p.settings.PlanID }
 
 // Client returns the lazily built client. A failure is not cached: the next
-// call retries (a mutex, not sync.Once, guards the build).
+// call retries. A caller waiting on another caller's build returns ctx.Err()
+// when its own ctx ends.
 func (p *Provider) Client(ctx context.Context) (insurance.QuoteClient, error) {
 	if p == nil {
 		return nil, fmt.Errorf("%w: missing %v", ErrNotConfigured, Settings{}.Missing())
@@ -123,8 +125,14 @@ func (p *Provider) Client(ctx context.Context) (insurance.QuoteClient, error) {
 	if missing := p.settings.Missing(); len(missing) > 0 {
 		return nil, fmt.Errorf("%w: missing %v", ErrNotConfigured, missing)
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	if c := p.client.Load(); c != nil {
+		return c, nil
+	}
+	release, err := p.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	if c := p.client.Load(); c != nil {
 		return c, nil
 	}
@@ -143,4 +151,19 @@ func (p *Provider) Client(ctx context.Context) (insurance.QuoteClient, error) {
 	}
 	p.client.Store(c)
 	return c, nil
+}
+
+// acquire takes the build slot, or returns ctx.Err() if ctx ends first.
+func (p *Provider) acquire(ctx context.Context) (func(), error) {
+	select {
+	case p.sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	// select picks randomly when both cases are ready; never resolve with a dead ctx.
+	if err := ctx.Err(); err != nil {
+		<-p.sem
+		return nil, err
+	}
+	return func() { <-p.sem }, nil
 }
