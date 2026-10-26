@@ -90,7 +90,10 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, err
 	}
 
-	filter := buildAccountFilter(req.QueryStringParameters)
+	filter, err := buildAccountFilter(req.QueryStringParameters)
+	if err != nil {
+		return nil, err
+	}
 
 	accts, err := h.config.ListCloudAccounts(ctx, filter)
 	if err != nil {
@@ -156,7 +159,10 @@ func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	filter := buildAccountFilter(req.QueryStringParameters)
+	filter, err := buildAccountFilter(req.QueryStringParameters)
+	if err != nil {
+		return nil, err
+	}
 
 	accts, err := h.config.ListCloudAccounts(ctx, filter)
 	if err != nil {
@@ -218,29 +224,35 @@ func annotateAccountNotices(acct *config.CloudAccount, hostPartition string) {
 }
 
 // buildAccountFilter constructs a CloudAccountFilter from query parameters.
-func buildAccountFilter(params map[string]string) config.CloudAccountFilter {
+// An unknown provider or an enabled value other than "true"/"false" is a 400
+// instead of being silently ignored (issue #312); an empty value or
+// provider "all" means no filter.
+func buildAccountFilter(params map[string]string) (config.CloudAccountFilter, error) {
 	var filter config.CloudAccountFilter
 
-	if p, ok := params["provider"]; ok && p != "" {
-		filter.Provider = &p
+	provider, err := providerFilterParam(params["provider"])
+	if err != nil {
+		return filter, err
+	}
+	if provider != "" {
+		filter.Provider = &provider
 	}
 
-	if e, ok := params["enabled"]; ok {
-		switch e {
-		case "true":
-			t := true
-			filter.Enabled = &t
-		case "false":
-			f := false
-			filter.Enabled = &f
-		}
+	switch params["enabled"] {
+	case "":
+	case "true":
+		t := true
+		filter.Enabled = &t
+	case "false":
+		f := false
+		filter.Enabled = &f
+	default:
+		return filter, NewClientError(400, "invalid enabled: must be true or false")
 	}
 
-	if s, ok := params["search"]; ok {
-		filter.Search = s
-	}
+	filter.Search = params["search"]
 
-	return filter
+	return filter, nil
 }
 
 // createSelfAccount handles POST /api/accounts/self.

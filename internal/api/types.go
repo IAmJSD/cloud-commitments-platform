@@ -753,15 +753,16 @@ type UpcomingPurchaseResponse struct {
 // to its parent PurchasePlan for display.
 //
 // The dashboard's Cancel button targets ExecutionID via
-// DELETE /api/purchases/planned/{id} (api.deletePlannedPurchase) so the
-// operator removes just THIS scheduled instance and leaves the plan
-// template intact — the next scheduler tick re-creates the next instance
-// for the plan. PlanID is exposed as context (e.g. for linking to the
-// plan's settings) and is NOT what destructive action endpoints should
-// target. PR #207 + #213 history: an earlier iteration routed Cancel to
-// api.deletePlan(planID) which deleted the entire plan; that was too
-// aggressive — operators usually want "skip this scheduled run", not
-// "nuke the recurring template".
+// DELETE /api/purchases/planned/{id} (api.deletePlannedPurchase). That
+// cancels THIS scheduled instance and also DISABLES its plan (issue #774;
+// DeletePlannedPurchaseResponse.PlanDisabled reports it): the plan row is
+// kept, but the scheduler creates no further instances until someone
+// re-enables it on the Plans page (issue #312 corrected this comment, which
+// used to say the plan stays active). PlanID is exposed as context (e.g. for
+// linking to the plan's settings) and is NOT what destructive action
+// endpoints should target. PR #207 + #213 history: an earlier iteration
+// routed Cancel to api.deletePlan(planID) which deleted the entire plan;
+// that was too aggressive.
 type UpcomingPurchase struct {
 	// CreatedByUserID propagates the underlying execution's
 	// created_by_user_id so the dashboard widget can apply the same
