@@ -101,7 +101,7 @@ func TestHandler_approvePurchase_PurchaseError(t *testing.T) {
 
 	mockPurchase := new(MockPurchaseManager)
 	mockPurchase.On("ApproveExecution", ctx, execID, "tok", approver).
-		Return("", errors.New("approval failed"))
+		Return(nil, "", errors.New("approval failed"))
 
 	h := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{

@@ -131,13 +131,7 @@ func TestRedactEmail(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMergeServiceConfig_NewRecord(t *testing.T) {
-	ctx := context.Background()
-	mockStore := new(MockConfigStore)
-
-	// Simulate "not found" error
-	mockStore.On("GetServiceConfig", ctx, "aws", "rds").
-		Return(nil, errors.New("not found"))
-
+	// No stored row: the request is the whole row.
 	incoming := config.ServiceConfig{
 		Provider: "aws",
 		Service:  "rds",
@@ -146,15 +140,12 @@ func TestMergeServiceConfig_NewRecord(t *testing.T) {
 		Coverage: 80,
 	}
 
-	result, err := mergeServiceConfig(ctx, mockStore, incoming, `{"enabled":true,"term":3,"coverage":80}`)
+	result, err := mergeServiceConfig(nil, incoming, `{"enabled":true,"term":3,"coverage":80}`)
 	require.NoError(t, err)
 	assert.Equal(t, incoming, result)
 }
 
 func TestMergeServiceConfig_ExistingRecord(t *testing.T) {
-	ctx := context.Background()
-	mockStore := new(MockConfigStore)
-
 	existing := &config.ServiceConfig{
 		Provider:       "aws",
 		Service:        "rds",
@@ -163,7 +154,6 @@ func TestMergeServiceConfig_ExistingRecord(t *testing.T) {
 		Coverage:       50.0,
 		IncludeEngines: []string{"mysql"},
 	}
-	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(existing, nil)
 
 	incoming := config.ServiceConfig{
 		Provider: "aws",
@@ -173,7 +163,7 @@ func TestMergeServiceConfig_ExistingRecord(t *testing.T) {
 		Coverage: 80.0,
 	}
 
-	result, err := mergeServiceConfig(ctx, mockStore, incoming, `{"enabled":true,"term":3,"coverage":80}`)
+	result, err := mergeServiceConfig(existing, incoming, `{"enabled":true,"term":3,"coverage":80}`)
 	require.NoError(t, err)
 
 	// UI-editable fields are updated
@@ -182,39 +172,19 @@ func TestMergeServiceConfig_ExistingRecord(t *testing.T) {
 	assert.Equal(t, 80.0, result.Coverage)
 	// Non-UI fields are preserved
 	assert.Equal(t, []string{"mysql"}, result.IncludeEngines)
+	// The stored row the store handed over is left as it was.
+	assert.False(t, existing.Enabled)
+	assert.Equal(t, 1, existing.Term)
+	assert.Equal(t, 50.0, existing.Coverage)
 }
 
-func TestMergeServiceConfig_DBError(t *testing.T) {
-	ctx := context.Background()
-	mockStore := new(MockConfigStore)
+func TestMergeServiceConfig_MalformedBody(t *testing.T) {
+	existing := &config.ServiceConfig{Provider: "aws", Service: "rds"}
 
-	mockStore.On("GetServiceConfig", ctx, "aws", "rds").
-		Return(nil, errors.New("connection refused"))
-
-	incoming := config.ServiceConfig{Provider: "aws", Service: "rds"}
-
-	_, err := mergeServiceConfig(ctx, mockStore, incoming, `{"provider":"aws","service":"rds"}`)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to read existing service config")
-}
-
-func TestMergeServiceConfig_NilExisting(t *testing.T) {
-	ctx := context.Background()
-	mockStore := new(MockConfigStore)
-
-	// GetServiceConfig returns nil, nil (record does not exist but no error)
-	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, nil)
-
-	incoming := config.ServiceConfig{
-		Provider: "aws",
-		Service:  "rds",
-		Enabled:  true,
-		Term:     3,
-	}
-
-	result, err := mergeServiceConfig(ctx, mockStore, incoming, `{"enabled":true,"term":3}`)
-	require.NoError(t, err)
-	assert.Equal(t, incoming, result)
+	_, err := mergeServiceConfig(existing, config.ServiceConfig{Provider: "aws", Service: "rds"}, `not json`)
+	var ce *clientError
+	require.ErrorAs(t, err, &ce)
+	assert.Equal(t, 400, ce.code)
 }
 
 // ---------------------------------------------------------------------------

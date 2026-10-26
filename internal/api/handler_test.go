@@ -877,7 +877,7 @@ func TestHandler_HandleRequest_ApprovePurchase(t *testing.T) {
 	mockAuth.On("HasPermissionAPI", mock.Anything, "", "approve-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
-	mockPurchase.On("ApproveExecution", mock.Anything, execID, "token123", approver).Return("", nil)
+	mockPurchase.On("ApproveExecution", mock.Anything, execID, "token123", approver).Return(nil, "", nil)
 
 	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
 

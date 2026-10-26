@@ -414,7 +414,6 @@ func TestLogin_WithMFA(t *testing.T) {
 		ID:           "user-123",
 		Email:        "mfa@example.com",
 		PasswordHash: hash,
-		Salt:         "", // Not used anymore
 		Active:       true,
 		MFAEnabled:   true,
 		MFASecret:    mfaSecret,
@@ -472,7 +471,6 @@ func TestLogin_WithMFA_InvalidCode(t *testing.T) {
 		ID:           "user-123",
 		Email:        "mfa@example.com",
 		PasswordHash: hash,
-		Salt:         "", // Not used anymore
 		Active:       true,
 		MFAEnabled:   true,
 		MFASecret:    "JBSWY3DPEHPK3PXP",
@@ -507,7 +505,6 @@ func TestLogin_WithMFA_MissingCode(t *testing.T) {
 		ID:           "user-123",
 		Email:        "mfa@example.com",
 		PasswordHash: hash,
-		Salt:         "", // Not used anymore
 		Active:       true,
 		MFAEnabled:   true,
 		MFASecret:    "JBSWY3DPEHPK3PXP",
@@ -541,7 +538,6 @@ func TestLogin_WithMFA_NoSecret(t *testing.T) {
 		ID:           "user-123",
 		Email:        "mfa@example.com",
 		PasswordHash: hash,
-		Salt:         "",
 		Active:       true,
 		MFAEnabled:   true,
 		MFASecret:    "", // Data-integrity anomaly: MFA enabled but no secret stored

@@ -176,14 +176,70 @@ func (h *Handler) checkCommitmentOptionCombo(ctx context.Context, cfg config.Ser
 		return nil
 	}
 	if err != nil {
-		logging.Errorf("commitment-option validation error (refusing save): %v", err)
-		return NewClientError(503, "could not validate the commitment term and payment option; try again")
+		return commitmentComboUnverifiable(err)
 	}
 	if !ok {
-		return NewClientError(400, fmt.Sprintf(
-			"%s does not support %dyr %s commitments",
-			cfg.Service, cfg.Term, cfg.Payment,
-		))
+		return commitmentComboUnsupported(cfg)
+	}
+	return nil
+}
+
+// commitmentComboUnverifiable is the 503 a save gets when the commitment
+// options could not be read, so the combo could not be checked.
+func commitmentComboUnverifiable(err error) error {
+	logging.Errorf("commitment-option validation error (refusing save): %v", err)
+	return NewClientError(503, "could not validate the commitment term and payment option; try again")
+}
+
+// commitmentComboUnsupported is the 400 a save gets for a (term, payment)
+// combination the probe data says the service does not sell.
+func commitmentComboUnsupported(cfg config.ServiceConfig) error {
+	return NewClientError(400, fmt.Sprintf(
+		"%s does not support %dyr %s commitments",
+		cfg.Service, cfg.Term, cfg.Payment,
+	))
+}
+
+// commitmentOptsSnapshot is the commitment-option data a service-config PUT
+// checks its merged row against. It is fetched before the save opens its
+// transaction (issue #1488): Get reads the store through pooled connections
+// and can probe AWS on a cold cache, and doing that while the transaction
+// holds a pooled connection deadlocks the pool once as many saves run at
+// once as the pool has connections (the Settings page saves its rows in
+// parallel). check is pure, so it is safe inside the transaction.
+type commitmentOptsSnapshot struct {
+	opts commitmentopts.Options
+	err  error
+	// loaded is false when there is nothing to check against: no service is
+	// wired, the save is not AWS, or no probe data exists (ErrNoData).
+	loaded bool
+}
+
+// prefetchCommitmentOptions fetches the snapshot for a save of provider. A
+// read error is kept rather than returned, so it fails only a save whose
+// merged row actually needs the check, as checkCommitmentOptionCombo does.
+func (h *Handler) prefetchCommitmentOptions(ctx context.Context, provider string) commitmentOptsSnapshot {
+	if h.commitmentOpts == nil || provider != "aws" {
+		return commitmentOptsSnapshot{}
+	}
+	opts, err := h.commitmentOpts.Get(ctx)
+	if errors.Is(err, commitmentopts.ErrNoData) {
+		return commitmentOptsSnapshot{}
+	}
+	return commitmentOptsSnapshot{opts: opts, err: err, loaded: true}
+}
+
+// check applies checkCommitmentOptionCombo's rules to cfg against the
+// snapshot, without touching the database or the network.
+func (s commitmentOptsSnapshot) check(cfg config.ServiceConfig) error {
+	if !s.loaded || cfg.Provider != "aws" || cfg.Term <= 0 || cfg.Payment == "" {
+		return nil
+	}
+	if s.err != nil {
+		return commitmentComboUnverifiable(s.err)
+	}
+	if !commitmentopts.ValidateCombo(s.opts, cfg.Provider, cfg.Service, cfg.Term, cfg.Payment) {
+		return commitmentComboUnsupported(cfg)
 	}
 	return nil
 }
@@ -203,36 +259,29 @@ var serviceConfigOverlayKeys = []string{
 	"min_count",
 }
 
-// mergeServiceConfig loads any existing service config and overlays the
-// UI-editable fields from cfg onto it. Every field (Enabled, Term, Payment,
-// Coverage and the include/exclude engines/regions/types and min_count
-// filters) is overlaid only when the request body actually carried the
-// corresponding key (per presentKeys), so a partial PUT cannot silently
-// revert or wipe a field it did not mean to touch. body is the raw request
-// JSON used to detect which keys are present.
+// mergeServiceConfig overlays the UI-editable fields from cfg onto the stored
+// row existing. Every field (Enabled, Term, Payment, Coverage and the
+// include/exclude engines/regions/types and min_count filters) is overlaid
+// only when the request body actually carried the corresponding key (per
+// presentKeys), so a partial PUT cannot silently revert or wipe a field it
+// did not mean to touch. body is the raw request JSON used to detect which
+// keys are present.
 //
-// A "not found" error means no existing record — cfg is returned unchanged.
-// Any other DB error is returned to prevent a partial write from clobbering
-// previously configured filter fields.
-func mergeServiceConfig(ctx context.Context, store config.StoreInterface, cfg config.ServiceConfig, body string) (config.ServiceConfig, error) {
-	existing, err := store.GetServiceConfig(ctx, cfg.Provider, cfg.Service)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			return cfg, nil // new record — no existing fields to preserve
-		}
-		return cfg, fmt.Errorf("failed to read existing service config before update: %w", err)
-	}
+// A nil existing means no stored row: cfg is returned unchanged. existing is
+// not modified.
+func mergeServiceConfig(existing *config.ServiceConfig, cfg config.ServiceConfig, body string) (config.ServiceConfig, error) {
 	if existing == nil {
-		return cfg, nil
+		return cfg, nil // new record — no existing fields to preserve
 	}
 
 	present, perr := presentKeys(body, serviceConfigOverlayKeys)
 	if perr != nil {
 		return cfg, perr
 	}
-	overlayPresentScalarFields(existing, &cfg, present)
-	overlayPresentFilterFields(existing, &cfg, present)
-	return *existing, nil
+	merged := *existing
+	overlayPresentScalarFields(&merged, &cfg, present)
+	overlayPresentFilterFields(&merged, &cfg, present)
+	return merged, nil
 }
 
 // presentKeys returns the subset of keys that appear as top-level fields in the
@@ -360,28 +409,44 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 		cfg.Service = parts[1]
 	}
 
-	// Merge: overlay each field (the scalars and the recommendation filters)
-	// only when the body carried its key, so a partial PUT never reverts or
-	// zeroes a field (ramp_schedule, a filter set out-of-band) it didn't mean
-	// to touch. Validation below runs on the merged row.
-	merged, mergeErr := mergeServiceConfig(ctx, h.config, cfg, req.Body)
-	if mergeErr != nil {
-		return nil, mergeErr
-	}
-	cfg = merged
+	// Fetch the commitment options before the transaction opens: the merge
+	// callback below runs while the transaction holds a pooled connection,
+	// so nothing in it may take another one (see commitmentOptsSnapshot).
+	combos := h.prefetchCommitmentOptions(ctx, cfg.Provider)
 
-	// Validate the configuration
-	if err := cfg.Validate(); err != nil {
-		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
-	}
-
-	if err := h.checkCommitmentOptionCombo(ctx, cfg); err != nil {
-		return nil, err
-	}
-
-	if err := h.config.SaveServiceConfig(ctx, &cfg); err != nil {
+	// Serialized read-merge-write (issue #1488): the store reads the stored
+	// row and writes the merged result in one locked transaction, so two
+	// admins saving different fields of this row at once cannot both merge
+	// onto the same stale base and lose one change. ClientErrors from the
+	// merge or validation propagate unchanged.
+	_, err := h.config.UpdateServiceConfigAtomic(ctx, cfg.Provider, cfg.Service, func(existing *config.ServiceConfig) (*config.ServiceConfig, error) {
+		return mergeAndValidateServiceConfig(existing, cfg, req.Body, combos)
+	})
+	if err != nil {
 		return nil, err
 	}
 
 	return &StatusResponse{Status: "updated"}, nil
+}
+
+// mergeAndValidateServiceConfig is the read-merge step of a service-config
+// PUT, run inside UpdateServiceConfigAtomic's transaction. It overlays each
+// field (the scalars and the recommendation filters) only when the body
+// carried its key, so a partial PUT never reverts or zeroes a field
+// (ramp_schedule, a filter set out-of-band) it didn't mean to touch, then
+// validates the merged row, not the partial body, including its commitment
+// combo against the prefetched combos. It touches neither the database nor
+// the network: the transaction already holds a pooled connection.
+func mergeAndValidateServiceConfig(existing *config.ServiceConfig, cfg config.ServiceConfig, body string, combos commitmentOptsSnapshot) (*config.ServiceConfig, error) {
+	merged, err := mergeServiceConfig(existing, cfg, body)
+	if err != nil {
+		return nil, err
+	}
+	if err := merged.Validate(); err != nil {
+		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
+	}
+	if err := combos.check(merged); err != nil {
+		return nil, err
+	}
+	return &merged, nil
 }

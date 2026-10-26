@@ -37,13 +37,13 @@ func overwriteSecurityColumns(ctx context.Context, store *PostgresStore, u *User
 	return store.withAdminInvariantLock(ctx, "overwrite security columns", func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			UPDATE users SET
-				email = $2, password_hash = $3, salt = $4, group_ids = $5,
-				active = $6, deactivated_at = $7, mfa_enabled = $8, mfa_secret = $9,
-				mfa_pending_secret = $10, mfa_pending_secret_expires_at = $11,
-				mfa_recovery_codes = $12, password_reset_token = $13,
-				password_reset_expiry = $14, password_history = $15, updated_at = NOW()
+				email = $2, password_hash = $3, group_ids = $4,
+				active = $5, deactivated_at = $6, mfa_enabled = $7, mfa_secret = $8,
+				mfa_pending_secret = $9, mfa_pending_secret_expires_at = $10,
+				mfa_recovery_codes = $11, password_reset_token = $12,
+				password_reset_expiry = $13, password_history = $14, updated_at = NOW()
 			WHERE id = $1`,
-			u.ID, u.Email, u.PasswordHash, u.Salt, u.GroupIDs,
+			u.ID, u.Email, u.PasswordHash, u.GroupIDs,
 			u.Active, u.DeactivatedAt, u.MFAEnabled, u.MFASecret,
 			u.MFAPendingSecret, u.MFAPendingSecretExpiresAt,
 			u.MFARecoveryCodes, u.PasswordResetToken,
@@ -78,7 +78,7 @@ func TestIntegration_LoginPreservesSecurityChanges(t *testing.T) {
 					return readErr
 				}
 				stamp := time.Now().UTC().Truncate(time.Microsecond)
-				current.PasswordHash, current.Salt = "new-password-hash", "new-salt"
+				current.PasswordHash = "new-password-hash"
 				current.Email = "changed-" + current.Email
 				current.MFAEnabled, current.MFASecret = !current.MFAEnabled, "changed-secret"
 				current.MFAPendingSecret, current.MFAPendingSecretExpiresAt = "pending-secret", &stamp

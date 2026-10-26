@@ -40,11 +40,11 @@ func (s *PostgresStore) UpdateUserAdminFields(ctx context.Context, user *User, r
 // the credentials written here (issue #526).
 func (s *PostgresStore) UpdateUserCredentials(ctx context.Context, user *User, readEmail, readPasswordHash string) error {
 	result, err := s.db.Exec(ctx, `
-		UPDATE users SET email = $4, password_hash = $5, salt = $6,
-			password_history = $7, password_reset_token = NULL, password_reset_expiry = NULL,
+		UPDATE users SET email = $4, password_hash = $5,
+			password_history = $6, password_reset_token = NULL, password_reset_expiry = NULL,
 			updated_at = NOW()
 		WHERE id = $1 AND email = $2 AND password_hash = $3
-	`, user.ID, readEmail, readPasswordHash, user.Email, user.PasswordHash, user.Salt, user.PasswordHistory)
+	`, user.ID, readEmail, readPasswordHash, user.Email, user.PasswordHash, user.PasswordHistory)
 	if err != nil {
 		return fmt.Errorf("failed to update user credentials: %w", err)
 	}
@@ -60,11 +60,11 @@ func (s *PostgresStore) UpdateUserCredentials(ctx context.Context, user *User, r
 // deactivated (issues #493, #526).
 func (s *PostgresStore) CompletePasswordReset(ctx context.Context, user *User, readResetToken, readPasswordHash string) error {
 	result, err := s.db.Exec(ctx, `
-		UPDATE users SET password_hash = $4, salt = $5, password_history = $6, active = $7,
+		UPDATE users SET password_hash = $4, password_history = $5, active = $6,
 			password_reset_token = NULL, password_reset_expiry = NULL, updated_at = NOW()
 		WHERE id = $1 AND password_reset_token = $2 AND password_hash = $3 AND deactivated_at IS NULL
 			AND password_reset_expiry > NOW()
-	`, user.ID, readResetToken, readPasswordHash, user.PasswordHash, user.Salt, user.PasswordHistory, user.Active)
+	`, user.ID, readResetToken, readPasswordHash, user.PasswordHash, user.PasswordHistory, user.Active)
 	if err != nil {
 		return fmt.Errorf("failed to complete password reset: %w", err)
 	}

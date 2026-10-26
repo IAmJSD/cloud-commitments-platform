@@ -136,7 +136,9 @@ type BreakdownValue struct {
 // ApproveExecution, ApproveAndExecute and RunPlannedPurchaseNow return the
 // raw revocation token minted on a successful execute (issue #103: only its
 // hash is stored, so callers can no longer recover a raw, emailable token by
-// re-reading the execution from the store). Empty on failure.
+// re-reading the execution from the store). Empty on failure. All three
+// also return the row with its final status, also on an execution error, and
+// a nil row when the run never started (issue #532).
 //
 // `check` (every execute entry point) re-runs the caller's permission
 // Constraints against the row the claim CAS returned, the row that is
@@ -144,7 +146,7 @@ type BreakdownValue struct {
 // pre-CAS check reads an earlier snapshot, which a repricing or a
 // recommendation attach can change before the CAS.
 type PurchaseManagerInterface interface {
-	ApproveExecution(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (string, error)
+	ApproveExecution(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	ApproveAndExecute(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	// DirectExecute is ApproveAndExecute for the direct-execute permission; it
 	// stamps the executed_* audit fields only after the claim is won.

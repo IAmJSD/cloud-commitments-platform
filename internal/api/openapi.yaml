@@ -991,7 +991,7 @@ paths:
             The execution cannot be approved: a non-AWS execution without a
             resolvable cloud account, a status other than pending or notified
             (in token mode the status check is the atomic transition, so a
-            concurrent change answers the same way, and in session mode a
+            concurrent change answers the same way, and in either mode a
             lost claim answers 409 as well).
           content:
             application/json:
@@ -1015,9 +1015,9 @@ paths:
                 $ref: '#/components/schemas/Error'
         '502':
           description: >
-            Session mode only. The claim was won and the purchase ran, but it
-            failed or only partly completed (a failed or partially_completed
-            run). Money may have moved; the body details carry execution_id
+            Session and token mode. The claim was won and the purchase ran,
+            but it failed or only partly completed (a failed or
+            partially_completed run). Money may have moved; the body details carry execution_id
             and the row's actual status. A partially_completed run is
             revocable: the executed email with its revocation link is sent as
             for a completed run. Check the execution in History before
@@ -2323,6 +2323,14 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [Region]
+                properties:
+                  Region:
+                    type: string
+                    description: >
+                      AWS region the quote was priced in. Always set. Send
+                      this same value as `region` on
+                      `/api/ri-exchange/execute`.
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -2368,7 +2376,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [ri_ids, targets, max_payment_due_usd]
+              required: [ri_ids, targets, max_payment_due_usd, region]
               properties:
                 ri_ids:
                   type: array
@@ -2381,6 +2389,12 @@ paths:
                 max_payment_due_usd:
                   type: string
                   description: Spend-cap guardrail (decimal string, e.g. "1000.00")
+                region:
+                  type: string
+                  description: >
+                    AWS region to execute in. Required: a missing region is
+                    rejected with 400 rather than defaulted, since an exchange
+                    cannot be undone. Send the `Region` the quote returned.
       responses:
         '200':
           description: Exchange submitted
@@ -6201,6 +6215,12 @@ components:
             account matches nothing.
           items:
             type: string
+        system_managed:
+          type: boolean
+          description: >
+            True for a built-in group seeded and maintained by migrations
+            (for example Administrators and Purchaser). Updating or deleting
+            it returns 403. Omitted when false.
         created_at:
           type: string
           format: date-time

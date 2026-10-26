@@ -27,7 +27,18 @@ func (s *Service) CreateGroup(ctx context.Context, group *Group, createdBy strin
 }
 
 // UpdateGroup updates a permission group.
+//
+// Updating a system-managed group is refused here as well as in
+// UpdateGroupAPI, so the guard does not depend on every caller remembering
+// to check first (issue #919). The check reads the STORED row rather than
+// trusting group.SystemManaged: the caller's struct is built by the caller
+// and may not carry the flag. The stored flag cannot change at runtime (no
+// write path sets system_managed; only migrations do), so the read-then-write
+// has no window in which a concurrent request could flip it.
 func (s *Service) UpdateGroup(ctx context.Context, group *Group) error {
+	if err := s.refuseSystemManagedGroup(ctx, group.ID); err != nil {
+		return err
+	}
 	return s.store.UpdateGroup(ctx, group)
 }
 
@@ -40,6 +51,16 @@ func (s *Service) UpdateGroup(ctx context.Context, group *Group) error {
 // so the purchase path would be dead tenant-wide until someone re-ran the
 // migration by hand.
 func (s *Service) DeleteGroup(ctx context.Context, groupID string) error {
+	if err := s.refuseSystemManagedGroup(ctx, groupID); err != nil {
+		return err
+	}
+	return s.store.DeleteGroup(ctx, groupID)
+}
+
+// refuseSystemManagedGroup loads the stored group and returns
+// ErrSystemManagedGroup if it is seeded by migrations, or a not-found error
+// if it does not exist. Shared by the UpdateGroup and DeleteGroup write paths.
+func (s *Service) refuseSystemManagedGroup(ctx context.Context, groupID string) error {
 	group, err := s.store.GetGroup(ctx, groupID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("failed to load group %s: %w", groupID, err)
@@ -50,7 +71,7 @@ func (s *Service) DeleteGroup(ctx context.Context, groupID string) error {
 	if group.SystemManaged {
 		return fmt.Errorf("%w: %q is seeded and maintained by migrations", ErrSystemManagedGroup, group.Name)
 	}
-	return s.store.DeleteGroup(ctx, groupID)
+	return nil
 }
 
 // GetGroup returns a group by ID.

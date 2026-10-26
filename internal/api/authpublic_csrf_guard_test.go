@@ -267,7 +267,7 @@ func purchaseCSRFGuardFixture(action string, viaToken bool) func(t *testing.T) c
 
 		pm := new(MockPurchaseManager)
 		pm.On("ApproveAndExecute", mock.Anything, csrfGuardExecID, mock.Anything, mock.Anything).Return(exec, "", nil).Maybe()
-		pm.On("ApproveExecution", mock.Anything, csrfGuardExecID, csrfGuardRawToken, mock.Anything).Return("", nil).Maybe()
+		pm.On("ApproveExecution", mock.Anything, csrfGuardExecID, csrfGuardRawToken, mock.Anything).Return(nil, "", nil).Maybe()
 		pm.On("CancelExecution", mock.Anything, csrfGuardExecID, csrfGuardRawToken, mock.Anything).Return(nil).Maybe()
 
 		var m *MockAuthService

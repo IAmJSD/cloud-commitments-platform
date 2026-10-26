@@ -31,9 +31,11 @@ type PurchaseManagerInterface interface {
 	// ApproveExecution, ApproveAndExecute and RunPlannedPurchaseNow return the
 	// raw revocation token minted on a successful execute (issue #103: only
 	// its hash is stored, so a re-read cannot yield an emailable token).
-	// Empty on failure. Each takes the caller's ClaimedRowCheck, run against
-	// the claimed row before any provider call (issue #415).
-	ApproveExecution(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (string, error)
+	// Empty on failure. Each also returns the row with its final status, nil
+	// when the run never started (issue #532), and takes the caller's
+	// ClaimedRowCheck, run against the claimed row before any provider call
+	// (issue #415).
+	ApproveExecution(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	ApproveAndExecute(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	// DirectExecute is ApproveAndExecute for the direct-execute permission; it
 	// stamps the executed_* audit fields only after the claim is won.
