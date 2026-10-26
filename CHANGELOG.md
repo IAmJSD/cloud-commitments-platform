@@ -1,7 +1,20 @@
 # Changelog
 
-All notable changes to CUDly are documented in this file.
+All notable changes to the CUDly platform (the API server, the web frontend
+and the deployment IaC) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
+
+Releases up to 0.9.0 were cut from the single CUDly repository, before the
+CLI, the shared Go libraries and providers, and the MCP server moved to
+[cloud-commitments-cli](https://github.com/LeanerCloud/cloud-commitments-cli),
+[cloud-commitments-go](https://github.com/LeanerCloud/cloud-commitments-go) and
+[cloud-commitments-mcp](https://github.com/LeanerCloud/cloud-commitments-mcp).
+Entries for code that now lives in those repositories have been removed here.
+
+The Unreleased section is not a complete list of changes since 0.9.0. No
+release has been cut since then, so the
+[merged pull requests](https://github.com/LeanerCloud/cloud-commitments-platform/pulls?q=is%3Apr+is%3Amerged)
+are the full record until the next release.
 
 ## [Unreleased]
 
@@ -37,7 +50,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - Remove debug console.log from frontend recommendation handler
 - Align pre-commit gocyclo threshold (10) with CI pipeline
 - Pin tool versions in GitHub Actions for reproducible builds
-- Update README Go version badge to match go.mod (1.25+)
 - The local git-secrets setup script aborted on its PEM pattern and, when
   patched past that, made every scan fail on an invalid regex; its keyword
   allowlist whitelisted whole Terraform and test-file lines. Allowlisting now
@@ -51,7 +63,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 - RI Exchange feature: reshape analysis with normalization factors, API
   endpoints, and frontend page for managing convertible Reserved Instances
 - RI utilization tracking from Cost Explorer with pagination support
-- Convertible RI listing in EC2 client
 - Security headers on all Lambda responses
 - Admin password resolution from cloud secret managers
 
@@ -115,7 +126,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 - Sanitize user input in dashboard and recommendations (XSS prevention)
 - Add connection pool limits and graceful shutdown to server
-- Add nil checks across Azure service clients
 - Enforce 12-char minimum password with complexity requirements
 - Use hidden-source-map for production frontend builds
 - Use rightmost X-Forwarded-For IP for client identification
@@ -126,55 +136,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
-- Database Savings Plans support and SP type filtering
 - OSL-3.0 license and contributing guidelines
 
-### Fixed
-
-- RDS RI purchase failing on details assertion and invalid reservation ID
-- OpenSearch RI resource type and offering lookup
-- Deduplicate reservation ID sanitization into pkg/common
-
-### Changed
-
-- Refactor internal packages to providers (aws, azure, gcp)
-- Add provider-specific mocking infrastructure and tests
+The other changes in this release were to the CLI and the provider code,
+which now live in cloud-commitments-cli and cloud-commitments-go.
 
 ## [0.5.0] - 2025-09-01
 
-### Added
-
-- Multi-cloud support (Azure experimental, GCP experimental)
-- API-based RDS extended support detection
-- Instance type validation system
-- CSV reader for recommendation import
-- Duplicate RI purchase prevention
-- Account alias lookup
-- Confirmation prompt and instance limit features
-
-### Changed
-
-- Replace global variables with Config struct pattern
-- Improve rate limiting and test performance
-- Refactor all purchase clients with enhanced error handling
+Changes in this release were to the CLI and the provider code, which now
+live in cloud-commitments-cli and cloud-commitments-go.
 
 ## [0.4.0] - 2025-07-01
 
-### Added
-
-- Multi-service RI support: EC2, ElastiCache, MemoryDB, OpenSearch, Redshift
-- Multi-service orchestration and CLI
-- Comprehensive test coverage (80%+ across packages)
-
-### Fixed
-
-- CSV pricing calculations to use AWS-provided cost data
+Changes in this release were to the CLI and the provider code, which now
+live in cloud-commitments-cli and cloud-commitments-go.
 
 ## [0.3.0] - 2025-05-01
 
-### Added
-
-- Initial CLI tool for RDS Reserved Instance purchasing
-- Recommendations fetching from AWS Cost Explorer
-- CSV output for analysis results
-- Go module setup with AWS SDK v2
+Changes in this release were to the CLI and the provider code, which now
+live in cloud-commitments-cli and cloud-commitments-go.

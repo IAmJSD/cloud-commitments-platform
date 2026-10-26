@@ -10,8 +10,23 @@ import { escapeHtml, showError, showSuccess } from '../users/utils';
 import { loadUsers } from '../users/userActions';
 import { openModal, closeModal } from '../modal';
 import { iconSvg } from '../icons';
-import { clearGroupFormValidation, validateGroupForm } from './groupFormValidation';
+import {
+  clearGroupFieldProblems, clearGroupFormValidation, clearNoPermissionsProblem,
+  showGroupFieldProblems, validateGroupForm, type GroupFieldProblem,
+} from './groupFormValidation';
 import { buildActionOptions, buildResourceOptions } from './permissionOptions';
+
+// Messages shown under the field for the saveGroup refusals that follow the
+// blank-field checks (issue #727). The toasts keep the row-naming summary.
+const NO_PERMISSIONS_FIELD_MESSAGE = 'Add at least one permission. To remove all privileges, delete the group instead.';
+const STORED_VALUE_FIELD_MESSAGE = 'This stored value cannot be shown in this form, so saving would drop the restriction. '
+  + 'Repair it through the API or in the database, then reload this page.';
+const EMPTY_LIST_FIELD_MESSAGE = 'This list has no usable entries. Enter at least one value, or clear the box for no restriction.';
+const MAX_AMOUNT_FIELD_MESSAGE = 'Enter an amount greater than 0, or leave it blank for no limit.';
+
+function constraintInput(item: Element, dimension: string): HTMLInputElement | null {
+  return item.querySelector<HTMLInputElement>(`.perm-${dimension}`);
+}
 
 // Module-level state for the duplicate modal — holds the source group so
 // saveDuplicateGroup doesn't need another lookup.
@@ -93,6 +108,7 @@ export async function saveGroup(e: Event): Promise<void> {
   // with a note under the field, never dropped or widened (#group-form is
   // novalidate, so this is the only gate).
   if (validateGroupForm()) return;
+  clearGroupFieldProblems();
 
   // Refuse rather than widen. A stored constraint value this form cannot
   // carry unchanged is flagged when the row is rendered; saving anyway would
@@ -100,10 +116,12 @@ export async function saveGroup(e: Event): Promise<void> {
   // for a constraint list that means an unintended widening (an empty list is
   // "no restriction" at enforcement). The group stays uneditable through the
   // form until the value is repaired via the API or in the database.
+  // Issue #727: each refusal below also shows under the field to fix.
   const blocked = unrepresentablePermissionErrors();
   if (blocked.length > 0) {
+    showGroupFieldProblems(blocked);
     showError(
-      `Cannot save: ${blocked.join('; ')}. ` +
+      `Cannot save: ${blocked.map(p => p.summary).filter(Boolean).join('; ')}. ` +
       'Saving would silently drop the restriction, so the edit is refused. ' +
       'Repair the value through the API or in the database, then reload this page.'
     );
@@ -112,8 +130,9 @@ export async function saveGroup(e: Event): Promise<void> {
 
   const badAmounts = maxAmountInputErrors();
   if (badAmounts.length > 0) {
+    showGroupFieldProblems(badAmounts);
     showError(
-      `Max Amount must be greater than 0; leave it blank for no limit (${badAmounts.join(', ')}).`
+      `Max Amount must be greater than 0; leave it blank for no limit (${badAmounts.map(p => p.summary).join(', ')}).`
     );
     return;
   }
@@ -130,6 +149,10 @@ export async function saveGroup(e: Event): Promise<void> {
   // keeping the group's old privileges -- there is no way for this form to
   // express "clear all permissions".
   if (permissions.length === 0) {
+    const add = document.getElementById('add-permission-btn');
+    if (add) {
+      showGroupFieldProblems([{ control: add, message: NO_PERMISSIONS_FIELD_MESSAGE, summary: '' }]);
+    }
     showError(
       'A group must grant at least one permission. ' +
       'To remove all privileges, delete the group instead.'
@@ -227,6 +250,7 @@ export function addPermission(permission?: Permission): void {
   `;
 
   permissionsList.appendChild(permDiv);
+  clearNoPermissionsProblem();
 
   // Add event listener for remove button
   const removeBtn = permDiv.querySelector('.remove-permission-btn');
@@ -312,11 +336,11 @@ function unrepresentableDimensions(constraints: Permission['constraints']): stri
 // which is ordinary. Blank is measured after trimming, so a box holding only
 // spaces counts as blank -- it is indistinguishable from empty on screen, and
 // erroring on a field that looks empty would be unfixable from the UI.
-function unrepresentablePermissionErrors(): string[] {
+function unrepresentablePermissionErrors(): GroupFieldProblem[] {
   const permissionsList = document.getElementById('permissions-list');
   if (!permissionsList) return [];
 
-  const errors: string[] = [];
+  const errors: GroupFieldProblem[] = [];
   permissionsList.querySelectorAll('.permission-item').forEach((item, index) => {
     const action = (item.querySelector('.perm-action') as HTMLSelectElement | null)?.value || '';
     const resource = (item.querySelector('.perm-resource') as HTMLSelectElement | null)?.value || '';
@@ -324,15 +348,22 @@ function unrepresentablePermissionErrors(): string[] {
 
     const stored = (item.getAttribute('data-unrepresentable') || '').split(', ').filter(d => d);
     if (stored.length > 0) {
-      errors.push(`${label} has a stored "${stored.join(', ')}" constraint value this form cannot represent`);
+      const summary = `${label} has a stored "${stored.join(', ')}" constraint value this form cannot represent`;
+      // Every affected input gets the inline note; the toast names the row once.
+      stored.forEach((dimension, i) => errors.push({
+        control: constraintInput(item, dimension) ?? (item as HTMLElement),
+        message: STORED_VALUE_FIELD_MESSAGE,
+        summary: i === 0 ? summary : '',
+      }));
     }
 
     for (const dimension of LIST_CONSTRAINT_DIMENSIONS) {
       // Already refused for this row on the stored value; do not say it twice.
       if (stored.includes(dimension)) continue;
-      const raw = (item.querySelector(`.perm-${dimension}`) as HTMLInputElement | null)?.value ?? '';
-      if (raw.trim() !== '' && parseConstraintList(raw).length === 0) {
-        errors.push(`${label} has a "${dimension}" value with no usable entries`);
+      const control = constraintInput(item, dimension);
+      const raw = control?.value ?? '';
+      if (control && raw.trim() !== '' && parseConstraintList(raw).length === 0) {
+        errors.push({ control, message: EMPTY_LIST_FIELD_MESSAGE, summary: `${label} has a "${dimension}" value with no usable entries` });
       }
     }
   });
@@ -342,21 +373,23 @@ function unrepresentablePermissionErrors(): string[] {
 // Max Amount is typed by the admin, unlike the stored-value problems above, so
 // its message tells them how to fix the field instead of pointing at the API.
 // 0 would read as "no cap" at enforcement, so it is refused rather than sent.
-function maxAmountInputErrors(): string[] {
-  const errors: string[] = [];
+function maxAmountInputErrors(): GroupFieldProblem[] {
+  const errors: GroupFieldProblem[] = [];
   document.querySelectorAll('#permissions-list .permission-item').forEach((item, index) => {
     const input = item.querySelector('.perm-max-amount') as HTMLInputElement | null;
+    if (!input) return;
+    const problem = { control: input, message: MAX_AMOUNT_FIELD_MESSAGE, summary: `permission ${index}` };
     // A number input reports unparsable text ("abc", "1e") as value "", which
     // would read as blank and save with no cap; badInput is the only signal.
-    if (input?.validity?.badInput) {
-      errors.push(`permission ${index}`);
+    if (input.validity?.badInput) {
+      errors.push(problem);
       return;
     }
-    const raw = input?.value ?? '';
+    const raw = input.value;
     if (raw.trim() === '') return;
     const amount = Number(raw);
     if (!Number.isFinite(amount) || amount <= 0) {
-      errors.push(`permission ${index}`);
+      errors.push(problem);
     }
   });
   return errors;

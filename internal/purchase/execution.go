@@ -1341,21 +1341,26 @@ var legacyAWSServiceSlugs = map[string]common.ServiceType{
 // flip the coverage_extra_test.go case (line ~60) to assert
 // ServiceType("savings-plans") (default-arm pass-through). The
 // "savingsplans-*" keys are forward-compat and should stay.
+//
+// A new per-plan-type spelling must also be added to
+// config.awsSavingsPlansSpellings, else a suppression stored under it misses
+// recs (#1422); a test ranges over savingsPlansSlugs to enforce that.
 func mapSavingsPlansSlug(service string) (common.ServiceType, bool) {
-	slugs := map[string]common.ServiceType{
-		"savings-plans":             common.ServiceSavingsPlansAll,
-		"savingsplans":              common.ServiceSavingsPlansAll,
-		"savings-plans-compute":     common.ServiceSavingsPlansCompute,
-		"savingsplans-compute":      common.ServiceSavingsPlansCompute,
-		"savings-plans-ec2instance": common.ServiceSavingsPlansEC2Instance,
-		"savingsplans-ec2instance":  common.ServiceSavingsPlansEC2Instance,
-		"savings-plans-sagemaker":   common.ServiceSavingsPlansSageMaker,
-		"savingsplans-sagemaker":    common.ServiceSavingsPlansSageMaker,
-		"savings-plans-database":    common.ServiceSavingsPlansDatabase,
-		"savingsplans-database":     common.ServiceSavingsPlansDatabase,
-	}
-	svc, ok := slugs[service]
+	svc, ok := savingsPlansSlugs[service]
 	return svc, ok
+}
+
+var savingsPlansSlugs = map[string]common.ServiceType{
+	"savings-plans":             common.ServiceSavingsPlansAll,
+	"savingsplans":              common.ServiceSavingsPlansAll,
+	"savings-plans-compute":     common.ServiceSavingsPlansCompute,
+	"savingsplans-compute":      common.ServiceSavingsPlansCompute,
+	"savings-plans-ec2instance": common.ServiceSavingsPlansEC2Instance,
+	"savingsplans-ec2instance":  common.ServiceSavingsPlansEC2Instance,
+	"savings-plans-sagemaker":   common.ServiceSavingsPlansSageMaker,
+	"savingsplans-sagemaker":    common.ServiceSavingsPlansSageMaker,
+	"savings-plans-database":    common.ServiceSavingsPlansDatabase,
+	"savingsplans-database":     common.ServiceSavingsPlansDatabase,
 }
 
 // updatePlanProgress advances the ramp schedule after a purchase.

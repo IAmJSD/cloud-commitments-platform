@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/exchange"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/aws/aws-lambda-go/events"
@@ -106,6 +107,10 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
 
+	if page.enabled {
+		return h.getRecommendationsPage(ctx, scope, filter, page)
+	}
+
 	recommendations, err := h.scheduler.ListRecommendations(recommendationsReadContext(ctx, scope), filter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recommendations: %w", err)
@@ -126,7 +131,7 @@ func (h *Handler) getRecommendations(ctx context.Context, req *events.LambdaFunc
 		return nil, err
 	}
 
-	return buildRecommendationsPageResponse(recommendations, page)
+	return buildRecommendationsResponse(recommendations), nil
 }
 
 // filterRecommendationsByAllowedAccounts filters recommendations to only include
@@ -146,10 +151,18 @@ func (h *Handler) filterRecommendationsByScope(ctx context.Context, allowedAccou
 	if allowedAccounts.AllowsAll() {
 		return recs, nil
 	}
+	nameByID, err := h.cloudAccountNamesByID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return filterRecommendationsInScope(allowedAccounts, nameByID, recs), nil
+}
 
-	// Resolve account names so the allowed list can match on either ID or
-	// display name. Recommendations only carry CloudAccountID, so the name
-	// lookup needs a one-time fetch of the account list.
+// cloudAccountNamesByID resolves account names so an allowed-accounts list
+// can match on either ID or display name. Recommendations only carry
+// CloudAccountID, so the name lookup needs a one-time fetch of the account
+// list.
+func (h *Handler) cloudAccountNamesByID(ctx context.Context) (map[string]string, error) {
 	accounts, err := h.config.ListCloudAccounts(ctx, config.CloudAccountFilter{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list accounts for filter: %w", err)
@@ -159,7 +172,12 @@ func (h *Handler) filterRecommendationsByScope(ctx context.Context, allowedAccou
 		a := accounts[_rvc]
 		nameByID[a.ID] = a.Name
 	}
+	return nameByID, nil
+}
 
+// filterRecommendationsInScope keeps the recs whose account allowedAccounts
+// allows, in place and in order. Recs without an account are dropped.
+func filterRecommendationsInScope(allowedAccounts auth.AccountScope, nameByID map[string]string, recs []config.RecommendationRecord) []config.RecommendationRecord {
 	filtered := recs[:0]
 	for _rvc := range recs {
 		rec := recs[_rvc]
@@ -171,7 +189,7 @@ func (h *Handler) filterRecommendationsByScope(ctx context.Context, allowedAccou
 			filtered = append(filtered, rec)
 		}
 	}
-	return filtered, nil
+	return filtered
 }
 
 // filterRecommendationsByEnabledProviders removes recommendations for providers
@@ -210,15 +228,9 @@ func buildRecommendationsResponse(recommendations []config.RecommendationRecord)
 // itself or one page of it (issue #723), so the totals never shrink to the
 // page.
 func summarizeRecommendations(all, rows []config.RecommendationRecord) *RecommendationsResponse {
-	regionSet := make(map[string]struct{})
-	var totalSavings, totalUpfront float64
+	var summary recommendationsSummary
 	for i := range all {
-		rec := &all[i]
-		totalSavings += rec.Savings
-		totalUpfront += rec.UpfrontCost
-		if rec.Region != "" {
-			regionSet[rec.Region] = struct{}{}
-		}
+		summary.add(&all[i])
 	}
 	for i := range rows {
 		// Surface the compute size (VCPU / MemoryGB) at the top level so
@@ -232,23 +244,51 @@ func summarizeRecommendations(all, rows []config.RecommendationRecord) *Recommen
 		// renders "—". Only returned rows are decoded.
 		stampComputeCapacity(&rows[i])
 	}
+	return summary.response(rows)
+}
 
-	regions := make([]string, 0, len(regionSet))
-	for r := range regionSet {
+// recommendationsSummary accumulates the full-set totals and region list of
+// a list response one rec at a time, so a paginated scan can total every
+// filtered row without holding them all (issue #981).
+type recommendationsSummary struct {
+	count        int
+	totalSavings float64
+	totalUpfront float64
+	regionSet    map[string]struct{}
+}
+
+func (s *recommendationsSummary) add(rec *config.RecommendationRecord) {
+	s.count++
+	s.totalSavings += rec.Savings
+	s.totalUpfront += rec.UpfrontCost
+	if rec.Region == "" {
+		return
+	}
+	if s.regionSet == nil {
+		s.regionSet = make(map[string]struct{})
+	}
+	s.regionSet[rec.Region] = struct{}{}
+}
+
+// response returns rows as the response body with the accumulated summary
+// and regions.
+func (s *recommendationsSummary) response(rows []config.RecommendationRecord) *RecommendationsResponse {
+	regions := make([]string, 0, len(s.regionSet))
+	for r := range s.regionSet {
 		regions = append(regions, r)
 	}
 
 	var avgPayback float64
-	if totalSavings > 0 {
-		avgPayback = totalUpfront / totalSavings
+	if s.totalSavings > 0 {
+		avgPayback = s.totalUpfront / s.totalSavings
 	}
 
 	return &RecommendationsResponse{
 		Recommendations: rows,
 		Summary: RecommendationsSummary{
-			TotalCount:          len(all),
-			TotalMonthlySavings: totalSavings,
-			TotalUpfrontCost:    totalUpfront,
+			TotalCount:          s.count,
+			TotalMonthlySavings: s.totalSavings,
+			TotalUpfrontCost:    s.totalUpfront,
 			AvgPaybackMonths:    avgPayback,
 		},
 		Regions: regions,
@@ -386,27 +426,18 @@ func (h *Handler) buildRecommendationDetail(ctx context.Context, rec *config.Rec
 	}
 }
 
-// Confidence bucket cut-offs for the recommendation drawer badge. They must
-// stay equal to exchange.ConfidenceHighSavingsUSD, exchange.ConfidenceHighMinCount
-// and exchange.ConfidenceMediumSavingsUSD in cloud-commitments-go pkg/exchange,
-// which score the reshape ranking the badge accompanies. Those exported
-// constants are newer than the pkg version pinned in go.mod; once the pin is
-// bumped past them, alias these to the exchange constants (#343).
-const (
-	confidenceHighSavingsUSD   = 200.0 // USD per month, high bucket
-	confidenceHighMinCount     = 3     // instances, high bucket
-	confidenceMediumSavingsUSD = 50.0  // USD per month, medium bucket
-)
-
 // confidenceBucketFor mirrors the heuristic that previously lived
 // client-side in frontend/src/recommendations.ts. Centralizing it on
 // the server lets future provider-specific tuning land in one place
 // without a frontend deploy. Thresholds intentionally match the original
 // shim 1:1 so the drawer label doesn't visibly shift on rollout.
 //
-//	high   = savings >= confidenceHighSavingsUSD AND count >= confidenceHighMinCount
-//	medium = savings >= confidenceMediumSavingsUSD
+//	high   = savings >= exchange.ConfidenceHighSavingsUSD AND count >= exchange.ConfidenceHighMinCount
+//	medium = savings >= exchange.ConfidenceMediumSavingsUSD
 //	low    = otherwise
+//
+// The cut-offs come from pkg/exchange, which scores the reshape ranking the
+// badge accompanies, so the two cannot drift apart (#343).
 //
 // A count below 1 (missing) is clamped to 1, so savings alone decide between
 // medium and low. This deliberately differs from the exchange ranking, which
@@ -416,10 +447,10 @@ func confidenceBucketFor(savings float64, count int) string {
 	if count < 1 {
 		count = 1
 	}
-	if savings >= confidenceHighSavingsUSD && count >= confidenceHighMinCount {
+	if savings >= exchange.ConfidenceHighSavingsUSD && count >= exchange.ConfidenceHighMinCount {
 		return "high"
 	}
-	if savings >= confidenceMediumSavingsUSD {
+	if savings >= exchange.ConfidenceMediumSavingsUSD {
 		return "medium"
 	}
 	return "low"

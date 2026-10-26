@@ -65,12 +65,14 @@ func riStatusTransition(rec riStatusRecord) (*config.RIExchangeRecord, error) {
 
 // riStatusOpts tweaks the fixture for the less common cases.
 type riStatusOpts struct {
-	fourEyes    bool // global 4-eyes mode on; the admin session is the creator
-	noCreator   bool // with fourEyes: the record has no creator, as every scheduler/ladder row does
-	noApprove   bool // the session holds no approve permission
-	approveOwn  bool // the session holds approve-own only (not the creator)
-	dbError     bool // the record lookup fails
-	rateLimited bool // the public approve/cancel rate limit rejects the request
+	fourEyes    bool   // global 4-eyes mode on; the admin session is the creator
+	noCreator   bool   // with fourEyes: the record has no creator, as every scheduler/ladder row does
+	noApprove   bool   // the session holds no approve permission
+	approveOwn  bool   // the session holds approve-own only (not the creator)
+	ownsRecord  bool   // with approveOwn: the session created the record
+	status      string // stored record status; "" means pending
+	dbError     bool   // the record lookup fails
+	rateLimited bool   // the public approve/cancel rate limit rejects the request
 }
 
 func riStatusHandler(rec riStatusRecord, o riStatusOpts) *Handler {
@@ -87,9 +89,12 @@ func riStatusHandler(rec riStatusRecord, o riStatusOpts) *Handler {
 			past := time.Now().Add(-time.Hour)
 			record.ExpiresAt = &past
 		}
+		if o.status != "" {
+			record.Status = o.status
+		}
 		if (o.fourEyes && !o.noCreator) || o.approveOwn {
 			creator := "admin-uuid"
-			if o.approveOwn {
+			if o.approveOwn && !o.ownsRecord {
 				creator = "someone-else"
 			}
 			record.CreatedByUserID = &creator
@@ -234,6 +239,11 @@ func TestHandleRequest_ApproveRIExchange_StatusCodes(t *testing.T) {
 		{name: "403 missing record reported as ErrNotFound with token", rec: riRecMissingNotFound, sess: riSessNone, token: riStatusRawToken, want: 403, wantError: "invalid approval token"},
 		{name: "404 missing record with session", rec: riRecMissing, sess: riSessCSRF, want: 404, wantError: "exchange record not found"},
 		{name: "404 missing record reported as ErrNotFound with session", rec: riRecMissingNotFound, sess: riSessCSRF, want: 404, wantError: "exchange record not found"},
+		// Issue #1428: approve-any keeps the 404/409 distinction, and so
+		// does an approve-own session on its own exchange.
+		{name: "409 approve-any session on an exchange no longer pending", rec: riRecPending, sess: riSessCSRF, opts: riStatusOpts{status: "completed"}, want: 409, wantError: "exchange " + riStatusID + " cannot be approved (status=completed)"},
+		{name: "409 approve-own creator on an exchange no longer pending", rec: riRecPending, sess: riSessCSRF, opts: riStatusOpts{approveOwn: true, ownsRecord: true, status: "completed"}, want: 409, wantError: "exchange " + riStatusID + " cannot be approved (status=completed)"},
+		{name: "200 approve-own creator approves own pending exchange", rec: riRecPending, sess: riSessCSRF, opts: riStatusOpts{approveOwn: true, ownsRecord: true}, want: 200, wantBody: `"status"`},
 		{name: "409 token approve of an exchange no longer pending", rec: riRecAlreadyProcessed, sess: riSessNone, token: riStatusRawToken, want: 409, wantError: "exchange already processed or was canceled by a newer analysis run"},
 		// Issue #587: the same invalid/expired/wrong-status mapping as the
 		// purchase approve, cancel and revoke links (403/410/409).
@@ -327,6 +337,61 @@ func TestHandleRequest_RIExchangeTokenRoutes_MissingAnswersLikeWrongToken(t *tes
 					assert.Equal(t, want.Headers, got.Headers)
 				})
 			}
+		}
+	}
+}
+
+// TestHandleRequest_ApproveRIExchange_ApproveOwnSessionNoOracle is the issue
+// #1428 regression. A session holding only approve-own on purchases used to
+// get 404 for a missing exchange id and 409 (with the status) for another
+// user's exchange that is no longer pending, both before the ownership check,
+// so it could learn which ids exist and read their status. It must now get
+// one answer for a missing id and for another user's exchange in any status,
+// with and without a token.
+func TestHandleRequest_ApproveRIExchange_ApproveOwnSessionNoOracle(t *testing.T) {
+	type probe struct {
+		name string
+		rec  riStatusRecord
+		opts riStatusOpts
+	}
+	other := riStatusOpts{approveOwn: true}
+	// The baseline is another user's pending exchange; every other probe
+	// must answer exactly like it.
+	baseline := probe{"another user's pending exchange", riRecPending, other}
+	probes := []probe{
+		{"missing record", riRecMissing, other},
+		{"missing record reported as ErrNotFound", riRecMissingNotFound, other},
+		{"another user's completed exchange", riRecPending, riStatusOpts{approveOwn: true, status: "completed"}},
+		{"another user's failed exchange", riRecPending, riStatusOpts{approveOwn: true, status: "failed"}},
+		{"another user's expired exchange", riRecExpired, other},
+	}
+	for _, tc := range []struct {
+		name      string
+		token     string
+		wantError string
+	}{
+		{"no token", "", "permission denied: cannot approve another user's pending exchange"},
+		{"wrong token", "wrong", "invalid approval token"},
+	} {
+		do := func(p probe) *events.LambdaFunctionURLResponse {
+			resp, err := riStatusHandler(p.rec, p.opts).HandleRequest(context.Background(), riStatusRequest("approve", riSessCSRF, tc.token))
+			require.NoError(t, err)
+			return resp
+		}
+		want := do(baseline)
+		t.Run(tc.name+"/baseline answers 403", func(t *testing.T) {
+			assert.Equal(t, 403, want.StatusCode, want.Body)
+			var body map[string]string
+			require.NoError(t, json.Unmarshal([]byte(want.Body), &body))
+			assert.Equal(t, tc.wantError, body["error"])
+		})
+		for _, p := range probes {
+			t.Run(tc.name+"/"+p.name, func(t *testing.T) {
+				got := do(p)
+				assert.Equal(t, want.StatusCode, got.StatusCode, got.Body)
+				assert.Equal(t, want.Body, got.Body)
+				assert.Equal(t, want.Headers, got.Headers)
+			})
 		}
 	}
 }
