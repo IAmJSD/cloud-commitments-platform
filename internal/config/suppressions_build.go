@@ -3,7 +3,6 @@ package config
 import (
 	"time"
 
-	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 )
 
@@ -43,8 +42,7 @@ func suppressionBucketOf(rec *RecommendationRecord) suppressionBucket {
 		b.unknownVariant = true
 		return b
 	}
-	isAWSEC2 := b.provider == string(common.ProviderAWS) && b.service == string(common.ServiceCompute)
-	if isAWSEC2 && v.Platform == "" && v.Tenancy == "" {
+	if isAWSEC2(b.provider, b.service) && v.Platform == "" && v.Tenancy == "" {
 		// Saved before Details existed (#453) and retried without re-matching:
 		// the bought platform/tenancy is unknown, so a known {az,"",""} would
 		// leave the real variant unsuppressed (double-buy). Wildcard instead.

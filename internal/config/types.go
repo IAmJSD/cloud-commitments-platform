@@ -799,7 +799,11 @@ func (s *PurchaseSuppression) AppliesTo(v *SuppressionVariant) bool {
 		return true
 	}
 	a, b := *s.Variant, *v
-	a.Tenancy, b.Tenancy = canonicalSuppressionTenancy(a.Tenancy), canonicalSuppressionTenancy(b.Tenancy)
+	// Only the stored side needs canonicalising: SuppressionVariant already
+	// canonicalises every rec variant, so a raw "shared" never reaches v.
+	if isAWSEC2(s.Provider, s.Service) {
+		a.Tenancy = canonicalSuppressionTenancy(a.Tenancy)
+	}
 	return a == b
 }
 
