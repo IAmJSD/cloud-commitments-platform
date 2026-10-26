@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -139,19 +140,15 @@ func TestExecutedNotification_PartialDirectExecuteEmailsRevocationToken(t *testi
 	assertPartialRunEmailed(t, notifier, row)
 }
 
-// The token approve returns no row yet, so a token alongside the error is what
-// marks a committed partial run; the email comes from the re-fetched row. The
-// status mapping of this path is unchanged here.
-func TestExecutedNotification_PartialTokenApproveEmailsRevocationToken(t *testing.T) {
-	ctx := context.Background()
-	execID := "89012345-8901-8901-8901-89012345abcd"
-	contact := "contact@example.com"
-	row := partialRunRow(execID)
-
+// tokenApproveHandler wires the email-link approve: the caller is the
+// account's contact mailbox with no approve-* permission, so approvePurchase
+// takes the token branch, whose ApproveExecution returns final, token and
+// runErr. The execution is read once, for the request itself: a failed run
+// answers from the returned row, never from a re-fetch.
+func tokenApproveHandler(ctx context.Context, execID, contact string, final *config.PurchaseExecution, token string, runErr error) (*Handler, *recordingExecutedNotifier, *MockConfigStore) {
 	mockConfig := new(MockConfigStore)
 	exec := approvalTestExec(execID, contact, mockConfig)
 	mockConfig.On("GetExecutionByID", ctx, execID).Return(exec, nil).Once()
-	mockConfig.On("GetExecutionByID", ctx, execID).Return(row, nil).Once()
 	mockConfig.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &contact}, nil)
 	mockAuth := new(MockAuthService)
 	mockAuth.On("GetAllowedAccountsAPI", mock.Anything, mock.Anything).Return(nil, nil).Maybe()
@@ -160,14 +157,67 @@ func TestExecutedNotification_PartialTokenApproveEmailsRevocationToken(t *testin
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
 	mockPurchase := new(MockPurchaseManager)
-	mockPurchase.On("ApproveExecution", ctx, execID, "valid-token", contact).Return(partialRunToken, errPartialRun)
+	mockPurchase.On("ApproveExecution", ctx, execID, "valid-token", contact).Return(final, token, runErr)
 	notifier := &recordingExecutedNotifier{}
-	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth, emailNotifier: notifier}
+	return &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth, emailNotifier: notifier}, notifier, mockConfig
+}
+
+// The token approve now gets the row back, so a partial run answers like the
+// session approve: emailed from the returned row, then a 502 with its status.
+func TestExecutedNotification_PartialTokenApproveEmailsRevocationToken(t *testing.T) {
+	ctx := context.Background()
+	execID := "89012345-8901-8901-8901-89012345abcd"
+	row := partialRunRow(execID)
+	handler, notifier, mockConfig := tokenApproveHandler(ctx, execID, "contact@example.com", row, partialRunToken, errPartialRun)
 
 	_, err := handler.approvePurchase(ctx, &events.LambdaFunctionURLRequest{Headers: map[string]string{"authorization": "Bearer sess-tok"}}, execID, "valid-token")
-	require.ErrorIs(t, err, errPartialRun)
+	assertPartialRun502(t, err)
 	assertPartialRunEmailed(t, notifier, row)
 	mockConfig.AssertExpectations(t)
+}
+
+// Issue #532 slice 3: a token approve maps its failures by cause, as the
+// session approve does. Past the claim (a row came back) a provider failure
+// is a 502 with the row's status and an audit loss a 500; before it, the
+// 4-eyes denial is a 403 and the token and lost-claim refusals keep their
+// 4xx. Nothing here committed, so nothing is emailed.
+func TestTokenApprove_FailureMappedByCause(t *testing.T) {
+	ctx := context.Background()
+	execID := "a1234567-a123-a123-a123-a1234567abcd"
+	failed := partialRunRow(execID)
+	failed.Status = "failed"
+	cases := map[string]struct {
+		final  *config.PurchaseExecution
+		err    error
+		code   int // 0: a plain (500) error, not a client error
+		status string
+	}{
+		"provider failure after the claim": {failed, errors.New("AWS RI purchase failed"), 502, "failed"},
+		"final status not saved":           {partialRunRow(execID), fmt.Errorf("%w: terminal save failed; original execution error: %w", config.ErrAuditLoss, errPartialRun), 500, ""},
+		"4-eyes denial before the claim":   {nil, fmt.Errorf("%w: approver is the requester", purchase.ErrFourEyesDenied), 403, ""},
+		"lost claim":                       {nil, fmt.Errorf("approve: %w", config.ErrExecutionNotInExpectedStatus), 409, ""},
+		"token rotated before the claim":   {nil, fmt.Errorf("approve: %w", config.ErrApprovalTokenChanged), 403, ""},
+		"not started, store error":         {nil, errors.New("failed to get execution: db down"), 0, ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			handler, notifier, _ := tokenApproveHandler(ctx, execID, "contact@example.com", tc.final, "", tc.err)
+			_, err := handler.approvePurchase(ctx, &events.LambdaFunctionURLRequest{Headers: map[string]string{"authorization": "Bearer sess-tok"}}, execID, "valid-token")
+			require.Error(t, err)
+			assert.Zero(t, notifier.calls)
+			ce, ok := IsClientError(err)
+			if tc.code == 0 {
+				assert.False(t, ok, "a failure before the run started stays a plain error, got %v", err)
+				return
+			}
+			require.True(t, ok, "expected a client error, got %v", err)
+			assert.Equal(t, tc.code, ce.code)
+			if tc.status != "" {
+				assert.Equal(t, execID, ce.Details()["execution_id"])
+				assert.Equal(t, tc.status, ce.Details()["status"])
+			}
+		})
+	}
 }
 
 func TestExecutedNotification_TokenApproveFailureWithoutTokenSendsNoEmail(t *testing.T) {
@@ -186,7 +236,7 @@ func TestExecutedNotification_TokenApproveFailureWithoutTokenSendsNoEmail(t *tes
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-any", "purchases").Return(false, nil).Maybe()
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
 	mockPurchase := new(MockPurchaseManager)
-	mockPurchase.On("ApproveExecution", ctx, execID, "valid-token", contact).Return("", errors.New("AWS RI purchase failed"))
+	mockPurchase.On("ApproveExecution", ctx, execID, "valid-token", contact).Return(nil, "", errors.New("AWS RI purchase failed"))
 	notifier := &recordingExecutedNotifier{}
 	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth, emailNotifier: notifier}
 

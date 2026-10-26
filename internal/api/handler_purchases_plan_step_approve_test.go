@@ -97,7 +97,7 @@ func newTokenApprove(t *testing.T, perms []auth.Permission, plan *config.Purchas
 	mp := new(MockPurchaseManager)
 	// A reached ApproveExecution proves the approval was not refused up front;
 	// it answers with a conflict so the test needs no email or re-fetch wiring.
-	mp.On("ApproveExecution", mock.Anything, stepExecID, "valid-token", stepContact).Return("", config.ErrExecutionNotInExpectedStatus).Maybe()
+	mp.On("ApproveExecution", mock.Anything, stepExecID, "valid-token", stepContact).Return(nil, "", config.ErrExecutionNotInExpectedStatus).Maybe()
 	return &tokenApproveFixture{
 		handler:  &Handler{purchase: mp, config: mockConfig, auth: mockAuth},
 		purchase: mp,

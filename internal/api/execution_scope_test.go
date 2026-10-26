@@ -389,7 +389,7 @@ func TestApprove_OutOfScopeSessionWithTokenUsesContactGate(t *testing.T) {
 	store := new(MockConfigStore)
 	mockPurchase := new(MockPurchaseManager)
 	h := newScopeTestHandler(t, exec, []string{scopeTestProd.ID}, store, mockPurchase)
-	mockPurchase.On("ApproveExecution", mock.Anything, scopeTestExecID, "email-token", "operator@example.com").Return("revocation-token", nil)
+	mockPurchase.On("ApproveExecution", mock.Anything, scopeTestExecID, "email-token", "operator@example.com").Return(nil, "revocation-token", nil)
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil)
 
 	res, err := h.approvePurchase(context.Background(), scopeTestRequest(), scopeTestExecID, "email-token")
