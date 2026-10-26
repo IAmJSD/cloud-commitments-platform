@@ -32,7 +32,8 @@ func TestLadderTrancheAmount_RoundTripsProviderPrecisionContract(t *testing.T) {
 	planned := map[string]*big.Rat{}
 	var rows []LadderTrancheDB
 	add := func(amount float64, plan *big.Rat) {
-		tr := lifecycleTranche(cfgID, amount, ladder.TrancheStatusScheduled, due)
+		// Only commitment-basis rows are claimable (#946).
+		tr := claimableTranche(cfgID, amount, due)
 		written[tr.ID], planned[tr.ID] = amount, plan
 		rows = append(rows, tr)
 	}
