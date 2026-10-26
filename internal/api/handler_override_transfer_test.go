@@ -22,13 +22,25 @@ import (
 // overrideTransferStore is an in-memory account and override store for the
 // export/import tests (issue #9). Like Postgres, it refuses a ramp_schedule
 // longer than the VARCHAR(32) column, and WithTx undoes every write of a
-// failed transaction. failSave, when set, injects a store failure.
+// failed transaction, audit events included. failSave, when set, injects a
+// store failure; failEvent fails SaveConfigAuditEventTx. events holds the
+// import events and, for each audited row write, an event carrying the row's
+// audit context (issue #1493).
 type overrideTransferStore struct {
 	*MockConfigStore
 	accounts  []config.CloudAccount
 	overrides map[string][]config.AccountServiceOverride
 	saved     []config.AccountServiceOverride
+	events    []overrideTransferEvent
 	failSave  func(*config.AccountServiceOverride) error
+	failEvent error
+}
+
+// overrideTransferEvent is one audit write the in-memory store received.
+type overrideTransferEvent struct {
+	event *config.AuditEvent             // set for SaveConfigAuditEventTx
+	row   *config.AccountServiceOverride // set for an audited row write
+	audit config.AuditContext
 }
 
 func (s *overrideTransferStore) WithTx(_ context.Context, fn func(pgx.Tx) error) error {
@@ -37,15 +49,33 @@ func (s *overrideTransferStore) WithTx(_ context.Context, fn func(pgx.Tx) error)
 		overrides[k] = append([]config.AccountServiceOverride(nil), v...)
 	}
 	saved := append([]config.AccountServiceOverride(nil), s.saved...)
+	events := append([]overrideTransferEvent(nil), s.events...)
 	if err := fn(nil); err != nil {
-		s.overrides, s.saved = overrides, saved
+		s.overrides, s.saved, s.events = overrides, saved, events
 		return err
 	}
 	return nil
 }
 
-func (s *overrideTransferStore) SaveAccountServiceOverrideTx(ctx context.Context, _ pgx.Tx, o *config.AccountServiceOverride) error {
-	return s.SaveAccountServiceOverride(ctx, o)
+func (s *overrideTransferStore) SaveAccountServiceOverrideAuditedTx(ctx context.Context, _ pgx.Tx, o *config.AccountServiceOverride, audit config.AuditContext) error {
+	if err := s.SaveAccountServiceOverride(ctx, o); err != nil {
+		return err
+	}
+	row := *o
+	s.events = append(s.events, overrideTransferEvent{row: &row, audit: audit})
+	return nil
+}
+
+func (s *overrideTransferStore) SaveConfigAuditEventTx(_ context.Context, _ pgx.Tx, ev *config.AuditEvent) error {
+	if s.failEvent != nil {
+		return s.failEvent
+	}
+	if ev.ID == "" {
+		ev.ID = "import-event"
+	}
+	copied := *ev
+	s.events = append(s.events, overrideTransferEvent{event: &copied})
+	return nil
 }
 
 func (s *overrideTransferStore) ListCloudAccounts(context.Context, config.CloudAccountFilter) ([]config.CloudAccount, error) {

@@ -21,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -1173,7 +1174,11 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 		return nil, err
 	}
 
-	if err := h.config.SaveAccountServiceOverride(ctx, override); err != nil {
+	// The write and its config_audit_events row commit together (issue #1493).
+	audit := config.AuditContext{Actor: configAuditActor(session)}
+	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		return h.config.SaveAccountServiceOverrideAuditedTx(ctx, tx, override, audit)
+	}); err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 
@@ -1279,7 +1284,10 @@ func (h *Handler) deleteAccountServiceOverride(ctx context.Context, req *events.
 		return nil, err
 	}
 
-	if err := h.config.DeleteAccountServiceOverride(ctx, accountID, provider, service); err != nil {
+	audit := config.AuditContext{Actor: configAuditActor(session)}
+	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		return h.config.DeleteAccountServiceOverrideAuditedTx(ctx, tx, accountID, provider, service, audit)
+	}); err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 
