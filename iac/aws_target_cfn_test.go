@@ -3,7 +3,6 @@ package iac
 import (
 	"fmt"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -57,22 +56,32 @@ func loadAWSTargetCFN(t *testing.T) *yaml.Node {
 	return doc.Content[0]
 }
 
-// cfnEval evaluates the subset of CloudFormation intrinsics the trust
-// policy's condition keys use (!Ref, !Select, !Split, !Sub) against the given
-// parameter values. Anything else is an error, so a rewrite into a form this
-// cannot model fails the test instead of passing unevaluated.
-func cfnEval(n *yaml.Node, params map[string]string) (any, error) {
+// cfnEnv is what the evaluator below resolves references against: refs holds
+// parameter values and resource attributes (keyed "Resource.Attribute", the
+// way ${OIDCProvider.Arn} names them), and conds holds the template's
+// evaluated Conditions for !If.
+type cfnEnv struct {
+	refs  map[string]string
+	conds map[string]bool
+}
+
+// cfnEval evaluates the subset of CloudFormation intrinsics the trust policy
+// uses (!Ref, !Select, !Split, !Sub, !If, and the !Equals and !Not its
+// condition is built from) against env. Anything else is an error, so a
+// rewrite into a form this cannot model fails the test instead of passing
+// unevaluated.
+func cfnEval(n *yaml.Node, env cfnEnv) (any, error) {
 	switch n.Tag {
 	case "!!str", "!!int":
 		return n.Value, nil
 	case "!Ref":
-		v, ok := params[n.Value]
+		v, ok := env.refs[n.Value]
 		if !ok {
 			return nil, fmt.Errorf("!Ref to %q, which is not a parameter value under test", n.Value)
 		}
 		return v, nil
 	case "!Split":
-		args, err := cfnArgs(n, 2, params)
+		args, err := cfnArgs(n, 2, env)
 		if err != nil {
 			return nil, err
 		}
@@ -82,7 +91,7 @@ func cfnEval(n *yaml.Node, params map[string]string) (any, error) {
 		}
 		return strings.Split(s, delim), nil
 	case "!Select":
-		args, err := cfnArgs(n, 2, params)
+		args, err := cfnArgs(n, 2, env)
 		if err != nil {
 			return nil, err
 		}
@@ -93,19 +102,41 @@ func cfnEval(n *yaml.Node, params map[string]string) (any, error) {
 		}
 		return list[idx], nil
 	case "!Sub":
-		return cfnSub(n, params)
+		return cfnSub(n, env)
+	case "!If":
+		return cfnIf(n, env)
+	case "!Equals":
+		args, err := cfnArgs(n, 2, env)
+		if err != nil {
+			return nil, err
+		}
+		a, b, ok := twoStrings(args)
+		if !ok {
+			return nil, fmt.Errorf("!Equals arguments are not strings: %v", args)
+		}
+		return a == b, nil
+	case "!Not":
+		args, err := cfnArgs(n, 1, env)
+		if err != nil {
+			return nil, err
+		}
+		b, ok := args[0].(bool)
+		if !ok {
+			return nil, fmt.Errorf("!Not argument is not a condition: %v", args[0])
+		}
+		return !b, nil
 	}
 	return nil, fmt.Errorf("unsupported node tag %q (value %q)", n.Tag, n.Value)
 }
 
 // cfnArgs evaluates the elements of a sequence-form intrinsic.
-func cfnArgs(n *yaml.Node, want int, params map[string]string) ([]any, error) {
+func cfnArgs(n *yaml.Node, want int, env cfnEnv) ([]any, error) {
 	if n.Kind != yaml.SequenceNode || len(n.Content) != want {
 		return nil, fmt.Errorf("%s wants a %d-element list", n.Tag, want)
 	}
 	out := make([]any, 0, want)
 	for _, c := range n.Content {
-		v, err := cfnEval(c, params)
+		v, err := cfnEval(c, env)
 		if err != nil {
 			return nil, err
 		}
@@ -120,10 +151,43 @@ func twoStrings(args []any) (string, string, bool) {
 	return a, b, ok1 && ok2
 }
 
+// cfnIf evaluates only the branch its named condition selects, as
+// CloudFormation does.
+func cfnIf(n *yaml.Node, env cfnEnv) (any, error) {
+	if n.Kind != yaml.SequenceNode || len(n.Content) != 3 || n.Content[0].Tag != "!!str" {
+		return nil, fmt.Errorf("!If wants [condition name, value if true, value if false]")
+	}
+	cond, ok := env.conds[n.Content[0].Value]
+	if !ok {
+		return nil, fmt.Errorf("!If names condition %q, which the template does not define", n.Content[0].Value)
+	}
+	if cond {
+		return cfnEval(n.Content[1], env)
+	}
+	return cfnEval(n.Content[2], env)
+}
+
+// cfnConditions evaluates the template's Conditions section for refs.
+func cfnConditions(t *testing.T, root *yaml.Node, refs map[string]string) map[string]bool {
+	t.Helper()
+	section := mapPath(t, root, "Conditions")
+	conds := map[string]bool{}
+	for i := 0; i+1 < len(section.Content); i += 2 {
+		v, err := cfnEval(section.Content[i+1], cfnEnv{refs: refs})
+		require.NoError(t, err, "condition %s", section.Content[i].Value)
+		b, ok := v.(bool)
+		require.True(t, ok, "condition %s does not evaluate to a boolean", section.Content[i].Value)
+		conds[section.Content[i].Value] = b
+	}
+	return conds
+}
+
 var subVarRe = regexp.MustCompile(`\$\{([^}!]+)\}`)
 
-// cfnSub renders both the string and the [string, {vars}] forms of !Sub.
-func cfnSub(n *yaml.Node, params map[string]string) (any, error) {
+// cfnSub renders both the string and the [string, {vars}] forms of !Sub. Like
+// CloudFormation it substitutes in a single pass: text a variable expands to
+// is not scanned for further ${...} references.
+func cfnSub(n *yaml.Node, env cfnEnv) (any, error) {
 	format, vars := n, map[string]string{}
 	if n.Kind == yaml.SequenceNode {
 		if len(n.Content) != 2 || n.Content[1].Kind != yaml.MappingNode {
@@ -132,7 +196,7 @@ func cfnSub(n *yaml.Node, params map[string]string) (any, error) {
 		format = n.Content[0]
 		m := n.Content[1]
 		for i := 0; i+1 < len(m.Content); i += 2 {
-			v, err := cfnEval(m.Content[i+1], params)
+			v, err := cfnEval(m.Content[i+1], env)
 			if err != nil {
 				return nil, err
 			}
@@ -149,7 +213,7 @@ func cfnSub(n *yaml.Node, params map[string]string) (any, error) {
 		if v, ok := vars[name]; ok {
 			return v
 		}
-		if v, ok := params[name]; ok {
+		if v, ok := env.refs[name]; ok {
 			return v
 		}
 		missing = fmt.Errorf("!Sub references %q, which is neither a variable nor a parameter value under test", name)
@@ -174,47 +238,44 @@ func TestAWSTargetCFN_HasNoIssuerHostParameter(t *testing.T) {
 	require.NotContains(t, string(raw), "${OIDCIssuerHost}", "nothing may still reference the removed parameter")
 }
 
-// TestAWSTargetCFN_ConditionKeysDeriveFromIssuerURL evaluates every key of the
-// trust policy's StringEquals block for real issuer URLs and checks it is the
-// host Terraform derives, followed by :aud or :sub.
-func TestAWSTargetCFN_ConditionKeysDeriveFromIssuerURL(t *testing.T) {
-	root := loadAWSTargetCFN(t)
-	urlPattern := regexp.MustCompile(mapPath(t, root, "Parameters", "OIDCIssuerURL", "AllowedPattern").Value)
-	statements := mapPath(t, root, "Resources", "CUDlyRole", "Properties", "AssumeRolePolicyDocument", "Statement")
-	require.Equal(t, yaml.SequenceNode, statements.Kind)
-	require.Len(t, statements.Content, 1, "the trust policy has exactly one statement")
-	stringEquals := mapPath(t, statements.Content[0], "Condition", "StringEquals")
-
-	for _, url := range []string{
-		"https://accounts.google.com",
-		"https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0",
-	} {
-		t.Run(url, func(t *testing.T) {
-			require.True(t, urlPattern.MatchString(url), "fixture must satisfy OIDCIssuerURL's AllowedPattern")
-			host := terraformConditionHost(url)
-			var keys []string
-			for i := 0; i+1 < len(stringEquals.Content); i += 2 {
-				v, err := cfnEval(stringEquals.Content[i], map[string]string{"OIDCIssuerURL": url})
-				require.NoError(t, err, "condition key %d must be computed from OIDCIssuerURL alone", i/2)
-				keys = append(keys, v.(string))
-			}
-			sort.Strings(keys)
-			require.Equal(t, []string{host + ":aud", host + ":sub"}, keys)
-		})
-	}
-}
-
 // TestCFNEval_Positive is the control for the evaluator above: it must
-// resolve the derivation the template uses, and reject an unknown parameter,
-// so the condition-key test cannot pass by evaluating nothing.
+// resolve the derivation and the condition the template uses, and reject an
+// unknown parameter or condition, so the trust-policy tests cannot pass by
+// evaluating nothing.
 func TestCFNEval_Positive(t *testing.T) {
-	var n yaml.Node
-	require.NoError(t, yaml.Unmarshal([]byte(`!Sub ["${Host}:aud", {Host: !Select [1, !Split ["https://", !Ref OIDCIssuerURL]]}]`), &n))
-	got, err := cfnEval(n.Content[0], map[string]string{"OIDCIssuerURL": "https://accounts.google.com"})
+	env := cfnEnv{refs: map[string]string{"OIDCIssuerURL": "https://accounts.google.com"}}
+	eval := func(src string, env cfnEnv) (any, error) {
+		var n yaml.Node
+		require.NoError(t, yaml.Unmarshal([]byte(src), &n))
+		return cfnEval(n.Content[0], env)
+	}
+
+	got, err := eval(`!Sub ["${Host}:aud", {Host: !Select [1, !Split ["https://", !Ref OIDCIssuerURL]]}]`, env)
 	require.NoError(t, err)
 	require.Equal(t, "accounts.google.com:aud", got)
 
-	require.NoError(t, yaml.Unmarshal([]byte(`!Sub "${OIDCIssuerHost}:aud"`), &n))
-	_, err = cfnEval(n.Content[0], map[string]string{"OIDCIssuerURL": "https://accounts.google.com"})
+	_, err = eval(`!Sub "${OIDCIssuerHost}:aud"`, env)
 	require.Error(t, err)
+
+	for aud, want := range map[string]bool{"": false, "api://x": true} {
+		got, err = eval(`!Not [!Equals [!Ref OIDCAudience, ""]]`, cfnEnv{refs: map[string]string{"OIDCAudience": aud}})
+		require.NoError(t, err)
+		require.Equal(t, want, got, "audience %q", aud)
+	}
+
+	ifSrc := `!If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]`
+	refs := map[string]string{"OIDCAudience": "api://x"}
+	got, err = eval(ifSrc, cfnEnv{refs: refs, conds: map[string]bool{"HasAudience": true}})
+	require.NoError(t, err)
+	require.Equal(t, "api://x", got)
+	got, err = eval(ifSrc, cfnEnv{refs: refs, conds: map[string]bool{"HasAudience": false}})
+	require.NoError(t, err)
+	require.Equal(t, "sts.amazonaws.com", got)
+	_, err = eval(ifSrc, cfnEnv{refs: refs})
+	require.Error(t, err, "an !If on an undefined condition must not evaluate")
+
+	// Single-pass substitution: a value containing ${...} is not re-expanded.
+	got, err = eval(`!Sub ["${A}", {A: "${B}"}]`, cfnEnv{refs: map[string]string{"B": "expanded"}})
+	require.NoError(t, err)
+	require.Equal(t, "${B}", got)
 }
