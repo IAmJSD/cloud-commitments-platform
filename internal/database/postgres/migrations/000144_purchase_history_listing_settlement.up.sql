@@ -1,4 +1,4 @@
--- Migration 000148: RI Marketplace listing settlement columns (issue #27).
+-- Migration 000144: RI Marketplace listing settlement columns (issue #27).
 --
 -- Migration 000087 left these out because nothing populated them yet. The
 -- marketplace status poller (finalize_revocations sweep) now writes them:
