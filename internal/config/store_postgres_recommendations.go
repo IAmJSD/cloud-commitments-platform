@@ -374,24 +374,35 @@ func (s *PostgresStore) ListStoredRecommendations(ctx context.Context, filter Re
 		if err := rows.Scan(&payload); err != nil {
 			return nil, fmt.Errorf("failed to scan payload: %w", err)
 		}
-		var rec RecommendationRecord
-		if err := json.Unmarshal(payload, &rec); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
+		rec, keep, err := decodeStoredRecommendation(payload, filter)
+		if err != nil {
+			return nil, err
 		}
-		// Apply the in-process percentage floor. Recs where the percentage
-		// cannot be computed (missing on-demand baseline) pass through -- we
-		// only drop a rec when pct is computable AND below the threshold.
-		if filter.MinSavingsPct > 0 {
-			if pct, ok := recEffectiveSavingsPct(&rec); ok && pct < filter.MinSavingsPct {
-				continue
-			}
+		if keep {
+			out = append(out, rec)
 		}
-		out = append(out, rec)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows iteration: %w", err)
 	}
 	return out, nil
+}
+
+// decodeStoredRecommendation unmarshals one stored payload and applies the
+// in-process MinSavingsPct floor. keep is false when the floor drops the rec.
+// Recs where the percentage cannot be computed (missing on-demand baseline)
+// pass through: a rec is only dropped when pct is computable AND below the
+// threshold.
+func decodeStoredRecommendation(payload []byte, filter RecommendationFilter) (rec RecommendationRecord, keep bool, err error) {
+	if err := json.Unmarshal(payload, &rec); err != nil {
+		return RecommendationRecord{}, false, fmt.Errorf("failed to unmarshal payload: %w", err)
+	}
+	if filter.MinSavingsPct > 0 {
+		if pct, ok := recEffectiveSavingsPct(&rec); ok && pct < filter.MinSavingsPct {
+			return rec, false, nil
+		}
+	}
+	return rec, true, nil
 }
 
 // GetRecommendationsFreshness returns the singleton freshness row. The

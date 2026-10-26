@@ -294,6 +294,30 @@ describe('HTML Structure', () => {
       const payment = document.getElementById('setting-default-payment');
       expect(payment).toBeTruthy();
     });
+
+    // Issue #345: settings coverage only drives the Dashboard target and its
+    // savings scaling; purchase plans size by their own Target Coverage.
+    test('labels settings coverage as a Dashboard target, not purchase sizing', () => {
+      const labelFor = (id: string) =>
+        document.querySelector(`label[for="${id}"]`)?.textContent?.trim()
+        ?? document.getElementById(id)?.closest('label')?.textContent?.trim();
+
+      expect(labelFor('setting-default-coverage')).toBe('Dashboard Coverage Target (%)');
+      for (const sp of ['compute', 'ec2instance', 'sagemaker', 'database']) {
+        expect(labelFor(`aws-savings-plans-${sp}-coverage`)).toBe('Dashboard coverage %:');
+      }
+      expect(labelFor('override-coverage')).toBe('Dashboard coverage (%):');
+
+      const help = document.getElementById('coverage-display-only-help');
+      expect(help?.textContent).toContain('do not change how much CUDly buys');
+      expect(document.getElementById('setting-default-coverage')?.getAttribute('aria-describedby'))
+        .toBe('coverage-display-only-help');
+    });
+
+    test('keeps the plan form Target Coverage label, which sizes plan steps', () => {
+      const plan = document.getElementById('plan-coverage');
+      expect(plan?.closest('label')?.textContent?.trim()).toBe('Target Coverage (%):');
+    });
   });
 
   describe('Modals', () => {

@@ -360,6 +360,17 @@ textarea {
     gap: var(--cudly-sp-3);
 }
 
+/* Text lines for skeletons written in static HTML (issue #186), which can't
+ * size blocks the way lib/skeleton.ts does: these match skeletonText's
+ * 1rem lines with a 60% last line. */
+.skeleton-line {
+    height: 1rem;
+}
+
+.skeleton-line-short {
+    width: 60%;
+}
+
 .skeleton-tile {
     /* KPI tile shape — matches .kpi-tile's padding + min height so the
      * post-render swap doesn't trigger layout shift. */

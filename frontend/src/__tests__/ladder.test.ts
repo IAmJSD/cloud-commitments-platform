@@ -79,6 +79,41 @@ describe('ladder.ts', () => {
     ]);
   });
 
+  // Issue #186: the per-account table loads behind the shared skeleton, not a
+  // plain "Loading..." paragraph, and the skeleton gives way to the table or
+  // to the error.
+  test('per-account configs show skeleton rows while loading, then the table (issue #186)', async () => {
+    document.body.innerHTML = '<div id="commitment-laddering-settings"></div>';
+    let resolve: (c: LadderConfig[]) => void = () => undefined;
+    (api.getLadderConfigs as jest.Mock).mockReturnValue(new Promise<LadderConfig[]>((r) => { resolve = r; }));
+    const done = initLadderingSettings(false);
+
+    const container = document.getElementById('ladder-configs-table-container')!;
+    // No visible "Loading…" paragraph; the only text is the sr-only status.
+    expect(container.querySelector('p')).toBeNull();
+    const rows = container.querySelectorAll('tr.skeleton-row');
+    expect(rows).toHaveLength(3);
+    expect(rows[0]!.querySelectorAll('td')).toHaveLength(8);
+    expect(container.querySelector('.skeleton-status')).toHaveTextContent('Loading…');
+
+    resolve([baseConfig({ id: 'config-1' })]);
+    await done;
+    expect(container.querySelector('.skeleton')).toBeNull();
+    expect(container.querySelectorAll('tbody tr')).toHaveLength(1);
+  });
+
+  test('a failed per-account config load replaces the skeleton with the error (issue #186)', async () => {
+    document.body.innerHTML = '<div id="commitment-laddering-settings"></div>';
+    (api.getLadderConfigs as jest.Mock).mockRejectedValue(new Error('boom'));
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    await initLadderingSettings(false);
+
+    const container = document.getElementById('ladder-configs-table-container')!;
+    expect(container.querySelector('.skeleton')).toBeNull();
+    expect(container.hasAttribute('aria-busy')).toBe(false);
+    expect(container).toHaveTextContent('Failed to load per-account configurations.');
+  });
+
   test('config modal moves focus inside, traps Tab, closes on Escape and restores focus (#731)', async () => {
     await renderSection([baseConfig({ id: 'config-1' })]);
     const editBtn = document.querySelector<HTMLButtonElement>('.ladder-edit-btn')!;

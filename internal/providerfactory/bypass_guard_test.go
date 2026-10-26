@@ -29,7 +29,7 @@ var bypassConstructors = map[string]map[string]bool{
 }
 
 // No non-test file under cmd/ or internal/ may call the concrete Azure/GCP
-// provider constructors or set the deprecated ProviderConfig.Profile field.
+// provider constructors or set the deprecated provider.Config.Profile field.
 func TestNoRegistryBypassInProductionCode(t *testing.T) {
 	root := filepath.Join("..", "..")
 	var violations []string
@@ -50,15 +50,21 @@ func TestNoRegistryBypassInProductionCode(t *testing.T) {
 	}
 	require.Greater(t, scanned, 100, "the walk must actually reach the production sources")
 	assert.Empty(t, violations,
-		"build credentialed Azure/GCP providers with providerfactory.NewAzure/NewGCP and use the typed ProviderConfig fields")
+		"build credentialed Azure/GCP providers with providerfactory.NewAzure/NewGCP and use the typed provider.Config fields")
 }
 
 // registryBypasses returns one entry per bypassing call or deprecated
 // Profile key in the file at path.
 func registryBypasses(t *testing.T, path string) []string {
 	t.Helper()
+	return bypassesInSource(t, path, nil)
+}
+
+// bypassesInSource is registryBypasses over src (or the file at path when src is nil).
+func bypassesInSource(t *testing.T, path string, src any) []string {
+	t.Helper()
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	f, err := parser.ParseFile(fset, path, src, parser.SkipObjectResolution)
 	require.NoError(t, err, path)
 
 	imports := map[string]string{} // local name -> import path
@@ -80,7 +86,7 @@ func registryBypasses(t *testing.T, path string) []string {
 				out = append(out, fset.Position(node.Pos()).String()+": "+node.Sel.Name)
 			}
 		case *ast.CompositeLit:
-			if sel, ok := node.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "ProviderConfig" && selectorPkg(sel, imports) == providerPkg {
+			if sel, ok := node.Type.(*ast.SelectorExpr); ok && (sel.Sel.Name == "Config" || sel.Sel.Name == "ProviderConfig") && selectorPkg(sel, imports) == providerPkg {
 				out = append(out, profileKeys(fset, node)...)
 			}
 		}
@@ -105,8 +111,26 @@ func profileKeys(fset *token.FileSet, lit *ast.CompositeLit) []string {
 			continue
 		}
 		if id, ok := kv.Key.(*ast.Ident); ok && id.Name == "Profile" {
-			out = append(out, fset.Position(kv.Pos()).String()+": ProviderConfig.Profile")
+			out = append(out, fset.Position(kv.Pos()).String()+": provider.Config.Profile")
 		}
 	}
 	return out
+}
+
+func TestBypassGuardMatchesConfigNames(t *testing.T) {
+	const providerImport = `import "github.com/LeanerCloud/cloud-commitments-go/pkg/provider"`
+	cases := map[string]struct {
+		src  string
+		want int
+	}{
+		"provider.Config":         {providerImport + "\nvar _ = provider.Config{Profile: \"x\"}\n", 1},
+		"provider.ProviderConfig": {providerImport + "\nvar _ = provider.ProviderConfig{Profile: \"x\"}\n", 1},
+		"unrelated foo.Config":    {"import foo \"example.com/foo\"\nvar _ = foo.Config{Profile: \"x\"}\n", 0},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := bypassesInSource(t, "x.go", "package x\n"+tc.src)
+			assert.Len(t, got, tc.want)
+		})
+	}
 }

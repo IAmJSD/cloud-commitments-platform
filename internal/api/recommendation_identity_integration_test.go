@@ -44,7 +44,7 @@ type identityProviderFactory struct {
 	recs map[string][]common.Recommendation
 }
 
-func (f identityProviderFactory) CreateAndValidateProvider(ctx context.Context, name string, cfg *provider.ProviderConfig) (provider.Provider, error) {
+func (f identityProviderFactory) CreateAndValidateProvider(ctx context.Context, name string, cfg *provider.Config) (provider.Provider, error) {
 	if name != "aws" || cfg == nil || cfg.AWSCredentialsProvider == nil {
 		return nil, fmt.Errorf("expected registered AWS fixture credentials")
 	}

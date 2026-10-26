@@ -106,6 +106,8 @@ import (
 	"strings"
 	"text/template"
 	"unicode"
+
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/iacbundle"
 )
 
 // iacData is this script's copy of federationIaCData in
@@ -296,51 +298,41 @@ func addToZip(zw *zip.Writer, name string, content []byte) error {
 	return err
 }
 
-// bundleModuleSpec returns the Terraform module directory, tfvars template path,
-// and zip destination name for the given target/source combination.
-func bundleModuleSpec(target, source, slug, templDir, modulesDir string) (moduleDir, tfvarsTmpl, tfvarsName string) {
+// bundleModuleSpec returns the Terraform module directory (slash-separated,
+// relative to the modules directory), tfvars template path, and zip
+// destination name for the given target/source combination.
+func bundleModuleSpec(target, source, slug, templDir string) (moduleDir, tfvarsTmpl, tfvarsName string) {
 	switch {
 	case target == "aws" && source == "aws":
-		return filepath.Join(modulesDir, "aws-cross-account", "terraform"),
+		return "aws-cross-account/terraform",
 			filepath.Join(templDir, "aws-cross-account.tfvars.tmpl"),
 			"terraform/" + slug + "-aws-cross-account.tfvars"
 	case target == "aws":
-		return filepath.Join(modulesDir, "aws-target", "terraform"),
+		return "aws-target/terraform",
 			filepath.Join(templDir, "aws-wif.tfvars.tmpl"),
 			"terraform/" + slug + "-aws-wif.tfvars"
 	case target == "azure":
-		return filepath.Join(modulesDir, "azure-target", "terraform"),
+		return "azure-target/terraform",
 			filepath.Join(templDir, "azure-wif.tfvars.tmpl"),
 			"terraform/" + slug + "-azure-wif.tfvars"
 	case target == "gcp" && source == "gcp":
-		return filepath.Join(modulesDir, "gcp-sa-impersonation", "terraform"),
+		return "gcp-sa-impersonation/terraform",
 			filepath.Join(templDir, "gcp-sa-impersonation.tfvars.tmpl"),
 			"terraform/" + slug + "-gcp-sa-impersonation.tfvars"
 	default: // gcp, non-gcp source
-		return filepath.Join(modulesDir, "gcp-target", "terraform"),
+		return "gcp-target/terraform",
 			filepath.Join(templDir, "gcp-wif.tfvars.tmpl"),
 			"terraform/" + slug + "-gcp-wif.tfvars"
 	}
 }
 
-// addTerraformToBundle writes the Terraform module files and generated .tfvars into zw.
+// addTerraformToBundle writes the Terraform module files and generated .tfvars
+// into zw. It goes through internal/iacbundle, as the API's bundle does, so the
+// out-of-tree modules the Terraform calls ship inside the zip too (#1442).
 func addTerraformToBundle(zw *zip.Writer, data iacData, target, source, slug, templDir, modulesDir string) error {
-	moduleDir, tfvarsTmpl, tfvarsName := bundleModuleSpec(target, source, slug, templDir, modulesDir)
-	entries, err := os.ReadDir(moduleDir)
-	if err != nil {
-		return fmt.Errorf("read module dir %s: %w\n\nRun from the repository root.", moduleDir, err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-		b, err := os.ReadFile(filepath.Join(moduleDir, entry.Name()))
-		if err != nil {
-			return err
-		}
-		if err = addToZip(zw, "terraform/"+entry.Name(), b); err != nil {
-			return err
-		}
+	moduleDir, tfvarsTmpl, tfvarsName := bundleModuleSpec(target, source, slug, templDir)
+	if err := iacbundle.AddTerraformDir(zw, os.DirFS(modulesDir), moduleDir, iacbundle.ExtraModules(target)); err != nil {
+		return fmt.Errorf("bundle %s: %w\n\nRun from the repository root.", filepath.Join(modulesDir, moduleDir), err)
 	}
 	content, err := renderTmpl(tfvarsTmpl, data)
 	if err != nil {

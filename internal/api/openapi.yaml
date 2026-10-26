@@ -2493,7 +2493,10 @@ paths:
         fails CSRF validation with 403. The token alone authorizes, so the
         route is open to callers without a session; token mode answers an
         unknown exchange id with the same 403 as a wrong token, so it does
-        not reveal which ids exist.
+        not reveal which ids exist. Likewise a session holding only
+        approve-own gets the same 403 for an unknown id as for another
+        user's exchange in any status, and falls through to token mode for
+        both.
       security:
         - bearerAuth: []
         - {}
@@ -2525,15 +2528,19 @@ paths:
             token is invalid, or, when a session exists, 4-eyes mode rejects
             the approver (for example the creator approving their own
             exchange). In token mode an unknown exchange id, an exchange with
-            no approval token and a wrong token get the same 403 and body.
+            no approval token and a wrong token get the same 403 and body. A
+            session holding only approve-own gets the same 403 and body for an
+            unknown id as for another user's exchange, pending or not.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
           description: >
-            Session mode only, the exchange does not exist. Token mode answers
-            an unknown id with 403, like a wrong token.
+            Session mode with approve-any (or the admin key) only, the
+            exchange does not exist. Token mode answers an unknown id with
+            403, like a wrong token, and an approve-own session answers it
+            like another user's exchange.
           content:
             application/json:
               schema:
@@ -2542,7 +2549,8 @@ paths:
           description: >
             The exchange is no longer pending (already processed, or canceled
             by a newer analysis run), including when a concurrent approve or
-            reject changed it first.
+            reject changed it first. An approve-own session gets this only
+            for an exchange it created.
           content:
             application/json:
               schema:
@@ -3798,7 +3806,17 @@ paths:
               schema:
                 $ref: '#/components/schemas/Group'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: >
+            Invalid request, or a permission change that would give a member
+            both a view-only and a write-capable group (for example adding a
+            write permission to a group whose members also belong to a
+            view-only group). The message names the group and how many
+            members conflict. Members who already held such a combination do
+            not block the update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':

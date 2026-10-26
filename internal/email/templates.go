@@ -313,8 +313,8 @@ Proposed Exchanges:
 - Source: {{.SourceRIID}} ({{.SourceInstanceType}}, {{printf "%.1f" .UtilizationPct}}% utilized)
   Target: {{.TargetInstanceType}} x{{.TargetCount}}
   Payment Due: ${{.PaymentDue}}
-  Approve: {{$.DashboardURL}}/api/ri-exchange/approve/{{.RecordID}}?token={{urlquery .ApprovalToken}}
-  Reject:  {{$.DashboardURL}}/api/ri-exchange/reject/{{.RecordID}}?token={{urlquery .ApprovalToken}}
+  Approve: {{$.DashboardURL}}/inventory/ri-exchange/approve/{{.RecordID}}?token={{urlquery .ApprovalToken}}
+  Reject:  {{$.DashboardURL}}/inventory/ri-exchange/reject/{{.RecordID}}?token={{urlquery .ApprovalToken}}
 {{end}}
 Total Payment: ${{.TotalPayment}}
 {{if .Skipped}}
@@ -325,7 +325,7 @@ Skipped (could not process):
 {{if .CancellationWindowNote}}{{.CancellationWindowNote}}{{else}}Please approve within 6 hours (before the next analysis run).{{end}}
 
 Review exchange history:
-{{.DashboardURL}}/#ri-exchange
+{{.DashboardURL}}/inventory/ri-exchange
 
 This is an automated message from CUDly. Do not share these links.
 `
@@ -371,8 +371,8 @@ const riExchangePendingApprovalHTMLTemplate = `<!DOCTYPE html>
 <td align="right" style="padding:10px 12px;color:#475569;">{{printf "%.1f" .UtilizationPct}}%</td>
 <td align="right" style="padding:10px 12px;color:#0f172a;font-weight:600;">${{.PaymentDue}}</td>
 <td style="padding:10px 12px;">
-<a href="{{$.DashboardURL}}/api/ri-exchange/approve/{{.RecordID}}?token={{urlquery .ApprovalToken}}" style="display:inline-block;padding:6px 14px;background:#16a34a;color:#ffffff;text-decoration:none;font-weight:600;font-size:12px;border-radius:4px;margin-right:4px;">Approve</a>
-<a href="{{$.DashboardURL}}/api/ri-exchange/reject/{{.RecordID}}?token={{urlquery .ApprovalToken}}" style="display:inline-block;padding:6px 14px;background:#ffffff;color:#dc2626;text-decoration:none;font-weight:600;font-size:12px;border-radius:4px;border:1px solid #dc2626;">Reject</a>
+<a href="{{$.DashboardURL}}/inventory/ri-exchange/approve/{{.RecordID}}?token={{urlquery .ApprovalToken}}" style="display:inline-block;padding:6px 14px;background:#16a34a;color:#ffffff;text-decoration:none;font-weight:600;font-size:12px;border-radius:4px;margin-right:4px;">Approve</a>
+<a href="{{$.DashboardURL}}/inventory/ri-exchange/reject/{{.RecordID}}?token={{urlquery .ApprovalToken}}" style="display:inline-block;padding:6px 14px;background:#ffffff;color:#dc2626;text-decoration:none;font-weight:600;font-size:12px;border-radius:4px;border:1px solid #dc2626;">Reject</a>
 </td>
 </tr>
 {{end}}</tbody></table>
@@ -395,7 +395,7 @@ const riExchangePendingApprovalHTMLTemplate = `<!DOCTYPE html>
 </td></tr>
 
 <tr><td style="padding:16px 32px;background:#f8fafc;border-top:1px solid #e2e8f0;border-radius:0 0 8px 8px;">
-<p style="margin:0;color:#94a3b8;font-size:11px;">This is an automated message from CUDly. Do not share these links. <a href="{{.DashboardURL}}/#ri-exchange" style="color:#64748b;">View exchange history</a></p>
+<p style="margin:0;color:#94a3b8;font-size:11px;">This is an automated message from CUDly. Do not share these links. <a href="{{.DashboardURL}}/inventory/ri-exchange" style="color:#64748b;">View exchange history</a></p>
 </td></tr>
 
 </table>
@@ -438,7 +438,7 @@ Skipped (could not process):
 - {{.SourceRIID}} ({{.SourceInstanceType}}): {{.Reason}}
 {{end}}{{end}}
 View exchange history:
-{{.DashboardURL}}/#ri-exchange
+{{.DashboardURL}}/inventory/ri-exchange
 
 This is an automated message from CUDly.
 `
