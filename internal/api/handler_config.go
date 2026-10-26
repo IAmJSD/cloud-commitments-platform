@@ -188,13 +188,15 @@ func (h *Handler) checkCommitmentOptionCombo(ctx context.Context, cfg config.Ser
 	return nil
 }
 
-// serviceConfigFilterKeys are the recommendation-filter JSON fields the
-// Settings UI now edits. They are overlaid onto the existing row only when the
+// serviceConfigOverlayKeys are the JSON fields the Settings UI edits: the four
+// scalars (enabled, term, payment, coverage) and the recommendation filters.
+// They are overlaid onto the existing row only when the
 // request body actually contains the key, so a partial PUT from a non-UI
 // client (or an older UI build) never zeroes a filter the operator set
 // elsewhere. RampSchedule is intentionally absent: it is still set out-of-band
 // and the UI does not own it.
-var serviceConfigFilterKeys = []string{
+var serviceConfigOverlayKeys = []string{
+	"enabled", "term", "payment", "coverage",
 	"include_engines", "exclude_engines",
 	"include_regions", "exclude_regions",
 	"include_types", "exclude_types",
@@ -202,13 +204,12 @@ var serviceConfigFilterKeys = []string{
 }
 
 // mergeServiceConfig loads any existing service config and overlays the
-// UI-editable fields from cfg onto it. The four always-present scalar fields
-// (Enabled, Term, Payment, Coverage) are overlaid unconditionally; the
-// recommendation-filter fields (include/exclude engines/regions/types,
-// min_count) are overlaid only when the request body actually carried the
-// corresponding key (per presentKeys), so a partial PUT cannot silently wipe a
-// filter set out-of-band. body is the raw request JSON used to detect which
-// filter keys are present.
+// UI-editable fields from cfg onto it. Every field (Enabled, Term, Payment,
+// Coverage and the include/exclude engines/regions/types and min_count
+// filters) is overlaid only when the request body actually carried the
+// corresponding key (per presentKeys), so a partial PUT cannot silently
+// revert or wipe a field it did not mean to touch. body is the raw request
+// JSON used to detect which keys are present.
 //
 // A "not found" error means no existing record — cfg is returned unchanged.
 // Any other DB error is returned to prevent a partial write from clobbering
@@ -225,15 +226,11 @@ func mergeServiceConfig(ctx context.Context, store config.StoreInterface, cfg co
 		return cfg, nil
 	}
 
-	existing.Enabled = cfg.Enabled
-	existing.Term = cfg.Term
-	existing.Payment = cfg.Payment
-	existing.Coverage = cfg.Coverage
-
-	present, perr := presentKeys(body, serviceConfigFilterKeys)
+	present, perr := presentKeys(body, serviceConfigOverlayKeys)
 	if perr != nil {
 		return cfg, perr
 	}
+	overlayPresentScalarFields(existing, &cfg, present)
 	overlayPresentFilterFields(existing, &cfg, present)
 	return *existing, nil
 }
@@ -253,6 +250,25 @@ func presentKeys(body string, keys []string) (map[string]bool, error) {
 		}
 	}
 	return present, nil
+}
+
+// overlayPresentScalarFields copies enabled, term, payment and coverage from src
+// onto dst only when the body carried the key, so a client that sends just the
+// field the user edited (the Settings page, #539) cannot revert the others. A
+// present zero value (enabled:false, coverage:0) still applies.
+func overlayPresentScalarFields(dst, src *config.ServiceConfig, present map[string]bool) {
+	if present["enabled"] {
+		dst.Enabled = src.Enabled
+	}
+	if present["term"] {
+		dst.Term = src.Term
+	}
+	if present["payment"] {
+		dst.Payment = src.Payment
+	}
+	if present["coverage"] {
+		dst.Coverage = src.Coverage
+	}
 }
 
 // overlayPresentFilterFields copies each filter field from src onto dst only
@@ -344,10 +360,10 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 		cfg.Service = parts[1]
 	}
 
-	// Merge: overlay the scalar UI fields unconditionally and the
-	// recommendation-filter fields only when the body carried them, so a
-	// partial PUT never zeroes a filter (ramp_schedule, or a filter set
-	// out-of-band) the request didn't mean to touch.
+	// Merge: overlay each field (the scalars and the recommendation filters)
+	// only when the body carried its key, so a partial PUT never reverts or
+	// zeroes a field (ramp_schedule, a filter set out-of-band) it didn't mean
+	// to touch. Validation below runs on the merged row.
 	merged, mergeErr := mergeServiceConfig(ctx, h.config, cfg, req.Body)
 	if mergeErr != nil {
 		return nil, mergeErr

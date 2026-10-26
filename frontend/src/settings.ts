@@ -198,6 +198,10 @@ const GLOBAL_CONFIG_FIELDS: ReadonlyArray<readonly [keyof api.Config, readonly s
 // non-UI fields (ramp_schedule, include_engines, etc.) that SaveServiceConfig replaces entirely.
 let loadedServiceConfigs: api.ServiceConfig[] = [];
 
+// Rows loaded from an old Settings id (#613) and not yet written under the
+// current one; keyed `provider/service`.
+let legacyRekeyedServices = new Set<string>();
+
 // saveInFlight guards saveGlobalSettings against concurrent invocations
 // (rapid Save clicks, Enter-in-form, etc.). Toggled in a try/finally and
 // mirrored on the Save button's disabled attribute so the UI reflects the
@@ -3175,8 +3179,13 @@ export async function loadGlobalSettings(): Promise<void> {
     // is the only one the scheduler and purchase flow match. The card DOM ids
     // still use the old names, so look them up through SERVICE_FIELDS rather
     // than deriving them from the row's service id.
-    const services = canonicalizeServiceConfigs(data.services ?? []);
+    const stored = data.services ?? [];
+    const services = canonicalizeServiceConfigs(stored);
     loadedServiceConfigs = services;
+    // Re-keyed rows have no backend row under the current id yet, so the next
+    // Save writes them in full instead of as a partial change (#539).
+    const storedKeys = new Set(stored.map(r => `${r.provider}/${r.service}`));
+    legacyRekeyedServices = new Set(services.filter(r => !storedKeys.has(`${r.provider}/${r.service}`)).map(r => `${r.provider}/${r.service}`));
     for (const svc of services) {
       const field = SERVICE_FIELDS.find(f => f.provider === svc.provider && f.service === svc.service);
       if (!field) continue;
@@ -3350,22 +3359,109 @@ async function renderAccountsOverview(): Promise<void> {
 
 /**
  * Names of the per-Savings-Plan coverage cards whose edited value is not a
- * whole number between 0 and 100. Untouched cards and empty inputs are not
- * checked: the save keeps their persisted value, as it always has.
+ * whole number between 0 and 100. Untouched cards are not checked; an edited
+ * card cleared to empty is invalid, not silently dropped.
  */
 function invalidEditedCardCoverages(): string[] {
   const bad: string[] = [];
   for (const field of SERVICE_FIELDS) {
     if (!('coverageId' in field) || !field.coverageId) continue;
     const input = byId<HTMLInputElement>(field.coverageId);
-    const raw = input?.value ?? '';
-    if (raw.trim() === '' || getFieldValue(field.coverageId) === savedSnapshot[field.coverageId]) continue;
+    if (!input) continue;
+    const raw = input.value;
+    if (getFieldValue(field.coverageId) === savedSnapshot[field.coverageId]) continue;
+    // Number('') is 0, so an edited-to-empty input must be rejected explicitly.
     const parsed = Number(raw);
-    if (Number.isInteger(parsed) && parsed >= 0 && parsed <= 100) continue;
+    if (raw.trim() !== '' && Number.isInteger(parsed) && parsed >= 0 && parsed <= 100) continue;
     const title = input?.closest('.service-default-card')?.querySelector('h5')?.textContent?.trim();
     bad.push(title || field.service);
   }
   return bad;
+}
+
+const SERVICE_FILTER_KEYS = [
+  'include_engines', 'exclude_engines', 'include_types', 'exclude_types',
+  'include_regions', 'exclude_regions',
+] as const;
+
+function isDirtyField(id: string): boolean {
+  return id in savedSnapshot && getFieldValue(id) !== savedSnapshot[id];
+}
+
+/**
+ * The fields of one service row the user changed since load/save, or null when
+ * nothing changed (no PUT). A card's term, payment, coverage and enabled
+ * controls count as changed when they differ from the saved snapshot; the
+ * recommendation filters are compared with the loaded row.
+ */
+function changedServiceFields(
+  field: (typeof SERVICE_FIELDS)[number],
+  base: api.ServiceConfig | undefined,
+  filters: Exclude<ReturnType<typeof readServiceFilterControls>, { message: string }> | undefined,
+): Partial<api.ServiceConfig> | null {
+  const changes: Partial<api.ServiceConfig> = {};
+  if (isDirtyField(field.termId)) {
+    changes.term = parseInt(byId<HTMLSelectElement>(field.termId)?.value || '3', 10);
+  }
+  if (field.paymentId && isDirtyField(field.paymentId)) {
+    changes.payment = byId<HTMLSelectElement>(field.paymentId)?.value || normalizePaymentValue('no-upfront', field.provider);
+  }
+  if ('coverageId' in field && field.coverageId && isDirtyField(field.coverageId)) {
+    const rawCov = byId<HTMLInputElement>(field.coverageId)?.value ?? '';
+    if (rawCov !== '' && Number.isFinite(Number(rawCov))) changes.coverage = Number(rawCov);
+  }
+  if ('enabledId' in field && field.enabledId && isDirtyField(field.enabledId)) {
+    changes.enabled = byId<HTMLInputElement>(field.enabledId)?.checked ?? true;
+  }
+  if (filters) {
+    for (const key of SERVICE_FILTER_KEYS) {
+      if (filters[key].join(',') !== (base?.[key] ?? []).join(',')) changes[key] = filters[key];
+    }
+    if (filters.min_count !== (base?.min_count ?? 0)) changes.min_count = filters.min_count;
+  }
+  if (Object.keys(changes).length === 0) return null;
+  if (!changes.payment && field.paymentId && base) {
+    // A stored payment the card normalises on load (#545) goes out with any
+    // PUT of the row, or the backend validates the legacy token and rejects it.
+    const shown = byId<HTMLSelectElement>(field.paymentId)?.value;
+    if (shown && shown !== base.payment) changes.payment = shown;
+  }
+  return changes;
+}
+
+/**
+ * Required fields for a service row the backend has no record of yet, where a
+ * partial body would fail validation. Mirrors what a first Save always sent.
+ */
+function newServiceConfigDefaults(
+  field: (typeof SERVICE_FIELDS)[number],
+  settings: api.Config,
+): api.ServiceConfig {
+  const paymentEl = field.paymentId ? byId<HTMLSelectElement>(field.paymentId) : null;
+  return {
+    provider: field.provider,
+    service: field.service,
+    enabled: true,
+    term: parseInt(byId<HTMLSelectElement>(field.termId)?.value || '3', 10),
+    payment: paymentEl?.value || normalizePaymentValue(field.paymentId ? 'no-upfront' : settings.default_payment, field.provider),
+    coverage: settings.default_coverage,
+  };
+}
+
+/**
+ * The backend copied a changed default coverage onto every service row, so show
+ * it on the Savings Plan cards the user did not edit in this Save (an edited
+ * card keeps its value and is sent as its own change).
+ */
+function showPropagatedCoverage(coverage: number, sentFields: Record<string, string>): void {
+  for (const field of SERVICE_FIELDS) {
+    if (!('coverageId' in field) || !field.coverageId) continue;
+    const el = byId<HTMLInputElement>(field.coverageId);
+    if (!el || getFieldValue(field.coverageId) !== savedSnapshot[field.coverageId]) continue;
+    el.value = String(coverage);
+    savedSnapshot[field.coverageId] = String(coverage);
+    sentFields[field.coverageId] = String(coverage);
+  }
 }
 
 /**
@@ -3516,6 +3612,7 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
       // after a partial failure does not send the old coverage back.
       savedSnapshot['setting-default-coverage'] = sentFields['setting-default-coverage']!;
       loadedServiceConfigs = loadedServiceConfigs.map(s => ({ ...s, coverage: settings.default_coverage }));
+      showPropagatedCoverage(settings.default_coverage, sentFields);
     }
 
     // Read + validate the per-service recommendation filters up front so a bad
@@ -3535,72 +3632,31 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     }
 
     const serviceSaves = SERVICE_FIELDS.map((field) => {
-      const { provider, service, termId, paymentId } = field;
-      const term = parseInt(byId<HTMLSelectElement>(termId)?.value || '3', 10);
-      const payment = paymentId
-        ? (byId<HTMLSelectElement>(paymentId)?.value || normalizePaymentValue('no-upfront', provider))
-        : normalizePaymentValue(settings.default_payment, provider);
+      const { provider, service } = field;
       const base = loadedServiceConfigs.find(s => s.provider === provider && s.service === service);
-      // Carry forward every field the UI doesn't own (e.g. ramp_schedule).
-      // The recommendation-filter fields are now UI-owned and overwritten from
-      // the card's controls below.
-
-      // Issue #136: per-product SP cards expose their own coverage and enabled
-      // controls. Read from the DOM when the card has the controls; fall back
-      // to the base row value (or the global default) otherwise so RI and
-      // Azure/GCP cards continue to inherit the global settings.
-      let coverage = base?.coverage ?? settings.default_coverage;
-      let enabled = base?.enabled ?? true;
-      if ('coverageId' in field && field.coverageId) {
-        const rawCov = byId<HTMLInputElement>(field.coverageId)?.value ?? '';
-        const parsed = Number(rawCov);
-        // Only a value the user edited on the card overrides the propagated
-        // default; an untouched card still shows the pre-save coverage.
-        const cardEdited = getFieldValue(field.coverageId) !== savedSnapshot[field.coverageId];
-        if (cardEdited && rawCov !== '' && Number.isFinite(parsed)) coverage = parsed;
-      }
-      if ('enabledId' in field && field.enabledId) {
-        const el = byId<HTMLInputElement>(field.enabledId);
-        if (el) enabled = el.checked;
-      }
-
       const filters = filterValuesByService.get(`${provider}-${service}`);
-      const cfg: api.ServiceConfig = {
-        ...(base ?? {}),
-        provider,
-        service,
-        enabled,
-        term,
-        payment,
-        coverage,
-        // Filters: send the card's current values. isServiceFilterError was
-        // already ruled out above, so `filters` here is always the value form.
-        ...(filters && !isServiceFilterError(filters) ? {
-          include_engines: filters.include_engines,
-          exclude_engines: filters.exclude_engines,
-          include_types: filters.include_types,
-          exclude_types: filters.exclude_types,
-          include_regions: filters.include_regions,
-          exclude_regions: filters.exclude_regions,
-          min_count: filters.min_count,
-        } : {}),
-      };
+      // Only the rows (and the fields of a row) the user changed go out, so a
+      // stale tab cannot revert a service another admin edited (#539).
+      const changes = changedServiceFields(field, base, filters && !isServiceFilterError(filters) ? filters : undefined);
+      const rekeyed = base !== undefined && legacyRekeyedServices.has(`${provider}/${service}`);
+      if (!changes && !rekeyed) return null;
+      const fresh = newServiceConfigDefaults(field, settings);
+      let cfg: Partial<api.ServiceConfig>;
+      if (!base) cfg = { ...fresh, ...changes };
+      else if (rekeyed) cfg = { ...base, term: fresh.term, payment: fresh.payment, ...changes };
+      else cfg = { provider, service, ...changes };
       return api.updateServiceConfig(provider, service, cfg).then(() => {
+        legacyRekeyedServices.delete(`${provider}/${service}`);
         loadedServiceConfigs = [
           ...loadedServiceConfigs.filter(s => !(s.provider === provider && s.service === service)),
-          cfg,
+          { ...(base ?? {}), ...cfg } as api.ServiceConfig,
         ];
-        if ('coverageId' in field && field.coverageId) {
-          const el = byId<HTMLInputElement>(field.coverageId);
-          // Show the persisted (possibly propagated) value only when the card
-          // still holds what this Save read; an edit typed during the PUT stays
-          // dirty against the persisted value and goes out with the next Save.
-          if (el && getFieldValue(field.coverageId) === sentFields[field.coverageId]) el.value = String(coverage);
-          savedSnapshot[field.coverageId] = String(coverage);
-        }
       });
     });
-    const results = await Promise.allSettled(serviceSaves);
+    // Only rows with a PUT take part in the outcome; an unchanged row is neither
+    // a success nor a failure.
+    const savedFields = SERVICE_FIELDS.filter((_, i) => serviceSaves[i] !== null);
+    const results = await Promise.allSettled(serviceSaves.filter((p): p is Promise<void> => p !== null));
 
     // The global PUT and every fulfilled service PUT are persisted, so the
     // snapshot moves forward for them. A rejected service keeps its previous
@@ -3612,7 +3668,7 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     const failures: string[] = [];
     results.forEach((result, i) => {
       if (result.status === 'fulfilled') return;
-      const field = SERVICE_FIELDS[i]!;
+      const field = savedFields[i]!;
       failures.push(`${field.provider}/${field.service}: ${(result.reason as Error).message}`);
       const ids = [field.termId, field.paymentId, 'coverageId' in field ? field.coverageId : null, 'enabledId' in field ? field.enabledId : null];
       for (const id of ids) {

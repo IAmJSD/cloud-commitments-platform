@@ -721,6 +721,113 @@ func TestMergeServiceConfig_PresenceAwareFilterOverlay(t *testing.T) {
 	})
 }
 
+// TestMergeServiceConfig_PresenceAwareScalarOverlay verifies that the four
+// scalar fields (enabled, term, payment, coverage) are overlaid only when the
+// body carries the key, so a stale tab that PUTs just the field the user
+// edited cannot revert the others (#539). A present zero value still applies.
+func TestMergeServiceConfig_PresenceAwareScalarOverlay(t *testing.T) {
+	ctx := context.Background()
+	newExisting := func() *config.ServiceConfig {
+		return &config.ServiceConfig{
+			Provider: "aws", Service: "rds", Enabled: true, Term: 3,
+			Payment: "all-upfront", Coverage: 50,
+		}
+	}
+	run := func(t *testing.T, req config.ServiceConfig, body string) config.ServiceConfig {
+		t.Helper()
+		store := new(MockConfigStore)
+		store.On("GetServiceConfig", ctx, "aws", "rds").Return(newExisting(), nil)
+		t.Cleanup(func() { store.AssertExpectations(t) })
+		req.Provider, req.Service = "aws", "rds"
+		merged, err := mergeServiceConfig(ctx, store, req, body)
+		require.NoError(t, err)
+		return merged
+	}
+
+	t.Run("only coverage sent -> other scalars preserved", func(t *testing.T) {
+		merged := run(t, config.ServiceConfig{Coverage: 90}, `{"coverage":90}`)
+		assert.Equal(t, 90.0, merged.Coverage)
+		assert.True(t, merged.Enabled)
+		assert.Equal(t, 3, merged.Term)
+		assert.Equal(t, "all-upfront", merged.Payment)
+	})
+
+	t.Run("only term sent -> other scalars preserved", func(t *testing.T) {
+		merged := run(t, config.ServiceConfig{Term: 1}, `{"term":1}`)
+		assert.Equal(t, 1, merged.Term)
+		assert.Equal(t, 50.0, merged.Coverage)
+		assert.Equal(t, "all-upfront", merged.Payment)
+		assert.True(t, merged.Enabled)
+	})
+
+	t.Run("present zero values still apply", func(t *testing.T) {
+		merged := run(t, config.ServiceConfig{}, `{"enabled":false,"coverage":0}`)
+		assert.False(t, merged.Enabled)
+		assert.Equal(t, 0.0, merged.Coverage)
+		assert.Equal(t, 3, merged.Term)
+	})
+
+	t.Run("only payment sent -> other scalars preserved", func(t *testing.T) {
+		merged := run(t, config.ServiceConfig{Payment: "no-upfront"}, `{"payment":"no-upfront"}`)
+		assert.Equal(t, "no-upfront", merged.Payment)
+		assert.Equal(t, 3, merged.Term)
+		assert.Equal(t, 50.0, merged.Coverage)
+	})
+}
+
+// TestHandler_updateServiceConfig_PartialPut drives the endpoint with partial
+// bodies (#539): absent keys keep the stored row, and validation runs on the
+// merged row, not on the partial body.
+func TestHandler_updateServiceConfig_PartialPut(t *testing.T) {
+	ctx := context.Background()
+	newHandler := func(existing *config.ServiceConfig) (*Handler, *MockConfigStore) {
+		mockAuth := new(MockAuthService)
+		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
+			UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com",
+		}, nil)
+		mockAuth.grantAdmin()
+		store := new(MockConfigStore)
+		store.On("GetServiceConfig", ctx, existing.Provider, existing.Service).Return(existing, nil)
+		return &Handler{config: store, auth: mockAuth}, store
+	}
+	put := func(h *Handler, body, path string) (*StatusResponse, error) {
+		return h.updateServiceConfig(ctx, &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"Authorization": "Bearer admin-token"},
+			Body:    body,
+		}, path)
+	}
+
+	t.Run("absent keys keep the stored row", func(t *testing.T) {
+		h, store := newHandler(&config.ServiceConfig{
+			Provider: "aws", Service: "rds", Enabled: true, Term: 3,
+			Payment: "all-upfront", Coverage: 55, MinCount: 4,
+		})
+		var saved *config.ServiceConfig
+		store.On("SaveServiceConfig", ctx, mock.AnythingOfType("*config.ServiceConfig")).
+			Run(func(args mock.Arguments) { saved = args.Get(1).(*config.ServiceConfig) }).Return(nil)
+
+		_, err := put(h, `{"term":1}`, "aws/rds")
+		require.NoError(t, err)
+		require.NotNil(t, saved)
+		assert.Equal(t, 1, saved.Term)
+		assert.True(t, saved.Enabled)
+		assert.Equal(t, "all-upfront", saved.Payment)
+		assert.Equal(t, 55.0, saved.Coverage)
+		assert.Equal(t, 4, saved.MinCount)
+	})
+
+	t.Run("validation covers the merged row", func(t *testing.T) {
+		h, store := newHandler(&config.ServiceConfig{
+			Provider: "gcp", Service: "compute", Enabled: true, Term: 1,
+			Payment: "all-upfront", Coverage: 80,
+		})
+		_, err := put(h, `{"term":3}`, "gcp/compute")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid payment option")
+		store.AssertNotCalled(t, "SaveServiceConfig", mock.Anything, mock.Anything)
+	})
+}
+
 func TestHandler_updateServiceConfig_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
