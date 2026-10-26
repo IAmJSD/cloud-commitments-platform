@@ -27,6 +27,13 @@ func analyticsScopeCall(t *testing.T, scope []string, accountID string, accounts
 // trends it checks that all three snapshot queries got the same filter.
 func analyticsScopeCallPath(t *testing.T, path string, scope []string, accountID string, accounts []config.CloudAccount) (status int, uuids []string, externals map[string][]string) {
 	t.Helper()
+	return analyticsParamsCall(t, path, scope, map[string]string{"account_id": accountID}, accounts)
+}
+
+// analyticsParamsCall is analyticsScopeCallPath with arbitrary query params, so
+// callers can send account_ids as well as the legacy account_id.
+func analyticsParamsCall(t *testing.T, path string, scope []string, params map[string]string, accounts []config.CloudAccount) (status int, uuids []string, externals map[string][]string) {
+	t.Helper()
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", mock.Anything, "tok").Return(&Session{UserID: "u-1", Email: "u@example.com"}, nil)
 	mockAuth.On("HasPermissionAPI", mock.Anything, "u-1", mock.Anything, mock.Anything).Return(true, nil)
@@ -53,7 +60,7 @@ func analyticsScopeCallPath(t *testing.T, path string, scope []string, accountID
 	h := &Handler{auth: mockAuth, analyticsClient: client, analyticsSnapshots: snaps, config: store}
 	resp, err := h.HandleRequest(context.Background(), &events.LambdaFunctionURLRequest{
 		Headers:               map[string]string{"Authorization": "Bearer tok"},
-		QueryStringParameters: map[string]string{"account_id": accountID},
+		QueryStringParameters: params,
 		RequestContext: events.LambdaFunctionURLRequestContext{
 			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "GET", Path: path},
 		},
