@@ -4,7 +4,6 @@ package api
 import (
 	"context"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/analytics"
@@ -150,13 +149,13 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	// For scoped users we require account_id and validate it's in their scope.
-	// We don't (yet) support analytics across a subset — the underlying
-	// aggregate takes a single account_id. An unrestricted/admin session
-	// can pass "" to mean "all accessible accounts". The requested account (a
-	// top-bar chip UUID, a raw external id, or "" for all) resolves to the
-	// dual-column filter inputs so rows that carry only the external account_id
-	// (cloud_account_id NULL) are aggregated (issue #701/#498/#866).
+	// Scoped users must name at least one account (account_ids or the legacy
+	// account_id) and every named account must be in their scope. An
+	// unrestricted/admin session can omit both to mean "all accessible
+	// accounts". The requested accounts (top-bar chip UUIDs, or a raw external
+	// id via the legacy param) resolve to the dual-column filter inputs so rows
+	// that carry only the external account_id (cloud_account_id NULL) are
+	// aggregated (issue #701/#498/#866).
 	requested, err := requestedAnalyticsAccounts(params)
 	if err != nil {
 		return nil, err
@@ -301,19 +300,10 @@ func (h *Handler) resolveAnalyticsAccountFilter(ctx context.Context, session *Se
 // mergeAccountFilter unions one account's dual-column filter into the
 // accumulated one, dropping duplicates.
 func mergeAccountFilter(uuids []string, ext map[string][]string, addUUIDs []string, addExt map[string][]string) (mergedUUIDs []string, mergedExt map[string][]string) {
-	for _, u := range addUUIDs {
-		if !slices.Contains(uuids, u) {
-			uuids = append(uuids, u)
-		}
-	}
+	uuids = appendMissing(uuids, addUUIDs...)
 	for provider, ids := range addExt {
-		if ext == nil {
-			ext = map[string][]string{}
-		}
 		for _, id := range ids {
-			if !slices.Contains(ext[provider], id) {
-				ext[provider] = append(ext[provider], id)
-			}
+			ext = addExternalIDForProvider(ext, provider, id)
 		}
 	}
 	return uuids, ext

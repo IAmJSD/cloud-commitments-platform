@@ -127,3 +127,32 @@ func TestAnalytics_AccountIDs_DuplicatesCollapse(t *testing.T) {
 	assert.Equal(t, []string{idsAcctA}, uuids)
 	assert.Equal(t, map[string][]string{"aws": {"111111111111"}}, externals)
 }
+
+// Issue #1452: parseAccountIDs canonicalises (trim + lowercase), so an
+// uppercase or padded id behaves exactly like its lowercase form, including
+// for a scoped user's own account.
+func TestAnalytics_AccountIDs_UppercasePaddedCanonical(t *testing.T) {
+	t.Parallel()
+	// Hex letters so ToUpper really changes the ids.
+	const idA, idB = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	accounts := []config.CloudAccount{
+		{ID: idA, Name: "a", Provider: "aws", ExternalID: "111111111111"},
+		{ID: idB, Name: "b", Provider: "aws", ExternalID: "222222222222"},
+	}
+	upper := " " + strings.ToUpper(idA) + " , " + strings.ToUpper(idB)
+	lower := idA + "," + idB
+	for _, path := range analyticsPaths {
+		for name, scope := range map[string][]string{"unrestricted": nil, "scoped": {idA, idB}} {
+			t.Run(path+" "+name, func(t *testing.T) {
+				t.Parallel()
+				wantStatus, wantUUIDs, wantExt := analyticsParamsCall(t, path, scope, map[string]string{"account_ids": lower}, accounts)
+				status, uuids, externals := analyticsParamsCall(t, path, scope, map[string]string{"account_ids": upper}, accounts)
+				assert.Equal(t, 200, wantStatus)
+				assert.Equal(t, wantStatus, status)
+				assert.Equal(t, []string{idA, idB}, uuids)
+				assert.Equal(t, wantUUIDs, uuids)
+				assert.Equal(t, wantExt, externals)
+			})
+		}
+	}
+}

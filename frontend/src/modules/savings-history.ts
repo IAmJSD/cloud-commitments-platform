@@ -103,11 +103,9 @@ export async function loadSavingsHistory(): Promise<void> {
     const period = periodSelect.value;
     const { start, end, interval } = getPeriodDates(period);
 
-    // Honour the global topbar filter chips (issue #503). The account chip
-    // is single-select, and the backend's /history/analytics takes a single
-    // account_id (see handler_analytics.go), so we forward the only selected
-    // ID, mirroring dashboard.ts loadSavingsTrendChart. The provider chip is
-    // forwarded too and the backend now applies it as a provider WHERE filter
+    // Honour the global topbar filter chips (issue #503). Every selected
+    // account is forwarded as account_ids; the backend scope-checks each id
+    // and sums them. The provider chip is forwarded too and the backend now applies it as a provider WHERE filter
     // on the savings-history query (issue #498, QA 2.3).
     const currentProvider = state.getCurrentProvider();
     const currentAccountIDs = state.getCurrentAccountIDs();
@@ -123,7 +121,7 @@ export async function loadSavingsHistory(): Promise<void> {
             end: end.toISOString(),
             interval,
             ...(currentProvider ? { provider: currentProvider } : {}),
-            ...(currentAccountIDs.length === 1 ? { account_ids: currentAccountIDs } : {}),
+            ...(currentAccountIDs.length > 0 ? { account_ids: currentAccountIDs } : {}),
         });
 
         if (!data.data_points || data.data_points.length === 0) {

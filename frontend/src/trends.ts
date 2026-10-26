@@ -81,8 +81,6 @@ export async function loadTrends(): Promise<void> {
 
   const provider = state.getCurrentProvider();
   const accountIDs = state.getCurrentAccountIDs();
-  // The account chip is single-select; forward only when exactly one is set.
-  const accountID = accountIDs.length === 1 ? accountIDs[0] : undefined;
   const { start, end } = trendsWindow(selectedPeriodMonths());
 
   const seq = ++loadSeq;
@@ -91,14 +89,14 @@ export async function loadTrends(): Promise<void> {
 
   try {
     const data = await api.getAnalyticsTrends({
-      accountID,
+      accountIDs,
       provider: provider || undefined,
       start: start.toISOString(),
       end: end.toISOString(),
     });
     if (seq !== loadSeq) return;
     teardownSkeleton(container);
-    renderTrends(container, data, provider, monthKeysBetween(start, end), Boolean(provider || accountID));
+    renderTrends(container, data, provider, monthKeysBetween(start, end), Boolean(provider || accountIDs.length > 0));
   } catch (error) {
     if (seq !== loadSeq) return;
     teardownSkeleton(container);

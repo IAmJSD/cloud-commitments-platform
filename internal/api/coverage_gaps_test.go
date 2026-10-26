@@ -57,6 +57,13 @@ func TestParseAccountIDs(t *testing.T) {
 	}
 }
 
+func TestParseAccountIDs_Canonical(t *testing.T) {
+	id := "abcdefab-abcd-abcd-abcd-abcdefabcdef"
+	ids, err := parseAccountIDs(" " + strings.ToUpper(id) + " ,\t" + id)
+	require.NoError(t, err)
+	assert.Equal(t, []string{id, id}, ids)
+}
+
 // TestParseAccountIDs_Cap verifies the MaxAccountIDsPerRequest guard
 // blocks input amplification — an unbounded account_ids list could fan
 // out into thousands of per-account DB queries / cloud API calls.
