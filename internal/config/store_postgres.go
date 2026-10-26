@@ -3056,9 +3056,12 @@ func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID stri
 // wrapping ErrPurchaseAlreadyRevoked; a missing row keeps the not-found
 // error.
 func (s *PostgresStore) FlipPurchaseRevocationInFlight(ctx context.Context, purchaseID string) error {
+	// revocation_in_flight_at (migration 000148, issue #1523) is the database
+	// clock at the flip; the finalize_revocations sweep uses it to release a
+	// flag whose Return was never recorded.
 	tag, err := s.db.Exec(ctx, `
 		UPDATE purchase_history
-		   SET revocation_in_flight = true
+		   SET revocation_in_flight = true, revocation_in_flight_at = now()
 		 WHERE purchase_id = $1
 		   AND revoked_at IS NULL
 	`, purchaseID)
@@ -3098,19 +3101,27 @@ func (s *PostgresStore) ClearRevocationInFlight(ctx context.Context, purchaseID 
 	return nil
 }
 
-// GetPurchaseHistoryInFlight returns all purchase_history rows with
-// revocation_in_flight=true and revoked_at IS NULL. Used by the
+// GetPurchaseHistoryInFlight returns the purchase_history rows whose Azure
+// Return was recorded as accepted (return_posted_at set by
+// MarkRevocationReturnPosted) but whose revoked_at is still NULL. Used by the
 // finalize_revocations scheduled sweep to retry MarkPurchaseRevoked for rows
 // where the Azure Return succeeded but the subsequent DB write failed
 // (issue #290 Finding #6).
+//
+// revocation_in_flight alone is not enough (issue #1523): a row is also left
+// flagged when a request dies between the flip and the Return, and marking
+// that row revoked would record a refund that never happened. The flag is not
+// required either: once the Return is recorded the purchase is refunded, even
+// if a concurrent request's failed Return cleared the flag.
 func (s *PostgresStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*PurchaseHistoryRecord, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
+		       revocation_in_flight
 		FROM purchase_history
-		WHERE revocation_in_flight = true
+		WHERE return_posted_at IS NOT NULL
 		  AND revoked_at IS NULL
 	`)
 	if err != nil {
@@ -3148,6 +3159,7 @@ func (s *PostgresStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*Purc
 			&revokedAt,
 			&revokedVia,
 			&supportCaseID,
+			&r.RevocationInFlight,
 		); err != nil {
 			return nil, fmt.Errorf("GetPurchaseHistoryInFlight scan: %w", err)
 		}
@@ -3170,7 +3182,6 @@ func (s *PostgresStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*Purc
 		if supportCaseID.Valid {
 			r.SupportCaseID = supportCaseID.String
 		}
-		r.RevocationInFlight = true
 		result = append(result, &r)
 	}
 	return result, rows.Err()

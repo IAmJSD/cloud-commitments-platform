@@ -435,11 +435,27 @@ type StoreInterface interface {
 	// should log on error but not surface it to the user.
 	ClearRevocationInFlight(ctx context.Context, purchaseID string) error
 
-	// GetPurchaseHistoryInFlight returns all purchase_history rows with
-	// revocation_in_flight=true and revoked_at IS NULL.  These are rows where
-	// the Azure Return call succeeded but MarkPurchaseRevoked failed; the
-	// finalize_revocations scheduled sweep calls this to retry the DB write.
+	// GetPurchaseHistoryInFlight returns the purchase_history rows whose
+	// Return was recorded by MarkRevocationReturnPosted but whose revoked_at
+	// is still NULL: the Azure Return call succeeded but MarkPurchaseRevoked
+	// failed. The finalize_revocations scheduled sweep calls this to retry the
+	// DB write. A flagged row with no recorded Return is not returned
+	// (issue #1523): no refund is known to have gone out for it.
 	GetPurchaseHistoryInFlight(ctx context.Context) ([]*PurchaseHistoryRecord, error)
+
+	// MarkRevocationReturnPosted records that the provider accepted the
+	// Return for purchaseID (return_posted_at, migration 000148). Called by
+	// the revoke handler after the Azure Return succeeds and before
+	// MarkPurchaseRevoked. The first stamp stands; a revoked row is a no-op.
+	// Returns a not-found error when no row matches (issue #1523).
+	MarkRevocationReturnPosted(ctx context.Context, purchaseID string) error
+
+	// ReleaseStaleRevocationsInFlight clears revocation_in_flight on unrevoked
+	// rows flagged for longer than after with no Return recorded, so the
+	// purchase can be revoked again, and returns their purchase IDs. A flagged
+	// row with no flip timestamp is stamped now and aged from then. Called by
+	// the finalize_revocations sweep (issue #1523).
+	ReleaseStaleRevocationsInFlight(ctx context.Context, after time.Duration) ([]string, error)
 
 	// UpdatePurchaseHistoryListing stamps the AWS marketplace listing_id and
 	// listing_state onto a purchase_history row. Called after
