@@ -234,17 +234,17 @@ func TestHandleRequest_ApproveRIExchange_StatusCodes(t *testing.T) {
 		{name: "403 missing record reported as ErrNotFound with token", rec: riRecMissingNotFound, sess: riSessNone, token: riStatusRawToken, want: 403, wantError: "invalid approval token"},
 		{name: "404 missing record with session", rec: riRecMissing, sess: riSessCSRF, want: 404, wantError: "exchange record not found"},
 		{name: "404 missing record reported as ErrNotFound with session", rec: riRecMissingNotFound, sess: riSessCSRF, want: 404, wantError: "exchange record not found"},
-		{name: "409 token approve of an exchange no longer pending", rec: riRecAlreadyProcessed, sess: riSessNone, token: riStatusRawToken, want: 409, wantError: "exchange already processed, expired, or was canceled by a newer analysis run"},
+		{name: "409 token approve of an exchange no longer pending", rec: riRecAlreadyProcessed, sess: riSessNone, token: riStatusRawToken, want: 409, wantError: "exchange already processed or was canceled by a newer analysis run"},
 		// Issue #587: the same invalid/expired/wrong-status mapping as the
 		// purchase approve, cancel and revoke links (403/410/409).
 		{name: "410 token approve of an expired exchange", rec: riRecExpired, sess: riSessNone, token: riStatusRawToken, want: 410, wantError: "exchange has expired"},
 		{name: "403 wrong token on an expired exchange does not reveal the expiry", rec: riRecExpired, sess: riSessNone, token: "wrong", want: 403, wantError: "invalid approval token"},
 		{name: "410 expired exchange answers before the 4-eyes session check", rec: riRecExpired, sess: riSessNone, token: riStatusRawToken, opts: riStatusOpts{fourEyes: true, noCreator: true}, want: 410, wantError: "exchange has expired"},
 		{name: "410 token approve when the exchange expires before the transition", rec: riRecTransitionExpired, sess: riSessNone, token: riStatusRawToken, want: 410, wantError: "exchange has expired"},
-		{name: "409 token approve loses the transition to a concurrent writer", rec: riRecTransitionConflict, sess: riSessNone, token: riStatusRawToken, want: 409, wantError: "exchange already processed, expired, or was canceled by a newer analysis run"},
+		{name: "409 token approve loses the transition to a concurrent writer", rec: riRecTransitionConflict, sess: riSessNone, token: riStatusRawToken, want: 409, wantError: "exchange already processed or was canceled by a newer analysis run"},
 		{name: "500 token approve transition store failure", rec: riRecTransitionFails, sess: riSessNone, token: riStatusRawToken, want: 500},
 		{name: "410 session approve when the exchange expires before the transition", rec: riRecTransitionExpired, sess: riSessCSRF, want: 410, wantError: "exchange has expired"},
-		{name: "409 session approve loses the transition to a concurrent writer", rec: riRecTransitionConflict, sess: riSessCSRF, want: 409, wantError: "exchange already processed, expired, or was canceled by a newer analysis run"},
+		{name: "409 session approve loses the transition to a concurrent writer", rec: riRecTransitionConflict, sess: riSessCSRF, want: 409, wantError: "exchange already processed or was canceled by a newer analysis run"},
 	})
 }
 
@@ -266,12 +266,12 @@ func TestHandleRequest_RejectRIExchange_StatusCodes(t *testing.T) {
 		{name: "403 missing record with token", rec: riRecMissing, sess: riSessNone, token: riStatusRawToken, want: 403, wantError: "invalid rejection token"},
 		{name: "403 missing record with wrong token", rec: riRecMissing, sess: riSessNone, token: "wrong", want: 403, wantError: "invalid rejection token"},
 		{name: "403 missing record reported as ErrNotFound with token", rec: riRecMissingNotFound, sess: riSessNone, token: riStatusRawToken, want: 403, wantError: "invalid rejection token"},
-		{name: "409 exchange no longer pending", rec: riRecAlreadyProcessed, sess: riSessNone, token: riStatusRawToken, want: 409, wantError: "exchange already processed, expired, or was canceled"},
+		{name: "409 exchange no longer pending", rec: riRecAlreadyProcessed, sess: riSessNone, token: riStatusRawToken, want: 409, wantError: "exchange already processed or was canceled"},
 		// Issue #587: 403 invalid, 410 expired, 409 wrong status.
 		{name: "410 expired exchange", rec: riRecExpired, sess: riSessNone, token: riStatusRawToken, want: 410, wantError: "exchange has expired"},
 		{name: "403 wrong token on an expired exchange does not reveal the expiry", rec: riRecExpired, sess: riSessNone, token: "wrong", want: 403, wantError: "invalid rejection token"},
 		{name: "410 exchange expires before the transition", rec: riRecTransitionExpired, sess: riSessNone, token: riStatusRawToken, want: 410, wantError: "exchange has expired"},
-		{name: "409 loses the transition to a concurrent writer", rec: riRecTransitionConflict, sess: riSessNone, token: riStatusRawToken, want: 409, wantError: "exchange already processed, expired, or was canceled"},
+		{name: "409 loses the transition to a concurrent writer", rec: riRecTransitionConflict, sess: riSessNone, token: riStatusRawToken, want: 409, wantError: "exchange already processed or was canceled"},
 		{name: "500 transition store failure", rec: riRecTransitionFails, sess: riSessNone, token: riStatusRawToken, want: 500},
 	})
 }

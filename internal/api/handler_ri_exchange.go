@@ -2749,8 +2749,8 @@ func (h *Handler) validateExchangeApproval(ctx context.Context, id, token string
 }
 
 const (
-	riExchangeApproveConflictMsg = "exchange already processed, expired, or was canceled by a newer analysis run"
-	riExchangeRejectConflictMsg  = "exchange already processed, expired, or was canceled"
+	riExchangeApproveConflictMsg = "exchange already processed or was canceled by a newer analysis run"
+	riExchangeRejectConflictMsg  = "exchange already processed or was canceled"
 	riExchangeExpiredMsg         = "exchange has expired"
 )
 
@@ -2786,11 +2786,17 @@ func checkExchangeToken(record *config.RIExchangeRecord, token, kind string) err
 // The expiry pre-check in checkExchangeToken cannot close the window alone:
 // the record can expire, or a concurrent approve or reject can win, between
 // that check and the transition. Anything else stays a server error.
+//
+// handleRequestError does not log ClientErrors, so the 409 and 410 branches
+// log the store's error themselves: it names the exchange and its current
+// status, which the response body does not.
 func riExchangeTransitionError(err error, conflictMsg string) error {
 	switch {
 	case errors.Is(err, config.ErrRIExchangeExpired):
+		logging.Infof("ri-exchange transition lost to expiry: %v", err)
 		return NewClientError(410, riExchangeExpiredMsg)
 	case errors.Is(err, config.ErrRIExchangeNotInExpectedStatus):
+		logging.Infof("ri-exchange transition lost to a concurrent writer: %v", err)
 		return NewClientError(409, conflictMsg)
 	default:
 		return fmt.Errorf("failed to transition exchange status: %w", err)
