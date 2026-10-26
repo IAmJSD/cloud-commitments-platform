@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -155,6 +156,63 @@ func TestPollMarketplaceListings_ActiveStampsListedAtOnly(t *testing.T) {
 	assert.Equal(t, MarketplacePollResult{Found: 1, Active: 1}, *res)
 	store.AssertExpectations(t)
 	store.AssertNotCalled(t, "SettleMarketplaceListing")
+}
+
+func pendingRow(purchaseID, listingID string) config.PurchaseHistoryRecord {
+	row := listedRow(purchaseID, listingID)
+	row.ListingState = config.ListingStatePending
+	return row
+}
+
+// A listing recorded as pending (AWS gave no status when it was created) that
+// AWS now reports active is recorded as active, even without a CreateDate
+// (issue #1494).
+func TestPollMarketplaceListings_PendingRowBecomesActive(t *testing.T) {
+	for _, created := range []time.Time{{}, pollerCreateDate} {
+		t.Run(fmt.Sprintf("create date %v", !created.IsZero()), func(t *testing.T) {
+			store := &MockConfigStore{}
+			f := newPollerFixtureWithStore(t, store, pendingRow("ri-1", "ril-1"))
+			f.aws.statuses["ril-1"] = marketplaceListingStatus{ListingID: "ril-1", State: config.ListingStateActive, CreatedAt: created}
+			f.store.On("RecordMarketplaceListingActive", mock.Anything, "ri-1", "ril-1", created).Return(true, nil).Once()
+
+			res, err := f.h.PollMarketplaceListings(context.Background())
+
+			require.NoError(t, err)
+			assert.Equal(t, MarketplacePollResult{Found: 1, Active: 1}, *res)
+			store.AssertExpectations(t)
+			store.AssertNotCalled(t, "SettleMarketplaceListing")
+		})
+	}
+}
+
+// An active row whose CreateDate AWS did not report needs no write.
+func TestPollMarketplaceListings_ActiveRowWithoutCreateDateNeedsNoWrite(t *testing.T) {
+	store := &MockConfigStore{}
+	f := newPollerFixtureWithStore(t, store, listedRow("ri-1", "ril-1"))
+	f.aws.statuses["ril-1"] = marketplaceListingStatus{ListingID: "ril-1", State: config.ListingStateActive}
+
+	res, err := f.h.PollMarketplaceListings(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, MarketplacePollResult{Found: 1, Active: 1}, *res)
+	store.AssertNotCalled(t, "RecordMarketplaceListingActive")
+}
+
+// A pending row whose listing sold out before any poll is settled like an
+// active one (issue #1494).
+func TestPollMarketplaceListings_PendingRowSettles(t *testing.T) {
+	f := newPollerFixture(t, pendingRow("ri-1", "ril-1"))
+	f.aws.statuses["ril-1"] = marketplaceListingStatus{ListingID: "ril-1", State: config.ListingStateClosed,
+		CreatedAt: pollerCreateDate, SoldCount: 1, UnitPrice: 1000, PriceKnown: true}
+	settled := f.captureSettle(true)
+
+	res, err := f.h.PollMarketplaceListings(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, MarketplacePollResult{Found: 1, Settled: 1}, *res)
+	require.Len(t, *settled, 1)
+	assert.Equal(t, config.ListingStateClosed, (*settled)[0].State)
+	assert.InDelta(t, 880, *(*settled)[0].ProceedsReceived, 1e-9)
 }
 
 func TestPollMarketplaceListings_CanceledAfterPartialSale(t *testing.T) {

@@ -35,7 +35,12 @@ func TestIntegration_ExecutionReaders_NullErrorColumn(t *testing.T) {
 	other := saveClean(1, "pending")
 	nullErr := saveClean(2, "pending")
 	last := saveClean(3, "notified")
-	_, err := store.db.Exec(ctx, `UPDATE purchase_executions SET error = NULL WHERE execution_id = $1`, nullErr)
+	// Migration 000146 (issue #1484) made the column NOT NULL. The scanner
+	// still tolerates NULL for a schema rolled back below 000146, so relax
+	// the constraint in this test's own database to seed the legacy shape.
+	_, err := store.db.Exec(ctx, `ALTER TABLE purchase_executions ALTER COLUMN error DROP NOT NULL`)
+	require.NoError(t, err)
+	_, err = store.db.Exec(ctx, `UPDATE purchase_executions SET error = NULL WHERE execution_id = $1`, nullErr)
 	require.NoError(t, err)
 
 	wantIDs := []string{last, nullErr, other}

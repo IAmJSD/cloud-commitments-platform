@@ -493,20 +493,24 @@ type StoreInterface interface {
 	ReleaseMarketplaceListingClaim(ctx context.Context, purchaseID, clientToken, priorState string, keepAttempt bool) error
 
 	// ListMarketplaceListingsToPoll returns the AWS rows whose listing the
-	// marketplace status poller reads (issue #27): active listings, and
+	// marketplace status poller reads (issue #27): active listings, listings
+	// recorded as pending with no list attempt in flight (issue #1494), and
 	// closed/canceled ones it has seen whose proceeds are not recorded yet.
 	ListMarketplaceListingsToPoll(ctx context.Context) ([]PurchaseHistoryRecord, error)
 
-	// RecordMarketplaceListingActive stamps listed_at on a row whose listing
-	// AWS still reports active. It writes only while the row holds listingID
-	// in the active state and never writes listing_state. Reports whether the
-	// row changed.
+	// RecordMarketplaceListingActive records a listing AWS reports active:
+	// it stamps listed_at (a zero listedAt keeps the stored one) while the row
+	// holds listingID as active, and also moves the state to active while the
+	// row holds it as pending with no list attempt in flight (issue #1494).
+	// It never writes the state of any other row. Reports whether the row
+	// changed.
 	RecordMarketplaceListingActive(ctx context.Context, purchaseID, listingID string, listedAt time.Time) (bool, error)
 
 	// SettleMarketplaceListing records a listing that closed or was canceled
 	// on AWS, with its proceeds and AWS fee when known. It applies once per
-	// listing, only while the row still holds it and is active or already in
-	// the same terminal state. Reports whether the row was written.
+	// listing, only while the row still holds it and is active, pending with
+	// no list attempt in flight, or already in the same terminal state.
+	// Reports whether the row was written.
 	SettleMarketplaceListing(ctx context.Context, settlement MarketplaceListingSettlement) (bool, error)
 
 	// ClaimRIExchangeIdempotencyKey atomically claims key for an RI exchange

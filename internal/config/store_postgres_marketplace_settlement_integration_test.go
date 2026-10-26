@@ -107,11 +107,13 @@ func checkPollSelection(ctx context.Context, t *testing.T, store *PostgresStore,
 	setSettlement(ctx, t, pool, "poll-cancel-unsettled", &seen, nil, nil)
 	seedListing(ctx, t, store, "aws", "poll-closed-unpriced", "ril-cl", ListingStateClosed)
 	setSettlement(ctx, t, pool, "poll-closed-unpriced", &seen, nil, nil)
+	// A listing recorded in AWS's own pending state (issue #1494).
+	seedListing(ctx, t, store, "aws", "poll-pending", "ril-pending", ListingStatePending)
 	// Excluded: settled, never seen by the poller, mid-claim, not listed, not AWS.
 	seedListing(ctx, t, store, "aws", "poll-closed-settled", "ril-cs", ListingStateClosed)
 	setSettlement(ctx, t, pool, "poll-closed-settled", &seen, settleAmount(88), settleAmount(12))
 	seedListing(ctx, t, store, "aws", "poll-cancel-legacy", "ril-legacy", ListingStateCancelled)
-	seedListing(ctx, t, store, "aws", "poll-pending", "ril-pending", ListingStatePending)
+	seedMidClaim(ctx, t, store, "poll-mid-claim", "ril-mid-claim")
 	seedListing(ctx, t, store, "aws", "poll-unlisted", "", "")
 	seedListing(ctx, t, store, "azure", "poll-azure", "ril-azure", ListingStateActive)
 
@@ -123,7 +125,9 @@ func checkPollSelection(ctx context.Context, t *testing.T, store *PostgresStore,
 			got[r.PurchaseID] = r
 		}
 	}
-	assert.ElementsMatch(t, []string{"poll-active", "poll-active-upper", "poll-cancel-unsettled", "poll-closed-unpriced"}, slices.Collect(maps.Keys(got)))
+	assert.ElementsMatch(t, []string{"poll-active", "poll-active-upper", "poll-cancel-unsettled", "poll-closed-unpriced", "poll-pending"},
+		slices.Collect(maps.Keys(got)))
+	assert.Equal(t, ListingStatePending, got["poll-pending"].ListingState)
 	active := got["poll-active"]
 	assert.Equal(t, "ril-active", active.ListingID)
 	assert.Equal(t, ListingStateActive, active.ListingState)
@@ -217,7 +221,7 @@ func checkSettleGuards(ctx context.Context, t *testing.T, store *PostgresStore, 
 	applied, err = store.SettleMarketplaceListing(ctx, closedSettlement("settle-relisted", "ril-old", 5, 1))
 	require.NoError(t, err)
 	assert.False(t, applied)
-	seedListing(ctx, t, store, "aws", "settle-pending", "ril-sp", ListingStatePending)
+	seedMidClaim(ctx, t, store, "settle-pending", "ril-sp")
 	applied, err = store.SettleMarketplaceListing(ctx, closedSettlement("settle-pending", "ril-sp", 5, 1))
 	require.NoError(t, err)
 	assert.False(t, applied)
