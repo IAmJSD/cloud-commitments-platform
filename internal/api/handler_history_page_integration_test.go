@@ -99,6 +99,13 @@ func (e *historyPagingEnv) addPurchase(ctx context.Context, t *testing.T, tenant
 		rec.CloudAccountID = &acct.ID
 	}
 	require.NoError(t, e.store.SavePurchaseHistory(ctx, rec))
+	if legacy {
+		// SavePurchaseHistory now links a row to the registered account with
+		// the same external id (#1235); clear it so this stays a legacy row.
+		tag, err := e.pg.DB.Pool().Exec(ctx, `UPDATE purchase_history SET cloud_account_id = NULL WHERE purchase_id = $1`, rec.PurchaseID)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), tag.RowsAffected())
+	}
 	var rowID string
 	require.NoError(t, e.pg.DB.Pool().QueryRow(ctx,
 		`SELECT id::text FROM purchase_history WHERE purchase_id = $1`, rec.PurchaseID).Scan(&rowID))
