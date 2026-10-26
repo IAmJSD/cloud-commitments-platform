@@ -18,6 +18,13 @@ var ErrEmptyPurchaseID = errors.New("purchase history record has no purchase id"
 // start another provider return (issue #316).
 var ErrPurchaseAlreadyRevoked = errors.New("purchase is already revoked")
 
+// ErrRevocationInFlight is returned (wrapped) by
+// FlipPurchaseRevocationInFlight when the purchase_history row is unrevoked
+// but another request already holds the in-flight claim: that request is
+// posting (or has posted) the provider return, so the caller must not post
+// another one (issue #1518).
+var ErrRevocationInFlight = errors.New("purchase revocation is already in flight")
+
 // ErrPurchasePlanConflict means a plan changed after the caller read it.
 var ErrPurchasePlanConflict = errors.New("purchase plan changed")
 
