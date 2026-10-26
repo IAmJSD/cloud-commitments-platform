@@ -1424,7 +1424,7 @@ func TestGetFederationIaC_CLIMatrix(t *testing.T) {
 			// PII guard: the session email must not appear raw in the script
 			// body outside the CONTACT_EMAIL env-var assignment. The email
 			// is legitimately present as the default value for CONTACT_EMAIL
-			// (e.g. CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-admin@example.com}"),
+			// (e.g. [ -n "$CONTACT_EMAIL" ] || CONTACT_EMAIL="admin@example.com"),
 			// but it must not be repeated elsewhere (e.g. embedded in a URL,
 			// a hardcoded JSON field, or a curl argument).
 			//
@@ -1432,7 +1432,7 @@ func TestGetFederationIaC_CLIMatrix(t *testing.T) {
 			// the email does not appear in the remaining content.
 			sessionEmail := "admin@example.com"
 			scriptWithoutAssignment := strings.ReplaceAll(res.Content,
-				`CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-`+sessionEmail+`}"`,
+				`[ -n "$CONTACT_EMAIL" ] || CONTACT_EMAIL="`+sessionEmail+`"`,
 				"CONTACT_EMAIL_ASSIGNMENT_REMOVED")
 			assert.NotContains(t, scriptWithoutAssignment, sessionEmail,
 				"session email must not appear in CLI script body outside CONTACT_EMAIL assignment (PII leak)")
