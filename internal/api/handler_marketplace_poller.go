@@ -2,16 +2,19 @@ package api
 
 // handler_marketplace_poller.go is the RI Marketplace status poller (issue
 // #27). The list and cancel endpoints record a listing as active or canceled;
-// nothing else told CUDly when AWS sold it. The poller reads every active
-// listing from AWS (DescribeReservedInstancesListings, signed as the purchase's
-// own account like the endpoints) and records the listing's AWS CreateDate
-// while it is active, and its terminal state with the realized proceeds and
-// the AWS fee once it closes (all sold) or is canceled after a partial sale.
+// nothing else told CUDly when AWS sold it. The poller reads from AWS
+// (DescribeReservedInstancesListings, signed as the purchase's own account
+// like the endpoints) every active listing, and every listing recorded as
+// pending because AWS gave no status when it was created (issue #1494). It
+// records the listing as active with its AWS CreateDate while it is for sale,
+// and its terminal state with the realized proceeds and the AWS fee once it
+// closes (all sold) or is canceled after a partial sale.
 //
-// It runs from the finalize_revocations scheduled sweep (see
-// internal/server/handler.go). Its writes are the store's status-guarded
-// UPDATEs, so a second run, the cancel handler or a relist racing a poll never
-// double-record proceeds or undo a recorded cancel.
+// It runs from the finalize_revocations scheduled task (see
+// internal/server/handler_marketplace_poll.go), so only where that task is
+// scheduled; docs/DEPLOYMENT.md lists the platforms. Its writes are the
+// store's status-guarded UPDATEs, so a second run, the cancel handler or a
+// relist racing a poll never double-record proceeds or undo a recorded cancel.
 
 import (
 	"context"
@@ -218,12 +221,7 @@ func (h *Handler) pollMarketplaceListing(ctx context.Context, row *config.Purcha
 func (h *Handler) recordMarketplaceListingStatus(ctx context.Context, row *config.PurchaseHistoryRecord, st marketplaceListingStatus) (marketplacePollOutcome, error) {
 	switch st.State {
 	case config.ListingStateActive:
-		if !st.CreatedAt.IsZero() {
-			if _, err := h.config.RecordMarketplaceListingActive(ctx, row.PurchaseID, row.ListingID, st.CreatedAt); err != nil {
-				return marketplacePollSkipped, err
-			}
-		}
-		return marketplacePollActive, nil
+		return h.recordMarketplaceListingActive(ctx, row, st)
 	case config.ListingStateClosed, config.ListingStateCancelled:
 		settlement, priced := marketplaceSettlement(row, st)
 		applied, err := h.config.SettleMarketplaceListing(ctx, settlement)
@@ -238,4 +236,18 @@ func (h *Handler) recordMarketplaceListingStatus(ctx context.Context, row *confi
 		return marketplacePollSettled, nil
 	}
 	return marketplacePollSkipped, nil
+}
+
+// recordMarketplaceListingActive records a listing AWS reports for sale. An
+// active row needs a write only to stamp the CreateDate. A row recorded as
+// pending is moved to active even when AWS reported no CreateDate, so it can
+// be canceled and relisted like any active listing (issue #1494).
+func (h *Handler) recordMarketplaceListingActive(ctx context.Context, row *config.PurchaseHistoryRecord, st marketplaceListingStatus) (marketplacePollOutcome, error) {
+	if st.CreatedAt.IsZero() && !strings.EqualFold(row.ListingState, config.ListingStatePending) {
+		return marketplacePollActive, nil
+	}
+	if _, err := h.config.RecordMarketplaceListingActive(ctx, row.PurchaseID, row.ListingID, st.CreatedAt); err != nil {
+		return marketplacePollSkipped, err
+	}
+	return marketplacePollActive, nil
 }
