@@ -93,7 +93,7 @@ func TestHandleRequest_History_ScopedPendingNotCrowdedOutByOtherAccounts(t *test
 	})).Return([]config.PurchaseExecution{mine}, nil)
 	store.On("GetExecutionsByStatusesFiltered", mock.Anything, mock.MatchedBy(isStaleSweepQuery)).Return([]config.PurchaseExecution{}, nil)
 
-	body := actionableHistoryRequest(t, store, []string{"dev"}, map[string]string{})
+	body := actionableHistoryRequest(t, store, []string{actionableDevUUID}, map[string]string{})
 
 	ids := make([]string, 0, len(body.Purchases))
 	for _, p := range body.Purchases {
@@ -140,7 +140,7 @@ func TestHandleRequest_History_StaleSweepIgnoresFiltersAndScope(t *testing.T) {
 			Return([]config.PurchaseExecution{}, nil).Once()
 
 		before := time.Now()
-		actionableHistoryRequest(t, store, []string{"dev"}, map[string]string{"provider": "azure"})
+		actionableHistoryRequest(t, store, []string{actionableDevUUID}, map[string]string{"provider": "azure"})
 
 		store.AssertExpectations(t)
 		assert.Nil(t, sweep.Scope)
@@ -243,8 +243,9 @@ func TestHistoryScope_ExecutionScope(t *testing.T) {
 		{"empty denies attributed rows", auth.ScopeForAccounts(nil), &config.ExecutionScope{UserID: "u-1"}},
 		{"by id", auth.ScopeForAccounts([]string{actionableDevUUID}),
 			&config.ExecutionScope{UserID: "u-1", AccountIDs: []string{actionableDevUUID, "111111111111"}}},
-		{"by unique name", auth.ScopeForAccounts([]string{"dev"}).WithRegisteredNames([]string{"dev", "other"}),
-			&config.ExecutionScope{UserID: "u-1", AccountIDs: []string{"dev", actionableDevUUID, "111111111111"}}},
+		{"name entry grants no account (#1034)", auth.ScopeForAccounts([]string{"dev"}).WithRegisteredAccounts([]auth.RegisteredAccount{
+			{ID: actionableDevUUID, Name: "dev", ExternalID: "111111111111"}, {ID: actionableOtherUUID, Name: "other", ExternalID: "222222222222"},
+		}), &config.ExecutionScope{UserID: "u-1", AccountIDs: []string{"dev"}}},
 		{"literal external number", auth.ScopeForAccounts([]string{"222222222222"}),
 			&config.ExecutionScope{UserID: "u-1", AccountIDs: []string{"222222222222"}}},
 	}
