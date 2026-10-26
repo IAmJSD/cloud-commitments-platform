@@ -12,7 +12,7 @@
 
 ## Planning (ALWAYS follow this process)
 
-- **EVERY TIME** you create or update a plan, you MUST enter a review loop: thoroughly review the plan and fix any issues found. Repeat until 3 consecutive review passes find no issues. Do NOT skip this step — it is mandatory for all plans, no exceptions.
+- **EVERY TIME** you create or update a plan, you MUST enter a review loop: thoroughly review the plan and fix any issues found. Repeat until 3 consecutive review passes find no issues. Do NOT skip this step; it is mandatory for all plans, no exceptions.
 - In each loop iteration, print a summary of found issues before and after fixing them.
 
 ## File Organization
@@ -75,7 +75,7 @@ Do this in the same PR that closes the issue. A full sweep of the directory
 should happen at the start of each sprint. Full convention and entry format
 are in `CONTRIBUTING.md` under "Known Issues Sweep".
 
-## Issue assignment — claim before you work (MANDATORY)
+## Issue assignment: claim before you work (MANDATORY)
 
 Several people (and their agents) work through this repo's issue queue in
 parallel. GitHub issue assignment is the lock that keeps two of them from
@@ -194,13 +194,13 @@ Work that is not tracked by an issue yet (for example a larger UI or
 integration effort) gets an issue first, assigned to whoever is doing it,
 so it shows up as taken.
 
-## Post-push CI watcher (MANDATORY — even for one-line fix commits)
+## Post-push CI watcher (MANDATORY, even for one-line fix commits)
 
 After **every** `git push` that publishes new commits to a PR branch on
 this repo (including follow-up CodeRabbit-nitpick fixes), launch a
 background watcher per workflow run **before** ending the turn. This is
 the project-level reinforcement of the global rule in
-`~/.claude/git-workflow.md` §Post-push CI watcher — CUDly's pre-commit
+`~/.claude/git-workflow.md` §Post-push CI watcher. CUDly's pre-commit
 job alone takes 9–15 min and is silently broken by routine changes
 (missing CI tools, pre-existing markdownlint debt, git-secrets
 allowlist drift), so leaving a push unwatched routinely lets CI
@@ -217,7 +217,7 @@ Mechanics:
 
 2. For each run still in `queued`/`in_progress`, launch one background
    watcher script via `Bash` with `run_in_background: true` (do NOT use
-   foreground polling — the main session must stay unblocked). The
+   foreground polling; the main session must stay unblocked). The
    minimum viable watcher polls `gh run view <ID> --json status,conclusion`
    every 30s and on completion either reports success or dumps the failed
    step digest. A reusable template lives at
@@ -255,7 +255,7 @@ rules live in `~/.claude/git-workflow.md` §"Post-PR review loop"
    "I fixed pass 1" is not loop-exit. CUDly PRs commonly run 3–6 CR
    passes before settling.
 6. If a fix push triggers conflicts (`mergeStateStatus: DIRTY`), resolve
-   them per `~/.claude/git-workflow.md` §3a — `git rebase
+   them per `~/.claude/git-workflow.md` §3a: `git rebase
    origin/<base>`, atomic conflict resolution, `git push
    --force-with-lease`, post a rebase note on the PR, then continue
    the CR loop.
@@ -267,7 +267,7 @@ When the CodeRabbit loop applies (see Review gate) and you are
 **delegating PR work to a subagent**, the prompt MUST include the
 full CR loop, not stop at the first `@coderabbitai review` ping. A fork
 that pushes the PR, pings CR, then exits leaves the CR threads
-unresolved — same failure mode as forgetting the post-push CI watcher.
+unresolved, the same failure mode as forgetting the post-push CI watcher.
 The subagent's exit criteria must be: "CR's most recent review has zero
 Actionable items AND every Nitpick is either fixed or has a
 justification reply on the thread", not "PR opened and CR pinged". When
@@ -298,10 +298,10 @@ Merge normally; never bypass failing or required checks (no
 real purchases, deploys or the CLI's `--yes`. Any new commit or rebase
 restarts the gate; a missing reviewer or verification blocks the PR.
 
-## PR labeling — mirror closing-issue labels (MANDATORY)
+## PR labeling: mirror closing-issue labels (MANDATORY)
 
 Every PR opened in this repo must carry the **same** triage labels as
-the issue it closes — `priority/*`, `severity/*`, `urgency/*`,
+the issue it closes: `priority/*`, `severity/*`, `urgency/*`,
 `impact/*`, `effort/*`, `type/*`, plus `triaged` if the issue carries
 it. Skipping this leaves PRs invisible to the same priority queries
 that surface the issues, so an unlabeled PR is effectively
@@ -321,7 +321,7 @@ LABELS=$(gh issue view "$ISSUE_NUM" --repo LeanerCloud/cloud-commitments-platfor
         + (if [.labels[].name] | any(. == "triaged") then ["triaged"] else [] end)
         | join(",")')
 
-# Guard against empty $LABELS — gh pr edit --add-label "" fails, which would
+# Guard against empty $LABELS: gh pr edit --add-label "" fails, which would
 # silently break this MANDATORY flow. If the closing issue has no triage
 # labels in the selected classes, surface the gap deterministically instead.
 if [ -n "$LABELS" ]; then
@@ -338,10 +338,10 @@ gh pr view "$PR_NUM" --repo LeanerCloud/cloud-commitments-platform --json labels
 ```
 
 If the closing issue lacks the `triaged` label, do NOT apply
-`triaged` to the PR — that would lie. Surface the gap in the PR body
+`triaged` to the PR; that would lie. Surface the gap in the PR body
 (or as a comment on the issue) so the human can triage.
 
-If a label doesn't yet exist in the repo (rare — the label set is
+If a label doesn't yet exist in the repo (rare, since the label set is
 populated from the existing issue queue), `gh label create` it with
 the same color/description as a sibling label BEFORE applying.
 
@@ -364,11 +364,11 @@ set for multi-close PRs).
 - Always validate user input at system boundaries
 - Always sanitize file paths to prevent directory traversal
 
-## CI/CD IAM — bootstrap vs runtime split
+## CI/CD IAM: bootstrap vs runtime split
 
 The per-cloud `terraform/environments/*/ci-cd-permissions/` modules provision
 the CI/CD deploy identities and are **applied once, manually, by a privileged
-human** — not by the CI workflow itself. The main deploy workflow assumes a
+human**, not by the CI workflow itself. The main deploy workflow assumes a
 deploy SA already exists and only has permission to manage workloads. Keep
 this split when adding new IAM:
 
@@ -385,7 +385,7 @@ this split when adding new IAM:
   `roles/compute.admin` or `Resource = "*"`.
 - **No silent fallbacks to over-privileged roles.** If a runtime grant
   requires a bootstrap permission the deploy SA doesn't have, the apply
-  SHOULD 403 — that's the signal to re-run the bootstrap, not to paper over
+  SHOULD 403; that's the signal to re-run the bootstrap, not to paper over
   with a wider grant. Fallback flags are allowed only as short-term
   workarounds and must be removed once the bootstrap has been re-applied.
 - **GCP WIF attribute_condition** in `ci-cd-permissions/github_oidc.tf`

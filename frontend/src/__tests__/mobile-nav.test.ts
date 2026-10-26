@@ -5,7 +5,7 @@
  * aria-expanded toggle, focus management, body scroll-lock class.
  */
 
-import { setupMobileNav, syncHeaderPlacement } from '../app';
+import { setupMobileNav, syncHeaderPlacement } from '../nav/mobile-nav';
 
 function buildDOM(): void {
   document.body.innerHTML = `
@@ -16,13 +16,13 @@ function buildDOM(): void {
         aria-expanded="false">
       </button>
       <div class="app-topbar-brand"><h1>CUDly</h1></div>
-      <div id="topbar-filters" class="app-topbar-filters" aria-label="Global filters"></div>
+      <div id="topbar-filters" class="app-topbar-filters" role="group" aria-label="Global filters"></div>
       <div id="user-info">
         <button type="button" id="user-email-display">me@example.com</button>
         <span id="user-role-display" class="role-badge"></span>
         <a href="/docs/" target="_blank" class="header-link">API Docs</a>
         <a id="feedback-link" href="#" class="header-link feedback-link">Feedback</a>
-        <button id="logout-btn">Logout</button>
+        <button id="logout-btn">Log out</button>
       </div>
     </header>
     <div class="sidebar-overlay" id="sidebar-overlay" aria-hidden="true"></div>
@@ -123,6 +123,29 @@ describe('setupMobileNav', () => {
     expect(document.body.classList.contains('sidebar-open')).toBe(false);
   });
 
+  test('closing via a sidebar link keeps focus on the new page heading (#730)', () => {
+    document.body.insertAdjacentHTML('beforeend', '<main><h2 id="page-h" tabindex="-1">Plans</h2></main>');
+    const pageHeading = document.getElementById('page-h') as HTMLElement;
+    const link = sidebar().querySelectorAll<HTMLElement>('.tab-btn')[1]!;
+    // Stands in for app.ts's tab handler, registered before the drawer's:
+    // switchTab(..., { focusContent: true }) has moved focus by now.
+    link.addEventListener('click', () => pageHeading.focus());
+    setupMobileNav();
+    hamburger().click(); // open
+    link.dispatchEvent(new MouseEvent('click', { button: 0, bubbles: true }));
+    expect(document.body.classList.contains('sidebar-open')).toBe(false);
+    expect(document.activeElement).toBe(pageHeading);
+  });
+
+  test('closing via a sidebar link rescues focus left inside the drawer', () => {
+    setupMobileNav();
+    hamburger().click(); // open
+    const link = sidebar().querySelector<HTMLElement>('.tab-btn')!;
+    link.focus();
+    link.dispatchEvent(new MouseEvent('click', { button: 0, bubbles: true }));
+    expect(document.activeElement).toBe(hamburger());
+  });
+
   test('modifier-key click on sidebar link does not close the drawer', () => {
     setupMobileNav();
     hamburger().click(); // open
@@ -164,6 +187,29 @@ describe('setupMobileNav', () => {
   test('no-op when sidebar element is missing from DOM', () => {
     document.getElementById('sidebar')!.remove();
     expect(() => setupMobileNav()).not.toThrow();
+  });
+
+  test('returns null when there is nothing to wire', () => {
+    document.getElementById('hamburger-btn')!.remove();
+    expect(setupMobileNav()).toBeNull();
+  });
+
+  test('returned handle drives the same open/close transitions as the hamburger', () => {
+    const nav = setupMobileNav();
+    expect(nav).not.toBeNull();
+    expect(nav!.isOpen()).toBe(false);
+
+    nav!.open();
+    expect(nav!.isOpen()).toBe(true);
+    expect(hamburger().getAttribute('aria-expanded')).toBe('true');
+    expect(sidebar().hasAttribute('inert')).toBe(false);
+    expect(document.activeElement).toBe(sidebar().querySelector('.tab-btn'));
+
+    nav!.close();
+    expect(nav!.isOpen()).toBe(false);
+    expect(hamburger().getAttribute('aria-expanded')).toBe('false');
+    expect(sidebar().hasAttribute('inert')).toBe(true);
+    expect(document.activeElement).toBe(hamburger());
   });
 });
 

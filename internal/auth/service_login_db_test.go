@@ -339,6 +339,18 @@ func TestIntegration_LoginMixedOrdering(t *testing.T) {
 	}
 }
 
+// dbClock reads the database's own clock. last_login_at and locked_until are
+// stamped with NOW() on the server, so bounds taken from the test process's
+// clock compare two clocks and fail when they disagree by a few milliseconds
+// (issue #568 (f)); bounds read here share the clock and precision of the
+// stamped value.
+func dbClock(t *testing.T, store *PostgresStore) time.Time {
+	t.Helper()
+	var now time.Time
+	require.NoError(t, store.db.QueryRow(t.Context(), "SELECT clock_timestamp()").Scan(&now))
+	return now
+}
+
 func TestIntegration_LoginLockoutExpiry(t *testing.T) {
 	store := NewPostgresStore(setupAuthTestDB(t))
 	service := NewService(ServiceConfig{Store: store})
@@ -355,8 +367,9 @@ func TestIntegration_LoginLockoutExpiry(t *testing.T) {
 			if success {
 				password = "OriginalPassword123!"
 			}
-			before := time.Now()
+			before := dbClock(t, store)
 			response, loginErr := service.Login(t.Context(), LoginRequest{Email: user.Email, Password: password})
+			after := dbClock(t, store)
 			stored, err := store.GetUserByID(t.Context(), user.ID)
 			require.NoError(t, err)
 			if success {
@@ -365,13 +378,13 @@ func TestIntegration_LoginLockoutExpiry(t *testing.T) {
 				assert.Zero(t, stored.FailedLoginAttempts)
 				assert.Nil(t, stored.LockedUntil)
 				require.NotNil(t, stored.LastLoginAt)
-				assert.WithinRange(t, *stored.LastLoginAt, before, time.Now())
+				assert.WithinRange(t, *stored.LastLoginAt, before, after)
 			} else {
 				require.EqualError(t, loginErr, genericLoginError)
 				assert.Nil(t, response)
 				assert.Equal(t, MaxFailedLoginAttempts+1, stored.FailedLoginAttempts)
 				require.NotNil(t, stored.LockedUntil)
-				assert.WithinRange(t, *stored.LockedUntil, before.Add(AccountLockoutDuration), time.Now().Add(AccountLockoutDuration))
+				assert.WithinRange(t, *stored.LockedUntil, before.Add(AccountLockoutDuration), after.Add(AccountLockoutDuration))
 			}
 		})
 	}

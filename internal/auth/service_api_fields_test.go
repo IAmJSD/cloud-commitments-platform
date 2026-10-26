@@ -88,6 +88,9 @@ func TestAPIAdapters_CreateUser_AllFieldsReachStore(t *testing.T) {
 	svc := createTestService(store, new(MockEmailSender))
 	var got *User
 	store.On("GetUserByEmail", ctx, req.Email).Return(nil, nil).Once()
+	// The issue #78 combination check reads each group; unknown groups are
+	// skipped, so returning none keeps this test about field plumbing.
+	store.On("GetGroup", ctx, mock.Anything).Return(nil, nil).Maybe()
 	store.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).
 		Run(func(args mock.Arguments) { got = args.Get(1).(*User) }).Return(nil).Once()
 	_, err := svc.CreateUserAPI(ctx, "", req)

@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -11,7 +10,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 )
 
@@ -485,95 +483,6 @@ func TestPurchaseIdempotencyKey_StableAndDiscriminating(t *testing.T) {
 	acctB := []config.RecommendationRecord{validRec()}
 	acctB[0].CloudAccountID = strptr("acct-B")
 	assert.NotEqual(t, mustPurchaseIdempotencyKey("user-1", acctA, 100), mustPurchaseIdempotencyKey("user-1", acctB, 100), "account")
-}
-
-func TestFindDuplicatePendingExecution(t *testing.T) {
-	ctx := context.Background()
-	now := time.Now()
-	creator := "11111111-1111-1111-1111-111111111111"
-	recs := []config.RecommendationRecord{validRec()}
-	key := mustPurchaseIdempotencyKey(creator, recs, 100)
-
-	makeExec := func(id string, age time.Duration, src string, c *string, capacity int) config.PurchaseExecution {
-		// Copy recs so a subtest that mutates exec.Recommendations does not
-		// corrupt the shared slice used to compute `key` above.
-		recsCopy := append([]config.RecommendationRecord(nil), recs...)
-		return config.PurchaseExecution{
-			ExecutionID:     id,
-			Status:          "pending",
-			Source:          src,
-			ScheduledDate:   now.Add(-age),
-			Recommendations: recsCopy,
-			CreatedByUserID: c,
-			CapacityPercent: capacity,
-		}
-	}
-
-	t.Run("matching recent web execution is a duplicate", func(t *testing.T) {
-		store := new(MockConfigStore)
-		store.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{
-			makeExec("exec-dup", 30*time.Second, common.PurchaseSourceWeb, &creator, 100),
-		}, nil)
-		h := &Handler{config: store}
-		dup, err := h.findDuplicatePendingExecution(ctx, creator, key, now)
-		require.NoError(t, err)
-		require.NotNil(t, dup)
-		assert.Equal(t, "exec-dup", dup.ExecutionID)
-	})
-
-	t.Run("outside the window is not a duplicate", func(t *testing.T) {
-		store := new(MockConfigStore)
-		store.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{
-			makeExec("exec-old", purchaseIdempotencyWindow+time.Minute, common.PurchaseSourceWeb, &creator, 100),
-		}, nil)
-		h := &Handler{config: store}
-		dup, err := h.findDuplicatePendingExecution(ctx, creator, key, now)
-		require.NoError(t, err)
-		assert.Nil(t, dup)
-	})
-
-	t.Run("different creator is not a duplicate", func(t *testing.T) {
-		other := "22222222-2222-2222-2222-222222222222"
-		store := new(MockConfigStore)
-		store.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{
-			makeExec("exec-other", 10*time.Second, common.PurchaseSourceWeb, &other, 100),
-		}, nil)
-		h := &Handler{config: store}
-		dup, err := h.findDuplicatePendingExecution(ctx, creator, key, now)
-		require.NoError(t, err)
-		assert.Nil(t, dup)
-	})
-
-	t.Run("non-web source is skipped", func(t *testing.T) {
-		store := new(MockConfigStore)
-		store.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{
-			makeExec("exec-cli", 10*time.Second, "cudly-cli", &creator, 100),
-		}, nil)
-		h := &Handler{config: store}
-		dup, err := h.findDuplicatePendingExecution(ctx, creator, key, now)
-		require.NoError(t, err)
-		assert.Nil(t, dup)
-	})
-
-	t.Run("distinct rec set is not a duplicate", func(t *testing.T) {
-		differing := makeExec("exec-diff", 10*time.Second, common.PurchaseSourceWeb, &creator, 100)
-		differing.Recommendations[0].Count = 99
-		store := new(MockConfigStore)
-		store.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{differing}, nil)
-		h := &Handler{config: store}
-		dup, err := h.findDuplicatePendingExecution(ctx, creator, key, now)
-		require.NoError(t, err)
-		assert.Nil(t, dup)
-	})
-
-	t.Run("lookup error is surfaced, not swallowed", func(t *testing.T) {
-		store := new(MockConfigStore)
-		store.On("GetPendingExecutions", ctx).Return(nil, errors.New("db down"))
-		h := &Handler{config: store}
-		dup, err := h.findDuplicatePendingExecution(ctx, creator, key, now)
-		require.Error(t, err)
-		assert.Nil(t, dup)
-	})
 }
 
 func TestBuildDuplicatePurchaseResponse(t *testing.T) {

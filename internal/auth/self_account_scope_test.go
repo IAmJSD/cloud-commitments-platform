@@ -30,10 +30,10 @@ import (
 )
 
 const (
-	scopedActorID        = "88888888-8888-4888-8888-888888888888"
-	regionalAdminGroupID = "99999999-9999-4999-8999-999999999999"
-	acctAViewersGroupID  = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	deletedGroupID       = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	scopedActorID           = "88888888-8888-4888-8888-888888888888"
+	regionalAdminGroupID    = "99999999-9999-4999-8999-999999999999"
+	acctAPlanAuthorsGroupID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	deletedGroupID          = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 )
 
 // regionalAdminGroup is the realistic shape of a scoped administrator: the
@@ -48,13 +48,15 @@ func regionalAdminGroup() *Group {
 	}
 }
 
-// acctAViewersGroup is scoped to a strict SUBSET of regionalAdminGroup's
-// accounts, so joining it grants nothing new on the account dimension.
-func acctAViewersGroup() *Group {
+// acctAPlanAuthorsGroup is scoped to a strict SUBSET of regionalAdminGroup's
+// accounts, so joining it grants nothing new on the account dimension. It is
+// write-capable because a view-only group next to the admin group would be
+// refused as a contradictory combination (issue #78) before scope is checked.
+func acctAPlanAuthorsGroup() *Group {
 	return &Group{
-		ID:              acctAViewersGroupID,
-		Name:            "Acct-A Viewers",
-		Permissions:     []Permission{{Action: ActionView, Resource: ResourceRecommendations}},
+		ID:              acctAPlanAuthorsGroupID,
+		Name:            "Acct-A Plan Authors",
+		Permissions:     []Permission{{Action: ActionCreate, Resource: ResourcePlans}},
 		AllowedAccounts: []string{"acct-A"},
 	}
 }
@@ -164,15 +166,15 @@ func TestSelfAccountScope_JoiningSubsetScopedGroupAllowed(t *testing.T) {
 	svc := createTestService(mockStore, new(MockEmailSender))
 
 	stubScopedActor(ctx, mockStore, []string{regionalAdminGroupID},
-		regionalAdminGroup(), acctAViewersGroup())
+		regionalAdminGroup(), acctAPlanAuthorsGroup())
 	mockStore.On("UpdateUserAdminFields", ctx, mock.AnythingOfType("*auth.User"), mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 	updated, err := svc.UpdateUser(ctx, scopedActorID, scopedActorID, UpdateUserRequest{
-		GroupIDs: []string{regionalAdminGroupID, acctAViewersGroupID},
+		GroupIDs: []string{regionalAdminGroupID, acctAPlanAuthorsGroupID},
 	})
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{regionalAdminGroupID, acctAViewersGroupID}, updated.GroupIDs)
+	assert.Equal(t, []string{regionalAdminGroupID, acctAPlanAuthorsGroupID}, updated.GroupIDs)
 }
 
 // T5 -- Fail closed when a PRIOR group cannot be resolved (issue #1748's

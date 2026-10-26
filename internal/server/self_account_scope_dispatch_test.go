@@ -146,10 +146,13 @@ func TestSelfAccountScopeDispatch_LeaveScopingGroupRefused(t *testing.T) {
 // scope still succeeds through the same route. Without this, a guard refusing
 // every self-membership edit would pass both tests above.
 func TestSelfAccountScopeDispatch_NonWideningChangeAllowed(t *testing.T) {
+	// Write-capable on purpose: a view-only group next to the admin group is
+	// refused as a contradictory combination (issue #78), which is not what
+	// this control is about.
 	subset := &auth.Group{
 		ID:              "55555555-5555-4555-8555-555555555557",
-		Name:            "Acct-A Viewers",
-		Permissions:     []auth.Permission{{Action: auth.ActionView, Resource: auth.ResourceRecommendations}},
+		Name:            "Acct-A Plan Authors",
+		Permissions:     []auth.Permission{{Action: auth.ActionCreate, Resource: auth.ResourcePlans}},
 		AllowedAccounts: []string{scopeDispatchAccountID},
 	}
 	handler, mockStore := newSelfScopeHarness(t, []string{scopeDispatchGroupID})

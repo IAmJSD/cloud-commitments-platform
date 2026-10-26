@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Docker and Docker Compose
-- Go 1.26.9+
+- Go 1.26.10+
 - Node.js and npm (for frontend development)
 - Make (optional, for convenience commands)
 
@@ -65,6 +65,30 @@ The development environment uses **Air** for hot reload. Any changes to `.go` fi
 # Air automatically detects changes and reloads
 docker-compose logs -f app
 ```
+
+#### Linux: match your uid
+
+The `app` service bind-mounts the checkout at `/app`, and Air writes its build
+output to `./tmp/` inside that mount. On Linux the mounted files keep your
+host uid/gid, so the container user must have the same ids or Air cannot write
+`tmp/main` and hot reload stops. `Dockerfile.dev` therefore takes `DEV_UID` and
+`DEV_GID` build args, which `docker-compose.yml` passes through. Both default
+to `1000`, the usual first Linux account. If `id -u` or `id -g` prints something
+else, record your ids in `.env` (gitignored) and rebuild:
+
+```bash
+printf 'DEV_UID=%s\nDEV_GID=%s\n' "$(id -u)" "$(id -g)" >> .env
+docker-compose build app && docker-compose up -d
+```
+
+Files the container writes into the checkout are then owned by you. macOS
+needs none of this: Docker Desktop remaps bind-mount ownership, so the
+defaults work for any account. If you change `USER` in `Dockerfile.dev`, keep
+it driven by these args, because the bind mount is the constraint.
+
+The dev image also sets `GOWORK=off`, so `go` commands run in the container
+build the root module alone from the module cache baked into the image. To
+work on the separate `tests/e2e` module there, `cd tests/e2e` first.
 
 ### Database Migrations
 
@@ -265,25 +289,29 @@ app := &Application{Scheduler: mockScheduler}
 
 ### Integration Test Setup
 
+Integration tests share one PostgreSQL container per test binary and each get a
+fresh database of their own on it (`internal/database/postgres/testhelpers`):
+
 ```go
 //go:build integration
 
 func TestWithPostgres(t *testing.T) {
-    if testing.Short() {
-        t.Skip("Skipping integration test")
-    }
-
-    ctx := testutil.TestContext(t)
-    pg, err := testutil.SetupPostgresContainer(ctx, t)
-    testutil.AssertNoError(t, err)
-
-    for k, v := range pg.Config() {
-        testutil.SetEnv(t, k, v)
-    }
+    ctx := t.Context()
+    // Fully migrated, dropped when the test ends. For a migration test that
+    // needs to start from nothing, use testhelpers.RequireEmptyDatabase(ctx, t).
+    pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
+    store := config.NewPostgresStore(pg.DB)
 
     // Test with real database...
 }
 ```
+
+The package needs a `TestMain` (in a `//go:build integration` file) that calls
+`testhelpers.TerminateSharedPostgres()` after `m.Run()`; see
+`internal/config/main_integration_test.go`. Start a dedicated server with
+`testhelpers.RequirePostgresContainer` only for a test that touches server-wide
+state (roles, `ALTER SYSTEM`, connection limits, other sessions' backends), and
+say why next to the call.
 
 ### Coverage
 
@@ -317,8 +345,8 @@ make security-scan
 
 # Individual scans
 make security-scan-go          # gosec
-make security-scan-docker      # trivy (container + filesystem)
-make security-scan-terraform   # tfsec
+make security-scan-docker      # trivy (dependencies + Terraform/Dockerfile misconfig)
+make security-scan-terraform   # tfsec (deprecated, not part of security-scan)
 ```
 
 ### Terraform & Docker Testing
