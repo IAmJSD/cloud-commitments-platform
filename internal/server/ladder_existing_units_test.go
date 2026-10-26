@@ -38,8 +38,9 @@ func TestLadderLayerStatesOnDemand_PinsCommitmentToOnDemandConversion(t *testing
 			states := map[pkgladder.LayerType]pkgladder.LayerState{
 				pkgladder.LayerEC2InstanceSP: spState(f64(tc.existing), f64(tc.expiring)),
 			}
-			out, err := ladderLayerStatesOnDemand(states, map[pkgladder.LayerType]float64{pkgladder.LayerEC2InstanceSP: tc.rate})
+			out, missing, err := ladderLayerStatesOnDemand(states, map[pkgladder.LayerType]float64{pkgladder.LayerEC2InstanceSP: tc.rate})
 			require.NoError(t, err)
+			require.Empty(t, missing)
 			got := out[pkgladder.LayerEC2InstanceSP]
 			assert.Equal(t, tc.wantExisting, *got.ExistingUSDPerHour, "existing OD")
 			assert.Equal(t, tc.wantExpg, *got.ExpiringUSDPerHour, "expiring OD")
@@ -56,7 +57,7 @@ func TestLadderLayerStatesOnDemand_RoundsTowardUnderBuying(t *testing.T) {
 	states := map[pkgladder.LayerType]pkgladder.LayerState{
 		pkgladder.LayerEC2InstanceSP: spState(f64(1), f64(1)),
 	}
-	out, err := ladderLayerStatesOnDemand(states, map[pkgladder.LayerType]float64{pkgladder.LayerEC2InstanceSP: rate})
+	out, _, err := ladderLayerStatesOnDemand(states, map[pkgladder.LayerType]float64{pkgladder.LayerEC2InstanceSP: rate})
 	require.NoError(t, err)
 	exact := new(big.Rat).Quo(big.NewRat(1, 1), new(big.Rat).SetFloat64(rate))
 
@@ -72,7 +73,7 @@ func TestLadderLayerStatesOnDemand_RoundsTowardUnderBuying(t *testing.T) {
 func TestLadderLayerStatesOnDemand_DoesNotMutateInput(t *testing.T) {
 	existing, expiring := f64(5), f64(2)
 	states := map[pkgladder.LayerType]pkgladder.LayerState{pkgladder.LayerEC2InstanceSP: spState(existing, expiring)}
-	_, err := ladderLayerStatesOnDemand(states, map[pkgladder.LayerType]float64{pkgladder.LayerEC2InstanceSP: 0.5})
+	_, _, err := ladderLayerStatesOnDemand(states, map[pkgladder.LayerType]float64{pkgladder.LayerEC2InstanceSP: 0.5})
 	require.NoError(t, err)
 	assert.Equal(t, 5.0, *existing)
 	assert.Equal(t, 2.0, *expiring)
@@ -86,8 +87,9 @@ func TestLadderLayerStatesOnDemand_EmptyLayersNeedNoRate(t *testing.T) {
 		pkgladder.LayerComputeSP:     {Layer: pkgladder.LayerComputeSP, ExistingUSDPerHour: f64(0), ExpiringUSDPerHour: f64(0)},
 		pkgladder.LayerConvertibleRI: {Layer: pkgladder.LayerConvertibleRI},
 	}
-	out, err := ladderLayerStatesOnDemand(states, map[pkgladder.LayerType]float64{})
+	out, missing, err := ladderLayerStatesOnDemand(states, map[pkgladder.LayerType]float64{})
 	require.NoError(t, err)
+	require.Empty(t, missing)
 	assert.Equal(t, 0.0, *out[pkgladder.LayerComputeSP].ExistingUSDPerHour)
 	assert.Nil(t, out[pkgladder.LayerConvertibleRI].ExistingUSDPerHour)
 	assert.Nil(t, out[pkgladder.LayerConvertibleRI].ExpiringUSDPerHour)
@@ -100,8 +102,8 @@ func TestLadderLayerStatesOnDemand_RejectsUnconvertibleCoverage(t *testing.T) {
 		rates   map[pkgladder.LayerType]float64
 		wantErr string
 	}{
-		{"existing without a rate", spState(f64(5), f64(0)), map[pkgladder.LayerType]float64{pkgladder.LayerComputeSP: 0.5}, "no commitment rate"},
-		{"expiring without a rate", spState(f64(0), f64(1)), nil, "no commitment rate"},
+		{"negative existing without a rate", spState(f64(-5), f64(0)), map[pkgladder.LayerType]float64{pkgladder.LayerComputeSP: 0.5}, "non-negative"},
+		{"NaN expiring without a rate", spState(f64(0), f64(math.NaN())), nil, "non-negative"},
 		{"zero rate", spState(f64(5), f64(0)), map[pkgladder.LayerType]float64{pkgladder.LayerEC2InstanceSP: 0}, "must be in (0, 1]"},
 		{"rate above one", spState(f64(5), f64(0)), map[pkgladder.LayerType]float64{pkgladder.LayerEC2InstanceSP: 1.5}, "must be in (0, 1]"},
 		{"NaN rate", spState(f64(5), f64(0)), map[pkgladder.LayerType]float64{pkgladder.LayerEC2InstanceSP: math.NaN()}, "must be in (0, 1]"},
@@ -111,7 +113,7 @@ func TestLadderLayerStatesOnDemand_RejectsUnconvertibleCoverage(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ladderLayerStatesOnDemand(map[pkgladder.LayerType]pkgladder.LayerState{pkgladder.LayerEC2InstanceSP: tc.state}, tc.rates)
+			_, _, err := ladderLayerStatesOnDemand(map[pkgladder.LayerType]pkgladder.LayerState{pkgladder.LayerEC2InstanceSP: tc.state}, tc.rates)
 			require.ErrorContains(t, err, tc.wantErr)
 			assert.ErrorContains(t, err, string(pkgladder.LayerEC2InstanceSP))
 		})
@@ -162,19 +164,21 @@ func TestExecuteLadderRun_ExpiringCoverageIsOnDemandEquivalent(t *testing.T) {
 	assert.InDelta(t, 3.0, store.savedRun.TotalHourlyCommit, 1e-9)
 }
 
-// Existing commitment on a layer with no rate cannot be converted; the run
-// fails and persists nothing instead of netting it 1:1 and over-buying.
-func TestExecuteLadderRun_ExistingCoverageWithoutRateIsErrored(t *testing.T) {
-	store := &ladderTestStore{}
-	cap := &fakeLadderCapability{t: t, baseline: testBaselineLowWater(12.5),
-		rates: map[pkgladder.LayerType]float64{pkgladder.LayerEC2InstanceSP: 0.5},
-		layerStates: map[pkgladder.LayerType]pkgladder.LayerState{
-			pkgladder.LayerConvertibleRI: {Layer: pkgladder.LayerConvertibleRI, ExistingUSDPerHour: f64(3), ExpiringUSDPerHour: f64(0)},
-			pkgladder.LayerEC2InstanceSP: spState(f64(0), f64(0)),
-		}}
-	err := runWithRates(t, store, cap)
-	require.ErrorContains(t, err, "no commitment rate")
-	require.ErrorContains(t, err, string(pkgladder.LayerConvertibleRI))
-	assert.Nil(t, store.savedRun)
-	assert.Empty(t, store.savedTranches)
+// Existing or expiring commitment on a layer with no rate cannot be
+// converted. Every such layer is reported, in layer order, with no partial
+// conversion for Allocate; layers that hold nothing still need no rate.
+func TestLadderLayerStatesOnDemand_ReportsEveryLayerWithoutARate(t *testing.T) {
+	states := map[pkgladder.LayerType]pkgladder.LayerState{
+		pkgladder.LayerEC2InstanceSP:    spState(f64(4), f64(0)),
+		pkgladder.LayerConvertibleRI:    {Layer: pkgladder.LayerConvertibleRI, ExistingUSDPerHour: f64(3), ExpiringUSDPerHour: f64(0)},
+		pkgladder.LayerComputeSP:        {Layer: pkgladder.LayerComputeSP, ExistingUSDPerHour: f64(0), ExpiringUSDPerHour: f64(1)},
+		pkgladder.LayerAzureSavingsPlan: {Layer: pkgladder.LayerAzureSavingsPlan},
+	}
+	out, missing, err := ladderLayerStatesOnDemand(states, map[pkgladder.LayerType]float64{pkgladder.LayerEC2InstanceSP: 0.5})
+	require.NoError(t, err)
+	assert.Nil(t, out, "no partial conversion reaches Allocate")
+	require.Equal(t, []ladderMissingRate{
+		{layer: pkgladder.LayerComputeSP, existing: f64(0), expiring: f64(1)},
+		{layer: pkgladder.LayerConvertibleRI, existing: f64(3), expiring: f64(0)},
+	}, missing)
 }

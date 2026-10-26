@@ -1,12 +1,16 @@
 package server
 
 import (
-	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/big"
+	"slices"
+
+	"github.com/google/uuid"
 
 	pkgladder "github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 )
 
 // Existing coverage units (#946).
@@ -34,41 +38,69 @@ import (
 //
 // A layer with non-zero existing or expiring commitment and no rate cannot be
 // converted. 1:1 would understate its coverage and over-buy, and no value is a
-// safe upper bound, so the run fails instead of guessing.
+// safe upper bound, so the gap cannot be sized. The run is persisted as a
+// Hold that buys nothing and says why (planMissingRateHold), rather than
+// guessing a rate or failing on every tick (owner decision D3 on #1238).
 
-// errNoRateForExistingCoverage marks a layer whose existing commitment cannot
-// be converted to on-demand-equivalent dollars.
-var errNoRateForExistingCoverage = errors.New("no commitment rate to convert existing commitment dollars to on-demand-equivalent dollars")
+// ladderMissingRate is one layer whose existing or expiring commitment needs a
+// rate the provider did not return. Amounts are commitment USD/hr.
+type ladderMissingRate struct {
+	layer              pkgladder.LayerType
+	existing, expiring *float64
+}
 
 // ladderLayerStatesOnDemand returns a copy of states with ExistingUSDPerHour
 // and ExpiringUSDPerHour converted from commitment dollars to
 // on-demand-equivalent dollars by each layer's rate. The input map and its
 // values are not modified. Nil amounts stay nil for Allocate to reject.
+//
+// When any layer holds commitment but has no rate, it returns a nil map and
+// every such layer (sorted by layer) instead: the gap cannot be sized, and the
+// caller must not hand a partial conversion to Allocate. Invalid provider data
+// (a rate outside (0, 1], a negative or non-finite amount) is an error.
 func ladderLayerStatesOnDemand(
 	states map[pkgladder.LayerType]pkgladder.LayerState,
 	rates map[pkgladder.LayerType]float64,
-) (map[pkgladder.LayerType]pkgladder.LayerState, error) {
+) (map[pkgladder.LayerType]pkgladder.LayerState, []ladderMissingRate, error) {
 	out := make(map[pkgladder.LayerType]pkgladder.LayerState, len(states))
-	for layer, st := range states {
+	var missing []ladderMissingRate
+	for _, layer := range slices.Sorted(maps.Keys(states)) {
+		st := states[layer]
 		rate, hasRate := rates[layer]
-		od, err := layerStateOnDemand(st, rate, hasRate)
+		if !hasRate && holdsCommitment(st) {
+			if err := validateCommitments(st); err != nil {
+				return nil, nil, fmt.Errorf("layer %s: %w", layer, err)
+			}
+			missing = append(missing, ladderMissingRate{layer: layer, existing: st.ExistingUSDPerHour, expiring: st.ExpiringUSDPerHour})
+			continue
+		}
+		od, err := layerStateOnDemand(st, rate)
 		if err != nil {
-			return nil, fmt.Errorf("layer %s: %w", layer, err)
+			return nil, nil, fmt.Errorf("layer %s: %w", layer, err)
 		}
 		out[layer] = od
 	}
-	return out, nil
+	if len(missing) > 0 {
+		return nil, missing, nil
+	}
+	return out, nil, nil
+}
+
+// validateCommitments checks the amounts of a layer that cannot be converted,
+// so bad provider data still fails the run instead of reaching a Hold message.
+func validateCommitments(st pkgladder.LayerState) error {
+	if _, err := commitmentToOnDemand("existing", st.ExistingUSDPerHour, big.NewRat(1, 1), true); err != nil {
+		return err
+	}
+	_, err := commitmentToOnDemand("expiring", st.ExpiringUSDPerHour, big.NewRat(1, 1), false)
+	return err
 }
 
 // layerStateOnDemand converts one layer's existing and expiring commitment.
 // A layer with no commitment (both amounts nil or zero) needs no rate.
-func layerStateOnDemand(st pkgladder.LayerState, rate float64, hasRate bool) (pkgladder.LayerState, error) {
-	if isZeroOrNil(st.ExistingUSDPerHour) && isZeroOrNil(st.ExpiringUSDPerHour) {
+func layerStateOnDemand(st pkgladder.LayerState, rate float64) (pkgladder.LayerState, error) {
+	if !holdsCommitment(st) {
 		return st, nil
-	}
-	if !hasRate {
-		return st, fmt.Errorf("%w (existing %s, expiring %s commitment USD/hr); refusing to assume 1:1",
-			errNoRateForExistingCoverage, fmtFloatPtr(st.ExistingUSDPerHour), fmtFloatPtr(st.ExpiringUSDPerHour))
 	}
 	r, err := commitmentRateRat(rate)
 	if err != nil {
@@ -87,6 +119,12 @@ func layerStateOnDemand(st pkgladder.LayerState, rate float64, hasRate bool) (pk
 }
 
 func isZeroOrNil(v *float64) bool { return v == nil || *v == 0 }
+
+// holdsCommitment reports whether a layer has existing or expiring commitment
+// that must be converted (and so needs a rate).
+func holdsCommitment(st pkgladder.LayerState) bool {
+	return !isZeroOrNil(st.ExistingUSDPerHour) || !isZeroOrNil(st.ExpiringUSDPerHour)
+}
 
 func fmtFloatPtr(v *float64) string {
 	if v == nil {
@@ -128,4 +166,46 @@ func commitmentToOnDemand(name string, commitment *float64, rate *big.Rat, round
 		return nil, fmt.Errorf("%s on-demand-equivalent amount exceeds float64", name)
 	}
 	return &od, nil
+}
+
+// ladderHoldMissingDiscountRate is the plan reason_code of a Hold-only run
+// whose gap could not be sized because existing coverage has no discount rate.
+// A Hold from Allocate (target met, baseline unavailable, ...) has no
+// reason_code.
+const ladderHoldMissingDiscountRate = "missing_discount_rate"
+
+// planMissingRateHold builds the run persisted when existing coverage on one
+// or more layers has no rate (see ladderLayerStatesOnDemand). Allocate never
+// runs, so no rate is guessed and nothing is bought: one Hold per layer says
+// which layer could not be sized and why. Existing and gap stay nil
+// (unmeasured, never 0), so the amend ceiling refuses any raise against this
+// run. The in-flight rows are not needed.
+func (p *ladderRunPlanner) planMissingRateHold() (*config.LadderRunDB, []config.LadderTrancheDB, error) {
+	actions := make([]pkgladder.PlannedAction, 0, len(p.missing))
+	for _, m := range p.missing {
+		actions = append(actions, pkgladder.PlannedAction{
+			Action:      pkgladder.ActionHold,
+			Layer:       m.layer,
+			Rationale:   m.rationale(p.term, p.paymentOpt),
+			DataSources: []string{dataSourceAWSCostExplorer},
+		})
+	}
+	plan := &pkgladder.LadderPlan{
+		Scope:            p.engineCfg.Scope,
+		GeneratedAt:      p.now,
+		TargetUSDPerHour: ladderPlanTarget(p.baseline, p.engineCfg.TargetCoveragePct),
+		Actions:          actions,
+		Baseline:         p.baseline,
+	}
+	p.holds = len(actions)
+	return p.buildRows(uuid.New().String(), plan, &pkgladder.TrancheResult{})
+}
+
+// rationale is the Hold's human message. It must read as "not sized yet", never
+// as "covered", so it is not mistaken for a target-met Hold.
+func (m ladderMissingRate) rationale(term pkgladder.Term, payment pkgladder.PaymentOption) string {
+	return fmt.Sprintf("Can't size this yet because layer %s holds existing coverage (%s commitment USD/hr, %s expiring) "+
+		"and the provider returned no discount rate for it at %s %s, so that coverage cannot be converted to on-demand-equivalent dollars. "+
+		"Nothing is bought this run: the rate is never estimated or assumed 1:1. The ladder sizes the gap once a rate is available.",
+		m.layer, fmtFloatPtr(m.existing), fmtFloatPtr(m.expiring), term, payment)
 }
