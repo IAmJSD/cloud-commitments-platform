@@ -14,16 +14,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMigration_000146_ClearRevokedInFlight covers the data half of issue #316
+// TestMigration_000142_ClearRevokedInFlight covers the data half of issue #316
 // (A04-013): before the fix MarkPurchaseRevoked left revocation_in_flight set,
-// so every completed Azure revocation still reads back as in flight. 000146
+// so every completed Azure revocation still reads back as in flight. 000142
 // clears the flag on revoked rows only; an unrevoked flagged row is the
 // finalize_revocations sweep's work queue and must keep it.
-func TestMigration_000146_ClearRevokedInFlight(t *testing.T) {
+func TestMigration_000142_ClearRevokedInFlight(t *testing.T) {
 	ctx := context.Background()
 	path := getMigrationsPath()
 	pool := testhelpers.RequireMigratedDatabase(ctx, t, path).DB.Pool()
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, previousMigrationVersion(t, 146)))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, previousMigrationVersion(t, 142)))
 
 	revokedAt := time.Now().UTC()
 	rows := []struct {
@@ -32,10 +32,10 @@ func TestMigration_000146_ClearRevokedInFlight(t *testing.T) {
 		revokedAt *time.Time
 		want      bool
 	}{
-		{"ri-146-revoked-flagged", true, &revokedAt, false}, // the stale flag
-		{"ri-146-pending-flagged", true, nil, true},         // sweep must still see it
-		{"ri-146-revoked-clear", false, &revokedAt, false},  // untouched
-		{"ri-146-active", false, nil, false},                // untouched
+		{"ri-142-revoked-flagged", true, &revokedAt, false}, // the stale flag
+		{"ri-142-pending-flagged", true, nil, true},         // sweep must still see it
+		{"ri-142-revoked-clear", false, &revokedAt, false},  // untouched
+		{"ri-142-active", false, nil, false},                // untouched
 	}
 	for _, r := range rows {
 		_, err := pool.Exec(ctx, `
@@ -47,7 +47,7 @@ func TestMigration_000146_ClearRevokedInFlight(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 146))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 142))
 
 	for _, r := range rows {
 		var got bool
@@ -57,9 +57,9 @@ func TestMigration_000146_ClearRevokedInFlight(t *testing.T) {
 	}
 
 	// The down is a deliberate no-op: it must apply and leave the rows alone.
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, previousMigrationVersion(t, 146)))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, previousMigrationVersion(t, 142)))
 	var flagged int
 	require.NoError(t, pool.QueryRow(ctx,
-		`SELECT count(*) FROM purchase_history WHERE revocation_in_flight AND purchase_id LIKE 'ri-146-%'`).Scan(&flagged))
+		`SELECT count(*) FROM purchase_history WHERE revocation_in_flight AND purchase_id LIKE 'ri-142-%'`).Scan(&flagged))
 	assert.Equal(t, 1, flagged, "only the unrevoked in-flight row stays flagged after the rollback")
 }
