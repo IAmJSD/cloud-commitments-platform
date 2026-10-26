@@ -520,7 +520,7 @@ jobs:
 
       - name: Restore Go module cache
         id: go_mod_cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.go_cache.outputs.gomodcache }}
           key: ${{ steps.go_cache.outputs.mod_key }}
@@ -530,7 +530,7 @@ jobs:
 
       - name: Restore Go build cache
         id: go_build_cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.go_cache.outputs.gocache }}
           key: ${{ steps.go_cache.outputs.build_key }}
@@ -1238,7 +1238,7 @@ jobs:
         # never reused. A miss or a cache service error leaves no file, and the
         # scan below runs as usual.
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec_key.outcome == 'success'
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/gosec-results.sarif
           key: ${{ steps.gosec_key.outputs.results_key }}
@@ -1250,7 +1250,7 @@ jobs:
       - name: Restore gosec binary
         id: gosec_bin
         if: always() && steps.checkout.outcome == 'success' && steps.setup_go.outcome == 'success' && steps.gosec_key.outcome == 'success' && steps.gosec_results.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.gosec_key.outputs.bin_dir }}
           key: ${{ steps.gosec_key.outputs.bin_key }}
