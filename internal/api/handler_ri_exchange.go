@@ -1647,9 +1647,19 @@ func parseThresholdParam(params map[string]string) (float64, error) {
 
 // monthlyCostFromConvertibleRI delegates to ricost.MonthlyCostFromConvertibleRI,
 // the single implementation of the convertible RI monthly cost formula shared
-// with internal/server.
+// with internal/server. Its error wraps ricost.ErrNonPositiveDuration or
+// ricost.ErrNoPricing, and callers must exclude the RI.
 func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
 	return ricost.MonthlyCostFromConvertibleRI(ri)
+}
+
+// excludedRIReason is the user-facing reason for an RI left out of reshape
+// analysis because monthlyCostFromConvertibleRI returned err.
+func excludedRIReason(err error) string {
+	if errors.Is(err, ricost.ErrNoPricing) {
+		return "AWS returned no pricing (fixed, usage and recurring charges total zero or less), so its monthly cost cannot be computed"
+	}
+	return "AWS returned no term length (duration), so its monthly cost cannot be computed"
 }
 
 // convertToExchangeTypes converts provider-specific types to the exchange package types.
@@ -1663,7 +1673,7 @@ func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recomme
 		monthlyCost, err := monthlyCostFromConvertibleRI(inst)
 		if err != nil {
 			logging.Warnf("convertToExchangeTypes: excluding RI from reshape: %v", err)
-			excluded = append(excluded, ExcludedRI{RIID: inst.ReservedInstanceID, Reason: "AWS returned no term length (duration), so its monthly cost cannot be computed"})
+			excluded = append(excluded, ExcludedRI{RIID: inst.ReservedInstanceID, Reason: excludedRIReason(err)})
 			continue
 		}
 		riInfos = append(riInfos, exchange.RIInfo{

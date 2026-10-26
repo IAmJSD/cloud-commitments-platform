@@ -10,7 +10,8 @@ import (
 
 // TestMonthlyCostFromConvertibleRI pins the exact float64 results the
 // duplicated copies in internal/api and internal/server returned before they
-// were merged into this package (issue #337). The comparisons are exact on
+// were merged into this package (issue #337), except that an RI with no
+// positive price is now an error (issue #1188). The comparisons are exact on
 // purpose: moving the formula here must not change a single bit of any
 // dollar figure.
 func TestMonthlyCostFromConvertibleRI(t *testing.T) {
@@ -20,6 +21,7 @@ func TestMonthlyCostFromConvertibleRI(t *testing.T) {
 		ri      ec2svc.ConvertibleRI
 		want    float64
 		wantErr string
+		wantIs  error // sentinel the error must wrap; ErrNonPositiveDuration when nil
 	}{
 		{name: "1y all upfront", ri: ec2svc.ConvertibleRI{ReservedInstanceID: "ri-a", FixedPrice: 8760, Duration: oneYear}, want: 730},
 		{name: "3y all upfront", ri: ec2svc.ConvertibleRI{ReservedInstanceID: "ri-b", FixedPrice: 3000, Duration: threeYears}, want: 83.33333333333333},
@@ -27,9 +29,12 @@ func TestMonthlyCostFromConvertibleRI(t *testing.T) {
 		{name: "1y partial upfront", ri: ec2svc.ConvertibleRI{ReservedInstanceID: "ri-d", FixedPrice: 438, RecurringHourlyAmount: 0.025, Duration: oneYear}, want: 54.75000000000001},
 		{name: "usage price only", ri: ec2svc.ConvertibleRI{ReservedInstanceID: "ri-e", UsagePrice: 0.04, Duration: oneYear}, want: 29.2},
 		{name: "all components 3y", ri: ec2svc.ConvertibleRI{ReservedInstanceID: "ri-f", FixedPrice: 1234.56, UsagePrice: 0.011, RecurringHourlyAmount: 0.0207, Duration: threeYears}, want: 57.43433333333333},
-		// Zero prices with a valid term currently compute to 0 without an
-		// error; this pins today's behavior rather than endorsing it.
-		{name: "zero prices", ri: ec2svc.ConvertibleRI{ReservedInstanceID: "ri-g", Duration: oneYear}, want: 0},
+		// Zero prices with a valid term mean AWS returned no pricing, not a
+		// free RI (issue #1188).
+		{name: "zero prices", ri: ec2svc.ConvertibleRI{ReservedInstanceID: "ri-g", Duration: oneYear},
+			wantErr: "convertible RI ri-g has no positive price (fixed 0, usage 0, recurring hourly 0): monthly cost is not computable", wantIs: ErrNoPricing},
+		{name: "negative price sum", ri: ec2svc.ConvertibleRI{ReservedInstanceID: "ri-l", FixedPrice: -876, Duration: oneYear},
+			wantErr: "convertible RI ri-l has no positive price (fixed -876, usage 0, recurring hourly 0): monthly cost is not computable", wantIs: ErrNoPricing},
 		{name: "one second term", ri: ec2svc.ConvertibleRI{ReservedInstanceID: "ri-h", FixedPrice: 1, Duration: 1}, want: 2628000},
 		{name: "zero duration", ri: ec2svc.ConvertibleRI{ReservedInstanceID: "ri-i", FixedPrice: 100},
 			wantErr: "convertible RI ri-i has non-positive duration 0: monthly cost is not computable"},
@@ -43,6 +48,11 @@ func TestMonthlyCostFromConvertibleRI(t *testing.T) {
 			got, err := MonthlyCostFromConvertibleRI(tc.ri)
 			if tc.wantErr != "" {
 				require.EqualError(t, err, tc.wantErr)
+				wantIs := tc.wantIs
+				if wantIs == nil {
+					wantIs = ErrNonPositiveDuration
+				}
+				assert.ErrorIs(t, err, wantIs)
 				assert.Zero(t, got)
 				return
 			}

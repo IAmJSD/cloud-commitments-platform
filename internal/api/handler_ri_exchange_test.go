@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	azurecompute "github.com/LeanerCloud/cloud-commitments-go/providers/azure/services/compute"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/ricost"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/smithy-go"
@@ -974,7 +976,7 @@ func TestGetReshapeRecommendations_EmptyRegionUsesConfigRegion(t *testing.T) {
 		reshapeEC2Factory: func(_ aws.Config) reshapeEC2Client {
 			return &fakeReshapeEC2Stub{
 				instances: []ec2svc.ConvertibleRI{
-					{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, CurrencyCode: "USD", Duration: 31536000},
+					{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, CurrencyCode: "USD", Duration: 31536000, FixedPrice: 876},
 				},
 			}
 		},
@@ -1059,8 +1061,11 @@ func TestGetReshapeRecommendations_AlternativeCurrencyFromRIs(t *testing.T) {
 				config: mockStore,
 				auth:   &mockAuthForExchange{},
 				reshapeEC2Factory: func(_ aws.Config) reshapeEC2Client {
+					// FixedPrice 100 over 1y is ~8.33/month; NF 8 x 8.33 stays
+					// under the c6i.large rec's NF 4 x 40, so the dollar-units
+					// gate keeps the alternative this test is about.
 					return &fakeReshapeEC2Stub{instances: []ec2svc.ConvertibleRI{
-						{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, CurrencyCode: tc.riCurrency, Duration: 31536000},
+						{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, CurrencyCode: tc.riCurrency, Duration: 31536000, FixedPrice: 100},
 					}}
 				},
 				reshapeRecsFactory: func(_ aws.Config) reshapeRecsClient {
@@ -2813,4 +2818,102 @@ func TestMonthlyCostFromConvertibleRI_NonPositiveDurationErrors(t *testing.T) {
 	cost, err := monthlyCostFromConvertibleRI(ec2svc.ConvertibleRI{FixedPrice: 8760, Duration: 31536000})
 	require.NoError(t, err)
 	assert.InDelta(t, 730.0, cost, 1e-6)
+}
+
+// A convertible RI whose FixedPrice, UsagePrice and RecurringHourlyAmount are
+// all zero has no pricing data; it is not free. MonthlyCost=0 would make
+// reshape's pricing gate pass every alternative and score the RI as neutral,
+// so it must be excluded (issue #1188). A No Upfront RI (FixedPrice 0 with an
+// hourly charge) is real pricing and must be kept.
+func TestConvertToExchangeTypes_ExcludesRIWithoutPricing(t *testing.T) {
+	const oneYear = 31536000
+	instances := []ec2svc.ConvertibleRI{
+		{ReservedInstanceID: "ri-unpriced", InstanceType: "m5.large", InstanceCount: 1, Duration: oneYear},
+		{ReservedInstanceID: "ri-no-upfront", InstanceType: "m5.large", InstanceCount: 1, RecurringHourlyAmount: 0.05, Duration: oneYear},
+		{ReservedInstanceID: "ri-usage-only", InstanceType: "m5.large", InstanceCount: 1, UsagePrice: 0.04, Duration: oneYear},
+		{ReservedInstanceID: "ri-all-upfront", InstanceType: "m5.large", InstanceCount: 1, FixedPrice: 876, Duration: oneYear},
+		{ReservedInstanceID: "ri-negative", InstanceType: "c5.large", InstanceCount: 1, FixedPrice: -876, Duration: oneYear},
+	}
+
+	riInfos, _, excluded := convertToExchangeTypes(instances, nil)
+
+	require.Len(t, riInfos, 3)
+	want := map[string]float64{"ri-no-upfront": 0.05 * 730, "ri-usage-only": 0.04 * 730, "ri-all-upfront": 876.0 / 8760 * 730}
+	for _, ri := range riInfos {
+		cost, ok := want[ri.ID]
+		require.True(t, ok, "unexpected RI %s kept", ri.ID)
+		assert.InDelta(t, cost, ri.MonthlyCost, 1e-6, ri.ID)
+		assert.Greater(t, ri.MonthlyCost, 0.0, ri.ID)
+	}
+	require.Len(t, excluded, 2)
+	assert.Equal(t, "ri-unpriced", excluded[0].RIID)
+	assert.Equal(t, "ri-negative", excluded[1].RIID)
+	for _, e := range excluded {
+		assert.Contains(t, e.Reason, "no pricing")
+		assert.NotContains(t, e.Reason, "term length")
+	}
+}
+
+// End to end through the reshape handler: an unpriced RI is reported in
+// excluded_ris with the pricing reason and gets no recommendation, while a
+// priced RI in the same account still does.
+func TestGetReshapeRecommendations_ReportsUnpricedRIs(t *testing.T) {
+	mockStore := &MockConfigStore{}
+	mockStore.On("ListStoredRecommendations", mock.Anything, mock.Anything).
+		Return([]config.RecommendationRecord(nil), nil)
+	h := &Handler{
+		config: mockStore,
+		auth:   &mockAuthForExchange{},
+		reshapeEC2Factory: func(_ aws.Config) reshapeEC2Client {
+			return &fakeReshapeEC2Stub{instances: []ec2svc.ConvertibleRI{
+				{ReservedInstanceID: "ri-unpriced", InstanceType: "m5.xlarge", InstanceCount: 1, Duration: 31536000, CurrencyCode: "USD"},
+				{ReservedInstanceID: "ri-ok", InstanceType: "m5.xlarge", InstanceCount: 1, FixedPrice: 8760, Duration: 31536000, CurrencyCode: "USD"},
+			}}
+		},
+		reshapeRecsFactory: func(_ aws.Config) reshapeRecsClient {
+			return &fakeReshapeRecsStub{utilization: []recommendations.RIUtilization{
+				{ReservedInstanceID: "ri-unpriced", UtilizationPercent: 50.0},
+				{ReservedInstanceID: "ri-ok", UtilizationPercent: 50.0},
+			}}
+		},
+		reshapeAccountResolver: func(_ context.Context) (string, error) { return "", nil },
+	}
+	h.awsCfgOnce.Do(func() { h.awsCfg = aws.Config{Region: "us-east-1"} })
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer test-token"},
+		QueryStringParameters: map[string]string{"lookback_days": "30", "threshold": "95.0"},
+	}
+	out, err := h.getReshapeRecommendations(context.Background(), req)
+	require.NoError(t, err)
+	resp, ok := out.(*ReshapeRecommendationsResponse)
+	require.True(t, ok)
+
+	require.Len(t, resp.ExcludedRIs, 1)
+	assert.Equal(t, "ri-unpriced", resp.ExcludedRIs[0].RIID)
+	assert.Contains(t, resp.ExcludedRIs[0].Reason, "no pricing")
+	require.NotEmpty(t, resp.Recommendations)
+	for _, r := range resp.Recommendations {
+		assert.NotEqual(t, "ri-unpriced", r.SourceRIID)
+	}
+}
+
+func TestMonthlyCostFromConvertibleRI_NoPositivePriceErrors(t *testing.T) {
+	for name, ri := range map[string]ec2svc.ConvertibleRI{
+		"all zero":     {ReservedInstanceID: "ri-x", Duration: 31536000},
+		"negative sum": {ReservedInstanceID: "ri-x", FixedPrice: -876, Duration: 31536000},
+		"NaN":          {ReservedInstanceID: "ri-x", UsagePrice: math.NaN(), Duration: 31536000},
+	} {
+		cost, err := monthlyCostFromConvertibleRI(ri)
+		require.Error(t, err, name)
+		assert.Zero(t, cost, name)
+		assert.Contains(t, err.Error(), "ri-x", name)
+		assert.ErrorIs(t, err, ricost.ErrNoPricing, name)
+		assert.NotErrorIs(t, err, ricost.ErrNonPositiveDuration, name)
+	}
+	_, err := monthlyCostFromConvertibleRI(ec2svc.ConvertibleRI{ReservedInstanceID: "ri-y"})
+	assert.ErrorIs(t, err, ricost.ErrNonPositiveDuration, "duration is checked before pricing")
+	cost, err := monthlyCostFromConvertibleRI(ec2svc.ConvertibleRI{RecurringHourlyAmount: 0.05, Duration: 31536000})
+	require.NoError(t, err)
+	assert.InDelta(t, 36.5, cost, 1e-6)
 }

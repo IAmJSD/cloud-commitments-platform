@@ -62,6 +62,7 @@ func newFourEyesExchangeFixture(globalCfg *config.GlobalConfig, globalCfgErr err
 				ProductDescription:  "Linux/UNIX",
 				InstanceTenancy:     "default",
 				Scope:               "Region",
+				FixedPrice:          876, // priced: an unpriced RI is excluded (issue #1188)
 				Duration:            31536000,
 			}}, nil
 		},
