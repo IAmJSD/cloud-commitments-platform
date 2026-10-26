@@ -172,10 +172,6 @@ func (m *mockAuthStoreForHealth) UpdateAPIKey(ctx context.Context, key *auth.Use
 	return nil
 }
 
-func (m *mockAuthStoreForHealth) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error {
-	return nil
-}
-
 func (m *mockAuthStoreForHealth) RecordAPIKeyUsage(ctx context.Context, keyID string, delta int64) error {
 	return nil
 }
@@ -368,6 +364,25 @@ func TestCheckConfigStore(t *testing.T) {
 			},
 			expectedStatus: "pending",
 		},
+		{
+			// #339: reinitializeAfterConnect set Config, then failed, and
+			// ensureDB closed the pool and cleared DB without connecting.
+			name: "config store left over a failed lazy init",
+			setupApp: func(app *Application) {
+				app.Config = &mockConfigStoreForHealth{}
+				app.dbConfig = &databaseConfigStub{}
+			},
+			expectedStatus: "unhealthy",
+		},
+		{
+			name: "config store after a completed lazy init",
+			setupApp: func(app *Application) {
+				app.Config = &mockConfigStoreForHealth{}
+				app.dbConfig = &databaseConfigStub{}
+				app.dbConnected = true
+			},
+			expectedStatus: "healthy",
+		},
 	}
 
 	for _, tt := range tests {
@@ -378,7 +393,7 @@ func TestCheckConfigStore(t *testing.T) {
 				tt.setupApp(app)
 			}
 
-			result := app.checkConfigStore(ctx, app.Config, app.DB)
+			result := app.checkConfigStore(ctx, app.Config, app.DB, app.dbConnected)
 			testutil.AssertEqual(t, tt.expectedStatus, result.Status)
 		})
 	}
@@ -445,9 +460,9 @@ func TestCheckMigrations_Failed(t *testing.T) {
 	app.recordMigrationResult(errors.New("dirty at 27"))
 	got := app.checkMigrations()
 	testutil.AssertEqual(t, "failed", got.Status)
-	if got.Message == "" || got.Message != "dirty at 27" {
-		t.Fatalf("expected message to contain the error; got %q", got.Message)
-	}
+	// The raw error stays in the server log; /health is public (#111).
+	testutil.AssertEqual(t, "Database migrations failed", got.Message)
+	testutil.AssertEqual(t, healthReasonMigrationFailed, got.Reason)
 }
 
 func TestCheckMigrations_Healthy(t *testing.T) {

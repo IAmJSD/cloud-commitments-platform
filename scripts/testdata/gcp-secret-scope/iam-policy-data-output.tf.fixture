@@ -1,0 +1,16 @@
+# Fixture (issue #150): a `google_iam_policy` data source on its own, exported as
+# a module output. Its policy_data can be applied by a scope-wide policy
+# resource in whichever configuration consumes the output, which the guard
+# cannot follow. The role comes from a variable with no in-tree default.
+# Must exit 2.
+
+data "google_iam_policy" "workload" {
+  binding {
+    role    = var.workload_role
+    members = ["serviceAccount:workload@example.iam.gserviceaccount.com"]
+  }
+}
+
+output "workload_policy_data" {
+  value = data.google_iam_policy.workload.policy_data
+}

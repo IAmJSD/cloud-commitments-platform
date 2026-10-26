@@ -18,7 +18,7 @@ terraform {
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = "~> 5.0"
+      version = "~> 5.45"
     }
   }
 }
@@ -452,11 +452,43 @@ resource "google_cloud_run_service_iam_member" "scheduler_ri_exchange_invoker" {
 # Runtime IAM: CUDly application cloud API access
 # ==============================================
 
-# Compute Viewer: grants compute.commitments.list and compute.machineTypes.list
-# needed for listing CUDs and available instance types.
-resource "google_project_iam_member" "compute_viewer" {
+# Compute read access: custom project role cudlyComputeReader holding only the
+# reads the pinned cloud-commitments-go GCP provider makes. Replaces
+# roles/compute.viewer, which read every Compute Engine resource in the project,
+# instance metadata and startup scripts included (issue #323). Each permission:
+#   compute.regions.list          Regions.List (recommendations, GetRegions)
+#   compute.machineTypes.list     MachineTypes.List (purchase validation)
+#   compute.commitments.list      RegionCommitments.List (existing CUDs)
+#   compute.commitments.get       RegionCommitments.Get (adopting a re-driven
+#                                 purchase whose insert hit a 409)
+#   compute.regionOperations.get  the insert's op.Wait() polls the region
+#                                 operation; without it a successful purchase
+#                                 is reported as failed
+#   resourcemanager.projects.get  ValidateCredentials' GetProject, and the
+#                                 ambient (no registered GCP account) default
+#                                 project lookup, which lists only projects the
+#                                 caller can get
+# Like the custom roles below, creating it needs the deployer SA's
+# roles/iam.roleAdmin from terraform/environments/gcp/ci-cd-permissions.
+resource "google_project_iam_custom_role" "cudly_compute_reader" {
+  project     = var.project_id
+  role_id     = "cudlyComputeReader"
+  title       = "CUDly Compute Reader"
+  description = "Minimum Compute Engine reads for CUDly to list regions, machine types and committed use discounts and confirm purchases."
+  permissions = [
+    "compute.commitments.get",
+    "compute.commitments.list",
+    "compute.machineTypes.list",
+    "compute.regionOperations.get",
+    "compute.regions.list",
+    "resourcemanager.projects.get",
+  ]
+  stage = "GA"
+}
+
+resource "google_project_iam_member" "compute_reader" {
   project = var.project_id
-  role    = "roles/compute.viewer"
+  role    = google_project_iam_custom_role.cudly_compute_reader.id
   member  = "serviceAccount:${google_service_account.cloud_run.email}"
 }
 
@@ -464,7 +496,7 @@ resource "google_project_iam_member" "compute_viewer" {
 # granting only compute.commitments.{create,update}. Replaces the original
 # roles/compute.admin grant (pre-eaa84c259), which conferred full VM/network/
 # disk/firewall control — a Cloud Run compromise could then rewrite the
-# entire project. Read-side permissions come from the roles/compute.viewer
+# entire project. Read-side permissions come from the cudlyComputeReader
 # grant above.
 #
 # Requires the deployer SA to hold iam.roles.{get,create,update,delete} —

@@ -55,9 +55,7 @@ func TestIntegration_PurchaseExecution_CreatedBySystem(t *testing.T) {
 	got, err = store.GetExecutionsByStatuses(ctx, []string{"pending"}, 100)
 	assertFlag("GetExecutionsByStatuses", got, err)
 	require.NoError(t, store.WithTx(ctx, func(tx pgx.Tx) error {
-		rows, txErr := store.GetPendingExecutionsTx(ctx, tx)
-		assertFlag("GetPendingExecutionsTx", rows, txErr)
-		rows, txErr = store.ListExecutionsForPlanStepTx(ctx, tx, plan.ID, 1)
+		rows, txErr := store.ListExecutionsForPlanStepTx(ctx, tx, plan.ID, 1)
 		assertFlag("ListExecutionsForPlanStepTx", rows, txErr)
 		_, txErr = store.ListPlanCommittedTx(ctx, tx, plan.ID)
 		require.NoError(t, txErr, "ListPlanCommittedTx")

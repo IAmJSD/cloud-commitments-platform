@@ -629,10 +629,11 @@ func TestService_ConfirmPasswordReset(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("constant-time mismatch rejects token even when DB row exists", func(t *testing.T) {
-		// The DB returned a user but the stored reset-token hash does not match
-		// the hash we derived from the supplied token string. The constant-time
-		// guard must reject the request to avoid timing-based disclosure.
+	t.Run("stored hash mismatch rejects token even when DB row exists", func(t *testing.T) {
+		// The store returned a user whose reset-token hash does not match the
+		// hash we derived from the supplied token string, which a correct store
+		// never does (it selects by that hash). The post-fetch store-integrity
+		// check must still reject it (issue #313).
 		mockStore := new(MockStore)
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
@@ -894,11 +895,11 @@ func TestService_ResetTokenStatus(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("constant-time mismatch returns used even if DB row exists", func(t *testing.T) {
-		// The DB returned a row but the stored token hash does not match the
-		// hash derived from the supplied token. The constant-time check must
-		// treat this as a missing/consumed token rather than branching on
-		// expiry state, to avoid leaking information through timing.
+	t.Run("stored hash mismatch returns used even if DB row exists", func(t *testing.T) {
+		// The store returned a row whose token hash does not match the hash
+		// derived from the supplied token, which a correct store never does.
+		// The post-fetch store-integrity check must treat this as a
+		// missing/consumed token rather than reporting the row's expiry state.
 		mockStore := new(MockStore)
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)

@@ -1,6 +1,7 @@
 # Fixture: a literal role inside a `google_iam_policy` data block feeding
 # google_project_iam_policy. The data block is not a scope-wide IAM resource, so
-# a scanner keyed on resource type misses it. Must exit 1.
+# a scanner keyed on resource type misses it. Since issue #150 the guard refuses
+# the authoritative-policy shape outright rather than analyzing it. Must exit 2.
 
 data "google_iam_policy" "project" {
   binding {

@@ -632,6 +632,8 @@ func TestService_UpdateUser(t *testing.T) {
 		}
 
 		mockStore.On("GetUserByID", ctx, "user-123").Return(existingUser, nil).Once()
+		// Two view-only groups: a consistent combination (issue #78).
+		stubViewOnlyGroups(ctx, mockStore, "group-2", "group-3")
 		mockStore.On("UpdateUserAdminFields", ctx, mock.AnythingOfType("*auth.User"), mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
 		req := UpdateUserRequest{
@@ -1044,6 +1046,8 @@ func TestService_CreateUser_EdgeCases(t *testing.T) {
 		service := createTestService(mockStore, mockEmail)
 
 		mockStore.On("GetUserByEmail", ctx, "newuser@example.com").Return(nil, nil).Once()
+		// Two view-only groups: a consistent combination (issue #78).
+		stubViewOnlyGroups(ctx, mockStore, "group-1", "group-2")
 		mockStore.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil).Once()
 
 		req := CreateUserRequest{

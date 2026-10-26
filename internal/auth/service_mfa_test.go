@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -349,6 +350,33 @@ func TestMFADisable_WithRecoveryCode(t *testing.T) {
 
 	err = service.MFADisable(ctx, user.ID, "SecurePass@123", plaintextCode)
 	require.NoError(t, err)
+}
+
+// Issue #568 (c): spending a recovery code that is not the last one shifts the
+// user's slice in place, so DisableMFA must still be guarded by the codes as
+// read, not by the shifted slice.
+func TestMFADisable_WithRecoveryCodePassesCodesAsRead(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	service := createTestService(mockStore, new(MockEmailSender))
+
+	user := createTestUser(t, "SecurePass@123")
+	user.MFAEnabled = true
+	user.MFASecret = "JBSWY3DPEHPK3PXP"
+	codes := make([]string, 0, 3)
+	for _, plaintext := range []string{"ABCD-2345", "EFGH-6789", "JKLM-2345"} {
+		hash, err := service.hashRecoveryCode(plaintext)
+		require.NoError(t, err)
+		codes = append(codes, hash)
+	}
+	user.MFARecoveryCodes = codes
+	asRead := slices.Clone(codes)
+
+	mockStore.On("GetUserByID", ctx, user.ID).Return(user, nil)
+	mockStore.On("DisableMFA", ctx, user.ID, user.MFASecret, asRead).Return(nil).Once()
+
+	require.NoError(t, service.MFADisable(ctx, user.ID, "SecurePass@123", "ABCD-2345"))
+	mockStore.AssertExpectations(t)
 }
 
 func TestMFADisable_WrongPassword(t *testing.T) {

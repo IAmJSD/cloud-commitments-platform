@@ -358,3 +358,37 @@ func TestApplySuppressions_UnreadableRecDetailsMatchEveryRow(t *testing.T) {
 	require.Len(t, out, 1)
 	assert.Equal(t, 3, out[0].Count)
 }
+
+// TestApplySuppressions_EC2SlugSpellings is the issue #1412 regression: AWS
+// EC2 recs and suppressions can be stored as "ec2" or "compute", and a
+// suppression hides the rec whichever spelling each uses. Azure and GCP
+// "compute" stay distinct from "ec2".
+func TestApplySuppressions_EC2SlugSpellings(t *testing.T) {
+	cases := []struct {
+		name, provider, recService, supService string
+		wantCount                              int
+	}{
+		{"aws compute sup hides ec2 rec", "aws", "ec2", "compute", 2},
+		{"aws ec2 sup hides compute rec", "aws", "compute", "ec2", 2},
+		{"aws same slug compute", "aws", "compute", "compute", 2},
+		{"aws unrelated service not hidden", "aws", "ec2", "rds", 5},
+		{"azure compute sup hides compute rec", "azure", "compute", "compute", 2},
+		{"azure ec2 sup does not hide compute rec", "azure", "compute", "ec2", 5},
+		{"gcp compute sup does not hide ec2 rec", "gcp", "ec2", "compute", 5},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &mockSuppressionStore{
+				recs: []config.RecommendationRecord{{ID: "r1", Provider: tc.provider, Service: tc.recService,
+					Region: "r", ResourceType: "m5.large", Count: 5}},
+				sups: []config.PurchaseSuppression{{ExecutionID: "e1", Provider: tc.provider, Service: tc.supService,
+					Region: "r", ResourceType: "m5.large", SuppressedCount: 3, ExpiresAt: time.Now().Add(time.Hour)}},
+			}
+			s := &Scheduler{config: store}
+			recs, err := s.ListRecommendations(context.Background(), config.RecommendationFilter{})
+			require.NoError(t, err)
+			require.Len(t, recs, 1)
+			assert.Equal(t, tc.wantCount, recs[0].Count)
+		})
+	}
+}

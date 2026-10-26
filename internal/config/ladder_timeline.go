@@ -7,8 +7,10 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 )
 
-const LadderTimelinePageSize = 100
-
+// LadderTimelineCursor is an optional (created_at, id) lower bound on the rows
+// a timeline read returns. Reads never issue one: each returns the whole scope
+// from one snapshot (#668), and the bound is only honored for a client that
+// still follows a next_cursor from the earlier paginated API.
 type LadderTimelineCursor struct {
 	CreatedAt time.Time `json:"created_at"`
 	ID        string    `json:"id"`
@@ -35,7 +37,6 @@ type LadderTimelineEvent struct {
 
 type LadderTimelinePage struct {
 	Events       []LadderTimelineEvent `json:"events"`
-	NextCursor   *LadderTimelineCursor `json:"next_cursor,omitempty"`
 	TotalUSDHr   string                `json:"total_usd_hr"`
 	TotalODUSDHr string                `json:"total_od_usd_hr"`
 	TotalCount   int64                 `json:"total_count"`
@@ -63,9 +64,8 @@ type LadderTimelineAction struct {
 }
 
 type LadderTimelineRunPage struct {
-	Runs       []LadderTimelineRun   `json:"runs"`
-	NextCursor *LadderTimelineCursor `json:"next_cursor,omitempty"`
-	TotalCount int64                 `json:"total_count"`
+	Runs       []LadderTimelineRun `json:"runs"`
+	TotalCount int64               `json:"total_count"`
 }
 
 type LadderTimelineStore interface {

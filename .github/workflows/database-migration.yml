@@ -406,9 +406,13 @@ jobs:
           # pgx5://, not postgresql://: migrate is installed with -tags 'pgx5'
           # above and golang-migrate dispatches on the URL scheme (issue #1849).
           DB_URL="pgx5://cudly@${DB_ENDPOINT}:5432/cudly?sslmode=require"
+          # Log only. migrate prints the version on stderr, so 2>&1 is needed
+          # to show it, but on failure the same capture holds a multi-line
+          # error. Nothing reads the value, so it is not written to
+          # $GITHUB_ENV, where such text could fail the step or set other
+          # variables for later steps (issue #349).
           VERSION=$(migrate -path "$MIGRATIONS_PATH" -database "$DB_URL" version 2>&1 || echo "unknown")
           echo "Current migration version: $VERSION"
-          echo "MIGRATION_VERSION=$VERSION" >> "$GITHUB_ENV"
 
   # Run GCP migrations
   migrate-gcp:
