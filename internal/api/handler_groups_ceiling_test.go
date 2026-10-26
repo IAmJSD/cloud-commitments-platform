@@ -138,3 +138,36 @@ func TestUpdateGroup_AdminAPIKeyActorIsSentinel(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, updated, result)
 }
+
+// TestUpdateGroup_ContradictoryMembersMaps400 pins issue #1409's wiring: a
+// group update the auth service refuses because it would contradict members'
+// group combinations is a 400 with the explanation, not a 500.
+func TestUpdateGroup_ContradictoryMembersMaps400(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	session := &Session{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(session, nil)
+	mockAuth.grantAdmin()
+
+	refusal := fmt.Errorf("%w: group %q would grant write permissions, but 2 of its members also belong to a view-only group; remove them from one of the two groups first",
+		auth.ErrContradictoryGroups, "Team")
+	mockAuth.On("UpdateGroupAPI", ctx, session.UserID, ceilingGroupID, mock.Anything).
+		Return(nil, refusal).Once()
+
+	h := &Handler{auth: mockAuth}
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"permissions":[{"action":"create","resource":"plans"}]}`,
+	}
+
+	result, err := h.updateGroup(ctx, req, ceilingGroupID)
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "a contradictory group update must map to a client error, not a 500")
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, err.Error(), "2 of its members")
+}
