@@ -126,10 +126,12 @@ paths:
       parameters:
         - name: provider
           in: query
-          description: Filter by cloud provider (aws, azure, gcp)
+          description: >
+            Filter by cloud provider. "all" or no value means every provider.
+            Any other value is a 400.
           schema:
             type: string
-            enum: [aws, azure, gcp]
+            enum: [aws, azure, gcp, all]
         - name: account_ids
           in: query
           description: >
@@ -3887,12 +3889,14 @@ paths:
       parameters:
         - name: provider
           in: query
-          description: Only return accounts of this provider (aws, azure or gcp).
+          description: >
+            Only return accounts of this provider (aws, azure or gcp). "all"
+            means every provider. Any other value is a 400.
           schema:
             type: string
         - name: enabled
           in: query
-          description: Only return enabled (true) or disabled (false) accounts. Other values are ignored.
+          description: Only return enabled (true) or disabled (false) accounts. Any other value is a 400.
           schema:
             type: boolean
         - name: search
@@ -3909,6 +3913,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/AccountSummary'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -3925,12 +3931,14 @@ paths:
       parameters:
         - name: provider
           in: query
-          description: Only return accounts of this provider (aws, azure or gcp).
+          description: >
+            Only return accounts of this provider (aws, azure or gcp). "all"
+            means every provider. Any other value is a 400.
           schema:
             type: string
         - name: enabled
           in: query
-          description: Only return enabled (true) or disabled (false) accounts. Other values are ignored.
+          description: Only return enabled (true) or disabled (false) accounts. Any other value is a 400.
           schema:
             type: boolean
         - name: search
@@ -3947,6 +3955,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/CloudAccount'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -4628,7 +4638,9 @@ paths:
             type: string
         - name: provider
           in: query
-          description: Exact, case-sensitive provider match. Not validated.
+          description: >
+            Only return commitments of this provider (aws, azure or gcp).
+            "all" means every provider. Any other value is a 400.
           schema:
             type: string
       responses:
@@ -4638,6 +4650,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/InventoryCommitmentsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -4663,8 +4677,9 @@ paths:
         - name: provider
           in: query
           description: >
-            Exact provider match. Not validated. Other providers are still
-            listed, with no services.
+            Only fill in this provider (aws, azure or gcp); the other
+            providers are still listed, with no services. "all" means every
+            provider. Any other value is a 400.
           schema:
             type: string
       responses:
@@ -4674,6 +4689,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CoverageBreakdownResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
