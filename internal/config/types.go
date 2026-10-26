@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 )
 
@@ -762,14 +763,14 @@ type SuppressionVariant struct {
 
 // awsLegacyServiceSlugs maps the AWS service slugs that rec rows persisted
 // before slug normalisation still carry to their canonical spelling.
-// memorydb has no canonical slug and is deliberately absent. Mirrors the legacy
-// entries of mapServiceSlug in internal/purchase/execution.go.
+// memorydb has no canonical slug and is deliberately absent. Keyed and valued by the
+// library constants; a purchase test checks it against mapServiceSlug.
 var awsLegacyServiceSlugs = map[string]string{
-	"ec2":         "compute",
-	"rds":         "relational-db",
-	"elasticache": "cache",
-	"opensearch":  "search",
-	"redshift":    "data-warehouse",
+	string(common.ServiceEC2):         string(common.ServiceCompute),
+	string(common.ServiceRDS):         string(common.ServiceRelationalDB),
+	string(common.ServiceElastiCache): string(common.ServiceCache),
+	string(common.ServiceOpenSearch):  string(common.ServiceSearch),
+	string(common.ServiceRedshift):    string(common.ServiceDataWarehouse),
 }
 
 // CanonicalSuppressionService maps legacy AWS service slugs to their canonical

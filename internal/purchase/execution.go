@@ -1299,17 +1299,24 @@ func mapServiceSlug(service string) (common.ServiceType, bool) {
 		"cache":          common.ServiceCache,
 		"search":         common.ServiceSearch,
 		"data-warehouse": common.ServiceDataWarehouse,
-		// Legacy AWS-only slugs. A new legacy alias must also be added to
-		// config.awsLegacyServiceSlugs, else suppressions miss it (#1420).
-		"ec2":         common.ServiceEC2,
-		"rds":         common.ServiceRDS,
-		"elasticache": common.ServiceElastiCache,
-		"opensearch":  common.ServiceOpenSearch,
-		"redshift":    common.ServiceRedshift,
-		"memorydb":    common.ServiceMemoryDB,
 	}
-	svc, ok := slugs[service]
+	if svc, ok := slugs[service]; ok {
+		return svc, true
+	}
+	svc, ok := legacyAWSServiceSlugs[service]
 	return svc, ok
+}
+
+// legacyAWSServiceSlugs are the AWS-only slugs. A new alias must also be added
+// to config.awsLegacyServiceSlugs, else suppressions miss it (#1420); a test
+// ranges over this map to enforce that.
+var legacyAWSServiceSlugs = map[string]common.ServiceType{
+	"ec2":         common.ServiceEC2,
+	"rds":         common.ServiceRDS,
+	"elasticache": common.ServiceElastiCache,
+	"opensearch":  common.ServiceOpenSearch,
+	"redshift":    common.ServiceRedshift,
+	"memorydb":    common.ServiceMemoryDB,
 }
 
 // mapSavingsPlansSlug normalizes both the canonical hyphenated SP slugs and
