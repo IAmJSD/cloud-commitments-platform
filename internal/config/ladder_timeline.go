@@ -53,7 +53,11 @@ type LadderTimelineRun struct {
 	ID                string                 `json:"id"`
 	ConfigID          string                 `json:"config_id"`
 	TotalHourlyCommit string                 `json:"total_hourly_commit"`
-	Status            ladder.RunStatus       `json:"status"`
+	// ReasonCode is the plan's reason_code, set only when the run could not
+	// size its gap (for example "missing_discount_rate"). An ordinary run,
+	// including a target-met Hold, has none.
+	ReasonCode string           `json:"reason_code,omitempty"`
+	Status     ladder.RunStatus `json:"status"`
 }
 
 type LadderTimelineAction struct {
