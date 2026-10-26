@@ -284,9 +284,10 @@ func (app *Application) processOneLadderConfig(
 // cannot be converted, so the gap cannot be sized: the run is persisted as a
 // Hold-only run with reason_code missing_discount_rate that buys nothing
 // (planMissingRateHold), not an Errored run. Allocate sizes the gap in
-// on-demand-equivalent dollars and emits tranches in commitment dollars with the rate they were sized with. Rows are
-// stored as basis=commitment plus that rate; the store nets each row back to
-// on-demand-equivalent dollars by its own rate.
+// on-demand-equivalent dollars and emits tranches in commitment dollars with
+// the rate they were sized with. Rows are stored as basis=commitment plus that
+// rate; the store nets each row back to on-demand-equivalent dollars by its
+// own rate.
 //
 // Persistence is APPEND-ONLY (see persistLadderRun): every run inserts its new
 // scheduled tranches and NEVER supersedes existing ones. Netting already
