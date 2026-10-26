@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -117,7 +118,7 @@ func (h *Handler) importAccountServiceOverrides(ctx context.Context, req *events
 	if in.DryRun {
 		return report, nil
 	}
-	if err := h.applyOverrideImport(ctx, plan); err != nil {
+	if err := h.applyOverrideImport(ctx, plan, report, configAuditActor(session)); err != nil {
 		return nil, err
 	}
 	report.Applied = true
@@ -317,17 +318,35 @@ func (h *Handler) findStoredOverride(ctx context.Context, cache map[string][]con
 }
 
 // applyOverrideImport writes the insert and update rows in one transaction:
-// either every planned row is written or, on any store failure, none is.
-func (h *Handler) applyOverrideImport(ctx context.Context, plan []plannedOverride) error {
+// either every planned row is written or, on any store failure, none is. The
+// transaction also records the import's config_audit_events row (mode and
+// counts) and, linked to it, one event per written row (issue #1493), so the
+// audit trail commits or rolls back with the writes.
+//
+// Rows are written in (account, provider, service) order, not file order:
+// each write locks its override's key until commit, and two imports that
+// touch the same overrides must take those locks in the same order or they
+// could deadlock.
+func (h *Handler) applyOverrideImport(ctx context.Context, plan []plannedOverride, report *OverrideImportReport, actor config.AuditActor) error {
 	now := time.Now()
+	ordered := append([]plannedOverride(nil), plan...)
+	sort.Slice(ordered, func(i, j int) bool { return plannedOverrideKey(ordered[i]) < plannedOverrideKey(ordered[j]) })
 	err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
-		for _, p := range plan {
+		importEvent, err := overrideImportEvent(report, actor)
+		if err != nil {
+			return err
+		}
+		if err := h.config.SaveConfigAuditEventTx(ctx, tx, importEvent); err != nil {
+			return err
+		}
+		for _, p := range ordered {
 			o := &config.AccountServiceOverride{ID: uuid.New().String(), AccountID: p.account.ID, Provider: p.row.Provider, Service: p.row.Service, CreatedAt: now, UpdatedAt: now}
 			if p.existing != nil {
 				o.ID, o.CreatedAt = p.existing.ID, p.existing.CreatedAt
 			}
 			applyOverrideFieldsTo(o, p.row.fields())
-			if err := h.config.SaveAccountServiceOverrideTx(ctx, tx, o); err != nil {
+			audit := config.AuditContext{Actor: actor, ParentEventID: &importEvent.ID, Details: map[string]any{"import_row": p.rowNum}}
+			if err := h.config.SaveAccountServiceOverrideAuditedTx(ctx, tx, o, audit); err != nil {
 				return fmt.Errorf("row %d: %w", p.rowNum, err)
 			}
 		}
@@ -337,4 +356,39 @@ func (h *Handler) applyOverrideImport(ctx context.Context, plan []plannedOverrid
 		return fmt.Errorf("accounts: import rolled back, nothing was written: %w", err)
 	}
 	return nil
+}
+
+// plannedOverrideKey is the lock key order applyOverrideImport writes in. The
+// fields are joined with NUL, which none of them can contain, so the order is
+// the tuple order.
+func plannedOverrideKey(p plannedOverride) string {
+	return p.account.ID + "\x00" + p.row.Provider + "\x00" + p.row.Service
+}
+
+// overrideImportEvent is the import-level audit event: the mode and the
+// per-action row counts of the applied import.
+func overrideImportEvent(report *OverrideImportReport, actor config.AuditActor) (*config.AuditEvent, error) {
+	details, err := json.Marshal(map[string]any{"mode": report.Mode, "summary": report.Summary, "rows": len(report.Rows)})
+	if err != nil {
+		return nil, fmt.Errorf("encode import audit details: %w", err)
+	}
+	return &config.AuditEvent{
+		ID:        uuid.New().String(),
+		EventType: config.AuditOverrideImport,
+		Actor:     actor,
+		Details:   details,
+	}, nil
+}
+
+// configAuditActor names the session in a config audit event. The user and
+// API key IDs are kept only when they are UUIDs (the stateless admin API key
+// session carries a sentinel user ID); Identity always names the actor,
+// falling back to that sentinel, as the 4-eyes comparison does.
+func configAuditActor(session *Session) config.AuditActor {
+	actor := config.AuditActor{UserID: resolveCreatorUserID(session), Identity: fourEyesActorIdentity(session)}
+	if validateUUID(session.UserAPIKeyID) == nil {
+		keyID := session.UserAPIKeyID
+		actor.APIKeyID = &keyID
+	}
+	return actor
 }

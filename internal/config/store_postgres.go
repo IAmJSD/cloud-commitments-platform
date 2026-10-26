@@ -4298,13 +4298,6 @@ func (s *PostgresStore) SaveAccountServiceOverride(ctx context.Context, o *Accou
 	return saveAccountServiceOverride(ctx, s.db, o)
 }
 
-// SaveAccountServiceOverrideTx upserts an account service override inside the
-// caller's transaction, so a batch of writes (the override import) commits or
-// rolls back as one.
-func (s *PostgresStore) SaveAccountServiceOverrideTx(ctx context.Context, tx pgx.Tx, o *AccountServiceOverride) error {
-	return saveAccountServiceOverride(ctx, tx, o)
-}
-
 // overrideExecutor is satisfied by both the pool and a pgx.Tx.
 type overrideExecutor interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)

@@ -606,10 +606,22 @@ type StoreInterface interface {
 	// Account service overrides
 	GetAccountServiceOverride(ctx context.Context, accountID, provider, service string) (*AccountServiceOverride, error)
 	SaveAccountServiceOverride(ctx context.Context, override *AccountServiceOverride) error
-	// SaveAccountServiceOverrideTx is SaveAccountServiceOverride inside the
-	// caller's WithTx transaction.
-	SaveAccountServiceOverrideTx(ctx context.Context, tx pgx.Tx, override *AccountServiceOverride) error
 	DeleteAccountServiceOverride(ctx context.Context, accountID, provider, service string) error
+	// SaveAccountServiceOverrideAuditedTx upserts the override inside the
+	// caller's WithTx transaction and records the change (the stored row
+	// before and after) in config_audit_events, issue #1493. It serializes on
+	// the override's key, so a caller writing several overrides in one tx must
+	// write them in a consistent key order. A write that changes no setting
+	// records nothing. override is updated to the stored row.
+	SaveAccountServiceOverrideAuditedTx(ctx context.Context, tx pgx.Tx, override *AccountServiceOverride, audit AuditContext) error
+	// DeleteAccountServiceOverrideAuditedTx deletes the override inside the
+	// caller's transaction and records the deleted row in config_audit_events.
+	// Deleting a missing override records nothing.
+	DeleteAccountServiceOverrideAuditedTx(ctx context.Context, tx pgx.Tx, accountID, provider, service string, audit AuditContext) error
+	// SaveConfigAuditEventTx records a config_audit_events row inside the
+	// caller's transaction (the override import's own event). An empty ID is
+	// filled in.
+	SaveConfigAuditEventTx(ctx context.Context, tx pgx.Tx, event *AuditEvent) error
 	ListAccountServiceOverrides(ctx context.Context, accountID string) ([]AccountServiceOverride, error)
 
 	// Plan ↔ account association

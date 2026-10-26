@@ -1598,14 +1598,37 @@ func (m *MockConfigStore) SaveAccountServiceOverride(ctx context.Context, overri
 	return args.Error(0)
 }
 
-// SaveAccountServiceOverrideTx falls back to SaveAccountServiceOverride when
-// no expectation is registered; see UpdatePurchasePlanTx.
-func (m *MockConfigStore) SaveAccountServiceOverrideTx(ctx context.Context, tx pgx.Tx, override *config.AccountServiceOverride) error {
-	m.record("SaveAccountServiceOverrideTx", ctx, tx, override)
-	if !isExpected(&m.Mock, "SaveAccountServiceOverrideTx") {
+// SaveAccountServiceOverrideAuditedTx falls back to SaveAccountServiceOverride
+// when no expectation is registered (see UpdatePurchasePlanTx), so tests that
+// seed SaveAccountServiceOverrideFn keep observing the write.
+func (m *MockConfigStore) SaveAccountServiceOverrideAuditedTx(ctx context.Context, tx pgx.Tx, override *config.AccountServiceOverride, audit config.AuditContext) error {
+	m.record("SaveAccountServiceOverrideAuditedTx", ctx, tx, override, audit)
+	if !isExpected(&m.Mock, "SaveAccountServiceOverrideAuditedTx") {
 		return m.SaveAccountServiceOverride(ctx, override)
 	}
-	args := m.Called(ctx, tx, override)
+	args := m.Called(ctx, tx, override, audit)
+	return args.Error(0)
+}
+
+// DeleteAccountServiceOverrideAuditedTx falls back to
+// DeleteAccountServiceOverride when no expectation is registered.
+func (m *MockConfigStore) DeleteAccountServiceOverrideAuditedTx(ctx context.Context, tx pgx.Tx, accountID, provider, service string, audit config.AuditContext) error {
+	m.record("DeleteAccountServiceOverrideAuditedTx", ctx, tx, accountID, provider, service, audit)
+	if !isExpected(&m.Mock, "DeleteAccountServiceOverrideAuditedTx") {
+		return m.DeleteAccountServiceOverride(ctx, accountID, provider, service)
+	}
+	args := m.Called(ctx, tx, accountID, provider, service, audit)
+	return args.Error(0)
+}
+
+// SaveConfigAuditEventTx records the event and returns nil when no
+// expectation is registered.
+func (m *MockConfigStore) SaveConfigAuditEventTx(ctx context.Context, tx pgx.Tx, event *config.AuditEvent) error {
+	m.record("SaveConfigAuditEventTx", ctx, tx, event)
+	if !isExpected(&m.Mock, "SaveConfigAuditEventTx") {
+		return nil
+	}
+	args := m.Called(ctx, tx, event)
 	return args.Error(0)
 }
 
