@@ -176,10 +176,10 @@ function renderPlannedPurchasesInternal(): void {
           <th><span>Provider</span>${filterBtn('provider', 'Provider')}</th>
           <th><span>Service</span>${filterBtn('service', 'Service')}</th>
           <th><span>Resource Type</span>${filterBtn('resource_type', 'Resource Type')}</th>
-          <th><span>Count</span>${filterBtn('count', 'Count')}</th>
+          <th class="num"><span>Count</span>${filterBtn('count', 'Count')}</th>
           <th><span>Term</span>${filterBtn('term', 'Term')}${filterBtn('payment', 'Payment')}</th>
-          <th><span>Upfront</span>${filterBtn('upfront_cost', 'Upfront')}</th>
-          <th><span>Est. Savings</span>${filterBtn('estimated_savings', 'Est. Savings')}</th>
+          <th class="num"><span>Upfront</span>${filterBtn('upfront_cost', 'Upfront')}</th>
+          <th class="num"><span>Est. Savings</span>${filterBtn('estimated_savings', 'Est. Savings')}</th>
           <th><span>Status</span>${filterBtn('status', 'Status')}</th>
           <th>Actions</th>
         </tr>
@@ -456,10 +456,10 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td>${providerBadgeHtml(purchase.provider)}</td>
       <td>${escapeHtml(purchase.service)}</td>
       <td>${resourceCell}</td>
-      <td>${countCell}</td>
+      <td class="num">${countCell}</td>
       <td>${termCell}</td>
-      <td>${upfrontShown}</td>
-      <td class="savings">${savingsCell}</td>
+      <td class="num">${upfrontShown}</td>
+      <td class="num savings">${savingsCell}</td>
       <td><span class="status-badges">${statusBadgeHtml(purchase.status)}${overdueBadge}</span>${overdueHintHtml}</td>
       <td class="actions">
         ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary icon-label" title="Run now" aria-label="Run now">${iconSvg('play')}<span>Run now</span></button>` : ''}

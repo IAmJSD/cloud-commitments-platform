@@ -51,7 +51,7 @@ func (p *runNowProvider) GetServiceClient(context.Context, common.ServiceType, s
 
 type runNowFactory struct{ provider *runNowProvider }
 
-func (f runNowFactory) CreateAndValidateProvider(context.Context, string, *provider.ProviderConfig) (provider.Provider, error) {
+func (f runNowFactory) CreateAndValidateProvider(context.Context, string, *provider.Config) (provider.Provider, error) {
 	return f.provider, nil
 }
 
@@ -123,6 +123,42 @@ func TestRunNow_PartialFailureIsServerErrorWithRowStatus(t *testing.T) {
 	assert.Equal(t, row.Status, ce.Details()["status"])
 	assert.EqualValues(t, 2, service.calls.Load())
 	assert.NotNil(t, row.ExecutedAt)
+}
+
+// A partial run-now bought one of two commitments (#532): it answers 502 with
+// the row status, and it is emailed with a revocation token that revokes the
+// stored row, listing only the commitment that was bought.
+func TestRunNow_PartialRunEmailsRevocationToken(t *testing.T) {
+	f, service := newRunNowFixture(t, 2, twoRunNowRecs())
+	notify := "ops@example.com"
+	global, err := f.store.GetGlobalConfig(f.ctx)
+	require.NoError(t, err)
+	global.NotificationEmail = &notify
+	require.NoError(t, f.store.SaveGlobalConfig(f.ctx, global))
+	f.handler.auth.(*MockAuthService).On("GetUser", mock.Anything, mock.Anything).Return(nil, errors.New("no user")).Maybe()
+	notifier := &recordingExecutedNotifier{}
+	f.handler.emailNotifier = notifier
+	before := time.Now()
+
+	_, runErr := f.runNow()
+	ce, ok := IsClientError(runErr)
+	require.True(t, ok, "expected a client-facing error, got %v", runErr)
+	assert.Equal(t, 502, ce.code)
+	assert.EqualValues(t, 2, service.calls.Load())
+	row, err := f.store.GetExecutionByID(f.ctx, f.execution.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, "partially_completed", row.Status)
+
+	require.Equal(t, 1, notifier.calls, "a partial run must send the executed email")
+	token := notifier.captured.RevocationToken
+	require.NotEmpty(t, token)
+	assert.NoError(t, validateRevokeToken(row, token), "the emailed token must revoke the stored row")
+	require.NotNil(t, row.ApprovalTokenExpiresAt)
+	assert.WithinRange(t, *row.ApprovalTokenExpiresAt,
+		before.Add(config.RevocationWindow).Add(-time.Second), time.Now().Add(config.RevocationWindow).Add(time.Second))
+	assert.True(t, notifier.captured.PartialPurchase)
+	require.Len(t, notifier.captured.Recommendations, 1, "only the bought commitment is listed")
+	assert.InDelta(t, 300.0, notifier.captured.TotalUpfrontCost, 0.001)
 }
 
 func TestRunNow_FourEyesDenialIsForbiddenAndLeavesRowUntouched(t *testing.T) {

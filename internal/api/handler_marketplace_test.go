@@ -27,12 +27,15 @@ const validMarketplacePurchaseID = "11111111-1111-1111-1111-111111111111"
 type stubMarketplaceEC2 struct {
 	createFn     func(ctx context.Context, req ec2svc.MarketplaceListingRequest) (ec2svc.MarketplaceListingResult, error)
 	cancelFn     func(ctx context.Context, listingID string) (ec2svc.MarketplaceListingResult, error)
+	describeFn   func(ctx context.Context, listingID string) (ec2svc.MarketplaceListingResult, error)
 	fetchClassFn func(ctx context.Context, reservedInstancesID string) (string, error)
 
 	lastCreateReq   ec2svc.MarketplaceListingRequest
 	createCallCount int
 	cancelCallCount int
 	lastCancelID    string
+	// describeCallCount counts DescribeMarketplaceListing calls (issue #525).
+	describeCallCount int
 }
 
 func (s *stubMarketplaceEC2) CreateMarketplaceListing(ctx context.Context, req ec2svc.MarketplaceListingRequest) (ec2svc.MarketplaceListingResult, error) {
@@ -44,7 +47,11 @@ func (s *stubMarketplaceEC2) CreateMarketplaceListing(ctx context.Context, req e
 	return ec2svc.MarketplaceListingResult{ListingID: "ril-default", State: config.ListingStateActive}, nil
 }
 
-func (s *stubMarketplaceEC2) DescribeMarketplaceListing(_ context.Context, listingID string) (ec2svc.MarketplaceListingResult, error) {
+func (s *stubMarketplaceEC2) DescribeMarketplaceListing(ctx context.Context, listingID string) (ec2svc.MarketplaceListingResult, error) {
+	s.describeCallCount++
+	if s.describeFn != nil {
+		return s.describeFn(ctx, listingID)
+	}
 	return ec2svc.MarketplaceListingResult{ListingID: listingID, State: config.ListingStateActive}, nil
 }
 
@@ -403,6 +410,8 @@ func TestMarketplaceList_CancelFailureRecordsNonActiveStateAsPending(t *testing.
 		wantNotMsg string
 	}{
 		{name: "pending", awsState: config.ListingStatePending, wantState: config.ListingStatePending, wantMsg: "needs reconciliation", wantNotMsg: "cancel it again"},
+		// An empty status is never recorded (issue #525): with the read-back
+		// failing too, the listing is recorded as pending from the start.
 		{name: "empty", awsState: "", wantState: config.ListingStatePending, wantMsg: "needs reconciliation", wantNotMsg: "cancel it again"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -413,7 +422,7 @@ func TestMarketplaceList_CancelFailureRecordsNonActiveStateAsPending(t *testing.
 				Return(standardRow(), nil)
 			cfgStore.On("ClaimMarketplaceListingSlot", mock.Anything, validMarketplacePurchaseID, mock.Anything, mock.Anything).
 				Return(&config.MarketplaceListingClaim{ClientToken: "tok"}, nil)
-			cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, "ril-x", tc.awsState).
+			cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, "ril-x", tc.wantState).
 				Return(errors.New("db down")).Once()
 			cfgStore.On("UpdatePurchaseHistoryListing", mock.Anything, validMarketplacePurchaseID, "ril-x", tc.wantState).
 				Return(nil).Once()
@@ -423,6 +432,9 @@ func TestMarketplaceList_CancelFailureRecordsNonActiveStateAsPending(t *testing.
 					return ec2svc.MarketplaceListingResult{ListingID: "ril-x", State: tc.awsState}, nil
 				},
 				cancelFn: func(_ context.Context, _ string) (ec2svc.MarketplaceListingResult, error) {
+					return ec2svc.MarketplaceListingResult{}, errors.New("throttled")
+				},
+				describeFn: func(_ context.Context, _ string) (ec2svc.MarketplaceListingResult, error) {
 					return ec2svc.MarketplaceListingResult{}, errors.New("throttled")
 				},
 			}

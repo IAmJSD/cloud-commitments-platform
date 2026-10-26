@@ -23,7 +23,16 @@ import (
 //
 // requirePermission must be called before this helper so the verb gate fires
 // first; callers pass the session it returned.
+//
+// A non-UUID accountID is refused with a 400 before the lookup:
+// cloud_accounts.id is a UUID column, so Postgres would reject the value with
+// a syntax error that handleRequestError turns into a 500. The ladder routes
+// pass caller-supplied ids (body or query string) straight here, without the
+// validateUUID the account path handlers run first.
 func (h *Handler) requireAccountAccess(ctx context.Context, session *Session, accountID string) (*config.CloudAccount, error) {
+	if !uuidRegex.MatchString(accountID) {
+		return nil, NewClientError(400, "invalid account id: must be a valid UUID")
+	}
 	account, err := h.config.GetCloudAccount(ctx, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
@@ -398,8 +407,15 @@ func (h *Handler) resolveSingleAccountFilterIDs(ctx context.Context, accountID s
 	if err != nil {
 		return nil, map[string][]string{"": {accountID}}
 	}
-	for _rvc := range accounts {
-		a := accounts[_rvc]
+	return unscopedAccountFilter(accounts, accountID)
+}
+
+// unscopedAccountFilter is the pure half of resolveSingleAccountFilterIDs: it
+// maps one non-empty account identifier onto the dual-column filter using an
+// already-loaded cloud_accounts list.
+func unscopedAccountFilter(accounts []config.CloudAccount, accountID string) (uuids []string, externalIDsByProvider map[string][]string) {
+	for i := range accounts {
+		a := &accounts[i]
 		if a.ID == accountID {
 			// Known UUID: match cloud_account_id by UUID and, when present,
 			// account_id by the resolved external number scoped to its provider.

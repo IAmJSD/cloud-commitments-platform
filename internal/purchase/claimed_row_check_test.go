@@ -59,6 +59,9 @@ type claimEntryPoint struct {
 	name string
 	from []string
 	run  func(m *Manager, id string, check ClaimedRowCheck) (*config.PurchaseExecution, error)
+	// pinnedToken is the approval token the entry point pins inside its claim
+	// (the token approve, issue #1190); "" for the unpinned entry points.
+	pinnedToken string
 }
 
 func claimEntryPoints() []claimEntryPoint {
@@ -68,19 +71,19 @@ func claimEntryPoints() []claimEntryPoint {
 		{"run-now", runNowFrom, func(m *Manager, id string, c ClaimedRowCheck) (*config.PurchaseExecution, error) {
 			row, _, err := m.RunPlannedPurchaseNow(ctx, id, actor, nil, c)
 			return row, err
-		}},
+		}, ""},
 		{"session approve", []string{"pending", "notified"}, func(m *Manager, id string, c ClaimedRowCheck) (*config.PurchaseExecution, error) {
 			row, _, err := m.ApproveAndExecute(ctx, id, actor, nil, c)
 			return row, err
-		}},
+		}, ""},
 		{"direct execute", []string{"pending", "notified"}, func(m *Manager, id string, c ClaimedRowCheck) (*config.PurchaseExecution, error) {
 			row, _, err := m.DirectExecute(ctx, id, actor, nil, c)
 			return row, err
-		}},
+		}, ""},
 		{"token approve", []string{"pending", "notified"}, func(m *Manager, id string, c ClaimedRowCheck) (*config.PurchaseExecution, error) {
 			_, err := m.ApproveExecution(ctx, id, claimCheckToken, actor, c)
 			return nil, err
-		}},
+		}, claimCheckToken},
 	}
 }
 
@@ -104,8 +107,13 @@ func claimCheckHarness(t *testing.T, ep claimEntryPoint, claimedPrice float64) (
 	claimed.Recommendations = append([]config.RecommendationRecord(nil), snapshot.Recommendations...)
 	claimed.Recommendations[0].UpfrontCost = claimedPrice
 	claimed.Status = "running"
-	store.On("TransitionExecutionStatus", mock.Anything, snapshot.ExecutionID, ep.from, "running", (*string)(nil)).
-		Return(&claimed, nil).Once()
+	if ep.pinnedToken != "" {
+		store.On("TransitionExecutionStatusTokenPinned", mock.Anything, snapshot.ExecutionID, ep.from, "running", (*string)(nil), ep.pinnedToken).
+			Return(&claimed, nil).Once()
+	} else {
+		store.On("TransitionExecutionStatus", mock.Anything, snapshot.ExecutionID, ep.from, "running", (*string)(nil)).
+			Return(&claimed, nil).Once()
+	}
 	return mgr, store, rec, snapshot, saved
 }
 

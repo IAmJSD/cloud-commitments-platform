@@ -37,6 +37,7 @@ import { createIcon, iconSvg } from './icons';
 import { applyReadOnlySettings, isPermissionDeniedError } from './settings';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
+import { attachAzureExchangeToolbar, buildAzureSelectCell, buildAzureSelectHeader, canPreviewAzureExchange } from './riexchange-azure';
 
 // Module state
 let currentRIs: ConvertibleRI[] = [];
@@ -421,7 +422,7 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
           <th>RI ID</th>
           <th>Instance Type${filterBtn('instance_type')}</th>
           <th>AZ${filterBtn('availability_zone')}</th>
-          <th>Count${filterBtn('instance_count')}</th>
+          <th class="num">Count${filterBtn('instance_count')}</th>
           <th>Offering${filterBtn('offering_type')}</th>
           <th>Expiry</th>
           <th>Utilization${filterBtn('utilization_pct')}</th>
@@ -439,7 +440,7 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
             <td class="monospace">${escapeHtml(ri.reserved_instance_id)}</td>
             <td>${escapeHtml(ri.instance_type)}</td>
             <td>${escapeHtml(ri.availability_zone)}</td>
-            <td>${ri.instance_count}</td>
+            <td class="num">${ri.instance_count}</td>
             <td>${escapeHtml(ri.offering_type)}</td>
             <td>${formatDate(ri.end)}</td>
             <td class="${utilClass}">${utilText}</td>
@@ -478,8 +479,9 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
  * entirely via DOM construction / textContent — never innerHTML — so any
  * Azure-derived field (SKU, display name, region) cannot inject markup.
  *
- * Azure reservations are listed read-only here; the quote/execute modal is
- * AWS-specific (offering-UUID flow), so no per-row Exchange button is shown.
+ * Users who can preview an exchange get a selection column and an
+ * "Exchange selected" action that opens the Azure exchange modal
+ * (riexchange-azure.ts, issue #81).
  */
 function renderAzureRIsTable(
   container: HTMLElement,
@@ -496,23 +498,30 @@ function renderAzureRIsTable(
 
   container.textContent = '';
   const table = document.createElement('table');
+  const canExchange = canPreviewAzureExchange();
 
   const thead = document.createElement('thead');
   const headerRow = document.createElement('tr');
-  for (const label of ['Reservation', 'SKU', 'Quantity', 'Region', 'Term', 'Expiry']) {
+  const labels = ['Reservation', 'SKU', 'Quantity', 'Region', 'Term', 'Expiry'];
+  if (canExchange) headerRow.appendChild(buildAzureSelectHeader());
+  for (const label of labels) {
     const th = document.createElement('th');
     th.textContent = label;
+    if (label === 'Quantity') th.className = 'num';
     headerRow.appendChild(th);
   }
   thead.appendChild(headerRow);
   table.appendChild(thead);
 
   const tbody = document.createElement('tbody');
-  for (const r of reservations) {
-    tbody.appendChild(buildAzureRIRow(r));
-  }
+  reservations.forEach((r, i) => {
+    const tr = buildAzureRIRow(r);
+    if (canExchange) tr.prepend(buildAzureSelectCell(r, i));
+    tbody.appendChild(tr);
+  });
   table.appendChild(tbody);
   container.appendChild(table);
+  if (canExchange) attachAzureExchangeToolbar(container, table, reservations, () => { void loadRIExchange(); });
 }
 
 function buildAzureRIRow(r: ExchangeableAzureRI): HTMLTableRowElement {
@@ -520,7 +529,7 @@ function buildAzureRIRow(r: ExchangeableAzureRI): HTMLTableRowElement {
 
   appendAzureCell(tr, r.display_name || r.reservation_id);
   appendAzureCell(tr, r.sku);
-  appendAzureCell(tr, String(r.quantity));
+  appendAzureCell(tr, String(r.quantity), true);
   appendAzureCell(tr, r.region || '—');
   appendAzureCell(tr, r.term || '—');
   appendAzureCell(tr, r.expiry_date ? formatDate(r.expiry_date) : '—');
@@ -528,9 +537,11 @@ function buildAzureRIRow(r: ExchangeableAzureRI): HTMLTableRowElement {
   return tr;
 }
 
-function appendAzureCell(tr: HTMLTableRowElement, text: string): void {
+// numeric right-aligns the cell with tabular digits (td.num, issue #739).
+function appendAzureCell(tr: HTMLTableRowElement, text: string, numeric = false): void {
   const td = document.createElement('td');
   td.textContent = text;
+  if (numeric) td.className = 'num';
   tr.appendChild(td);
 }
 
@@ -2033,7 +2044,7 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
       + '<td>' + escapeHtml(String(rec.target_count)) + 'x ' + escapeHtml(rec.target_instance_type) + '</td>'
       // payment_due is USD (the execute cap is max_payment_due_usd); an
       // empty amount renders as a dash, not a lone "$" (issue #284).
-      + '<td>' + (rec.payment_due ? '$' + escapeHtml(rec.payment_due) : '&mdash;') + '</td>'
+      + '<td class="num">' + (rec.payment_due ? '$' + escapeHtml(rec.payment_due) : '&mdash;') + '</td>'
       + '<td>' + statusBadgeHtml(rec.status) + errorLine + '</td>'
       + '<td>' + exchangeIdCell + '</td>'
       + '<td>' + approveBtn + '</td>'
@@ -2042,7 +2053,7 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
 
   const tableHTML = '<table>'
     + '<thead><tr>'
-    + '<th>Date</th><th>Source Type</th><th>Target Type</th><th>Payment</th><th>Status</th><th>Exchange ID</th><th>Actions</th>'
+    + '<th>Date</th><th>Source Type</th><th>Target Type</th><th class="num">Payment</th><th>Status</th><th>Exchange ID</th><th>Actions</th>'
     + '</tr></thead>'
     + '<tbody>' + rowsHTML + '</tbody>'
     + '</table>';

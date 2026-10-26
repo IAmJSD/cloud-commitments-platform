@@ -1063,7 +1063,7 @@ describe('Settings Module', () => {
 
         expect(api.updateConfig).not.toHaveBeenCalled();
         expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
-          message: 'Target coverage must be a whole number between 0 and 100',
+          message: 'Dashboard coverage target must be a whole number between 0 and 100',
           kind: 'error',
         }));
       });

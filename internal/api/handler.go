@@ -579,14 +579,14 @@ func riExchangeArmStateOf(cfg *config.GlobalConfig) riExchangeArmState {
 // armed reports whether this state will make the scheduled TaskRIExchangeReshape
 // execute exchanges against the provider without a human approval step.
 //
-// The predicate mirrors the CONSUMER exactly. pkg/exchange/auto.go's
-// processRecommendation routes to processManualExchange only on the literal
-// "manual" and sends every other value -- including "", "Auto" and any typo --
-// to processAutoExchange. Defining "armed" as mode == "auto" would therefore
-// leave the gate below open on precisely the route that matters: PUT /api/config
+// The predicate is deliberately wider than the consumer. pkg/exchange's
+// RunAutoExchange executes without approval only for the literal "auto" and
+// refuses any other unknown mode (including "") with an error, so a typo
+// fails the scheduled run loudly instead of executing. PUT /api/config
 // unmarshals onto GlobalConfig wholesale and GlobalConfig.Validate never
-// constrains RIExchangeMode, so any non-"manual" string reaches the scheduler.
-// Both axes of the guard must see what the scheduler sees.
+// constrains RIExchangeMode, so any non-"manual" string can be stored; treating
+// every such value as armed keeps the grant check closed if the consumer's
+// mode handling ever changes.
 func (s riExchangeArmState) armed() bool {
 	return s.enabled && s.mode != "manual"
 }
@@ -712,13 +712,21 @@ func (h *Handler) withRegisteredAccountNames(ctx context.Context, scope auth.Acc
 }
 
 // setSecurityHeaders adds comprehensive security headers to the response.
+// HSTSHeaderValue is the Strict-Transport-Security value for every response
+// path: API responses here, and the HTTP-mode static, Lambda static and
+// health responses in internal/server. One constant keeps the modes from
+// drifting apart again (issue #14: Lambda mode had dropped "preload").
+// "preload" only makes the domain eligible for the browser preload list;
+// submitting it to hstspreload.org is a separate, manual step.
+const HSTSHeaderValue = "max-age=31536000; includeSubDomains; preload"
+
 func setSecurityHeaders(headers map[string]string) map[string]string {
 	// Content Security Policy - restrictive for API responses
 	// Only allow connections to same origin, block all other resources
 	headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
 
 	// Strict Transport Security - enforce HTTPS for 1 year including subdomains
-	headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+	headers["Strict-Transport-Security"] = HSTSHeaderValue
 
 	// Permissions Policy - disable all browser features
 	headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
@@ -774,7 +782,7 @@ func (h *Handler) buildResponseHeaders() map[string]string {
 
 	if h.corsAllowedOrigin != "" {
 		corsHeaders["Access-Control-Allow-Origin"] = h.corsAllowedOrigin
-		corsHeaders["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+		corsHeaders["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 		corsHeaders["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key, Authorization, X-Authorization, X-CSRF-Token"
 		corsHeaders["Access-Control-Allow-Credentials"] = "true"
 	}
@@ -1154,25 +1162,5 @@ func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string,
 // attacker-controlled tokens into a JSON snippet the operator copy-
 // pastes into IAM.
 func parseArnPartition(arn string) string {
-	const prefix = "arn:"
-	if len(arn) <= len(prefix) || arn[:len(prefix)] != prefix {
-		return ""
-	}
-	rest := arn[len(prefix):]
-	end := -1
-	for i := 0; i < len(rest); i++ {
-		if rest[i] == ':' {
-			end = i
-			break
-		}
-	}
-	if end <= 0 {
-		return ""
-	}
-	switch rest[:end] {
-	case "aws", "aws-cn", "aws-us-gov":
-		return rest[:end]
-	default:
-		return ""
-	}
+	return config.AWSPartitionFromARN(arn)
 }

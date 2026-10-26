@@ -1151,7 +1151,7 @@ describe('Create-override modal', () => {
 
     expect(api.saveAccountServiceOverride).not.toHaveBeenCalled();
     const errEl = document.getElementById('override-form-error');
-    expect(errEl?.textContent).toContain('Coverage must be between 0 and 100');
+    expect(errEl?.textContent).toContain('Dashboard coverage must be between 0 and 100');
   });
 
   test('save success closes the modal and reloads the panel', async () => {

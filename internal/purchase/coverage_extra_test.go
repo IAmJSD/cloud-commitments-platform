@@ -405,14 +405,15 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	mockStore.On("GetExecutionByID", ctx, "exec-appv").Return(exec, nil).Times(2)
 	mockStore.On("GetCloudAccount", ctx, accountID).Return(account, nil)
 	// Atomic approve transition (issue #372 fix).
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-appv", []string{"pending", "notified"}, "running", (*string)(nil)).Return(approved, nil)
+	mockStore.On("TransitionExecutionStatusTokenPinned", ctx, "exec-appv", []string{"pending", "notified"}, "running", (*string)(nil), "correct-token").Return(approved, nil)
 	// Synchronous execute chain: GetPurchasePlan is called with the
 	// approved execution's PlanID — pinning the non-empty id here means a
 	// regression that drops it (e.g. passes "" or exec.ExecutionID by
 	// mistake) would mismatch the mock expectation and fail the test.
 	plan := &config.PurchasePlan{ID: planID, Name: "test-plan"}
 	mockStore.On("GetPurchasePlan", mock.Anything, planID).Return(plan, nil)
-	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
+	// Nothing is selected, so nothing is bought and no "purchase confirmed"
+	// email goes out (#339).
 	mockStore.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	mockStore.On("CompletePlanStep", mock.Anything, planID, 1).Return(nil)
 
@@ -425,6 +426,7 @@ func TestProcessMessage_ApproveHappyPath(t *testing.T) {
 	err := manager.ProcessMessage(ctx, `{"type":"approve","execution_id":"exec-appv","token":"correct-token","actor_email":"owner@example.com"}`)
 	require.NoError(t, err)
 	mockStore.AssertExpectations(t)
+	mockEmail.AssertNotCalled(t, "SendPurchaseConfirmation", mock.Anything, mock.Anything)
 	mockEmail.AssertExpectations(t)
 }
 
@@ -490,8 +492,8 @@ func TestProcessMessage_ApproveFourEyesOn_SelfApproveDenied(t *testing.T) {
 			err := manager.ProcessMessage(ctx, msg)
 			require.ErrorIs(t, err, ErrFourEyesDenied)
 			assert.Contains(t, err.Error(), "4-eyes mode requires a different approver")
-			mockStore.AssertNotCalled(t, "TransitionExecutionStatus",
-				mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			mockStore.AssertNotCalled(t, "TransitionExecutionStatusTokenPinned",
+				mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 			mockStore.AssertExpectations(t)
 			mockEmail.AssertExpectations(t)
 		})
@@ -582,10 +584,11 @@ func TestProcessMessage_ApproveFourEyesOn_DifferentApproverSucceeds(t *testing.T
 	mockStore.On("GetCloudAccount", ctx, accountID).Return(account, nil)
 	mockStore.On("GetGlobalConfig", mock.Anything).Return(fourEyesCfgOnForManager(), nil)
 	mockStore.On("GetUserEmailByID", ctx, creatorID).Return("owner@example.com", nil)
-	mockStore.On("TransitionExecutionStatus", ctx, "exec-appv-diff", []string{"pending", "notified"}, "running", (*string)(nil)).Return(approved, nil)
+	mockStore.On("TransitionExecutionStatusTokenPinned", ctx, "exec-appv-diff", []string{"pending", "notified"}, "running", (*string)(nil), "correct-token").Return(approved, nil)
 	plan := &config.PurchasePlan{ID: planID, Name: "test-plan"}
 	mockStore.On("GetPurchasePlan", mock.Anything, planID).Return(plan, nil)
-	mockEmail.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
+	// Nothing is selected, so nothing is bought and no "purchase confirmed"
+	// email goes out (#339).
 	mockStore.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 	mockStore.On("CompletePlanStep", mock.Anything, planID, 1).Return(nil)
 
@@ -598,6 +601,7 @@ func TestProcessMessage_ApproveFourEyesOn_DifferentApproverSucceeds(t *testing.T
 	err := manager.ProcessMessage(ctx, `{"type":"approve","execution_id":"exec-appv-diff","token":"correct-token","actor_email":"approver@example.com"}`)
 	require.NoError(t, err)
 	mockStore.AssertExpectations(t)
+	mockEmail.AssertNotCalled(t, "SendPurchaseConfirmation", mock.Anything, mock.Anything)
 	mockEmail.AssertExpectations(t)
 }
 
@@ -621,10 +625,10 @@ func TestProcessMessage_CancelHappyPath(t *testing.T) {
 	// load the execution; mock returns it three times.
 	mockStore.On("GetExecutionByID", ctx, "exec-cancel").Return(exec, nil).Times(3)
 	mockStore.On("GetCloudAccount", ctx, accountID).Return(account, nil)
-	// CancelExecutionAtomic is called inside WithTx (nil tx sentinel in
-	// tests); actor_email is non-empty so cancelledBy is non-nil.
+	// CancelExecutionAtomicTokenPinned is called inside WithTx (nil tx
+	// sentinel in tests); actor_email is non-empty so cancelledBy is non-nil.
 	actor := "owner@example.com"
-	mockStore.On("CancelExecutionAtomic", ctx, mock.Anything, "exec-cancel", &actor).
+	mockStore.On("CancelExecutionAtomicTokenPinned", ctx, mock.Anything, "exec-cancel", &actor, "correct-token").
 		Return(true, "canceled", nil)
 	// Suppression cleanup must follow a successful atomic cancel.
 	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-cancel").

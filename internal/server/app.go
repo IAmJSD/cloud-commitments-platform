@@ -837,8 +837,6 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 	app.Auth = authSvc
 
 	dbRL := api.NewDBRateLimiter(dbConn.Pool())
-	// Periodic cleanup also evicts expired keys with no subsequent allowed request.
-	app.startRateLimiterCleanup(dbRL)
 	app.RateLimiter = dbRL
 	log.Println("Initialized database-backed rate limiter with shared replica counters")
 
@@ -943,6 +941,11 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		return fmt.Errorf("failed to create API handler")
 	}
 
+	// Periodic cleanup also evicts expired keys with no subsequent allowed
+	// request. Started last: on any earlier error ensureDB closes the pool, and
+	// a worker started before that would keep ticking against it.
+	app.startRateLimiterCleanup(dbRL)
+
 	return nil
 }
 
@@ -992,14 +995,25 @@ func buildAdminPasswordSyncCallback(store auth.StoreInterface, resolver secrets.
 
 	return func(ctx context.Context, userID, newPassword string) {
 		user, err := store.GetUserByID(ctx, userID)
-		if err != nil || user == nil || user.Email != adminEmail {
+		if err != nil {
+			// Cannot tell whether this was the admin, so the secret manager copy
+			// may now be stale. Say so instead of skipping silently.
+			logging.Errorf("Admin password sync skipped: could not load user %s: %v; if this user is the admin, secret %q may no longer match the database password", userID, err, adminPasswordSecret)
+			return
+		}
+		if user == nil || user.Email != adminEmail {
 			return
 		}
 		if err := resolver.PutSecret(ctx, adminPasswordSecret, newPassword); err != nil {
-			logging.Warnf("Failed to sync admin password to secret manager: %v", err)
-		} else {
-			logging.Infof("Admin password synced to secret manager")
+			// The password change is already committed to the database, so the
+			// two copies have now diverged. ERROR, not WARN: anything recovering
+			// from the secret manager copy gets the old password (#199). The
+			// usual cause is a runtime identity without write access to this
+			// one secret.
+			logging.Errorf("Admin password sync FAILED: secret %q no longer matches the database password (check the runtime identity can write this secret): %v", adminPasswordSecret, err)
+			return
 		}
+		logging.Infof("Admin password synced to secret manager")
 	}
 }
 
@@ -1163,7 +1177,7 @@ func (a *authServiceAdapter) GetUser(ctx context.Context, userID string) (*api.U
 		return nil, err
 	}
 	if user == nil {
-		return nil, fmt.Errorf("user not found")
+		return nil, auth.ErrUserNotFound
 	}
 	return &api.User{
 		ID:         user.ID,
@@ -1178,11 +1192,11 @@ func (a *authServiceAdapter) UpdateUserProfile(ctx context.Context, userID, emai
 }
 
 // User management methods - delegate to auth service API methods.
-func (a *authServiceAdapter) CreateUserAPI(ctx context.Context, actorUserID string, req any) (any, error) {
+func (a *authServiceAdapter) CreateUserAPI(ctx context.Context, actorUserID string, req auth.APICreateUserRequest) (*auth.APICreateUserResponse, error) {
 	return a.service.CreateUserAPI(ctx, actorUserID, req)
 }
 
-func (a *authServiceAdapter) UpdateUserAPI(ctx context.Context, actorUserID, userID string, req any) (any, error) {
+func (a *authServiceAdapter) UpdateUserAPI(ctx context.Context, actorUserID, userID string, req auth.APIUpdateUserRequest) (*auth.APIUser, error) {
 	return a.service.UpdateUserAPI(ctx, actorUserID, userID, req)
 }
 
@@ -1216,11 +1230,11 @@ func (a *authServiceAdapter) MFARegenerateRecoveryCodesAPI(ctx context.Context, 
 }
 
 // Group management methods - delegate to auth service API methods.
-func (a *authServiceAdapter) CreateGroupAPI(ctx context.Context, actorUserID string, req any) (any, error) {
+func (a *authServiceAdapter) CreateGroupAPI(ctx context.Context, actorUserID string, req auth.APICreateGroupRequest) (*auth.APIGroup, error) {
 	return a.service.CreateGroupAPI(ctx, actorUserID, req)
 }
 
-func (a *authServiceAdapter) UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, req any) (any, error) {
+func (a *authServiceAdapter) UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, req auth.APIUpdateGroupRequest) (*auth.APIGroup, error) {
 	return a.service.UpdateGroupAPI(ctx, actorUserID, groupID, req)
 }
 

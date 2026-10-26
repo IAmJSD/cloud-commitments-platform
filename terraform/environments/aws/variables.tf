@@ -122,9 +122,16 @@ variable "database_username" {
 }
 
 variable "database_engine_version" {
-  description = "PostgreSQL major engine version (major-only pin, e.g. \"16\"). The AWS provider resolves to the latest minor release and stores it in engine_version_actual, suppressing drift when RDS auto-upgrades the minor version. Pinning a full minor version (e.g. \"16.6\") causes downgrade failures if RDS auto-upgrades beyond it (incident: 2026-07-16, #1372)."
+  description = "PostgreSQL major engine version (major-only pin, e.g. \"16\"). The AWS provider resolves to the latest minor release and stores it in engine_version_actual, suppressing drift when RDS auto-upgrades the minor version. Pinning a full minor version (e.g. \"16.6\") causes downgrade failures if RDS auto-upgrades beyond it (incident: 2026-07-16, #1372). The migrations need 15 or later (UNIQUE NULLS NOT DISTINCT, #1233)."
   type        = string
   default     = "16"
+
+  validation {
+    # "<major>" or "<major>.<minor>"; try() turns a malformed value into a
+    # validation failure instead of a tonumber() evaluation error.
+    condition     = try(tonumber(regex("^([0-9]+)(\\.[0-9]+)?$", var.database_engine_version)[0]) >= 15, false)
+    error_message = "database_engine_version must be PostgreSQL 15 or later, as \"<major>\" or \"<major>.<minor>\" (e.g. \"16\"): the migrations use PostgreSQL 15+ features (UNIQUE NULLS NOT DISTINCT)."
+  }
 }
 
 variable "database_instance_class" {

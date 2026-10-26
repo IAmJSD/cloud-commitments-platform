@@ -88,6 +88,23 @@ func TestLoadMarketplaceAWSConfig_NoCloudAccountRegisteredRoleWithoutARNRefused(
 	assert.Nil(t, cfg.Credentials)
 }
 
+// Issue #559: when the host identity check itself fails (here STS rejects the
+// host's credentials), the account is still refused, but the tenant-visible
+// message must not tell the tenant to set aws_role_arn.
+func TestLoadMarketplaceAWSConfig_RegisteredRoleWithoutARNHostCheckFailure(t *testing.T) {
+	account := config.CloudAccount{ID: "acct-host", Provider: "aws", ExternalID: marketplaceHostAccount, AWSAuthMode: "role_arn"}
+	h := registeredLookupHandler(hostRejectedSTS, []config.CloudAccount{account}, nil)
+
+	cfg, err := h.loadMarketplaceAWSConfig(context.Background(), noCloudAccountRow(nil, marketplaceHostAccount))
+
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a client error, got %v", err)
+	assert.Equal(t, 400, ce.code)
+	assert.Equal(t, credentials.ErrHostIdentityUnavailable.Error(), ce.message)
+	assert.NotContains(t, ce.message, "aws_role_arn")
+	assert.Nil(t, cfg.Credentials)
+}
+
 // An id that matches no single registered AWS account keeps #261's rule: the
 // host's credentials only for the host account, otherwise a 400.
 func TestLoadMarketplaceAWSConfig_NoCloudAccountUnresolvedFallsBackToHostCheck(t *testing.T) {

@@ -8,9 +8,7 @@
  */
 
 import type { ExchangeQuoteSummary, RIExchangeHistoryRecord } from './api';
-
-// Hours in an average month; only used for the approximate monthly delta.
-const HOURS_PER_MONTH = 730;
+import { HOURS_PER_MONTH } from './lib/hours-per-month';
 
 export interface ExchangeConfirmParts {
   quote: ExchangeQuoteSummary;

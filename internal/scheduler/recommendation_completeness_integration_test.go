@@ -26,6 +26,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// lockedBuffer is a bytes.Buffer safe for concurrent use. The test captures
+// the process-wide logger, and connection pools from other subtests on the
+// shared Postgres server (#1400) can still log from background goroutines
+// (pgxpool's idle-connection creation) while the test reads the capture.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
 type completenessHTTP struct {
 	resourceType string
 	accounts     []any
@@ -205,14 +226,14 @@ func TestAWSRecommendationCompletenessPersistence(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
-			var diagnostics bytes.Buffer
+			var diagnostics lockedBuffer
 			previous := logging.SetOutput(&diagnostics)
 			t.Cleanup(func() { logging.SetOutput(previous) })
 			container := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 			store := config.NewPostgresStore(container.DB)
 			factory := new(MockProviderFactory)
 			fixture := &completenessHTTP{resourceType: "db.t3.medium", details: tc.details, fallback: tc.fallback, failScope: tc.failScope, spMode: tc.spMode, spFallback: tc.spFallback}
-			factory.On("CreateAndValidateProvider", mock.Anything, "aws", (*provider.ProviderConfig)(nil)).
+			factory.On("CreateAndValidateProvider", mock.Anything, "aws", (*provider.Config)(nil)).
 				Return(completenessProvider(t, fixture), nil).Once()
 			var accountID *string
 			var completeAccountID string
@@ -236,7 +257,7 @@ func TestAWSRecommendationCompletenessPersistence(t *testing.T) {
 				if tc.spMode != "" {
 					cleanFixture = &completenessHTTP{spMode: "valid"}
 				}
-				factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.MatchedBy(func(cfg *provider.ProviderConfig) bool { return cfg != nil })).
+				factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.MatchedBy(func(cfg *provider.Config) bool { return cfg != nil })).
 					Return(completenessProvider(t, cleanFixture), nil).Once()
 			}
 			seed := []config.RecommendationRecord{

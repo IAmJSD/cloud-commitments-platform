@@ -36,9 +36,10 @@ print_section() {
 }
 
 # 1. Go Security Scanner (gosec)
-# scripts/run-gosec.sh owns the gosec pin, module list and rule set, shared
-# with the pre-commit hook, `make security-scan-go` and CI (issue #340). It
-# installs the pinned gosec itself, so there is no not-installed branch.
+# scripts/run-gosec.sh owns the module list and rule set, shared with the
+# pre-commit hook, `make security-scan-go` and CI (issue #340). It installs
+# the gosec version in .gosec-version itself (issue #347), so there is no
+# not-installed branch.
 print_section "1. Go Security Scanner (gosec)"
 if "$(dirname "$0")/run-gosec.sh" 2>&1 | tee "$REPORT_DIR/gosec-report.txt"; then
     echo -e "${GREEN}✓ gosec scan completed${NC}"

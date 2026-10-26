@@ -22,6 +22,8 @@
  * so re-selecting the placeholder brings the note back.
  */
 
+import { clearFieldError, clearFieldErrors, showFieldError } from '../lib/field-errors';
+
 const NOTE_CLASS = 'group-form-note';
 const NAME_NOTE_ID = 'group-name-error';
 
@@ -67,9 +69,48 @@ function rowMessage(actionBlank: boolean, resourceBlank: boolean): string {
 export function clearGroupFormValidation(): void {
   const f = form();
   if (!f) return;
+  clearFieldErrors(f);
   f.querySelectorAll(`.${NOTE_CLASS}`).forEach(n => n.remove());
   f.querySelectorAll('[aria-invalid="true"]').forEach(el => setInvalid(el as HTMLElement, null));
   delete f.dataset['validated'];
+}
+
+/**
+ * A reason saveGroup refuses after the blank-field checks (issue #727): an
+ * unrepresentable constraint, a bad Max Amount, or no permissions at all,
+ * tied to the control that has to change.
+ */
+export interface GroupFieldProblem {
+  control: HTMLElement;
+  /** Shown under the field. */
+  message: string;
+  /** The same reason for the toast summary, naming the permission row. */
+  summary: string;
+}
+
+/**
+ * Show each problem under its field through lib/field-errors (aria-invalid,
+ * aria-describedby, cleared by the next edit) and focus the first. Inside a
+ * permission row the note goes after the flex .form-row, not beside the
+ * input. The caller keeps its toast as the summary.
+ */
+export function showGroupFieldProblems(problems: readonly GroupFieldProblem[]): void {
+  for (const p of problems) {
+    showFieldError(p.control, p.message, p.control.closest('.form-row') ?? undefined);
+  }
+  problems[0]?.control.focus();
+}
+
+/** Drop the field problems of an earlier refused save before re-checking. */
+export function clearGroupFieldProblems(): void {
+  const f = form();
+  if (f) clearFieldErrors(f);
+}
+
+/** A newly added permission row answers the "no permissions" refusal. */
+export function clearNoPermissionsProblem(): void {
+  const add = document.getElementById('add-permission-btn');
+  if (add) clearFieldError(add);
 }
 
 /**

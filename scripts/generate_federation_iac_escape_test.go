@@ -31,14 +31,12 @@ const (
 	hostileURL   = `https://cudly.example.com/a"b${x}`
 	hostileSlug  = `slug"x`
 	hostileSA    = `sa"x${y}@example.com`
-	// hostileShellEmail is hostileEmail without a '}'. The shared shellEscape
-	// rule (the server's, mirrored by the script) does not escape '}', so inside
-	// a "${VAR:-default}" expansion a '}' in the value ends the expansion early
-	// and corrupts the value. It cannot run a command or leave the quotes,
-	// because '$', '`', '"' and '\' are all escaped; fixing it needs a
-	// context-aware rule for the server's CLI templates too, so it is out of
-	// scope for #952.
-	hostileShellEmail = `"o\"q$x $(printf INJECTED) ` + "`printf INJECTED`" + `"@example.com`
+	// hostileShellEmail adds Bash command substitutions to hostileEmail. It
+	// keeps the '}' (once left out because it closed the template's
+	// "${CUDLY_CONTACT_EMAIL:-default}" early): the deploy scripts now assign
+	// the pre-filled email on its own line (#1436), and the probe below does
+	// the same.
+	hostileShellEmail = `"o\"q${x}%{y} $(printf INJECTED) ` + "`printf INJECTED`" + `"@example.com`
 )
 
 // hclAttrRE matches one `name = "value"` tfvars line, optionally followed by a
@@ -227,17 +225,18 @@ func TestGenerator_CFParamsValuesCannotChangeStructure(t *testing.T) {
 	}, got)
 }
 
-// probeDeployScript stands in for aws-cfn-deploy.sh.tmpl. The real template
-// cannot be rendered by this script today (iacData lacks OIDCIssuerHost,
-// #153), so this probe exercises the same .sh.tmpl escaping path with the
-// quoting shapes the real Bash templates use, and prints what Bash made of
-// each value instead of calling any cloud CLI.
+// probeDeployScript stands in for aws-cfn-deploy.sh.tmpl. Running the real
+// script would call the AWS CLI, so this probe exercises the same .sh.tmpl
+// escaping path with the quoting shapes the real Bash templates use, and
+// prints what Bash made of each value instead of calling any cloud CLI.
+// TestGenerator_AWSWIFBundleRendersDeployScript renders the real template.
 const probeDeployScript = `#!/usr/bin/env bash
 # Target: {{.AccountName}} ({{.AccountExternalID}})
 set -euo pipefail
 : "${STACK_NAME:=CUDly-{{.AccountSlug}}-WIF}"
 NAME="{{.AccountName}}"
-CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-{{.ContactEmail}}}"
+CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-}"
+[ -n "$CONTACT_EMAIL" ] || CONTACT_EMAIL="{{.ContactEmail}}"
 URL="{{.CUDlyAPIURL}}/api/register"
 printf '%s\n' "$STACK_NAME" "$NAME" "$CONTACT_EMAIL" "$URL"
 `

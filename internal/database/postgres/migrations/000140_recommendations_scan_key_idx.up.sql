@@ -1,0 +1,21 @@
+-- Index the keyset order GET /api/recommendations pages in (issue #981).
+--
+-- A paginated request walks the recommendations cache in chunks ordered by the
+-- application recommendation ID (payload->>'id'), with the table's UUID
+-- primary key as the tie-breaker, and resumes each chunk after the last row it
+-- read. Without an index on that order every chunk is a full scan plus a
+-- top-N sort, so a walk of N rows in chunks of C costs O(N^2 / C).
+--
+-- COLLATE "C" compares bytes, which is the order Go's string comparison uses,
+-- so the SQL order matches the order the API has always paged in. COALESCE
+-- maps a missing or null id to '' (what the Go decoder produces), so no row
+-- falls outside the order. The expression must stay identical to
+-- recommendationScanKeyExpr in internal/config/store_postgres_recommendations.go
+-- or the planner cannot use the index.
+--
+-- The table is a regenerable cache rewritten every collection cycle, so a
+-- plain CREATE INDEX (which blocks writes while it builds) is acceptable; the
+-- migration runner wraps every migration in a transaction, which rules out
+-- CREATE INDEX CONCURRENTLY anyway.
+CREATE INDEX IF NOT EXISTS recommendations_scan_key_idx
+    ON recommendations ((COALESCE(payload->>'id', '') COLLATE "C"), id);

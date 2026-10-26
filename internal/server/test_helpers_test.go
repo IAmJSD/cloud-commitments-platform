@@ -111,6 +111,14 @@ func (m *mockConfigStoreForHealth) GetPlannedExecutions(ctx context.Context, sta
 	return nil, nil
 }
 
+func (m *mockConfigStoreForHealth) ListHistoryExecutionsPage(ctx context.Context, q config.HistoryExecutionsPageQuery) ([]config.PurchaseExecution, error) {
+	return nil, nil
+}
+
+func (m *mockConfigStoreForHealth) ListPurchaseHistoryPage(ctx context.Context, filter config.PurchaseHistoryFilter, after *config.HistoryPageKey) ([]config.PurchaseHistoryPageRow, error) {
+	return nil, nil
+}
+
 func (m *mockConfigStoreForHealth) GetStaleApprovedExecutions(ctx context.Context, olderThan time.Duration) ([]config.PurchaseExecution, error) {
 	return nil, nil
 }
@@ -204,6 +212,10 @@ func (m *mockConfigStoreForHealth) GetLadderExecutionGate(ctx context.Context, i
 }
 
 func (m *mockConfigStoreForHealth) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (bool, string, error) {
+	return false, "", nil
+}
+
+func (m *mockConfigStoreForHealth) CancelExecutionAtomicTokenPinned(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string, rawToken string) (bool, string, error) {
 	return false, "", nil
 }
 
@@ -349,6 +361,9 @@ func (m *mockConfigStoreForHealth) UpsertRecommendations(_ context.Context, _ ti
 func (m *mockConfigStoreForHealth) ListStoredRecommendations(_ context.Context, _ config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	return nil, nil
 }
+func (m *mockConfigStoreForHealth) ListStoredRecommendationsChunk(_ context.Context, _ config.RecommendationFilter, _ *config.RecommendationScanKey, _ int) (config.RecommendationChunk, error) {
+	return config.RecommendationChunk{Done: true}, nil
+}
 func (m *mockConfigStoreForHealth) GetRecommendationsFreshness(_ context.Context) (*config.RecommendationsFreshness, error) {
 	return &config.RecommendationsFreshness{}, nil
 }
@@ -412,9 +427,6 @@ func (m *mockConfigStoreForHealth) RecoverReapedExecutionTx(ctx context.Context,
 	return m.SavePurchaseExecution(ctx, e)
 }
 func (m *mockConfigStoreForHealth) ListRecentSubmitsTx(ctx context.Context, _ pgx.Tx, _ string, _ time.Time) ([]config.PurchaseExecution, error) {
-	return m.GetPendingExecutions(ctx)
-}
-func (m *mockConfigStoreForHealth) GetPendingExecutionsTx(ctx context.Context, _ pgx.Tx) ([]config.PurchaseExecution, error) {
 	return m.GetPendingExecutions(ctx)
 }
 func (m *mockConfigStoreForHealth) WithTx(_ context.Context, fn func(tx pgx.Tx) error) error {
@@ -485,6 +497,12 @@ func (m *mockConfigStoreForHealth) UpdateGlobalConfigAtomic(_ context.Context, a
 }
 func (m *mockConfigStoreForHealth) UpdatePurchaseHistoryListing(_ context.Context, _, _, _ string) error {
 	return nil
+}
+func (m *mockConfigStoreForHealth) GetMarketplaceListingAttempt(_ context.Context, _ string) (*config.MarketplaceListingAttempt, error) {
+	return nil, nil
+}
+func (m *mockConfigStoreForHealth) ResolveMarketplaceListingAttempt(_ context.Context, _ string, _ config.MarketplaceListingAttempt, _, _ string) (bool, error) {
+	return false, nil
 }
 func (m *mockConfigStoreForHealth) ClaimMarketplaceListingSlot(_ context.Context, _, _ string, _ []byte) (*config.MarketplaceListingClaim, error) {
 	return &config.MarketplaceListingClaim{}, nil

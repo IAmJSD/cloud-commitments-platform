@@ -109,9 +109,14 @@ variable "database_username" {
 }
 
 variable "database_version" {
-  description = "PostgreSQL version"
+  description = "Cloud SQL PostgreSQL version. The migrations need 15 or later (UNIQUE NULLS NOT DISTINCT, #1233)."
   type        = string
   default     = "POSTGRES_16"
+
+  validation {
+    condition     = contains(["POSTGRES_15", "POSTGRES_16"], var.database_version)
+    error_message = "database_version must be POSTGRES_15 or POSTGRES_16: the migrations use PostgreSQL 15+ features (UNIQUE NULLS NOT DISTINCT)."
+  }
 }
 
 variable "database_tier" {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 )
 
@@ -114,6 +115,9 @@ type GlobalConfig struct {
 	// a standard SOX / SOC2 segregation-of-duties control. Default: false.
 	// Admins who created an execution and need to approve it must disable this
 	// mode first (the admin wildcard is NOT exempt from the restriction).
+	// While it is on, unattended RI exchange runs (RIExchangeMode "auto" and
+	// ladder reshapes) run as "manual" and only raise pending records
+	// (issue #679).
 	RequireDifferentApprover bool `json:"require_different_approver" dynamodbav:"require_different_approver"`
 }
 
@@ -195,6 +199,12 @@ func (g *GlobalConfig) GracePeriodFor(provider string) int {
 }
 
 // ServiceConfig represents per-service configuration.
+//
+// Coverage is a percentage whose meaning depends on where the config lives.
+// In a PurchasePlan's Services it is the plan's sizing target (planstep sizes
+// each ramp step by it). In the global and per-account service settings it is
+// display-only: the dashboard scales projected savings by it and nothing in
+// purchase execution reads it (issue #345).
 type ServiceConfig struct {
 	Provider       string   `json:"provider" dynamodbav:"provider"`
 	Service        string   `json:"service" dynamodbav:"service"`
@@ -657,6 +667,15 @@ type RecommendationRecord struct {
 	// collapses the denominator) don't inflate the displayed effective
 	// savings %. See #274.
 	OnDemandCost *float64 `json:"on_demand_cost,omitempty" dynamodbav:"on_demand_cost,omitempty"`
+	// CommitmentCurrency is the ISO 4217 code UpfrontCost and MonthlyCost are
+	// denominated in, copied from common.Recommendation.CommitmentCurrency at
+	// collection time. Empty means unknown: the provider parser could not
+	// prove the currency of every payment leg, or the row predates the field.
+	// The purchase spend caps are USD, so a rec that is not provably USD is
+	// never compared against one (issue #361). Persisted via the
+	// recommendations row's JSONB `payload` column, and with the execution's
+	// recommendations JSONB; no DDL needed.
+	CommitmentCurrency string `json:"commitment_currency,omitempty" dynamodbav:"commitment_currency,omitempty"`
 	// SavingsPercentage is the provider-authoritative effective savings %
 	// reported directly by the cloud provider (AWS Cost Explorer
 	// `EstimatedMonthlySavingsPercentage`, Azure / GCP converters' computed
@@ -757,13 +776,67 @@ type SuppressionVariant struct {
 	Tenancy          string `json:"tenancy"`
 }
 
+// awsLegacyServiceSlugs maps the AWS service slugs that rec rows persisted
+// before slug normalisation still carry to their canonical spelling.
+// memorydb has no canonical slug and is deliberately absent. Keyed and valued by the
+// library constants; a purchase test checks it against mapServiceSlug.
+var awsLegacyServiceSlugs = map[string]string{
+	string(common.ServiceEC2):         string(common.ServiceCompute),
+	string(common.ServiceRDS):         string(common.ServiceRelationalDB),
+	string(common.ServiceElastiCache): string(common.ServiceCache),
+	string(common.ServiceOpenSearch):  string(common.ServiceSearch),
+	string(common.ServiceRedshift):    string(common.ServiceDataWarehouse),
+}
+
+// awsSavingsPlansSpellings maps the dash-free spelling of each per-plan-type
+// Savings Plans slug, which the purchase manager's mapSavingsPlansSlug also
+// accepts, to the hyphenated library constant that recs carry (issue #1422).
+// The "savingsplans" umbrella is deliberately absent: folding it into one plan
+// type would let a single umbrella suppression hide another plan type's recs.
+// A purchase test checks every per-type key of mapSavingsPlansSlug against it.
+var awsSavingsPlansSpellings = map[string]string{
+	"savingsplans-compute":     string(common.ServiceSavingsPlansCompute),
+	"savingsplans-ec2instance": string(common.ServiceSavingsPlansEC2Instance),
+	"savingsplans-sagemaker":   string(common.ServiceSavingsPlansSageMaker),
+	"savingsplans-database":    string(common.ServiceSavingsPlansDatabase),
+}
+
+// CanonicalSuppressionService maps legacy AWS service slugs, and the dash-free
+// spellings of the per-type Savings Plans slugs, to their canonical slug so a
+// suppression and a rec match whichever spelling each was stored under
+// (issues #1412, #1420, #1422). Other providers' services, including Azure and
+// GCP "compute" and Azure "savingsplans", are returned unchanged. It lives in
+// config, the lowest package both the scheduler and BuildSuppressions import;
+// the pinned cloud-commitments-go common package has no such mapping.
+func CanonicalSuppressionService(provider, service string) string {
+	if provider != "aws" {
+		return service
+	}
+	if canonical, ok := awsLegacyServiceSlugs[service]; ok {
+		return canonical
+	}
+	if canonical, ok := awsSavingsPlansSpellings[service]; ok {
+		return canonical
+	}
+	return service
+}
+
 // AppliesTo reports whether the suppression counts against a recommendation
 // on the same 6-tuple whose variant is v. A row without a variant (legacy)
 // applies to every variant, and a nil v (the rec's Details could not be read)
 // matches every row: both fall back to the pre-#816 6-tuple match, which
 // over-suppresses (under-buys) rather than over-shows.
 func (s *PurchaseSuppression) AppliesTo(v *SuppressionVariant) bool {
-	return s.Variant == nil || v == nil || *s.Variant == *v
+	if s.Variant == nil || v == nil {
+		return true
+	}
+	a, b := *s.Variant, *v
+	// Only the stored side needs canonicalising: SuppressionVariant already
+	// canonicalises every rec variant, so a raw "shared" never reaches v.
+	if isAWSEC2(s.Provider, s.Service) {
+		a.Tenancy = canonicalSuppressionTenancy(a.Tenancy)
+	}
+	return a == b
 }
 
 // RecommendationFilter parameterises ListStoredRecommendations and the
@@ -787,6 +860,26 @@ type RecommendationFilter struct {
 	MinSavingsUSD                float64  // 0 = no floor on monthly savings dollar amount
 	MinSavingsPct                float64  // 0 = no floor on savings percentage (0–100 scale)
 	ID                           string   // "" = all ids; non-empty = exact match on the id column
+}
+
+// RecommendationScanKey is a stored recommendation's position in the keyset
+// scan order of ListStoredRecommendationsChunk (issue #981): the application
+// recommendation ID compared byte-wise, then the cache table's UUID primary
+// key (RowID), which keeps rows that share an ID in a total order.
+type RecommendationScanKey struct {
+	ID    string
+	RowID string
+}
+
+// RecommendationChunk is one keyset read of the recommendations cache.
+// Recs holds the rows that passed the filter, in scan order. Last is the
+// position of the last row read (nil when no row was read) and is where the
+// next chunk resumes. Done is true when fewer rows than the limit were read,
+// so nothing matches after Last.
+type RecommendationChunk struct {
+	Recs []RecommendationRecord
+	Last *RecommendationScanKey
+	Done bool
 }
 
 // PurchasePlanFilter parameterises ListPurchasePlans. Zero-value means "no
@@ -905,6 +998,9 @@ type RIUtilizationCacheEntry struct {
 type PurchaseHistoryFilter struct {
 	// Provider matches purchase_history.provider exactly. Empty skips the clause.
 	Provider string
+	// PlanID matches purchase_history.plan_id exactly; HistorySummaryAggregate
+	// also applies it to purchase_executions.plan_id. Empty skips the clause.
+	PlanID string
 	// AccountIDs matches purchase_history.cloud_account_id (the cloud_accounts
 	// UUID FK) with ANY($). Empty/nil skips this half of the account predicate.
 	AccountIDs []string
@@ -1253,6 +1349,9 @@ type CloudAccount struct {
 	CredentialsConfigured bool   `json:"credentials_configured"`
 	BastionAccountName    string `json:"bastion_account_name,omitempty"`
 	IsSelf                bool   `json:"is_self,omitempty"`
+	// Notices are warnings the API derives for the response, such as the
+	// aws-cn Savings Plans limitation (issue #1194).
+	Notices []AccountNotice `json:"notices,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -1294,7 +1393,7 @@ type AccountServiceOverride struct {
 // of the federation IaC, then approved or rejected by a CUDly admin.
 type AccountRegistration struct {
 	ID                   string     `json:"id"`
-	ReferenceToken       string     `json:"reference_token"`
+	ReferenceToken       string     `json:"-"`      // registrant's status credential; only submitRegistration returns it (#310)
 	Status               string     `json:"status"` // pending, approved, rejected
 	Provider             string     `json:"provider"`
 	ExternalID           string     `json:"external_id"`

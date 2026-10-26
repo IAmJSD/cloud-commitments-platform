@@ -313,8 +313,8 @@ Proposed Exchanges:
 - Source: {{.SourceRIID}} ({{.SourceInstanceType}}, {{printf "%.1f" .UtilizationPct}}% utilized)
   Target: {{.TargetInstanceType}} x{{.TargetCount}}
   Payment Due: ${{.PaymentDue}}
-  Approve: {{$.DashboardURL}}/api/ri-exchange/approve/{{.RecordID}}?token={{urlquery .ApprovalToken}}
-  Reject:  {{$.DashboardURL}}/api/ri-exchange/reject/{{.RecordID}}?token={{urlquery .ApprovalToken}}
+  Approve: {{$.DashboardURL}}/inventory/ri-exchange/approve/{{.RecordID}}?token={{urlquery .ApprovalToken}}
+  Reject:  {{$.DashboardURL}}/inventory/ri-exchange/reject/{{.RecordID}}?token={{urlquery .ApprovalToken}}
 {{end}}
 Total Payment: ${{.TotalPayment}}
 {{if .Skipped}}
@@ -325,7 +325,7 @@ Skipped (could not process):
 {{if .CancellationWindowNote}}{{.CancellationWindowNote}}{{else}}Please approve within 6 hours (before the next analysis run).{{end}}
 
 Review exchange history:
-{{.DashboardURL}}/#ri-exchange
+{{.DashboardURL}}/inventory/ri-exchange
 
 This is an automated message from CUDly. Do not share these links.
 `
@@ -371,8 +371,8 @@ const riExchangePendingApprovalHTMLTemplate = `<!DOCTYPE html>
 <td align="right" style="padding:10px 12px;color:#475569;">{{printf "%.1f" .UtilizationPct}}%</td>
 <td align="right" style="padding:10px 12px;color:#0f172a;font-weight:600;">${{.PaymentDue}}</td>
 <td style="padding:10px 12px;">
-<a href="{{$.DashboardURL}}/api/ri-exchange/approve/{{.RecordID}}?token={{urlquery .ApprovalToken}}" style="display:inline-block;padding:6px 14px;background:#16a34a;color:#ffffff;text-decoration:none;font-weight:600;font-size:12px;border-radius:4px;margin-right:4px;">Approve</a>
-<a href="{{$.DashboardURL}}/api/ri-exchange/reject/{{.RecordID}}?token={{urlquery .ApprovalToken}}" style="display:inline-block;padding:6px 14px;background:#ffffff;color:#dc2626;text-decoration:none;font-weight:600;font-size:12px;border-radius:4px;border:1px solid #dc2626;">Reject</a>
+<a href="{{$.DashboardURL}}/inventory/ri-exchange/approve/{{.RecordID}}?token={{urlquery .ApprovalToken}}" style="display:inline-block;padding:6px 14px;background:#16a34a;color:#ffffff;text-decoration:none;font-weight:600;font-size:12px;border-radius:4px;margin-right:4px;">Approve</a>
+<a href="{{$.DashboardURL}}/inventory/ri-exchange/reject/{{.RecordID}}?token={{urlquery .ApprovalToken}}" style="display:inline-block;padding:6px 14px;background:#ffffff;color:#dc2626;text-decoration:none;font-weight:600;font-size:12px;border-radius:4px;border:1px solid #dc2626;">Reject</a>
 </td>
 </tr>
 {{end}}</tbody></table>
@@ -395,7 +395,7 @@ const riExchangePendingApprovalHTMLTemplate = `<!DOCTYPE html>
 </td></tr>
 
 <tr><td style="padding:16px 32px;background:#f8fafc;border-top:1px solid #e2e8f0;border-radius:0 0 8px 8px;">
-<p style="margin:0;color:#94a3b8;font-size:11px;">This is an automated message from CUDly. Do not share these links. <a href="{{.DashboardURL}}/#ri-exchange" style="color:#64748b;">View exchange history</a></p>
+<p style="margin:0;color:#94a3b8;font-size:11px;">This is an automated message from CUDly. Do not share these links. <a href="{{.DashboardURL}}/inventory/ri-exchange" style="color:#64748b;">View exchange history</a></p>
 </td></tr>
 
 </table>
@@ -404,10 +404,28 @@ const riExchangePendingApprovalHTMLTemplate = `<!DOCTYPE html>
 
 const riExchangeCompletedTemplate = `CUDly - RI Exchanges Completed
 ==============================
+{{with .ReconciliationExchanges}}
+NEEDS RECONCILIATION - verify in AWS before acting
+--------------------------------------------------
 
+CUDly sent the exchange(s) below to AWS but got no definite answer, so AWS
+may or may not have executed them. They are not failures: do not retry them
+until they are reconciled. The run stopped at the first one, and each one
+keeps counting against the daily exchange cap until it is resolved. Check the
+source RI in the AWS console, then record what happened with the resolve
+request shown for each exchange (the API accepts it once the record has been
+unchanged for a few hours).
+{{range .}}
+- Source: {{.SourceRIID}} ({{.SourceInstanceType}})
+  Target: {{.TargetInstanceType}} x{{.TargetCount}}
+  Quoted payment: ${{.PaymentDue}}
+  Record: {{.RecordID}}
+  Resolve: POST /api/ri-exchange/resolve/{{.RecordID}}
+  Detail: {{.Error}}
+{{end}}{{end}}
 The following RI exchanges have been {{if eq .Mode "auto"}}automatically {{end}}completed:
 
-{{range .Exchanges}}{{if eq .Error ""}}
+{{range .Exchanges}}{{if and (eq .Error "") (not .OutcomeUnknown)}}
 - Source: {{.SourceRIID}} ({{.SourceInstanceType}})
   Target: {{.TargetInstanceType}} x{{.TargetCount}}
   Payment: ${{.PaymentDue}}
@@ -420,7 +438,7 @@ Skipped (could not process):
 - {{.SourceRIID}} ({{.SourceInstanceType}}): {{.Reason}}
 {{end}}{{end}}
 View exchange history:
-{{.DashboardURL}}/#ri-exchange
+{{.DashboardURL}}/inventory/ri-exchange
 
 This is an automated message from CUDly.
 `
@@ -477,7 +495,7 @@ func (s *Sender) SendPurchaseFailedNotification(ctx context.Context, data Notifi
 		return fmt.Errorf("failed to render purchase failed email: %w", err)
 	}
 
-	subject := "CUDly - Purchase Failed - Action Required"
+	subject := purchaseFailedSubject(data, "CUDly - Purchase Failed - Action Required")
 	if data.RecipientEmail != "" {
 		return s.SendToEmailWithCC(ctx, data.RecipientEmail, data.CCEmails, subject, body)
 	}
@@ -591,8 +609,7 @@ func (s *Sender) SendRIExchangeCompleted(ctx context.Context, data RIExchangeNot
 		return fmt.Errorf("failed to render ri exchange completed email: %w", err)
 	}
 
-	subject := fmt.Sprintf("CUDly - RI Exchanges Completed (%d exchanges)", len(data.Exchanges))
-	return s.SendNotification(ctx, subject, body)
+	return s.SendNotification(ctx, riExchangeCompletedSubject(data), body)
 }
 
 const purchaseApprovalRequestTemplate = `CUDly - Purchase Approval Required
@@ -940,9 +957,12 @@ func (s *Sender) SendPurchaseScheduledNotification(ctx context.Context, data Not
 // purchaseExecutedNotificationTemplate is the plain-text half of the
 // post-execution notification email. Rendered alongside
 // purchaseExecutedNotificationHTMLTemplate for multipart/alternative delivery.
-const purchaseExecutedNotificationTemplate = `[CUDly] Purchase executed{{if .Recommendations}} ({{len .Recommendations}} commitment(s)){{end}}
+const purchaseExecutedNotificationTemplate = `[CUDly] Purchase {{if .PartialPurchase}}partially {{end}}executed{{if .Recommendations}} ({{len .Recommendations}} commitment(s)){{end}}
 =============================================================================
-{{if .RequestedByEmail}}
+{{if .PartialPurchase}}
+Not every commitment in this purchase went through. See the execution in the
+dashboard for which ones failed.
+{{end}}{{if .RequestedByEmail}}
 Requested by: {{if .RequestedByName}}{{.RequestedByName}} <{{.RequestedByEmail}}>{{else}}{{.RequestedByEmail}}{{end}}{{if .RequestedAt}} at {{.RequestedAt}}{{end}}
 {{end}}{{if .ExecutedBy}}
 Executed by:  {{.ExecutedBy}}{{if .ExecutedAt}} at {{.ExecutedAt}}{{end}}
@@ -986,8 +1006,8 @@ const purchaseExecutedNotificationHTMLTemplate = `<!DOCTYPE html>
 <tr><td align="center">
 <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="background:#ffffff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
 <tr><td style="padding:32px 32px 16px 32px;">
-<h1 style="margin:0;font-size:22px;color:#0f172a;">Purchase Executed</h1>
-<p style="margin:8px 0 0 0;color:#475569;font-size:14px;"><strong>{{len .Recommendations}}</strong> commitment(s) were purchased successfully.</p>
+<h1 style="margin:0;font-size:22px;color:#0f172a;">Purchase {{if .PartialPurchase}}Partially {{end}}Executed</h1>
+{{if .PartialPurchase}}<p style="margin:8px 0 0 0;color:#b45309;font-size:14px;">Not every commitment in this purchase went through. See the execution in the dashboard for which ones failed.</p>{{else}}<p style="margin:8px 0 0 0;color:#475569;font-size:14px;"><strong>{{len .Recommendations}}</strong> commitment(s) were purchased successfully.</p>{{end}}
 </td></tr>
 
 <tr><td style="padding:0 32px 8px 32px;">
@@ -1093,12 +1113,16 @@ func (s *Sender) SendPurchaseExecutedNotification(ctx context.Context, data Noti
 // recommendation list is small enough to fit. Extracted so both Sender
 // and SMTPSender use the same subject format.
 func buildExecutedNotificationSubject(data NotificationData) string {
+	verb := "executed"
+	if data.PartialPurchase {
+		verb = "partially executed"
+	}
 	if len(data.Recommendations) == 1 {
 		r := data.Recommendations[0]
-		return fmt.Sprintf("[CUDly] Purchase executed: %s %s in %s",
-			r.Service, r.ResourceType, r.Region)
+		return fmt.Sprintf("[CUDly] Purchase %s: %s %s in %s",
+			verb, r.Service, r.ResourceType, r.Region)
 	}
-	return fmt.Sprintf("[CUDly] Purchase executed (%d commitment(s))", len(data.Recommendations))
+	return fmt.Sprintf("[CUDly] Purchase %s (%d commitment(s))", verb, len(data.Recommendations))
 }
 
 // ---------------------------------------------------------------------------

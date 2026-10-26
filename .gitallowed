@@ -12,32 +12,30 @@
 # it instead of silencing the scanner. Test fixtures should use synthetic
 # placeholders; add an entry only for a line a real scan flags.
 
-# scripts/setup-git-secrets.sh registers its detectors as literal regex text
-# and three of them (Azure connection string, PostgreSQL and MySQL DSN
-# detectors, verified empirically -- MongoDB's does not) match their own
-# registration line. Each entry below is anchored on the path, the line
-# number, AND the entire line as it appears in that file (including the
-# trailing comment), with a trailing $ -- not just the "git secrets --add
-# '" command prefix, and not just the added pattern with the anchor left
-# open at the end. A prefix-only anchor whitelists a secret appended to
-# ANY registration line in this file; an anchor missing the trailing $
-# whitelists a secret appended to the END of one of these three specific
-# lines. Both are the #1972 hole reintroduced at a smaller scale, and both
-# were caught only by a fixture exercising exactly that mutation -- add
-# one for any future entry in this block that isn't already covered.
+# scripts/setup-git-secrets.sh registers its detectors as literal regex text,
+# and one of them (the Azure connection string) matches its own registration
+# line. The DSN detectors used to as well, until #368 widened their schemes to
+# alternations, whose registration text no longer spells out a literal
+# "scheme://" for the detector to find. The entry below is anchored on the path,
+# the line number, AND the entire line as it appears in that file (including
+# the trailing comment), with a trailing $ -- not just the "git secrets --add
+# '" command prefix, and not just the added pattern with the anchor left open
+# at the end. A prefix-only anchor whitelists a secret appended to ANY
+# registration line in this file; an anchor missing the trailing $ whitelists
+# a secret appended to the END of this specific line. Both are the #1972 hole
+# reintroduced at a smaller scale, and both were caught only by a fixture
+# exercising exactly that mutation -- add one for any future entry in this
+# block that isn't already covered.
 #
-# Each entry below also replaces one letter of its own trigger substring
-# with a single-character bracket expression, e.g. "Protoco[l]" for
-# "Protocol". This is a no-op for matching (as a regex, [l] matches the
-# literal letter l exactly like l would) but it breaks the contiguous
-# trigger span each entry is built from, so .gitallowed does not need to
-# allow-list ITSELF against the very patterns these entries exist to
-# suppress (confirmed empirically: without this, the .gitallowed
-# self-scan case below fails -- and note this comment must not spell any
-# of those spans out literally either, for the same reason).
+# The entry also replaces one letter of its own trigger substring with a
+# single-character bracket expression, e.g. "Protoco[l]" for "Protocol". This
+# is a no-op for matching (as a regex, [l] matches the literal letter l exactly
+# like l would) but it breaks the contiguous trigger span the entry is built
+# from, so .gitallowed does not need to allow-list ITSELF against the very
+# pattern the entry exists to suppress (confirmed empirically: without this,
+# the .gitallowed self-scan case fails -- and note this comment must not spell
+# that span out literally either, for the same reason).
 ^scripts/setup-git-secrets\.sh:[0-9]+:add_pattern 'DefaultEndpointsProtoco[l]=https'                      # Azure Connection String$
-^scripts/setup-git-secrets\.sh:[0-9]+:add_pattern 'postgre[s]://\[\^:\]\+:\[\^@\]\+@'                           # PostgreSQL$
-^scripts/setup-git-secrets\.sh:[0-9]+:add_pattern 'mysq[l]://\[\^:\]\+:\[\^@\]\+@'                              # MySQL$
 
 # Truncated PEM placeholder used by scripts/test-git-secrets-allowlist.sh
 # (and by any fixture in this repo needing a non-secret PEM-shaped string):
@@ -71,9 +69,13 @@
 # each placeholder is bracketed so this file does not match its own entries.
 # A single account field per line, quoted placeholder only:
 ^[^:]+(_test\.go|\.test\.ts):[0-9]+:[[:space:]]*(AccountID|accountID|account_id|Account):[[:space:]]*["'](12345678901[2]|11111111111[1]|11112222333[3]|22222222222[2]|33333333333[3]|44444444444[4]|55555555555[5]|66666666666[6]|77777777777[7]|99988877766[6]|99998888777[7]|99999999999[9])["'],?$
-# Test-fixture credential fields: one field, one short quoted value, nothing
-# else on the line, in a test file only.
-^[^:]+(_test\.go|\.test\.ts):[0-9]+:[[:space:]]*(password|api_key):[[:space:]]*["'][^"']{0,40}["'],?$
+# Test-fixture credential fields: one field, one quoted placeholder from the
+# list, nothing else on the line, in a test file only. The values are listed
+# rather than matched by shape (#368): a shape such as "any value up to 40
+# characters" also passes a real password or a 32-character API key pasted
+# into a test file. To use a new placeholder, add it to the list.
+^[^:]+(_test\.go|\.test\.ts):[0-9]+:[[:space:]]*password:[[:space:]]*["'](C0mpl3x!S3cur3|lowercases3!|My\$ecur3#S3cur3!|MyAdmin@12345678|MyQwerty123!|NoNumberSecure!|NoSpecialS3cur3|pa111ssword|pass###word|pass1111word|password|password11|password123|S3cure1111xyz!|S3cureAaaa123!|S3cureXyz###1|S3cureXyz11!|SecurePass123!|smtp_password|StrongS3cur3!|testpass|UPPERCASES3!|cGFzc3dvcmQ=)["'],?$
+^[^:]+(_test\.go|\.test\.ts):[0-9]+:[[:space:]]*api_key:[[:space:]]*["'](full-api-key-value|full-key-value|new-api-key-12345|test-key)["'],?$
 
 # Placeholder credentials that only the word-bounded detectors (#328) flag:
 # a detector glued to a word, e.g. the "password" of db_password or a DSN
@@ -93,8 +95,20 @@
 ^terraform/environments/(aws|azure|gcp)/dev\.tfvars\.example:[0-9]+:[[:space:]]*#[[:space:]]+admin_passwor[d][[:space:]]+=[[:space:]]+"YourSecurePassword123!"[[:space:]]*$
 ^terraform/modules/secrets/azure/main\.tf:[0-9]+:[[:space:]]*value[[:space:]]+=[[:space:]]+var\.smtp_passwor[d][[:space:]]+!=[[:space:]]+null[[:space:]]+\?[[:space:]]+var\.smtp_passwor[d][[:space:]]+:[[:space:]]+"PLACEHOLDER_GENERATE_IN_AZURE_PORTAL"[[:space:]]*$
 ^terraform/modules/secrets/gcp/main\.tf:[0-9]+:[[:space:]]*secret_data[[:space:]]+=[[:space:]]+var\.sendgrid_api_ke[y][[:space:]]+!=[[:space:]]+null[[:space:]]+\?[[:space:]]+var\.sendgrid_api_ke[y][[:space:]]+:[[:space:]]+"PLACEHOLDER_REPLACE_ME"[[:space:]]*$
-^terraform/profiles/README\.md:[0-9]+:[[:space:]]*export[[:space:]]+TF_VAR_database_passwor[d]="secret123"[[:space:]]*$
-^terraform/profiles/README\.md:[0-9]+:[[:space:]]*database_passwor[d][[:space:]]+=[[:space:]]+"secret123"[[:space:]]*$
+^terraform/profiles/README\.md:[0-9]+:[[:space:]]*export[[:space:]]+TF_VAR_admin_passwor[d]="secret123"[[:space:]]*$
+^terraform/profiles/README\.md:[0-9]+:[[:space:]]*admin_passwor[d][[:space:]]+=[[:space:]]+"secret123"[[:space:]]*$
+^terraform/environments/aws/tests/postgres_version\.tftest\.hcl:[0-9]+:[[:space:]]*defaults[[:space:]]+=[[:space:]]+\{[[:space:]]+account_id[[:space:]]+=[[:space:]]+"123[4]567[8]901[2]"[[:space:]]+\}[[:space:]]*$
+
+# Lines the DSN detectors flag since #368 added the postgresql://, pgx5:// and
+# other schemes. None holds a real credential: the local docker-compose
+# database password that docs/DEVELOPMENT.md documents, a ${DB_PASSWORD} shell
+# reference in an audit quote, and an audit sentence that names the pgx5 scheme
+# in prose, where the detector runs on to a later ":" and "@". Same whole-line
+# anchoring as the blocks around it; the scheme is bracketed so this file does
+# not match the detector itself.
+^docs/DEVELOPMENT\.md:[0-9]+:[[:space:]]*-database[[:space:]]+"pgx[5]://cudly:cudly_local_dev@(localhost|postgres):5432/cudly\?sslmode=disable"[[:space:]]+(up|version|down[[:space:]]+1|\\)[[:space:]]*$
+^docs/audits/codebase-audit-2026-09-02\.md:[0-9]+:[[:space:]]*DB_URL="pgx[5]://cudly:\$\{DB_PASSWORD\}@\$\{DB_ENDPOINT\}:5432/cudly\?sslmode=require"[[:space:]]*$
+^docs/audits/codebase-audit-2026-09-02\.md:[0-9]+:-[[:space:]]+verdict:[[:space:]]+CONFIRMED[[:space:]]+—[[:space:]]+Dockerfile\.dev:22-33[[:space:]]+downloads[[:space:]]+the[[:space:]]+v4\.17\.0[[:space:]]+release[[:space:]]+tarball,[[:space:]]+while[[:space:]]+Dockerfile:55-85[[:space:]]+explains[[:space:]]+that[[:space:]]+upstream[[:space:]]+tarballs[[:space:]]+carry[[:space:]]+upstream's[[:space:]]+own[[:space:]]+toolchain[[:space:]]+and[[:space:]]+dependency[[:space:]]+pins[[:space:]]+\("how[[:space:]]+issue[[:space:]]+#1833's[[:space:]]+stdlib[[:space:]]+CVEs[[:space:]]+reached[[:space:]]+the[[:space:]]+runtime[[:space:]]+image"\)[[:space:]]+and[[:space:]]+builds[[:space:]]+migrate[[:space:]]+as[[:space:]]+a[[:space:]]+package[[:space:]]+of[[:space:]]+this[[:space:]]+module[[:space:]]+at[[:space:]]+the[[:space:]]+version[[:space:]]+`go\.mod`[[:space:]]+resolves[[:space:]]+\(v4\.19\.1,[[:space:]]+go\.mod:106\)[[:space:]]+with[[:space:]]+`-tags=pgx5`\.[[:space:]]+The[[:space:]]+divergence[[:space:]]+is[[:space:]]+worse[[:space:]]+than[[:space:]]+the[[:space:]]+finding[[:space:]]+states:[[:space:]]+the[[:space:]]+prod[[:space:]]+binary[[:space:]]+registers[[:space:]]+only[[:space:]]+the[[:space:]]+`pgx[5]://`[[:space:]]+scheme[[:space:]]+while[[:space:]]+the[[:space:]]+dev[[:space:]]+tarball[[:space:]]+is[[:space:]]+the[[:space:]]+default[[:space:]]+`postgre[s]://`[[:space:]]+build,[[:space:]]+so[[:space:]]+the[[:space:]]+same[[:space:]]+migration[[:space:]]+command[[:space:]]+is[[:space:]]+not[[:space:]]+portable[[:space:]]+between[[:space:]]+the[[:space:]]+two[[:space:]]+images\.[[:space:]]+`go[[:space:]]+install[[:space:]]+github\.com/air-verse/air@v1\.61\.7`[[:space:]]+at[[:space:]]+Dockerfile\.dev:16[[:space:]]+does[[:space:]]+resolve[[:space:]]+air's[[:space:]]+own[[:space:]]+go\.mod,[[:space:]]+as[[:space:]]+claimed\.[[:space:]]*$
 
 # One-off fixture lines a real scan flags (a synthetic placeholder account ID,
 # a throwaway test password, a credential-less test DSN). Each entry pins the
@@ -161,6 +175,7 @@
 ^internal/server/migrations_bounded_real_runner_test\.go:[0-9]+:[[:space:]]*cfg,[[:space:]]+err[[:space:]]+:=[[:space:]]+pgxpool\.ParseConfig\("postgre[s]://u:p@"[[:space:]]+\+[[:space:]]+ln\.Addr\(\)\.String\(\)[[:space:]]+\+[[:space:]]+"/db\?sslmode=disable"\)[[:space:]]*$
 ^scripts/generate-federation-iac_test\.go:[0-9]+:[[:space:]]*`aws_account_id[[:space:]]+=[[:space:]]+"111[1]222[2]333[3]"`,[[:space:]]*$
 ^scripts/generate-federation-iac_test\.go:[0-9]+:[[:space:]]*accountID:[[:space:]]+"000[0]111[1]222[2]",[[:space:]]*$
+^terraform/environments/aws/tests/fargate_cdn_alb\.tftest\.hcl:[0-9]+:[[:space:]]*account_id[[:space:]]+=[[:space:]]+"123[4]567[8]901[2]"[[:space:]]*$
 
 # The bare AWS secret access key detector (#295) flags this line, which holds no
 # secret: an IAM OIDC thumbprint (a public certificate hash, upper-case hex) in a
