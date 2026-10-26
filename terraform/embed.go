@@ -1,5 +1,6 @@
 // Package terraform embeds the shared Terraform modules that ship inside the
-// customer federation bundles built by internal/api.
+// customer federation bundles built by internal/iacbundle (for both the API
+// and scripts/generate-federation-iac.go).
 package terraform
 
 import "embed"
