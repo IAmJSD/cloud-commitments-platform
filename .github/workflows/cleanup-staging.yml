@@ -405,14 +405,32 @@ jobs:
           # per the zero-expression-interpolation-in-run-blocks rule from #1641.
           PROJECT="$GCP_PROJECT_ID"
           ./scripts/delete-owned-cloud-sql-instance.sh terraform/environments/gcp "$PROJECT"
-          # Remove the Service Networking Connection from state and delete directly
-          # GCP needs extra time after Cloud SQL deletion to release VPC peering
-          cd terraform/environments/gcp
-          terraform state rm module.networking.google_service_networking_connection.private_vpc_connection 2>/dev/null || true
-          gcloud services vpc-peerings delete \
-            --service=servicenetworking.googleapis.com \
-            --network=cudly-staging-vpc \
-            --project="$PROJECT" --quiet 2>/dev/null || echo "VPC peering already gone or not found"
+
+      # After the Cloud SQL step (the peering cannot go while the instance still
+      # uses it) and before `terraform destroy`. Deletes the peering on the
+      # network named by this state's `network_name` output, and removes it
+      # from state only after that delete succeeds. The Cloud SQL step used to do
+      # this inline: state rm first, delete on a hardcoded `cudly-staging-vpc`,
+      # and the delete's failure swallowed, which left a live peering untracked
+      # (#330). Rationale: the script's header.
+      #
+      # continue-on-error so a failed delete does not skip `Terraform Destroy`:
+      # the likely failure is GCP still releasing the peering just after the
+      # Cloud SQL delete, and skipping destroy would leave the whole staging
+      # stack running (and billing) instead of only the network. The script
+      # leaves the address in state when the delete fails, so the destroy below
+      # still tracks the peering. The failure is NOT swallowed: the last step
+      # fails the job when this step's outcome is failure.
+      - name: Delete the Service Networking peering this state owns
+        id: delete-peering
+        continue-on-error: true
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          # Routed via env: rather than interpolated into this script's source,
+          # per the zero-expression-interpolation-in-run-blocks rule from #1641.
+          PROJECT="$GCP_PROJECT_ID"
+          ./scripts/delete-owned-vpc-peering.sh terraform/environments/gcp "$PROJECT"
 
       - name: Terraform Destroy
         env:
@@ -423,3 +441,13 @@ jobs:
           terraform destroy \
             -var-file="github-staging.tfvars" \
             -auto-approve
+
+      # Surfaces the peering step's failure, which continue-on-error turned
+      # into a passing step so that `Terraform Destroy` above still ran.
+      # !cancelled() rather than the implicit success(), so it still reports
+      # when the destroy failed too.
+      - name: Fail if the peering delete failed
+        if: ${{ !cancelled() && steps.delete-peering.outcome == 'failure' }}
+        run: |
+          echo "::error::Deleting the Service Networking peering failed; its address is still in Terraform state. Terraform Destroy ran anyway. See the 'Delete the Service Networking peering this state owns' step log, then re-run this job."
+          exit 1
