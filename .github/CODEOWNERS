@@ -1,0 +1,4 @@
+# Requests review from the maintainer on every PR. The ruleset does not
+# require code-owner review, so this only auto-requests reviews; it does not
+# block merges.
+* @cristim

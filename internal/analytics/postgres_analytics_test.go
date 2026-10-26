@@ -250,6 +250,11 @@ func TestValidateCommitmentType(t *testing.T) {
 	t.Run("accepts SavingsPlan", func(t *testing.T) {
 		assert.NoError(t, validateCommitmentType("SavingsPlan"))
 	})
+	t.Run("accepts the pkg/common vocabulary", func(t *testing.T) {
+		for _, v := range []string{"reserved-instance", "savings-plan", "committed-use", "reserved-capacity"} {
+			assert.NoError(t, validateCommitmentType(v), v)
+		}
+	})
 	t.Run("rejects an unknown value", func(t *testing.T) {
 		err := validateCommitmentType("bogus")
 		require.Error(t, err)

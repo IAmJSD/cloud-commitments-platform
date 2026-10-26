@@ -3,6 +3,7 @@
  */
 import { loadRecommendations, openPurchaseModal, getPurchaseModalRecommendations, clearPurchaseModalRecommendations, refreshRecommendations, setupRecommendationsHandlers, pickBestVariantPerCell, seedGlobalDefaults, effectiveMonthlySavings, effectiveSavingsPct, displaySavingsPct, onDemandMonthly, groupRecsByCell, cellSummary, pageLevelRange, resetExpandedCells, resetAutoRefreshInFlight, scaleCost, formatCostForPeriod, periodSuffix, loadColumnVisibility, saveColumnVisibility, resetColumnVisibilityState, TOGGLEABLE_COLUMNS, COLUMN_DEFS, isHomogeneousSelection, renderUsageSparkline, loadColumnFilters, saveColumnFilters, resetColumnFiltersState, spGroupKey, groupSpCellKeys, formatCapacity, scaleRecForCapacity, weightedDisplaySavingsPct } from '../recommendations';
 import type { CostPeriod } from '../state';
+import { HOURS_PER_MONTH } from '../lib/hours-per-month';
 
 // Mock the api module
 jest.mock('../api', () => ({
@@ -5813,8 +5814,11 @@ describe('Issue #319: scaleCost', () => {
     expect(scaleCost(100, 'monthly')).toBe(100);
   });
 
-  test('hourly factor is 1/720', () => {
-    expect(scaleCost(720, 'hourly')).toBeCloseTo(1.0);
+  // Issues #337/#394: hourly uses the backend's 730-hour month, not 720.
+  test('hourly factor is 1/730, the shared hours-per-month', () => {
+    expect(HOURS_PER_MONTH).toBe(730);
+    expect(scaleCost(730, 'hourly')).toBeCloseTo(1.0, 10);
+    expect(scaleCost(720, 'hourly')).not.toBeCloseTo(1.0, 4);
   });
 
   test('daily factor is 1/30', () => {
@@ -5851,7 +5855,7 @@ describe('Issue #319: formatCostForPeriod', () => {
   });
 
   test('hourly uses 4 decimal places', () => {
-    expect(formatCostForPeriod(720, 'hourly')).toMatch(/\$1\.0000/);
+    expect(formatCostForPeriod(730, 'hourly')).toMatch(/\$1\.0000/);
   });
 
   test('daily uses 2 decimal places', () => {
@@ -6003,13 +6007,13 @@ describe('Issue #319: table cells scale with period', () => {
     (state.getRecommendationsColumnFilters as jest.Mock).mockReturnValue({});
   });
 
-  test('hourly: savings cell shows $1.0000', async () => {
+  test('hourly: savings cell shows $0.9863 (720 / 730 hours)', async () => {
     (state.getCostPeriod as jest.Mock).mockReturnValue('hourly');
     await loadRecommendations();
     const rows = document.querySelectorAll('tr.recommendation-row');
     expect(rows.length).toBeGreaterThan(0);
     const savingsCell = rows[0]!.querySelector('.savings');
-    expect(savingsCell?.textContent).toMatch(/\$1\.0000/);
+    expect(savingsCell?.textContent).toMatch(/\$0\.9863/);
   });
 
   test('daily: savings cell shows $24.00', async () => {
@@ -6047,7 +6051,7 @@ describe('Issue #319: table cells scale with period', () => {
     (state.getRecommendations as jest.Mock).mockReturnValue([recWithUpfront]);
     await loadRecommendations();
     const rows = document.querySelectorAll('tr.recommendation-row');
-    // We just verify "1000" appears somewhere but "0.0014" (1000/720) does not
+    // We just verify "1000" appears somewhere but "0.0014" (1000/730) does not
     const rowText = rows[0]!.textContent ?? '';
     expect(rowText).toContain('1000');
     expect(rowText).not.toMatch(/0\.0014/);
@@ -6099,8 +6103,8 @@ describe('Issue #319: table cells scale with period', () => {
 
   test('hourly numeric filter compares the scaled (per-hour) savings, not the raw monthly value', async () => {
     // Both recs would pass a ">0.75" filter against raw monthly_cost (360
-    // and 720 are both > 0.75). After hourly scaling (÷720), only r-high
-    // (1.0) passes; r-low (0.5) is filtered out. If numericCellValue were
+    // and 720 are both > 0.75). After hourly scaling (÷730), only r-high
+    // (0.986) passes; r-low (0.493) is filtered out. If numericCellValue were
     // to drop the scaleCost call, this test would surface the regression.
     const recLow  = { ...mockRec, id: 'r-low',  resource_type: 'low',  savings: 360, monthly_cost: 360 };
     const recHigh = { ...mockRec, id: 'r-high', resource_type: 'high', savings: 720, monthly_cost: 720 };
@@ -7609,7 +7613,7 @@ describe('Issue #484: numeric filter matches the displayed rounded value', () =>
   // display rounds to PERIOD_DECIMALS.hourly (4) decimals.
   //
   // raw monthly = 123.456789 → daily = monthly/30 = 4.1152263; hourly =
-  // monthly/720 = 0.171467... Use a monthly that's clean enough to keep
+  // monthly/730 = 0.169119... Use a monthly that's clean enough to keep
   // the assertions readable while still distinguishing exact rounding.
   const recs = [
     { id: 'r-exact',   provider: 'aws', cloud_account_id: 'a1', service: 'ec2', resource_type: 't3.medium', region: 'us-east-1', count: 1, term: 1, savings: 123.456789, upfront_cost: 500 },

@@ -281,4 +281,23 @@ describe('Planned Purchases column filters (issue #166 follow-up)', () => {
 
     expect(countRows()).toBe(3);
   });
+
+  // Money and count columns carry th.num/td.num (right-aligned, tabular
+  // digits) in the header and in every row at the same index (issue #739).
+  function numColumns(root: ParentNode): { headers: string[]; rowsMatch: boolean } {
+    const ths = Array.from(root.querySelectorAll('thead th'));
+    const numIdx = ths.flatMap((th, i) => (th.classList.contains('num') ? [i] : []));
+    const rows = Array.from(root.querySelectorAll('tbody tr'));
+    const rowsMatch = rows.length > 0 && rows.every((tr) => {
+      const tds = Array.from(tr.querySelectorAll('td'));
+      return tds.flatMap((td, i) => (td.classList.contains('num') ? [i] : [])).join() === numIdx.join();
+    });
+    return { headers: numIdx.map((i) => (ths[i]!.textContent ?? '').trim()), rowsMatch };
+  }
+
+  test('money and count columns are right-aligned with tabular digits (issue #739)', async () => {
+    await loadPlans();
+    const list = document.getElementById('planned-purchases-list')!;
+    expect(numColumns(list)).toEqual({ headers: ['Count', 'Upfront', 'Est. Savings'], rowsMatch: true });
+  });
 });

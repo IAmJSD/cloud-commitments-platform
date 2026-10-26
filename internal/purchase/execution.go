@@ -159,7 +159,7 @@ func (m *Manager) executeSingleAccount(ctx context.Context, exec *config.Purchas
 // (issue #97; see fan_out_shape.go). Every error it returns is before
 // submission. Split out of executeSingleAccount to keep that function under
 // the gocyclo budget.
-func (m *Manager) prepareSingleAccountSubmission(ctx context.Context, exec *config.PurchaseExecution) (*provider.ProviderConfig, purchaseTarget, error) {
+func (m *Manager) prepareSingleAccountSubmission(ctx context.Context, exec *config.PurchaseExecution) (*provider.Config, purchaseTarget, error) {
 	if err := requireRecsMatchRowAccount(exec); err != nil {
 		return nil, purchaseTarget{}, beforeSubmission(err)
 	}
@@ -445,7 +445,7 @@ func applyAccountOutcome(acctExec *config.PurchaseExecution, purchaseErrors []st
 // resolved (lookup failed, the account does not exist, or credentials could
 // not be derived); the caller must NOT fall back to ambient credentials on
 // error, as that would purchase/stamp against the wrong account (#646).
-func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config.PurchaseExecution) (*provider.ProviderConfig, purchaseTarget, error) {
+func (m *Manager) resolveSingleAccountProvider(ctx context.Context, exec *config.PurchaseExecution) (*provider.Config, purchaseTarget, error) {
 	// Skip credential resolution when nothing is selected. Approval-only
 	// flows may carry an account ID on the recs solely for the contact-email
 	// gate; attempting resolution there would fail on accounts with no
@@ -502,11 +502,11 @@ func (e *partialPurchaseError) Error() string {
 // resolveAccountProvider returns a *ProviderConfig with a pre-authenticated provider
 // for the given account. Returns an error if credential resolution fails -- callers
 // must NOT fall back to ambient credentials on error.
-func (m *Manager) resolveAccountProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+func (m *Manager) resolveAccountProvider(ctx context.Context, account config.CloudAccount) (*provider.Config, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[resolveAccountProvider]: resolving credentials for provider=%s account=%s",
 		account.Provider, account.ID)
-	var cfg *provider.ProviderConfig
+	var cfg *provider.Config
 	var err error
 	switch account.Provider {
 	case "aws":
@@ -528,7 +528,7 @@ func (m *Manager) resolveAccountProvider(ctx context.Context, account config.Clo
 	return cfg, nil
 }
 
-func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAccount) (*provider.Config, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[resolveAWSProvider]: resolving AWS credentials for account=%s authMode=%s",
 		account.ID, account.AWSAuthMode)
@@ -544,10 +544,10 @@ func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAc
 	}
 	logging.Infof("purchase[resolveAWSProvider]: AWS credentials resolved for account=%s in %s",
 		account.ID, time.Since(t0))
-	return &provider.ProviderConfig{Name: "aws", AWSCredentialsProvider: awsCreds}, nil
+	return &provider.Config{Name: "aws", AWSCredentialsProvider: awsCreds}, nil
 }
 
-func (m *Manager) resolveAzureProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+func (m *Manager) resolveAzureProvider(ctx context.Context, account config.CloudAccount) (*provider.Config, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[resolveAzureProvider]: resolving Azure credentials for account=%s authMode=%s",
 		account.ID, account.AzureAuthMode)
@@ -571,10 +571,10 @@ func (m *Manager) resolveAzureProvider(ctx context.Context, account config.Cloud
 	}
 	logging.Infof("purchase[resolveAzureProvider]: Azure credentials resolved for account=%s in %s",
 		account.ID, time.Since(t0))
-	return &provider.ProviderConfig{ProviderOverride: azProv}, nil
+	return &provider.Config{ProviderOverride: azProv}, nil
 }
 
-func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAccount) (*provider.ProviderConfig, error) {
+func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAccount) (*provider.Config, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[resolveGCPProvider]: resolving GCP credentials for account=%s authMode=%s",
 		account.ID, account.GCPAuthMode)
@@ -604,7 +604,7 @@ func (m *Manager) resolveGCPProvider(ctx context.Context, account config.CloudAc
 	}
 	logging.Infof("purchase[resolveGCPProvider]: GCP credentials resolved for account=%s in %s",
 		account.ID, time.Since(t0))
-	return &provider.ProviderConfig{ProviderOverride: gcpProv}, nil
+	return &provider.Config{ProviderOverride: gcpProv}, nil
 }
 
 // getMaxAccountParallelism is a thin alias over the shared
@@ -624,7 +624,7 @@ type recPurchaseOutcome struct {
 	index    int
 }
 
-func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.ProviderConfig, awsPartition string) (totalSavings, totalUpfront float64, purchaseErrors []string, procErr error) {
+func (m *Manager) processPurchaseRecommendations(ctx context.Context, exec *config.PurchaseExecution, plan *config.PurchasePlan, accountID string, provCfg *provider.Config, awsPartition string) (totalSavings, totalUpfront float64, purchaseErrors []string, procErr error) {
 	// ExecutionID is carried into PurchaseOptions so executeSinglePurchase
 	// can tag every per-rec log line with the owning exec UUID. Without
 	// this, CloudWatch filtering by exec ID returns zero hits and a stuck
@@ -1111,7 +1111,7 @@ func logRecCtxErr(executionID, recTuple string, elapsed time.Duration, recCtxErr
 // provCfg carries optional per-account credentials; pass nil to use ambient credentials.
 // opts carries execution-level metadata (the source surface) that providers stamp
 // onto the commitment they create.
-func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.RecommendationRecord, provCfg *provider.ProviderConfig, opts common.PurchaseOptions) (common.PurchaseResult, error) {
+func (m *Manager) executeSinglePurchase(ctx context.Context, rec config.RecommendationRecord, provCfg *provider.Config, opts common.PurchaseOptions) (common.PurchaseResult, error) {
 	// Per-purchase Info logs tagged with the owning execution ID so a
 	// CloudWatch filter on the execution UUID surfaces every step of the
 	// purchase attempt -- provider construction, service-client lookup,
@@ -1344,21 +1344,26 @@ var legacyAWSServiceSlugs = map[string]common.ServiceType{
 // flip the coverage_extra_test.go case (line ~60) to assert
 // ServiceType("savings-plans") (default-arm pass-through). The
 // "savingsplans-*" keys are forward-compat and should stay.
+//
+// A new per-plan-type spelling must also be added to
+// config.awsSavingsPlansSpellings, else a suppression stored under it misses
+// recs (#1422); a test ranges over savingsPlansSlugs to enforce that.
 func mapSavingsPlansSlug(service string) (common.ServiceType, bool) {
-	slugs := map[string]common.ServiceType{
-		"savings-plans":             common.ServiceSavingsPlansAll,
-		"savingsplans":              common.ServiceSavingsPlansAll,
-		"savings-plans-compute":     common.ServiceSavingsPlansCompute,
-		"savingsplans-compute":      common.ServiceSavingsPlansCompute,
-		"savings-plans-ec2instance": common.ServiceSavingsPlansEC2Instance,
-		"savingsplans-ec2instance":  common.ServiceSavingsPlansEC2Instance,
-		"savings-plans-sagemaker":   common.ServiceSavingsPlansSageMaker,
-		"savingsplans-sagemaker":    common.ServiceSavingsPlansSageMaker,
-		"savings-plans-database":    common.ServiceSavingsPlansDatabase,
-		"savingsplans-database":     common.ServiceSavingsPlansDatabase,
-	}
-	svc, ok := slugs[service]
+	svc, ok := savingsPlansSlugs[service]
 	return svc, ok
+}
+
+var savingsPlansSlugs = map[string]common.ServiceType{
+	"savings-plans":             common.ServiceSavingsPlansAll,
+	"savingsplans":              common.ServiceSavingsPlansAll,
+	"savings-plans-compute":     common.ServiceSavingsPlansCompute,
+	"savingsplans-compute":      common.ServiceSavingsPlansCompute,
+	"savings-plans-ec2instance": common.ServiceSavingsPlansEC2Instance,
+	"savingsplans-ec2instance":  common.ServiceSavingsPlansEC2Instance,
+	"savings-plans-sagemaker":   common.ServiceSavingsPlansSageMaker,
+	"savingsplans-sagemaker":    common.ServiceSavingsPlansSageMaker,
+	"savings-plans-database":    common.ServiceSavingsPlansDatabase,
+	"savingsplans-database":     common.ServiceSavingsPlansDatabase,
 }
 
 // updatePlanProgress advances the ramp schedule after a purchase.

@@ -9,6 +9,7 @@ import { formatTrendAxisTick, upsertChart } from './chart-utils';
 import { formatCompactCurrency, formatCurrency } from '../utils';
 import { setChartSummary, renderChartTable, removeChartTable } from '../lib/chart-a11y';
 import { applyChartDefaults, chartColor, withAlpha } from '../lib/chart-theme';
+import { HOURS_PER_MONTH } from '../lib/hours-per-month';
 
 // Register Chart.js components
 Chart.register(...registerables);
@@ -26,8 +27,8 @@ const API_UNIT = 'monthly' as const;
 
 export type SavingsUnit = 'hourly' | 'monthly' | 'yearly';
 
-// Conversion factors relative to monthly as the canonical unit.
-const HOURS_PER_MONTH = 730;   // 365.25 * 24 / 12
+// Conversion factors relative to monthly as the canonical unit. Hourly uses
+// the shared 730-hour month (365 * 24 / 12), the same as the backend.
 const MONTHS_PER_YEAR = 12;
 
 /**

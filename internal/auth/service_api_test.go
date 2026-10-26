@@ -516,6 +516,9 @@ func TestService_UpdateGroupAPI(t *testing.T) {
 		}
 
 		mockStore.On("GetGroup", ctx, "group-123").Return(existingGroup, nil).Once()
+		// The group gains its first permission, so the issue #1409 member
+		// check runs; the group has no members.
+		mockStore.On("ListUsers", ctx).Return([]User{}, nil).Once()
 		mockStore.On("UpdateGroup", ctx, mock.AnythingOfType("*auth.Group")).Return(nil).Once()
 
 		req := APIUpdateGroupRequest{

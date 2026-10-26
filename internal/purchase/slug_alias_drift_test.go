@@ -57,3 +57,25 @@ func TestMapServiceSlugAcceptsEveryCanonicalReservationSlug(t *testing.T) {
 		assert.Equal(t, want, got)
 	}
 }
+
+// TestSavingsPlansSpellingsMatchSuppressionAliases checks that every per-type
+// Savings Plans spelling the purchase manager accepts canonicalises, for
+// suppressions, to the slug it buys, so a suppression stored under the
+// dash-free spelling still hides the hyphenated rec (#1422). The umbrella
+// spellings must stay umbrellas: folding one into a plan type would let one
+// umbrella suppression hide every plan type's recs.
+func TestSavingsPlansSpellingsMatchSuppressionAliases(t *testing.T) {
+	for _, pt := range common.SavingsPlansPlanTypes() {
+		require.Contains(t, savingsPlansSlugs, string(pt), "per-type slug %q was removed from savingsPlansSlugs", pt)
+	}
+	for key, want := range savingsPlansSlugs {
+		t.Run(key, func(t *testing.T) {
+			canonical := config.CanonicalSuppressionService("aws", key)
+			if want == common.ServiceSavingsPlansAll {
+				assert.Equal(t, key, canonical, "umbrella spelling %q must pass through unchanged", key)
+				return
+			}
+			assert.Equal(t, string(want), canonical, "spelling %q is missing from config.awsSavingsPlansSpellings", key)
+		})
+	}
+}

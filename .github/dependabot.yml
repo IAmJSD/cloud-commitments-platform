@@ -1,0 +1,104 @@
+# Dependabot version updates (owner decision D19, from the CI-policy
+# question in #1307). Security alerts are a separate setting; this file only
+# schedules version-update PRs.
+#
+# Minor and patch updates are grouped into one PR per ecosystem, and each
+# ecosystem opens at most 5 PRs at a time, so the weekly run stays reviewable.
+# Major updates still arrive one PR per dependency, because they are the ones
+# that need reading.
+#
+# cooldown holds back a release until it is 7 days old, so a compromised or
+# yanked version has time to be caught before Dependabot proposes it.
+version: 2
+
+updates:
+  # Root Go module.
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore(deps)
+    labels:
+      - type/chore
+    groups:
+      gomod-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # tests/e2e is its own module, excluded from the root module on purpose.
+  - package-ecosystem: gomod
+    directory: /tests/e2e
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore(deps)
+    labels:
+      - type/chore
+    groups:
+      e2e-gomod-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore(deps)
+    labels:
+      - type/chore
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Workflow actions are pinned by commit SHA with a version comment;
+  # Dependabot bumps the SHA and the comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore(ci)
+    labels:
+      - type/chore
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Dockerfile, Dockerfile.dev and Dockerfile.test pin base images by tag
+  # and digest; Dependabot updates both.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore(deps)
+    labels:
+      - type/chore
+    groups:
+      docker-minor-patch:
+        update-types:
+          - minor
+          - patch
