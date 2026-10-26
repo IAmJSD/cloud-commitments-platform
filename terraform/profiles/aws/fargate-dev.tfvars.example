@@ -29,7 +29,7 @@ admin_email = "admin@example.com"
 # Database (RDS PostgreSQL)
 database_name                  = "cudly"
 database_username              = "cudly"
-database_engine_version        = "16.6"
+database_engine_version        = "16" # major only: a full minor pin breaks on RDS auto-upgrade (see variables.tf)
 database_backup_retention_days = 7
 database_deletion_protection   = false
 database_skip_final_snapshot   = true

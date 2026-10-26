@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime"
@@ -15,7 +16,6 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -29,29 +29,17 @@ func getTestMigrationsPath() string {
 	return filepath.Join(filepath.Dir(filename), "..", "database", "postgres", "migrations")
 }
 
-// setupTestContainerDB starts a PostgreSQL container via testcontainers,
-// runs migrations, and adds a UNIQUE constraint on execution_id for ON CONFLICT support.
-// Returns the database.Connection or skips the test.
+// setupTestContainerDB returns a freshly migrated database of the test's own
+// on the package's shared PostgreSQL container (issue #982). It skips only
+// when this environment has no usable Docker provider; a migration that will
+// not apply fails it (issue #1597).
 func setupTestContainerDB(t *testing.T) *database.Connection {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() {
-		container.Cleanup(context.Background())
-	})
-
-	// Migrating is the thing under test here, not a precondition of it: a
-	// migration that will not apply is a broken schema, and skipping on it would
-	// report the whole suite green on exactly the defect it exists to catch
-	// (issue #1597).
-	require.NoError(t,
-		migrations.RunMigrations(ctx, container.DB.Pool(), getTestMigrationsPath(), "", ""),
-		"migrations failed to apply to a fresh database")
-
-	return container.DB
+	return testhelpers.RequireMigratedDatabase(ctx, t, getTestMigrationsPath()).DB
 }
 
 // cleanupTestData deletes all data from test tables.
@@ -1204,11 +1192,10 @@ func TestPostgresStoreDB_SaveRIExchangeRecord_DefaultsEmptyPaymentDue(t *testing
 	ctx := context.Background()
 
 	record := &RIExchangeRecord{
-		// AccountID must satisfy the ri_exchange_history schema
-		// invariants: VARCHAR(20) + CHECK (account_id ~ '^\d{12}$').
-		// The earlier test value "payment-due-test-account" tripped both
-		// the length cap and the regex check — replaced with a
-		// 12-digit AWS-style account ID.
+		// A 12-digit AWS-style account ID, the shape every row written
+		// by the AWS exchange path carries (enforced in Go by the
+		// server's exchange store adapter since migration 000137
+		// dropped the column's AWS-only CHECK, issue #144).
 		AccountID:          "123456789012",
 		ExchangeID:         "payment-due-test-exchange",
 		Region:             "us-east-1",
@@ -1774,6 +1761,57 @@ func TestPostgresStoreDB_TransitionExecutionStatusPinned(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "running", got.Status)
 	})
+}
+
+// TestPostgresStoreDB_TransitionExecutionStatusPinnedTx (issue #1052): the tx
+// variant commits or rolls back with the caller's transaction, and a lost pin,
+// a lost status CAS or a missing row is reported without aborting it.
+func TestPostgresStoreDB_TransitionExecutionStatusPinnedTx(t *testing.T) {
+	conn := setupTestContainerDB(t)
+	if conn == nil {
+		return
+	}
+	store := NewPostgresStore(conn)
+	ctx := context.Background()
+	plan := &PurchasePlan{Name: "pinned claim tx", Enabled: true, Services: map[string]ServiceConfig{}, RampSchedule: PresetRampSchedules["immediate"]}
+	require.NoError(t, store.CreatePurchasePlan(ctx, plan))
+	exec := &PurchaseExecution{PlanID: plan.ID, Status: "notified", StepNumber: 1, ScheduledDate: time.Now()}
+	require.NoError(t, store.SavePurchaseExecution(ctx, exec))
+	from := []string{"pending", "notified"}
+	status := func() string {
+		t.Helper()
+		reread, err := store.GetExecutionByID(ctx, exec.ExecutionID)
+		require.NoError(t, err)
+		return reread.Status
+	}
+
+	rollback := errors.New("caller's later write failed")
+	err := store.WithTx(ctx, func(tx pgx.Tx) error {
+		got, txErr := store.TransitionExecutionStatusPinnedTx(ctx, tx, exec.ExecutionID, from, "failed", nil, true)
+		require.NoError(t, txErr)
+		assert.Equal(t, "failed", got.Status)
+		return rollback
+	})
+	require.ErrorIs(t, err, rollback)
+	assert.Equal(t, "notified", status(), "the transition rolls back with the caller's transaction")
+
+	require.NoError(t, store.WithTx(ctx, func(tx pgx.Tx) error {
+		_, pinErr := store.TransitionExecutionStatusPinnedTx(ctx, tx, exec.ExecutionID, from, "failed", nil, false)
+		require.ErrorIs(t, pinErr, ErrExecutionNotInExpectedStatus, "a lost pin is a lost CAS")
+		_, goneErr := store.TransitionExecutionStatusPinnedTx(ctx, tx, uuid.NewString(), from, "failed", nil, true)
+		require.ErrorIs(t, goneErr, ErrNotFound)
+		got, txErr := store.TransitionExecutionStatusPinnedTx(ctx, tx, exec.ExecutionID, from, "failed", nil, true)
+		require.NoError(t, txErr, "the rejections did not abort the transaction")
+		assert.Equal(t, "failed", got.Status)
+		return nil
+	}))
+	assert.Equal(t, "failed", status())
+
+	require.NoError(t, store.WithTx(ctx, func(tx pgx.Tx) error {
+		_, casErr := store.TransitionExecutionStatusPinnedTx(ctx, tx, exec.ExecutionID, from, "failed", nil, true)
+		require.ErrorIs(t, casErr, ErrExecutionNotInExpectedStatus)
+		return nil
+	}))
 }
 
 // TestPostgresStoreDB_TransitionExecutionStatusTokenPinned (issue #590): the

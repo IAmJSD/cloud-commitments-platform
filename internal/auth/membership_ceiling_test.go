@@ -111,6 +111,38 @@ func TestMembershipCeiling_UpdateUser_UpdateUsersOnlyCannotSelfPromoteToAdmin(t 
 	mockStore.AssertNotCalled(t, "UpdateUserAdminFields", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
+// Non-admin variant of the self-promotion test above (issue #419): the
+// ceiling is not an Administrators special case. An actor holding only
+// update:users adds to their OWN membership a group carrying an ordinary,
+// non-carved-out permission they do not hold. guardSelfEscalation admits it
+// (update:users is held, nothing carved out, no account restriction), so
+// only the #226 grant ceiling, measured against the actor's prior
+// permissions, stands between the actor and view:recommendations.
+func TestMembershipCeiling_UpdateUser_SelfEditNonAdminPermissionAboveCeilingRefused(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	svc := newCeilingService(t, mockStore)
+
+	recommendationViewers := &Group{
+		ID:          "44444444-4444-4444-8444-000000000002",
+		Name:        "Recommendation Viewers",
+		Permissions: []Permission{{Action: ActionView, Resource: ResourceRecommendations}},
+	}
+	stubActorPermissions(ctx, mockStore, updateUsersOnly)
+	mockStore.On("GetGroup", ctx, recommendationViewers.ID).Return(recommendationViewers, nil)
+
+	_, err := svc.UpdateUser(ctx, ceilingActorID, ceilingActorID, UpdateUserRequest{
+		GroupIDs: []string{ceilingActorGroupID, recommendationViewers.ID},
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrPermissionCeiling)
+	assert.NotErrorIs(t, err, ErrSelfEscalation)
+	assert.Contains(t, err.Error(), ActionView+":"+ResourceRecommendations)
+	mockStore.AssertNotCalled(t, "UpdateUserAdminFields", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}
+
 // Negative control: an actor may still create a user in a group whose
 // permissions their own effective set already covers.
 func TestMembershipCeiling_CreateUser_AllowedWithinCeiling(t *testing.T) {

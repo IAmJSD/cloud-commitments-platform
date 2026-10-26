@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestApplicationRateLimiter(t *testing.T) {
@@ -38,16 +38,17 @@ func TestApplicationRateLimiter(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 
 	for mode, isLambda := range []bool{false, true} {
 		t.Run(fmt.Sprintf("lambda=%t", isLambda), func(t *testing.T) {
 			cfg := ApplicationConfig{
 				IsLambda: isLambda, DashboardURL: "https://rate-limit.example.test",
 				DefaultTerm: 3, DefaultCoverage: 80,
+				// Each 401 login runs Login's timing-equalizing bcrypt
+				// compare, about 5s at cost 12 under -race. The limiter
+				// does not depend on the cost.
+				authBcryptCost: bcrypt.MinCost,
 			}
 			newApp := func() *Application {
 				app, appErr := NewApplicationFromDeps(ctx, cfg, ExternalDeps{
@@ -67,7 +68,8 @@ func TestApplicationRateLimiter(t *testing.T) {
 			ip := func(bucket int) string { return fmt.Sprintf("192.0.2.%d", mode*10+bucket) }
 			request := func(replica int, path, sourceIP, body string) (int, error) {
 				method := http.MethodGet
-				if path == "/api/auth/login" || strings.HasPrefix(path, "/api/purchases/") {
+				if path == "/api/auth/login" || path == "/api/auth/forgot-password" ||
+					strings.HasPrefix(path, "/api/purchases/") {
 					method = http.MethodPost
 				}
 				req, reqErr := http.NewRequestWithContext(ctx, method, servers[replica].URL+path, strings.NewReader(body))
@@ -100,7 +102,7 @@ func TestApplicationRateLimiter(t *testing.T) {
 			checkCount := func(sourceIP, endpoint string, want int) {
 				t.Helper()
 				var count int
-				err = pg.DB.Pool().QueryRow(ctx, "SELECT count FROM rate_limits WHERE id = $1",
+				err := pg.DB.Pool().QueryRow(ctx, "SELECT count FROM rate_limits WHERE id = $1",
 					"IP#"+sourceIP+"#ENDPOINT#"+endpoint).Scan(&count)
 				assert.NoError(t, err)
 				assert.Equal(t, want, count)
@@ -130,10 +132,45 @@ func TestApplicationRateLimiter(t *testing.T) {
 			}
 			checkCount(ip(3), "approve_cancel_public", 32)
 
+			// Forgot-password per-IP cap (#13): distinct addresses from one
+			// client share one bucket across replicas, and a client-supplied
+			// X-Forwarded-For entry left of the proxy-appended one opens no
+			// fresh bucket.
+			forgot := func(replica, i int, xff string) (int, error) {
+				return request(replica, "/api/auth/forgot-password", xff,
+					fmt.Sprintf(`{"email":"probe%d@example.test"}`, i))
+			}
+			for i := range 12 {
+				want := http.StatusOK
+				if i >= 10 {
+					want = http.StatusTooManyRequests
+				}
+				status, reqErr := forgot(i%2, i, fmt.Sprintf("198.51.100.%d, %s", i+1, ip(7)))
+				require.NoError(t, reqErr)
+				assert.Equal(t, want, status, "forgot-password attempt %d", i+1)
+			}
+			checkCount(ip(7), "forgot_password_ip", 12)
+
 			type outcome struct {
 				status int
 				err    error
 			}
+			forgotResults := make(chan outcome, 15)
+			for i := range 15 {
+				go func() {
+					status, reqErr := forgot(i%2, 100+i, ip(8))
+					forgotResults <- outcome{status, reqErr}
+				}()
+			}
+			forgotStatuses := make(map[int]int)
+			for range 15 {
+				result := <-forgotResults
+				require.NoError(t, result.err)
+				forgotStatuses[result.status]++
+			}
+			assert.Equal(t, map[int]int{http.StatusOK: 10, http.StatusTooManyRequests: 5}, forgotStatuses)
+			checkCount(ip(8), "forgot_password_ip", 15)
+
 			results := make(chan outcome, 12)
 			for i := range 12 {
 				go func() {

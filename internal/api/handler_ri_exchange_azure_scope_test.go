@@ -173,12 +173,18 @@ func TestAzureExchangeScopeRefused(t *testing.T) {
 				}
 				require.Error(t, err)
 				require.Equal(t, 1, client.listCalls)
+				ce, ok := IsClientError(err)
+				require.True(t, ok, "a refused source must be a client error, not a generic 500: %v", err)
 				if tc.foreign {
-					ce, ok := IsClientError(err)
-					require.True(t, ok)
 					require.Equal(t, 403, ce.code)
 					require.Nil(t, client.priced)
 				} else {
+					// The real CalculateExchange refuses with
+					// ErrUnsupportedAppliedScope (#521); the caller gets a 422
+					// naming the scope problem instead of "failed to ...".
+					require.Equal(t, 422, ce.code)
+					require.Contains(t, ce.message, "unsupported applied scope")
+					require.NotContains(t, ce.message, "failed to")
 					require.Len(t, client.priced, len(sources))
 				}
 			})
