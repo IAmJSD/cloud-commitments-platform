@@ -9,24 +9,14 @@ Parameters:
     Type: String
     Description: >
       Full OIDC issuer URL (with https://) — used for the IAM OIDC provider Url property.
-      Must NOT contain a trailing slash; the value here must match OIDCIssuerHost
-      (minus the https:// prefix) exactly because AWS IAM condition keys are
-      case-sensitive and string-equal.
+      Must NOT contain a trailing slash. The trust policy's condition-key host
+      is derived from this value (the URL with https:// removed), so the two
+      cannot disagree; AWS IAM condition keys are case-sensitive and
+      string-equal.
       Azure AD: https://login.microsoftonline.com/<tenant_id>/v2.0
       GCP:      https://accounts.google.com
     AllowedPattern: "^https://[^/]+(/[^/]+)*$"
     ConstraintDescription: "OIDCIssuerURL must be https:// and must not contain a trailing slash."
-
-  OIDCIssuerHost:
-    Type: String
-    Description: >
-      OIDC issuer host and path WITHOUT the https:// prefix — used as the IAM
-      condition key. Must equal OIDCIssuerURL with the https:// stripped and no
-      trailing slash; the operator is responsible for keeping the two in sync.
-      Azure AD: login.microsoftonline.com/<tenant_id>/v2.0
-      GCP:      accounts.google.com
-    AllowedPattern: "^[^/]+(/[^/]+)*$"
-    ConstraintDescription: "OIDCIssuerHost must not start or end with a slash."
 
   OIDCAudience:
     Type: String
@@ -267,11 +257,22 @@ Resources:
             Principal:
               Federated: !GetAtt OIDCProvider.Arn
             Action: sts:AssumeRoleWithWebIdentity
+            # The condition-key host is OIDCIssuerURL minus its https://
+            # prefix, derived here rather than taken as a second parameter so
+            # the two cannot disagree (#324). OIDCIssuerURL's AllowedPattern
+            # guarantees exactly one leading https:// and no trailing slash, so
+            # element 1 of the split is the whole host and path. This is the
+            # same value as local.oidc_condition_host in the Terraform module.
             Condition:
               StringEquals:
-                !Sub "${OIDCIssuerHost}:aud":
-                  !If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]
-                !Sub "${OIDCIssuerHost}:sub": !Ref OIDCSubjectClaim
+                ? !Sub
+                  - "${Host}:aud"
+                  - Host: !Select [1, !Split ["https://", !Ref OIDCIssuerURL]]
+                : !If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]
+                ? !Sub
+                  - "${Host}:sub"
+                  - Host: !Select [1, !Split ["https://", !Ref OIDCIssuerURL]]
+                : !Ref OIDCSubjectClaim
       ManagedPolicyArns:
         - !Ref CUDlyPolicy
 

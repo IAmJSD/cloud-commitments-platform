@@ -30,9 +30,8 @@ type federationIaCData struct {
 	Source            string
 	SourceAccountID   string // AWS account ID where CUDly runs (resolved via STS)
 	// AWS WIF / cross-account
-	OIDCIssuerURL  string
-	OIDCIssuerHost string // issuer URL without https:// prefix (used as IAM condition key)
-	OIDCAudience   string
+	OIDCIssuerURL string
+	OIDCAudience  string
 	// OIDCSubjectClaim restricts the AWS trust policy to a single workload
 	// subject. Deliberately left empty by every generic-bundle builder below —
 	// CUDly's server has no generic way to know the calling workload's real
@@ -338,7 +337,6 @@ func shellEscapeData(data federationIaCData) federationIaCData {
 	d.AccountSlug = shellEscape(data.AccountSlug)
 	d.Source = shellEscape(data.Source)
 	d.OIDCIssuerURL = shellEscape(data.OIDCIssuerURL)
-	d.OIDCIssuerHost = shellEscape(data.OIDCIssuerHost)
 	d.OIDCAudience = shellEscape(data.OIDCAudience)
 	d.OIDCSubjectClaim = shellEscape(data.OIDCSubjectClaim)
 	d.SubscriptionID = shellEscape(data.SubscriptionID)
@@ -402,7 +400,6 @@ func buildGenericIaCData(target, source, dashboardURL string) federationIaCData 
 	switch target {
 	case "aws":
 		data.OIDCIssuerURL = awsOIDCIssuer(source, "")
-		data.OIDCIssuerHost = strings.TrimPrefix(data.OIDCIssuerURL, "https://")
 		data.OIDCAudience = awsOIDCAudience(source)
 	case "gcp":
 		data.OIDCIssuerURI = gcpOIDCIssuerURI(source, "")
@@ -858,7 +855,6 @@ func buildCFParamsJSON(data federationIaCData, source string) (string, error) {
 	} else {
 		params = []cfParam{
 			{ParameterKey: "OIDCIssuerURL", ParameterValue: data.OIDCIssuerURL},
-			{ParameterKey: "OIDCIssuerHost", ParameterValue: strings.TrimPrefix(data.OIDCIssuerURL, "https://")},
 			{ParameterKey: "OIDCAudience", ParameterValue: data.OIDCAudience},
 			{ParameterKey: "OIDCSubjectClaim", ParameterValue: data.OIDCSubjectClaim},
 			{ParameterKey: "RoleName", ParameterValue: "CUDly-" + data.AccountSlug},

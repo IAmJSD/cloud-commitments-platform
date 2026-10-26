@@ -271,6 +271,17 @@ jobs:
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
+      # The Function URL's host is server-assigned, so its origin is read from
+      # the previous apply instead of being committed to github-*.tfvars, where
+      # it went stale whenever the URL was reissued (#324). Empty on the first
+      # deploy; "Check CORS covers the Function URL" below flags that case.
+      - name: Read deployed Function URL
+        id: deployed-url
+        run: |
+          set -euo pipefail
+          url=$(scripts/read-lambda-function-url.sh terraform/environments/aws)
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+
       - name: Terraform Plan
         id: plan
         env:
@@ -285,6 +296,7 @@ jobs:
           # accepted by the var (the Terraform local then falls back to
           # frontend_domain_names[0]).
           TF_VAR_dashboard_url: ${{ secrets.DASHBOARD_URL }}
+          TF_VAR_lambda_deployed_function_url: ${{ steps.deployed-url.outputs.url }}
           ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
         run: |
           cd terraform/environments/aws
@@ -333,6 +345,19 @@ jobs:
             echo "function_name=$(terraform output -raw lambda_function_name 2>/dev/null | grep -v '::' || echo "")"
             echo "log_group=$(terraform output -raw lambda_log_group_name 2>/dev/null | grep -v '::' || echo "")"
           } >> "$GITHUB_OUTPUT"
+
+      # The allowlist this apply wrote holds the origin read before the plan.
+      # If the apply created or reissued the Function URL, the live origin is
+      # not in it until the next deploy, which reads the new URL back.
+      - name: Check CORS covers the Function URL
+        env:
+          PLANNED_URL: ${{ steps.deployed-url.outputs.url }}
+        run: |
+          set -euo pipefail
+          live=$(scripts/read-lambda-function-url.sh terraform/environments/aws)
+          if [ -n "$live" ] && [ "$live" != "$PLANNED_URL" ]; then
+            echo "::warning::The Function URL is now ${live}, but this apply's CORS allowlist was built from '${PLANNED_URL}'. Re-run this workflow so the next apply adds the new origin."
+          fi
 
       - name: Save deployment info
         env:

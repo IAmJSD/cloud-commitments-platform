@@ -224,11 +224,16 @@ func (s *PostgresStore) UpdateGlobalConfigAtomic(ctx context.Context, apply func
 }
 
 // propagateChangedDefaults overwrites a service-config column only when its
-// global default changed, so a round-tripped or partial PUT keeps per-service
+// global default changed (the payment default only on AWS rows), so a round-tripped or partial PUT keeps per-service
 // customisations.
 func propagateChangedDefaults(ctx context.Context, tx pgx.Tx, before, after *GlobalConfig) error {
 	termChanged := after.DefaultTerm != before.DefaultTerm
-	paymentChanged := after.DefaultPayment != before.DefaultPayment
+	// The global default payment is an AWS token. Azure and GCP rows keep their
+	// own tokens (monthly/upfront): copying "all-upfront" onto them is an
+	// upfront charge nobody chose on Azure and fails GCP validation on every
+	// later save. Write it only to AWS rows, and only when AWS accepts it.
+	paymentChanged := after.DefaultPayment != before.DefaultPayment &&
+		slices.Contains(ValidPaymentOptionsByProvider["aws"], after.DefaultPayment)
 	coverageChanged := after.DefaultCoverage != before.DefaultCoverage
 	rampChanged := after.DefaultRampSchedule != before.DefaultRampSchedule
 	if !termChanged && !paymentChanged && !coverageChanged && !rampChanged {
@@ -237,7 +242,7 @@ func propagateChangedDefaults(ctx context.Context, tx pgx.Tx, before, after *Glo
 	const query = `
 		UPDATE service_configs SET
 			term = CASE WHEN $1 THEN $2 ELSE term END,
-			payment = CASE WHEN $3 THEN $4 ELSE payment END,
+			payment = CASE WHEN $3 AND provider = 'aws' THEN $4 ELSE payment END,
 			coverage = CASE WHEN $5 THEN $6 ELSE coverage END,
 			ramp_schedule = CASE WHEN $7 THEN $8 ELSE ramp_schedule END
 	`

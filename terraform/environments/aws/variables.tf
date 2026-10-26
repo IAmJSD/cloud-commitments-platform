@@ -315,6 +315,25 @@ variable "lambda_allowed_origins" {
   default     = []
 }
 
+# The Function URL's own origin is not in any tfvars file: its host is
+# server-assigned and only known after the first apply, so a hand-pasted copy
+# goes stale whenever the URL is reissued (#324). The deploy and rollback
+# workflows read it back from the previous apply's lambda_function_url output
+# (scripts/read-lambda-function-url.sh) and pass it as
+# TF_VAR_lambda_deployed_function_url; compute.tf appends its origin to
+# lambda_allowed_origins. A -var-file value would override a TF_VAR_*, which
+# is why this is a separate variable that no tfvars file sets.
+variable "lambda_deployed_function_url" {
+  description = "Lambda Function URL from the previous apply (empty on the first deploy). Its origin is added to the Function URL CORS allowlist. Set by the deploy workflows; leave unset in tfvars."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.lambda_deployed_function_url == "" || can(regex("^https://[a-z0-9]+\\.lambda-url\\.[a-z0-9-]+\\.on\\.aws/?$", var.lambda_deployed_function_url))
+    error_message = "lambda_deployed_function_url must be empty or a Lambda Function URL (https://<id>.lambda-url.<region>.on.aws)."
+  }
+}
+
 variable "lambda_reserved_concurrency" {
   description = "Reserved concurrent executions (-1 for unreserved). Also the cap on concurrent DB pools (see db_max_connections)."
   type        = number

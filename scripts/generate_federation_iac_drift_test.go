@@ -4,7 +4,7 @@ package main
 // as the server's GET /api/federation/iac, from its own copy of the template
 // data struct (iacData, a copy of internal/api's federationIaCData). A comment
 // asking people to keep the two in sync did not: iacData went without
-// OIDCIssuerHost, which aws-cfn-deploy.sh.tmpl references, so
+// OIDCIssuerHost, which aws-cfn-deploy.sh.tmpl then referenced, so
 // `--format bundle` failed for every AWS target with a non-AWS source.
 //
 // The script carries //go:build ignore and internal/api is a large package, so
@@ -160,7 +160,7 @@ func TestIaCData_CoversEveryTemplateField(t *testing.T) {
 // tests above: a parser that found no fields would make both pass vacuously.
 func TestIaCData_FieldWalkerSeesKnownFields(t *testing.T) {
 	refs := iacTemplateFieldRefs(t)
-	for _, field := range []string{"AccountName", "CUDlyAPIURL", "OIDCIssuerHost", "SourceAccountID"} {
+	for _, field := range []string{"AccountName", "CUDlyAPIURL", "OIDCIssuerURL", "SourceAccountID"} {
 		require.Contains(t, refs, field)
 	}
 	require.Contains(t, structFieldNames(t, scriptFile, "iacData"), "AccountName")
@@ -168,15 +168,18 @@ func TestIaCData_FieldWalkerSeesKnownFields(t *testing.T) {
 
 // TestGenerator_AWSWIFBundleRendersDeployScript runs the real
 // aws-cfn-deploy.sh.tmpl through --format bundle for each non-AWS source. It
-// only reads the rendered script; running it would call the AWS CLI.
+// only reads the rendered script; running it would call the AWS CLI. The
+// template no longer declares OIDCIssuerHost (it derives the condition-key
+// host from OIDCIssuerURL, #324), and CloudFormation rejects an override for
+// an undeclared parameter, so the script must not pass it.
 func TestGenerator_AWSWIFBundleRendersDeployScript(t *testing.T) {
 	const tenant = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	cases := []struct {
-		source, wantHost string
-		extra            []string
+		source, wantURL string
+		extra           []string
 	}{
-		{"gcp", "accounts.google.com", nil},
-		{"azure", "login.microsoftonline.com/" + tenant + "/v2.0", []string{"--tenant-id", tenant}},
+		{"gcp", "https://accounts.google.com", nil},
+		{"azure", "https://login.microsoftonline.com/" + tenant + "/v2.0", []string{"--tenant-id", tenant}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.source, func(t *testing.T) {
@@ -189,7 +192,8 @@ func TestGenerator_AWSWIFBundleRendersDeployScript(t *testing.T) {
 			res := runGenerator(t, args...)
 			require.Zero(t, res.exitCode, "stderr: %s", res.stderr)
 			script := readZipEntry(t, bundle, "cloudformation/deploy-cfn.sh")
-			require.Contains(t, script, `"OIDCIssuerHost=`+tc.wantHost+`"`)
+			require.Contains(t, script, `"OIDCIssuerURL=`+tc.wantURL+`"`)
+			require.NotContains(t, script, "OIDCIssuerHost")
 		})
 	}
 }

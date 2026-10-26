@@ -259,8 +259,11 @@ paths:
       tags: [Configuration]
       summary: Update per-service configuration
       description: >
-        Provider and service are taken from the path. The response does not
-        echo the configuration; read it back with GET.
+        Provider and service are taken from the path. This is a partial
+        update: any enabled, term, payment, coverage or filter key absent from
+        the body keeps its stored value, and the merged row is validated. A
+        key that is present, even with a zero value, replaces the stored one.
+        The response does not echo the configuration; read it back with GET.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
