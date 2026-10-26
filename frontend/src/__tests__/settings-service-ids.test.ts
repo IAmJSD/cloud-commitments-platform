@@ -28,11 +28,6 @@ jest.mock('../toast', () => ({ showToast: jest.fn(() => ({ dismiss: jest.fn() })
 
 import * as api from '../api';
 
-// Cosmos DB recommendations carry common.ServiceNoSQL ("nosql"), which
-// mapServiceSlug does not list yet (no Cosmos purchase path). Settings must
-// still use that id so its config and overrides match those recommendations.
-const NOT_IN_PURCHASE_SLUGS = ['azure/nosql'];
-
 function backendServiceSlugs(): string[] {
   const src = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'internal', 'purchase', 'execution.go'), 'utf-8');
   const block = /func mapServiceSlug\(service string\)[\s\S]*?slugs := map\[string\]common\.ServiceType\{([\s\S]*?)\n\t\}/.exec(src);
@@ -125,7 +120,7 @@ describe('Settings Azure/GCP service ids (issue #613)', () => {
       expect(await overrideOptions(provider)).toEqual(SETTINGS_SERVICE_IDS[provider]);
       offered.push(...saved.map(s => `${provider}/${s}`));
     }
-    expect(offered.filter(id => !slugs.includes(id.split('/')[1]!))).toEqual(NOT_IN_PURCHASE_SLUGS);
+    expect(offered.filter(id => !slugs.includes(id.split('/')[1]!))).toEqual([]);
   });
 
   it('shows rows stored under the old ids on their cards and saves them under the current ids', async () => {

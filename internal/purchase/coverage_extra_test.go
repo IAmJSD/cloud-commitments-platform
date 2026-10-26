@@ -43,6 +43,7 @@ func TestMapServiceType_AllBranches(t *testing.T) {
 		// canonical-only.
 		{"compute", common.ServiceCompute},
 		{"relational-db", common.ServiceRelationalDB},
+		{"nosql", common.ServiceNoSQL},
 		{"cache", common.ServiceCache},
 		{"search", common.ServiceSearch},
 		{"data-warehouse", common.ServiceDataWarehouse},

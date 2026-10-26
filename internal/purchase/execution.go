@@ -1275,11 +1275,13 @@ func resolveEC2OfferingClass(s string) (ec2types.OfferingClassType, error) {
 // mapServiceSlug returns the common.ServiceType for a canonical or legacy
 // service slug.
 //
-// Canonical slugs (compute, relational-db, cache, search, data-warehouse)
-// map to the canonical ServiceType constants. Legacy AWS-only slugs (ec2,
-// rds, elasticache, opensearch, redshift, memorydb) map to the AWS-legacy
-// constants for backward compat with rec rows persisted before the
-// canonical normalisation.
+// Canonical slugs (compute, relational-db, nosql, cache, search,
+// data-warehouse) map to the canonical ServiceType constants. Legacy
+// AWS-only slugs (ec2, rds, elasticache, opensearch, redshift, memorydb)
+// map to the AWS-legacy constants for backward compat with rec rows
+// persisted before the canonical normalisation. nosql is Azure Cosmos DB
+// (#613); it used to reach the Azure client only through mapServiceType's
+// verbatim fallback.
 //
 // The split matters because Azure and GCP providers' GetServiceClient
 // switches accept canonical-only; passing the AWS-legacy constants for a
@@ -1296,6 +1298,7 @@ func mapServiceSlug(service string) (common.ServiceType, bool) {
 		// Canonical slugs.
 		"compute":        common.ServiceCompute,
 		"relational-db":  common.ServiceRelationalDB,
+		"nosql":          common.ServiceNoSQL,
 		"cache":          common.ServiceCache,
 		"search":         common.ServiceSearch,
 		"data-warehouse": common.ServiceDataWarehouse,
