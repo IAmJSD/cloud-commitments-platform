@@ -60,9 +60,9 @@ func effectiveWindowUsage(key *UserAPIKey, now time.Time) (int64, *time.Time) {
 // predates the counter. Reporting that as 0 would assert a request volume we
 // do not have; nil says "unknown" and lets the UI show it as such.
 //
-// This relies on last_used_at and request_count_total moving together. Any new
-// caller of the legacy UpdateAPIKeyLastUsed (which bumps only the timestamp)
-// would break the invariant and make a genuinely-unused key look unknown.
+// This relies on last_used_at and request_count_total moving together. A new
+// writer that bumps only the timestamp (as the removed UpdateAPIKeyLastUsed
+// did) would break the invariant and make a genuinely-unused key look unknown.
 func effectiveLifetimeUsage(key *UserAPIKey) *int64 {
 	if key.RequestCountTotal == 0 && key.LastUsedAt != nil {
 		return nil
@@ -405,8 +405,8 @@ func (s *Service) HasAPIKeyPermissionForConstraintsAPI(ctx context.Context, keyI
 	if key == nil {
 		return false, fmt.Errorf("API key not found")
 	}
-	// lookupAPIKeyUser also verifies that the user is still active.
-	user, err := s.lookupAPIKeyUser(ctx, userID)
+	// loadActiveUser also verifies that the user is still active.
+	user, err := s.loadActiveUser(ctx, userID)
 	if err != nil {
 		return false, err
 	}
@@ -458,7 +458,7 @@ func (s *Service) GetAPIKeyEffectivePermissionsAPI(ctx context.Context, keyID, u
 	if err != nil {
 		return nil, err
 	}
-	user, err := s.lookupAPIKeyUser(ctx, userID)
+	user, err := s.loadActiveUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}

@@ -419,6 +419,8 @@ func size(shown, stored *config.RecommendationRecord, product float64, n int, sh
 	out.Savings = stored.Savings * ratio
 	out.MonthlyCost = scaled(stored.MonthlyCost, ratio)
 	out.OnDemandCost = scaled(stored.OnDemandCost, ratio)
+	// The costs are stored's, so their currency is too (issue #361).
+	out.CommitmentCurrency = stored.CommitmentCurrency
 	if out.UpfrontCost < 0 || (out.MonthlyCost != nil && *out.MonthlyCost < 0) ||
 		out.UpfrontCost+monthlyTotal(&out) <= 0 {
 		return out, false, errors.New("stored row carries no usable price")

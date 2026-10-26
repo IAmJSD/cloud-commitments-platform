@@ -324,24 +324,6 @@ func TestResolveGCPTokenSource_InvalidJSON(t *testing.T) {
 // Additional coverage for already-partially-covered functions
 // ---------------------------------------------------------------------------
 
-func TestResolveGCPCredentials_LoadError(t *testing.T) {
-	store := newMockStore()
-	store.err = assert.AnError
-
-	account := &config.CloudAccount{ID: "acct1"}
-	_, err := ResolveGCPCredentials(context.Background(), account, store)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "load gcp service account")
-}
-
-func TestResolveGCPCredentials_NotStored(t *testing.T) {
-	store := newMockStore()
-	account := &config.CloudAccount{ID: "acct1"}
-	_, err := ResolveGCPCredentials(context.Background(), account, store)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no service account stored")
-}
-
 func TestResolveAzureCredentials_LoadError(t *testing.T) {
 	store := newMockStore()
 	store.err = assert.AnError
@@ -383,7 +365,7 @@ func TestResolveAccessKeyProvider_InvalidJSON(t *testing.T) {
 }
 
 func TestResolveRoleARNProvider_LongID_WithExternalID(t *testing.T) {
-	// Exercise the branch where account.ID > 8 chars (sessionSuffix truncated)
+	// Exercise the branch where account.ID > 8 chars (roleSessionName truncates)
 	// and AWSExternalID is set.
 	account := &config.CloudAccount{
 		ID:            "a-very-long-account-id",
@@ -397,7 +379,7 @@ func TestResolveRoleARNProvider_LongID_WithExternalID(t *testing.T) {
 }
 
 func TestResolveWebIdentityProvider_LongID_WithTokenFile(t *testing.T) {
-	// Exercises resolveWebIdentityProvider with a long account ID (truncation branch)
+	// Exercises resolveWebIdentityProvider with a long account ID (roleSessionName truncates)
 	// and with the token file path set in the account struct.
 	f, err := os.CreateTemp("", "wif-token-*.txt")
 	require.NoError(t, err)
@@ -431,7 +413,7 @@ func TestResolveAzureTokenCredential_ManagedIdentity(t *testing.T) {
 
 func TestResolveGCPTokenSource_WIF_WithStoredConfig(t *testing.T) {
 	// Exercises the WIF branch where CredTypeGCPWIFConfig is used as the key.
-	// The JSON is intentionally invalid so google.CredentialsFromJSON fails,
+	// The JSON is intentionally invalid so google.CredentialsFromJSONWithType fails,
 	// but we cover the credType selection branch.
 	store := newMockStore()
 	store.data["acct1/gcp_workload_identity_config"] = []byte("not valid json")
@@ -446,7 +428,7 @@ func TestResolveGCPTokenSource_WIF_WithStoredConfig(t *testing.T) {
 }
 
 func TestResolveGCPTokenSource_ServiceAccountKey_ValidJSON(t *testing.T) {
-	// A minimal valid GCP service account JSON that google.CredentialsFromJSON accepts.
+	// A minimal valid GCP service account JSON that google.CredentialsFromJSONWithType accepts.
 	saJSON := []byte(`{
 		"type": "service_account",
 		"project_id": "test-project",

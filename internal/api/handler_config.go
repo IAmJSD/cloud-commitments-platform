@@ -4,12 +4,14 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/commitmentopts"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -158,17 +160,24 @@ func (h *Handler) requireGlobalConfigScope(ctx context.Context, session *Session
 // combination we've dynamically confirmed the cloud doesn't sell. Returns
 // nil when: no probe service is wired, the service hasn't persisted data
 // yet (absent data → fall through to the frontend's hardcoded rules),
-// the save isn't AWS, or the combo is valid. Errors from Validate are
-// logged and swallowed (permissive) so a transient DB blip never blocks
-// a settings save.
+// the save isn't AWS, or the combo is valid.
+//
+// Any other Validate error (a store read failing, a timeout) fails the save
+// with a 503 instead of letting it through: the check exists for API
+// callers that bypass the frontend's rules, so waving the save through on an
+// error would persist an unsupported combo that fails only at purchase time
+// (issue #243, audit finding A02-022). The caller can retry.
 func (h *Handler) checkCommitmentOptionCombo(ctx context.Context, cfg config.ServiceConfig) error {
 	if h.commitmentOpts == nil || cfg.Provider != "aws" || cfg.Term <= 0 || cfg.Payment == "" {
 		return nil
 	}
 	ok, err := h.commitmentOpts.Validate(ctx, cfg.Provider, cfg.Service, cfg.Term, cfg.Payment)
-	if err != nil {
-		logging.Warnf("commitment-option validation error (allowing save): %v", err)
+	if errors.Is(err, commitmentopts.ErrNoData) {
 		return nil
+	}
+	if err != nil {
+		logging.Errorf("commitment-option validation error (refusing save): %v", err)
+		return NewClientError(503, "could not validate the commitment term and payment option; try again")
 	}
 	if !ok {
 		return NewClientError(400, fmt.Sprintf(

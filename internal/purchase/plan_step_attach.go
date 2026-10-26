@@ -306,7 +306,7 @@ func (m *Manager) failStep(ctx context.Context, tx pgx.Tx, locked *config.Purcha
 	if err := m.config.SavePurchaseExecutionTx(ctx, tx, fresh); err != nil {
 		return stepClaim{}, fmt.Errorf("failed to record plan step %d of plan %s as failed: %w", claim.number, locked.ID, err)
 	}
-	claim.failedNew = true
+	claim.failedNew = fresh
 	return claim, nil
 }
 

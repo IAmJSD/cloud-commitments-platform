@@ -33,15 +33,31 @@ import (
 // active source cloud so the validateSourceIdentity guard (see #41) is
 // satisfied by default. Tests that specifically exercise the missing-env-var
 // failure modes call mockSourceIdentity afterwards to override.
-func federationHandler() *Handler {
-	if os.Getenv("CUDLY_SOURCE_CLOUD") == "" {
-		_ = os.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
-	}
+//
+// The ValidateSession stub is a hard expectation: AssertExpectations runs at
+// cleanup, so a test that builds this handler but never reaches the session
+// check, or that adds a stub the code under test never calls, fails instead
+// of passing silently. The permission stubs grantAdmin registers stay
+// optional (.Maybe()), as documented on grantPermissionsScoped.
+func federationHandler(t *testing.T) *Handler {
+	t.Helper()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  "admin@example.com",
 	}, nil)
+	return newFederationHandler(mockAuth)
+}
+
+// newFederationHandler wires mockAuth into a federation test Handler with the
+// environment and source identity described on federationHandler. It
+// registers no session stub of its own: callers stub ValidateSession (or
+// assert it is never reached) and register AssertExpectations on mockAuth.
+func newFederationHandler(mockAuth *MockAuthService) *Handler {
+	if os.Getenv("CUDLY_SOURCE_CLOUD") == "" {
+		_ = os.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
+	}
 	mockAuth.grantAdmin()
 	h := NewHandler(HandlerConfig{ConfigStore: new(MockConfigStore), AuthService: mockAuth})
 	mockSourceIdentity(h, defaultTestSourceIdentity())
@@ -121,7 +137,7 @@ func TestSingleFileSpec_RejectsUnknownFormat(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetFederationIaC_MissingParams(t *testing.T) {
-	h := federationHandler()
+	h := federationHandler(t)
 	ctx := context.Background()
 
 	_, err := h.getFederationIaC(ctx, federationReq(map[string]string{}))
@@ -135,7 +151,11 @@ func TestGetFederationIaC_MissingParams(t *testing.T) {
 // rejected before template rendering — the response would otherwise embed
 // the CUDly host AWS account ID resolved via STS.
 func TestGetFederationIaC_RequiresAuth(t *testing.T) {
-	h := federationHandler()
+	// No Authorization header, so the request must be rejected before any
+	// session lookup: no ValidateSession stub, and assert it is never reached.
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+	h := newFederationHandler(mockAuth)
 	ctx := context.Background()
 
 	req := &events.LambdaFunctionURLRequest{
@@ -148,11 +168,12 @@ func TestGetFederationIaC_RequiresAuth(t *testing.T) {
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a client error")
 	assert.Equal(t, 401, ce.code)
+	mockAuth.AssertNotCalled(t, "ValidateSession", mock.Anything, mock.Anything)
 }
 
 func TestGetFederationIaC_RejectsEmptyFormat(t *testing.T) {
 	// The legacy tfvars-only default was removed; an explicit format is required.
-	h := federationHandler()
+	h := federationHandler(t)
 	ctx := context.Background()
 
 	_, err := h.getFederationIaC(ctx, federationReq(map[string]string{
@@ -166,7 +187,7 @@ func TestGetFederationIaC_RejectsEmptyFormat(t *testing.T) {
 }
 
 func TestGetFederationIaC_RejectsUnknownFormat(t *testing.T) {
-	h := federationHandler()
+	h := federationHandler(t)
 	ctx := context.Background()
 
 	_, err := h.getFederationIaC(ctx, federationReq(map[string]string{
@@ -179,7 +200,7 @@ func TestGetFederationIaC_RejectsUnknownFormat(t *testing.T) {
 }
 
 func TestGetFederationIaC_AWSWIF_CFNZip(t *testing.T) {
-	h := federationHandler()
+	h := federationHandler(t)
 	ctx := context.Background()
 
 	res, err := h.getFederationIaC(ctx, federationReq(map[string]string{
@@ -214,7 +235,7 @@ func TestGetFederationIaC_CFN_AWSCrossAccount(t *testing.T) {
 	// aws-cross-account requires CUDly itself to be running on AWS — the new
 	// validateFederationTargetSource guard (#42) rejects this combo otherwise.
 	t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
-	h := federationHandler()
+	h := federationHandler(t)
 	ctx := context.Background()
 
 	res, err := h.getFederationIaC(ctx, federationReq(map[string]string{
@@ -266,7 +287,7 @@ func TestGetFederationIaC_Bundle_AWSCrossAccount(t *testing.T) {
 	// aws-cross-account requires CUDly itself to be running on AWS — the new
 	// validateFederationTargetSource guard (#42) rejects this combo otherwise.
 	t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
-	h := federationHandler()
+	h := federationHandler(t)
 	ctx := context.Background()
 
 	res, err := h.getFederationIaC(ctx, federationReq(map[string]string{
@@ -294,7 +315,7 @@ func TestGetFederationIaC_Bundle_AWSCrossAccount(t *testing.T) {
 }
 
 func TestGetFederationIaC_Bundle_AWSWif(t *testing.T) {
-	h := federationHandler()
+	h := federationHandler(t)
 	ctx := context.Background()
 
 	res, err := h.getFederationIaC(ctx, federationReq(map[string]string{
@@ -317,7 +338,7 @@ func TestGetFederationIaC_Bundle_AWSWif(t *testing.T) {
 }
 
 func TestGetFederationIaC_Bundle_GCPSAImpersonation(t *testing.T) {
-	h := federationHandler()
+	h := federationHandler(t)
 	ctx := context.Background()
 
 	res, err := h.getFederationIaC(ctx, federationReq(map[string]string{
@@ -339,7 +360,7 @@ func TestGetFederationIaC_Bundle_GCPSAImpersonation(t *testing.T) {
 }
 
 func TestGetFederationIaC_InvalidSource(t *testing.T) {
-	h := federationHandler()
+	h := federationHandler(t)
 	ctx := context.Background()
 
 	_, err := h.getFederationIaC(ctx, federationReq(map[string]string{
@@ -353,7 +374,7 @@ func TestGetFederationIaC_InvalidSource(t *testing.T) {
 }
 
 func TestGetFederationIaC_CFNZip_ParamsValidJSON(t *testing.T) {
-	h := federationHandler()
+	h := federationHandler(t)
 	ctx := context.Background()
 
 	res, err := h.getFederationIaC(ctx, federationReq(map[string]string{
@@ -396,7 +417,7 @@ func TestGetFederationIaC_CFNZip_ParamsValidJSON(t *testing.T) {
 // explicitly so the deploy fails with a specific, actionable error instead of
 // either "must have values" (CFN) or a misleading "Optional" comment (tfvars).
 func TestGetFederationIaC_AWSWIF_SubjectClaimThreaded(t *testing.T) {
-	h := federationHandler()
+	h := federationHandler(t)
 	ctx := context.Background()
 
 	t.Run("cfn params JSON", func(t *testing.T) {
@@ -515,7 +536,7 @@ func TestGetFederationIaC_CLI_AWSCrossAccount(t *testing.T) {
 	// aws-cross-account requires CUDly itself to be running on AWS — the new
 	// validateFederationTargetSource guard (#42) rejects this combo otherwise.
 	t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
-	h := federationHandler()
+	h := federationHandler(t)
 	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
 		"target": "aws", "source": "aws", "format": "cli",
 	}))
@@ -528,7 +549,7 @@ func TestGetFederationIaC_CLI_AWSCrossAccount(t *testing.T) {
 }
 
 func TestGetFederationIaC_CLI_AWSWIF(t *testing.T) {
-	h := federationHandler()
+	h := federationHandler(t)
 	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
 		"target": "aws", "source": "azure", "format": "cli",
 	}))
@@ -539,7 +560,7 @@ func TestGetFederationIaC_CLI_AWSWIF(t *testing.T) {
 }
 
 func TestGetFederationIaC_CLI_Azure(t *testing.T) {
-	h := federationHandler()
+	h := federationHandler(t)
 	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
 		"target": "azure", "source": "aws", "format": "cli",
 	}))
@@ -550,7 +571,7 @@ func TestGetFederationIaC_CLI_Azure(t *testing.T) {
 }
 
 func TestGetFederationIaC_CLI_GCPSAImpersonation(t *testing.T) {
-	h := federationHandler()
+	h := federationHandler(t)
 	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
 		"target": "gcp", "source": "gcp", "format": "cli",
 	}))
@@ -561,7 +582,7 @@ func TestGetFederationIaC_CLI_GCPSAImpersonation(t *testing.T) {
 }
 
 func TestGetFederationIaC_CLI_GCPWIF(t *testing.T) {
-	h := federationHandler()
+	h := federationHandler(t)
 	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
 		"target": "gcp", "source": "aws", "format": "cli",
 	}))
@@ -616,7 +637,7 @@ func unzipResponse(t *testing.T, res *FederationIaCResponse) map[string][]byte {
 }
 
 func TestGetFederationIaC_AzureBicep(t *testing.T) {
-	h := federationHandler()
+	h := federationHandler(t)
 	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
 		"target": "azure", "source": "aws", "format": "bicep",
 	}))
@@ -640,7 +661,7 @@ func TestGetFederationIaC_AzureBicep(t *testing.T) {
 }
 
 func TestGetFederationIaC_AzureARM(t *testing.T) {
-	h := federationHandler()
+	h := federationHandler(t)
 	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
 		"target": "azure", "source": "gcp", "format": "arm",
 	}))
@@ -660,7 +681,7 @@ func TestGetFederationIaC_AzureARM(t *testing.T) {
 }
 
 func TestGetFederationIaC_Bicep_RejectsNonAzure(t *testing.T) {
-	h := federationHandler()
+	h := federationHandler(t)
 	_, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
 		"target": "aws", "source": "azure", "format": "bicep",
 	}))
@@ -681,7 +702,7 @@ func TestGetFederationIaC_Bicep_RejectsNonAzure(t *testing.T) {
 // empty source_account_id.
 func TestGetFederationIaC_FailsLoudOnEmptySourceAccountID(t *testing.T) {
 	t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
-	h := federationHandler()
+	h := federationHandler(t)
 	// Override the federationHandler default ({Provider:"aws", AccountID:"…"}) with
 	// an empty AccountID to simulate the STS GetCallerIdentity failure path.
 	mockSourceIdentity(h, &sourceIdentity{Provider: "aws", AccountID: ""})
@@ -700,7 +721,7 @@ func TestGetFederationIaC_FailsLoudOnEmptySourceAccountID(t *testing.T) {
 // is rendered with contact_email equal to the authenticated user's email.
 func TestGetFederationIaC_PrefillContactEmailFromSession(t *testing.T) {
 	t.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
-	h := federationHandler()
+	h := federationHandler(t)
 
 	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
 		"target": "aws", "source": "gcp", "format": "bundle",
@@ -737,7 +758,7 @@ func TestGetFederationIaC_PrefillContactEmailFromSession(t *testing.T) {
 // shape, which would silently re-introduce the manual flag requirement.
 func TestGetFederationIaC_TfvarsAutoLoadedByTerraform(t *testing.T) {
 	t.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
-	h := federationHandler()
+	h := federationHandler(t)
 
 	cases := []struct {
 		name           string
@@ -873,7 +894,7 @@ func TestRenderedCLIShellScript_RegistrationAlwaysRuns(t *testing.T) {
 			if tc.target == "aws" && tc.source == "aws" {
 				t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
 			}
-			h := federationHandler()
+			h := federationHandler(t)
 			// Use federationReqWithDomain so CUDlyAPIURL is populated and the
 			// {{if .CUDlyAPIURL}} registration block is rendered.
 			res, err := h.getFederationIaC(context.Background(), federationReqWithDomain(map[string]string{
@@ -914,7 +935,7 @@ func TestRenderedCFNDeployScript_HasRegistrationBlock(t *testing.T) {
 			if tc.target == "aws" && tc.source == "aws" {
 				t.Setenv("CUDLY_SOURCE_CLOUD", "aws")
 			}
-			h := federationHandler()
+			h := federationHandler(t)
 			// Use federationReqWithDomain so CUDlyAPIURL is populated and the
 			// {{if .CUDlyAPIURL}} registration block is rendered in the deploy script.
 			res, err := h.getFederationIaC(context.Background(), federationReqWithDomain(map[string]string{
@@ -958,7 +979,7 @@ func TestBuildAzureTemplateZip_IncludesRenderedDeployScript(t *testing.T) {
 	for _, format := range []string{"bicep", "arm"} {
 		format := format
 		t.Run(format, func(t *testing.T) {
-			h := federationHandler()
+			h := federationHandler(t)
 			res, err := h.getFederationIaC(context.Background(), federationReqWithDomain(map[string]string{
 				"target": "azure", "source": "aws", "format": format,
 			}))
@@ -1089,7 +1110,7 @@ func TestGetFederationIaC_FailsLoudOnEmptyAzureSourceIdentity(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("CUDLY_SOURCE_CLOUD", "azure")
-			h := federationHandler()
+			h := federationHandler(t)
 			mockSourceIdentity(h, tc.identity)
 
 			_, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
@@ -1118,7 +1139,7 @@ func TestGetFederationIaC_FailsLoudOnEmptyAzureSourceIdentity(t *testing.T) {
 // terraform apply.
 func TestGetFederationIaC_FailsLoudOnEmptyGCPSourceIdentity(t *testing.T) {
 	t.Setenv("CUDLY_SOURCE_CLOUD", "gcp")
-	h := federationHandler()
+	h := federationHandler(t)
 	mockSourceIdentity(h, &sourceIdentity{Provider: "gcp", ProjectID: ""})
 
 	_, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
@@ -1210,7 +1231,7 @@ func TestGetFederationIaC_RejectsImpossibleTargetSourceCombo(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("CUDLY_SOURCE_CLOUD", tc.sourceCloud)
-			h := federationHandler()
+			h := federationHandler(t)
 
 			_, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
 				"target": tc.target, "source": tc.source, "format": "cli",
@@ -1361,7 +1382,7 @@ func TestGetFederationIaC_CLIMatrix(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("CUDLY_SOURCE_CLOUD", tc.sourceCloud)
-			h := federationHandler()
+			h := federationHandler(t)
 
 			// Use federationReqWithDomain so CUDlyAPIURL is set and the
 			// registration block renders — we need the full output to verify PII.
@@ -1403,7 +1424,7 @@ func TestGetFederationIaC_CLIMatrix(t *testing.T) {
 			// PII guard: the session email must not appear raw in the script
 			// body outside the CONTACT_EMAIL env-var assignment. The email
 			// is legitimately present as the default value for CONTACT_EMAIL
-			// (e.g. CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-admin@example.com}"),
+			// (e.g. [ -n "$CONTACT_EMAIL" ] || CONTACT_EMAIL="admin@example.com"),
 			// but it must not be repeated elsewhere (e.g. embedded in a URL,
 			// a hardcoded JSON field, or a curl argument).
 			//
@@ -1411,7 +1432,7 @@ func TestGetFederationIaC_CLIMatrix(t *testing.T) {
 			// the email does not appear in the remaining content.
 			sessionEmail := "admin@example.com"
 			scriptWithoutAssignment := strings.ReplaceAll(res.Content,
-				`CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-`+sessionEmail+`}"`,
+				`[ -n "$CONTACT_EMAIL" ] || CONTACT_EMAIL="`+sessionEmail+`"`,
 				"CONTACT_EMAIL_ASSIGNMENT_REMOVED")
 			assert.NotContains(t, scriptWithoutAssignment, sessionEmail,
 				"session email must not appear in CLI script body outside CONTACT_EMAIL assignment (PII leak)")
@@ -1432,7 +1453,7 @@ func TestGetFederationIaC_ARMMatrix(t *testing.T) {
 	for _, source := range armSources {
 		source := source
 		t.Run("target=azure/source="+source, func(t *testing.T) {
-			h := federationHandler()
+			h := federationHandler(t)
 
 			res, err := h.getFederationIaC(context.Background(), federationReqWithDomain(map[string]string{
 				"target": "azure", "source": source, "format": "arm",
@@ -1506,7 +1527,7 @@ func TestGetFederationIaC_ARMMatrix(t *testing.T) {
 func TestGetFederationIaC_SingleFileRenderShape(t *testing.T) {
 	// Every format that singleFileSpec accepts must produce a plain-text
 	// response. Currently only "cli" qualifies.
-	h := federationHandler()
+	h := federationHandler(t)
 
 	res, err := h.getFederationIaC(context.Background(), federationReq(map[string]string{
 		"target": "aws", "source": "gcp", "format": "cli",
@@ -1545,7 +1566,7 @@ func TestGetFederationIaC_CLIArcheraDefaultOff(t *testing.T) {
 		tc := tc
 		t.Run(tc.target+"/"+tc.source, func(t *testing.T) {
 			t.Setenv("CUDLY_SOURCE_CLOUD", tc.sourceCloud)
-			h := federationHandler()
+			h := federationHandler(t)
 
 			res, err := h.getFederationIaC(context.Background(), federationReqWithDomain(map[string]string{
 				"target": tc.target, "source": tc.source, "format": "cli",
