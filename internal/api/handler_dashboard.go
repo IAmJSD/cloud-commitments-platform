@@ -22,6 +22,10 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 	if err != nil {
 		return nil, err
 	}
+	provider, err := providerFilterParam(params["provider"])
+	if err != nil {
+		return nil, err
+	}
 
 	accountUUIDs, accountExternalIDsByProvider, err := h.resolveDashboardAccountScope(ctx, session, params)
 	if err != nil {
@@ -36,7 +40,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 	}
 
 	recommendations, err := h.scheduler.ListRecommendations(recommendationsReadContext(ctx, scope), config.RecommendationFilter{
-		Provider: params["provider"],
+		Provider: provider,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recommendations: %w", err)
@@ -56,7 +60,14 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 
 	totalSavings, byService := summarizeRecommendationsWithCoverage(recommendations, coverageByKey)
 	targetCoverage := h.resolveTargetCoverage(ctx)
-	activeCommitments, committedMonthly, ytdSavings, currentSavingsByService := h.calculateCommitmentMetrics(ctx, params["provider"], accountUUIDs, accountExternalIDsByProvider)
+	activeCommitments, committedMonthly, ytdSavings, currentSavingsByService, err := h.calculateCommitmentMetrics(ctx, provider, accountUUIDs, accountExternalIDsByProvider)
+	if err != nil {
+		// Issue #72: purchase history is a hard dependency of the commitment
+		// KPIs, same as recommendations are of the savings KPIs above. Fail
+		// the request rather than ship $0 committed / 0 commitments, which
+		// would be indistinguishable from a real empty portfolio.
+		return nil, err
+	}
 
 	// Populate CurrentSavings on each per-service bucket from actual
 	// purchase_history commitments. Services with recommendations but no
@@ -617,12 +628,13 @@ func aggregateActiveCommitmentsPerService(purchases []config.PurchaseHistoryReco
 // calculateCommitmentMetrics aggregates, applying the pre-resolved account
 // scope and an optional provider filter. Extracted to keep the parent under the
 // cyclomatic limit (mirrors the appendAccountPredicate / accountMatchesFilters
-// pattern). Returns ok=false on a store error or an explicit zero-account scope
-// so the caller emits zeroed KPIs without querying.
+// pattern). Returns (nil, nil) for an explicit zero-account scope, so the
+// caller emits genuinely-zero KPIs without querying, and a wrapped error on a
+// store failure (issue #72: a failed read must never be reported as $0).
 //
 //   - non-nil but empty accountUUIDs (no external groups): explicit "scoped to
 //     zero accounts" sentinel (a restricted session whose allowed_accounts match
-//     nothing). Returns (nil, false) WITHOUT querying so a scoped user never sees
+//     nothing). Returns (nil, nil) WITHOUT querying so a scoped user never sees
 //     all-accounts data (issue #956). A nil/empty filter sent to the store would
 //     match every row (no WHERE clause), so this must short-circuit.
 //   - otherwise: GetActivePurchaseHistory with the dual-column account predicate
@@ -633,15 +645,14 @@ func aggregateActiveCommitmentsPerService(purchases []config.PurchaseHistoryReco
 //   - provider: when non-empty, only purchases for that provider are returned,
 //     mirroring fetchCommitmentRecords' in-memory provider filter so KPIs match
 //     the provider chip selection.
-func (h *Handler) fetchCommitmentPurchases(ctx context.Context, asOf time.Time, provider string, accountUUIDs []string, accountExternalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, bool) {
+func (h *Handler) fetchCommitmentPurchases(ctx context.Context, asOf time.Time, provider string, accountUUIDs []string, accountExternalIDsByProvider map[string][]string) ([]config.PurchaseHistoryRecord, error) {
 	if accountUUIDs != nil && len(accountUUIDs) == 0 && len(accountExternalIDsByProvider) == 0 {
-		return nil, false
+		return nil, nil
 	}
 
 	purchases, err := h.config.GetActivePurchaseHistory(ctx, asOf, accountUUIDs, accountExternalIDsByProvider)
 	if err != nil {
-		logging.Errorf("dashboard: failed to fetch commitment purchases; KPIs will be zeroed: %v", err)
-		return nil, false
+		return nil, fmt.Errorf("failed to get active purchase history: %w", err)
 	}
 
 	if provider != "" {
@@ -654,7 +665,7 @@ func (h *Handler) fetchCommitmentPurchases(ctx context.Context, asOf time.Time, 
 		purchases = filtered
 	}
 
-	return purchases, true
+	return purchases, nil
 }
 
 // calculateCommitmentMetrics aggregates active-commitment counts and monthly
@@ -677,11 +688,13 @@ func (h *Handler) fetchCommitmentPurchases(ctx context.Context, asOf time.Time, 
 // EstimatedSavings, derived from aggregateActiveCommitmentsPerService so both
 // this KPI path (committedMonthly) and the per-service chart use exactly the
 // same gate.
-func (h *Handler) calculateCommitmentMetrics(ctx context.Context, provider string, accountUUIDs []string, accountExternalIDsByProvider map[string][]string) (activeCommitments int, committedMonthly, ytdSavings float64, savingsByService map[string]float64) {
+//
+// A store error is returned, never reported as zeroed metrics (issue #72).
+func (h *Handler) calculateCommitmentMetrics(ctx context.Context, provider string, accountUUIDs []string, accountExternalIDsByProvider map[string][]string) (activeCommitments int, committedMonthly, ytdSavings float64, savingsByService map[string]float64, err error) {
 	currentTime := time.Now()
-	purchases, ok := h.fetchCommitmentPurchases(ctx, currentTime, provider, accountUUIDs, accountExternalIDsByProvider)
-	if !ok {
-		return 0, 0, 0, nil
+	purchases, err := h.fetchCommitmentPurchases(ctx, currentTime, provider, accountUUIDs, accountExternalIDsByProvider)
+	if err != nil {
+		return 0, 0, 0, nil, err
 	}
 
 	yearStart := time.Date(currentTime.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
@@ -717,7 +730,7 @@ func (h *Handler) calculateCommitmentMetrics(ctx context.Context, provider strin
 		ytdSavings += p.EstimatedSavings * float64(elapsedWholeMonths(countFrom, currentTime))
 	}
 
-	return activeCommitments, committedMonthly, ytdSavings, savingsByService
+	return activeCommitments, committedMonthly, ytdSavings, savingsByService, nil
 }
 
 // elapsedWholeMonths returns the number of complete calendar months between
@@ -736,16 +749,20 @@ func elapsedWholeMonths(from, to time.Time) int {
 	return months
 }
 
-// calculateCurrentCoverage calculates the current coverage percentage.
-func (h *Handler) calculateCurrentCoverage(potentialSavings, committedMonthly float64) float64 {
-	if potentialSavings == 0 {
-		return 100.0 // No recommendations means 100% coverage
-	}
-
+// calculateCurrentCoverage returns committed / (committed + potential) as a
+// percentage, or nil when both are zero and there is nothing to measure.
+//
+// It used to return a hard-coded 100% whenever potentialSavings was 0, even
+// with nothing committed, so an empty or zeroed commitment half rendered as a
+// reassuring "100% coverage, $0 committed" (issue #72). Committed savings with
+// no remaining recommendations still compute to 100% through the ratio; only
+// the 0/0 case is now reported as unknown (JSON null) rather than invented.
+func (h *Handler) calculateCurrentCoverage(potentialSavings, committedMonthly float64) *float64 {
 	totalPossible := potentialSavings + committedMonthly
 	if totalPossible == 0 {
-		return 0
+		return nil
 	}
 
-	return (committedMonthly / totalPossible) * 100
+	coverage := (committedMonthly / totalPossible) * 100
+	return &coverage
 }

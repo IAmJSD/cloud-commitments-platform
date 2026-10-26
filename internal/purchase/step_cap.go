@@ -60,9 +60,11 @@ func (m *Manager) recheckStepCap(ctx context.Context, exec *config.PurchaseExecu
 // before any provider call, with the beforeSubmission class so its suppressions
 // release. It returns the refusal, joined with ErrAuditLoss when the terminal
 // save fails (the row would then be stranded in "running" for the reaper).
+// Operators are notified either way, as executeAndFinalize does (issue #1195).
 func (m *Manager) failClaimedBeforeSubmission(ctx context.Context, exec *config.PurchaseExecution, cause error) error {
 	execErr := beforeSubmission(cause)
 	m.finalizeExecution(exec, execErr)
+	defer m.notifyExecutionFailure(ctx, exec)
 	logging.Errorf("Refused claimed purchase %s before submission: %v", exec.ExecutionID, cause)
 	if err := m.saveTerminalExecution(ctx, exec, execErr); err != nil {
 		return fmt.Errorf("%w: terminal save failed (%w); original refusal: %w", config.ErrAuditLoss, err, execErr)

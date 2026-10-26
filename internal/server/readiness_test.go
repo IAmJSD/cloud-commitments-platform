@@ -98,6 +98,8 @@ func TestReadinessFailedMigrations(t *testing.T) {
 		Config:   &mockConfigStoreForHealth{},
 		Auth:     createHealthyAuthService(),
 		dbConfig: &dbConfigForReadiness,
+		// ensureDB finished: the stores above are the live ones.
+		dbConnected: true,
 	}
 	app.recordMigrationResult(context.DeadlineExceeded)
 
@@ -120,6 +122,8 @@ func TestReadinessPendingMigrations(t *testing.T) {
 		Config:   &mockConfigStoreForHealth{},
 		Auth:     createHealthyAuthService(),
 		dbConfig: &dbConfigForReadiness,
+		// ensureDB finished: the stores above are the live ones.
+		dbConnected: true,
 	}
 
 	req := httptest.NewRequestWithContext(context.Background(), "GET", "/ready", nil)
@@ -145,6 +149,8 @@ func TestReadinessDisabledMigrationsStayReady(t *testing.T) {
 		Config:   &mockConfigStoreForHealth{},
 		Auth:     createHealthyAuthService(),
 		dbConfig: &noMigrate,
+		// ensureDB finished: the stores above are the live ones.
+		dbConnected: true,
 	}
 
 	req := httptest.NewRequestWithContext(context.Background(), "GET", "/ready", nil)

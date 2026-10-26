@@ -44,11 +44,12 @@ const (
 	EnvAllowDev   = "CREDENTIAL_ENCRYPTION_ALLOW_DEV_KEY"   // 1 = permit zero-key fallback
 )
 
+// The memoized key. keyMu is held across a load so concurrent callers queue
+// behind one fetch instead of all hitting the secret store at once.
 var (
+	keyMu           sync.Mutex
 	cachedKey       []byte
 	cachedKeySource string
-	cachedKeyOnce   sync.Once
-	cachedKeyErr    error
 )
 
 // LoadKey loads the 32-byte AES-256 key for tenant credential encryption.
@@ -65,13 +66,23 @@ var (
 // The returned source string is the env var name that resolved (for logging).
 // Callers MUST NOT log the key value.
 //
-// Result is memoized via sync.Once for the process lifetime; tests reset the
+// A successful load is memoized for the process lifetime. A failed load is
+// not: one throttled secret fetch, or a first caller whose context was
+// already canceled, would otherwise break credential decryption until the
+// process restarts (issue #104), so the next call retries. Tests reset the
 // cache via resetKeyCacheForTest() in this package's test files.
 func LoadKey(ctx context.Context, resolver secrets.Resolver) (key []byte, source string, err error) {
-	cachedKeyOnce.Do(func() {
-		cachedKey, cachedKeySource, cachedKeyErr = loadKey(ctx, resolver)
-	})
-	return cachedKey, cachedKeySource, cachedKeyErr
+	keyMu.Lock()
+	defer keyMu.Unlock()
+	if cachedKey != nil {
+		return cachedKey, cachedKeySource, nil
+	}
+	key, source, err = loadKey(ctx, resolver)
+	if err != nil {
+		return nil, source, err
+	}
+	cachedKey, cachedKeySource = key, source
+	return key, source, nil
 }
 
 // DevKey returns the all-zero 32-byte dev key. Exposed for the rekey

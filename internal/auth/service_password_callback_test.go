@@ -84,10 +84,10 @@ func TestService_OnPasswordChange_ChangePassword(t *testing.T) {
 
 		testUser := createTestUser(t, "OldSecure123!")
 
-		// Invalidation now runs only after UpdateUser succeeds (issue #102
+		// Invalidation now runs only after UpdateUserCredentials succeeds (issue #102
 		// CodeRabbit finding on #392: invalidating first would revoke
 		// credentials for a password that never actually changed), so a
-		// failed UpdateUser must never reach DeleteUserSessions/ListAPIKeysByUser.
+		// failed UpdateUserCredentials must never reach DeleteUserSessions/ListAPIKeysByUser.
 		mockStore.On("GetUserByID", ctx, "user-123").Return(testUser, nil).Once()
 		mockStore.On("UpdateUserCredentials", ctx, mock.AnythingOfType("*auth.User"), mock.Anything, mock.Anything).Return(assert.AnError).Once()
 

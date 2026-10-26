@@ -84,6 +84,15 @@ azure_sanity_report.json
 ri-exchange_*.json
 sanity_report*.json
 
+# Root artifacts written by documented Make targets (#279). Anchored with a
+# leading slash so same-named files elsewhere in the tree stay trackable.
+# scripts/test-gitignore-make-artifacts.sh asserts both directions.
+/bootstrap
+/coverage.html
+/trivy-report.json
+/tfsec-report.json
+/complexity-report.txt
+
 # Compiled binaries
 cudly-final
 cudly-test

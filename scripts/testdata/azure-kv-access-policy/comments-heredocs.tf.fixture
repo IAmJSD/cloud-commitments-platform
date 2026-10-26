@@ -1,0 +1,33 @@
+# Fixture: the banned spellings as text, never as declarations. Must exit 0.
+#
+# resource "azurerm_key_vault_access_policy" "in_a_hash_comment" {
+// resource "azurerm_key_vault_access_policy" "in_a_slash_comment" {
+/*
+resource "azurerm_key_vault_access_policy" "in_a_block_comment" {
+}
+*/
+
+resource "azurerm_key_vault" "main" {
+  name                      = "kv-fixture"
+  location                  = var.location
+  resource_group_name       = var.resource_group_name
+  tenant_id                 = data.azurerm_client_config.current.tenant_id
+  sku_name                  = "standard"
+  enable_rbac_authorization = true
+
+  # access_policy {
+  /*
+  dynamic "access_policy" {
+  }
+  */
+}
+
+output "migration_note" {
+  value = <<-EOT
+    Grants used to be written as:
+    resource "azurerm_key_vault_access_policy" "in_a_heredoc" {
+      access_policy {
+      }
+    }
+  EOT
+}

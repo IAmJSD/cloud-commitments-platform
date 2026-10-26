@@ -57,7 +57,9 @@ func (h *Handler) createAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 		}
 	}
 
-	var createReq CreateAPIKeyRequest
+	// Decode straight into the auth wire type so an explicit max_amount of 0
+	// reaches the explicit-zero check instead of being erased (issue #980).
+	var createReq auth.APICreateAPIKeyRequest
 	err = json.Unmarshal([]byte(req.Body), &createReq)
 	if err != nil {
 		return nil, NewClientError(400, "invalid request body")
@@ -120,7 +122,7 @@ func (h *Handler) deleteAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 	}
 
 	if err := h.auth.DeleteAPIKeyAPI(ctx, session.UserID, keyID); err != nil {
-		return nil, fmt.Errorf("failed to delete API key: %w", err)
+		return nil, mapAPIKeyAccessError(err, "delete")
 	}
 
 	return map[string]string{"status": "deleted"}, nil
@@ -140,10 +142,22 @@ func (h *Handler) revokeAPIKey(ctx context.Context, req *events.LambdaFunctionUR
 	}
 
 	if err := h.auth.RevokeAPIKeyAPI(ctx, session.UserID, keyID); err != nil {
-		return nil, fmt.Errorf("failed to revoke API key: %w", err)
+		return nil, mapAPIKeyAccessError(err, "revoke")
 	}
 
 	return map[string]string{"status": "revoked"}, nil
+}
+
+// mapAPIKeyAccessError maps a delete/revoke failure to its response. A key
+// that does not exist and another user's key (for a non-admin caller) both
+// answer 404 with the same text, as openapi.yaml documents, so the response
+// does not confirm that someone else's key ID exists (issue #312). Anything
+// else stays a 500.
+func mapAPIKeyAccessError(err error, action string) error {
+	if errors.Is(err, auth.ErrAPIKeyNotFound) || errors.Is(err, auth.ErrAPIKeyNotOwned) {
+		return NewClientError(404, "API key not found")
+	}
+	return fmt.Errorf("failed to %s API key: %w", action, err)
 }
 
 // apiKeyIDFromPath extracts the key ID from /api/api-keys/{id} or

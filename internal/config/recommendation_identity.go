@@ -75,5 +75,34 @@ func (r *RecommendationRecord) SuppressionVariant() (SuppressionVariant, error) 
 	if err != nil {
 		return SuppressionVariant{}, err
 	}
-	return SuppressionVariant{AvailabilityZone: r.AvailabilityZone, Platform: ci.Platform, Tenancy: ci.Tenancy}, nil
+	v := SuppressionVariant{AvailabilityZone: r.AvailabilityZone, Platform: ci.Platform, Tenancy: ci.Tenancy}
+	if r.Provider == "aws" && CanonicalSuppressionService(r.Provider, r.Service) == "compute" {
+		v.Tenancy = canonicalSuppressionTenancy(v.Tenancy)
+		if v.AvailabilityZone == "" {
+			// Rows saved 2026-10-09..12 hold the zone only in Details (#1232).
+			v.AvailabilityZone = r.detailsAvailabilityZone()
+		}
+	}
+	return v, nil
+}
+
+// canonicalSuppressionTenancy maps the pre-2026-05-20 EC2 tenancy spelling
+// "shared" to today's "default" so old and new suppressions and recs match.
+func canonicalSuppressionTenancy(t string) string {
+	if t == "shared" {
+		return "default"
+	}
+	return t
+}
+
+// detailsAvailabilityZone reads the zonal AZ from Details; "" when absent or
+// unreadable (ComputeIdentity has already reported a decode error).
+func (r *RecommendationRecord) detailsAvailabilityZone() string {
+	var d struct {
+		AvailabilityZone string `json:"availability_zone"`
+	}
+	if json.Unmarshal(r.Details, &d) != nil {
+		return ""
+	}
+	return d.AvailabilityZone
 }

@@ -99,7 +99,7 @@ func TestManager_ApproveExecution_Success(t *testing.T) {
 	}
 
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatusTokenPinned", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil), "valid-token").Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-456")
 
 	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "", nil)
@@ -128,7 +128,7 @@ func TestManager_ApproveExecution_StampsApprovedBy(t *testing.T) {
 	}
 
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatusTokenPinned", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil), "valid-token").Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-456")
 
 	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "operator@example.com", nil)
@@ -163,7 +163,7 @@ func TestManager_ApproveExecution_NotifiedStatus(t *testing.T) {
 	}
 
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatusTokenPinned", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil), "valid-token").Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-456")
 
 	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "", nil)
@@ -191,7 +191,7 @@ func TestManager_ApproveExecution_InvalidToken(t *testing.T) {
 	// Critically: TransitionExecutionStatus and SavePurchaseExecution must
 	// NOT have been called. A token-validation bypass is exactly what the
 	// constant-time comparison guards against.
-	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "TransitionExecutionStatusTokenPinned", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	store.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 	store.AssertExpectations(t)
 }
@@ -210,7 +210,7 @@ func TestManager_ApproveExecution_EmptyToken(t *testing.T) {
 	_, err := manager.ApproveExecution(ctx, "exec-123", "", "", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid approval token")
-	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "TransitionExecutionStatusTokenPinned", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestManager_ApproveExecution_NotFound(t *testing.T) {
@@ -252,7 +252,7 @@ func TestManager_ApproveExecution_TransitionFails(t *testing.T) {
 		ApprovalToken: config.HashApprovalToken("valid-token"),
 	}
 	store.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil)).
+	store.On("TransitionExecutionStatusTokenPinned", ctx, "exec-123", approveFromStatuses, "running", (*string)(nil), "valid-token").
 		Return(nil, errors.New(`execution exec-123 cannot transition from "canceled" to "approved"`))
 
 	_, err := manager.ApproveExecution(ctx, "exec-123", "valid-token", "", nil)
@@ -283,7 +283,9 @@ func TestManager_ApproveAndExecute_EmptyPlanID(t *testing.T) {
 	}
 	store.On("TransitionExecutionStatus", ctx, "exec-direct-1", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
 	// No GetPurchasePlan / GetPlanAccounts / UpdatePurchasePlan calls — see AssertNotCalled below.
-	sender.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
+	// No recommendations, so nothing is bought and no "purchase confirmed"
+	// email goes out (#339): with no SendPurchaseConfirmation expectation
+	// registered, a send fails the test.
 	store.On("SavePurchaseExecution", mock.Anything, mock.AnythingOfType("*config.PurchaseExecution")).Return(nil)
 
 	_, _, err := manager.ApproveAndExecute(ctx, "exec-direct-1", "operator@example.com", nil, nil)
@@ -703,8 +705,8 @@ func TestManager_ApproveExecution_FourEyesOn_SQSActorEqualsCreator_Denied(t *tes
 			_, err := manager.ApproveExecution(ctx, "exec-sqs-self", "valid-token", tc.actorEmail, nil)
 			require.ErrorIs(t, err, ErrFourEyesDenied)
 			assert.Contains(t, err.Error(), "4-eyes mode requires a different approver")
-			store.AssertNotCalled(t, "TransitionExecutionStatus",
-				mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			store.AssertNotCalled(t, "TransitionExecutionStatusTokenPinned",
+				mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 			store.AssertExpectations(t)
 		})
 	}
@@ -737,7 +739,7 @@ func TestManager_ApproveExecution_FourEyesOn_DifferentActor_Allowed(t *testing.T
 	store.On("GetExecutionByID", ctx, "exec-sqs-diff").Return(execution, nil)
 	store.On("GetGlobalConfig", mock.Anything).Return(fourEyesCfgOnForManager(), nil)
 	store.On("GetUserEmailByID", ctx, creatorID).Return("creator@example.com", nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-sqs-diff", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatusTokenPinned", ctx, "exec-sqs-diff", approveFromStatuses, "running", (*string)(nil), "valid-token").Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-fourEyes")
 
 	_, err := manager.ApproveExecution(ctx, "exec-sqs-diff", "valid-token", "approver@example.com", nil)
@@ -784,8 +786,8 @@ func TestManager_ApproveExecution_FourEyesOn_UnresolvableCreator_Denied(t *testi
 		_, err := manager.ApproveExecution(ctx, "exec-sqs-unresolvable", "valid-token", "approver@example.com", nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "creator's account could not be resolved")
-		store.AssertNotCalled(t, "TransitionExecutionStatus",
-			mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		store.AssertNotCalled(t, "TransitionExecutionStatusTokenPinned",
+			mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		store.AssertExpectations(t)
 	})
 
@@ -801,8 +803,8 @@ func TestManager_ApproveExecution_FourEyesOn_UnresolvableCreator_Denied(t *testi
 		_, err := manager.ApproveExecution(ctx, "exec-sqs-unresolvable", "valid-token", "approver@example.com", nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to resolve creator identity")
-		store.AssertNotCalled(t, "TransitionExecutionStatus",
-			mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+		store.AssertNotCalled(t, "TransitionExecutionStatusTokenPinned",
+			mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 		store.AssertExpectations(t)
 	})
 }
@@ -821,7 +823,7 @@ func TestManager_CancelExecution(t *testing.T) {
 
 	mockStore.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
 	// WithTx passes nil as the tx sentinel in tests; empty actor -> nil cancelledBy.
-	mockStore.On("CancelExecutionAtomic", ctx, mock.Anything, "exec-123", (*string)(nil)).
+	mockStore.On("CancelExecutionAtomicTokenPinned", ctx, mock.Anything, "exec-123", (*string)(nil), "valid-token").
 		Return(true, "canceled", nil)
 	mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-123").
 		Return(nil)
@@ -937,8 +939,8 @@ func TestManager_CancelExecution_RejectsNonCancelableStatus(t *testing.T) {
 				assert.Contains(t, err.Error(), "use the revoke endpoint before it fires")
 			}
 			// Status guard fires before the atomic UPDATE — a rejected
-			// cancel must never reach CancelExecutionAtomic.
-			mockStore.AssertNotCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+			// cancel must never reach CancelExecutionAtomicTokenPinned.
+			mockStore.AssertNotCalled(t, "CancelExecutionAtomicTokenPinned", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 			mockStore.AssertExpectations(t)
 		})
 	}
@@ -964,8 +966,8 @@ func TestManager_CancelExecution_AllowsCancelableStatus(t *testing.T) {
 				ApprovalToken: config.HashApprovalToken("valid-token"),
 			}
 			mockStore.On("GetExecutionByID", ctx, "exec-123").Return(execution, nil)
-			// CancelExecutionAtomic is called inside WithTx (nil tx sentinel in tests).
-			mockStore.On("CancelExecutionAtomic", ctx, mock.Anything, "exec-123", (*string)(nil)).
+			// CancelExecutionAtomicTokenPinned is called inside WithTx (nil tx sentinel in tests).
+			mockStore.On("CancelExecutionAtomicTokenPinned", ctx, mock.Anything, "exec-123", (*string)(nil), "valid-token").
 				Return(true, "canceled", nil)
 			// Suppression cleanup must follow a successful atomic cancel.
 			mockStore.On("DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-123").
@@ -981,7 +983,7 @@ func TestManager_CancelExecution_AllowsCancelableStatus(t *testing.T) {
 
 			err := manager.CancelExecution(ctx, "exec-123", "valid-token", "")
 			require.NoError(t, err)
-			mockStore.AssertCalled(t, "CancelExecutionAtomic", ctx, mock.Anything, "exec-123", (*string)(nil))
+			mockStore.AssertCalled(t, "CancelExecutionAtomicTokenPinned", ctx, mock.Anything, "exec-123", (*string)(nil), "valid-token")
 			mockStore.AssertCalled(t, "DeleteSuppressionsByExecutionTx", ctx, mock.Anything, "exec-123")
 			mockStore.AssertExpectations(t)
 		})
@@ -1053,7 +1055,7 @@ func TestManager_ApproveExecution_ExpiredToken(t *testing.T) {
 	assert.Contains(t, err.Error(), "expired")
 	// Token validation passes but the expiry check fires — TransitionExecutionStatus
 	// must never be called on an expired token.
-	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "TransitionExecutionStatusTokenPinned", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	store.AssertExpectations(t)
 }
 
@@ -1080,7 +1082,7 @@ func TestManager_ApproveExecution_ValidTokenWithinTTL(t *testing.T) {
 		Recommendations: approvalTestRecs(),
 	}
 	store.On("GetExecutionByID", ctx, "exec-live").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-live", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatusTokenPinned", ctx, "exec-live", approveFromStatuses, "running", (*string)(nil), "valid-token").Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-live")
 
 	_, err := manager.ApproveExecution(ctx, "exec-live", "valid-token", "", nil)
@@ -1111,7 +1113,7 @@ func TestManager_ApproveExecution_NilExpiresAt_LegacyRow(t *testing.T) {
 		Recommendations: approvalTestRecs(),
 	}
 	store.On("GetExecutionByID", ctx, "exec-legacy").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-legacy", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatusTokenPinned", ctx, "exec-legacy", approveFromStatuses, "running", (*string)(nil), "valid-token").Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-legacy")
 
 	_, err := manager.ApproveExecution(ctx, "exec-legacy", "valid-token", "", nil)
@@ -1145,7 +1147,7 @@ func TestManager_ApproveExecution_NonAWSOrphanReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "no longer exists")
 	assert.Contains(t, err.Error(), "azure")
 	// Execute chain must not run after the orphan guard fires.
-	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "TransitionExecutionStatusTokenPinned", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	store.AssertExpectations(t)
 }
 
@@ -1173,7 +1175,7 @@ func TestManager_ApproveExecution_AWSOrphanFallsThrough(t *testing.T) {
 		Recommendations: approvalTestRecs(),
 	}
 	store.On("GetExecutionByID", ctx, "exec-aws-ambient").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-aws-ambient", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatusTokenPinned", ctx, "exec-aws-ambient", approveFromStatuses, "running", (*string)(nil), "valid-token").Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-aws")
 
 	_, err := manager.ApproveExecution(ctx, "exec-aws-ambient", "valid-token", "", nil)
@@ -1207,7 +1209,7 @@ func TestOrphanExecutionError_RecLevelAccountIDPreventsOrphan(t *testing.T) {
 // TestManager_CancelExecution_RaceWithApprove is the regression guard for
 // issue #671: when a concurrent approve wins the race and transitions the
 // execution to 'approved' before the cancel's conditional UPDATE runs,
-// CancelExecutionAtomic returns (false, "approved", nil). CancelExecution
+// CancelExecutionAtomicTokenPinned returns (false, "approved", nil). CancelExecution
 // must surface a clean error containing the racing status rather than
 // silently overwriting the approved row.
 func TestManager_CancelExecution_RaceWithApprove(t *testing.T) {
@@ -1222,7 +1224,7 @@ func TestManager_CancelExecution_RaceWithApprove(t *testing.T) {
 	store.On("GetExecutionByID", ctx, "exec-raced").Return(execution, nil)
 	// Simulate: concurrent approve won between our IsCancelable check and
 	// the atomic UPDATE. The DB row is now 'approved' so zero rows affected.
-	store.On("CancelExecutionAtomic", ctx, mock.Anything, "exec-raced", (*string)(nil)).
+	store.On("CancelExecutionAtomicTokenPinned", ctx, mock.Anything, "exec-raced", (*string)(nil), "valid-token").
 		Return(false, "approved", nil)
 
 	err := manager.CancelExecution(ctx, "exec-raced", "valid-token", "")
@@ -1231,7 +1233,7 @@ func TestManager_CancelExecution_RaceWithApprove(t *testing.T) {
 	assert.Contains(t, err.Error(), "concurrent", "error must mention the concurrent operation")
 	// The approve is already in flight — the DB row must not have been
 	// overwritten by the cancel. AssertExpectations verifies that
-	// CancelExecutionAtomic was called (confirming the guard reached the DB)
+	// CancelExecutionAtomicTokenPinned was called (confirming the guard reached the DB)
 	// and that no further writes landed.
 	store.AssertExpectations(t)
 	// When the CAS misses, suppression cleanup must never fire.
@@ -1256,7 +1258,7 @@ func TestManager_CancelExecution_ExpiredToken(t *testing.T) {
 	err := manager.CancelExecution(ctx, "exec-cancel-expired", "valid-token", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expired")
-	store.AssertNotCalled(t, "CancelExecutionAtomic", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "CancelExecutionAtomicTokenPinned", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	store.AssertExpectations(t)
 }
 
@@ -1293,7 +1295,7 @@ func TestApproveExecution_MintsRevocationToken(t *testing.T) {
 	// returned and executeAndFinalize continued operating on -- in place; it
 	// does no fetch of its own (see rotateApprovalToken's doc comment for why).
 	store.On("GetExecutionByID", ctx, "exec-rotate").Return(execution, nil)
-	store.On("TransitionExecutionStatus", ctx, "exec-rotate", approveFromStatuses, "running", (*string)(nil)).Return(updated, nil)
+	store.On("TransitionExecutionStatusTokenPinned", ctx, "exec-rotate", approveFromStatuses, "running", (*string)(nil), "pre-rotate-token").Return(updated, nil)
 	stubExecuteChain(t, store, sender, "plan-rotate")
 
 	_, err := manager.ApproveExecution(ctx, "exec-rotate", "pre-rotate-token", "", nil)
@@ -1333,9 +1335,12 @@ func TestClearApprovalToken_PersistsEmpty(t *testing.T) {
 		ApprovalTokenExpiresAt: &future,
 	}
 	store.On("GetExecutionByID", ctx, "exec-tok-clear").Return(execution, nil)
-	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+	// Guarded on "canceled" (issue #835). The mock falls back to
+	// SavePurchaseExecution only when no guarded expectation is set, so this
+	// expectation is what pins the guard.
+	store.On("SaveExecutionIfStatus", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
 		return e.ExecutionID == "exec-tok-clear" && e.ApprovalToken == "" && e.ApprovalTokenExpiresAt == nil
-	})).Return(nil)
+	}), []string{"canceled"}).Return(nil)
 
 	err := manager.clearApprovalToken(ctx, "exec-tok-clear")
 	require.NoError(t, err)
@@ -1355,13 +1360,14 @@ func TestMintRevocationToken_PersistsFreshToken(t *testing.T) {
 		Status:        "completed",
 		ApprovalToken: "old-approval-token",
 	}
-	store.On("SavePurchaseExecution", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
+	// Guarded on the terminal status the row already carries (issue #835).
+	store.On("SaveExecutionIfStatus", ctx, mock.MatchedBy(func(e *config.PurchaseExecution) bool {
 		// Fresh token must be non-empty, different from old, and expiry set.
 		return e.ExecutionID == "exec-mint" &&
 			e.ApprovalToken != "" &&
 			e.ApprovalToken != "old-approval-token" &&
 			e.ApprovalTokenExpiresAt != nil
-	})).Return(nil)
+	}), []string{"completed"}).Return(nil)
 
 	rawToken, err := manager.rotateApprovalToken(ctx, execution, config.RevocationWindow)
 	require.NoError(t, err)
@@ -1395,4 +1401,27 @@ func TestManager_ApproveAndExecute_FourEyesOn_SystemCreated(t *testing.T) {
 	require.NoError(t, gate(nil, "", &approverID))
 	require.ErrorIs(t, gate(nil, "  ", nil), ErrFourEyesDenied, "anonymous actor")
 	require.ErrorIs(t, gate(&creatorID, "", &creatorID), ErrFourEyesDenied, "flag must not override a creator")
+}
+
+// TestMaskActor pins the PII mask written to the approval logs: everything
+// before the first '@' is hidden, a non-email keeps only its last 4 bytes,
+// and an empty actor is "<anon>".
+func TestMaskActor(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"", "<anon>"},
+		{"approver@example.com", "***@example.com"},
+		{"a@b", "***@b"},
+		{"@example.com", "***@example.com"},
+		{"trailing@", "***@"},
+		{"first@second@example.com", "***@second@example.com"},
+		{"josé@example.com", "***@example.com"},
+		{"\xff\xfe@example.com", "***@example.com"},
+		{"a", "****"},
+		{"abcd", "****"},
+		{"abcde", "...bcde"},
+		{"service-account", "...ount"},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, maskActor(tc.in), "maskActor(%q)", tc.in)
+	}
 }

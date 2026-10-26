@@ -971,8 +971,10 @@ func concealExecutionDenial(err error) error {
 
 // tokenActionError maps the email-link approve/cancel failures that are the
 // caller's fault to a 4xx: a wrong token is 403 (as on the RI exchange
-// approve path), an expired token is 410, and an execution
-// whose status no longer allows the action is 409. Anything else stays a server error.
+// approve path), as is a token rotated or expired between the snapshot check
+// and the status CAS (config.ErrApprovalTokenChanged, issue #1190), an expired
+// token is 410, and an execution whose status no longer allows the action is
+// 409. Anything else stays a server error.
 func tokenActionError(err error) error {
 	switch {
 	case errors.Is(err, config.ErrAuditLoss):
@@ -981,7 +983,7 @@ func tokenActionError(err error) error {
 		return claimedRowRefusalError(nil, err)
 	case errors.Is(err, purchase.ErrStaleAzurePricing):
 		return NewClientError(409, err.Error())
-	case errors.Is(err, purchase.ErrInvalidApprovalToken):
+	case errors.Is(err, purchase.ErrInvalidApprovalToken), errors.Is(err, config.ErrApprovalTokenChanged):
 		return NewClientError(403, "invalid approval token")
 	case errors.Is(err, purchase.ErrApprovalTokenExpired):
 		return NewClientError(410, "approval token has expired")
@@ -1413,15 +1415,18 @@ func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *conf
 	}
 
 	// Stamp the scheduled time and actor onto the post-CAS row, then persist.
-	// SavePurchaseExecution is a full-row upsert, so we set all extra fields on
-	// the returned (freshly-transitioned) execution to avoid overwriting fields
-	// a concurrent writer may have set between the CAS and here.
+	// The write is a full-row upsert, so the extra fields go on the returned
+	// (freshly-transitioned) execution, and it is guarded on "scheduled": a
+	// revoke that lands between the CAS and here flips the row to canceled,
+	// and an unguarded upsert would put "scheduled" back, so the scheduler
+	// would buy a purchase the user revoked (issue #835). A lost guard returns
+	// ErrExecutionNotInExpectedStatus, which approveWithDelay maps to a 409.
 	scheduledAt := time.Now().Add(delay)
 	updated.ScheduledExecutionAt = &scheduledAt
 	if actor != "" {
 		updated.ApprovedBy = &actor
 	}
-	if err := h.config.SavePurchaseExecution(ctx, updated); err != nil {
+	if err := h.config.SaveExecutionIfStatus(ctx, updated, []string{"scheduled"}); err != nil {
 		return nil, fmt.Errorf("failed to stamp scheduled_execution_at on execution %s: %w", execution.ExecutionID, err)
 	}
 	return updated, nil
@@ -1986,13 +1991,23 @@ func checkRevokableStatus(execution *config.PurchaseExecution) error {
 }
 
 // validateRevokeToken checks that the execution carries a non-empty
-// ApprovalToken, that the token has not expired, that the revocation window
-// has not closed (config.RevocationWindow after CompletedAt), and that the
-// token matches using constant-time comparison. Pre-migration rows without an
-// ApprovalTokenExpiresAt pass the expiry check (legacy backward compat).
+// ApprovalToken that matches the supplied token (constant-time comparison),
+// then that the token has not expired and that the revocation window has not
+// closed (config.RevocationWindow after CompletedAt). Pre-migration rows
+// without an ApprovalTokenExpiresAt pass the expiry check (legacy backward
+// compat).
+//
+// The token is compared first, as on the approve path (ValidateApprovalToken):
+// a wrong token must get the same "invalid" answer whatever the row's expiry or
+// window, or the expiry/window message tells a token guesser that the link
+// exists and has lapsed (issue #1190).
 // Extracted from revokeViaEmailToken to keep that function under the cyclomatic limit.
 func validateRevokeToken(execution *config.PurchaseExecution, token string) error {
-	if execution.ApprovalToken == "" {
+	// execution.ApprovalToken is the SHA-256 hex digest stored at rest
+	// (issue #103), not the raw secret; config.ApprovalTokenMatches hashes
+	// the supplied token and compares digests in constant time, and is false
+	// for an empty stored or supplied token.
+	if !config.ApprovalTokenMatches(execution.ApprovalToken, token) {
 		return NewClientError(403, "invalid revocation token")
 	}
 	if execution.ApprovalTokenExpiresAt != nil && time.Now().After(*execution.ApprovalTokenExpiresAt) {
@@ -2002,16 +2017,7 @@ func validateRevokeToken(execution *config.PurchaseExecution, token string) erro
 	// Enforce the 24-hour revocation window (issue #291 Finding #6).
 	// Use CompletedAt as the reference timestamp; fall back to ExecutedAt
 	// for direct-execute rows which may not have a CompletedAt yet.
-	if windowErr := checkRevocationWindow(execution); windowErr != nil {
-		return windowErr
-	}
-	// execution.ApprovalToken is the SHA-256 hex digest stored at rest
-	// (issue #103), not the raw secret; config.ApprovalTokenMatches hashes
-	// the supplied token and compares digests in constant time.
-	if !config.ApprovalTokenMatches(execution.ApprovalToken, token) {
-		return NewClientError(403, "invalid revocation token")
-	}
-	return nil
+	return checkRevocationWindow(execution)
 }
 
 // checkRevocationWindow returns a 403 ClientError when the 24-hour revocation
@@ -2064,8 +2070,9 @@ func revocationWindowClosesAt(execution *config.PurchaseExecution) string {
 // UPDATE WHERE status IN ('completed','partially_completed'). This guards
 // against lost-update races: if the row changed between the GetExecutionByID
 // read and this write (e.g. a concurrent transition), zero rows are affected
-// and we return a 409 rather than blindly overwriting. CancelledBy is stamped
-// in a follow-up SavePurchaseExecution on the freshly-returned row.
+// and we return a 409 rather than blindly overwriting. CancelledBy is then
+// stamped by a narrow SetCancelledBy UPDATE keyed on the execution ID, so the
+// row TransitionExecutionStatus returns is not used.
 //
 // transitionedBy is the acting user's UUID (resolveCreatorUserID), or nil when
 // the caller has no user row. It must never be an email: transitioned_by is a
@@ -2074,11 +2081,17 @@ func revocationWindowClosesAt(execution *config.PurchaseExecution) string {
 // The revocation window is enforced here, not only in validateRevokeToken, so
 // the session-authed branch (tryRevokeViaSession) cannot flip an execution
 // whose window closed long ago to revocation_requested (issue #260).
+//
+// Neither revoke path (this one or the token path in revokePurchase) applies
+// the 4-eyes RequireDifferentApprover policy: that policy gates approvals
+// only, and a revocation records a request that an operator completes with
+// AWS Support. Whether revocation should also need a second person is an
+// open owner decision (issue #311).
 func (h *Handler) revokeViaSession(ctx context.Context, execution *config.PurchaseExecution, revokedBy string, transitionedBy *string) (any, error) {
 	if err := checkRevocationWindow(execution); err != nil {
 		return nil, err
 	}
-	updated, err := h.config.TransitionExecutionStatus(
+	_, err := h.config.TransitionExecutionStatus(
 		ctx, execution.ExecutionID,
 		[]string{"completed", "partially_completed"}, "revocation_requested", transitionedBy)
 	if err != nil {
@@ -2101,7 +2114,6 @@ func (h *Handler) revokeViaSession(ctx context.Context, execution *config.Purcha
 		if err := h.config.SetCancelledBy(ctx, execution.ExecutionID, revokedBy); err != nil {
 			return nil, fmt.Errorf("failed to record revocation requester for execution %s: %w", execution.ExecutionID, err)
 		}
-		_ = updated // kept for future use; CancelledBy is now persisted atomically
 	}
 	logging.Infof("Revocation requested for execution %s by %s", execution.ExecutionID, redactEmail(revokedBy))
 	return map[string]string{
@@ -2645,45 +2657,100 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 // matches zero rows and the tx rolls back (issue #220) instead of both
 // persisting an approvable successor and reverting whatever the other
 // writer changed on the original row.
+//
+// The successor is a web-source pending row for the retrying user, so it
+// also goes through the submit dedupe (issue #760): see writeRetrySuccessorTx.
 func (h *Handler) persistRetrySuccessorTx(ctx context.Context, failedExec, newExecution *config.PurchaseExecution, suppressions []config.PurchaseSuppression) error {
-	var lostRace, settledTranche bool
 	err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
-		if err := h.guardLadderTrancheForRetry(ctx, tx, failedExec.IdempotencyKey); err != nil {
-			settledTranche = errors.Is(err, errRetryLadderTrancheSettled)
-			return err
-		}
-		if err := h.config.SavePurchaseExecutionTx(ctx, tx, newExecution); err != nil {
-			return err
-		}
-		linked, linkErr := h.config.LinkRetryExecutionAtomic(ctx, tx, failedExec.ExecutionID, newExecution.ExecutionID)
-		if linkErr != nil {
-			return linkErr
-		}
-		if !linked {
-			lostRace = true
-			return errRetryLinkRaceLost
-		}
-		for i := range suppressions {
-			if err := h.config.CreateSuppressionTx(ctx, tx, &suppressions[i]); err != nil {
-				return err
-			}
-		}
-		return nil
+		return h.writeRetrySuccessorTx(ctx, tx, failedExec, newExecution, suppressions)
 	})
 	if err == nil {
 		return nil
 	}
-	if settledTranche {
+	var dup *retryDuplicateSubmitError
+	switch {
+	case errors.Is(err, errRetryLadderTrancheSettled):
 		return NewClientErrorWithDetails(409,
 			fmt.Sprintf("execution %s belongs to a ladder tranche that is already settled; retrying it could buy the same commitment twice", failedExec.ExecutionID),
 			map[string]any{})
-	}
-	if lostRace {
+	case errors.Is(err, errRetryLinkRaceLost):
 		return NewClientErrorWithDetails(409,
 			fmt.Sprintf("execution %s was already retried; act on its descendant instead", failedExec.ExecutionID),
 			map[string]any{})
+	case errors.As(err, &dup):
+		return NewClientErrorWithDetails(409,
+			fmt.Sprintf("an identical purchase was submitted moments ago as execution %s; act on it instead of retrying %s", dup.existingID, failedExec.ExecutionID),
+			map[string]any{"duplicate_execution_id": dup.existingID})
 	}
 	return fmt.Errorf("failed to save retry execution: %w", err)
+}
+
+// writeRetrySuccessorTx is persistRetrySuccessorTx's transaction body.
+//
+// Its first statement takes the retrying user's per-creator submit lock
+// (ListRecentSubmitsTx), the same lock at the same point as
+// persistExecutionAndSuppressions, so a retry and an identical fresh submit
+// by that user serialize instead of both inserting a pending row. Taking it
+// before the ladder tranche lock keeps one order everywhere: the submit path
+// takes only this lock, and the reconciler never takes it. The rows read
+// under the lock are checked for a duplicate of the successor only after the
+// link CAS, so a lost retry race still reports "already retried".
+func (h *Handler) writeRetrySuccessorTx(ctx context.Context, tx pgx.Tx, failedExec, newExecution *config.PurchaseExecution, suppressions []config.PurchaseSuppression) error {
+	creatorID := derefStringOrEmpty(newExecution.CreatedByUserID)
+	now := time.Now()
+	recent, listErr := h.config.ListRecentSubmitsTx(ctx, tx, creatorID, now.Add(-purchaseIdempotencyWindow))
+	if listErr != nil {
+		return listErr
+	}
+	if err := h.guardLadderTrancheForRetry(ctx, tx, failedExec.IdempotencyKey); err != nil {
+		return err
+	}
+	if err := h.config.SavePurchaseExecutionTx(ctx, tx, newExecution); err != nil {
+		return err
+	}
+	linked, linkErr := h.config.LinkRetryExecutionAtomic(ctx, tx, failedExec.ExecutionID, newExecution.ExecutionID)
+	if linkErr != nil {
+		return linkErr
+	}
+	if !linked {
+		return errRetryLinkRaceLost
+	}
+	if err := checkRetryDuplicateSubmit(recent, creatorID, newExecution, now); err != nil {
+		return err
+	}
+	for i := range suppressions {
+		if err := h.config.CreateSuppressionTx(ctx, tx, &suppressions[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkRetryDuplicateSubmit returns a *retryDuplicateSubmitError when recent
+// (the creator's live web submits, read under the submit lock) already holds
+// an execution with the successor's submit fingerprint. The successor's own
+// row is not in recent: it was read before the successor was inserted. A
+// fingerprint that cannot be derived fails the retry rather than skipping
+// the check, since a skipped check is a possible double purchase.
+func checkRetryDuplicateSubmit(recent []config.PurchaseExecution, creatorID string, successor *config.PurchaseExecution, now time.Time) error {
+	key, err := purchaseIdempotencyKey(creatorID, successor.Recommendations, successor.CapacityPercent)
+	if err != nil {
+		return fmt.Errorf("derive retry idempotency key: %w", err)
+	}
+	if dup := matchDuplicateInList(recent, creatorID, key, now); dup != nil {
+		return &retryDuplicateSubmitError{existingID: dup.ExecutionID}
+	}
+	return nil
+}
+
+// retryDuplicateSubmitError rolls back persistRetrySuccessorTx's tx when the
+// retrying user already has an identical live submit inside the idempotency
+// window, so the retry would mint a second approvable row for the same
+// purchase. persistRetrySuccessorTx translates it into a 409.
+type retryDuplicateSubmitError struct{ existingID string }
+
+func (e *retryDuplicateSubmitError) Error() string {
+	return "identical purchase already submitted as execution " + e.existingID
 }
 
 // errRetryLinkRaceLost is returned from persistRetrySuccessorTx's tx
@@ -2695,8 +2762,9 @@ func (h *Handler) persistRetrySuccessorTx(ctx context.Context, failedExec, newEx
 var errRetryLinkRaceLost = errors.New("retry link race lost")
 
 // guardLadderTrancheForRetry locks the ladder tranche named by the execution's
-// idempotency key (if any) before anything else in the retry tx, the same order
-// the reconciler uses (tranche, then execution rows), and refuses when the
+// idempotency key (if any) before any execution row in the retry tx (only the
+// per-creator submit advisory lock comes first), the same order the reconciler
+// uses (tranche, then execution rows), and refuses when the
 // tranche is settled. A failed tranche no longer nets, so an approvable
 // successor would buy the same slice a second time.
 func (h *Handler) guardLadderTrancheForRetry(ctx context.Context, tx pgx.Tx, idempotencyKey string) error {
@@ -3171,17 +3239,44 @@ func validateExecutePurchaseRecommendations(recs []config.RecommendationRecord) 
 // response should carry. Returns the original "pending" when email_sent is
 // true or when the failed-state write itself fails (best-effort — the UI
 // still gets email_sent=false and can point the user at History).
+//
+// The write is guarded on the row still being "pending" (issue #1232). A
+// session approve, cancel or pause can land while the email is being sent;
+// an unguarded write would then stamp "failed" over a row that was already
+// approved and bought, which makes it eligible for retry and a second
+// purchase. A lost guard is a no-op: the row keeps the status the other
+// writer gave it, and that status is what the response carries.
 func (h *Handler) finalizePurchaseStatus(ctx context.Context, execution *config.PurchaseExecution, emailSent bool, emailReason string) string {
 	if emailSent {
 		return "pending"
 	}
-	execution.Status = "failed"
-	execution.Error = emailReason
-	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
+	failed := *execution
+	failed.Status = "failed"
+	failed.Error = emailReason
+	err := h.config.SaveExecutionIfStatus(ctx, &failed, []string{"pending"})
+	switch {
+	case err == nil:
+		execution.Status, execution.Error = failed.Status, failed.Error
+		return "failed"
+	case errors.Is(err, config.ErrExecutionNotInExpectedStatus):
+		logging.Warnf("execution %s left pending while its approval email was being sent; not marking it failed: %v", execution.ExecutionID, err)
+		return h.currentExecutionStatus(ctx, execution.ExecutionID)
+	default:
 		logging.Errorf("failed to mark execution %s as failed after email send error: %v", execution.ExecutionID, err)
 		return "pending"
 	}
-	return "failed"
+}
+
+// currentExecutionStatus re-reads an execution's stored status for a response
+// whose in-memory copy went stale. Falls back to "pending" (the status the row
+// was created with) when the read fails.
+func (h *Handler) currentExecutionStatus(ctx context.Context, executionID string) string {
+	row, err := h.config.GetExecutionByID(ctx, executionID)
+	if err != nil || row == nil {
+		logging.Errorf("failed to re-read execution %s status: %v", executionID, err)
+		return "pending"
+	}
+	return row.Status
 }
 
 // validateAndTotalRecommendations validates each recommendation and returns
@@ -3445,47 +3540,6 @@ func recDetailsAvailabilityZone(r *config.RecommendationRecord) (string, error) 
 		return strings.TrimSpace(cd.AvailabilityZone), nil
 	}
 	return "", nil
-}
-
-// findDuplicatePendingExecution returns an existing pending/notified execution
-// whose idempotency fingerprint matches key and whose creation falls inside
-// purchaseIdempotencyWindow of now, or (nil, nil) when there is no duplicate.
-// It recomputes each candidate's key from its persisted recs + creator +
-// capacity rather than relying on a stored column, so no schema change is
-// needed. Restricted to web-sourced executions to avoid colliding with
-// scheduler/CLI rows. A lookup error is non-fatal to the caller's decision
-// (returned so the caller can log and proceed with a fresh execution).
-func (h *Handler) findDuplicatePendingExecution(ctx context.Context, creatorID, key string, now time.Time) (*config.PurchaseExecution, error) {
-	pending, err := h.config.GetPendingExecutions(ctx)
-	if err != nil {
-		return nil, err
-	}
-	cutoff := now.Add(-purchaseIdempotencyWindow)
-	for i := range pending {
-		ex := &pending[i]
-		if ex.Source != common.PurchaseSourceWeb {
-			continue
-		}
-		if ex.ScheduledDate.Before(cutoff) {
-			continue
-		}
-		exCreator := ""
-		if ex.CreatedByUserID != nil {
-			exCreator = *ex.CreatedByUserID
-		}
-		if exCreator != creatorID {
-			continue
-		}
-		exKey, err := purchaseIdempotencyKey(exCreator, ex.Recommendations, ex.CapacityPercent)
-		if err != nil {
-			logging.Errorf("purchase idempotency: skipping pending execution %s, cannot derive its key: %v", ex.ExecutionID, err)
-			continue
-		}
-		if exKey == key {
-			return ex, nil
-		}
-	}
-	return nil, nil
 }
 
 // buildDuplicatePurchaseResponse returns the executePurchase response body for

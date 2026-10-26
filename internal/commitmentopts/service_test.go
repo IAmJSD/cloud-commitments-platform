@@ -9,6 +9,8 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/opensearch"
+	opensearchtypes "github.com/aws/aws-sdk-go-v2/service/opensearch/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -387,4 +389,67 @@ type proberFunc struct {
 func (p proberFunc) Service() string { return p.name }
 func (p proberFunc) Probe(ctx context.Context, _ aws.Config) ([]Combo, error) {
 	return p.fn()
+}
+
+// A capped OpenSearch probe persists no opensearch combos, so a legitimate
+// 3-year all-upfront save is allowed instead of rejected as unsold.
+func TestService_Validate_CappedProbeStaysPermissive(t *testing.T) {
+	// Every page carries only the 1-year no-upfront offering and another page.
+	osFake := &fakeOpenSearch{fn: func(*opensearch.DescribeReservedInstanceOfferingsInput) (*opensearch.DescribeReservedInstanceOfferingsOutput, error) {
+		return &opensearch.DescribeReservedInstanceOfferingsOutput{
+			ReservedInstanceOfferings: []opensearchtypes.ReservedInstanceOffering{{
+				InstanceType:  opensearchtypes.OpenSearchPartitionInstanceType(probeTargetOpenSearch),
+				Duration:      31536000,
+				PaymentOption: opensearchtypes.ReservedInstancePaymentOptionNoUpfront,
+			}},
+			NextToken: aws.String("more"),
+		}, nil
+	}}
+	capped := &OpenSearchProber{NewClient: func(aws.Config) OpenSearchDescribeOfferings { return osFake }}
+	rds := &stubProber{name: "rds", combos: []Combo{{Provider: "aws", Service: "rds", TermYears: 1, Payment: "all-upfront"}}}
+	store := &fakeStore{}
+	svc := New(store, &fakeAccounts{accounts: []config.CloudAccount{awsAccount("a")}}, noopBuildConfig, []Prober{capped, rds})
+
+	ok, err := svc.Validate(context.Background(), "aws", "opensearch", 3, "all-upfront")
+	require.NoError(t, err)
+	assert.True(t, ok)
+}
+
+// filterAccounts applies CloudAccountFilter the way the Postgres store does,
+// and records the filter it was given.
+type filterAccounts struct {
+	got      config.CloudAccountFilter
+	accounts []config.CloudAccount
+}
+
+func (f *filterAccounts) ListCloudAccounts(_ context.Context, filter config.CloudAccountFilter) ([]config.CloudAccount, error) {
+	f.got = filter
+	var out []config.CloudAccount
+	for _, a := range f.accounts {
+		if (filter.Provider == nil || a.Provider == *filter.Provider) && (filter.Enabled == nil || a.Enabled == *filter.Enabled) {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+// A disabled AWS account listed first must not be the one probed (A05-010).
+func TestService_FindAWSAccount_SkipsDisabled(t *testing.T) {
+	disabled := awsAccount("disabled")
+	disabled.Enabled = false
+	accounts := &filterAccounts{accounts: []config.CloudAccount{disabled, awsAccount("enabled")}}
+	svc := New(&fakeStore{}, accounts, noopBuildConfig, nil)
+
+	got, err := svc.findAWSAccount(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "enabled", got.ID)
+	require.NotNil(t, accounts.got.Enabled, "the store query must ask for enabled accounts only")
+	assert.True(t, *accounts.got.Enabled)
+
+	// A lister that ignores the filter still cannot hand back a disabled account.
+	svc = New(&fakeStore{}, &fakeAccounts{accounts: []config.CloudAccount{disabled}}, noopBuildConfig, nil)
+	got, err = svc.findAWSAccount(context.Background())
+	require.NoError(t, err)
+	assert.Nil(t, got)
 }
