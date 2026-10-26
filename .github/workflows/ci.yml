@@ -1064,6 +1064,19 @@ jobs:
             terraform -chdir="$d" test
           fi
 
+      # The Cloud Run OIDC signing key's create-time retention input must keep
+      # deployed keys unchanged and reject values Cloud KMS refuses (#324).
+      - name: Test GCP compute modules
+        if: matrix.cloud == 'gcp'
+        run: |
+          for t in terraform/modules/compute/gcp/*/tests; do
+            [ -d "$t" ] || continue
+            d=$(dirname "$t")
+            terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
+            terraform -chdir="$d" fmt -check -recursive
+            terraform -chdir="$d" test
+          done
+
       - name: Test CI/CD trust (immutable ids)
         # Skips a cloud until it has a tests dir.
         run: |
@@ -1762,6 +1775,12 @@ jobs:
       # a stubbed aws CLI in a temp copy of the root; no AWS access.
       - name: Run init-backend.sh self-test
         run: bash scripts/test-init-backend.sh
+
+      # The Lambda deploy and rollback read the Function URL back from state
+      # for its CORS origin (#324); the reader must reject anything that is
+      # not a Function URL. terraform is stubbed, so nothing reads real state.
+      - name: Run Function URL reader self-tests
+        run: bash scripts/test-read-lambda-function-url.sh
 
   # Assert that every job writing the Azure or GCP Terraform state carries the
   # shared concurrency group for that state (`azure-tfstate-<env>`,

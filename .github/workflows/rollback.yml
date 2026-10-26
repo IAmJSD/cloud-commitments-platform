@@ -306,6 +306,11 @@ jobs:
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
+          # Keep the deployed Function URL's origin in the CORS allowlist, as
+          # deploy-aws-lambda.yml does; it is not in github-*.tfvars (#324).
+          TF_VAR_lambda_deployed_function_url=$(../../../scripts/read-lambda-function-url.sh .)
+          export TF_VAR_lambda_deployed_function_url
+
           terraform apply -auto-approve \
             -var-file="github-${ENVIRONMENT}.tfvars" \
             -var="image_uri=${IMAGE_URI}" \
