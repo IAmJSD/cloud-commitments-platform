@@ -31,14 +31,12 @@ const (
 	hostileURL   = `https://cudly.example.com/a"b${x}`
 	hostileSlug  = `slug"x`
 	hostileSA    = `sa"x${y}@example.com`
-	// hostileShellEmail is hostileEmail without a '}'. The shared shellEscape
-	// rule (the server's, mirrored by the script) does not escape '}', so inside
-	// a "${VAR:-default}" expansion a '}' in the value ends the expansion early
-	// and corrupts the value. It cannot run a command or leave the quotes,
-	// because '$', '`', '"' and '\' are all escaped; fixing it needs a
-	// context-aware rule for the server's CLI templates too, so it is out of
-	// scope for #952.
-	hostileShellEmail = `"o\"q$x $(printf INJECTED) ` + "`printf INJECTED`" + `"@example.com`
+	// hostileShellEmail adds Bash command substitutions to hostileEmail. It
+	// keeps the '}' (once left out because it closed the template's
+	// "${CUDLY_CONTACT_EMAIL:-default}" early): the deploy scripts now assign
+	// the pre-filled email on its own line (#1436), and the probe below does
+	// the same.
+	hostileShellEmail = `"o\"q${x}%{y} $(printf INJECTED) ` + "`printf INJECTED`" + `"@example.com`
 )
 
 // hclAttrRE matches one `name = "value"` tfvars line, optionally followed by a
@@ -237,7 +235,8 @@ const probeDeployScript = `#!/usr/bin/env bash
 set -euo pipefail
 : "${STACK_NAME:=CUDly-{{.AccountSlug}}-WIF}"
 NAME="{{.AccountName}}"
-CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-{{.ContactEmail}}}"
+CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-}"
+[ -n "$CONTACT_EMAIL" ] || CONTACT_EMAIL="{{.ContactEmail}}"
 URL="{{.CUDlyAPIURL}}/api/register"
 printf '%s\n' "$STACK_NAME" "$NAME" "$CONTACT_EMAIL" "$URL"
 `

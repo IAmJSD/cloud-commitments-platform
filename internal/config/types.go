@@ -661,6 +661,15 @@ type RecommendationRecord struct {
 	// collapses the denominator) don't inflate the displayed effective
 	// savings %. See #274.
 	OnDemandCost *float64 `json:"on_demand_cost,omitempty" dynamodbav:"on_demand_cost,omitempty"`
+	// CommitmentCurrency is the ISO 4217 code UpfrontCost and MonthlyCost are
+	// denominated in, copied from common.Recommendation.CommitmentCurrency at
+	// collection time. Empty means unknown: the provider parser could not
+	// prove the currency of every payment leg, or the row predates the field.
+	// The purchase spend caps are USD, so a rec that is not provably USD is
+	// never compared against one (issue #361). Persisted via the
+	// recommendations row's JSONB `payload` column, and with the execution's
+	// recommendations JSONB; no DDL needed.
+	CommitmentCurrency string `json:"commitment_currency,omitempty" dynamodbav:"commitment_currency,omitempty"`
 	// SavingsPercentage is the provider-authoritative effective savings %
 	// reported directly by the cloud provider (AWS Cost Explorer
 	// `EstimatedMonthlySavingsPercentage`, Azure / GCP converters' computed

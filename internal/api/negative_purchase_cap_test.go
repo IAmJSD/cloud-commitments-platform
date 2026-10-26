@@ -21,6 +21,7 @@ func capRec(upfront float64) config.RecommendationRecord {
 	return config.RecommendationRecord{
 		ID: "rec-1", Provider: "aws", Service: "ec2", Region: "us-east-1",
 		CloudAccountID: &acct, Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: upfront,
+		CommitmentCurrency: "USD",
 	}
 }
 

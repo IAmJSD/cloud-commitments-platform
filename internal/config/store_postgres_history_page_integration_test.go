@@ -34,6 +34,13 @@ func (f *historyPageFixture) addPurchase(ctx context.Context, t *testing.T, prov
 		CloudAccountID: cloudAccountID,
 	}
 	require.NoError(t, f.store.SavePurchaseHistory(ctx, rec))
+	if cloudAccountID == nil {
+		// SavePurchaseHistory now links a row to the registered account with
+		// the same external id (#1235); clear it so nil seeds a legacy row.
+		tag, err := f.store.db.Exec(ctx, `UPDATE purchase_history SET cloud_account_id = NULL WHERE purchase_id = $1`, rec.PurchaseID)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), tag.RowsAffected())
+	}
 	var id string
 	require.NoError(t, f.store.db.QueryRow(ctx, `SELECT id::text FROM purchase_history WHERE purchase_id = $1`, rec.PurchaseID).Scan(&id))
 	f.keys[rec.PurchaseID] = HistoryPageKey{Timestamp: at, Source: HistorySourcePurchase, ID: id}

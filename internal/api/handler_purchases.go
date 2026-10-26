@@ -3079,11 +3079,16 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 // runPlannedPurchase, "execute-any"/"execute-own" for direct-execute,
 // "approve-any"/"approve-own" for session approve. recs carry store-derived
 // or persisted-at-submit-time costs depending on the caller; none of these
-// call sites ever price from client-supplied numbers.
+// call sites ever price from client-supplied numbers. MaxPurchaseAmount is
+// USD, so a batch with any rec not provably priced in USD is checked by
+// requireUncappedPurchaseGrant instead of by its raw amount (issue #361).
 func (h *Handler) enforcePurchaseConstraints(ctx context.Context, session *Session, action string, recs []config.RecommendationRecord) error {
 	constraintSets := purchaseConstraintSets(recs)
 	if err := requireNonZeroCommitment(constraintSets); err != nil {
 		return err
+	}
+	if currency := nonUSDPurchaseCurrency(recs); currency != "" {
+		return h.requireUncappedPurchaseGrant(ctx, session, action, constraintSets, currency)
 	}
 	return h.requirePermissionConstraints(ctx, session, action, "purchases", constraintSets)
 }
