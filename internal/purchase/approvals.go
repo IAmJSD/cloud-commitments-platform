@@ -48,28 +48,31 @@ const directExecuteSkipReason = "direct-execute permission"
 // check is the caller's ClaimedRowCheck, run against the claimed row before
 // any provider call (issue #415); the SQS approve worker passes nil.
 //
-// Returns the raw revocation token minted by ApproveAndExecute on success
-// (see that function's doc comment for why this must be a return value
-// rather than something the caller re-fetches from the DB). Empty on
-// failure, and best-effort empty if the mint itself failed after an
+// Returns the same row and token as ApproveAndExecute (issue #532): the row
+// carries the run's final status, also on an execution error, and is nil when
+// the run never started (bad token, orphan, 4-eyes denial, lost claim), so the
+// caller can tell a refusal from a provider failure after the claim. The raw
+// revocation token minted on success is a return value rather than something
+// the caller re-fetches from the DB (see transitionApproveAndExecute). It is
+// empty on failure, and best-effort empty if the mint itself failed after an
 // otherwise-successful approve. A partially_completed run returns its token
-// together with its error (issue #532), so a non-empty token with an error
-// means part of the purchase committed and is revocable.
-func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, actor string, check ClaimedRowCheck) (string, error) {
+// together with its error, so a non-empty token with an error means part of
+// the purchase committed and is revocable.
+func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, actor string, check ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[%s]: ApproveExecution entry (auth=token actor=%q)", executionID, maskActor(actor))
 
 	execution, err := m.config.GetExecutionByID(ctx, executionID)
 	if errors.Is(err, config.ErrNotFound) {
-		return "", fmt.Errorf("execution not found: %s", executionID)
+		return nil, "", fmt.Errorf("execution not found: %s", executionID)
 	}
 	if err != nil {
-		return "", fmt.Errorf("failed to get execution: %w", err)
+		return nil, "", fmt.Errorf("failed to get execution: %w", err)
 	}
 
 	// Validate token and TTL (Finding #4 + issue #397).
 	if tokErr := ValidateApprovalToken(execution, token); tokErr != nil {
-		return "", tokErr
+		return nil, "", tokErr
 	}
 
 	// Preflight guard (issue #609): reject non-AWS orphan executions before
@@ -77,7 +80,7 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 	if checkErr := OrphanExecutionError(execution); checkErr != nil {
 		logging.Errorf("purchase[%s]: ApproveExecution preflight rejected after %s: %v",
 			executionID, time.Since(t0), checkErr)
-		return "", checkErr
+		return nil, "", checkErr
 	}
 
 	// Token/SQS path: no authenticated session UUID is available, so the
@@ -85,7 +88,7 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 	// The token check above read a snapshot; the claim pins the same token
 	// inside its status CAS so a re-notification that rotated it since cannot
 	// win the claim with the old one (issue #1190).
-	_, revocationToken, err := m.transitionApproveAndExecute(ctx, executionID, actor, nil, []string{"pending", "notified"}, "", token, check)
+	final, revocationToken, err := m.transitionApproveAndExecute(ctx, executionID, actor, nil, []string{"pending", "notified"}, "", token, check)
 	if err != nil {
 		logging.Errorf("purchase[%s]: ApproveExecution (token path) failed after %s: %v",
 			executionID, time.Since(t0), err)
@@ -93,7 +96,7 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 		logging.Infof("purchase[%s]: ApproveExecution (token path) completed in %s",
 			executionID, time.Since(t0))
 	}
-	return revocationToken, err
+	return final, revocationToken, err
 }
 
 // maskActor masks an actor email/username for safe log emission.

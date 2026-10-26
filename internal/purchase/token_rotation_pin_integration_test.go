@@ -82,7 +82,7 @@ func TestApproveExecution_TokenRotatedBeforeClaimIsRefused(t *testing.T) {
 		stubUnreachableProvider(factory)
 		manager := &Manager{config: &rotatingStore{PostgresStore: store, t: t}, email: quietSender(), providerFactory: factory}
 
-		revocationToken, err := manager.ApproveExecution(ctx, row.ExecutionID, rotOldToken, "approver@example.invalid", nil)
+		_, revocationToken, err := manager.ApproveExecution(ctx, row.ExecutionID, rotOldToken, "approver@example.invalid", nil)
 
 		require.ErrorIs(t, err, config.ErrApprovalTokenChanged, "the revoked token must lose the claim")
 		assert.Empty(t, revocationToken)
@@ -99,7 +99,7 @@ func TestApproveExecution_TokenRotatedBeforeClaimIsRefused(t *testing.T) {
 		stubUnreachableProvider(factory)
 		manager := &Manager{config: store, email: quietSender(), providerFactory: factory}
 
-		_, err := manager.ApproveExecution(ctx, row.ExecutionID, rotOldToken, "approver@example.invalid", nil)
+		_, _, err := manager.ApproveExecution(ctx, row.ExecutionID, rotOldToken, "approver@example.invalid", nil)
 
 		require.NotErrorIs(t, err, config.ErrApprovalTokenChanged)
 		assert.NotEqual(t, "notified", statusInDB(ctx, t, store, row.ExecutionID).Status, "the claim was won and the run started")

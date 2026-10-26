@@ -74,7 +74,7 @@ func TestHandler_approvePurchase(t *testing.T) {
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
-	mockPurchase.On("ApproveExecution", ctx, execID, "valid-token", approver).Return("", nil)
+	mockPurchase.On("ApproveExecution", ctx, execID, "valid-token", approver).Return(nil, "", nil)
 
 	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
 
@@ -291,7 +291,7 @@ func TestHandler_approvePurchase_AcceptsContactEmailSession(t *testing.T) {
 	mockAuth.On("HasPermissionAPI", ctx, "", "approve-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
-	mockPurchase.On("ApproveExecution", ctx, execID, "valid-token", contactEmail).Return("", nil)
+	mockPurchase.On("ApproveExecution", ctx, execID, "valid-token", contactEmail).Return(nil, "", nil)
 
 	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
 

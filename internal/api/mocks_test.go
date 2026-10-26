@@ -78,12 +78,13 @@ func (m *MockPurchaseManager) claimedRowRefusal(ctx context.Context, check purch
 	return nil, nil
 }
 
-func (m *MockPurchaseManager) ApproveExecution(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (string, error) {
-	if _, err := m.claimedRowRefusal(ctx, check); err != nil {
-		return "", err
+func (m *MockPurchaseManager) ApproveExecution(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
+	if refused, err := m.claimedRowRefusal(ctx, check); err != nil {
+		return refused, "", err
 	}
 	args := m.Called(ctx, execID, token, actor)
-	return args.String(0), args.Error(1)
+	exec, _ := args.Get(0).(*config.PurchaseExecution)
+	return exec, args.String(1), args.Error(2)
 }
 
 func (m *MockPurchaseManager) ApproveAndExecute(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error) {

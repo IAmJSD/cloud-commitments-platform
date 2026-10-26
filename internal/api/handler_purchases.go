@@ -1094,25 +1094,32 @@ func (h *Handler) executeTokenApprove(ctx context.Context, req *events.LambdaFun
 	// the hash.
 	// approveConstraintsForSession above read a snapshot; the funnel re-runs
 	// it on the row its claim returns, the row it buys (issue #415).
-	revocationToken, approveErr := h.purchase.ApproveExecution(ctx, execution.ExecutionID, token, actor, h.tokenApproveClaimCheck(tokenSession))
-	// A token returned with an error is a partially_completed run: part of it
-	// committed and is revocable, so it is emailed like a completed run
-	// (issue #532). Any other error has nothing to email.
-	if approveErr != nil && revocationToken == "" {
-		return nil, tokenActionError(approveErr)
+	final, revocationToken, approveErr := h.purchase.ApproveExecution(ctx, execution.ExecutionID, token, actor, h.tokenApproveClaimCheck(tokenSession))
+	if approveErr != nil {
+		return nil, h.tokenApproveFailure(ctx, req, execution.ExecutionID, final, revocationToken, actor, approveErr)
 	}
 	h.emailTokenApproveOutcome(ctx, req, execution, revocationToken, actor)
-	if approveErr != nil {
-		return nil, tokenActionError(approveErr)
-	}
 	return map[string]string{"status": "completed"}, nil
 }
 
+// tokenApproveFailure answers a failed token approve (issue #532). Once the
+// claim was won (a row came back) it answers like the session approve: a
+// partially_completed run gets its executed email, a provider failure is a
+// 502 carrying the row's status, an audit loss a 500. A 4-eyes denial is a
+// 403 on every path. Any other refusal before the claim (bad, rotated or
+// expired token, lost claim) keeps the tokenActionError mapping.
+func (h *Handler) tokenApproveFailure(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string, final *config.PurchaseExecution, revocationToken, actor string, err error) error {
+	if final == nil && !errors.Is(err, purchase.ErrFourEyesDenied) {
+		return tokenActionError(err)
+	}
+	return h.executeFailure(ctx, req, executionID, "approved", final, revocationToken, actor, err)
+}
+
 // emailTokenApproveOutcome sends the executed email for a token approve that
-// committed, in full or in part. It re-fetches the execution to pick up the
-// FINAL state (status, completed_at, per-rec purchase results)
-// ApproveAndExecute wrote -- the pre-approve `execution` struct is stale on
-// those fields. Falling back to the stale struct on a re-fetch failure is a
+// completed (tokenApproveFailure emails a partial run from the returned row).
+// It re-fetches the execution to pick up the FINAL state (status,
+// completed_at, per-rec purchase results) ApproveAndExecute wrote -- the
+// pre-approve `execution` struct is stale on those fields. Falling back to the stale struct on a re-fetch failure is a
 // cosmetic degradation of the email content only: revocationToken is already
 // in hand either way, so the Revoke link is always valid. Best-effort (issue
 // #291): errors are logged inside sendPurchaseExecutedEmail and never
