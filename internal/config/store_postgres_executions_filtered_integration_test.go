@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -95,4 +96,50 @@ func TestIntegration_GetExecutionsByStatusesFiltered(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, got, len(ids))
 	})
+}
+
+// TestIntegration_GetExecutionsByStatusesFiltered_PlanID pins the plan-history
+// view's plan_id on the actionable read (issues #632 and #1404): newer pending
+// rows of another plan, or of no plan, must not push the plan's own row out of
+// the limit, and the plan is ANDed with the scope rather than widening it.
+func TestIntegration_GetExecutionsByStatusesFiltered_PlanID(t *testing.T) {
+	ctx := context.Background()
+	f := newHistorySummaryFixture(ctx, t)
+	planA := createHistoryTestPlan(ctx, t, f.store, "actionable-plan-a")
+	planB := createHistoryTestPlan(ctx, t, f.store, "actionable-plan-b")
+	a, b := f.accountA, f.accountB
+	save := func(n int, planID string, account *string) string {
+		exec := &PurchaseExecution{
+			PlanID: planID, ExecutionID: uuid.NewString(), IdempotencyKey: uuid.NewString(), Status: "pending",
+			ScheduledDate: f.base.Add(time.Duration(n) * time.Hour), CloudAccountID: account,
+		}
+		require.NoError(t, f.store.SavePurchaseExecution(ctx, exec))
+		return exec.ExecutionID
+	}
+	mine := save(1, planA, &a)
+	save(2, planB, &a)
+	save(3, planB, &b)
+	save(4, "", &a) // not tied to any plan
+
+	ids := func(q ExecutionsByStatusesQuery) []string {
+		t.Helper()
+		q.Statuses = []string{"pending"}
+		got, err := f.store.GetExecutionsByStatusesFiltered(ctx, q)
+		require.NoError(t, err)
+		out := make([]string, 0, len(got))
+		for i := range got {
+			out = append(out, got[i].ExecutionID)
+		}
+		return out
+	}
+
+	assert.Equal(t, []string{mine}, ids(ExecutionsByStatusesQuery{PlanID: planA, Limit: 100}))
+	assert.Equal(t, []string{mine}, ids(ExecutionsByStatusesQuery{PlanID: planA, Limit: 1}),
+		"the limit counts only the plan's rows")
+	assert.NotEqual(t, []string{mine}, ids(ExecutionsByStatusesQuery{Limit: 1}),
+		"control: unfiltered, newer rows of other plans fill a one-row read")
+	assert.Len(t, ids(ExecutionsByStatusesQuery{PlanID: planB, Limit: 100}), 2)
+	assert.Empty(t, ids(ExecutionsByStatusesQuery{PlanID: planA, Limit: 100,
+		Scope: &ExecutionScope{AccountIDs: []string{b}, UserID: f.userID}}), "the plan narrows the scope, never widens it")
+	assert.Empty(t, ids(ExecutionsByStatusesQuery{PlanID: uuid.NewString(), Limit: 100}))
 }

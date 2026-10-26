@@ -18,6 +18,7 @@ func actionableExecutionsQuery(filters *historyFilters, scope *historyScope) con
 		Statuses: actionableExecutionStatuses,
 		Limit:    config.MaxListLimit,
 		Provider: filters.Provider,
+		PlanID:   filters.PlanID,
 		Scope:    scope.executionScope(),
 	}
 	if filters.HasDate {
@@ -64,9 +65,11 @@ func (s *historyScope) executionScope() *config.ExecutionScope {
 }
 
 // isNarrowed reports whether q drops any row the unfiltered class read would
-// return.
+// return. Every filter field of ExecutionsByStatusesQuery must be listed here,
+// or the stale sweep would only see the narrowed rows.
 func isNarrowed(q *config.ExecutionsByStatusesQuery) bool {
-	return q.Start != nil || q.End != nil || q.Provider != "" || len(q.AccountIDs) > 0 || q.Scope != nil
+	return q.Start != nil || q.End != nil || q.Provider != "" || q.PlanID != "" ||
+		len(q.AccountIDs) > 0 || q.Scope != nil
 }
 
 // staleExecutionsToSweep returns the stale pending/notified executions the GET

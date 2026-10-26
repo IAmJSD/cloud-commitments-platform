@@ -160,6 +160,68 @@ func TestHandleRequest_History_StaleSweepIgnoresFiltersAndScope(t *testing.T) {
 	})
 }
 
+// actionablePlanUUID is the plan the plan-history view filters on.
+const actionablePlanUUID = "33333333-3333-4333-8333-333333333333"
+
+func isPlanQuery(planID string) func(config.ExecutionsByStatusesQuery) bool {
+	return func(q config.ExecutionsByStatusesQuery) bool { return isActionableQuery(q) && q.PlanID == planID }
+}
+
+// Issues #632 and #1404: the plan-history view's plan_id is part of the
+// actionable SQL read, so MaxListLimit newer pending rows of other plans do
+// not hide the plan's own pending row. The plan-less read returns the other
+// plans' rows; the read carrying the plan returns the plan's row.
+func TestHandleRequest_History_PlanPendingNotCrowdedOutByOtherPlans(t *testing.T) {
+	now := time.Now()
+	others := make([]config.PurchaseExecution, config.MaxListLimit)
+	for i := range others {
+		others[i] = pendingForAccount("other", actionableDevUUID, now)
+		others[i].PlanID = "44444444-4444-4444-8444-444444444444"
+	}
+	mine := pendingForAccount("mine", actionableDevUUID, now.Add(-time.Hour))
+	mine.PlanID = actionablePlanUUID
+
+	store := new(MockConfigStore)
+	store.On("GetExecutionsByStatusesFiltered", mock.Anything, mock.MatchedBy(isPlanQuery(""))).Return(others, nil).Maybe()
+	store.On("GetExecutionsByStatusesFiltered", mock.Anything, mock.MatchedBy(isPlanQuery(actionablePlanUUID))).
+		Return([]config.PurchaseExecution{mine}, nil)
+	store.On("GetExecutionsByStatusesFiltered", mock.Anything, mock.MatchedBy(isStaleSweepQuery)).Return([]config.PurchaseExecution{}, nil).Maybe()
+
+	body := actionableHistoryRequest(t, store, []string{"*"}, map[string]string{"plan_id": actionablePlanUUID})
+
+	ids := make([]string, 0, len(body.Purchases))
+	for _, p := range body.Purchases {
+		ids = append(ids, p.PurchaseID)
+	}
+	assert.Equal(t, []string{"mine"}, ids)
+	assert.False(t, body.Truncated, "the plan's class is not capped")
+}
+
+// A plan view narrows the actionable read, so it must still issue the
+// separate unfiltered stale sweep: other plans' stale approvals are expired by
+// any History load, plan view or not.
+func TestHandleRequest_History_PlanViewStillSweepsAllStaleApprovals(t *testing.T) {
+	var sweep config.ExecutionsByStatusesQuery
+	store := new(MockConfigStore)
+	store.On("GetExecutionsByStatusesFiltered", mock.Anything, mock.MatchedBy(isActionableQuery)).Return([]config.PurchaseExecution{}, nil)
+	store.On("GetExecutionsByStatusesFiltered", mock.Anything, mock.MatchedBy(isStaleSweepQuery)).
+		Run(func(args mock.Arguments) { sweep = args.Get(1).(config.ExecutionsByStatusesQuery) }).
+		Return([]config.PurchaseExecution{}, nil).Once()
+
+	actionableHistoryRequest(t, store, []string{"*"}, map[string]string{"plan_id": actionablePlanUUID})
+
+	store.AssertExpectations(t)
+	assert.Empty(t, sweep.PlanID, "the sweep is not limited to the viewed plan")
+	assert.Nil(t, sweep.Scope)
+	assert.Empty(t, sweep.Provider)
+	assert.Empty(t, sweep.AccountIDs)
+}
+
+func TestIsNarrowed_PlanID(t *testing.T) {
+	assert.False(t, isNarrowed(&config.ExecutionsByStatusesQuery{Statuses: actionableExecutionStatuses}))
+	assert.True(t, isNarrowed(&config.ExecutionsByStatusesQuery{Statuses: actionableExecutionStatuses, PlanID: actionablePlanUUID}))
+}
+
 func TestActionableExecutionsQuery_AccountValues(t *testing.T) {
 	f := historyFilters{
 		AccountIDs:            []string{actionableDevUUID},

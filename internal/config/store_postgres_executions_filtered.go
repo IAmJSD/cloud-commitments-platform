@@ -24,6 +24,9 @@ type ExecutionsByStatusesQuery struct {
 	// Provider keeps executions with at least one recommendation for this
 	// provider. "" applies no provider filter.
 	Provider string
+	// PlanID matches purchase_executions.plan_id exactly, as
+	// HistoryExecutionsPageQuery.PlanID does. "" applies no plan filter.
+	PlanID   string
 	Statuses []string
 	// AccountIDs keeps executions whose cloud_account_id is one of these
 	// values, or, when cloud_account_id is NULL, that have a recommendation
@@ -81,6 +84,9 @@ func executionsByStatusesWhere(q *ExecutionsByStatusesQuery) (conds []string, ar
 	}
 	if q.End != nil {
 		conds = append(conds, fmt.Sprintf("scheduled_date <= $%d", bind(*q.End)))
+	}
+	if q.PlanID != "" {
+		conds = append(conds, fmt.Sprintf("plan_id = $%d", bind(q.PlanID)))
 	}
 	if q.Provider != "" {
 		conds = append(conds, executionRecHasValue("provider", bind([]string{q.Provider})))
