@@ -54,7 +54,7 @@ func m149Allowed(ctx context.Context, t *testing.T, pool *pgxpool.Pool, name str
 	return allowed
 }
 
-// TestMigration_BindGroupAccountNamesToIDs covers 000149 (issue #1034): name
+// TestMigration_BindGroupAccountNamesToIDs covers 000145 (issue #1034): name
 // entries that identify exactly one account that predates the grant become
 // that account's ID; everything else is left untouched.
 func TestMigration_BindGroupAccountNamesToIDs(t *testing.T) {
@@ -63,7 +63,7 @@ func TestMigration_BindGroupAccountNamesToIDs(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
 	pool, path := container.DB.Pool(), getMigrationsPath()
 
-	const version = 149
+	const version = 145
 	prev := previousMigrationVersion(t, version)
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, prev))
 

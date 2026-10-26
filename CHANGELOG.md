@@ -36,7 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   display-name entry used to grant whichever account was later created or
   renamed to that name. Group writes now store the ID of the one account a
   name identifies (and reject names that identify none or several), and
-  migration 000149 rewrites existing name entries whose account predates the
+  migration 000145 rewrites existing name entries whose account predates the
   grant; entries it cannot bind stop granting access (#1034)
 - API-key creation over HTTP rejects an explicit `max_amount: 0` spend cap with a 400 instead of minting the key with no cap, matching group writes (#980)
 - Group writes reject an explicit `max_amount: 0` spend cap with a 400 instead of storing it as no cap; omit the field for no limit (#133)

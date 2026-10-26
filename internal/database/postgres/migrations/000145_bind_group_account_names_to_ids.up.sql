@@ -1,4 +1,4 @@
--- 000149: bind display-name entries in groups.allowed_accounts to account IDs
+-- 000145: bind display-name entries in groups.allowed_accounts to account IDs
 -- (issue #1034).
 --
 -- Account scopes now match allowed_accounts entries by cloud account ID only

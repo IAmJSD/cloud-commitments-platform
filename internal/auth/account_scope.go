@@ -155,7 +155,7 @@ func (s AccountScope) WithRegisteredAccounts(accounts []RegisteredAccount) Accou
 // A display name in the allow-list matches nothing: it is not bound to any
 // account, so it would grant whichever account carries the name today
 // (issue #1034). Group writes store IDs (see the group handlers), and
-// migration 000149 rewrote the name entries that still identified one
+// migration 000145 rewrote the name entries that still identified one
 // account.
 //
 // A restricted scope with no accounts allows nothing, which is what makes the

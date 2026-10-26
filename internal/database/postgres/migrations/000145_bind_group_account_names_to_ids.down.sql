@@ -1,4 +1,4 @@
--- 000149 down: intentional no-op.
+-- 000145 down: intentional no-op.
 --
 -- The up migration replaced display-name entries in groups.allowed_accounts
 -- with the IDs of the accounts they named. Writing the names back would
