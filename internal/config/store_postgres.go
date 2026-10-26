@@ -2971,27 +2971,32 @@ func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID stri
 	return nil
 }
 
-// FlipPurchaseRevocationInFlight sets revocation_in_flight=true on the
-// purchase_history row for purchaseID. Called immediately before the Azure
-// Return API call to enable partial-success reconciliation (issue #290
-// Finding #6). Idempotent: an unrevoked row whose flag is already true is
-// left as it is.
+// FlipPurchaseRevocationInFlight claims the revocation of the
+// purchase_history row for purchaseID by setting revocation_in_flight=true.
+// Called immediately before the Azure Return API call to enable
+// partial-success reconciliation (issue #290 Finding #6).
 //
-// Compare-and-set on revoked_at IS NULL (issue #316): only an unrevoked row
-// can be flipped. A stale concurrent revoke request that reaches the flip
-// after another request's MarkPurchaseRevoked committed would otherwise set
-// the flag again on a revoked row, which MarkPurchaseRevoked (guarded on the
-// same predicate) then never clears. The row lock serializes the two
-// UPDATEs, and the flip re-checks the predicate on the committed row, so the
-// flag ends false whichever lands first. A revoked row returns an error
-// wrapping ErrPurchaseAlreadyRevoked; a missing row keeps the not-found
-// error.
+// It is a compare-and-set on two predicates:
+//   - revoked_at IS NULL (issue #316): a stale request that reaches the flip
+//     after another request's MarkPurchaseRevoked committed must not flag the
+//     revoked row again, since MarkPurchaseRevoked (guarded on the same
+//     predicate) would then never clear it. That returns an error wrapping
+//     ErrPurchaseAlreadyRevoked.
+//   - revocation_in_flight = false (issue #1518): only one request may hold
+//     the claim, so two first-time revokes cannot both post a Return. The
+//     request that loses gets an error wrapping ErrRevocationInFlight.
+//
+// The row lock serializes concurrent flips and marks, and under READ
+// COMMITTED a waiting UPDATE re-checks both predicates against the committed
+// row, so exactly one flip of an unrevoked, unflagged row succeeds. A missing
+// row keeps the not-found error.
 func (s *PostgresStore) FlipPurchaseRevocationInFlight(ctx context.Context, purchaseID string) error {
 	tag, err := s.db.Exec(ctx, `
 		UPDATE purchase_history
 		   SET revocation_in_flight = true
 		 WHERE purchase_id = $1
 		   AND revoked_at IS NULL
+		   AND revocation_in_flight = false
 	`, purchaseID)
 	if err != nil {
 		return fmt.Errorf("FlipPurchaseRevocationInFlight: %w", err)
@@ -2999,21 +3004,35 @@ func (s *PostgresStore) FlipPurchaseRevocationInFlight(ctx context.Context, purc
 	if tag.RowsAffected() > 0 {
 		return nil
 	}
-	var exists bool
-	if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM purchase_history WHERE purchase_id = $1)`, purchaseID).Scan(&exists); err != nil {
+	// Nothing matched: tell a missing row from a revoked one and from one
+	// another request has claimed. A row that is unrevoked when re-read lost
+	// the claim to a concurrent request; it is reported in flight even if
+	// that request has since cleared the flag, so this caller never posts a
+	// Return it did not claim.
+	var total, unrevoked int
+	if err := s.db.QueryRow(ctx, `
+		SELECT count(*), count(*) FILTER (WHERE revoked_at IS NULL)
+		  FROM purchase_history
+		 WHERE purchase_id = $1
+	`, purchaseID).Scan(&total, &unrevoked); err != nil {
 		return fmt.Errorf("FlipPurchaseRevocationInFlight existence check: %w", err)
 	}
-	if !exists {
+	if total == 0 {
 		return fmt.Errorf("FlipPurchaseRevocationInFlight: purchase_id %q not found", purchaseID)
 	}
-	return fmt.Errorf("FlipPurchaseRevocationInFlight: purchase_id %q: %w", purchaseID, ErrPurchaseAlreadyRevoked)
+	if unrevoked == 0 {
+		return fmt.Errorf("FlipPurchaseRevocationInFlight: purchase_id %q: %w", purchaseID, ErrPurchaseAlreadyRevoked)
+	}
+	return fmt.Errorf("FlipPurchaseRevocationInFlight: purchase_id %q: %w", purchaseID, ErrRevocationInFlight)
 }
 
 // ClearRevocationInFlight sets revocation_in_flight=false on a purchase_history
 // row. Called when the Azure Return call fails transiently (before Azure actually
 // issued a refund) so the row is not left stuck in the in-flight state, which
 // would mislead the finalize_revocations sweep into thinking Azure succeeded
-// (issue #290, second-wave CR Finding D). No-op when already false.
+// (issue #290, second-wave CR Finding D). No-op when already false. The
+// UPDATE is unconditional: only the request whose
+// FlipPurchaseRevocationInFlight claimed the row may call it (issue #1518).
 func (s *PostgresStore) ClearRevocationInFlight(ctx context.Context, purchaseID string) error {
 	tag, err := s.db.Exec(ctx, `
 		UPDATE purchase_history

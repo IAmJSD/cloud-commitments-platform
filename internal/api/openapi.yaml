@@ -1480,7 +1480,9 @@ paths:
         one-hour safety margin, and the body must echo the quote from GET
         /api/purchases/{id}/revoke/calculate. An already revoked row answers
         "already_revoked"; a row whose Azure refund was issued but not yet
-        recorded answers code RECONCILE_PENDING and must not be retried.
+        recorded, or is being posted by a concurrent revoke of the same
+        purchase, answers code RECONCILE_PENDING and must not be retried.
+        Only one revoke at a time posts the Azure return.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -8321,7 +8323,8 @@ components:
         One of three shapes. A canceled scheduled execution: status
         "canceled" and message. A revoked purchase history row: status
         "revoked" or "already_revoked" with revoked_at and revoked_via. An
-        Azure refund that was issued but could not be recorded yet: code
+        Azure refund that was issued but could not be recorded yet, or that a
+        concurrent revoke of the same purchase is posting: code
         RECONCILE_PENDING, azure_returned and message (do not retry).
       properties:
         status:

@@ -200,15 +200,13 @@ func (h *Handler) loadAndRevokePurchaseHistory(ctx context.Context, req *events.
 
 	// Partial-success reconciliation (issue #290 Finding #6): if the
 	// revocation_in_flight flag is set but revoked_at is still NULL, Azure
-	// already issued the refund but our DB write failed. Return 207 so the
-	// frontend does not retry the Azure call (which would fail with "already
-	// returned"). The finalize_revocations sweep will reconcile the row.
+	// already issued the refund but our DB write failed, or another request
+	// holds the claim and is posting the Return now (issue #1518). Return 207
+	// so the frontend does not retry the Azure call (which would fail with
+	// "already returned"). The finalize_revocations sweep will reconcile the
+	// row.
 	if record.RevocationInFlight {
-		return &revokeReconcilePendingResult{
-			Code:          "RECONCILE_PENDING",
-			AzureReturned: true,
-			Message:       "Refund already issued. We will reconcile your audit record shortly. Do not retry.",
-		}, nil
+		return revocationInFlightResult(), nil
 	}
 
 	// Parse the confirmed quote from the request body. Azure revocations
@@ -787,8 +785,8 @@ func (h *Handler) callAzureReturn(
 		return nil, quoteErr
 	}
 
-	if revoked := h.flipRevocationInFlight(ctx, record); revoked != nil {
-		return revoked, nil
+	if stop, claimErr := h.claimRevocationInFlight(ctx, record); stop != nil || claimErr != nil {
+		return stop, claimErr
 	}
 
 	// Step 2: Return (post the actual refund request).
@@ -810,30 +808,58 @@ func (h *Handler) callAzureReturn(
 	return h.persistAzureRevocation(ctx, record, calcRefundAmount, calcRefundCurrency)
 }
 
-// flipRevocationInFlight sets the in-flight flag BEFORE the Azure Return
+// revocationInFlightResult is the answer for a row whose revocation another
+// request has in flight: the RECONCILE_PENDING response, which tells the
+// frontend not to retry.
+func revocationInFlightResult() *revokeReconcilePendingResult {
+	return &revokeReconcilePendingResult{
+		Code:          "RECONCILE_PENDING",
+		AzureReturned: true,
+		Message:       "Refund already issued. We will reconcile your audit record shortly. Do not retry.",
+	}
+}
+
+// claimRevocationInFlight sets the in-flight flag BEFORE the Azure Return
 // (partial-success guard, issue #290 Finding #6) so that if the subsequent
 // MarkPurchaseRevoked write fails, the row is visible to the
-// finalize_revocations sweep rather than silently stuck. Best-effort: if the
-// flip itself fails, log and continue — the in-flight flag is a safety net,
-// not a hard precondition.
+// finalize_revocations sweep rather than silently stuck.
 //
-// The one exception is a row the flip found already revoked (issue #316): a
-// concurrent request finished the revocation after this one loaded the row,
-// so no second Return is posted and the caller answers already_revoked, as
-// the up-front idempotency check would have. The result is nil otherwise.
-func (h *Handler) flipRevocationInFlight(ctx context.Context, record *config.PurchaseHistoryRecord) *revokePurchaseResult {
+// The flip is also the claim that lets exactly one request post the Return
+// (issue #1518). Both results are nil only when this request won it; every
+// other outcome stops before the Return:
+//   - the row was revoked by a concurrent request after this one loaded it
+//     (issue #316): already_revoked, as the up-front idempotency check would
+//     have answered;
+//   - another request holds the claim: RECONCILE_PENDING, as the up-front
+//     in-flight check would have answered;
+//   - the flip failed: an error (500). No Return has been posted, so a retry
+//     is safe, whereas posting one without the claim could race the holder's
+//     and, if this request's MarkPurchaseRevoked then failed too, leave a
+//     refund that no in-flight flag points the sweep at.
+//
+// Because only the claim holder reaches the Return, the ClearRevocationInFlight
+// in handleAzureReturnError only ever clears this request's own flag.
+func (h *Handler) claimRevocationInFlight(ctx context.Context, record *config.PurchaseHistoryRecord) (any, error) {
 	flipErr := h.config.FlipPurchaseRevocationInFlight(ctx, record.PurchaseID)
-	if flipErr == nil {
-		return nil
+	switch {
+	case flipErr == nil:
+		return nil, nil
+	case errors.Is(flipErr, config.ErrRevocationInFlight):
+		logging.Infof("revoke azure: purchase_id=%s is already being revoked by a concurrent request; not posting a second Return", record.PurchaseID)
+		return revocationInFlightResult(), nil
+	case errors.Is(flipErr, config.ErrPurchaseAlreadyRevoked):
+		logging.Infof("revoke azure: purchase_id=%s was revoked by a concurrent request; not posting a second Return", record.PurchaseID)
+		return h.alreadyRevokedResult(ctx, record.PurchaseID), nil
+	default:
+		return nil, fmt.Errorf("revoke azure: claim revocation of %s (no Return posted): %w", record.PurchaseID, flipErr)
 	}
-	if !errors.Is(flipErr, config.ErrPurchaseAlreadyRevoked) {
-		logging.Warnf("revoke azure: FlipPurchaseRevocationInFlight for %s failed (continuing): %v", record.PurchaseID, flipErr)
-		return nil
-	}
-	logging.Infof("revoke azure: purchase_id=%s was revoked by a concurrent request; not posting a second Return", record.PurchaseID)
+}
+
+// alreadyRevokedResult answers already_revoked for a row a concurrent request
+// revoked. Best-effort: the re-read stamp only fills in the response.
+func (h *Handler) alreadyRevokedResult(ctx context.Context, purchaseID string) *revokePurchaseResult {
 	result := &revokePurchaseResult{Status: "already_revoked"}
-	// Best-effort: the stamp only fills in the response.
-	if current, err := h.config.GetPurchaseHistoryByPurchaseID(ctx, record.PurchaseID); err == nil && current != nil && current.RevokedAt != nil {
+	if current, err := h.config.GetPurchaseHistoryByPurchaseID(ctx, purchaseID); err == nil && current != nil && current.RevokedAt != nil {
 		result.RevokedAt = current.RevokedAt.Format(time.RFC3339)
 		result.RevokedVia = current.RevokedVia
 	}
@@ -896,7 +922,8 @@ func (h *Handler) azureCalculateRefund(ctx context.Context, calcClient azureCalc
 
 // handleAzureReturnError clears the in-flight flag (no refund was issued) and
 // maps the Return error to the right status: 422 on the 7-day window edge, 400
-// on other client errors, 500 otherwise.
+// on other client errors, 500 otherwise. The caller holds the claim from
+// claimRevocationInFlight, so the flag it clears is its own (issue #1518).
 func (h *Handler) handleAzureReturnError(ctx context.Context, record *config.PurchaseHistoryRecord, err error) error {
 	// Azure Return failed. Clear the in-flight flag so the row is not left in
 	// a permanently sticky state that would mislead the finalize_revocations

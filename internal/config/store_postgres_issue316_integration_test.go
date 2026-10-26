@@ -6,6 +6,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -148,11 +149,14 @@ func TestFlipPurchaseRevocationInFlight_CompareAndSet(t *testing.T) {
 		assert.Zero(t, inFlightIndexed(ctx, t, store, id))
 	})
 
-	t.Run("an unrevoked row still flips, idempotently", func(t *testing.T) {
+	t.Run("an unrevoked row flips once; a second flip finds it in flight", func(t *testing.T) {
 		const id = "azure-flip-316-b"
 		seedRevocationRow(ctx, t, store, id)
 		require.NoError(t, store.FlipPurchaseRevocationInFlight(ctx, id))
-		require.NoError(t, store.FlipPurchaseRevocationInFlight(ctx, id), "a second flip of an in-flight row is a no-op")
+		err := store.FlipPurchaseRevocationInFlight(ctx, id)
+		require.ErrorIs(t, err, ErrRevocationInFlight, "a second flip of an in-flight row must not claim it again (issue #1518)")
+		assert.NotErrorIs(t, err, ErrPurchaseAlreadyRevoked)
+		assert.NotContains(t, err.Error(), "not found")
 		assert.Equal(t, 1, inFlightIndexed(ctx, t, store, id))
 	})
 
@@ -160,6 +164,7 @@ func TestFlipPurchaseRevocationInFlight_CompareAndSet(t *testing.T) {
 		err := store.FlipPurchaseRevocationInFlight(ctx, "azure-flip-316-missing")
 		require.ErrorContains(t, err, "not found")
 		assert.NotErrorIs(t, err, ErrPurchaseAlreadyRevoked)
+		assert.NotErrorIs(t, err, ErrRevocationInFlight)
 	})
 
 	// The race the guard closes: one request's MarkPurchaseRevoked against
@@ -167,7 +172,8 @@ func TestFlipPurchaseRevocationInFlight_CompareAndSet(t *testing.T) {
 	// serializes them; a flip that waits on the mark re-checks
 	// revoked_at IS NULL on the committed row and matches nothing. Whatever
 	// the interleaving, the row ends revoked with the flag clear, and every
-	// flip either landed before the mark or reports the row revoked.
+	// flip reports the row either still in flight (it ran before the mark;
+	// the row was already claimed, issue #1518) or revoked.
 	t.Run("stale flips racing a mark", func(t *testing.T) {
 		const rounds, flips = 20, 4
 		for round := range rounds {
@@ -195,7 +201,8 @@ func TestFlipPurchaseRevocationInFlight_CompareAndSet(t *testing.T) {
 
 			require.NoError(t, errs[0], "round %d: the mark", round)
 			for i, err := range errs[1:] {
-				if err != nil {
+				require.Error(t, err, "round %d: flip %d must not claim a row that is already in flight", round, i)
+				if !errors.Is(err, ErrRevocationInFlight) {
 					require.ErrorIs(t, err, ErrPurchaseAlreadyRevoked, "round %d: flip %d", round, i)
 				}
 			}
@@ -204,6 +211,61 @@ func TestFlipPurchaseRevocationInFlight_CompareAndSet(t *testing.T) {
 			require.NotNil(t, got.RevokedAt, "round %d", round)
 			require.False(t, got.RevocationInFlight, "round %d: a flip that lost to the mark must not re-flag the revoked row", round)
 		}
+	})
+}
+
+// TestFlipPurchaseRevocationInFlight_ExclusiveClaim covers issue #1518: the
+// flip let a row that was already in flight be flipped again, so two
+// first-time revokes could both pass it and both post an Azure Return. Now
+// it is a claim: of any number of concurrent flips of one unrevoked,
+// unflagged row exactly one succeeds and the rest get ErrRevocationInFlight.
+// After the holder clears the flag (its Return failed) the row can be
+// claimed again.
+func TestFlipPurchaseRevocationInFlight_ExclusiveClaim(t *testing.T) {
+	ctx := context.Background()
+	store := setupRampStepStore(ctx, t)
+
+	t.Run("concurrent first flips: exactly one claims the row", func(t *testing.T) {
+		const rounds, flips = 20, 6
+		for round := range rounds {
+			id := fmt.Sprintf("azure-flip-1518-race-%d", round)
+			seedRevocationRow(ctx, t, store, id)
+
+			errs := make([]error, flips)
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			for i := range flips {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start
+					errs[i] = store.FlipPurchaseRevocationInFlight(ctx, id)
+				}()
+			}
+			close(start)
+			wg.Wait()
+
+			winners := 0
+			for i, err := range errs {
+				if err == nil {
+					winners++
+					continue
+				}
+				require.ErrorIs(t, err, ErrRevocationInFlight, "round %d: flip %d", round, i)
+			}
+			require.Equal(t, 1, winners, "round %d: exactly one concurrent flip may claim the row", round)
+			require.Equal(t, 1, inFlightIndexed(ctx, t, store, id), "round %d", round)
+		}
+	})
+
+	t.Run("the holder's clear releases the claim", func(t *testing.T) {
+		const id = "azure-flip-1518-release"
+		seedRevocationRow(ctx, t, store, id)
+		require.NoError(t, store.FlipPurchaseRevocationInFlight(ctx, id))
+		require.ErrorIs(t, store.FlipPurchaseRevocationInFlight(ctx, id), ErrRevocationInFlight)
+		require.NoError(t, store.ClearRevocationInFlight(ctx, id))
+		require.NoError(t, store.FlipPurchaseRevocationInFlight(ctx, id), "a cleared row can be claimed by a later revoke")
+		assert.Equal(t, 1, inFlightIndexed(ctx, t, store, id))
 	})
 }
 

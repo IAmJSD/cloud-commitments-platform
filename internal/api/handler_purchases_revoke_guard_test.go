@@ -183,7 +183,9 @@ func confirmedQuote(amount float64, currency string) revokeConfirmBody {
 // flip is now a compare-and-set on revoked_at IS NULL. When it reports the
 // row already revoked, a concurrent request finished the revocation after
 // this one loaded the row, so no second Return is posted and the answer is
-// already_revoked. Any other flip failure stays best-effort.
+// already_revoked. Since issue #1518 the flip is also the claim that lets one
+// request post the Return: a row another request holds answers
+// RECONCILE_PENDING, and any other flip failure stops before the Return.
 func TestCallAzureReturn_FlipFindsRowRevoked(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -215,21 +217,52 @@ func TestCallAzureReturn_FlipFindsRowRevoked(t *testing.T) {
 		mockStore.AssertNotCalled(t, "MarkPurchaseRevoked", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 
-	t.Run("other flip error: still returns and marks", func(t *testing.T) {
+	// Issue #1518: another request holds the claim. This one must neither
+	// post a Return nor touch the flag (clearing it would orphan the holder's
+	// refund from the finalize sweep), and answers RECONCILE_PENDING like the
+	// up-front in-flight check.
+	t.Run("in flight: no Return, no clear, RECONCILE_PENDING", func(t *testing.T) {
 		t.Parallel()
 		mockStore := new(MockConfigStore)
 		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		r := armReservationRecord()
-		mockStore.On("FlipPurchaseRevocationInFlight", ctx, r.PurchaseID).Return(fmt.Errorf("FlipPurchaseRevocationInFlight: connection reset"))
-		mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
+		mockStore.On("FlipPurchaseRevocationInFlight", ctx, r.PurchaseID).
+			Return(fmt.Errorf("FlipPurchaseRevocationInFlight: purchase_id %q: %w", r.PurchaseID, config.ErrRevocationInFlight))
+		// Registered only so a regression fails on the assertions below
+		// rather than on an unexpected-call panic.
+		mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 		returnClient := &stubReturnClient{}
 
 		h := &Handler{config: mockStore}
 		result, err := h.callAzureReturn(ctx, &countingCalcRefundClient{price: quote}, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
 		require.NoError(t, err)
-		assert.Equal(t, 1, returnClient.calls)
-		res, ok := result.(*revokePurchaseResult)
-		require.True(t, ok, "got %T", result)
-		assert.Equal(t, "revoked", res.Status)
+		assert.Zero(t, returnClient.calls, "the request that loses the claim must not post a Return")
+		assert.Equal(t, revocationInFlightResult(), result)
+		mockStore.AssertNotCalled(t, "ClearRevocationInFlight", mock.Anything, mock.Anything)
+		mockStore.AssertNotCalled(t, "MarkPurchaseRevoked", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	// Issue #1518: a request that could not establish the claim does not know
+	// whether another request holds it, so it posts no Return (a retry is
+	// safe) and leaves the flag alone.
+	t.Run("other flip error: no Return, no clear, 500", func(t *testing.T) {
+		t.Parallel()
+		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		r := armReservationRecord()
+		mockStore.On("FlipPurchaseRevocationInFlight", ctx, r.PurchaseID).Return(fmt.Errorf("FlipPurchaseRevocationInFlight: connection reset"))
+		mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		returnClient := &stubReturnClient{}
+
+		h := &Handler{config: mockStore}
+		result, err := h.callAzureReturn(ctx, &countingCalcRefundClient{price: quote}, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
+		require.Error(t, err)
+		assert.Nil(t, result)
+		assert.ErrorContains(t, err, "connection reset")
+		_, isClientErr := IsClientError(err)
+		assert.False(t, isClientErr, "a store failure is a 500, not a client error")
+		assert.Zero(t, returnClient.calls, "no Return without the claim")
+		mockStore.AssertNotCalled(t, "ClearRevocationInFlight", mock.Anything, mock.Anything)
+		mockStore.AssertNotCalled(t, "MarkPurchaseRevoked", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	})
 }

@@ -410,14 +410,16 @@ type StoreInterface interface {
 	// it is already non-null). Used by the revoke endpoint (issue #290).
 	MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error
 
-	// FlipPurchaseRevocationInFlight atomically sets revocation_in_flight=true
-	// on a purchase_history row. Called immediately before the Azure Return API
-	// call so that the row can be identified by the finalize sweep if the
-	// subsequent MarkPurchaseRevoked DB write fails (partial-success reconciliation,
-	// issue #290 Finding #6, migration 000072). No-op when the flag is already
-	// true (idempotent). Only an unrevoked row is flipped: a revoked one
-	// returns an error wrapping ErrPurchaseAlreadyRevoked (issue #316).
-	// Returns a not-found error when no row matches.
+	// FlipPurchaseRevocationInFlight atomically claims a purchase_history row
+	// by setting revocation_in_flight=true. Called immediately before the Azure
+	// Return API call so that the row can be identified by the finalize sweep if
+	// the subsequent MarkPurchaseRevoked DB write fails (partial-success
+	// reconciliation, issue #290 Finding #6, migration 000072). Only an
+	// unrevoked, unflagged row is flipped, so exactly one concurrent caller
+	// wins: a revoked row returns an error wrapping ErrPurchaseAlreadyRevoked
+	// (issue #316), and a row another request already flagged returns an error
+	// wrapping ErrRevocationInFlight (issue #1518). Returns a not-found error
+	// when no row matches.
 	FlipPurchaseRevocationInFlight(ctx context.Context, purchaseID string) error
 
 	// ClearRevocationInFlight resets revocation_in_flight=false on a
@@ -426,7 +428,9 @@ type StoreInterface interface {
 	// left in a permanently-sticky in-flight state that would prevent future
 	// retries or mislead the finalize_revocations sweep (issue #290, second-wave
 	// CR Finding D). No-op when the row is already false. Best-effort: callers
-	// should log on error but not surface it to the user.
+	// should log on error but not surface it to the user. Only the caller whose
+	// FlipPurchaseRevocationInFlight succeeded may call it, so it never clears
+	// a flag another request set (issue #1518).
 	ClearRevocationInFlight(ctx context.Context, purchaseID string) error
 
 	// GetPurchaseHistoryInFlight returns all purchase_history rows with
