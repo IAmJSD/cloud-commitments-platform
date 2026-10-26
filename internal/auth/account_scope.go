@@ -29,15 +29,21 @@ type AccountScope struct {
 	// identifier the caller passes, never with a display name (issue #1034).
 	Accounts []string
 
-	// idByUniqueName maps each display name carried by exactly one registered
-	// cloud account to that account's ID. It lets a caller that knows an
-	// account only by name (for example a legacy row keyed by external ID)
-	// identify it: Allows resolves the name to the account carrying it and
-	// then checks that account's ID against Accounts. A name shared by two
-	// accounts resolves to neither (issue #433). nil (the zero value, and every
-	// scope built without WithRegisteredAccounts) disables the lookup, so
-	// forgetting to populate it fails closed.
-	idByUniqueName map[string]string
+	// byUniqueName maps each display name carried by exactly one registered
+	// cloud account to that account. It lets a caller that knows an account by
+	// its external ID (for example a legacy row) identify it: Allows resolves
+	// the name to the account carrying it, checks that the identifier the
+	// caller passed really is that account's external ID, and then checks the
+	// account's ID against Accounts. A name shared by two accounts resolves to
+	// neither (issue #433). nil (the zero value, and every scope built without
+	// WithRegisteredAccounts) disables the lookup, so forgetting to populate
+	// it fails closed.
+	byUniqueName map[string]RegisteredAccount
+
+	// internalIDs holds the ID of every registered account. External IDs are
+	// free text an account editor sets, so one can equal another account's
+	// ID; the name lookup never treats an internal ID as an external ID.
+	internalIDs map[string]struct{}
 
 	// Unrestricted grants access to every account. Set it only where
 	// unlimited access has been positively established.
@@ -47,8 +53,9 @@ type AccountScope struct {
 // RegisteredAccount is the identity of one registered cloud account, as
 // WithRegisteredAccounts needs it.
 type RegisteredAccount struct {
-	ID   string
-	Name string
+	ID         string
+	Name       string
+	ExternalID string
 }
 
 // UnrestrictedScope returns a scope granting every account. Use it only at a
@@ -116,8 +123,10 @@ func ScopeFromLegacyList(accounts []string) AccountScope {
 
 // WithRegisteredAccounts returns a copy of the scope that can identify an
 // account by its display name. accounts must hold EVERY registered cloud
-// account (all providers, enabled or not), so that a shared name is visible
-// as shared. Only names that exactly one account carries are kept.
+// account (all providers, enabled or not), with its ID, name and external ID,
+// so that a shared name is visible as shared and no account's ID can pass for
+// another account's external ID. Only names that exactly one account carries
+// are kept.
 //
 // This never makes a scope entry match by name. Entries are account IDs, and
 // a stored name could otherwise outlive its account and grant whichever
@@ -130,17 +139,19 @@ func (s AccountScope) WithRegisteredAccounts(accounts []RegisteredAccount) Accou
 		return s
 	}
 	counts := make(map[string]int, len(accounts))
-	ids := make(map[string]string, len(accounts))
+	byName := make(map[string]RegisteredAccount, len(accounts))
+	s.internalIDs = make(map[string]struct{}, len(accounts))
 	for _, a := range accounts {
 		if a.Name != "" {
 			counts[a.Name]++
-			ids[a.Name] = a.ID
+			byName[a.Name] = a
 		}
+		s.internalIDs[a.ID] = struct{}{}
 	}
-	s.idByUniqueName = make(map[string]string, len(counts))
+	s.byUniqueName = make(map[string]RegisteredAccount, len(counts))
 	for n, c := range counts {
-		if c == 1 && ids[n] != "" {
-			s.idByUniqueName[n] = ids[n]
+		if c == 1 && byName[n].ID != "" {
+			s.byUniqueName[n] = byName[n]
 		}
 	}
 	return s
@@ -148,9 +159,25 @@ func (s AccountScope) WithRegisteredAccounts(accounts []RegisteredAccount) Accou
 
 // Allows reports whether the scope permits the given cloud account. The
 // account matches when accountID is in the allow-list, or when the scope was
-// built with WithRegisteredAccounts, exactly one registered account carries
-// accountName, and THAT account's ID is in the allow-list. Pass "" for the
-// name when unavailable.
+// built with WithRegisteredAccounts and the name identifies the same account
+// as accountID: exactly one registered account carries accountName, accountID
+// is THAT account's external ID and no registered account's ID, and the
+// account's ID is in the allow-list. Pass "" for the name when unavailable.
+//
+// The name is bound to the identifier because the two can come from different
+// accounts. External IDs are free text, so an editor of an in-scope account
+// can set its external ID to another account's ID; a caller that then looks
+// the name up by that identifier gets the in-scope account's name for the
+// other account. Without the binding the scope would grant the other account.
+// The decision is therefore always on the ID of the account accountID
+// denotes, never on the name alone.
+//
+// External IDs are unique per provider only, so the scope cannot tell which
+// provider's account an external ID means. A caller that passes a name for an
+// external ID must have resolved it unambiguously: within the record's
+// provider, or across all providers only when exactly one account carries it
+// (see historyRowAccountName and uniqueAccountByExternalID in package api).
+// A caller that can resolve the account itself should pass its ID instead.
 //
 // A display name in the allow-list matches nothing: it is not bound to any
 // account, so it would grant whichever account carries the name today
@@ -170,8 +197,20 @@ func (s AccountScope) Allows(accountID, accountName string) bool {
 	if accountName == "" {
 		return false
 	}
-	namedID, ok := s.idByUniqueName[accountName]
-	return ok && s.contains(namedID)
+	named, ok := s.byUniqueName[accountName]
+	return ok && s.identifies(named, accountID) && s.contains(named.ID)
+}
+
+// identifies reports whether id denotes the registered account a through a's
+// external ID: it equals that external ID and is not the ID of any registered
+// account. a's own ID needs no check here, because Allows has already matched
+// the identifier itself against the allow-list.
+func (s AccountScope) identifies(a RegisteredAccount, id string) bool {
+	if id == "" || id != a.ExternalID {
+		return false
+	}
+	_, isInternalID := s.internalIDs[id]
+	return !isInternalID
 }
 
 // contains reports whether id is a non-empty entry of the allow-list.

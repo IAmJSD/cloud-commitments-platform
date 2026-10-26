@@ -1409,8 +1409,7 @@ func (h *Handler) reshapeCloudAccountInScope(ctx context.Context, session *Sessi
 	if aErr != nil {
 		return false, fmt.Errorf("failed to resolve cloud account scope: %w", aErr)
 	}
-	nameByID := h.resolveAccountNamesByID(ctx)
-	return allowed.Allows(cloudAccountID, nameByID[cloudAccountID]), nil
+	return allowed.Allows(cloudAccountID, ""), nil
 }
 
 // requireReshapeAccountScope enforces the session's allowed_accounts scope for

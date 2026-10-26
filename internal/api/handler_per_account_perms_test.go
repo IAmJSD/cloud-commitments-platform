@@ -92,8 +92,8 @@ func scopedReq() *events.LambdaFunctionURLRequest {
 }
 
 // permsAccountList returns a ListCloudAccountsFn-compatible slice containing
-// both test accounts — used so resolveAccountNamesByID can map UUID→name for
-// the display-name lookup of AccountScope.Allows.
+// both test accounts — used so getAccountScope can register them for the
+// display-name lookup of AccountScope.Allows.
 func permsAccountList() []config.CloudAccount {
 	return []config.CloudAccount{
 		{ID: permsAccA, Name: permsAccAName, Provider: "aws"},
@@ -304,7 +304,7 @@ func TestPerAccountPerms_History_ListFilter(t *testing.T) {
 		Return([]config.PurchaseHistoryRecord{rowA, rowB}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 		Return([]config.PurchaseExecution{}, nil)
-	// resolveAccountNamesByID needs ListCloudAccounts so AccountScope.Allows can
+	// getAccountScope needs ListCloudAccounts so AccountScope.Allows can
 	// resolve display names when the AccountID differs from the UUID.
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
@@ -1124,7 +1124,7 @@ func TestPerAccountPerms_ListConvertibleRIs_ScopedOutsideAllowedReturnsEmpty(t *
 	ctx := context.Background()
 
 	mockStore := new(MockConfigStore)
-	// resolveAccountNamesByID calls ListCloudAccounts so AccountScope.Allows can
+	// getAccountScope calls ListCloudAccounts so AccountScope.Allows can
 	// resolve display names. Return both accounts so the name lookup is realistic.
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil

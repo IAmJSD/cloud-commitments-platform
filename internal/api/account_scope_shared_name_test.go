@@ -207,7 +207,7 @@ func TestGetAccountScope_AccountListFailureIsIDOnly(t *testing.T) {
 
 // The other gate shapes take the same scope from getAccountScope: plan
 // accounts (requirePlanAccess / requirePlanMutationAccess) and the
-// resolveAccountNamesByID map (validatePurchaseRecommendationScope).
+// recommendation's cloud_account_id (validatePurchaseRecommendationScope).
 func TestAccountScope_SharedDisplayName_OtherGates(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -241,5 +241,80 @@ func TestAccountScope_SharedDisplayName_OtherGates(t *testing.T) {
 			id := sharedNameAWS.ID
 			check(h.validatePurchaseRecommendationScope(ctx, session, []config.RecommendationRecord{{CloudAccountID: &id}}))
 		})
+	}
+}
+
+// rE7 on #1116: external IDs are free text, so an editor of in-scope account Z
+// can set Z's external ID to victim Y's internal ID (and, with a different
+// provider, to Y's provider account number). Every gate that decides on a
+// record's cloud_account_id must decide on that ID, so neither change reaches
+// Y. Before the fix the purchase gate looked the name up in a map keyed by
+// both IDs and external IDs, got Z's name for Y's ID, and resolved it back to
+// Z, which is in scope.
+var (
+	shadowVictim = config.CloudAccount{ID: "b1b1b1b1-0000-4000-8000-000000000001", Name: "prod-payments", Provider: "aws", ExternalID: "123456789012", Enabled: true}
+	shadowEditor = config.CloudAccount{ID: "b2b2b2b2-0000-4000-8000-000000000002", Name: "zz-team", Provider: "azure", ExternalID: "b1b1b1b1-0000-4000-8000-000000000001", Enabled: true}
+)
+
+func TestAccountScope_EditorControlledExternalIDGrantsNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	session := &Session{UserID: "u-1"}
+	sameNumber := shadowEditor
+	sameNumber.ExternalID = shadowVictim.ExternalID // ambiguous: two accounts carry it
+
+	for _, tc := range []struct {
+		name     string
+		editor   config.CloudAccount
+		targetID string
+	}{
+		{"editor's external ID is the victim's ID", shadowEditor, shadowVictim.ID},
+		{"ambiguous external ID", sameNumber, shadowVictim.ExternalID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// Listed in name order, as ListCloudAccounts returns them.
+			h := sharedNameHandler(t, []string{tc.editor.ID}, []config.CloudAccount{shadowVictim, tc.editor}, nil)
+			target, own := tc.targetID, tc.editor.ID
+
+			err := h.validatePurchaseRecommendationScope(ctx, session, []config.RecommendationRecord{{CloudAccountID: &target}})
+			var ce *clientError
+			require.ErrorAs(t, err, &ce, "a purchase in %s must be refused", target)
+			assert.Equal(t, 403, ce.code)
+			assert.NoError(t, h.validatePurchaseRecommendationScope(ctx, session, []config.RecommendationRecord{{CloudAccountID: &own}}),
+				"control: the editor's own account is still purchasable")
+
+			scope, err := h.getAccountScope(ctx, session)
+			require.NoError(t, err)
+			recs := filterDashboardRecommendations(scope, []config.RecommendationRecord{{ID: "victim", CloudAccountID: &target}, {ID: "own", CloudAccountID: &own}})
+			require.Len(t, recs, 1)
+			assert.Equal(t, "own", recs[0].ID, "dashboard")
+
+			ladders, err := h.filterLadderConfigsByAllowedAccounts(ctx, session, []config.LadderConfigDB{{CloudAccountID: target}, {CloudAccountID: own}})
+			require.NoError(t, err)
+			assert.Equal(t, []config.LadderConfigDB{{CloudAccountID: own}}, ladders, "ladder")
+
+			for id, want := range map[string]bool{target: false, own: true} {
+				h.reshapeAccountResolver = func(context.Context) (string, error) { return id, nil }
+				inScope, err := h.reshapeCloudAccountInScope(ctx, session)
+				require.NoError(t, err)
+				assert.Equal(t, want, inScope, "RI reshape on %s", id)
+			}
+		})
+	}
+}
+
+// A legacy history row known only by an external ID that two registered
+// accounts carry cannot be attributed, so it stays hidden from both.
+func TestHandleRequest_AccountScope_AmbiguousExternalIDHistoryRow(t *testing.T) {
+	t.Parallel()
+	sameNumber := shadowEditor
+	sameNumber.ExternalID = shadowVictim.ExternalID
+	rows := []config.PurchaseHistoryRecord{{PurchaseID: "legacy", AccountID: shadowVictim.ExternalID, Status: "completed"}}
+
+	assert.Equal(t, []string{"legacy"}, historyScopeIDs(t, []string{shadowVictim.ID}, []config.CloudAccount{shadowVictim}, rows),
+		"control: an unambiguous external ID identifies the in-scope account")
+	for _, scope := range [][]string{{shadowVictim.ID}, {sameNumber.ID}} {
+		assert.Empty(t, historyScopeIDs(t, scope, []config.CloudAccount{shadowVictim, sameNumber}, rows), "scope %v", scope)
 	}
 }

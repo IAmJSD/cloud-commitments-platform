@@ -709,7 +709,7 @@ func (h *Handler) withRegisteredAccountNames(ctx context.Context, scope auth.Acc
 	}
 	known := make([]auth.RegisteredAccount, len(registered))
 	for i := range registered {
-		known[i] = auth.RegisteredAccount{ID: registered[i].ID, Name: registered[i].Name}
+		known[i] = auth.RegisteredAccount{ID: registered[i].ID, Name: registered[i].Name, ExternalID: registered[i].ExternalID}
 	}
 	return scope.WithRegisteredAccounts(known)
 }

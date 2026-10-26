@@ -1826,7 +1826,7 @@ func TestFilterDashboardRecommendations_FreshSlice(t *testing.T) {
 	originalFirst := input[0]
 
 	mockStore := new(MockConfigStore)
-	// resolveAccountNamesByID calls ListCloudAccounts via the Fn override path.
+	// getAccountScope calls ListCloudAccounts via the Fn override path.
 	listCalled := false
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		listCalled = true
@@ -1843,11 +1843,11 @@ func TestFilterDashboardRecommendations_FreshSlice(t *testing.T) {
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	handler := &Handler{auth: mockAuth, config: mockStore}
-	_ = listCalled // asserted implicitly: if not called the name map is empty and AccountScope.Allows uses only ID
+	_ = listCalled // asserted implicitly: if not called the scope has no registered accounts and AccountScope.Allows uses only ID
 
 	scope, err := handler.getAccountScope(ctx, session)
 	require.NoError(t, err)
-	filtered := handler.filterDashboardRecommendations(ctx, scope, input)
+	filtered := filterDashboardRecommendations(scope, input)
 
 	// Only account A's rec must pass through.
 	require.Len(t, filtered, 1)

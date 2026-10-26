@@ -510,8 +510,8 @@ func TestHandler_getHistory_ScopedUserSeesEmptyAccountRows(t *testing.T) {
 	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{ambientExec}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
-	// resolveAccountNamesByID must not error — return an empty accounts list
-	// so AccountScope.Allows falls back to ID-only matching (safe for our assertions).
+	// The account scope lists the registered accounts; an empty list leaves
+	// AccountScope.Allows matching by ID only (safe for our assertions).
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return nil, nil
 	}

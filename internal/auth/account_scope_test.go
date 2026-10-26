@@ -64,11 +64,12 @@ func TestAccountScope_EmptyExplicitListGrantsNothing(t *testing.T) {
 
 func TestAccountScope_RestrictedAllowsOnlyItsOwn(t *testing.T) {
 	s := ScopeForAccounts([]string{"acct-A", "uuid-prod"}).WithRegisteredAccounts([]RegisteredAccount{
-		{ID: "uuid-prod", Name: "prod-name"}, {ID: "uuid-other", Name: "other-name"},
+		{ID: "uuid-prod", Name: "prod-name", ExternalID: "ext-123"}, {ID: "uuid-other", Name: "other-name", ExternalID: "ext-456"},
 	})
 
 	assert.True(t, s.Allows("acct-A", ""), "matches by ID")
 	assert.True(t, s.Allows("ext-123", "prod-name"), "a unique name identifies an account whose ID is in scope")
+	assert.False(t, s.Allows("ext-456", "prod-name"), "but only for that account's own external ID")
 	assert.False(t, s.Allows("acct-B", ""), "an account outside the list is denied")
 	assert.False(t, s.Allows("acct-B", "other-name"))
 	assert.False(t, s.AllowsAll())
@@ -166,8 +167,8 @@ func TestAccountScope_NameEntryNeverMatches(t *testing.T) {
 // access, the account that takes the old name does not.
 func TestAccountScope_IDEntrySurvivesRenameAndReuse(t *testing.T) {
 	afterRename := []RegisteredAccount{
-		{ID: "uuid-orig", Name: "prod-old"}, // renamed away from "prod"
-		{ID: "uuid-new", Name: "prod"},      // took the old name
+		{ID: "uuid-orig", Name: "prod-old", ExternalID: "ext-orig"}, // renamed away from "prod"
+		{ID: "uuid-new", Name: "prod", ExternalID: "ext-new"},       // took the old name
 	}
 	s := ScopeForAccounts([]string{"uuid-orig"}).WithRegisteredAccounts(afterRename)
 
@@ -181,7 +182,9 @@ func TestAccountScope_IDEntrySurvivesRenameAndReuse(t *testing.T) {
 // account, so it cannot be used to reach either of them.
 func TestAccountScope_SharedNameIdentifiesNoAccount(t *testing.T) {
 	registered := []RegisteredAccount{
-		{ID: "uuid-aws-prod", Name: "prod"}, {ID: "uuid-az-prod", Name: "prod"}, {ID: "uuid-solo", Name: "solo"},
+		{ID: "uuid-aws-prod", Name: "prod", ExternalID: "ext-aws"},
+		{ID: "uuid-az-prod", Name: "prod", ExternalID: "ext-az"},
+		{ID: "uuid-solo", Name: "solo", ExternalID: "ext-solo"},
 	}
 	s := ScopeForAccounts([]string{"uuid-aws-prod", "uuid-solo"}).WithRegisteredAccounts(registered)
 
@@ -194,7 +197,7 @@ func TestAccountScope_SharedNameIdentifiesNoAccount(t *testing.T) {
 
 	// Whichever copy is in scope, the shared name identifies neither.
 	for _, id := range []string{"uuid-aws-prod", "uuid-az-prod"} {
-		assert.False(t, ScopeForAccounts([]string{id}).WithRegisteredAccounts(registered).Allows("ext", "prod"),
+		assert.False(t, ScopeForAccounts([]string{id}).WithRegisteredAccounts(registered).Allows("ext-aws", "prod"),
 			"shared name must not resolve to %s", id)
 	}
 }
@@ -243,8 +246,44 @@ func TestAccountScope_WithRegisteredAccountsEdgeCases(t *testing.T) {
 	assert.False(t, base.Allows("ext-prod", "prod"), "WithRegisteredAccounts returns a copy")
 
 	exact := ScopeForAccounts([]string{"uuid-P"}).WithRegisteredAccounts([]RegisteredAccount{
-		{ID: "uuid-P", Name: "Prod"}, {ID: "uuid-p", Name: "prod"},
+		{ID: "uuid-P", Name: "Prod", ExternalID: "ext"}, {ID: "uuid-p", Name: "prod", ExternalID: "ext-lower"},
 	})
 	assert.True(t, exact.Allows("ext", "Prod"), "names are compared exactly")
 	assert.False(t, exact.Allows("ext", "prod"))
+}
+
+// rE7 on #1116: the name and the identifier a caller passes can come from
+// different accounts. External IDs are free text, so an editor of in-scope
+// account Z can set Z's external ID to victim Y's internal ID; a lookup keyed
+// by identifier then hands back Z's name for Y. The name must only ever
+// identify the account the identifier denotes, so this is refused.
+func TestAccountScope_NameMustIdentifyTheAccountOfTheIdentifier(t *testing.T) {
+	registered := []RegisteredAccount{
+		{ID: "uuid-Y", Name: "prod-payments", ExternalID: "123456789012"},
+		{ID: "uuid-Z", Name: "zz-team", ExternalID: "uuid-Y"}, // Z's external ID set to Y's ID
+	}
+	s := ScopeForAccounts([]string{"uuid-Z"}).WithRegisteredAccounts(registered)
+
+	assert.False(t, s.Allows("uuid-Y", "zz-team"), "Z's name must not grant Y through Z's external ID")
+	assert.False(t, s.Allows("uuid-Y", "prod-payments"))
+	assert.False(t, s.Allows("123456789012", "zz-team"), "a name of another account never binds")
+	assert.True(t, s.Allows("uuid-Z", "zz-team"), "control: Z itself is still granted")
+}
+
+// External IDs are unique per provider only, so two accounts can share one.
+// The caller resolves which account a record means (within the record's
+// provider) and passes that account's name; the name then binds only to its
+// own account, never to the other account carrying the same external ID.
+func TestAccountScope_SharedExternalIDBindsOnlyTheNamedAccount(t *testing.T) {
+	registered := []RegisteredAccount{
+		{ID: "uuid-Y", Name: "prod-payments", ExternalID: "123456789012"},
+		{ID: "uuid-Z", Name: "zz-team", ExternalID: "123456789012"}, // another provider
+	}
+	inY := ScopeForAccounts([]string{"uuid-Y"}).WithRegisteredAccounts(registered)
+	assert.True(t, inY.Allows("123456789012", "prod-payments"), "Y's own record")
+	assert.False(t, inY.Allows("123456789012", "zz-team"), "Z's record is not Y's")
+
+	inZ := ScopeForAccounts([]string{"uuid-Z"}).WithRegisteredAccounts(registered)
+	assert.False(t, inZ.Allows("123456789012", "prod-payments"), "Y's record is not Z's")
+	assert.False(t, inZ.Allows("123456789012", ""), "without a name the shared number identifies no account")
 }
