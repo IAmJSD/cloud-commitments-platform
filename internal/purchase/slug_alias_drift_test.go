@@ -42,3 +42,18 @@ func TestLegacyAWSSlugsMatchSuppressionAliases(t *testing.T) {
 		})
 	}
 }
+
+// TestMapServiceSlugAcceptsEveryCanonicalReservationSlug pins the canonical
+// slugs, including Azure Cosmos DB's "nosql" (#613). The Settings page writes
+// service configs and overrides under these ids, and its test reads this
+// table, so a slug missing here shows up there as a slug the backend rejects.
+func TestMapServiceSlugAcceptsEveryCanonicalReservationSlug(t *testing.T) {
+	for _, want := range []common.ServiceType{
+		common.ServiceCompute, common.ServiceRelationalDB, common.ServiceNoSQL,
+		common.ServiceCache, common.ServiceSearch, common.ServiceDataWarehouse,
+	} {
+		got, ok := mapServiceSlug(string(want))
+		require.True(t, ok, "mapServiceSlug rejects canonical slug %q", want)
+		assert.Equal(t, want, got)
+	}
+}
