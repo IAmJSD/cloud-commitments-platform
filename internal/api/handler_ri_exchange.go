@@ -1926,12 +1926,9 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 		return nil, mapAWSExchangeError("exchange quote failed", err)
 	}
 
-	// Echo the region the SDK chain resolved back to the caller (issue
-	// #238): the frontend modal has no other way to learn it, and
-	// execute rejects a missing region outright since exchanges are
-	// financially irreversible. Carrying the same value the quote used
-	// keeps quote and execute pinned to one region instead of letting
-	// execute re-resolve (and potentially land on a different one).
+	// Return the region the quote was priced in. Execute requires a region,
+	// and callers must send this same one so the exchange runs where it was
+	// priced.
 	return ExchangeQuoteResponse{ExchangeQuoteSummary: quote, Region: region}, nil
 }
 
@@ -2196,11 +2193,9 @@ type ExchangeExecuteResponse struct {
 	ExchangeID string                         `json:"exchange_id"`
 }
 
-// ExchangeQuoteResponse wraps the library's quote summary with the
-// region the SDK chain resolved (issue #238). The embedded pointer
-// promotes the summary's own fields to the JSON top level, matching
-// the shape callers got before this type existed; Region is the only
-// addition.
+// ExchangeQuoteResponse is the library's quote summary plus the region
+// the quote was priced in, which callers must send back on execute. The embedded
+// pointer promotes the summary's fields to the JSON top level.
 type ExchangeQuoteResponse struct {
 	*exchange.ExchangeQuoteSummary
 	Region string `json:"Region"`

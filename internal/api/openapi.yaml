@@ -2321,6 +2321,14 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [Region]
+                properties:
+                  Region:
+                    type: string
+                    description: >
+                      AWS region the quote was priced in. Always set. Send
+                      this same value as `region` on
+                      `/api/ri-exchange/execute`.
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -2366,7 +2374,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [ri_ids, targets, max_payment_due_usd]
+              required: [ri_ids, targets, max_payment_due_usd, region]
               properties:
                 ri_ids:
                   type: array
@@ -2379,6 +2387,12 @@ paths:
                 max_payment_due_usd:
                   type: string
                   description: Spend-cap guardrail (decimal string, e.g. "1000.00")
+                region:
+                  type: string
+                  description: >
+                    AWS region to execute in. Required: a missing region is
+                    rejected with 400 rather than defaulted, since an exchange
+                    cannot be undone. Send the `Region` the quote returned.
       responses:
         '200':
           description: Exchange submitted
