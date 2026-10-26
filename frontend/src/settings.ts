@@ -3281,6 +3281,7 @@ export async function loadAccountsTab(): Promise<void> {
   void loadAccountsForProvider('gcp');
   void initFederationPanel(source);
   void import('./modules/registrations').then(m => m.initRegistrations());
+  void import('./modules/override-transfer').then(m => m.initOverrideTransfer());
   void renderAccountsOverview();
 }
 

@@ -253,6 +253,12 @@ export type {
   AccountTestResult,
   AccountServiceOverride,
   AccountServiceOverrideRequest,
+  OverrideTransferRow,
+  OverrideExport,
+  OverrideImportMode,
+  OverrideImportRequest,
+  OverrideImportRowResult,
+  OverrideImportReport,
   OrgDiscoveryResult,
   FederationIaCResponse
 } from './accounts';
@@ -270,6 +276,9 @@ export {
   listAccountServiceOverrides,
   saveAccountServiceOverride,
   deleteAccountServiceOverride,
+  exportAccountServiceOverrides,
+  exportAccountServiceOverridesCSV,
+  importAccountServiceOverrides,
   discoverOrgAccounts,
   listPlanAccounts,
   setPlanAccounts,
