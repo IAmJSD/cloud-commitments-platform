@@ -64,6 +64,7 @@ func TestGetEnvInt(t *testing.T) {
 		envValue     string
 		defaultValue int
 		expected     int
+		wantErr      bool
 	}{
 		{
 			name:         "returns parsed int when valid",
@@ -85,6 +86,7 @@ func TestGetEnvInt(t *testing.T) {
 			envValue:     "not_a_number",
 			defaultValue: 10,
 			expected:     10,
+			wantErr:      true,
 		},
 		{
 			name:         "handles negative numbers",
@@ -111,8 +113,15 @@ func TestGetEnvInt(t *testing.T) {
 				defer os.Unsetenv(tt.key)
 			}
 
-			result := getEnvInt(tt.key, tt.defaultValue)
+			env := &envParser{}
+			result := env.getEnvInt(tt.key, tt.defaultValue)
 			assert.Equal(t, tt.expected, result)
+			if tt.wantErr {
+				require.Len(t, env.errs, 1, "a malformed value must be reported (#120)")
+				assert.Contains(t, env.errs[0].Error(), tt.key)
+			} else {
+				assert.Empty(t, env.errs)
+			}
 		})
 	}
 }
@@ -124,6 +133,7 @@ func TestGetEnvBool(t *testing.T) {
 		envValue     string
 		defaultValue bool
 		expected     bool
+		wantErr      bool
 	}{
 		{
 			name:         "returns true for 'true'",
@@ -166,6 +176,7 @@ func TestGetEnvBool(t *testing.T) {
 			envValue:     "not_a_bool",
 			defaultValue: true,
 			expected:     true,
+			wantErr:      true,
 		},
 	}
 
@@ -178,8 +189,15 @@ func TestGetEnvBool(t *testing.T) {
 				defer os.Unsetenv(tt.key)
 			}
 
-			result := getEnvBool(tt.key, tt.defaultValue)
+			env := &envParser{}
+			result := env.getEnvBool(tt.key, tt.defaultValue)
 			assert.Equal(t, tt.expected, result)
+			if tt.wantErr {
+				require.Len(t, env.errs, 1, "a malformed value must be reported (#120)")
+				assert.Contains(t, env.errs[0].Error(), tt.key)
+			} else {
+				assert.Empty(t, env.errs)
+			}
 		})
 	}
 }
@@ -191,6 +209,7 @@ func TestGetEnvDuration(t *testing.T) {
 		envValue     string
 		defaultValue time.Duration
 		expected     time.Duration
+		wantErr      bool
 	}{
 		{
 			name:         "parses seconds",
@@ -233,6 +252,7 @@ func TestGetEnvDuration(t *testing.T) {
 			envValue:     "invalid",
 			defaultValue: time.Hour,
 			expected:     time.Hour,
+			wantErr:      true,
 		},
 	}
 
@@ -245,8 +265,15 @@ func TestGetEnvDuration(t *testing.T) {
 				defer os.Unsetenv(tt.key)
 			}
 
-			result := getEnvDuration(tt.key, tt.defaultValue)
+			env := &envParser{}
+			result := env.getEnvDuration(tt.key, tt.defaultValue)
 			assert.Equal(t, tt.expected, result)
+			if tt.wantErr {
+				require.Len(t, env.errs, 1, "a malformed value must be reported (#120)")
+				assert.Contains(t, env.errs[0].Error(), tt.key)
+			} else {
+				assert.Empty(t, env.errs)
+			}
 		})
 	}
 }
@@ -650,6 +677,26 @@ func TestLoadFromEnv(t *testing.T) {
 
 		_, err := LoadFromEnv()
 		require.Error(t, err)
+	})
+
+	// #120: a set but malformed tuning variable fails the load instead of
+	// silently becoming the default, which Validate would then accept.
+	t.Run("returns error naming every malformed variable", func(t *testing.T) {
+		cleanup := setEnvVars(map[string]string{
+			"DB_HOST":              "db.example.com",
+			"DB_PASSWORD":          "testpass",
+			"DB_MAX_CONNECTIONS":   "100 ",
+			"DB_MAX_CONN_LIFETIME": "1h30",
+			"DB_AUTO_MIGRATE":      "yes",
+		})
+		defer cleanup()
+
+		config, err := LoadFromEnv()
+		require.Error(t, err)
+		assert.Nil(t, config)
+		for _, key := range []string{"DB_MAX_CONNECTIONS", "DB_MAX_CONN_LIFETIME", "DB_AUTO_MIGRATE"} {
+			assert.Contains(t, err.Error(), key)
+		}
 	})
 }
 

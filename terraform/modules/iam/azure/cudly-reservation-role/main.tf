@@ -3,12 +3,13 @@ terraform {
 
   required_providers {
     azurerm = {
-      # Deliberately >= 3.0 (not ~> 3.0): this module is consumed by both
-      # terraform/environments/azure/ci-cd-permissions (azurerm ~> 3.0) and
+      # Deliberately spans two majors (not ~> 3.x): this module is consumed by
+      # both terraform/environments/azure/ci-cd-permissions (azurerm 3.x) and
       # iac/federation/azure-target/terraform (azurerm ~> 4.0), so the
-      # constraint must intersect with both provider lines.
+      # constraint must intersect with both provider lines. The < 5.0 ceiling
+      # keeps an unreviewed azurerm 5.x out (#12).
       source  = "hashicorp/azurerm"
-      version = ">= 3.0"
+      version = ">= 3.0, < 5.0"
     }
   }
 }

@@ -227,11 +227,11 @@ func TestGenerator_CFParamsValuesCannotChangeStructure(t *testing.T) {
 	}, got)
 }
 
-// probeDeployScript stands in for aws-cfn-deploy.sh.tmpl. The real template
-// cannot be rendered by this script today (iacData lacks OIDCIssuerHost,
-// #153), so this probe exercises the same .sh.tmpl escaping path with the
-// quoting shapes the real Bash templates use, and prints what Bash made of
-// each value instead of calling any cloud CLI.
+// probeDeployScript stands in for aws-cfn-deploy.sh.tmpl. Running the real
+// script would call the AWS CLI, so this probe exercises the same .sh.tmpl
+// escaping path with the quoting shapes the real Bash templates use, and
+// prints what Bash made of each value instead of calling any cloud CLI.
+// TestGenerator_AWSWIFBundleRendersDeployScript renders the real template.
 const probeDeployScript = `#!/usr/bin/env bash
 # Target: {{.AccountName}} ({{.AccountExternalID}})
 set -euo pipefail

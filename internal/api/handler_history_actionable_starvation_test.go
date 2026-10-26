@@ -30,13 +30,13 @@ func isActionableCall(statuses []string) bool {
 	return slices.Equal(statuses, actionableExecutionStatuses)
 }
 
-func isTerminalCall(statuses []string) bool {
-	return slices.Equal(statuses, terminalExecutionStatuses)
+func isTerminalPage(q config.HistoryExecutionsPageQuery) bool {
+	return slices.Equal(q.Statuses, terminalExecutionStatuses)
 }
 
 func newStarvationStore(ctx context.Context) *MockConfigStore {
 	store := new(MockConfigStore)
-	store.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	store.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	store.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil).Maybe()
 	return store
 }
@@ -57,6 +57,7 @@ func TestHandler_getHistory_PendingNotStarvedByNewerTerminalRows(t *testing.T) {
 	pending := executionsWithStatus(1, "pending", now.Add(-time.Hour), "pending")
 	store := newStarvationStore(ctx)
 	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(append(execs, pending...), nil)
+	store.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(append(execs, pending...), nil)
 
 	body := runStarvationHistory(t, ctx, store)
 
@@ -65,6 +66,8 @@ func TestHandler_getHistory_PendingNotStarvedByNewerTerminalRows(t *testing.T) {
 		ids[p.(map[string]any)["purchase_id"].(string)] = true
 	}
 	assert.True(t, ids["pending-0"], "older pending row must survive 150 newer failed rows")
+	assert.Len(t, ids, config.DefaultListLimit+1, "a page of failed rows plus the pending row")
+	assert.Equal(t, true, body["has_more"], "the older failed rows are on the next page")
 	summary := body["summary"].(map[string]any)
 	assert.EqualValues(t, 1, summary["total_pending"])
 }
@@ -87,11 +90,14 @@ func TestHandler_getHistory_FetchesDisjointClassesWithTheirLimits(t *testing.T) 
 	ctx := context.Background()
 	store := newStarvationStore(ctx)
 	store.On("GetExecutionsByStatuses", ctx, mock.MatchedBy(isActionableCall), config.MaxListLimit).Return([]config.PurchaseExecution{}, nil).Once()
-	store.On("GetExecutionsByStatuses", ctx, mock.MatchedBy(isTerminalCall), config.DefaultListLimit).Return([]config.PurchaseExecution{}, nil).Once()
+	store.On("ListHistoryExecutionsPage", ctx, mock.MatchedBy(func(q config.HistoryExecutionsPageQuery) bool {
+		return isTerminalPage(q) && q.Limit == historyStreamBatch(config.DefaultListLimit) && q.After == nil
+	})).Return([]config.PurchaseExecution{}, nil).Once()
 
 	runStarvationHistory(t, ctx, store)
 
-	store.AssertNumberOfCalls(t, "GetExecutionsByStatuses", 2)
+	store.AssertNumberOfCalls(t, "GetExecutionsByStatuses", 1)
+	store.AssertNumberOfCalls(t, "ListHistoryExecutionsPage", 1)
 	for _, s := range actionableExecutionStatuses {
 		assert.NotContains(t, terminalExecutionStatuses, s, "classes must be disjoint")
 	}
@@ -119,15 +125,45 @@ func TestHandler_getHistory_ClassListingErrorKeepsOtherClass(t *testing.T) {
 				terminalRet = mock.Arguments{nil, errors.New("terminal listing failed")}
 			}
 			store.On("GetExecutionsByStatuses", ctx, mock.MatchedBy(isActionableCall), mock.Anything).Return(actionableRet...)
-			store.On("GetExecutionsByStatuses", ctx, mock.MatchedBy(isTerminalCall), mock.Anything).Return(terminalRet...)
+			store.On("ListHistoryExecutionsPage", ctx, mock.MatchedBy(isTerminalPage)).Return(terminalRet...)
 
 			body := runStarvationHistory(t, ctx, store)
 
 			purchases := body["purchases"].([]any)
 			require.Len(t, purchases, 1)
 			assert.Equal(t, tt.wantID, purchases[0].(map[string]any)["purchase_id"])
+			assert.Equal(t, true, body["truncated"], "a failed class listing hides rows, so the response must flag incomplete results")
 		})
 	}
+}
+
+// TestHandler_getHistory_BothClassListingsFailSetTruncated covers the
+// no-executions early return: when both class listings fail the response
+// carries only completed history and must still flag incomplete results.
+func TestHandler_getHistory_BothClassListingsFailSetTruncated(t *testing.T) {
+	ctx := context.Background()
+	store := newStarvationStore(ctx)
+	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(nil, errors.New("listing failed"))
+	store.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(nil, errors.New("listing failed"))
+
+	body := runStarvationHistory(t, ctx, store)
+
+	assert.Empty(t, body["purchases"])
+	assert.Equal(t, true, body["truncated"])
+}
+
+// TestHandler_getHistory_EmptyClassListingsNotTruncated guards the other side
+// of the listing-error signal: two successful but empty listings are a
+// complete result and must not raise the banner.
+func TestHandler_getHistory_EmptyClassListingsNotTruncated(t *testing.T) {
+	ctx := context.Background()
+	store := newStarvationStore(ctx)
+	store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+	store.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+
+	body := runStarvationHistory(t, ctx, store)
+
+	assert.Equal(t, false, body["truncated"])
 }
 
 func TestHandler_getHistory_TruncatedPerClass(t *testing.T) {
@@ -138,7 +174,8 @@ func TestHandler_getHistory_TruncatedPerClass(t *testing.T) {
 		terminal      int
 		wantTruncated bool
 	}{
-		{"terminal class at cap", 0, config.DefaultListLimit, true},
+		{"terminal class past the page", 0, config.DefaultListLimit + 1, true},
+		{"terminal class exactly fills the page", 0, config.DefaultListLimit, false},
 		{"both under cap", config.DefaultListLimit, config.DefaultListLimit - 1, false},
 		{"actionable class at cap", config.MaxListLimit, 0, true},
 	}
@@ -149,6 +186,7 @@ func TestHandler_getHistory_TruncatedPerClass(t *testing.T) {
 				executionsWithStatus(tt.terminal, "failed", now, "failed")...)
 			store := newStarvationStore(ctx)
 			store.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(rows, nil)
+			store.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(rows, nil)
 
 			body := runStarvationHistory(t, ctx, store)
 

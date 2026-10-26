@@ -20,7 +20,7 @@ import (
 func TestGetHistory_SummaryComesFromScopedAggregate(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
-	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.ListCloudAccountsFn = func(context.Context, config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
@@ -77,7 +77,7 @@ func TestGetHistory_SummaryFilterMatchesRowFetchFilter(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	var rowFilter config.PurchaseHistoryFilter
-	mockStore.On("GetPurchaseHistoryFiltered", ctx, mock.Anything).
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) { rowFilter = args.Get(1).(config.PurchaseHistoryFilter) }).
 		Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
@@ -108,7 +108,7 @@ func TestGetHistory_SummaryFallsBackToPageWhenAggregateFails(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	up := 40.0
-	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{
 		{PurchaseID: "p1", AccountID: "acct", UpfrontCost: &up, EstimatedSavings: 4},
 	}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
@@ -141,7 +141,7 @@ func TestGetHistory_LambdaSweepRunsAfterSummaryAggregate(t *testing.T) {
 		return func(mock.Arguments) { mu.Lock(); order = append(order, s); mu.Unlock() }
 	}
 	mockStore := new(MockConfigStore)
-	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{stale}, nil)
 	mockStore.On("HistorySummaryAggregate", ctx, mock.Anything).Run(note("aggregate")).
 		Return(&config.HistorySummaryGroups{Executions: []config.ExecutionSummaryGroup{{Status: "pending", Count: 1}}}, nil)

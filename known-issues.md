@@ -128,34 +128,26 @@ as an explicitly consented step (the `az role assignment create` mirror of
 step 1) and must not be reintroduced into the template.
 `scripts/check-azure-role-parity.sh` fails CI if it is.
 
-### Azure ARM template re-deployment required for purchase support (issue #731)
-
-The built-in "Reservation Purchaser" role (f7b75c60-3036-4b75-91c3-6b41c27c1689)
-does not include `Microsoft.Capacity/calculateprice/action`,
-`Microsoft.Capacity/reservationorders/write`, or
-`Microsoft.BillingBenefits/savingsPlanOrderAliases/write`. Without these,
-the live purchase API returns 403.
-
-`arm/CUDly-CrossSubscription/template.json` has been updated (fix/731-arm-roles)
-to add a custom role "CUDly Reservation and Savings Plan Purchaser" that enumerates
-all required actions explicitly. Existing tenants who applied the ARM template before
-this fix MUST re-deploy it:
-
-```bash
-az deployment sub create \
-  --location eastus \
-  --template-file arm/CUDly-CrossSubscription/template.json \
-  --parameters servicePrincipalObjectId=<SP-object-id> \
-  --name CUDly-CrossSubscription \
-  --no-prompt
-```
-
-Until re-deployed, `PurchaseCommitment` and `ValidateOffering` for savings plans
-will continue to return 403.
-
 ## Resolved
 
 ### Azure
+
+- **ARM template lacked the purchase actions (issue #731)**: Resolved.
+  The built-in "Reservation Purchaser" role
+  (f7b75c60-3036-4b75-91c3-6b41c27c1689) does not include
+  `Microsoft.Capacity/calculatePrice/action`,
+  `Microsoft.Capacity/reservationOrders/write`, or
+  `Microsoft.BillingBenefits/savingsPlanOrderAliases/write`, so the live
+  purchase API returned 403. `arm/CUDly-CrossSubscription/template.json`
+  now defines and assigns a custom role named
+  **"CUDly Reservation Purchaser (custom)"** that lists every required
+  action explicitly; that is the name to look for in the Azure portal or
+  `az role definition list --custom-role-only true`. Tenants that applied
+  the template before the fix keep getting 403 from `PurchaseCommitment`
+  and `ValidateOffering` for savings plans until they re-deploy it. Do not
+  re-deploy with a bare `az deployment sub create`: follow the issue #1545
+  entry under Outstanding, which first revokes the tenant-wide grant older
+  templates left behind and then re-deploys.
 
 - **ARM template role-definition scoping + `Reservation Reader` tenant
   gap**: Resolved. `arm/CUDly-CrossSubscription/template.json` now uses
