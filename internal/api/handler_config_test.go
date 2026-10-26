@@ -645,11 +645,8 @@ func TestHandler_updateServiceConfig(t *testing.T) {
 // overlaid. A partial PUT that omits a filter must preserve the existing
 // value; a PUT that includes it (even empty) must apply it.
 func TestMergeServiceConfig_PresenceAwareFilterOverlay(t *testing.T) {
-	ctx := context.Background()
-	// Each subtest gets a fresh existing record: mergeServiceConfig overlays
-	// onto the pointer returned by GetServiceConfig (the production postgres
-	// store returns a fresh struct per call), so a shared fixture would leak
-	// mutations across subtests.
+	// Each subtest gets a fresh existing record so no subtest can see
+	// another's data.
 	newExisting := func() *config.ServiceConfig {
 		return &config.ServiceConfig{
 			Provider: "aws", Service: "rds", Enabled: true, Term: 3,
@@ -661,10 +658,6 @@ func TestMergeServiceConfig_PresenceAwareFilterOverlay(t *testing.T) {
 	}
 
 	t.Run("body includes filter fields -> overlaid", func(t *testing.T) {
-		store := new(MockConfigStore)
-		store.On("GetServiceConfig", ctx, "aws", "rds").Return(newExisting(), nil)
-		t.Cleanup(func() { store.AssertExpectations(t) })
-
 		req := config.ServiceConfig{
 			Provider: "aws", Service: "rds", Enabled: false, Term: 1,
 			Payment: "no-upfront", Coverage: 90,
@@ -673,7 +666,7 @@ func TestMergeServiceConfig_PresenceAwareFilterOverlay(t *testing.T) {
 		}
 		body := `{"enabled":false,"term":1,"payment":"no-upfront","coverage":90,"include_engines":["postgres"],"min_count":7}`
 
-		merged, err := mergeServiceConfig(ctx, store, req, body)
+		merged, err := mergeServiceConfig(newExisting(), req, body)
 		require.NoError(t, err)
 		assert.False(t, merged.Enabled)
 		assert.Equal(t, 1, merged.Term)
@@ -685,17 +678,13 @@ func TestMergeServiceConfig_PresenceAwareFilterOverlay(t *testing.T) {
 	})
 
 	t.Run("body omits filter fields -> preserved", func(t *testing.T) {
-		store := new(MockConfigStore)
-		store.On("GetServiceConfig", ctx, "aws", "rds").Return(newExisting(), nil)
-		t.Cleanup(func() { store.AssertExpectations(t) })
-
 		req := config.ServiceConfig{
 			Provider: "aws", Service: "rds", Enabled: true, Term: 3,
 			Payment: "all-upfront", Coverage: 80,
 		}
 		body := `{"enabled":true,"term":3,"payment":"all-upfront","coverage":80}`
 
-		merged, err := mergeServiceConfig(ctx, store, req, body)
+		merged, err := mergeServiceConfig(newExisting(), req, body)
 		require.NoError(t, err)
 		assert.Equal(t, 80.0, merged.Coverage)
 		assert.Equal(t, []string{"mysql"}, merged.IncludeEngines, "omitted filter must be preserved")
@@ -704,10 +693,6 @@ func TestMergeServiceConfig_PresenceAwareFilterOverlay(t *testing.T) {
 	})
 
 	t.Run("body includes empty filter -> cleared", func(t *testing.T) {
-		store := new(MockConfigStore)
-		store.On("GetServiceConfig", ctx, "aws", "rds").Return(newExisting(), nil)
-		t.Cleanup(func() { store.AssertExpectations(t) })
-
 		req := config.ServiceConfig{
 			Provider: "aws", Service: "rds", Enabled: true, Term: 3,
 			Payment: "all-upfront", Coverage: 80,
@@ -715,7 +700,7 @@ func TestMergeServiceConfig_PresenceAwareFilterOverlay(t *testing.T) {
 		}
 		body := `{"enabled":true,"term":3,"payment":"all-upfront","coverage":80,"include_engines":[]}`
 
-		merged, err := mergeServiceConfig(ctx, store, req, body)
+		merged, err := mergeServiceConfig(newExisting(), req, body)
 		require.NoError(t, err)
 		assert.Empty(t, merged.IncludeEngines, "explicit empty list clears the filter")
 	})
@@ -726,7 +711,6 @@ func TestMergeServiceConfig_PresenceAwareFilterOverlay(t *testing.T) {
 // body carries the key, so a stale tab that PUTs just the field the user
 // edited cannot revert the others (#539). A present zero value still applies.
 func TestMergeServiceConfig_PresenceAwareScalarOverlay(t *testing.T) {
-	ctx := context.Background()
 	newExisting := func() *config.ServiceConfig {
 		return &config.ServiceConfig{
 			Provider: "aws", Service: "rds", Enabled: true, Term: 3,
@@ -735,11 +719,8 @@ func TestMergeServiceConfig_PresenceAwareScalarOverlay(t *testing.T) {
 	}
 	run := func(t *testing.T, req config.ServiceConfig, body string) config.ServiceConfig {
 		t.Helper()
-		store := new(MockConfigStore)
-		store.On("GetServiceConfig", ctx, "aws", "rds").Return(newExisting(), nil)
-		t.Cleanup(func() { store.AssertExpectations(t) })
 		req.Provider, req.Service = "aws", "rds"
-		merged, err := mergeServiceConfig(ctx, store, req, body)
+		merged, err := mergeServiceConfig(newExisting(), req, body)
 		require.NoError(t, err)
 		return merged
 	}
@@ -824,6 +805,86 @@ func TestHandler_updateServiceConfig_PartialPut(t *testing.T) {
 		_, err := put(h, `{"term":3}`, "gcp/compute")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid payment option")
+		store.AssertNotCalled(t, "SaveServiceConfig", mock.Anything, mock.Anything)
+	})
+}
+
+// TestHandler_updateServiceConfig_MergesInsideAtomicUpdate pins issue #1488:
+// the PUT must read and merge the stored row inside the store's locked
+// UpdateServiceConfigAtomic, never through a separate GetServiceConfig +
+// SaveServiceConfig pair that two concurrent PUTs can interleave.
+func TestHandler_updateServiceConfig_MergesInsideAtomicUpdate(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com",
+	}, nil)
+	mockAuth.grantAdmin()
+	store := new(MockConfigStore)
+	stored := &config.ServiceConfig{
+		Provider: "aws", Service: "rds", Enabled: true, Term: 3,
+		Payment: "all-upfront", Coverage: 55, MinCount: 4,
+	}
+	var written *config.ServiceConfig
+	store.On("UpdateServiceConfigAtomic", ctx, "aws", "rds", mock.Anything).
+		Run(func(args mock.Arguments) {
+			apply := args.Get(3).(func(*config.ServiceConfig) (*config.ServiceConfig, error))
+			var err error
+			written, err = apply(stored)
+			require.NoError(t, err)
+		}).Return(stored, nil)
+	h := &Handler{config: store, auth: mockAuth}
+
+	_, err := h.updateServiceConfig(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"coverage":80}`,
+	}, "aws/rds")
+	require.NoError(t, err)
+	require.NotNil(t, written)
+	assert.Equal(t, 80.0, written.Coverage)
+	assert.Equal(t, []any{true, 3, "all-upfront", 4}, []any{written.Enabled, written.Term, written.Payment, written.MinCount})
+	store.AssertNotCalled(t, "GetServiceConfig", mock.Anything, mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "SaveServiceConfig", mock.Anything, mock.Anything)
+}
+
+// TestHandler_updateServiceConfig_StoredRowRead covers the two outcomes of the
+// in-transaction read: no stored row saves the body as the whole row, and any
+// other read error aborts the save.
+func TestHandler_updateServiceConfig_StoredRowRead(t *testing.T) {
+	ctx := context.Background()
+	newHandler := func(readErr error) (*Handler, *MockConfigStore) {
+		mockAuth := new(MockAuthService)
+		mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
+			UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Email: "admin@example.com",
+		}, nil)
+		mockAuth.grantAdmin()
+		store := new(MockConfigStore)
+		store.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, readErr)
+		return &Handler{config: store, auth: mockAuth}, store
+	}
+	put := func(h *Handler) error {
+		_, err := h.updateServiceConfig(ctx, &events.LambdaFunctionURLRequest{
+			Headers: map[string]string{"Authorization": "Bearer admin-token"},
+			Body:    `{"enabled":true,"term":1,"payment":"no-upfront","coverage":80}`,
+		}, "aws/rds")
+		return err
+	}
+
+	t.Run("no stored row -> body saved as the row", func(t *testing.T) {
+		h, store := newHandler(fmt.Errorf("service config not found for aws:rds: %w", config.ErrNotFound))
+		var saved *config.ServiceConfig
+		store.On("SaveServiceConfig", ctx, mock.AnythingOfType("*config.ServiceConfig")).
+			Run(func(args mock.Arguments) { saved = args.Get(1).(*config.ServiceConfig) }).Return(nil)
+		require.NoError(t, put(h))
+		require.NotNil(t, saved)
+		assert.Equal(t, config.ServiceConfig{
+			Provider: "aws", Service: "rds", Enabled: true, Term: 1, Payment: "no-upfront", Coverage: 80,
+		}, *saved)
+	})
+
+	t.Run("read error -> no save", func(t *testing.T) {
+		h, store := newHandler(errors.New("connection refused"))
+		require.ErrorContains(t, put(h), "connection refused")
 		store.AssertNotCalled(t, "SaveServiceConfig", mock.Anything, mock.Anything)
 	})
 }

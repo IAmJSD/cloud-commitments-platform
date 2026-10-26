@@ -203,36 +203,29 @@ var serviceConfigOverlayKeys = []string{
 	"min_count",
 }
 
-// mergeServiceConfig loads any existing service config and overlays the
-// UI-editable fields from cfg onto it. Every field (Enabled, Term, Payment,
-// Coverage and the include/exclude engines/regions/types and min_count
-// filters) is overlaid only when the request body actually carried the
-// corresponding key (per presentKeys), so a partial PUT cannot silently
-// revert or wipe a field it did not mean to touch. body is the raw request
-// JSON used to detect which keys are present.
+// mergeServiceConfig overlays the UI-editable fields from cfg onto the stored
+// row existing. Every field (Enabled, Term, Payment, Coverage and the
+// include/exclude engines/regions/types and min_count filters) is overlaid
+// only when the request body actually carried the corresponding key (per
+// presentKeys), so a partial PUT cannot silently revert or wipe a field it
+// did not mean to touch. body is the raw request JSON used to detect which
+// keys are present.
 //
-// A "not found" error means no existing record — cfg is returned unchanged.
-// Any other DB error is returned to prevent a partial write from clobbering
-// previously configured filter fields.
-func mergeServiceConfig(ctx context.Context, store config.StoreInterface, cfg config.ServiceConfig, body string) (config.ServiceConfig, error) {
-	existing, err := store.GetServiceConfig(ctx, cfg.Provider, cfg.Service)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			return cfg, nil // new record — no existing fields to preserve
-		}
-		return cfg, fmt.Errorf("failed to read existing service config before update: %w", err)
-	}
+// A nil existing means no stored row: cfg is returned unchanged. existing is
+// not modified.
+func mergeServiceConfig(existing *config.ServiceConfig, cfg config.ServiceConfig, body string) (config.ServiceConfig, error) {
 	if existing == nil {
-		return cfg, nil
+		return cfg, nil // new record — no existing fields to preserve
 	}
 
 	present, perr := presentKeys(body, serviceConfigOverlayKeys)
 	if perr != nil {
 		return cfg, perr
 	}
-	overlayPresentScalarFields(existing, &cfg, present)
-	overlayPresentFilterFields(existing, &cfg, present)
-	return *existing, nil
+	merged := *existing
+	overlayPresentScalarFields(&merged, &cfg, present)
+	overlayPresentFilterFields(&merged, &cfg, present)
+	return merged, nil
 }
 
 // presentKeys returns the subset of keys that appear as top-level fields in the
@@ -360,28 +353,37 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 		cfg.Service = parts[1]
 	}
 
-	// Merge: overlay each field (the scalars and the recommendation filters)
-	// only when the body carried its key, so a partial PUT never reverts or
-	// zeroes a field (ramp_schedule, a filter set out-of-band) it didn't mean
-	// to touch. Validation below runs on the merged row.
-	merged, mergeErr := mergeServiceConfig(ctx, h.config, cfg, req.Body)
-	if mergeErr != nil {
-		return nil, mergeErr
-	}
-	cfg = merged
-
-	// Validate the configuration
-	if err := cfg.Validate(); err != nil {
-		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
-	}
-
-	if err := h.checkCommitmentOptionCombo(ctx, cfg); err != nil {
-		return nil, err
-	}
-
-	if err := h.config.SaveServiceConfig(ctx, &cfg); err != nil {
+	// Serialized read-merge-write (issue #1488): the store reads the stored
+	// row and writes the merged result in one locked transaction, so two
+	// admins saving different fields of this row at once cannot both merge
+	// onto the same stale base and lose one change. ClientErrors from the
+	// merge or validation propagate unchanged.
+	_, err := h.config.UpdateServiceConfigAtomic(ctx, cfg.Provider, cfg.Service, func(existing *config.ServiceConfig) (*config.ServiceConfig, error) {
+		return h.mergeAndValidateServiceConfig(ctx, existing, cfg, req.Body)
+	})
+	if err != nil {
 		return nil, err
 	}
 
 	return &StatusResponse{Status: "updated"}, nil
+}
+
+// mergeAndValidateServiceConfig is the read-merge step of a service-config
+// PUT, run inside UpdateServiceConfigAtomic's transaction. It overlays each
+// field (the scalars and the recommendation filters) only when the body
+// carried its key, so a partial PUT never reverts or zeroes a field
+// (ramp_schedule, a filter set out-of-band) it didn't mean to touch, then
+// validates the merged row, not the partial body.
+func (h *Handler) mergeAndValidateServiceConfig(ctx context.Context, existing *config.ServiceConfig, cfg config.ServiceConfig, body string) (*config.ServiceConfig, error) {
+	merged, err := mergeServiceConfig(existing, cfg, body)
+	if err != nil {
+		return nil, err
+	}
+	if err := merged.Validate(); err != nil {
+		return nil, NewClientError(400, fmt.Sprintf("validation error: %s", err))
+	}
+	if err := h.checkCommitmentOptionCombo(ctx, merged); err != nil {
+		return nil, err
+	}
+	return &merged, nil
 }

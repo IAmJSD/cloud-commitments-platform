@@ -157,6 +157,49 @@ func (m *MockConfigStore) SaveServiceConfig(ctx context.Context, cfg *config.Ser
 	return args.Error(0)
 }
 
+// UpdateServiceConfigAtomic mocks the locked read-merge-write of one service
+// config row. When an expectation is registered it dispatches through
+// m.Called (tests can drive the apply closure via a Run callback). Otherwise
+// it emulates the real store by routing through the mocked GetServiceConfig +
+// apply + SaveServiceConfig, so tests that seed those two keep working. Like
+// the real store, a not-found read hands apply a nil row.
+func (m *MockConfigStore) UpdateServiceConfigAtomic(ctx context.Context, provider, service string, apply func(*config.ServiceConfig) (*config.ServiceConfig, error)) (*config.ServiceConfig, error) {
+	m.record("UpdateServiceConfigAtomic", ctx, provider, service, apply)
+	if isExpected(&m.Mock, "UpdateServiceConfigAtomic") {
+		args := m.Called(ctx, provider, service, apply)
+		if args.Get(0) == nil {
+			return nil, args.Error(1)
+		}
+		v, ok := args.Get(0).(*config.ServiceConfig)
+		if !ok {
+			m.reporter.wrongReturnType("UpdateServiceConfigAtomic", "*config.ServiceConfig", args.Get(0))
+		}
+		return v, args.Error(1)
+	}
+	return m.updateServiceConfigFallback(ctx, provider, service, apply)
+}
+
+// updateServiceConfigFallback is UpdateServiceConfigAtomic's default. It
+// routes through the mocked GetServiceConfig and SaveServiceConfig, which
+// record themselves; see UpdatePurchasePlanTx.
+func (m *MockConfigStore) updateServiceConfigFallback(ctx context.Context, provider, service string, apply func(*config.ServiceConfig) (*config.ServiceConfig, error)) (*config.ServiceConfig, error) {
+	existing, err := m.GetServiceConfig(ctx, provider, service)
+	if err != nil && !errors.Is(err, config.ErrNotFound) {
+		return nil, err
+	}
+	next, err := apply(existing)
+	if err != nil {
+		return nil, err
+	}
+	if next == nil || next.Provider != provider || next.Service != service {
+		return nil, fmt.Errorf("service config update for %s/%s must return a row with the same key", provider, service)
+	}
+	if err := m.SaveServiceConfig(ctx, next); err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
 // ListServiceConfigs mocks the ListServiceConfigs operation.
 func (m *MockConfigStore) ListServiceConfigs(ctx context.Context) ([]config.ServiceConfig, error) {
 	m.record("ListServiceConfigs", ctx)

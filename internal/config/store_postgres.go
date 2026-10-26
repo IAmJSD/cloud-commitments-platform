@@ -399,20 +399,36 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 // SERVICE CONFIGURATION
 // ==========================================
 
+// serviceConfigColumns is the column list every service_configs read scans,
+// in scanServiceConfig order.
+const serviceConfigColumns = `provider, service, enabled, term, payment, coverage, ramp_schedule,
+		       include_engines, exclude_engines, include_regions, exclude_regions,
+		       include_types, exclude_types, min_count`
+
+const getServiceConfigQuery = `SELECT ` + serviceConfigColumns + `
+		FROM service_configs
+		WHERE provider = $1 AND service = $2`
+
+// serviceConfigLockPrefix namespaces the per-service advisory lock
+// UpdateServiceConfigAtomic takes. It is a distinct text input to the same
+// hashtextextended(text, 0) bigint key space as the ladder-config and
+// plan-step provider locks; a 64-bit hash collision could only cause a
+// spurious wait, never a correctness break.
+const serviceConfigLockPrefix = "cudly:service-config:"
+
 // GetServiceConfig retrieves configuration for a specific service.
 func (s *PostgresStore) GetServiceConfig(ctx context.Context, provider, service string) (*ServiceConfig, error) {
-	query := `
-		SELECT provider, service, enabled, term, payment, coverage, ramp_schedule,
-		       include_engines, exclude_engines, include_regions, exclude_regions,
-		       include_types, exclude_types, min_count
-		FROM service_configs
-		WHERE provider = $1 AND service = $2
-	`
+	return getServiceConfigFrom(ctx, s.db, getServiceConfigQuery, provider, service)
+}
 
+// getServiceConfigFrom runs query (getServiceConfigQuery, optionally with a
+// locking clause) via q (the pool or a transaction). A missing row is reported
+// as an error wrapping ErrNotFound.
+func getServiceConfigFrom(ctx context.Context, q globalConfigExecutor, query, provider, service string) (*ServiceConfig, error) {
 	var config ServiceConfig
 	var includeEngines, excludeEngines, includeRegions, excludeRegions, includeTypes, excludeTypes []string
 
-	err := s.db.QueryRow(ctx, query, provider, service).Scan(
+	err := q.QueryRow(ctx, query, provider, service).Scan(
 		&config.Provider,
 		&config.Service,
 		&config.Enabled,
@@ -449,6 +465,59 @@ func (s *PostgresStore) GetServiceConfig(ctx context.Context, provider, service 
 
 // SaveServiceConfig saves configuration for a service.
 func (s *PostgresStore) SaveServiceConfig(ctx context.Context, config *ServiceConfig) error {
+	return saveServiceConfigWith(ctx, s.db, config)
+}
+
+// UpdateServiceConfigAtomic performs a serialized read-merge-write of one
+// service_configs row (issue #1488). In one transaction it takes a
+// transaction-scoped advisory lock on (provider, service), reads the row
+// FOR UPDATE, hands it to apply and upserts the row apply returns.
+//
+// Both locks are needed. The advisory lock serializes two saves of a row that
+// does not exist yet, which a row lock cannot do because there is nothing to
+// lock: without it both would read nothing and the second insert would
+// overwrite the first. The row lock makes writers that do not take the
+// advisory lock, such as the global-defaults propagation in
+// UpdateGlobalConfigAtomic, wait for this transaction (and this transaction
+// wait for them), so the row read here is the row the write replaces.
+//
+// apply receives nil when no row exists. It must return the full row to
+// write, keyed on the same provider and service; an error it returns aborts
+// the transaction and is propagated unchanged.
+func (s *PostgresStore) UpdateServiceConfigAtomic(ctx context.Context, provider, service string, apply func(existing *ServiceConfig) (*ServiceConfig, error)) (*ServiceConfig, error) {
+	var saved *ServiceConfig
+	err := s.WithTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", serviceConfigLockPrefix+provider+"/"+service); err != nil {
+			return fmt.Errorf("failed to acquire service config lock: %w", err)
+		}
+		existing, err := getServiceConfigFrom(ctx, tx, getServiceConfigQuery+" FOR UPDATE", provider, service)
+		if errors.Is(err, ErrNotFound) {
+			existing = nil
+		} else if err != nil {
+			return err
+		}
+		next, err := apply(existing)
+		if err != nil {
+			return err
+		}
+		if next == nil || next.Provider != provider || next.Service != service {
+			return fmt.Errorf("service config update for %s/%s must return a row with the same key", provider, service)
+		}
+		if err := saveServiceConfigWith(ctx, tx, next); err != nil {
+			return err
+		}
+		saved = next
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return saved, nil
+}
+
+// saveServiceConfigWith upserts one service_configs row via q (the pool or a
+// transaction).
+func saveServiceConfigWith(ctx context.Context, q globalConfigExecutor, config *ServiceConfig) error {
 	query := `
 		INSERT INTO service_configs (
 			provider, service, enabled, term, payment, coverage, ramp_schedule,
@@ -471,7 +540,7 @@ func (s *PostgresStore) SaveServiceConfig(ctx context.Context, config *ServiceCo
 			updated_at = NOW()
 	`
 
-	_, err := s.db.Exec(ctx, query,
+	_, err := q.Exec(ctx, query,
 		config.Provider,
 		config.Service,
 		config.Enabled,
