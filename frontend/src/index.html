@@ -386,7 +386,19 @@
                 <section id="settings-section" class="card page-hero" role="tabpanel" aria-labelledby="admin-subtab-general">
                     <h2>Global Configuration</h2>
                     <p class="settings-description page-hero-description">Configure CUDly settings for commitment purchases across all cloud providers.</p>
-                    <div id="settings-loading" class="loading">Loading settings...</div>
+                    <!-- Issue #186: the same skeleton loadGlobalSettings shows, so the
+                         panel never flashes plain "Loading" text before the script runs. -->
+                    <div id="settings-loading" class="loading" aria-busy="true">
+                        <span class="sr-only skeleton-status" role="status">Loading…</span>
+                        <div class="skeleton-group" aria-hidden="true">
+                            <div class="skeleton skeleton-line"></div>
+                            <div class="skeleton skeleton-line"></div>
+                            <div class="skeleton skeleton-line"></div>
+                            <div class="skeleton skeleton-line"></div>
+                            <div class="skeleton skeleton-line"></div>
+                            <div class="skeleton skeleton-line skeleton-line-short"></div>
+                        </div>
+                    </div>
                     <form id="global-settings-form" class="settings-form hidden">
                         <fieldset class="settings-category">
                             <legend>General Settings</legend>
