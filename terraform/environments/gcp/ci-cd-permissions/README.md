@@ -151,8 +151,12 @@ gcloud iam workload-identity-pools providers describe github-actions \
 
 To change the allowed repo, update `github_owner_id` and `github_repo_id` in `terraform.tfvars`
 (`gh api repos/<owner>/<repo> --jq '.owner.id, .id'`) and re-apply. The `principalSet` member is
-keyed on `attribute.repository_id`; the `attribute.repository` mapping is kept so the old member
-keeps resolving while the replacement is created first. `github_repo` is still the skip toggle
+keyed on `attribute.repository_id_ref` (`<github_repo_id>:<deploy_ref>`), so the grant pins the
+same repo and ref as the condition and changing `deploy_ref` moves both. Principal identifiers are
+pool-scoped, so without the ref a second provider added to the `github-actions` pool could
+satisfy the grant from any ref of the repo; keep the pool dedicated to this trust. The older
+`attribute.repository` and `attribute.repository_id` mappings are kept so the previous member
+keeps resolving while its replacement is created first. `github_repo` is still the skip toggle
 (empty disables WIF setup) but no longer feeds the condition or the member.
 
 AWS and Azure match the GitHub immutable OIDC subject (`repo:<owner>@<owner_id>/<repo>@<repo_id>:...`),

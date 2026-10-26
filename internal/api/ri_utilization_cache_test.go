@@ -12,6 +12,8 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/providers/aws/recommendations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/testutil/goroutines"
+	"github.com/stretchr/testify/require"
 )
 
 // fakeRIUtilCacheStore is a minimal in-test implementation of
@@ -122,6 +124,10 @@ func TestRIUtilizationCache_HitReturnsCachedData(t *testing.T) {
 	}
 }
 
+// The fetcher blocks until the test releases it, so getOrFetch returning at
+// all proves the stale copy was served without waiting for the refresh. That
+// replaces an elapsed-time bound, and require.Eventually replaces the
+// sleep-poll on the stored row (issue #36).
 func TestRIUtilizationCache_StaleOnNonLambdaServesStaleAndKicksRefresh(t *testing.T) {
 	store := newFakeRIUtilCacheStore()
 	staleData := []recommendations.RIUtilization{{ReservedInstanceID: "ri-stale"}}
@@ -132,43 +138,59 @@ func TestRIUtilizationCache_StaleOnNonLambdaServesStaleAndKicksRefresh(t *testin
 	c := newRIUtilizationCache(store, false) // non-Lambda
 
 	fetchCalled := make(chan struct{}, 1)
-	fetch := func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseFetch := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseFetch)
+	//nolint:unparam // fetcher signature is fixed by getOrFetch; this refresh path never errors
+	fetch := func(_ context.Context, _ int) ([]recommendations.RIUtilization, error) {
 		fetchCalled <- struct{}{}
+		<-release
 		return freshData, nil
 	}
 
-	start := time.Now()
-	got, err := c.getOrFetch(context.Background(), "us-east-1", 30, 50*time.Millisecond, time.Hour, fetch)
-	elapsed := time.Since(start)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	// SWR must return quickly with the stale payload, not wait for
-	// the fetcher.
-	if elapsed > 50*time.Millisecond {
-		t.Fatalf("getOrFetch took %s — should have returned the stale copy synchronously", elapsed)
-	}
+	got := getOrFetchWithin(t, 10*time.Second, func() ([]recommendations.RIUtilization, error) {
+		return c.getOrFetch(context.Background(), "us-east-1", 30, 50*time.Millisecond, time.Hour, fetch)
+	}, "getOrFetch waited for the fetcher; SWR must return the stale copy synchronously")
 	if len(got) != 1 || got[0].ReservedInstanceID != "ri-stale" {
 		t.Fatalf("expected stale copy, got %+v", got)
 	}
 
-	// Background fetch should fire within a short window.
 	select {
 	case <-fetchCalled:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(10 * time.Second):
 		t.Fatalf("background fetch never fired")
 	}
+	releaseFetch()
 
-	// Give the storePayload write a beat to land.
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
 		latest, ok := store.latest("us-east-1", 30)
-		if ok && len(latest) == 1 && latest[0].ReservedInstanceID == "ri-fresh" {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+		return ok && len(latest) == 1 && latest[0].ReservedInstanceID == "ri-fresh"
+	}, 10*time.Second, time.Millisecond, "background refresh did not update the stored row")
+}
+
+// getOrFetchWithin runs call on another goroutine and fails the test with msg
+// if it has not returned within limit. The limit only bounds a hang (a call
+// stuck on a fetcher the test never releases); it is not a timing assertion.
+func getOrFetchWithin(t *testing.T, limit time.Duration, call func() ([]recommendations.RIUtilization, error), msg string) []recommendations.RIUtilization {
+	t.Helper()
+	type result struct {
+		err  error
+		data []recommendations.RIUtilization
 	}
-	t.Fatalf("background refresh did not update the stored row")
+	ret := make(chan result, 1)
+	go func() {
+		data, err := call()
+		ret <- result{data: data, err: err}
+	}()
+	select {
+	case r := <-ret:
+		require.NoError(t, r.err)
+		return r.data
+	case <-time.After(limit):
+		t.Fatal(msg)
+		return nil
+	}
 }
 
 func TestRIUtilizationCache_StaleOnLambdaBlocksForSyncRefetch(t *testing.T) {
@@ -228,6 +250,9 @@ func TestRIUtilizationCache_SingleflightCollapsesConcurrentRefreshes(t *testing.
 	// Gate the fetcher so concurrent calls all race to enter the
 	// refresh — singleflight should collapse them.
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseFetch := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseFetch)
 	//nolint:unparam // fetcher signature is fixed by newRIUtilizationCache; this refresh path never errors
 	fetch := func(_ context.Context, _ int) ([]recommendations.RIUtilization, error) {
 		calls.Add(1)
@@ -236,8 +261,10 @@ func TestRIUtilizationCache_SingleflightCollapsesConcurrentRefreshes(t *testing.
 	}
 
 	// Spawn 10 concurrent readers.
+	const readers = 10
+	mark := goroutines.NewMark()
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for i := 0; i < readers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -249,25 +276,39 @@ func TestRIUtilizationCache_SingleflightCollapsesConcurrentRefreshes(t *testing.
 	}
 	wg.Wait()
 
-	// All 10 getOrFetch calls returned the stale copy. The 10
-	// background-refresh goroutines are now racing to enter sf.Do —
-	// under CPU pressure (full test suite with -race) they can lag
-	// behind the getOrFetch returns, and a straggler that arrives
-	// after the first singleflight batch finishes would open a
-	// second batch and bump calls to 2. Give the scheduler enough
-	// runway for all 10 to reach sf.Do (where they'll block on
-	// release) before we unblock the in-flight fetch.
-	time.Sleep(250 * time.Millisecond)
-
-	// Unblock the single in-flight fetch and wait for the collapsed
-	// batch's storePayload to complete so calls.Load() reflects the
-	// final state.
-	close(release)
-	time.Sleep(200 * time.Millisecond)
-
+	// All 10 getOrFetch calls returned the stale copy, each kicking a
+	// background refresh. Releasing the fetch before every refresh has
+	// reached sf.Do would let a straggler open a second batch, so wait until
+	// all 10 are accounted for: each one either called the fetcher, or is
+	// parked in sf.Do on the in-flight call's WaitGroup as a duplicate. No
+	// refresh can start a new fetch while the first is blocked, so once the
+	// sum is 10 the fetch count is final (issue #36: this replaces a 250ms
+	// head-start sleep that could still lose to a slow scheduler).
+	require.Eventually(t, func() bool {
+		return int(calls.Load())+len(sfDuplicatesWaiting(mark)) == readers
+	}, 10*time.Second, time.Millisecond, "the background refreshes never all reached singleflight")
 	if n := calls.Load(); n != 1 {
 		t.Fatalf("expected exactly 1 fetch call under singleflight; got %d", n)
 	}
+
+	// Unblock the single in-flight fetch and wait for the collapsed batch to
+	// store the fresh row and every refresh goroutine to return.
+	releaseFetch()
+	require.Eventually(t, func() bool {
+		latest, ok := store.latest("us-east-1", 30)
+		return ok && len(latest) == 1 && latest[0].ReservedInstanceID == "ri-fresh" &&
+			len(mark.Started("riUtilizationCache).kickBackgroundRefresh")) == 0
+	}, 10*time.Second, time.Millisecond, "the collapsed refresh did not store the fresh row and return")
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("expected exactly 1 fetch call under singleflight after release; got %d", n)
+	}
+}
+
+// sfDuplicatesWaiting returns the background refreshes started after mark
+// that singleflight has registered as duplicates of an in-flight call: they
+// are blocked on that call's WaitGroup inside Group.Do.
+func sfDuplicatesWaiting(mark goroutines.Mark) []goroutines.Goroutine {
+	return mark.Started("riUtilizationCache).kickBackgroundRefresh", "singleflight.(*Group).Do(", "sync.(*WaitGroup).Wait(")
 }
 
 func TestRIUtilizationCache_FetchErrorNotCached(t *testing.T) {

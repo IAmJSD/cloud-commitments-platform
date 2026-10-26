@@ -9,11 +9,17 @@ output "role_name" {
 }
 
 output "policy_arns" {
-  description = "ARNs of all attached managed policies"
+  # One entry per aws_iam_role_policy_attachment in role.tf, keyed by the
+  # attachment's name; outputs_guard_test.go fails if the two drift (#309).
+  # workload_boundary is not here: it is a permissions boundary for the roles
+  # the deploy role creates, not a policy attached to the deploy role.
+  description = "ARNs of all managed policies attached to the deploy role, keyed by attachment name"
   value = {
     networking = aws_iam_policy.networking.arn
     compute    = aws_iam_policy.compute.arn
+    compute_b  = aws_iam_policy.compute_b.arn
     data       = aws_iam_policy.data.arn
+    iam        = aws_iam_policy.iam.arn
     monitoring = aws_iam_policy.monitoring.arn
   }
 }

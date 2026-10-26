@@ -1,0 +1,11 @@
+# Fixture (issue #150): an authoritative folder policy whose policy_data comes
+# from a variable with no in-tree default. Must exit 2.
+
+variable "folder_policy_data" {
+  type = string
+}
+
+resource "google_folder_iam_policy" "folder" {
+  folder      = var.folder_id
+  policy_data = var.folder_policy_data
+}

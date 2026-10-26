@@ -124,9 +124,14 @@ variable "rotation_lambda_vpc_config" {
 }
 
 variable "rds_cluster_id" {
-  description = "RDS cluster ID for rotation (required if enable_secret_rotation is true)"
+  description = "RDS DB instance identifier for rotation (required if enable_secret_rotation is true). It is interpolated into the rotation role's RDS ARN, so it must be a literal identifier, not a pattern."
   type        = string
   default     = null
+
+  validation {
+    condition     = var.rds_cluster_id == null || can(regex("^[A-Za-z][A-Za-z0-9-]{0,62}$", var.rds_cluster_id))
+    error_message = "rds_cluster_id must be null or an RDS identifier (a letter, then up to 62 letters, digits or hyphens); wildcards would widen the rotation role's RDS grant."
+  }
 }
 
 variable "tags" {

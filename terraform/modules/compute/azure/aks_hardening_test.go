@@ -74,9 +74,17 @@ func TestAKSDatabaseSecretKeyRefsExistInSecretData(t *testing.T) {
 		keys[m[1]] = true
 	}
 
+	// A key is either a literal on the secret_key_ref itself or, since the
+	// Deployment and the scheduled-task CronJobs (#893) render their env from
+	// local.app_env, the secret_ref of an app_env entry.
 	refs := regexp.MustCompile(`secret_key_ref\s*\{\s*name\s*=\s*kubernetes_secret\.database\[0\]\.metadata\[0\]\.name\s*key\s*=\s*"([^"]+)"`).FindAllStringSubmatch(content, -1)
+	refs = append(refs, regexp.MustCompile(`\bsecret_ref\s*=\s*"([^"]+)"`).FindAllStringSubmatch(content, -1)...)
 	if len(refs) == 0 {
-		t.Fatal(`found no secret_key_ref pointing at kubernetes_secret.database`)
+		t.Fatal(`found no secret_key_ref or app_env secret_ref naming a kubernetes_secret.database key`)
+	}
+	pw := regexp.MustCompile(`\{\s*name\s*=\s*"DB_PASSWORD_SECRET"\s*,\s*value\s*=\s*null\s*,\s*secret_ref\s*=\s*"([^"]+)"\s*\}`).FindAllStringSubmatch(content, -1)
+	if len(pw) != 1 || pw[0][1] != "password_secret_name" {
+		t.Error(`local.app_env must read DB_PASSWORD_SECRET from the database Secret's "password_secret_name" key (#1115)`)
 	}
 	for _, r := range refs {
 		if !keys[r[1]] {

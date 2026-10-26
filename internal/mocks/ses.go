@@ -2,7 +2,6 @@ package mocks
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/stretchr/testify/mock"
@@ -11,6 +10,9 @@ import (
 // MockSESClient is a mock implementation of SES client.
 type MockSESClient struct { //nolint:revive // exported: doc comment style intentional
 	mock.Mock
+	// reporter fails the registered test on a mistyped .Return value. See
+	// report.go.
+	reporter testReporter
 }
 
 // SendEmail mocks the SendEmail operation.
@@ -21,7 +23,7 @@ func (m *MockSESClient) SendEmail(ctx context.Context, input *sesv2.SendEmailInp
 	}
 	v, ok := args.Get(0).(*sesv2.SendEmailOutput)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *sesv2.SendEmailOutput, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("SendEmail", "*sesv2.SendEmailOutput", args.Get(0))
 	}
 	return v, args.Error(1)
 }

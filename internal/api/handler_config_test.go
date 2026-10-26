@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -827,6 +828,43 @@ func TestHandler_updateServiceConfig_CommitmentOptsAccept(t *testing.T) {
 	assert.Equal(t, "updated", result.Status)
 }
 
+// A Validate error other than ErrNoData must fail the save closed with a 503
+// rather than persist a combo nobody checked (issue #243, A02-022).
+func TestHandler_updateServiceConfig_CommitmentOptsErrorRefusesSave(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockConfigStore)
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "admin-token").Return(&Session{
+		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		Email:  "admin@example.com",
+	}, nil)
+	mockAuth.grantAdmin()
+	mockStore.On("GetServiceConfig", ctx, "aws", "rds").Return(nil, nil)
+
+	handler := &Handler{
+		config: mockStore,
+		auth:   mockAuth,
+		commitmentOpts: &stubCommitmentOpts{
+			validateFn: func(context.Context, string, string, int, string) (bool, error) {
+				return false, errors.New("read commitmentopts store: connection refused")
+			},
+		},
+	}
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer admin-token"},
+		Body:    `{"enabled": true, "term": 3, "payment": "no-upfront", "coverage": 80}`,
+	}
+	result, err := handler.updateServiceConfig(ctx, req, "aws/rds")
+
+	require.Error(t, err)
+	assert.Nil(t, result)
+	ce, ok := IsClientError(err)
+	require.True(t, ok)
+	assert.Equal(t, 503, ce.code)
+	mockStore.AssertNotCalled(t, "SaveServiceConfig", mock.Anything, mock.Anything)
+}
+
 func TestHandler_updateServiceConfig_NoSlash(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -1005,6 +1043,33 @@ func TestHandler_updateConfig_ValidationError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.Contains(t, err.Error(), "validation error")
+}
+
+// TestUpdateConfig_RejectsOutOfRangeRIExchangeLimits covers #120: PUT
+// /api/config must refuse a negative RI-exchange cap or an out-of-range
+// utilization threshold instead of storing it. The principal holds
+// execute:ri-exchange, so the #1765 auto-mode gate never refuses these writes
+// and only validation can.
+func TestUpdateConfig_RejectsOutOfRangeRIExchangeLimits(t *testing.T) {
+	for body, field := range map[string]string{
+		`{"ri_exchange_max_daily_usd": -1}`:           "ri_exchange_max_daily_usd",
+		`{"ri_exchange_max_per_exchange_usd": -250}`:  "ri_exchange_max_per_exchange_usd",
+		`{"ri_exchange_utilization_threshold": 101}`:  "ri_exchange_utilization_threshold",
+		`{"ri_exchange_utilization_threshold": -0.5}`: "ri_exchange_utilization_threshold",
+	} {
+		t.Run(body, func(t *testing.T) {
+			r, store := autoGateSessionRouter(t, autoGateAdminPlusExchange, disarmedConfig())
+
+			_, err := r.Route(context.Background(), "PUT", genericPath, autoGateTokenReq(body))
+
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "expected a client error, got %v", err)
+			assert.Equal(t, 400, ce.code)
+			assert.Contains(t, err.Error(), field)
+			assert.False(t, wrote(store), "a rejected write must not reach the store")
+		})
+	}
 }
 
 func TestHandler_updateConfig_SaveError(t *testing.T) {

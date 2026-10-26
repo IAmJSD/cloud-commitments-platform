@@ -124,7 +124,7 @@ func TestUpdateGroup_AdminAPIKeyActorIsSentinel(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
-	updated := map[string]any{"id": ceilingGroupID}
+	updated := &auth.APIGroup{ID: ceilingGroupID}
 	mockAuth.On("UpdateGroupAPI", ctx, apiKeyAdminUserID, ceilingGroupID, mock.Anything).
 		Return(updated, nil).Once()
 
