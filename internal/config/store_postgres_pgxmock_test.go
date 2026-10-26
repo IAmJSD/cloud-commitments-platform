@@ -2613,9 +2613,10 @@ func TestPGXMock_SavePurchaseHistory_Success(t *testing.T) {
 	ctx := context.Background()
 
 	// 20 columns: original 18 + revocation_window_closes_at (issue #290)
-	// + offering_class (issue #292).
-	mock.ExpectExec("INSERT INTO purchase_history").WithArgs(anyArgsCfg(20)...).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// + offering_class (issue #292). The row reports whether it was stored
+	// with a cloud account (issue #1235).
+	mock.ExpectQuery("INSERT INTO purchase_history").WithArgs(anyArgsCfg(20)...).
+		WillReturnRows(pgxmock.NewRows([]string{"attached"}).AddRow(true))
 
 	err := store.SavePurchaseHistory(ctx, &PurchaseHistoryRecord{
 		AccountID:  "acc-1",
@@ -2625,6 +2626,53 @@ func TestPGXMock_SavePurchaseHistory_Success(t *testing.T) {
 		Service:    "ec2",
 	})
 	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// A nil CloudAccountID is resolved in the INSERT itself from
+// (provider, external_id), and a stored row with no account is still a
+// success: refusing it would lose a bought commitment's history (#621).
+func TestPGXMock_SavePurchaseHistory_ResolvesAccountAndKeepsUnmatchedRow(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+
+	mock.ExpectQuery(`COALESCE\(\$17::uuid, \(\s*SELECT ca\.id FROM cloud_accounts`).WithArgs(anyArgsCfg(20)...).
+		WillReturnRows(pgxmock.NewRows([]string{"attached"}).AddRow(false))
+
+	err := store.SavePurchaseHistory(context.Background(), &PurchaseHistoryRecord{
+		AccountID: "acc-unregistered", PurchaseID: "pur-2", Timestamp: time.Now(), Provider: "aws", Service: "ec2",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// No row back means the dedupe kept an existing row: not an error.
+func TestPGXMock_SavePurchaseHistory_AlreadyRecorded(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+
+	mock.ExpectQuery("INSERT INTO purchase_history").WithArgs(anyArgsCfg(20)...).
+		WillReturnRows(pgxmock.NewRows([]string{"attached"}))
+
+	err := store.SavePurchaseHistory(context.Background(), &PurchaseHistoryRecord{
+		AccountID: "acc-1", PurchaseID: "pur-1", Timestamp: time.Now(), Provider: "aws", Service: "ec2",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPGXMock_SavePurchaseHistory_DBError(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+
+	mock.ExpectQuery("INSERT INTO purchase_history").WithArgs(anyArgsCfg(20)...).
+		WillReturnError(errors.New("fk violation"))
+
+	err := store.SavePurchaseHistory(context.Background(), &PurchaseHistoryRecord{
+		AccountID: "acc-1", PurchaseID: "pur-1", Timestamp: time.Now(), Provider: "aws", Service: "ec2",
+	})
+	require.ErrorContains(t, err, "failed to save purchase history: fk violation")
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // ─── CountPendingExecutionsForAccount / ListPendingExecutionIDsForAccount ───
