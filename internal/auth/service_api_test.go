@@ -198,7 +198,7 @@ func TestService_UpdateUserAPI(t *testing.T) {
 	// toast would fire, but the users.email column was never touched. We
 	// assert that (a) the email-uniqueness lookup happens (proves the
 	// admin path runs the same validation as self-edit), and (b) the
-	// user persisted via store.UpdateUser carries the new email value,
+	// user persisted via store.UpdateUserAdminFields carries the new email value,
 	// NOT just that the call succeeded.
 	t.Run("successful email update persists to store", func(t *testing.T) {
 		mockStore := new(MockStore)
@@ -214,7 +214,7 @@ func TestService_UpdateUserAPI(t *testing.T) {
 		mockStore.On("GetUserByID", ctx, "user-123").Return(existingUser, nil).Once()
 		// Uniqueness check: new email not yet in use.
 		mockStore.On("GetUserByEmail", ctx, "new@example.com").Return(nil, nil).Once()
-		// Capture the User passed to UpdateUser and assert its email is
+		// Capture the User passed to UpdateUserAdminFields and assert its email is
 		// the NEW one. Without the fix, this fails because the User would
 		// still carry old@example.com.
 		mockStore.On("UpdateUserAdminFields", ctx, mock.MatchedBy(func(u *User) bool {
@@ -268,7 +268,7 @@ func TestService_UpdateUserAPI(t *testing.T) {
 	// Regression for issue #89: before this fix, APIUpdateUserRequest had no
 	// Active field at all, so a PUT /api/users/{id} body could never
 	// deactivate a user -- the same field-silently-dropped defect class
-	// issue #892 fixed for Email. We assert the User passed to store.UpdateUser
+	// issue #892 fixed for Email. We assert the User passed to store.UpdateUserAdminFields
 	// carries Active=false, not just that the call succeeds, so the test
 	// would have failed on the pre-fix struct (which drops the field on the
 	// floor and always persists whatever GetUserByID returned, i.e. true).

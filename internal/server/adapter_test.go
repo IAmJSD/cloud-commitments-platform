@@ -363,7 +363,7 @@ func TestAuthServiceAdapter_UpdateUserAPI(t *testing.T) {
 	// (issue #907 self-escalation guard). Actor != target, so the
 	// self-escalation guard skips; the group change does not remove the
 	// Administrators group, so the last-admin guard skips; the store
-	// UpdateUser call must therefore fire. Without that, the test silently
+	// UpdateUserAdminFields call must therefore fire. Without that, the test silently
 	// passes even if the adapter stopped forwarding actorUserID, which is
 	// exactly the regression CR flagged.
 	_, err := adapter.UpdateUserAPI(ctx, "actor-1", "user-1", auth.APIUpdateUserRequest{

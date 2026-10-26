@@ -11,7 +11,6 @@ type StoreInterface interface {
 	GetUserByID(ctx context.Context, userID string) (*User, error)
 	GetUserByEmail(ctx context.Context, email string) (*User, error)
 	CreateUser(ctx context.Context, user *User) error
-	UpdateUser(ctx context.Context, user *User) error
 	UpdateUserAdminFields(ctx context.Context, user *User, readEmail string, readGroupIDs []string, readActive bool) error
 	UpdateUserCredentials(ctx context.Context, user *User, readEmail, readPasswordHash string) error
 	SetPasswordResetToken(ctx context.Context, user *User, readExpiry *time.Time) error

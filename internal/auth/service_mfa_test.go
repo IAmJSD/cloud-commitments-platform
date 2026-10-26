@@ -236,7 +236,7 @@ func TestMFASetup_WrongPassword(t *testing.T) {
 	_, err := service.MFASetup(ctx, user.ID, "WrongPassword!@#")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid password")
-	mockStore.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.Anything)
+	mockStore.AssertNotCalled(t, "SetPendingMFASecret", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestMFAEnable_HappyPath(t *testing.T) {
@@ -392,7 +392,7 @@ func TestMFADisable_WrongPassword(t *testing.T) {
 	err := service.MFADisable(ctx, user.ID, "wrong", "000000")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid password")
-	mockStore.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.Anything)
+	mockStore.AssertNotCalled(t, "DisableMFA", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
 
 func TestMFADisable_IdempotentWhenAlreadyDisabled(t *testing.T) {
