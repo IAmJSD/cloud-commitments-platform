@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const commitmentTypeVocabularyVersion = 145
+const commitmentTypeVocabularyVersion = 141
 
 // insertTypedSnapshot inserts one savings_snapshots row and returns the error
 // so callers can assert CHECK rejections.
@@ -42,7 +42,7 @@ func commitmentTypeOf(ctx context.Context, t *testing.T, pool *pgxpool.Pool, id 
 	return v
 }
 
-// TestMigration_SavingsSnapshotsCommitmentTypeVocabulary covers 000145 (#339,
+// TestMigration_SavingsSnapshotsCommitmentTypeVocabulary covers 000141 (#339,
 // A06-019): the CHECK admits the pkg/common vocabulary (plus the legacy
 // literals), existing rows are relabeled from (provider, service) in every
 // partition, and down restores the two-value CHECK.

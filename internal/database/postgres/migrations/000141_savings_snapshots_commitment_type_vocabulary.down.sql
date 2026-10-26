@@ -1,4 +1,4 @@
--- Revert 000145 (issue #339): restore the two-value commitment_type CHECK.
+-- Revert 000141 (issue #339): restore the two-value commitment_type CHECK.
 --
 -- Rows are mapped back to the only labels the old collector could emit:
 -- savings-plan becomes 'SavingsPlan' and everything else 'RI'. This is lossy on

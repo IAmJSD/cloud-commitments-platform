@@ -8,7 +8,7 @@ import (
 )
 
 // Legacy commitment_type literals written before #339. The savings_snapshots
-// CHECK still admits them (migration 000145) so a not-yet-replaced replica can
+// CHECK still admits them (migration 000141) so a not-yet-replaced replica can
 // keep writing during a rolling deploy; the collector never emits them.
 const (
 	legacyCommitmentRI          = "RI"
@@ -16,7 +16,7 @@ const (
 )
 
 // allowedCommitmentTypes mirrors the savings_snapshots valid_commitment_type
-// CHECK constraint (migration 000145): the pkg/common vocabulary plus the two
+// CHECK constraint (migration 000141): the pkg/common vocabulary plus the two
 // legacy literals.
 var allowedCommitmentTypes = map[string]bool{
 	string(common.CommitmentReservedInstance): true,
