@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/stretchr/testify/assert"
@@ -27,8 +29,39 @@ const (
 	riRecPending riStatusRecord = iota
 	riRecNoToken
 	riRecMissing
+	// riRecMissingNotFound is missing as PostgresStore reports it: a wrapped
+	// config.ErrNotFound instead of a nil record (issue #601).
+	riRecMissingNotFound
 	riRecAlreadyProcessed
+	// riRecExpired is pending but past its expires_at. Its transition is
+	// mocked to succeed, so a 410 proves the token check answered before
+	// any write (the real CAS would refuse too; see riRecTransitionExpired).
+	riRecExpired
+	// riRecTransitionExpired expires between the token check and the
+	// transition: the store reports ErrRIExchangeExpired, as Postgres does.
+	riRecTransitionExpired
+	// riRecTransitionConflict loses the transition to a concurrent approve or
+	// reject: the store reports ErrRIExchangeNotInExpectedStatus.
+	riRecTransitionConflict
+	// riRecTransitionFails hits a store error unrelated to the record state.
+	riRecTransitionFails
 )
+
+// riStatusTransition returns the mocked TransitionRIExchangeStatus result for rec.
+func riStatusTransition(rec riStatusRecord) (*config.RIExchangeRecord, error) {
+	switch rec {
+	case riRecAlreadyProcessed:
+		return nil, nil
+	case riRecTransitionExpired:
+		return nil, fmt.Errorf("%w: %s", config.ErrRIExchangeExpired, riStatusID)
+	case riRecTransitionConflict:
+		return nil, fmt.Errorf("%w: expected status %q but current status is %q", config.ErrRIExchangeNotInExpectedStatus, "pending", "processing")
+	case riRecTransitionFails:
+		return nil, errors.New("connection reset")
+	default:
+		return &config.RIExchangeRecord{ID: riStatusID, Status: "processing"}, nil
+	}
+}
 
 // riStatusOpts tweaks the fixture for the less common cases.
 type riStatusOpts struct {
@@ -42,13 +75,17 @@ type riStatusOpts struct {
 
 func riStatusHandler(rec riStatusRecord, o riStatusOpts) *Handler {
 	var record *config.RIExchangeRecord
-	if rec != riRecMissing {
+	if rec != riRecMissing && rec != riRecMissingNotFound {
 		record = &config.RIExchangeRecord{
 			ID: riStatusID, Status: "pending", SourceRIIDs: []string{"ri-1"}, PaymentDue: "0",
 			ApprovalToken: config.HashApprovalToken(riStatusRawToken),
 		}
 		if rec == riRecNoToken {
 			record.ApprovalToken = ""
+		}
+		if rec == riRecExpired {
+			past := time.Now().Add(-time.Hour)
+			record.ExpiresAt = &past
 		}
 		if (o.fourEyes && !o.noCreator) || o.approveOwn {
 			creator := "admin-uuid"
@@ -59,17 +96,18 @@ func riStatusHandler(rec riStatusRecord, o riStatusOpts) *Handler {
 		}
 	}
 	store := new(MockConfigStore)
-	if o.dbError {
+	switch {
+	case o.dbError:
 		store.On("GetRIExchangeRecord", mock.Anything, riStatusID).Return(nil, errors.New("db down")).Maybe()
-	} else {
+	case rec == riRecMissingNotFound:
+		store.On("GetRIExchangeRecord", mock.Anything, riStatusID).
+			Return(nil, fmt.Errorf("ri exchange record %s: %w", riStatusID, config.ErrNotFound)).Maybe()
+	default:
 		store.On("GetRIExchangeRecord", mock.Anything, riStatusID).Return(record, nil).Maybe()
 	}
-	var transitioned *config.RIExchangeRecord
-	if rec != riRecAlreadyProcessed {
-		transitioned = &config.RIExchangeRecord{ID: riStatusID, Status: "processing"}
-	}
+	transitioned, transitionErr := riStatusTransition(rec)
 	store.On("TransitionRIExchangeStatus", mock.Anything, riStatusID, "pending", mock.Anything, mock.Anything).
-		Return(transitioned, nil).Maybe()
+		Return(transitioned, transitionErr).Maybe()
 	store.On("ReserveApprovedRIExchange", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return("500.000000", nil).Maybe()
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{RequireDifferentApprover: o.fourEyes}, nil).Maybe()
 	store.On("FailRIExchange", mock.Anything, riStatusID, mock.Anything).Return(nil).Maybe()
@@ -178,7 +216,7 @@ func TestHandleRequest_ApproveRIExchange_StatusCodes(t *testing.T) {
 		{name: "403 session without CSRF and no token", rec: riRecPending, sess: riSessNoCSRF, want: 403, wantError: "CSRF validation failed"},
 		{name: "403 session without CSRF does not fall through to a valid token", rec: riRecPending, sess: riSessNoCSRF, token: riStatusRawToken, want: 403, wantError: "CSRF validation failed"},
 		{name: "403 wrong token without session", rec: riRecPending, sess: riSessNone, token: "wrong", want: 403, wantError: "invalid approval token"},
-		{name: "403 record without approval token", rec: riRecNoToken, sess: riSessNone, token: riStatusRawToken, want: 403, wantError: "this exchange record does not support approval"},
+		{name: "403 record without approval token", rec: riRecNoToken, sess: riSessNone, token: riStatusRawToken, want: 403, wantError: "invalid approval token"},
 		{name: "400 invalid UUID", rec: riRecPending, sess: riSessNone, token: riStatusRawToken, id: "not-a-uuid", want: 400, wantError: "invalid ID format: must be a valid UUID"},
 		{name: "403 session without approve right and no token", rec: riRecPending, sess: riSessCSRF, opts: riStatusOpts{noApprove: true}, want: 403, wantError: "permission denied: requires approve-any or approve-own on purchases"},
 		{name: "403 4-eyes creator cannot approve own exchange", rec: riRecPending, sess: riSessCSRF, opts: riStatusOpts{fourEyes: true}, want: 403, wantError: "approval declined: 4-eyes mode requires a different approver than the requester"},
@@ -189,10 +227,24 @@ func TestHandleRequest_ApproveRIExchange_StatusCodes(t *testing.T) {
 		{name: "403 body token is not read", rec: riRecPending, sess: riSessNone, body: `{"token":"` + riStatusRawToken + `"}`, want: 403, wantError: "CSRF validation failed"},
 		{name: "429 rate limited", rec: riRecPending, sess: riSessNone, token: riStatusRawToken, opts: riStatusOpts{rateLimited: true}, want: 429, wantError: "too many requests, please try again later"},
 		{name: "500 record lookup fails", rec: riRecPending, sess: riSessNone, token: riStatusRawToken, opts: riStatusOpts{dbError: true}, want: 500},
-		{name: "404 missing record with token", rec: riRecMissing, sess: riSessNone, token: riStatusRawToken, want: 404, wantError: "exchange record not found"},
-		{name: "404 missing record with wrong token", rec: riRecMissing, sess: riSessNone, token: "wrong", want: 404, wantError: "exchange record not found"},
+		// Issue #601: in token mode a missing record answers like a wrong
+		// token, so the route does not reveal which ids exist.
+		{name: "403 missing record with token", rec: riRecMissing, sess: riSessNone, token: riStatusRawToken, want: 403, wantError: "invalid approval token"},
+		{name: "403 missing record with wrong token", rec: riRecMissing, sess: riSessNone, token: "wrong", want: 403, wantError: "invalid approval token"},
+		{name: "403 missing record reported as ErrNotFound with token", rec: riRecMissingNotFound, sess: riSessNone, token: riStatusRawToken, want: 403, wantError: "invalid approval token"},
 		{name: "404 missing record with session", rec: riRecMissing, sess: riSessCSRF, want: 404, wantError: "exchange record not found"},
-		{name: "409 token approve of an exchange no longer pending", rec: riRecAlreadyProcessed, sess: riSessNone, token: riStatusRawToken, want: 409, wantError: "exchange already processed, expired, or was canceled by a newer analysis run"},
+		{name: "404 missing record reported as ErrNotFound with session", rec: riRecMissingNotFound, sess: riSessCSRF, want: 404, wantError: "exchange record not found"},
+		{name: "409 token approve of an exchange no longer pending", rec: riRecAlreadyProcessed, sess: riSessNone, token: riStatusRawToken, want: 409, wantError: "exchange already processed or was canceled by a newer analysis run"},
+		// Issue #587: the same invalid/expired/wrong-status mapping as the
+		// purchase approve, cancel and revoke links (403/410/409).
+		{name: "410 token approve of an expired exchange", rec: riRecExpired, sess: riSessNone, token: riStatusRawToken, want: 410, wantError: "exchange has expired"},
+		{name: "403 wrong token on an expired exchange does not reveal the expiry", rec: riRecExpired, sess: riSessNone, token: "wrong", want: 403, wantError: "invalid approval token"},
+		{name: "410 expired exchange answers before the 4-eyes session check", rec: riRecExpired, sess: riSessNone, token: riStatusRawToken, opts: riStatusOpts{fourEyes: true, noCreator: true}, want: 410, wantError: "exchange has expired"},
+		{name: "410 token approve when the exchange expires before the transition", rec: riRecTransitionExpired, sess: riSessNone, token: riStatusRawToken, want: 410, wantError: "exchange has expired"},
+		{name: "409 token approve loses the transition to a concurrent writer", rec: riRecTransitionConflict, sess: riSessNone, token: riStatusRawToken, want: 409, wantError: "exchange already processed or was canceled by a newer analysis run"},
+		{name: "500 token approve transition store failure", rec: riRecTransitionFails, sess: riSessNone, token: riStatusRawToken, want: 500},
+		{name: "410 session approve when the exchange expires before the transition", rec: riRecTransitionExpired, sess: riSessCSRF, want: 410, wantError: "exchange has expired"},
+		{name: "409 session approve loses the transition to a concurrent writer", rec: riRecTransitionConflict, sess: riSessCSRF, want: 409, wantError: "exchange already processed or was canceled by a newer analysis run"},
 	})
 }
 
@@ -209,9 +261,72 @@ func TestHandleRequest_RejectRIExchange_StatusCodes(t *testing.T) {
 		{name: "429 rate limited", rec: riRecPending, sess: riSessNone, token: riStatusRawToken, opts: riStatusOpts{rateLimited: true}, want: 429, wantError: "too many requests, please try again later"},
 		{name: "500 record lookup fails", rec: riRecPending, sess: riSessNone, token: riStatusRawToken, opts: riStatusOpts{dbError: true}, want: 500},
 		{name: "403 wrong token", rec: riRecPending, sess: riSessNone, token: "wrong", want: 403, wantError: "invalid rejection token"},
-		{name: "403 record without approval token", rec: riRecNoToken, sess: riSessNone, token: riStatusRawToken, want: 403, wantError: "this exchange record does not support rejection"},
-		{name: "404 missing record with token", rec: riRecMissing, sess: riSessNone, token: riStatusRawToken, want: 404, wantError: "exchange record not found"},
-		{name: "404 missing record with wrong token", rec: riRecMissing, sess: riSessNone, token: "wrong", want: 404, wantError: "exchange record not found"},
-		{name: "409 exchange no longer pending", rec: riRecAlreadyProcessed, sess: riSessNone, token: riStatusRawToken, want: 409, wantError: "exchange already processed, expired, or was canceled"},
+		{name: "403 record without approval token", rec: riRecNoToken, sess: riSessNone, token: riStatusRawToken, want: 403, wantError: "invalid rejection token"},
+		// Issue #601: a missing record answers like a wrong token.
+		{name: "403 missing record with token", rec: riRecMissing, sess: riSessNone, token: riStatusRawToken, want: 403, wantError: "invalid rejection token"},
+		{name: "403 missing record with wrong token", rec: riRecMissing, sess: riSessNone, token: "wrong", want: 403, wantError: "invalid rejection token"},
+		{name: "403 missing record reported as ErrNotFound with token", rec: riRecMissingNotFound, sess: riSessNone, token: riStatusRawToken, want: 403, wantError: "invalid rejection token"},
+		{name: "409 exchange no longer pending", rec: riRecAlreadyProcessed, sess: riSessNone, token: riStatusRawToken, want: 409, wantError: "exchange already processed or was canceled"},
+		// Issue #587: 403 invalid, 410 expired, 409 wrong status.
+		{name: "410 expired exchange", rec: riRecExpired, sess: riSessNone, token: riStatusRawToken, want: 410, wantError: "exchange has expired"},
+		{name: "403 wrong token on an expired exchange does not reveal the expiry", rec: riRecExpired, sess: riSessNone, token: "wrong", want: 403, wantError: "invalid rejection token"},
+		{name: "410 exchange expires before the transition", rec: riRecTransitionExpired, sess: riSessNone, token: riStatusRawToken, want: 410, wantError: "exchange has expired"},
+		{name: "409 loses the transition to a concurrent writer", rec: riRecTransitionConflict, sess: riSessNone, token: riStatusRawToken, want: 409, wantError: "exchange already processed or was canceled"},
+		{name: "500 transition store failure", rec: riRecTransitionFails, sess: riSessNone, token: riStatusRawToken, want: 500},
 	})
+}
+
+// TestHandleRequest_RIExchangeTokenRoutes_MissingAnswersLikeWrongToken is the
+// issue #601 regression: a caller that does not hold the emailed token gets
+// the same status, headers and body for a missing exchange id as for an
+// existing one, so approve and reject cannot be used to learn which ids
+// exist. A 401 before the lookup (the purchase routes' fix, #435) does not
+// fit here: the token alone authorizes these routes, with no session.
+func TestHandleRequest_RIExchangeTokenRoutes_MissingAnswersLikeWrongToken(t *testing.T) {
+	type probe struct {
+		name  string
+		rec   riStatusRecord
+		token string
+	}
+	// The baseline is a missing record as the mocks report it; every other
+	// probe must answer exactly like it.
+	baseline := probe{"missing record", riRecMissing, "wrong"}
+	probes := []probe{
+		{"missing record reported as ErrNotFound", riRecMissingNotFound, "wrong"},
+		{"missing record reported as ErrNotFound with the real token's value", riRecMissingNotFound, riStatusRawToken},
+		{"pending record with a wrong token", riRecPending, "wrong"},
+		{"record without a token", riRecNoToken, "wrong"},
+		{"expired record with a wrong token", riRecExpired, "wrong"},
+	}
+	callers := []struct {
+		name string
+		sess riStatusSession
+		opts riStatusOpts
+	}{
+		{"no session", riSessNone, riStatusOpts{}},
+		{"invalid session", riSessInvalid, riStatusOpts{}},
+		{"session without approve permission", riSessCSRF, riStatusOpts{noApprove: true}},
+	}
+	for _, action := range []string{"approve", "reject"} {
+		for _, caller := range callers {
+			do := func(p probe) *events.LambdaFunctionURLResponse {
+				resp, err := riStatusHandler(p.rec, caller.opts).HandleRequest(context.Background(), riStatusRequest(action, caller.sess, p.token))
+				require.NoError(t, err)
+				return resp
+			}
+			want := do(baseline)
+			t.Run(action+"/"+caller.name+"/answers 403 invalid token", func(t *testing.T) {
+				assert.Equal(t, 403, want.StatusCode, want.Body)
+				assert.Contains(t, want.Body, "invalid "+map[string]string{"approve": "approval", "reject": "rejection"}[action]+" token")
+			})
+			for _, p := range probes {
+				t.Run(action+"/"+caller.name+"/"+p.name, func(t *testing.T) {
+					got := do(p)
+					assert.Equal(t, want.StatusCode, got.StatusCode, got.Body)
+					assert.Equal(t, want.Body, got.Body)
+					assert.Equal(t, want.Headers, got.Headers)
+				})
+			}
+		}
+	}
 }

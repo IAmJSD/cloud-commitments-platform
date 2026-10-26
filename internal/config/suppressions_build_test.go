@@ -152,3 +152,183 @@ func TestPurchaseSuppression_AppliesTo(t *testing.T) {
 	assert.True(t, legacy.AppliesTo(&SuppressionVariant{"us-east-1b", "Windows", "dedicated"}), "a legacy row is a wildcard")
 	assert.True(t, legacy.AppliesTo(nil))
 }
+
+// TestBuildSuppressions_LegacyEC2WithoutDetailsIsWildcard: an EC2 rec saved
+// before Details existed has an unknown platform and tenancy, so it must
+// suppress every variant (issue #1232). Non-EC2 and fully detailed recs keep
+// their known variant.
+func TestBuildSuppressions_LegacyEC2WithoutDetailsIsWildcard(t *testing.T) {
+	base := RecommendationRecord{Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large", Count: 1, AvailabilityZone: "us-east-1a"}
+	for name, details := range map[string][]byte{"nil": nil, "empty": {}, "null": []byte(`null`), "no keys": []byte(`{}`)} {
+		t.Run(name, func(t *testing.T) {
+			rec := base
+			rec.Details = details
+			sups := BuildSuppressions([]RecommendationRecord{rec}, "exec-1", &GlobalConfig{}, time.Now())
+			require.Len(t, sups, 1)
+			assert.Nil(t, sups[0].Variant)
+			assert.True(t, sups[0].AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}))
+		})
+	}
+
+	full := base
+	full.Details = []byte(`{"platform":"Linux/UNIX","tenancy":"default"}`)
+	sups := BuildSuppressions([]RecommendationRecord{full}, "exec-1", &GlobalConfig{}, time.Now())
+	require.Len(t, sups, 1)
+	assert.Equal(t, &SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}, sups[0].Variant)
+}
+
+// TestBuildSuppressions_ComputeSlugEC2: AWS EC2 recs under the canonical
+// "compute" slug follow the same wildcard rule as "ec2"; a rec with only a
+// platform or only a tenancy keeps its narrow variant.
+func TestBuildSuppressions_ComputeSlugEC2(t *testing.T) {
+	base := RecommendationRecord{Provider: "aws", Service: "compute", Region: "us-east-1", ResourceType: "m5.large", Count: 1, AvailabilityZone: "us-east-1a"}
+	sups := BuildSuppressions([]RecommendationRecord{base}, "exec-1", &GlobalConfig{}, time.Now())
+	require.Len(t, sups, 1)
+	assert.Nil(t, sups[0].Variant)
+	assert.True(t, sups[0].AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}))
+
+	for name, tc := range map[string]struct {
+		details []byte
+		want    SuppressionVariant
+	}{
+		"platform only": {[]byte(`{"platform":"Linux/UNIX"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", ""}},
+		"tenancy only":  {[]byte(`{"tenancy":"default"}`), SuppressionVariant{"us-east-1a", "", "default"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := base
+			rec.Details = tc.details
+			sups := BuildSuppressions([]RecommendationRecord{rec}, "exec-1", &GlobalConfig{}, time.Now())
+			require.Len(t, sups, 1)
+			assert.Equal(t, &tc.want, sups[0].Variant)
+		})
+	}
+}
+
+func TestCanonicalSuppressionService(t *testing.T) {
+	cases := []struct{ provider, service, want string }{
+		{"aws", "ec2", "compute"},
+		{"aws", "rds", "relational-db"},
+		{"aws", "elasticache", "cache"},
+		{"aws", "opensearch", "search"},
+		{"aws", "redshift", "data-warehouse"},
+		{"aws", "compute", "compute"},
+		{"aws", "relational-db", "relational-db"},
+		{"aws", "cache", "cache"},
+		{"aws", "search", "search"},
+		{"aws", "data-warehouse", "data-warehouse"},
+		{"aws", "memorydb", "memorydb"},
+		{"azure", "compute", "compute"},
+		{"azure", "ec2", "ec2"},
+		{"azure", "rds", "rds"},
+		{"gcp", "compute", "compute"},
+		{"gcp", "redshift", "redshift"},
+		{"gcp", "elasticache", "elasticache"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.provider+"/"+tc.service, func(t *testing.T) {
+			got := CanonicalSuppressionService(tc.provider, tc.service)
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, got, CanonicalSuppressionService(tc.provider, got), "idempotent")
+		})
+	}
+}
+
+// Issue #1420: a legacy "rds" rec and a canonical "relational-db" rec for the
+// same tuple merge into one canonical suppression row with the summed count.
+func TestBuildSuppressions_MergesRDSAliases(t *testing.T) {
+	gp := &GlobalConfig{GracePeriodDays: map[string]int{"aws": 7}}
+	sups := BuildSuppressions([]RecommendationRecord{
+		{Provider: "aws", Service: "rds", Region: "r", ResourceType: "db.r5.large", Count: 3},
+		{Provider: "aws", Service: "relational-db", Region: "r", ResourceType: "db.r5.large", Count: 2},
+	}, "exec-1", gp, time.Now())
+	require.Len(t, sups, 1)
+	assert.Equal(t, "relational-db", sups[0].Service)
+	assert.Equal(t, 5, sups[0].SuppressedCount)
+}
+
+// Issue #1412: AWS "ec2" and "compute" recs in one request share a bucket and
+// are written under the canonical slug; Azure compute is untouched.
+func TestBuildSuppressions_CanonicalisesAWSEC2Slug(t *testing.T) {
+	now := time.Date(2026, 4, 24, 0, 0, 0, 0, time.UTC)
+	gp := &GlobalConfig{GracePeriodDays: map[string]int{"aws": 7, "azure": 7}}
+	sups := BuildSuppressions([]RecommendationRecord{
+		{Provider: "aws", Service: "ec2", Region: "r", ResourceType: "m5.large", Count: 3},
+		{Provider: "aws", Service: "compute", Region: "r", ResourceType: "m5.large", Count: 2},
+		{Provider: "azure", Service: "compute", Region: "r", ResourceType: "D2", Count: 1},
+	}, "exec-1", gp, now)
+	require.Len(t, sups, 2)
+	assert.Equal(t, "compute", sups[0].Service)
+	assert.Equal(t, 5, sups[0].SuppressedCount)
+	assert.Equal(t, "compute", sups[1].Service)
+	assert.Equal(t, "azure", sups[1].Provider)
+}
+
+// TestBuildSuppressions_LegacyShapesCanonicalised pins the two legacy EC2
+// shapes of issue #1232: Details tenancy "shared" (pre-2026-05-20) is the same
+// capacity as "default", and an AZ stored only in Details is used when the AZ
+// field is empty (the field wins when both are set).
+func TestBuildSuppressions_LegacyShapesCanonicalised(t *testing.T) {
+	mk := func(service, field, details string) RecommendationRecord {
+		return RecommendationRecord{Provider: "aws", Service: service, Region: "us-east-1", ResourceType: "m5.large",
+			Count: 1, AvailabilityZone: field, Details: []byte(details)}
+	}
+	for name, tc := range map[string]struct {
+		rec  RecommendationRecord
+		want SuppressionVariant
+	}{
+		"legacy shared tenancy":   {mk("ec2", "us-east-1a", `{"platform":"Linux/UNIX","tenancy":"shared"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}},
+		"compute slug shared":     {mk("compute", "", `{"platform":"Linux/UNIX","tenancy":"shared"}`), SuppressionVariant{"", "Linux/UNIX", "default"}},
+		"AZ only in details":      {mk("ec2", "", `{"availability_zone":"us-east-1a","platform":"Linux/UNIX","tenancy":"default"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}},
+		"field wins over details": {mk("ec2", "us-east-1b", `{"availability_zone":"us-east-1a","platform":"Linux/UNIX","tenancy":"default"}`), SuppressionVariant{"us-east-1b", "Linux/UNIX", "default"}},
+		"modern rec unchanged":    {mk("ec2", "us-east-1a", `{"availability_zone":"us-east-1a","platform":"Linux/UNIX","tenancy":"dedicated"}`), SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated"}},
+		"non-EC2 untouched":       {RecommendationRecord{Provider: "aws", Service: "rds", Region: "r", ResourceType: "db", Count: 1, Details: []byte(`{"availability_zone":"us-east-1a","tenancy":"shared"}`)}, SuppressionVariant{"", "", "shared"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sups := BuildSuppressions([]RecommendationRecord{tc.rec}, "exec-1", &GlobalConfig{}, time.Now())
+			require.Len(t, sups, 1)
+			assert.Equal(t, &tc.want, sups[0].Variant)
+		})
+	}
+}
+
+func TestPurchaseSuppression_AppliesTo_LegacySharedTenancy(t *testing.T) {
+	def := &SuppressionVariant{"us-east-1a", "Linux/UNIX", "default"}
+	variant := &SuppressionVariant{"us-east-1a", "Linux/UNIX", "shared"}
+	for name, tc := range map[string]struct {
+		provider, service string
+		want              bool
+	}{
+		"aws ec2 stored-side shared": {"aws", "ec2", true},
+		"aws compute slug":           {"aws", "compute", true},
+		"aws rds untouched":          {"aws", "rds", false},
+		"azure compute untouched":    {"azure", "compute", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stored := PurchaseSuppression{Provider: tc.provider, Service: tc.service, Variant: variant}
+			assert.Equal(t, tc.want, stored.AppliesTo(def))
+		})
+	}
+	ec2 := PurchaseSuppression{Provider: "aws", Service: "ec2", Variant: variant}
+	assert.False(t, ec2.AppliesTo(&SuppressionVariant{"us-east-1a", "Linux/UNIX", "dedicated"}))
+}
+
+func TestRecommendationRecord_SuppressionVariant_DetailsAZ(t *testing.T) {
+	for name, tc := range map[string]struct{ details, want string }{
+		"padded AZ is trimmed":   {`{"availability_zone":" us-east-1a "}`, "us-east-1a"},
+		"non-string AZ is empty": {`{"availability_zone":5}`, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := RecommendationRecord{Provider: "aws", Service: "ec2", Details: []byte(tc.details)}
+			v, err := rec.SuppressionVariant()
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, v.AvailabilityZone)
+		})
+	}
+}
+
+func TestCanonicalSuppressionTenancy(t *testing.T) {
+	assert.Equal(t, "default", canonicalSuppressionTenancy(" Shared "))
+	assert.Equal(t, "default", canonicalSuppressionTenancy("shared"))
+	assert.Equal(t, "Dedicated", canonicalSuppressionTenancy("Dedicated"))
+	assert.Equal(t, "default", canonicalSuppressionTenancy("default"))
+}

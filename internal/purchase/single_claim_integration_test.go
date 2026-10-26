@@ -209,3 +209,52 @@ func TestSingleClaim_ExecutorArrivingMidApproveCannotBuyAgain(t *testing.T) {
 	assert.Equal(t, 1, f.purchaseCount())
 	assert.Equal(t, "completed", rowStatus(ctx, t, f, row.ExecutionID).Status)
 }
+
+// Issue #532 item 4: the stranded-approval re-drive claims only "approved"
+// rows, and every synchronous run (approve, direct execute, run-now) holds its
+// row "running" for the whole provider call, so a re-drive that read the row
+// as approved (a stale listing) loses the claim mid-run and buys nothing.
+func TestSingleClaim_StrandedRedriveMidSyncRunCannotBuyAgain(t *testing.T) {
+	ctx := context.Background()
+	f := newRampStepFixture(ctx, t)
+	runs := map[string]func(id string) error{
+		"approve": func(id string) error {
+			_, _, err := f.manager.ApproveAndExecute(ctx, id, "a@example.invalid", nil, nil)
+			return err
+		},
+		"direct execute": func(id string) error {
+			_, _, err := f.manager.DirectExecute(ctx, id, "a@example.invalid", nil, nil)
+			return err
+		},
+		"run now": func(id string) error {
+			_, _, err := f.manager.RunPlannedPurchaseNow(ctx, id, "a@example.invalid", nil, nil)
+			return err
+		},
+	}
+	for name, run := range runs {
+		t.Run(name, func(t *testing.T) {
+			row := claimRaceRow(ctx, t, f, "notified")
+			before := f.purchaseCount()
+			var fired atomic.Bool
+			var midStatus string
+			var redriven bool
+			var redriveErr error
+			f.onPurchase = func() {
+				if fired.Swap(true) {
+					return
+				}
+				midStatus = rowStatus(ctx, t, f, row.ExecutionID).Status
+				c := rowStatusCopy(row)
+				c.Status = "approved"
+				redriven, redriveErr = f.manager.claimAndRedrive(ctx, c)
+			}
+			t.Cleanup(func() { f.onPurchase = nil })
+			require.NoError(t, run(row.ExecutionID))
+			assert.Equal(t, "running", midStatus, "the sync run holds the row running during the provider call")
+			require.NoError(t, redriveErr)
+			assert.False(t, redriven, "the re-drive must lose the claim")
+			assert.Equal(t, 1, f.purchaseCount()-before)
+			assert.Equal(t, "completed", rowStatus(ctx, t, f, row.ExecutionID).Status)
+		})
+	}
+}

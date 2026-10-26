@@ -99,9 +99,15 @@ func reshapeRequest() *events.LambdaFunctionURLRequest {
 // the read-side mapping logic.
 func seedRecsForRegion(ctx context.Context, t *testing.T, store *config.PostgresStore, recs []config.RecommendationRecord) {
 	t.Helper()
-	require.NoError(t, store.ReplaceRecommendations(ctx, time.Now(), recs),
+	require.NoError(t, store.UpsertRecommendations(ctx, time.Now(), recs, nil),
 		"seeding recommendations into the test container failed")
 }
+
+// reshapeIntegrationFixedPrice gives fixture RIs a real price (an unpriced
+// RI is excluded, issue #1188) small enough that the dollar-units gate keeps
+// the seeded cross-family recs: 100 over 1y is ~8.33/month, and NF 8 x 8.33
+// stays under the c5.large / r5.large recs' NF 4 x 50 and NF 4 x 60.
+const reshapeIntegrationFixedPrice = 100
 
 // TestReshapeRecommendations_Integration_EndToEnd exercises the full
 // path: auth → cache cold-fetch → AnalyzeReshapingWithRecs (recs-driven
@@ -128,8 +134,9 @@ func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 
 	ec2Fake := &fakeReshapeEC2{
 		instances: []ec2svc.ConvertibleRI{
-			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, Duration: 31536000},
+			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, Duration: 31536000, FixedPrice: reshapeIntegrationFixedPrice},
 			{ReservedInstanceID: "ri-noterm", InstanceType: "m5.xlarge", InstanceCount: 1},
+			{ReservedInstanceID: "ri-unpriced", InstanceType: "m5.xlarge", InstanceCount: 1, Duration: 31536000},
 		},
 	}
 	recsFake := &fakeReshapeRecs{
@@ -147,8 +154,11 @@ func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 	rec := body.Recommendations[0]
 	require.Equal(t, "ri-1", rec.SourceRIID)
 	require.Equal(t, "m5.large", rec.TargetInstanceType)
-	require.Len(t, body.ExcludedRIs, 1, "an RI with no term length must be reported, not silently skipped")
+	require.Len(t, body.ExcludedRIs, 2, "RIs with no term length or no pricing must be reported, not silently skipped")
 	require.Equal(t, "ri-noterm", body.ExcludedRIs[0].RIID)
+	require.Contains(t, body.ExcludedRIs[0].Reason, "term length")
+	require.Equal(t, "ri-unpriced", body.ExcludedRIs[1].RIID)
+	require.Contains(t, body.ExcludedRIs[1].Reason, "no pricing")
 
 	// Same-family m5 stripped; c5 + r5 surface ascending by cost.
 	require.Len(t, rec.AlternativeTargets, 2,
@@ -192,7 +202,7 @@ func TestReshapeRecommendations_Integration_SecondCallHitsCache(t *testing.T) {
 
 	ec2Fake := &fakeReshapeEC2{
 		instances: []ec2svc.ConvertibleRI{
-			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, Duration: 31536000},
+			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, Duration: 31536000, FixedPrice: reshapeIntegrationFixedPrice},
 		},
 	}
 	recsFake := &fakeReshapeRecs{
@@ -227,7 +237,7 @@ func TestReshapeRecommendations_Integration_NoCachedRecsReturnsPrimaryOnly(t *te
 
 	ec2Fake := &fakeReshapeEC2{
 		instances: []ec2svc.ConvertibleRI{
-			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, Duration: 31536000},
+			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, Duration: 31536000, FixedPrice: reshapeIntegrationFixedPrice},
 		},
 	}
 	recsFake := &fakeReshapeRecs{
@@ -304,7 +314,7 @@ func TestReshapeRecommendations_Integration_ScopedAccount_FiltersToAccount(t *te
 	// scope filter is honored, only Tenant A's c5.large surfaces;
 	// otherwise both alternatives leak through (the regression we're
 	// guarding against).
-	require.NoError(t, store.ReplaceRecommendations(ctx, time.Now(), []config.RecommendationRecord{
+	require.NoError(t, store.UpsertRecommendations(ctx, time.Now(), []config.RecommendationRecord{
 		{
 			Provider:       "aws",
 			Service:        "ec2",
@@ -323,11 +333,11 @@ func TestReshapeRecommendations_Integration_ScopedAccount_FiltersToAccount(t *te
 			MonthlyCost:    aws.Float64(60),
 			CloudAccountID: &accountBID,
 		},
-	}), "seeding scoped recommendations failed")
+	}, nil), "seeding scoped recommendations failed")
 
 	ec2Fake := &fakeReshapeEC2{
 		instances: []ec2svc.ConvertibleRI{
-			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, Duration: 31536000},
+			{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, Duration: 31536000, FixedPrice: reshapeIntegrationFixedPrice},
 		},
 	}
 	recsFake := &fakeReshapeRecs{

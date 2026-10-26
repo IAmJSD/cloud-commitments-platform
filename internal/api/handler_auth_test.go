@@ -1430,12 +1430,14 @@ func TestHandler_getCurrentUserPermissions_RegularUser(t *testing.T) {
 		{Action: "view", Resource: "plans"},
 	}
 	mockAuth.On("GetUserPermissionsAPI", ctx, "user-1").Return(perms, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "user-1").Return([]string{}, nil).Once()
 
 	handler := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer tok"}}
 	result, err := handler.getCurrentUserPermissions(ctx, req)
 	require.NoError(t, err)
 	assert.False(t, result.IsAdmin)
+	assert.True(t, result.UnrestrictedAccountAccess, "no allowed_accounts restriction means unrestricted")
 	require.Len(t, result.Permissions, 2)
 	assert.Equal(t, PermissionEntry{Action: "view", Resource: "recommendations"}, result.Permissions[0])
 	assert.Equal(t, PermissionEntry{Action: "view", Resource: "plans"}, result.Permissions[1])
@@ -1455,6 +1457,7 @@ func TestHandler_getCurrentUserPermissions_Admin(t *testing.T) {
 		{Action: auth.ActionAdmin, Resource: auth.ResourceAll},
 	}
 	mockAuth.On("GetUserPermissionsAPI", ctx, "admin-1").Return(perms, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "admin-1").Return([]string{}, nil).Once()
 
 	handler := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer admin-tok"}}
@@ -1525,6 +1528,7 @@ func TestHandler_getCurrentUserPermissions_AdminAPIKey(t *testing.T) {
 	// short-circuits to {admin, *} + is_admin=true rather than calling
 	// GetUserPermissionsAPI (which would fail to find an admin-api-key row).
 	assert.True(t, result.IsAdmin)
+	assert.True(t, result.UnrestrictedAccountAccess, "the admin API key is positively unrestricted")
 	require.Len(t, result.Permissions, 1)
 	assert.Equal(t, PermissionEntry{Action: auth.ActionAdmin, Resource: auth.ResourceAll}, result.Permissions[0])
 }
@@ -1546,6 +1550,7 @@ func TestHandler_getCurrentUserPermissions_UserAPIKey(t *testing.T) {
 		{Action: "view", Resource: "recommendations"},
 	}
 	mockAuth.On("GetAPIKeyEffectivePermissionsAPI", ctx, "key-42", "user-42").Return(perms, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "user-42").Return([]string{}, nil).Once()
 
 	handler := &Handler{auth: mockAuth}
 	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"X-API-Key": "user-key"}}

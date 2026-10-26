@@ -57,7 +57,7 @@
 # step already ran three state rm commands: those addresses were root-level
 # (`google_sql_database_instance.main`), but the resources live under
 # `module.database` (terraform/environments/gcp/database.tf:5;
-# scripts/gcp-import-dev-state.sh:273-288 imports them module-qualified).
+# scripts/gcp-import-dev-state.sh:334-349 imports them module-qualified).
 # Measured on Terraform 1.14.7 against a state holding those three
 # module-qualified resources: `terraform state rm
 # google_sql_database_instance.main` exits 1 "No matching objects found" and

@@ -318,8 +318,12 @@ func TestHandler_rejectRIExchange_RecordNotFound(t *testing.T) {
 
 	h := &Handler{config: mockStore}
 	_, err := h.rejectRIExchange(ctx, "11111111-1111-1111-1111-111111111111", "tok")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	// A missing record answers like a wrong token (issue #601).
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "want ClientError, got %v", err)
+	assert.Equal(t, 403, ce.code)
+	assert.Equal(t, "invalid rejection token", ce.message)
 }
 
 func TestHandler_rejectRIExchange_WrongToken(t *testing.T) {
@@ -467,4 +471,7 @@ func TestHandler_TransitionRegistrationStatus_NonUUIDActorIsNil(t *testing.T) {
 	}
 	_, err := handler.rejectRegistration(ctx, req, regID)
 	require.NoError(t, err)
+	// reviewed_by is a UUID FK too: the sentinel must not reach it (issue #1234).
+	assert.Nil(t, reg.ReviewedBy, "admin-api-key must not be written to reviewed_by")
+	assert.NotNil(t, reg.ReviewedAt, "reviewed_at is still recorded for an API-key review")
 }
