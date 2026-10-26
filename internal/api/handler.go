@@ -579,14 +579,14 @@ func riExchangeArmStateOf(cfg *config.GlobalConfig) riExchangeArmState {
 // armed reports whether this state will make the scheduled TaskRIExchangeReshape
 // execute exchanges against the provider without a human approval step.
 //
-// The predicate mirrors the CONSUMER exactly. pkg/exchange/auto.go's
-// processRecommendation routes to processManualExchange only on the literal
-// "manual" and sends every other value -- including "", "Auto" and any typo --
-// to processAutoExchange. Defining "armed" as mode == "auto" would therefore
-// leave the gate below open on precisely the route that matters: PUT /api/config
+// The predicate is deliberately wider than the consumer. pkg/exchange's
+// RunAutoExchange executes without approval only for the literal "auto" and
+// refuses any other unknown mode (including "") with an error, so a typo
+// fails the scheduled run loudly instead of executing. PUT /api/config
 // unmarshals onto GlobalConfig wholesale and GlobalConfig.Validate never
-// constrains RIExchangeMode, so any non-"manual" string reaches the scheduler.
-// Both axes of the guard must see what the scheduler sees.
+// constrains RIExchangeMode, so any non-"manual" string can be stored; treating
+// every such value as armed keeps the grant check closed if the consumer's
+// mode handling ever changes.
 func (s riExchangeArmState) armed() bool {
 	return s.enabled && s.mode != "manual"
 }

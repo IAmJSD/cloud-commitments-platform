@@ -40,6 +40,7 @@ function canActOnRecommendations(): boolean {
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 import { fetchOverridesForAccounts } from './lib/overrides';
 import { ownValue } from './lib/own-property';
+import { HOURS_PER_MONTH } from './lib/hours-per-month';
 // Re-export the shared primitives so existing consumers that import from
 // recommendations.ts keep working without import-path churn (issue #166).
 export { parseNumericFilter } from './lib/column-filters';
@@ -1726,9 +1727,12 @@ export function onDemandMonthly(r: LocalRecommendation): number | null {
 // Cost-period scaling (issue #319)
 //
 
-/** Conversion factors relative to a monthly base. */
+/**
+ * Conversion factors relative to a monthly base. Hourly uses the 730-hour
+ * month the backend uses (issues #337, #394); daily stays a 30-day month.
+ */
 const PERIOD_FACTOR: Record<CostPeriod, number> = {
-  hourly:  1 / 720,   // 24 × 30 hrs/mo
+  hourly:  1 / HOURS_PER_MONTH,
   daily:   1 / 30,
   monthly: 1,
   yearly:  12,

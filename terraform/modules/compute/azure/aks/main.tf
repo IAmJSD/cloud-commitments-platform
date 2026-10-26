@@ -201,6 +201,25 @@ resource "azurerm_role_assignment" "workload_kv_secrets_user" {
   principal_id         = azurerm_user_assigned_identity.workload.principal_id
 }
 
+# Write access to the admin-password secret ONLY (#199). The deployment below
+# sets ADMIN_PASSWORD_SECRET and ADMIN_EMAIL, which arms the app's
+# admin-password sync (buildAdminPasswordSyncCallback in internal/server/app.go):
+# on an admin password change it calls azsecrets.SetSecret, which the read-only
+# grant above 403s, leaving the vault copy stale.
+#
+# Scoped to the one secret rather than the vault, so the vault-wide grant stays
+# read-only and the extra rights of "Key Vault Secrets Officer" (no built-in
+# role is set-only) reach this secret and nothing else. The scope is built from
+# the vault ARM ID and the secret name, both known at plan time, because scope
+# is ForceNew. The count mirrors the app-side gate: both env vars non-empty.
+resource "azurerm_role_assignment" "workload_admin_password_secret_writer" {
+  count = var.admin_password_secret_name != "" && var.admin_email != "" ? 1 : 0
+
+  scope                = "${var.key_vault_id}/secrets/${var.admin_password_secret_name}"
+  role_definition_name = "Key Vault Secrets Officer"
+  principal_id         = azurerm_user_assigned_identity.workload.principal_id
+}
+
 # Grant AKS cluster identity access to pull images from ACR
 resource "azurerm_role_assignment" "aks_acr" {
   principal_id                     = azurerm_kubernetes_cluster.main.kubelet_identity[0].object_id

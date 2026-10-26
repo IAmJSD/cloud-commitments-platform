@@ -1000,7 +1000,7 @@ function buildCoverageOverrideInput(
   input.className = 'override-coverage-input';
   input.setAttribute(
     'aria-label',
-    `Coverage for ${override.provider}/${override.service} override`,
+    `Dashboard coverage for ${override.provider}/${override.service} override`,
   );
 
   const initial = override.coverage !== undefined ? String(override.coverage) : '';
@@ -1269,7 +1269,7 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
     // Enabled is second-to-last (immediately before the action cell) so the
     // descriptive columns keep the layout users learned from PR #72/#23.
     // Issue #110.
-    ['Service', 'Term', 'Payment', 'Coverage', 'Enabled', ''].forEach(h => {
+    ['Service', 'Term', 'Payment', 'Dashboard coverage', 'Enabled', ''].forEach(h => {
       const th = document.createElement('th');
       th.textContent = h;
       hrow.appendChild(th);
@@ -1773,7 +1773,7 @@ async function submitOverrideForm(e: Event): Promise<void> {
     const n = Number(coverageRaw);
     if (!Number.isFinite(n) || n < 0 || n > 100) {
       const errEl = document.getElementById('override-form-error');
-      if (errEl) errEl.textContent = 'Coverage must be between 0 and 100.';
+      if (errEl) errEl.textContent = 'Dashboard coverage must be between 0 and 100.';
       return;
     }
     req.coverage = n;
@@ -1784,7 +1784,7 @@ async function submitOverrideForm(e: Event): Promise<void> {
     // be a no-op semantically — no field overrides anything. Block at the
     // UI to avoid silent confusion.
     const errEl = document.getElementById('override-form-error');
-    if (errEl) errEl.textContent = 'Set at least one of Term, Payment, or Coverage.';
+    if (errEl) errEl.textContent = 'Set at least one of Term, Payment, or Dashboard coverage.';
     return;
   }
 
@@ -3441,7 +3441,7 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
   const rawCoverage = Number(coverageText);
   // Number('') is 0, so an empty field must be rejected explicitly.
   if (coverageText.trim() === '' || !Number.isFinite(rawCoverage) || !Number.isInteger(rawCoverage) || rawCoverage < 0 || rawCoverage > 100) {
-    showToast({ message: 'Target coverage must be a whole number between 0 and 100', kind: 'error' });
+    showToast({ message: 'Dashboard coverage target must be a whole number between 0 and 100', kind: 'error' });
     if (saveBtn) saveBtn.disabled = false;
     saveInFlight = false;
     return;
@@ -3459,7 +3459,7 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
   // before any PUT, so a fractional value like 12.7 is not persisted.
   const badCoverageCards = invalidEditedCardCoverages();
   if (badCoverageCards.length > 0) {
-    showToast({ message: `Target coverage must be a whole number between 0 and 100 (${badCoverageCards.join(', ')})`, kind: 'error' });
+    showToast({ message: `Dashboard coverage must be a whole number between 0 and 100 (${badCoverageCards.join(', ')})`, kind: 'error' });
     if (saveBtn) saveBtn.disabled = false;
     saveInFlight = false;
     return;

@@ -422,7 +422,7 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
           <th>RI ID</th>
           <th>Instance Type${filterBtn('instance_type')}</th>
           <th>AZ${filterBtn('availability_zone')}</th>
-          <th>Count${filterBtn('instance_count')}</th>
+          <th class="num">Count${filterBtn('instance_count')}</th>
           <th>Offering${filterBtn('offering_type')}</th>
           <th>Expiry</th>
           <th>Utilization${filterBtn('utilization_pct')}</th>
@@ -440,7 +440,7 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
             <td class="monospace">${escapeHtml(ri.reserved_instance_id)}</td>
             <td>${escapeHtml(ri.instance_type)}</td>
             <td>${escapeHtml(ri.availability_zone)}</td>
-            <td>${ri.instance_count}</td>
+            <td class="num">${ri.instance_count}</td>
             <td>${escapeHtml(ri.offering_type)}</td>
             <td>${formatDate(ri.end)}</td>
             <td class="${utilClass}">${utilText}</td>
@@ -507,6 +507,7 @@ function renderAzureRIsTable(
   for (const label of labels) {
     const th = document.createElement('th');
     th.textContent = label;
+    if (label === 'Quantity') th.className = 'num';
     headerRow.appendChild(th);
   }
   thead.appendChild(headerRow);
@@ -528,7 +529,7 @@ function buildAzureRIRow(r: ExchangeableAzureRI): HTMLTableRowElement {
 
   appendAzureCell(tr, r.display_name || r.reservation_id);
   appendAzureCell(tr, r.sku);
-  appendAzureCell(tr, String(r.quantity));
+  appendAzureCell(tr, String(r.quantity), true);
   appendAzureCell(tr, r.region || '—');
   appendAzureCell(tr, r.term || '—');
   appendAzureCell(tr, r.expiry_date ? formatDate(r.expiry_date) : '—');
@@ -536,9 +537,11 @@ function buildAzureRIRow(r: ExchangeableAzureRI): HTMLTableRowElement {
   return tr;
 }
 
-function appendAzureCell(tr: HTMLTableRowElement, text: string): void {
+// numeric right-aligns the cell with tabular digits (td.num, issue #739).
+function appendAzureCell(tr: HTMLTableRowElement, text: string, numeric = false): void {
   const td = document.createElement('td');
   td.textContent = text;
+  if (numeric) td.className = 'num';
   tr.appendChild(td);
 }
 
@@ -2041,7 +2044,7 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
       + '<td>' + escapeHtml(String(rec.target_count)) + 'x ' + escapeHtml(rec.target_instance_type) + '</td>'
       // payment_due is USD (the execute cap is max_payment_due_usd); an
       // empty amount renders as a dash, not a lone "$" (issue #284).
-      + '<td>' + (rec.payment_due ? '$' + escapeHtml(rec.payment_due) : '&mdash;') + '</td>'
+      + '<td class="num">' + (rec.payment_due ? '$' + escapeHtml(rec.payment_due) : '&mdash;') + '</td>'
       + '<td>' + statusBadgeHtml(rec.status) + errorLine + '</td>'
       + '<td>' + exchangeIdCell + '</td>'
       + '<td>' + approveBtn + '</td>'
@@ -2050,7 +2053,7 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
 
   const tableHTML = '<table>'
     + '<thead><tr>'
-    + '<th>Date</th><th>Source Type</th><th>Target Type</th><th>Payment</th><th>Status</th><th>Exchange ID</th><th>Actions</th>'
+    + '<th>Date</th><th>Source Type</th><th>Target Type</th><th class="num">Payment</th><th>Status</th><th>Exchange ID</th><th>Actions</th>'
     + '</tr></thead>'
     + '<tbody>' + rowsHTML + '</tbody>'
     + '</table>';

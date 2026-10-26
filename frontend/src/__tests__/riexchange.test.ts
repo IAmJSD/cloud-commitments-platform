@@ -1519,6 +1519,45 @@ describe('RI Exchange global filter scoping (issue #871)', () => {
       expect(noticeText()).toBe('');
     });
   });
+
+  // Money and count columns carry th.num/td.num (right-aligned, tabular
+  // digits) in the header and in every row at the same index (issue #739).
+  function numColumns(root: ParentNode): { headers: string[]; rowsMatch: boolean } {
+    const ths = Array.from(root.querySelectorAll('thead th'));
+    const numIdx = ths.flatMap((th, i) => (th.classList.contains('num') ? [i] : []));
+    const rows = Array.from(root.querySelectorAll('tbody tr'));
+    const rowsMatch = rows.length > 0 && rows.every((tr) => {
+      const tds = Array.from(tr.querySelectorAll('td'));
+      return tds.flatMap((td, i) => (td.classList.contains('num') ? [i] : [])).join() === numIdx.join();
+    });
+    return { headers: numIdx.map((i) => (ths[i]!.textContent ?? '').trim()), rowsMatch };
+  }
+
+  it('right-aligns the count and payment columns of the RI tables (issue #739)', async () => {
+    (api.listConvertibleRIs as jest.Mock).mockResolvedValue([{
+      reserved_instance_id: 'ri-1', instance_type: 'm5.large', availability_zone: 'us-east-1a',
+      instance_count: 3, start: '2026-01-01T00:00:00Z', end: '2027-01-01T00:00:00Z',
+      offering_type: 'Convertible', fixed_price: 0, usage_price: 0, state: 'active', normalization_factor: 4,
+    }]);
+    (api.getRIExchangeHistory as jest.Mock).mockResolvedValue([{
+      id: 'h1', account_id: 'a', exchange_id: '', region: 'us-east-1', source_ri_ids: ['ri-1'],
+      source_instance_type: 'm5.large', source_count: 1, target_offering_id: 'o', target_instance_type: 'm5.xlarge',
+      target_count: 1, payment_due: '1.25', status: 'failed', mode: 'manual',
+      created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z',
+    }]);
+    await loadRIExchange();
+    expect(numColumns(instancesEl)).toEqual({ headers: ['Count'], rowsMatch: true });
+    expect(numColumns(historyEl)).toEqual({ headers: ['Payment'], rowsMatch: true });
+  });
+
+  it('right-aligns the Azure reservation quantity column (issue #739)', async () => {
+    stateMod().getCurrentProvider.mockReturnValue('azure');
+    (api.listExchangeableAzureRIs as jest.Mock).mockResolvedValue([
+      { reservation_order_id: 'o1', reservation_id: 'r1', sku: 'Standard_D2s_v3', quantity: 2, region: 'eastus', term: 'P1Y', instance_flexibility: 'On', display_name: 'web-rsv' },
+    ]);
+    await loadRIExchange();
+    expect(numColumns(instancesEl)).toEqual({ headers: ['Quantity'], rowsMatch: true });
+  });
 });
 
 describe('exchange history table counts (issue #286)', () => {

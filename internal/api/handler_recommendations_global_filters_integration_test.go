@@ -29,7 +29,7 @@ type globalFilterProvider struct {
 	provider.RecommendationsClient
 }
 
-func (p globalFilterProvider) CreateAndValidateProvider(_ context.Context, name string, cfg *provider.ProviderConfig) (provider.Provider, error) {
+func (p globalFilterProvider) CreateAndValidateProvider(_ context.Context, name string, cfg *provider.Config) (provider.Provider, error) {
 	if name != "aws" || cfg != nil {
 		return nil, fmt.Errorf("unexpected provider request: %s", name)
 	}

@@ -233,7 +233,7 @@ func TestAWSRecommendationCompletenessPersistence(t *testing.T) {
 			store := config.NewPostgresStore(container.DB)
 			factory := new(MockProviderFactory)
 			fixture := &completenessHTTP{resourceType: "db.t3.medium", details: tc.details, fallback: tc.fallback, failScope: tc.failScope, spMode: tc.spMode, spFallback: tc.spFallback}
-			factory.On("CreateAndValidateProvider", mock.Anything, "aws", (*provider.ProviderConfig)(nil)).
+			factory.On("CreateAndValidateProvider", mock.Anything, "aws", (*provider.Config)(nil)).
 				Return(completenessProvider(t, fixture), nil).Once()
 			var accountID *string
 			var completeAccountID string
@@ -257,7 +257,7 @@ func TestAWSRecommendationCompletenessPersistence(t *testing.T) {
 				if tc.spMode != "" {
 					cleanFixture = &completenessHTTP{spMode: "valid"}
 				}
-				factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.MatchedBy(func(cfg *provider.ProviderConfig) bool { return cfg != nil })).
+				factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.MatchedBy(func(cfg *provider.Config) bool { return cfg != nil })).
 					Return(completenessProvider(t, cleanFixture), nil).Once()
 			}
 			seed := []config.RecommendationRecord{
