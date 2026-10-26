@@ -602,6 +602,10 @@ type NotificationData struct {
 	// the purchase). Used in the post-execution notification body.
 	// Empty omits the field.
 	ExecutedBy string
+	// PartialPurchase marks a post-execution notification for a
+	// partially_completed run (issue #532): the template says some
+	// commitments were not purchased instead of claiming all of them were.
+	PartialPurchase bool
 	// OutcomeUnknown switches the purchase-failed email to the outcome-unknown
 	// variant, for a row a recovery sweep failed after its purchase run was
 	// interrupted: the commitment may already exist, so the email asks the

@@ -603,6 +603,59 @@ func TestExecuteAzureExchange_InScopeSubscriptionAllowed(t *testing.T) {
 	assert.Equal(t, "sess-fresh", resp.SessionID)
 }
 
+// TestExecuteAzureExchange_ResolvesAccountOnce pins issue #311: the execute
+// path looked the subscription's CloudAccount up separately for the scope
+// check, the client build and the constraint AccountIDs. Here the store
+// answers the first lookup with the caller's own account and any later one
+// with another account, as a concurrent re-registration would. The scope
+// check and the constraint check must both see the first row, from a single
+// lookup.
+func TestExecuteAzureExchange_ResolvesAccountOnce(t *testing.T) {
+	ctx := context.Background()
+	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+		&azurecompute.ExchangePreview{SessionID: "sess-once", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
+		[]azurecompute.CompatibleOffering{}, nil,
+	)
+	opsClient.On("ExecuteExchange", mock.Anything, "sess-once").Return(
+		&azurecompute.ExchangeResult{SessionID: "sess-once", Status: "Succeeded"}, nil,
+	)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	var captured []auth.PermissionConstraints
+	mockAuth := scopedAzureAuth(t, "execute", "ri-exchange", []string{"acct-mine"})
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
+		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
+			captured = sets
+			return true
+		})).Return(true, nil)
+
+	lookups := 0
+	store := &MockConfigStore{}
+	store.GetCloudAccountByExternalIDFn = func(_ context.Context, provider, externalID string) (*config.CloudAccount, error) {
+		assert.Equal(t, "azure", provider)
+		assert.Equal(t, "sub-1", externalID)
+		lookups++
+		if lookups == 1 {
+			return &config.CloudAccount{ID: "acct-mine", Name: "My Team"}, nil
+		}
+		return &config.CloudAccount{ID: "acct-other", Name: "Other Team"}, nil
+	}
+
+	h := &Handler{auth: mockAuth, config: store, azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient }}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, lookups, "the execute path must resolve the subscription's CloudAccount exactly once")
+	require.Len(t, captured, 1)
+	assert.Equal(t, []string{"acct-mine"}, captured[0].AccountIDs,
+		"the constraint check must use the same account row the scope check allowed")
+}
+
 // TestExecuteAzureExchange_ScopeCheckPrecedesClientBuild_Unregistered proves
 // the fix for the authz-ordering finding: requireAzureSubscriptionScope must
 // run BEFORE buildAzureExchangeClient, exactly like getAzureCompatibleOfferings.

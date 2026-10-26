@@ -52,7 +52,9 @@ const directExecuteSkipReason = "direct-execute permission"
 // (see that function's doc comment for why this must be a return value
 // rather than something the caller re-fetches from the DB). Empty on
 // failure, and best-effort empty if the mint itself failed after an
-// otherwise-successful approve.
+// otherwise-successful approve. A partially_completed run returns its token
+// together with its error (issue #532), so a non-empty token with an error
+// means part of the purchase committed and is revocable.
 func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, actor string, check ClaimedRowCheck) (string, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[%s]: ApproveExecution entry (auth=token actor=%q)", executionID, maskActor(actor))
@@ -384,10 +386,12 @@ func (m *Manager) RunPlannedPurchaseNow(ctx context.Context, executionID, actor 
 // gate being reimplemented (or skipped) at a second call site.
 //
 // Returns the raw revocation token minted on a successful execute, or ""
-// if the (best-effort) mint failed. Every caller emails a "purchase
-// executed, revoke here" link, and since only the token's hash is stored
-// (issue #103) a DB re-read can never yield a raw, emailable value, so the
-// rotation lives here, in the one funnel all approve paths share.
+// if the (best-effort) mint failed. A partially_completed run also gets one,
+// returned alongside its error (see IsCommittedPartialRun, issue #532).
+// Every caller emails a "purchase executed, revoke here" link, and since
+// only the token's hash is stored (issue #103) a DB re-read can never yield
+// a raw, emailable value, so the rotation lives here, in the one funnel all
+// approve paths share.
 //
 // A non-empty skipReason stamps the executed_* audit fields once the CAS wins.
 // The returned row is nil when the CAS was never won, or when the audit stamp
@@ -452,23 +456,46 @@ func (m *Manager) transitionApproveAndExecute(ctx context.Context, executionID, 
 	}
 
 	logging.Infof("purchase[%s]: executing purchase synchronously", executionID)
+	revocationToken, execErr := m.runClaimedAndMint(ctx, updated, t0)
+	return updated, revocationToken, execErr
+}
+
+// IsCommittedPartialRun reports whether an execute call that returned row and
+// err ended partially_completed with that status saved: some commitments were
+// bought, so the run is revocable and its executed email must go out like a
+// completed run's (issue #532). An audit loss is excluded: the stored row is
+// still "running", whatever the returned row says.
+func IsCommittedPartialRun(row *config.PurchaseExecution, err error) bool {
+	return err != nil && row != nil && row.Status == config.StatusPartiallyCompleted && !errors.Is(err, config.ErrAuditLoss)
+}
+
+// runClaimedAndMint runs the claimed row and, when the run committed anything
+// (completed, or a saved partially_completed), mints its revocation token. It
+// returns the raw token ("" when nothing committed or the best-effort mint
+// failed) and the run's error, which a partial run keeps.
+func (m *Manager) runClaimedAndMint(ctx context.Context, updated *config.PurchaseExecution, t0 time.Time) (string, error) {
+	executionID := updated.ExecutionID
 	execErr := m.executeAndFinalize(ctx, updated)
 	if execErr != nil {
 		logging.Errorf("purchase[%s]: transitionApproveAndExecute failed after %s: %v", executionID, time.Since(t0), execErr)
-		return updated, "", execErr
+		if !IsCommittedPartialRun(updated, execErr) {
+			return "", execErr
+		}
+	} else {
+		logging.Infof("purchase[%s]: transitionApproveAndExecute completed in %s", executionID, time.Since(t0))
 	}
-	logging.Infof("purchase[%s]: transitionApproveAndExecute completed in %s", executionID, time.Since(t0))
 
-	// Mint a fresh revocation token now that the purchase has committed. The
-	// pre-approve approval token must not double as the revocation token: on
-	// the token path it was just consumed to authorize this very approve
+	// Mint a fresh revocation token now that the purchase has committed, in
+	// full or in part (a partially_completed row is revocable, issue #532).
+	// The pre-approve approval token must not double as the revocation token:
+	// on the token path it was just consumed to authorize this very approve
 	// action, and on every path its raw value is no longer recoverable once
 	// hashed at rest (issue #103). See rotateApprovalToken's doc comment.
 	revocationToken, mintErr := m.rotateApprovalToken(ctx, updated, config.RevocationWindow)
 	if mintErr != nil {
 		logging.Warnf("purchase[%s]: transitionApproveAndExecute: revocation token mint failed (best-effort): %v", executionID, mintErr)
 	}
-	return updated, revocationToken, nil
+	return revocationToken, execErr
 }
 
 // CancelExecution cancels a pending execution. actor carries the email of

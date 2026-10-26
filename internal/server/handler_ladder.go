@@ -15,6 +15,7 @@ import (
 
 	pkgcommon "github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	pkgladder "github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 )
 
@@ -277,10 +278,16 @@ func (app *Application) processOneLadderConfig(
 // have not yet been bought. Tranches completed after `now` are counted too (see
 // below): a safe under-buy, and a deliberate deviation from go's InFlight doc.
 //
-// Units: Allocate sizes the gap in on-demand-equivalent dollars and emits
-// tranches in commitment dollars with the rate they were sized with. Rows are
-// stored as basis=commitment plus that rate; the store nets each row back to
-// on-demand-equivalent dollars by its own rate.
+// Units: the provider's existing and expiring coverage arrive in commitment
+// dollars and are first converted to on-demand-equivalent dollars with the
+// same rates (ladderLayerStatesOnDemand). Coverage on a layer with no rate
+// cannot be converted, so the gap cannot be sized: the run is persisted as a
+// Hold-only run with reason_code missing_discount_rate that buys nothing
+// (planMissingRateHold), not an Errored run. Allocate sizes the gap in
+// on-demand-equivalent dollars and emits tranches in commitment dollars with
+// the rate they were sized with. Rows are stored as basis=commitment plus that
+// rate; the store nets each row back to on-demand-equivalent dollars by its
+// own rate.
 //
 // Persistence is APPEND-ONLY (see persistLadderRun): every run inserts its new
 // scheduled tranches and NEVER supersedes existing ones. Netting already
@@ -328,6 +335,15 @@ func (app *Application) executeLadderRun(
 		return fmt.Errorf("GetCommitmentRates: %w", err)
 	}
 
+	// Providers report existing coverage in commitment dollars; Allocate and
+	// the plan snapshot compare it with an on-demand-equivalent target (#946).
+	// Layers holding coverage with no rate come back in missing; the run is
+	// then a Hold that buys nothing and says why.
+	layerStates, missing, err := ladderLayerStatesOnDemand(layerStates, rates)
+	if err != nil {
+		return fmt.Errorf("existing coverage: %w", err)
+	}
+
 	// L5 netting runs inside the persist transaction (PlanAndSaveLadderRun):
 	// the store reads the config's in-flight commitment (scheduled tranches
 	// still within config.LadderFireGrace plus fired, unresolved ones) under
@@ -339,14 +355,13 @@ func (app *Application) executeLadderRun(
 	// network I/O.
 	in := &ladderRunPlanner{
 		dbCfg: dbCfg, engineCfg: engineCfg, baseline: baseline, layerStates: layerStates, rates: rates,
-		layers: capability.SupportedLayers(), term: term, paymentOpt: paymentOpt, now: now,
+		layers: capability.SupportedLayers(), term: term, paymentOpt: paymentOpt, now: now, missing: missing,
 	}
-	savedRun, err := app.Config.PlanAndSaveLadderRun(ctx, dbCfg.ID, now, in.plan)
+	savedRun, err := app.Config.PlanAndSaveLadderRun(ctx, dbCfg.ID, now, in.build)
 	if err != nil {
 		return fmt.Errorf("persist ladder run: %w", err)
 	}
-	log.Printf("ladder_run: config %s: persisted run %s (status=%s, allocations=%d, tranches=%d, holds=%d)",
-		dbCfg.ID, savedRun.ID, savedRun.Status, in.allocations, in.tranches, in.holds)
+	in.logPersisted(savedRun)
 	return nil
 }
 
@@ -363,8 +378,42 @@ type ladderRunPlanner struct {
 	term        pkgladder.Term
 	paymentOpt  pkgladder.PaymentOption
 	now         time.Time
+	// missing lists the layers whose existing coverage has no rate. When set,
+	// the run is a Hold-only run (planMissingRateHold) and layerStates is nil.
+	missing []ladderMissingRate
 
 	allocations, tranches, holds int // set by plan, for the log line
+}
+
+// build is the LadderPlanBuilder handed to PlanAndSaveLadderRun.
+func (p *ladderRunPlanner) build(rows []config.LadderInFlightRow) (*config.LadderRunDB, []config.LadderTrancheDB, error) {
+	if len(p.missing) > 0 {
+		return p.planMissingRateHold()
+	}
+	return p.plan(rows)
+}
+
+// reasonCode is the plan's machine-readable reason_code: set only for a run
+// whose gap could not be sized. An ordinary run, including a target-met Hold,
+// has none and explains itself in its actions' rationale.
+func (p *ladderRunPlanner) reasonCode() string {
+	if len(p.missing) > 0 {
+		return ladderHoldMissingDiscountRate
+	}
+	return ""
+}
+
+// logPersisted logs the saved run. A missing-rate Hold is logged at WARN,
+// once per run: it is an expected state until the provider returns a rate,
+// not a failure, and the run counts as planned.
+func (p *ladderRunPlanner) logPersisted(run *config.LadderRunDB) {
+	if len(p.missing) > 0 {
+		logging.Warnf("ladder_run: config %s: persisted Hold-only run %s (reason_code=%s): %d layer(s) hold existing coverage with no discount rate; nothing bought",
+			p.dbCfg.ID, run.ID, ladderHoldMissingDiscountRate, len(p.missing))
+		return
+	}
+	log.Printf("ladder_run: config %s: persisted run %s (status=%s, allocations=%d, tranches=%d, holds=%d)",
+		p.dbCfg.ID, run.ID, run.Status, p.allocations, p.tranches, p.holds)
 }
 
 func (p *ladderRunPlanner) plan(rows []config.LadderInFlightRow) (*config.LadderRunDB, []config.LadderTrancheDB, error) {
@@ -433,7 +482,7 @@ func (p *ladderRunPlanner) buildRows(runID string, plan *pkgladder.LadderPlan, t
 	if err := plan.Validate(); err != nil {
 		return nil, nil, fmt.Errorf("LadderPlan.Validate: %w", err)
 	}
-	planJSON, err := marshalLadderPlan(plan)
+	planJSON, err := marshalLadderPlan(plan, p.reasonCode())
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal plan: %w", err)
 	}
@@ -552,7 +601,8 @@ func ladderConfigToEngine(dbCfg *config.LadderConfigDB, accountID string) (pkgla
 // The monetary snapshot is derived to stay consistent with the authoritative
 // allocation rather than recomputed independently:
 //   - target = baseline low-water * targetCoveragePct/100 (the coverage goal),
-//   - existing = sum of per-layer ExistingUSDPerHour,
+//   - existing = sum of per-layer ExistingUSDPerHour, already converted to
+//     on-demand-equivalent dollars by ladderLayerStatesOnDemand,
 //   - gap = sum of the planned allocations' on-demand-equivalent gaps (the unit
 //     of target and existing), NOT target - existing.
 //
@@ -596,7 +646,8 @@ func assembleLadderPlan(
 	// Holds are informational; append last.
 	actions = append(actions, allocResult.Holds...)
 
-	// existing = sum of per-layer existing commitment (always reportable).
+	// existing = sum of per-layer on-demand-equivalent existing coverage
+	// (always reportable).
 	var existingTotal float64
 	for _, ls := range layerStates {
 		if ls.ExistingUSDPerHour != nil {
@@ -607,13 +658,9 @@ func assembleLadderPlan(
 
 	// target and gap are only meaningful when the baseline is available; nil
 	// stays nil (a Hold-only no-op has no purchase target/gap to report).
-	var target, gap *big.Rat
+	target := ladderPlanTarget(baseline, targetCoveragePct)
+	var gap *big.Rat
 	if baseline.LowWaterUSDPerHour != nil {
-		if low := ratFromFloat(*baseline.LowWaterUSDPerHour); low != nil {
-			if pctFrac := ratFromFloat(targetCoveragePct / 100.0); pctFrac != nil {
-				target = new(big.Rat).Mul(low, pctFrac)
-			}
-		}
 		// gap is what is being placed this run in on-demand-equivalent dollars,
 		// so it compares with target and existing; total_hourly_commit is the
 		// same placement in commitment dollars.
@@ -629,6 +676,20 @@ func assembleLadderPlan(
 		Actions:            actions,
 		Baseline:           baseline,
 	}
+}
+
+// ladderPlanTarget is the plan's on-demand-equivalent target, baseline
+// low-water * targetCoveragePct/100. nil when the baseline is unavailable.
+func ladderPlanTarget(baseline pkgladder.UsageBaseline, targetCoveragePct float64) *big.Rat {
+	if baseline.LowWaterUSDPerHour == nil {
+		return nil
+	}
+	low := ratFromFloat(*baseline.LowWaterUSDPerHour)
+	pctFrac := ratFromFloat(targetCoveragePct / 100.0)
+	if low == nil || pctFrac == nil {
+		return nil
+	}
+	return new(big.Rat).Mul(low, pctFrac)
 }
 
 // ratFromFloat converts a float64 to *big.Rat. It returns nil when
@@ -791,6 +852,9 @@ type ladderPlanJSONAction struct {
 // The *big.Rat monetary fields are converted to *float64 so they round-trip
 // cleanly through JSONB without binary encoding.
 type ladderPlanJSONDTO struct {
+	// ReasonCode is set only when the run could not size its gap (see
+	// ladderRunPlanner.reasonCode); ordinary runs omit it.
+	ReasonCode    string                  `json:"reason_code,omitempty"`
 	Scope         pkgladder.Scope         `json:"scope"`
 	GeneratedAt   time.Time               `json:"generated_at"`
 	TargetUSDHr   *float64                `json:"target_usd_hr,omitempty"`
@@ -802,8 +866,8 @@ type ladderPlanJSONDTO struct {
 
 // marshalLadderPlan serializes a LadderPlan to JSON for storage in the
 // plan JSONB column. *big.Rat fields are converted to *float64 at this
-// boundary; nil stays nil.
-func marshalLadderPlan(plan *pkgladder.LadderPlan) (json.RawMessage, error) {
+// boundary; nil stays nil. reasonCode is stored as reason_code when non-empty.
+func marshalLadderPlan(plan *pkgladder.LadderPlan, reasonCode string) (json.RawMessage, error) {
 	actions := make([]ladderPlanJSONAction, 0, len(plan.Actions))
 	for _, a := range plan.Actions {
 		action := ladderPlanJSONAction{
@@ -818,6 +882,7 @@ func marshalLadderPlan(plan *pkgladder.LadderPlan) (json.RawMessage, error) {
 		actions = append(actions, action)
 	}
 	dto := ladderPlanJSONDTO{
+		ReasonCode:    reasonCode,
 		Scope:         plan.Scope,
 		GeneratedAt:   plan.GeneratedAt,
 		TargetUSDHr:   ratToFloat64Ptr(plan.TargetUSDPerHour),

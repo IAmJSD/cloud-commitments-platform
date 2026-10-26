@@ -777,9 +777,14 @@ func (s *Service) DeleteUser(ctx context.Context, userID string) error {
 	return nil
 }
 
-// GetUser returns user info. Returns (nil, pgx.ErrNoRows) if the user does not exist.
+// GetUser returns user info. A user that does not exist returns an error
+// matching both ErrUserNotFound and pgx.ErrNoRows (issue #312).
 func (s *Service) GetUser(ctx context.Context, userID string) (*User, error) {
-	return s.store.GetUserByID(ctx, userID)
+	user, err := s.store.GetUserByID(ctx, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %w", ErrUserNotFound, err)
+	}
+	return user, err
 }
 
 // UpdateUserProfile allows a user to update their own email and password.

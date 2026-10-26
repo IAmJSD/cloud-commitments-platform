@@ -45,11 +45,6 @@ func (m *MockStore) CreateUser(ctx context.Context, user *User) error {
 	return args.Error(0)
 }
 
-func (m *MockStore) UpdateUser(ctx context.Context, user *User) error {
-	args := m.Called(ctx, user)
-	return args.Error(0)
-}
-
 func (m *MockStore) UpdateUserAdminFields(ctx context.Context, user *User, readEmail string, readGroupIDs []string, readActive bool) error {
 	return m.Called(ctx, user, readEmail, readGroupIDs, readActive).Error(0)
 }

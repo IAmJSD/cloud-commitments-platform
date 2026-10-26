@@ -22,6 +22,10 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 	if err != nil {
 		return nil, err
 	}
+	provider, err := providerFilterParam(params["provider"])
+	if err != nil {
+		return nil, err
+	}
 
 	accountUUIDs, accountExternalIDsByProvider, err := h.resolveDashboardAccountScope(ctx, session, params)
 	if err != nil {
@@ -36,7 +40,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 	}
 
 	recommendations, err := h.scheduler.ListRecommendations(recommendationsReadContext(ctx, scope), config.RecommendationFilter{
-		Provider: params["provider"],
+		Provider: provider,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recommendations: %w", err)
@@ -56,7 +60,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 
 	totalSavings, byService := summarizeRecommendationsWithCoverage(recommendations, coverageByKey)
 	targetCoverage := h.resolveTargetCoverage(ctx)
-	activeCommitments, committedMonthly, ytdSavings, currentSavingsByService, err := h.calculateCommitmentMetrics(ctx, params["provider"], accountUUIDs, accountExternalIDsByProvider)
+	activeCommitments, committedMonthly, ytdSavings, currentSavingsByService, err := h.calculateCommitmentMetrics(ctx, provider, accountUUIDs, accountExternalIDsByProvider)
 	if err != nil {
 		// Issue #72: purchase history is a hard dependency of the commitment
 		// KPIs, same as recommendations are of the savings KPIs above. Fail

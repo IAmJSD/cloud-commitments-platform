@@ -5,6 +5,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -129,6 +130,17 @@ func (f *credentialRaceFixture) stored() *User {
 	return u
 }
 
+// adminEdit applies edit to the stored row through UpdateUserAdminFields, the
+// column-scoped writer an admin's email or active change goes through, so the
+// competing write is the one production would make.
+func (f *credentialRaceFixture) adminEdit(ctx context.Context, edit func(u *User)) {
+	u, err := f.store.GetUserByID(ctx, f.user.ID)
+	require.NoError(f.t, err)
+	readEmail, readGroupIDs, readActive := u.Email, slices.Clone(u.GroupIDs), u.Active
+	edit(u)
+	require.NoError(f.t, f.store.UpdateUserAdminFields(ctx, u, readEmail, readGroupIDs, readActive))
+}
+
 // requireFactorEnforced proves the victim's factor survived: login without it
 // is refused and login with it succeeds.
 func (f *credentialRaceFixture) requireFactorEnforced(email, password string, enrolled *User) {
@@ -244,10 +256,7 @@ func TestIntegration_CredentialWritesRejectStaleCredentials(t *testing.T) {
 	t.Run("profile-after-concurrent-email-change", func(t *testing.T) {
 		f := newCredentialRaceFixture(t, store, "stale-profile@example.com")
 		winner := f.onRead(func(ctx context.Context, _ *Service) {
-			u, err := store.GetUserByID(ctx, f.user.ID)
-			require.NoError(t, err)
-			u.Email = "stale-profile-admin@example.com"
-			require.NoError(t, store.UpdateUser(ctx, u))
+			f.adminEdit(ctx, func(u *User) { u.Email = "stale-profile-admin@example.com" })
 		})
 		err := f.svc.UpdateUserProfile(ctx, f.user.ID, "stale-profile-self@example.com", credentialRacePassword, credentialRaceNew)
 		require.ErrorIs(t, err, ErrUserChanged)
@@ -259,11 +268,10 @@ func TestIntegration_CredentialWritesRejectStaleCredentials(t *testing.T) {
 	t.Run("reset-after-concurrent-deactivation", func(t *testing.T) {
 		f := newCredentialRaceFixture(t, store, "stale-reset-deactivated@example.com")
 		winner := f.onRead(func(ctx context.Context, _ *Service) {
-			u, err := store.GetUserByID(ctx, f.user.ID)
-			require.NoError(t, err)
-			now := time.Now()
-			u.Active, u.DeactivatedAt = false, &now
-			require.NoError(t, store.UpdateUser(ctx, u))
+			f.adminEdit(ctx, func(u *User) {
+				now := time.Now()
+				u.Active, u.DeactivatedAt = false, &now
+			})
 		})
 		require.NoError(t, f.svc.RequestPasswordReset(ctx, f.user.Email))
 		assert.Empty(t, f.mail.resets)
@@ -273,10 +281,7 @@ func TestIntegration_CredentialWritesRejectStaleCredentials(t *testing.T) {
 	t.Run("reset-after-concurrent-email-change", func(t *testing.T) {
 		f := newCredentialRaceFixture(t, store, "stale-reset-email@example.com")
 		winner := f.onRead(func(ctx context.Context, _ *Service) {
-			u, err := store.GetUserByID(ctx, f.user.ID)
-			require.NoError(t, err)
-			u.Email = "stale-reset-email-new@example.com"
-			require.NoError(t, store.UpdateUser(ctx, u))
+			f.adminEdit(ctx, func(u *User) { u.Email = "stale-reset-email-new@example.com" })
 		})
 		require.NoError(t, f.svc.RequestPasswordReset(ctx, f.user.Email))
 		assert.Empty(t, f.mail.resets, "a token must not be mailed to the address the user just left")
@@ -401,11 +406,10 @@ func TestIntegration_ResetConfirmRejectsStaleRead(t *testing.T) {
 		f := newCredentialRaceFixture(t, store, "reset-after-deactivation@example.com")
 		token := f.issueResetToken()
 		winner := f.onRead(func(ctx context.Context, _ *Service) {
-			u, err := store.GetUserByID(ctx, f.user.ID)
-			require.NoError(t, err)
-			now := time.Now()
-			u.Active, u.DeactivatedAt = false, &now
-			require.NoError(t, store.UpdateUser(ctx, u))
+			f.adminEdit(ctx, func(u *User) {
+				now := time.Now()
+				u.Active, u.DeactivatedAt = false, &now
+			})
 		})
 		err := f.svc.ConfirmPasswordReset(ctx, PasswordResetConfirm{Token: token, NewPassword: credentialRaceNew})
 		require.ErrorIs(t, err, ErrUserChanged)

@@ -129,6 +129,20 @@ func validateProvider(provider string) error {
 	return nil
 }
 
+// providerFilterParam validates a read endpoint's provider query parameter
+// and returns the value to filter on: "" (every provider) for an absent
+// value or "all", else the provider. Anything validateProvider refuses is a
+// 400, as on the recommendations and history reads (issue #312).
+func providerFilterParam(provider string) (string, error) {
+	if err := validateProvider(provider); err != nil {
+		return "", err
+	}
+	if provider == "all" {
+		return "", nil
+	}
+	return provider, nil
+}
+
 // validateEmailFormat returns a 400 error when email is non-empty but does not
 // parse as an RFC 5322 address or lacks a TLD (e.g. name@hostonly). Empty
 // strings are accepted (contact email is optional on cloud accounts).

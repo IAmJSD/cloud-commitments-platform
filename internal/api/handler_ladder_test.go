@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
@@ -50,6 +51,52 @@ func newLadderHandler(t *testing.T) (*Handler, *MockConfigStore, **config.Ladder
 
 const ladderValidRamp = `"ramp_schedule":{"steps":[{"after_days":0,"fraction":1.0}]}`
 
+// cloud_accounts.id is a UUID column, so the ladder tests use UUID ids: a
+// non-UUID id is now refused before any lookup (#1430).
+const (
+	ladderTestAccount  = "33333333-3333-4333-8333-333333333333"
+	ladderGhostAccount = "44444444-4444-4444-8444-444444444444"
+	ladderBadAccountID = "not-a-uuid"
+)
+
+// failNonUUIDLookups makes the mock store answer GetCloudAccount the way
+// Postgres does for a non-UUID id: a plain (non-client) error, which
+// handleRequestError would turn into a 500.
+func failNonUUIDLookups(mockStore *MockConfigStore) {
+	mockStore.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		if !uuidRegex.MatchString(id) {
+			return nil, fmt.Errorf(`pq: invalid input syntax for type uuid: %q`, id)
+		}
+		return &config.CloudAccount{ID: id, Provider: "aws"}, nil
+	}
+}
+
+// requireInvalidAccountID asserts a 400 ClientError that never reached the
+// account lookup.
+func requireInvalidAccountID(t *testing.T, mockStore *MockConfigStore, result any, err error) {
+	t.Helper()
+	require.Error(t, err)
+	assert.Nil(t, result)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "a non-UUID account id must be a 400 ClientError, not a 500; got %T: %v", err, err)
+	assert.Equal(t, 400, ce.code)
+	mockStore.AssertNotCalled(t, "GetCloudAccount", mock.Anything, ladderBadAccountID)
+	mockStore.AssertNotCalled(t, "UpsertLadderConfig", mock.Anything, mock.Anything)
+}
+
+// TestUpsertLadderConfig_NonUUIDAccountIDIs400 pins #1430: a cloud_account_id
+// that is not a UUID answers 400 instead of letting Postgres's uuid syntax
+// error surface as a 500.
+func TestUpsertLadderConfig_NonUUIDAccountIDIs400(t *testing.T) {
+	ctx := context.Background()
+	handler, mockStore, _ := newLadderHandler(t)
+	failNonUUIDLookups(mockStore)
+
+	body := `{"cloud_account_id":"` + ladderBadAccountID + `","provider":"aws","mode":"email_approval","cadence":"daily",` + ladderValidRamp + `}`
+	result, err := handler.upsertLadderConfig(ctx, ladderReq(body))
+	requireInvalidAccountID(t, mockStore, result, err)
+}
+
 // TestUpsertLadderConfig_BufferFractionExplicitZeroSurvives asserts that an
 // explicit buffer_fraction:0 ("no buffer") reaches the store unchanged rather
 // than being silently rewritten to DefaultLadderBufferFraction.
@@ -57,7 +104,7 @@ func TestUpsertLadderConfig_BufferFractionExplicitZeroSurvives(t *testing.T) {
 	ctx := context.Background()
 	handler, _, captured := newLadderHandler(t)
 
-	body := `{"cloud_account_id":"acct-1","provider":"aws","mode":"email_approval","cadence":"daily","buffer_fraction":0,` + ladderValidRamp + `}`
+	body := `{"cloud_account_id":"` + ladderTestAccount + `","provider":"aws","mode":"email_approval","cadence":"daily","buffer_fraction":0,` + ladderValidRamp + `}`
 	_, err := handler.upsertLadderConfig(ctx, ladderReq(body))
 	require.NoError(t, err)
 	require.NotNil(t, *captured, "store should have been reached")
@@ -71,7 +118,7 @@ func TestUpsertLadderConfig_BufferFractionOmittedDefaults(t *testing.T) {
 	ctx := context.Background()
 	handler, _, captured := newLadderHandler(t)
 
-	body := `{"cloud_account_id":"acct-1","provider":"aws","mode":"email_approval","cadence":"daily",` + ladderValidRamp + `}`
+	body := `{"cloud_account_id":"` + ladderTestAccount + `","provider":"aws","mode":"email_approval","cadence":"daily",` + ladderValidRamp + `}`
 	_, err := handler.upsertLadderConfig(ctx, ladderReq(body))
 	require.NoError(t, err)
 	require.NotNil(t, *captured, "store should have been reached")
@@ -86,7 +133,7 @@ func TestUpsertLadderConfig_ExplicitZeroTargetCoverageRejected(t *testing.T) {
 	ctx := context.Background()
 	handler, mockStore, _ := newLadderHandler(t)
 
-	body := `{"cloud_account_id":"acct-1","provider":"aws","mode":"email_approval","cadence":"daily","target_coverage":0,` + ladderValidRamp + `}`
+	body := `{"cloud_account_id":"` + ladderTestAccount + `","provider":"aws","mode":"email_approval","cadence":"daily","target_coverage":0,` + ladderValidRamp + `}`
 	result, err := handler.upsertLadderConfig(ctx, ladderReq(body))
 	require.Error(t, err)
 	assert.Nil(t, result)
@@ -103,7 +150,7 @@ func TestUpsertLadderConfig_ShortAWSLookbackRejected(t *testing.T) {
 	ctx := context.Background()
 	handler, mockStore, _ := newLadderHandler(t)
 
-	body := `{"cloud_account_id":"acct-1","provider":"aws","mode":"email_approval","cadence":"daily","lookback_days":9,` + ladderValidRamp + `}`
+	body := `{"cloud_account_id":"` + ladderTestAccount + `","provider":"aws","mode":"email_approval","cadence":"daily","lookback_days":9,` + ladderValidRamp + `}`
 	result, err := handler.upsertLadderConfig(ctx, ladderReq(body))
 	require.Error(t, err)
 	assert.Nil(t, result)
@@ -124,7 +171,7 @@ func TestUpsertLadderConfig_MultiStepRampAccepted(t *testing.T) {
 	handler, _, captured := newLadderHandler(t)
 
 	const ramp = `"ramp_schedule":{"steps":[{"after_days":0,"fraction":0.5},{"after_days":30,"fraction":0.3},{"after_days":60,"fraction":0.2}]}`
-	body := `{"cloud_account_id":"acct-1","provider":"aws","mode":"email_approval","cadence":"daily",` + ramp + `}`
+	body := `{"cloud_account_id":"` + ladderTestAccount + `","provider":"aws","mode":"email_approval","cadence":"daily",` + ramp + `}`
 	result, err := handler.upsertLadderConfig(ctx, ladderReq(body))
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -142,7 +189,7 @@ func TestUpsertLadderConfig_UnknownFieldRejected(t *testing.T) {
 	ctx := context.Background()
 	handler, mockStore, _ := newLadderHandler(t)
 
-	body := `{"cloud_account_id":"acct-1","provider":"aws","mode":"email_approval","cadence":"daily","max_hourly_commit_per_runn":5,` + ladderValidRamp + `}`
+	body := `{"cloud_account_id":"` + ladderTestAccount + `","provider":"aws","mode":"email_approval","cadence":"daily","max_hourly_commit_per_runn":5,` + ladderValidRamp + `}`
 	result, err := handler.upsertLadderConfig(ctx, ladderReq(body))
 	require.Error(t, err)
 	assert.Nil(t, result)
@@ -159,7 +206,7 @@ func TestUpsertLadderConfig_ProviderMismatchRejected(t *testing.T) {
 	ctx := context.Background()
 	handler, mockStore, _ := newLadderHandler(t)
 
-	body := `{"cloud_account_id":"acct-1","provider":"azure","mode":"email_approval","cadence":"daily",` + ladderValidRamp + `}`
+	body := `{"cloud_account_id":"` + ladderTestAccount + `","provider":"azure","mode":"email_approval","cadence":"daily",` + ladderValidRamp + `}`
 	result, err := handler.upsertLadderConfig(ctx, ladderReq(body))
 	require.Error(t, err)
 	assert.Nil(t, result)
@@ -181,9 +228,9 @@ func TestUpsertLadderConfig_ProviderMismatchRejected(t *testing.T) {
 func TestUpsertLadderConfig_NonexistentAccountRejected(t *testing.T) {
 	ctx := context.Background()
 	handler, mockStore, _ := newLadderHandler(t)
-	mockStore.On("GetCloudAccount", ctx, "ghost").Return(nil, nil)
+	mockStore.On("GetCloudAccount", ctx, ladderGhostAccount).Return(nil, nil)
 
-	body := `{"cloud_account_id":"ghost","provider":"aws","mode":"email_approval","cadence":"daily",` + ladderValidRamp + `}`
+	body := `{"cloud_account_id":"` + ladderGhostAccount + `","provider":"aws","mode":"email_approval","cadence":"daily",` + ladderValidRamp + `}`
 	result, err := handler.upsertLadderConfig(ctx, ladderReq(body))
 	require.Error(t, err)
 	assert.Nil(t, result)

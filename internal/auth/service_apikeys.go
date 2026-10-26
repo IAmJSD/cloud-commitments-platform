@@ -250,12 +250,12 @@ func (s *Service) authorizeAPIKeyAccess(ctx context.Context, userID, keyID, acti
 	key, err := s.store.GetAPIKeyByID(ctx, keyID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("API key not found")
+			return nil, ErrAPIKeyNotFound
 		}
 		return nil, fmt.Errorf("failed to get API key: %w", err)
 	}
 	if key == nil {
-		return nil, fmt.Errorf("API key not found")
+		return nil, ErrAPIKeyNotFound
 	}
 
 	if _, err := s.loadUser(ctx, userID); err != nil {
@@ -268,7 +268,7 @@ func (s *Service) authorizeAPIKeyAccess(ctx context.Context, userID, keyID, acti
 			return nil, fmt.Errorf("failed to check admin capability: %w", err)
 		}
 		if !isAdmin {
-			return nil, fmt.Errorf("unauthorized: cannot %s another user's API key", action)
+			return nil, fmt.Errorf("%w: cannot %s another user's API key", ErrAPIKeyNotOwned, action)
 		}
 	}
 

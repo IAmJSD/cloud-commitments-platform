@@ -1147,12 +1147,6 @@ func (m *MockAuthStore) CreateUser(ctx context.Context, user *auth.User) error {
 	return args.Error(0)
 }
 
-// UpdateUser mocks the UpdateUser operation.
-func (m *MockAuthStore) UpdateUser(ctx context.Context, user *auth.User) error {
-	args := m.Called(ctx, user)
-	return args.Error(0)
-}
-
 func (m *MockAuthStore) UpdateUserAdminFields(ctx context.Context, user *auth.User, readEmail string, readGroupIDs []string, readActive bool) error {
 	return m.Called(ctx, user, readEmail, readGroupIDs, readActive).Error(0)
 }
@@ -1912,6 +1906,114 @@ func (m *MockConfigStore) GetExecutionsByStatuses(ctx context.Context, statuses 
 		m.reporter.wrongReturnType("GetExecutionsByStatuses", "[]config.PurchaseExecution", args.Get(0))
 	}
 	return filterExecutionsLikeStore(v, statuses, limit), args.Error(1)
+}
+
+// ListHistoryExecutionsPage mocks the ListHistoryExecutionsPage operation.
+// With no expectation registered it returns no rows. A registered
+// expectation's rows go through the store contract (see
+// pageExecutionsLikeStore), so a test can return one unordered fixture and
+// page through it.
+func (m *MockConfigStore) ListHistoryExecutionsPage(ctx context.Context, q config.HistoryExecutionsPageQuery) ([]config.PurchaseExecution, error) {
+	m.record("ListHistoryExecutionsPage", ctx, q)
+	if !isExpected(&m.Mock, "ListHistoryExecutionsPage") {
+		return nil, nil
+	}
+	args := m.Called(ctx, q)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).([]config.PurchaseExecution)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected []config.PurchaseExecution, got %T", args.Get(0)))
+	}
+	return pageExecutionsLikeStore(v, &q), args.Error(1)
+}
+
+// ListPurchaseHistoryPage mocks the ListPurchaseHistoryPage operation. With
+// no expectation registered it returns no rows. A registered expectation's
+// rows are ordered, resumed after `after` and capped like the store does; the
+// filter's predicates are not applied (match on the filter argument instead).
+// The expectation may return []config.PurchaseHistoryPageRow, or plain
+// []config.PurchaseHistoryRecord fixtures, which get row IDs from their
+// position in the fixture (see PurchaseHistoryFixtureRowID).
+func (m *MockConfigStore) ListPurchaseHistoryPage(ctx context.Context, filter config.PurchaseHistoryFilter, after *config.HistoryPageKey) ([]config.PurchaseHistoryPageRow, error) {
+	m.record("ListPurchaseHistoryPage", ctx, filter, after)
+	if !isExpected(&m.Mock, "ListPurchaseHistoryPage") {
+		return nil, nil
+	}
+	args := m.Called(ctx, filter, after)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	var v []config.PurchaseHistoryPageRow
+	switch rows := args.Get(0).(type) {
+	case []config.PurchaseHistoryPageRow:
+		v = rows
+	case []config.PurchaseHistoryRecord:
+		v = make([]config.PurchaseHistoryPageRow, len(rows))
+		for i := range rows {
+			v[i] = config.PurchaseHistoryPageRow{PurchaseHistoryRecord: rows[i], RowID: PurchaseHistoryFixtureRowID(i)}
+		}
+	default:
+		panic(fmt.Sprintf("mock: expected []config.PurchaseHistoryPageRow or []config.PurchaseHistoryRecord, got %T", args.Get(0)))
+	}
+	out := make([]config.PurchaseHistoryPageRow, 0, len(v))
+	for i := range v {
+		if after == nil || after.SortsBefore(v[i].Key()) {
+			out = append(out, v[i])
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Key().SortsBefore(out[j].Key()) })
+	return capHistoryPage(out, filter.Limit), args.Error(1)
+}
+
+// pageExecutionsLikeStore applies ListHistoryExecutionsPage's contract to
+// canned rows: status filter, clean completed rows dropped, inclusive
+// scheduled_date bounds, rows after q.After only, stream order, then the cap.
+func pageExecutionsLikeStore(rows []config.PurchaseExecution, q *config.HistoryExecutionsPageQuery) []config.PurchaseExecution {
+	var out []config.PurchaseExecution
+	for i := range rows {
+		if executionMatchesPageQuery(&rows[i], q) {
+			out = append(out, rows[i])
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return executionPageKey(&out[i]).SortsBefore(executionPageKey(&out[j]))
+	})
+	return capHistoryPage(out, q.Limit)
+}
+
+// PurchaseHistoryFixtureRowID is the row ID ListPurchaseHistoryPage gives the
+// i-th row of a []config.PurchaseHistoryRecord fixture: a valid UUID, so a
+// cursor built from it decodes, and later fixture rows sort lower.
+func PurchaseHistoryFixtureRowID(i int) string {
+	return fmt.Sprintf("00000000-0000-4000-8000-%012x", 0xffffffffffff-i)
+}
+
+func executionMatchesPageQuery(r *config.PurchaseExecution, q *config.HistoryExecutionsPageQuery) bool {
+	if !slices.Contains(q.Statuses, r.Status) || (r.Status == "completed" && r.Error == "") {
+		return false
+	}
+	if (q.Start != nil && r.ScheduledDate.Before(*q.Start)) || (q.End != nil && r.ScheduledDate.After(*q.End)) {
+		return false
+	}
+	return q.After == nil || q.After.SortsBefore(executionPageKey(r))
+}
+
+func executionPageKey(e *config.PurchaseExecution) config.HistoryPageKey {
+	return config.HistoryPageKey{Timestamp: e.ScheduledDate, Source: config.HistorySourceExecution, ID: e.ExecutionID}
+}
+
+// capHistoryPage applies the History page limit bounds the store uses.
+func capHistoryPage[T any](rows []T, limit int) []T {
+	if limit <= 0 {
+		limit = config.DefaultListLimit
+	}
+	limit = min(limit, config.MaxListLimit)
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows
 }
 
 // filterExecutionsLikeStore applies the store contract to canned rows: filter by

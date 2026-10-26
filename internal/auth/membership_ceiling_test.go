@@ -8,7 +8,7 @@ package auth
 // newCeilingService) are shared with the permission-ceiling tests; see
 // group_ceiling_fixtures_test.go.
 //
-// Every refusal case stubs NO CreateUser / UpdateUser expectation on the
+// Every refusal case stubs NO CreateUser / UpdateUserAdminFields expectation on the
 // mock store, so a removed guard fails the test loudly (testify panics on an
 // un-stubbed call) rather than passing silently.
 

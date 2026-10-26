@@ -155,6 +155,16 @@ type StoreInterface interface {
 	// this method's status filter) to avoid accidental double-processing of
 	// failed / expired rows.
 	GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error)
+	// ListHistoryExecutionsPage and ListPurchaseHistoryPage read one keyset
+	// page each of the History view's paged stream (issue #674): rows strictly
+	// after q.After / after (nil starts at the top) in the stream order of
+	// HistoryPageKey, capped at the limit. The executions half excludes clean
+	// completed rows like GetExecutionsByStatuses and bounds scheduled_date
+	// inclusively; the purchase_history half applies GetPurchaseHistoryFiltered's
+	// predicate. Rows inserted or changed between two page reads never shift
+	// the rows a later page returns.
+	ListHistoryExecutionsPage(ctx context.Context, q HistoryExecutionsPageQuery) ([]PurchaseExecution, error)
+	ListPurchaseHistoryPage(ctx context.Context, filter PurchaseHistoryFilter, after *HistoryPageKey) ([]PurchaseHistoryPageRow, error)
 	// CountExecutionsByPlanAndStatus returns, keyed by plan ID, the exact
 	// number of executions in each of the supplied statuses that last
 	// changed state (updated_at) at or after `since` -- not those merely
@@ -497,6 +507,7 @@ type StoreInterface interface {
 	// processing (approved) exchange under the shared daily-cap lock, excluding
 	// the row's own amount, and stores the ceiling as its payment_due.
 	ReserveApprovedRIExchange(ctx context.Context, id, dailyCapUSD, perExchangeCapUSD string) (string, error)
+	// GetRIExchangeRecord returns a wrapped ErrNotFound when no record has id.
 	GetRIExchangeRecord(ctx context.Context, id string) (*RIExchangeRecord, error)
 	GetRIExchangeRecordByToken(ctx context.Context, token string) (*RIExchangeRecord, error)
 	GetRIExchangeHistory(ctx context.Context, since time.Time, limit int) ([]RIExchangeRecord, error)
@@ -506,6 +517,8 @@ type StoreInterface interface {
 	GetRIExchangeHistoryForAccounts(ctx context.Context, since time.Time, limit int, accountIDs []string) ([]RIExchangeRecord, error)
 	// TransitionRIExchangeStatus atomically transitions an RI exchange record status.
 	// actor is the UUID of the user performing the transition (nil for system-initiated paths).
+	// A lost transition returns a wrapped ErrRIExchangeExpired when the record
+	// has expired, or ErrRIExchangeNotInExpectedStatus when its status moved on.
 	TransitionRIExchangeStatus(ctx context.Context, id string, fromStatus string, toStatus string, actor *string) (*RIExchangeRecord, error)
 	CompleteRIExchange(ctx context.Context, id string, exchangeID string) error
 	// CompleteRIExchangeWithPayment marks an RI exchange as completed and

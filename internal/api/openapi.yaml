@@ -126,10 +126,12 @@ paths:
       parameters:
         - name: provider
           in: query
-          description: Filter by cloud provider (aws, azure, gcp)
+          description: >
+            Filter by cloud provider. "all" or no value means every provider.
+            Any other value is a 400.
           schema:
             type: string
-            enum: [aws, azure, gcp]
+            enum: [aws, azure, gcp, all]
         - name: account_ids
           in: query
           description: >
@@ -146,6 +148,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DashboardSummary'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -889,6 +893,8 @@ paths:
             execute_mode "direct" only. The claim was won and the purchase
             ran, but it failed or only partly completed. Money may have moved;
             the body details carry execution_id and the row's actual status.
+            A partially_completed run is revocable: the executed email with
+            its revocation link is sent as for a completed run.
             Check the execution in History before retrying.
           content:
             application/json:
@@ -1009,8 +1015,10 @@ paths:
             Session mode only. The claim was won and the purchase ran, but it
             failed or only partly completed (a failed or partially_completed
             run). Money may have moved; the body details carry execution_id
-            and the row's actual status. Check the execution in History
-            before retrying.
+            and the row's actual status. A partially_completed run is
+            revocable: the executed email with its revocation link is sent as
+            for a completed run. Check the execution in History before
+            retrying.
           content:
             application/json:
               schema:
@@ -1230,7 +1238,16 @@ paths:
         '409':
           description: >
             The execution status cannot be revoked (still pending or
-            notified, or not completed), or the revocation link has expired.
+            notified, or not completed), or its status changed concurrently.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: >
+            Token mode only, the revocation token matches but has expired.
+            The token is matched first, so a wrong token on an expired link
+            is 403, as on approve and cancel.
           content:
             application/json:
               schema:
@@ -2258,9 +2275,12 @@ paths:
                   excluded_ris:
                     type: array
                     description: >
-                      Convertible RIs left out of cost-based analysis (for
-                      example AWS returned no term length), so they have no
-                      recommendation. Omitted when empty.
+                      Convertible RIs left out of cost-based analysis
+                      because their monthly cost cannot be computed (AWS
+                      returned no term length, or no pricing: fixed, usage
+                      and recurring charges total zero or less), so they have
+                      no recommendation. reason says which. Omitted when
+                      empty.
                     items:
                       type: object
                       properties:
@@ -2470,8 +2490,10 @@ paths:
         present; a CSRF rejection never falls through. The token is read
         from the query string only. This route
         never returns 401: a request with no token and no usable session
-        fails CSRF validation with 403. A missing record (404) and a wrong
-        token (403) are distinguishable for unauthenticated callers.
+        fails CSRF validation with 403. The token alone authorizes, so the
+        route is open to callers without a session; token mode answers an
+        unknown exchange id with the same 403 as a wrong token, so it does
+        not reveal which ids exist.
       security:
         - bearerAuth: []
         - {}
@@ -2500,19 +2522,37 @@ paths:
           description: >
             CSRF validation failed (including a request with neither a token
             nor a valid session), the session lacks approve permission, the
-            token is invalid, the record does not support approval, or, when a
-            session exists, 4-eyes mode rejects the approver (for example the
-            creator approving their own exchange).
+            token is invalid, or, when a session exists, 4-eyes mode rejects
+            the approver (for example the creator approving their own
+            exchange). In token mode an unknown exchange id, an exchange with
+            no approval token and a wrong token get the same 403 and body.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
-          $ref: '#/components/responses/NotFound'
+          description: >
+            Session mode only, the exchange does not exist. Token mode answers
+            an unknown id with 403, like a wrong token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '409':
           description: >
-            The exchange is no longer pending (already processed, expired or
-            canceled by a newer analysis run).
+            The exchange is no longer pending (already processed, or canceled
+            by a newer analysis run), including when a concurrent approve or
+            reject changed it first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: >
+            The exchange has expired (its expires_at has passed). Token mode
+            checks this once the token matches, so a wrong token on an
+            expired exchange is 403; both modes also get 410 when the
+            exchange expires before the atomic transition.
           content:
             application/json:
               schema:
@@ -2537,9 +2577,9 @@ paths:
       summary: Reject a pending RI exchange (token-based, no session required)
       description: >
         Authorized by the rejection token in the query string alone. A session
-        is ignored and no CSRF check runs. A missing token is 400; a missing
-        record (404) and a wrong token (403) are distinguishable for
-        unauthenticated callers.
+        is ignored and no CSRF check runs. A missing token is 400. An unknown
+        exchange id gets the same 403 and body as a wrong token, so the route
+        does not reveal which ids exist.
       security: []
       parameters:
         - name: token
@@ -2557,15 +2597,25 @@ paths:
         '400':
           $ref: '#/components/responses/BadRequest'
         '403':
-          description: The rejection token is invalid, or the record does not support rejection.
+          description: >
+            The rejection token is invalid. An unknown exchange id and an
+            exchange with no token get the same answer.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-        '404':
-          $ref: '#/components/responses/NotFound'
         '409':
-          description: The exchange is no longer pending (already processed, expired or canceled).
+          description: >
+            The exchange is no longer pending (already processed or canceled),
+            including when a concurrent approve or reject changed it first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: >
+            The rejection token matches but the exchange has expired (its
+            expires_at has passed). A wrong token on an expired exchange is 403.
           content:
             application/json:
               schema:
@@ -2700,6 +2750,16 @@ paths:
       operationId: getHistory
       tags: [History]
       summary: Get purchase history
+      description: >-
+        Lists completed purchases and terminal executions (failed, expired,
+        canceled, ...) newest first, `limit` rows per page, plus the actionable
+        executions (pending approvals and in-flight purchases). Actionable
+        executions are not paged: the first page lists all of them, up to
+        `actionable_executions_limit`, and pages fetched with `cursor` leave
+        them out. To fetch the next page, repeat the request with the same
+        filters and `cursor` set to the previous response's `next_cursor`.
+        Rows written after the first page was loaded never shift, repeat or
+        skip a row on a later page.
       parameters:
         - $ref: '#/components/parameters/HistoryProvider'
         - name: account_ids
@@ -2726,12 +2786,23 @@ paths:
             format: date
         - name: limit
           in: query
-          description: >
-            Maximum number of completed purchase rows. Values below 1 fall
-            back to the default; values above 1000 are capped at 1000.
+          description: >-
+            Page size for completed purchases and terminal executions together.
+            Values below 1 use the default; values above 1000 are capped at 1000.
           schema:
             type: integer
             default: 100
+            maximum: 1000
+        - name: cursor
+          in: query
+          description: >-
+            Opaque position to continue from: the `next_cursor` value of the
+            previous page, passed unchanged. Omit it for the first page. Any
+            other value is rejected with 400. There is no `offset` parameter;
+            sending one is rejected with 400.
+          schema:
+            type: string
+            maxLength: 256
       responses:
         '200':
           description: Purchase history with summary
@@ -3864,12 +3935,14 @@ paths:
       parameters:
         - name: provider
           in: query
-          description: Only return accounts of this provider (aws, azure or gcp).
+          description: >
+            Only return accounts of this provider (aws, azure or gcp). "all"
+            means every provider. Any other value is a 400.
           schema:
             type: string
         - name: enabled
           in: query
-          description: Only return enabled (true) or disabled (false) accounts. Other values are ignored.
+          description: Only return enabled (true) or disabled (false) accounts. Any other value is a 400.
           schema:
             type: boolean
         - name: search
@@ -3886,6 +3959,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/AccountSummary'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -3902,12 +3977,14 @@ paths:
       parameters:
         - name: provider
           in: query
-          description: Only return accounts of this provider (aws, azure or gcp).
+          description: >
+            Only return accounts of this provider (aws, azure or gcp). "all"
+            means every provider. Any other value is a 400.
           schema:
             type: string
         - name: enabled
           in: query
-          description: Only return enabled (true) or disabled (false) accounts. Other values are ignored.
+          description: Only return enabled (true) or disabled (false) accounts. Any other value is a 400.
           schema:
             type: boolean
         - name: search
@@ -3924,6 +4001,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/CloudAccount'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -4605,7 +4684,9 @@ paths:
             type: string
         - name: provider
           in: query
-          description: Exact, case-sensitive provider match. Not validated.
+          description: >
+            Only return commitments of this provider (aws, azure or gcp).
+            "all" means every provider. Any other value is a 400.
           schema:
             type: string
       responses:
@@ -4615,6 +4696,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/InventoryCommitmentsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -4640,8 +4723,9 @@ paths:
         - name: provider
           in: query
           description: >
-            Exact provider match. Not validated. Other providers are still
-            listed, with no services.
+            Only fill in this provider (aws, azure or gcp); the other
+            providers are still listed, with no services. "all" means every
+            provider. Any other value is a 400.
           schema:
             type: string
       responses:
@@ -4651,6 +4735,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CoverageBreakdownResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -6994,19 +7080,37 @@ components:
             missing.
         limit:
           type: integer
-          description: Row cap on completed purchase history rows for this request.
+          description: >-
+            Page size: the most completed purchases and terminal executions
+            together that this response lists.
         executions_limit:
           type: integer
           description: >-
-            Row cap on terminal executions (failed, expired, canceled, ...),
-            fixed and ignoring the limit parameter. Actionable executions use
-            the separate `actionable_executions_limit` cap.
+            Row cap on terminal executions (failed, expired, canceled, ...).
+            They share the page with completed purchases, so it equals
+            `limit`. Actionable executions use the separate
+            `actionable_executions_limit` cap.
         actionable_executions_limit:
           type: integer
           description: >-
             Row cap on actionable executions (pending, notified, scheduled,
             approved, running, paused), fixed at 1000 and ignoring the limit
-            parameter.
+            parameter. Actionable executions are listed on the first page only.
+        has_more:
+          type: boolean
+          description: >-
+            True when more completed purchases or terminal executions the
+            caller may see follow this page; fetch them with `next_cursor`.
+            `truncated` is also true then. When `truncated` is true and
+            `has_more` is false, the missing rows cannot be paged to: the
+            actionable executions reached their cap, or an execution listing
+            failed.
+        next_cursor:
+          type: string
+          description: >-
+            Opaque position after the last paged row of this response; pass it
+            as the `cursor` parameter to fetch the next page. Present only when
+            `has_more` is true.
 
     HistorySummary:
       type: object

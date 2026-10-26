@@ -957,9 +957,12 @@ func (s *Sender) SendPurchaseScheduledNotification(ctx context.Context, data Not
 // purchaseExecutedNotificationTemplate is the plain-text half of the
 // post-execution notification email. Rendered alongside
 // purchaseExecutedNotificationHTMLTemplate for multipart/alternative delivery.
-const purchaseExecutedNotificationTemplate = `[CUDly] Purchase executed{{if .Recommendations}} ({{len .Recommendations}} commitment(s)){{end}}
+const purchaseExecutedNotificationTemplate = `[CUDly] Purchase {{if .PartialPurchase}}partially {{end}}executed{{if .Recommendations}} ({{len .Recommendations}} commitment(s)){{end}}
 =============================================================================
-{{if .RequestedByEmail}}
+{{if .PartialPurchase}}
+Not every commitment in this purchase went through. See the execution in the
+dashboard for which ones failed.
+{{end}}{{if .RequestedByEmail}}
 Requested by: {{if .RequestedByName}}{{.RequestedByName}} <{{.RequestedByEmail}}>{{else}}{{.RequestedByEmail}}{{end}}{{if .RequestedAt}} at {{.RequestedAt}}{{end}}
 {{end}}{{if .ExecutedBy}}
 Executed by:  {{.ExecutedBy}}{{if .ExecutedAt}} at {{.ExecutedAt}}{{end}}
@@ -1003,8 +1006,8 @@ const purchaseExecutedNotificationHTMLTemplate = `<!DOCTYPE html>
 <tr><td align="center">
 <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="background:#ffffff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
 <tr><td style="padding:32px 32px 16px 32px;">
-<h1 style="margin:0;font-size:22px;color:#0f172a;">Purchase Executed</h1>
-<p style="margin:8px 0 0 0;color:#475569;font-size:14px;"><strong>{{len .Recommendations}}</strong> commitment(s) were purchased successfully.</p>
+<h1 style="margin:0;font-size:22px;color:#0f172a;">Purchase {{if .PartialPurchase}}Partially {{end}}Executed</h1>
+{{if .PartialPurchase}}<p style="margin:8px 0 0 0;color:#b45309;font-size:14px;">Not every commitment in this purchase went through. See the execution in the dashboard for which ones failed.</p>{{else}}<p style="margin:8px 0 0 0;color:#475569;font-size:14px;"><strong>{{len .Recommendations}}</strong> commitment(s) were purchased successfully.</p>{{end}}
 </td></tr>
 
 <tr><td style="padding:0 32px 8px 32px;">
@@ -1110,12 +1113,16 @@ func (s *Sender) SendPurchaseExecutedNotification(ctx context.Context, data Noti
 // recommendation list is small enough to fit. Extracted so both Sender
 // and SMTPSender use the same subject format.
 func buildExecutedNotificationSubject(data NotificationData) string {
+	verb := "executed"
+	if data.PartialPurchase {
+		verb = "partially executed"
+	}
 	if len(data.Recommendations) == 1 {
 		r := data.Recommendations[0]
-		return fmt.Sprintf("[CUDly] Purchase executed: %s %s in %s",
-			r.Service, r.ResourceType, r.Region)
+		return fmt.Sprintf("[CUDly] Purchase %s: %s %s in %s",
+			verb, r.Service, r.ResourceType, r.Region)
 	}
-	return fmt.Sprintf("[CUDly] Purchase executed (%d commitment(s))", len(data.Recommendations))
+	return fmt.Sprintf("[CUDly] Purchase %s (%d commitment(s))", verb, len(data.Recommendations))
 }
 
 // ---------------------------------------------------------------------------

@@ -76,7 +76,7 @@ func captureIdempotencyTokens(t *testing.T, exec *config.PurchaseExecution) map[
 
 	// provCfg is nil: the mock factory matches mock.Anything for it and the
 	// real factory is never reached.
-	_, _, errs, procErr := manager.processPurchaseRecommendations(ctx, exec, plan, "111111111111", nil)
+	_, _, errs, procErr := manager.processPurchaseRecommendations(ctx, exec, plan, "111111111111", nil, "")
 	require.NoError(t, procErr, "processPurchaseRecommendations must not fail in the happy path")
 	require.Empty(t, errs, "all recs must commit so the captured token reflects a real purchase")
 	return tokens
@@ -133,7 +133,7 @@ func TestOfferingClassStampedOnHistoryMatchesPurchase(t *testing.T) {
 				},
 			}
 
-			_, _, errs, procErr := manager.processPurchaseRecommendations(ctx, exec, &config.PurchasePlan{Name: "Direct purchase"}, "111111111111", nil)
+			_, _, errs, procErr := manager.processPurchaseRecommendations(ctx, exec, &config.PurchasePlan{Name: "Direct purchase"}, "111111111111", nil, "")
 			require.NoError(t, procErr)
 			require.Empty(t, errs)
 			require.NotNil(t, history)
@@ -161,7 +161,7 @@ func TestUnknownOfferingClassRefusesBeforePurchase(t *testing.T) {
 		},
 	}
 
-	_, _, errs, procErr := manager.processPurchaseRecommendations(ctx, exec, &config.PurchasePlan{Name: "Direct purchase"}, "111111111111", nil)
+	_, _, errs, procErr := manager.processPurchaseRecommendations(ctx, exec, &config.PurchasePlan{Name: "Direct purchase"}, "111111111111", nil, "")
 	require.ErrorIs(t, procErr, errUnknownOfferingClass)
 	assert.Nil(t, errs)
 	mockFactory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)

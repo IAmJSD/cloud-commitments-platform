@@ -3,8 +3,11 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // API adapter types - these match the types in internal/api/handler.go
@@ -430,11 +433,14 @@ func (s *Service) UpdateGroupAPI(ctx context.Context, actorUserID, groupID strin
 // GetGroupAPI returns a group by ID via the API.
 func (s *Service) GetGroupAPI(ctx context.Context, groupID string) (any, error) {
 	group, err := s.GetGroup(ctx, groupID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %w", ErrGroupNotFound, err)
+	}
 	if err != nil {
 		return nil, err
 	}
 	if group == nil {
-		return nil, fmt.Errorf("group not found")
+		return nil, ErrGroupNotFound
 	}
 	return groupToAPIGroup(group), nil
 }

@@ -40,6 +40,7 @@ WITH scoped AS (
         r.baseline_usd_hr::text AS baseline_usd_hr, r.target_usd_hr::text AS target_usd_hr,
         r.existing_usd_hr::text AS existing_usd_hr, r.gap_usd_hr::text AS gap_usd_hr,
         r.total_hourly_commit::text AS total_hourly_commit,
+        r.plan->>'reason_code' AS reason_code,
         COALESCE((SELECT jsonb_agg(jsonb_build_object(
           'action', action->'action', 'layer', action->'layer',
           'rationale', action->'rationale', 'data_sources', action->'data_sources'))

@@ -334,7 +334,7 @@ func TestService_RequestPasswordReset(t *testing.T) {
 	// Regression test for issue #89 / audit finding A03-006: an admin-
 	// deactivated account must not receive a working reset link. It must be
 	// refused with the exact same no-error, no-email response as "email
-	// does not exist" -- neither UpdateUser (which would mint a fresh reset
+	// does not exist" -- neither SetPasswordResetToken (which would mint a fresh reset
 	// token) nor SendPasswordResetEmail may be called, or the response shape
 	// would let a caller distinguish deactivated from missing.
 	t.Run("deactivated account gets no reset link, same response as missing email", func(t *testing.T) {
@@ -353,7 +353,7 @@ func TestService_RequestPasswordReset(t *testing.T) {
 		}
 
 		mockStore.On("GetUserByEmail", ctx, "deactivated@example.com").Return(deactivatedUser, nil).Once()
-		// UpdateUser and SendPasswordResetEmail must NOT be called.
+		// SetPasswordResetToken and SendPasswordResetEmail must NOT be called.
 
 		err := service.RequestPasswordReset(ctx, "deactivated@example.com")
 		require.NoError(t, err, "deactivated-account reset request must not error (enumeration protection)")
@@ -362,7 +362,7 @@ func TestService_RequestPasswordReset(t *testing.T) {
 
 // TestService_RequestPasswordReset_RateLimit is the regression test for 03-M5.
 // An active token issued within PasswordResetRateLimit must be preserved: the
-// second call must return nil without calling UpdateUser or sending an email.
+// second call must return nil without calling SetPasswordResetToken or sending an email.
 func TestService_RequestPasswordReset_RateLimit(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockStore)
@@ -382,11 +382,11 @@ func TestService_RequestPasswordReset_RateLimit(t *testing.T) {
 	}
 
 	mockStore.On("GetUserByEmail", ctx, "ratelimit@example.com").Return(userWithFreshToken, nil).Once()
-	// UpdateUser and SendPasswordResetEmail must NOT be called.
+	// SetPasswordResetToken and SendPasswordResetEmail must NOT be called.
 
 	err := service.RequestPasswordReset(ctx, "ratelimit@example.com")
 	require.NoError(t, err, "rate-limited reset must not return an error (enumeration protection)")
-	// Verify by asserting no UpdateUser or email calls happened (handled by AssertExpectations).
+	// Verify by asserting no SetPasswordResetToken or email calls happened (handled by AssertExpectations).
 }
 
 func TestService_ConfirmPasswordReset(t *testing.T) {

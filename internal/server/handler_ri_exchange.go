@@ -292,13 +292,16 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 
 // monthlyCostFromConvertibleRI delegates to ricost.MonthlyCostFromConvertibleRI,
 // the single implementation of the convertible RI monthly cost formula shared
-// with internal/api.
+// with internal/api. It errors for a non-positive duration or no positive
+// price, and callers must exclude the RI.
 func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
 	return ricost.MonthlyCostFromConvertibleRI(ri)
 }
 
 // convertForAutoExchange converts provider-specific types to exchange package types,
-// including RI metadata needed for offering lookup.
+// including RI metadata needed for offering lookup. It serves both the
+// auto-exchange run and the ladder write path (ladder_write.go); an RI whose
+// monthly cost is not computable is logged and dropped on both.
 func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recommendations.RIUtilization) ([]exchange.RIInfo, []exchange.UtilizationInfo, map[string]exchange.RIMetadataInfo) {
 	riInfos := make([]exchange.RIInfo, 0, len(instances))
 	riMetadata := make(map[string]exchange.RIMetadataInfo, len(instances))
@@ -307,7 +310,7 @@ func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recomme
 		inst := instances[i]
 		monthlyCost, err := monthlyCostFromConvertibleRI(inst)
 		if err != nil {
-			logging.Warnf("convertForAutoExchange: excluding RI from auto-exchange: %v", err)
+			logging.Warnf("convertForAutoExchange: excluding RI from auto-exchange and ladder reshaping: %v", err)
 			continue
 		}
 		riInfos = append(riInfos, exchange.RIInfo{

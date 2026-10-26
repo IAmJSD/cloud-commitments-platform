@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 )
 
@@ -660,6 +661,15 @@ type RecommendationRecord struct {
 	// collapses the denominator) don't inflate the displayed effective
 	// savings %. See #274.
 	OnDemandCost *float64 `json:"on_demand_cost,omitempty" dynamodbav:"on_demand_cost,omitempty"`
+	// CommitmentCurrency is the ISO 4217 code UpfrontCost and MonthlyCost are
+	// denominated in, copied from common.Recommendation.CommitmentCurrency at
+	// collection time. Empty means unknown: the provider parser could not
+	// prove the currency of every payment leg, or the row predates the field.
+	// The purchase spend caps are USD, so a rec that is not provably USD is
+	// never compared against one (issue #361). Persisted via the
+	// recommendations row's JSONB `payload` column, and with the execution's
+	// recommendations JSONB; no DDL needed.
+	CommitmentCurrency string `json:"commitment_currency,omitempty" dynamodbav:"commitment_currency,omitempty"`
 	// SavingsPercentage is the provider-authoritative effective savings %
 	// reported directly by the cloud provider (AWS Cost Explorer
 	// `EstimatedMonthlySavingsPercentage`, Azure / GCP converters' computed
@@ -760,15 +770,30 @@ type SuppressionVariant struct {
 	Tenancy          string `json:"tenancy"`
 }
 
-// CanonicalSuppressionService maps the legacy AWS EC2 slug "ec2" to the
-// canonical "compute" slug so a suppression and a rec match whichever spelling
-// each was stored under (issue #1412). Other providers' services, including
-// Azure and GCP "compute", are returned unchanged. It lives in config, the
-// lowest package both the scheduler and BuildSuppressions import; the pinned
+// awsLegacyServiceSlugs maps the AWS service slugs that rec rows persisted
+// before slug normalisation still carry to their canonical spelling.
+// memorydb has no canonical slug and is deliberately absent. Keyed and valued by the
+// library constants; a purchase test checks it against mapServiceSlug.
+var awsLegacyServiceSlugs = map[string]string{
+	string(common.ServiceEC2):         string(common.ServiceCompute),
+	string(common.ServiceRDS):         string(common.ServiceRelationalDB),
+	string(common.ServiceElastiCache): string(common.ServiceCache),
+	string(common.ServiceOpenSearch):  string(common.ServiceSearch),
+	string(common.ServiceRedshift):    string(common.ServiceDataWarehouse),
+}
+
+// CanonicalSuppressionService maps legacy AWS service slugs to their canonical
+// slug so a suppression and a rec match whichever spelling each was stored
+// under (issues #1412, #1420). Other providers' services, including Azure and
+// GCP "compute", are returned unchanged. It lives in config, the lowest
+// package both the scheduler and BuildSuppressions import; the pinned
 // cloud-commitments-go common package has no such mapping.
 func CanonicalSuppressionService(provider, service string) string {
-	if provider == "aws" && service == "ec2" {
-		return "compute"
+	if provider != "aws" {
+		return service
+	}
+	if canonical, ok := awsLegacyServiceSlugs[service]; ok {
+		return canonical
 	}
 	return service
 }
@@ -779,7 +804,16 @@ func CanonicalSuppressionService(provider, service string) string {
 // matches every row: both fall back to the pre-#816 6-tuple match, which
 // over-suppresses (under-buys) rather than over-shows.
 func (s *PurchaseSuppression) AppliesTo(v *SuppressionVariant) bool {
-	return s.Variant == nil || v == nil || *s.Variant == *v
+	if s.Variant == nil || v == nil {
+		return true
+	}
+	a, b := *s.Variant, *v
+	// Only the stored side needs canonicalising: SuppressionVariant already
+	// canonicalises every rec variant, so a raw "shared" never reaches v.
+	if isAWSEC2(s.Provider, s.Service) {
+		a.Tenancy = canonicalSuppressionTenancy(a.Tenancy)
+	}
+	return a == b
 }
 
 // RecommendationFilter parameterises ListStoredRecommendations and the
@@ -1269,6 +1303,9 @@ type CloudAccount struct {
 	CredentialsConfigured bool   `json:"credentials_configured"`
 	BastionAccountName    string `json:"bastion_account_name,omitempty"`
 	IsSelf                bool   `json:"is_self,omitempty"`
+	// Notices are warnings the API derives for the response, such as the
+	// aws-cn Savings Plans limitation (issue #1194).
+	Notices []AccountNotice `json:"notices,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

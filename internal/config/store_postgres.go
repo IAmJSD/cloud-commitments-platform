@@ -2314,64 +2314,6 @@ func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays 
 // PURCHASE HISTORY
 // ==========================================
 
-// SavePurchaseHistory saves a purchase history record. It is idempotent per
-// (provider, account_id, purchase_id): a re-drive or root retry that adopts a
-// commitment the first attempt already bought saves the same key again, and a
-// second row would double-count spend and savings (#704). The NOT EXISTS
-// covers rows that predate the unique index from migration 000108; the index
-// and ON CONFLICT cover two concurrent saves. An existing row is left as is.
-func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *PurchaseHistoryRecord) error {
-	if err := record.Validate(); err != nil {
-		return err
-	}
-	query := `
-		INSERT INTO purchase_history (
-			account_id, purchase_id, timestamp, provider, service, region,
-			resource_type, count, term, payment, upfront_cost, monthly_cost,
-			estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-			source, revocation_window_closes_at, offering_class
-		)
-		SELECT $1::varchar, $2::varchar, $3, $4::varchar, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
-		WHERE NOT EXISTS (
-			SELECT 1 FROM purchase_history
-			WHERE provider = $4 AND account_id = $1 AND purchase_id = $2
-		)
-		ON CONFLICT DO NOTHING
-	`
-
-	tag, err := s.db.Exec(ctx, query,
-		record.AccountID,
-		record.PurchaseID,
-		record.Timestamp,
-		record.Provider,
-		record.Service,
-		record.Region,
-		record.ResourceType,
-		record.Count,
-		record.Term,
-		record.Payment,
-		record.UpfrontCost,
-		record.MonthlyCost,
-		record.EstimatedSavings,
-		nullStringFromString(record.PlanID),
-		nullStringFromString(record.PlanName),
-		record.RampStep,
-		record.CloudAccountID,
-		record.Source,
-		record.RevocationWindowClosesAt,
-		nullStringFromString(record.OfferingClass),
-	)
-
-	if err != nil {
-		return fmt.Errorf("failed to save purchase history: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		logging.Infof("purchase history for %s/%s/%s already recorded; keeping the existing row", record.Provider, record.AccountID, record.PurchaseID)
-	}
-
-	return nil
-}
-
 // UpdatePurchaseHistoryListing stamps the marketplace listing fields onto a
 // purchase_history row identified by its purchase_id (RI reservation ID).
 // Called by the marketplace-list handler after CreateReservedInstancesListing
@@ -3383,7 +3325,9 @@ func riExchangeUSD(micros *big.Int) string {
 	return fmt.Sprintf("%s.%06d", whole, fractional)
 }
 
-// GetRIExchangeRecord retrieves an RI exchange record by ID.
+// GetRIExchangeRecord retrieves an RI exchange record by ID. A missing record
+// is a wrapped ErrNotFound, so callers can tell it from a failed query and
+// answer it as a client error rather than a 500 (issue #601).
 func (s *PostgresStore) GetRIExchangeRecord(ctx context.Context, id string) (*RIExchangeRecord, error) {
 	query := `
 		SELECT id, account_id, exchange_id, region, source_ri_ids,
@@ -3402,7 +3346,7 @@ func (s *PostgresStore) GetRIExchangeRecord(ctx context.Context, id string) (*RI
 	}
 
 	if len(records) == 0 {
-		return nil, fmt.Errorf("ri exchange record not found: %s", id)
+		return nil, fmt.Errorf("ri exchange record %s: %w", id, ErrNotFound)
 	}
 
 	return &records[0], nil
@@ -3478,7 +3422,8 @@ func (s *PostgresStore) GetRIExchangeHistoryForAccounts(ctx context.Context, sin
 
 // TransitionRIExchangeStatus atomically transitions an RI exchange record status.
 // Uses a single UPDATE...WHERE...RETURNING for atomicity, then diagnoses failure
-// only if zero rows are returned.
+// only if zero rows are returned (ErrRIExchangeExpired or
+// ErrRIExchangeNotInExpectedStatus, wrapped, for an existing record).
 // actor is the UUID of the user performing the transition (nil for system-initiated paths).
 func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id, fromStatus, toStatus string, actor *string) (*RIExchangeRecord, error) {
 	query := `
@@ -3521,9 +3466,9 @@ func (s *PostgresStore) diagnoseTransitionFailure(ctx context.Context, id, fromS
 		return fmt.Errorf("failed to diagnose transition failure: %w", err)
 	}
 	if expired {
-		return fmt.Errorf("ri exchange has expired")
+		return fmt.Errorf("%w: %s", ErrRIExchangeExpired, id)
 	}
-	return fmt.Errorf("ri exchange status transition failed: expected status %q but current status is %q", fromStatus, currentStatus)
+	return fmt.Errorf("%w: expected status %q but current status is %q", ErrRIExchangeNotInExpectedStatus, fromStatus, currentStatus)
 }
 
 // CompleteRIExchange marks an RI exchange as completed.

@@ -17,7 +17,7 @@ import (
 // admin:* grants, so it passed. Closing only the group-permission write path
 // would have left this open and #1550 would have auto-closed over it.
 //
-// As elsewhere in this package, refusal cases stub NO UpdateUser expectation:
+// As elsewhere in this package, refusal cases stub NO UpdateUserAdminFields expectation:
 // testify panics if the write lands, so the assertions cannot be vacuous.
 
 const (

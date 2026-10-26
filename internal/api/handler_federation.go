@@ -525,7 +525,11 @@ func buildFederationBundle(data federationIaCData, target, source, slug string) 
 		return nil, "", err
 	}
 
-	readme := buildBundleReadme(data, target, source)
+	providerNote, noteErr := bundleProviderReadmeSection(target, source)
+	if noteErr != nil {
+		return nil, "", fmt.Errorf("bundle: %w", noteErr)
+	}
+	readme := buildBundleReadme(data, target, source) + providerNote
 	if err := addStringToZip(zw, "README.txt", readme); err != nil {
 		return nil, "", fmt.Errorf("bundle: write readme: %w", err)
 	}
@@ -661,7 +665,7 @@ func buildAzureTemplateReadme(data federationIaCData, format string) string {
 // addBundleTerraform adds the Terraform module files and generated .tfvars to the zip.
 func addBundleTerraform(zw *zip.Writer, data federationIaCData, target, source, slug string) error {
 	tfDir := bundleModuleDir(target, source) + "/terraform"
-	if err := addDirToZip(zw, cudlyiac.Modules, tfDir, "terraform"); err != nil {
+	if err := addBundleTerraformDir(zw, tfDir, bundleExtraModules(target)); err != nil {
 		return fmt.Errorf("bundle: terraform dir: %w", err)
 	}
 	tfvarsTmpl, tfvarsName := bundleTfvarsSpec(target, source, slug)
@@ -804,6 +808,7 @@ func buildBundleReadme(data federationIaCData, target, source string) string {
 		sb.WriteString("After apply, set aws_auth_mode=workload_identity_federation and aws_role_arn in CUDly.\n")
 	case target == "azure":
 		sb.WriteString("Contents:\n  terraform/           - Azure App Registration + federated-identity-credential Terraform module\n")
+		sb.WriteString("  terraform/modules/   - Custom reservation-purchaser role module called by terraform/main.tf\n")
 		sb.WriteString("  terraform/*.auto.tfvars - Pre-filled variable values (auto-loaded by Terraform)\n\n")
 		sb.WriteString("This uses true Workload Identity Federation — no certificate, no private key,\nno client secret is created or stored. CUDly's OIDC issuer signs a short-lived\nJWT on each Azure API call and Azure AD verifies it against the federated\ncredential provisioned here.\n\n")
 		sb.WriteString("Deploy (Terraform):\n")

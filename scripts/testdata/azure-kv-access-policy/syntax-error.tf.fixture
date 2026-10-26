@@ -1,0 +1,8 @@
+# Fixture: a file that does not parse as HCL. Must exit 2 (cannot check).
+#
+# The block below is never closed. A parser that gave up on the file and
+# reported it clean would hide anything declared in it, so an unparseable file
+# is a "cannot check" result, never a pass.
+
+resource "azurerm_key_vault_access_policy" "unterminated" {
+  key_vault_id = var.key_vault_id

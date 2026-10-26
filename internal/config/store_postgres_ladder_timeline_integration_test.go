@@ -5,6 +5,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,4 +140,36 @@ func TestLadderTimelineMixedBasisOnDemand(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.ListLadderTimeline(ctx, accountID, "aws", nil)
 	require.ErrorIs(t, err, ErrLadderTimelineRate)
+}
+
+// A run that could not size its gap carries the plan's reason_code to the runs
+// API; an ordinary run (here a target-met Hold) has none, so the two Holds are
+// told apart by code as well as by rationale.
+func TestLadderTimelineRuns_ProjectsPlanReasonCode(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	store := setupLadderStore(ctx, t)
+	cfgID := seedLadderConfig(ctx, t, store)
+	var accountID string
+	require.NoError(t, store.db.QueryRow(ctx, "SELECT cloud_account_id FROM ladder_configs WHERE id=$1", cfgID).Scan(&accountID))
+	start := time.Now().UTC()
+	for i, plan := range []string{
+		`{"actions":[{"action":"hold","layer":"ec2-instance-sp","rationale":"target already met: gap=0"}]}`,
+		`{"reason_code":"missing_discount_rate","actions":[{"action":"hold","layer":"compute-sp","rationale":"Can't size this yet because layer compute-sp ..."}]}`,
+	} {
+		_, err := store.SaveLadderRun(ctx, &LadderRunDB{ConfigID: &cfgID, Status: ladder.RunStatusPlanned,
+			StartedAt: start.Add(time.Duration(i) * time.Second), Plan: []byte(plan)})
+		require.NoError(t, err)
+	}
+	runs, err := store.ListLadderTimelineRuns(ctx, accountID, "aws", nil)
+	require.NoError(t, err)
+	require.Len(t, runs.Runs, 2)
+	codes := map[string]string{}
+	for _, run := range runs.Runs {
+		codes[run.Actions[0].Layer] = run.ReasonCode
+	}
+	require.Equal(t, map[string]string{"ec2-instance-sp": "", "compute-sp": "missing_discount_rate"}, codes)
+	raw, err := json.Marshal(runs)
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(string(raw), `"reason_code"`), "an ordinary run omits reason_code")
 }

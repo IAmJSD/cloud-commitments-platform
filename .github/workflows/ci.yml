@@ -1062,19 +1062,20 @@ jobs:
           fi
 
       - name: Test CI/CD trust (immutable ids)
-        # Skips a cloud until it has a tests dir. The lock file is gitignored,
-        # so no -lockfile=readonly.
+        # Skips a cloud until it has a tests dir.
         run: |
           d="terraform/environments/$CLOUD/ci-cd-permissions"
           if [ -d "$d/tests" ]; then
-            terraform -chdir="$d" init -backend=false -input=false
+            terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
             terraform -chdir="$d" test
           fi
 
+      # -lockfile=readonly fails the job when a committed lock file lacks this
+      # runner's provider hashes, instead of quietly adding them (#1435).
       - name: Terraform Init
         run: |
           cd "terraform/environments/$CLOUD"
-          terraform init -backend=false
+          terraform init -backend=false -lockfile=readonly -input=false
 
       - name: Terraform Validate
         run: |
@@ -1691,6 +1692,35 @@ jobs:
       - name: Run Cloud SQL scope self-tests
         run: bash scripts/test-cloud-sql-delete-scope.sh
 
+  # Assert that cleanup-staging.yml's destroy-gcp job deletes the Service
+  # Networking peering on the network its state names (the `network_name`
+  # output, not a hardcoded `cudly-staging-vpc`), and removes the peering from
+  # state only after that delete succeeded, with nothing swallowed (#330). The
+  # step it replaces removed the module-qualified address from state first and
+  # swallowed the delete's failure, which left a live peering no state
+  # tracked. The suite runs scripts/delete-owned-vpc-peering.sh end to end
+  # against stubbed terraform and gcloud, asserts the step order inside
+  # destroy-gcp (Cloud SQL, then peering, then destroy), and sweeps every
+  # workflow plus a recursive glob of scripts/ so the script stays the only
+  # place that runs `gcloud services vpc-peerings delete`.
+  # Fast (shell only), so it always runs.
+  vpc-peering-delete-scope:
+    name: VPC peering delete scope
+    runs-on: ubuntu-latest
+    # Same shape as ecr-delete-selection above: this job checks out the tree and
+    # runs a shell script against it, so `contents: read` is all it needs.
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run VPC peering scope self-tests
+        run: bash scripts/test-vpc-peering-delete-scope.sh
+
   # Assert that every job applying a `compute_platform` writes the Terraform
   # state namespace that platform owns: `compute_platform=lambda` into
   # github-<env>/, `compute_platform=fargate` into github-fargate-<env>/. The
@@ -1777,12 +1807,14 @@ jobs:
       - name: Run rollback verify-step self-tests
         run: bash scripts/test-rollback-ecr-registry.sh
 
-  # Assert that no Terraform file declares an azurerm_key_vault_access_policy
-  # resource. This project's only Key Vault sets enable_rbac_authorization =
-  # true, and an RBAC-enabled vault ignores access policies entirely, so such a
-  # grant applies cleanly and then does nothing at runtime (#1621). The nested
-  # `access_policy` block form is deliberately not covered; #1839 tracks it.
-  # Fast (shell only), so it always runs.
+  # Assert that no Terraform file declares a Key Vault access policy: neither
+  # an azurerm_key_vault_access_policy resource nor an access_policy block
+  # (static or dynamic) inside azurerm_key_vault. This project's only Key Vault
+  # sets enable_rbac_authorization = true, and an RBAC-enabled vault ignores
+  # access policies entirely, so such a grant applies cleanly and then does
+  # nothing at runtime (#1621). The files are parsed as HCL by a small Go
+  # program (cmd/check-azure-kv-access-policy, #204), so the job needs Go; it
+  # is still fast, so it always runs.
   azure-kv-access-policy:
     name: Azure Key Vault grant model
     runs-on: ubuntu-latest
@@ -1794,6 +1826,12 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
       - name: Assert no Key Vault access policies
         run: bash scripts/check-azure-kv-access-policy.sh
@@ -1848,6 +1886,47 @@ jobs:
       - name: Run import script self-tests
         run: bash scripts/test-gcp-import-dev-state.sh
 
+  # Assert that the files the documented Make targets write at the repo root
+  # (the `bootstrap` Lambda binary, coverage.html, the trivy/tfsec JSON reports,
+  # complexity-report.txt) are gitignored, and that the patterns stay
+  # root-anchored so same-named files elsewhere remain trackable (#279).
+  # Fast (shell only), so it always runs.
+  gitignore-make-artifacts:
+    name: Gitignore covers Make artifacts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assert Make artifacts are gitignored
+        run: bash scripts/test-gitignore-make-artifacts.sh
+
+  # Execute scripts/tf-deploy.sh and the Makefile.terraform targets that drive
+  # it against a stub `terraform` that only records its argv (#59): every
+  # state-changing target goes through the script, so it gets the profile
+  # check, environment bootstrap and `terraform init`, and extra args such as
+  # -target=module.frontend reach terraform verbatim. Fast (shell only), so it
+  # always runs.
+  tf-deploy-wrapper:
+    name: Terraform deploy wrapper
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run tf-deploy.sh self-tests
+        run: bash scripts/test-tf-deploy.sh
+
   # Summary job - all checks must pass
   ci-success:
     name: CI Success
@@ -1870,12 +1949,15 @@ jobs:
       - ecr-delete-selection
       - rds-deletion-protection-scope
       - cloud-sql-delete-scope
+      - vpc-peering-delete-scope
       - aws-tfstate-platform-key
       - tfstate-concurrency-group
       - rollback-ecr-registry
       - azure-kv-access-policy
       - migration-down-gate
       - gcp-import-dev-state
+      - gitignore-make-artifacts
+      - tf-deploy-wrapper
     if: always()
     permissions:
       contents: read

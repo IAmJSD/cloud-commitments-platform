@@ -264,10 +264,12 @@ Orchestrate deployment to multiple cloud providers in parallel.
 
 1. **Determine Strategy** - Choose which clouds to deploy to
 2. **Deploy AWS Lambda** - Parallel deployment
-3. **Deploy AWS Fargate** - Parallel deployment (optional)
-4. **Deploy GCP** - Parallel deployment
-5. **Deploy Azure** - Parallel deployment
-6. **Notify** - Aggregate results
+3. **Deploy GCP** - Parallel deployment
+4. **Deploy Azure** - Parallel deployment
+5. **Notify** - Aggregate results
+
+AWS Fargate is not part of this fan-out. Deploy it by dispatching
+[deploy-aws-fargate.yml](#aws-fargate-deployment) directly.
 
 ### Triggers
 
@@ -280,7 +282,7 @@ Orchestrate deployment to multiple cloud providers in parallel.
 
 ### Deployment Options
 
-- `all` - Deploy to AWS, GCP, and Azure
+- `all` - Deploy to AWS Lambda, GCP, and Azure
 - `aws-only` - AWS Lambda only
 - `gcp-only` - GCP Cloud Run only
 - `azure-only` - Azure Container Apps only
