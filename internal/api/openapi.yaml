@@ -32,9 +32,16 @@ tags:
   - name: APIKeys
   - name: Users
   - name: Groups
+  - name: RIExchange
   - name: Health
   - name: Info
   - name: Docs
+  - name: Accounts
+  - name: Registrations
+  - name: Federation
+  - name: Inventory
+  - name: Ladder
+  - name: Notifications
   - name: Insurance
     description: Read-only configuration status and configured plan comparison.
 
@@ -123,9 +130,15 @@ paths:
           schema:
             type: string
             enum: [aws, azure, gcp]
+        - name: account_ids
+          in: query
+          description: >
+            Comma-separated cloud account UUIDs (at most 200). When present it
+            takes precedence over account_id. The result is always narrowed
+            to the caller's allowed accounts.
+          schema:
+            type: string
         - $ref: '#/components/parameters/AccountID'
-        - $ref: '#/components/parameters/StartDate'
-        - $ref: '#/components/parameters/EndDate'
       responses:
         '200':
           description: Dashboard summary
@@ -178,6 +191,10 @@ paths:
       operationId: updateConfig
       tags: [Configuration]
       summary: Update global configuration
+      description: >
+        Partial update: keys present in the body replace the stored values
+        and absent keys are preserved. The response does not echo the
+        configuration; read it back with GET /api/config.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -188,11 +205,13 @@ paths:
               $ref: '#/components/schemas/GlobalConfig'
       responses:
         '200':
-          description: Updated configuration
+          description: Configuration saved
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ConfigResponse'
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                status: updated
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -200,35 +219,46 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
-  /api/config/service/{service}:
+  /api/config/service/{provider}/{service}:
     parameters:
-      - name: service
+      - name: provider
         in: path
         required: true
         schema:
           type: string
-          enum: [ec2, rds, elasticache, opensearch]
+          enum: [aws, azure, gcp]
+      - name: service
+        in: path
+        required: true
+        description: Service name within the provider, for example ec2 or rds. Letters, digits, hyphens and underscores only.
+        schema:
+          type: string
     get:
       operationId: getServiceConfig
       tags: [Configuration]
       summary: Get per-service configuration
       responses:
         '200':
-          description: Service configuration
+          description: >
+            Service configuration, or an empty object {} when none is stored
+            for this provider and service.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ServiceConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
-        '404':
-          $ref: '#/components/responses/NotFound'
     put:
       operationId: updateServiceConfig
       tags: [Configuration]
       summary: Update per-service configuration
+      description: >
+        Provider and service are taken from the path. The response does not
+        echo the configuration; read it back with GET.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -239,11 +269,13 @@ paths:
               $ref: '#/components/schemas/ServiceConfig'
       responses:
         '200':
-          description: Updated service configuration
+          description: Service configuration saved
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ServiceConfig'
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                status: updated
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -295,7 +327,50 @@ paths:
           in: query
           schema:
             type: string
-        - $ref: '#/components/parameters/AccountID'
+        - name: account_ids
+          in: query
+          description: >
+            Comma-separated cloud account UUIDs (at most 200). Results are
+            always narrowed to the caller's allowed accounts.
+          schema:
+            type: string
+        - name: min_savings_usd
+          in: query
+          description: Minimum monthly savings in USD. Absent or 0 means no floor.
+          schema:
+            type: number
+            minimum: 0
+        - name: min_savings_pct
+          in: query
+          description: Minimum effective savings percentage (0-100). Absent or 0 means no floor.
+          schema:
+            type: number
+            minimum: 0
+            maximum: 100
+        - name: limit
+          in: query
+          description: >-
+            Opt-in maximum page size in rows (1-1000). When neither limit nor
+            cursor is present, every matching recommendation is returned in
+            one response (legacy behavior); a present but empty value is a
+            400. When either is sent, rows are returned in ascending id order,
+            one page at a time, and a page can hold fewer than limit rows
+            (follow next_cursor, not the row count) because each page is also
+            capped at 4 MiB of serialized JSON. A single row larger than that
+            is returned alone. summary and regions still describe the full
+            filtered set.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: cursor
+          in: query
+          description: >-
+            Opaque next_cursor value from the previous page. Implies
+            pagination; the page size defaults to 500 when limit is omitted.
+          schema:
+            type: string
+            maxLength: 1024
       responses:
         '200':
           description: Recommendations list
@@ -303,6 +378,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/RecommendationsResponse'
+        '400':
+          description: >
+            Invalid query parameter: a limit that is empty, not an integer or
+            outside 1-1000; a cursor that is empty, longer than 1024
+            characters or not a cursor this endpoint issued; or an invalid
+            provider, service, region, account_ids, min_savings_usd or
+            min_savings_pct filter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -313,19 +399,30 @@ paths:
       operationId: refreshRecommendations
       tags: [Recommendations]
       summary: Trigger a fresh collection of recommendations from cloud providers
+      description: >
+        Starts a collection across every registered account; on Lambda it
+        runs asynchronously. Poll GET /api/recommendations/freshness until
+        last_collected_at passes started_at. Callers restricted to a subset
+        of accounts get 403.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       responses:
         '200':
-          description: Collection result
+          description: Collection started
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CollectResult'
+                $ref: '#/components/schemas/RefreshResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          description: A collection is already in progress (started within the last 5 minutes).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /api/recommendations/freshness:
     get:
@@ -349,6 +446,51 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+
+  /api/recommendations/{id}/detail:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: >
+          Recommendation ID as returned by GET /api/recommendations. It is a
+          pipe-separated identity (provider, account, service, region,
+          resource type, engine, term, payment, plus optional zone and
+          platform/tenancy segments) that can contain "/" and spaces, so
+          percent-encode it.
+        schema:
+          type: string
+    get:
+      operationId: getRecommendationDetail
+      tags: [Recommendations]
+      summary: Get the drill-down details of one recommendation
+      description: >
+        Backs the recommendation drawer. A recommendation hidden by an account
+        service override still resolves, with hidden_by naming the override
+        dimensions; a fully suppressed one answers 404.
+      responses:
+        '200':
+          description: Recommendation details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecommendationDetailResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: >
+            No such recommendation, it is fully suppressed, or it belongs to
+            an account outside the caller's account scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
 
   # ---- Purchase Plans -----------------------------------------------------
   /api/plans:
@@ -592,6 +734,96 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorWithCode'
+
+  /api/plans/{id}/accounts:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    get:
+      operationId: listPlanAccounts
+      tags: [Plans]
+      summary: List the cloud accounts assigned to a plan
+      description: >
+        Requires view:plans. A caller with a restricted account scope sees
+        only the plan's accounts inside that scope, and gets 404 when none of
+        the plan's accounts is in scope. An unrestricted caller gets an empty
+        list for an unknown plan ID.
+      responses:
+        '200':
+          description: Accounts assigned to the plan, ordered by name
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CloudAccount'
+        '400':
+          description: The plan ID is not a valid UUID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: No account of the plan is inside the caller's account scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    put:
+      operationId: setPlanAccounts
+      tags: [Plans]
+      summary: Replace the cloud accounts assigned to a plan
+      description: >
+        Requires update:plans. Replaces the plan's whole account list
+        atomically. Every account's provider must match one of the providers
+        of the plan's services. A caller with a restricted account scope must
+        have every current account of the plan and every requested account in
+        scope.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetPlanAccountsRequest'
+      responses:
+        '200':
+          description: Accounts replaced. The body is an empty JSON object.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: >
+            Invalid plan ID or request body, account_ids missing, empty or
+            holding a non-UUID entry, or one or more accounts have a provider
+            the plan's services do not use (every mismatch is listed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: >
+            The plan or a requested account does not exist, or the plan or a
+            requested account is outside the caller's account scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          $ref: '#/components/responses/EditorReconciliationRequired'
+        '500':
+          $ref: '#/components/responses/InternalError'
 
   # ---- Purchase Actions ---------------------------------------------------
   /api/purchases/execute:
@@ -886,6 +1118,42 @@ paths:
   /api/purchases/revoke/{id}:
     parameters:
       - $ref: '#/components/parameters/ResourceID'
+    get:
+      operationId: getRevokeConfirmationForm
+      tags: [Purchases]
+      summary: Render the revocation confirmation form for the email link
+      description: >
+        The revocation email links here. Returns an HTML page with a form
+        that POSTs the token to this path; nothing is looked up or changed, so
+        mail prefetchers cannot trigger a revocation. The form submits a
+        plain browser form POST, which carries no Authorization or
+        X-CSRF-Token header.
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: false
+          description: >
+            Approval token from the email link. Embedded unchanged (HTML
+            escaped) in the form's hidden token field; it is not validated
+            here.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: HTML confirmation page
+          content:
+            text/html:
+              schema:
+                type: string
+        '400':
+          description: The execution ID is not a valid UUID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
     post:
       operationId: revokePurchaseViaEmail
       tags: [Purchases]
@@ -894,10 +1162,8 @@ paths:
         Records a revocation request for a completed or partially completed
         purchase. The same path also answers GET with an unauthenticated HTML
         confirmation form (no state change, so mail prefetchers cannot
-        trigger a revocation); that form POSTs the token here. The GET
-        operation is not listed separately because the permission-gate
-        guard in openapi_403_test.go matches routes by prefix and would
-        mistake it for the GET /api/purchases/{id} details route.
+        trigger a revocation), documented as the GET operation on this path;
+        that form POSTs the token here.
 
         Two modes. Session mode: session bearer token plus
         X-CSRF-Token, with cancel-any or cancel-own and account scope, as for
@@ -975,6 +1241,564 @@ paths:
           $ref: '#/components/responses/RateLimited'
         '500':
           description: Server error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/purchases/approve/{id}/details:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: getApprovalDetails
+      tags: [Purchases]
+      summary: Read a pending purchase's details for the approval link
+      description: >
+        Read-only; POST only so the approval token travels in the body. A
+        signed-in session is always required. A session holding view:purchases
+        with the execution in its account scope gets the details without a
+        token. Otherwise the request needs both a valid approval token for
+        this execution and a session whose email is the contact email of an
+        account on the execution. Every final denial answers like a missing
+        execution (404).
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+        - name: token
+          in: query
+          required: false
+          description: >
+            Approval token, accepted as a fallback. Prefer the request body so
+            the token stays out of access logs.
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token:
+                  type: string
+                  description: Approval token from the approval email link.
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                token:
+                  type: string
+                  description: Approval token from the approval email link.
+      responses:
+        '200':
+          description: Purchase execution details, as returned by GET /api/purchases/{id}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PurchaseExecution'
+        '400':
+          description: The execution ID is not a valid UUID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: >
+            The caller has no valid session. This is answered before the
+            execution is looked up, so an existing and a missing execution ID
+            get the same response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: CSRF validation failed (checked before the execution is looked up).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: >
+            Execution not found, or the caller may not read it (no
+            view:purchases or out of scope, and no valid token plus matching
+            contact email).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: >
+            Token path only. The approval token matches but has expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/purchases/retry/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: retryPurchase
+      tags: [Purchases]
+      summary: Retry a failed purchase execution
+      description: >
+        Creates a new pending execution from a failed execution's stored
+        recommendations and sends a fresh approval email; the failed row keeps
+        its status and links to the new one. Requires a bearer session (an
+        API key alone gets 401) holding retry-any, or retry-own for an
+        execution the caller created, with the execution in the caller's
+        account scope. The recommendations must also satisfy the Constraints
+        of the caller's execute permission on purchases.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+        - name: force
+          in: query
+          required: false
+          description: >
+            "true" (case-insensitive) overrides the soft block applied once an
+            execution has been retried 5 times. It does not override any other
+            409.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Retry execution created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetryPurchaseResponse'
+        '400':
+          description: >
+            Invalid execution ID, or the stored recommendations fail validation
+            (negative cost or savings, totals above the allowed maximum, or a
+            zero total commitment).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: No valid bearer session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: >
+            CSRF validation failed, the session lacks retry-any or retry-own
+            (or retry-own on another user's execution), or the recommendations
+            exceed the Constraints of the session's execute permission.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Execution not found, or outside the caller's account scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: >
+            The execution cannot be retried: its status is not failed, it was
+            already retried (retry_execution_id names the successor when
+            known; a concurrent retry also answers this way), it is a plan step
+            with no recommendations, it belongs to a settled ladder tranche,
+            a provider re-drive of it is unsafe (ops_hint plus
+            redrive_unsafe, permanent and not overridable by force), its
+            failure is operator-fixable (ops_hint plus failure_reason), or it
+            reached the retry threshold without force=true (retry_attempt_n
+            plus threshold).
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Error'
+                  - type: object
+                    properties:
+                      retry_execution_id:
+                        type: string
+                        format: uuid
+                      ops_hint:
+                        type: string
+                      redrive_unsafe:
+                        type: boolean
+                      failure_reason:
+                        type: string
+                      retry_attempt_n:
+                        type: integer
+                      threshold:
+                        type: integer
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/purchases/{id}/revoke:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: >
+          A purchase execution ID, or the purchase_id of a purchase history
+          row. For Azure the purchase_id is the reservation's ARM resource ID,
+          which contains "/" and is sent as-is: everything between
+          /api/purchases/ and /revoke is the ID.
+        schema:
+          type: string
+    post:
+      operationId: revokePurchase
+      tags: [Purchases]
+      summary: Revoke a purchase within its free-cancel window
+      description: >
+        Requires a bearer session (an API key alone gets 401) holding
+        revoke-any or revoke-own on purchases, checked against the
+        permission's Constraints. When the ID is an execution, a still
+        scheduled execution is canceled before any provider call (status
+        "canceled"). Otherwise the purchase history row is revoked: only
+        Azure reservations are supported, within 7 days of purchase less a
+        one-hour safety margin, and the body must echo the quote from GET
+        /api/purchases/{id}/revoke/calculate. An already revoked row answers
+        "already_revoked"; a row whose Azure refund was issued but not yet
+        recorded answers code RECONCILE_PENDING and must not be retried.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevokePurchaseRequest'
+      responses:
+        '200':
+          description: Canceled, revoked, already revoked, or refund pending reconciliation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevokePurchaseResponse'
+        '400':
+          description: >
+            Invalid JSON body, expected_refund_amount or
+            expected_refund_currency missing for an Azure revoke, or Azure
+            rejected the refund calculation or return as a client error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: No valid bearer session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: >
+            CSRF validation failed, the session lacks revoke-any and
+            revoke-own, revoke-own on another user's scheduled execution, the
+            purchase is in an account the session cannot access or has no
+            account attribution, the request exceeds the permission's
+            Constraints, or the authentication service is not configured.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: >
+            No execution or purchase history row has this ID, or the
+            execution is outside the caller's account scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '410':
+          description: >
+            The ID is an execution that is no longer scheduled (the purchase
+            already ran or the execution was never scheduled), so it cannot be
+            canceled for free.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: >
+            The purchase cannot be revoked in-app: the provider is not Azure
+            (AWS and GCP have no direct cancel API), the Azure return window
+            has closed, the reservation IDs cannot be parsed from the
+            purchase_id, Azure returned no refund quote, or the confirmed
+            refund amount or currency diverges from Azure's current quote
+            (re-quote and confirm again).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/purchases/{id}/revoke/calculate:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: >
+          The purchase_id of a purchase history row. For Azure this is the
+          reservation's ARM resource ID, which contains "/" and is sent as-is.
+        schema:
+          type: string
+    get:
+      operationId: calculateRevokeRefund
+      tags: [Purchases]
+      summary: Quote the refund for revoking an Azure reservation
+      description: >
+        First step of the quote-then-confirm revoke flow; nothing is changed.
+        Runs Azure CalculateRefund and returns the amount and currency to send
+        back as expected_refund_amount and expected_refund_currency on POST
+        /api/purchases/{id}/revoke. Same session, permission and window rules
+        as that POST.
+      responses:
+        '200':
+          description: Refund quote
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevokeRefundQuote'
+        '400':
+          description: Azure rejected the refund calculation as a client error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: No valid bearer session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: >
+            The session lacks revoke-any and revoke-own, the purchase is in an
+            account the session cannot access or has no account attribution,
+            the request exceeds the permission's Constraints, or the
+            authentication service is not configured.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: No purchase history row has this purchase_id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: >
+            The provider is not Azure, the Azure return window has closed, the
+            reservation IDs cannot be parsed from the purchase_id, or Azure
+            returned no refund amount or currency.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/purchases/{id}/marketplace-list:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The AWS Reserved Instance ID (purchase history purchase_id).
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: createMarketplaceListing
+      tags: [Purchases]
+      summary: List a Standard Reserved Instance on the AWS RI Marketplace
+      description: >
+        Requires a bearer session holding sell-any or sell-own on purchases,
+        checked against the permission's Constraints. The purchase's cloud
+        account must be in the caller's account scope; a purchase with no
+        cloud account needs sell-any and an unrestricted scope. Only Standard RIs with
+        at least one month remaining can be listed. Signs AWS calls as the
+        purchase's own cloud account. A retry after an ambiguous failure
+        reuses the stored client token and price schedule, so it does not
+        create a second listing.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MarketplaceListRequest'
+      responses:
+        '200':
+          description: Listing created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketplaceListResponse'
+        '400':
+          description: >
+            Invalid ID or body, an invalid price_schedule (non-positive term
+            or price, a term beyond the remaining months, a price below the
+            floor, or no default price computable), the RI is not Standard,
+            the purchase's cloud account is missing, not AWS or cannot be
+            signed for, the account role could not be assumed, or AWS rejected
+            the request as a client error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: No valid bearer session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: >
+            CSRF validation failed, the session lacks sell-any and sell-own,
+            the purchase is outside the caller's accounts or has no account
+            attribution, or the request exceeds the permission's Constraints.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: No purchase history row has this ID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: A listing is already active or in progress for this RI.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '422':
+          description: >
+            The purchase has no timestamp or an unsupported term, or less than
+            one month of its term remains.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '502':
+          description: >
+            AWS failed, the role assumption failed transiently, AWS returned a
+            dead listing, or a created listing could not be saved (the message
+            says whether it was canceled or may still be active).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: AWS throttled the role assumption; retry after the Retry-After delay.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/purchases/{id}/marketplace-cancel:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The AWS Reserved Instance ID (purchase history purchase_id).
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: cancelMarketplaceListing
+      tags: [Purchases]
+      summary: Cancel an active AWS RI Marketplace listing
+      description: >
+        Same session, permission and account rules as marketplace-list.
+        Cancels the RI's active listing on AWS and records the new state.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Listing canceled
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [listing_id, listing_state]
+                properties:
+                  listing_id:
+                    type: string
+                  listing_state:
+                    type: string
+                    description: Listing state reported by AWS after the cancel.
+        '400':
+          description: >
+            Invalid ID, the purchase's cloud account is missing, not AWS or
+            cannot be signed for, the account role could not be assumed, or
+            AWS rejected the cancel as a client error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: No valid bearer session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: >
+            CSRF validation failed, the session lacks sell-any and sell-own,
+            the purchase is outside the caller's accounts or has no account
+            attribution, or the request exceeds the permission's Constraints.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: No purchase history row has this ID.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: The RI has no active listing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: >
+            Server error, including a listing canceled on AWS whose new state
+            could not be saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: AWS failed, or the role assumption failed transiently.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: AWS throttled the role assumption; retry after the Retry-After delay.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              schema:
+                type: integer
           content:
             application/json:
               schema:
@@ -1180,6 +2004,11 @@ paths:
             application/json:
               schema:
                 type: object
+                properties:
+                  reservations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AzureExchangeableReservation'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1260,7 +2089,11 @@ paths:
         client-supplied session is never trusted. Execution is refused when
         the fresh quote carries policy errors, omits a net payable amount,
         is denominated in a different currency than requested, or exceeds
-        `max_payment_due`.
+        `max_payment_due`. A source whose applied scope cannot be carried onto
+        the purchased reservation (see `applied_scope_type` on
+        AzureExchangeableReservation), or sources with different applied
+        scopes, are refused with 422 before any Azure call; the same holds
+        for the compatible-offerings preview.
         Submits are deduplicated for 15 minutes on a fingerprint of
         `subscription_id` plus the sources and targets with their quantities,
         so a retry after a client timeout returns 409 rather than committing
@@ -1501,6 +2334,9 @@ paths:
         earlier submit succeeded, only that it claimed the window.
         The exchange runs in the deployment's own AWS account, so a session
         whose allowed accounts do not cover that account gets 403.
+        A quote that is not denominated in USD, or names no currency, is
+        refused with 422 before the exchange is accepted, because
+        `max_payment_due_usd` cannot be enforced against it.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -1545,6 +2381,8 @@ paths:
                 $ref: '#/components/schemas/Error'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
 
   /api/ri-exchange/config:
     get:
@@ -1567,7 +2405,11 @@ paths:
       operationId: updateRIExchangeConfig
       tags: [RIExchange]
       summary: Update RI exchange configuration
-      description: Requires `update:config` permission.
+      description: >-
+        Requires `update:config` permission. While 4-eyes approval mode
+        (`require_different_approver`) is on, the scheduler runs `auto` mode
+        as `manual`: it only raises pending exchanges, which need approval.
+        The stored mode is not changed.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -1735,21 +2577,184 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /api/ri-exchange/resolve/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: resolveRIExchange
+      tags: [RIExchange]
+      summary: Record an operator's outcome for a stale processing RI exchange
+      description: >
+        A run that crashed between the provider call and its ledger write
+        leaves the exchange processing, holding its reserved ceiling against
+        the daily cap. After checking AWS, an operator records whether the
+        exchange happened. `failed` releases the hold and requires
+        `acknowledge_unknown_outcome`; `completed` keeps the reserved amount
+        on today's books and may name the provider `exchange_id`. Requires
+        `execute:ri-exchange`, checked against the permission's constraints
+        with `checked_region` as the region, and a signed-in user or user API
+        key (the admin API key is refused). The store refuses a row that a
+        running writer may still settle, and a repeat of the same request
+        returns the stored result with `replayed: true`.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [outcome, reason, cloud_check]
+              properties:
+                outcome:
+                  type: string
+                  enum: [failed, completed]
+                reason:
+                  type: string
+                  minLength: 10
+                  maxLength: 300
+                  description: Free text, trimmed, without control characters.
+                exchange_id:
+                  type: string
+                  pattern: '^[A-Za-z0-9-]{1,100}$'
+                  description: Provider exchange id. Only allowed with outcome completed.
+                acknowledge_unknown_outcome:
+                  type: boolean
+                  description: Must be true when outcome is failed.
+                cloud_check:
+                  type: object
+                  additionalProperties: false
+                  required: [checked_account_id, checked_region, checked_at]
+                  description: >
+                    Where the operator verified the exchange at AWS. The store
+                    requires the exchange's own account and region and a time
+                    after its last change.
+                  properties:
+                    checked_account_id:
+                      type: string
+                      pattern: '^\d{12}$'
+                    checked_region:
+                      type: string
+                      pattern: '^[a-z0-9-]{1,32}$'
+                    checked_at:
+                      type: string
+                      format: date-time
+      responses:
+        '200':
+          description: Exchange resolved, or the same resolve replayed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  status:
+                    type: string
+                  payment_due:
+                    type: string
+                  note:
+                    type: string
+                  replayed:
+                    type: boolean
+        '400':
+          description: >
+            Invalid id or body: body over 4096 bytes, unknown fields, a
+            missing or invalid field, or a cloud check that does not match
+            the exchange.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >
+            CSRF validation failed, the session lacks `execute:ri-exchange` or
+            fails its constraints, or the caller is the admin API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: No such exchange, or the deployment's AWS account is outside the session's allowed accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: The exchange is not a stale processing row this request can resolve.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: RI exchange resolve storage is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   # ---- History ------------------------------------------------------------
   /api/history:
     get:
       operationId: getHistory
       tags: [History]
       summary: Get purchase history
+      description: >-
+        Lists completed purchases and terminal executions (failed, expired,
+        canceled, ...) newest first, `limit` rows per page, plus the actionable
+        executions (pending approvals and in-flight purchases). Actionable
+        executions are not paged: the first page lists all of them, up to
+        `actionable_executions_limit`, and pages fetched with `cursor` leave
+        them out. To fetch the next page, repeat the request with the same
+        filters and `cursor` set to the previous response's `next_cursor`.
+        Rows written after the first page was loaded never shift, repeat or
+        skip a row on a later page.
       parameters:
-        - $ref: '#/components/parameters/AccountID'
-        - $ref: '#/components/parameters/StartDate'
-        - $ref: '#/components/parameters/EndDate'
-        - name: interval
+        - $ref: '#/components/parameters/HistoryProvider'
+        - name: account_ids
           in: query
+          description: >
+            Comma-separated cloud account UUIDs (at most 200). Combined with
+            account_id (the union of both is matched).
           schema:
             type: string
-            enum: [hourly, daily, weekly, monthly]
+        - $ref: '#/components/parameters/AccountID'
+        - name: start
+          in: query
+          description: >
+            First day to include (YYYY-MM-DD, UTC). When only one of start
+            and end is sent, the other defaults to 366 days away from it.
+          schema:
+            type: string
+            format: date
+        - name: end
+          in: query
+          description: Last day to include (YYYY-MM-DD, UTC, inclusive). The range may span at most 366 days.
+          schema:
+            type: string
+            format: date
+        - name: limit
+          in: query
+          description: >-
+            Page size for completed purchases and terminal executions together.
+            Values below 1 use the default; values above 1000 are capped at 1000.
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+        - name: cursor
+          in: query
+          description: >-
+            Opaque position to continue from: the `next_cursor` value of the
+            previous page, passed unchanged. Omit it for the first page. Any
+            other value is rejected with 400. There is no `offset` parameter;
+            sending one is rejected with 400.
+          schema:
+            type: string
+            maxLength: 256
       responses:
         '200':
           description: Purchase history with summary
@@ -1757,6 +2762,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HistoryResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1768,9 +2775,17 @@ paths:
       tags: [History]
       summary: Get time-series analytics for purchase history
       parameters:
-        - $ref: '#/components/parameters/AccountID'
+        - $ref: '#/components/parameters/AnalyticsAccountID'
         - $ref: '#/components/parameters/StartDate'
         - $ref: '#/components/parameters/EndDate'
+        - name: interval
+          in: query
+          description: Bucket size of the returned data points.
+          schema:
+            type: string
+            enum: [hourly, daily, weekly, monthly]
+            default: hourly
+        - $ref: '#/components/parameters/HistoryProvider'
       responses:
         '200':
           description: Analytics data
@@ -1778,10 +2793,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AnalyticsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          description: account_id is outside the caller's allowed accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/AnalyticsUnavailable'
 
   /api/history/breakdown:
     get:
@@ -1789,14 +2814,14 @@ paths:
       tags: [History]
       summary: Get savings breakdown by dimension
       parameters:
-        - $ref: '#/components/parameters/AccountID'
+        - $ref: '#/components/parameters/AnalyticsAccountID'
         - $ref: '#/components/parameters/StartDate'
         - $ref: '#/components/parameters/EndDate'
         - name: dimension
           in: query
           schema:
             type: string
-            enum: [service, provider, region]
+            enum: [service, provider, region, account]
             default: service
       responses:
         '200':
@@ -1805,10 +2830,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BreakdownResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          description: account_id is outside the caller's allowed accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/AnalyticsUnavailable'
 
   # ---- Analytics ----------------------------------------------------------
   /api/analytics/collect:
@@ -1827,6 +2862,73 @@ paths:
                 $ref: '#/components/schemas/StatusMessageResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+
+  /api/analytics/trends:
+    get:
+      operationId: getAnalyticsTrends
+      tags: [Analytics]
+      summary: Get savings-snapshot trends
+      description: >
+        Requires `view:purchases` permission. Returns monthly savings totals
+        plus by-provider and by-service breakdowns from the savings snapshot
+        store. The monthly series covers `months` calendar months counted back
+        from the current month; the breakdowns cover the requested range.
+      parameters:
+        - name: account_id
+          in: query
+          description: >
+            Cloud account ID or external account ID. Required for sessions
+            restricted to specific accounts; omit for all accessible accounts.
+          schema:
+            type: string
+        - name: start
+          in: query
+          description: RFC 3339 or YYYY-MM-DD. Defaults to 7 days before `end`.
+          schema:
+            type: string
+        - name: end
+          in: query
+          description: >
+            RFC 3339 or YYYY-MM-DD (a date covers the whole day). Defaults to
+            now. The range may span at most 366 days.
+          schema:
+            type: string
+        - name: provider
+          in: query
+          description: Filters `by_service` only. Not validated; an unknown value yields no rows.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Savings trends
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalyticsTrendsResponse'
+        '400':
+          description: >
+            Invalid date, start after end, range over 366 days, or a
+            restricted session omitted `account_id`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: The account is outside the session's allowed accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: The savings snapshot store is not configured.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   # ---- Auth ---------------------------------------------------------------
   /api/auth/login:
@@ -1854,6 +2956,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '429':
           $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/RateLimiterUnavailable'
 
   /api/auth/logout:
     post:
@@ -1924,8 +3028,16 @@ paths:
                 $ref: '#/components/schemas/LoginResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '409':
+          description: An admin account already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '429':
           $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/RateLimiterUnavailable'
 
   /api/auth/forgot-password:
     post:
@@ -1971,6 +3083,16 @@ paths:
                 $ref: '#/components/schemas/StatusResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '409':
+          description: The account changed concurrently while the password was being reset; retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/RateLimiterUnavailable'
 
   /api/auth/profile:
     put:
@@ -2021,6 +3143,295 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/me/permissions:
+    get:
+      operationId: getCurrentUserPermissions
+      tags: [Auth]
+      summary: Get the caller's effective permissions
+      security:
+        - bearerAuth: []
+        - apiKeyAuth: []
+      description: >
+        For a session, the union of the user's group permissions. For a user
+        API key, the key's permissions intersected with its owner's. For the
+        admin API key, `{admin, *}`. `is_admin` is true when the set holds
+        `{admin, *}`.
+      responses:
+        '200':
+          description: Effective permissions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPermissionsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/reset-password/status:
+    get:
+      operationId: getResetPasswordStatus
+      tags: [Auth]
+      summary: Check a password reset or invite token without consuming it
+      description: >
+        Returns 200 for every token state. `used` also covers tokens that were
+        never issued and accounts that are deactivated. Shares the
+        reset-password rate limit (10 requests per 15 minutes per IP).
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          description: Reset or invite token from the email link
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Token state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResetPasswordStatusResponse'
+        '400':
+          description: The token parameter is missing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          description: The rate limiter is unavailable (fails closed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/mfa/setup:
+    post:
+      operationId: setupMFA
+      tags: [Auth]
+      summary: Start MFA enrollment
+      description: >
+        Generates a pending TOTP secret (valid for 5 minutes) and its
+        otpauth provisioning URI. Repeating the call replaces the pending
+        secret. Requires a bearer-token session; API keys get 401. Rate
+        limited to 10 MFA requests per 15 minutes per IP and per user. A
+        missing user, failed lookup or locked account answers 401.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MFASetupRequest'
+      responses:
+        '200':
+          description: Pending secret created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MFASetupResponse'
+        '400':
+          description: Invalid body, password encoding or password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: CSRF validation failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: >
+            MFA is already enabled (disable it first), or the account changed
+            concurrently.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          description: The rate limiter is unavailable (fails closed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/mfa/enable:
+    post:
+      operationId: enableMFA
+      tags: [Auth]
+      summary: Finish MFA enrollment
+      description: >
+        Verifies a TOTP code against the pending secret, enables MFA and
+        returns 10 recovery codes, shown only once. Requires a bearer-token
+        session; API keys get 401. Rate limited to 10 MFA requests per 15
+        minutes per IP and per user. A wrong code counts toward account
+        lockout; a locked account answers 401.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MFAEnableRequest'
+      responses:
+        '200':
+          description: MFA enabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MFARecoveryCodesResponse'
+        '400':
+          description: >
+            Invalid body, invalid code, no enrollment in progress, or the
+            enrollment expired.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: CSRF validation failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: MFA is already enabled, or the account changed concurrently.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          description: The rate limiter is unavailable (fails closed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/mfa/disable:
+    post:
+      operationId: disableMFA
+      tags: [Auth]
+      summary: Disable MFA
+      description: >
+        Requires the current password and, while MFA is on, a TOTP code or an
+        unused recovery code. With MFA already off, the correct password alone
+        succeeds and clears any pending enrollment. Requires a bearer-token
+        session; API keys get 401. Rate limited to 10 MFA requests per 15
+        minutes per IP and per user. A wrong code counts toward account
+        lockout; a locked account answers 401.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MFADisableRequest'
+      responses:
+        '200':
+          description: MFA disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '400':
+          description: >
+            Invalid body or password encoding, wrong password, missing code,
+            or invalid code.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: CSRF validation failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: The account changed concurrently.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          description: The rate limiter is unavailable (fails closed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/mfa/regenerate-recovery-codes:
+    post:
+      operationId: regenerateMFARecoveryCodes
+      tags: [Auth]
+      summary: Replace MFA recovery codes
+      description: >
+        Requires a current TOTP code (a recovery code is not accepted).
+        Replaces all stored recovery codes and returns 10 new ones, shown only
+        once. Requires a bearer-token session; API keys get 401. Rate limited
+        to 10 MFA requests per 15 minutes per IP and per user. A wrong code
+        counts toward account lockout; a locked account answers 401.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MFARegenerateRequest'
+      responses:
+        '200':
+          description: New recovery codes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MFARecoveryCodesResponse'
+        '400':
+          description: Invalid body, invalid code, or MFA is not enabled.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: CSRF validation failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: The account changed concurrently.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          description: The rate limiter is unavailable (fails closed).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   # ---- API Keys -----------------------------------------------------------
   /api/api-keys:
@@ -2366,6 +3777,1371 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  # ---- Cloud Accounts ---------------------------------------------------
+  /api/accounts/discover-org:
+    post:
+      operationId: discoverOrgAccounts
+      tags: [Accounts]
+      summary: Import the member accounts of an AWS organization (admin only)
+      description: >
+        Uses the stored credentials of an AWS org-root account to list the
+        organization's member accounts and creates a cloud account for each
+        one not already registered (matched by external_id). New accounts are
+        created disabled, with an empty aws_auth_mode and aws_bastion_id set
+        to the org root, so an operator must configure and enable each one.
+        The caller needs unrestricted account access.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiscoverOrgRequest'
+      responses:
+        '200':
+          description: Discovery summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiscoverOrgResult'
+        '400':
+          description: >
+            Invalid JSON body, account_id is not a UUID, the account is not an
+            AWS account, or it is not configured as an org root.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >
+            CSRF validation failed, the caller is not an admin, or the caller's
+            account access is restricted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Org-root account not found, or outside the caller's account scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: >
+            The org root's credentials could not be resolved, the AWS
+            Organizations call failed, or a discovered account could not be saved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/accounts/self:
+    post:
+      operationId: createSelfAccount
+      tags: [Accounts]
+      summary: Register CUDly's own host cloud account (admin only)
+      description: >
+        Creates an enabled cloud account for the AWS account, Azure
+        subscription or GCP project CUDly itself runs in, using the host's
+        ambient credentials. No request body is read.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Created account (is_self is true)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CloudAccount'
+        '400':
+          description: >
+            CUDly cannot detect its own host identity, or the detected values
+            fail account validation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: The host account is already registered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/accounts/list:
+    get:
+      operationId: listAccountSummaries
+      tags: [Accounts]
+      summary: List accounts with minimal fields
+      description: >
+        Returns only id, name, external_id and provider for each account in
+        the caller's account scope, for account pickers and filters. Requires
+        view:recommendations rather than view:accounts. Sorted by name.
+      parameters:
+        - name: provider
+          in: query
+          description: Only return accounts of this provider (aws, azure or gcp).
+          schema:
+            type: string
+        - name: enabled
+          in: query
+          description: Only return enabled (true) or disabled (false) accounts. Other values are ignored.
+          schema:
+            type: boolean
+        - name: search
+          in: query
+          description: Case-insensitive substring match on name or external_id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Account summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AccountSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/accounts:
+    get:
+      operationId: listAccounts
+      tags: [Accounts]
+      summary: List cloud accounts
+      description: >
+        Returns the full account objects in the caller's account scope,
+        sorted by name. Requires view:accounts.
+      parameters:
+        - name: provider
+          in: query
+          description: Only return accounts of this provider (aws, azure or gcp).
+          schema:
+            type: string
+        - name: enabled
+          in: query
+          description: Only return enabled (true) or disabled (false) accounts. Other values are ignored.
+          schema:
+            type: boolean
+        - name: search
+          in: query
+          description: Case-insensitive substring match on name or external_id.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Cloud accounts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CloudAccount'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      operationId: createAccount
+      tags: [Accounts]
+      summary: Create a cloud account (admin only)
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloudAccountRequest'
+      responses:
+        '200':
+          description: Created account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CloudAccount'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: An account with this provider and external_id already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/accounts/{id}/credentials:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: saveAccountCredentials
+      tags: [Accounts]
+      summary: Store credentials for a cloud account (admin only)
+      description: >
+        Stores (or replaces) one credential of the given type for the account.
+        The payload keys are validated per credential_type and unknown keys
+        are rejected.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountCredentialsRequest'
+      responses:
+        '200':
+          description: Stored. The body is an empty JSON object.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Account not found, or outside the caller's account scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/accounts/{id}/test:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: testAccountCredentials
+      tags: [Accounts]
+      summary: Test a cloud account's credentials (admin only)
+      description: >
+        Checks that the account's credentials work. AWS accounts are resolved
+        the same way purchases resolve them and then probed with
+        sts:GetCallerIdentity, which must return the account's external_id.
+        Azure managed identity and GCP application default credentials
+        report ok without a live check. Azure and GCP workload identity
+        federation accounts perform a live token exchange when the deployment
+        has an OIDC signer; other modes only check that the expected
+        credential is stored. A failed check is reported as ok=false with
+        status 200.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountTestResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Account not found, or outside the caller's account scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/accounts/{id}/service-overrides:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    get:
+      operationId: listAccountServiceOverrides
+      tags: [Accounts]
+      summary: List an account's per-service overrides
+      responses:
+        '200':
+          description: Service overrides (empty array when none)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AccountServiceOverride'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Account not found, or outside the caller's account scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/accounts/{id}/service-overrides/{provider}/{service}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+      - name: provider
+        in: path
+        required: true
+        schema:
+          type: string
+          enum: [aws, azure, gcp]
+      - name: service
+        in: path
+        required: true
+        description: Service name, for example ec2.
+        schema:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]{0,63}$'
+    put:
+      operationId: saveAccountServiceOverride
+      tags: [Accounts]
+      summary: Create or replace an account's override for one service (admin only)
+      description: >
+        Upserts the override for this account, provider and service. The
+        override is replaced as a whole: fields omitted from the body are
+        cleared and inherit the global service configuration.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccountServiceOverrideRequest'
+      responses:
+        '200':
+          description: Saved override
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountServiceOverride'
+        '400':
+          description: >
+            Invalid path (account ID, provider or service name), invalid
+            request body, or an AWS term and payment combination the service
+            does not offer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Account not found, or outside the caller's account scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      operationId: deleteAccountServiceOverride
+      tags: [Accounts]
+      summary: Delete an account's override for one service (admin only)
+      description: >
+        Removes the override so the service inherits the global
+        configuration again. Succeeds when no override exists.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Deleted. The body is an empty JSON object.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: Invalid path (account ID, provider or service name).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Account not found, or outside the caller's account scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/accounts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    get:
+      operationId: getAccount
+      tags: [Accounts]
+      summary: Get a cloud account by ID
+      responses:
+        '200':
+          description: Cloud account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CloudAccount'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Account not found, or outside the caller's account scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      operationId: updateAccount
+      tags: [Accounts]
+      summary: Replace a cloud account (admin only)
+      description: >
+        Replaces the account's configuration with the request body; fields
+        omitted from the body are cleared, and enabled defaults to false.
+        The provider is validated but not changed. Stored credentials are
+        not affected.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloudAccountRequest'
+      responses:
+        '200':
+          description: >
+            Updated account, built from the request (credentials_configured
+            is always false here; read the account again for the stored value).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CloudAccount'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Account not found, or outside the caller's account scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Another account with this provider and external_id already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      operationId: deleteAccount
+      tags: [Accounts]
+      summary: Delete a cloud account (admin only)
+      description: >
+        Deletes the account with its credentials and service overrides.
+        Purchase executions in a terminal status are kept as history and
+        detached from the account, and enabled plans that target only this
+        account are disabled. The delete is refused while any other purchase
+        execution still uses the account.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Deleted. The body is an empty JSON object.
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Account not found, or outside the caller's account scope.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: >
+            Purchase executions still need the account. reason is
+            pending_executions when pending or notified purchases must be
+            canceled first, or active_executions when approved, running,
+            scheduled or paused purchases must finish or be revoked or deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountDeleteConflict'
+
+  # ---- Account Registration ---------------------------------------------
+  /api/register:
+    post:
+      operationId: submitRegistration
+      tags: [Registrations]
+      summary: Submit an account self-registration request
+      description: >
+        Public endpoint called by the federation IaC templates (or by hand) to
+        ask an admin to onboard a cloud account. Creates a pending
+        registration and notifies the admins. Rate limited per client IP.
+        Keep the returned reference_token to poll GET /api/register/{token}.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegistrationRequest'
+      responses:
+        '200':
+          description: Registration recorded as pending
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationSubmitResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: A pending registration already exists for this provider and external_id.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/register/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        description: Reference token returned by POST /api/register (64 hex characters).
+        schema:
+          type: string
+    get:
+      operationId: getRegistrationStatus
+      tags: [Registrations]
+      summary: Get the status of a registration by its reference token
+      description: >
+        Public, limited view of a registration: only its status, creation
+        time and, when rejected, the rejection reason.
+      security: []
+      responses:
+        '200':
+          description: Registration status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegistrationStatusResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/registrations:
+    get:
+      operationId: listRegistrations
+      tags: [Registrations]
+      summary: List account registrations (admin only)
+      description: Returns matching registrations, newest first. Filters combine with AND.
+      parameters:
+        - name: status
+          in: query
+          description: Exact status match.
+          schema:
+            type: string
+            enum: [pending, approved, rejected]
+        - name: provider
+          in: query
+          description: Exact provider match.
+          schema:
+            type: string
+            enum: [aws, azure, gcp]
+        - name: search
+          in: query
+          description: >
+            Case-insensitive substring match against account_name,
+            external_id and contact_email. % and _ are matched literally.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Registrations (empty array when none match)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AccountRegistration'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/registrations/{id}/approve:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: approveRegistration
+      tags: [Registrations]
+      summary: Approve a pending registration and create the cloud account (admin only)
+      description: >
+        The body has the same format as the account-create request,
+        typically pre-filled from the registration and optionally edited.
+        The registration moves to approved, a cloud account is created from
+        the body, and any credential submitted with the registration is
+        stored for the new account and wiped from the registration. The
+        account is enabled when the registration carried a credential or its
+        auth mode needs no stored secret; the body's enabled value is
+        ignored. The contact email is notified of the decision.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CloudAccountRequest'
+      responses:
+        '200':
+          description: The created cloud account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CloudAccount'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >
+            The registration is not pending, another request processed it
+            concurrently, or an account with this provider and external_id
+            already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/registrations/{id}/reject:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: rejectRegistration
+      tags: [Registrations]
+      summary: Reject a pending registration (admin only)
+      description: >
+        Moves the registration to rejected and notifies its contact email.
+        The body is optional.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectRegistrationRequest'
+      responses:
+        '200':
+          description: The rejected registration (reference token omitted)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RejectRegistrationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >
+            The registration is not pending, or another request processed it
+            concurrently.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/registrations/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    get:
+      operationId: getRegistration
+      tags: [Registrations]
+      summary: Get a registration by ID (admin only)
+      responses:
+        '200':
+          description: Registration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountRegistration'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      operationId: deleteRegistration
+      tags: [Registrations]
+      summary: Delete a registration (admin only)
+      description: Deletes the registration record in any status. A cloud account created by approving it is kept.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200':
+          description: Deleted (status is "deleted")
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  # ---- Federation -------------------------------------------------------
+  /api/federation/iac:
+    get:
+      operationId: getFederationIaC
+      tags: [Federation]
+      summary: Generate federation IaC for onboarding a target account
+      description: >
+        Renders generic infrastructure-as-code that sets up trust from a
+        target cloud account to this CUDly deployment and self-registers the
+        account. Requires view:accounts. The file is returned inside a JSON
+        envelope: format=cli yields a shell script as plain text; every other
+        format yields a zip archive, base64-encoded. format=cfn requires
+        target=aws; format=bicep and format=arm require target=azure. When
+        target equals source, CUDly must be deployed on that cloud.
+      parameters:
+        - name: target
+          in: query
+          required: true
+          description: Cloud of the account being onboarded.
+          schema:
+            type: string
+            enum: [aws, azure, gcp]
+        - name: source
+          in: query
+          required: true
+          description: Cloud whose identity CUDly uses to reach the target.
+          schema:
+            type: string
+            enum: [aws, azure, gcp]
+        - name: format
+          in: query
+          required: true
+          description: >
+            cli (shell script), bundle (Terraform module and tfvars, plus a
+            CloudFormation fallback for target=aws), cfn (CloudFormation),
+            bicep or arm (Azure templates).
+          schema:
+            type: string
+            enum: [cli, bundle, cfn, bicep, arm]
+      responses:
+        '200':
+          description: Generated file
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FederationIaCResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          description: >
+            Server error, including a deployment whose own cloud identity
+            (AWS account ID, Azure subscription or tenant, GCP project) cannot
+            be resolved.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ---- Inventory --------------------------------------------------------
+  /api/inventory/commitments:
+    get:
+      operationId: listInventoryCommitments
+      tags: [Inventory]
+      summary: List active commitments
+      description: >
+        Requires `view:purchases` permission. Returns unexpired commitments
+        from purchase history within the session's allowed accounts, soonest
+        expiring first. An `account_id` outside the allowed accounts yields an
+        empty list.
+      parameters:
+        - name: account_id
+          in: query
+          description: Cloud account ID or external account ID
+          schema:
+            type: string
+        - name: provider
+          in: query
+          description: Exact, case-sensitive provider match. Not validated.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Active commitments
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InventoryCommitmentsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/inventory/coverage:
+    get:
+      operationId: getCoverageBreakdown
+      tags: [Inventory]
+      summary: Get commitment coverage by provider and service
+      description: >
+        Requires `view:purchases` permission. Covered monthly spend comes from
+        active commitments (recurring cost plus amortized upfront); the
+        on-demand gap comes from recommendation savings and is treated as zero
+        if recommendations cannot be read. Always returns one section per
+        provider (aws, azure, gcp).
+      parameters:
+        - name: account_id
+          in: query
+          description: Cloud account ID or external account ID
+          schema:
+            type: string
+        - name: provider
+          in: query
+          description: >
+            Exact provider match. Not validated. Other providers are still
+            listed, with no services.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Coverage breakdown
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CoverageBreakdownResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  # ---- Commitment Laddering ---------------------------------------------
+  /api/ladder/configs:
+    get:
+      operationId: listLadderConfigs
+      tags: [Ladder]
+      summary: List ladder configurations
+      description: >
+        Requires `view:config` permission. Only configurations for the
+        session's allowed accounts are returned.
+      responses:
+        '200':
+          description: Ladder configurations, newest first
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadderConfigsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    put:
+      operationId: upsertLadderConfig
+      tags: [Ladder]
+      summary: Create or update a ladder configuration
+      description: >
+        Requires `update:config` permission within the target account's scope.
+        Upserts on (cloud_account_id, provider). Omitted numeric fields take
+        their defaults; unknown fields are rejected. A write that arms the
+        config (enabled with mode `auto_approve`) or raises or clears an armed
+        config's cap also requires `execute:purchases`, and the admin API key
+        is refused.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LadderConfigUpsertRequest'
+      responses:
+        '200':
+          description: Stored configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadderConfig'
+        '400':
+          description: >
+            Invalid body, missing or invalid field, or the provider does not
+            match the cloud account's provider.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: The cloud account does not exist or is outside the session's allowed accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/ladder/runs:
+    get:
+      operationId: listLadderRuns
+      tags: [Ladder]
+      summary: List ladder runs for an account
+      description: >
+        Requires `view:config` permission within the account's scope. Pages of
+        up to 100 runs, oldest first. AWS accounts only.
+      parameters:
+        - name: account_id
+          in: query
+          required: true
+          description: Cloud account ID
+          schema:
+            type: string
+            format: uuid
+        - name: provider
+          in: query
+          required: true
+          description: Must match the account's provider; only aws is served.
+          schema:
+            type: string
+        - name: after_created_at
+          in: query
+          description: >
+            Cursor from `next_cursor.created_at` (RFC 3339). Send together
+            with `after_id`.
+          schema:
+            type: string
+            format: date-time
+        - name: after_id
+          in: query
+          description: Cursor from `next_cursor.id`. Send together with `after_created_at`.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Page of runs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadderTimelineRunPage'
+        '400':
+          description: Missing account_id or provider, or an invalid cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: >
+            The account does not exist, is outside the session's allowed
+            accounts, or has a different provider.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: Ladder planning is available only for AWS accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Ladder timeline storage is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/ladder/tranches:
+    get:
+      operationId: listLadderTranches
+      tags: [Ladder]
+      summary: List ladder tranches for an account
+      description: >
+        Requires `view:config` permission within the account's scope. Pages of
+        up to 100 tranches, oldest first; totals cover every tranche of the
+        account, not only the page. AWS accounts only.
+      parameters:
+        - name: account_id
+          in: query
+          required: true
+          description: Cloud account ID
+          schema:
+            type: string
+            format: uuid
+        - name: provider
+          in: query
+          required: true
+          description: Must match the account's provider; only aws is served.
+          schema:
+            type: string
+        - name: after_created_at
+          in: query
+          description: >
+            Cursor from `next_cursor.created_at` (RFC 3339). Send together
+            with `after_id`.
+          schema:
+            type: string
+            format: date-time
+        - name: after_id
+          in: query
+          description: Cursor from `next_cursor.id`. Send together with `after_created_at`.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Page of tranches
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadderTimelinePage'
+        '400':
+          description: Missing account_id or provider, or an invalid cursor.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: >
+            The account does not exist, is outside the session's allowed
+            accounts, or has a different provider.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: >
+            A tranche has an unreadable amount basis or commitment rate, or
+            another server error occurred.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: Ladder planning is available only for AWS accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Ladder timeline storage is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/ladder/tranches/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    patch:
+      operationId: amendLadderTranche
+      tags: [Ladder]
+      summary: Amend a scheduled ladder tranche
+      description: >
+        Requires `update:config` permission within the tranche's account
+        scope. Changes the amount and date of a future, scheduled tranche of a
+        planned run that has no execution yet, guarded by `expected_revision`.
+        AWS accounts only. A malformed ID answers 404.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LadderTrancheAmendment'
+      responses:
+        '200':
+          description: Amended tranche
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadderTrancheAmendmentResult'
+        '400':
+          description: >
+            Invalid body, a past scheduled_date, or the new amount would
+            exceed the original run total, the current per-run cap or the
+            config commitment ceiling.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >
+            The tranche changed (revision mismatch) or is no longer editable:
+            its run is not planned, it is not scheduled, it has an execution,
+            or its date has passed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: Ladder planning is available only for AWS accounts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: >
+            The ladder lock is busy (retry after the Retry-After delay), or
+            ladder amendment storage is unavailable.
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying (lock busy only)
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/ladder/tranches/{id}/resolve:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: resolveLadderTranche
+      tags: [Ladder]
+      summary: Resolve a fired ladder tranche
+      description: >
+        Requires `execute:purchases` permission within the tranche's account
+        scope; the admin API key is refused. Moves a fired tranche to failed
+        when no execution of its retry chain can still run or has bought
+        anything. If an execution's outcome is unknown, the request must set
+        `acknowledge_unknown_outcome` and name the `cloud_check` performed. An
+        identical repeat returns 200 with `replayed: true`. Outcome
+        `completed` is not implemented yet (501). AWS accounts only. A
+        malformed ID answers 404.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LadderTrancheResolveRequest'
+      responses:
+        '200':
+          description: Tranche resolved as failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadderTrancheResolveResponse'
+        '400':
+          description: >
+            Invalid body (over 4096 bytes, unknown field, bad length or
+            characters, acknowledge_unknown_outcome without cloud_check or the
+            reverse), or a cloud_check that names another account or service,
+            is dated in the future, or predates the last execution change.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: >
+            The tranche cannot be resolved: it is not fired (or was resolved
+            with a different reason), an execution may still run or may have
+            purchased, an unknown outcome was not acknowledged, or the chain
+            changed too recently.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '501':
+          description: >
+            Outcome `completed` is not available yet, or the account is not an
+            AWS account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Ladder resolve storage is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ---- Notifications ----------------------------------------------------
+  /api/notifications/unsubscribe:
+    parameters:
+      - name: token
+        in: query
+        required: true
+        description: Signed token for the email and scope, from the email's unsubscribe link.
+        schema:
+          type: string
+      - name: email
+        in: query
+        required: true
+        description: Recipient address to mute.
+        schema:
+          type: string
+      - name: scope
+        in: query
+        required: true
+        description: Notification category to mute.
+        schema:
+          type: string
+          enum: [purchase_approvals, ri_exchange_approvals]
+    get:
+      operationId: unsubscribeNotification
+      tags: [Notifications]
+      summary: Unsubscribe from a notification category (email link)
+      description: >
+        Verifies the signed token, records the mute for the email and scope,
+        and returns an HTML confirmation page. Errors are returned as JSON.
+      security: []
+      responses:
+        '200':
+          description: Unsubscribed; HTML confirmation page
+          content:
+            text/html:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Invalid unsubscribe token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: >
+            Server error, including a deployment with no unsubscribe signing
+            secret configured.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      operationId: unsubscribeNotificationOneClick
+      tags: [Notifications]
+      summary: One-click unsubscribe (RFC 8058)
+      description: >
+        The POST a mail client sends for a List-Unsubscribe-Post header.
+        Same query parameters, effect and responses as the GET. The body
+        must be exactly List-Unsubscribe=One-Click.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [List-Unsubscribe]
+              additionalProperties: false
+              properties:
+                List-Unsubscribe:
+                  type: string
+                  enum: [One-Click]
+      responses:
+        '200':
+          description: Unsubscribed; HTML confirmation page
+          content:
+            text/html:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Invalid unsubscribe token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: >
+            Server error, including a deployment with no unsubscribe signing
+            secret configured.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   # ---- Health -------------------------------------------------------------
   /health:
     get:
@@ -2458,6 +5234,20 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
 
+  /version:
+    get:
+      operationId: getVersion
+      tags: [Info]
+      summary: Build version, git commit and build time (no auth required)
+      security: []
+      responses:
+        '200':
+          description: Build identity
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VersionResponse'
+
   # ---- Docs --------------------------------------------------------------
   /api/docs:
     get:
@@ -2472,6 +5262,14 @@ paths:
             text/html:
               schema:
                 type: string
+    head:
+      operationId: swaggerUIHead
+      tags: [Docs]
+      summary: Swagger UI (headers only)
+      security: []
+      responses:
+        '200':
+          description: Same headers as GET, empty body
 
   /api/docs/openapi.yaml:
     get:
@@ -2483,9 +5281,17 @@ paths:
         '200':
           description: OpenAPI YAML
           content:
-            application/x-yaml:
+            application/yaml:
               schema:
                 type: string
+    head:
+      operationId: getOpenAPISpecHead
+      tags: [Docs]
+      summary: Raw OpenAPI specification (headers only)
+      security: []
+      responses:
+        '200':
+          description: Same headers as GET, empty body
 
   /docs:
     get:
@@ -2500,6 +5306,36 @@ paths:
             text/html:
               schema:
                 type: string
+    head:
+      operationId: swaggerUIAliasHead
+      tags: [Docs]
+      summary: Swagger UI (alias) (headers only)
+      security: []
+      responses:
+        '200':
+          description: Same headers as GET, empty body
+
+  /docs/openapi.yaml:
+    get:
+      operationId: getOpenAPISpecAlias
+      tags: [Docs]
+      summary: Raw OpenAPI specification (alias)
+      security: []
+      responses:
+        '200':
+          description: OpenAPI YAML
+          content:
+            application/yaml:
+              schema:
+                type: string
+    head:
+      operationId: getOpenAPISpecAliasHead
+      tags: [Docs]
+      summary: Raw OpenAPI specification (alias) (headers only)
+      security: []
+      responses:
+        '200':
+          description: Same headers as GET, empty body
 
 # ---------------------------------------------------------------------------
 # Components
@@ -2534,20 +5370,39 @@ components:
         type: string
 
     StartDate:
-      name: start_date
+      name: start
       in: query
-      description: RFC 3339 or YYYY-MM-DD
+      description: >
+        Range start, as an RFC 3339 timestamp or YYYY-MM-DD. Defaults to 7
+        days before end. The range may span at most 366 days.
       schema:
         type: string
-        format: date
 
     EndDate:
-      name: end_date
+      name: end
       in: query
-      description: RFC 3339 or YYYY-MM-DD
+      description: >
+        Range end, as an RFC 3339 timestamp or YYYY-MM-DD (a date includes
+        the whole day). Defaults to now.
       schema:
         type: string
-        format: date
+
+    AnalyticsAccountID:
+      name: account_id
+      in: query
+      description: >
+        Cloud account UUID. Required for callers restricted to specific
+        accounts; empty means all accounts for unrestricted callers.
+      schema:
+        type: string
+
+    HistoryProvider:
+      name: provider
+      in: query
+      description: Filter by cloud provider; "all" or empty means no filter.
+      schema:
+        type: string
+        enum: [aws, azure, gcp, all]
 
     CSRFToken:
       name: X-CSRF-Token
@@ -2620,6 +5475,20 @@ components:
             $ref: '#/components/schemas/Error'
     RateLimited:
       description: Rate limit exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RateLimiterUnavailable:
+      description: >
+        The rate limiter could not be reached, so this credential endpoint
+        fails closed. Retry later.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    AnalyticsUnavailable:
+      description: Analytics storage is not configured on this deployment.
       content:
         application/json:
           schema:
@@ -2825,6 +5694,62 @@ components:
           format: int32
           minimum: 1
           description: Number of instances to hand back.
+
+    AzureExchangeableReservation:
+      type: object
+      description: >
+        One Azure VM reservation eligible for exchange, as listed by
+        GET /api/ri-exchange/azure-instances. An exchange buys its
+        replacement reservations with the source's applied scope.
+      required: [reservation_order_id, reservation_id, sku, quantity, instance_flexibility]
+      properties:
+        reservation_order_id:
+          type: string
+          description: GUID of the parent reservation order.
+        reservation_id:
+          type: string
+          description: Full ARM resource id of the reservation item.
+        billing_scope_id:
+          type: string
+          description: >
+            ARM scope charged for the reservation, e.g. /subscriptions/{id}.
+            Omitted when Azure did not report one; such a reservation cannot
+            be exchanged.
+        applied_scope_type:
+          type: string
+          description: >
+            Who receives the reservation's discount. Only Shared and Single
+            can be carried through an exchange; a source with any other
+            value, or with none, is refused with 422 on compatible-offerings
+            and execute. Omitted when Azure did not report one.
+          example: Shared
+        applied_scopes:
+          type: array
+          items:
+            type: string
+          description: >
+            ARM scopes a Single-scoped reservation applies to (exactly one
+            for an exchange). Omitted for Shared.
+        sku:
+          type: string
+          description: VM size, e.g. Standard_D2s_v3.
+        quantity:
+          type: integer
+          format: int32
+          description: Number of VM instances covered.
+        region:
+          type: string
+          description: ARM region name. May be omitted for Shared reservations.
+        term:
+          type: string
+          description: Reservation term (P1Y, P3Y or P5Y).
+        expiry_date:
+          type: string
+          format: date-time
+        instance_flexibility:
+          type: string
+        display_name:
+          type: string
 
     AzureExchangeTarget:
       type: object
@@ -3184,8 +6109,8 @@ components:
           exclusiveMinimum: true
           description: >-
             Spend cap per purchase. Omit for no cap. An explicit 0 is rejected
-            with 400 on group writes (create and update); API-key creation
-            over HTTP does not enforce this yet.
+            with 400 on group writes (create and update) and on API-key
+            creation.
 
     # -- API Keys -----------------------------------------------------------
     CreateAPIKeyRequest:
@@ -3473,6 +6398,11 @@ components:
         current_coverage:
           type: number
           format: double
+          nullable: true
+          description: >-
+            Committed / (committed + potential) monthly savings, as a
+            percentage. Null when both are zero, so there is nothing to
+            measure.
         target_coverage:
           type: number
           format: double
@@ -3537,11 +6467,33 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/RecommendationRecord'
-        total_savings:
-          type: number
-          format: double
-        count:
-          type: integer
+        regions:
+          type: array
+          items:
+            type: string
+        summary:
+          type: object
+          description: Totals over the full filtered set, not just the returned page.
+          properties:
+            total_count:
+              type: integer
+            total_monthly_savings:
+              type: number
+              format: double
+            total_upfront_cost:
+              type: number
+              format: double
+            avg_payback_months:
+              type: number
+              format: double
+        next_cursor:
+          type: string
+          description: >-
+            Present only on a paginated request that has more rows; pass it as
+            the cursor query parameter to fetch the next page. Its absence is
+            the only end-of-list signal: a page with fewer rows than limit is
+            not necessarily the last one, because each page is also capped by
+            serialized size.
 
     RecommendationRecord:
       type: object
@@ -3602,16 +6554,19 @@ components:
         error:
           type: string
 
-    CollectResult:
+    RefreshResponse:
       type: object
-      description: Result of a recommendation collection run
+      required: [started_at, last_collected_at]
       properties:
-        collected:
-          type: integer
-        errors:
-          type: array
-          items:
-            type: string
+        started_at:
+          type: string
+          format: date-time
+          description: When this collection started.
+        last_collected_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Previous successful collection, or null if none.
 
     RecommendationsFreshness:
       type: object
@@ -4057,16 +7012,42 @@ components:
             counts them while summary_complete is true. May
             be a false positive when exactly `limit` or `executions_limit` rows exist.
             Also true when the actionable executions class (pending, approved,
-            running, ...) reached its own cap of 1000 rows.
+            running, ...) reached its own cap (`actionable_executions_limit`),
+            and when listing either execution class failed, so its rows are
+            missing.
         limit:
           type: integer
-          description: Row cap on completed purchase history rows for this request.
+          description: >-
+            Page size: the most completed purchases and terminal executions
+            together that this response lists.
         executions_limit:
           type: integer
           description: >-
-            Row cap on terminal executions (failed, expired, canceled, ...),
-            fixed and ignoring the limit parameter. Actionable executions use a
-            separate cap of 1000.
+            Row cap on terminal executions (failed, expired, canceled, ...).
+            They share the page with completed purchases, so it equals
+            `limit`. Actionable executions use the separate
+            `actionable_executions_limit` cap.
+        actionable_executions_limit:
+          type: integer
+          description: >-
+            Row cap on actionable executions (pending, notified, scheduled,
+            approved, running, paused), fixed at 1000 and ignoring the limit
+            parameter. Actionable executions are listed on the first page only.
+        has_more:
+          type: boolean
+          description: >-
+            True when more completed purchases or terminal executions the
+            caller may see follow this page; fetch them with `next_cursor`.
+            `truncated` is also true then. When `truncated` is true and
+            `has_more` is false, the missing rows cannot be paged to: the
+            actionable executions reached their cap, or an execution listing
+            failed.
+        next_cursor:
+          type: string
+          description: >-
+            Opaque position after the last paged row of this response; pass it
+            as the `cursor` parameter to fetch the next page. Present only when
+            `has_more` is true.
 
     HistorySummary:
       type: object
@@ -4074,7 +7055,8 @@ components:
         Counts and dollar totals. Dollar totals cover completed, non-revoked
         rows only; audit-gap and partially completed execution rows count as
         completed without dollars, and canceled rows count only toward
-        total_purchases.
+        total_purchases. Revoked rows count toward total_purchases and
+        total_revoked only.
       properties:
         total_purchases:
           type: integer
@@ -4082,14 +7064,17 @@ components:
           type: integer
         total_pending:
           type: integer
+          description: Rows with status pending, notified or scheduled.
         total_in_progress:
           type: integer
+          description: Rows with status approved, running or paused.
         total_failed:
           type: integer
         total_expired:
           type: integer
         total_revoked:
           type: integer
+          description: Revoked commitments; excluded from total_completed.
         total_upfront:
           type: number
           format: double
@@ -4103,11 +7088,16 @@ components:
 
     PurchaseHistoryRecord:
       type: object
+      description: >-
+        One completed purchase_history row or one synthesized execution row
+        (pending, failed, expired, ...). Fields marked as execution-only are
+        computed at read time and absent from completed rows.
       properties:
         account_id:
           type: string
         purchase_id:
           type: string
+          description: Provider purchase ID, or the execution ID on execution rows.
         timestamp:
           type: string
           format: date-time
@@ -4132,6 +7122,10 @@ components:
         monthly_cost:
           type: number
           format: double
+          nullable: true
+          description: >-
+            Null when the provider returned no monthly recurring breakdown.
+            Aggregations skip nulls rather than counting them as 0.
         estimated_savings:
           type: number
           format: double
@@ -4141,6 +7135,77 @@ components:
           type: string
         ramp_step:
           type: integer
+        cloud_account_id:
+          type: string
+        status:
+          type: string
+          description: >-
+            "completed" for purchase_history rows. Execution rows carry the
+            execution status: pending, notified, scheduled, approved,
+            running, paused, completed, partially_completed, failed, expired
+            or canceled (legacy rows may say "cancelled").
+        approver:
+          type: string
+          description: Approval recipient email; pending and notified rows only.
+        source:
+          type: string
+        status_description:
+          type: string
+          description: Short explanation for non-completed rows.
+        created_by_user_id:
+          type: string
+          description: Execution-only.
+        created_by_system:
+          type: boolean
+          description: Execution-only. True for scheduler-created executions.
+        retry_execution_id:
+          type: string
+          description: Execution-only. Successor execution when this row was retried.
+        retry_attempt_n:
+          type: integer
+          description: Execution-only. Position in the retry chain (0 for the original).
+        ops_hint:
+          type: string
+          description: Execution-only. Operator hint shown instead of Retry on failed rows.
+        redrive_unsafe:
+          type: boolean
+          description: Execution-only. True when ops_hint is a permanent re-drive refusal.
+        is_audit_gap:
+          type: boolean
+          description: >-
+            Execution-only. A completed purchase whose history write failed;
+            its dollars are excluded from the summary totals.
+        created_by_user_email:
+          type: string
+          description: Execution-only. Email of the user who created the execution.
+        revocation_window_closes_at:
+          type: string
+          format: date-time
+          description: End of the provider's free-cancel window, when it has one.
+        revoked_at:
+          type: string
+          format: date-time
+        revoked_via:
+          type: string
+          description: direct-api or support-case.
+        support_case_id:
+          type: string
+        calc_refund_amount:
+          type: number
+          format: double
+          description: Refund amount quoted when the revoke was calculated.
+        calc_refund_currency:
+          type: string
+        revocation_in_flight:
+          type: boolean
+        offering_class:
+          type: string
+          description: standard or convertible (AWS RIs).
+        listing_id:
+          type: string
+        listing_state:
+          type: string
+          description: Marketplace listing state (active, pending, cancelled or closed).
 
     AnalyticsResponse:
       type: object
@@ -4244,6 +7309,10 @@ components:
           enum: [healthy, unhealthy]
         message:
           type: string
+          description: Fixed human-readable text; never a raw error string.
+        reason:
+          type: string
+          description: Stable code for a failed check, e.g. db_unreachable or migration_failed.
 
     # -- Info ---------------------------------------------------------------
     PublicInfoResponse:
@@ -4275,3 +7344,1458 @@ components:
             is unreachable. Used by the frontend to distinguish legitimate ambient-credential
             executions (cloud_account_id IS NULL because the rec targets this account)
             from orphan rows whose account was deleted (issue #608).
+
+    CloudAccount:
+      type: object
+      description: A managed cloud account (AWS account, Azure subscription or GCP project).
+      required: [id, name, enabled, provider, external_id, credentials_configured, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        contact_email:
+          type: string
+        enabled:
+          type: boolean
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+        external_id:
+          type: string
+          description: AWS account ID, Azure subscription ID or GCP project ID.
+        aws_auth_mode:
+          type: string
+          description: Empty for accounts imported by org discovery until configured.
+        aws_role_arn:
+          type: string
+        aws_external_id:
+          type: string
+          description: sts:ExternalId used when assuming aws_role_arn.
+        aws_bastion_id:
+          type: string
+          description: ID of the cloud account whose credentials are used as the bastion.
+        aws_web_identity_token_file:
+          type: string
+        aws_is_org_root:
+          type: boolean
+        azure_subscription_id:
+          type: string
+        azure_tenant_id:
+          type: string
+        azure_client_id:
+          type: string
+        azure_auth_mode:
+          type: string
+        gcp_project_id:
+          type: string
+        gcp_client_email:
+          type: string
+        gcp_auth_mode:
+          type: string
+        gcp_wif_audience:
+          type: string
+          description: Workload Identity Pool provider resource used as the STS audience.
+        credentials_configured:
+          type: boolean
+          description: True when at least one credential is stored for the account.
+        is_self:
+          type: boolean
+          description: >
+            Present (true) on the account that matches CUDly's own host
+            identity. Set by GET /api/accounts and POST /api/accounts/self only.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+
+    CloudAccountRequest:
+      type: object
+      description: >
+        Create or replace a cloud account. Provider-specific fields are
+        stored as sent. For AWS, aws_external_id is required (16 to 1224
+        characters from letters, digits and _+=,.@:/-) when aws_auth_mode is
+        role_arn or bastion and aws_role_arn is set.
+      required: [name, provider, external_id]
+      properties:
+        name:
+          type: string
+          description: Must not contain control characters.
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+        external_id:
+          type: string
+          description: >
+            AWS account ID, Azure subscription ID or GCP project ID. Must not
+            contain control characters.
+        description:
+          type: string
+        contact_email:
+          type: string
+          format: email
+        enabled:
+          type: boolean
+          description: Defaults to false when omitted.
+        aws_auth_mode:
+          type: string
+          enum: [access_keys, role_arn, bastion, workload_identity_federation]
+        aws_role_arn:
+          type: string
+          description: IAM role ARN in any AWS partition.
+        aws_external_id:
+          type: string
+        aws_bastion_id:
+          type: string
+        aws_web_identity_token_file:
+          type: string
+          description: >
+            Must start with /var/run/secrets/eks.amazonaws.com/serviceaccount/
+            or /var/run/secrets/kubernetes.io/serviceaccount/ and must not
+            contain "..".
+        aws_is_org_root:
+          type: boolean
+        azure_subscription_id:
+          type: string
+        azure_tenant_id:
+          type: string
+        azure_client_id:
+          type: string
+        azure_auth_mode:
+          type: string
+          enum: [client_secret, managed_identity, workload_identity_federation]
+        gcp_project_id:
+          type: string
+        gcp_client_email:
+          type: string
+          description: Service account email (name@project.iam.gserviceaccount.com).
+        gcp_auth_mode:
+          type: string
+          enum: [service_account, application_default, workload_identity_federation]
+        gcp_wif_audience:
+          type: string
+
+    AccountSummary:
+      type: object
+      description: Minimal account projection without credential or configuration fields.
+      required: [id, name, external_id, provider]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        external_id:
+          type: string
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+
+    AccountCredentialsRequest:
+      type: object
+      required: [credential_type, payload]
+      properties:
+        credential_type:
+          type: string
+          enum: [aws_access_keys, azure_client_secret, gcp_service_account, gcp_workload_identity_config]
+        payload:
+          type: object
+          additionalProperties: true
+          description: >
+            Credential fields, at most two levels deep; unknown keys are
+            rejected. aws_access_keys requires access_key_id and
+            secret_access_key. azure_client_secret requires client_secret.
+            gcp_service_account takes a service account key JSON (type
+            service_account with project_id, private_key and client_email).
+            gcp_workload_identity_config takes an external_account credential
+            configuration JSON (audience, subject_token_type, token_url and a
+            credential_source object).
+
+    AccountTestResult:
+      type: object
+      required: [ok, message]
+      properties:
+        ok:
+          type: boolean
+        message:
+          type: string
+
+    AccountServiceOverride:
+      type: object
+      description: >
+        Per-account override of the global service configuration. Omitted
+        fields inherit the global value.
+      required: [id, account_id, provider, service, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        account_id:
+          type: string
+          format: uuid
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+        service:
+          type: string
+        enabled:
+          type: boolean
+        term:
+          type: integer
+        payment:
+          type: string
+        coverage:
+          type: number
+          format: double
+        ramp_schedule:
+          type: string
+        include_engines:
+          type: array
+          items:
+            type: string
+        exclude_engines:
+          type: array
+          items:
+            type: string
+        include_regions:
+          type: array
+          items:
+            type: string
+        exclude_regions:
+          type: array
+          items:
+            type: string
+        include_types:
+          type: array
+          items:
+            type: string
+        exclude_types:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AccountServiceOverrideRequest:
+      type: object
+      description: Fields to override. Omitted fields inherit the global value.
+      properties:
+        enabled:
+          type: boolean
+        term:
+          type: integer
+        payment:
+          type: string
+        coverage:
+          type: number
+          format: double
+        ramp_schedule:
+          type: string
+        include_engines:
+          type: array
+          items:
+            type: string
+        exclude_engines:
+          type: array
+          items:
+            type: string
+        include_regions:
+          type: array
+          items:
+            type: string
+        exclude_regions:
+          type: array
+          items:
+            type: string
+        include_types:
+          type: array
+          items:
+            type: string
+        exclude_types:
+          type: array
+          items:
+            type: string
+
+    DiscoverOrgRequest:
+      type: object
+      required: [account_id]
+      properties:
+        account_id:
+          type: string
+          format: uuid
+          description: ID of the AWS org-root cloud account (aws_is_org_root true).
+
+    DiscoverOrgResult:
+      type: object
+      required: [discovered, created, skipped]
+      properties:
+        discovered:
+          type: integer
+          description: Member accounts returned by AWS Organizations.
+        created:
+          type: integer
+          description: New cloud accounts created.
+        skipped:
+          type: integer
+          description: Members already registered (matched by external_id).
+
+    AccountDeleteConflict:
+      type: object
+      required: [error, reason]
+      properties:
+        error:
+          type: string
+        reason:
+          type: string
+          enum: [pending_executions, active_executions]
+        pending_count:
+          type: integer
+          description: Pending or notified executions (reason pending_executions only).
+        pending_execution_ids:
+          type: array
+          description: >
+            IDs of those executions, at most 1000 (reason pending_executions
+            only; omitted when they could not be listed).
+          items:
+            type: string
+        active_count:
+          type: integer
+          description: Approved, running, scheduled or paused executions (reason active_executions only).
+
+    RegistrationRequest:
+      type: object
+      required: [provider, external_id, account_name, contact_email]
+      properties:
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+        external_id:
+          type: string
+          description: Provider account identifier (AWS account ID, Azure subscription ID or GCP project ID). No control characters.
+        account_name:
+          type: string
+          description: >
+            Display name. Line breaks are stripped, surrounding whitespace is
+            trimmed, and the result is truncated to 256 characters; it must
+            then be non-empty and free of control characters.
+        contact_email:
+          type: string
+          description: Address notified of the decision. Must contain @ and be at least 5 characters.
+        description:
+          type: string
+        source_provider:
+          type: string
+          description: Cloud whose identity CUDly uses to reach this account.
+        aws_role_arn:
+          type: string
+        aws_auth_mode:
+          type: string
+        aws_external_id:
+          type: string
+        azure_subscription_id:
+          type: string
+        azure_tenant_id:
+          type: string
+        azure_client_id:
+          type: string
+        azure_auth_mode:
+          type: string
+        gcp_project_id:
+          type: string
+        gcp_client_email:
+          type: string
+        gcp_auth_mode:
+          type: string
+        gcp_wif_audience:
+          type: string
+          description: Full Workload Identity Pool provider resource name (federated path only).
+        credential_type:
+          type: string
+          description: Type of the credential in credential_payload, stored for the account on approval.
+        credential_payload:
+          type: string
+          description: >
+            Optional credential, encrypted at rest and never returned. Moved
+            to the account's credential store on approval and then wiped
+            from the registration.
+
+    RegistrationSubmitResponse:
+      type: object
+      required: [reference_token, status]
+      properties:
+        reference_token:
+          type: string
+          description: 64 hex characters. Use with GET /api/register/{token}.
+        status:
+          type: string
+          enum: [pending]
+
+    RegistrationStatusResponse:
+      type: object
+      required: [status, created_at]
+      properties:
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        created_at:
+          type: string
+          format: date-time
+        rejection_reason:
+          type: string
+          description: Present only when non-empty.
+
+    AccountRegistration:
+      type: object
+      description: >
+        Registration record as seen by admins. Optional string fields are
+        omitted when empty. The credential payload is never returned.
+      required: [id, reference_token, status, provider, external_id, account_name, contact_email, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        reference_token:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+        external_id:
+          type: string
+        account_name:
+          type: string
+        contact_email:
+          type: string
+        description:
+          type: string
+        source_provider:
+          type: string
+        aws_role_arn:
+          type: string
+        aws_auth_mode:
+          type: string
+        aws_external_id:
+          type: string
+        azure_subscription_id:
+          type: string
+        azure_tenant_id:
+          type: string
+        azure_client_id:
+          type: string
+        azure_auth_mode:
+          type: string
+        gcp_project_id:
+          type: string
+        gcp_client_email:
+          type: string
+        gcp_auth_mode:
+          type: string
+        gcp_wif_audience:
+          type: string
+        reg_credential_type:
+          type: string
+          description: Type of the credential submitted with the registration.
+        has_credentials:
+          type: boolean
+          description: True when a credential type was submitted; omitted otherwise.
+        rejection_reason:
+          type: string
+        cloud_account_id:
+          type: string
+          format: uuid
+          description: Account created on approval.
+        reviewed_by:
+          type: string
+          description: Reviewing user ID, or admin-api-key when approved or rejected with the admin API key.
+        reviewed_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    RejectRegistrationRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          description: Shown to the registrant via GET /api/register/{token} and in the decision email.
+
+    RejectRegistrationResponse:
+      type: object
+      required: [id, status, provider, external_id, account_name, rejection_reason]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [rejected]
+        provider:
+          type: string
+        external_id:
+          type: string
+        account_name:
+          type: string
+        rejection_reason:
+          type: string
+          description: Empty string when no reason was given.
+
+    # -- Cloud Accounts -----------------------------------------------------
+
+    FederationIaCResponse:
+      type: object
+      required: [filename, content, content_type]
+      properties:
+        filename:
+          type: string
+          description: Suggested download file name (.sh or .zip).
+        content:
+          type: string
+          description: File content; base64-encoded when content_encoding is base64.
+        content_type:
+          type: string
+          enum: [text/x-shellscript, application/zip]
+        content_encoding:
+          type: string
+          enum: [base64]
+          description: Present (base64) for zip archives; omitted for the shell script.
+
+    # -- Version ------------------------------------------------------------
+
+    VersionResponse:
+      type: object
+      required: [version, git_sha, build_time]
+      properties:
+        version:
+          type: string
+          description: Build version, or dev when not stamped at build time.
+        git_sha:
+          type: string
+          description: Git commit SHA, or unknown when not stamped.
+        build_time:
+          type: string
+          description: Build timestamp, or unknown when not stamped.
+
+    RecommendationDetailResponse:
+      type: object
+      required: [id, usage_history, confidence_bucket, provenance_note]
+      properties:
+        id:
+          type: string
+        usage_history:
+          type: array
+          description: >
+            Utilization history. Always empty for now: the collector does not
+            yet persist per-recommendation utilization.
+          items:
+            $ref: '#/components/schemas/UsagePoint'
+        confidence_bucket:
+          type: string
+          enum: [low, medium, high]
+          description: >
+            high is at least 200 monthly savings and a count of at least 3,
+            medium is at least 50 monthly savings, low otherwise.
+        provenance_note:
+          type: string
+          description: >
+            Human-readable source of the recommendation, plus the last
+            collection time (RFC 3339, UTC) when it is known.
+        hidden_by:
+          type: array
+          description: >
+            Present when an account service override would hide this
+            recommendation from the list; names each failing dimension.
+            Omitted when the recommendation is visible.
+          items:
+            type: string
+            enum: [enabled=false, engine, region, resource_type]
+
+    UsagePoint:
+      type: object
+      required: [timestamp, cpu_pct, mem_pct]
+      properties:
+        timestamp:
+          type: string
+        cpu_pct:
+          type: number
+          format: double
+        mem_pct:
+          type: number
+          format: double
+
+    # -- Plan accounts ------------------------------------------------------
+
+    SetPlanAccountsRequest:
+      type: object
+      required: [account_ids]
+      properties:
+        account_ids:
+          type: array
+          minItems: 1
+          description: The plan's complete new account list (cloud account UUIDs).
+          items:
+            type: string
+            format: uuid
+
+    # -- Purchase retry -----------------------------------------------------
+
+    RetryPurchaseResponse:
+      type: object
+      required: [execution_id, original_execution, status, recommendation_count, total_upfront_cost, estimated_savings, email_sent, retry_attempt_n]
+      properties:
+        execution_id:
+          type: string
+          format: uuid
+          description: The new execution.
+        original_execution:
+          type: string
+          format: uuid
+          description: The failed execution that was retried.
+        status:
+          type: string
+          enum: [pending, failed]
+          description: failed when the approval email could not be sent (see email_reason).
+        recommendation_count:
+          type: integer
+        total_upfront_cost:
+          type: number
+          format: double
+        estimated_savings:
+          type: number
+          format: double
+        email_sent:
+          type: boolean
+        retry_attempt_n:
+          type: integer
+          description: Attempt number of the new execution in the retry chain.
+        email_reason:
+          type: string
+          description: Why the approval email was not sent. Omitted when it was sent.
+        approval_recipient:
+          type: string
+          description: Address the approval email went to. Omitted when none.
+
+    # -- Purchase revoke ----------------------------------------------------
+
+    RevokePurchaseRequest:
+      type: object
+      description: >
+        The refund quote the user confirmed, from GET
+        /api/purchases/{id}/revoke/calculate. Both fields are required to
+        revoke an Azure reservation; other paths ignore the body.
+      properties:
+        expected_refund_amount:
+          type: number
+          format: double
+        expected_refund_currency:
+          type: string
+
+    RevokePurchaseResponse:
+      type: object
+      description: >
+        One of three shapes. A canceled scheduled execution: status
+        "canceled" and message. A revoked purchase history row: status
+        "revoked" or "already_revoked" with revoked_at and revoked_via. An
+        Azure refund that was issued but could not be recorded yet: code
+        RECONCILE_PENDING, azure_returned and message (do not retry).
+      properties:
+        status:
+          type: string
+          enum: [canceled, revoked, already_revoked]
+        message:
+          type: string
+        revoked_at:
+          type: string
+          format: date-time
+        revoked_via:
+          type: string
+          description: How the revocation was made, for example direct-api.
+        code:
+          type: string
+          enum: [RECONCILE_PENDING]
+        azure_returned:
+          type: boolean
+
+    RevokeRefundQuote:
+      type: object
+      required: [refund_amount, refund_currency, quoted_at]
+      properties:
+        refund_amount:
+          type: number
+          format: double
+        refund_currency:
+          type: string
+        quoted_at:
+          type: string
+          format: date-time
+
+    # -- RI Marketplace -----------------------------------------------------
+
+    MarketplacePriceTier:
+      type: object
+      required: [term_months, price]
+      properties:
+        term_months:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Remaining months this tier covers; at most the RI's remaining months.
+        price:
+          type: number
+          format: double
+          description: >
+            One-time USD sale price per instance when term_months remain. Must
+            be positive.
+
+    MarketplaceListRequest:
+      type: object
+      properties:
+        price_schedule:
+          type: array
+          description: >
+            Optional. Each tier's price must be at least 5% of the per-instance
+            upfront residual prorated to its term. When omitted, a single tier
+            covering the remaining months is priced at 95% of the per-instance
+            prorated upfront residual.
+          items:
+            $ref: '#/components/schemas/MarketplacePriceTier'
+
+    MarketplaceListResponse:
+      type: object
+      required: [listing_id, listing_state, price_schedule, aws_fee_percent]
+      properties:
+        listing_id:
+          type: string
+        listing_state:
+          type: string
+        price_schedule:
+          type: array
+          description: >
+            The schedule the listing was created with; on a retry of an
+            earlier attempt this is the stored schedule, not the request's.
+          items:
+            $ref: '#/components/schemas/MarketplacePriceTier'
+        aws_fee_percent:
+          type: number
+          description: AWS Marketplace transaction fee charged on proceeds (12).
+        note:
+          type: string
+
+    UserPermissionsResponse:
+      type: object
+      required: [permissions, is_admin]
+      properties:
+        permissions:
+          type: array
+          items:
+            type: object
+            required: [action, resource]
+            properties:
+              action:
+                type: string
+              resource:
+                type: string
+        is_admin:
+          type: boolean
+          description: True when permissions include `{admin, *}`.
+
+    ResetPasswordStatusResponse:
+      type: object
+      required: [state, flow]
+      properties:
+        state:
+          type: string
+          enum: [valid, expired, used]
+          description: >
+            `used` also covers tokens that were never issued and deactivated
+            accounts.
+        flow:
+          type: string
+          enum: [reset, invite]
+          description: >
+            `invite` for a not-yet-activated invited user; `reset` otherwise,
+            including every `used` token.
+
+    MFASetupRequest:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+          description: Base64-encoded current password
+
+    MFASetupResponse:
+      type: object
+      required: [secret, provisioning_uri]
+      properties:
+        secret:
+          type: string
+          description: Pending TOTP secret (base32), stored server side
+        provisioning_uri:
+          type: string
+          description: otpauth:// URI for rendering as a QR code
+
+    MFAEnableRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          description: TOTP code from the authenticator
+
+    MFADisableRequest:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+          description: Base64-encoded current password
+        code:
+          type: string
+          description: >
+            TOTP code or unused recovery code. Required while MFA is enabled.
+
+    MFARegenerateRequest:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          description: TOTP code (recovery codes are not accepted)
+
+    MFARecoveryCodesResponse:
+      type: object
+      required: [recovery_codes]
+      properties:
+        recovery_codes:
+          type: array
+          description: Plaintext recovery codes, returned only once
+          items:
+            type: string
+
+    # -- Analytics trends ---------------------------------------------------
+
+    AnalyticsTrendsResponse:
+      type: object
+      properties:
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+        months:
+          type: integer
+          description: Calendar months spanned by start..end (at least 1); the length of the monthly window.
+        monthly:
+          type: array
+          items:
+            $ref: '#/components/schemas/TrendsMonthlySummary'
+        by_provider:
+          type: array
+          items:
+            $ref: '#/components/schemas/TrendsProviderBreakdown'
+        by_service:
+          type: array
+          items:
+            $ref: '#/components/schemas/TrendsServiceBreakdown'
+
+    TrendsMonthlySummary:
+      type: object
+      properties:
+        month:
+          type: string
+          format: date-time
+        cloud_account_id:
+          type: string
+          description: Omitted when the snapshot has no linked cloud account.
+        account_id:
+          type: string
+          description: External account ID recorded on the snapshot
+        provider:
+          type: string
+        service:
+          type: string
+        total_savings:
+          type: number
+          format: double
+        avg_coverage:
+          type: number
+          format: double
+          description: Average coverage percentage. Omitted when coverage data is absent (not zero).
+        snapshot_count:
+          type: integer
+
+    TrendsProviderBreakdown:
+      type: object
+      properties:
+        provider:
+          type: string
+        service:
+          type: string
+        total_savings:
+          type: number
+          format: double
+        avg_coverage:
+          type: number
+          format: double
+          description: Omitted when coverage data is absent.
+
+    TrendsServiceBreakdown:
+      type: object
+      properties:
+        service:
+          type: string
+        region:
+          type: string
+        total_savings:
+          type: number
+          format: double
+        avg_coverage:
+          type: number
+          format: double
+          description: Omitted when coverage data is absent.
+
+    # -- Inventory ----------------------------------------------------------
+
+    InventoryCommitmentsResponse:
+      type: object
+      required: [commitments]
+      properties:
+        commitments:
+          type: array
+          items:
+            $ref: '#/components/schemas/InventoryCommitment'
+
+    InventoryCommitment:
+      type: object
+      properties:
+        id:
+          type: string
+          description: '`<account_id>:<purchase_id>`'
+        provider:
+          type: string
+        account_id:
+          type: string
+        account_name:
+          type: string
+          description: Omitted when the account name cannot be resolved.
+        service:
+          type: string
+        resource_type:
+          type: string
+        region:
+          type: string
+        count:
+          type: integer
+        term_years:
+          type: integer
+        payment_option:
+          type: string
+        start_date:
+          type: string
+          format: date-time
+          description: Purchase time
+        end_date:
+          type: string
+          format: date-time
+          description: Computed expiry
+        upfront_cost:
+          type: number
+          format: double
+          nullable: true
+        monthly_cost:
+          type: number
+          format: double
+          nullable: true
+          description: Null when the provider reported no monthly breakdown.
+        estimated_savings:
+          type: number
+          format: double
+        status:
+          type: string
+          enum: [active]
+
+    CoverageBreakdownResponse:
+      type: object
+      required: [providers]
+      properties:
+        providers:
+          type: array
+          description: One section each for aws, azure and gcp, in that order.
+          items:
+            $ref: '#/components/schemas/ProviderCoverageSection'
+
+    ProviderCoverageSection:
+      type: object
+      properties:
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+        services:
+          type: array
+          nullable: true
+          description: Null when the provider has no usage data.
+          items:
+            $ref: '#/components/schemas/CoverageServiceRow'
+        overall_coverage_pct:
+          type: number
+          format: double
+          nullable: true
+          description: Null when there is no usage signal (not zero).
+
+    CoverageServiceRow:
+      type: object
+      properties:
+        service:
+          type: string
+        covered_monthly:
+          type: number
+          format: double
+          nullable: true
+          description: >
+            Monthly spend covered by active commitments (recurring plus
+            amortized upfront). Null when a commitment's upfront cost is
+            unknown.
+        on_demand_monthly:
+          type: number
+          format: double
+          description: Uncommitted monthly spend, from recommendation savings
+        coverage_pct:
+          type: number
+          format: double
+          nullable: true
+          description: covered / (covered + on_demand) * 100. Null when unknown or both are zero.
+
+    # -- Ladder -------------------------------------------------------------
+
+    LadderRampSchedule:
+      type: object
+      required: [steps]
+      description: >
+        At least one step; after_days strictly ascending; fractions in (0, 1]
+        summing to 1.
+      properties:
+        steps:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [after_days, fraction]
+            properties:
+              after_days:
+                type: integer
+                minimum: 0
+                description: Days after the run starts at which the tranche fires
+              fraction:
+                type: number
+                format: double
+                maximum: 1
+                description: Share of the target allocation, greater than 0
+
+    LadderConfig:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        cloud_account_id:
+          type: string
+          format: uuid
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+        enabled:
+          type: boolean
+        mode:
+          type: string
+          enum: [email_approval, auto_approve]
+        cadence:
+          type: string
+          enum: [daily, weekly]
+        target_coverage:
+          type: number
+          format: double
+        buffer_fraction:
+          type: number
+          format: double
+        baseline_percentile:
+          type: number
+          format: double
+        lookback_days:
+          type: integer
+        buffer_utilization_threshold:
+          type: number
+          format: double
+        max_hourly_commit_per_run:
+          type: number
+          format: double
+          description: Omitted when there is no cap.
+        max_actions_per_run:
+          type: integer
+        ramp_schedule:
+          $ref: '#/components/schemas/LadderRampSchedule'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    LadderConfigsResponse:
+      type: object
+      required: [configs]
+      properties:
+        configs:
+          type: array
+          items:
+            $ref: '#/components/schemas/LadderConfig'
+
+    LadderConfigUpsertRequest:
+      type: object
+      additionalProperties: false
+      required: [cloud_account_id, provider, mode, cadence, ramp_schedule]
+      properties:
+        cloud_account_id:
+          type: string
+          format: uuid
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+          description: Must match the cloud account's provider.
+        enabled:
+          type: boolean
+          default: false
+        mode:
+          type: string
+          enum: [email_approval, auto_approve]
+        cadence:
+          type: string
+          enum: [daily, weekly]
+        target_coverage:
+          type: number
+          format: double
+          maximum: 100
+          default: 100
+          description: Percentage, greater than 0.
+        buffer_fraction:
+          type: number
+          format: double
+          minimum: 0
+          default: 0.1
+          description: Less than 1.
+        baseline_percentile:
+          type: number
+          format: double
+          maximum: 50
+          default: 5
+          description: Greater than 0.
+        lookback_days:
+          type: integer
+          minimum: 1
+          default: 30
+          description: At least 10 for aws.
+        buffer_utilization_threshold:
+          type: number
+          format: double
+          maximum: 100
+          default: 90
+          description: Percentage, greater than 0.
+        max_hourly_commit_per_run:
+          type: number
+          format: double
+          nullable: true
+          minimum: 0.000001
+          maximum: 1.0e+12
+          description: >
+            Cap on the hourly commitment one run may buy, with at most 6
+            decimal places. Omit or send null for no cap.
+        max_actions_per_run:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 10
+        ramp_schedule:
+          $ref: '#/components/schemas/LadderRampSchedule'
+        id:
+          type: string
+          description: Used as the row ID only when a new row is inserted; ignored on update.
+        created_at:
+          type: string
+          format: date-time
+          description: Accepted and ignored.
+        updated_at:
+          type: string
+          format: date-time
+          description: Accepted and ignored.
+
+    LadderTimelineCursor:
+      type: object
+      required: [created_at, id]
+      description: Pass as after_created_at and after_id to fetch the next page.
+      properties:
+        created_at:
+          type: string
+          format: date-time
+        id:
+          type: string
+          format: uuid
+
+    LadderTimelinePage:
+      type: object
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/LadderTimelineEvent'
+        next_cursor:
+          $ref: '#/components/schemas/LadderTimelineCursor'
+        total_count:
+          type: integer
+          format: int64
+          description: Tranches across all pages
+        total_usd_hr:
+          type: string
+          description: Decimal sum of amount_usd_hr across all pages
+        total_od_usd_hr:
+          type: string
+          description: Decimal sum of od_usd_hr across all pages
+
+    LadderTimelineEvent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        config_id:
+          type: string
+          format: uuid
+        layer_type:
+          type: string
+          enum: [ec2-instance-sp, compute-sp, convertible-ri, azure-reservation, azure-savings-plan]
+        term:
+          type: string
+          enum: [1yr, 3yr]
+        payment_option:
+          type: string
+          enum: [all-upfront, partial-upfront, no-upfront]
+        status:
+          type: string
+          enum: [scheduled, fired, completed, cancelled, failed]
+        run_status:
+          type: string
+          enum: [planned, awaiting_approval, approved, executing, completed, failed, cancelled, expired]
+        execution_id:
+          type: string
+          description: Omitted until the tranche has an execution.
+        revision:
+          type: integer
+          format: int64
+          description: Pass as expected_revision when amending.
+        amount_usd_hr:
+          type: string
+          description: Decimal hourly amount in the basis given by amount_basis
+        amount_basis:
+          type: string
+          enum: [on_demand_equivalent, commitment]
+          description: Omitted for older rows, which are treated as on_demand_equivalent.
+        commitment_rate:
+          type: string
+          description: Present when amount_basis is commitment.
+        od_usd_hr:
+          type: string
+          description: On-demand-equivalent hourly amount, 6 decimal places, rounded up
+        scheduled_date:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    LadderTimelineRunPage:
+      type: object
+      properties:
+        runs:
+          type: array
+          items:
+            $ref: '#/components/schemas/LadderTimelineRun'
+        next_cursor:
+          $ref: '#/components/schemas/LadderTimelineCursor'
+        total_count:
+          type: integer
+          format: int64
+          description: Runs across all pages
+
+    LadderTimelineRun:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        config_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [planned, awaiting_approval, approved, executing, completed, failed, cancelled, expired]
+        started_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        baseline_usd_hr:
+          type: string
+          nullable: true
+          description: Decimal; null when not computed
+        target_usd_hr:
+          type: string
+          nullable: true
+          description: Decimal; null when not computed
+        existing_usd_hr:
+          type: string
+          nullable: true
+          description: Decimal; null when not computed
+        gap_usd_hr:
+          type: string
+          nullable: true
+          description: Decimal; null when not computed
+        total_hourly_commit:
+          type: string
+          description: Decimal
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/LadderTimelineAction'
+
+    LadderTimelineAction:
+      type: object
+      properties:
+        action:
+          type: string
+        layer:
+          type: string
+        rationale:
+          type: string
+        data_sources:
+          type: array
+          items:
+            type: string
+
+    LadderTrancheAmendment:
+      type: object
+      additionalProperties: false
+      required: [expected_revision, scheduled_date, amount_usd_hr]
+      properties:
+        expected_revision:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The tranche's current revision
+        scheduled_date:
+          type: string
+          format: date-time
+          description: Must be in the future.
+        amount_usd_hr:
+          type: string
+          pattern: '^(0|[1-9]\d{0,13})(\.\d{1,6})?$'
+          description: Positive decimal with at most 6 fractional digits
+
+    LadderTrancheAmendmentResult:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: int64
+        scheduled_date:
+          type: string
+          format: date-time
+        amount_usd_hr:
+          type: string
+        run_total_usd_hr:
+          type: string
+          description: The run's total hourly amount after the change
+
+    LadderTrancheResolveRequest:
+      type: object
+      additionalProperties: false
+      required: [outcome, reason]
+      description: At most 4096 bytes.
+      properties:
+        outcome:
+          type: string
+          enum: [failed, completed]
+          description: Only failed is implemented; completed answers 501.
+        reason:
+          type: string
+          minLength: 10
+          maxLength: 300
+          description: Trimmed; no control characters.
+        note:
+          type: string
+          maxLength: 200
+          description: Trimmed; no control characters.
+        acknowledge_unknown_outcome:
+          type: boolean
+          description: Must be true exactly when cloud_check is sent.
+        cloud_check:
+          type: object
+          additionalProperties: false
+          required: [checked_account_id, checked_region, checked_service, checked_at]
+          description: Where the operator looked for the purchase.
+          properties:
+            checked_account_id:
+              type: string
+              pattern: '^[A-Za-z0-9_-]{1,64}$'
+              description: The tranche's cloud account ID or provider account number
+            checked_region:
+              type: string
+              pattern: '^[a-z0-9-]{1,32}$'
+            checked_service:
+              type: string
+              pattern: '^[a-z0-9-]{1,32}$'
+              description: Must equal the tranche's layer_type.
+            checked_at:
+              type: string
+              format: date-time
+              description: >
+                Must not be in the future and must follow the last execution
+                change; checked only when an execution's outcome is unknown.
+
+    LadderTrancheResolveResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [failed]
+        status_reason:
+          type: string
+        replayed:
+          type: boolean
+          description: True when an identical earlier request already resolved it.

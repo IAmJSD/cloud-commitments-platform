@@ -26,7 +26,7 @@ func TestLadderTimelineScopedPagesAndSnapshots(t *testing.T) {
 		Plan:              []byte(`{"secret":"never-serialize-this","actions":[{"action":"Hold","layer":"compute-sp","rationale":"Baseline already covered","data_sources":["aws-ce"],"secret":"never-serialize-this"}]}`),
 	})
 	require.NoError(t, err)
-	tranches := make([]LadderTrancheDB, LadderTimelinePageSize+1)
+	tranches := make([]LadderTrancheDB, 101)
 	for i := range tranches {
 		tranches[i] = LadderTrancheDB{
 			ID: uuid.NewString(), ConfigID: &cfgID, RunID: &run.ID,
@@ -37,16 +37,18 @@ func TestLadderTimelineScopedPagesAndSnapshots(t *testing.T) {
 	require.NoError(t, store.SaveLadderTranches(ctx, tranches))
 	first, err := store.ListLadderTimeline(ctx, accountID, "aws", nil)
 	require.NoError(t, err)
-	require.Len(t, first.Events, 100)
+	require.Len(t, first.Events, 101, "one read returns the whole scope")
 	require.Equal(t, int64(101), first.TotalCount)
 	require.Equal(t, "12.469056", first.TotalUSDHr)
-	require.NotNil(t, first.NextCursor)
-	second, err := store.ListLadderTimeline(ctx, accountID, "aws", first.NextCursor)
+	// A cursor from the earlier paginated API narrows the rows, never the totals.
+	legacy, err := store.ListLadderTimeline(ctx, accountID, "aws", &LadderTimelineCursor{CreatedAt: first.Events[99].CreatedAt, ID: first.Events[99].ID})
 	require.NoError(t, err)
-	require.Len(t, second.Events, 1)
-	require.Nil(t, second.NextCursor)
+	require.Len(t, legacy.Events, 1)
+	require.Equal(t, first.Events[100].ID, legacy.Events[0].ID)
+	require.Equal(t, int64(101), legacy.TotalCount)
+	require.Equal(t, "12.469056", legacy.TotalUSDHr)
 	ids := make(map[string]bool)
-	for _, event := range append(first.Events, second.Events...) {
+	for _, event := range first.Events {
 		require.False(t, ids[event.ID], "cursor must never duplicate an event")
 		ids[event.ID] = true
 		require.Zero(t, event.Revision, "untouched tranches report revision 0")
@@ -82,13 +84,12 @@ func TestLadderTimelineScopedPagesAndSnapshots(t *testing.T) {
 	runs, err = store.ListLadderTimelineRuns(ctx, accountID, "aws", nil)
 	require.NoError(t, err)
 	require.Equal(t, int64(101), runs.TotalCount)
-	require.Len(t, runs.Runs, 100)
-	lastRunPage, err := store.ListLadderTimelineRuns(ctx, accountID, "aws", runs.NextCursor)
+	require.Len(t, runs.Runs, 101)
+	lastRunPage, err := store.ListLadderTimelineRuns(ctx, accountID, "aws", &LadderTimelineCursor{CreatedAt: runs.Runs[99].CreatedAt, ID: runs.Runs[99].ID})
 	require.NoError(t, err)
 	require.Len(t, lastRunPage.Runs, 1)
-	for _, item := range runs.Runs {
-		require.NotEqual(t, lastRunPage.Runs[0].ID, item.ID)
-	}
+	require.Equal(t, runs.Runs[100].ID, lastRunPage.Runs[0].ID)
+	require.Equal(t, int64(101), lastRunPage.TotalCount)
 	otherConfig := seedLadderConfigWithExtID(ctx, t, store, "222222222222")
 	otherRun, err := store.SaveLadderRun(ctx, &LadderRunDB{ConfigID: &otherConfig, Status: ladder.RunStatusPlanned, StartedAt: time.Now().UTC(), Plan: []byte(`{}`)})
 	require.NoError(t, err)

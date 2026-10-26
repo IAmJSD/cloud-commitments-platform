@@ -275,93 +275,6 @@ func TestPostgresStore_CreateUser(t *testing.T) {
 	})
 }
 
-func TestPostgresStore_UpdateUser(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("successfully update user", func(t *testing.T) {
-		mockDB := new(MockDBConnection)
-		store := &PostgresStore{db: mockDB}
-
-		user := &User{
-			ID:       "user-123",
-			Email:    "updated@example.com",
-			GroupIDs: []string{},
-		}
-
-		// Create a CommandTag that indicates 1 row was affected
-		tag := pgconn.NewCommandTag("UPDATE 1")
-		mockDB.On("Exec", ctx, mock.AnythingOfType("string"), mock.Anything).Return(tag, nil)
-
-		err := store.UpdateUser(ctx, user)
-		require.NoError(t, err)
-		assert.False(t, user.UpdatedAt.IsZero())
-
-		mockDB.AssertExpectations(t)
-	})
-
-	t.Run("return error when update fails", func(t *testing.T) {
-		mockDB := new(MockDBConnection)
-		store := &PostgresStore{db: mockDB}
-
-		user := &User{
-			ID:       "user-123",
-			GroupIDs: []string{},
-		}
-
-		mockDB.On("Exec", ctx, mock.AnythingOfType("string"), mock.Anything).Return(pgconn.CommandTag{}, fmt.Errorf("update failed"))
-
-		err := store.UpdateUser(ctx, user)
-		assert.Error(t, err)
-
-		mockDB.AssertExpectations(t)
-	})
-}
-
-func TestPostgresStore_DeleteUser(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("successfully delete user", func(t *testing.T) {
-		mockDB := new(MockDBConnection)
-		store := &PostgresStore{db: mockDB}
-
-		// Create a CommandTag that indicates 1 row was affected
-		tag := pgconn.NewCommandTag("DELETE 1")
-		mockDB.On("Exec", ctx, mock.AnythingOfType("string"), mock.Anything).Return(tag, nil)
-
-		err := store.DeleteUser(ctx, "user-123")
-		require.NoError(t, err)
-
-		mockDB.AssertExpectations(t)
-	})
-
-	t.Run("return error when delete fails", func(t *testing.T) {
-		mockDB := new(MockDBConnection)
-		store := &PostgresStore{db: mockDB}
-
-		mockDB.On("Exec", ctx, mock.AnythingOfType("string"), mock.Anything).Return(pgconn.CommandTag{}, fmt.Errorf("delete failed"))
-
-		err := store.DeleteUser(ctx, "user-123")
-		assert.Error(t, err)
-
-		mockDB.AssertExpectations(t)
-	})
-
-	t.Run("return error when user not found", func(t *testing.T) {
-		mockDB := new(MockDBConnection)
-		store := &PostgresStore{db: mockDB}
-
-		// Return 0 rows affected
-		tag := pgconn.NewCommandTag("DELETE 0")
-		mockDB.On("Exec", ctx, mock.AnythingOfType("string"), mock.Anything).Return(tag, nil)
-
-		err := store.DeleteUser(ctx, "nonexistent")
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "user not found")
-
-		mockDB.AssertExpectations(t)
-	})
-}
-
 func TestNewPostgresStore(t *testing.T) {
 	mockDB := new(MockDBConnection)
 	store := NewPostgresStore(mockDB)
@@ -468,29 +381,6 @@ func TestPostgresStore_AdminExists(t *testing.T) {
 
 		mockDB.AssertExpectations(t)
 	})
-}
-
-func TestPostgresStore_UpdateUser_NotFound(t *testing.T) {
-	ctx := context.Background()
-
-	mockDB := new(MockDBConnection)
-	store := &PostgresStore{db: mockDB}
-
-	user := &User{
-		ID:       "nonexistent",
-		Email:    "test@example.com",
-		GroupIDs: []string{},
-	}
-
-	// Return 0 rows affected
-	tag := pgconn.NewCommandTag("UPDATE 0")
-	mockDB.On("Exec", ctx, mock.AnythingOfType("string"), mock.Anything).Return(tag, nil)
-
-	err := store.UpdateUser(ctx, user)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "user not found")
-
-	mockDB.AssertExpectations(t)
 }
 
 // ==========================================

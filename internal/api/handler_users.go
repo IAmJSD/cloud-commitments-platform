@@ -85,6 +85,7 @@ func mapAuthError(err error) error {
 	switch {
 	case errors.Is(err, auth.ErrInvalidEmail),
 		errors.Is(err, auth.ErrNoGroups),
+		errors.Is(err, auth.ErrContradictoryGroups),
 		errors.Is(err, auth.ErrPasswordPolicy):
 		return NewClientError(400, err.Error())
 	case errors.Is(err, auth.ErrSelfEscalation),

@@ -15,6 +15,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 )
 
 // Security constants.
@@ -299,6 +300,29 @@ func validateGCPWIFPayload(payload map[string]interface{}) error {
 		if err := validateGCPWIFRequiredKey(payload, key); err != nil {
 			return err
 		}
+	}
+	return validateGCPWIFEndpointKeys(payload)
+}
+
+// validateGCPWIFEndpointKeys checks the config's token exchange and
+// service-account impersonation URLs with credentials.ValidateGCPWIFEndpoints,
+// the same check the resolver runs before it uses a stored config. Runs after
+// the required-key checks, so token_url is a non-empty string here.
+func validateGCPWIFEndpointKeys(payload map[string]interface{}) error {
+	tokenURL, ok := payload["token_url"].(string)
+	if !ok {
+		return NewClientError(400, "credentials payload key \"token_url\" must be a non-empty string")
+	}
+	impersonationURL := ""
+	if v, ok := payload["service_account_impersonation_url"]; ok {
+		s, isStr := v.(string)
+		if !isStr || strings.TrimSpace(s) == "" {
+			return NewClientError(400, "credentials payload key \"service_account_impersonation_url\" must be a non-empty string")
+		}
+		impersonationURL = s
+	}
+	if err := credentials.ValidateGCPWIFEndpoints(tokenURL, impersonationURL); err != nil {
+		return NewClientError(400, "credentials payload for gcp_workload_identity_config: "+err.Error())
 	}
 	return nil
 }

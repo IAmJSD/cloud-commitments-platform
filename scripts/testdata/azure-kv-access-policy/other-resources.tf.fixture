@@ -1,0 +1,48 @@
+# Fixture: the name access_policy where it is NOT a Key Vault grant. Must exit 0.
+#
+# Every earlier line matcher failed on one of these (issue #204):
+#   - azurerm_storage_share's acl has a real nested `access_policy` block, which
+#     belongs to the share, not to any vault;
+#   - a non-vault resource with an `access_policy` block or dynamic block of
+#     that name directly in its body;
+#   - attributes whose name starts with or equals access_policy;
+#   - a vault that grants nothing, next to all of the above.
+
+resource "azurerm_storage_share" "reports" {
+  name               = "reports"
+  storage_account_id = var.storage_account_id
+  quota              = 50
+
+  acl {
+    id = "reports-read"
+
+    access_policy {
+      permissions = "r"
+    }
+  }
+}
+
+resource "azurerm_example_service" "svc" {
+  access_policy_enabled = false
+  access_policy         = "metadata"
+
+  access_policy {
+    mode = "metadata"
+  }
+
+  dynamic "access_policy" {
+    for_each = var.modes
+    content {
+      mode = access_policy.value
+    }
+  }
+}
+
+resource "azurerm_key_vault" "main" {
+  name                      = "kv-fixture"
+  location                  = var.location
+  resource_group_name       = var.resource_group_name
+  tenant_id                 = data.azurerm_client_config.current.tenant_id
+  sku_name                  = "standard"
+  enable_rbac_authorization = true
+}

@@ -2,7 +2,6 @@ package mocks
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 	"github.com/stretchr/testify/mock"
@@ -11,6 +10,9 @@ import (
 // MockSecretsManagerClient is a mock implementation of Secrets Manager client.
 type MockSecretsManagerClient struct {
 	mock.Mock
+	// reporter fails the registered test on a mistyped .Return value. See
+	// report.go.
+	reporter testReporter
 }
 
 // GetSecretValue mocks the GetSecretValue operation.
@@ -21,7 +23,7 @@ func (m *MockSecretsManagerClient) GetSecretValue(ctx context.Context, input *se
 	}
 	v, ok := args.Get(0).(*secretsmanager.GetSecretValueOutput)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *secretsmanager.GetSecretValueOutput, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("GetSecretValue", "*secretsmanager.GetSecretValueOutput", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -34,7 +36,7 @@ func (m *MockSecretsManagerClient) CreateSecret(ctx context.Context, input *secr
 	}
 	v, ok := args.Get(0).(*secretsmanager.CreateSecretOutput)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *secretsmanager.CreateSecretOutput, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("CreateSecret", "*secretsmanager.CreateSecretOutput", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -47,7 +49,7 @@ func (m *MockSecretsManagerClient) UpdateSecret(ctx context.Context, input *secr
 	}
 	v, ok := args.Get(0).(*secretsmanager.UpdateSecretOutput)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected *secretsmanager.UpdateSecretOutput, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("UpdateSecret", "*secretsmanager.UpdateSecretOutput", args.Get(0))
 	}
 	return v, args.Error(1)
 }

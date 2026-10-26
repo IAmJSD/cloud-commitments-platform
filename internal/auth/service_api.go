@@ -238,18 +238,16 @@ func apiPermissionToPermission(ap APIPermission) Permission {
 	return p
 }
 
-// API adapter methods - these implement the AuthServiceInterface from handler.go
-// They use any to avoid import cycles with the api package
+// API adapter methods - these back api.AuthServiceInterface via the server
+// package's authServiceAdapter. The api package imports auth, so the user and
+// group writes take and return the concrete API* types directly (issue #169).
+// The methods that still use any predate that and are not yet converted.
 
 // CreateUserAPI creates a new user via the API. actorUserID is the
 // authenticated caller performing the creation (from the session, never the
 // request body); it is used by the service layer to enforce the membership
 // grant ceiling (issue #226).
-func (s *Service) CreateUserAPI(ctx context.Context, actorUserID string, reqInterface any) (any, error) {
-	req, ok := reqInterface.(APICreateUserRequest)
-	if !ok {
-		return nil, fmt.Errorf("invalid request type")
-	}
+func (s *Service) CreateUserAPI(ctx context.Context, actorUserID string, req APICreateUserRequest) (*APICreateUserResponse, error) {
 	authReq := CreateUserRequest{
 		Email:    req.Email,
 		Password: req.Password,
@@ -269,11 +267,7 @@ func (s *Service) CreateUserAPI(ctx context.Context, actorUserID string, reqInte
 // UpdateUserAPI updates a user via the API. actorUserID is the authenticated
 // caller performing the change (from the session, never the request body); it
 // is used by the service layer to enforce the self-escalation guard (#907).
-func (s *Service) UpdateUserAPI(ctx context.Context, actorUserID, userID string, reqInterface any) (any, error) {
-	req, ok := reqInterface.(APIUpdateUserRequest)
-	if !ok {
-		return nil, fmt.Errorf("invalid request type")
-	}
+func (s *Service) UpdateUserAPI(ctx context.Context, actorUserID, userID string, req APIUpdateUserRequest) (*APIUser, error) {
 	authReq := UpdateUserRequest{
 		GroupIDs: req.Groups,
 	}
@@ -336,11 +330,7 @@ func apiPermissionsToPermissions(in []APIPermission) ([]Permission, error) {
 // principal (a user ID, or AdminAPIKeyActorID for the stateless admin API
 // key); the requested permissions are checked against that principal's own
 // effective set before anything is written (issue #1550).
-func (s *Service) CreateGroupAPI(ctx context.Context, actorUserID string, reqInterface any) (any, error) {
-	req, ok := reqInterface.(APICreateGroupRequest)
-	if !ok {
-		return nil, fmt.Errorf("invalid request type")
-	}
+func (s *Service) CreateGroupAPI(ctx context.Context, actorUserID string, req APICreateGroupRequest) (*APIGroup, error) {
 	perms, err := apiPermissionsToPermissions(req.Permissions)
 	if err != nil {
 		return nil, err
@@ -408,11 +398,7 @@ func updateRequestPermissions(req APIUpdateGroupRequest) ([]Permission, error) {
 // against the acting principal's own effective permissions before writing
 // (issues #1550, #1629). actorUserID is a user ID, or AdminAPIKeyActorID for
 // the stateless admin API key.
-func (s *Service) UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, reqInterface any) (any, error) {
-	req, ok := reqInterface.(APIUpdateGroupRequest)
-	if !ok {
-		return nil, fmt.Errorf("invalid request type")
-	}
+func (s *Service) UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, req APIUpdateGroupRequest) (*APIGroup, error) {
 	group, err := s.GetGroup(ctx, groupID)
 	if err != nil {
 		return nil, err

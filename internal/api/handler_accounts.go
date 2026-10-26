@@ -124,6 +124,7 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 	}
 
 	// Mark the self-account (the account matching CUDly's own host identity)
+	// and attach the derived notices (issue #1194).
 	h.markSelfAccount(ctx, accts)
 
 	return accts, nil
@@ -193,17 +194,33 @@ func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFun
 	return summaries, nil
 }
 
-// markSelfAccount sets IsSelf=true on the account matching the source identity.
+// markSelfAccount sets IsSelf=true on the account matching the source
+// identity, then attaches each account's derived notices. The self-account
+// has no role ARN, so its notices use CUDly's own partition from STS.
 func (h *Handler) markSelfAccount(ctx context.Context, accts []config.CloudAccount) {
 	si := h.resolveSourceIdentity(ctx)
-	if si == nil || si.ExternalID() == "" {
-		return
+	var hostPartition string
+	if si != nil {
+		hostPartition = si.Partition
 	}
 	for i := range accts {
-		if accts[i].Provider == si.Provider && accts[i].ExternalID == si.ExternalID() {
+		if si != nil && si.ExternalID() != "" && accts[i].Provider == si.Provider && accts[i].ExternalID == si.ExternalID() {
 			accts[i].IsSelf = true
 		}
+		annotateAccountNotices(&accts[i], hostPartition)
 	}
+}
+
+// annotateAccountNotices sets the derived notices on acct, such as the aws-cn
+// Savings Plans limitation (issue #1194). The partition comes from the
+// account's role ARN; a self-account with no role ARN falls back to
+// hostPartition, CUDly's own partition ("" when unknown).
+func annotateAccountNotices(acct *config.CloudAccount, hostPartition string) {
+	partition := acct.AWSPartition()
+	if partition == "" && acct.IsSelf && acct.Provider == "aws" {
+		partition = hostPartition
+	}
+	acct.Notices = config.AWSPartitionNotices(partition)
 }
 
 // buildAccountFilter constructs a CloudAccountFilter from query parameters.
@@ -267,6 +284,7 @@ func (h *Handler) createSelfAccount(ctx context.Context, httpReq *events.LambdaF
 	}
 
 	account.IsSelf = true
+	annotateAccountNotices(account, si.Partition)
 	return account, nil
 }
 
@@ -343,6 +361,7 @@ func (h *Handler) createAccount(ctx context.Context, httpReq *events.LambdaFunct
 		return nil, classifyStoreError(err, fmt.Sprintf("an account with external ID %q already exists for %s", req.ExternalID, req.Provider))
 	}
 
+	annotateAccountNotices(account, "")
 	return account, nil
 }
 
@@ -558,6 +577,7 @@ func (h *Handler) getAccount(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, err
 	}
 
+	annotateAccountNotices(account, "")
 	return account, nil
 }
 
@@ -603,6 +623,7 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 		return nil, classifyStoreError(err, fmt.Sprintf("an account with external ID %q already exists for %s", req.ExternalID, req.Provider))
 	}
 
+	annotateAccountNotices(account, "")
 	return account, nil
 }
 

@@ -904,8 +904,8 @@ func TestHandler_executePurchase_MatchingTenancyTermChangeSucceeds(t *testing.T)
 // TestHandler_executePurchase_StaleOriginIDRefused is the fail-open
 // regression guard from the independent review of PR #406: the request
 // names an origin recommendation id that used to be real but has since been
-// wiped from the current stored set (e.g. a collection refresh --
-// ReplaceRecommendations -- ran between page load and purchase), while the
+// evicted from the current stored set (e.g. a collection refresh's stale-row
+// eviction ran between page load and purchase), while the
 // NEWLY requested term still resolves to a current row via config.RecIdentityKey.
 // Pre-fix, an unresolvable id was silently SKIPPED (treated the same as an
 // honest caller who never made an origin claim at all), so the purchase
