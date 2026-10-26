@@ -179,8 +179,8 @@ func TestNewConvertibleOfferingLookup_MapsEveryField(t *testing.T) {
 
 func TestConvertForAutoExchange_CarriesAvailabilityZone(t *testing.T) {
 	_, _, meta := convertForAutoExchange([]ec2svc.ConvertibleRI{
-		{ReservedInstanceID: "ri-zonal", Scope: "Availability Zone", AvailabilityZone: "us-east-1b"},
-		{ReservedInstanceID: "ri-regional", Scope: "Region"},
+		{ReservedInstanceID: "ri-zonal", Scope: "Availability Zone", AvailabilityZone: "us-east-1b", Duration: 31536000},
+		{ReservedInstanceID: "ri-regional", Scope: "Region", Duration: 31536000},
 	}, nil)
 	assert.Equal(t, "us-east-1b", meta["ri-zonal"].AvailabilityZone)
 	assert.Empty(t, meta["ri-regional"].AvailabilityZone)

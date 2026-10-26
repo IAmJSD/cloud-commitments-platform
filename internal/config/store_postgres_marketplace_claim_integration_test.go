@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
@@ -23,9 +22,7 @@ const claimTestSchedule = `[{"term_months":36,"price":100}]`
 
 func TestMarketplaceListingClaim_PostgresSemantics(t *testing.T) {
 	ctx := context.Background()
-	container := testhelpers.RequirePostgresContainer(ctx, t)
-	t.Cleanup(func() { assert.NoError(t, container.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, container.DB.Pool(), getTestMigrationsPath(), "", ""))
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getTestMigrationsPath())
 
 	store := NewPostgresStore(container.DB)
 	checkMarketplaceListingClaim(ctx, t, store)

@@ -1,6 +1,7 @@
 import type { ChartConfiguration } from 'chart.js';
 import type { LadderEvent, LadderRun } from './api/ladder';
 import { formatDate } from './utils';
+import { requireToken as token } from './lib/chart-theme';
 import { LADDER_COUNTED_NOTE, formatLadderAmount, formatLadderUnits, ladderAmountUnits, ladderCumulative, ladderLabel, type LadderCumulative } from './ladder-timeline-filters';
 
 export const LADDER_UNIT_LABEL = 'On-demand-equivalent $/hr';
@@ -9,13 +10,6 @@ const layerTokens: Record<string, string> = {
   'compute-sp': '--cudly-primary', 'ec2-instance-sp': '--cudly-success', 'convertible-ri': '--cudly-warn-fg',
   'azure-reservation': '--cudly-error', 'azure-savings-plan': '--cudly-info',
 };
-
-/** Resolve a design token; a missing token is a bug, not a reason to paint a default color. */
-function token(name: string): string {
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  if (!value) throw new Error(`Missing CSS token ${name}`);
-  return value;
-}
 
 export interface LadderChartSeries { label: string; layer?: string; values: bigint[]; kind: 'base' | 'layer' | 'target' }
 

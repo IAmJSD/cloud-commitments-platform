@@ -514,3 +514,108 @@ func TestGetRecommendationByID_AbsentRec(t *testing.T) {
 	assert.Nil(t, got, "absent rec must return nil")
 	assert.Nil(t, hiddenBy)
 }
+
+func TestFilterRecsByResolvedConfigs_MinCount_ExemptsSavingsPlans(t *testing.T) {
+	// An SP rec's Count is always 1 (not an instance count), so the min-count
+	// floor must not drop it; non-SP recs with the same Count still drop (#1146).
+	a := "acct-A"
+	cases := []struct {
+		provider, service string
+		keep              bool
+	}{
+		{"aws", "savingsplans", true},
+		{"aws", "savings-plans-compute", true},
+		{"aws", "savings-plans-ec2instance", true},
+		{"aws", "savings-plans-sagemaker", true},
+		{"aws", "savings-plans-database", true},
+		{"azure", "savingsplans", true},
+		{"aws", "ec2", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.provider+"/"+tc.service, func(t *testing.T) {
+			rec := config.RecommendationRecord{
+				ID: "r", Provider: tc.provider, Service: tc.service, Region: "us-east-1",
+				ResourceType: "x", Count: 1, CloudAccountID: &a,
+			}
+			resolved := map[string]*config.ServiceConfig{
+				config.AccountConfigKey(a, tc.provider, tc.service): {Provider: tc.provider, Service: tc.service, Enabled: true, MinCount: 5},
+			}
+			out := filterRecsByResolvedConfigs([]config.RecommendationRecord{rec}, resolved)
+			assert.Equal(t, tc.keep, len(out) == 1)
+		})
+	}
+}
+
+// TestGetRecommendationByID_HiddenByMinCount covers #120: a rec the list
+// drops for being under the min_count floor must open with a "min_count"
+// hidden_by reason, not an empty one that contradicts the list view.
+func TestGetRecommendationByID_HiddenByMinCount(t *testing.T) {
+	ctx := context.Background()
+	rec := rdsRec("acct-A", "us-east-1", "mysql")
+	rec.Count = 3
+	store := &mockOverrideStore{
+		recs: []config.RecommendationRecord{rec},
+		globals: map[string]*config.ServiceConfig{
+			"aws|rds": {Provider: "aws", Service: "rds", Enabled: true, MinCount: 5},
+		},
+	}
+	s := &Scheduler{config: store}
+
+	listed, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
+	require.NoError(t, err)
+	require.Empty(t, listed, "count 3 is under min_count 5, so the list hides it")
+
+	got, hiddenBy, err := s.GetRecommendationByID(ctx, rec.ID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, []string{"min_count"}, hiddenBy)
+}
+
+// TestOverrideHiddenReasons_AgreesWithFilter checks, over every combination
+// of failing dimensions, that the list filter drops a rec exactly when
+// overrideHiddenReasons names a reason, and names every failing dimension.
+func TestOverrideHiddenReasons_AgreesWithFilter(t *testing.T) {
+	a := "acct-A"
+	for mask := 0; mask < 1<<5; mask++ {
+		rec := config.RecommendationRecord{
+			ID: "r", Provider: "aws", Service: "rds", Region: "us-east-1",
+			ResourceType: "db.t3.medium", Engine: "mysql", Count: 3, CloudAccountID: &a,
+		}
+		cfg := &config.ServiceConfig{Provider: "aws", Service: "rds", Enabled: true}
+		var want []string
+		if mask&1 != 0 {
+			cfg.Enabled = false
+			want = append(want, "enabled=false")
+		}
+		if mask&2 != 0 {
+			cfg.ExcludeEngines = []string{"mysql"}
+			want = append(want, "engine")
+		}
+		if mask&4 != 0 {
+			cfg.ExcludeRegions = []string{"us-east-1"}
+			want = append(want, "region")
+		}
+		if mask&8 != 0 {
+			cfg.IncludeTypes = []string{"db.r5.large"}
+			want = append(want, "resource_type")
+		}
+		if mask&16 != 0 {
+			cfg.MinCount = 4
+			want = append(want, "min_count")
+		}
+		resolved := map[string]*config.ServiceConfig{config.AccountConfigKey(a, "aws", "rds"): cfg}
+		kept := len(filterRecsByResolvedConfigs([]config.RecommendationRecord{rec}, resolved)) == 1
+		got := overrideHiddenReasons(&rec, cfg)
+		assert.Equal(t, want, got, "mask %05b", mask)
+		assert.Equal(t, kept, len(got) == 0, "mask %05b: filter and hidden_by disagree", mask)
+	}
+}
+
+// TestOverrideHiddenReasons_MinCountExemptsSavingsPlans keeps the explainer in
+// line with the filter's Savings Plans carve-out (#1146): an SP rec is never
+// reported as hidden by min_count.
+func TestOverrideHiddenReasons_MinCountExemptsSavingsPlans(t *testing.T) {
+	rec := config.RecommendationRecord{ID: "r", Provider: "aws", Service: "savingsplans", Count: 1}
+	cfg := &config.ServiceConfig{Provider: "aws", Service: "savingsplans", Enabled: true, MinCount: 5}
+	assert.Empty(t, overrideHiddenReasons(&rec, cfg))
+}

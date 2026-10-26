@@ -102,10 +102,11 @@ jest.mock('../confirmDialog', () => ({
 
 // Mock utils
 jest.mock('../utils', () => ({
+  NO_VALUE: '\u2014',
   formatDate: jest.fn((val) => val ? new Date(val).toLocaleDateString() : ''),
   formatTerm: jest.fn((years) => years == null ? '' : `${years} Year${years === 1 ? '' : 's'}`),
   formatRampSchedule: jest.fn((val) => val || 'Unknown'),
-  getStatusBadge: jest.fn(() => ({ class: 'active', label: 'Active' })),
+  getStatusBadge: jest.fn(() => ({ class: 'success', label: 'Active' })),
   escapeHtml: jest.fn((str) => str || ''),
   escapeHtmlAttr: jest.fn((str: string | null | undefined) => {
     if (!str) return '';
@@ -212,20 +213,6 @@ describe('Plans Module', () => {
   });
 
   describe('loadPlans', () => {
-    test('wires actual form values to the no-write schedule preview', () => {
-      const button = document.createElement('button');
-      button.id = 'preview-plan-schedule-btn';
-      document.getElementById('plan-modal')!.appendChild(button);
-      (document.querySelector('input[value="custom"]') as HTMLInputElement).checked = true;
-      (document.getElementById('ramp-step-percent') as HTMLInputElement).value = '33';
-      setupPlanHandlers();
-      button.click();
-      expect(document.querySelectorAll('[data-preview-step]')).toHaveLength(3);
-      expect(api.createPlan).not.toHaveBeenCalled();
-      expect(api.updatePlan).not.toHaveBeenCalled();
-      expect(api.createPlannedPurchases).not.toHaveBeenCalled();
-    });
-
     test('fetches and renders plans', async () => {
       (api.getPlans as jest.Mock).mockResolvedValue({
         plans: [
@@ -261,6 +248,27 @@ describe('Plans Module', () => {
       const list = document.getElementById('plans-list');
       expect(list?.innerHTML).toContain('Test Plan');
       expect(list?.innerHTML).toContain('ec2');
+    });
+
+    test.each([
+      [{ current_step: 2, total_steps: 4 }, '2/4 steps'],
+      [{ current_step: 0, total_steps: 0 }, '\u2014'],
+      [{ current_step: 0 }, '\u2014'],
+    ])('ramp progress %j renders %s instead of a fabricated 0/1 (#136)', async (steps, expected) => {
+      (api.getPlans as jest.Mock).mockResolvedValue({
+        plans: [{
+          id: 'plan-1', name: 'Ramp Plan', enabled: true, auto_purchase: true,
+          services: { ec2: { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'all-upfront', coverage: 80 } },
+          ramp_schedule: { type: 'weekly', percent_per_step: 25, step_interval_days: 7, ...steps },
+        }],
+      });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+
+      await loadPlans();
+
+      const progress = Array.from(document.querySelectorAll('#plans-list .plan-detail'))
+        .find((el) => el.querySelector('.plan-detail-label')?.textContent === 'Progress');
+      expect(progress?.querySelector('.plan-detail-value')?.textContent).toBe(expected);
     });
 
     test('multi-SP plan summary lists every plan-type covered (issue #131)', async () => {
@@ -470,7 +478,9 @@ describe('Plans Module', () => {
       await loadPlans();
 
       const list = document.getElementById('plans-list');
-      expect(list?.innerHTML).toContain('status-badge');
+      // getStatusBadge is mocked to the success tone; the card renders it as
+      // the shared .badge pill (issue #737).
+      expect(list?.querySelector('.plan-status .badge.badge-success')?.textContent).toBe('Active');
     });
 
     test('renders toggle switches for plans', async () => {
@@ -851,7 +861,7 @@ describe('Plans Module', () => {
       // Paused rows stay visible with a Paused badge and are NOT replaced by
       // the empty-state message.
       expect(container?.innerHTML).toContain('status-paused');
-      expect(container?.innerHTML).toContain('>paused<');
+      expect(container?.querySelector('.badge.badge-muted')?.textContent).toBe('Paused');
       expect(container?.innerHTML).not.toContain('No planned purchases');
     });
 
@@ -3095,7 +3105,7 @@ describe('Plans Module', () => {
       ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0, current_step: 0, total_steps: 1 },
     };
 
-    test('absent provider in services renders -- not aws in plan card', async () => {
+    test('absent provider in services renders an em dash, not aws in plan card', async () => {
       const mockBadge = (jest.requireMock('../utils') as { providerBadgeHtml: jest.Mock }).providerBadgeHtml;
       mockBadge.mockClear();
 
@@ -3112,7 +3122,7 @@ describe('Plans Module', () => {
       expect(mockBadge).toHaveBeenCalledWith(null);
     });
 
-    test('absent term in services renders -- not 3yr in plan card', async () => {
+    test('absent term in services renders an em dash, not 3yr in plan card', async () => {
       (api.getPlans as jest.Mock).mockResolvedValue({
         plans: [{ ...planBase, services: { ec2: { provider: 'aws', service: 'ec2', coverage: 80 } } }]
       });
@@ -3121,12 +3131,12 @@ describe('Plans Module', () => {
       await loadPlans();
 
       const list = document.getElementById('plans-list');
-      // Pre-fix rendered '3 Years' for a missing term; post-fix renders '--'
+      // Pre-fix rendered '3 Years' for a missing term; post-fix renders '—'
       expect(list?.textContent).not.toContain('3 Years');
-      expect(list?.textContent).toContain('--');
+      expect(list?.textContent).toContain('—');
     });
 
-    test('absent coverage in services renders -- not 80% in plan card', async () => {
+    test('absent coverage in services renders an em dash, not 80% in plan card', async () => {
       (api.getPlans as jest.Mock).mockResolvedValue({
         plans: [{ ...planBase, services: { ec2: { provider: 'aws', service: 'ec2', term: 1 } } }]
       });
@@ -3135,12 +3145,12 @@ describe('Plans Module', () => {
       await loadPlans();
 
       const list = document.getElementById('plans-list');
-      // Pre-fix rendered '80%' for a missing coverage; post-fix renders '--'
+      // Pre-fix rendered '80%' for a missing coverage; post-fix renders '—'
       expect(list?.textContent).not.toContain('80%');
-      expect(list?.textContent).toContain('--');
+      expect(list?.textContent).toContain('—');
     });
 
-    test('empty services object renders all -- fields in plan card', async () => {
+    test('empty services object renders all em-dash fields in plan card', async () => {
       (api.getPlans as jest.Mock).mockResolvedValue({
         plans: [{ ...planBase, services: {} }]
       });
@@ -3150,7 +3160,7 @@ describe('Plans Module', () => {
 
       const list = document.getElementById('plans-list');
       // Pre-fix: all-zero fallback { provider:'aws', term:3, coverage:80 }
-      // Post-fix: all '--' for missing data
+      // Post-fix: all '—' for missing data
       expect(list?.textContent).not.toContain('80%');
       expect(list?.textContent).not.toContain('3 Years');
     });
@@ -3275,6 +3285,12 @@ describe('Plans Module', () => {
       ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0 }
     };
 
+    // The plan's own status badge (Active, success tone) shares the card, so
+    // assert on the health badge element rather than on the card's markup.
+    const healthBadge = (): Element | undefined => Array.from(
+      document.querySelectorAll('#plans-list .badge'),
+    ).find((b) => (b.textContent ?? '').startsWith('Health:'));
+
     test('renders a green badge for a healthy score (>= 80)', async () => {
       (api.getPlans as jest.Mock).mockResolvedValue({
         plans: [{ ...basePlan, health_score: 90, health_factors: [] }]
@@ -3284,7 +3300,7 @@ describe('Plans Module', () => {
       await loadPlans();
 
       const list = document.getElementById('plans-list');
-      expect(list?.innerHTML).toContain('badge-success');
+      expect(healthBadge()?.className).toBe('badge badge-success');
       expect(list?.innerHTML).toContain('Health: 90');
     });
 
@@ -3301,7 +3317,7 @@ describe('Plans Module', () => {
       await loadPlans();
 
       const list = document.getElementById('plans-list');
-      expect(list?.innerHTML).toContain('badge-warning');
+      expect(healthBadge()?.className).toBe('badge badge-warning');
       expect(list?.innerHTML).toContain('Health: 65');
     });
 
@@ -3321,7 +3337,7 @@ describe('Plans Module', () => {
       await loadPlans();
 
       const list = document.getElementById('plans-list');
-      expect(list?.innerHTML).toContain('badge-danger');
+      expect(healthBadge()?.className).toBe('badge badge-danger');
       expect(list?.innerHTML).toContain('Health: 30');
     });
 
@@ -3349,9 +3365,8 @@ describe('Plans Module', () => {
 
       const list = document.getElementById('plans-list');
       expect(list?.innerHTML).toContain('Health: unknown');
-      expect(list?.innerHTML).toContain('badge-muted');
       // Critically, it must NOT be dressed up as a healthy score.
-      expect(list?.innerHTML).not.toContain('badge-success');
+      expect(healthBadge()?.className).toBe('badge badge-muted');
       expect(list?.innerHTML).not.toContain('Health: 100');
     });
 
@@ -3372,7 +3387,7 @@ describe('Plans Module', () => {
       await loadPlans();
 
       const list = document.getElementById('plans-list');
-      expect(list?.innerHTML).toContain(expectedClass);
+      expect(healthBadge()?.className).toBe(`badge ${expectedClass}`);
       expect(list?.innerHTML).toContain(`Health: ${score}`);
     });
 
@@ -3432,6 +3447,119 @@ describe('Plans Module', () => {
       expect(list?.querySelector('img')).toBeNull();
       const badge = list?.querySelector('.badge-danger[title]');
       expect(badge?.getAttribute('title')).toContain(maliciousNote);
+    });
+  });
+  describe('inline schedule preview', () => {
+    const restartNotice = 'restarts from today for a plan already in progress; executed purchases are not shown';
+    const host = (): HTMLElement => document.getElementById('plan-editor-panel')!;
+    const points = (): number => host().querySelectorAll('[data-preview-step]').length;
+    const backendPlan = (ramp: Record<string, unknown>, coverage: number | null = 80) => ({
+      id: 'plan-1', name: 'Plan', enabled: true, auto_purchase: false, notification_days_before: 3,
+      services: { ec2: { provider: 'aws', service: 'ec2', term: 1, payment: 'all-upfront', ...(coverage === null ? {} : { coverage }) } },
+      ramp_schedule: ramp,
+    });
+    const openEdit = async (plan: unknown): Promise<void> => {
+      (api.getPlans as jest.Mock).mockResolvedValue({ plans: [{ id: 'plan-1', name: 'Plan', enabled: true, auto_purchase: false, services: {} }] });
+      (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+      (api.getPlan as jest.Mock).mockResolvedValue(plan);
+      await loadPlans();
+      expect(points()).toBe(0);
+      (document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement).click();
+      await jest.advanceTimersByTimeAsync(50);
+    };
+    beforeEach(() => {
+      jest.useFakeTimers({ now: new Date('2026-10-15T12:00:00Z') });
+      const form = document.getElementById('plan-form')!.innerHTML;
+      document.body.innerHTML = `<div id="plans-list"></div><div id="planned-purchases-list"></div>
+        <div id="plan-modal" class="modal hidden"><div class="modal-content"><h2 id="plan-modal-title">Create Purchase Plan</h2>
+        <div class="plan-editor-layout"><section id="plan-editor-panel" hidden></section><form id="plan-form">${form}</form></div>
+        <div class="modal-buttons"><button type="button" id="close-plan-modal-btn">Cancel</button><button type="submit" form="plan-form">Save</button></div>
+        </div></div><div id="purchase-modal" class="hidden"></div>`;
+      _resetRampHandlersForTest();
+    });
+    afterEach(() => { closePlanModal(); jest.useRealTimers(); });
+
+    test.each([
+      ['weekly 25%', { type: 'weekly', percent_per_step: 25, step_interval_days: 7 }, 4],
+      ['custom 33% / 14 days', { type: 'custom', percent_per_step: 33, step_interval_days: 14 }, 3],
+      ['monthly 10%', { type: 'monthly', percent_per_step: 10, step_interval_days: 30 }, 10],
+    ])('Edit shows the %s schedule preview and the restart notice', async (_name, ramp, count) => {
+      await openEdit(backendPlan(ramp));
+      expect(points()).toBe(count);
+      expect(host().hidden).toBe(false);
+      expect(host().querySelector('.editor-draft-notice')!.textContent).toContain(restartNotice);
+      expect(api.createPlan).not.toHaveBeenCalled(); expect(api.updatePlan).not.toHaveBeenCalled();
+      expect(api.createPlannedPurchases).not.toHaveBeenCalled();
+    });
+
+    const checkedRamp = (): string => document.querySelector<HTMLInputElement>('input[name="ramp-schedule"]:checked')!.value;
+    const customFields = (): string[] => ['ramp-step-percent', 'ramp-interval-days'].map(id => (document.getElementById(id) as HTMLInputElement).value);
+
+    test.each([
+      ['weekly 20% / 7d', { type: 'weekly', percent_per_step: 20, step_interval_days: 7 }, 'custom', ['20', '7'], 5],
+      ['monthly 5% / 30d', { type: 'monthly', percent_per_step: 5, step_interval_days: 30 }, 'custom', ['5', '30'], 20],
+      ['weekly 25% on a 14 day interval', { type: 'weekly', percent_per_step: 25, step_interval_days: 14 }, 'custom', ['25', '14'], 4],
+      ['monthly 10% on a 15 day interval', { type: 'monthly', percent_per_step: 10, step_interval_days: 15 }, 'custom', ['10', '15'], 10],
+      ['weekly 25% / 7d', { type: 'weekly', percent_per_step: 25, step_interval_days: 7 }, 'weekly-25pct', null, 4],
+      ['monthly 10% / 30d', { type: 'monthly', percent_per_step: 10, step_interval_days: 30 }, 'monthly-10pct', null, 10],
+      ['immediate', { type: 'immediate', percent_per_step: 100, step_interval_days: 0 }, 'immediate', null, 1],
+    ])('Edit prefills a stored %s ramp as %s (#1156)', async (_name, ramp, radio, fields, count) => {
+      await openEdit(backendPlan(ramp));
+      expect(checkedRamp()).toBe(radio);
+      if (fields) expect(customFields()).toEqual(fields);
+      expect(points()).toBe(count);
+    });
+
+    test('Edit with absent coverage shows the validation message and no points', async () => {
+      await openEdit(backendPlan({ type: 'weekly', percent_per_step: 25, step_interval_days: 7 }, null));
+      expect(points()).toBe(0);
+      expect(host().querySelector('[data-editor="summary"]')!.textContent).not.toBe('');
+    });
+
+    // Panel and modal listeners on the form (input/change bubble, invalid/submit capture), keyed by type:capture.
+    const trackFormListeners = () => {
+      const form = document.getElementById('plan-form')!;
+      const owned = new Set(['input:false', 'change:false', 'invalid:true', 'submit:true']);
+      const key = (type: string, o?: boolean | AddEventListenerOptions): string => `${type}:${o === true || (typeof o === 'object' && o.capture === true)}`;
+      const entries: { key: string; fn: unknown }[] = [];
+      const add = form.addEventListener.bind(form), remove = form.removeEventListener.bind(form);
+      jest.spyOn(form, 'addEventListener').mockImplementation((type: string, fn: EventListenerOrEventListenerObject, o?: boolean | AddEventListenerOptions) => {
+        if (owned.has(key(type, o))) entries.push({ key: key(type, o), fn });
+        add(type, fn, o);
+      });
+      jest.spyOn(form, 'removeEventListener').mockImplementation((type: string, fn: EventListenerOrEventListenerObject, o?: boolean | AddEventListenerOptions) => {
+        const index = entries.findIndex(entry => entry.key === key(type, o) && entry.fn === fn);
+        if (index >= 0) entries.splice(index, 1);
+        remove(type, fn, o);
+      });
+      return entries;
+    };
+
+    test('closing the Edit modal removes every listener the panel and the modal added', async () => {
+      const entries = trackFormListeners();
+      await openEdit(backendPlan({ type: 'weekly', percent_per_step: 25, step_interval_days: 7 }));
+      expect(entries.map(entry => entry.key).sort()).toEqual(['change:false', 'input:false', 'invalid:true', 'submit:true']);
+      closePlanModal();
+      expect(entries).toEqual([]);
+      expect(host().hidden).toBe(true); expect(host().childElementCount).toBe(0);
+      expect(host().closest('.plan-editor-layout')!.classList.contains('has-editor-draft')).toBe(false);
+    });
+
+    test('Edit then Create without closing leaves exactly one panel listening and no Edit notice', async () => {
+      const entries = trackFormListeners();
+      await openEdit(backendPlan({ type: 'weekly', percent_per_step: 25, step_interval_days: 7 }));
+      openCreatePlanModal();
+      expect(entries.map(entry => entry.key).sort()).toEqual(['change:false', 'input:false', 'invalid:true', 'submit:true']);
+      expect(host().querySelector('.editor-draft-notice')!.textContent).not.toContain('restarts from today');
+      const coverage = document.getElementById('plan-coverage') as HTMLInputElement;
+      coverage.value = '60'; coverage.dispatchEvent(new Event('input', { bubbles: true }));
+      expect(host().querySelector('[data-editor="summary"]')!.textContent).toContain('Target 60%');
+    });
+
+    test('Create previews without the restart notice', () => {
+      openCreatePlanModal();
+      expect(host().hidden).toBe(false);
+      expect(host().querySelector('.editor-draft-notice')!.textContent).not.toContain('restarts from today');
     });
   });
 });

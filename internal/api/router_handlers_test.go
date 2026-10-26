@@ -6,6 +6,8 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -1012,19 +1014,23 @@ func TestHandler_getRIExchangeHistory_AccountScope(t *testing.T) {
 		{ID: "u-dev", Name: "dev", Provider: "aws", ExternalID: "444455556666"},
 		{ID: "u-az", Name: "az-prod", Provider: "azure", ExternalID: stsAccount},
 	}
+	// wantIDs is the account-id set a scoped request must push into the store
+	// query (issue #308). Literal allow-list entries are always included;
+	// they match no stored STS id unless they are one.
 	tests := []struct {
-		name  string
-		scope []string // nil means unrestricted
-		want  int
+		name    string
+		scope   []string // nil means unrestricted
+		wantIDs []string
+		want    int
 	}{
 		{name: "unrestricted sees all", scope: nil, want: 1},
-		{name: "scoped by account uuid", scope: []string{"u-prod"}, want: 1},
-		{name: "scoped by account name", scope: []string{"prod"}, want: 1},
-		{name: "scoped by sts account id", scope: []string{stsAccount}, want: 1},
-		{name: "scoped to a different account", scope: []string{"u-dev"}, want: 0},
-		{name: "scoped to a different account by name", scope: []string{"dev"}, want: 0},
-		{name: "same external id under another provider by uuid", scope: []string{"u-az"}, want: 0},
-		{name: "same external id under another provider by name", scope: []string{"az-prod"}, want: 0},
+		{name: "scoped by account uuid", scope: []string{"u-prod"}, wantIDs: []string{stsAccount, "u-prod"}, want: 1},
+		{name: "scoped by account name", scope: []string{"prod"}, wantIDs: []string{stsAccount, "prod"}, want: 1},
+		{name: "scoped by sts account id", scope: []string{stsAccount}, wantIDs: []string{stsAccount}, want: 1},
+		{name: "scoped to a different account", scope: []string{"u-dev"}, wantIDs: []string{"444455556666", "u-dev"}, want: 0},
+		{name: "scoped to a different account by name", scope: []string{"dev"}, wantIDs: []string{"444455556666", "dev"}, want: 0},
+		{name: "same external id under another provider by uuid", scope: []string{"u-az"}, wantIDs: []string{"u-az"}, want: 0},
+		{name: "same external id under another provider by name", scope: []string{"az-prod"}, wantIDs: []string{"az-prod"}, want: 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1034,8 +1040,19 @@ func TestHandler_getRIExchangeHistory_AccountScope(t *testing.T) {
 			mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "uid"}, nil)
 			mockAuth.grantScoped(tc.scope...)
 			store := new(MockConfigStore)
-			store.On("GetRIExchangeHistory", ctx, mock.Anything, 500).
-				Return([]config.RIExchangeRecord{{ID: "ex-1", AccountID: stsAccount}}, nil)
+			stored := []config.RIExchangeRecord{{ID: "ex-1", AccountID: stsAccount}}
+			if tc.scope == nil {
+				store.On("GetRIExchangeHistory", ctx, mock.Anything, 500).Return(stored, nil).Once()
+			} else {
+				// Model the SQL predicate: return the stored row only when
+				// its account id is in the requested set.
+				var matched []config.RIExchangeRecord
+				if slices.Contains(tc.wantIDs, stsAccount) {
+					matched = stored
+				}
+				store.On("GetRIExchangeHistoryForAccounts", ctx, mock.Anything, 500, tc.wantIDs).
+					Return(matched, nil).Once()
+			}
 			store.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 				return accounts, nil
 			}
@@ -1045,6 +1062,113 @@ func TestHandler_getRIExchangeHistory_AccountScope(t *testing.T) {
 			result, err := h.getRIExchangeHistory(ctx, req)
 			require.NoError(t, err)
 			assert.Len(t, result.(*RIExchangeHistoryResponse).Records, tc.want)
+			store.AssertExpectations(t)
 		})
 	}
+}
+
+// STS account ids for the scoped exchange-history tests.
+const (
+	exchangeAcctA     = "111122223333"
+	exchangeAcctB     = "222233334444"
+	exchangeAcctOther = "999988887777"
+)
+
+// scopedExchangeHistoryHandler wires a handler whose session is scoped to the
+// "u-b" account (STS id 222233334444), with "u-a" (111122223333) also
+// registered.
+func scopedExchangeHistoryHandler(ctx context.Context, store *MockConfigStore) (*Handler, *events.LambdaFunctionURLRequest) {
+	mockAuth := new(MockAuthService)
+	mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "uid"}, nil)
+	mockAuth.grantScoped("u-b")
+	store.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+		return []config.CloudAccount{
+			{ID: "u-a", Name: "a", Provider: "aws", ExternalID: exchangeAcctA},
+			{ID: "u-b", Name: "b", Provider: "aws", ExternalID: exchangeAcctB},
+		}, nil
+	}
+	req := &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer tok"}}
+	return &Handler{auth: mockAuth, config: store}, req
+}
+
+// Issue #308: the 500-row cap used to run before the account filter, so a
+// scoped user whose exchanges were older than the newest 500 (all another
+// account's) saw an empty history. The scoped request must push its account
+// ids into the store query and never fetch the unscoped newest-500 list.
+func TestHandler_getRIExchangeHistory_ScopedLimitAppliesAfterAccountFilter(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	newestForA := make([]config.RIExchangeRecord, 500)
+	for i := range newestForA {
+		newestForA[i] = config.RIExchangeRecord{ID: fmt.Sprintf("a-%d", i), AccountID: exchangeAcctA}
+	}
+	store.On("GetRIExchangeHistory", ctx, mock.Anything, 500).Return(newestForA, nil).Maybe()
+	olderForB := []config.RIExchangeRecord{
+		{ID: "b-1", AccountID: exchangeAcctB, ApprovalToken: "secret"},
+		{ID: "b-2", AccountID: exchangeAcctB},
+	}
+	store.On("GetRIExchangeHistoryForAccounts", ctx, mock.Anything, 500, []string{exchangeAcctB, "u-b"}).
+		Return(olderForB, nil).Once()
+	h, req := scopedExchangeHistoryHandler(ctx, store)
+
+	result, err := h.getRIExchangeHistory(ctx, req)
+	require.NoError(t, err)
+	recs := result.(*RIExchangeHistoryResponse).Records
+	require.Len(t, recs, 2)
+	assert.Equal(t, "b-1", recs[0].ID)
+	assert.Equal(t, "b-2", recs[1].ID)
+	assert.Empty(t, recs[0].ApprovalToken, "approval tokens are stripped on the scoped path too")
+	store.AssertExpectations(t)
+	store.AssertNotCalled(t, "GetRIExchangeHistory", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// The account predicate now lives in SQL; the handler still re-checks each
+// returned row so a store that ignored it cannot leak another account's
+// exchanges.
+func TestHandler_getRIExchangeHistory_ScopedDropsOutOfScopeStoreRows(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	store.On("GetRIExchangeHistoryForAccounts", ctx, mock.Anything, 500, mock.Anything).
+		Return([]config.RIExchangeRecord{
+			{ID: "a-1", AccountID: exchangeAcctA},
+			{ID: "b-1", AccountID: exchangeAcctB},
+			{ID: "x-1", AccountID: exchangeAcctOther},
+		}, nil).Once()
+	h, req := scopedExchangeHistoryHandler(ctx, store)
+
+	result, err := h.getRIExchangeHistory(ctx, req)
+	require.NoError(t, err)
+	recs := result.(*RIExchangeHistoryResponse).Records
+	require.Len(t, recs, 1)
+	assert.Equal(t, "b-1", recs[0].ID)
+}
+
+func TestHandler_getRIExchangeHistory_ScopedErrors(t *testing.T) {
+	t.Parallel()
+	t.Run("store error", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		store := new(MockConfigStore)
+		store.On("GetRIExchangeHistoryForAccounts", ctx, mock.Anything, 500, mock.Anything).
+			Return(nil, errors.New("db error")).Once()
+		h, req := scopedExchangeHistoryHandler(ctx, store)
+
+		_, err := h.getRIExchangeHistory(ctx, req)
+		require.ErrorContains(t, err, "failed to load exchange history: db error")
+	})
+	t.Run("account list error", func(t *testing.T) {
+		t.Parallel()
+		ctx := context.Background()
+		store := new(MockConfigStore)
+		h, req := scopedExchangeHistoryHandler(ctx, store)
+		store.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
+			return nil, errors.New("list failed")
+		}
+
+		_, err := h.getRIExchangeHistory(ctx, req)
+		require.ErrorContains(t, err, "failed to list cloud accounts for exchange history scope")
+		store.AssertNotCalled(t, "GetRIExchangeHistoryForAccounts", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
 }

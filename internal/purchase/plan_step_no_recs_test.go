@@ -93,6 +93,10 @@ func scheduledBarePlanStepFails(t *testing.T, notificationDaysBefore int) {
 	mockStore.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	mockStore.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{exec}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(autoPurchaseOnCfg(), nil)
+	// The purchase-failed notice (#714) reads the recipient on a detached
+	// context and goes out once, for the root row only.
+	mockStore.On("GetGlobalConfig", mock.Anything).Return(autoPurchaseOnCfg(), nil)
+	mockEmail.On("SendPurchaseFailedNotification", mock.Anything, mock.Anything).Return(nil).Once()
 	mockStore.On("GetPurchasePlan", mock.Anything, bareStepPlanID).Return(plan, nil)
 	mockStore.On("TransitionExecutionStatus", ctx, bareStepExecID,
 		[]string{"approved", "pending", "notified"}, "running", (*string)(nil)).Return(&claimed, nil)
@@ -125,8 +129,9 @@ func scheduledBarePlanStepFails(t *testing.T, notificationDaysBefore int) {
 	assert.Contains(t, rec.saved[0].Error, "no recommendations")
 }
 
-func TestNotificationTickOnBarePlanStepCreatesOneFailedRowAndSendsNoEmail(t *testing.T) {
+func TestNotificationTickOnBarePlanStepCreatesOneFailedRowAndSendsNoApprovalEmail(t *testing.T) {
 	ctx := context.Background()
+	logs := captureMarkers(t)
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
 	t.Cleanup(func() {
@@ -141,7 +146,7 @@ func TestNotificationTickOnBarePlanStepCreatesOneFailedRowAndSendsNoEmail(t *tes
 	notifyTo := "notify@example.com"
 
 	mockStore.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{plan}, nil)
-	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &notifyTo, AutoPurchaseEnabled: true}, nil)
+	mockStore.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{NotificationEmail: &notifyTo, AutoPurchaseEnabled: true}, nil)
 
 	// Tick 1 finds no row for the date; tick 2 finds whatever tick 1 saved.
 	var stored config.PurchaseExecution
@@ -161,6 +166,8 @@ func TestNotificationTickOnBarePlanStepCreatesOneFailedRowAndSendsNoEmail(t *tes
 	// assertion failure instead of an unexpected-call panic.
 	mockEmail.On("SendScheduledPurchaseNotification", ctx, mock.Anything).Return(nil).Maybe()
 	mockStore.On("StampPlanNotificationSent", ctx, plan.ID, mock.Anything).Return(nil).Maybe()
+	// The failed row is reported to operators, once (issue #1195).
+	mockEmail.On("SendPurchaseFailedNotification", mock.Anything, mock.Anything).Return(nil)
 
 	manager := &Manager{config: mockStore, email: mockEmail, notifyDays: 7, resolver: &fakeResolver{err: planstep.ErrNoMatch}}
 
@@ -171,7 +178,9 @@ func TestNotificationTickOnBarePlanStepCreatesOneFailedRowAndSendsNoEmail(t *tes
 	}
 
 	mockEmail.AssertNotCalled(t, "SendScheduledPurchaseNotification", ctx, mock.Anything)
+	mockEmail.AssertNumberOfCalls(t, "SendPurchaseFailedNotification", 1)
 	require.Len(t, saves, 1, "two ticks must leave exactly one row")
+	assert.Equal(t, 1, logs.count(saves[0].ExecutionID), "one purchase-failed marker for the row")
 	assert.Equal(t, "failed", saves[0].Status)
 	assert.Equal(t, 1, saves[0].StepNumber)
 	assert.Contains(t, saves[0].Error, "no current recommendation matched")

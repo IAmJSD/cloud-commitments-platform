@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 )
 
@@ -114,6 +115,9 @@ type GlobalConfig struct {
 	// a standard SOX / SOC2 segregation-of-duties control. Default: false.
 	// Admins who created an execution and need to approve it must disable this
 	// mode first (the admin wildcard is NOT exempt from the restriction).
+	// While it is on, unattended RI exchange runs (RIExchangeMode "auto" and
+	// ladder reshapes) run as "manual" and only raise pending records
+	// (issue #679).
 	RequireDifferentApprover bool `json:"require_different_approver" dynamodbav:"require_different_approver"`
 }
 
@@ -679,8 +683,9 @@ type RecommendationRecord struct {
 	CloudAccountID    *string  `json:"cloud_account_id,omitempty" dynamodbav:"cloud_account_id,omitempty"`
 	SourceAccountID   *string  `json:"source_account_id,omitempty" dynamodbav:"source_account_id,omitempty"`
 	// SuppressedCount is the cumulative count already committed against
-	// this recommendation's 6-tuple (account, provider, service, region,
-	// resource_type, engine) within the active grace window. The
+	// this recommendation's suppression key (account, provider, service,
+	// region, resource_type, engine, plus availability zone, platform and
+	// tenancy, issue #816) within the active grace window. The
 	// scheduler subtracts this from Count before returning the rec to
 	// the frontend; a rec where SuppressedCount ≥ original count is
 	// dropped entirely. Populated by the scheduler — zero on writes.
@@ -739,6 +744,63 @@ type PurchaseSuppression struct {
 	SuppressedCount int       `json:"suppressed_count"`
 	ExpiresAt       time.Time `json:"expires_at"`
 	CreatedAt       time.Time `json:"created_at"`
+	// Variant narrows the row to one availability zone, platform and tenancy
+	// on its 6-tuple (issue #816, migration 000134). nil means the variant is
+	// unknown: rows written before 000134 or by code predating #816. Such a
+	// row is a wildcard over its 6-tuple (see AppliesTo).
+	Variant *SuppressionVariant `json:"variant,omitempty"`
+}
+
+// SuppressionVariant is the part of the suppression key beyond the 6-tuple:
+// the zonal EC2 availability zone and the EC2 platform and tenancy, the same
+// three fields the rec identity key carries (issues #792, #806). Empty strings
+// are known values (a regional rec, a non-EC2 rec), not wildcards.
+type SuppressionVariant struct {
+	AvailabilityZone string `json:"availability_zone"`
+	Platform         string `json:"platform"`
+	Tenancy          string `json:"tenancy"`
+}
+
+// awsLegacyServiceSlugs maps the AWS service slugs that rec rows persisted
+// before slug normalisation still carry to their canonical spelling.
+// memorydb has no canonical slug and is deliberately absent. Keyed and valued by the
+// library constants; a purchase test checks it against mapServiceSlug.
+var awsLegacyServiceSlugs = map[string]string{
+	string(common.ServiceEC2):         string(common.ServiceCompute),
+	string(common.ServiceRDS):         string(common.ServiceRelationalDB),
+	string(common.ServiceElastiCache): string(common.ServiceCache),
+	string(common.ServiceOpenSearch):  string(common.ServiceSearch),
+	string(common.ServiceRedshift):    string(common.ServiceDataWarehouse),
+}
+
+// CanonicalSuppressionService maps legacy AWS service slugs to their canonical
+// slug so a suppression and a rec match whichever spelling each was stored
+// under (issues #1412, #1420). Other providers' services, including Azure and
+// GCP "compute", are returned unchanged. It lives in config, the lowest
+// package both the scheduler and BuildSuppressions import; the pinned
+// cloud-commitments-go common package has no such mapping.
+func CanonicalSuppressionService(provider, service string) string {
+	if provider != "aws" {
+		return service
+	}
+	if canonical, ok := awsLegacyServiceSlugs[service]; ok {
+		return canonical
+	}
+	return service
+}
+
+// AppliesTo reports whether the suppression counts against a recommendation
+// on the same 6-tuple whose variant is v. A row without a variant (legacy)
+// applies to every variant, and a nil v (the rec's Details could not be read)
+// matches every row: both fall back to the pre-#816 6-tuple match, which
+// over-suppresses (under-buys) rather than over-shows.
+func (s *PurchaseSuppression) AppliesTo(v *SuppressionVariant) bool {
+	if s.Variant == nil || v == nil {
+		return true
+	}
+	a, b := *s.Variant, *v
+	a.Tenancy, b.Tenancy = canonicalSuppressionTenancy(a.Tenancy), canonicalSuppressionTenancy(b.Tenancy)
+	return a == b
 }
 
 // RecommendationFilter parameterises ListStoredRecommendations and the
@@ -1228,6 +1290,9 @@ type CloudAccount struct {
 	CredentialsConfigured bool   `json:"credentials_configured"`
 	BastionAccountName    string `json:"bastion_account_name,omitempty"`
 	IsSelf                bool   `json:"is_self,omitempty"`
+	// Notices are warnings the API derives for the response, such as the
+	// aws-cn Savings Plans limitation (issue #1194).
+	Notices []AccountNotice `json:"notices,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -1269,7 +1334,7 @@ type AccountServiceOverride struct {
 // of the federation IaC, then approved or rejected by a CUDly admin.
 type AccountRegistration struct {
 	ID                   string     `json:"id"`
-	ReferenceToken       string     `json:"reference_token"`
+	ReferenceToken       string     `json:"-"`      // registrant's status credential; only submitRegistration returns it (#310)
 	Status               string     `json:"status"` // pending, approved, rejected
 	Provider             string     `json:"provider"`
 	ExternalID           string     `json:"external_id"`

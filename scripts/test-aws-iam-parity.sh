@@ -176,6 +176,321 @@ cp "$REPO_ROOT/terraform/modules/compute/aws/lambda/main.tf" "$FIX15/terraform/m
 printf '%s\n' '    "Resource": "*",' >> "$FIX15/terraform/modules/compute/aws/lambda/main.tf"
 run_case "Resource \"*\" is not treated as an action wildcard" 0 --root "$FIX15"
 
+# Case 16 (#69): the pre-fix shape - all three runtime copies grant the unused
+# organizations:DescribeAccount / DescribeOrganization. Parity holds, so only
+# the runtime organizations allowlist catches it.
+FIX16="$TMP_BASE/dead-runtime-org-grants"
+seed_fixture "$FIX16"
+sed 's/^\( *\)- organizations:ListAccounts$/&\
+\1- organizations:DescribeAccount\
+\1- organizations:DescribeOrganization/' \
+  "$REPO_ROOT/cloudformation/stacks/CUDly/template.yaml" \
+  > "$FIX16/cloudformation/stacks/CUDly/template.yaml"
+for f in terraform/modules/compute/aws/lambda/main.tf terraform/modules/compute/aws/fargate/main.tf; do
+  sed 's/^\( *\)"organizations:ListAccounts",$/&\
+\1"organizations:DescribeAccount",\
+\1"organizations:DescribeOrganization",/' \
+    "$REPO_ROOT/$f" > "$FIX16/$f"
+done
+for f in cloudformation/stacks/CUDly/template.yaml terraform/modules/compute/aws/lambda/main.tf terraform/modules/compute/aws/fargate/main.tf; do
+  grep -q 'organizations:DescribeOrganization' "$FIX16/$f" || { echo "FAIL: case 16 fixture did not inject into $f"; (( fail++ )) || true; }
+done
+run_case "runtime grants unused organizations actions in all three copies exits 1" 1 --root "$FIX16"
+
+# --- #1136: bare "*" Action written across lines, NotAction, lookalikes -------
+# Each case widens (or pretends to widen) one runtime copy only, so parity
+# fails exactly when the extractor reports a bare "*" for it.
+
+CFN_STACK_REL=cloudformation/stacks/CUDly/template.yaml
+TF_LAMBDA_REL=terraform/modules/compute/aws/lambda/main.tf
+TF_FARGATE_REL=terraform/modules/compute/aws/fargate/main.tf
+
+# new_fixture <name> seeds a fixture tree under TMP_BASE and prints its path.
+new_fixture() {
+  seed_fixture "$TMP_BASE/$1"
+  echo "$TMP_BASE/$1"
+}
+
+# cfn_statement <fixture> inserts stdin as a statement of the CFN stack's
+# Lambda policy, ahead of the CostExplorer statement. A missing anchor counts
+# as a failure, so a moved anchor cannot turn a case into a silent no-op.
+cfn_statement() {
+  local file="$1/$CFN_STACK_REL" snip="$1/statement.snip"
+  cat > "$snip"
+  if awk -v snip="$snip" '
+      !done && index($0, "- Sid: CostExplorer") { while ((getline l < snip) > 0) print l; done = 1 }
+      { print }
+      END { exit !done }' "$file" > "$file.new"; then
+    mv "$file.new" "$file"
+  else
+    echo "FAIL: CostExplorer anchor not found in $file"
+    (( fail++ )) || true
+  fi
+  rm -f "$snip" "$file.new"
+}
+
+# Case 17: YAML block list item.
+FIX17=$(new_fixture bare-star-yaml-block)
+cfn_statement "$FIX17" <<'YAML'
+          - Sid: Widened
+            Effect: Allow
+            Action:
+              - "*"
+            Resource: "*"
+YAML
+run_case "bare \"*\" as a YAML block list item (CFN stack) exits 1" 1 --root "$FIX17"
+
+# Case 18: YAML compact block list (items at the key's indent), single-quoted.
+FIX18=$(new_fixture bare-star-yaml-compact)
+cfn_statement "$FIX18" <<'YAML'
+          - Sid: Widened
+            Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - '*'
+            Resource: "*"
+YAML
+run_case "bare '*' in a compact YAML block list (CFN stack) exits 1" 1 --root "$FIX18"
+
+# Case 19: YAML flow list where "*" is not the first item.
+FIX19=$(new_fixture bare-star-yaml-flow)
+cfn_statement "$FIX19" <<'YAML'
+          - Sid: Widened
+            Effect: Allow
+            Action: [logs:CreateLogGroup, "*"]
+            Resource: "*"
+YAML
+run_case "bare \"*\" after another item in a YAML flow list (CFN stack) exits 1" 1 --root "$FIX19"
+
+# Case 20: HCL policy-document actions list across lines.
+FIX20=$(new_fixture bare-star-hcl-actions)
+cat >> "$FIX20/$TF_LAMBDA_REL" <<'HCL'
+
+data "aws_iam_policy_document" "widened" {
+  statement {
+    actions = [
+      "*",
+    ]
+    resources = ["*"]
+  }
+}
+HCL
+run_case "bare \"*\" in a multi-line HCL actions list (TF lambda) exits 1" 1 --root "$FIX20"
+
+# Case 21: jsonencode Action list across lines.
+FIX21=$(new_fixture bare-star-hcl-jsonencode)
+cat >> "$FIX21/$TF_FARGATE_REL" <<'HCL'
+
+resource "aws_iam_role_policy" "widened" {
+  role = "widened"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "logs:CreateLogGroup",
+        "*",
+      ]
+      Resource = "*"
+    }]
+  })
+}
+HCL
+run_case "bare \"*\" in a multi-line jsonencode Action list (TF fargate) exits 1" 1 --root "$FIX21"
+
+# Case 22: JSON policy heredoc Action array across lines.
+FIX22=$(new_fixture bare-star-json)
+cat >> "$FIX22/$TF_FARGATE_REL" <<'HCL'
+
+resource "aws_iam_policy" "widened" {
+  policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "*"
+    ],
+    "Resource": "*"
+  }]
+}
+EOF
+}
+HCL
+run_case "bare \"*\" in a multi-line JSON Action array (TF fargate) exits 1" 1 --root "$FIX22"
+
+# Case 23: JSON with the array opening on the line after the key, in a CLI
+# onboarding template (federation core group).
+FIX23=$(new_fixture bare-star-json-cli)
+sed 's/^\( *\)"Action": \["ec2:CreateTags"\]$/\1"Action":\
+\1  [\
+\1    "ec2:CreateTags",\
+\1    "*"\
+\1  ]/' "$REPO_ROOT/internal/iacfiles/templates/aws-wif-cli.sh.tmpl" \
+  > "$FIX23/internal/iacfiles/templates/aws-wif-cli.sh.tmpl"
+grep -qx ' *"\*"' "$FIX23/internal/iacfiles/templates/aws-wif-cli.sh.tmpl" \
+  || { echo "FAIL: case 23 fixture did not inject into aws-wif-cli.sh.tmpl"; (( fail++ )) || true; }
+run_case "bare \"*\" in a JSON array opened on the next line (WIF CLI template) exits 1" 1 --root "$FIX23"
+
+# Case 24: NotAction "*" matches no action, so it grants nothing and is not
+# an action wildcard (single-line and block forms). The first NotAction opens
+# the statement right after an Action block list, so the block must end at
+# the dedented "- " line rather than read it as one of its items.
+FIX24=$(new_fixture notaction-yaml)
+cfn_statement "$FIX24" <<'YAML'
+          - Sid: AllowLogs
+            Effect: Allow
+            Resource: "*"
+            Action:
+              - logs:CreateLogGroup
+          - NotAction: "*"
+            Effect: Deny
+            Resource: "*"
+          - Sid: DenyNothing
+            Effect: Deny
+            NotAction: "*"
+            Resource: "*"
+          - Sid: DenyNothingBlock
+            Effect: Deny
+            NotAction:
+              - "*"
+            Resource: "*"
+YAML
+run_case "NotAction \"*\" (CFN stack) is not an action wildcard" 0 --root "$FIX24"
+
+# Case 25: same for HCL not_actions and JSON/jsonencode NotAction.
+FIX25=$(new_fixture notaction-hcl-json)
+cat >> "$FIX25/$TF_LAMBDA_REL" <<'HCL'
+
+data "aws_iam_policy_document" "deny_nothing" {
+  statement {
+    effect      = "Deny"
+    not_actions = ["*"]
+    resources   = ["*"]
+  }
+  statement {
+    effect = "Deny"
+    not_actions = [
+      "*",
+    ]
+    resources = ["*"]
+  }
+}
+HCL
+cat >> "$FIX25/$TF_FARGATE_REL" <<'HCL'
+
+resource "aws_iam_role_policy" "deny_nothing" {
+  role = "deny-nothing"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Deny"
+      NotAction = "*"
+      Resource  = "*"
+    }]
+  })
+}
+
+resource "aws_iam_policy" "deny_nothing" {
+  policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Deny",
+    "NotAction": [
+      "*"
+    ],
+    "Resource": "*"
+  }]
+}
+EOF
+}
+HCL
+run_case "not_actions / NotAction \"*\" (TF lambda and fargate) is not an action wildcard" 0 --root "$FIX25"
+
+# Case 26: YAML lookalikes. Service wildcards outside the compared namespaces
+# and a "*" in the Resource or Condition lists that follow are not a bare "*".
+FIX26=$(new_fixture lookalike-yaml)
+cfn_statement "$FIX26" <<'YAML'
+          - Sid: Lookalikes
+            Effect: Allow
+            Action:
+              - "s3:*"
+              - 'logs:Describe*'
+            Resource:
+              - "*"
+            Condition:
+              StringLike:
+                aws:ResourceTag/Owner:
+                  - "*"
+YAML
+run_case "YAML lookalikes (\"s3:*\", Resource/Condition \"*\" lists) are not a bare \"*\"" 0 --root "$FIX26"
+
+# Case 27: HCL and JSON lookalikes, including a Resource list that opens on the
+# line right after a closed Action list.
+FIX27=$(new_fixture lookalike-hcl-json)
+cat >> "$FIX27/$TF_LAMBDA_REL" <<'HCL'
+
+resource "aws_iam_role_policy" "lookalikes" {
+  role = "lookalikes"
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "s3:*",
+        "logs:Describe*",
+      ]
+      Resource = [
+        "*",
+      ]
+      Condition = {
+        StringLike = {
+          "aws:ResourceTag/Owner" = [
+            "*",
+          ]
+        }
+      }
+    }]
+  })
+}
+HCL
+cat >> "$FIX27/$TF_FARGATE_REL" <<'HCL'
+
+resource "aws_iam_policy" "lookalikes" {
+  policy = <<EOF
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "s3:*"
+    ],
+    "Resource": [
+      "*"
+    ]
+  }]
+}
+EOF
+}
+HCL
+run_case "HCL/JSON lookalikes (\"s3:*\", Resource/Condition \"*\" lists) are not a bare \"*\"" 0 --root "$FIX27"
+
+# Case 28: the line that ends an Action block list is itself scanned for keys,
+# so a bare "*" Action opening the next statement is still caught.
+FIX28=$(new_fixture bare-star-after-block)
+cfn_statement "$FIX28" <<'YAML'
+          - Sid: AllowLogs
+            Effect: Allow
+            Resource: "*"
+            Action:
+              - logs:CreateLogGroup
+          - Action: "*"
+            Effect: Allow
+            Resource: "*"
+YAML
+run_case "bare \"*\" Action opening the statement after an Action block list (CFN stack) exits 1" 1 --root "$FIX28"
+
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."
 [[ "$fail" -eq 0 ]]

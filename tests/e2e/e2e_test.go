@@ -123,8 +123,22 @@ func TestVersionEndpoint(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("GET /version: decode body: %v", err)
 	}
-	if len(body) == 0 {
-		t.Error("GET /version: empty JSON body")
+	// Name the fields (internal/api.VersionResponse) rather than accepting any
+	// non-empty object: a stub such as {"ok":true} or {"error":"not
+	// configured"} must fail. git_sha is what an operator compares against the
+	// branch HEAD to confirm which build is deployed. The compose stack builds
+	// without a GIT_COMMIT build arg, so its value here is the "unknown"
+	// sentinel; only presence and type are asserted for it and build_time.
+	for _, key := range []string{"version", "git_sha", "build_time"} {
+		v, ok := body[key].(string)
+		if !ok || v == "" {
+			t.Errorf("GET /version: %q must be a non-empty string; got body %v", key, body)
+		}
+	}
+	// docker-compose.test.yml sets VERSION=test on cudly-app; seeing it here
+	// proves the field carries the deployed build's value, not a fallback.
+	if got := body["version"]; got != "test" {
+		t.Errorf("GET /version: version = %v, want %q (VERSION in docker-compose.test.yml)", got, "test")
 	}
 }
 

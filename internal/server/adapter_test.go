@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // hashSessionTokenForTest mirrors auth.hashSessionToken (private). Session
@@ -36,6 +37,9 @@ func createMockAuthService(t *testing.T) (*authServiceAdapter, *auth.MockStore) 
 		// random ephemeral key, so any test asserting a specific derived CSRF
 		// token (TestAuthServiceAdapter_ValidateCSRFToken) cannot reproduce it.
 		CSRFKey: auth.TestCSRFKey(),
+		// Hashing and Login's timing-equalizing compare run at the test
+		// cost; cost 12 takes seconds per call under -race.
+		BcryptCost: bcrypt.MinCost,
 	})
 	adapter := newAuthServiceAdapter(service)
 	return adapter, mockStore
@@ -311,17 +315,22 @@ func TestAuthServiceAdapter_CreateUserAPI(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
 	ctx := context.Background()
 
-	mockStore.On("GetUserByEmail", ctx, mock.AnythingOfType("string")).Return(nil, nil)
-	mockStore.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).Return(nil)
+	mockStore.On("GetUserByEmail", ctx, "new@example.com").Return(nil, nil).Once()
+	mockStore.On("CreateUser", ctx, mock.MatchedBy(func(u *auth.User) bool {
+		return u.Email == "new@example.com" && len(u.GroupIDs) == 1 && u.GroupIDs[0] == "group-viewer"
+	})).Return(nil).Once()
 
-	// Pass a properly typed request
-	_, err := adapter.CreateUserAPI(ctx, "", map[string]interface{}{
-		"email":    "new@example.com",
-		"password": "StrongPassword123!",
-		"groups":   []string{"group-viewer"},
+	resp, err := adapter.CreateUserAPI(ctx, "", auth.APICreateUserRequest{
+		Email:    "new@example.com",
+		Password: "StrongPassword123!",
+		Groups:   []string{"group-viewer"},
 	})
-	// May fail depending on validation but exercises the code
-	_ = err
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.APIUser)
+	assert.Equal(t, "new@example.com", resp.Email)
+	assert.Equal(t, []string{"group-viewer"}, resp.Groups)
+	mockStore.AssertExpectations(t)
 }
 
 func TestAuthServiceAdapter_UpdateUserAPI(t *testing.T) {
@@ -354,7 +363,7 @@ func TestAuthServiceAdapter_UpdateUserAPI(t *testing.T) {
 	// (issue #907 self-escalation guard). Actor != target, so the
 	// self-escalation guard skips; the group change does not remove the
 	// Administrators group, so the last-admin guard skips; the store
-	// UpdateUser call must therefore fire. Without that, the test silently
+	// UpdateUserAdminFields call must therefore fire. Without that, the test silently
 	// passes even if the adapter stopped forwarding actorUserID, which is
 	// exactly the regression CR flagged.
 	_, err := adapter.UpdateUserAPI(ctx, "actor-1", "user-1", auth.APIUpdateUserRequest{
@@ -368,13 +377,19 @@ func TestAuthServiceAdapter_CreateGroupAPI(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
 	ctx := context.Background()
 
-	mockStore.On("CreateGroup", ctx, mock.AnythingOfType("*auth.Group")).Return(nil)
+	mockStore.On("CreateGroup", ctx, mock.MatchedBy(func(g *auth.Group) bool {
+		return g.Name == "test-group" && len(g.Permissions) == 1
+	})).Return(nil).Once()
 
-	_, err := adapter.CreateGroupAPI(ctx, auth.AdminAPIKeyActorID, map[string]interface{}{
-		"name":        "test-group",
-		"permissions": []string{"read:config"},
+	group, err := adapter.CreateGroupAPI(ctx, auth.AdminAPIKeyActorID, auth.APICreateGroupRequest{
+		Name:        "test-group",
+		Permissions: []auth.APIPermission{{Action: auth.ActionView, Resource: auth.ResourceConfig}},
 	})
-	_ = err
+	require.NoError(t, err)
+	require.NotNil(t, group)
+	assert.Equal(t, "test-group", group.Name)
+	assert.Equal(t, []auth.APIPermission{{Action: auth.ActionView, Resource: auth.ResourceConfig}}, group.Permissions)
+	mockStore.AssertExpectations(t)
 }
 
 func TestAuthServiceAdapter_UpdateGroupAPI(t *testing.T) {
@@ -384,13 +399,18 @@ func TestAuthServiceAdapter_UpdateGroupAPI(t *testing.T) {
 	mockStore.On("GetGroup", ctx, "group-1").Return(&auth.Group{
 		ID:   "group-1",
 		Name: "old-name",
-	}, nil)
-	mockStore.On("UpdateGroup", ctx, mock.AnythingOfType("*auth.Group")).Return(nil)
+	}, nil).Once()
+	mockStore.On("UpdateGroup", ctx, mock.MatchedBy(func(g *auth.Group) bool {
+		return g.ID == "group-1" && g.Name == "new-name"
+	})).Return(nil).Once()
 
-	_, err := adapter.UpdateGroupAPI(ctx, auth.AdminAPIKeyActorID, "group-1", map[string]interface{}{
-		"name": "new-name",
+	group, err := adapter.UpdateGroupAPI(ctx, auth.AdminAPIKeyActorID, "group-1", auth.APIUpdateGroupRequest{
+		Name: "new-name",
 	})
-	_ = err
+	require.NoError(t, err)
+	require.NotNil(t, group)
+	assert.Equal(t, "new-name", group.Name)
+	mockStore.AssertExpectations(t)
 }
 
 func TestAuthServiceAdapter_CreateAPIKeyAPI(t *testing.T) {
@@ -427,9 +447,9 @@ func TestAuthServiceAdapter_CreateAPIKeyAPI(t *testing.T) {
 	require.NotNil(t, result)
 }
 
-// The handler passes api.CreateAPIKeyRequest, whose constraint JSON tags
-// (accounts, max_amount) differ from auth.PermissionConstraints. Every
-// constraint field must reach the store; a dropped one widens the key's scope.
+// The wire constraint tags (accounts, max_amount) differ from
+// auth.PermissionConstraints. Every constraint field must reach the store; a
+// dropped one widens the key's scope.
 func TestAuthServiceAdapter_CreateAPIKeyAPI_KeepsPermissionConstraints(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
 	ctx := context.Background()
@@ -450,13 +470,13 @@ func TestAuthServiceAdapter_CreateAPIKeyAPI_KeepsPermissionConstraints(t *testin
 		Run(func(args mock.Arguments) { stored = args.Get(1).(*auth.UserAPIKey) }).Return(nil)
 
 	expiresAt := time.Now().Add(24 * time.Hour)
-	_, err := adapter.CreateAPIKeyAPI(ctx, "user-1", api.CreateAPIKeyRequest{
+	_, err := adapter.CreateAPIKeyAPI(ctx, "user-1", auth.APICreateAPIKeyRequest{
 		Name:      "scoped",
 		Password:  password,
 		ExpiresAt: &expiresAt,
-		Permissions: []api.Permission{{
+		Permissions: []auth.APIPermission{{
 			Action: auth.ActionView, Resource: auth.ResourceRecommendations,
-			Constraints: &api.PermissionConstraint{
+			Constraints: &auth.APIPermissionConstraint{
 				Accounts: []string{"123"}, Providers: []string{"aws"}, Services: []string{"ec2"},
 				Regions: []string{"us-east-1"}, MaxAmount: 500,
 			},
@@ -582,6 +602,7 @@ func TestSetupAdminThenLogin_RoundTrip(t *testing.T) {
 		SessionDuration: time.Hour,
 		CSRFKey:         auth.TestCSRFKey(),
 		DashboardURL:    "http://localhost:3000",
+		BcryptCost:      bcrypt.MinCost,
 	})
 	adapter := newAuthServiceAdapter(realAuth)
 	handler := api.NewHandler(api.HandlerConfig{AuthService: adapter})

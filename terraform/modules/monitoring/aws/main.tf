@@ -128,10 +128,12 @@ locals {
     }
   ]
 
-  # jsondecode(jsonencode(...)) coerces each branch to type `any`, allowing
-  # Terraform's ternary operator to accept lists whose inner tuples differ in
-  # length (e.g. lambda_widgets[0].metrics has 5 items vs fargate's 2 items).
-  platform_widgets = var.compute_platform == "lambda" ? jsondecode(jsonencode(local.lambda_widgets)) : jsondecode(jsonencode(local.fargate_widgets))
+  # The ternary picks between two JSON strings (same type) and decodes the
+  # winner. Decoding each branch first, as this used to, still hands the
+  # ternary two tuples whose inner lengths differ (lambda_widgets[0].metrics
+  # has 5 items vs fargate's 2), which fails at plan time once
+  # compute_platform is known; validate alone never caught it (#714).
+  platform_widgets = jsondecode(var.compute_platform == "lambda" ? jsonencode(local.lambda_widgets) : jsonencode(local.fargate_widgets))
 }
 
 # CloudWatch Dashboard
@@ -303,7 +305,7 @@ resource "aws_cloudwatch_metric_alarm" "db_cpu" {
   ok_actions          = [aws_sns_topic.alerts.arn]
 
   dimensions = {
-    DBClusterIdentifier = var.db_cluster_id
+    DBInstanceIdentifier = var.db_instance_identifier
   }
 
   tags = var.tags
@@ -323,27 +325,7 @@ resource "aws_cloudwatch_metric_alarm" "db_connections" {
   ok_actions          = [aws_sns_topic.alerts.arn]
 
   dimensions = {
-    DBClusterIdentifier = var.db_cluster_id
-  }
-
-  tags = var.tags
-}
-
-resource "aws_cloudwatch_metric_alarm" "db_capacity" {
-  alarm_name          = "${var.stack_name}-db-capacity-warning"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 3
-  metric_name         = "ServerlessDatabaseCapacity"
-  namespace           = "AWS/RDS"
-  period              = 300
-  statistic           = "Average"
-  threshold           = 1.5 # 75% of max 2.0 ACU
-  alarm_description   = "Aurora Serverless capacity approaching limit"
-  alarm_actions       = [aws_sns_topic.alerts.arn]
-  ok_actions          = [aws_sns_topic.alerts.arn]
-
-  dimensions = {
-    DBClusterIdentifier = var.db_cluster_id
+    DBInstanceIdentifier = var.db_instance_identifier
   }
 
   tags = var.tags
@@ -353,7 +335,10 @@ resource "aws_cloudwatch_metric_alarm" "db_capacity" {
 resource "aws_cloudwatch_log_metric_filter" "errors" {
   name           = "${var.stack_name}-error-count"
   log_group_name = var.log_group_name
-  pattern        = "[time, request_id, level = ERROR*, ...]"
+  # Quoted term = substring match. The app's logger writes
+  # "2006/01/02 15:04:05 [ERROR] message", which the old space-delimited
+  # "[time, request_id, level = ERROR*, ...]" pattern never matched (#714).
+  pattern = "\"[ERROR]\""
 
   metric_transformation {
     name      = "ErrorCount"

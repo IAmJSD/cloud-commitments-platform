@@ -7,7 +7,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 3.0"
+      version = "~> 3.117"
     }
   }
 }
@@ -130,4 +130,40 @@ resource "azurerm_monitor_diagnostic_setting" "postgres" {
     category = "AllMetrics"
     enabled  = true
   }
+}
+
+# ==============================================
+# Deletion Protection (management lock)
+# ==============================================
+#
+# Flexible Server has no API-side deletion-protection flag (unlike RDS and
+# Cloud SQL), so a CanNotDelete management lock is the Azure equivalent. It
+# makes Azure refuse to delete the server from the portal, the CLI, a
+# resource-group delete or another Terraform state.
+#
+# The lock is inherited by the server's child and extension resources
+# (database, firewall rules, configurations, diagnostic settings), so it
+# depends on all of them: Terraform then creates it last and, on destroy or
+# replacement, removes it first. Without that ordering a destroy of a
+# protected server fails with ScopeLocked on the first child it reaches.
+#
+# This state's own `terraform destroy` still works: it deletes the lock and
+# then the server (the plan lists both). The deploy identity therefore needs
+# Microsoft.Authorization/locks/{read,write,delete}, granted by
+# terraform/environments/azure/ci-cd-permissions.
+
+resource "azurerm_management_lock" "server" {
+  count = var.deletion_protection ? 1 : 0
+
+  name       = "${var.app_name}-postgres-delete-lock"
+  scope      = azurerm_postgresql_flexible_server.main.id
+  lock_level = "CanNotDelete"
+  notes      = "Managed by Terraform (deletion_protection). Turn it off there instead of deleting this lock by hand."
+
+  depends_on = [
+    azurerm_postgresql_flexible_server_database.main,
+    azurerm_postgresql_flexible_server_firewall_rule.allowed_ips,
+    azurerm_postgresql_flexible_server_configuration.config,
+    azurerm_monitor_diagnostic_setting.postgres,
+  ]
 }

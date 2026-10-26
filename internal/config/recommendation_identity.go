@@ -64,3 +64,45 @@ func RecIdentityKey(rec *RecommendationRecord) (string, error) {
 		rec.AvailabilityZone, ci.Platform, ci.Tenancy,
 	}, "\x1f"), nil
 }
+
+// SuppressionVariant is the rec's availability zone, platform and tenancy as
+// the purchase suppression key carries them (issue #816): the same AZ field and
+// the same Details read (ComputeIdentity) as RecIdentityKey, so the write side
+// (BuildSuppressions) and the read side (the scheduler's subtraction pass)
+// cannot drift from the identity key or from each other.
+func (r *RecommendationRecord) SuppressionVariant() (SuppressionVariant, error) {
+	ci, err := r.ComputeIdentity()
+	if err != nil {
+		return SuppressionVariant{}, err
+	}
+	v := SuppressionVariant{AvailabilityZone: r.AvailabilityZone, Platform: ci.Platform, Tenancy: ci.Tenancy}
+	if r.Provider == "aws" && CanonicalSuppressionService(r.Provider, r.Service) == "compute" {
+		v.Tenancy = canonicalSuppressionTenancy(v.Tenancy)
+		if v.AvailabilityZone == "" {
+			// Rows saved 2026-10-09..12 hold the zone only in Details (#1232).
+			v.AvailabilityZone = r.detailsAvailabilityZone()
+		}
+	}
+	return v, nil
+}
+
+// canonicalSuppressionTenancy maps the pre-2026-05-20 EC2 tenancy spelling
+// "shared" to today's "default" so old and new suppressions and recs match.
+func canonicalSuppressionTenancy(t string) string {
+	if t == "shared" {
+		return "default"
+	}
+	return t
+}
+
+// detailsAvailabilityZone reads the zonal AZ from Details; "" when absent or
+// unreadable (ComputeIdentity has already reported a decode error).
+func (r *RecommendationRecord) detailsAvailabilityZone() string {
+	var d struct {
+		AvailabilityZone string `json:"availability_zone"`
+	}
+	if json.Unmarshal(r.Details, &d) != nil {
+		return ""
+	}
+	return d.AvailabilityZone
+}

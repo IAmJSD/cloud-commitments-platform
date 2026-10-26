@@ -186,86 +186,22 @@ func isLastAdminConstraintViolation(err error) bool {
 	return strings.HasPrefix(err.Error(), sentinel)
 }
 
-// UpdateUser updates an existing user.
-func (s *PostgresStore) UpdateUser(ctx context.Context, user *User) error {
-	user.UpdatedAt = time.Now()
-
-	query := `
-		UPDATE users SET
-			email = $2,
-			password_hash = $3,
-			salt = $4,
-			group_ids = $5,
-			active = $6,
-			mfa_enabled = $7,
-			mfa_secret = $8,
-			mfa_pending_secret = $9,
-			mfa_pending_secret_expires_at = $10,
-			mfa_recovery_codes = $11,
-			password_reset_token = $12,
-			password_reset_expiry = $13,
-			failed_login_attempts = $14,
-			locked_until = $15,
-			password_history = $16,
-			updated_at = $17,
-			last_login_at = $18,
-			deactivated_at = $19
-		WHERE id = $1
-	`
-
-	// See CreateUser for the nil-slice substitution rationale.
-	recoveryCodes := user.MFARecoveryCodes
-	if recoveryCodes == nil {
-		recoveryCodes = []string{}
-	}
-
-	result, err := s.db.Exec(ctx, query,
-		user.ID,
-		user.Email,
-		user.PasswordHash,
-		user.Salt,
-		user.GroupIDs,
-		user.Active,
-		user.MFAEnabled,
-		user.MFASecret,
-		user.MFAPendingSecret,
-		user.MFAPendingSecretExpiresAt,
-		recoveryCodes,
-		user.PasswordResetToken,
-		user.PasswordResetExpiry,
-		user.FailedLoginAttempts,
-		user.LockedUntil,
-		user.PasswordHistory,
-		user.UpdatedAt,
-		user.LastLoginAt,
-		user.DeactivatedAt,
-	)
-
-	if err != nil {
-		return fmt.Errorf("failed to update user: %w", err)
-	}
-
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("user not found: %s", user.ID)
-	}
-
-	return nil
-}
-
-// DeleteUser deletes a user.
+// DeleteUser deletes a user. Deleting an Administrators-group member lowers
+// the admin count, so it takes the admin-invariant lock first (see
+// adminInvariantAdvisoryLockKey).
 func (s *PostgresStore) DeleteUser(ctx context.Context, userID string) error {
 	query := `DELETE FROM users WHERE id = $1`
 
-	result, err := s.db.Exec(ctx, query, userID)
-	if err != nil {
-		return fmt.Errorf("failed to delete user: %w", err)
-	}
-
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("user not found: %s", userID)
-	}
-
-	return nil
+	return s.withAdminInvariantLock(ctx, "delete user", func(tx pgx.Tx) error {
+		result, err := tx.Exec(ctx, query, userID)
+		if err != nil {
+			return fmt.Errorf("failed to delete user: %w", err)
+		}
+		if result.RowsAffected() == 0 {
+			return fmt.Errorf("user not found: %s", userID)
+		}
+		return nil
+	})
 }
 
 // ListUsers lists all users.
@@ -362,7 +298,46 @@ func (s *PostgresStore) CountGroupMembers(ctx context.Context, groupID string) (
 // check_min_one_admin() in migration 000065 so bootstrap inserts and
 // admin-demoting commits serialize against each other as well as among
 // themselves.
+//
+// Convention (issue #63): any transaction that may demote, deactivate or
+// delete an Administrators-group member, or create the first admin, must
+// acquire this lock as its first statement, before it locks any users row.
+// Use withAdminInvariantLock. The deferred trigger takes the same key again at
+// commit, which is then a no-op re-acquire. A write that locked a users row
+// first and only reached this lock in the trigger would hold the row while
+// waiting for the lock, and deadlock against a writer holding the lock while
+// waiting for that row. Writes that cannot take admin standing away (login
+// counters, MFA and password columns) do not take the lock; they only ever
+// hold the row lock, so they cannot complete such a cycle.
 const adminInvariantAdvisoryLockKey = 8059058058580001
+
+// withAdminInvariantLock runs fn in a transaction whose first statement takes
+// adminInvariantAdvisoryLockKey, then commits. The min-one-admin trigger runs
+// at that commit, so its last_admin_constraint_violation comes back wrapped
+// from here. op names the write in begin, lock and commit errors; errors from
+// fn are returned unchanged. The lock auto-releases at COMMIT or ROLLBACK.
+func (s *PostgresStore) withAdminInvariantLock(ctx context.Context, op string, fn func(tx pgx.Tx) error) error {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to %s: begin transaction: %w", op, err)
+	}
+	defer func() {
+		if rbErr := tx.Rollback(ctx); rbErr != nil {
+			_ = rbErr // no-op after Commit; Postgres logs real rollback failures
+		}
+	}()
+
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", adminInvariantAdvisoryLockKey); err != nil {
+		return fmt.Errorf("failed to %s: acquire admin invariant lock: %w", op, err)
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to %s: commit: %w", op, err)
+	}
+	return nil
+}
 
 // CreateAdminIfNone atomically inserts user as the first admin in the
 // system. Returns (true, nil) when the insert succeeded; (false, nil)
@@ -641,8 +616,8 @@ func (s *PostgresStore) CreateSession(ctx context.Context, session *Session) err
 	query := `
 		INSERT INTO sessions (
 			token, user_id, email, expires_at, created_at,
-			user_agent, ip_address, csrf_token
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			user_agent, ip_address, csrf_token, password_version
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 
 	_, err := s.db.Exec(ctx, query,
@@ -654,6 +629,7 @@ func (s *PostgresStore) CreateSession(ctx context.Context, session *Session) err
 		session.UserAgent,
 		session.IPAddress,
 		session.CSRFToken,
+		session.PasswordVersion,
 	)
 
 	if err != nil {
@@ -667,7 +643,7 @@ func (s *PostgresStore) CreateSession(ctx context.Context, session *Session) err
 func (s *PostgresStore) GetSession(ctx context.Context, token string) (*Session, error) {
 	query := `
 		SELECT token, user_id, email, expires_at, created_at,
-		       user_agent, ip_address, csrf_token
+		       user_agent, ip_address, csrf_token, password_version
 		FROM sessions
 		WHERE token = $1 AND expires_at > NOW()
 	`
@@ -682,6 +658,7 @@ func (s *PostgresStore) GetSession(ctx context.Context, token string) (*Session,
 		&session.UserAgent,
 		&session.IPAddress,
 		&session.CSRFToken,
+		&session.PasswordVersion,
 	)
 
 	if err != nil {

@@ -97,6 +97,15 @@ const commitmentConfigs: Record<string, Record<string, CommitmentConfig>> = {
   }
 };
 
+// Own-property lookup: plain `record[key]` also resolves prototype members,
+// so a provider of 'constructor' returned Object as a CommitmentConfig.
+const own = <T>(record: Readonly<Record<string, T>>, key: string): T | undefined =>
+  Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
+
+// Keys that would reach or replace a prototype when assigned on a plain
+// object. Server-supplied service names are never allowed to be one.
+const UNSAFE_KEYS: ReadonlySet<string> = new Set(['__proto__', 'constructor', 'prototype']);
+
 // Default fallback configuration
 const DEFAULT_CONFIG: CommitmentConfig = {
   terms: STANDARD_TERMS,
@@ -107,7 +116,7 @@ const DEFAULT_CONFIG: CommitmentConfig = {
  * Get commitment configuration for a provider/service combination
  */
 export function getCommitmentConfig(provider: string, service?: string): CommitmentConfig {
-  const providerConfigs = commitmentConfigs[provider.toLowerCase()];
+  const providerConfigs = own(commitmentConfigs, provider.toLowerCase());
 
   if (!providerConfigs) {
     // Unknown provider, return default
@@ -115,13 +124,13 @@ export function getCommitmentConfig(provider: string, service?: string): Commitm
   }
 
   if (service) {
-    const serviceConfig = providerConfigs[service.toLowerCase()];
+    const serviceConfig = own(providerConfigs, service.toLowerCase());
     if (serviceConfig) {
       return serviceConfig;
     }
   }
 
-  return providerConfigs._default ?? DEFAULT_CONFIG;
+  return own(providerConfigs, '_default') ?? DEFAULT_CONFIG;
 }
 
 /**
@@ -268,6 +277,8 @@ export async function fetchAndPopulateCommitmentOptions(fetchFn?: FetchLike): Pr
 
   const awsConfigs = commitmentConfigs.aws ?? (commitmentConfigs.aws = {});
   for (const [service, supportedCombos] of Object.entries(body.aws)) {
+    // A "__proto__" key would replace the config object's prototype (#320).
+    if (UNSAFE_KEYS.has(service)) continue;
     // Always diff against the canonical STANDARD_TERMS × AWS_PAYMENTS
     // product, not against the existing (possibly-narrowed-from-a-prior-
     // overlay) entry. Otherwise, when the server widens its supported set

@@ -19,7 +19,6 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/api"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -28,10 +27,7 @@ import (
 
 func TestConfigPermissionConstraintsHTTP(t *testing.T) {
 	ctx := context.Background()
-	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pg.Cleanup(ctx)) })
-	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 	store, authStore := config.NewPostgresStore(pg.DB), auth.NewPostgresStore(pg.DB)
 	csrfKey := []byte(strings.Repeat("c", 32))
 	authSvc := auth.NewService(auth.ServiceConfig{Store: authStore, CSRFKey: csrfKey})

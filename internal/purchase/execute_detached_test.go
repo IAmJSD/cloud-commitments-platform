@@ -69,7 +69,7 @@ func newDetachFixture(t *testing.T) *detachFixture {
 			f.historyRemaining = time.Until(deadline)
 		}
 	}).Return(nil)
-	email := new(MockEmailSender)
+	email := allowFailedNotification(new(MockEmailSender))
 	email.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
 	stsMock.On("GetCallerIdentity", mock.Anything, mock.Anything).Return(&stsOut, nil)
 	factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(prov, nil)
@@ -78,9 +78,19 @@ func newDetachFixture(t *testing.T) *detachFixture {
 	return f
 }
 
+// A run longer than the terminal save budget must still give the save its
+// full budget, and each provider call gets its own per-rec budget rather than
+// a share of one. The budgets are scaled down (production: 30s each, with 16s
+// calls) so the test takes about 2.5s instead of 32s; the production values
+// are pinned with literal durations in the ExpiredCallerDeadline test below.
 func TestExecuteAndFinalize_SlowRunGetsFreshTerminalSaveBudget(t *testing.T) {
+	const (
+		budget   = 2 * time.Second         // terminal save and per-rec cap
+		callTime = 1200 * time.Millisecond // each call fits its cap; two exceed the save budget
+	)
 	t.Setenv("CUDLY_MAX_ACCOUNT_PARALLELISM", "1")
 	f := newDetachFixture(t)
+	f.manager.budgets = purchaseBudgets{terminalSave: budget, perRec: budget}
 	f.exec.Recommendations = append(f.exec.Recommendations, f.exec.Recommendations[0])
 	f.exec.Recommendations[1].ResourceType = "m5.xlarge"
 	var active atomic.Int32
@@ -93,7 +103,7 @@ func TestExecuteAndFinalize_SlowRunGetsFreshTerminalSaveBudget(t *testing.T) {
 			}
 			defer active.Add(-1)
 			ctx := args.Get(0).(context.Context)
-			timer := time.NewTimer(16 * time.Second)
+			timer := time.NewTimer(callTime)
 			defer timer.Stop()
 			select {
 			case <-timer.C:
@@ -103,15 +113,15 @@ func TestExecuteAndFinalize_SlowRunGetsFreshTerminalSaveBudget(t *testing.T) {
 		}).Return(common.PurchaseResult{Success: true, CommitmentID: "ri-slow"}, nil).Twice()
 	started := time.Now()
 	err := f.manager.executeAndFinalize(context.Background(), f.exec)
-	assert.Greater(t, time.Since(started), 30*time.Second)
+	assert.Greater(t, time.Since(started), budget)
 	assert.False(t, overlapped.Load())
 	assert.False(t, providerCanceled.Load(), "provider call must fit its own budget")
 	f.svc.AssertNumberOfCalls(t, "PurchaseCommitment", 2)
 	assert.Equal(t, 2, f.history)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"completed"}, f.saved)
-	assert.Greater(t, f.saveRemaining, 29*time.Second)
-	assert.LessOrEqual(t, f.saveRemaining, 30*time.Second)
+	assert.Greater(t, f.saveRemaining, budget-time.Second)
+	assert.LessOrEqual(t, f.saveRemaining, budget)
 }
 
 var stsOut = sts.GetCallerIdentityOutput{Account: aws.String("123456789012")}
@@ -153,6 +163,7 @@ func TestExecuteAndFinalize_ExpiredCallerDeadline_UsesOwnBudgets(t *testing.T) {
 
 	// per-rec cap (30s) still bounds the provider call inside the 4m run budget.
 	assert.WithinDuration(t, time.Now(), provDeadline, 30*time.Second)
+	assert.Greater(t, time.Until(provDeadline), 29*time.Second)
 	_, ok := f.saveCtx.Deadline()
 	require.True(t, ok, "terminal save needs a deadline")
 	// Literal durations on purpose: comparing against the constants would

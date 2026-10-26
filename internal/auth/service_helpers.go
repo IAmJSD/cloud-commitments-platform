@@ -94,6 +94,9 @@ func (s *Service) createSession(ctx context.Context, user *User, userAgent, ipAd
 		UserAgent: userAgent,
 		IPAddress: ipAddress,
 		CSRFToken: csrfToken, // MAC stored for diagnostics only; not used in validation
+		// The version of the row whose password this login verified, so a
+		// rotation that commits after that read still revokes the session.
+		PasswordVersion: user.PasswordVersion,
 	}
 
 	if err := s.store.CreateSession(ctx, storedSession); err != nil {
@@ -126,16 +129,24 @@ func generateToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// containsAny checks if any element from requested is in allowed.
-func containsAny(allowed, requested []string) bool {
-	allowedSet := make(map[string]bool)
+// containsAll reports whether requested is non-empty and EVERY element of it
+// is in allowed. Comparison is exact (case-sensitive, no trimming).
+//
+// It fails closed on an empty requested list: there is nothing to check, so
+// it does not report a match. Callers that read an empty list as "no
+// restriction" (matchStringListConstraints) handle that case before calling.
+func containsAll(allowed, requested []string) bool {
+	if len(requested) == 0 {
+		return false
+	}
+	allowedSet := make(map[string]bool, len(allowed))
 	for _, a := range allowed {
 		allowedSet[a] = true
 	}
 	for _, r := range requested {
-		if allowedSet[r] {
-			return true
+		if !allowedSet[r] {
+			return false
 		}
 	}
-	return false
+	return true
 }

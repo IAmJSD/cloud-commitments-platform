@@ -471,4 +471,7 @@ func TestHandler_TransitionRegistrationStatus_NonUUIDActorIsNil(t *testing.T) {
 	}
 	_, err := handler.rejectRegistration(ctx, req, regID)
 	require.NoError(t, err)
+	// reviewed_by is a UUID FK too: the sentinel must not reach it (issue #1234).
+	assert.Nil(t, reg.ReviewedBy, "admin-api-key must not be written to reviewed_by")
+	assert.NotNil(t, reg.ReviewedAt, "reviewed_at is still recorded for an API-key review")
 }
