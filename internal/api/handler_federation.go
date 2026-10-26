@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"reflect"
 	"regexp"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	cudlyiac "github.com/LeanerCloud/cloud-commitments-platform/iac"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/iacbundle"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/iacfiles"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -662,7 +662,7 @@ func buildAzureTemplateReadme(data federationIaCData, format string) string {
 // addBundleTerraform adds the Terraform module files and generated .tfvars to the zip.
 func addBundleTerraform(zw *zip.Writer, data federationIaCData, target, source, slug string) error {
 	tfDir := bundleModuleDir(target, source) + "/terraform"
-	if err := addBundleTerraformDir(zw, tfDir, bundleExtraModules(target)); err != nil {
+	if err := iacbundle.AddTerraformDir(zw, cudlyiac.Modules, tfDir, iacbundle.ExtraModules(target)); err != nil {
 		return fmt.Errorf("bundle: terraform dir: %w", err)
 	}
 	tfvarsTmpl, tfvarsName := bundleTfvarsSpec(target, source, slug)
@@ -870,21 +870,6 @@ func buildCFParamsJSON(data federationIaCData, source string) (string, error) {
 // ---------------------------------------------------------------------------
 // Zip helpers
 // ---------------------------------------------------------------------------
-
-func addDirToZip(zw *zip.Writer, fsys fs.ReadFileFS, srcDir, destPrefix string) error {
-	return fs.WalkDir(fsys, srcDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		b, err := fsys.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		// Compute the relative path from srcDir to this file.
-		rel := strings.TrimPrefix(path, srcDir+"/")
-		return addBytesToZip(zw, destPrefix+"/"+rel, b)
-	})
-}
 
 func addBytesToZip(zw *zip.Writer, name string, content []byte) error {
 	f, err := zw.Create(name)
