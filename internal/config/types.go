@@ -199,6 +199,12 @@ func (g *GlobalConfig) GracePeriodFor(provider string) int {
 }
 
 // ServiceConfig represents per-service configuration.
+//
+// Coverage is a percentage whose meaning depends on where the config lives.
+// In a PurchasePlan's Services it is the plan's sizing target (planstep sizes
+// each ramp step by it). In the global and per-account service settings it is
+// display-only: the dashboard scales projected savings by it and nothing in
+// purchase execution reads it (issue #345).
 type ServiceConfig struct {
 	Provider       string   `json:"provider" dynamodbav:"provider"`
 	Service        string   `json:"service" dynamodbav:"service"`
