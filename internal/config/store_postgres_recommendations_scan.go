@@ -12,7 +12,7 @@ import (
 // returns rows in the order the API used to produce by sorting in Go.
 // COALESCE maps a missing or JSON-null id to "", which is what decoding the
 // payload yields. It must stay identical to the expression indexed by
-// migration 000142 (recommendations_scan_key_idx), or the planner falls back
+// migration 000140 (recommendations_scan_key_idx), or the planner falls back
 // to a full scan and sort for every chunk.
 const recommendationScanKeyExpr = `(COALESCE(payload->>'id', '') COLLATE "C")`
 

@@ -151,7 +151,7 @@ func TestListStoredRecommendationsChunk_EmptyTable(t *testing.T) {
 }
 
 // TestListStoredRecommendationsChunk_UsesScanKeyIndex proves the chunk query
-// matches the expression migration 000142 indexes: with sequential and bitmap
+// matches the expression migration 000140 indexes: with sequential and bitmap
 // scans disabled the plan reads recommendations_scan_key_idx in order and has no
 // Sort node. A drift between recommendationScanKeyExpr and the index (for
 // example dropping COLLATE "C") brings the full scan plus sort back for every

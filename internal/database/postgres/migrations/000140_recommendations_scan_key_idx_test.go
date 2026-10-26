@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMigration_RecommendationsScanKeyIndex checks that 000142 creates the
+// TestMigration_RecommendationsScanKeyIndex checks that 000140 creates the
 // keyset index the paginated recommendations scan relies on (issue #981), in
 // byte-wise ("C") order with the primary key as tie-breaker, and that the down
 // migration removes it.
@@ -21,7 +21,7 @@ func TestMigration_RecommendationsScanKeyIndex(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
 	pool, path := container.DB.Pool(), getMigrationsPath()
 
-	const version = 142
+	const version = 140
 	prev := previousMigrationVersion(t, version)
 
 	indexDef := func() string {
@@ -35,7 +35,7 @@ func TestMigration_RecommendationsScanKeyIndex(t *testing.T) {
 	}
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, prev))
-	require.Empty(t, indexDef(), "before 000142 the index must not exist")
+	require.Empty(t, indexDef(), "before 000140 the index must not exist")
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, version))
 	def := indexDef()
