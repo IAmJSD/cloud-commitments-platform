@@ -41,23 +41,44 @@ func encodeOverridesCSV(rows []OverrideTransferRow) (string, error) {
 	return buf.String(), w.Error()
 }
 
+// overrideCSVRecord renders one row. Every text cell goes through csvSafeText;
+// only the cells this package formats itself (booleans, numbers, timestamps)
+// are written as is.
 func overrideCSVRecord(r *OverrideTransferRow) []string {
+	list := func(l []string) string { return csvSafeText(strings.Join(l, overrideCSVListSep)) }
 	return []string{
-		r.AccountID, csvSafeText(r.AccountName), r.AccountExternalID, r.Provider, r.Service,
-		formatBoolPtr(r.Enabled), formatIntPtr(r.Term), derefString(r.Payment), formatFloatPtr(r.Coverage), derefString(r.RampSchedule),
-		strings.Join(r.IncludeEngines, overrideCSVListSep), strings.Join(r.ExcludeEngines, overrideCSVListSep),
-		strings.Join(r.IncludeRegions, overrideCSVListSep), strings.Join(r.ExcludeRegions, overrideCSVListSep),
-		strings.Join(r.IncludeTypes, overrideCSVListSep), strings.Join(r.ExcludeTypes, overrideCSVListSep),
+		csvSafeText(r.AccountID), csvSafeText(r.AccountName), csvSafeText(r.AccountExternalID), csvSafeText(r.Provider), csvSafeText(r.Service),
+		formatBoolPtr(r.Enabled), formatIntPtr(r.Term), csvSafeText(derefString(r.Payment)), formatFloatPtr(r.Coverage), csvSafeText(derefString(r.RampSchedule)),
+		list(r.IncludeEngines), list(r.ExcludeEngines),
+		list(r.IncludeRegions), list(r.ExcludeRegions),
+		list(r.IncludeTypes), list(r.ExcludeTypes),
 		formatTimePtr(r.CreatedAt), formatTimePtr(r.UpdatedAt),
 	}
 }
 
-// csvSafeText stops a spreadsheet from running a free-text cell as a formula
-// (CSV injection). Only the account name is free text; import ignores it, so
-// the prefix never round-trips into stored data.
+// csvFormulaLeads are the leading characters that make a spreadsheet read a
+// cell as a formula (OWASP CSV injection). A leading quote is escaped too, so
+// that csvUnescapeText can undo the prefix without guessing.
+const csvFormulaLeads = "=+-@\t\r'"
+
+// csvSafeText stops a spreadsheet from running a text cell as a formula (CSV
+// injection) by prefixing a quote. Stored override values (ramp_schedule, the
+// include/exclude lists, payment) are user-supplied, so every text cell is
+// escaped, not only the account name.
 func csvSafeText(s string) string {
-	if s != "" && strings.ContainsRune("=+-@\t\r", rune(s[0])) {
+	if s != "" && strings.ContainsRune(csvFormulaLeads, rune(s[0])) {
 		return "'" + s
+	}
+	return s
+}
+
+// csvUnescapeText undoes csvSafeText on import: a quote followed by a
+// formula-lead character (or another quote) is the escape prefix and is
+// dropped, so an escaped value round-trips to the stored original. A quote
+// before anything else is not something csvSafeText writes, so it is kept.
+func csvUnescapeText(s string) string {
+	if len(s) >= 2 && s[0] == '\'' && strings.ContainsRune(csvFormulaLeads, rune(s[1])) {
+		return s[1:]
 	}
 	return s
 }
@@ -142,7 +163,7 @@ func overrideCSVHeaderIndex(header []string) (map[string]int, error) {
 func overrideRowFromCSV(rec []string, index map[string]int) (OverrideTransferRow, error) {
 	cell := func(name string) string {
 		if i, ok := index[name]; ok && i < len(rec) {
-			return strings.TrimSpace(rec[i])
+			return csvUnescapeText(strings.TrimSpace(rec[i]))
 		}
 		return ""
 	}

@@ -2,12 +2,16 @@ package api
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -16,12 +20,32 @@ import (
 )
 
 // overrideTransferStore is an in-memory account and override store for the
-// export/import tests (issue #9).
+// export/import tests (issue #9). Like Postgres, it refuses a ramp_schedule
+// longer than the VARCHAR(32) column, and WithTx undoes every write of a
+// failed transaction. failSave, when set, injects a store failure.
 type overrideTransferStore struct {
 	*MockConfigStore
 	accounts  []config.CloudAccount
 	overrides map[string][]config.AccountServiceOverride
 	saved     []config.AccountServiceOverride
+	failSave  func(*config.AccountServiceOverride) error
+}
+
+func (s *overrideTransferStore) WithTx(_ context.Context, fn func(pgx.Tx) error) error {
+	overrides := make(map[string][]config.AccountServiceOverride, len(s.overrides))
+	for k, v := range s.overrides {
+		overrides[k] = append([]config.AccountServiceOverride(nil), v...)
+	}
+	saved := append([]config.AccountServiceOverride(nil), s.saved...)
+	if err := fn(nil); err != nil {
+		s.overrides, s.saved = overrides, saved
+		return err
+	}
+	return nil
+}
+
+func (s *overrideTransferStore) SaveAccountServiceOverrideTx(ctx context.Context, _ pgx.Tx, o *config.AccountServiceOverride) error {
+	return s.SaveAccountServiceOverride(ctx, o)
 }
 
 func (s *overrideTransferStore) ListCloudAccounts(context.Context, config.CloudAccountFilter) ([]config.CloudAccount, error) {
@@ -33,6 +57,14 @@ func (s *overrideTransferStore) ListAccountServiceOverrides(_ context.Context, a
 }
 
 func (s *overrideTransferStore) SaveAccountServiceOverride(_ context.Context, o *config.AccountServiceOverride) error {
+	if o.RampSchedule != nil && utf8.RuneCountInString(*o.RampSchedule) > 32 {
+		return fmt.Errorf("value too long for type character varying(32)")
+	}
+	if s.failSave != nil {
+		if err := s.failSave(o); err != nil {
+			return err
+		}
+	}
 	s.saved = append(s.saved, *o)
 	list := s.overrides[o.AccountID]
 	for i := range list {
@@ -159,4 +191,78 @@ func importBody(t *testing.T, in OverrideImportRequest) string {
 	b, err := json.Marshal(in)
 	require.NoError(t, err)
 	return string(b)
+}
+
+// formulaOverride holds a spreadsheet formula in every user-supplied text
+// field the service-config rules do not restrict, and a value that itself
+// starts with the escape quote.
+func formulaOverride() config.AccountServiceOverride {
+	return config.AccountServiceOverride{
+		ID: "o-5", AccountID: xferAWS, Provider: "aws", Service: "opensearch",
+		RampSchedule:   ptr(`=HYPERLINK("http://x","y")`),
+		IncludeEngines: []string{"-2+3", "postgres"}, ExcludeEngines: []string{"@SUM(A1)"},
+		IncludeRegions: []string{"+1"}, ExcludeRegions: []string{"'quoted", "=x"},
+		IncludeTypes: []string{"=1+2"}, ExcludeTypes: []string{"'=1+2"},
+	}
+}
+
+// csvTextColumns are the CSV cells that carry stored or user-supplied text.
+var csvTextColumns = map[string]bool{
+	"account_id": true, "account_name": true, "account_external_id": true, "provider": true, "service": true,
+	"payment": true, "ramp_schedule": true,
+	"include_engines": true, "exclude_engines": true, "include_regions": true,
+	"exclude_regions": true, "include_types": true, "exclude_types": true,
+}
+
+func TestOverridesCSV_NeutralizesEveryTextCellAndRoundTrips(t *testing.T) {
+	o := formulaOverride()
+	o.Payment = ptr("+cmd")
+	acct := &config.CloudAccount{ID: xferAWS, Name: "@name", Provider: "aws", ExternalID: "-123"}
+	row := overrideTransferRowFrom(acct, &o)
+	row.Provider, row.Service = "=aws", "+svc"
+
+	text, err := encodeOverridesCSV([]OverrideTransferRow{row})
+	require.NoError(t, err)
+	records, err := csv.NewReader(strings.NewReader(text)).ReadAll()
+	require.NoError(t, err)
+	require.Len(t, records, 2)
+	for i, cell := range records[1] {
+		col := records[0][i]
+		if csvTextColumns[col] && cell != "" {
+			assert.NotContains(t, "=+-@\t\r", cell[:1], "column %s cell %q would run as a formula", col, cell)
+		}
+	}
+
+	back, err := decodeOverridesCSV(text)
+	require.NoError(t, err)
+	require.Len(t, back, 1)
+	assert.Equal(t, row.fields(), back[0].fields(), "import must strip the escape prefix again")
+	assert.Equal(t, []string{"-123", "=aws", "+svc"}, []string{back[0].AccountExternalID, back[0].Provider, back[0].Service})
+}
+
+func TestOverridesCSV_KeepsAQuoteThatIsNotAnEscape(t *testing.T) {
+	csvText := "account_id,provider,service,include_types,ramp_schedule\n" + xferAWS + ",aws,ec2,'m5;'=x,'immediate\n"
+	rows, err := decodeOverridesCSV(csvText)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, []string{"'m5", "'=x"}, rows[0].IncludeTypes, "only a leading cell prefix is an escape")
+	assert.Equal(t, "'immediate", *rows[0].RampSchedule, "a quote before a non-formula character is data")
+}
+
+func TestImportOverrides_CSVWithFormulaValuesReimportsUnchanged(t *testing.T) {
+	store := newOverrideTransferStore()
+	store.overrides[xferAWS] = append(store.overrides[xferAWS], formulaOverride())
+	h := transferHandler(t, store, nil)
+
+	exported, err := h.exportAccountServiceOverrides(context.Background(), exportRequest("csv"))
+	require.NoError(t, err)
+	body := exported.(*rawResponse).body
+	assert.Contains(t, body, `"'=HYPERLINK(""http://x"",""y"")"`)
+	assert.Contains(t, body, ",'=1+2,''=1+2,")
+
+	got, err := h.importAccountServiceOverrides(context.Background(), adminRequest(importBody(t, OverrideImportRequest{CSV: body})))
+	require.NoError(t, err)
+	report := got.(*OverrideImportReport)
+	assert.Equal(t, 5, report.Summary[overrideActionUnchanged], "%+v", report.Rows)
+	assert.Empty(t, store.saved)
 }
