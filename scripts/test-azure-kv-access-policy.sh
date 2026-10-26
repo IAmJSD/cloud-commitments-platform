@@ -63,6 +63,34 @@ run_case "indented access policy exits 1" 1 \
 run_case "access policy with no inter-token whitespace exits 1" 1 \
   "${FIXTURES}/nospace.tf.fixture"
 
+# The nested spellings (issue #204): an access_policy block, static or
+# dynamic, inside azurerm_key_vault is the same inert grant as the resource.
+run_case "nested access_policy block in a key vault exits 1" 1 \
+  "${FIXTURES}/nested-inline.tf.fixture"
+
+run_case "nested dynamic access_policy block in a key vault exits 1" 1 \
+  "${FIXTURES}/nested-dynamic.tf.fixture"
+
+# The negatives every earlier line matcher got wrong: the block name inside a
+# resource that is not a vault, prefix-named and same-named attributes.
+run_case "access_policy outside a key vault exits 0" 0 \
+  "${FIXTURES}/other-resources.tf.fixture"
+
+# The banned spellings as comment and heredoc text are not declarations.
+run_case "comment and heredoc text exits 0" 0 \
+  "${FIXTURES}/comments-heredocs.tf.fixture"
+
+# Skipping heredoc text must not skip what follows it.
+run_case "declaration after a heredoc quoting it exits 1" 1 \
+  "${FIXTURES}/heredoc-adjacent.tf.fixture"
+
+# A file the parser rejects cannot be checked, so it is exit 2, never 0.
+run_case "unparseable file exits 2" 2 \
+  "${FIXTURES}/syntax-error.tf.fixture"
+
+run_case "unparseable file next to a clean one exits 2" 2 \
+  "${FIXTURES}/clean.tf.fixture" "${FIXTURES}/syntax-error.tf.fixture"
+
 # A violation must still be found when mixed in with clean files.
 run_case "violation alongside a clean file exits 1" 1 \
   "${FIXTURES}/clean.tf.fixture" "${FIXTURES}/access-policy.tf.fixture"
@@ -90,9 +118,9 @@ run_case "aks module declares no access policy" 0 \
   "${REPO_ROOT}/terraform/modules/compute/azure/aks/main.tf"
 
 # The default scan roots (terraform/ + iac/) must hold no violation. This also
-# pins the guard's false-positive surface: it runs over every real Terraform
-# file in the tree, none of which may trip it.
-run_case "default scan roots declare no access-policy resource" 0
+# pins the guard's false-positive surface: it parses every real Terraform file
+# in the tree, none of which may trip it or fail to parse.
+run_case "default scan roots declare no access-policy grant" 0
 
 # Every run_case above compares exit codes only, so a guard that exited 1 with a
 # blank or wrong message would pass all of them while telling a developer
@@ -120,6 +148,49 @@ run_report_case() {
 run_report_case "violation report names the file and line" \
   'access-policy\.tf\.fixture:9: resource "azurerm_key_vault_access_policy"' \
   "${FIXTURES}/access-policy.tf.fixture"
+
+run_report_case "nested block report names the line and the enclosing vault" \
+  'nested-inline\.tf\.fixture:16: access_policy \{  \(inside resource "azurerm_key_vault" "main"\)' \
+  "${FIXTURES}/nested-inline.tf.fixture"
+
+run_report_case "nested dynamic block report names the line and the enclosing vault" \
+  'nested-dynamic\.tf\.fixture:23: dynamic "access_policy" \{  \(inside resource "azurerm_key_vault" "main"\)' \
+  "${FIXTURES}/nested-dynamic.tf.fixture"
+
+run_report_case "heredoc-adjacent report names the declaration" \
+  'heredoc-adjacent\.tf\.fixture:15: resource "azurerm_key_vault_access_policy" "real"' \
+  "${FIXTURES}/heredoc-adjacent.tf.fixture"
+
+# The report must list exactly the grants, one line each: a line for the
+# heredoc's quoted text (line 10) or for the vault's network_acls block would
+# mean the guard is reading text or the wrong block.
+run_count_case() {
+  local label="$1"
+  local expected="$2"
+  shift 2
+
+  local count
+  count="$("$CHECK" "$@" 2>&1 >/dev/null | grep -cE '\.tf\.fixture:[0-9]+: ' || true)"
+
+  if [[ "$count" -eq "$expected" ]]; then
+    echo "PASS: $label"
+    (( pass++ )) || true
+  else
+    echo "FAIL: $label (expected $expected reported line(s), got $count)"
+    (( fail++ )) || true
+  fi
+}
+
+run_count_case "heredoc-adjacent reports only the real declaration" 1 \
+  "${FIXTURES}/heredoc-adjacent.tf.fixture"
+
+run_count_case "nested-dynamic reports only the access_policy block" 1 \
+  "${FIXTURES}/nested-dynamic.tf.fixture"
+
+run_count_case "all violating fixtures report one line each" 6 \
+  "${FIXTURES}/access-policy.tf.fixture" "${FIXTURES}/key-permissions.tf.fixture" \
+  "${FIXTURES}/indented.tf.fixture" "${FIXTURES}/nospace.tf.fixture" \
+  "${FIXTURES}/nested-inline.tf.fixture" "${FIXTURES}/nested-dynamic.tf.fixture"
 
 echo ""
 echo "Results: ${pass} passed, ${fail} failed."
