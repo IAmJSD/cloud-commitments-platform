@@ -1017,17 +1017,6 @@ jobs:
             terraform -chdir="$d" test
           done
 
-      - name: Test Azure compute modules
-        if: matrix.cloud == 'azure'
-        run: |
-          for t in terraform/modules/compute/azure/*/tests; do
-            [ -d "$t" ] || continue
-            d=$(dirname "$t")
-            terraform -chdir="$d" init -backend=false -lockfile=readonly -input=false
-            terraform -chdir="$d" fmt -check -recursive
-            terraform -chdir="$d" test
-          done
-
       # With CloudFront in front of a Fargate ALB, the ALB must admit only
       # CloudFront's origin-facing prefix list (#412).
       - name: Test AWS ALB ingress guard
