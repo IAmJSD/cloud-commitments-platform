@@ -229,6 +229,10 @@ func TestService_UpdateGroup(t *testing.T) {
 			Name: "Updated Team",
 		}
 
+		// UpdateGroup loads the stored group first so it can refuse to
+		// reshape a system-managed one (issue #919).
+		mockStore.On("GetGroup", ctx, "group-123").
+			Return(&Group{ID: "group-123", Name: "Team"}, nil).Once()
 		mockStore.On("UpdateGroup", ctx, group).Return(nil).Once()
 
 		err := service.UpdateGroup(ctx, group)

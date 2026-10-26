@@ -396,10 +396,12 @@ func TestAuthServiceAdapter_UpdateGroupAPI(t *testing.T) {
 	adapter, mockStore := createMockAuthService(t)
 	ctx := context.Background()
 
+	// Twice: UpdateGroupAPI loads the group, then Service.UpdateGroup
+	// re-reads it for its own system_managed guard (issue #919).
 	mockStore.On("GetGroup", ctx, "group-1").Return(&auth.Group{
 		ID:   "group-1",
 		Name: "old-name",
-	}, nil).Once()
+	}, nil).Twice()
 	mockStore.On("UpdateGroup", ctx, mock.MatchedBy(func(g *auth.Group) bool {
 		return g.ID == "group-1" && g.Name == "new-name"
 	})).Return(nil).Once()
