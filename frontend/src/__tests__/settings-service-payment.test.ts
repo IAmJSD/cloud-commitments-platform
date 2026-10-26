@@ -276,6 +276,31 @@ describe('Settings Save payment tokens (issue #545)', () => {
     ]);
   });
 
+  it.each([
+    ['all-upfront', { provider: 'gcp', service: 'compute', term: 1, payment: 'monthly' }],
+    ['monthly', { provider: 'gcp', service: 'compute', term: 1 }],
+  ])('a GCP row holding payment %p: a term edit PUTs %j', async (stored, body) => {
+    (api.getConfig as jest.Mock).mockResolvedValue({
+      global: { enabled_providers: ['gcp'], default_term: 3, default_payment: 'all-upfront', default_coverage: 80 },
+      services: [{ provider: 'gcp', service: 'compute', term: 3, payment: stored, enabled: true, coverage: 80 }],
+    });
+    await loadGlobalSettings();
+    (document.getElementById('gcp-compute-term') as HTMLSelectElement).value = '1';
+    await saveGlobalSettings(new Event('submit'));
+
+    expect((api.updateServiceConfig as jest.Mock).mock.calls).toEqual([['gcp', 'compute', body]]);
+  });
+
+  it('an emptied Savings Plan coverage card shows an inline error', async () => {
+    await loadGlobalSettings();
+    setupSettingsHandlers();
+    const card = document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement;
+    card.value = '';
+    card.dispatchEvent(new Event('blur'));
+
+    expect(card.getAttribute('aria-invalid')).toBe('true');
+  });
+
   it('never falls back to upfront when a payment select has no matching option at Save', async () => {
     await loadGlobalSettings();
     (document.getElementById('azure-vm-payment') as HTMLSelectElement).value = 'junk';

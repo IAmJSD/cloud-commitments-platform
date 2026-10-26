@@ -2621,7 +2621,7 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
   // save-time-only toast contract) — so the inline-error UX is uniform
   // across Settings.
   wireInlineRangeValidation('setting-notification-days', { signal, requireInteger: true });
-  wireInlineRangeValidation('setting-recs-stale-hours', { signal, requireInteger: true });
+  wireInlineRangeValidation('setting-recs-stale-hours', { signal, requireInteger: true, required: true });
   wireInlineRangeValidation('setting-default-coverage', { signal, requireInteger: true, required: true });
   wireInlineRangeValidation('setting-grace-aws', { signal, requireInteger: true });
   wireInlineRangeValidation('setting-grace-azure', { signal, requireInteger: true });
@@ -2634,7 +2634,7 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
     .forEach(f =>
       wireInlineRangeValidation(
         (f as { coverageId: string }).coverageId,
-        { signal, requireInteger: true },
+        { signal, requireInteger: true, required: true },
       )
     );
 
@@ -3420,10 +3420,12 @@ function changedServiceFields(
     if (filters.min_count !== (base?.min_count ?? 0)) changes.min_count = filters.min_count;
   }
   if (Object.keys(changes).length === 0) return null;
-  if (!changes.payment && field.paymentId && base) {
+  if (!changes.payment && base) {
     // A stored payment the card normalises on load (#545) goes out with any
     // PUT of the row, or the backend validates the legacy token and rejects it.
-    const shown = byId<HTMLSelectElement>(field.paymentId)?.value;
+    // GCP cards have no payment control and GCP only accepts monthly, so a row
+    // holding another token (an AWS default copied onto it) is repaired too.
+    const shown = field.paymentId ? byId<HTMLSelectElement>(field.paymentId)?.value : field.provider === 'gcp' ? 'monthly' : undefined;
     if (shown && shown !== base.payment) changes.payment = shown;
   }
   return changes;
@@ -3541,8 +3543,11 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     saveInFlight = false;
     return;
   }
-  const rawStaleHours = Number(byId<HTMLInputElement>('setting-recs-stale-hours')?.value ?? '24');
-  if (!Number.isFinite(rawStaleHours) || !Number.isInteger(rawStaleHours) || rawStaleHours < 0 || rawStaleHours > 8760) {
+  const staleHoursText = byId<HTMLInputElement>('setting-recs-stale-hours')?.value ?? '24';
+  const rawStaleHours = Number(staleHoursText);
+  // 0 is a legal value (disables auto-refresh) but Number('') is also 0, so an
+  // emptied field must be rejected explicitly rather than saved as "disable".
+  if (staleHoursText.trim() === '' || !Number.isFinite(rawStaleHours) || !Number.isInteger(rawStaleHours) || rawStaleHours < 0 || rawStaleHours > 8760) {
     showToast({ message: 'Cache stale threshold must be a whole number between 0 and 8760 hours (0 = disable)', kind: 'error' });
     if (saveBtn) saveBtn.disabled = false;
     saveInFlight = false;

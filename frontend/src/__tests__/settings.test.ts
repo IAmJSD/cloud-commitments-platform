@@ -931,6 +931,41 @@ describe('Settings Module', () => {
         expect(api.updateServiceConfig).toHaveBeenCalledWith('aws', 'savings-plans-compute', expect.objectContaining({ coverage: 65 }));
       });
 
+      test('an unedited SP card is never flagged, whatever its stored value', async () => {
+        await loadStaleTab();
+        (api.getConfig as jest.Mock).mockResolvedValue({
+          global: { enabled_providers: ['aws'], default_term: 1, default_payment: 'no-upfront', default_coverage: 50, notification_days_before: 3 },
+          services: [{ provider: 'aws', service: 'savings-plans-compute', enabled: true, term: 1, payment: 'no-upfront', coverage: 150 }],
+        });
+        await loadGlobalSettings();
+        (document.getElementById('setting-notification-email') as HTMLInputElement).value = 'new@test.com';
+        mockShowToast.mockClear();
+
+        await save();
+
+        expect(api.updateConfig).toHaveBeenCalledWith({ notification_email: 'new@test.com' });
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' }));
+      });
+
+      test('an emptied cache stale threshold is refused, an explicit 0 is saved', async () => {
+        await loadStaleTab();
+        const hours = document.getElementById('setting-recs-stale-hours') as HTMLInputElement;
+        hours.value = '';
+        mockShowToast.mockClear();
+
+        await save();
+
+        expect(api.updateConfig).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+          message: expect.stringContaining('Cache stale threshold must be a whole number'),
+          kind: 'error',
+        }));
+
+        hours.value = '0';
+        await save();
+        expect(api.updateConfig).toHaveBeenCalledWith({ recommendations_cache_stale_hours: 0 });
+      });
+
       test('a second save after a service PUT succeeded resends nothing', async () => {
         await loadStaleTab();
         (document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement).value = '65';
