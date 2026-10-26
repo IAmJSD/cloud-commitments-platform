@@ -782,17 +782,34 @@ var awsLegacyServiceSlugs = map[string]string{
 	string(common.ServiceRedshift):    string(common.ServiceDataWarehouse),
 }
 
-// CanonicalSuppressionService maps legacy AWS service slugs to their canonical
-// slug so a suppression and a rec match whichever spelling each was stored
-// under (issues #1412, #1420). Other providers' services, including Azure and
-// GCP "compute", are returned unchanged. It lives in config, the lowest
-// package both the scheduler and BuildSuppressions import; the pinned
-// cloud-commitments-go common package has no such mapping.
+// awsSavingsPlansSpellings maps the dash-free spelling of each per-plan-type
+// Savings Plans slug, which the purchase manager's mapSavingsPlansSlug also
+// accepts, to the hyphenated library constant that recs carry (issue #1422).
+// The "savingsplans" umbrella is deliberately absent: folding it into one plan
+// type would let a single umbrella suppression hide another plan type's recs.
+// A purchase test checks every per-type key of mapSavingsPlansSlug against it.
+var awsSavingsPlansSpellings = map[string]string{
+	"savingsplans-compute":     string(common.ServiceSavingsPlansCompute),
+	"savingsplans-ec2instance": string(common.ServiceSavingsPlansEC2Instance),
+	"savingsplans-sagemaker":   string(common.ServiceSavingsPlansSageMaker),
+	"savingsplans-database":    string(common.ServiceSavingsPlansDatabase),
+}
+
+// CanonicalSuppressionService maps legacy AWS service slugs, and the dash-free
+// spellings of the per-type Savings Plans slugs, to their canonical slug so a
+// suppression and a rec match whichever spelling each was stored under
+// (issues #1412, #1420, #1422). Other providers' services, including Azure and
+// GCP "compute" and Azure "savingsplans", are returned unchanged. It lives in
+// config, the lowest package both the scheduler and BuildSuppressions import;
+// the pinned cloud-commitments-go common package has no such mapping.
 func CanonicalSuppressionService(provider, service string) string {
 	if provider != "aws" {
 		return service
 	}
 	if canonical, ok := awsLegacyServiceSlugs[service]; ok {
+		return canonical
+	}
+	if canonical, ok := awsSavingsPlansSpellings[service]; ok {
 		return canonical
 	}
 	return service
