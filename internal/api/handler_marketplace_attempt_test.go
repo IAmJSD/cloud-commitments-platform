@@ -159,6 +159,15 @@ func (a *fakeMarketplaceAWS) FindMarketplaceListingByToken(_ context.Context, _,
 	return ec2svc.MarketplaceListingResult{ListingID: l.id, State: l.state}, true, nil
 }
 
+func (a *fakeMarketplaceAWS) DescribeMarketplaceListingStatus(_ context.Context, id string) (marketplaceListingStatus, error) {
+	for _, l := range a.listings {
+		if l.id == id {
+			return marketplaceListingStatus{ListingID: l.id, State: l.state}, nil
+		}
+	}
+	return marketplaceListingStatus{}, errMarketplaceListingNotFound
+}
+
 func (a *fakeMarketplaceAWS) live() int {
 	n := 0
 	for _, l := range a.listings {
@@ -387,6 +396,10 @@ type failingFinder struct{}
 
 func (failingFinder) FindMarketplaceListingByToken(context.Context, string, string) (ec2svc.MarketplaceListingResult, bool, error) {
 	return ec2svc.MarketplaceListingResult{}, false, errors.New("RequestLimitExceeded")
+}
+
+func (failingFinder) DescribeMarketplaceListingStatus(context.Context, string) (marketplaceListingStatus, error) {
+	return marketplaceListingStatus{}, errors.New("RequestLimitExceeded")
 }
 
 func TestMarketplaceListHTTP_CorruptStoredScheduleFailsLoud(t *testing.T) {

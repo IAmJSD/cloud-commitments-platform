@@ -1571,15 +1571,23 @@ func (s *PostgresStore) CancelScheduledExecutionAtomic(ctx context.Context, tx p
 // already represented by their purchase_history rows, so returning them would
 // only consume the cap (the History handler skips them anyway).
 func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error) {
-	if len(statuses) == 0 {
+	return s.GetExecutionsByStatusesFiltered(ctx, ExecutionsByStatusesQuery{Statuses: statuses, Limit: limit})
+}
+
+// GetExecutionsByStatusesFiltered is GetExecutionsByStatuses with the History
+// filters and account scope in q applied in SQL, before the limit (issue
+// #632). Order and the clean-completed exclusion are GetExecutionsByStatuses'.
+func (s *PostgresStore) GetExecutionsByStatusesFiltered(ctx context.Context, q ExecutionsByStatusesQuery) ([]PurchaseExecution, error) {
+	if len(q.Statuses) == 0 {
 		return nil, nil
 	}
+	limit := q.Limit
 	if limit <= 0 {
 		limit = DefaultListLimit
 	}
-	if limit > MaxListLimit {
-		limit = MaxListLimit
-	}
+	limit = min(limit, MaxListLimit)
+	conds, args := executionsByStatusesWhere(&q)
+	args = append(args, limit)
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token_hash, recommendations,
@@ -1590,13 +1598,12 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
 		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
-		WHERE ` + historyExecutionsPredicate + `
+		WHERE ` + strings.Join(conds, "\n\t\t  AND ") + `
 		ORDER BY (status = 'pending' AND scheduled_date > now()) ASC,
 		         CASE WHEN status = 'pending' AND scheduled_date > now() THEN scheduled_date END ASC,
 		         scheduled_date DESC
-		LIMIT $2
-	`
-	return s.queryExecutions(ctx, query, statuses, limit)
+		LIMIT $` + fmt.Sprint(len(args))
+	return s.queryExecutions(ctx, query, args...)
 }
 
 // CountExecutionsByPlanAndStatus returns, keyed by plan ID, the exact number
@@ -2103,6 +2110,9 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 		// approval_token_hash is NULL on rows migration 000100 found with no
 		// raw token (every canceled row among them).
 		var approvalTokenHash sql.NullString
+		// error is nullable (migration 000001); one NULL row must not fail the
+		// whole list scan (issue #1465). exec.Error stays "" for those.
+		var errText sql.NullString
 
 		err := rows.Scan(
 			&planID,
@@ -2116,7 +2126,7 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 			&exec.TotalUpfrontCost,
 			&exec.EstimatedSavings,
 			&completedAt,
-			&exec.Error,
+			&errText,
 			&expiresAt,
 			&exec.CloudAccountID,
 			&exec.Source,
@@ -2146,6 +2156,7 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 			exec.IdempotencyKey = idempotencyKey.String
 		}
 		exec.ApprovalToken = approvalTokenHash.String
+		exec.Error = errText.String
 
 		// Unmarshal recommendations
 		if err := json.Unmarshal(recommendationsJSON, &exec.Recommendations); err != nil {
@@ -2323,10 +2334,16 @@ func (s *PostgresStore) UpdatePurchaseHistoryListing(ctx context.Context, purcha
 	// A listing recorded as canceled or closed is never marked live again
 	// (issue #525): a list request that lost a race with the cancel endpoint
 	// gets ErrMarketplaceListingEnded instead of reviving the canceled listing.
+	// Writing a new listing id (a relist) drops the previous listing's
+	// listed_at and settlement in the same statement (issue #27), so the new
+	// listing can be settled even if it ends before the poller sees it active.
 	query := `
 		UPDATE purchase_history
 		SET listing_id = $1, listing_state = $2,
-		    listing_client_token = NULL, listing_price_schedule = NULL
+		    listing_client_token = NULL, listing_price_schedule = NULL,
+		    listed_at = CASE WHEN COALESCE(listing_id, '') = $1 THEN listed_at END,
+		    listing_proceeds_received = CASE WHEN COALESCE(listing_id, '') = $1 THEN listing_proceeds_received END,
+		    listing_fee_paid = CASE WHEN COALESCE(listing_id, '') = $1 THEN listing_fee_paid END
 		WHERE purchase_id = $3
 		  AND NOT (COALESCE(listing_id, '') = $1
 		           AND lower(COALESCE(listing_state, '')) IN ($4, $5)
@@ -2906,9 +2923,11 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 
 // MarkPurchaseRevoked stamps revoked_at / revoked_via / support_case_id and
 // the refund-quote audit columns (calc_refund_amount, calc_refund_currency) on
-// the purchase_history row identified by purchaseID. The UPDATE is a no-op
-// when revoked_at is already non-null (idempotency guard). Returns a not-found
-// error when zero rows are affected and revoked_at was previously NULL.
+// the purchase_history row identified by purchaseID, and clears
+// revocation_in_flight as migration 000072 documents: a completed revocation
+// is no longer in flight (issue #316). The UPDATE is a no-op when revoked_at
+// is already non-null (idempotency guard). Returns a not-found error when zero
+// rows are affected and revoked_at was previously NULL.
 func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
 	var supportCaseIDPtr *string
 	if supportCaseID != "" {
@@ -2924,7 +2943,8 @@ func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID stri
 		       revoked_via           = $3,
 		       support_case_id       = $4,
 		       calc_refund_amount    = $5,
-		       calc_refund_currency  = $6
+		       calc_refund_currency  = $6,
+		       revocation_in_flight  = false
 		 WHERE purchase_id = $1
 		   AND revoked_at IS NULL
 	`, purchaseID, revokedAt, revokedVia, supportCaseIDPtr, calcRefundAmount, calcCurrencyPtr)
@@ -4394,7 +4414,10 @@ func (s *PostgresStore) validatePlanAccountProvidersTx(ctx context.Context, tx p
 	if len(accountIDs) == 0 {
 		return nil
 	}
-	expected := DerivePlanProviders(&PurchasePlan{Services: services})
+	expected, err := DerivePlanProviders(&PurchasePlan{Services: services})
+	if err != nil {
+		return fmt.Errorf("validate plan account providers: %w", err)
+	}
 	if len(expected) == 0 {
 		return nil
 	}

@@ -62,9 +62,10 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 	// page size, and later pages leave it out, so paging can never push a
 	// pending approval off the first page. A failure to list them must not
 	// hide completed history — log, skip, continue, and flag the response.
-	// The same filter set is applied here (in-memory against the synthesized
-	// row's recommendations and scheduled_date) so the two halves of the
-	// merged response are consistently scoped (issue #701).
+	// The same filter set and the account scope are pushed into the SQL read
+	// so the class cap counts only rows the caller can be shown (issue #632),
+	// and re-checked in memory against the synthesized row so the two halves
+	// of the merged response are consistently scoped (issue #701).
 	//
 	// Stale pending/notified executions are expired AFTER the response is
 	// assembled so the GET handler is a pure read (issue #1032): the caller
@@ -80,7 +81,7 @@ func (h *Handler) getHistory(ctx context.Context, req *events.LambdaFunctionURLR
 	var staleExecs []config.PurchaseExecution
 	actionableIncomplete := false
 	if filters.Cursor == nil {
-		extra, staleExecs, actionableIncomplete = h.fetchExecutionsAsHistory(ctx, filters)
+		extra, staleExecs, actionableIncomplete = h.fetchExecutionsAsHistory(ctx, filters, scope)
 		extra = scope.filter(extra)
 	}
 	defer h.expireStaleExecutions(staleExecs)
@@ -185,32 +186,29 @@ const approvalExpiryWindow = 7 * 24 * time.Hour
 // history must still render. Terminal executions are read by the paged
 // stream instead (fetchHistoryPage).
 //
-// The filter set (issue #701) is applied in Go against the synthetic row:
-// provider via the recs' collapsed provider, account via CloudAccountID,
-// date via ScheduledDate.
+// The filter set (issue #701) and the caller's account scope are pushed into
+// the SQL read as a superset (issue #632), so the MaxListLimit cap counts only
+// executions the caller could be shown and other tenants' or filtered-out rows
+// cannot crowd a pending approval out. The exact checks still run in Go
+// against the synthetic row: provider via the recs' providers, account via
+// CloudAccountID, plan via PlanID, date via ScheduledDate here, and the scope
+// in the caller.
 //
 // The third return value reports that actionable executions may be missing:
-// the class reached its MaxListLimit cap, so older executions may have been
-// dropped before the filters ran, or its listing failed (issue #686).
-func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyFilters) ([]config.PurchaseHistoryRecord, []config.PurchaseExecution, bool) {
-	executions, ok := h.fetchExecutionsByClass(ctx, actionableExecutionStatuses, filters.PlanID, config.MaxListLimit)
+// the class reached its MaxListLimit cap, or its listing failed (issue #686).
+func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyFilters, scope historyScope) ([]config.PurchaseHistoryRecord, []config.PurchaseExecution, bool) {
+	q := actionableExecutionsQuery(&filters, &scope)
+	executions, ok := h.fetchExecutionsByClass(ctx, q)
 	incomplete := !ok || len(executions) >= config.MaxListLimit
+	staleExecs := h.staleExecutionsToSweep(ctx, &q, executions)
 	if len(executions) == 0 {
-		return nil, nil, incomplete
+		return nil, staleExecs, incomplete
 	}
 	approver := h.resolvePendingApproverEmail(ctx)
 	userEmailCache := h.resolveUserEmails(ctx, executions)
 	out := make([]config.PurchaseHistoryRecord, 0, len(executions))
-	var staleExecs []config.PurchaseExecution
 	for _rvc := range executions {
 		exec := executions[_rvc]
-		// Collect stale pending/notified executions for the post-assembly
-		// expire sweep. We do NOT mutate status here to keep the GET
-		// read-only: the response reflects current DB state; the sweep
-		// fires the transition so the next request sees "expired".
-		if isStaleExecution(exec) {
-			staleExecs = append(staleExecs, exec)
-		}
 		if !filters.matchesExecution(exec) {
 			continue
 		}
@@ -224,18 +222,13 @@ func (h *Handler) fetchExecutionsAsHistory(ctx context.Context, filters historyF
 // render; the caller flags the response as incomplete so the hidden rows are
 // not silent (issue #686).
 //
-// A non-empty planID selects only that plan's executions in SQL, so a plan view
-// is not crowded out by other plans' rows under the limit.
-func (h *Handler) fetchExecutionsByClass(ctx context.Context, statuses []string, planID string, limit int) ([]config.PurchaseExecution, bool) {
-	var rows []config.PurchaseExecution
-	var err error
-	if planID != "" {
-		rows, err = h.config.ListHistoryExecutionsPage(ctx, config.HistoryExecutionsPageQuery{Statuses: statuses, PlanID: planID, Limit: limit})
-	} else {
-		rows, err = h.config.GetExecutionsByStatuses(ctx, statuses, limit)
-	}
+// q carries the request filters, plan_id included, and the caller's scope, so
+// a plan view or a scoped caller is not crowded out by other rows under the
+// limit (issues #632, #1404).
+func (h *Handler) fetchExecutionsByClass(ctx context.Context, q config.ExecutionsByStatusesQuery) ([]config.PurchaseExecution, bool) {
+	rows, err := h.config.GetExecutionsByStatusesFiltered(ctx, q)
 	if err != nil {
-		logging.Warnf("history: failed to load executions with statuses %v: %v", statuses, err)
+		logging.Warnf("history: failed to load executions with statuses %v: %v", q.Statuses, err)
 		return nil, false
 	}
 	return rows, true

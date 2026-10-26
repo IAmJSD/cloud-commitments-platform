@@ -56,7 +56,9 @@ func (s *PostgresStore) GetMarketplaceListingAttempt(ctx context.Context, purcha
 // seen, or already holds listingID (another request recorded the listing the
 // caller just canceled). state must be an ended state (canceled or closed) or
 // empty, which clears a stuck pending row that has no listing; an empty
-// listingID clears the listing id too. It reports whether the row was written.
+// listingID clears the listing id too. A new listing id drops the previous
+// listing's listed_at and settlement (issue #27). It reports whether the row
+// was written.
 func (s *PostgresStore) ResolveMarketplaceListingAttempt(ctx context.Context, purchaseID string, seen MarketplaceListingAttempt, listingID, state string) (bool, error) {
 	if state != "" && !isEndedListingState(state) {
 		return false, fmt.Errorf("cannot resolve marketplace listing %s for purchase %s to live state %q", listingID, purchaseID, state)
@@ -64,7 +66,10 @@ func (s *PostgresStore) ResolveMarketplaceListingAttempt(ctx context.Context, pu
 	query := `
 		UPDATE purchase_history
 		SET listing_id = NULLIF($2, ''), listing_state = NULLIF($3, ''),
-		    listing_client_token = NULL, listing_price_schedule = NULL
+		    listing_client_token = NULL, listing_price_schedule = NULL,
+		    listed_at = CASE WHEN COALESCE(listing_id, '') = $2 THEN listed_at END,
+		    listing_proceeds_received = CASE WHEN COALESCE(listing_id, '') = $2 THEN listing_proceeds_received END,
+		    listing_fee_paid = CASE WHEN COALESCE(listing_id, '') = $2 THEN listing_fee_paid END
 		WHERE purchase_id = $1
 		  AND ((lower(COALESCE(listing_state, '')) = lower($4)
 		        AND COALESCE(listing_id, '') = $5

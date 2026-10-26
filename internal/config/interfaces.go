@@ -155,6 +155,10 @@ type StoreInterface interface {
 	// this method's status filter) to avoid accidental double-processing of
 	// failed / expired rows.
 	GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error)
+	// GetExecutionsByStatusesFiltered is GetExecutionsByStatuses with the
+	// History filters and account scope in q applied in SQL before the limit,
+	// so the cap counts only rows the caller can be shown (issue #632).
+	GetExecutionsByStatusesFiltered(ctx context.Context, q ExecutionsByStatusesQuery) ([]PurchaseExecution, error)
 	// ListHistoryExecutionsPage and ListPurchaseHistoryPage read one keyset
 	// page each of the History view's paged stream (issue #674): rows strictly
 	// after q.After / after (nil starts at the top) in the stream order of
@@ -398,7 +402,9 @@ type StoreInterface interface {
 	// support_case_id on a purchase_history row identified by purchase_id.
 	// calcRefundAmount and calcRefundCurrency capture the Azure CalculateRefund
 	// quote for audit (migration 000071, Finding #4); both nil/empty for
-	// non-Azure paths or legacy rows written before the migration.
+	// non-Azure paths or legacy rows written before the migration. Also
+	// clears revocation_in_flight (migration 000072): a revoked row is no
+	// longer in flight.
 	// Returns a not-found error when no row matches. Idempotent: a second
 	// call for the same row is a no-op (revoked_at is not overwritten when
 	// it is already non-null). Used by the revoke endpoint (issue #290).
@@ -479,6 +485,23 @@ type StoreInterface interface {
 	// schedule so the retry resends them (ambiguous AWS outcome); otherwise
 	// they are cleared because AWS created nothing reusable.
 	ReleaseMarketplaceListingClaim(ctx context.Context, purchaseID, clientToken, priorState string, keepAttempt bool) error
+
+	// ListMarketplaceListingsToPoll returns the AWS rows whose listing the
+	// marketplace status poller reads (issue #27): active listings, and
+	// closed/canceled ones it has seen whose proceeds are not recorded yet.
+	ListMarketplaceListingsToPoll(ctx context.Context) ([]PurchaseHistoryRecord, error)
+
+	// RecordMarketplaceListingActive stamps listed_at on a row whose listing
+	// AWS still reports active. It writes only while the row holds listingID
+	// in the active state and never writes listing_state. Reports whether the
+	// row changed.
+	RecordMarketplaceListingActive(ctx context.Context, purchaseID, listingID string, listedAt time.Time) (bool, error)
+
+	// SettleMarketplaceListing records a listing that closed or was canceled
+	// on AWS, with its proceeds and AWS fee when known. It applies once per
+	// listing, only while the row still holds it and is active or already in
+	// the same terminal state. Reports whether the row was written.
+	SettleMarketplaceListing(ctx context.Context, settlement MarketplaceListingSettlement) (bool, error)
 
 	// ClaimRIExchangeIdempotencyKey atomically claims key for an RI exchange
 	// submit, so a client that retries a timed-out execute request cannot
