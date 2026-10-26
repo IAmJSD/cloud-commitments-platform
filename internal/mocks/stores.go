@@ -1598,6 +1598,17 @@ func (m *MockConfigStore) SaveAccountServiceOverride(ctx context.Context, overri
 	return args.Error(0)
 }
 
+// SaveAccountServiceOverrideTx falls back to SaveAccountServiceOverride when
+// no expectation is registered; see UpdatePurchasePlanTx.
+func (m *MockConfigStore) SaveAccountServiceOverrideTx(ctx context.Context, tx pgx.Tx, override *config.AccountServiceOverride) error {
+	m.record("SaveAccountServiceOverrideTx", ctx, tx, override)
+	if !isExpected(&m.Mock, "SaveAccountServiceOverrideTx") {
+		return m.SaveAccountServiceOverride(ctx, override)
+	}
+	args := m.Called(ctx, tx, override)
+	return args.Error(0)
+}
+
 func (m *MockConfigStore) DeleteAccountServiceOverride(ctx context.Context, accountID, provider, service string) error {
 	m.record("DeleteAccountServiceOverride", ctx, accountID, provider, service)
 	if !isExpected(&m.Mock, "DeleteAccountServiceOverride") {

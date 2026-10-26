@@ -3987,6 +3987,84 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
+  /api/accounts/service-overrides/export:
+    get:
+      operationId: exportAccountServiceOverrides
+      tags: [Accounts]
+      summary: Export every per-service override in the caller's account scope
+      description: >
+        Returns every account_service_overrides row on the accounts the
+        caller's scope allows, with each account's provider and external ID
+        so the file can be imported into another tenant (issue #9). Requires
+        view:accounts. JSON by default; format=csv returns the same rows as
+        CSV (list cells are semicolon-separated, an empty cell is an unset
+        field). A CSV text cell starting with = + - @ tab, CR or ' gets a '
+        prefix so a spreadsheet does not run it as a formula; import strips
+        that prefix again.
+      parameters:
+        - name: format
+          in: query
+          description: json (default) or csv. Any other value is a 400.
+          schema:
+            type: string
+            enum: [json, csv]
+      responses:
+        '200':
+          description: The overrides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverrideExport'
+            text/csv:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/accounts/service-overrides/import:
+    post:
+      operationId: importAccountServiceOverrides
+      tags: [Accounts]
+      summary: Import per-service overrides from an export file
+      description: >
+        Applies an export file (JSON rows or CSV text) as desired state
+        (issue #9). Each row names its account by account_id, else by
+        provider and account_external_id, and must be in the caller's account
+        scope. A row sets every field of its override (an unset field clears
+        it); overrides not in the file are left alone. Rows are validated with
+        the service-config rules, the commitment-option check of the PUT
+        endpoint and the column bounds (ramp_schedule at most 32 characters,
+        coverage at most 2 decimal places, no control characters in
+        ramp_schedule or list values). strict (default) writes nothing when
+        any row is rejected and answers 400 with the report under
+        details.report; best_effort writes the valid rows. dry_run reports
+        without writing. The writes run in one transaction, so a store
+        failure writes nothing. Requires update:accounts. Writes are upserts,
+        so re-running an import is safe.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OverrideImportRequest'
+      responses:
+        '200':
+          description: Per-row report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverrideImportReport'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
   /api/accounts:
     get:
       operationId: listAccounts
@@ -7627,6 +7705,135 @@ components:
           type: boolean
         message:
           type: string
+
+    OverrideTransferRow:
+      type: object
+      description: >
+        One override in an export or import file. account_name, created_at
+        and updated_at are informational and ignored on import.
+      required: [provider, service]
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        account_name:
+          type: string
+        account_external_id:
+          type: string
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+        service:
+          type: string
+        enabled:
+          type: boolean
+        term:
+          type: integer
+        payment:
+          type: string
+        coverage:
+          type: number
+          format: double
+        ramp_schedule:
+          type: string
+          maxLength: 32
+        include_engines:
+          type: array
+          items:
+            type: string
+        exclude_engines:
+          type: array
+          items:
+            type: string
+        include_regions:
+          type: array
+          items:
+            type: string
+        exclude_regions:
+          type: array
+          items:
+            type: string
+        include_types:
+          type: array
+          items:
+            type: string
+        exclude_types:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OverrideExport:
+      type: object
+      required: [version, exported_at, overrides]
+      properties:
+        version:
+          type: integer
+        exported_at:
+          type: string
+          format: date-time
+        overrides:
+          type: array
+          items:
+            $ref: '#/components/schemas/OverrideTransferRow'
+
+    OverrideImportRequest:
+      type: object
+      description: Send exactly one of overrides or csv (1 to 5000 rows).
+      properties:
+        mode:
+          type: string
+          enum: [strict, best_effort]
+        dry_run:
+          type: boolean
+        overrides:
+          type: array
+          items:
+            $ref: '#/components/schemas/OverrideTransferRow'
+        csv:
+          type: string
+
+    OverrideImportReport:
+      type: object
+      required: [mode, dry_run, applied, summary, rows]
+      properties:
+        mode:
+          type: string
+          enum: [strict, best_effort]
+        dry_run:
+          type: boolean
+        applied:
+          type: boolean
+        summary:
+          type: object
+          description: Row count per action (insert, update, unchanged, rejected).
+          additionalProperties:
+            type: integer
+        rows:
+          type: array
+          items:
+            type: object
+            required: [row, provider, service, action]
+            properties:
+              row:
+                type: integer
+              account_id:
+                type: string
+                format: uuid
+              provider:
+                type: string
+              service:
+                type: string
+              action:
+                type: string
+                enum: [insert, update, unchanged, rejected]
+              error:
+                type: string
 
     AccountServiceOverride:
       type: object
