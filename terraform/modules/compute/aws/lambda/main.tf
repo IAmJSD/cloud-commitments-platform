@@ -7,7 +7,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 5.100"
     }
   }
 }
@@ -143,7 +143,7 @@ resource "aws_lambda_function_url" "main" {
   cors {
     allow_credentials = true
     allow_origins     = var.allowed_origins
-    allow_methods     = ["GET", "POST", "PUT", "DELETE"]
+    allow_methods     = ["GET", "POST", "PUT", "PATCH", "DELETE"]
     allow_headers     = ["Content-Type", "Authorization", "X-CSRF-Token", "X-Session-Token"]
     max_age           = 3600
   }
@@ -252,9 +252,14 @@ resource "aws_iam_role_policy" "secrets_access" {
         Action = [
           "secretsmanager:GetSecretValue"
         ]
+        # Every "${arn}*" entry is guarded: an empty ARN would otherwise render
+        # the bare "*", which compact() keeps, granting GetSecretValue on every
+        # secret in the account (#291). var.database_password_secret_arn is
+        # also validated non-empty; the guard keeps this fail-closed if that
+        # input is ever made optional.
         Resource = compact([
           var.database_password_secret_arn,
-          "${var.database_password_secret_arn}*",
+          var.database_password_secret_arn != "" ? "${var.database_password_secret_arn}*" : "",
           var.admin_password_secret_arn,
           var.admin_password_secret_arn != "" ? "${var.admin_password_secret_arn}*" : "",
           var.credential_encryption_key_secret_arn,
@@ -516,8 +521,6 @@ resource "aws_iam_role_policy" "org_discovery" {
         Effect = "Allow"
         Action = [
           "organizations:ListAccounts",
-          "organizations:DescribeAccount",
-          "organizations:DescribeOrganization",
         ]
         Resource = "*" # Organizations API does not support resource-level restrictions
       }

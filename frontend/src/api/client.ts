@@ -4,6 +4,15 @@
 
 import type { ApiError, RequestOptions } from './types';
 import { reloadPage } from '../utils';
+import {
+  BAD_RESPONSE_MESSAGE,
+  NETWORK_ERROR_MESSAGE,
+  TIMEOUT_ERROR_MESSAGE,
+  httpStatusMessage,
+  isGenericServerMessage,
+  isNetworkFailure,
+  makeApiError,
+} from './errors';
 
 const API_BASE = '/api';
 
@@ -93,11 +102,18 @@ function installStorageListener(): void {
   if (storageListenerInstalled) return;
   if (typeof window === 'undefined' || !window.addEventListener) return;
   window.addEventListener('storage', (e: StorageEvent) => {
-    if (!e.key || !(STORAGE_KEYS as readonly string[]).includes(e.key)) return;
-    // Only react to a *cleared* key (newValue === null); partial
-    // updates (e.g. token refresh) propagate via the in-memory state
-    // and don't need a reload.
-    if (e.newValue !== null) return;
+    if (e.key === null) {
+      // localStorage.clear() in another tab (a browser privacy control,
+      // devtools, a future clear() call) fires with key === null: every
+      // key, auth included, is gone. Signed-out tabs have nothing to drop.
+      if (!authToken && !apiKey && !csrfToken) return;
+    } else {
+      if (!(STORAGE_KEYS as readonly string[]).includes(e.key)) return;
+      // Only react to a *cleared* key (newValue === null); partial
+      // updates (e.g. token refresh) propagate via the in-memory state
+      // and don't need a reload.
+      if (e.newValue !== null) return;
+    }
     authToken = '';
     apiKey = '';
     csrfToken = '';
@@ -187,10 +203,25 @@ export function getAuthHeaders(): Record<string, string> {
 }
 
 /**
- * Base64 encode a string (for password encoding)
+ * Base64 encode a string (for password encoding).
+ *
+ * `btoa` only accepts code points up to U+00FF and throws a raw
+ * InvalidCharacterError otherwise, so a passphrase with an emoji, a CJK
+ * character or a curly quote could never be submitted. Strings that fit in
+ * Latin-1 keep the exact bytes `btoa` has always sent, so existing passwords
+ * still hash the same on the server; anything wider is sent as UTF-8, which
+ * is how Go's `string(decoded)` reads it.
  */
 export function base64Encode(str: string): string {
-  return btoa(str);
+  // eslint-disable-next-line no-control-regex
+  if (/^[\u0000-\u00ff]*$/.test(str)) {
+    return btoa(str);
+  }
+  let binary = '';
+  for (const byte of new TextEncoder().encode(str)) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
 }
 
 /**
@@ -239,12 +270,14 @@ export async function apiRequest<T>(endpoint: string, options: RequestOptions = 
       signal,
     });
   } catch (err) {
-    if (timeoutController.signal.aborted) {
-      const error: ApiError = new Error(
-        `Request to ${endpoint} timed out after ${timeoutMs}ms`,
-      );
-      error.status = 0;
-      throw error;
+    // Transport failures carry status 0 and a sentence the user can act
+    // on; the raw text stays on `detail` for support (issue #748). A
+    // caller's own abort is rethrown untouched so it can tell it apart.
+    if (timeoutController.signal.aborted && !options.signal?.aborted) {
+      throw makeApiError(TIMEOUT_ERROR_MESSAGE, 0, `Request to ${endpoint} timed out after ${timeoutMs}ms`);
+    }
+    if (isNetworkFailure(err)) {
+      throw makeApiError(NETWORK_ERROR_MESSAGE, 0, `Request to ${endpoint} failed: ${(err as Error).message}`);
     }
     throw err;
   } finally {
@@ -252,12 +285,15 @@ export async function apiRequest<T>(endpoint: string, options: RequestOptions = 
   }
 
   if (!response.ok) {
-    const error: ApiError = new Error(`HTTP ${response.status}`);
-    error.status = response.status;
+    // Without a server message, say what the status means instead of
+    // showing a bare "HTTP 502" (issue #748). A server message wins.
+    const error: ApiError = makeApiError(
+      httpStatusMessage(response.status), response.status, `HTTP ${response.status} from ${endpoint}`,
+    );
     try {
       const data = await response.json() as Record<string, unknown>;
       const message = typeof data['error'] === 'string' ? data['error'] : '';
-      if (message) error.message = message;
+      if (message && !isGenericServerMessage(message)) error.message = message;
       // Strip the `error` key and surface the rest as structured
       // details so callers can branch on ops_hint / retry_attempt_n /
       // threshold / retry_execution_id without substring-matching the
@@ -282,7 +318,14 @@ export async function apiRequest<T>(endpoint: string, options: RequestOptions = 
   if (response.status === 204 || response.headers?.get('content-length') === '0') {
     return null as T;
   }
-  return await response.json() as T;
+  try {
+    return await response.json() as T;
+  } catch (parseErr) {
+    // A proxy or CDN error page served with a 2xx would otherwise reach
+    // the user as "Unexpected token '<' ..." (issue #748).
+    throw makeApiError(BAD_RESPONSE_MESSAGE, response.status,
+      `Unparseable response from ${endpoint}: ${(parseErr as Error).message}`);
+  }
 }
 
 /**

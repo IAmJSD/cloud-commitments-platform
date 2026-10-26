@@ -2,11 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"regexp"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
@@ -18,6 +19,7 @@ import (
 	ec2svc "github.com/LeanerCloud/cloud-commitments-go/providers/aws/services/ec2"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/ricost"
 )
 
 // riExchangeClients holds the injectable dependencies for RI exchange operations.
@@ -40,6 +42,9 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 	if err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
+	// Before the enabled check: a stranded hold from an earlier run still
+	// blocks approvals of pending exchanges while automation is off.
+	app.alarmStaleRIExchanges(ctx)
 	if !cfg.RIExchangeEnabled {
 		log.Println("RI exchange automation is disabled, skipping")
 		return nil, nil
@@ -48,6 +53,10 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+	}
+	accountID, err := resolveAccountID(ctx, sts.NewFromConfig(awsCfg))
+	if err != nil {
+		return nil, fmt.Errorf("RI exchange reshape aborted: %w", err)
 	}
 
 	ec2Client := awsprovider.NewEC2ClientDirect(awsCfg)
@@ -61,11 +70,41 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 		},
 		exchangeClient: exchange.NewExchangeClient(awsCfg),
 		lookupOffering: newConvertibleOfferingLookup(ec2Client),
-		accountID:      resolveAccountID(ctx, awsCfg),
+		accountID:      accountID,
 		region:         awsCfg.Region,
 	}
 
 	return app.executeRIExchangeReshape(ctx, cfg, clients)
+}
+
+// riExchangeStaleAlarmAfter is how long a processing RI exchange may go
+// unchanged before the scheduled run raises an operator alarm (#692). Every
+// writer settles its row well inside this (4m30s on the API path, the task
+// timeout on the scheduled path), so a row this old was most likely stranded
+// by a crash between the provider call and the ledger write.
+const riExchangeStaleAlarmAfter = time.Hour
+
+// alarmStaleRIExchanges logs an ERROR, which feeds the application error
+// alarm, for every processing RI exchange older than riExchangeStaleAlarmAfter.
+// Such a row keeps its reserved ceiling counted against the daily cap on every
+// later day, and whether the exchange happened at AWS is unknown, so it is
+// never settled or released here: an operator verifies it at AWS and resolves
+// it via POST /api/ri-exchange/resolve/{id}. It returns how many it reported.
+func (app *Application) alarmStaleRIExchanges(ctx context.Context) int {
+	stale, err := app.Config.GetStaleProcessingExchanges(ctx, riExchangeStaleAlarmAfter)
+	if err != nil {
+		logging.Errorf("RI exchange reconciliation: failed to list stale processing exchanges: %v", err)
+		return 0
+	}
+	for i := range stale {
+		r := &stale[i]
+		logging.Errorf("RI exchange reconciliation needed: record_id=%s account_id=%s region=%s source_ri_ids=%v held_usd=%s processing_since=%s: "+
+			"the exchange outcome at AWS is unknown and the row keeps holding daily-cap headroom; check the source RIs in AWS, "+
+			"then resolve it with POST /api/ri-exchange/resolve/%s (allowed once unchanged for %s)",
+			r.ID, r.AccountID, r.Region, r.SourceRIIDs, r.PaymentDue, r.UpdatedAt.UTC().Format(time.RFC3339),
+			r.ID, config.RIExchangeResolveStaleAfter)
+	}
+	return len(stale)
 }
 
 // convertibleOfferingFinder is the slice of the EC2 client the offering
@@ -94,6 +133,11 @@ func newConvertibleOfferingLookup(finder convertibleOfferingFinder) exchange.Loo
 // executeRIExchangeReshape contains the core exchange logic, separated from AWS
 // client construction for testability.
 func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *config.GlobalConfig, clients riExchangeClients) (*exchange.AutoExchangeResult, error) {
+	// Every record the run creates carries this account ID for the audit
+	// trail, so a run without one stops before touching AWS or the store.
+	if clients.accountID == "" {
+		return nil, errors.New("no AWS account ID resolved for the RI exchange audit trail")
+	}
 	instances, err := clients.listConvertibleRIs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list convertible RIs: %w", err)
@@ -115,7 +159,7 @@ func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *confi
 		RIs:            riInfos,
 		Utilization:    utilInfos,
 		Config: exchange.RIExchangeConfig{
-			Mode:                     cfg.RIExchangeMode,
+			Mode:                     fourEyesExchangeMode(cfg, cfg.RIExchangeMode),
 			UtilizationThreshold:     cfg.RIExchangeUtilizationThreshold,
 			MaxPaymentPerExchangeUSD: cfg.RIExchangeMaxPerExchangeUSD,
 			MaxPaymentDailyUSD:       cfg.RIExchangeMaxDailyUSD,
@@ -141,19 +185,26 @@ func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *confi
 	return result, nil
 }
 
-// resolveAccountID fetches the AWS account ID via STS. Returns "unknown" on failure
-// since account_id is stored for audit trail only and is not used to scope queries.
-func resolveAccountID(ctx context.Context, awsCfg aws.Config) string {
-	stsClient := sts.NewFromConfig(awsCfg)
-	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+// callerIdentityGetter is the slice of the STS client resolveAccountID needs.
+// Satisfied by *sts.Client.
+type callerIdentityGetter interface {
+	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
+}
+
+// resolveAccountID fetches the caller's AWS account ID via STS and fails when
+// it cannot be determined. The ID is written onto every RI exchange record the
+// run creates, so a placeholder such as "unknown" would put a fabricated
+// account on the audit trail of a money action (#326); the run is aborted
+// instead, as defaultLadderAccountResolver does.
+func resolveAccountID(ctx context.Context, client callerIdentityGetter) (string, error) {
+	identity, err := client.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
-		log.Printf("Warning: failed to get AWS account ID via STS: %v (using 'unknown')", err)
-		return "unknown"
+		return "", fmt.Errorf("resolve caller AWS account via STS: %w", err)
 	}
-	if identity.Account != nil {
-		return *identity.Account
+	if identity == nil || identity.Account == nil || *identity.Account == "" {
+		return "", errors.New("STS GetCallerIdentity returned no account ID")
 	}
-	return "unknown"
+	return *identity.Account, nil
 }
 
 // sendExchangeNotification sends email notifications based on the exchange result.
@@ -224,6 +275,7 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 			ExchangeID:         o.ExchangeID,
 			UtilizationPct:     o.UtilizationPct,
 			Error:              o.Error,
+			OutcomeUnknown:     o.OutcomeUnknown,
 		})
 	}
 
@@ -238,24 +290,11 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 	return data
 }
 
-// monthlyCostFromConvertibleRI computes the per-instance per-month
-// effective cost from an RI's pricing fields, matching the same
-// formula the AWS effectiveMonthlyCost function uses for offerings:
-//
-//	monthly = (FixedPrice / hours_per_term + UsagePrice + recurring_hourly) × 730
-//
-// Returns an error when Duration is non-positive: a zero cost would read
-// as a free RI and skip the pricing gate, so callers must exclude the RI.
-//
-// Used to populate exchange.RIInfo.MonthlyCost so the cross-family
-// dollar-units pre-filter compares apples-to-apples against per-target
-// offering costs.
+// monthlyCostFromConvertibleRI delegates to ricost.MonthlyCostFromConvertibleRI,
+// the single implementation of the convertible RI monthly cost formula shared
+// with internal/api.
 func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
-	if ri.Duration <= 0 {
-		return 0, fmt.Errorf("convertible RI %s has non-positive duration %d: monthly cost is not computable", ri.ReservedInstanceID, ri.Duration)
-	}
-	hoursPerTerm := float64(ri.Duration) / 3600
-	return ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730, nil
+	return ricost.MonthlyCostFromConvertibleRI(ri)
 }
 
 // convertForAutoExchange converts provider-specific types to exchange package types,
@@ -310,7 +349,29 @@ func newConfigExchangeStoreAdapter(store config.StoreInterface) *configExchangeS
 	return &configExchangeStoreAdapter{store: store}
 }
 
+// awsAccountIDPattern is the shape of an AWS account ID: exactly 12 ASCII digits
+// (RE2's \d is ASCII-only).
+var awsAccountIDPattern = regexp.MustCompile(`^\d{12}$`)
+
+// requireAWSExchangeAccountID refuses an exchange record whose account ID is not
+// an AWS account ID. Every record this adapter writes comes from the AWS EC2
+// exchange engine, so its account ID must be the 12-digit account STS
+// reported. ri_exchange_history.account_id itself no longer enforces that
+// shape (migration 000137 dropped the AWS-only CHECK so the column can hold
+// Azure and GCP identifiers, issue #144); this check keeps the guarantee for
+// AWS rows at the boundary where the provider is known, including refusing the
+// "unknown" placeholder resolveAccountID falls back to when STS fails.
+func requireAWSExchangeAccountID(accountID string) error {
+	if !awsAccountIDPattern.MatchString(accountID) {
+		return fmt.Errorf("refusing to record RI exchange: account ID %q is not a 12-digit AWS account ID", accountID)
+	}
+	return nil
+}
+
 func (a *configExchangeStoreAdapter) SaveRIExchangeRecord(ctx context.Context, record *exchange.ExchangeRecord) error {
+	if err := requireAWSExchangeAccountID(record.AccountID); err != nil {
+		return err
+	}
 	cfgRecord := exchangeToConfigRecord(record)
 	if err := a.store.SaveRIExchangeRecord(ctx, cfgRecord); err != nil {
 		return err
@@ -320,6 +381,9 @@ func (a *configExchangeStoreAdapter) SaveRIExchangeRecord(ctx context.Context, r
 }
 
 func (a *configExchangeStoreAdapter) ReserveRIExchange(ctx context.Context, record *exchange.ExchangeRecord, dailyCapUSD, perExchangeCapUSD string) (string, error) {
+	if err := requireAWSExchangeAccountID(record.AccountID); err != nil {
+		return "", err
+	}
 	cfgRecord := exchangeToConfigRecord(record)
 	ceiling, err := a.store.ReserveRIExchange(ctx, cfgRecord, dailyCapUSD, perExchangeCapUSD)
 	if err != nil {

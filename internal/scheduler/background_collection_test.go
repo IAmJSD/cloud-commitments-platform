@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/testutil/goroutines"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -31,14 +32,13 @@ func TestListRecommendations_UnmarkedColdStart_NeverMarksOrCollects(t *testing.T
 
 	s := &Scheduler{config: mockStore, isLambda: false}
 
+	mark := goroutines.NewMark()
 	recs, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
 	require.NoError(t, err)
 	assert.Empty(t, recs)
 
-	// A wrongly spawned collect would hit GetGlobalConfig first.
-	time.Sleep(20 * time.Millisecond)
+	assertNoBackgroundCollect(t, mark, mockStore)
 	mockStore.AssertNotCalled(t, "MarkCollectionStarted", mock.Anything)
-	mockStore.AssertNotCalled(t, "GetGlobalConfig", mock.Anything)
 	assert.False(t, s.collecting.Load(), "an unmarked read must not claim the collection slot")
 }
 
@@ -57,13 +57,30 @@ func TestListRecommendations_UnmarkedStaleCache_NeverRefreshes(t *testing.T) {
 
 	s := &Scheduler{config: mockStore, isLambda: false, cacheTTL: time.Nanosecond}
 
+	mark := goroutines.NewMark()
 	_, err := s.ListRecommendations(ctx, config.RecommendationFilter{})
 	require.NoError(t, err)
 
-	time.Sleep(20 * time.Millisecond)
-	mockStore.AssertNotCalled(t, "GetGlobalConfig", mock.Anything)
+	assertNoBackgroundCollect(t, mark, mockStore)
 	mockStore.AssertNotCalled(t, "MarkCollectionStarted", mock.Anything)
 	assert.False(t, s.collecting.Load(), "an unmarked read must not claim the collection slot")
+}
+
+// assertNoBackgroundCollect checks that the read run since mark started no
+// goroutine and made no GetGlobalConfig call, without a wall-clock wait
+// (issue #36). A go statement puts its goroutine in the runtime's stack dump
+// as soon as it executes, scheduled or not, and the goroutine stays there
+// until it returns. So a collect the read wrongly spawned is either still
+// listed by mark.Spawned, or it has finished, and then it went through
+// CollectRecommendations, whose first store call is GetGlobalConfig (the mock
+// records every call, expected or not). The goroutine snapshot is taken first
+// so a collect that finishes in between is caught by the call log.
+func assertNoBackgroundCollect(t *testing.T, mark goroutines.Mark, store *MockConfigStore) {
+	t.Helper()
+	for _, g := range mark.Spawned() {
+		t.Errorf("the read started a background goroutine:\n%s", g.Stack)
+	}
+	store.AssertNotCalled(t, "GetGlobalConfig", mock.Anything)
 }
 
 // A marked read of a stale cache still kicks the background refresh: the

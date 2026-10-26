@@ -24,6 +24,10 @@ mkdir -p "$WORK/bin"
 #   M = HTTP 301 to https://app.example/ready with an empty body: what an
 #       http:// URL gets from an HTTPS-only ALB listener (#647)
 #   R = connection refused
+#   E = HTTP 503 with an empty body
+#   N = HTTP 502 with a non-JSON (HTML) body, as a proxy in front of the app
+#       answers while no replica is up
+#   Z = HTTP 200 with an empty body
 # Models the real curl flags the callers use: -o FILE, -w with %{http_code} and
 # %{redirect_url}, -f/--fail (exit 22 on >= 400, no body) and --fail-with-body
 # (exit 22 on >= 400, body still written). Without either, curl exits 0 for any
@@ -72,6 +76,9 @@ case "${tokens[$i]}" in
   D) code=200; body="$degraded" ;;
   U) code=503; body="$degraded" ;;
   M) code=301; body=""; location="https://app.example/ready" ;;
+  E) code=503; body="" ;;
+  N) code=502; body='<html><body><h1>502 Bad Gateway</h1></body></html>' ;;
+  Z) code=200; body="" ;;
   R) echo "curl: (7) Failed to connect" >&2
      [ -n "$wfmt" ] && printf '000 '
      exit 7 ;;
@@ -131,6 +138,14 @@ run_case "curl error mid-streak resets it (H R H H U, streak 3, must not pass)" 
 run_case "301 redirect forever fails and names the redirect target" 1 "M" "HTTP 301 redirect to https://app.example/ready"
 run_case "301 mid-streak resets it (H H M H H U, must not pass)" 1 "H H M H H U" "auth store not initialized"
 run_case "503 failure keeps the status and the body" 1 "U" "HTTP 503: {\"status\":\"degraded\""
+
+# #438: the remaining response shapes from #217. The gate judges the status
+# code only, so a body that is empty or not JSON neither breaks it nor changes
+# the verdict.
+run_case "503 with an empty body fails and says the body was empty" 1 "E" "HTTP 503: <empty body>"
+run_case "502 with a non-JSON body fails and prints the body" 1 "N" "HTTP 502: <html><body><h1>502 Bad Gateway</h1>"
+run_case "non-JSON 502 mid-streak resets it (H H N H H E, must not pass)" 1 "H H N H H E" "HTTP 503: <empty body>"
+run_case "200 with an empty body counts as ready (status code is the contract)" 0 "Z Z Z" "Service is ready."
 
 # run_env_case LABEL EXPECTED_EXIT SCENARIO OUTPUT_SUBSTRING [ENV=VAL ...]
 # Runs the SUT with ONLY the given env overrides (plus a zero sleep interval),

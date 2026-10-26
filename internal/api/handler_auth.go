@@ -114,7 +114,10 @@ func (h *Handler) getCurrentUser(ctx context.Context, req *events.LambdaFunction
 //     view-only key owned by an admin is not advertised as admin (issue #62);
 //   - admin API key: {admin, *}.
 //
-// IsAdmin is derived from that same set.
+// IsAdmin is derived from that same set. UnrestrictedAccountAccess reports
+// whether the caller passes the account-scope gate that global actions such
+// as POST /api/recommendations/refresh enforce (issue #619), so the frontend
+// can skip an automatic refresh the backend would refuse with 403.
 //
 // Auth: the route is AuthUser, which admits admin API key, user API
 // key, OR a bearer-token session (see router.go AuthLevel doc). The
@@ -132,7 +135,15 @@ func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.Lam
 		return nil, err
 	}
 	if isUserAPIKey {
-		return h.userAPIKeyPermissions(ctx, keyID, keyOwnerID)
+		resp, keyErr := h.userAPIKeyPermissions(ctx, keyID, keyOwnerID)
+		if keyErr != nil {
+			return nil, keyErr
+		}
+		// Resolve the flag for the same session the refresh gate sees for
+		// this key: authorizeAPIKey puts the owner's ID and the key's ID on
+		// it, so the two stay in step if getAccountScope ever reads the key.
+		resp.UnrestrictedAccountAccess = h.unrestrictedAccountAccess(ctx, &Session{UserID: keyOwnerID, UserAPIKeyID: keyID})
+		return resp, nil
 	}
 
 	userID, err := h.resolveAuthenticatedUserID(ctx, req)
@@ -146,8 +157,9 @@ func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.Lam
 	// (matches the requireAdmin / requirePermission short-circuit).
 	if userID == apiKeyAdminUserID {
 		return &UserPermissionsResponse{
-			Permissions: []PermissionEntry{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}},
-			IsAdmin:     true,
+			Permissions:               []PermissionEntry{{Action: auth.ActionAdmin, Resource: auth.ResourceAll}},
+			IsAdmin:                   true,
+			UnrestrictedAccountAccess: h.unrestrictedAccountAccess(ctx, &Session{UserID: userID}),
 		}, nil
 	}
 
@@ -166,7 +178,28 @@ func (h *Handler) getCurrentUserPermissions(ctx context.Context, req *events.Lam
 		logging.Errorf("getCurrentUserPermissions: GetUserPermissionsAPI returned %T, want []auth.APIPermission", raw)
 		return nil, fmt.Errorf("GetUserPermissionsAPI returned unexpected payload type %T", raw)
 	}
-	return permissionsResponse(apiPerms), nil
+	resp := permissionsResponse(apiPerms)
+	resp.UnrestrictedAccountAccess = h.unrestrictedAccountAccess(ctx, &Session{UserID: userID})
+	return resp, nil
+}
+
+// unrestrictedAccountAccess reports whether session passes
+// requireUnrestrictedAccountScope, the gate on POST
+// /api/recommendations/refresh, by running that same check rather than a
+// copy of it. A scope lookup failure is logged and reported as false: the flag
+// only steers the UI (false skips an automatic refresh), the refresh endpoint
+// still enforces the scope itself, and failing the whole permissions response
+// would drop the frontend to its coarser group-based gating.
+func (h *Handler) unrestrictedAccountAccess(ctx context.Context, session *Session) bool {
+	err := h.requireUnrestrictedAccountScope(ctx, session)
+	if err == nil {
+		return true
+	}
+	if ce, isClient := IsClientError(err); isClient && ce.code == 403 {
+		return false // a restricted scope: the expected refusal
+	}
+	logging.Errorf("getCurrentUserPermissions: resolving account scope for user %s: %v", session.UserID, err)
+	return false
 }
 
 // userAPIKeyCaller reports whether the request authenticated with a user API
@@ -332,12 +365,23 @@ func (h *Handler) forgotPassword(ctx context.Context, req *events.LambdaFunction
 		return nil, fmt.Errorf("authentication service not configured")
 	}
 
+	// Per-IP cap: 10 attempts per IP per 15 minutes, checked before the body
+	// is parsed so malformed requests spend the budget too. Without it one
+	// client could walk any number of addresses, one request each, past the
+	// per-email bucket below (#13). The client IP is the request's SourceIP,
+	// the same key every other per-IP bucket uses. Fail-open like the
+	// per-email bucket (02-M1); the 429 depends only on this caller's own
+	// request count, never on whether an account exists.
+	if err := h.checkRateLimit(ctx, req, "forgot_password_ip"); err != nil {
+		return nil, err
+	}
+
 	var pwdReq PasswordResetRequest
 	if err := json.Unmarshal([]byte(req.Body), &pwdReq); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
 
-	// Rate limiting: 10 attempts per email per 5 minutes to prevent enumeration attacks.
+	// Per-email cap: 10 attempts per email per 5 minutes to prevent enumeration attacks.
 	// On rate-limiter error: emit a high-severity alert (02-M1) but continue with the
 	// request. Failing closed here would reveal infrastructure state (503 vs 200) to
 	// an enumerating attacker and harm legitimate users more than the enumeration risk.

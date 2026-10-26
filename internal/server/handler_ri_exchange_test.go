@@ -195,6 +195,10 @@ func TestConvertForAutoExchange(t *testing.T) {
 func TestConfigExchangeStoreAdapter(t *testing.T) {
 	savedRecord := (*config.RIExchangeRecord)(nil)
 	completedID := ""
+	// The adapter must pass both caps through unchanged and in order (#666):
+	// the store treats the first as the daily cap and the second as the
+	// per-exchange cap, so a swap would pass a mock that ignores them.
+	var gotDailyCap, gotPerExchangeCap string
 	mockStore := &mockConfigStoreForExchange{
 		saveRIExchangeRecordFunc: func(ctx context.Context, record *config.RIExchangeRecord) error {
 			savedRecord = record
@@ -202,6 +206,7 @@ func TestConfigExchangeStoreAdapter(t *testing.T) {
 			return nil
 		},
 		reserveRIExchangeFunc: func(ctx context.Context, record *config.RIExchangeRecord, dailyCapUSD, perExchangeCapUSD string) (string, error) {
+			gotDailyCap, gotPerExchangeCap = dailyCapUSD, perExchangeCapUSD
 			savedRecord = record
 			record.ID = "reserved-id"
 			record.PaymentDue = "10.000000"
@@ -226,7 +231,7 @@ func TestConfigExchangeStoreAdapter(t *testing.T) {
 	t.Run("SaveRIExchangeRecord", func(t *testing.T) {
 		ctx := testutil.TestContext(t)
 		record := &exchange.ExchangeRecord{
-			AccountID:          "123456789",
+			AccountID:          "123456789012",
 			Region:             "us-east-1",
 			SourceRIIDs:        []string{"ri-123"},
 			SourceInstanceType: "m5.large",
@@ -244,7 +249,7 @@ func TestConfigExchangeStoreAdapter(t *testing.T) {
 		if savedRecord == nil {
 			t.Fatal("expected record to be saved")
 		}
-		testutil.AssertEqual(t, "123456789", savedRecord.AccountID)
+		testutil.AssertEqual(t, "123456789012", savedRecord.AccountID)
 		testutil.AssertEqual(t, "m5.large", savedRecord.SourceInstanceType)
 		testutil.AssertEqual(t, "m6i.large", savedRecord.TargetInstanceType)
 		testutil.AssertEqual(t, "saved-id", record.ID)
@@ -252,9 +257,14 @@ func TestConfigExchangeStoreAdapter(t *testing.T) {
 
 	t.Run("ReserveRIExchange", func(t *testing.T) {
 		ladderRunID := "ladder-run-1"
-		record := &exchange.ExchangeRecord{PaymentDue: "5", Status: "processing", Mode: "auto", LadderRunID: &ladderRunID}
+		record := &exchange.ExchangeRecord{
+			AccountID:  "123456789012",
+			PaymentDue: "5", Status: "processing", Mode: "auto", LadderRunID: &ladderRunID,
+		}
 		ceiling, err := adapter.ReserveRIExchange(context.Background(), record, "20", "10")
 		testutil.AssertNoError(t, err)
+		testutil.AssertEqual(t, "20", gotDailyCap)
+		testutil.AssertEqual(t, "10", gotPerExchangeCap)
 		testutil.AssertEqual(t, "10.000000", ceiling)
 		testutil.AssertEqual(t, "reserved-id", record.ID)
 		testutil.AssertEqual(t, ceiling, record.PaymentDue)
@@ -279,6 +289,48 @@ func TestConfigExchangeStoreAdapter(t *testing.T) {
 		testutil.AssertNoError(t, err)
 		testutil.AssertEqual(t, "42.50", spend)
 	})
+}
+
+// TestConfigExchangeStoreAdapter_RefusesNonAWSAccountID pins the Go-side half
+// of issue #144. Migration 000137 dropped the AWS-only CHECK on
+// ri_exchange_history.account_id so the column can hold Azure and GCP
+// identifiers; the AWS exchange adapter must keep refusing anything that is not
+// a 12-digit AWS account ID before it reaches the store, or the STS-failure
+// placeholder "unknown" would start landing in the exchange audit table.
+func TestConfigExchangeStoreAdapter_RefusesNonAWSAccountID(t *testing.T) {
+	storeCalls := 0
+	adapter := newConfigExchangeStoreAdapter(&mockConfigStoreForExchange{
+		saveRIExchangeRecordFunc: func(context.Context, *config.RIExchangeRecord) error {
+			storeCalls++
+			return nil
+		},
+		reserveRIExchangeFunc: func(context.Context, *config.RIExchangeRecord, string, string) (string, error) {
+			storeCalls++
+			return "0", nil
+		},
+	})
+
+	for _, accountID := range []string{
+		"",
+		"unknown", // resolveAccountID's STS-failure placeholder
+		"12345678901",
+		"1234567890123",
+		"3f2504e0-4f89-11d3-9a0c-0305e82c3301", // Azure subscription GUID
+		"cudly-prod-0042",                      // GCP project ID
+		"123456789012\n",
+		"١٢٣٤٥٦٧٨٩٠١٢", // 12 non-ASCII digits
+	} {
+		t.Run(fmt.Sprintf("%q", accountID), func(t *testing.T) {
+			saveErr := adapter.SaveRIExchangeRecord(context.Background(), &exchange.ExchangeRecord{AccountID: accountID})
+			testutil.AssertError(t, saveErr)
+			testutil.AssertContains(t, saveErr.Error(), "not a 12-digit AWS account ID")
+
+			_, reserveErr := adapter.ReserveRIExchange(context.Background(), &exchange.ExchangeRecord{AccountID: accountID}, "20", "10")
+			testutil.AssertError(t, reserveErr)
+			testutil.AssertContains(t, reserveErr.Error(), "not a 12-digit AWS account ID")
+		})
+	}
+	testutil.AssertEqual(t, 0, storeCalls)
 }
 
 func TestSendExchangeNotification_NoEmailSender(t *testing.T) {
@@ -463,7 +515,7 @@ func TestExecuteRIExchangeReshape_NoConvertibleRIs(t *testing.T) {
 		lookupOffering: func(ctx context.Context, _ exchange.LookupOfferingParams) (string, error) {
 			return "", nil
 		},
-		accountID: "123456789",
+		accountID: "123456789012",
 		region:    "us-east-1",
 	}
 
@@ -489,6 +541,7 @@ func TestExecuteRIExchangeReshape_ListRIsFailure(t *testing.T) {
 		listConvertibleRIs: func(ctx context.Context) ([]ec2svc.ConvertibleRI, error) {
 			return nil, errors.New("EC2 API throttled")
 		},
+		accountID: "123456789",
 	}
 
 	_, err := app.executeRIExchangeReshape(ctx, cfg, clients)
@@ -517,6 +570,7 @@ func TestExecuteRIExchangeReshape_UtilizationFailure(t *testing.T) {
 		getRIUtilization: func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
 			return nil, errors.New("Cost Explorer unavailable")
 		},
+		accountID: "123456789",
 	}
 
 	_, err := app.executeRIExchangeReshape(ctx, cfg, clients)
@@ -590,7 +644,7 @@ func TestExecuteRIExchangeReshape_ManualMode(t *testing.T) {
 		lookupOffering: func(ctx context.Context, _ exchange.LookupOfferingParams) (string, error) {
 			return "offering-123", nil
 		},
-		accountID: "123456789",
+		accountID: "123456789012",
 		region:    "us-east-1",
 	}
 
@@ -709,7 +763,7 @@ func TestExecuteRIExchangeReshape_AutoMode(t *testing.T) {
 		lookupOffering: func(ctx context.Context, _ exchange.LookupOfferingParams) (string, error) {
 			return "offering-456", nil
 		},
-		accountID: "123456789",
+		accountID: "123456789012",
 		region:    "us-east-1",
 	}
 
@@ -824,7 +878,7 @@ func TestExecuteRIExchangeReshape_DailyCapHitMidRun(t *testing.T) {
 		lookupOffering: func(ctx context.Context, _ exchange.LookupOfferingParams) (string, error) {
 			return "offering-cap-test", nil
 		},
-		accountID: "123456789",
+		accountID: "123456789012",
 		region:    "us-east-1",
 	}
 
