@@ -65,8 +65,88 @@ ACTION_PREFIXES='ce|ec2|rds|elasticache|es|redshift|memorydb|savingsplans|organi
 # regardless of whether it is YAML, HCL, or an embedded JSON heredoc. IAM
 # actions always start with an uppercase letter or a "*" after the colon, which
 # keeps ARNs (region segments are lowercase) out of the match. Wildcards
-# (<prefix>:*, <prefix>:Describe*, and a single-line Action "*") are extracted
-# as their own tokens so widening one side of a pair is reported as drift.
+# (<prefix>:*, <prefix>:Describe*, and a bare Action "*") are extracted as
+# their own tokens so widening one side of a pair is reported as drift.
+
+# bare_star_action prints "*" when stdin grants a bare "*" Action. The files
+# are YAML, HCL and JSON heredocs with no common parser in this script's
+# toolset, so this awk follows each Action/Actions value across lines:
+#   - a scalar:                 Action: "*"   "Action": "*"   Action = "*"
+#   - a flow, JSON or HCL list: actions = ["*"]   "Action": [\n  "*"\n]
+#   - a YAML block list:        Action:\n  - "*"
+# Only a quoted lone "*" counts ("s3:*" does not; the token regex above
+# handles service wildcards). The key must start the line or follow "{" or
+# ",", so NotAction / not_actions (a "*" there matches no action and grants
+# nothing), Resource "*", Condition values and prose do not count.
+# POSIX awk only (CI runs mawk): no IGNORECASE, no [[:space:]] reliance.
+bare_star_action() {
+  awk '
+    # scan walks one line of a value from bracket depth d. It sets FOUND on a
+    # quoted lone "*", DONE when the value ends (REST = text after it), and
+    # returns the depth still open at the end of the line.
+    function scan(s, d,    i, n, c, q, buf, seen) {
+      DONE = 0; REST = ""; q = ""; seen = 0; n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (q != "") {
+          if (c == "\\" && q == "\"") { buf = buf c substr(s, i + 1, 1); i++ }
+          else if (c != q) buf = buf c
+          else {
+            q = ""
+            if (buf == "*") FOUND = 1
+            if (d == 0) { DONE = 1; REST = substr(s, i + 1); return 0 }
+          }
+          continue
+        }
+        if (c == "\"" || c == "\047") { q = c; buf = ""; seen = 1 }
+        else if (c == "#" || (c == "/" && substr(s, i + 1, 1) == "/")) break
+        else if (c == "[") { d++; seen = 1 }
+        else if (c == "]") { d--; if (d <= 0) { DONE = 1; REST = substr(s, i + 1); return 0 } }
+        else if ((c == "," || c == "}") && d == 0) { DONE = 1; REST = substr(s, i); return 0 }
+        else if (c != " " && c != "\t") seen = 1
+      }
+      if (d == 0 && seen) DONE = 1
+      return d
+    }
+    # value starts scanning a key value; col is the key column for YAML.
+    function value(s, col) {
+      DEPTH = scan(s, 0)
+      if (DONE) return 1
+      if (DEPTH > 0) MODE = "list"
+      else { MODE = "pending"; COL = col }
+      return 0
+    }
+    # keys finds every Action/Actions key on a line and scans its value.
+    function keys(s,    t, m, lead, nx) {
+      while (s != "") {
+        t = "," tolower(s)
+        if (!match(t, /[{,][ \t]*(-[ \t]+)?"?actions?"?[ \t]*[:=]/)) return
+        nx = substr(s, RSTART + RLENGTH - 1, 1)
+        if (nx == "=" || nx == ">" || nx == "~") { s = substr(s, RSTART + RLENGTH); continue }
+        m = substr(t, RSTART + 1, RLENGTH - 1); lead = length(m)
+        sub(/^[ \t]*(-[ \t]+)?/, "", m); lead -= length(m)
+        if (!value(substr(s, RSTART + RLENGTH - 1), RSTART + lead - 1)) return
+        s = REST
+      }
+    }
+    { sub(/\r$/, "") }
+    MODE == "list" { DEPTH = scan($0, DEPTH); if (DONE) { MODE = ""; keys(REST) }; next }
+    /^[ \t]*$/ { next }
+    MODE == "pending" {
+      MODE = ""
+      if ($0 ~ /^[ \t]*-([ \t]|$)/) MODE = "block"
+      else if ($0 ~ /^[ \t]*[["\047]/) { if (value($0, COL)) keys(REST); next }
+    }
+    MODE == "block" {
+      if ($0 ~ /^[ \t]*-([ \t]|$)/ && match($0, /[^ \t]/) - 1 >= COL) {
+        item = $0; sub(/^[ \t]*-/, "", item); scan(item, 0); next
+      }
+      MODE = ""
+    }
+    { keys($0) }
+    END { if (FOUND) print "*" }
+  '
+}
 
 extract_actions() {
   local file="$1"
@@ -84,10 +164,7 @@ extract_actions() {
     printf '%s\n' "$stripped" \
       | grep -oE "(^|[^A-Za-z:])(${ACTION_PREFIXES}):([A-Z][A-Za-z]*\*?|\*)" \
       | sed 's/^[^a-zA-Z]//' || true
-    # A bare "*" action (single-line Action/Actions key); Resource "*" is not matched.
-    if printf '%s\n' "$stripped" | grep -qiE "\"?actions?\"?[[:space:]]*[:=][[:space:]]*\[?[[:space:]]*[\"']\*[\"']"; then
-      echo '*'
-    fi
+    printf '%s\n' "$stripped" | bare_star_action
   } | sort -u)
 
   if [[ "$exclude_orgs" == "no-orgs" ]]; then

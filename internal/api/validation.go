@@ -15,6 +15,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 )
 
 // Security constants.
@@ -126,6 +127,20 @@ func validateProvider(provider string) error {
 		return NewClientError(400, "invalid provider: must be aws, azure, gcp, or all")
 	}
 	return nil
+}
+
+// providerFilterParam validates a read endpoint's provider query parameter
+// and returns the value to filter on: "" (every provider) for an absent
+// value or "all", else the provider. Anything validateProvider refuses is a
+// 400, as on the recommendations and history reads (issue #312).
+func providerFilterParam(provider string) (string, error) {
+	if err := validateProvider(provider); err != nil {
+		return "", err
+	}
+	if provider == "all" {
+		return "", nil
+	}
+	return provider, nil
 }
 
 // validateEmailFormat returns a 400 error when email is non-empty but does not
@@ -285,6 +300,29 @@ func validateGCPWIFPayload(payload map[string]interface{}) error {
 		if err := validateGCPWIFRequiredKey(payload, key); err != nil {
 			return err
 		}
+	}
+	return validateGCPWIFEndpointKeys(payload)
+}
+
+// validateGCPWIFEndpointKeys checks the config's token exchange and
+// service-account impersonation URLs with credentials.ValidateGCPWIFEndpoints,
+// the same check the resolver runs before it uses a stored config. Runs after
+// the required-key checks, so token_url is a non-empty string here.
+func validateGCPWIFEndpointKeys(payload map[string]interface{}) error {
+	tokenURL, ok := payload["token_url"].(string)
+	if !ok {
+		return NewClientError(400, "credentials payload key \"token_url\" must be a non-empty string")
+	}
+	impersonationURL := ""
+	if v, ok := payload["service_account_impersonation_url"]; ok {
+		s, isStr := v.(string)
+		if !isStr || strings.TrimSpace(s) == "" {
+			return NewClientError(400, "credentials payload key \"service_account_impersonation_url\" must be a non-empty string")
+		}
+		impersonationURL = s
+	}
+	if err := credentials.ValidateGCPWIFEndpoints(tokenURL, impersonationURL); err != nil {
+		return NewClientError(400, "credentials payload for gcp_workload_identity_config: "+err.Error())
 	}
 	return nil
 }

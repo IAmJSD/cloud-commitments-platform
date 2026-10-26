@@ -3,9 +3,8 @@ package auth
 // store_postgres_pgxmock_test.go - pgxmock tests for the PostgresStore SQL
 // paths that the MockDBConnection suite never executes (TEST-01, issue #1153):
 // CreateAdminIfNone (bootstrap-race guard), CountGroupMembers, ListUsers,
-// ListAPIKeysByUser, UpdateAPIKeyLastUsed and Ping. These tests pin the actual
-// SQL text (argument count and order, the NOT EXISTS predicate) so that
-// column drift or predicate divergence between AdminExists and
+// ListAPIKeysByUser and Ping. These tests pin the actual SQL text (argument
+// count and order, the NOT EXISTS predicate) so that column drift or predicate divergence between AdminExists and
 // CreateAdminIfNone fails a test instead of shipping green.
 
 import (
@@ -497,46 +496,6 @@ func TestPGXMock_ListAPIKeysByUser_QueryError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to list API keys")
 	assert.Nil(t, keys)
-}
-
-// ---- UpdateAPIKeyLastUsed ------------------------------------------------------
-
-func TestPGXMock_UpdateAPIKeyLastUsed_Success(t *testing.T) {
-	mock := newAuthPgxMock(t)
-	store := NewPostgresStore(mock)
-
-	mock.ExpectExec(`UPDATE api_keys SET last_used_at = NOW\(\) WHERE id = \$1`).
-		WithArgs("key-1").
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-
-	err := store.UpdateAPIKeyLastUsed(context.Background(), "key-1")
-	assert.NoError(t, err)
-}
-
-func TestPGXMock_UpdateAPIKeyLastUsed_NotFound(t *testing.T) {
-	mock := newAuthPgxMock(t)
-	store := NewPostgresStore(mock)
-
-	mock.ExpectExec(`UPDATE api_keys SET last_used_at = NOW\(\) WHERE id = \$1`).
-		WithArgs("missing-key").
-		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
-
-	err := store.UpdateAPIKeyLastUsed(context.Background(), "missing-key")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "API key not found")
-}
-
-func TestPGXMock_UpdateAPIKeyLastUsed_ExecError(t *testing.T) {
-	mock := newAuthPgxMock(t)
-	store := NewPostgresStore(mock)
-
-	mock.ExpectExec(`UPDATE api_keys SET last_used_at = NOW\(\) WHERE id = \$1`).
-		WithArgs("key-1").
-		WillReturnError(errors.New("db down"))
-
-	err := store.UpdateAPIKeyLastUsed(context.Background(), "key-1")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to update API key last used")
 }
 
 // ---- RecordAPIKeyUsage ----------------------------------------------------------

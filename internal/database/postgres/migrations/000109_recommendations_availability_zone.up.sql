@@ -22,8 +22,11 @@
 -- Lock impact: ADD COLUMN ... GENERATED ... STORED rewrites the table and the
 -- index build blocks writes, both under ACCESS EXCLUSIVE / SHARE locks for the
 -- duration. The table is a regenerable cache re-populated every collection
--- cycle, so this is acceptable. CREATE INDEX CONCURRENTLY is not possible:
--- the migration runner wraps every migration in a transaction.
+-- cycle, so this is acceptable. CREATE INDEX CONCURRENTLY is not used: the
+-- runner adds no BEGIN/COMMIT, but it sends this two-statement file as one
+-- simple query, which PostgreSQL runs as one implicit transaction where
+-- CONCURRENTLY is rejected, and TestMigrationsAreTransactional keeps it out of
+-- migrations as policy.
 ALTER TABLE recommendations
     ADD COLUMN IF NOT EXISTS availability_zone TEXT
     GENERATED ALWAYS AS (

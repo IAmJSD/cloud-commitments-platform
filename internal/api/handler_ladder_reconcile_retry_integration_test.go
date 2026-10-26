@@ -70,9 +70,10 @@ func newLadderRetryRig(t *testing.T) *ladderRetryRig {
 // tranche id as its idempotency key, the link Retry uses to find the tranche.
 func (r *ladderRetryRig) addFiredTranche(t *testing.T) {
 	ctx := context.Background()
+	basis, rate := config.LadderAmountCommitment, "1" // only commitment-dollar rows are claimable
 	tr := config.LadderTrancheDB{ID: uuid.New().String(), ConfigID: &r.cfgID, LayerType: ladder.LayerComputeSP,
 		Term: ladder.Term1Year, PaymentOption: ladder.PaymentNoUpfront, Status: ladder.TrancheStatusScheduled,
-		AmountUSDHr: 5, ScheduledDate: time.Now().Add(-time.Hour)}
+		AmountUSDHr: 5, ScheduledDate: time.Now().Add(-time.Hour), AmountBasis: &basis, CommitmentRate: &rate}
 	require.NoError(t, r.store.SaveLadderTranches(ctx, []config.LadderTrancheDB{tr}))
 	var failedID string
 	_, err := r.store.ClaimDueLadderTranches(ctx, r.cfgID, time.Now(), 1,

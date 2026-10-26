@@ -25,6 +25,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/execution"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/oidc"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/providerfactory"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"golang.org/x/sync/errgroup"
@@ -467,6 +468,12 @@ func joinProviderErrors(failed map[string]string) string {
 // CloudAccountID. The *sweepGap is non-nil when some account's sweep was
 // incomplete (its rows are kept; see tolerateIncompleteSweep). Provider-level
 // errors propagate unchanged.
+//
+// A name that is not one of the known providers (e.g. "AWS" or "azure " left
+// in EnabledProviders) is an error, so the merge records it as a failed
+// provider and persistCollection writes last_collection_error. Returning nil
+// here reported a provider that was never contacted as a clean, successful
+// collection of zero recommendations (issue #111).
 func (s *Scheduler) collectProviderRecommendations(ctx context.Context, providerName string, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, []string, *sweepGap, error) {
 	switch providerName {
 	case "aws":
@@ -476,8 +483,7 @@ func (s *Scheduler) collectProviderRecommendations(ctx context.Context, provider
 	case "gcp":
 		return s.collectGCPRecommendations(ctx, globalCfg)
 	default:
-		logging.Warnf("Unknown provider: %s", providerName)
-		return nil, nil, nil, nil
+		return nil, nil, nil, fmt.Errorf("unknown provider %q (valid: aws, azure, gcp)", providerName)
 	}
 }
 
@@ -911,11 +917,10 @@ func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.Clou
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve credentials: %w", err)
 	}
-	azProv, err := azureprovider.NewAzureProvider(&provider.ProviderConfig{Profile: acct.AzureSubscriptionID})
+	azProv, err := providerfactory.NewAzure(acct.AzureSubscriptionID, azCred)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create provider: %w", err)
 	}
-	azProv.SetCredential(azCred)
 
 	recClient, err := azProv.GetRecommendationsClient(ctx)
 	if err != nil {
@@ -979,7 +984,11 @@ func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudA
 
 	var prov provider.Provider
 	if gcpTS != nil {
-		prov = gcpprovider.NewProviderWithCredentials(ctx, acct.GCPProjectID, gcpTS)
+		created, createErr := providerfactory.NewGCP(acct.GCPProjectID, gcpTS)
+		if createErr != nil {
+			return nil, nil, fmt.Errorf("create provider: %w", createErr)
+		}
+		prov = created
 	} else {
 		// ADC mode (application_default): use ambient credentials
 		created, createErr := s.providerFactory.CreateAndValidateProvider(ctx, "gcp", nil)
@@ -1277,7 +1286,8 @@ func (s *Scheduler) ListRecommendationsStrict(ctx context.Context, filter config
 // hiddenBy is non-nil (one or more reason strings) when the rec exists and
 // passes the suppression check, but would be dropped by the account-override
 // filter. Possible reasons: "enabled=false", "engine", "region",
-// "resource_type".  The caller renders a "hidden by your override" banner.
+// "resource_type", "min_count" (overrideDimensions). The caller renders a
+// "hidden by your override" banner.
 //
 // Returns (nil, nil, nil) when the rec is genuinely absent or fully suppressed.
 func (s *Scheduler) GetRecommendationByID(ctx context.Context, id string) (rec *config.RecommendationRecord, hiddenBy []string, err error) {
@@ -1320,25 +1330,6 @@ func (s *Scheduler) GetRecommendationByID(ctx context.Context, id string) (rec *
 	}
 
 	return found, hiddenBy, nil
-}
-
-// overrideHiddenReasons returns a non-empty slice when rec would be dropped by
-// the given resolved ServiceConfig, naming each failing dimension.
-func overrideHiddenReasons(rec *config.RecommendationRecord, cfg *config.ServiceConfig) []string {
-	var reasons []string
-	if !cfg.Enabled {
-		reasons = append(reasons, "enabled=false")
-	}
-	if !engineMatches(rec.Engine, cfg) {
-		reasons = append(reasons, "engine")
-	}
-	if !inListRule(rec.Region, cfg.IncludeRegions, cfg.ExcludeRegions) {
-		reasons = append(reasons, "region")
-	}
-	if !inListRule(rec.ResourceType, cfg.IncludeTypes, cfg.ExcludeTypes) {
-		reasons = append(reasons, "resource_type")
-	}
-	return reasons
 }
 
 // resolveEffectiveCacheTTL returns the effective stale-while-revalidate TTL
@@ -1425,8 +1416,9 @@ func aggregateSuppressions(sups []config.PurchaseSuppression) map[suppressionKey
 	for i := range sups {
 		sup := sups[i]
 		k := suppressionKey{
-			accountID: sup.AccountID, provider: sup.Provider, service: sup.Service,
-			region: sup.Region, resourceType: sup.ResourceType, engine: sup.Engine,
+			accountID: sup.AccountID, provider: sup.Provider,
+			service: config.CanonicalSuppressionService(sup.Provider, sup.Service),
+			region:  sup.Region, resourceType: sup.ResourceType, engine: sup.Engine,
 		}
 		index[k] = append(index[k], sup)
 	}
@@ -1470,8 +1462,9 @@ func applySuppressionIndex(recs []config.RecommendationRecord, index map[suppres
 			accountID = *rec.CloudAccountID
 		}
 		k := suppressionKey{
-			accountID: accountID, provider: rec.Provider, service: rec.Service,
-			region: rec.Region, resourceType: rec.ResourceType, engine: rec.Engine,
+			accountID: accountID, provider: rec.Provider,
+			service: config.CanonicalSuppressionService(rec.Provider, rec.Service),
+			region:  rec.Region, resourceType: rec.ResourceType, engine: rec.Engine,
 		}
 		a := matchingSuppressions(&rec, index[k])
 		if a == nil {
@@ -1750,6 +1743,11 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 			Selected:          true,                              // Default to selected
 			Purchased:         false,
 		}
+		// Keep the currency the provider parser proved for the commitment
+		// legs; empty stays empty (unknown), never a defaulted "USD". The
+		// purchase spend-cap check refuses a capped purchase of a rec that
+		// is not provably USD (issue #361).
+		record.CommitmentCurrency = rec.CommitmentCurrency
 		id, err := recommendationID(record)
 		if err != nil {
 			logging.Errorf("convertRecommendations: dropping %s rec (account=%s service=%s sku=%s region=%s): %v",

@@ -1994,31 +1994,38 @@ func (f *fakeCredStore) DecryptPayload(_ string) ([]byte, error)                
 // --- buildAccountFilter ---
 
 func TestBuildAccountFilter(t *testing.T) {
+	build := func(t *testing.T, params map[string]string) config.CloudAccountFilter {
+		t.Helper()
+		f, err := buildAccountFilter(params)
+		require.NoError(t, err)
+		return f
+	}
+
 	t.Run("provider filter", func(t *testing.T) {
-		f := buildAccountFilter(map[string]string{"provider": "aws"})
+		f := build(t, map[string]string{"provider": "aws"})
 		require.NotNil(t, f.Provider)
 		assert.Equal(t, "aws", *f.Provider)
 	})
 
 	t.Run("enabled true", func(t *testing.T) {
-		f := buildAccountFilter(map[string]string{"enabled": "true"})
+		f := build(t, map[string]string{"enabled": "true"})
 		require.NotNil(t, f.Enabled)
 		assert.True(t, *f.Enabled)
 	})
 
 	t.Run("enabled false", func(t *testing.T) {
-		f := buildAccountFilter(map[string]string{"enabled": "false"})
+		f := build(t, map[string]string{"enabled": "false"})
 		require.NotNil(t, f.Enabled)
 		assert.False(t, *f.Enabled)
 	})
 
 	t.Run("search filter", func(t *testing.T) {
-		f := buildAccountFilter(map[string]string{"search": "production"})
+		f := build(t, map[string]string{"search": "production"})
 		assert.Equal(t, "production", f.Search)
 	})
 
 	t.Run("empty params", func(t *testing.T) {
-		f := buildAccountFilter(map[string]string{})
+		f := build(t, map[string]string{})
 		assert.Nil(t, f.Provider)
 		assert.Nil(t, f.Enabled)
 		assert.Empty(t, f.Search)

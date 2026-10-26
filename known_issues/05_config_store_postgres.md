@@ -129,9 +129,11 @@
 
 **Implementation plan:** replace the SELECT+INSERT with a single atomic `INSERT ... ON CONFLICT (id) DO UPDATE SET count = CASE WHEN reset_time < $now THEN 1 ELSE count + 1 END, reset_time = CASE WHEN reset_time < $now THEN $newResetTime ELSE reset_time END, updated_at = $now RETURNING count, reset_time`. Drop the `queryErr/count/existingResetTime` arguments from `rateLimitOutcome`. Tests: `TestDBRateLimiter_ConcurrentFirstRequest` (20 goroutines hit same id, assert no SQLSTATE 23505 + final count = 20) and `TestDBRateLimiter_WindowExpiry_AtomicReset` (pre-seed past reset_time, single call resets count to 1).
 
-## MEDIUM: nothing stops a future ladder executor from claiming a legacy on-demand row
+## ~~MEDIUM: nothing stops a future ladder executor from claiming a legacy on-demand row~~ — RESOLVED
 
 **File**: `internal/config/store_postgres_ladder_lifecycle.go`, `ClaimDueLadderTranches`
 **Description**: Legacy `on_demand_equivalent` tranches net at rate 1 and the amend ceiling assumes NULL-basis rows are on-demand (#886 left them unknown). The claim query does not filter by basis, so an executor that buys `amount_usd_hr` as commitment dollars would overbuy a legacy row. No executor exists yet.
 **Impact**: None today; blocks executor enablement. Track on #946 and the executor issue.
-**Status:** Open
+**Status:** ✔️ Resolved
+
+**Resolved by:** the #946 fix. `selectDueLadderTranchesTx` (used by `ClaimDueLadderTranches`) now selects only `amount_basis = 'commitment'` rows, which the validated `ladder_tranche_amount_provenance` constraint pairs with a stored `commitment_rate`. NULL-basis and `on_demand_equivalent` rows are never claimed: they stay netted while within `LadderFireGrace`, then the overdue sweep cancels them and the next run re-plans the gap in commitment dollars. `TestClaimDueLadderTranches_NeverClaimsOnDemandOrUnknownBasisRows` covers this against real PostgreSQL, including a limit-1 claim where older legacy rows must not starve a due commitment row.

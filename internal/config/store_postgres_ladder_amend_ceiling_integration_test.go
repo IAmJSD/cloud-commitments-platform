@@ -257,6 +257,9 @@ func TestLadderAmendCeiling_SettledSkewMargin(t *testing.T) {
 func TestLadderAmendCeiling_CancelsOverdueBeforeCounting(t *testing.T) {
 	f := newCeilingFixture(t)
 	_, ids := f.plan(fptr(10), fptr(0), fptr(100), 5, 5)
+	// Commitment basis at rate 1 (same netting) so only the cancel, not the
+	// claim's basis filter, keeps X from being claimed below.
+	f.setBasis(ids[0], "commitment", "1")
 	// X is past the 24h grace window: neither counted in flight nor claimable at "now".
 	_, err := f.store.db.Exec(f.ctx, "UPDATE ladder_tranches SET scheduled_date=now()-interval '25 hours' WHERE id=$1", ids[0])
 	require.NoError(t, err)

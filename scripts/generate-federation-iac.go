@@ -108,8 +108,13 @@ import (
 	"unicode"
 )
 
-// iacData mirrors internal/api/handler_federation.go:federationIaCData.
-// Keep in sync with any template variable changes.
+// iacData is this script's copy of federationIaCData in
+// internal/api/handler_federation.go: both render the same templates in
+// internal/iacfiles/templates. The script cannot import that type (it would
+// pull internal/api into a //go:build ignore dev tool), so the two are held in
+// step by tests in scripts/generate_federation_iac_drift_test.go instead: they
+// fail when the two structs stop having the same fields, or when any template
+// references a field iacData lacks (#153).
 type iacData struct {
 	AccountName       string
 	AccountExternalID string
@@ -123,7 +128,11 @@ type iacData struct {
 	SourceAccountID string
 	// AWS WIF / cross-account
 	OIDCIssuerURL string
-	OIDCAudience  string
+	// OIDCIssuerHost is OIDCIssuerURL without its https:// prefix, the form
+	// IAM uses in condition keys; aws-cfn-deploy.sh.tmpl passes it to
+	// CloudFormation. Derived the same way as the server does.
+	OIDCIssuerHost string
+	OIDCAudience   string
 	// OIDCSubjectClaim restricts the AWS trust policy to a single workload
 	// subject. Empty unless --oidc-subject-claim is passed; every AWS-WIF
 	// template requires it (no working subject-less default, see #1640).
@@ -664,6 +673,7 @@ func populateData(data *iacData, target, source, tenantID, projectID, saEmail, o
 	switch target {
 	case "aws":
 		data.OIDCIssuerURL = awsOIDCIssuer(source, tenantID)
+		data.OIDCIssuerHost = strings.TrimPrefix(data.OIDCIssuerURL, "https://")
 		data.OIDCAudience = awsOIDCAudience(source)
 		data.OIDCSubjectClaim = oidcSubjectClaim
 		if err := requireSourceAccountID(data, source, sourceAccountID,

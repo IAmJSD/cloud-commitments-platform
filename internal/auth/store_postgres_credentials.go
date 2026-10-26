@@ -140,9 +140,32 @@ func (s *PostgresStore) EnableMFA(ctx context.Context, userID, pendingSecret str
 		return fmt.Errorf("failed to enable MFA: %w", err)
 	}
 	if result.RowsAffected() == 0 {
-		return ErrUserChanged
+		return s.enableMFARefusal(ctx, userID, pendingSecret)
 	}
 	return nil
+}
+
+// enableMFARefusal names why EnableMFA's guarded write matched no row: the
+// enrollment expired if MFA is still off under the same pending secret and its
+// expiry has passed on the database clock, otherwise the row changed (issue
+// #568). Pending secrets are random and leave the row only by being cleared or
+// replaced, so a row still holding this one was refused by the expiry check.
+// If the check itself fails, the write's own verdict, ErrUserChanged, stands.
+func (s *PostgresStore) enableMFARefusal(ctx context.Context, userID, pendingSecret string) error {
+	var expired bool
+	err := s.db.QueryRow(ctx, `
+		SELECT (mfa_pending_secret_expires_at <= NOW()) IS TRUE FROM users
+		WHERE id = $1 AND mfa_enabled = false AND mfa_pending_secret = $2
+	`, userID, pendingSecret).Scan(&expired)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return ErrUserChanged
+	case err != nil:
+		return fmt.Errorf("%w (checking enrollment expiry: %w)", ErrUserChanged, err)
+	case expired:
+		return ErrMFAEnrollmentExpired
+	}
+	return ErrUserChanged
 }
 
 // ReplaceMFARecoveryCodes writes only the recovery codes, and only while MFA is

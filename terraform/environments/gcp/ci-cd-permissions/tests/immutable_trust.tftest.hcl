@@ -34,9 +34,30 @@ run "trust_uses_immutable_ids" {
     error_message = "id mappings must exist and the repository mapping must stay"
   }
 
+  # Issue #323 (A13-014): the grant pins the ref, not just the repo id.
   assert {
-    condition     = endswith(google_service_account_iam_member.github_actions[0].member, "/attribute.repository_id/1391259743")
-    error_message = "member must be keyed on attribute.repository_id"
+    condition     = endswith(google_service_account_iam_member.github_actions[0].member, "/attribute.repository_id_ref/1391259743:refs/heads/main")
+    error_message = "member must be keyed on attribute.repository_id_ref with the repo id and deploy_ref"
+  }
+
+  assert {
+    condition     = !strcontains(google_service_account_iam_member.github_actions[0].member, "/attribute.repository_id/")
+    error_message = "the repo-only member (any ref of the repo) must not remain"
+  }
+
+  assert {
+    condition     = startswith(google_service_account_iam_member.github_actions[0].member, "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github[0].name}/")
+    error_message = "member must be scoped to this module's pool"
+  }
+
+  assert {
+    condition     = lookup(google_iam_workload_identity_pool_provider.github[0].attribute_mapping, "attribute.repository_id_ref", "") == "assertion.repository_id + ':' + assertion.ref"
+    error_message = "attribute.repository_id_ref must map to the repo id and ref the member pins"
+  }
+
+  assert {
+    condition     = google_service_account_iam_member.github_actions[0].role == "roles/iam.workloadIdentityUser"
+    error_message = "the deploy trust must still grant workloadIdentityUser"
   }
 }
 
@@ -50,6 +71,11 @@ run "condition_follows_deploy_ref" {
   assert {
     condition     = endswith(google_iam_workload_identity_pool_provider.github[0].attribute_condition, "assertion.ref == 'refs/heads/feature/x'")
     error_message = "condition must follow deploy_ref"
+  }
+
+  assert {
+    condition     = endswith(google_service_account_iam_member.github_actions[0].member, "/attribute.repository_id_ref/1391259743:refs/heads/feature/x")
+    error_message = "member must follow deploy_ref, matching the condition"
   }
 }
 
