@@ -655,10 +655,11 @@ describe('Settings Module', () => {
       window.alert = jest.fn();
 
       const event = { preventDefault: jest.fn() } as unknown as Event;
-      await saveGlobalSettings(event);
+      await expect(saveGlobalSettings(event)).resolves.toBeUndefined();
 
-      // Should still call updateConfig with default values
-      expect(api.updateConfig).toHaveBeenCalled();
+      // No provider checkbox exists, so the empty list is refused (#1531)
+      // instead of being written.
+      expect(api.updateConfig).not.toHaveBeenCalled();
     });
 
     // Issue #22 follow-up: AWS Savings Plans split into four per-plan-type
@@ -2144,7 +2145,7 @@ describe('Settings Module', () => {
   });
 
   describe('global PUT against the real index.html (issue #539)', () => {
-    const loadRealPage = async (): Promise<void> => {
+    const loadRealPage = async (providers: string[] = ['aws']): Promise<void> => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const fs = require('fs') as typeof import('fs');
       // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -2156,7 +2157,7 @@ describe('Settings Module', () => {
         .replace(/<script[\s\S]*?<\/script>/gi, '');
       (api.getConfig as jest.Mock).mockResolvedValue({
         global: {
-          enabled_providers: ['aws'],
+          enabled_providers: providers,
           notification_email: 'old@test.com',
           auto_collect: true,
           collection_schedule: 'daily',
@@ -2215,6 +2216,58 @@ describe('Settings Module', () => {
       await save();
 
       expect(globalBody()).toEqual({ enabled_providers: ['aws', 'gcp'] });
+    });
+
+    describe('refuses a save that leaves no provider enabled (issue #1531)', () => {
+      const serverProviders = (providers: string[]): void => {
+        (api.getConfig as jest.Mock).mockResolvedValue({
+          global: { enabled_providers: providers, default_term: 3, default_payment: 'all-upfront', default_coverage: 80 },
+          services: [],
+        });
+      };
+      const uncheckAws = (): void => {
+        (document.getElementById('provider-aws') as HTMLInputElement).checked = false;
+      };
+
+      test('unchecking the only enabled provider is refused with a toast and nothing sent', async () => {
+        await loadRealPage(['aws']);
+        mockShowToast.mockClear();
+        uncheckAws();
+
+        await save();
+
+        expect(mockShowToast).toHaveBeenCalledWith({ message: 'Enable at least one provider before saving.', kind: 'error' });
+        expect(api.updateConfig).not.toHaveBeenCalled();
+        expect(api.updateServiceConfig).not.toHaveBeenCalled();
+      });
+
+      test('unchecking one of two providers saves the remaining one', async () => {
+        await loadRealPage(['aws', 'gcp']);
+        uncheckAws();
+
+        await save();
+
+        expect(globalBody()).toEqual({ enabled_providers: ['gcp'] });
+      });
+
+      test('a stored empty list does not block editing an unrelated field', async () => {
+        await loadRealPage([]);
+        (document.getElementById('setting-notification-email') as HTMLInputElement).value = 'new@test.com';
+
+        await save();
+
+        expect(globalBody()).toEqual({ notification_email: 'new@test.com' });
+      });
+
+      test('another admin enabling gcp makes the merged list non-empty, so the save is allowed', async () => {
+        await loadRealPage(['aws']);
+        serverProviders(['gcp']);
+        uncheckAws();
+
+        await save();
+
+        expect(globalBody()).toEqual({ enabled_providers: ['gcp'] });
+      });
     });
 
     test('editing only the collection schedule saves it', async () => {

@@ -3654,6 +3654,12 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     if (globalSent) {
       if ('grace_period_days' in changedGlobal || 'enabled_providers' in changedGlobal) {
         await rebaseMultiFieldKeys(changedGlobal, isFieldChanged);
+        // The backend disagrees with itself on an empty list (filters read it as
+        // "all", the scheduler collects nothing), so never write one (#1531).
+        if (changedGlobal.enabled_providers?.length === 0) {
+          showToast({ message: 'Enable at least one provider before saving.', kind: 'error' });
+          return;
+        }
       }
       await api.updateConfig(changedGlobal);
       // Persisted: advance the snapshot now, so a later validation failure or
