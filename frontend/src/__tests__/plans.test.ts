@@ -1663,6 +1663,27 @@ describe('Plans Module', () => {
         }));
       });
 
+      test.each([
+        ['ramp-step-percent', '150', 'Ramp Step Percent must be a whole number between 1 and 100'],
+        ['ramp-step-percent', '0', 'Ramp Step Percent must be a whole number between 1 and 100'],
+        ['ramp-interval-days', '366', 'Ramp Interval Days must be a whole number between 1 and 365'],
+        ['ramp-interval-days', '0', 'Ramp Interval Days must be a whole number between 1 and 365'],
+        ['plan-notify-days', '31', 'Notification Days must be a whole number between 1 and 30'],
+        ['plan-notify-days', '0', 'Notification Days must be a whole number between 1 and 30'],
+      ])('refuses %s=%s with a toast and sends nothing (#1534)', async (inputId, value, message) => {
+        (document.querySelector('input[value="custom"]') as HTMLInputElement).checked = true;
+        (document.getElementById('ramp-step-percent') as HTMLInputElement).value = '20';
+        (document.getElementById('ramp-interval-days') as HTMLInputElement).value = '7';
+        const field = document.getElementById(inputId) as HTMLInputElement;
+        field.value = value;
+        field.dispatchEvent(new Event('blur'));
+        await savePlan({ preventDefault: jest.fn() } as unknown as Event);
+        expect(field.value).toBe(value);
+        expect(api.createPlan).not.toHaveBeenCalled();
+        expect(api.updatePlan).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message, kind: 'error' }));
+      });
+
       test('rejects fractional custom_step_percent when ramp is custom', async () => {
         const customRadio = document.querySelector('input[value="custom"]') as HTMLInputElement;
         customRadio.checked = true;

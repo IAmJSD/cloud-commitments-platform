@@ -340,37 +340,27 @@ describe('plan numeric inputs: live range validation (#702)', () => {
     expect(errorEl('plan-notify-days')!.classList.contains('hidden')).toBe(true);
   });
 
-  // --- blur clamps the value to [min, max] ---------------------------------
+  // --- blur leaves the typed value alone ------------------------------------
 
-  it('out-of-range value is clamped to max on blur', () => {
-    const input = document.getElementById('ramp-step-percent') as HTMLInputElement;
-    input.value = '150';
-    fire(input, 'blur');
-
-    expect(input.value).toBe('100');
-    expect(input.getAttribute('aria-invalid')).toBeNull();
-    expect(errorEl('ramp-step-percent')!.classList.contains('hidden')).toBe(true);
-  });
-
-  // A clamped 0 would silently become a 1% plan that buys (#523).
-  it.each(['0', '150'])('plan-coverage %s is not rewritten on blur and keeps its error', (value) => {
-    const input = document.getElementById('plan-coverage') as HTMLInputElement;
+  // Clicking Save blurs the field first, so a clamp would save a value the
+  // user never typed (#523, #1534).
+  it.each([
+    ['plan-coverage', '0'],
+    ['plan-coverage', '150'],
+    ['ramp-step-percent', '150'],
+    ['ramp-step-percent', '0'],
+    ['ramp-interval-days', '366'],
+    ['plan-notify-days', '0'],
+    ['plan-notify-days', '31'],
+  ])('%s=%s is not rewritten on blur and keeps its error', (inputId, value) => {
+    const input = document.getElementById(inputId) as HTMLInputElement;
     input.value = value;
     fire(input, 'input');
     fire(input, 'blur');
 
     expect(input.value).toBe(value);
     expect(input.getAttribute('aria-invalid')).toBe('true');
-    expect(errorEl('plan-coverage')!.classList.contains('hidden')).toBe(false);
-  });
-
-  it('below-min value is clamped to min on blur', () => {
-    const input = document.getElementById('plan-notify-days') as HTMLInputElement;
-    input.value = '0';
-    fire(input, 'blur');
-
-    expect(input.value).toBe('1');
-    expect(input.getAttribute('aria-invalid')).toBeNull();
+    expect(errorEl(inputId)!.classList.contains('hidden')).toBe(false);
   });
 
   it('non-integer value is NOT clamped on blur (error stays visible)', () => {
@@ -593,6 +583,18 @@ describe('Add Purchases modal: inline range validation (#771)', () => {
     input.dispatchEvent(new Event('input'));
 
     expect(input.getAttribute('aria-describedby')).toContain('add-purchases-count-range-error');
+  });
+
+  it.each(['0', '53'])('count=%s is not rewritten on blur and keeps the submit button disabled', value => {
+    const input = countInput();
+    input.value = value;
+    input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new Event('blur'));
+
+    expect(input.value).toBe(value);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(errorEl()!.classList.contains('hidden')).toBe(false);
+    expect(submitBtn().disabled).toBe(true);
   });
 
   // --- save-time guard prevents API call on out-of-range value -------------

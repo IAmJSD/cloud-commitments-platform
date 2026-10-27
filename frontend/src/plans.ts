@@ -1642,12 +1642,15 @@ function updatePlanNameFromSchedule(): void {
 /**
  * Wire live range + integer-only validation on a plan numeric input.
  *
- * Registers `input` and `blur` event handlers that:
+ * Registers an `input` handler that:
  *   - reject non-integer values via the regex `^\d+$` (blocks scientific
  *     notation such as `1e+30` and decimal fractions)
  *   - show a sibling `.field-error` span when the value is out of [min, max]
  *     or non-integer, and hide it when the value is valid or the field is empty
  *   - set / clear `aria-invalid` for screen-reader accessibility
+ *
+ * It never rewrites the value: Save blurs the field first, so a clamp would
+ * save a number the user did not type (#1534). The Save handlers refuse instead.
  *
  * Idempotent: the `data-range-wired` attribute guards against re-registering
  * duplicate listeners when the modal is closed and reopened. The error span
@@ -1655,7 +1658,7 @@ function updatePlanNameFromSchedule(): void {
  * `max` parameters are used instead of reading HTML attributes so callers are
  * the source of truth and the helper stays self-contained.
  */
-function wireRangeInput(inputId: string, min: number, max: number, clamp = true): void {
+function wireRangeInput(inputId: string, min: number, max: number): void {
   const input = document.getElementById(inputId) as HTMLInputElement | null;
   if (!input) return;
 
@@ -1712,19 +1715,7 @@ function wireRangeInput(inputId: string, min: number, max: number, clamp = true)
     }
   };
 
-  const clampOnBlur = (): void => {
-    const raw = input.value.trim();
-    if (!integerPattern.test(raw) || raw === '') return;
-    const parsed = parseInt(raw, 10);
-    if (parsed < min || parsed > max) {
-      input.value = String(Math.min(max, Math.max(min, parsed)));
-      input.removeAttribute('aria-invalid');
-      error.classList.add('hidden');
-    }
-  };
-
   input.addEventListener('input', check);
-  if (clamp) input.addEventListener('blur', clampOnBlur);
 }
 
 /**
@@ -1733,8 +1724,7 @@ function wireRangeInput(inputId: string, min: number, max: number, clamp = true)
  * the create and edit flows.
  */
 function wirePlanRangeInputs(): void {
-  // No clamp: a clamped 0 would silently become a 1% plan that buys; savePlan refuses it.
-  wireRangeInput('plan-coverage', 1, 100, false);
+  wireRangeInput('plan-coverage', 1, 100);
   wireRangeInput('ramp-step-percent', 1, 100);
   wireRangeInput('ramp-interval-days', 1, 365);
   wireRangeInput('plan-notify-days', 1, 30);
