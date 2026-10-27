@@ -31,16 +31,14 @@ jobs:
   playwright:
     name: Playwright Chromium
     runs-on: ubuntu-latest
-    # Raised from 10 so the install step's own 8-minute cap is always what
-    # fires. Every other step at its worst across all attempts sums to 78s
-    # (75s if you look only at green runs, which understates it, and no sample
-    # exercised the spec-failure path at all), plus roughly 30s for the cache
-    # restore and save. So a full 480s install lands at ~600s: exactly the old
-    # cap, leaving nothing for the job timeout to be a backstop with. And a
-    # job timeout cancels, which is the conclusion #1869 is about. A cap is
-    # not a cost: the median successful job takes 69s, and only pathological
-    # runs ever approach either limit.
-    timeout-minutes: 12
+    # Leave room for both separately capped Chromium installs to run
+    # sequentially, then finish the remaining steps and retain a job-level
+    # backstop. Each install can take 8 minutes, and the other steps need up to
+    # about 108s based on measured worst cases, so 20 minutes leaves a small
+    # margin without changing either step's fail-fast cap. A cap is not a cost:
+    # the median successful job takes 69s, and only pathological runs approach
+    # either limit.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: frontend
@@ -75,6 +73,8 @@ jobs:
           version="$(jq -re '.packages["node_modules/@playwright/test"].version' package-lock.json)"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "Playwright ${version}"
+          # The env context lacks runner-provided variables, so surface the image.
+          echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
 
       # Split restore/save rather than the combined actions/cache, whose save is
       # a post step gated on `post-if: success()` and so skips the run being
@@ -85,6 +85,59 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.playwright.outputs.version }}-chromium
+
+      # Cache the .deb files, not /var/cache/apt/archives itself (root-owned, and
+      # the cache action cannot write there). #1538: `install-deps` pulls ~26 MB
+      # from azure.archive.ubuntu.com, which sometimes serves at 20-50 KB/s and
+      # busts the step timeout. Same split restore/save as the browser, for the
+      # same reason.
+      - name: Restore Chromium system deps
+        id: apt-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/playwright-apt
+          # Keyed on the runner image too: the packages come partly from
+          # noble-updates, so debs cached on an older image can go stale.
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.playwright.outputs.version }}-${{ steps.playwright.outputs.image }}-chromium-apt
+
+      - name: Install Chromium system deps
+        id: apt-deps
+        # Same 8-minute cap and rationale as the #1869 fix: a wedge must fail
+        # this step by name instead of cancelling the job. The mirror stall in
+        # #1538 hit this cap three times on 2026-10-27; with the debs restored
+        # apt only refreshes its index.
+        timeout-minutes: 8
+        env:
+          APT_CACHE_HIT: ${{ steps.apt-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          # Make sure apt keeps what it downloads, or the miss path below has
+          # nothing to save. The snippet sorts after docker-clean, so it also
+          # overrides that file's Keep-Downloaded-Packages=false; docker-clean's
+          # post-invoke hook would still delete the debs, so drop it if present.
+          echo 'APT::Keep-Downloaded-Packages "true";' | sudo tee /etc/apt/apt.conf.d/99-keep-debs >/dev/null
+          sudo rm -f /etc/apt/apt.conf.d/docker-clean
+          if [ -d "${HOME}/.cache/playwright-apt" ]; then
+            sudo cp -n "${HOME}"/.cache/playwright-apt/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+          fi
+          npx playwright install-deps chromium
+          if [ "${APT_CACHE_HIT}" != 'true' ]; then
+            mkdir -p "${HOME}/.cache/playwright-apt"
+            cp /var/cache/apt/archives/*.deb "${HOME}/.cache/playwright-apt/" 2>/dev/null || true
+            count="$(find "${HOME}/.cache/playwright-apt" -name '*.deb' | wc -l | tr -d ' ')"
+            echo "debs to cache: ${count}"
+            echo "count=${count}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Save Chromium system deps
+        # Skipped on a hit, and on an install failure (an untaken `if:` still
+        # implies success()), so only debs from a completed install reach the key.
+        # Also skipped when apt kept no debs: an empty save would hit forever.
+        if: steps.apt-cache.outputs.cache-hit != 'true' && steps.apt-deps.outputs.count != '0' && steps.apt-deps.outputs.count != ''
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.cache/playwright-apt
+          key: ${{ steps.apt-cache.outputs.cache-primary-key }}
 
       - name: Install Chromium
         # This step timeout is the fix for #1869, where this install wedged
@@ -100,10 +153,14 @@ jobs:
         # Above the healthy maximum, below every wedge, under the job cap.
         # That gap is also why there is no retry: an attempt capped under 381s
         # fails healthy runs, and two capped above it do not fit in the job.
+        # Kept at 8 now that apt is a separate step: those measurements were
+        # taken on the combined step, so there is no data yet for a tighter cap
+        # on the browser download alone.
         timeout-minutes: 8
         # Idempotent on a cache hit: skips the download when the restored
-        # browser is complete and re-fetches when it is not.
-        run: npx playwright install --with-deps chromium
+        # browser is complete and re-fetches when it is not. System deps are
+        # the previous step's job.
+        run: npx playwright install chromium
 
       - name: Save Chromium
         # Skipped on a hit, and on an install failure (an untaken `if:` still
