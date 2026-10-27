@@ -914,6 +914,36 @@ func (m *MockConfigStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*co
 	return v, args.Error(1)
 }
 
+// MarkRevocationReturnPosted mocks MarkRevocationReturnPosted (issue #1523).
+// Uses the isExpected default-or-dispatch pattern: revoke tests that only
+// verify MarkPurchaseRevoked do not need an expectation for this stamp.
+func (m *MockConfigStore) MarkRevocationReturnPosted(ctx context.Context, purchaseID string) error {
+	m.record("MarkRevocationReturnPosted", ctx, purchaseID)
+	if !isExpected(&m.Mock, "MarkRevocationReturnPosted") {
+		return nil
+	}
+	args := m.Called(ctx, purchaseID)
+	return args.Error(0)
+}
+
+// ReleaseStaleRevocationsInFlight mocks ReleaseStaleRevocationsInFlight
+// (issue #1523). Default-or-dispatch: with no expectation it releases nothing.
+func (m *MockConfigStore) ReleaseStaleRevocationsInFlight(ctx context.Context, after time.Duration) ([]string, error) {
+	m.record("ReleaseStaleRevocationsInFlight", ctx, after)
+	if !isExpected(&m.Mock, "ReleaseStaleRevocationsInFlight") {
+		return nil, nil
+	}
+	args := m.Called(ctx, after)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).([]string)
+	if !ok {
+		m.reporter.wrongReturnType("ReleaseStaleRevocationsInFlight", "[]string", args.Get(0))
+	}
+	return v, args.Error(1)
+}
+
 // UpdatePurchaseHistoryListing mocks stamping listing_id and listing_state (issue #292).
 func (m *MockConfigStore) UpdatePurchaseHistoryListing(ctx context.Context, purchaseID, listingID, listingState string) error {
 	m.record("UpdatePurchaseHistoryListing", ctx, purchaseID, listingID, listingState)

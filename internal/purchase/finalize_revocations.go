@@ -2,6 +2,7 @@ package purchase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,14 +12,27 @@ import (
 // FinalizeResult summarizes one sweep of FinalizeInFlightRevocations.
 // Returned for the scheduled-task handler to log and surface in CloudWatch.
 type FinalizeResult struct {
-	// Found is the number of purchase_history rows with revocation_in_flight=true
-	// and revoked_at IS NULL that the sweep saw.
+	// Found is the number of unrevoked purchase_history rows with a recorded
+	// Return (return_posted_at) that the sweep saw.
 	Found int
 	// Finalized is the number of rows successfully stamped by MarkPurchaseRevoked.
 	Finalized int
 	// Errored is the number of rows the MarkPurchaseRevoked call failed for.
 	Errored int
+	// Released is the number of rows whose revocation_in_flight flag was
+	// cleared because no Return was recorded within
+	// staleRevocationInFlightAfter (issue #1523). They are not revoked.
+	Released int
 }
+
+// staleRevocationInFlightAfter is how long a row may stay flagged with no
+// recorded Return before the sweep clears the flag so the purchase can be
+// revoked again (issue #1523). It is twice the longest request a deployment
+// can run (Cloud Run's request timeout caps at 3600s; Lambda at 900s), so a
+// revoke still between its flip and its Return is never released. Releasing
+// one early would not finalize anything wrongly either: a Return recorded
+// after the release is still finalized, flag or not.
+const staleRevocationInFlightAfter = 2 * time.Hour
 
 // finalizeRevocationBackoffs are the sleep durations between consecutive
 // MarkPurchaseRevoked retry attempts in FinalizeInFlightRevocations.
@@ -27,13 +41,21 @@ var finalizeRevocationBackoffs = []time.Duration{
 	6 * time.Second,
 }
 
-// FinalizeInFlightRevocations sweeps purchase_history rows with
-// revocation_in_flight=true and revoked_at IS NULL and retries
+// FinalizeInFlightRevocations sweeps unrevoked purchase_history rows whose
+// Azure Return was recorded as accepted (return_posted_at) and retries
 // MarkPurchaseRevoked for each. These rows represent cases where the Azure
 // Return API call succeeded but the subsequent DB write failed — the
 // finalize_revocations scheduled tick ensures the audit record is eventually
 // consistent without requiring the user to retry (which would be rejected by
 // Azure as "already returned").
+//
+// A row that is only flagged (revocation_in_flight) with no recorded Return is
+// never marked revoked (issue #1523): its request may have died before the
+// Return was posted, so the purchase may still be active and billed. Once it
+// has been flagged for staleRevocationInFlightAfter, the sweep clears the flag
+// instead, so the user can revoke it again, and logs it for an operator. A
+// failure to release is logged, does not stop the finalize pass, and is
+// returned with the result.
 //
 // The sweep uses a fixed timestamp of time.Now() at the START of the sweep so
 // all rows finalized in one pass share the same revokedAt wall-clock value,
@@ -49,12 +71,14 @@ var finalizeRevocationBackoffs = []time.Duration{
 // the sweep returns them with an error wrapping ctx.Err(), so a Lambda near
 // its deadline stops instead of sleeping past it (issue #243).
 func (m *Manager) FinalizeInFlightRevocations(ctx context.Context) (*FinalizeResult, error) {
+	released, releaseErr := m.releaseStaleRevocations(ctx)
+
 	rows, err := m.config.GetPurchaseHistoryInFlight(ctx)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(releaseErr, err)
 	}
 
-	result := &FinalizeResult{Found: len(rows)}
+	result := &FinalizeResult{Found: len(rows), Released: released}
 	now := time.Now().UTC()
 
 	for _, record := range rows {
@@ -63,7 +87,7 @@ func (m *Manager) FinalizeInFlightRevocations(ctx context.Context) (*FinalizeRes
 			result.Errored++
 			logging.Errorf("finalize_revocations: sweep stopped at purchase_id=%s: %v (found=%d finalized=%d errored=%d)",
 				record.PurchaseID, ctxErr, result.Found, result.Finalized, result.Errored)
-			return result, fmt.Errorf("finalize_revocations: sweep canceled: %w", ctxErr)
+			return result, errors.Join(releaseErr, fmt.Errorf("finalize_revocations: sweep canceled: %w", ctxErr))
 		}
 		if markErr != nil {
 			logging.Errorf("finalize_revocations: MarkPurchaseRevoked for %s failed after %d attempts: %v",
@@ -75,7 +99,25 @@ func (m *Manager) FinalizeInFlightRevocations(ctx context.Context) (*FinalizeRes
 		}
 	}
 
-	return result, nil
+	return result, releaseErr
+}
+
+// releaseStaleRevocations clears the flag on rows flagged for longer than
+// staleRevocationInFlightAfter with no recorded Return, and logs each one: if
+// Azure did take a Return that was never recorded, the row now reads as
+// active and an operator has to reconcile it by hand.
+func (m *Manager) releaseStaleRevocations(ctx context.Context) (int, error) {
+	ids, err := m.config.ReleaseStaleRevocationsInFlight(ctx, staleRevocationInFlightAfter)
+	if err != nil {
+		logging.Errorf("finalize_revocations: releasing stale in-flight revocations failed: %v", err)
+		return 0, fmt.Errorf("finalize_revocations: release stale: %w", err)
+	}
+	for _, id := range ids {
+		logging.Errorf("finalize_revocations: purchase_id=%s was flagged in flight for over %s with no recorded Azure Return; "+
+			"cleared the flag without marking it revoked so it can be revoked again. If Azure did accept a Return, reconcile the row by hand",
+			id, staleRevocationInFlightAfter)
+	}
+	return len(ids), nil
 }
 
 // markRevokedWithRetry calls MarkPurchaseRevoked, retrying after each

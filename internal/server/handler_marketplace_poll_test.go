@@ -47,7 +47,7 @@ func TestFinalizeSweep_PollsMarketplaceListings(t *testing.T) {
 	assert.Equal(t, 1, poller.calls)
 	encoded, err := json.Marshal(out)
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"Found":1,"Finalized":1,"Errored":0,
+	assert.JSONEq(t, `{"Found":1,"Finalized":1,"Errored":0,"Released":0,
 		"marketplace_listings":{"found":3,"active":1,"settled":2,"unpriced":0,"skipped":0,"errored":0}}`, string(encoded))
 }
 

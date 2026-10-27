@@ -950,9 +950,14 @@ func (h *Handler) handleAzureReturnError(ctx context.Context, record *config.Pur
 // backoff retries. If every attempt fails, Azure has already refunded but the
 // DB write could not land, so it returns a 207 RECONCILE_PENDING result (no
 // retry) for the finalize_revocations sweep to reconcile, rather than a 500.
+//
+// Each attempt first records that Azure accepted the Return
+// (MarkRevocationReturnPosted, until one lands): the finalize_revocations
+// sweep only finalizes rows with that record (issue #1523).
 func (h *Handler) persistAzureRevocation(ctx context.Context, record *config.PurchaseHistoryRecord, calcRefundAmount *float64, calcRefundCurrency string) (any, error) {
 	now := time.Now().UTC()
-	markErr := h.config.MarkPurchaseRevoked(ctx, record.PurchaseID, now, "direct-api", "", calcRefundAmount, calcRefundCurrency)
+	returnRecorded := false
+	markErr := h.recordAzureReturnAndMark(ctx, record.PurchaseID, now, calcRefundAmount, calcRefundCurrency, &returnRecorded)
 	for attempt, backoff := range revokeMarkRetryBackoffs {
 		if markErr == nil {
 			break
@@ -960,15 +965,16 @@ func (h *Handler) persistAzureRevocation(ctx context.Context, record *config.Pur
 		logging.Warnf("revoke azure: MarkPurchaseRevoked attempt %d failed for %s: %v (retrying in %s)",
 			attempt+1, record.PurchaseID, markErr, backoff)
 		time.Sleep(backoff)
-		markErr = h.config.MarkPurchaseRevoked(ctx, record.PurchaseID, now, "direct-api", "", calcRefundAmount, calcRefundCurrency)
+		markErr = h.recordAzureReturnAndMark(ctx, record.PurchaseID, now, calcRefundAmount, calcRefundCurrency, &returnRecorded)
 	}
 	if markErr != nil {
 		// All retries failed. Azure has already refunded but we cannot persist
 		// the revocation state. Return 207 Multi-Status so the frontend knows
 		// the refund issued but not to retry — the finalize_revocations sweep
-		// will reconcile the DB write on its next tick.
-		logging.Errorf("revoke azure: MarkPurchaseRevoked failed for %s after %d attempts (Azure already returned): %v",
-			record.PurchaseID, len(revokeMarkRetryBackoffs)+1, markErr)
+		// will reconcile the DB write on its next tick, provided the Return
+		// was recorded.
+		logging.Errorf("revoke azure: MarkPurchaseRevoked failed for %s after %d attempts (Azure already returned, return recorded=%t): %v",
+			record.PurchaseID, len(revokeMarkRetryBackoffs)+1, returnRecorded, markErr)
 		return &revokeReconcilePendingResult{
 			Code:          "RECONCILE_PENDING",
 			AzureReturned: true,
@@ -984,6 +990,20 @@ func (h *Handler) persistAzureRevocation(ctx context.Context, record *config.Pur
 		RevokedAt:  now.Format(time.RFC3339),
 		RevokedVia: "direct-api",
 	}, nil
+}
+
+// recordAzureReturnAndMark is one persist attempt after Azure accepted the
+// Return: stamp return_posted_at unless an earlier attempt already did (a
+// failure is logged; the mark may still land), then MarkPurchaseRevoked.
+func (h *Handler) recordAzureReturnAndMark(ctx context.Context, purchaseID string, now time.Time, calcRefundAmount *float64, calcRefundCurrency string, returnRecorded *bool) error {
+	if !*returnRecorded {
+		if err := h.config.MarkRevocationReturnPosted(ctx, purchaseID); err != nil {
+			logging.Warnf("revoke azure: MarkRevocationReturnPosted for %s failed (continuing to the mark): %v", purchaseID, err)
+		} else {
+			*returnRecorded = true
+		}
+	}
+	return h.config.MarkPurchaseRevoked(ctx, purchaseID, now, "direct-api", "", calcRefundAmount, calcRefundCurrency)
 }
 
 // parseAzureReservationIDs extracts the reservation order ID and reservation ID

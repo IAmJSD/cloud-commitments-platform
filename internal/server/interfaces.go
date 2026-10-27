@@ -55,8 +55,9 @@ type PurchaseManagerInterface interface {
 	// whose scheduled_execution_at is in the past (Gmail-style pre-fire delay,
 	// issue #291 wave-2). Called on the "fire_scheduled_purchases" scheduler tick.
 	FireScheduledDelayedPurchases(ctx context.Context) (*purchase.FireResult, error)
-	// FinalizeInFlightRevocations sweeps purchase_history rows with
-	// revocation_in_flight=true and retries MarkPurchaseRevoked for each. Handles
+	// FinalizeInFlightRevocations sweeps unrevoked purchase_history rows with a
+	// recorded Azure Return and retries MarkPurchaseRevoked for each, and
+	// releases flags that stayed set with no recorded Return (issue #1523). Handles
 	// the partial-success case where Azure Return succeeded but the DB write
 	// failed (issue #290 Finding #6). Called on the "finalize_revocations" tick.
 	FinalizeInFlightRevocations(ctx context.Context) (*purchase.FinalizeResult, error)
