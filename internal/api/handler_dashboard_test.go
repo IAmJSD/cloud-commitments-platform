@@ -629,8 +629,8 @@ func TestHandler_getUpcomingPurchases_ScopedUser(t *testing.T) {
 			planB.ID: {{ID: "acc-stage", Name: "Staging"}},
 		},
 	}
-	// Registered accounts, loaded by getAccountScope so the unique name
-	// "Production" can match by name (#433).
+	// Registered accounts, loaded by getAccountScope to resolve display names
+	// to account IDs (#433, #1034).
 	mockStore.ListCloudAccountsFn = func(context.Context, config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{{ID: "acc-prod", Name: "Production"}, {ID: "acc-stage", Name: "Staging"}}, nil
 	}
@@ -639,7 +639,7 @@ func TestHandler_getUpcomingPurchases_ScopedUser(t *testing.T) {
 		UserID: "viewer-1",
 	}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "view", "purchases").Return(true, nil)
-	mockAuth.On("GetAllowedAccountsAPI", ctx, "viewer-1").Return([]string{"Production"}, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "viewer-1").Return([]string{"acc-prod"}, nil)
 
 	handler := &Handler{auth: mockAuth, config: store}
 	req := &events.LambdaFunctionURLRequest{
@@ -1826,7 +1826,7 @@ func TestFilterDashboardRecommendations_FreshSlice(t *testing.T) {
 	originalFirst := input[0]
 
 	mockStore := new(MockConfigStore)
-	// resolveAccountNamesByID calls ListCloudAccounts via the Fn override path.
+	// getAccountScope calls ListCloudAccounts via the Fn override path.
 	listCalled := false
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		listCalled = true
@@ -1843,11 +1843,11 @@ func TestFilterDashboardRecommendations_FreshSlice(t *testing.T) {
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	handler := &Handler{auth: mockAuth, config: mockStore}
-	_ = listCalled // asserted implicitly: if not called the name map is empty and MatchesAccount uses only ID
+	_ = listCalled // asserted implicitly: if not called the scope has no registered accounts and AccountScope.Allows uses only ID
 
 	scope, err := handler.getAccountScope(ctx, session)
 	require.NoError(t, err)
-	filtered := handler.filterDashboardRecommendations(ctx, scope, input)
+	filtered := filterDashboardRecommendations(scope, input)
 
 	// Only account A's rec must pass through.
 	require.Len(t, filtered, 1)

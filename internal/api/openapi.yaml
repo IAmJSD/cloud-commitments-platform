@@ -259,8 +259,11 @@ paths:
       tags: [Configuration]
       summary: Update per-service configuration
       description: >
-        Provider and service are taken from the path. The response does not
-        echo the configuration; read it back with GET.
+        Provider and service are taken from the path. This is a partial
+        update: any enabled, term, payment, coverage or filter key absent from
+        the body keeps its stored value, and the merged row is validated. A
+        key that is present, even with a zero value, replaces the stored one.
+        The response does not echo the configuration; read it back with GET.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -988,7 +991,7 @@ paths:
             The execution cannot be approved: a non-AWS execution without a
             resolvable cloud account, a status other than pending or notified
             (in token mode the status check is the atomic transition, so a
-            concurrent change answers the same way, and in session mode a
+            concurrent change answers the same way, and in either mode a
             lost claim answers 409 as well).
           content:
             application/json:
@@ -1012,9 +1015,9 @@ paths:
                 $ref: '#/components/schemas/Error'
         '502':
           description: >
-            Session mode only. The claim was won and the purchase ran, but it
-            failed or only partly completed (a failed or partially_completed
-            run). Money may have moved; the body details carry execution_id
+            Session and token mode. The claim was won and the purchase ran,
+            but it failed or only partly completed (a failed or
+            partially_completed run). Money may have moved; the body details carry execution_id
             and the row's actual status. A partially_completed run is
             revocable: the executed email with its revocation link is sent as
             for a completed run. Check the execution in History before
@@ -1477,7 +1480,9 @@ paths:
         one-hour safety margin, and the body must echo the quote from GET
         /api/purchases/{id}/revoke/calculate. An already revoked row answers
         "already_revoked"; a row whose Azure refund was issued but not yet
-        recorded answers code RECONCILE_PENDING and must not be retried.
+        recorded, or is being posted by a concurrent revoke of the same
+        purchase, answers code RECONCILE_PENDING and must not be retried.
+        Only one revoke at a time posts the Azure return.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -2311,6 +2316,44 @@ paths:
           application/json:
             schema:
               type: object
+              required: [ri_ids]
+              anyOf:
+                - required: [targets]
+                  properties:
+                    targets:
+                      minItems: 1
+                - required: [target_offering_id, target_count]
+                  properties:
+                    target_offering_id:
+                      minLength: 1
+                    target_count:
+                      minimum: 1
+              description: >
+                One of `targets` or `target_offering_id` with `target_count`
+                is required, otherwise 400. When both are present, `targets`
+                wins.
+              properties:
+                ri_ids:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: string
+                targets:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ExchangeTarget'
+                target_offering_id:
+                  type: string
+                  description: Legacy single-target form. Needs `target_count`.
+                target_count:
+                  type: integer
+                  format: int32
+                  description: Legacy single-target form. Needs `target_offering_id`.
+                region:
+                  type: string
+                  description: >
+                    AWS region to price the quote in. Defaults to the
+                    deployment's region.
       responses:
         '200':
           description: Exchange quote
@@ -2318,6 +2361,15 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [Region]
+                properties:
+                  Region:
+                    type: string
+                    minLength: 1
+                    description: >
+                      AWS region the quote was priced in. Always set. Send
+                      this same value as `region` on
+                      `/api/ri-exchange/execute`.
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -2363,19 +2415,50 @@ paths:
           application/json:
             schema:
               type: object
-              required: [ri_ids, targets, max_payment_due_usd]
+              required: [ri_ids, max_payment_due_usd, region]
+              anyOf:
+                - required: [targets]
+                  properties:
+                    targets:
+                      minItems: 1
+                - required: [target_offering_id, target_count]
+                  properties:
+                    target_offering_id:
+                      minLength: 1
+                    target_count:
+                      minimum: 1
+              description: >
+                One of `targets` or `target_offering_id` with `target_count`
+                is required, otherwise 400. When both are present, `targets`
+                wins.
               properties:
                 ri_ids:
                   type: array
+                  minItems: 1
                   items:
                     type: string
                 targets:
                   type: array
                   items:
-                    type: object
+                    $ref: '#/components/schemas/ExchangeTarget'
+                target_offering_id:
+                  type: string
+                  description: Legacy single-target form. Needs `target_count`.
+                target_count:
+                  type: integer
+                  format: int32
+                  description: Legacy single-target form. Needs `target_offering_id`.
                 max_payment_due_usd:
                   type: string
+                  minLength: 1
                   description: Spend-cap guardrail (decimal string, e.g. "1000.00")
+                region:
+                  type: string
+                  minLength: 1
+                  description: >
+                    AWS region to execute in. Required: a missing region is
+                    rejected with 400 rather than defaulted, since an exchange
+                    cannot be undone. Send the `Region` the quote returned.
       responses:
         '200':
           description: Exchange submitted
@@ -2493,7 +2576,10 @@ paths:
         fails CSRF validation with 403. The token alone authorizes, so the
         route is open to callers without a session; token mode answers an
         unknown exchange id with the same 403 as a wrong token, so it does
-        not reveal which ids exist.
+        not reveal which ids exist. Likewise a session holding only
+        approve-own gets the same 403 for an unknown id as for another
+        user's exchange in any status, and falls through to token mode for
+        both.
       security:
         - bearerAuth: []
         - {}
@@ -2525,15 +2611,19 @@ paths:
             token is invalid, or, when a session exists, 4-eyes mode rejects
             the approver (for example the creator approving their own
             exchange). In token mode an unknown exchange id, an exchange with
-            no approval token and a wrong token get the same 403 and body.
+            no approval token and a wrong token get the same 403 and body. A
+            session holding only approve-own gets the same 403 and body for an
+            unknown id as for another user's exchange, pending or not.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '404':
           description: >
-            Session mode only, the exchange does not exist. Token mode answers
-            an unknown id with 403, like a wrong token.
+            Session mode with approve-any (or the admin key) only, the
+            exchange does not exist. Token mode answers an unknown id with
+            403, like a wrong token, and an approve-own session answers it
+            like another user's exchange.
           content:
             application/json:
               schema:
@@ -2542,7 +2632,8 @@ paths:
           description: >
             The exchange is no longer pending (already processed, or canceled
             by a newer analysis run), including when a concurrent approve or
-            reject changed it first.
+            reject changed it first. An approve-own session gets this only
+            for an exchange it created.
           content:
             application/json:
               schema:
@@ -3798,7 +3889,17 @@ paths:
               schema:
                 $ref: '#/components/schemas/Group'
         '400':
-          $ref: '#/components/responses/BadRequest'
+          description: >
+            Invalid request, or a permission change that would give a member
+            both a view-only and a write-capable group (for example adding a
+            write permission to a group whose members also belong to a
+            view-only group). The message names the group and how many
+            members conflict. Members who already held such a combination do
+            not block the update.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -3959,6 +4060,84 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/AccountSummary'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/accounts/service-overrides/export:
+    get:
+      operationId: exportAccountServiceOverrides
+      tags: [Accounts]
+      summary: Export every per-service override in the caller's account scope
+      description: >
+        Returns every account_service_overrides row on the accounts the
+        caller's scope allows, with each account's provider and external ID
+        so the file can be imported into another tenant (issue #9). Requires
+        view:accounts. JSON by default; format=csv returns the same rows as
+        CSV (list cells are semicolon-separated, an empty cell is an unset
+        field). A CSV text cell starting with = + - @ tab, CR or ' gets a '
+        prefix so a spreadsheet does not run it as a formula; import strips
+        that prefix again.
+      parameters:
+        - name: format
+          in: query
+          description: json (default) or csv. Any other value is a 400.
+          schema:
+            type: string
+            enum: [json, csv]
+      responses:
+        '200':
+          description: The overrides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverrideExport'
+            text/csv:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/accounts/service-overrides/import:
+    post:
+      operationId: importAccountServiceOverrides
+      tags: [Accounts]
+      summary: Import per-service overrides from an export file
+      description: >
+        Applies an export file (JSON rows or CSV text) as desired state
+        (issue #9). Each row names its account by account_id, else by
+        provider and account_external_id, and must be in the caller's account
+        scope. A row sets every field of its override (an unset field clears
+        it); overrides not in the file are left alone. Rows are validated with
+        the service-config rules, the commitment-option check of the PUT
+        endpoint and the column bounds (ramp_schedule at most 32 characters,
+        coverage at most 2 decimal places, no control characters in
+        ramp_schedule or list values). strict (default) writes nothing when
+        any row is rejected and answers 400 with the report under
+        details.report; best_effort writes the valid rows. dry_run reports
+        without writing. The writes run in one transaction, so a store
+        failure writes nothing. Requires update:accounts. Writes are upserts,
+        so re-running an import is safe.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OverrideImportRequest'
+      responses:
+        '200':
+          description: Per-row report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverrideImportReport'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -5814,6 +5993,19 @@ components:
         display_name:
           type: string
 
+    ExchangeTarget:
+      type: object
+      description: One AWS RI offering to acquire in an exchange.
+      required: [offering_id, count]
+      properties:
+        offering_id:
+          type: string
+          format: uuid
+        count:
+          type: integer
+          format: int32
+          minimum: 1
+
     AzureExchangeTarget:
       type: object
       description: One Azure VM reservation to acquire in an exchange.
@@ -6093,8 +6285,20 @@ components:
             $ref: '#/components/schemas/Permission'
         allowed_accounts:
           type: array
+          description: >
+            Cloud accounts the group may reach: account IDs (or provider
+            external IDs), or "*" for all accounts. Entries match by ID only;
+            a display name stored before #1034 that no longer identifies its
+            account matches nothing.
           items:
             type: string
+        system_managed:
+          type: boolean
+          readOnly: true
+          description: >
+            True for a built-in group seeded and maintained by migrations
+            (for example Administrators and Purchaser). Updating or deleting
+            it returns 403. Omitted when false.
         created_at:
           type: string
           format: date-time
@@ -6116,6 +6320,12 @@ components:
             $ref: '#/components/schemas/Permission'
         allowed_accounts:
           type: array
+          description: >
+            Account IDs, provider external IDs, or "*". A display name is
+            accepted only when exactly one registered account that the caller
+            can access carries it, and is stored as that account's ID, so the
+            grant stays with the account after a rename. Any other entry is
+            rejected with 400.
           items:
             type: string
 
@@ -6132,6 +6342,12 @@ components:
             $ref: '#/components/schemas/Permission'
         allowed_accounts:
           type: array
+          description: >
+            Account IDs, provider external IDs, or "*". A display name is
+            accepted only when exactly one registered account that the caller
+            can access carries it, and is stored as that account's ID, so the
+            grant stays with the account after a rename. Any other entry is
+            rejected with 400.
           items:
             type: string
 
@@ -6668,7 +6884,7 @@ components:
 
     PartialProviderSweep:
       type: object
-      required: [provider, incomplete_accounts, attempted_scopes, failed_scopes, failed_details, reasons]
+      required: [provider, incomplete_accounts, attempted_scopes, failed_scopes, failed_details, skipped_recommendations, reasons]
       properties:
         provider:
           type: string
@@ -6687,6 +6903,12 @@ components:
         failed_details:
           type: integer
           description: Individual recommendation details rejected inside answering scopes (AWS).
+        skipped_recommendations:
+          type: integer
+          description: >
+            Recommendations the provider dropped as invalid (GCP: non-USD,
+            malformed amount or plan, unrecognized term) while returning the
+            rest. Their accounts' sweeps were complete.
         reasons:
           type: object
           description: >
@@ -6743,6 +6965,9 @@ components:
           type: string
         target_coverage:
           type: integer
+          minimum: 1
+          maximum: 100
+          description: Percentage, 1 to 100. Defaults to 80 when omitted on create.
         ramp_schedule:
           type: string
           enum: [immediate, weekly-25pct, monthly-10pct, custom]
@@ -7590,6 +7815,135 @@ components:
         message:
           type: string
 
+    OverrideTransferRow:
+      type: object
+      description: >
+        One override in an export or import file. account_name, created_at
+        and updated_at are informational and ignored on import.
+      required: [provider, service]
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        account_name:
+          type: string
+        account_external_id:
+          type: string
+        provider:
+          type: string
+          enum: [aws, azure, gcp]
+        service:
+          type: string
+        enabled:
+          type: boolean
+        term:
+          type: integer
+        payment:
+          type: string
+        coverage:
+          type: number
+          format: double
+        ramp_schedule:
+          type: string
+          maxLength: 32
+        include_engines:
+          type: array
+          items:
+            type: string
+        exclude_engines:
+          type: array
+          items:
+            type: string
+        include_regions:
+          type: array
+          items:
+            type: string
+        exclude_regions:
+          type: array
+          items:
+            type: string
+        include_types:
+          type: array
+          items:
+            type: string
+        exclude_types:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OverrideExport:
+      type: object
+      required: [version, exported_at, overrides]
+      properties:
+        version:
+          type: integer
+        exported_at:
+          type: string
+          format: date-time
+        overrides:
+          type: array
+          items:
+            $ref: '#/components/schemas/OverrideTransferRow'
+
+    OverrideImportRequest:
+      type: object
+      description: Send exactly one of overrides or csv (1 to 5000 rows).
+      properties:
+        mode:
+          type: string
+          enum: [strict, best_effort]
+        dry_run:
+          type: boolean
+        overrides:
+          type: array
+          items:
+            $ref: '#/components/schemas/OverrideTransferRow'
+        csv:
+          type: string
+
+    OverrideImportReport:
+      type: object
+      required: [mode, dry_run, applied, summary, rows]
+      properties:
+        mode:
+          type: string
+          enum: [strict, best_effort]
+        dry_run:
+          type: boolean
+        applied:
+          type: boolean
+        summary:
+          type: object
+          description: Row count per action (insert, update, unchanged, rejected).
+          additionalProperties:
+            type: integer
+        rows:
+          type: array
+          items:
+            type: object
+            required: [row, provider, service, action]
+            properties:
+              row:
+                type: integer
+              account_id:
+                type: string
+                format: uuid
+              provider:
+                type: string
+              service:
+                type: string
+              action:
+                type: string
+                enum: [insert, update, unchanged, rejected]
+              error:
+                type: string
+
     AccountServiceOverride:
       type: object
       description: >
@@ -8076,7 +8430,8 @@ components:
         One of three shapes. A canceled scheduled execution: status
         "canceled" and message. A revoked purchase history row: status
         "revoked" or "already_revoked" with revoked_at and revoked_via. An
-        Azure refund that was issued but could not be recorded yet: code
+        Azure refund that was issued but could not be recorded yet, or that a
+        concurrent revoke of the same purchase is posting: code
         RECONCILE_PENDING, azure_returned and message (do not retry).
       properties:
         status:

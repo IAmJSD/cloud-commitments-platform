@@ -199,6 +199,12 @@ func (g *GlobalConfig) GracePeriodFor(provider string) int {
 }
 
 // ServiceConfig represents per-service configuration.
+//
+// Coverage is a percentage whose meaning depends on where the config lives.
+// In a PurchasePlan's Services it is the plan's sizing target (planstep sizes
+// each ramp step by it). In the global and per-account service settings it is
+// display-only: the dashboard scales projected savings by it and nothing in
+// purchase execution reads it (issue #345).
 type ServiceConfig struct {
 	Provider       string   `json:"provider" dynamodbav:"provider"`
 	Service        string   `json:"service" dynamodbav:"service"`
@@ -782,17 +788,34 @@ var awsLegacyServiceSlugs = map[string]string{
 	string(common.ServiceRedshift):    string(common.ServiceDataWarehouse),
 }
 
-// CanonicalSuppressionService maps legacy AWS service slugs to their canonical
-// slug so a suppression and a rec match whichever spelling each was stored
-// under (issues #1412, #1420). Other providers' services, including Azure and
-// GCP "compute", are returned unchanged. It lives in config, the lowest
-// package both the scheduler and BuildSuppressions import; the pinned
-// cloud-commitments-go common package has no such mapping.
+// awsSavingsPlansSpellings maps the dash-free spelling of each per-plan-type
+// Savings Plans slug, which the purchase manager's mapSavingsPlansSlug also
+// accepts, to the hyphenated library constant that recs carry (issue #1422).
+// The "savingsplans" umbrella is deliberately absent: folding it into one plan
+// type would let a single umbrella suppression hide another plan type's recs.
+// A purchase test checks every per-type key of mapSavingsPlansSlug against it.
+var awsSavingsPlansSpellings = map[string]string{
+	"savingsplans-compute":     string(common.ServiceSavingsPlansCompute),
+	"savingsplans-ec2instance": string(common.ServiceSavingsPlansEC2Instance),
+	"savingsplans-sagemaker":   string(common.ServiceSavingsPlansSageMaker),
+	"savingsplans-database":    string(common.ServiceSavingsPlansDatabase),
+}
+
+// CanonicalSuppressionService maps legacy AWS service slugs, and the dash-free
+// spellings of the per-type Savings Plans slugs, to their canonical slug so a
+// suppression and a rec match whichever spelling each was stored under
+// (issues #1412, #1420, #1422). Other providers' services, including Azure and
+// GCP "compute" and Azure "savingsplans", are returned unchanged. It lives in
+// config, the lowest package both the scheduler and BuildSuppressions import;
+// the pinned cloud-commitments-go common package has no such mapping.
 func CanonicalSuppressionService(provider, service string) string {
 	if provider != "aws" {
 		return service
 	}
 	if canonical, ok := awsLegacyServiceSlugs[service]; ok {
+		return canonical
+	}
+	if canonical, ok := awsSavingsPlansSpellings[service]; ok {
 		return canonical
 	}
 	return service
@@ -837,6 +860,26 @@ type RecommendationFilter struct {
 	MinSavingsUSD                float64  // 0 = no floor on monthly savings dollar amount
 	MinSavingsPct                float64  // 0 = no floor on savings percentage (0–100 scale)
 	ID                           string   // "" = all ids; non-empty = exact match on the id column
+}
+
+// RecommendationScanKey is a stored recommendation's position in the keyset
+// scan order of ListStoredRecommendationsChunk (issue #981): the application
+// recommendation ID compared byte-wise, then the cache table's UUID primary
+// key (RowID), which keeps rows that share an ID in a total order.
+type RecommendationScanKey struct {
+	ID    string
+	RowID string
+}
+
+// RecommendationChunk is one keyset read of the recommendations cache.
+// Recs holds the rows that passed the filter, in scan order. Last is the
+// position of the last row read (nil when no row was read) and is where the
+// next chunk resumes. Done is true when fewer rows than the limit were read,
+// so nothing matches after Last.
+type RecommendationChunk struct {
+	Recs []RecommendationRecord
+	Last *RecommendationScanKey
+	Done bool
 }
 
 // PurchasePlanFilter parameterises ListPurchasePlans. Zero-value means "no
@@ -913,6 +956,10 @@ type PartialProviderSweep struct {
 	// FailedDetails is how many individual recommendation details were
 	// rejected inside scopes that otherwise answered (AWS only).
 	FailedDetails int `json:"failed_details"`
+	// SkippedRecommendations is how many recommendations the provider
+	// dropped as invalid (GCP: non-USD, malformed amount or plan, unknown
+	// term) while returning the rest. Those accounts' sweeps were complete.
+	SkippedRecommendations int `json:"skipped_recommendations"`
 	// Reasons counts the failure causes by PartialReason* category.
 	Reasons map[string]int `json:"reasons"`
 }
@@ -955,6 +1002,9 @@ type RIUtilizationCacheEntry struct {
 type PurchaseHistoryFilter struct {
 	// Provider matches purchase_history.provider exactly. Empty skips the clause.
 	Provider string
+	// PlanID matches purchase_history.plan_id exactly; HistorySummaryAggregate
+	// also applies it to purchase_executions.plan_id. Empty skips the clause.
+	PlanID string
 	// AccountIDs matches purchase_history.cloud_account_id (the cloud_accounts
 	// UUID FK) with ANY($). Empty/nil skips this half of the account predicate.
 	AccountIDs []string
@@ -1192,6 +1242,25 @@ type MarketplaceListingClaim struct {
 	// and the row keeps its recorded listing id, which every list, cancel and
 	// claim check treats the same as the original dead state.
 	Resumed bool
+}
+
+// MarketplaceListingSettlement is what the marketplace status poller records
+// when a listing reaches a terminal state on AWS (issue #27).
+type MarketplaceListingSettlement struct {
+	// PurchaseID and ListingID identify the row and the listing it must still
+	// record; a row that moved on to another listing is left alone.
+	PurchaseID string
+	ListingID  string
+	// State is the terminal AWS state: ListingStateClosed or
+	// ListingStateCancelled.
+	State string
+	// ListedAt is the listing's AWS CreateDate; nil keeps the stored value.
+	ListedAt *time.Time
+	// ProceedsReceived is the USD the seller receives for the sold instances,
+	// net of the AWS fee, and FeePaid that fee. Both nil when the sale price
+	// could not be determined; the row is then polled again.
+	ProceedsReceived *float64
+	FeePaid          *float64
 }
 
 // AWS EC2 ReservedInstancesListing status values, mirroring the

@@ -1409,8 +1409,7 @@ func (h *Handler) reshapeCloudAccountInScope(ctx context.Context, session *Sessi
 	if aErr != nil {
 		return false, fmt.Errorf("failed to resolve cloud account scope: %w", aErr)
 	}
-	nameByID := h.resolveAccountNamesByID(ctx)
-	return allowed.Allows(cloudAccountID, nameByID[cloudAccountID]), nil
+	return allowed.Allows(cloudAccountID, ""), nil
 }
 
 // requireReshapeAccountScope enforces the session's allowed_accounts scope for
@@ -1880,6 +1879,29 @@ func validateExchangeRIIDs(riIDs []string) error {
 	return nil
 }
 
+// validateExchangeTargetsBody holds the source and target checks quote and
+// execute share, so the quote cannot accept a request the library then fails
+// with a 500. A whitespace-only target_offering_id counts as absent.
+func validateExchangeTargetsBody(riIDs []string, targets []ExchangeTargetBody, offeringID string, count int32) error {
+	if err := validateExchangeRIIDs(riIDs); err != nil {
+		return err
+	}
+	legacy := strings.TrimSpace(offeringID) != ""
+	if len(targets) == 0 && !legacy {
+		return NewClientError(400, "either targets[] or target_offering_id is required")
+	}
+	if err := validateTargets(targets); err != nil {
+		return err
+	}
+	// The legacy singleton's count, which validateTargets does not see.
+	// Refuse before the submit claim rather than inside ExecuteExchange,
+	// after it.
+	if len(targets) == 0 && count < 1 {
+		return NewClientError(400, fmt.Sprintf("target_count must be >= 1, got %d", count))
+	}
+	return nil
+}
+
 // getExchangeQuote gets a quote for an RI exchange.
 func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, permErr := h.requirePermission(ctx, req, "view", "purchases")
@@ -1896,13 +1918,7 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
-	if len(body.RIIDs) == 0 {
-		return nil, NewClientError(400, "ri_ids is required")
-	}
-	if len(body.Targets) == 0 && body.TargetOfferingID == "" {
-		return nil, NewClientError(400, "either targets[] or target_offering_id is required")
-	}
-	if err := validateTargets(body.Targets); err != nil {
+	if err := validateExchangeTargetsBody(body.RIIDs, body.Targets, body.TargetOfferingID, body.TargetCount); err != nil {
 		return nil, err
 	}
 
@@ -1927,12 +1943,9 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 		return nil, mapAWSExchangeError("exchange quote failed", err)
 	}
 
-	// Echo the region the SDK chain resolved back to the caller (issue
-	// #238): the frontend modal has no other way to learn it, and
-	// execute rejects a missing region outright since exchanges are
-	// financially irreversible. Carrying the same value the quote used
-	// keeps quote and execute pinned to one region instead of letting
-	// execute re-resolve (and potentially land on a different one).
+	// Return the region the quote was priced in. Execute requires a region,
+	// and callers must send this same one so the exchange runs where it was
+	// priced.
 	return ExchangeQuoteResponse{ExchangeQuoteSummary: quote, Region: region}, nil
 }
 
@@ -1942,20 +1955,8 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 // cyclomatic-complexity threshold; every branch here becomes a
 // separate test case so the logic stays inspectable.
 func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error {
-	if err := validateExchangeRIIDs(body.RIIDs); err != nil {
+	if err := validateExchangeTargetsBody(body.RIIDs, body.Targets, body.TargetOfferingID, body.TargetCount); err != nil {
 		return err
-	}
-	if len(body.Targets) == 0 && body.TargetOfferingID == "" {
-		return NewClientError(400, "either targets[] or target_offering_id is required")
-	}
-	if err := validateTargets(body.Targets); err != nil {
-		return err
-	}
-	// The legacy singleton's count, which validateTargets above does not see.
-	// Same reasoning as the targets[] count: refuse before the submit claim
-	// rather than inside ExecuteExchange, after it.
-	if len(body.Targets) == 0 && body.TargetCount < 1 {
-		return NewClientError(400, fmt.Sprintf("target_count must be >= 1, got %d", body.TargetCount))
 	}
 	if body.MaxPaymentDueUSD == "" {
 		return NewClientError(400, "max_payment_due_usd is required as a safety guardrail")
@@ -2197,11 +2198,9 @@ type ExchangeExecuteResponse struct {
 	ExchangeID string                         `json:"exchange_id"`
 }
 
-// ExchangeQuoteResponse wraps the library's quote summary with the
-// region the SDK chain resolved (issue #238). The embedded pointer
-// promotes the summary's own fields to the JSON top level, matching
-// the shape callers got before this type existed; Region is the only
-// addition.
+// ExchangeQuoteResponse is the library's quote summary plus the region
+// the quote was priced in, which callers must send back on execute. The embedded
+// pointer promotes the summary's fields to the JSON top level.
 type ExchangeQuoteResponse struct {
 	*exchange.ExchangeQuoteSummary
 	Region string `json:"Region"`
@@ -2246,6 +2245,9 @@ func (h *Handler) updateRIExchangeConfig(ctx context.Context, req *events.Lambda
 	if err := h.requireGlobalConfigScope(ctx, session); err != nil {
 		return nil, err
 	}
+	// Resolved before the transaction: the closure below runs while it holds a
+	// pooled connection and must not need a second one (issue #1517).
+	riExchangeGrant := h.resolveGrant(ctx, req, auth.ResourceRIExchange)
 
 	// Route through the serialized read-modify-write so this partial update
 	// (only the ri_exchange_* columns) shares the advisory lock with other
@@ -2270,7 +2272,7 @@ func (h *Handler) updateRIExchangeConfig(ctx context.Context, req *events.Lambda
 		existing.RIExchangeMaxDailyUSD = body.MaxPaymentDailyUSD
 		existing.RIExchangeLookbackDays = body.LookbackDays
 
-		return h.requireRIExchangeAutoModeGrant(ctx, req, before, riExchangeArmStateOf(existing))
+		return requireRIExchangeAutoModeGrant(before, riExchangeArmStateOf(existing), riExchangeGrant)
 	}); err != nil {
 		// A refused write is not a failed save. Surface the gate's 403 (and any
 		// other ClientError the closure raises) unwrapped, so the response says
@@ -2317,8 +2319,8 @@ const riExchangeHistoryLimit = 500
 //
 // RI exchange records carry the 12-digit AWS account id from STS, so it is
 // resolved to its single registered AWS account and the scope is matched by
-// that account's UUID or name. An unregistered or ambiguous id matches only a
-// literal entry in the allow-list. A lookup failure errors out.
+// that account's UUID. An unregistered or ambiguous id matches only a literal
+// entry in the allow-list. A lookup failure errors out.
 func (h *Handler) loadRIExchangeHistory(ctx context.Context, session *Session) ([]config.RIExchangeRecord, error) {
 	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
@@ -2537,10 +2539,17 @@ func (h *Handler) approveRIExchangeViaSession(ctx context.Context, req *events.L
 	return result, execErr
 }
 
-// fetchAndAuthorizeRIExchange looks up the pending exchange record by id, checks
-// that it is in "pending" state, and then verifies that session is authorized to
-// approve it. Extracted from approveRIExchangeViaSession to keep that function
-// under the cyclomatic-complexity limit.
+// fetchAndAuthorizeRIExchange looks up the exchange record by id, verifies that
+// session is authorized to approve it, and then checks that it is in "pending"
+// state. Extracted from approveRIExchangeViaSession to keep that function under
+// the cyclomatic-complexity limit.
+//
+// Ownership is checked before existence and status (issue #1428): an
+// approve-own session gets the same 403 for a missing id and for another
+// user's exchange, pending or not, so it cannot learn which ids exist or read
+// their status. The 403 also falls through to the email token like any other
+// ownership refusal. Approve-any sessions and the admin key may approve any
+// exchange, so they keep the 404/409 distinction.
 func (h *Handler) fetchAndAuthorizeRIExchange(ctx context.Context, session *Session, id string) (*config.RIExchangeRecord, error) {
 	if err := validateUUID(id); err != nil {
 		return nil, err
@@ -2560,16 +2569,14 @@ func (h *Handler) fetchAndAuthorizeRIExchange(ctx context.Context, session *Sess
 	if err != nil {
 		return nil, err
 	}
+	if err := h.authorizeSessionApproveRIExchange(ctx, session, record); err != nil {
+		return nil, err
+	}
 	if record == nil {
 		return nil, NewClientError(404, "exchange record not found")
 	}
-
 	if record.Status != "pending" {
 		return nil, NewClientError(409, fmt.Sprintf("exchange %s cannot be approved (status=%s)", id, record.Status))
-	}
-
-	if err := h.authorizeSessionApproveRIExchange(ctx, session, record); err != nil {
-		return nil, err
 	}
 
 	return record, nil
@@ -2612,6 +2619,10 @@ func (h *Handler) sessionHasApproveRight(ctx context.Context, session *Session) 
 // The RI exchange shares ResourcePurchases because approval is conceptually
 // "approving a purchase action on a different resource type" per the issue spec,
 // which prefers reusing the existing verbs to keep the matrix small.
+//
+// record may be nil (no such exchange). An approve-own session is refused for
+// it exactly as for another user's record (issue #1428); the admin key and
+// approve-any pass, and the caller answers 404.
 func (h *Handler) authorizeSessionApproveRIExchange(ctx context.Context, session *Session, record *config.RIExchangeRecord) error {
 	// Stateless admin API key: full access, no user row. Administrators-group
 	// users pass via the approve-any check below.
@@ -2638,8 +2649,9 @@ func (h *Handler) authorizeSessionApproveRIExchange(ctx context.Context, session
 		return NewClientError(403, "permission denied: requires approve-any or approve-own on purchases")
 	}
 
-	// approve-own: only allow if the session user created this exchange.
-	if record.CreatedByUserID == nil || *record.CreatedByUserID != session.UserID {
+	// approve-own: only allow if the session user created this exchange. A
+	// missing record answers the same, so the refusal is no existence oracle.
+	if record == nil || record.CreatedByUserID == nil || *record.CreatedByUserID != session.UserID {
 		return NewClientError(403, "permission denied: cannot approve another user's pending exchange")
 	}
 

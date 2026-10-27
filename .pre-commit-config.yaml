@@ -20,11 +20,19 @@ repos:
         require_serial: true
         files: '(\.go$|(^|/)go\.(mod|sum)$)'
 
+  # The Go hooks (go-vet here, go-test below) list packages with `go list`
+  # and drop node_modules instead of passing ./... (issue #177). Go's ./...
+  # skips only vendor, testdata and `.`/`_` directories, so after `npm ci`
+  # (pre-commit.yml runs it before this hook) it also matches Go source that
+  # npm packages ship, such as frontend/node_modules/flatted/golang, and the
+  # hooks would gate on code this repo does not own. -e lists a broken
+  # node_modules package instead of failing on it; pipefail makes a failing
+  # `go list` fail the hook rather than run on an empty package list.
   - repo: local
     hooks:
       - id: go-vet
         name: Run go vet
-        entry: bash -c 'go vet ./...'
+        entry: bash -c 'set -euo pipefail; pkgs=$(go list -e ./... | grep -v "/node_modules/"); go vet $pkgs'
         language: system
         pass_filenames: false
         files: \.go$
@@ -145,6 +153,28 @@ repos:
         types: [yaml]
         files: ^\.github/workflows/
 
+  # CloudFormation linting
+  #
+  # The aws-target federation template shipped to customers once used
+  # intrinsic functions as map keys, which CloudFormation cannot load at all
+  # (cfn-lint E0000), and the repo's own Go evaluator accepted it (#1489).
+  # check-yaml above excludes these directories because PyYAML cannot read the
+  # !Ref/!Sub short forms, so this hook is what checks they load. Local hook
+  # with the version pinned in additional_dependencies, like zizmor above.
+  #
+  # --non-zero-exit-code error: errors (templates CloudFormation rejects)
+  # fail the hook. Warnings do not fail it, because the
+  # cloudformation/stacks/CUDly and aws-cross-account templates carry a W3005
+  # (redundant DependsOn) that is not a load or deploy failure.
+  - repo: local
+    hooks:
+      - id: cfn-lint
+        name: Lint CloudFormation templates
+        language: python
+        additional_dependencies: ['cfn-lint==1.58.0']
+        entry: cfn-lint --non-zero-exit-code error
+        files: ^(cloudformation/stacks/[^/]+|iac/federation/[^/]+/cloudformation)/template\.ya?ml$
+
   # Markdown linting
   - repo: https://github.com/igorshubovych/markdownlint-cli
     rev: 76b3d32d3f4b965e1d6425253c59407420ae2c43  # frozen: v0.47.0
@@ -259,7 +289,8 @@ repos:
     hooks:
       - id: go-test
         name: Run Go tests (pre-push only; CI covers via ci.yml)
-        entry: bash -c 'go test -short -race ./...'
+        # Same node_modules exclusion as the go-vet hook (issue #177).
+        entry: bash -c 'set -euo pipefail; pkgs=$(go list -e ./... | grep -v "/node_modules/"); go test -short -race $pkgs'
         language: system
         pass_filenames: false
         files: \.go$

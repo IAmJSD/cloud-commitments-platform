@@ -65,7 +65,6 @@ func newBootstrapCandidate(email string) *User {
 	return &User{
 		Email:        email,
 		PasswordHash: "test-hash",
-		Salt:         "test-salt",
 		Active:       true,
 	}
 }

@@ -518,6 +518,7 @@ func validateRequestBodySize(body string) error {
 const MaxAccountIDsPerRequest = 200
 
 // parseAccountIDs splits a comma-separated account_ids query parameter into a slice.
+// Ids are trimmed and lowercased so every caller compares canonical UUIDs.
 // Empty entries are removed. Returns nil when the input is empty.
 // Returns an error if any value is not a valid UUID, or if the list
 // exceeds MaxAccountIDsPerRequest entries.
@@ -547,7 +548,7 @@ func parseAccountIDs(raw string) ([]string, error) {
 		if err := validateUUID(trimmed); err != nil {
 			return nil, fmt.Errorf("invalid account_ids: %q is not a valid UUID", trimmed)
 		}
-		ids = append(ids, trimmed)
+		ids = append(ids, strings.ToLower(trimmed))
 	}
 	return ids, nil
 }

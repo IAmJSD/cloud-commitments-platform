@@ -130,6 +130,13 @@ tr.history-row-highlight:hover {
     border-bottom: 1px solid var(--cudly-border);
 }
 
+/* The left-align above outranks the shared th.num/td.num rule by source
+   order, so restate it for this table's money and count columns (#739). */
+.planned-purchases-table th.num,
+.planned-purchases-table td.num {
+    text-align: right;
+}
+
 .planned-purchases-table tbody tr:hover {
     background: var(--cudly-surface-muted);
 }

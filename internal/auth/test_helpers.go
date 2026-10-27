@@ -370,7 +370,6 @@ func createTestUser(t *testing.T, password string) *User {
 		ID:           "user-123",
 		Email:        "test@example.com",
 		PasswordHash: hash,
-		Salt:         "", // Not used anymore, bcrypt handles salting
 		GroupIDs:     []string{DefaultAdminGroupID},
 		Active:       true,
 		CreatedAt:    time.Now(),

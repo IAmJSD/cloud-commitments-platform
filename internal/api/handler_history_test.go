@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -510,8 +511,8 @@ func TestHandler_getHistory_ScopedUserSeesEmptyAccountRows(t *testing.T) {
 	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{ambientExec}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
-	// resolveAccountNamesByID must not error — return an empty accounts list
-	// so MatchesAccount falls back to ID-only matching (safe for our assertions).
+	// The account scope lists the registered accounts; an empty list leaves
+	// AccountScope.Allows matching by ID only (safe for our assertions).
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return nil, nil
 	}
@@ -1080,6 +1081,22 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		assert.True(t, ids["exec-in-A"], "execution in account A must survive the filter")
 		assert.False(t, ids["exec-in-C"], "execution in unrelated account C must be filtered out")
 		assert.False(t, ids["exec-nil-account"], "execution with NULL exec.CloudAccountID AND no rec-level CloudAccountID must still be excluded (effective account is empty)")
+	})
+
+	t.Run("uppercase and padded account_ids are canonicalised (issue #1452)", func(t *testing.T) {
+		mockStore, handler, req, ctx := newHandler(t)
+
+		uuidA := "aaaaaaaa-1111-1111-1111-111111111111"
+		uuidB := "bbbbbbbb-2222-2222-2222-222222222222"
+
+		mockStore.On("ListPurchaseHistoryPage", ctx, config.PurchaseHistoryFilter{AccountIDs: []string{uuidA, uuidB}, Limit: historyStreamBatch(config.DefaultListLimit)}, noCursor).
+			Return([]config.PurchaseHistoryRecord{{AccountID: "acc-A", PurchaseID: "p-A"}}, nil).Once()
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+
+		result, err := handler.getHistory(ctx, req, map[string]string{"account_ids": " " + strings.ToUpper(uuidA) + " , " + strings.ToUpper(uuidB)})
+		require.NoError(t, err)
+		require.Len(t, result.(HistoryResponse).Purchases, 1)
+		mockStore.AssertExpectations(t)
 	})
 
 	t.Run("legacy singular account_id is folded into the dual-column filter", func(t *testing.T) {

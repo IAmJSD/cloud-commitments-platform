@@ -251,7 +251,7 @@ func TestRevokePurchase_AzureSuccess(t *testing.T) {
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	r := armReservationRecord()
-	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
+	mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
 
 	sessID := "test-session"
 	calcClient := &stubCalcRefundClient{
@@ -487,9 +487,11 @@ func TestAuthorizeSessionRevoke_RevokeAny_AccountScope(t *testing.T) {
 		{name: "empty account", scope: []string{inScope}, accountID: &empty, wantErr: "cannot verify ownership"},
 		// Issue #534: History shows these rows, so revoke must accept them.
 		{name: "external id only, scoped by external id", scope: []string{"111122223333"}, external: "111122223333"},
-		{name: "external id only, scoped by name", scope: []string{"prod"}, external: "111122223333"},
-		{name: "uuid row, scoped by name", scope: []string{"prod"}, accountID: &inScope, external: "111122223333"},
-		{name: "external id only, other account", scope: []string{"dev"}, external: "999999999999", wantErr: "account you do not have access to"},
+		{name: "external id only, scoped by account id", scope: []string{inScope}, external: "111122223333"},
+		// Issue #1034: a display-name entry is not bound to an account.
+		{name: "external id only, name entry", scope: []string{"prod"}, external: "111122223333", wantErr: "account you do not have access to"},
+		{name: "uuid row, name entry", scope: []string{"prod"}, accountID: &inScope, external: "111122223333", wantErr: "account you do not have access to"},
+		{name: "external id only, other account", scope: []string{outOfScope}, external: "999999999999", wantErr: "account you do not have access to"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -544,19 +546,19 @@ func TestAuthorizeSessionRevoke_RevokeAny_ProviderAndUUIDAuthority(t *testing.T)
 		rec      config.PurchaseHistoryRecord
 		wantErr  string
 	}{
-		{name: "same external id, scope names other provider account, aws first", scope: []string{"prod"},
+		{name: "same external id, scope holds other provider account, aws first", scope: []string{"u-az"},
 			accounts: []config.CloudAccount{awsDev, azProd}, rec: config.PurchaseHistoryRecord{Provider: "aws", AccountID: "123"}, wantErr: denied},
-		{name: "same external id, scope names other provider account, azure first", scope: []string{"prod"},
+		{name: "same external id, scope holds other provider account, azure first", scope: []string{"u-az"},
 			accounts: []config.CloudAccount{azProd, awsDev}, rec: config.PurchaseHistoryRecord{Provider: "aws", AccountID: "123"}, wantErr: denied},
-		{name: "same external id, scope names own provider account, aws first", scope: []string{"dev"},
+		{name: "same external id, scope holds own provider account, aws first", scope: []string{"u-aws"},
 			accounts: []config.CloudAccount{awsDev, azProd}, rec: config.PurchaseHistoryRecord{Provider: "aws", AccountID: "123"}},
-		{name: "same external id, scope names own provider account, azure first", scope: []string{"dev"},
+		{name: "same external id, scope holds own provider account, azure first", scope: []string{"u-aws"},
 			accounts: []config.CloudAccount{azProd, awsDev}, rec: config.PurchaseHistoryRecord{Provider: "aws", AccountID: "123"}},
-		{name: "uuid out of scope, in-scope external id", scope: []string{"in"},
+		{name: "uuid out of scope, in-scope external id", scope: []string{"u-in"},
 			accounts: []config.CloudAccount{in, out}, rec: config.PurchaseHistoryRecord{CloudAccountID: str("u-out"), AccountID: "111"}, wantErr: denied},
 		{name: "uuid in scope, out-of-scope external id", scope: []string{"u-in"},
 			accounts: []config.CloudAccount{in, out}, rec: config.PurchaseHistoryRecord{CloudAccountID: str("u-in"), AccountID: "222"}},
-		{name: "resolver error, name scope", scope: []string{"prod"}, listErr: errors.New("db down"),
+		{name: "resolver error", scope: []string{"u-az"}, listErr: errors.New("db down"),
 			rec: config.PurchaseHistoryRecord{AccountID: "123"}, wantErr: denied},
 	}
 	for _, tc := range cases {
@@ -1170,7 +1172,7 @@ func TestCallAzureReturn_TOCTOUWithinEpsilonSucceeds(t *testing.T) {
 	// User confirmed $100.00; Azure now quotes $100.005 (within $0.01).
 	userConfirmed := 100.0
 	calcClient := &stubCalcRefundClientWithAmount{amount: 100.005, currency: "USD", sessID: "s-1"}
-	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
+	mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
 	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
 
 	h := &Handler{config: mockStore}
@@ -1195,7 +1197,7 @@ func TestCallAzureReturn_AuditRowPopulatedWithQuote(t *testing.T) {
 	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
 
 	// Assert MarkPurchaseRevoked receives the quote amount and currency.
-	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "",
+	mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "",
 		mock.MatchedBy(func(v *float64) bool { return v != nil && *v == 42.50 }),
 		"EUR",
 	).Return(nil)
@@ -1271,7 +1273,7 @@ func TestCallAzureReturn_MarkPurchaseRevokedFailAllRetries(t *testing.T) {
 	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
 
 	// MarkPurchaseRevoked is called 1 + len(backoffs) = 4 times total (initial + 3 retries).
-	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).
+	mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).
 		Return(errors.New("db down")).Times(4)
 
 	h := &Handler{config: mockStore}
@@ -1380,7 +1382,7 @@ func TestCallAzureReturn_JustOutsideSafetyMargin(t *testing.T) {
 
 	calcClient := &stubCalcRefundClientWithAmount{amount: 50.0, currency: "USD", sessID: "s-margin"}
 	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
-	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
+	mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
 
 	h := &Handler{config: mockStore}
 	result, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(50, "USD"))
@@ -1473,7 +1475,7 @@ func TestCallAzureReturn_TransientError_ClearsInFlight(t *testing.T) {
 	returnClient := &stubReturnClient{err: errors.New("dial tcp: connection refused")}
 
 	r := armReservationRecord()
-	mockStore.On("ClearRevocationInFlight", ctx, r.PurchaseID).Return(nil).Once()
+	mockStore.On("ClearRevocationInFlight", mock.Anything, r.PurchaseID).Return(nil).Once()
 
 	h := &Handler{config: mockStore}
 	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
@@ -1499,7 +1501,7 @@ func TestCallAzureReturn_ClientError_ClearsInFlight(t *testing.T) {
 	}
 
 	r := armReservationRecord()
-	mockStore.On("ClearRevocationInFlight", ctx, r.PurchaseID).Return(nil).Once()
+	mockStore.On("ClearRevocationInFlight", mock.Anything, r.PurchaseID).Return(nil).Once()
 
 	h := &Handler{config: mockStore}
 	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
@@ -1524,7 +1526,7 @@ func TestCallAzureReturn_WindowEdge_ClearsInFlight(t *testing.T) {
 	}
 
 	r := armReservationRecord()
-	mockStore.On("ClearRevocationInFlight", ctx, r.PurchaseID).Return(nil).Once()
+	mockStore.On("ClearRevocationInFlight", mock.Anything, r.PurchaseID).Return(nil).Once()
 
 	h := &Handler{config: mockStore}
 	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
@@ -1548,7 +1550,7 @@ func TestCallAzureReturn_Success_DoesNotClearInFlight(t *testing.T) {
 	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
 
 	r := armReservationRecord()
-	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"),
+	mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"),
 		"direct-api", "", mock.Anything, mock.Anything).Return(nil).Once()
 
 	h := &Handler{config: mockStore}
@@ -1750,7 +1752,7 @@ func TestRevokeAzurePurchase_Success(t *testing.T) {
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	r := armReservationRecord()
-	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
+	mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
 
 	calcClient := &stubCalcRefundClientWithAmount{amount: 12.34, currency: "USD", sessID: "s-revoke"}
 	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}

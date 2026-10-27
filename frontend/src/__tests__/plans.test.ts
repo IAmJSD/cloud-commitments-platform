@@ -1111,6 +1111,25 @@ describe('Plans Module', () => {
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Failed to pause purchase: API Error' }));
     });
 
+    test('edit form shows the stored plan coverage (#523)', async () => {
+      (api.getPlan as jest.Mock).mockResolvedValue({
+        id: 'plan-1',
+        name: 'Test Plan',
+        enabled: true,
+        auto_purchase: false,
+        notification_days_before: 3,
+        services: {
+          ec2: { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'all-upfront', coverage: 55 },
+        },
+        ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0 },
+      });
+
+      (document.querySelector('[data-action="edit"]') as HTMLButtonElement)?.click();
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect((document.getElementById('plan-coverage') as HTMLInputElement).value).toBe('55');
+    });
+
     test('edit action calls getPlan with plan_id, not the purchase id (#773)', async () => {
       // The purchase row has id="purchase-1" and plan_id="plan-1".
       // Before the fix, editPlan received "purchase-1", causing GET /plans/purchase-1
@@ -1583,6 +1602,37 @@ describe('Plans Module', () => {
         expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
       });
 
+      test('rejects an empty target_coverage instead of sending 0 (#523)', async () => {
+        (document.getElementById('plan-coverage') as HTMLInputElement).value = '';
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+          message: 'Target Coverage must be a whole number between 1 and 100',
+          kind: 'error',
+        }));
+      });
+
+      test.each(['0', '101'])('rejects target_coverage %s (#523)', async (value) => {
+        (document.getElementById('plan-coverage') as HTMLInputElement).value = value;
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+          message: 'Target Coverage must be a whole number between 1 and 100',
+        }));
+      });
+
+      test('sends target_coverage 1 as 1 (#523)', async () => {
+        (api.createPlan as jest.Mock).mockResolvedValue({});
+        (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+        (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+        (document.getElementById('plan-coverage') as HTMLInputElement).value = '1';
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).toHaveBeenCalledWith(expect.objectContaining({ target_coverage: 1 }));
+      });
+
       test('rejects NaN notification_days_before (e.g. empty string after clear)', async () => {
         (document.getElementById('plan-notify-days') as HTMLInputElement).value = 'abc';
         const event = { preventDefault: jest.fn() } as unknown as Event;
@@ -1611,6 +1661,27 @@ describe('Plans Module', () => {
           target_coverage: 80,
           notification_days_before: 3,
         }));
+      });
+
+      test.each([
+        ['ramp-step-percent', '150', 'Ramp Step Percent must be a whole number between 1 and 100'],
+        ['ramp-step-percent', '0', 'Ramp Step Percent must be a whole number between 1 and 100'],
+        ['ramp-interval-days', '366', 'Ramp Interval Days must be a whole number between 1 and 365'],
+        ['ramp-interval-days', '0', 'Ramp Interval Days must be a whole number between 1 and 365'],
+        ['plan-notify-days', '31', 'Notification Days must be a whole number between 1 and 30'],
+        ['plan-notify-days', '0', 'Notification Days must be a whole number between 1 and 30'],
+      ])('refuses %s=%s with a toast and sends nothing (#1534)', async (inputId, value, message) => {
+        (document.querySelector('input[value="custom"]') as HTMLInputElement).checked = true;
+        (document.getElementById('ramp-step-percent') as HTMLInputElement).value = '20';
+        (document.getElementById('ramp-interval-days') as HTMLInputElement).value = '7';
+        const field = document.getElementById(inputId) as HTMLInputElement;
+        field.value = value;
+        field.dispatchEvent(new Event('blur'));
+        await savePlan({ preventDefault: jest.fn() } as unknown as Event);
+        expect(field.value).toBe(value);
+        expect(api.createPlan).not.toHaveBeenCalled();
+        expect(api.updatePlan).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message, kind: 'error' }));
       });
 
       test('rejects fractional custom_step_percent when ramp is custom', async () => {

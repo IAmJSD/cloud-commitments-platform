@@ -75,6 +75,18 @@ export async function refreshRecommendations(): Promise<RefreshRecommendationsRe
  *   (async-invoked scheduler running). The polling loop watches this and
  *   last_collected_at to detect completion.
  */
+/** Mirrors `config.PartialProviderSweep`: one provider's incomplete or skipped-rec summary. */
+export interface PartialProviderSweep {
+  provider: string;
+  incomplete_accounts: number;
+  attempted_scopes: number;
+  failed_scopes: number;
+  failed_details: number;
+  /** Recommendations the provider dropped as invalid (GCP: non-USD, malformed, unknown term). */
+  skipped_recommendations?: number;
+  reasons: Record<string, number>;
+}
+
 export interface RecommendationsFreshness {
   last_collected_at: string | null;
   last_collection_error: string | null;
@@ -84,6 +96,7 @@ export interface RecommendationsFreshness {
   // tolerate `undefined` for legacy callsites that haven't been updated
   // and treat undefined the same as null.
   last_collection_started_at?: string | null;
+  last_collection_partial?: { providers: PartialProviderSweep[] } | null;
 }
 
 /**

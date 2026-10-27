@@ -101,3 +101,63 @@ func TestFinalizeInFlightRevocations_CanceledDuringBackoffStopsSweep(t *testing.
 	assert.Less(t, elapsed, time.Second, "the sweep must not sleep through the backoff after cancellation")
 	store.AssertNumberOfCalls(t, "MarkPurchaseRevoked", 2)
 }
+
+// Issue #1523: before the finalize pass the sweep releases flags that stayed
+// set past staleRevocationInFlightAfter with no recorded Return. Released rows
+// are counted but never marked revoked.
+func TestFinalizeInFlightRevocations_ReleasesStaleFlagsWithoutMarking(t *testing.T) {
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	store.On("ReleaseStaleRevocationsInFlight", ctx, staleRevocationInFlightAfter).
+		Return([]string{"crashed-before-return", "legacy"}, nil).Once()
+	store.On("GetPurchaseHistoryInFlight", ctx).Return(inFlightRows("returned"), nil).Once()
+	expectMark(store, "returned", nil)
+	m := &Manager{config: store}
+
+	res, err := m.FinalizeInFlightRevocations(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, FinalizeResult{Found: 1, Finalized: 1, Released: 2}, *res)
+	store.AssertExpectations(t)
+	store.AssertNumberOfCalls(t, "MarkPurchaseRevoked", 1)
+}
+
+// A release failure must not stop the finalize pass (the two queues are
+// disjoint), but the tick must still fail so the outage is visible.
+func TestFinalizeInFlightRevocations_ReleaseErrorStillFinalizes(t *testing.T) {
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	store.On("ReleaseStaleRevocationsInFlight", ctx, staleRevocationInFlightAfter).
+		Return(nil, errors.New("release failed")).Once()
+	store.On("GetPurchaseHistoryInFlight", ctx).Return(inFlightRows("returned"), nil).Once()
+	expectMark(store, "returned", nil)
+	m := &Manager{config: store}
+
+	res, err := m.FinalizeInFlightRevocations(ctx)
+	require.ErrorContains(t, err, "release failed")
+	require.NotNil(t, res)
+	assert.Equal(t, FinalizeResult{Found: 1, Finalized: 1}, *res)
+	store.AssertExpectations(t)
+}
+
+// Both a release failure and a list failure are reported.
+func TestFinalizeInFlightRevocations_ReleaseAndListErrorsJoined(t *testing.T) {
+	ctx := context.Background()
+	store := new(MockConfigStore)
+	store.On("ReleaseStaleRevocationsInFlight", ctx, staleRevocationInFlightAfter).
+		Return(nil, errors.New("release failed")).Once()
+	store.On("GetPurchaseHistoryInFlight", ctx).Return(nil, errors.New("list failed")).Once()
+	m := &Manager{config: store}
+
+	res, err := m.FinalizeInFlightRevocations(ctx)
+	require.ErrorContains(t, err, "release failed")
+	require.ErrorContains(t, err, "list failed")
+	assert.Nil(t, res)
+}
+
+// The timeout should outlast a revoke still between its flip and its recorded
+// Return: the app server caps a request at 30s (internal/server/http.go) and
+// the detached Return plus its writes at 3m30s (issue #1527). Correctness does
+// not depend on this (issue #1525).
+func TestStaleRevocationInFlightAfter_OutlastsLongestRequest(t *testing.T) {
+	assert.Greater(t, staleRevocationInFlightAfter, time.Hour)
+}

@@ -152,6 +152,11 @@ func TestHandler_getRecommendationsFreshness(t *testing.T) {
 				AttemptedScopes:    10,
 				FailedScopes:       9,
 				Reasons:            map[string]int{config.PartialReasonThrottled: 9},
+			}, {
+				// GCP skipped recommendations (issue #1472): complete sweep, N dropped.
+				Provider:               "gcp",
+				SkippedRecommendations: 3,
+				Reasons:                map[string]int{},
 			}},
 		}
 		mockStore.On("GetRecommendationsFreshness", ctx).
@@ -167,7 +172,9 @@ func TestHandler_getRecommendationsFreshness(t *testing.T) {
 		body, err := json.Marshal(got)
 		require.NoError(t, err)
 		assert.JSONEq(t, `{"providers":[{"provider":"azure","incomplete_accounts":1,"attempted_scopes":10,`+
-			`"failed_scopes":9,"failed_details":0,"reasons":{"throttled":9}}]}`,
+			`"failed_scopes":9,"failed_details":0,"skipped_recommendations":0,"reasons":{"throttled":9}},`+
+			`{"provider":"gcp","incomplete_accounts":0,"attempted_scopes":0,"failed_scopes":0,"failed_details":0,`+
+			`"skipped_recommendations":3,"reasons":{}}]}`,
 			string(mustField(t, body, "last_collection_partial")))
 	})
 

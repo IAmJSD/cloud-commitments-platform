@@ -44,6 +44,10 @@ type APIGroup struct {
 	UpdatedAt       string          `json:"updated_at,omitempty"`
 	Permissions     []APIPermission `json:"permissions"`
 	AllowedAccounts []string        `json:"allowed_accounts"`
+	// SystemManaged marks a group seeded and maintained by migrations. The
+	// API refuses to update or delete it (ErrSystemManagedGroup), and the
+	// dashboard reads this flag to hide Edit and Delete (issue #919).
+	SystemManaged bool `json:"system_managed,omitempty"`
 }
 
 // APIPermission is the permission type for API responses.
@@ -199,6 +203,7 @@ func groupToAPIGroup(g *Group) *APIGroup {
 		Description:     g.Description,
 		Permissions:     apiPerms,
 		AllowedAccounts: allowedAccounts,
+		SystemManaged:   g.SystemManaged,
 		CreatedAt:       g.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:       g.UpdatedAt.Format(time.RFC3339),
 	}
@@ -396,7 +401,9 @@ func updateRequestPermissions(req APIUpdateGroupRequest) ([]Permission, error) {
 // UpdateGroupAPI updates a group via the API. It refuses to touch a
 // system-managed group at all, and checks any requested permission list
 // against the acting principal's own effective permissions before writing
-// (issues #1550, #1629). actorUserID is a user ID, or AdminAPIKeyActorID for
+// (issues #1550, #1629). A permission change that would give a member both a
+// view-only and a write-capable group is refused after those checks (issue
+// #1409), so an access refusal (403) wins over the contradiction (400). actorUserID is a user ID, or AdminAPIKeyActorID for
 // the stateless admin API key.
 func (s *Service) UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, req APIUpdateGroupRequest) (*APIGroup, error) {
 	group, err := s.GetGroup(ctx, groupID)
@@ -421,13 +428,17 @@ func (s *Service) UpdateGroupAPI(ctx context.Context, actorUserID, groupID strin
 		return nil, err
 	}
 
-	applyUpdateGroupRequest(group, req, perms)
-
-	group.UpdatedAt = time.Now()
-	if err := s.UpdateGroup(ctx, group); err != nil {
+	updated := *group
+	applyUpdateGroupRequest(&updated, req, perms)
+	if err := s.checkGroupPermissionChange(ctx, group, &updated); err != nil {
 		return nil, err
 	}
-	return groupToAPIGroup(group), nil
+
+	updated.UpdatedAt = time.Now()
+	if err := s.UpdateGroup(ctx, &updated); err != nil {
+		return nil, err
+	}
+	return groupToAPIGroup(&updated), nil
 }
 
 // GetGroupAPI returns a group by ID via the API.

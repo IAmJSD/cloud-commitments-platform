@@ -118,3 +118,64 @@ describe('generated plan name step count (#1185)', () => {
     expect((document.getElementById('plan-name') as HTMLInputElement).value).toContain(`(${steps})`);
   });
 });
+
+describe('custom ramp inputs when Edit is the first plan modal (#1536)', () => {
+  beforeEach(() => {
+    document.body.innerHTML = loadRealIndexBody();
+    jest.clearAllMocks();
+    _resetRampHandlersForTest();
+  });
+
+  const stepInput = (): HTMLInputElement => document.getElementById('ramp-step-percent') as HTMLInputElement;
+  const intervalInput = (): HTMLInputElement => document.getElementById('ramp-interval-days') as HTMLInputElement;
+
+  test('Edit on a preset plan, then Custom, leaves both inputs enabled', async () => {
+    const stored = plan('weekly', 25, 7);
+    (api.getPlans as jest.Mock).mockResolvedValue({ plans: [stored] });
+    (api.getPlan as jest.Mock).mockResolvedValue(stored);
+    setupPlanHandlers();
+    await loadPlans();
+
+    (document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement).click();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(stepInput().disabled).toBe(true);
+
+    const custom = document.querySelector('input[name="ramp-schedule"][value="custom"]') as HTMLInputElement;
+    custom.checked = true;
+    custom.dispatchEvent(new Event('change', { bubbles: true }));
+
+    expect(document.getElementById('custom-ramp-config')!.classList.contains('hidden')).toBe(false);
+    expect(stepInput().disabled).toBe(false);
+    expect(intervalInput().disabled).toBe(false);
+  });
+
+  async function editFirst(term: number | null, payment: string): Promise<void> {
+    const stored = plan('weekly', 25, 7) as { services: { ec2: Record<string, unknown> } };
+    if (term === null) delete stored.services.ec2['term']; else stored.services.ec2['term'] = term;
+    stored.services.ec2['payment'] = payment;
+    (api.getPlans as jest.Mock).mockResolvedValue({ plans: [stored] });
+    (api.getPlan as jest.Mock).mockResolvedValue(stored);
+    setupPlanHandlers();
+    await loadPlans();
+    (document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement).click();
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+
+  test('Edit-first leaves an absent stored term unset', async () => {
+    await editFirst(null, 'no-upfront');
+    expect((document.getElementById('plan-term') as HTMLSelectElement).value).toBe('');
+  });
+
+  test('Edit-first keeps the stored term and a non-default payment', async () => {
+    await editFirst(1, 'all-upfront');
+    expect((document.getElementById('plan-term') as HTMLSelectElement).value).toBe('1');
+    expect((document.getElementById('plan-payment') as HTMLSelectElement).value).toBe('all-upfront');
+  });
+
+  test('Create opens with the hidden custom inputs disabled', () => {
+    setupPlanHandlers();
+    openCreatePlanModal();
+    expect(stepInput().disabled).toBe(true);
+    expect(intervalInput().disabled).toBe(true);
+  });
+});

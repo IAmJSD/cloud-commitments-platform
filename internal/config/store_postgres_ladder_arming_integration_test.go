@@ -5,38 +5,23 @@ package config
 
 import (
 	"context"
-	"net/url"
-	"os"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestPostgresStoreDB_LadderArming runs against a dedicated database named pr2_*
-// (LADDER_ARMING_TEST_DATABASE_URL): a fresh migrate leaves both ladder switches
+// TestPostgresStoreDB_LadderArming runs against a fresh database from the
+// shared test container: a fresh migrate leaves both ladder switches
 // OFF with NULL stamps, the stamps survive a whole-config write from another
 // path, and every cap LadderCapMicros accepts is stored as the same micro-dollars
 // it compared (NUMERIC(20,6)).
 func TestPostgresStoreDB_LadderArming(t *testing.T) {
-	dsn := os.Getenv("LADDER_ARMING_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("set LADDER_ARMING_TEST_DATABASE_URL to a dedicated pr2_* test database")
-	}
-	parsed, err := url.Parse(dsn)
-	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(strings.TrimPrefix(parsed.Path, "/"), "pr2_"), "database must be dedicated to PR2 verification")
-
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	pool, err := pgxpool.New(ctx, dsn)
-	require.NoError(t, err)
-	defer pool.Close()
-	require.NoError(t, migrations.RunMigrations(ctx, pool, getTestMigrationsPath(), "", ""))
+	pool := testhelpers.RequireMigratedDatabase(ctx, t, getTestMigrationsPath()).DB
 	store := &PostgresStore{db: pool}
 
 	cfg, err := store.GetGlobalConfig(ctx)

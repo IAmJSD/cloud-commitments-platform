@@ -170,11 +170,11 @@ describe('loadTrends', () => {
     expect(config.data.datasets[0].data).toEqual([null, null, null, null, 400, 400]);
   });
 
-  test('forwards the single account chip and the window, never the provider when unset', async () => {
-    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['acct-uuid-1']);
+  test('forwards every selected account and the window, never the provider when unset', async () => {
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['acct-uuid-1', 'acct-uuid-2']);
     await loadTrends();
     const arg = (api.getAnalyticsTrends as jest.Mock).mock.calls[0][0];
-    expect(arg.accountID).toBe('acct-uuid-1');
+    expect(arg.accountIDs).toEqual(['acct-uuid-1', 'acct-uuid-2']);
     expect(arg.provider).toBeUndefined();
     expect(arg.start).toBe(trendsWindow(6).start.toISOString());
   });

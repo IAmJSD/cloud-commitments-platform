@@ -484,7 +484,9 @@ func TestService_UpdateGroupAPI(t *testing.T) {
 			Description: "Old description",
 			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
 		}
-		mockStore.On("GetGroup", ctx, "group-123").Return(existingGroup, nil).Once()
+		// Twice: UpdateGroupAPI loads the group, then Service.UpdateGroup
+		// re-reads it for its own system_managed guard (issue #919).
+		mockStore.On("GetGroup", ctx, "group-123").Return(existingGroup, nil).Twice()
 		mockStore.On("UpdateGroup", ctx, mock.AnythingOfType("*auth.Group")).Return(nil).Once()
 
 		req := APIUpdateGroupRequest{
@@ -515,7 +517,12 @@ func TestService_UpdateGroupAPI(t *testing.T) {
 			Permissions: []Permission{},
 		}
 
-		mockStore.On("GetGroup", ctx, "group-123").Return(existingGroup, nil).Once()
+		// Twice: UpdateGroupAPI loads the group, then Service.UpdateGroup
+		// re-reads it for its own system_managed guard (issue #919).
+		mockStore.On("GetGroup", ctx, "group-123").Return(existingGroup, nil).Twice()
+		// The group gains its first permission, so the issue #1409 member
+		// check runs; the group has no members.
+		mockStore.On("ListUsers", ctx).Return([]User{}, nil).Once()
 		mockStore.On("UpdateGroup", ctx, mock.AnythingOfType("*auth.Group")).Return(nil).Once()
 
 		req := APIUpdateGroupRequest{

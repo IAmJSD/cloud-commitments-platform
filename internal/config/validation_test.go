@@ -1183,3 +1183,10 @@ func TestPurchasePlan_CheckNoMultiStepSavingsPlans(t *testing.T) {
 		})
 	}
 }
+
+// Only purchase plans refuse a 0% target (platform#523); service and global
+// coverage keep accepting 0.
+func TestCoverageZeroStillValidOutsidePlans(t *testing.T) {
+	require.NoError(t, (&ServiceConfig{Provider: "aws", Service: "ec2", Term: 3, Payment: "all-upfront", Coverage: 0}).Validate())
+	require.NoError(t, validateCoverage(0))
+}

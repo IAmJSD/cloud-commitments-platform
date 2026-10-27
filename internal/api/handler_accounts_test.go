@@ -214,7 +214,7 @@ func TestListAccountsMinimal_NoViewRecommendations_403(t *testing.T) {
 func TestListAccountsMinimal_ScopesByAllowedAccounts(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", true, []string{"Production"})
+	setupStandardUserAuth(ctx, mockAuth, "view", "recommendations", true, []string{sampleAccount().ID})
 
 	prod := sampleAccount()
 	prod.Name = "Production"
@@ -1430,6 +1430,128 @@ func TestSetPlanAccounts_EmptyServicesSkipsValidation(t *testing.T) {
 	assert.Equal(t, []string{azureAcct1}, capturedIDs, "empty services map → validation skipped → write proceeds")
 }
 
+// TestSetPlanAccounts_ColonKeyedPlanStillChecksProvider: migration 000040
+// wrote "aws:savings-plans-<type>" keys. DerivePlanProviders used to skip
+// them, so a plan keyed only that way had an empty provider set and accepted
+// an Azure account (issue #316, A04-012).
+func TestSetPlanAccounts_ColonKeyedPlanStillChecksProvider(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	setCalled := false
+	store := setupAdminMock(ctx)
+	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+		return &config.PurchasePlan{ID: planID209, Name: "sp-plan", Services: map[string]config.ServiceConfig{
+			"aws:savings-plans-compute":     {Provider: "aws", Service: "savings-plans"},
+			"aws:savings-plans-ec2instance": {Provider: "aws", Service: "savings-plans"},
+		}}, nil
+	}
+	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, Name: "prod-azure", Provider: "azure"}, nil
+	}
+	store.SetPlanAccountsFn = func(_ context.Context, _ string, _ []string) error {
+		setCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"account_ids":["` + azureAcct1 + `"]}`
+	_, err := handler.setPlanAccounts(ctx, adminRequest(body), planID209)
+	require.Error(t, err, "an Azure account must not be assignable to an AWS-only plan")
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError, got %T", err)
+	assert.Equal(t, 400, ce.code)
+	assert.Contains(t, ce.Error(), "prod-azure")
+	assert.False(t, setCalled, "SetPlanAccounts must NOT be called when validation fails")
+}
+
+// TestSetPlanAccounts_LegacyKeyedPlanUsesProviderField: a legacy alias kept
+// under its original key (#1123) has no provider prefix, but its Provider
+// field names one. A matching account is accepted and a mismatched one is
+// refused, instead of the plan accepting every provider (main) or none (the
+// first #316 commit).
+func TestSetPlanAccounts_LegacyKeyedPlanUsesProviderField(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, accountProvider string
+		wantCode              int
+	}{
+		{"matching provider accepted", "azure", 0},
+		{"mismatched provider refused", "aws", 400},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mockAuth := new(MockAuthService)
+			setupAdminAuth(ctx, mockAuth)
+			setCalled := false
+			store := setupAdminMock(ctx)
+			store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+				return &config.PurchasePlan{ID: planID209, Name: "alias plan", Services: map[string]config.ServiceConfig{
+					"original-key": {Provider: "azure", Service: "vm", Enabled: true},
+				}}, nil
+			}
+			store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+				return &config.CloudAccount{ID: id, Name: "acct-" + tc.accountProvider, Provider: tc.accountProvider}, nil
+			}
+			store.SetPlanAccountsFn = func(_ context.Context, _ string, _ []string) error {
+				setCalled = true
+				return nil
+			}
+			handler := &Handler{auth: mockAuth, config: store}
+
+			body := `{"account_ids":["` + azureAcct1 + `"]}`
+			_, err := handler.setPlanAccounts(ctx, adminRequest(body), planID209)
+			if tc.wantCode == 0 {
+				require.NoError(t, err)
+				assert.True(t, setCalled)
+				return
+			}
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "expected a clientError, got %T", err)
+			assert.Equal(t, tc.wantCode, ce.code)
+			assert.False(t, setCalled)
+		})
+	}
+}
+
+// TestSetPlanAccounts_UnparseableServiceKeyFailsClosed: stored entries that
+// identify no provider (no prefix in the key, empty Provider field) used to be
+// skipped silently; when none identified one, the provider set came out empty
+// and any account was accepted. It now fails the request instead (issue #316,
+// A04-012).
+func TestSetPlanAccounts_UnparseableServiceKeyFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupAdminAuth(ctx, mockAuth)
+
+	setCalled := false
+	store := setupAdminMock(ctx)
+	store.GetPurchasePlanFn = func(_ context.Context, _ string) (*config.PurchasePlan, error) {
+		return &config.PurchasePlan{ID: planID209, Name: "bad-key", Services: map[string]config.ServiceConfig{
+			"ec2":    {Service: "ec2"},
+			"future": {},
+		}}, nil
+	}
+	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		return &config.CloudAccount{ID: id, Name: "prod-azure", Provider: "azure"}, nil
+	}
+	store.SetPlanAccountsFn = func(_ context.Context, _ string, _ []string) error {
+		setCalled = true
+		return nil
+	}
+	handler := &Handler{auth: mockAuth, config: store}
+
+	body := `{"account_ids":["` + azureAcct1 + `"]}`
+	_, err := handler.setPlanAccounts(ctx, adminRequest(body), planID209)
+	require.Error(t, err)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "expected a clientError, got %T", err)
+	assert.Equal(t, 500, ce.code)
+	assert.NotContains(t, ce.Error(), planID209, "the plan UUID must not leak into the response")
+	assert.False(t, setCalled, "SetPlanAccounts must NOT be called when the plan's providers cannot be derived")
+}
+
 // TestSetPlanAccounts_RejectsEmpty verifies the universal-plans fix:
 // PUT /api/plans/:id/accounts with an empty account_ids returns HTTP 400
 // and never reaches the store. Eliminates the back-door for re-creating a
@@ -1961,20 +2083,18 @@ func TestGetAccount_OutOfScope_Returns404(t *testing.T) {
 	assert.True(t, IsNotFoundError(err), "expected 404 not-found, got %v", err)
 }
 
-func TestGetAccount_InScope_ByName(t *testing.T) {
+func TestGetAccount_InScope_ByID(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	// allowed_accounts = ["Production"] matches acct.Name
-	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "view", "accounts", []string{"Production"})
+	// allowed_accounts holds acct.ID; entries match by account ID only (#1034).
+	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "view", "accounts", []string{"11111111-1111-1111-1111-111111111111"})
 
 	acct := sampleAccount()
 	acct.Name = "Production"
 	customStore := &mockConfigStoreAccounts{
 		MockConfigStore: setupAdminMock(ctx),
 		getResult:       &acct,
-		// "Production" is unique among the registered accounts, so it may
-		// match by name (#433).
-		listResult: []config.CloudAccount{acct},
+		listResult:      []config.CloudAccount{acct},
 	}
 
 	handler := &Handler{auth: mockAuth, config: customStore}
@@ -1982,6 +2102,30 @@ func TestGetAccount_InScope_ByName(t *testing.T) {
 	require.NoError(t, err)
 	got := result.(*config.CloudAccount)
 	assert.Equal(t, "Production", got.Name)
+}
+
+// A display-name entry is not bound to an account, so it must not grant the
+// account that currently carries that name, even when the name is unique
+// (#1034): that account may have taken the name after the intended one was
+// deleted or renamed.
+func TestGetAccount_NameEntry_Returns404(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	setupScopedAuth(ctx, mockAuth, "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "view", "accounts", []string{"Production"})
+
+	acct := sampleAccount()
+	acct.Name = "Production"
+	customStore := &mockConfigStoreAccounts{
+		MockConfigStore: setupAdminMock(ctx),
+		getResult:       &acct,
+		listResult:      []config.CloudAccount{acct},
+	}
+
+	handler := &Handler{auth: mockAuth, config: customStore}
+	result, err := handler.getAccount(ctx, scopedRequest(""), "11111111-1111-1111-1111-111111111111")
+	assert.Nil(t, result)
+	require.Error(t, err)
+	assert.True(t, IsNotFoundError(err), "expected 404 not-found, got %v", err)
 }
 
 func TestDeleteAccount_OutOfScope_Returns404_NoDelete(t *testing.T) {

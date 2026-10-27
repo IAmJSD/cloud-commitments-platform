@@ -157,6 +157,49 @@ func (m *MockConfigStore) SaveServiceConfig(ctx context.Context, cfg *config.Ser
 	return args.Error(0)
 }
 
+// UpdateServiceConfigAtomic mocks the locked read-merge-write of one service
+// config row. When an expectation is registered it dispatches through
+// m.Called (tests can drive the apply closure via a Run callback). Otherwise
+// it emulates the real store by routing through the mocked GetServiceConfig +
+// apply + SaveServiceConfig, so tests that seed those two keep working. Like
+// the real store, a not-found read hands apply a nil row.
+func (m *MockConfigStore) UpdateServiceConfigAtomic(ctx context.Context, provider, service string, apply func(*config.ServiceConfig) (*config.ServiceConfig, error)) (*config.ServiceConfig, error) {
+	m.record("UpdateServiceConfigAtomic", ctx, provider, service, apply)
+	if isExpected(&m.Mock, "UpdateServiceConfigAtomic") {
+		args := m.Called(ctx, provider, service, apply)
+		if args.Get(0) == nil {
+			return nil, args.Error(1)
+		}
+		v, ok := args.Get(0).(*config.ServiceConfig)
+		if !ok {
+			m.reporter.wrongReturnType("UpdateServiceConfigAtomic", "*config.ServiceConfig", args.Get(0))
+		}
+		return v, args.Error(1)
+	}
+	return m.updateServiceConfigFallback(ctx, provider, service, apply)
+}
+
+// updateServiceConfigFallback is UpdateServiceConfigAtomic's default. It
+// routes through the mocked GetServiceConfig and SaveServiceConfig, which
+// record themselves; see UpdatePurchasePlanTx.
+func (m *MockConfigStore) updateServiceConfigFallback(ctx context.Context, provider, service string, apply func(*config.ServiceConfig) (*config.ServiceConfig, error)) (*config.ServiceConfig, error) {
+	existing, err := m.GetServiceConfig(ctx, provider, service)
+	if err != nil && !errors.Is(err, config.ErrNotFound) {
+		return nil, err
+	}
+	next, err := apply(existing)
+	if err != nil {
+		return nil, err
+	}
+	if next == nil || next.Provider != provider || next.Service != service {
+		return nil, fmt.Errorf("service config update for %s/%s must return a row with the same key", provider, service)
+	}
+	if err := m.SaveServiceConfig(ctx, next); err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
 // ListServiceConfigs mocks the ListServiceConfigs operation.
 func (m *MockConfigStore) ListServiceConfigs(ctx context.Context) ([]config.ServiceConfig, error) {
 	m.record("ListServiceConfigs", ctx)
@@ -871,6 +914,36 @@ func (m *MockConfigStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*co
 	return v, args.Error(1)
 }
 
+// MarkRevocationReturnPosted mocks MarkRevocationReturnPosted (issue #1523).
+// Uses the isExpected default-or-dispatch pattern: revoke tests that only
+// verify MarkPurchaseRevoked do not need an expectation for this stamp.
+func (m *MockConfigStore) MarkRevocationReturnPosted(ctx context.Context, purchaseID string) error {
+	m.record("MarkRevocationReturnPosted", ctx, purchaseID)
+	if !isExpected(&m.Mock, "MarkRevocationReturnPosted") {
+		return nil
+	}
+	args := m.Called(ctx, purchaseID)
+	return args.Error(0)
+}
+
+// ReleaseStaleRevocationsInFlight mocks ReleaseStaleRevocationsInFlight
+// (issue #1523). Default-or-dispatch: with no expectation it releases nothing.
+func (m *MockConfigStore) ReleaseStaleRevocationsInFlight(ctx context.Context, after time.Duration) ([]string, error) {
+	m.record("ReleaseStaleRevocationsInFlight", ctx, after)
+	if !isExpected(&m.Mock, "ReleaseStaleRevocationsInFlight") {
+		return nil, nil
+	}
+	args := m.Called(ctx, after)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).([]string)
+	if !ok {
+		m.reporter.wrongReturnType("ReleaseStaleRevocationsInFlight", "[]string", args.Get(0))
+	}
+	return v, args.Error(1)
+}
+
 // UpdatePurchaseHistoryListing mocks stamping listing_id and listing_state (issue #292).
 func (m *MockConfigStore) UpdatePurchaseHistoryListing(ctx context.Context, purchaseID, listingID, listingState string) error {
 	m.record("UpdatePurchaseHistoryListing", ctx, purchaseID, listingID, listingState)
@@ -927,6 +1000,35 @@ func (m *MockConfigStore) ReleaseMarketplaceListingClaim(ctx context.Context, pu
 	m.record("ReleaseMarketplaceListingClaim", ctx, purchaseID, clientToken, priorState, keepAttempt)
 	args := m.Called(ctx, purchaseID, clientToken, priorState, keepAttempt)
 	return args.Error(0)
+}
+
+// ListMarketplaceListingsToPoll mocks the marketplace status poller's row scan (issue #27).
+func (m *MockConfigStore) ListMarketplaceListingsToPoll(ctx context.Context) ([]config.PurchaseHistoryRecord, error) {
+	m.record("ListMarketplaceListingsToPoll", ctx)
+	args := m.Called(ctx)
+	var rows []config.PurchaseHistoryRecord
+	if v := args.Get(0); v != nil {
+		r, ok := v.([]config.PurchaseHistoryRecord)
+		if !ok {
+			panic(fmt.Sprintf("mock: expected []config.PurchaseHistoryRecord, got %T", v))
+		}
+		rows = r
+	}
+	return rows, args.Error(1)
+}
+
+// RecordMarketplaceListingActive mocks stamping listed_at on an active listing (issue #27).
+func (m *MockConfigStore) RecordMarketplaceListingActive(ctx context.Context, purchaseID, listingID string, listedAt time.Time) (bool, error) {
+	m.record("RecordMarketplaceListingActive", ctx, purchaseID, listingID, listedAt)
+	args := m.Called(ctx, purchaseID, listingID, listedAt)
+	return args.Bool(0), args.Error(1)
+}
+
+// SettleMarketplaceListing mocks recording a closed or canceled listing (issue #27).
+func (m *MockConfigStore) SettleMarketplaceListing(ctx context.Context, settlement config.MarketplaceListingSettlement) (bool, error) {
+	m.record("SettleMarketplaceListing", ctx, settlement)
+	args := m.Called(ctx, settlement)
+	return args.Bool(0), args.Error(1)
 }
 
 // ClaimRIExchangeIdempotencyKey mocks the atomic RI exchange submit claim
@@ -1569,6 +1671,40 @@ func (m *MockConfigStore) SaveAccountServiceOverride(ctx context.Context, overri
 	return args.Error(0)
 }
 
+// SaveAccountServiceOverrideAuditedTx falls back to SaveAccountServiceOverride
+// when no expectation is registered (see UpdatePurchasePlanTx), so tests that
+// seed SaveAccountServiceOverrideFn keep observing the write.
+func (m *MockConfigStore) SaveAccountServiceOverrideAuditedTx(ctx context.Context, tx pgx.Tx, override *config.AccountServiceOverride, audit config.AuditContext) error {
+	m.record("SaveAccountServiceOverrideAuditedTx", ctx, tx, override, audit)
+	if !isExpected(&m.Mock, "SaveAccountServiceOverrideAuditedTx") {
+		return m.SaveAccountServiceOverride(ctx, override)
+	}
+	args := m.Called(ctx, tx, override, audit)
+	return args.Error(0)
+}
+
+// DeleteAccountServiceOverrideAuditedTx falls back to
+// DeleteAccountServiceOverride when no expectation is registered.
+func (m *MockConfigStore) DeleteAccountServiceOverrideAuditedTx(ctx context.Context, tx pgx.Tx, accountID, provider, service string, audit config.AuditContext) error {
+	m.record("DeleteAccountServiceOverrideAuditedTx", ctx, tx, accountID, provider, service, audit)
+	if !isExpected(&m.Mock, "DeleteAccountServiceOverrideAuditedTx") {
+		return m.DeleteAccountServiceOverride(ctx, accountID, provider, service)
+	}
+	args := m.Called(ctx, tx, accountID, provider, service, audit)
+	return args.Error(0)
+}
+
+// SaveConfigAuditEventTx records the event and returns nil when no
+// expectation is registered.
+func (m *MockConfigStore) SaveConfigAuditEventTx(ctx context.Context, tx pgx.Tx, event *config.AuditEvent) error {
+	m.record("SaveConfigAuditEventTx", ctx, tx, event)
+	if !isExpected(&m.Mock, "SaveConfigAuditEventTx") {
+		return nil
+	}
+	args := m.Called(ctx, tx, event)
+	return args.Error(0)
+}
+
 func (m *MockConfigStore) DeleteAccountServiceOverride(ctx context.Context, accountID, provider, service string) error {
 	m.record("DeleteAccountServiceOverride", ctx, accountID, provider, service)
 	if !isExpected(&m.Mock, "DeleteAccountServiceOverride") {
@@ -1665,6 +1801,19 @@ func (m *MockConfigStore) ListStoredRecommendations(ctx context.Context, filter 
 	v, ok := args.Get(0).([]config.RecommendationRecord)
 	if !ok {
 		m.reporter.wrongReturnType("ListStoredRecommendations", "[]config.RecommendationRecord", args.Get(0))
+	}
+	return v, args.Error(1)
+}
+
+func (m *MockConfigStore) ListStoredRecommendationsChunk(ctx context.Context, filter config.RecommendationFilter, after *config.RecommendationScanKey, limit int) (config.RecommendationChunk, error) {
+	m.record("ListStoredRecommendationsChunk", ctx, filter, after, limit)
+	if !isExpected(&m.Mock, "ListStoredRecommendationsChunk") {
+		return config.RecommendationChunk{Done: true}, nil
+	}
+	args := m.Called(ctx, filter, after, limit)
+	v, ok := args.Get(0).(config.RecommendationChunk)
+	if !ok {
+		panic(fmt.Sprintf("mock: expected config.RecommendationChunk, got %T", args.Get(0)))
 	}
 	return v, args.Error(1)
 }
@@ -1892,6 +2041,27 @@ func (m *MockConfigStore) WithTx(ctx context.Context, fn func(tx pgx.Tx) error) 
 		return args.Error(0)
 	}
 	return fn(nil)
+}
+
+// GetExecutionsByStatusesFiltered mocks the GetExecutionsByStatusesFiltered
+// operation. Without an expectation for it, it answers from the
+// GetExecutionsByStatuses expectation: the unfiltered rows are a superset of
+// the filtered ones, and the History handler re-applies every filter in Go, so
+// tests written against GetExecutionsByStatuses keep working.
+func (m *MockConfigStore) GetExecutionsByStatusesFiltered(ctx context.Context, q config.ExecutionsByStatusesQuery) ([]config.PurchaseExecution, error) {
+	if !isExpected(&m.Mock, "GetExecutionsByStatusesFiltered") {
+		return m.GetExecutionsByStatuses(ctx, q.Statuses, q.Limit)
+	}
+	m.record("GetExecutionsByStatusesFiltered", ctx, q)
+	args := m.Called(ctx, q)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	v, ok := args.Get(0).([]config.PurchaseExecution)
+	if !ok {
+		m.reporter.wrongReturnType("GetExecutionsByStatusesFiltered", "[]config.PurchaseExecution", args.Get(0))
+	}
+	return filterExecutionsLikeStore(v, q.Statuses, q.Limit), args.Error(1)
 }
 
 // GetExecutionsByStatuses mocks the GetExecutionsByStatuses operation.

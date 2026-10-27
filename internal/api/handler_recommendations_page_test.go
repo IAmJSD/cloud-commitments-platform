@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -43,8 +44,24 @@ func pageTestRecs(n int) []config.RecommendationRecord {
 func pageTestHandler(t *testing.T, recs []config.RecommendationRecord) *Handler {
 	t.Helper()
 	ms := new(MockScheduler)
+	// Unpaginated requests read the full list; paginated ones scan it in
+	// ID order (issue #981).
 	ms.On("ListRecommendations", mock.Anything, mock.Anything).Return(recs, nil)
+	ms.On("ScanRecommendations", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(recs, nil)
 	return &Handler{scheduler: ms, apiKey: "test-key"}
+}
+
+// buildBudgetedPage pages recs the way a paginated request does: the rows
+// reach the collector in ID order, as the store scan delivers them, and the
+// page is cut with the given byte budget.
+func buildBudgetedPage(recs []config.RecommendationRecord, page recommendationsPage, budget int) (*RecommendationsResponse, error) {
+	sorted := append([]config.RecommendationRecord(nil), recs...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	collector := newRecommendationsPageCollector(page)
+	if err := collector.add(sorted); err != nil {
+		return nil, err
+	}
+	return collector.response(budget)
 }
 
 func pageTestReq() *events.LambdaFunctionURLRequest {

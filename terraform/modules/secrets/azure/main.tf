@@ -107,6 +107,15 @@ resource "azurerm_key_vault_secret" "admin_password" {
     environment = var.environment
   })
 
+  # The app's admin-password sync (#199) writes this secret at runtime. Without
+  # ignore_changes, the next apply would compare against the synced value and
+  # silently write the Terraform-side password back, undoing the sync. Changing
+  # var.admin_password therefore no longer rotates the vault copy; rotate it
+  # through the app (or with `az keyvault secret set`) instead.
+  lifecycle {
+    ignore_changes = [value]
+  }
+
   depends_on = [azurerm_role_assignment.current_user_secrets_officer]
 }
 

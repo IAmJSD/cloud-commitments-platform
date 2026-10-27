@@ -18,7 +18,7 @@ export function integer(value: string, label: string, min: number, max: number):
 }
 
 export function buildLocalScheduleIntent(input: PlanScheduleIntentInput): { coverage: number; notificationDays: number; dates: string[]; shares: number[] } {
-  const coverage = integer(input.coverage, 'Target coverage', 0, 100);
+  const coverage = integer(input.coverage, 'Target coverage', 1, 100);
   const notice = integer(input.notificationDays, 'Notification days', 1, 30);
   // Mirrors presets/shares in internal/config/types.go and custom
   // step counting in PlanRequest.buildCustomRampSchedule, internal/api/types.go.

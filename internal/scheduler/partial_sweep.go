@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	awsrecommendations "github.com/LeanerCloud/cloud-commitments-go/providers/aws/recommendations"
 	azureprovider "github.com/LeanerCloud/cloud-commitments-go/providers/azure"
 	gcpprovider "github.com/LeanerCloud/cloud-commitments-go/providers/gcp"
@@ -30,7 +33,50 @@ type sweepGap struct {
 	attemptedScopes    int
 	failedScopes       int
 	failedDetails      int
-	reasons            map[string]int
+	// skippedRecommendations counts recommendations the provider dropped as
+	// invalid (for example non-USD) while returning the rest. A gap made only
+	// of these does not hold back stale-row eviction; see holdsEviction.
+	skippedRecommendations int
+	// skippedOnly is true when every sweep merged into this gap lost nothing
+	// but invalid recommendations, so the account's sweep itself was complete.
+	skippedOnly bool
+	reasons     map[string]int
+}
+
+// holdsEviction reports whether the sweep must stay out of the succeeded-
+// account roster. A nil gap (complete sweep) and a skipped-only gap do not:
+// a skipped recommendation is invalid, so its previous-cycle row is exactly
+// what stale-row eviction should remove rather than keep offering for
+// purchase. Every other gap lost whole scopes, whose rows must survive.
+func (g *sweepGap) holdsEviction() bool {
+	return g != nil && !g.skippedOnly
+}
+
+var skippedCountRE = regexp.MustCompile(`(\d+) recommendation\(s\) skipped`)
+
+// partialResult is implemented by provider errors that accompany usable
+// results (GCP's skipped recommendations). Matching the method, not the
+// provider's internal type, keeps this provider-agnostic.
+type partialResult interface{ Partial() bool }
+
+// tolerateSkippedRecommendations keeps the recommendations returned alongside
+// a Partial() error and records how many were skipped. Any other error is
+// returned unchanged.
+func tolerateSkippedRecommendations(providerName string, err error) (*sweepGap, error) {
+	var p partialResult
+	if err == nil || !errors.As(err, &p) || !p.Partial() {
+		return nil, err
+	}
+	logging.Warnf("%s recommendations partial, keeping the rest: %v", providerName, err)
+	// The count is parsed from the message because the contract exposes only
+	// Partial(); an unparsable message still yields a gap, with count 0.
+	n := 0
+	if m := skippedCountRE.FindStringSubmatch(err.Error()); m != nil {
+		if v, convErr := strconv.Atoi(m[1]); convErr == nil {
+			n = v
+		}
+	}
+	return &sweepGap{skippedRecommendations: n, skippedOnly: true, reasons: map[string]int{}}, nil
 }
 
 // gapFromAWSIncomplete summarizes an AWS IncompleteRecommendationsError.
@@ -70,7 +116,9 @@ func (g *sweepGap) forAccount() *sweepGap {
 		return nil
 	}
 	out := mergeSweepGaps(nil, g)
-	out.incompleteAccounts = 1
+	if g.holdsEviction() {
+		out.incompleteAccounts = 1
+	}
 	return out
 }
 
@@ -80,11 +128,13 @@ func mergeSweepGaps(a, b *sweepGap) *sweepGap {
 	if a == nil && b == nil {
 		return nil
 	}
-	out := &sweepGap{reasons: map[string]int{}}
+	out := &sweepGap{reasons: map[string]int{}, skippedOnly: true}
 	for _, g := range []*sweepGap{a, b} {
 		if g == nil {
 			continue
 		}
+		out.skippedOnly = out.skippedOnly && g.skippedOnly
+		out.skippedRecommendations += g.skippedRecommendations
 		out.incompleteAccounts += g.incompleteAccounts
 		out.attemptedScopes += g.attemptedScopes
 		out.failedScopes += g.failedScopes
@@ -103,12 +153,13 @@ func (g *sweepGap) toProviderSweep(providerName string) config.PartialProviderSw
 		reasons[reason] = n
 	}
 	return config.PartialProviderSweep{
-		Provider:           providerName,
-		IncompleteAccounts: g.incompleteAccounts,
-		AttemptedScopes:    g.attemptedScopes,
-		FailedScopes:       g.failedScopes,
-		FailedDetails:      g.failedDetails,
-		Reasons:            reasons,
+		Provider:               providerName,
+		IncompleteAccounts:     g.incompleteAccounts,
+		AttemptedScopes:        g.attemptedScopes,
+		FailedScopes:           g.failedScopes,
+		FailedDetails:          g.failedDetails,
+		SkippedRecommendations: g.skippedRecommendations,
+		Reasons:                reasons,
 	}
 }
 

@@ -924,7 +924,8 @@ export interface ExchangeExecuteRequest {
 
 export interface ExchangeResult {
   exchange_id: string;
-  quote: ExchangeQuoteSummary;
+  // The execute response's quote carries no Region (only the quote endpoint does).
+  quote: Omit<ExchangeQuoteSummary, "Region">;
 }
 
 // RI Exchange Config Types

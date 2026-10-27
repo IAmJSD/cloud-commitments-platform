@@ -42,3 +42,40 @@ func TestLegacyAWSSlugsMatchSuppressionAliases(t *testing.T) {
 		})
 	}
 }
+
+// TestMapServiceSlugAcceptsEveryCanonicalReservationSlug pins the canonical
+// slugs, including Azure Cosmos DB's "nosql" (#613). The Settings page writes
+// service configs and overrides under these ids, and its test reads this
+// table, so a slug missing here shows up there as a slug the backend rejects.
+func TestMapServiceSlugAcceptsEveryCanonicalReservationSlug(t *testing.T) {
+	for _, want := range []common.ServiceType{
+		common.ServiceCompute, common.ServiceRelationalDB, common.ServiceNoSQL,
+		common.ServiceCache, common.ServiceSearch, common.ServiceDataWarehouse,
+	} {
+		got, ok := mapServiceSlug(string(want))
+		require.True(t, ok, "mapServiceSlug rejects canonical slug %q", want)
+		assert.Equal(t, want, got)
+	}
+}
+
+// TestSavingsPlansSpellingsMatchSuppressionAliases checks that every per-type
+// Savings Plans spelling the purchase manager accepts canonicalises, for
+// suppressions, to the slug it buys, so a suppression stored under the
+// dash-free spelling still hides the hyphenated rec (#1422). The umbrella
+// spellings must stay umbrellas: folding one into a plan type would let one
+// umbrella suppression hide every plan type's recs.
+func TestSavingsPlansSpellingsMatchSuppressionAliases(t *testing.T) {
+	for _, pt := range common.SavingsPlansPlanTypes() {
+		require.Contains(t, savingsPlansSlugs, string(pt), "per-type slug %q was removed from savingsPlansSlugs", pt)
+	}
+	for key, want := range savingsPlansSlugs {
+		t.Run(key, func(t *testing.T) {
+			canonical := config.CanonicalSuppressionService("aws", key)
+			if want == common.ServiceSavingsPlansAll {
+				assert.Equal(t, key, canonical, "umbrella spelling %q must pass through unchanged", key)
+				return
+			}
+			assert.Equal(t, string(want), canonical, "spelling %q is missing from config.awsSavingsPlansSpellings", key)
+		})
+	}
+}

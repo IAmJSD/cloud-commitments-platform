@@ -726,7 +726,7 @@ func TestTokenApprove_SessionRequiresCSRF(t *testing.T) {
 	t.Run("valid CSRF header", func(t *testing.T) {
 		mockPurchase := new(MockPurchaseManager)
 		handler := newHandler(new(MockConfigStore), mockPurchase)
-		mockPurchase.On("ApproveExecution", ctx, execID, "email-token", contactEmail).Return("", nil)
+		mockPurchase.On("ApproveExecution", ctx, execID, "email-token", contactEmail).Return(nil, "", nil)
 		req := &events.LambdaFunctionURLRequest{
 			Headers: map[string]string{"authorization": "Bearer sess-tok", "x-csrf-token": "csrf-ok"},
 		}

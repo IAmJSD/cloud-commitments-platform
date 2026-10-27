@@ -122,9 +122,17 @@ variable "admin_email" {
 }
 
 variable "admin_password_secret_name" {
-  description = "Key Vault secret name containing admin password"
+  description = "Key Vault secret name containing admin password. When set together with admin_email, the runtime identity gets write access to this one secret for the admin-password sync (#199)."
   type        = string
   default     = ""
+
+  # The write grant's RBAC scope is <key_vault_id>/secrets/<this name>, so a
+  # value carrying a "/" (or anything else outside Key Vault's secret-name
+  # alphabet) could move that scope somewhere other than exactly one secret.
+  validation {
+    condition     = var.admin_password_secret_name == "" || can(regex("^[0-9A-Za-z-]{1,127}$", var.admin_password_secret_name))
+    error_message = "admin_password_secret_name must be empty or a bare Key Vault secret name (1-127 letters, digits and hyphens), not a path or ID."
+  }
 }
 
 variable "auto_migrate" {
@@ -305,7 +313,7 @@ variable "send_notifications_schedule" {
 }
 
 variable "enable_finalize_revocations_schedule" {
-  description = "Schedule the finalize_revocations sweep (idempotent audit repair of revoked purchases)."
+  description = "Schedule the finalize_revocations sweep (idempotent audit repair of revoked purchases, plus the RI Marketplace listing poll, which has no schedule of its own: disabling this also stops recording listing sales and proceeds)."
   type        = bool
   default     = true
 }

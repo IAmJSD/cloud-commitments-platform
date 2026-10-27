@@ -227,6 +227,22 @@ func TestService_Validate_HitAndMiss(t *testing.T) {
 	assert.False(t, ok)
 }
 
+// ValidateCombo is the store-free check callers run inside a transaction
+// against a snapshot fetched earlier with Get (issue #1488). It must give the
+// same answers as Validate.
+func TestValidateCombo_Snapshot(t *testing.T) {
+	opts := Options{"aws": {"rds": {
+		{Provider: "aws", Service: "rds", TermYears: 1, Payment: "all-upfront"},
+		{Provider: "aws", Service: "rds", TermYears: 3, Payment: "no-upfront"},
+	}}}
+	assert.True(t, ValidateCombo(opts, "aws", "rds", 1, "all-upfront"))
+	assert.True(t, ValidateCombo(opts, "aws", "rds", 3, "no-upfront"))
+	assert.False(t, ValidateCombo(opts, "aws", "rds", 3, "partial-upfront"))
+	assert.True(t, ValidateCombo(opts, "aws", "ec2", 3, "partial-upfront"), "service absent from the snapshot is permissive")
+	assert.True(t, ValidateCombo(opts, "azure", "vm", 1, "all-upfront"), "provider absent from the snapshot is permissive")
+	assert.True(t, ValidateCombo(nil, "aws", "rds", 3, "partial-upfront"), "nil snapshot is permissive")
+}
+
 func TestService_Validate_UnknownProviderPermissive(t *testing.T) {
 	cached := Options{"aws": {"rds": {{Provider: "aws", Service: "rds", TermYears: 1, Payment: "all-upfront"}}}}
 	store := &fakeStore{opts: cached, has: true}

@@ -106,6 +106,8 @@ import (
 	"strings"
 	"text/template"
 	"unicode"
+
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/iacbundle"
 )
 
 // iacData is this script's copy of federationIaCData in
@@ -128,11 +130,7 @@ type iacData struct {
 	SourceAccountID string
 	// AWS WIF / cross-account
 	OIDCIssuerURL string
-	// OIDCIssuerHost is OIDCIssuerURL without its https:// prefix, the form
-	// IAM uses in condition keys; aws-cfn-deploy.sh.tmpl passes it to
-	// CloudFormation. Derived the same way as the server does.
-	OIDCIssuerHost string
-	OIDCAudience   string
+	OIDCAudience  string
 	// OIDCSubjectClaim restricts the AWS trust policy to a single workload
 	// subject. Empty unless --oidc-subject-claim is passed; every AWS-WIF
 	// template requires it (no working subject-less default, see #1640).
@@ -296,51 +294,41 @@ func addToZip(zw *zip.Writer, name string, content []byte) error {
 	return err
 }
 
-// bundleModuleSpec returns the Terraform module directory, tfvars template path,
-// and zip destination name for the given target/source combination.
-func bundleModuleSpec(target, source, slug, templDir, modulesDir string) (moduleDir, tfvarsTmpl, tfvarsName string) {
+// bundleModuleSpec returns the Terraform module directory (slash-separated,
+// relative to the modules directory), tfvars template path, and zip
+// destination name for the given target/source combination.
+func bundleModuleSpec(target, source, slug, templDir string) (moduleDir, tfvarsTmpl, tfvarsName string) {
 	switch {
 	case target == "aws" && source == "aws":
-		return filepath.Join(modulesDir, "aws-cross-account", "terraform"),
+		return "aws-cross-account/terraform",
 			filepath.Join(templDir, "aws-cross-account.tfvars.tmpl"),
 			"terraform/" + slug + "-aws-cross-account.tfvars"
 	case target == "aws":
-		return filepath.Join(modulesDir, "aws-target", "terraform"),
+		return "aws-target/terraform",
 			filepath.Join(templDir, "aws-wif.tfvars.tmpl"),
 			"terraform/" + slug + "-aws-wif.tfvars"
 	case target == "azure":
-		return filepath.Join(modulesDir, "azure-target", "terraform"),
+		return "azure-target/terraform",
 			filepath.Join(templDir, "azure-wif.tfvars.tmpl"),
 			"terraform/" + slug + "-azure-wif.tfvars"
 	case target == "gcp" && source == "gcp":
-		return filepath.Join(modulesDir, "gcp-sa-impersonation", "terraform"),
+		return "gcp-sa-impersonation/terraform",
 			filepath.Join(templDir, "gcp-sa-impersonation.tfvars.tmpl"),
 			"terraform/" + slug + "-gcp-sa-impersonation.tfvars"
 	default: // gcp, non-gcp source
-		return filepath.Join(modulesDir, "gcp-target", "terraform"),
+		return "gcp-target/terraform",
 			filepath.Join(templDir, "gcp-wif.tfvars.tmpl"),
 			"terraform/" + slug + "-gcp-wif.tfvars"
 	}
 }
 
-// addTerraformToBundle writes the Terraform module files and generated .tfvars into zw.
+// addTerraformToBundle writes the Terraform module files and generated .tfvars
+// into zw. It goes through internal/iacbundle, as the API's bundle does, so the
+// out-of-tree modules the Terraform calls ship inside the zip too (#1442).
 func addTerraformToBundle(zw *zip.Writer, data iacData, target, source, slug, templDir, modulesDir string) error {
-	moduleDir, tfvarsTmpl, tfvarsName := bundleModuleSpec(target, source, slug, templDir, modulesDir)
-	entries, err := os.ReadDir(moduleDir)
-	if err != nil {
-		return fmt.Errorf("read module dir %s: %w\n\nRun from the repository root.", moduleDir, err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-		b, err := os.ReadFile(filepath.Join(moduleDir, entry.Name()))
-		if err != nil {
-			return err
-		}
-		if err = addToZip(zw, "terraform/"+entry.Name(), b); err != nil {
-			return err
-		}
+	moduleDir, tfvarsTmpl, tfvarsName := bundleModuleSpec(target, source, slug, templDir)
+	if err := iacbundle.AddTerraformDir(zw, os.DirFS(modulesDir), moduleDir, iacbundle.ExtraModules(target)); err != nil {
+		return fmt.Errorf("bundle %s: %w\n\nRun from the repository root.", filepath.Join(modulesDir, moduleDir), err)
 	}
 	content, err := renderTmpl(tfvarsTmpl, data)
 	if err != nil {
@@ -458,14 +446,15 @@ func displayClaim(claim string) string {
 // Excluded by construction are whitespace and $ * " ' ` \ ( ) { } ; & | < > ,
 // % and newlines.
 //
-// This is deliberately stricter than the AllowedPattern ^[^\s*$]+$ that the
-// CloudFormation template and the Terraform module enforce on the same value.
-// Those two run on a value that is already a typed parameter, so they only need
-// to reject what IAM itself mis-handles: '$' (IAM expands ${...} policy
-// variables inside Condition values) and '*' (compared literally by
-// StringEquals). This check runs earlier, on a value about to become shell,
-// JSON and HCL *source*, so it has to reject the metacharacters of those
-// grammars as well.
+// This is deliberately stricter than the checks the CloudFormation template and
+// the Terraform module apply to the same value. Those run on a value that is
+// already a typed parameter, so they only need to reject whitespace and what
+// IAM itself mis-handles: '$' (IAM expands ${...} policy variables inside
+// Condition values) and '*' (compared literally by StringEquals). The template
+// also rejects '"', '\' and control characters, because it substitutes the
+// value into its trust policy's JSON text (#1489). This check runs earlier, on
+// a value about to become shell, JSON and HCL *source*, so it has to reject the
+// metacharacters of those grammars as well.
 //
 // The practical cost of the extra strictness is nil here: awsOIDCIssuer emits
 // only login.microsoftonline.com, accounts.google.com, or "" for a source it
@@ -673,7 +662,6 @@ func populateData(data *iacData, target, source, tenantID, projectID, saEmail, o
 	switch target {
 	case "aws":
 		data.OIDCIssuerURL = awsOIDCIssuer(source, tenantID)
-		data.OIDCIssuerHost = strings.TrimPrefix(data.OIDCIssuerURL, "https://")
 		data.OIDCAudience = awsOIDCAudience(source)
 		data.OIDCSubjectClaim = oidcSubjectClaim
 		if err := requireSourceAccountID(data, source, sourceAccountID,

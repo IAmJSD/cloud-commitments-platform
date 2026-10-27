@@ -5,6 +5,8 @@
  * the DOM shape each call site expects (tile / row / box).
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   skeletonBox,
   skeletonText,
@@ -252,6 +254,21 @@ describe('consistent loading pattern + slow fallback (issue #186)', () => {
     jest.advanceTimersByTime(1000);
     expect(container.querySelectorAll('.skeleton-slow-note')).toHaveLength(1);
   });
+});
+
+// Issue #186: the static Settings placeholder in index.html (shown before
+// loadGlobalSettings runs) uses the same skeleton, not "Loading settings..."
+// text.
+test('index.html #settings-loading is a skeleton with a screen-reader status (issue #186)', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf-8');
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const loading = doc.getElementById('settings-loading')!;
+  expect(loading.querySelectorAll('.skeleton-group .skeleton.skeleton-line')).toHaveLength(6);
+  expect(loading.querySelector('.skeleton-group')!.getAttribute('aria-hidden')).toBe('true');
+  const status = loading.querySelector('.skeleton-status.sr-only[role="status"]');
+  expect(status?.textContent).toBe('Loading…');
+  // Nothing but the screen-reader status carries text.
+  expect(loading.textContent!.trim()).toBe('Loading…');
 });
 
 // Issue #729 (UX-34): the placeholders are aria-hidden, so the container

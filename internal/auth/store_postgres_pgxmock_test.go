@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/pashagolub/pgxmock/v4"
+	"github.com/pashagolub/pgxmock/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,16 +33,16 @@ func newAuthPgxMock(t *testing.T) pgxmock.PgxPoolIface {
 }
 
 // createAdminIfNoneSQLRegex matches the full conditional bootstrap INSERT:
-// 19 insert columns fed by SELECT $1..$19, guarded by the NOT EXISTS
-// predicate bound to $20.
+// 18 insert columns fed by SELECT $1..$18, guarded by the NOT EXISTS
+// predicate bound to $19. The unused salt column is not written (issue #313).
 const createAdminIfNoneSQLRegex = `(?s)INSERT INTO users \(\s*` +
-	`id, email, password_hash, salt, group_ids, active,\s*` +
+	`id, email, password_hash, group_ids, active,\s*` +
 	`mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,\s*` +
 	`mfa_recovery_codes, password_reset_token, password_reset_expiry,\s*` +
 	`failed_login_attempts, locked_until, password_history,\s*` +
 	`created_at, updated_at, last_login_at\s*\)\s*` +
-	`SELECT \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13, \$14, \$15, \$16, \$17, \$18, \$19\s*` +
-	`WHERE NOT EXISTS \(SELECT 1 FROM users WHERE group_ids @> ARRAY\[\$20::uuid\] AND active = true\)`
+	`SELECT \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9, \$10, \$11, \$12, \$13, \$14, \$15, \$16, \$17, \$18\s*` +
+	`WHERE NOT EXISTS \(SELECT 1 FROM users WHERE group_ids @> ARRAY\[\$19::uuid\] AND active = true\)`
 
 // bootstrapAdminUser returns a minimal valid first-admin candidate.
 func bootstrapAdminUser() *User {
@@ -50,37 +50,35 @@ func bootstrapAdminUser() *User {
 		ID:           "11111111-2222-4333-8444-555555555555",
 		Email:        "bootstrap-admin@example.com",
 		PasswordHash: "hash",
-		Salt:         "salt",
 		Active:       true,
 	}
 }
 
-// createAdminArgs builds the 20 expected Exec arguments for CreateAdminIfNone:
+// createAdminArgs builds the 19 expected Exec arguments for CreateAdminIfNone:
 // exact matches for the security-relevant ones (id, email, group_ids, active
-// and the $20 predicate binding) and AnyArg for incidental fields whose
+// and the $19 predicate binding) and AnyArg for incidental fields whose
 // values the function fills in (timestamps) or passes through untouched.
 func createAdminArgs(user *User, wantGroupIDs []string) []any {
 	return []any{
 		user.ID,                  // $1
 		user.Email,               // $2
 		user.PasswordHash,        // $3
-		user.Salt,                // $4
-		wantGroupIDs,             // $5 - must contain the Administrators group
-		user.Active,              // $6
-		user.MFAEnabled,          // $7
-		pgxmock.AnyArg(),         // $8 mfa_secret
-		pgxmock.AnyArg(),         // $9 mfa_pending_secret
-		pgxmock.AnyArg(),         // $10 mfa_pending_secret_expires_at
-		pgxmock.AnyArg(),         // $11 mfa_recovery_codes
-		pgxmock.AnyArg(),         // $12 password_reset_token
-		pgxmock.AnyArg(),         // $13 password_reset_expiry
-		user.FailedLoginAttempts, // $14
-		pgxmock.AnyArg(),         // $15 locked_until
-		pgxmock.AnyArg(),         // $16 password_history
-		pgxmock.AnyArg(),         // $17 created_at (set inside)
-		pgxmock.AnyArg(),         // $18 updated_at (set inside)
-		pgxmock.AnyArg(),         // $19 last_login_at
-		DefaultAdminGroupID,      // $20 NOT EXISTS predicate binding
+		wantGroupIDs,             // $4 - must contain the Administrators group
+		user.Active,              // $5
+		user.MFAEnabled,          // $6
+		pgxmock.AnyArg(),         // $7 mfa_secret
+		pgxmock.AnyArg(),         // $8 mfa_pending_secret
+		pgxmock.AnyArg(),         // $9 mfa_pending_secret_expires_at
+		pgxmock.AnyArg(),         // $10 mfa_recovery_codes
+		pgxmock.AnyArg(),         // $11 password_reset_token
+		pgxmock.AnyArg(),         // $12 password_reset_expiry
+		user.FailedLoginAttempts, // $13
+		pgxmock.AnyArg(),         // $14 locked_until
+		pgxmock.AnyArg(),         // $15 password_history
+		pgxmock.AnyArg(),         // $16 created_at (set inside)
+		pgxmock.AnyArg(),         // $17 updated_at (set inside)
+		pgxmock.AnyArg(),         // $18 last_login_at
+		DefaultAdminGroupID,      // $19 NOT EXISTS predicate binding
 	}
 }
 
@@ -314,7 +312,7 @@ func TestPGXMock_CountGroupMembers_QueryError(t *testing.T) {
 
 // userColumns matches the SELECT column order in ListUsers / scanUser.
 var userColumns = []string{
-	"id", "email", "password_hash", "salt", "group_ids", "active",
+	"id", "email", "password_hash", "group_ids", "active",
 	"mfa_enabled", "mfa_secret", "mfa_pending_secret", "mfa_pending_secret_expires_at",
 	"mfa_recovery_codes", "password_reset_token", "password_reset_expiry",
 	"failed_login_attempts", "locked_until", "password_history",
@@ -331,7 +329,7 @@ func TestPGXMock_ListUsers_Success(t *testing.T) {
 	deactivated := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	rows := pgxmock.NewRows(userColumns).
 		AddRow(
-			"user-1", "admin@example.com", "hash1", "salt1",
+			"user-1", "admin@example.com", "hash1",
 			[]string{DefaultAdminGroupID}, true,
 			true, "mfa-secret", nil, nil,
 			[]string{"code1"}, nil, nil,
@@ -339,7 +337,7 @@ func TestPGXMock_ListUsers_Success(t *testing.T) {
 			created, created, lastLogin, nil, int64(4),
 		).
 		AddRow(
-			"user-2", "user@example.com", "hash2", "salt2",
+			"user-2", "user@example.com", "hash2",
 			[]string{}, false,
 			false, nil, nil, nil,
 			[]string{}, nil, nil,
@@ -347,7 +345,7 @@ func TestPGXMock_ListUsers_Success(t *testing.T) {
 			created, created, nil, deactivated, int64(0),
 		)
 
-	mock.ExpectQuery(`(?s)SELECT id, email, password_hash, salt, group_ids, active,.*FROM users\s+ORDER BY created_at DESC\s+LIMIT 10000`).
+	mock.ExpectQuery(`(?s)SELECT id, email, password_hash, group_ids, active,.*FROM users\s+ORDER BY created_at DESC\s+LIMIT 10000`).
 		WillReturnRows(rows)
 
 	users, err := store.ListUsers(context.Background())
@@ -407,7 +405,7 @@ func TestPGXMock_ListUsers_RowError(t *testing.T) {
 	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	rows := pgxmock.NewRows(userColumns).
 		AddRow(
-			"user-1", "admin@example.com", "hash1", "salt1",
+			"user-1", "admin@example.com", "hash1",
 			[]string{}, true,
 			false, nil, nil, nil,
 			[]string{}, nil, nil,

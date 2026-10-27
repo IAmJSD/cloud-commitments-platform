@@ -184,7 +184,7 @@ func TestIntegration_CredentialWritesPreserveConcurrentMFA(t *testing.T) {
 		assert.True(t, f.svc.verifyPassword(credentialRaceNew, stored.PasswordHash))
 		assert.Equal(t, []string{f.user.PasswordHash}, stored.PasswordHistory)
 		assertOnlyChanged(t, enrolled(), stored, func(w *User) {
-			w.Email, w.PasswordHash, w.Salt, w.PasswordHistory = "profile-both-new@example.com", stored.PasswordHash, "", stored.PasswordHistory
+			w.Email, w.PasswordHash, w.PasswordHistory = "profile-both-new@example.com", stored.PasswordHash, stored.PasswordHistory
 			w.PasswordVersion++
 		})
 		_, err := f.svc.ValidateSession(ctx, f.session)
@@ -202,7 +202,7 @@ func TestIntegration_CredentialWritesPreserveConcurrentMFA(t *testing.T) {
 		assert.True(t, f.svc.verifyPassword(credentialRaceNew, stored.PasswordHash))
 		assert.Equal(t, []string{f.user.PasswordHash}, stored.PasswordHistory)
 		assertOnlyChanged(t, enrolled(), stored, func(w *User) {
-			w.PasswordHash, w.Salt, w.PasswordHistory = stored.PasswordHash, "", stored.PasswordHistory
+			w.PasswordHash, w.PasswordHistory = stored.PasswordHash, stored.PasswordHistory
 			w.PasswordVersion++
 		})
 		_, err := f.svc.ValidateSession(ctx, f.session)
@@ -324,7 +324,7 @@ func TestIntegration_ResetConfirmPreservesConcurrentMFA(t *testing.T) {
 		stored := f.stored()
 		assert.True(t, f.svc.verifyPassword(credentialRaceNew, stored.PasswordHash))
 		assertOnlyChanged(t, enrolled(), stored, func(w *User) {
-			w.PasswordHash, w.Salt, w.PasswordHistory = stored.PasswordHash, "", []string{f.user.PasswordHash}
+			w.PasswordHash, w.PasswordHistory = stored.PasswordHash, []string{f.user.PasswordHash}
 			w.PasswordResetToken, w.PasswordResetExpiry = "", nil
 			w.PasswordVersion++
 		})

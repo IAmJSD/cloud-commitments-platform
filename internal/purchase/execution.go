@@ -499,7 +499,7 @@ func (e *partialPurchaseError) Error() string {
 	return "some purchases failed (partial success): " + strings.Join(e.errors, "; ")
 }
 
-// resolveAccountProvider returns a *provider.Config with a pre-authenticated provider
+// resolveAccountProvider returns a *ProviderConfig with a pre-authenticated provider
 // for the given account. Returns an error if credential resolution fails -- callers
 // must NOT fall back to ambient credentials on error.
 func (m *Manager) resolveAccountProvider(ctx context.Context, account config.CloudAccount) (*provider.Config, error) {
@@ -1275,11 +1275,13 @@ func resolveEC2OfferingClass(s string) (ec2types.OfferingClassType, error) {
 // mapServiceSlug returns the common.ServiceType for a canonical or legacy
 // service slug.
 //
-// Canonical slugs (compute, relational-db, cache, search, data-warehouse)
-// map to the canonical ServiceType constants. Legacy AWS-only slugs (ec2,
-// rds, elasticache, opensearch, redshift, memorydb) map to the AWS-legacy
-// constants for backward compat with rec rows persisted before the
-// canonical normalisation.
+// Canonical slugs (compute, relational-db, nosql, cache, search,
+// data-warehouse) map to the canonical ServiceType constants. Legacy
+// AWS-only slugs (ec2, rds, elasticache, opensearch, redshift, memorydb)
+// map to the AWS-legacy constants for backward compat with rec rows
+// persisted before the canonical normalisation. nosql is Azure Cosmos DB
+// (#613); it used to reach the Azure client only through mapServiceType's
+// verbatim fallback.
 //
 // The split matters because Azure and GCP providers' GetServiceClient
 // switches accept canonical-only; passing the AWS-legacy constants for a
@@ -1296,6 +1298,7 @@ func mapServiceSlug(service string) (common.ServiceType, bool) {
 		// Canonical slugs.
 		"compute":        common.ServiceCompute,
 		"relational-db":  common.ServiceRelationalDB,
+		"nosql":          common.ServiceNoSQL,
 		"cache":          common.ServiceCache,
 		"search":         common.ServiceSearch,
 		"data-warehouse": common.ServiceDataWarehouse,
@@ -1341,21 +1344,26 @@ var legacyAWSServiceSlugs = map[string]common.ServiceType{
 // flip the coverage_extra_test.go case (line ~60) to assert
 // ServiceType("savings-plans") (default-arm pass-through). The
 // "savingsplans-*" keys are forward-compat and should stay.
+//
+// A new per-plan-type spelling must also be added to
+// config.awsSavingsPlansSpellings, else a suppression stored under it misses
+// recs (#1422); a test ranges over savingsPlansSlugs to enforce that.
 func mapSavingsPlansSlug(service string) (common.ServiceType, bool) {
-	slugs := map[string]common.ServiceType{
-		"savings-plans":             common.ServiceSavingsPlansAll,
-		"savingsplans":              common.ServiceSavingsPlansAll,
-		"savings-plans-compute":     common.ServiceSavingsPlansCompute,
-		"savingsplans-compute":      common.ServiceSavingsPlansCompute,
-		"savings-plans-ec2instance": common.ServiceSavingsPlansEC2Instance,
-		"savingsplans-ec2instance":  common.ServiceSavingsPlansEC2Instance,
-		"savings-plans-sagemaker":   common.ServiceSavingsPlansSageMaker,
-		"savingsplans-sagemaker":    common.ServiceSavingsPlansSageMaker,
-		"savings-plans-database":    common.ServiceSavingsPlansDatabase,
-		"savingsplans-database":     common.ServiceSavingsPlansDatabase,
-	}
-	svc, ok := slugs[service]
+	svc, ok := savingsPlansSlugs[service]
 	return svc, ok
+}
+
+var savingsPlansSlugs = map[string]common.ServiceType{
+	"savings-plans":             common.ServiceSavingsPlansAll,
+	"savingsplans":              common.ServiceSavingsPlansAll,
+	"savings-plans-compute":     common.ServiceSavingsPlansCompute,
+	"savingsplans-compute":      common.ServiceSavingsPlansCompute,
+	"savings-plans-ec2instance": common.ServiceSavingsPlansEC2Instance,
+	"savingsplans-ec2instance":  common.ServiceSavingsPlansEC2Instance,
+	"savings-plans-sagemaker":   common.ServiceSavingsPlansSageMaker,
+	"savingsplans-sagemaker":    common.ServiceSavingsPlansSageMaker,
+	"savings-plans-database":    common.ServiceSavingsPlansDatabase,
+	"savingsplans-database":     common.ServiceSavingsPlansDatabase,
 }
 
 // updatePlanProgress advances the ramp schedule after a purchase.

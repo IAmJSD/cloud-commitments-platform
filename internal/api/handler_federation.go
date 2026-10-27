@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"reflect"
 	"regexp"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	cudlyiac "github.com/LeanerCloud/cloud-commitments-platform/iac"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/iacbundle"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/iacfiles"
 	"github.com/aws/aws-lambda-go/events"
 )
@@ -30,9 +30,8 @@ type federationIaCData struct {
 	Source            string
 	SourceAccountID   string // AWS account ID where CUDly runs (resolved via STS)
 	// AWS WIF / cross-account
-	OIDCIssuerURL  string
-	OIDCIssuerHost string // issuer URL without https:// prefix (used as IAM condition key)
-	OIDCAudience   string
+	OIDCIssuerURL string
+	OIDCAudience  string
 	// OIDCSubjectClaim restricts the AWS trust policy to a single workload
 	// subject. Deliberately left empty by every generic-bundle builder below —
 	// CUDly's server has no generic way to know the calling workload's real
@@ -338,7 +337,6 @@ func shellEscapeData(data federationIaCData) federationIaCData {
 	d.AccountSlug = shellEscape(data.AccountSlug)
 	d.Source = shellEscape(data.Source)
 	d.OIDCIssuerURL = shellEscape(data.OIDCIssuerURL)
-	d.OIDCIssuerHost = shellEscape(data.OIDCIssuerHost)
 	d.OIDCAudience = shellEscape(data.OIDCAudience)
 	d.OIDCSubjectClaim = shellEscape(data.OIDCSubjectClaim)
 	d.SubscriptionID = shellEscape(data.SubscriptionID)
@@ -402,7 +400,6 @@ func buildGenericIaCData(target, source, dashboardURL string) federationIaCData 
 	switch target {
 	case "aws":
 		data.OIDCIssuerURL = awsOIDCIssuer(source, "")
-		data.OIDCIssuerHost = strings.TrimPrefix(data.OIDCIssuerURL, "https://")
 		data.OIDCAudience = awsOIDCAudience(source)
 	case "gcp":
 		data.OIDCIssuerURI = gcpOIDCIssuerURI(source, "")
@@ -665,7 +662,7 @@ func buildAzureTemplateReadme(data federationIaCData, format string) string {
 // addBundleTerraform adds the Terraform module files and generated .tfvars to the zip.
 func addBundleTerraform(zw *zip.Writer, data federationIaCData, target, source, slug string) error {
 	tfDir := bundleModuleDir(target, source) + "/terraform"
-	if err := addBundleTerraformDir(zw, tfDir, bundleExtraModules(target)); err != nil {
+	if err := iacbundle.AddTerraformDir(zw, cudlyiac.Modules, tfDir, iacbundle.ExtraModules(target)); err != nil {
 		return fmt.Errorf("bundle: terraform dir: %w", err)
 	}
 	tfvarsTmpl, tfvarsName := bundleTfvarsSpec(target, source, slug)
@@ -858,7 +855,6 @@ func buildCFParamsJSON(data federationIaCData, source string) (string, error) {
 	} else {
 		params = []cfParam{
 			{ParameterKey: "OIDCIssuerURL", ParameterValue: data.OIDCIssuerURL},
-			{ParameterKey: "OIDCIssuerHost", ParameterValue: strings.TrimPrefix(data.OIDCIssuerURL, "https://")},
 			{ParameterKey: "OIDCAudience", ParameterValue: data.OIDCAudience},
 			{ParameterKey: "OIDCSubjectClaim", ParameterValue: data.OIDCSubjectClaim},
 			{ParameterKey: "RoleName", ParameterValue: "CUDly-" + data.AccountSlug},
@@ -874,21 +870,6 @@ func buildCFParamsJSON(data federationIaCData, source string) (string, error) {
 // ---------------------------------------------------------------------------
 // Zip helpers
 // ---------------------------------------------------------------------------
-
-func addDirToZip(zw *zip.Writer, fsys fs.ReadFileFS, srcDir, destPrefix string) error {
-	return fs.WalkDir(fsys, srcDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		b, err := fsys.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		// Compute the relative path from srcDir to this file.
-		rel := strings.TrimPrefix(path, srcDir+"/")
-		return addBytesToZip(zw, destPrefix+"/"+rel, b)
-	})
-}
 
 func addBytesToZip(zw *zip.Writer, name string, content []byte) error {
 	f, err := zw.Create(name)

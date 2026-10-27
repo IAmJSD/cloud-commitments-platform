@@ -26,6 +26,12 @@ type StoreInterface interface {
 	// Service configuration
 	GetServiceConfig(ctx context.Context, provider, service string) (*ServiceConfig, error)
 	SaveServiceConfig(ctx context.Context, config *ServiceConfig) error
+	// UpdateServiceConfigAtomic serializes a read-merge-write of one service
+	// config row under a locked transaction so concurrent partial PUTs of the
+	// same row cannot lose each other's updates. apply receives the stored row
+	// (nil when none exists) and returns the full row to write; its error
+	// aborts the write and is propagated.
+	UpdateServiceConfigAtomic(ctx context.Context, provider, service string, apply func(existing *ServiceConfig) (*ServiceConfig, error)) (*ServiceConfig, error)
 	ListServiceConfigs(ctx context.Context) ([]ServiceConfig, error)
 
 	// Purchase plans
@@ -155,6 +161,10 @@ type StoreInterface interface {
 	// this method's status filter) to avoid accidental double-processing of
 	// failed / expired rows.
 	GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error)
+	// GetExecutionsByStatusesFiltered is GetExecutionsByStatuses with the
+	// History filters and account scope in q applied in SQL before the limit,
+	// so the cap counts only rows the caller can be shown (issue #632).
+	GetExecutionsByStatusesFiltered(ctx context.Context, q ExecutionsByStatusesQuery) ([]PurchaseExecution, error)
 	// ListHistoryExecutionsPage and ListPurchaseHistoryPage read one keyset
 	// page each of the History view's paged stream (issue #674): rows strictly
 	// after q.After / after (nil starts at the top) in the stream order of
@@ -398,18 +408,24 @@ type StoreInterface interface {
 	// support_case_id on a purchase_history row identified by purchase_id.
 	// calcRefundAmount and calcRefundCurrency capture the Azure CalculateRefund
 	// quote for audit (migration 000071, Finding #4); both nil/empty for
-	// non-Azure paths or legacy rows written before the migration.
+	// non-Azure paths or legacy rows written before the migration. Also
+	// clears revocation_in_flight (migration 000072): a revoked row is no
+	// longer in flight.
 	// Returns a not-found error when no row matches. Idempotent: a second
 	// call for the same row is a no-op (revoked_at is not overwritten when
 	// it is already non-null). Used by the revoke endpoint (issue #290).
 	MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia string, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error
 
-	// FlipPurchaseRevocationInFlight atomically sets revocation_in_flight=true
-	// on a purchase_history row. Called immediately before the Azure Return API
-	// call so that the row can be identified by the finalize sweep if the
-	// subsequent MarkPurchaseRevoked DB write fails (partial-success reconciliation,
-	// issue #290 Finding #6, migration 000072). No-op when the flag is already
-	// true (idempotent). Returns a not-found error when no row matches.
+	// FlipPurchaseRevocationInFlight atomically claims a purchase_history row
+	// by setting revocation_in_flight=true. Called immediately before the Azure
+	// Return API call so that the row can be identified by the finalize sweep if
+	// the subsequent MarkPurchaseRevoked DB write fails (partial-success
+	// reconciliation, issue #290 Finding #6, migration 000072). Only an
+	// unrevoked, unflagged row is flipped, so exactly one concurrent caller
+	// wins: a revoked row returns an error wrapping ErrPurchaseAlreadyRevoked
+	// (issue #316), and a row another request already flagged returns an error
+	// wrapping ErrRevocationInFlight (issue #1518). Returns a not-found error
+	// when no row matches.
 	FlipPurchaseRevocationInFlight(ctx context.Context, purchaseID string) error
 
 	// ClearRevocationInFlight resets revocation_in_flight=false on a
@@ -418,14 +434,32 @@ type StoreInterface interface {
 	// left in a permanently-sticky in-flight state that would prevent future
 	// retries or mislead the finalize_revocations sweep (issue #290, second-wave
 	// CR Finding D). No-op when the row is already false. Best-effort: callers
-	// should log on error but not surface it to the user.
+	// should log on error but not surface it to the user. Only the caller whose
+	// FlipPurchaseRevocationInFlight succeeded may call it, so it never clears
+	// a flag another request set (issue #1518).
 	ClearRevocationInFlight(ctx context.Context, purchaseID string) error
 
-	// GetPurchaseHistoryInFlight returns all purchase_history rows with
-	// revocation_in_flight=true and revoked_at IS NULL.  These are rows where
-	// the Azure Return call succeeded but MarkPurchaseRevoked failed; the
-	// finalize_revocations scheduled sweep calls this to retry the DB write.
+	// GetPurchaseHistoryInFlight returns the purchase_history rows whose
+	// Return was recorded by MarkRevocationReturnPosted but whose revoked_at
+	// is still NULL: the Azure Return call succeeded but MarkPurchaseRevoked
+	// failed. The finalize_revocations scheduled sweep calls this to retry the
+	// DB write. A flagged row with no recorded Return is not returned
+	// (issue #1523): no refund is known to have gone out for it.
 	GetPurchaseHistoryInFlight(ctx context.Context) ([]*PurchaseHistoryRecord, error)
+
+	// MarkRevocationReturnPosted records that the provider accepted the
+	// Return for purchaseID (return_posted_at, migration 000148). Called by
+	// the revoke handler after the Azure Return succeeds and before
+	// MarkPurchaseRevoked. The first stamp stands; a revoked row is a no-op.
+	// Returns a not-found error when no row matches (issue #1523).
+	MarkRevocationReturnPosted(ctx context.Context, purchaseID string) error
+
+	// ReleaseStaleRevocationsInFlight clears revocation_in_flight on unrevoked
+	// rows flagged for longer than after with no Return recorded, so the
+	// purchase can be revoked again, and returns their purchase IDs. A flagged
+	// row with no flip timestamp is stamped now and aged from then. Called by
+	// the finalize_revocations sweep (issue #1523).
+	ReleaseStaleRevocationsInFlight(ctx context.Context, after time.Duration) ([]string, error)
 
 	// UpdatePurchaseHistoryListing stamps the AWS marketplace listing_id and
 	// listing_state onto a purchase_history row. Called after
@@ -479,6 +513,27 @@ type StoreInterface interface {
 	// schedule so the retry resends them (ambiguous AWS outcome); otherwise
 	// they are cleared because AWS created nothing reusable.
 	ReleaseMarketplaceListingClaim(ctx context.Context, purchaseID, clientToken, priorState string, keepAttempt bool) error
+
+	// ListMarketplaceListingsToPoll returns the AWS rows whose listing the
+	// marketplace status poller reads (issue #27): active listings, listings
+	// recorded as pending with no list attempt in flight (issue #1494), and
+	// closed/canceled ones it has seen whose proceeds are not recorded yet.
+	ListMarketplaceListingsToPoll(ctx context.Context) ([]PurchaseHistoryRecord, error)
+
+	// RecordMarketplaceListingActive records a listing AWS reports active:
+	// it stamps listed_at (a zero listedAt keeps the stored one) while the row
+	// holds listingID as active, and also moves the state to active while the
+	// row holds it as pending with no list attempt in flight (issue #1494).
+	// It never writes the state of any other row. Reports whether the row
+	// changed.
+	RecordMarketplaceListingActive(ctx context.Context, purchaseID, listingID string, listedAt time.Time) (bool, error)
+
+	// SettleMarketplaceListing records a listing that closed or was canceled
+	// on AWS, with its proceeds and AWS fee when known. It applies once per
+	// listing, only while the row still holds it and is active, pending with
+	// no list attempt in flight, or already in the same terminal state.
+	// Reports whether the row was written.
+	SettleMarketplaceListing(ctx context.Context, settlement MarketplaceListingSettlement) (bool, error)
 
 	// ClaimRIExchangeIdempotencyKey atomically claims key for an RI exchange
 	// submit, so a client that retries a timed-out execute request cannot
@@ -584,6 +639,21 @@ type StoreInterface interface {
 	GetAccountServiceOverride(ctx context.Context, accountID, provider, service string) (*AccountServiceOverride, error)
 	SaveAccountServiceOverride(ctx context.Context, override *AccountServiceOverride) error
 	DeleteAccountServiceOverride(ctx context.Context, accountID, provider, service string) error
+	// SaveAccountServiceOverrideAuditedTx upserts the override inside the
+	// caller's WithTx transaction and records the change (the stored row
+	// before and after) in config_audit_events, issue #1493. It serializes on
+	// the override's key, so a caller writing several overrides in one tx must
+	// write them in a consistent key order. A write that changes no setting
+	// records nothing. override is updated to the stored row.
+	SaveAccountServiceOverrideAuditedTx(ctx context.Context, tx pgx.Tx, override *AccountServiceOverride, audit AuditContext) error
+	// DeleteAccountServiceOverrideAuditedTx deletes the override inside the
+	// caller's transaction and records the deleted row in config_audit_events.
+	// Deleting a missing override records nothing.
+	DeleteAccountServiceOverrideAuditedTx(ctx context.Context, tx pgx.Tx, accountID, provider, service string, audit AuditContext) error
+	// SaveConfigAuditEventTx records a config_audit_events row inside the
+	// caller's transaction (the override import's own event). An empty ID is
+	// filled in.
+	SaveConfigAuditEventTx(ctx context.Context, tx pgx.Tx, event *AuditEvent) error
 	ListAccountServiceOverrides(ctx context.Context, accountID string) ([]AccountServiceOverride, error)
 
 	// Plan ↔ account association
@@ -600,6 +670,10 @@ type StoreInterface interface {
 	// unscoped "replace everything" method (issue #159).
 	UpsertRecommendations(ctx context.Context, collectedAt time.Time, recs []RecommendationRecord, successfulCollects []SuccessfulCollect) error
 	ListStoredRecommendations(ctx context.Context, filter RecommendationFilter) ([]RecommendationRecord, error)
+	// ListStoredRecommendationsChunk is ListStoredRecommendations for a
+	// keyset walk: at most limit rows after the position after, in
+	// byte-wise ID order then primary-key order (issue #981).
+	ListStoredRecommendationsChunk(ctx context.Context, filter RecommendationFilter, after *RecommendationScanKey, limit int) (RecommendationChunk, error)
 	GetRecommendationsFreshness(ctx context.Context) (*RecommendationsFreshness, error)
 	SetRecommendationsCollectionError(ctx context.Context, errMsg string) error
 	// SetRecommendationsCollectionPartial records (or, with nil, clears) the

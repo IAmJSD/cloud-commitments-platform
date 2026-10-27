@@ -52,7 +52,7 @@ func historyScopeIDs(t *testing.T, scope []string, accounts []config.CloudAccoun
 }
 
 // Issue #550: external ids are unique per (provider, external_id) only. A
-// name-scoped History user must see rows of the account in their scope and
+// History user scoped to an account must see rows of the account in their scope and
 // none of the same-external-id account under another provider, whatever the
 // order the accounts are listed in.
 func TestHandleRequest_History_SameExternalIDAcrossProviders(t *testing.T) {
@@ -70,31 +70,31 @@ func TestHandleRequest_History_SameExternalIDAcrossProviders(t *testing.T) {
 	for order, accounts := range bothOrders {
 		t.Run("scope names azure account, "+order, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, []string{"az-row"}, historyScopeIDs(t, []string{"prod"}, accounts, rows))
+			assert.Equal(t, []string{"az-row"}, historyScopeIDs(t, []string{"u-az"}, accounts, rows))
 		})
 		t.Run("scope names aws account, "+order, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, []string{"aws-row"}, historyScopeIDs(t, []string{"dev"}, accounts, rows))
+			assert.Equal(t, []string{"aws-row"}, historyScopeIDs(t, []string{"u-aws"}, accounts, rows))
 		})
 	}
 
 	t.Run("legacy row without provider on an ambiguous external id is not name-matched", func(t *testing.T) {
 		t.Parallel()
 		legacy := []config.PurchaseHistoryRecord{{PurchaseID: "legacy", AccountID: "123", Status: "completed"}}
-		assert.Empty(t, historyScopeIDs(t, []string{"prod"}, []config.CloudAccount{awsDev, azProd}, legacy))
+		assert.Empty(t, historyScopeIDs(t, []string{"u-az"}, []config.CloudAccount{awsDev, azProd}, legacy))
 	})
 
 	t.Run("a set cloud account id stays authoritative", func(t *testing.T) {
 		t.Parallel()
 		uuid := "u-az"
 		row := []config.PurchaseHistoryRecord{{PurchaseID: "by-uuid", Provider: "aws", AccountID: "123", CloudAccountID: &uuid, Status: "completed"}}
-		assert.Equal(t, []string{"by-uuid"}, historyScopeIDs(t, []string{"prod"}, []config.CloudAccount{awsDev, azProd}, row))
-		assert.Empty(t, historyScopeIDs(t, []string{"dev"}, []config.CloudAccount{awsDev, azProd}, row))
+		assert.Equal(t, []string{"by-uuid"}, historyScopeIDs(t, []string{"u-az"}, []config.CloudAccount{awsDev, azProd}, row))
+		assert.Empty(t, historyScopeIDs(t, []string{"u-aws"}, []config.CloudAccount{awsDev, azProd}, row))
 	})
 }
 
-// Unambiguous accounts keep matching by name or id, with and without a
-// provider on the row.
+// Unambiguous accounts keep matching by account ID or by a raw external-id
+// entry, with and without a provider on the row.
 func TestHandleRequest_History_UniqueExternalIDStillMatches(t *testing.T) {
 	t.Parallel()
 	in := config.CloudAccount{ID: "u-in", Name: "in", Provider: "aws", ExternalID: "111"}
@@ -104,14 +104,14 @@ func TestHandleRequest_History_UniqueExternalIDStillMatches(t *testing.T) {
 		{PurchaseID: "in-legacy", AccountID: "111", Status: "completed"},
 		{PurchaseID: "out", Provider: "aws", AccountID: "222", Status: "completed"},
 	}
-	got := historyScopeIDs(t, []string{"in"}, []config.CloudAccount{in, out}, rows)
+	got := historyScopeIDs(t, []string{"u-in"}, []config.CloudAccount{in, out}, rows)
 	assert.ElementsMatch(t, []string{"in-prov", "in-legacy"}, got)
 	got = historyScopeIDs(t, []string{"111"}, []config.CloudAccount{in, out}, rows)
 	assert.ElementsMatch(t, []string{"in-prov", "in-legacy"}, got)
 }
 
 // In-flight history rows carry the account UUID in AccountID with no
-// CloudAccountID, so a name-scoped user must still see their own rows.
+// CloudAccountID, so a scoped user must still see their own rows.
 func TestHandleRequest_History_UUIDInAccountID(t *testing.T) {
 	t.Parallel()
 	dev := config.CloudAccount{ID: "u-aws", Name: "dev", Provider: "aws", ExternalID: "123"}
@@ -121,25 +121,25 @@ func TestHandleRequest_History_UUIDInAccountID(t *testing.T) {
 	t.Run("pending row with provider", func(t *testing.T) {
 		t.Parallel()
 		rows := []config.PurchaseHistoryRecord{{PurchaseID: "p1", Provider: "aws", AccountID: "u-aws", Status: "pending"}}
-		assert.Equal(t, []string{"p1"}, historyScopeIDs(t, []string{"dev"}, accounts, rows))
-		assert.Empty(t, historyScopeIDs(t, []string{"prod"}, accounts, rows))
+		assert.Equal(t, []string{"p1"}, historyScopeIDs(t, []string{"u-aws"}, accounts, rows))
+		assert.Empty(t, historyScopeIDs(t, []string{"u-az"}, accounts, rows))
 	})
 	t.Run("pending row without provider", func(t *testing.T) {
 		t.Parallel()
 		rows := []config.PurchaseHistoryRecord{{PurchaseID: "p2", AccountID: "u-aws", Status: "pending"}}
-		assert.Equal(t, []string{"p2"}, historyScopeIDs(t, []string{"dev"}, accounts, rows))
-		assert.Empty(t, historyScopeIDs(t, []string{"prod"}, accounts, rows))
+		assert.Equal(t, []string{"p2"}, historyScopeIDs(t, []string{"u-aws"}, accounts, rows))
+		assert.Empty(t, historyScopeIDs(t, []string{"u-az"}, accounts, rows))
 	})
 }
 
 // Two accounts of one provider sharing an external id are ambiguous: the row
-// is hidden from both name scopes.
+// is hidden from both account scopes.
 func TestHandleRequest_History_SameProviderAmbiguousExternalID(t *testing.T) {
 	t.Parallel()
 	a := config.CloudAccount{ID: "u-a", Name: "dev", Provider: "aws", ExternalID: "123"}
 	b := config.CloudAccount{ID: "u-b", Name: "prod", Provider: "aws", ExternalID: "123"}
 	rows := []config.PurchaseHistoryRecord{{PurchaseID: "amb", Provider: "aws", AccountID: "123", Status: "completed"}}
-	for _, scope := range []string{"dev", "prod"} {
+	for _, scope := range []string{"u-a", "u-b"} {
 		assert.Empty(t, historyScopeIDs(t, []string{scope}, []config.CloudAccount{a, b}, rows), scope)
 		assert.Empty(t, historyScopeIDs(t, []string{scope}, []config.CloudAccount{b, a}, rows), scope)
 	}

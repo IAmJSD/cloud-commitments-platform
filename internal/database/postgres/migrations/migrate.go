@@ -167,9 +167,9 @@ func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, email, password st
 	// The `role` column was removed by migration 000057 (issue #945).
 	result, err := pool.Exec(ctx, `
 		INSERT INTO users (
-			id, email, password_hash, salt, active, group_ids, created_at, updated_at
+			id, email, password_hash, active, group_ids, created_at, updated_at
 		) VALUES (
-			gen_random_uuid(), $1, '', '', false, ARRAY[$2]::UUID[], NOW(), NOW()
+			gen_random_uuid(), $1, '', false, ARRAY[$2]::UUID[], NOW(), NOW()
 		)
 		ON CONFLICT (email) DO NOTHING
 	`, email, defaultAdminGroupID)
@@ -220,9 +220,9 @@ func ensureAdminUserWithPassword(ctx context.Context, pool *pgxpool.Pool, email,
 	// The `role` column was removed by migration 000057 (issue #945).
 	result, err := pool.Exec(ctx, `
 		INSERT INTO users (
-			id, email, password_hash, salt, active, group_ids, created_at, updated_at
+			id, email, password_hash, active, group_ids, created_at, updated_at
 		) VALUES (
-			gen_random_uuid(), $1, $2, '', true, ARRAY[$3]::UUID[], NOW(), NOW()
+			gen_random_uuid(), $1, $2, true, ARRAY[$3]::UUID[], NOW(), NOW()
 		)
 		ON CONFLICT (email) DO UPDATE
 			SET password_hash = $2, active = true, updated_at = NOW()
