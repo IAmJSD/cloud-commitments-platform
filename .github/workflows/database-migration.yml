@@ -267,9 +267,9 @@ jobs:
     # consequences, both accepted as better than concurrent writers to one
     # database:
     #   - GitHub keeps one pending entry per group, so a queued migration can be
-    #     evicted by a later dispatch. Unlike rollback.yml, the `summary` job
-    #     below does not exit 1 on a non-success result, so an evicted migration
-    #     leaves the run green; read the per-cloud results it prints.
+    #     evicted by a later dispatch. The evicted job ends `cancelled`, so the
+    #     run concludes `cancelled`, not green; the `summary` job (if: always())
+    #     still runs and prints the per-cloud results.
     #   - if the `environment:` binding below carries required reviewers, it is
     #     undocumented whether a job parked awaiting approval holds its group.
     concurrency:
