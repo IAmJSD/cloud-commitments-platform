@@ -712,10 +712,10 @@ type StoreInterface interface {
 	// dashboard loads don't each fan out to a paid CE API call. A
 	// per-process in-memory cache effectively never hits because each
 	// cold container starts empty. GetRIUtilizationCache returns nil
-	// when the (region, lookback_days) key is absent — callers treat
-	// that as a miss and re-fetch.
-	GetRIUtilizationCache(ctx context.Context, region string, lookbackDays int) (*RIUtilizationCacheEntry, error)
-	UpsertRIUtilizationCache(ctx context.Context, region string, lookbackDays int, payload []byte, fetchedAt time.Time) error
+	// when the (cloud_account_id, region, lookback_days) key is absent —
+	// callers treat that as a miss and re-fetch.
+	GetRIUtilizationCache(ctx context.Context, key RIUtilizationCacheKey) (*RIUtilizationCacheEntry, error)
+	UpsertRIUtilizationCache(ctx context.Context, key RIUtilizationCacheKey, payload []byte, fetchedAt time.Time) error
 
 	// Account registrations (self-service enrollment via federation IaC)
 	CreateAccountRegistration(ctx context.Context, reg *AccountRegistration) error

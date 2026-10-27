@@ -1852,12 +1852,12 @@ func (m *MockConfigStore) SetRecommendationsCollectionPartial(ctx context.Contex
 	return args.Error(0)
 }
 
-func (m *MockConfigStore) GetRIUtilizationCache(ctx context.Context, region string, lookbackDays int) (*config.RIUtilizationCacheEntry, error) {
-	m.record("GetRIUtilizationCache", ctx, region, lookbackDays)
+func (m *MockConfigStore) GetRIUtilizationCache(ctx context.Context, key config.RIUtilizationCacheKey) (*config.RIUtilizationCacheEntry, error) {
+	m.record("GetRIUtilizationCache", ctx, key)
 	if !isExpected(&m.Mock, "GetRIUtilizationCache") {
 		return nil, nil
 	}
-	args := m.Called(ctx, region, lookbackDays)
+	args := m.Called(ctx, key)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -1868,12 +1868,12 @@ func (m *MockConfigStore) GetRIUtilizationCache(ctx context.Context, region stri
 	return v, args.Error(1)
 }
 
-func (m *MockConfigStore) UpsertRIUtilizationCache(ctx context.Context, region string, lookbackDays int, payload []byte, fetchedAt time.Time) error {
-	m.record("UpsertRIUtilizationCache", ctx, region, lookbackDays, payload, fetchedAt)
+func (m *MockConfigStore) UpsertRIUtilizationCache(ctx context.Context, key config.RIUtilizationCacheKey, payload []byte, fetchedAt time.Time) error {
+	m.record("UpsertRIUtilizationCache", ctx, key, payload, fetchedAt)
 	if !isExpected(&m.Mock, "UpsertRIUtilizationCache") {
 		return nil
 	}
-	args := m.Called(ctx, region, lookbackDays, payload, fetchedAt)
+	args := m.Called(ctx, key, payload, fetchedAt)
 	return args.Error(0)
 }
 

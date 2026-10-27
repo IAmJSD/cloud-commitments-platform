@@ -59,9 +59,9 @@ func newUtilizationScopeStore() *MockConfigStore {
 	store.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
 	}
-	store.On("GetRIUtilizationCache", mock.Anything, mock.Anything, mock.Anything).
+	store.On("GetRIUtilizationCache", mock.Anything, mock.Anything).
 		Return((*config.RIUtilizationCacheEntry)(nil), nil).Maybe()
-	store.On("UpsertRIUtilizationCache", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	store.On("UpsertRIUtilizationCache", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(nil).Maybe()
 	return store
 }
@@ -213,4 +213,60 @@ func TestGetRIUtilization_PermissionCheckedBeforeScope(t *testing.T) {
 	assert.Zero(t, ec2.calls)
 	assert.Zero(t, recs.calls)
 	auth.AssertNotCalled(t, "GetAllowedAccountsAPI", mock.Anything, mock.Anything)
+}
+
+// Two deployment accounts reading the same region and lookback must each get
+// their own Cost Explorer result: the resolved cloud account is part of the
+// cache key (issue #120). With the old (region, lookback_days) key the second
+// account's request was served the first account's cached rows.
+func TestGetRIUtilization_AccountsInSameRegionDoNotShareCache(t *testing.T) {
+	ctx := context.Background()
+	auth, req := adminDashboardReq(ctx)
+	req.QueryStringParameters = map[string]string{"region": "us-east-1", "lookback_days": "30"}
+	recs := &countingUtilRecs{}
+	h := newUtilizationScopeHandler(auth, newUtilizationScopeStore(), ownUtilEC2(), recs, permsAccA)
+	cacheStore := newFakeRIUtilCacheStore()
+	h.riUtilizationCacheOnce.Do(func() { h.riUtilizationCache = newRIUtilizationCache(cacheStore, false) })
+	account := permsAccA
+	h.reshapeAccountResolver = func(_ context.Context) (string, error) { return account, nil }
+
+	recs.rows = []recommendations.RIUtilization{{ReservedInstanceID: "ri-account-a"}}
+	resp, err := h.getRIUtilization(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ri-account-a"}, utilIDs(t, resp))
+
+	account = permsAccB
+	recs.rows = []recommendations.RIUtilization{{ReservedInstanceID: "ri-account-b"}}
+	resp, err = h.getRIUtilization(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ri-account-b"}, utilIDs(t, resp), "account B must not be served account A's cached utilization")
+	assert.Equal(t, 2, recs.calls, "account B's read is a cache miss and calls Cost Explorer")
+
+	account = permsAccA
+	resp, err = h.getRIUtilization(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ri-account-a"}, utilIDs(t, resp), "account A still reads its own cached row")
+	assert.Equal(t, 2, recs.calls, "account A's second read is a cache hit")
+
+	_, ok := cacheStore.latest(config.RIUtilizationCacheKey{CloudAccountID: permsAccA, Region: "us-east-1", LookbackDays: 30})
+	assert.True(t, ok, "account A's row is stored under its own key")
+}
+
+// A failure to resolve the deployment account fails the utilization read
+// closed for every session, with no Cost Explorer call: without the account
+// the cache row cannot be keyed (issue #120).
+func TestGetRIUtilization_AccountResolutionErrorFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	auth, req := adminDashboardReq(ctx)
+	recs := &countingUtilRecs{rows: payerUtilizationRows()}
+	h := newUtilizationScopeHandler(auth, newUtilizationScopeStore(), ownUtilEC2(), recs, permsAccA)
+	h.reshapeAccountResolver = func(_ context.Context) (string, error) {
+		return "", errors.New("sts get-caller-identity denied")
+	}
+
+	resp, err := h.getRIUtilization(ctx, req)
+
+	require.ErrorContains(t, err, "resolve cloud account scope")
+	assert.Nil(t, resp)
+	assert.Zero(t, recs.calls)
 }
