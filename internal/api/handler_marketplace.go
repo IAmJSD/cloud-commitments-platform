@@ -91,8 +91,9 @@ func (h *Handler) loadMarketplaceAWSConfig(ctx context.Context, row *config.Purc
 // account, resolved through the purchase path's credential resolver.
 func (h *Handler) marketplaceAccountAWSConfig(ctx context.Context, account *config.CloudAccount, base aws.Config) (aws.Config, error) {
 	stsClient := sts.NewFromConfig(base)
-	provider, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, account, h.credStore, stsClient,
-		credentials.AWSResolveOptions{AmbientProvider: base.Credentials, AmbientSTS: stsClient})
+	opts := h.bastionResolveOptions(base)
+	opts.AmbientProvider, opts.AmbientSTS = base.Credentials, stsClient
+	provider, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, account, h.credStore, stsClient, opts)
 	if err != nil {
 		if errors.Is(err, credentials.ErrNotHostAccount) {
 			return aws.Config{}, NewClientError(400, err.Error())

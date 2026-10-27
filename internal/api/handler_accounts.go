@@ -1645,7 +1645,7 @@ func (h *Handler) buildOrgRootAWSConfig(ctx context.Context, root *config.CloudA
 		return aws.Config{}, fmt.Errorf("accounts: load base aws config: %w", err)
 	}
 	stsClient := sts.NewFromConfig(baseCfg)
-	credProvider, err := credentials.ResolveAWSCredentialProvider(ctx, root, h.credStore, stsClient)
+	credProvider, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, root, h.credStore, stsClient, h.bastionResolveOptions(baseCfg))
 	if err != nil {
 		return aws.Config{}, fmt.Errorf("accounts: resolve credentials for org root %s: %w", root.ID, err)
 	}

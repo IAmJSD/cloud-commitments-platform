@@ -395,9 +395,11 @@ func TestResolveBastionProvider_BastionDisabled(t *testing.T) {
 	assert.Contains(t, err.Error(), "bastion account bastion-acct is disabled")
 }
 
-// TestResolveBastionProvider_LegacyFallback verifies the back-compat path:
-// when AccountLookup/STSClientFactory are nil, the resolver falls through to
-// the old behavior of trusting the caller-supplied STS client.
+// TestResolveBastionProvider_LegacyFallback pins the removal of the legacy
+// fallback (issue #263, audit finding A03-011): when AccountLookup or
+// STSClientFactory is nil, the resolver must fail instead of assuming the
+// target role with the caller-supplied (host) STS client. Neither the lookup
+// nor the factory nor the caller's STS client may be used.
 func TestResolveBastionProvider_LegacyFallback(t *testing.T) {
 	target := &config.CloudAccount{
 		ID:           "target-acct",
@@ -405,9 +407,35 @@ func TestResolveBastionProvider_LegacyFallback(t *testing.T) {
 		AWSBastionID: "bastion-acct",
 		AWSRoleARN:   "arn:aws:iam::999999999999:role/Target",
 	}
+	lookup := func(_ context.Context, _ string) (*config.CloudAccount, error) {
+		t.Error("AccountLookup must not run when the STS client factory is missing")
+		return nil, nil
+	}
+	factory := func(_ aws.CredentialsProvider) STSClient {
+		t.Error("STSClientFactory must not run when the account lookup is missing")
+		return &mockSTSClient{}
+	}
+	cases := map[string]AWSResolveOptions{
+		"no options":   {},
+		"lookup only":  {AccountLookup: lookup},
+		"factory only": {STSClientFactory: factory},
+		"ambient only": {AmbientProvider: testAmbientCreds, AmbientSTS: &callerIdentitySTS{account: "111111111111"}},
+	}
+	for name, opts := range cases {
+		t.Run(name, func(t *testing.T) {
+			hostSTS := &recordingSTS{}
+			provider, err := ResolveAWSCredentialProviderWithOpts(context.Background(), target, newMockStore(), hostSTS, opts)
+			require.Error(t, err)
+			assert.Nil(t, provider)
+			assert.Contains(t, err.Error(), "bastion account lookup and STS client factory are required")
+			assert.Zero(t, hostSTS.assumeRoleCalls, "the caller's STS client must never assume the target role")
+		})
+	}
+
+	// The 4-argument wrapper passes no options, so it cannot resolve a bastion.
 	provider, err := ResolveAWSCredentialProvider(context.Background(), target, newMockStore(), &mockSTSClient{})
-	require.NoError(t, err)
-	assert.NotNil(t, provider)
+	require.Error(t, err)
+	assert.Nil(t, provider)
 }
 
 func TestResolveAzureCredentials_Success(t *testing.T) {

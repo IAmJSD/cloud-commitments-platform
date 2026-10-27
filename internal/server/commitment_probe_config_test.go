@@ -31,7 +31,7 @@ func (s hostIdentitySTS) GetCallerIdentity(context.Context, *sts.GetCallerIdenti
 // accepted when it is not.
 func TestCommitmentProbeConfigBuilder_HostIdentityCheck(t *testing.T) {
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
-	build := newCommitmentProbeConfigBuilder(nil, aws.AnonymousCredentials{}, hostIdentitySTS{account: "111111111111"})
+	build := newCommitmentProbeConfigBuilder(nil, nil, aws.Config{Credentials: aws.AnonymousCredentials{}}, hostIdentitySTS{account: "111111111111"})
 
 	nonHost := &config.CloudAccount{ID: "tenant", ExternalID: "222222222222", AWSAuthMode: "role_arn"}
 	_, err := build(context.Background(), nonHost)
