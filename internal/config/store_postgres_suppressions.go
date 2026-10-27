@@ -156,6 +156,15 @@ func (s *PostgresStore) DeleteSuppressionsByExecutionTx(ctx context.Context, tx 
 // matches each row's variant (availability zone, platform, tenancy;
 // issue #816) to subtract cumulative suppressed counts from its rec-list
 // output. A row with NULL variant columns comes back with a nil Variant.
+//
+// More than MaxListLimit active rows is an error, not a truncated list
+// (#120). Every row subtracts from a rec's count, so a truncated list would
+// silently under-suppress an arbitrary subset of recently purchased
+// capacity, and the money path (scheduler.ListRecommendationsStrict) would
+// then offer to re-buy it. An error is what every caller already handles as
+// "could not read suppressions": the money path refuses, the read-only pages
+// log it and over-show. The query fetches one row past the cap to tell the
+// two cases apart without a second COUNT round trip.
 func (s *PostgresStore) ListActiveSuppressions(ctx context.Context) ([]PurchaseSuppression, error) {
 	const q = `
 		SELECT id, execution_id, account_id, provider, service, region,
@@ -163,8 +172,9 @@ func (s *PostgresStore) ListActiveSuppressions(ctx context.Context) ([]PurchaseS
 		       availability_zone, platform, tenancy
 		FROM purchase_suppressions
 		WHERE expires_at > NOW()
+		LIMIT $1
 	`
-	rows, err := s.db.Query(ctx, q)
+	rows, err := s.db.Query(ctx, q, MaxListLimit+1)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query active suppressions: %w", err)
 	}
@@ -187,6 +197,9 @@ func (s *PostgresStore) ListActiveSuppressions(ctx context.Context) ([]PurchaseS
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("failed to iterate suppression rows: %w", err)
+	}
+	if len(out) > MaxListLimit {
+		return nil, fmt.Errorf("more than %d active suppressions; refusing to return a partial list", MaxListLimit)
 	}
 	return out, nil
 }
