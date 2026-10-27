@@ -1879,6 +1879,29 @@ func validateExchangeRIIDs(riIDs []string) error {
 	return nil
 }
 
+// validateExchangeTargetsBody holds the source and target checks quote and
+// execute share, so the quote cannot accept a request the library then fails
+// with a 500. A whitespace-only target_offering_id counts as absent.
+func validateExchangeTargetsBody(riIDs []string, targets []ExchangeTargetBody, offeringID string, count int32) error {
+	if err := validateExchangeRIIDs(riIDs); err != nil {
+		return err
+	}
+	legacy := strings.TrimSpace(offeringID) != ""
+	if len(targets) == 0 && !legacy {
+		return NewClientError(400, "either targets[] or target_offering_id is required")
+	}
+	if err := validateTargets(targets); err != nil {
+		return err
+	}
+	// The legacy singleton's count, which validateTargets does not see.
+	// Refuse before the submit claim rather than inside ExecuteExchange,
+	// after it.
+	if len(targets) == 0 && count < 1 {
+		return NewClientError(400, fmt.Sprintf("target_count must be >= 1, got %d", count))
+	}
+	return nil
+}
+
 // getExchangeQuote gets a quote for an RI exchange.
 func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, permErr := h.requirePermission(ctx, req, "view", "purchases")
@@ -1895,13 +1918,7 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
-	if len(body.RIIDs) == 0 {
-		return nil, NewClientError(400, "ri_ids is required")
-	}
-	if len(body.Targets) == 0 && body.TargetOfferingID == "" {
-		return nil, NewClientError(400, "either targets[] or target_offering_id is required")
-	}
-	if err := validateTargets(body.Targets); err != nil {
+	if err := validateExchangeTargetsBody(body.RIIDs, body.Targets, body.TargetOfferingID, body.TargetCount); err != nil {
 		return nil, err
 	}
 
@@ -1938,20 +1955,8 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 // cyclomatic-complexity threshold; every branch here becomes a
 // separate test case so the logic stays inspectable.
 func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error {
-	if err := validateExchangeRIIDs(body.RIIDs); err != nil {
+	if err := validateExchangeTargetsBody(body.RIIDs, body.Targets, body.TargetOfferingID, body.TargetCount); err != nil {
 		return err
-	}
-	if len(body.Targets) == 0 && body.TargetOfferingID == "" {
-		return NewClientError(400, "either targets[] or target_offering_id is required")
-	}
-	if err := validateTargets(body.Targets); err != nil {
-		return err
-	}
-	// The legacy singleton's count, which validateTargets above does not see.
-	// Same reasoning as the targets[] count: refuse before the submit claim
-	// rather than inside ExecuteExchange, after it.
-	if len(body.Targets) == 0 && body.TargetCount < 1 {
-		return NewClientError(400, fmt.Sprintf("target_count must be >= 1, got %d", body.TargetCount))
 	}
 	if body.MaxPaymentDueUSD == "" {
 		return NewClientError(400, "max_payment_due_usd is required as a safety guardrail")

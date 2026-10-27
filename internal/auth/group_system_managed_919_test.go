@@ -128,3 +128,25 @@ func TestAPIGroup_CarriesSystemManaged(t *testing.T) {
 		assert.NotContains(t, groups[1], "system_managed")
 	})
 }
+
+// TestServiceUpdateGroupAPI_SystemManagedRefusalPrecedesCeiling pins the
+// order of the two 403 causes (#1521). The service-level guard on UpdateGroup
+// would also refuse, but only after the ceiling checks; this request would
+// trip the ceiling first, so only the UpdateGroupAPI guard yields
+// ErrSystemManagedGroup.
+func TestServiceUpdateGroupAPI_SystemManagedRefusalPrecedesCeiling(t *testing.T) {
+	ctx := context.Background()
+	mockStore := new(MockStore)
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+	svc := newCeilingService(t, mockStore)
+
+	stubActorPermissionsMaybe(ctx, mockStore, []Permission{{Action: ActionView, Resource: ResourceAll}})
+	stubTargetGroup(ctx, mockStore, seededPurchaserGroup())
+
+	_, err := svc.UpdateGroupAPI(ctx, ceilingActorID, ceilingTargetID,
+		updateReqWith(APIPermission{Action: ActionAdmin, Resource: ResourceAll}))
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSystemManagedGroup)
+	assert.NotErrorIs(t, err, ErrPermissionCeiling)
+}
