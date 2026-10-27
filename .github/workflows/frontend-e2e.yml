@@ -99,6 +99,10 @@ jobs:
           # Keyed on the runner image too: the packages come partly from
           # noble-updates, so debs cached on an older image can go stale.
           key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.playwright.outputs.version }}-${{ steps.playwright.outputs.image }}-chromium-apt
+          # #1541: after a runner image change the exact key misses, but the
+          # fonts never change and were the slow downloads in #1538, so restore
+          # the previous image's debs and let install-deps fetch only the delta.
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ steps.playwright.outputs.version }}-
 
       - name: Install Chromium system deps
         id: apt-deps
@@ -123,6 +127,9 @@ jobs:
           npx playwright install-deps chromium
           if [ "${APT_CACHE_HIT}" != 'true' ]; then
             mkdir -p "${HOME}/.cache/playwright-apt"
+            # Drop obsolete versions so the saved cache holds only the current set.
+            sudo apt-get autoclean -y
+            rm -f "${HOME}"/.cache/playwright-apt/*.deb
             cp /var/cache/apt/archives/*.deb "${HOME}/.cache/playwright-apt/" 2>/dev/null || true
             count="$(find "${HOME}/.cache/playwright-apt" -name '*.deb' | wc -l | tr -d ' ')"
             echo "debs to cache: ${count}"
