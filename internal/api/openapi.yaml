@@ -1667,11 +1667,15 @@ paths:
             floor, or no default price computable), the RI is not Standard,
             the purchase's cloud account is missing, not AWS or cannot be
             signed for, the account role could not be assumed, or AWS rejected
-            the request as a client error.
+            the request as a client error. When AWS answers
+            SellerNotRegistered, reason is seller_not_registered and error
+            explains that the account's root user must register it as an RI
+            Marketplace seller, with a bank account that has a US address,
+            linking the AWS guide; no other 400 carries a reason.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/MarketplaceClientError'
         '401':
           description: No valid bearer session.
           content:
@@ -1766,11 +1770,13 @@ paths:
           description: >
             Invalid ID, the purchase's cloud account is missing, not AWS or
             cannot be signed for, the account role could not be assumed, or
-            AWS rejected the cancel as a client error.
+            AWS rejected the cancel as a client error. AWS errors are mapped
+            as for marketplace-list, so a SellerNotRegistered answer carries
+            reason seller_not_registered here too.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/MarketplaceClientError'
         '401':
           description: No valid bearer session.
           content:
@@ -8481,6 +8487,19 @@ components:
           description: >
             One-time USD sale price per instance when term_months remain. Must
             be positive.
+
+    MarketplaceClientError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        reason:
+          type: string
+          enum: [seller_not_registered]
+          description: >
+            Present only when AWS reported that the account is not a
+            registered RI Marketplace seller (SellerNotRegistered).
 
     MarketplaceListRequest:
       type: object
