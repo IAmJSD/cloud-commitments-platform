@@ -229,16 +229,19 @@ describe('Settings → Purchasing grace-period inputs', () => {
     expect(toastArg.message).not.toMatch(/AZURE/);
   });
 
-  it('empty input defaults to 7 in the save payload', async () => {
-    (document.getElementById('setting-grace-aws') as HTMLInputElement).value = '';
+  it('an emptied grace input refuses the save instead of saving 7', async () => {
+    const aws = document.getElementById('setting-grace-aws') as HTMLInputElement;
+    aws.value = '';
+    aws.dispatchEvent(new Event('input'));
     (document.getElementById('setting-grace-azure') as HTMLInputElement).value = '0';
-    (document.getElementById('setting-grace-gcp') as HTMLInputElement).value = '5';
 
     await saveGlobalSettings(new Event("submit"));
 
-    expect(api.updateConfig).toHaveBeenCalledTimes(1);
-    const payload = (api.updateConfig as jest.Mock).mock.calls[0]![0];
-    expect(payload.grace_period_days).toEqual({ aws: 7, azure: 0, gcp: 5 });
+    expect(api.updateConfig).not.toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'error',
+      message: expect.stringContaining('(AWS)'),
+    }));
   });
 
   it('resetSettings restores every grace input to 7', async () => {
@@ -313,7 +316,7 @@ describe('Settings → Purchasing grace inputs: inline range validation', () => 
     expect(errorEl('setting-grace-azure')!.textContent).toBe('Must be a whole number between 0 and 30');
   });
 
-  it('clearing the field removes aria-invalid and hides the inline error', () => {
+  it('clearing the field shows the inline error (a grace period is required)', () => {
     const input = document.getElementById('setting-grace-aws') as HTMLInputElement;
     input.value = '99';
     fire(input, 'input');
@@ -321,8 +324,8 @@ describe('Settings → Purchasing grace inputs: inline range validation', () => 
 
     input.value = '';
     fire(input, 'input');
-    expect(input.getAttribute('aria-invalid')).toBeNull();
-    expect(errorEl('setting-grace-aws')!.classList.contains('hidden')).toBe(true);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(errorEl('setting-grace-aws')!.classList.contains('hidden')).toBe(false);
   });
 
   it('typing a valid in-range value removes aria-invalid', () => {
@@ -351,5 +354,177 @@ describe('Settings → Purchasing grace inputs: inline range validation', () => 
     const toastArg = mockShowToast.mock.calls[0]![0] as { message: string; kind: string };
     expect(toastArg.message).toBe('Grace period must be a whole number between 0 and 30 days (AWS).');
     expect(toastArg.kind).toBe('error');
+  });
+});
+
+/**
+ * #539: grace_period_days and enabled_providers are replaced whole by the
+ * backend, so Save re-reads the server's value and overlays only the fields
+ * this tab changed.
+ */
+describe('Settings → stale-tab Save rebases multi-field keys onto the server (#539)', () => {
+  const baseGlobal = {
+    default_term: 3, default_payment: 'all-upfront', default_coverage: 80, notification_days_before: 3,
+  };
+  const input = (id: string): HTMLInputElement => document.getElementById(id) as HTMLInputElement;
+  const sent = (): Record<string, unknown> => (api.updateConfig as jest.Mock).mock.calls[0]![0];
+  const submit = (): Promise<void> => saveGlobalSettings(new Event('submit'));
+
+  // Loads the tab's (soon stale) view, then makes the server return `server`.
+  const loadStaleTab = async (loaded: Record<string, unknown>, server: Record<string, unknown>): Promise<void> => {
+    (api.getConfig as jest.Mock).mockResolvedValueOnce({ global: { ...baseGlobal, ...loaded }, services: [] });
+    await loadGlobalSettings();
+    (api.getConfig as jest.Mock).mockClear().mockResolvedValue({ global: { ...baseGlobal, ...server }, services: [] });
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    seedDOM();
+    (api.updateConfig as jest.Mock).mockResolvedValue(undefined);
+  });
+
+  it('keeps another admin\'s grace value for a provider this tab did not change, and shows it', async () => {
+    await loadStaleTab(
+      { enabled_providers: ['aws'], grace_period_days: { aws: 7, azure: 7, gcp: 7 } },
+      { enabled_providers: ['aws'], grace_period_days: { aws: 3, azure: 7, gcp: 7 } },
+    );
+    input('setting-grace-azure').value = '9';
+
+    await submit();
+
+    expect(sent()).toEqual({ grace_period_days: { aws: 3, azure: 9, gcp: 7 } });
+    expect(input('setting-grace-aws').value).toBe('3');
+    (api.updateConfig as jest.Mock).mockClear();
+    await submit();
+    expect(api.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('keeps a typed-in grace edit made while the PUT is in flight', async () => {
+    await loadStaleTab(
+      { enabled_providers: ['aws'], grace_period_days: { aws: 7, azure: 7, gcp: 7 } },
+      { enabled_providers: ['aws'], grace_period_days: { aws: 3, azure: 7, gcp: 7 } },
+    );
+    input('setting-grace-azure').value = '9';
+    let resolvePut!: () => void;
+    (api.updateConfig as jest.Mock).mockImplementationOnce(() => new Promise<void>(r => { resolvePut = r; }));
+
+    const saving = submit();
+    await new Promise(r => setTimeout(r, 0));
+    input('setting-grace-aws').value = '12';
+    resolvePut();
+    await saving;
+
+    expect(input('setting-grace-aws').value).toBe('12');
+  });
+
+  it('keeps providers another admin added when this tab unchecks one', async () => {
+    await loadStaleTab(
+      { enabled_providers: ['aws', 'azure'] },
+      { enabled_providers: ['aws', 'azure', 'gcp'] },
+    );
+    input('provider-azure').checked = false;
+
+    await submit();
+
+    expect(sent()).toEqual({ enabled_providers: ['aws', 'gcp'] });
+  });
+
+  it('does not duplicate a provider the server already enabled', async () => {
+    await loadStaleTab(
+      { enabled_providers: ['aws'] },
+      { enabled_providers: ['aws', 'gcp'] },
+    );
+    input('provider-gcp').checked = true;
+
+    await submit();
+
+    expect(sent()).toEqual({ enabled_providers: ['aws', 'gcp'] });
+  });
+
+  it.each([
+    ['rejects', () => (api.getConfig as jest.Mock).mockRejectedValue(new Error('boom'))],
+    ['returns no global', () => (api.getConfig as jest.Mock).mockResolvedValue({ services: [] })],
+  ])('aborts the whole save, sending nothing, when the server read %s', async (_name, breakRead) => {
+    await loadStaleTab({ enabled_providers: ['aws'], grace_period_days: { aws: 7, azure: 7, gcp: 7 } }, {});
+    breakRead();
+    input('setting-grace-azure').value = '9';
+
+    await submit();
+
+    expect(api.updateConfig).not.toHaveBeenCalled();
+    expect(api.updateServiceConfig).not.toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+    (api.updateConfig as jest.Mock).mockClear();
+    (api.getConfig as jest.Mock).mockResolvedValue({
+      global: { ...baseGlobal, enabled_providers: ['aws'], grace_period_days: { aws: 7, azure: 7, gcp: 7 } }, services: [],
+    });
+    await submit();
+    expect(sent()).toEqual({ grace_period_days: { aws: 7, azure: 9, gcp: 7 } });
+  });
+
+  it('does not read the server or send grace when no grace input changed', async () => {
+    await loadStaleTab({ enabled_providers: ['aws'], grace_period_days: { aws: 7, azure: 7, gcp: 7 } }, {});
+    input('setting-notification-email').value = 'new@test.com';
+
+    await submit();
+
+    expect(api.getConfig).not.toHaveBeenCalled();
+    expect(sent()).toEqual({ notification_email: 'new@test.com' });
+  });
+
+  // Holds the server read open so the form can change between click and PUT.
+  const holdServerRead = (server: Record<string, unknown>): (() => void) => {
+    let release!: () => void;
+    (api.getConfig as jest.Mock).mockReset().mockImplementation(() => new Promise(r => {
+      release = () => r({ global: { ...baseGlobal, ...server }, services: [] });
+    }));
+    return () => release();
+  };
+
+  it('judges grace changes by the values captured at Save, not the form after the read', async () => {
+    await loadStaleTab({ enabled_providers: ['aws'], grace_period_days: { aws: 7, azure: 7, gcp: 7 } }, {});
+    input('setting-grace-azure').value = '9';
+    const release = holdServerRead({ enabled_providers: ['aws'], grace_period_days: { aws: 3, azure: 7, gcp: 7 } });
+
+    const saving = submit();
+    input('setting-grace-aws').value = '12';
+    release();
+    await saving;
+
+    expect(sent()).toEqual({ grace_period_days: { aws: 3, azure: 9, gcp: 7 } });
+  });
+
+  it('judges provider changes by the values captured at Save, not the form after the read', async () => {
+    await loadStaleTab({ enabled_providers: ['aws', 'azure'] }, {});
+    input('provider-azure').checked = false;
+    const release = holdServerRead({ enabled_providers: ['aws', 'azure', 'gcp'] });
+
+    const saving = submit();
+    input('provider-gcp').checked = true;
+    release();
+    await saving;
+
+    expect(sent()).toEqual({ enabled_providers: ['aws', 'gcp'] });
+  });
+
+  it('removes every copy of an unchecked provider the server lists twice', async () => {
+    await loadStaleTab({ enabled_providers: ['aws', 'azure'] }, { enabled_providers: ['aws', 'aws', 'azure'] });
+    input('provider-aws').checked = false;
+
+    await submit();
+
+    expect(sent()).toEqual({ enabled_providers: ['azure'] });
+  });
+
+  it('omits a provider the server has no grace value for when it is unchanged', async () => {
+    await loadStaleTab(
+      { enabled_providers: ['aws'], grace_period_days: { aws: 7, azure: 7, gcp: 7 } },
+      { enabled_providers: ['aws'], grace_period_days: { azure: 7, gcp: 7 } },
+    );
+    input('setting-grace-gcp').value = '4';
+
+    await submit();
+
+    expect(sent()).toEqual({ grace_period_days: { azure: 7, gcp: 4 } });
   });
 });

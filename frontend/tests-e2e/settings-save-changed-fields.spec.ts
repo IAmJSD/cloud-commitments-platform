@@ -41,3 +41,46 @@ test('Settings Save sends only the edited field and no service rows', async ({ p
   expect(new URL(puts[0]!.url).pathname).toBe('/api/config');
   expect(puts[0]!.body).toEqual({ default_coverage: 60 });
 });
+
+// Issue #539: the grace map is replaced whole by the backend, so Save re-reads
+// it and overlays only this tab's edit instead of writing a stale map back.
+test('Settings Save keeps another admin\'s grace value and refuses an emptied grace field', async ({ page }) => {
+  await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1'
+    ? route.fallback() : route.abort());
+  await seedAuth(page);
+  await mockApi(page);
+  const puts: unknown[] = [];
+  let gets = 0;
+  await page.route('**/api/config', route => {
+    if (route.request().method() === 'PUT') {
+      puts.push(route.request().postDataJSON());
+      return route.fulfill({ json: { status: 'updated' } });
+    }
+    gets++;
+    // The first read is the page load; later reads see another admin's AWS change.
+    const aws = gets === 1 ? 7 : 3;
+    return route.fulfill({ json: { global: {
+      enabled_providers: ['aws'], default_term: 3, default_payment: 'all-upfront', default_coverage: 70,
+      notification_days_before: 3, grace_period_days: { aws, azure: 7, gcp: 7 },
+    }, services: [] } });
+  });
+  await page.route('**/api/commitment-options', route => route.fulfill({ json: { status: 'ok', aws: {} } }));
+  await page.route('**/api/ri-exchange/config', route => route.fulfill({ json: {
+    mode: 'manual', auto_exchange_enabled: false, utilization_threshold: 80,
+    max_payment_per_exchange_usd: 0, max_payment_daily_usd: 0, lookback_days: 30,
+  } }));
+  await page.route('**/api/ladder/**', route => route.fulfill({ json: { configs: [], runs: [], events: [], total_count: 0, total_usd_hr: '0.000000' } }));
+  await page.goto('/admin/purchasing');
+
+  await expect(page.locator('#setting-grace-aws')).toHaveValue('7');
+  await page.locator('#setting-grace-azure').fill('');
+  await page.locator('#save-purchasing-btn').click();
+  await expect(page.locator('.toast, [role="status"]').filter({ hasText: 'Grace period must be' }).first()).toBeVisible();
+  expect(puts).toHaveLength(0);
+
+  await page.locator('#setting-grace-azure').fill('5');
+  await page.locator('#save-purchasing-btn').click();
+  await expect(page.locator('.toast, [role="status"]').filter({ hasText: 'Settings saved' }).first()).toBeVisible();
+  expect(puts).toEqual([{ grace_period_days: { aws: 3, azure: 5, gcp: 7 } }]);
+  await expect(page.locator('#setting-grace-aws')).toHaveValue('3');
+});

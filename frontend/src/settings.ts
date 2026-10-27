@@ -222,8 +222,8 @@ let saveInFlight = false;
  *   byId<HTMLInputElement>('foo')?.value ?? '';  // read site
  */
 // Grace-period input: 0 is a valid user choice (disables the feature
-// for that provider), so we use empty-string to signal "fall back to
-// default (7)". An explicit 0 must round-trip as 0, not get swallowed.
+// for that provider), so an explicit 0 must round-trip as 0, not get
+// swallowed. A missing server value renders as the default (7).
 function populateGraceInput(id: string, value: number | undefined): void {
   const el = document.getElementById(id) as HTMLInputElement | null;
   if (!el) return;
@@ -231,8 +231,8 @@ function populateGraceInput(id: string, value: number | undefined): void {
 }
 
 // readGraceInput parses the grace-period input, returning the numeric
-// value or an error message (out of range, not a number). Empty input
-// defaults to 7.
+// value or an error message (empty, out of range, not a number). Empty is
+// refused, not defaulted: a cleared field most likely means 0.
 //
 // The error wording mirrors what wireInlineRangeValidation renders
 // under the field on input/blur, so the inline indicator and the
@@ -243,9 +243,8 @@ function readGraceInput(id: string): { value: number; err?: undefined } | { valu
   const el = document.getElementById(id) as HTMLInputElement | null;
   if (!el) return { value: 7 };
   const raw = el.value.trim();
-  if (raw === '') return { value: 7 };
   const n = Number(raw);
-  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 30) {
+  if (raw === '' || !Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 30) {
     return { value: 0, err: 'Must be a whole number between 0 and 30' };
   }
   return { value: n };
@@ -2623,9 +2622,9 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
   wireInlineRangeValidation('setting-notification-days', { signal, requireInteger: true });
   wireInlineRangeValidation('setting-recs-stale-hours', { signal, requireInteger: true, required: true });
   wireInlineRangeValidation('setting-default-coverage', { signal, requireInteger: true, required: true });
-  wireInlineRangeValidation('setting-grace-aws', { signal, requireInteger: true });
-  wireInlineRangeValidation('setting-grace-azure', { signal, requireInteger: true });
-  wireInlineRangeValidation('setting-grace-gcp', { signal, requireInteger: true });
+  wireInlineRangeValidation('setting-grace-aws', { signal, requireInteger: true, required: true });
+  wireInlineRangeValidation('setting-grace-azure', { signal, requireInteger: true, required: true });
+  wireInlineRangeValidation('setting-grace-gcp', { signal, requireInteger: true, required: true });
   // Per-SP-plan coverage percentage inputs — must carry the same inline
   // validation as the global default-coverage field so users see range errors
   // on the service cards without waiting for Save. Issue #1411 row 7.13.
@@ -3467,6 +3466,52 @@ function showPropagatedCoverage(coverage: number, sentFields: Record<string, str
   }
 }
 
+const GRACE_INPUTS = [['aws', 'setting-grace-aws'], ['azure', 'setting-grace-azure'], ['gcp', 'setting-grace-gcp']] as const;
+
+
+/**
+ * grace_period_days and enabled_providers are replaced whole by the backend, so
+ * a tab opened before another admin's save would revert that admin's providers
+ * (#539). Re-read the server's current value and overlay only the fields this
+ * user changed, judged by the values captured at Save (the form may change while
+ * the read is pending). Rejects, leaving nothing sent, if the server value is unavailable.
+ */
+async function rebaseMultiFieldKeys(
+  changedGlobal: Partial<api.Config>,
+  isFieldChanged: (id: string) => boolean,
+): Promise<void> {
+  const fresh = await api.getConfig();
+  if (!fresh?.global) throw new Error('could not load the current settings to merge into');
+  if ('grace_period_days' in changedGlobal) {
+    const merged: Record<string, number> = { ...(fresh.global.grace_period_days ?? {}) };
+    for (const [provider, id] of GRACE_INPUTS) {
+      if (isFieldChanged(id)) merged[provider] = changedGlobal.grace_period_days![provider]!;
+    }
+    changedGlobal.grace_period_days = merged;
+  }
+  if ('enabled_providers' in changedGlobal) {
+    let merged: api.Provider[] = [...((fresh.global.enabled_providers ?? []) as api.Provider[])];
+    for (const provider of ['aws', 'azure', 'gcp'] as const) {
+      if (!isFieldChanged(`provider-${provider}`)) continue;
+      const at = merged.indexOf(provider);
+      const checked = changedGlobal.enabled_providers!.includes(provider);
+      if (checked && at < 0) merged.push(provider);
+      if (!checked) merged = merged.filter(p => p !== provider);
+    }
+    changedGlobal.enabled_providers = merged;
+  }
+}
+
+/** Show the persisted grace map, keeping any input the user edited while the save ran. */
+function showSavedGrace(saved: Record<string, number>, sentFields: Record<string, string>): void {
+  for (const [provider, id] of GRACE_INPUTS) {
+    if (getFieldValue(id) !== sentFields[id]) continue;
+    populateGraceInput(id, saved[provider]);
+    savedSnapshot[id] = sentFields[id] = getFieldValue(id);
+  }
+  revalidateInlineRanges();
+}
+
 /**
  * Save global settings
  */
@@ -3504,7 +3549,7 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
   // reasons.
   const gracePeriodDays: Record<string, number> = {};
   const graceErrors: string[] = [];
-  for (const [provider, id] of [['aws', 'setting-grace-aws'], ['azure', 'setting-grace-azure'], ['gcp', 'setting-grace-gcp']] as const) {
+  for (const [provider, id] of GRACE_INPUTS) {
     const v = readGraceInput(id);
     if (v.err) {
       graceErrors.push(provider.toUpperCase());
@@ -3599,19 +3644,24 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     // Save button are unreachable after a failed first load, so the snapshot is
     // always populated here. laddering_enabled is not part of Save: its toggle
     // saves itself (ladder.ts). Multi-field keys (grace map, enabled_providers)
-    // are sent whole, because the backend replaces them as a unit.
+    // are replaced whole by the backend, so rebaseMultiFieldKeys merges them first.
     const changedGlobal: Partial<api.Config> = { ...settings };
+    const isFieldChanged = (id: string): boolean => sentFields[id] !== savedSnapshot[id];
     for (const [key, ids] of GLOBAL_CONFIG_FIELDS) {
-      if (ids.every(id => getFieldValue(id) === savedSnapshot[id])) delete changedGlobal[key];
+      if (!ids.some(isFieldChanged)) delete changedGlobal[key];
     }
     const globalSent = Object.keys(changedGlobal).length > 0;
     if (globalSent) {
+      if ('grace_period_days' in changedGlobal || 'enabled_providers' in changedGlobal) {
+        await rebaseMultiFieldKeys(changedGlobal, isFieldChanged);
+      }
       await api.updateConfig(changedGlobal);
       // Persisted: advance the snapshot now, so a later validation failure or
       // service-save error does not leave these fields looking unsaved.
       for (const [key, ids] of GLOBAL_CONFIG_FIELDS) {
         if (key in changedGlobal) ids.forEach(id => { savedSnapshot[id] = sentFields[id]!; });
       }
+      if (changedGlobal.grace_period_days) showSavedGrace(changedGlobal.grace_period_days, sentFields);
     }
     if (defaultCoverageChanged) {
       // The default is persisted and propagated; mirror that locally so a retry
