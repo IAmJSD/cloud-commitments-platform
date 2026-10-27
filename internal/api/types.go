@@ -828,7 +828,7 @@ type PlanRequest struct {
 	Provider               string   `json:"provider,omitempty"`
 	Service                string   `json:"service,omitempty"`
 	TargetAccounts         []string `json:"target_accounts,omitempty"`
-	TargetCoverage         int      `json:"target_coverage,omitempty"`
+	TargetCoverage         *int     `json:"target_coverage,omitempty"`
 	Term                   int      `json:"term,omitempty"`
 	NotificationDaysBefore int      `json:"notification_days_before"`
 	CustomStepPercent      int      `json:"custom_step_percent,omitempty"`
@@ -839,6 +839,15 @@ type PlanRequest struct {
 	MaxStepCommitment *float64 `json:"max_step_commitment,omitempty"`
 	AutoPurchase      bool     `json:"auto_purchase"`
 	Enabled           bool     `json:"enabled"`
+}
+
+// validateTargetCoverage refuses an explicit target outside 1..100: the plan
+// executor rejects 0, so a stored 0% plan would fail on every tick.
+func (r *PlanRequest) validateTargetCoverage() error {
+	if r.TargetCoverage != nil && (*r.TargetCoverage < 1 || *r.TargetCoverage > 100) {
+		return NewClientError(400, "target_coverage must be between 1 and 100 for a purchase plan")
+	}
+	return nil
 }
 
 // toPurchasePlan converts a PlanRequest to a config.PurchasePlan.
@@ -920,9 +929,10 @@ func (r *PlanRequest) buildServiceConfig() map[string]config.ServiceConfig {
 		payment = "no-upfront"
 	}
 
-	coverage := float64(r.TargetCoverage)
-	if coverage == 0 {
-		coverage = 80
+	// nil is an omitted field (create defaults it to 80); an explicit value is kept as sent.
+	coverage := float64(config.DefaultCoveragePercent)
+	if r.TargetCoverage != nil {
+		coverage = float64(*r.TargetCoverage)
 	}
 
 	return map[string]config.ServiceConfig{

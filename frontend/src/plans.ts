@@ -1145,15 +1145,17 @@ export async function savePlan(e: Event): Promise<void> {
   // to 2. Mirrors the strict parse pattern from handleAddPurchases and settings.ts
   // validatePurchasingSettings (feedback_strict_int_parse, finding 11-M1).
   const rawTerm = Number((document.getElementById('plan-term') as HTMLSelectElement).value);
-  const rawCoverage = Number((document.getElementById('plan-coverage') as HTMLInputElement).value);
+  const coverageText = (document.getElementById('plan-coverage') as HTMLInputElement).value.trim();
+  // Number('') is 0, so an emptied field must not reach the range check as 0.
+  const rawCoverage = coverageText === '' ? NaN : Number(coverageText);
   const rawNotifyDays = Number((document.getElementById('plan-notify-days') as HTMLInputElement).value);
 
   if (!Number.isFinite(rawTerm) || !Number.isInteger(rawTerm) || rawTerm < 1) {
     showToast({ message: 'Term must be a valid whole number of years', kind: 'error' });
     return;
   }
-  if (!Number.isFinite(rawCoverage) || !Number.isInteger(rawCoverage) || rawCoverage < 0 || rawCoverage > 100) {
-    showToast({ message: 'Target Coverage must be a whole number between 0 and 100', kind: 'error' });
+  if (!Number.isFinite(rawCoverage) || !Number.isInteger(rawCoverage) || rawCoverage < 1 || rawCoverage > 100) {
+    showToast({ message: 'Target Coverage must be a whole number between 1 and 100', kind: 'error' });
     return;
   }
   if (!Number.isFinite(rawNotifyDays) || !Number.isInteger(rawNotifyDays) || rawNotifyDays < 1 || rawNotifyDays > 30) {
@@ -1653,7 +1655,7 @@ function updatePlanNameFromSchedule(): void {
  * `max` parameters are used instead of reading HTML attributes so callers are
  * the source of truth and the helper stays self-contained.
  */
-function wireRangeInput(inputId: string, min: number, max: number): void {
+function wireRangeInput(inputId: string, min: number, max: number, clamp = true): void {
   const input = document.getElementById(inputId) as HTMLInputElement | null;
   if (!input) return;
 
@@ -1722,7 +1724,7 @@ function wireRangeInput(inputId: string, min: number, max: number): void {
   };
 
   input.addEventListener('input', check);
-  input.addEventListener('blur', clampOnBlur);
+  if (clamp) input.addEventListener('blur', clampOnBlur);
 }
 
 /**
@@ -1731,7 +1733,8 @@ function wireRangeInput(inputId: string, min: number, max: number): void {
  * the create and edit flows.
  */
 function wirePlanRangeInputs(): void {
-  wireRangeInput('plan-coverage', 0, 100);
+  // No clamp: a clamped 0 would silently become a 1% plan that buys; savePlan refuses it.
+  wireRangeInput('plan-coverage', 1, 100, false);
   wireRangeInput('ramp-step-percent', 1, 100);
   wireRangeInput('ramp-interval-days', 1, 365);
   wireRangeInput('plan-notify-days', 1, 30);

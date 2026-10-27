@@ -6881,6 +6881,9 @@ components:
           type: string
         target_coverage:
           type: integer
+          minimum: 1
+          maximum: 100
+          description: Percentage, 1 to 100. Defaults to 80 when omitted on create.
         ramp_schedule:
           type: string
           enum: [immediate, weekly-25pct, monthly-10pct, custom]

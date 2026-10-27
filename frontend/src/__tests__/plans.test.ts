@@ -1111,6 +1111,25 @@ describe('Plans Module', () => {
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Failed to pause purchase: API Error' }));
     });
 
+    test('edit form shows the stored plan coverage (#523)', async () => {
+      (api.getPlan as jest.Mock).mockResolvedValue({
+        id: 'plan-1',
+        name: 'Test Plan',
+        enabled: true,
+        auto_purchase: false,
+        notification_days_before: 3,
+        services: {
+          ec2: { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'all-upfront', coverage: 55 },
+        },
+        ramp_schedule: { type: 'immediate', percent_per_step: 100, step_interval_days: 0 },
+      });
+
+      (document.querySelector('[data-action="edit"]') as HTMLButtonElement)?.click();
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      expect((document.getElementById('plan-coverage') as HTMLInputElement).value).toBe('55');
+    });
+
     test('edit action calls getPlan with plan_id, not the purchase id (#773)', async () => {
       // The purchase row has id="purchase-1" and plan_id="plan-1".
       // Before the fix, editPlan received "purchase-1", causing GET /plans/purchase-1
@@ -1581,6 +1600,37 @@ describe('Plans Module', () => {
         await savePlan(event);
         expect(api.createPlan).not.toHaveBeenCalled();
         expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
+      });
+
+      test('rejects an empty target_coverage instead of sending 0 (#523)', async () => {
+        (document.getElementById('plan-coverage') as HTMLInputElement).value = '';
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+          message: 'Target Coverage must be a whole number between 1 and 100',
+          kind: 'error',
+        }));
+      });
+
+      test.each(['0', '101'])('rejects target_coverage %s (#523)', async (value) => {
+        (document.getElementById('plan-coverage') as HTMLInputElement).value = value;
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+          message: 'Target Coverage must be a whole number between 1 and 100',
+        }));
+      });
+
+      test('sends target_coverage 1 as 1 (#523)', async () => {
+        (api.createPlan as jest.Mock).mockResolvedValue({});
+        (api.getPlans as jest.Mock).mockResolvedValue({ plans: [] });
+        (api.getPlannedPurchases as jest.Mock).mockResolvedValue({ purchases: [] });
+        (document.getElementById('plan-coverage') as HTMLInputElement).value = '1';
+        const event = { preventDefault: jest.fn() } as unknown as Event;
+        await savePlan(event);
+        expect(api.createPlan).toHaveBeenCalledWith(expect.objectContaining({ target_coverage: 1 }));
       });
 
       test('rejects NaN notification_days_before (e.g. empty string after clear)', async () => {

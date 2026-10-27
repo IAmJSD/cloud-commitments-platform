@@ -3,7 +3,7 @@
  * inputs (issue #702).
  *
  * Covers wireRangeInput (via wirePlanRangeInputs) for:
- *   #plan-coverage       min=0  max=100
+ *   #plan-coverage       min=1  max=100
  *   #ramp-step-percent   min=1  max=100
  *   #ramp-interval-days  min=1  max=365  (max attr was previously missing)
  *   #plan-notify-days    min=1  max=30
@@ -178,7 +178,7 @@ function buildPlanModalDOM(): void {
   ]);
 
   // The five numeric inputs under test (min/max match HTML spec + issue #702)
-  addInput(form, 'plan-coverage', 'number', '80', { min: '0', max: '100' });
+  addInput(form, 'plan-coverage', 'number', '80', { min: '1', max: '100' });
 
   const autoPurchase = document.createElement('input');
   autoPurchase.id = 'plan-auto-purchase';
@@ -247,8 +247,9 @@ describe('plan numeric inputs: live range validation (#702)', () => {
   // --- out-of-range values show inline error --------------------------------
 
   it.each([
-    ['plan-coverage', '101', 'Must be a whole number between 0 and 100'],
-    ['plan-coverage', '-1', 'Must be a whole number between 0 and 100'],
+    ['plan-coverage', '101', 'Must be a whole number between 1 and 100'],
+    ['plan-coverage', '0', 'Must be a whole number between 1 and 100'],
+    ['plan-coverage', '-1', 'Must be a whole number between 1 and 100'],
     ['ramp-step-percent', '0', 'Must be a whole number between 1 and 100'],
     ['ramp-step-percent', '101', 'Must be a whole number between 1 and 100'],
     ['ramp-interval-days', '0', 'Must be a whole number between 1 and 365'],
@@ -300,7 +301,7 @@ describe('plan numeric inputs: live range validation (#702)', () => {
 
   it.each([
     ['plan-coverage', '80'],
-    ['plan-coverage', '0'],
+    ['plan-coverage', '1'],
     ['plan-coverage', '100'],
     ['ramp-step-percent', '25'],
     ['ramp-interval-days', '7'],
@@ -342,13 +343,25 @@ describe('plan numeric inputs: live range validation (#702)', () => {
   // --- blur clamps the value to [min, max] ---------------------------------
 
   it('out-of-range value is clamped to max on blur', () => {
-    const input = document.getElementById('plan-coverage') as HTMLInputElement;
+    const input = document.getElementById('ramp-step-percent') as HTMLInputElement;
     input.value = '150';
     fire(input, 'blur');
 
     expect(input.value).toBe('100');
     expect(input.getAttribute('aria-invalid')).toBeNull();
-    expect(errorEl('plan-coverage')!.classList.contains('hidden')).toBe(true);
+    expect(errorEl('ramp-step-percent')!.classList.contains('hidden')).toBe(true);
+  });
+
+  // A clamped 0 would silently become a 1% plan that buys (#523).
+  it.each(['0', '150'])('plan-coverage %s is not rewritten on blur and keeps its error', (value) => {
+    const input = document.getElementById('plan-coverage') as HTMLInputElement;
+    input.value = value;
+    fire(input, 'input');
+    fire(input, 'blur');
+
+    expect(input.value).toBe(value);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(errorEl('plan-coverage')!.classList.contains('hidden')).toBe(false);
   });
 
   it('below-min value is clamped to min on blur', () => {

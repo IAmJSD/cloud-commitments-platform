@@ -147,7 +147,7 @@ func newCombinedPlanFixtureIn(t *testing.T, automatic bool, capAmount *float64, 
 	require.NoError(t, f.store.SaveGlobalConfig(ctx, global))
 	response := combinedRoute(t, f.handler, "POST", "/api/plans", PlanRequest{
 		Name: "combined Azure", Provider: "azure", Service: "compute", Payment: "monthly", Term: 1,
-		TargetAccounts: []string{f.account}, TargetCoverage: 80, RampSchedule: "weekly-25pct",
+		TargetAccounts: []string{f.account}, TargetCoverage: ptr(80), RampSchedule: "weekly-25pct",
 		Enabled: true, AutoPurchase: automatic, NotificationDaysBefore: 3, MaxStepCommitment: capAmount,
 	})
 	require.Equal(t, 200, response.StatusCode, response.Body)
