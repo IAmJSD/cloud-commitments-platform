@@ -89,14 +89,36 @@ func TestInMemoryRateLimiter_Allow_RateLimited(t *testing.T) {
 	assert.False(t, allowed)
 }
 
-func TestInMemoryRateLimiter_Allow_WindowExpiry(t *testing.T) {
+// fakeClock is a manually advanced clock for InMemoryRateLimiter tests, so
+// window expiry is driven by Advance instead of a wall-clock sleep (#36).
+type fakeClock struct{ t time.Time }
+
+func newFakeClock() *fakeClock {
+	return &fakeClock{t: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)}
+}
+
+func (c *fakeClock) Now() time.Time          { return c.t }
+func (c *fakeClock) Advance(d time.Duration) { c.t = c.t.Add(d) }
+
+// newInMemoryRateLimiterWithClock returns a limiter that reads clock instead
+// of time.Now.
+func newInMemoryRateLimiterWithClock(clock *fakeClock) *InMemoryRateLimiter {
 	rl := NewInMemoryRateLimiter()
+	rl.now = clock.Now
+	return rl
+}
+
+// The window is an hour, so only the injected clock can expire it: a limiter
+// that read time.Now would still block the third request.
+func TestInMemoryRateLimiter_Allow_WindowExpiry(t *testing.T) {
+	clock := newFakeClock()
+	rl := newInMemoryRateLimiterWithClock(clock)
 	ctx := context.Background()
 
-	// Set a very short window
+	window := time.Hour
 	rl.SetLimit("test_endpoint", RateLimitConfig{
 		MaxAttempts: 1,
-		Window:      10 * time.Millisecond,
+		Window:      window,
 	})
 
 	// First request should be allowed
@@ -109,13 +131,22 @@ func TestInMemoryRateLimiter_Allow_WindowExpiry(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, allowed)
 
-	// Wait for window to expire
-	time.Sleep(20 * time.Millisecond)
-
-	// Third request should be allowed (window expired)
+	// At exactly the reset time the window has not expired yet.
+	clock.Advance(window)
 	allowed, err = rl.Allow(ctx, "test-key", "test_endpoint")
 	require.NoError(t, err)
-	assert.True(t, allowed)
+	assert.False(t, allowed, "request at exactly the reset time must still be blocked")
+
+	// One tick later the window has expired and a new one starts.
+	clock.Advance(time.Nanosecond)
+	allowed, err = rl.Allow(ctx, "test-key", "test_endpoint")
+	require.NoError(t, err)
+	assert.True(t, allowed, "request after the window expired must be allowed")
+
+	// The new window counts from the expiry request.
+	allowed, err = rl.Allow(ctx, "test-key", "test_endpoint")
+	require.NoError(t, err)
+	assert.False(t, allowed, "the new window must enforce the limit again")
 }
 
 func TestInMemoryRateLimiter_Allow_DifferentKeys(t *testing.T) {
@@ -180,30 +211,44 @@ func TestInMemoryRateLimiter_AllowWithUser(t *testing.T) {
 	assert.True(t, allowed)
 }
 
+// At the entry cap, Allow first purges expired entries. Advancing the clock
+// past the short window expires every short-window entry but not the
+// long-window one, so the purge alone must bring the map well under the cap
+// (the 80% oldest-first eviction would leave hundreds of entries) and must
+// keep the live entry and its count.
 func TestInMemoryRateLimiter_GarbageCollection(t *testing.T) {
-	rl := NewInMemoryRateLimiter()
+	clock := newFakeClock()
+	rl := newInMemoryRateLimiterWithClock(clock)
 	ctx := context.Background()
 
-	// Set very short window for expired entries
-	rl.SetLimit("test_endpoint", RateLimitConfig{
-		MaxAttempts: 100,
-		Window:      1 * time.Millisecond,
-	})
+	rl.SetLimit("short_endpoint", RateLimitConfig{MaxAttempts: 100, Window: time.Minute})
+	rl.SetLimit("long_endpoint", RateLimitConfig{MaxAttempts: 1, Window: time.Hour})
 
-	// Create many entries
-	for i := 0; i < 1100; i++ {
-		key := string(rune('a' + (i % 26)))
-		_, err := rl.Allow(ctx, key, "test_endpoint")
+	// The live entry is the oldest, so oldest-first eviction would drop it.
+	allowed, err := rl.Allow(ctx, "live-key", "long_endpoint")
+	require.NoError(t, err)
+	require.True(t, allowed)
+	for i := 1; i < inMemoryRateLimitMaxEntries; i++ {
+		_, err = rl.Allow(ctx, fmt.Sprintf("key-%d", i), "short_endpoint")
 		require.NoError(t, err)
 	}
+	rl.mu.Lock()
+	require.Len(t, rl.attempts, inMemoryRateLimitMaxEntries)
+	rl.mu.Unlock()
 
-	// Wait for entries to expire
-	time.Sleep(10 * time.Millisecond)
-
-	// Trigger GC by adding more requests (GC triggers when attempts > 1000)
-	// The Allow function should clean up expired entries
-	_, err := rl.Allow(ctx, "trigger-gc", "test_endpoint")
+	// Expire the short-window entries, then trigger the cap check.
+	clock.Advance(2 * time.Minute)
+	_, err = rl.Allow(ctx, "trigger-gc", "short_endpoint")
 	require.NoError(t, err)
+
+	rl.mu.Lock()
+	count := len(rl.attempts)
+	rl.mu.Unlock()
+	assert.Equal(t, 2, count, "expired entries must be purged, leaving the live entry and the new one")
+
+	allowed, err = rl.Allow(ctx, "live-key", "long_endpoint")
+	require.NoError(t, err)
+	assert.False(t, allowed, "the live entry must survive the purge with its count intact")
 }
 
 func TestInMemoryRateLimiter_ConcurrentAccess(t *testing.T) {
