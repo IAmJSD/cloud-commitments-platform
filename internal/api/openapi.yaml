@@ -160,6 +160,30 @@ paths:
       operationId: getUpcomingPurchases
       tags: [Dashboard]
       summary: Get upcoming scheduled purchases
+      description: >
+        Pending purchase executions the caller's account scope can see. The
+        optional filters narrow that set and never widen it.
+      parameters:
+        - name: provider
+          in: query
+          description: >
+            Filter by the row's provider (its plan's first service). "all" or
+            no value means every provider. Any other value is a 400.
+          schema:
+            type: string
+            enum: [aws, azure, gcp, all]
+        - name: account_ids
+          in: query
+          description: >
+            Comma-separated cloud account UUIDs (at most 200). When present it
+            takes precedence over account_id. A row matches when any account
+            the execution can buy in is selected (a plan-level execution
+            covers every plan account; a per-account execution only its own).
+            The selection is narrowed to the caller's allowed accounts, so an
+            account outside them matches no rows.
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AccountID'
       responses:
         '200':
           description: Upcoming purchases
@@ -167,6 +191,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UpcomingPurchaseResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
