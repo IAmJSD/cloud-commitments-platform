@@ -13,6 +13,9 @@
 #      loop over terraform/environments/*/dev, which does not exist.
 #   4. Makefile.terraform's clean-locks refuses to delete the provider lock
 #      files without CONFIRM_CLEAN_LOCKS=yes.
+#   5. complexity skips _test.go files, as CI's Lint Code job does, and tells
+#      a gocyclo failure apart from findings. It used to fold stderr into the
+#      findings with `2>&1 || true`, so a tool error read as complex functions.
 #
 # Tools are stubs on a PATH that holds nothing else, so the real tools are
 # never run and nothing leaves the machine. Exits 0 when all cases pass;
@@ -149,6 +152,52 @@ if [ ! -e "$lock" ]; then
 else
   note_fail "clean-locks kept the lock file despite confirmation"
 fi
+
+# 5. complexity. gocyclo_stub NAME STDOUT STDERR EXIT: a PATH dir whose only
+# command is a gocyclo that logs its argv to $WORK/gocyclo.log, prints STDOUT
+# and STDERR, and exits EXIT.
+gocyclo_stub() {
+  local dir="$WORK/bin-gocyclo-$1"
+  mkdir -p "$dir"
+  {
+    echo '#!/bin/sh'
+    echo "echo \"\$*\" >> '$WORK/gocyclo.log'"
+    [ -n "$2" ] && echo "echo '$2'"
+    [ -n "$3" ] && echo "echo \"$3\" >&2"
+    echo "exit $4"
+  } > "$dir/gocyclo"
+  chmod +x "$dir/gocyclo"
+  rm -f "$WORK/gocyclo.log"
+  echo "$dir"
+}
+expect_status 0 "complexity passes when gocyclo reports nothing" \
+  run_make "$(gocyclo_stub clean "" "" 0)" complexity
+if grep -qxF -- '-over 10 -ignore _test\.go|(^|/)(node_modules|vendor)/ .' "$WORK/gocyclo.log" 2>/dev/null; then
+  note_pass "complexity runs gocyclo with CI's -ignore (_test.go, node_modules, vendor)"
+else
+  note_fail "complexity does not pass CI's -ignore to gocyclo"
+  sed 's/^/    /' "$WORK/gocyclo.log" 2>/dev/null || true
+fi
+expect_status 1 "complexity fails on a reported function" \
+  run_make "$(gocyclo_stub findings "11 pkg f a.go:1:1" "" 1)" complexity
+if grep -q "Found functions with cyclomatic complexity over 10" "$WORK/out.log"; then
+  note_pass "complexity reports findings as findings"
+else
+  note_fail "complexity did not report the finding"; sed 's/^/    /' "$WORK/out.log"
+fi
+expect_status 1 "complexity fails when gocyclo errors out" \
+  run_make "$(gocyclo_stub broken "" "a.go:1:1: expected package, found EOF" 1)" complexity
+if grep -q "gocyclo failed (exit 1)" "$WORK/out.log" &&
+   ! grep -q "Found functions" "$WORK/out.log" &&
+   grep -q "expected package, found EOF" "$WORK/out.log"; then
+  note_pass "complexity reports a gocyclo error as a tool failure and shows its stderr"
+else
+  note_fail "complexity reported a gocyclo error as findings or hid it"; sed 's/^/    /' "$WORK/out.log"
+fi
+expect_status 1 "complexity fails on an unexpected gocyclo exit (2, usage)" \
+  run_make "$(gocyclo_stub usage "" "usage: gocyclo" 2)" complexity
+expect_status 1 "complexity fails when gocyclo is missing" \
+  run_make "$WORK/empty" complexity
 
 echo ""
 echo "Results: ${pass} passed, ${fail} failed"
