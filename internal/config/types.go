@@ -905,11 +905,15 @@ type PurchasePlanFilter struct {
 // kept rows from a sweep that did not cover everything it was asked to (for
 // example 9 of 10 Azure subscriptions answered). It is cleared by the next
 // collection whose every sweep is complete.
+// NextCollectionAt is not stored: the API handler computes it from the
+// deployment's schedule (issue #756) and leaves it nil when scheduled
+// collection is off or its next run cannot be known.
 type RecommendationsFreshness struct {
 	LastCollectedAt         *time.Time                        `json:"last_collected_at"`
 	LastCollectionError     *string                           `json:"last_collection_error"`
 	LastCollectionStartedAt *time.Time                        `json:"last_collection_started_at"`
 	LastCollectionPartial   *RecommendationsCollectionPartial `json:"last_collection_partial"`
+	NextCollectionAt        *time.Time                        `json:"next_collection_at"`
 }
 
 // RecommendationsCollectionPartial records that the most recent collection

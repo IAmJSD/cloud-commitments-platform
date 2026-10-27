@@ -317,6 +317,7 @@ func TestLoadApplicationConfig(t *testing.T) {
 			"DEFAULT_PAYMENT_OPTION", "DEFAULT_COVERAGE", "DEFAULT_RAMP_SCHEDULE",
 			"API_KEY_SECRET_ARN", "ENABLE_DASHBOARD", "DASHBOARD_BUCKET",
 			"DASHBOARD_URL", "CORS_ALLOWED_ORIGIN", "AWS_LAMBDA_RUNTIME_API",
+			"RECOMMENDATION_SCHEDULE",
 		}
 		for _, key := range envVars {
 			testutil.SetEnv(t, key, "")
@@ -333,6 +334,7 @@ func TestLoadApplicationConfig(t *testing.T) {
 		testutil.AssertEqual(t, "", cfg.DefaultRampSchedule)
 		testutil.AssertEqual(t, false, cfg.EnableDashboard)
 		testutil.AssertEqual(t, false, cfg.IsLambda)
+		testutil.AssertEqual(t, "", cfg.RecommendationSchedule)
 	})
 
 	t.Run("custom values", func(t *testing.T) {
@@ -348,6 +350,7 @@ func TestLoadApplicationConfig(t *testing.T) {
 		testutil.SetEnv(t, "DASHBOARD_URL", "https://dash.example.com")
 		testutil.SetEnv(t, "CORS_ALLOWED_ORIGIN", "https://example.com")
 		testutil.SetEnv(t, "AWS_LAMBDA_RUNTIME_API", "localhost:9001")
+		testutil.SetEnv(t, "RECOMMENDATION_SCHEDULE", "cron(0 2 * * ? *)")
 
 		cfg, err := LoadApplicationConfig()
 		testutil.AssertNoError(t, err)
@@ -364,6 +367,7 @@ func TestLoadApplicationConfig(t *testing.T) {
 		testutil.AssertEqual(t, "https://dash.example.com", cfg.DashboardURL)
 		testutil.AssertEqual(t, "https://example.com", cfg.CORSAllowedOrigin)
 		testutil.AssertEqual(t, true, cfg.IsLambda)
+		testutil.AssertEqual(t, "cron(0 2 * * ? *)", cfg.RecommendationSchedule)
 	})
 }
 
@@ -497,6 +501,20 @@ func TestNewApplicationFromDeps(t *testing.T) {
 		app, err := NewApplicationFromDeps(ctx, lambdaCfg, deps)
 		testutil.AssertNoError(t, err)
 		testutil.AssertTrue(t, app.RateLimiter != nil, "Rate limiter must not be nil for Lambda (fix for issue #420: cold-start requests must be rate-limited)")
+	})
+
+	// Issue #756: the schedule reaches the API handler that serves
+	// next_collection_at on GET /api/recommendations/freshness.
+	t.Run("recommendation schedule reaches the API handler", func(t *testing.T) {
+		cfg := baseCfg
+		cfg.RecommendationSchedule = "cron(0 2 * * ? *)"
+		deps := ExternalDeps{EmailSender: &noopEmailSender{}, DBConfig: validDBConfig}
+
+		app, err := NewApplicationFromDeps(ctx, cfg, deps)
+		testutil.AssertNoError(t, err)
+		next := app.API.NextCollectionAt(time.Date(2026, 10, 27, 15, 4, 5, 0, time.UTC))
+		testutil.AssertTrue(t, next != nil, "next_collection_at must be computed from the configured schedule")
+		testutil.AssertEqual(t, time.Date(2026, 10, 28, 2, 0, 0, 0, time.UTC), *next)
 	})
 
 	t.Run("nil dbConfig returns error", func(t *testing.T) {

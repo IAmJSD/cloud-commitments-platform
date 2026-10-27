@@ -582,6 +582,14 @@ resource "kubernetes_deployment" "app" {
             value = local.scheduled_task_oidc_subject
           }
 
+          # The Cloud Scheduler cron (UTC) of the recommendations job, so
+          # GET /api/recommendations/freshness can report the next run
+          # (next_collection_at, #756). Empty when the job is not created.
+          env {
+            name  = "RECOMMENDATION_SCHEDULE"
+            value = var.enable_scheduled_tasks ? var.recommendation_schedule : ""
+          }
+
           dynamic "env" {
             for_each = local.archera_env
             content {

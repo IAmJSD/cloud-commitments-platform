@@ -150,6 +150,11 @@ type ApplicationConfig struct {
 	// SQS event source mapping's function_response_types actually includes
 	// "ReportBatchItemFailures" (issue #108 follow-up).
 	ReportSQSBatchItemFailures bool
+	// RecommendationSchedule is RECOMMENDATION_SCHEDULE: the schedule
+	// Terraform gave the deployment's recommendation-collection trigger
+	// (EventBridge rate()/cron() or five-field cron), empty when scheduled
+	// collection is off. Only read to report the next run (issue #756).
+	RecommendationSchedule string
 	// authBcryptCost is passed to auth.ServiceConfig.BcryptCost. Only tests
 	// in this package set it; zero keeps the production bcrypt cost.
 	authBcryptCost int
@@ -332,6 +337,7 @@ func LoadApplicationConfig() (ApplicationConfig, error) {
 		ScheduledTaskSecretName: os.Getenv("SCHEDULED_TASK_SECRET_NAME"),
 		IsLambda:                runtime.IsLambda(),
 		Analytics:               analyticsConfig,
+		RecommendationSchedule:  os.Getenv("RECOMMENDATION_SCHEDULE"),
 	}, nil
 }
 
@@ -552,6 +558,8 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		OIDCIssuerURL:     resolveOIDCIssuerURL(cfg),
 		Insurance:         archeraProvider,
 		IsLambda:          cfg.IsLambda,
+
+		RecommendationSchedule: cfg.RecommendationSchedule,
 	})
 
 	log.Printf("CUDly Server initialization complete")
@@ -941,6 +949,8 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		EncryptionKeySource: app.encKeySource,
 		Insurance:           app.archera,
 		IsLambda:            app.appConfig.IsLambda,
+
+		RecommendationSchedule: app.appConfig.RecommendationSchedule,
 	})
 	if app.API == nil {
 		return fmt.Errorf("failed to create API handler")
