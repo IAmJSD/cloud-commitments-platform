@@ -2,6 +2,8 @@ package purchase
 
 import (
 	"context"
+	"slices"
+	"testing"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/provider"
@@ -16,6 +18,36 @@ import (
 // All Fn-override fields (GetPlanAccountsFn, SavePurchaseExecutionFn, etc.)
 // and default behaviors live in internal/mocks.
 type MockConfigStore = mocks.MockConfigStore
+
+// expectationAsserter is any testify mock (*mock.Mock or a type embedding it).
+type expectationAsserter interface {
+	AssertExpectations(t mock.TestingT) bool
+}
+
+// assertMocksOnCleanup makes t fail at cleanup when any required (non-.Maybe())
+// expectation registered on ms was never consumed, so an .On(...) a test sets up
+// is also a check that the call happened (issue #35). Call it right after
+// constructing the mocks; registering it before the expectations is fine.
+func assertMocksOnCleanup(t *testing.T, ms ...expectationAsserter) {
+	t.Helper()
+	t.Cleanup(func() {
+		for _, m := range ms {
+			m.AssertExpectations(t)
+		}
+	})
+}
+
+// optionalCalls marks the expectations a shared helper registered for methods
+// as optional, for a test whose path never makes those calls. Times(0) clears
+// a .Once() count too: testify reports an unconsumed .Once() even when it is
+// .Maybe().
+func optionalCalls(m *mock.Mock, methods ...string) {
+	for _, c := range m.ExpectedCalls {
+		if slices.Contains(methods, c.Method) {
+			c.Maybe().Times(0)
+		}
+	}
+}
 
 // MockProviderFactory is a mock implementation of ProviderFactoryInterface.
 type MockProviderFactory struct {

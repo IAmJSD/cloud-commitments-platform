@@ -172,6 +172,7 @@ func TestFireScheduledDelayedPurchases_EndToEnd(t *testing.T) {
 	mockEmail := new(MockEmailSender)
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
+	assertMocksOnCleanup(t, store, mockEmail, mockFactory, mockProviderInst)
 	mockServiceClient := new(MockServiceClient)
 
 	const acctID = "acct-fire"
@@ -252,6 +253,7 @@ func TestFireScheduledDelayedPurchases_AuditGapAfterCASStillFires(t *testing.T) 
 	mockEmail := new(MockEmailSender)
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
+	assertMocksOnCleanup(t, store, mockEmail, mockFactory, mockProviderInst)
 	mockServiceClient := new(MockServiceClient)
 
 	const acctID = "acct-auditgap"

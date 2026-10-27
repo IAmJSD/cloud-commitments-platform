@@ -73,15 +73,26 @@ func gateHarness(t *testing.T, plan *config.PurchasePlan, exec config.PurchaseEx
 	t.Helper()
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	store.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	store.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{exec}, nil)
 	store.On("GetPurchasePlan", ctx, exec.PlanID).Return(plan, nil)
-	store.On("GetGlobalConfig", ctx).Return(cfg, cfgErr)
+	expectKillSwitchRead(ctx, store, plan, cfg, cfgErr)
 	manager := &Manager{config: store, email: new(MockEmailSender)}
 	result, err := manager.ProcessScheduledPurchases(ctx)
 	require.NoError(t, err)
 	store.AssertNotCalled(t, "TransitionExecutionStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	return result
+}
+
+// expectKillSwitchRead registers the gate's global-config read. The gate reads
+// the plan first and refuses a missing one before the kill switch is consulted,
+// so that read is only required when the plan exists.
+func expectKillSwitchRead(ctx context.Context, store *MockConfigStore, plan *config.PurchasePlan, cfg *config.GlobalConfig, cfgErr error) {
+	call := store.On("GetGlobalConfig", ctx).Return(cfg, cfgErr)
+	if plan == nil {
+		call.Maybe()
+	}
 }
 
 func dueRecExec(status string, recs ...config.RecommendationRecord) config.PurchaseExecution {
@@ -148,10 +159,11 @@ func TestSQSExecutePath_RefusesBeforeClaim(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			store := new(MockConfigStore)
+			assertMocksOnCleanup(t, store)
 			exec := tc.exec
 			store.On("GetExecutionByID", ctx, exec.ExecutionID).Return(&exec, nil)
 			store.On("GetPurchasePlan", ctx, exec.PlanID).Return(tc.plan, nil)
-			store.On("GetGlobalConfig", ctx).Return(tc.cfg, tc.cfgErr)
+			expectKillSwitchRead(ctx, store, tc.plan, tc.cfg, tc.cfgErr)
 			manager := &Manager{config: store, email: new(MockEmailSender)}
 
 			err := manager.handleExecutePurchase(ctx, &AsyncMessage{Type: MessageTypeExecutePurchase, ExecutionID: exec.ExecutionID})
@@ -168,6 +180,7 @@ func TestSQSExecutePath_RefusesBeforeClaim(t *testing.T) {
 func TestAutoExecuteGate_ApprovedRowIgnoresKillSwitchAndCap(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore) // no GetGlobalConfig / GetPurchasePlan expectation: any read panics
+	assertMocksOnCleanup(t, store)
 	manager := &Manager{config: store, email: new(MockEmailSender)}
 	exec := dueRecExec("approved", upfrontRec(1e9))
 	require.NoError(t, manager.checkAutoExecuteGate(ctx, &exec))
@@ -178,6 +191,7 @@ func TestAutoExecuteGate_ApprovedRowIgnoresKillSwitchAndCap(t *testing.T) {
 // A web-submitted direct purchase (no plan) never reaches the plan gate.
 func TestExecutableByScheduler_WebRowNeverReadsKillSwitch(t *testing.T) {
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	manager := &Manager{config: store}
 	exec := config.PurchaseExecution{ExecutionID: "w", Status: "pending", Source: "cudly-web", Recommendations: []config.RecommendationRecord{upfrontRec(1)}}
 	ok, err := manager.executableByScheduler(context.Background(), &exec)
@@ -190,6 +204,7 @@ func TestExecutableByScheduler_WebRowNeverReadsKillSwitch(t *testing.T) {
 func TestExecutableByScheduler_NonAutoPlanNeverReadsKillSwitch(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	store.On("GetPurchasePlan", ctx, "plan-gate").Return(&config.PurchasePlan{ID: "plan-gate"}, nil)
 	manager := &Manager{config: store}
 	exec := dueRecExec("notified", upfrontRec(1))
@@ -214,6 +229,7 @@ func TestSendUpcomingPurchaseNotifications_KillSwitch(t *testing.T) {
 	t.Run("off sends nothing and touches no plan", func(t *testing.T) {
 		ctx := context.Background()
 		store := new(MockConfigStore)
+		assertMocksOnCleanup(t, store)
 		store.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{plan}, nil)
 		store.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{}, nil)
 		manager := &Manager{config: store, email: new(MockEmailSender)}
@@ -226,6 +242,7 @@ func TestSendUpcomingPurchaseNotifications_KillSwitch(t *testing.T) {
 	t.Run("read error fails the tick", func(t *testing.T) {
 		ctx := context.Background()
 		store := new(MockConfigStore)
+		assertMocksOnCleanup(t, store)
 		store.On("ListPurchasePlans", ctx, config.PurchasePlanFilter{}).Return([]config.PurchasePlan{plan}, nil)
 		store.On("GetGlobalConfig", ctx).Return(nil, errors.New("db down"))
 		manager := &Manager{config: store, email: new(MockEmailSender)}
@@ -240,11 +257,14 @@ func TestSendUpcomingPurchaseNotifications_KillSwitch(t *testing.T) {
 func TestScheduler_DirectExecuteRowSkippedWithoutPlanLookup(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	exec := dueRecExec("pending", upfrontRec(10))
 	exec.PlanID = ""
 	store.On("GetStaleApprovedExecutions", ctx, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	store.On("GetPendingExecutions", ctx).Return([]config.PurchaseExecution{exec}, nil)
-	store.On("GetPurchasePlan", ctx, "").Return(nil, errors.New(`ERROR: invalid input syntax for type uuid: "" (SQLSTATE 22P02)`))
+	// Must NOT be called (AssertNotCalled below); the stub only makes a
+	// regression fail the way Postgres would, hence .Maybe().
+	store.On("GetPurchasePlan", ctx, "").Return(nil, errors.New(`ERROR: invalid input syntax for type uuid: "" (SQLSTATE 22P02)`)).Maybe()
 	manager := &Manager{config: store, email: new(MockEmailSender)}
 
 	result, err := manager.ProcessScheduledPurchases(ctx)

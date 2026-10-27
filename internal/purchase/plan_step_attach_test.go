@@ -37,7 +37,9 @@ func attachManager(t *testing.T, listed, locked *config.PurchasePlan, res *fakeR
 	store := new(MockConfigStore)
 	store.On("LockPurchasePlanTx", mock.Anything, mock.Anything, listed.ID).Return(locked, nil)
 	store.On("ListExecutionsForPlanStepTx", mock.Anything, mock.Anything, listed.ID, 1).Return(rows, nil)
-	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil)
+	// Read only for the grace periods (no-match and attach paths); a step
+	// refused before that, e.g. over the cap, never reads it.
+	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil).Maybe()
 	return &Manager{config: store, resolver: res}, store
 }
 
@@ -55,6 +57,7 @@ func TestAttach_NewRowIsPendingWithoutTokenAndRotatesIn(t *testing.T) {
 	plan := attachPlan(time.Now().Add(48*time.Hour), 1e6)
 	res := &fakeResolver{recs: attachRecs()}
 	m, store := attachManager(t, plan, plan, res)
+	assertMocksOnCleanup(t, store)
 	store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
 	store.On("CreateSuppressionTx", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -84,7 +87,11 @@ func TestAttach_NoMatchWaitsForGraceThenFailsOnce(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			plan := attachPlan(tc.next, 1e6)
 			m, store := attachManager(t, plan, plan, &fakeResolver{err: planstep.ErrNoMatch})
-			store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
+			assertMocksOnCleanup(t, store)
+			save := store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
+			if !tc.wantFail {
+				save.Maybe() // no row inside the grace window (asserted below)
+			}
 
 			_, _, _, err := m.getOrCreateExecution(context.Background(), plan)
 			require.ErrorIs(t, err, errExecutionNotNotifiable)
@@ -104,6 +111,7 @@ func TestAttach_CapIsCheckedOnTheLockedPlan(t *testing.T) {
 	listed := attachPlan(time.Now().Add(48*time.Hour), 1e6)
 	locked := attachPlan(*listed.NextExecutionDate, 5) // lowered between list and lock
 	m, store := attachManager(t, listed, locked, &fakeResolver{recs: attachRecs()})
+	assertMocksOnCleanup(t, store)
 	store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
 
 	_, _, _, err := m.getOrCreateExecution(context.Background(), listed)
@@ -157,6 +165,7 @@ func TestAttach_PreCreatedEmptyRootRow(t *testing.T) {
 
 	t.Run("attaches in place without a second row", func(t *testing.T) {
 		m, store := attachManager(t, plan, plan, &fakeResolver{recs: attachRecs()}, root)
+		assertMocksOnCleanup(t, store)
 		store.On("SetExecutionRecommendationsIfEmptyTx", mock.Anything, mock.Anything, "root", mock.Anything, mock.Anything, mock.Anything).Return(true, nil)
 		exec, _, rotate, err := m.getOrCreateExecution(context.Background(), plan)
 		require.NoError(t, err)
@@ -191,6 +200,7 @@ func TestAttachScheduledDate_NeverInsideTheVetoWindow(t *testing.T) {
 func TestAttach_NewRowGetsTheVetoWindowWhenThePlanDateIsClose(t *testing.T) {
 	plan := attachPlan(time.Now().Add(10*time.Minute), 1e6) // NotificationDaysBefore = 3
 	m, store := attachManager(t, plan, plan, &fakeResolver{recs: attachRecs()})
+	assertMocksOnCleanup(t, store)
 	store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
 	store.On("CreateSuppressionTx", mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
@@ -250,6 +260,7 @@ func TestAttach_UnsupportedPlanFailsTheStepVisibly(t *testing.T) {
 	res := &fakeResolver{err: planstep.Precheck(locked)}
 	require.ErrorIs(t, res.err, planstep.ErrUnsupportedPlan)
 	m, store := attachManager(t, listed, locked, res)
+	assertMocksOnCleanup(t, store)
 	store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
 
 	_, _, _, err := m.getOrCreateExecution(context.Background(), listed)

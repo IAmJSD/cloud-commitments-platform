@@ -94,6 +94,7 @@ func armedHarness(t *testing.T, serviceType common.ServiceType) (*Manager, *Mock
 	factory := new(MockProviderFactory)
 	prov := new(MockProvider)
 	svc := new(MockServiceClient)
+	assertMocksOnCleanup(t, store, email, factory, prov, svc)
 
 	// Fn overrides rather than testify expectations: these must not double as
 	// assertions, because whether the execution path reaches them at all is

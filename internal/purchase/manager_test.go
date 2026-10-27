@@ -232,6 +232,7 @@ func TestManager_ProcessScheduledPurchases_DuePurchase(t *testing.T) {
 	mockFactory := new(MockProviderFactory)
 	mockProvider := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
+	assertMocksOnCleanup(t, mockFactory, mockProvider, mockServiceClient)
 
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "", mock.Anything).Return(mockProvider, nil)
 	mockProvider.On("GetServiceClient", mock.MatchedBy(hasPerRecDeadline(30*time.Second)), common.ServiceEC2, "us-east-1").Return(mockServiceClient, nil)
@@ -501,6 +502,7 @@ func TestManager_RecoverStrandedApprovals_FailsStrandedRow(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 	mockEmail := new(MockEmailSender)
+	assertMocksOnCleanup(t, mockEmail)
 	mockFactory := new(MockProviderFactory)
 
 	stranded := config.PurchaseExecution{
