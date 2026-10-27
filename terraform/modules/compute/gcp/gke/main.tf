@@ -41,7 +41,10 @@ locals {
   # the fail-closed "oidc" so an unauthenticated boot requires opting
   # in to "disabled" deliberately.
   scheduled_task_oidc_audience = "${var.app_url}/api/scheduled/collect_recommendations"
-  scheduled_task_oidc_subject  = try(google_service_account.scheduler[0].unique_id, "")
+  # The sweep jobs in scheduled-tasks.tf sign with the same scheduler SA, so
+  # they add audiences (one per enabled sweep) but no subject.
+  scheduled_task_oidc_audiences = join(",", concat([local.scheduled_task_oidc_audience], values(local.sweep_audiences)))
+  scheduled_task_oidc_subject   = try(google_service_account.scheduler[0].unique_id, "")
   scheduled_task_auth_mode = (
     length(google_service_account.scheduler) > 0
     ? "oidc"
@@ -574,7 +577,7 @@ resource "kubernetes_deployment" "app" {
 
           env {
             name  = "SCHEDULED_TASK_OIDC_AUDIENCE"
-            value = local.scheduled_task_oidc_audience
+            value = local.scheduled_task_oidc_audiences
           }
 
           env {

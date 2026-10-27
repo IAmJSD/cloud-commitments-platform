@@ -2,14 +2,14 @@
 
 **Surfaced during:** 2026-04-23 follow-up audit — Failed + Expired rows now persist and surface in History
 **Related commits:** `32f9e4ffc` (pending-in-history), `b44283746` (failed + expired states)
-**Status:** Partially resolved. The cleanup task exists (verified 2026-04-25) but retention is unscheduled by default on AWS, GCP and CFN; Azure Container Apps schedules it.
+**Status:** Partially resolved. The cleanup task exists (verified 2026-04-25) but retention is unscheduled by default on AWS, GCP and CFN (opt-in there except on Fargate); Azure Container Apps schedules it.
 
 > **Amendment (#712):** the AWS trigger claimed below (`cleanup-lambda/main.tf:98`)
 > is false: no environment consumes the `cleanup-lambda` module, so nothing
 > schedules cleanup on AWS. The same holds for the Terraform behind the
 > "matches what the cleanup-lambda Terraform actually configures" sentence
 > under "Original problem". Only Azure Container Apps schedules cleanup today. Retention
-> scheduling is tracked by #712; retention is scheduled via the server `cleanup` task on AWS Lambda and CloudFormation when opted in.
+> scheduling is tracked by #712; retention is scheduled via the server `cleanup` task on AWS Lambda, CloudFormation, GCP Cloud Run, GKE and AKS when opted in.
 
 ## Resolution
 
@@ -27,6 +27,10 @@
 - **Azure Container Apps:** a Logic App calls `/api/scheduled/cleanup` daily
   when `enable_scheduled_tasks` is true. (The `azure/cleanup-function` module
   is not consumed by any environment.)
+- **GCP Cloud Run and GKE (opt-in):** `enable_cleanup_schedule` /
+  `cleanup_schedule` add a `<name>-cleanup` Cloud Scheduler job that calls
+  `/api/scheduled/cleanup` (#712), when the module's `enable_scheduled_tasks`
+  is true.
 - **AKS (opt-in):** `enable_cleanup_schedule` / `cleanup_schedule` on the AKS
   module add a `<project>-task-cleanup` CronJob that runs the server cleanup
   task (#893), when `deploy_kubernetes_resources` is true.
@@ -34,7 +38,7 @@
 The `CleanupOldExecutions` Postgres implementation in
 `internal/config/store_postgres.go` runs the expected
 `DELETE FROM purchase_executions WHERE …`, so the table is bounded
-only where that task is scheduled (Azure Container Apps by default, AWS Lambda and CloudFormation when opted in, see amendment).
+only where that task is scheduled (Azure Container Apps by default; AWS Lambda, CloudFormation, GCP and AKS when opted in, see amendment).
 
 ## Original problem (historical context)
 

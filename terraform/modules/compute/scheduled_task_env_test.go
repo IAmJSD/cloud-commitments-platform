@@ -1,7 +1,7 @@
-// AWS env-layer checks for issue #712: the Lambda and Fargate modules' task
-// variables must be declared, passed name-identically by
-// terraform/environments/aws/compute.tf and defaulted per the opt-in policy,
-// and no tfvars file may switch off a default-on task.
+// Env-layer checks for issue #712: each module's task variables must be
+// declared, passed name-identically by its terraform/environments/<cloud>/
+// compute.tf and defaulted per the opt-in policy, and no AWS tfvars file may
+// switch off a default-on task.
 package compute_test
 
 import (
@@ -19,7 +19,7 @@ import (
 type taskVar struct{ enable, schedule string }
 
 // taskVars names the module/env variables that switch each task and set its
-// cadence; the AWS env checks use it instead of inferring names.
+// cadence; the env checks use it instead of inferring names.
 var taskVars = map[string]taskVar{
 	"collect_recommendations":     {"enable_scheduled_tasks", "recommendation_schedule"},
 	"reap_stuck_purchases":        {"enable_reap_stuck_purchases_schedule", "reap_stuck_purchases_schedule"},
@@ -167,25 +167,26 @@ func sweepProblems(dir string, needPermission bool) ([]string, error) {
 	return problems, nil
 }
 
-func TestAWSEnvWiring(t *testing.T) {
-	envVars, err := os.ReadFile(awsEnvDir + "/variables.tf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compute, err := os.ReadFile(awsEnvDir + "/compute.tf")
-	if err != nil {
-		t.Fatal(err)
-	}
+// TestEnvWiring runs envProblems for every platform an environment root
+// deploys, against that root's variables.tf and compute.tf.
+func TestEnvWiring(t *testing.T) {
 	for _, p := range platforms {
 		if p.aws != strings.HasPrefix(p.name, "aws-") {
 			t.Errorf("%s: aws flag does not match the platform name", p.name)
 		}
-		if !p.aws {
-			continue
+		if p.aws && p.envBlock == "" {
+			t.Errorf("%s: aws platform has no envBlock", p.name)
 		}
 		if p.envBlock == "" {
-			t.Errorf("%s: aws platform has no envBlock", p.name)
 			continue
+		}
+		envVars, err := os.ReadFile(p.envDir + "/variables.tf")
+		if err != nil {
+			t.Fatal(err)
+		}
+		compute, err := os.ReadFile(p.envDir + "/compute.tf")
+		if err != nil {
+			t.Fatal(err)
 		}
 		files, err := scanDir(p.dir)
 		if err != nil {
@@ -193,6 +194,12 @@ func TestAWSEnvWiring(t *testing.T) {
 			continue
 		}
 		wired, _ := wiredFrom(files)
+		for task := range legacyWiring[p.name] {
+			if !wired[task] {
+				t.Errorf("%s: legacyWiring lists %s but it is not wired", p.name, task)
+			}
+			delete(wired, task)
+		}
 		problems, gaps := envProblems(files["variables.tf"], string(envVars), string(compute), p.envBlock, wired)
 		for _, prob := range problems {
 			t.Errorf("%s: %s", p.name, prob)
