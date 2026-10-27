@@ -277,7 +277,7 @@ jobs:
         # manual rerun. The GITHUB_TOKEN fix above is the primary fix;
         # the retry wrapper is the cheap defense-in-depth for the
         # residual flakes that token alone cannot eliminate.
-        uses: nick-fields/retry@ce71cc2ab81d554ebbe88c79ab5975992d79ba08 # v3.0.2
+        uses: nick-fields/retry@ad984534de44a9489a53aefd81eb77f87c70dc60 # v4.0.0
         env:
           # SKIP the `gosec` pre-commit hook in CI: it is designed to scan
           # only the changed packages of a local commit, but `pre-commit run
