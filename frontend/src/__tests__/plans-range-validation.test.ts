@@ -437,6 +437,68 @@ describe('plan numeric inputs: live range validation (#702)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Hidden custom-ramp inputs must not block Save (#1536)
+// ---------------------------------------------------------------------------
+
+describe('hidden custom ramp inputs stay out of validation (#1536)', () => {
+  let savePlan: typeof import('../plans').savePlan;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // The ramp handlers install once per module, so a rebuilt DOM needs a fresh module.
+    jest.resetModules();
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fresh = require('../plans') as typeof import('../plans');
+    savePlan = fresh.savePlan;
+    buildPlanModalDOM();
+    fresh.openNewPlanModal();
+  });
+
+  const stepInput = (): HTMLInputElement => document.getElementById('ramp-step-percent') as HTMLInputElement;
+  const intervalInput = (): HTMLInputElement => document.getElementById('ramp-interval-days') as HTMLInputElement;
+  const form = (): HTMLFormElement => document.getElementById('plan-form') as HTMLFormElement;
+
+  function pickRamp(value: string): void {
+    const radio = document.querySelector<HTMLInputElement>(`input[name="ramp-schedule"][value="${value}"]`)!;
+    radio.checked = true;
+    radio.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  it('opens with the hidden custom inputs disabled', () => {
+    expect(stepInput().disabled).toBe(true);
+    expect(intervalInput().disabled).toBe(true);
+  });
+
+  it.each([
+    [['immediate']],
+    [['weekly-25pct', 'immediate']],
+    [['custom', 'immediate']],
+  ])('after %j the hidden inputs are disabled and the form passes checkValidity', (steps) => {
+    for (const step of steps) pickRamp(step);
+    expect(document.getElementById('custom-ramp-config')!.classList.contains('hidden')).toBe(true);
+    expect(stepInput().disabled).toBe(true);
+    expect(intervalInput().disabled).toBe(true);
+    expect(form().checkValidity()).toBe(true);
+  });
+
+  it('selecting Custom re-enables the inputs and an out-of-range value is still refused', async () => {
+    pickRamp('immediate');
+    pickRamp('custom');
+    expect(stepInput().disabled).toBe(false);
+    expect(intervalInput().disabled).toBe(false);
+
+    (document.getElementById('plan-coverage') as HTMLInputElement).value = '80';
+    (document.getElementById('plan-notify-days') as HTMLInputElement).value = '3';
+    intervalInput().value = '0';
+    expect(form().checkValidity()).toBe(false);
+    await savePlan(new Event('submit'));
+    expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Ramp Interval Days must be a whole number between 1 and 365',
+    }));
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Add Purchases modal: inline range validation on Number of Purchases (#771)
 // ---------------------------------------------------------------------------
 
