@@ -281,9 +281,6 @@ func (n *noopEmailSender) SendPurchaseFailedNotification(ctx context.Context, da
 func (n *noopEmailSender) SendPasswordResetEmail(ctx context.Context, emailAddr, resetURL string) error {
 	return nil
 }
-func (n *noopEmailSender) SendWelcomeEmail(ctx context.Context, emailAddr, dashboardURL, role string) error {
-	return nil
-}
 func (n *noopEmailSender) SendUserInviteEmail(ctx context.Context, emailAddr, setupURL string) error {
 	return nil
 }

@@ -450,16 +450,6 @@ func (s *SMTPSender) SendPasswordResetEmail(ctx context.Context, email, resetURL
 	)
 }
 
-// SendWelcomeEmail sends a welcome email to new users as multipart/
-// alternative (text + styled HTML). Issue #355.
-func (s *SMTPSender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error {
-	return sendMultipartVia(
-		ctx, s, email, "Welcome to CUDly!", "welcome",
-		func() (string, error) { return RenderWelcomeEmail(email, dashboardURL, role) },
-		func() (string, error) { return RenderWelcomeEmailHTML(email, dashboardURL, role) },
-	)
-}
-
 // SendUserInviteEmail sends an invite-with-setup-link email to a user
 // created without a password, as multipart/alternative (text + styled HTML).
 // Issue #355.

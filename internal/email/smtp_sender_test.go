@@ -164,19 +164,6 @@ func TestSMTPSender_SendPasswordResetEmail_NoFromEmail(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestSMTPSender_SendWelcomeEmail_NoFromEmail(t *testing.T) {
-	sender := &SMTPSender{
-		host:      "smtp.example.com",
-		port:      587,
-		fromEmail: "", // No from email - should skip
-	}
-
-	ctx := context.Background()
-	err := sender.SendWelcomeEmail(ctx, "user@example.com", "https://dashboard.example.com", "user")
-
-	require.NoError(t, err)
-}
-
 func TestSMTPSender_SendNewRecommendationsNotification_NoFromEmail(t *testing.T) {
 	sender := &SMTPSender{
 		host:      "smtp.example.com",
