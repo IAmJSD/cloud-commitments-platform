@@ -48,6 +48,7 @@ for (const path of [['custom', 'immediate'], ['weekly-25pct', 'immediate']]) {
 
 test('Edit as the first modal, then Custom, lets the user type custom ramp values', async ({ page }) => {
   const puts: unknown[] = [];
+  let accountPuts = 0;
   await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1'
     ? route.fallback() : route.abort());
   await seedAuth(page);
@@ -58,7 +59,11 @@ test('Edit as the first modal, then Custom, lets the user type custom ramp value
   await page.route('**/api/plans**', route => {
     const url = new URL(route.request().url());
     if (route.request().method() === 'PUT') {
-      puts.push(route.request().postDataJSON());
+      if (url.pathname.endsWith('/accounts')) {
+        accountPuts++;
+        return route.fulfill({ json: [] });
+      }
+      if (url.pathname.endsWith('/draft-plan')) puts.push(route.request().postDataJSON());
       return route.fulfill({ json: plan });
     }
     return route.fulfill({ json: url.pathname.endsWith('/accounts') ? []
@@ -84,5 +89,6 @@ test('Edit as the first modal, then Custom, lets the user type custom ramp value
   await modal.locator('.account-suggestion-item').first().click();
   await page.getByRole('button', { name: 'Save Plan' }).click();
   await expect.poll(() => puts.length).toBe(1);
+  await expect.poll(() => accountPuts).toBe(1);
   expect(puts[0]).toMatchObject({ ramp_schedule: 'custom', custom_step_percent: 30, custom_interval_days: 14 });
 });
