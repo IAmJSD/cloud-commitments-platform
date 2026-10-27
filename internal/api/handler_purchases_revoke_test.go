@@ -251,7 +251,7 @@ func TestRevokePurchase_AzureSuccess(t *testing.T) {
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	r := armReservationRecord()
-	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
+	mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
 
 	sessID := "test-session"
 	calcClient := &stubCalcRefundClient{
@@ -1172,7 +1172,7 @@ func TestCallAzureReturn_TOCTOUWithinEpsilonSucceeds(t *testing.T) {
 	// User confirmed $100.00; Azure now quotes $100.005 (within $0.01).
 	userConfirmed := 100.0
 	calcClient := &stubCalcRefundClientWithAmount{amount: 100.005, currency: "USD", sessID: "s-1"}
-	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
+	mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
 	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
 
 	h := &Handler{config: mockStore}
@@ -1197,7 +1197,7 @@ func TestCallAzureReturn_AuditRowPopulatedWithQuote(t *testing.T) {
 	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
 
 	// Assert MarkPurchaseRevoked receives the quote amount and currency.
-	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "",
+	mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "",
 		mock.MatchedBy(func(v *float64) bool { return v != nil && *v == 42.50 }),
 		"EUR",
 	).Return(nil)
@@ -1273,7 +1273,7 @@ func TestCallAzureReturn_MarkPurchaseRevokedFailAllRetries(t *testing.T) {
 	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
 
 	// MarkPurchaseRevoked is called 1 + len(backoffs) = 4 times total (initial + 3 retries).
-	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).
+	mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).
 		Return(errors.New("db down")).Times(4)
 
 	h := &Handler{config: mockStore}
@@ -1382,7 +1382,7 @@ func TestCallAzureReturn_JustOutsideSafetyMargin(t *testing.T) {
 
 	calcClient := &stubCalcRefundClientWithAmount{amount: 50.0, currency: "USD", sessID: "s-margin"}
 	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
-	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
+	mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
 
 	h := &Handler{config: mockStore}
 	result, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(50, "USD"))
@@ -1550,7 +1550,7 @@ func TestCallAzureReturn_Success_DoesNotClearInFlight(t *testing.T) {
 	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}
 
 	r := armReservationRecord()
-	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"),
+	mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"),
 		"direct-api", "", mock.Anything, mock.Anything).Return(nil).Once()
 
 	h := &Handler{config: mockStore}
@@ -1752,7 +1752,7 @@ func TestRevokeAzurePurchase_Success(t *testing.T) {
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	r := armReservationRecord()
-	mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
+	mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil)
 
 	calcClient := &stubCalcRefundClientWithAmount{amount: 12.34, currency: "USD", sessID: "s-revoke"}
 	returnClient := &stubReturnClient{resp: armreservations.ReturnClientPostResponse{}}

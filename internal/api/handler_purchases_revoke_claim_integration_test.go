@@ -177,3 +177,64 @@ func runConcurrentFirstRevokes(t *testing.T, store *config.PostgresStore, round 
 	assert.NotNil(t, got.RevokedAt, "the winner's MarkPurchaseRevoked must land")
 	assert.False(t, got.RevocationInFlight, "MarkPurchaseRevoked clears the holder's flag")
 }
+
+// TestRevokeAzure_RequestCanceledAfterReturn_RecordsAndRevokes covers issue
+// #1525 on real Postgres. The request is canceled right after Azure accepts
+// the Return (a client disconnect). Before the fix every write that follows
+// ran under the canceled request context, so pgx refused each attempt: the
+// Return went unrecorded, the row was never revoked, and the
+// finalize_revocations sweep would release it after 2h as if nothing had been
+// refunded. Now those writes run detached, so the row ends up with the Return
+// recorded and revoked.
+func TestRevokeAzure_RequestCanceledAfterReturn_RecordsAndRevokes(t *testing.T) {
+	// NOT parallel: mutates the package-global revokeMarkRetryBackoffs, so a
+	// regression fails fast instead of sleeping through the retries.
+	orig := revokeMarkRetryBackoffs
+	revokeMarkRetryBackoffs = []time.Duration{0, 0, 0}
+	t.Cleanup(func() { revokeMarkRetryBackoffs = orig })
+
+	pg, store := setupSubmitDB(t)
+	ctx, cancelTest := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelTest()
+
+	record := withinWindowRecord("/providers/Microsoft.Capacity/reservationOrders/order-1525/reservations/res-1525")
+	record.AccountID = "acct-1525"
+	record.Region = "eastus"
+	record.ResourceType = "Standard_D2s_v3"
+	require.NoError(t, store.SavePurchaseHistory(ctx, record))
+
+	reqCtx, cancelReq := context.WithCancel(ctx)
+	defer cancelReq()
+	calc := &barrierCalcRefundClient{
+		price:   &armreservations.Price{Amount: toPtr(10.0), CurrencyCode: toPtr("USD")},
+		parties: 1,
+		ready:   make(chan struct{}),
+	}
+	ret := &cancelAfterReturnClient{cancel: cancelReq}
+	h := &Handler{config: store, azureRevokeFactory: &azureRevokeClientFactory{
+		newCredential:            func() (azcore.TokenCredential, error) { return nil, nil },
+		newCalculateRefundClient: func(azcore.TokenCredential) (azureCalculateRefundClient, error) { return calc, nil },
+		newReturnClient:          func(azcore.TokenCredential) (azureReturnClient, error) { return ret, nil },
+	}}
+	body, err := json.Marshal(confirmedQuote(10, "USD"))
+	require.NoError(t, err)
+	req := &events.LambdaFunctionURLRequest{Body: string(body)}
+
+	result, err := h.loadAndRevokePurchaseHistory(reqCtx, req, revokeAdminSession(), record.PurchaseID)
+	require.NoError(t, err)
+	require.Equal(t, 1, ret.calls, "exactly one Return")
+	require.ErrorIs(t, reqCtx.Err(), context.Canceled, "the request was canceled after the Return")
+	res, ok := result.(*revokePurchaseResult)
+	require.True(t, ok, "want revoked, got %T %+v", result, result)
+	assert.Equal(t, "revoked", res.Status)
+
+	var returnPostedAt, revokedAt *time.Time
+	var inFlight bool
+	require.NoError(t, pg.DB.Pool().QueryRow(ctx, `
+		SELECT return_posted_at, revoked_at, revocation_in_flight
+		  FROM purchase_history WHERE purchase_id = $1`, record.PurchaseID).
+		Scan(&returnPostedAt, &revokedAt, &inFlight))
+	assert.NotNil(t, returnPostedAt, "the accepted Return must be recorded")
+	assert.NotNil(t, revokedAt, "the purchase must be marked revoked")
+	assert.False(t, inFlight, "MarkPurchaseRevoked clears the in-flight flag")
+}

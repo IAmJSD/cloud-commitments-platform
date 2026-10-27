@@ -27,11 +27,14 @@ type FinalizeResult struct {
 
 // staleRevocationInFlightAfter is how long a row may stay flagged with no
 // recorded Return before the sweep clears the flag so the purchase can be
-// revoked again (issue #1523). It is twice the longest request a deployment
-// can run (Cloud Run's request timeout caps at 3600s; Lambda at 900s), so a
-// revoke still between its flip and its Return is never released. Releasing
-// one early would not finalize anything wrongly either: a Return recorded
-// after the release is still finalized, flag or not.
+// revoked again (issue #1523). It is not a bound on request time: Lambda caps
+// a request at 900s and Cloud Run at 3600s, but Fargate and Container Apps do
+// not cap it at all. 2h is a margin that keeps a normal revoke still between
+// its flip and its Return from being released under it. Correctness does not
+// depend on it (issue #1525): a Return recorded after the release is still
+// finalized, flag or not, and if the user revokes again while the first
+// Return is in flight, Azure refuses a second Return of the same reservation,
+// so there is no double refund.
 const staleRevocationInFlightAfter = 2 * time.Hour
 
 // finalizeRevocationBackoffs are the sleep durations between consecutive

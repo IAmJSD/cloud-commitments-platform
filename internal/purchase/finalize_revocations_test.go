@@ -154,8 +154,9 @@ func TestFinalizeInFlightRevocations_ReleaseAndListErrorsJoined(t *testing.T) {
 	assert.Nil(t, res)
 }
 
-// The timeout must outlast any request still between its flip and its Return:
-// Cloud Run's request timeout caps at an hour.
+// The timeout should outlast a normal request still between its flip and its
+// Return. Cloud Run's request timeout caps at an hour; Fargate and Container
+// Apps have no cap, and correctness does not depend on this (issue #1525).
 func TestStaleRevocationInFlightAfter_OutlastsLongestRequest(t *testing.T) {
 	assert.Greater(t, staleRevocationInFlightAfter, time.Hour)
 }

@@ -33,6 +33,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/ctxutil"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/jackc/pgx/v5"
 )
@@ -124,6 +125,16 @@ var revokeMarkRetryBackoffs = []time.Duration{
 	3 * time.Second,
 	9 * time.Second,
 }
+
+// revokePersistTimeout bounds the writes that record an Azure Return Azure has
+// already accepted (issue #1525). They run detached from the request, so a
+// client disconnect or upstream timeout right after the Return does not lose
+// the record. 30s covers the whole retry schedule (13s of backoff across
+// revokeMarkRetryBackoffs) plus four attempts of two single-row UPDATEs, while
+// still capping how long a hung database can hold the handler after its
+// caller has gone. If it runs out, the result is the same 207 as exhausted
+// retries.
+const revokePersistTimeout = 30 * time.Second
 
 // revokePurchase handles POST /api/purchases/{purchaseId}/revoke.
 //
@@ -954,7 +965,14 @@ func (h *Handler) handleAzureReturnError(ctx context.Context, record *config.Pur
 // Each attempt first records that Azure accepted the Return
 // (MarkRevocationReturnPosted, until one lands): the finalize_revocations
 // sweep only finalizes rows with that record (issue #1523).
-func (h *Handler) persistAzureRevocation(ctx context.Context, record *config.PurchaseHistoryRecord, calcRefundAmount *float64, calcRefundCurrency string) (any, error) {
+//
+// Azure has already refunded by the time this runs, so the writes ignore the
+// request's cancellation and run under their own revokePersistTimeout (issue
+// #1525): a request canceled right after the Return still records it. Nothing
+// before the Return is detached.
+func (h *Handler) persistAzureRevocation(reqCtx context.Context, record *config.PurchaseHistoryRecord, calcRefundAmount *float64, calcRefundCurrency string) (any, error) {
+	ctx, cancel := ctxutil.DetachedWithTimeout(reqCtx, revokePersistTimeout)
+	defer cancel()
 	now := time.Now().UTC()
 	returnRecorded := false
 	markErr := h.recordAzureReturnAndMark(ctx, record.PurchaseID, now, calcRefundAmount, calcRefundCurrency, &returnRecorded)
