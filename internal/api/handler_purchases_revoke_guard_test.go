@@ -133,7 +133,7 @@ func TestRevokePurchase_AzureRefundGuard(t *testing.T) {
 			mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return(nil, fmt.Errorf("%w: execution %s", config.ErrNotFound, r.PurchaseID))
 			mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 			mockStore.On("FlipPurchaseRevocationInFlight", ctx, r.PurchaseID).Return(nil).Maybe()
-			mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil).Maybe()
+			mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 			calcClient := &countingCalcRefundClient{price: tc.quote}
 			returnClient := &stubReturnClient{}
