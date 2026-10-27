@@ -406,6 +406,10 @@ func (h *Handler) updateServiceConfig(ctx context.Context, req *events.LambdaFun
 	if err := json.Unmarshal([]byte(req.Body), &cfg); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
+	// created_at and updated_at are read-only row stamps (issue #8). The
+	// GET response carries them, so a client that echoes it back must not
+	// get them into the merged row; the store takes both from the database.
+	cfg.CreatedAt, cfg.UpdatedAt = nil, nil
 
 	parts := strings.SplitN(service, "/", 2)
 	if len(parts) == 2 {

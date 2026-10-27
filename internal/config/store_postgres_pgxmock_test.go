@@ -400,16 +400,15 @@ func TestPGXMock_GetServiceConfig_Success(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	cols := []string{
-		"provider", "service", "enabled", "term", "payment", "coverage", "ramp_schedule",
-		"include_engines", "exclude_engines", "include_regions", "exclude_regions",
-		"include_types", "exclude_types", "min_count",
-	}
-	rows := pgxmock.NewRows(cols).AddRow(
+	created := time.Date(2026, 4, 27, 12, 34, 0, 0, time.UTC)
+	updated := created.Add(48 * time.Hour)
+	rows := pgxmock.NewRows(serviceConfigCols).AddRow(
 		"aws", "ec2", true, 1, "no-upfront", 80.0, RampImmediate,
 		[]string{"mysql"}, []string{}, []string{"us-east-1"}, []string{}, []string{}, []string{}, 2,
+		created, updated,
 	)
-	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
+	mock.ExpectQuery(`SELECT .*created_at, updated_at\s+FROM service_configs`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
 
 	cfg, err := store.GetServiceConfig(ctx, "aws", "ec2")
 	require.NoError(t, err)
@@ -417,6 +416,11 @@ func TestPGXMock_GetServiceConfig_Success(t *testing.T) {
 	assert.Equal(t, "ec2", cfg.Service)
 	assert.Equal(t, []string{"mysql"}, cfg.IncludeEngines)
 	assert.Equal(t, 2, cfg.MinCount)
+	// Issue #8: the row's stamps reach the caller.
+	require.NotNil(t, cfg.CreatedAt)
+	require.NotNil(t, cfg.UpdatedAt)
+	assert.True(t, created.Equal(*cfg.CreatedAt))
+	assert.True(t, updated.Equal(*cfg.UpdatedAt))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -427,21 +431,28 @@ func TestPGXMock_ListServiceConfigs_Success(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	cols := []string{
-		"provider", "service", "enabled", "term", "payment", "coverage", "ramp_schedule",
-		"include_engines", "exclude_engines", "include_regions", "exclude_regions",
-		"include_types", "exclude_types", "min_count",
-	}
-	rows := pgxmock.NewRows(cols).
+	ec2Stamp := time.Date(2026, 4, 27, 12, 34, 0, 0, time.UTC)
+	rdsStamp := ec2Stamp.Add(time.Hour)
+	rows := pgxmock.NewRows(serviceConfigCols).
 		AddRow("aws", "ec2", true, 1, "no-upfront", 80.0, RampImmediate,
-			[]string{}, []string{}, []string{}, []string{}, []string{}, []string{}, 0).
+			[]string{}, []string{}, []string{}, []string{}, []string{}, []string{}, 0,
+			ec2Stamp, ec2Stamp.Add(time.Minute)).
 		AddRow("aws", "rds", true, 3, "all-upfront", 70.0, RampImmediate,
-			[]string{}, []string{}, []string{}, []string{}, []string{}, []string{}, 0)
-	mock.ExpectQuery("SELECT").WillReturnRows(rows)
+			[]string{}, []string{}, []string{}, []string{}, []string{}, []string{}, 0,
+			rdsStamp, rdsStamp.Add(time.Minute))
+	mock.ExpectQuery(`SELECT .*created_at, updated_at\s+FROM service_configs`).WillReturnRows(rows)
 
 	cfgs, err := store.ListServiceConfigs(ctx)
 	require.NoError(t, err)
-	assert.Len(t, cfgs, 2)
+	require.Len(t, cfgs, 2)
+	// Issue #8: each row keeps its own stamps; scanning into a reused
+	// variable must not leave every entry pointing at the last row's time.
+	require.NotNil(t, cfgs[0].UpdatedAt)
+	require.NotNil(t, cfgs[1].UpdatedAt)
+	assert.True(t, ec2Stamp.Equal(*cfgs[0].CreatedAt))
+	assert.True(t, ec2Stamp.Add(time.Minute).Equal(*cfgs[0].UpdatedAt))
+	assert.True(t, rdsStamp.Equal(*cfgs[1].CreatedAt))
+	assert.True(t, rdsStamp.Add(time.Minute).Equal(*cfgs[1].UpdatedAt))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
