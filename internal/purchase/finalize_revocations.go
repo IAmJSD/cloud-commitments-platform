@@ -27,10 +27,13 @@ type FinalizeResult struct {
 
 // staleRevocationInFlightAfter is how long a row may stay flagged with no
 // recorded Return before the sweep clears the flag so the purchase can be
-// revoked again (issue #1523). It is not a bound on request time: Lambda caps
-// a request at 900s and Cloud Run at 3600s, but Fargate and Container Apps do
-// not cap it at all. 2h is a margin that keeps a normal revoke still between
-// its flip and its Return from being released under it. Correctness does not
+// revoked again (issue #1523). It only has to outlast a revoke still between
+// its flip and its recorded Return, which every deployment bounds: the app's
+// own HTTP server caps each request at 30s on every container platform
+// (handleHTTPRequest in internal/server/http.go), Lambda ends an invocation at
+// its function timeout, and past the flip the revoke handler runs the Return
+// and the writes recording it detached under their own budgets (3m and 30s,
+// issue #1527). 2h is a wide margin over all of these. Correctness does not
 // depend on it (issue #1525): a Return recorded after the release is still
 // finalized, flag or not, and if the user revokes again while the first
 // Return is in flight, Azure refuses a second Return of the same reservation,

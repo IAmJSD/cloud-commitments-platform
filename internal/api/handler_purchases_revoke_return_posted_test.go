@@ -164,23 +164,54 @@ func (s *ctxHonoringStore) MarkPurchaseRevoked(ctx context.Context, purchaseID s
 	return s.MockConfigStore.MarkPurchaseRevoked(ctx, purchaseID, revokedAt, revokedVia, supportCaseID, calcRefundAmount, calcRefundCurrency)
 }
 
-// cancelAfterReturnClient accepts the Return, then cancels the request, as a
-// client disconnecting right after Azure answered would. It records whether
-// the Return itself ran under the request's (cancelable) context.
+func (s *ctxHonoringStore) ClearRevocationInFlight(ctx context.Context, purchaseID string) error {
+	if err := s.seen(ctx); err != nil {
+		return err
+	}
+	return s.MockConfigStore.ClearRevocationInFlight(ctx, purchaseID)
+}
+
+// cancelAfterReturnClient stands in for a Return that Azure accepts while the
+// request is canceled underneath it (a client disconnect, or the app server's
+// 30s per-request timeout, issue #1527). Like the real SDK call, whose HTTP
+// request is aborted when its context is canceled, it then reports the
+// context's error instead of the accepted response, or err when set (a Return
+// that failed anyway). It records the state of the context it ran under.
 type cancelAfterReturnClient struct {
-	cancel        context.CancelFunc
-	calls         int
-	sawRequestCtx bool
+	cancel      context.CancelFunc
+	err         error
+	calls       int
+	ctxErr      error
+	deadline    time.Time
+	hasDeadline bool
 }
 
 func (c *cancelAfterReturnClient) Post(ctx context.Context, _ string, _ armreservations.RefundRequest, _ *armreservations.ReturnClientPostOptions) (armreservations.ReturnClientPostResponse, error) {
 	c.calls++
-	before := ctx.Err()
 	c.cancel()
-	c.sawRequestCtx = before == nil && ctx.Err() != nil
-	return armreservations.ReturnClientPostResponse{}, nil
+	c.ctxErr = ctx.Err()
+	c.deadline, c.hasDeadline = ctx.Deadline()
+	if c.ctxErr != nil {
+		return armreservations.ReturnClientPostResponse{}, c.ctxErr
+	}
+	return armreservations.ReturnClientPostResponse{}, c.err
 }
 
+// assertDetached checks that canceling the request did not reach the Return,
+// and that the Return carried its own 3m budget (a literal, so the test pins
+// the budget TestLambdaTimeoutCoversRevokeBudget also covers).
+func (c *cancelAfterReturnClient) assertDetached(t *testing.T, start time.Time) {
+	t.Helper()
+	require.Equal(t, 1, c.calls, "exactly one Return")
+	require.NoError(t, c.ctxErr, "canceling the request must not cancel a Return already posted to Azure")
+	require.True(t, c.hasDeadline, "the detached Return must still be bounded by its own timeout")
+	assert.WithinDuration(t, start.Add(3*time.Minute), c.deadline, 5*time.Second)
+}
+
+// TestCallAzureReturn_RequestCanceledAfterReturn_StillRecordsAndMarks also
+// covers issue #1527: the request is canceled while the Return is in flight
+// and Azure accepts it. The Return runs detached, so it still reports the
+// acceptance, and the handler records it and marks the purchase revoked.
 func TestCallAzureReturn_RequestCanceledAfterReturn_StillRecordsAndMarks(t *testing.T) {
 	// NOT parallel: mutates the package-global revokeMarkRetryBackoffs, so a
 	// regression fails in milliseconds instead of sleeping through the retries.
@@ -202,11 +233,11 @@ func TestCallAzureReturn_RequestCanceledAfterReturn_StillRecordsAndMarks(t *test
 	calcClient := &stubCalcRefundClientWithAmount{amount: 10.0, currency: "USD", sessID: "s-cancel"}
 	returnClient := &cancelAfterReturnClient{cancel: cancel}
 	h := &Handler{config: store}
+	start := time.Now()
 	result, err := h.callAzureReturn(reqCtx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
 	require.NoError(t, err)
 
-	require.Equal(t, 1, returnClient.calls)
-	assert.True(t, returnClient.sawRequestCtx, "the Return itself must run under the request's context")
+	returnClient.assertDetached(t, start)
 	require.ErrorIs(t, reqCtx.Err(), context.Canceled)
 	rr, ok := result.(*revokePurchaseResult)
 	require.True(t, ok, "a canceled request must still record the accepted Return and revoke, got %T %+v", result, result)

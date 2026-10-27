@@ -1475,7 +1475,7 @@ func TestCallAzureReturn_TransientError_ClearsInFlight(t *testing.T) {
 	returnClient := &stubReturnClient{err: errors.New("dial tcp: connection refused")}
 
 	r := armReservationRecord()
-	mockStore.On("ClearRevocationInFlight", ctx, r.PurchaseID).Return(nil).Once()
+	mockStore.On("ClearRevocationInFlight", mock.Anything, r.PurchaseID).Return(nil).Once()
 
 	h := &Handler{config: mockStore}
 	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
@@ -1501,7 +1501,7 @@ func TestCallAzureReturn_ClientError_ClearsInFlight(t *testing.T) {
 	}
 
 	r := armReservationRecord()
-	mockStore.On("ClearRevocationInFlight", ctx, r.PurchaseID).Return(nil).Once()
+	mockStore.On("ClearRevocationInFlight", mock.Anything, r.PurchaseID).Return(nil).Once()
 
 	h := &Handler{config: mockStore}
 	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
@@ -1526,7 +1526,7 @@ func TestCallAzureReturn_WindowEdge_ClearsInFlight(t *testing.T) {
 	}
 
 	r := armReservationRecord()
-	mockStore.On("ClearRevocationInFlight", ctx, r.PurchaseID).Return(nil).Once()
+	mockStore.On("ClearRevocationInFlight", mock.Anything, r.PurchaseID).Return(nil).Once()
 
 	h := &Handler{config: mockStore}
 	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))

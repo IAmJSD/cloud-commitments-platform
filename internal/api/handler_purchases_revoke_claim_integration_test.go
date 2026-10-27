@@ -186,6 +186,13 @@ func runConcurrentFirstRevokes(t *testing.T, store *config.PostgresStore, round 
 // finalize_revocations sweep would release it after 2h as if nothing had been
 // refunded. Now those writes run detached, so the row ends up with the Return
 // recorded and revoked.
+//
+// It also covers issue #1527: the stub cancels the request while the Return is
+// in flight and, like the real SDK call, reports a canceled context as an
+// error even though Azure accepted the Return. Before the fix the Return ran
+// on the request context, so the handler saw context.Canceled, recorded
+// nothing and left the flag set; now the Return runs detached and reports the
+// acceptance.
 func TestRevokeAzure_RequestCanceledAfterReturn_RecordsAndRevokes(t *testing.T) {
 	// NOT parallel: mutates the package-global revokeMarkRetryBackoffs, so a
 	// regression fails fast instead of sleeping through the retries.
@@ -220,10 +227,11 @@ func TestRevokeAzure_RequestCanceledAfterReturn_RecordsAndRevokes(t *testing.T) 
 	require.NoError(t, err)
 	req := &events.LambdaFunctionURLRequest{Body: string(body)}
 
+	start := time.Now()
 	result, err := h.loadAndRevokePurchaseHistory(reqCtx, req, revokeAdminSession(), record.PurchaseID)
 	require.NoError(t, err)
-	require.Equal(t, 1, ret.calls, "exactly one Return")
-	require.ErrorIs(t, reqCtx.Err(), context.Canceled, "the request was canceled after the Return")
+	ret.assertDetached(t, start)
+	require.ErrorIs(t, reqCtx.Err(), context.Canceled, "the request was canceled during the Return")
 	res, ok := result.(*revokePurchaseResult)
 	require.True(t, ok, "want revoked, got %T %+v", result, result)
 	assert.Equal(t, "revoked", res.Status)
@@ -237,4 +245,55 @@ func TestRevokeAzure_RequestCanceledAfterReturn_RecordsAndRevokes(t *testing.T) 
 	assert.NotNil(t, returnPostedAt, "the accepted Return must be recorded")
 	assert.NotNil(t, revokedAt, "the purchase must be marked revoked")
 	assert.False(t, inFlight, "MarkPurchaseRevoked clears the in-flight flag")
+}
+
+// TestRevokeAzure_RequestCanceledDuringFailedReturn_ClearsFlag covers issue
+// #1527's error path on real Postgres: the request is canceled while the
+// Return is in flight and the Return then fails (Azure answered 503). The
+// in-flight clear must still land, or the row stays flagged and unrevocable
+// until the sweep releases it 2h later. Before the fix the clear ran on the
+// canceled request context and pgx refused it.
+func TestRevokeAzure_RequestCanceledDuringFailedReturn_ClearsFlag(t *testing.T) {
+	pg, store := setupSubmitDB(t)
+	ctx, cancelTest := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelTest()
+
+	record := withinWindowRecord("/providers/Microsoft.Capacity/reservationOrders/order-1527/reservations/res-1527")
+	record.AccountID = "acct-1527"
+	record.Region = "eastus"
+	record.ResourceType = "Standard_D2s_v3"
+	require.NoError(t, store.SavePurchaseHistory(ctx, record))
+
+	reqCtx, cancelReq := context.WithCancel(ctx)
+	defer cancelReq()
+	calc := &barrierCalcRefundClient{
+		price:   &armreservations.Price{Amount: toPtr(10.0), CurrencyCode: toPtr("USD")},
+		parties: 1,
+		ready:   make(chan struct{}),
+	}
+	ret := &cancelAfterReturnClient{cancel: cancelReq, err: &azcore.ResponseError{StatusCode: 503}}
+	h := &Handler{config: store, azureRevokeFactory: &azureRevokeClientFactory{
+		newCredential:            func() (azcore.TokenCredential, error) { return nil, nil },
+		newCalculateRefundClient: func(azcore.TokenCredential) (azureCalculateRefundClient, error) { return calc, nil },
+		newReturnClient:          func(azcore.TokenCredential) (azureReturnClient, error) { return ret, nil },
+	}}
+	body, err := json.Marshal(confirmedQuote(10, "USD"))
+	require.NoError(t, err)
+	req := &events.LambdaFunctionURLRequest{Body: string(body)}
+
+	start := time.Now()
+	_, err = h.loadAndRevokePurchaseHistory(reqCtx, req, revokeAdminSession(), record.PurchaseID)
+	require.Error(t, err, "a failed Return is an error")
+	ret.assertDetached(t, start)
+	require.ErrorIs(t, reqCtx.Err(), context.Canceled, "the request was canceled during the Return")
+
+	var returnPostedAt, revokedAt *time.Time
+	var inFlight bool
+	require.NoError(t, pg.DB.Pool().QueryRow(ctx, `
+		SELECT return_posted_at, revoked_at, revocation_in_flight
+		  FROM purchase_history WHERE purchase_id = $1`, record.PurchaseID).
+		Scan(&returnPostedAt, &revokedAt, &inFlight))
+	assert.False(t, inFlight, "the failed Return's in-flight flag must be cleared")
+	assert.Nil(t, returnPostedAt, "a failed Return must not be recorded")
+	assert.Nil(t, revokedAt, "a failed Return must not revoke the purchase")
 }
