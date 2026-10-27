@@ -6806,7 +6806,7 @@ components:
 
     PartialProviderSweep:
       type: object
-      required: [provider, incomplete_accounts, attempted_scopes, failed_scopes, failed_details, reasons]
+      required: [provider, incomplete_accounts, attempted_scopes, failed_scopes, failed_details, skipped_recommendations, reasons]
       properties:
         provider:
           type: string
@@ -6825,6 +6825,12 @@ components:
         failed_details:
           type: integer
           description: Individual recommendation details rejected inside answering scopes (AWS).
+        skipped_recommendations:
+          type: integer
+          description: >
+            Recommendations the provider dropped as invalid (GCP: non-USD,
+            malformed amount or plan, unrecognized term) while returning the
+            rest. Their accounts' sweeps were complete.
         reasons:
           type: object
           description: >

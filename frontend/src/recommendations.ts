@@ -322,6 +322,19 @@ export function setupRecommendationsHandlers(): void {
 }
 
 /**
+ * Names the recommendations a provider dropped as invalid in the last
+ * collection (issue #1472), or null when none were. The rest of that
+ * provider's recommendations are shown normally.
+ */
+export function describeSkippedRecommendations(f: RecommendationsFreshness): string | null {
+  const parts = (f.last_collection_partial?.providers ?? [])
+    .filter((p) => (p.skipped_recommendations ?? 0) > 0)
+    .map((p) => `${p.skipped_recommendations} ${p.provider.toUpperCase()}`);
+  if (parts.length === 0) return null;
+  return `${parts.join(', ')} recommendation(s) skipped as invalid (for example a non-USD price or an unrecognized term) in the last collection. The others are shown.`;
+}
+
+/**
  * Check freshness and fire a background refresh if the cache is stale or cold.
  * Fire-and-forget: does not block the table render that already happened.
  *
@@ -356,6 +369,9 @@ export async function triggerAutoRefreshIfStale(
     console.error('Failed to fetch recommendations freshness:', err);
     return;
   }
+
+  const skipNotice = describeSkippedRecommendations(freshness);
+  if (skipNotice) showToast({ message: skipNotice, kind: 'warning' });
 
   const lastCollectedMs =
     freshness.last_collected_at === null

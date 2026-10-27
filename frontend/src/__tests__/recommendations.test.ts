@@ -1875,6 +1875,28 @@ describe('Recommendations Module', () => {
       await pendingRefresh;
     });
 
+    test('warns how many GCP recommendations the last collection skipped (#1472)', async () => {
+      mockGetRecs();
+      (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({
+        last_collected_at: new Date().toISOString(),
+        last_collection_error: null,
+        last_collection_partial: {
+          providers: [{
+            provider: 'gcp', incomplete_accounts: 0, attempted_scopes: 0, failed_scopes: 0,
+            failed_details: 0, skipped_recommendations: 3, reasons: {},
+          }],
+        },
+      });
+
+      await loadRecommendations();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockShowToast).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'warning', message: expect.stringContaining('3 GCP recommendation(s) skipped') }),
+      );
+    });
+
     test('persistent in-flight toast — shown with timeout: null so it stays until settled', async () => {
       mockGetRecs();
       (recsApi.getRecommendationsFreshness as jest.Mock).mockResolvedValue({

@@ -81,10 +81,10 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations v1.1.0
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azkeys v1.5.0
 	github.com/Azure/azure-sdk-for-go/sdk/security/keyvault/azsecrets v1.5.0
-	github.com/LeanerCloud/cloud-commitments-go/pkg v0.0.0-20261026094505-9cec521d6531
-	github.com/LeanerCloud/cloud-commitments-go/providers/aws v0.0.0-20261026094505-9cec521d6531
-	github.com/LeanerCloud/cloud-commitments-go/providers/azure v0.0.0-20261026094505-9cec521d6531
-	github.com/LeanerCloud/cloud-commitments-go/providers/gcp v0.0.0-20261026094505-9cec521d6531
+	github.com/LeanerCloud/cloud-commitments-go/pkg v0.0.0-20261026123645-88b95b64b043
+	github.com/LeanerCloud/cloud-commitments-go/providers/aws v0.0.0-20261026123645-88b95b64b043
+	github.com/LeanerCloud/cloud-commitments-go/providers/azure v0.0.0-20261026123645-88b95b64b043
+	github.com/LeanerCloud/cloud-commitments-go/providers/gcp v0.0.0-20261026123645-88b95b64b043
 	github.com/aws/aws-lambda-go v1.55.1
 	github.com/aws/aws-sdk-go-v2/service/kms v1.61.4
 	github.com/aws/aws-sdk-go-v2/service/lambda v1.113.0

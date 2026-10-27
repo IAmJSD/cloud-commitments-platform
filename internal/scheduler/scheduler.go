@@ -547,9 +547,9 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 		// in those cases.
 		if acctID := s.resolveAmbientHostAccountID(ctx); acctID != "" {
 			recs = s.tagAccount(recs, acctID)
-			return recs, ambientEvictionRoster(gap == nil, acctID), gap.forAccount(), nil
+			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount(), nil
 		}
-		return recs, ambientEvictionRoster(gap == nil, ""), gap.forAccount(), nil
+		return recs, ambientEvictionRoster(!gap.holdsEviction(), ""), gap.forAccount(), nil
 	}
 
 	recs, outcome := fanOutPerAccount(ctx, "AWS", accounts, func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
@@ -653,12 +653,12 @@ func fanOutPerAccount(
 			// SucceededAccountIDs, the roster that authorizes stale-row
 			// eviction. See tolerateIncompleteSweep for why (issue #1652).
 			outcome.SucceededCount++
-			if gap == nil {
-				outcome.SucceededAccountIDs = append(outcome.SucceededAccountIDs, acct.ID)
-			} else {
+			if gap.holdsEviction() {
 				outcome.IncompleteAccountIDs = append(outcome.IncompleteAccountIDs, acct.ID)
-				outcome.Gap = mergeSweepGaps(outcome.Gap, gap.forAccount())
+			} else {
+				outcome.SucceededAccountIDs = append(outcome.SucceededAccountIDs, acct.ID)
 			}
+			outcome.Gap = mergeSweepGaps(outcome.Gap, gap.forAccount())
 			mu.Unlock()
 			return nil
 		})
@@ -886,9 +886,9 @@ func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.G
 		}
 		if acctID := s.resolveAmbientAccountID(ctx, "azure", subscriptionID); acctID != "" {
 			recs = s.tagAccount(recs, acctID)
-			return recs, ambientEvictionRoster(gap == nil, acctID), gap.forAccount(), nil
+			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount(), nil
 		}
-		return recs, ambientEvictionRoster(gap == nil, ""), gap.forAccount(), nil
+		return recs, ambientEvictionRoster(!gap.holdsEviction(), ""), gap.forAccount(), nil
 	}
 
 	recs, outcome := fanOutPerAccount(ctx, "Azure", accounts, s.collectAzureForAccount)
@@ -961,9 +961,9 @@ func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.Glo
 		}
 		if acctID := s.resolveAmbientAccountID(ctx, "gcp", projectID); acctID != "" {
 			recs = s.tagAccount(recs, acctID)
-			return recs, ambientEvictionRoster(gap == nil, acctID), gap.forAccount(), nil
+			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount(), nil
 		}
-		return recs, ambientEvictionRoster(gap == nil, ""), gap.forAccount(), nil
+		return recs, ambientEvictionRoster(!gap.holdsEviction(), ""), gap.forAccount(), nil
 	}
 
 	recs, outcome := fanOutPerAccount(ctx, "GCP", accounts, s.collectGCPForAccount)
@@ -1080,7 +1080,7 @@ func tolerateIncompleteSweep(providerName string, err error) (*sweepGap, error) 
 	}
 	partial := azureprovider.AsPartialSubscriptionFailure(err)
 	if partial == nil {
-		return nil, err
+		return tolerateSkippedRecommendations(providerName, err)
 	}
 	logging.Warnf(
 		"%s recommendations incomplete: %d of %d subscriptions succeeded; not queried: %s (keeping the %d that did, "+
