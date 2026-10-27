@@ -247,7 +247,7 @@ func (s *Sender) createVerificationRequest(ctx context.Context, email string) er
 		return fmt.Errorf("failed to create email identity verification: %w", err)
 	}
 
-	logging.Infof("Created email verification request for %s - check inbox for verification email", email)
+	logging.Infof("Created email verification request for %s - check inbox for verification email", redactEmail(email))
 	return nil
 }
 

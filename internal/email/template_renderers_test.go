@@ -554,6 +554,45 @@ func TestPlainTextTemplates_NoHTMLEscaping(t *testing.T) {
 		assert.NotContains(t, body, "&amp;")
 	})
 
+	t.Run("PurchaseScheduledDelay_revokeURL_verbatim", func(t *testing.T) {
+		// A revoke link with a second query parameter must stay copyable:
+		// html/template would turn the & into &amp; and break the link.
+		const revokeURL = "https://example.com/purchases#history?execution=exec-3&source=email"
+		data := NotificationData{
+			DashboardURL:             "https://example.com",
+			ExecutionID:              "exec-3",
+			RevokeURL:                revokeURL,
+			RevocationWindowClosesAt: "2026-10-28 <09:00>",
+			Recommendations:          []RecommendationSummary{{Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1}},
+		}
+		body, err := RenderPurchaseScheduledDelayEmail(data)
+		require.NoError(t, err)
+		assert.Contains(t, body, revokeURL, "revoke URL must survive verbatim in the plain-text scheduled-delay body")
+		assert.Contains(t, body, "2026-10-28 <09:00>")
+		assert.NotContains(t, body, "&amp;")
+		assert.NotContains(t, body, "&lt;")
+	})
+
+	t.Run("PurchaseExecutedNotification_requestedBy_verbatim", func(t *testing.T) {
+		data := NotificationData{
+			DashboardURL:     "https://example.com",
+			ExecutionID:      "exec-4",
+			RequestedByName:  name,
+			RequestedByEmail: email,
+			RevocationToken:  "tok+/=",
+			Recommendations:  []RecommendationSummary{{Service: "ec2", ResourceType: "m5.large", Region: "us-east-1", Count: 1}},
+		}
+		body, err := RenderPurchaseExecutedNotificationEmail(data)
+		require.NoError(t, err)
+		assert.Contains(t, body, "Requested by: "+name+" <"+email+">",
+			"requester name and address must be verbatim in the plain-text executed notice")
+		// The revoke token is still query-escaped by urlquery, exactly once.
+		assert.Contains(t, body, "/api/purchases/revoke/exec-4?token=tok%2B%2F%3D")
+		assert.NotContains(t, body, "&#39;")
+		assert.NotContains(t, body, "&amp;")
+		assert.NotContains(t, body, "&lt;")
+	})
+
 	t.Run("HTML_renderers_still_escape", func(t *testing.T) {
 		// HTML halves MUST still escape data -- that is the XSS defense.
 		// A name with a script tag must not survive literally in the HTML body.
@@ -568,6 +607,12 @@ func TestPlainTextTemplates_NoHTMLEscaping(t *testing.T) {
 		html, err := RenderPurchaseApprovalRequestEmailHTML(data)
 		require.NoError(t, err)
 		assert.NotContains(t, html, xssName, "html/template must escape <script> tags in HTML bodies")
+
+		data.RequestedByEmail = "a@example.com"
+		executedHTML, err := RenderPurchaseExecutedNotificationEmailHTML(data)
+		require.NoError(t, err)
+		assert.Contains(t, executedHTML, "a@example.com", "fixture must reach the Requested-by row")
+		assert.NotContains(t, executedHTML, xssName, "the executed notice's HTML half must still escape")
 	})
 }
 
