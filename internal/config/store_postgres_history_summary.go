@@ -105,6 +105,10 @@ const executionSummaryRecsKey = `CASE WHEN jsonb_typeof(recommendations) = 'arra
 func executionSummaryQuery(filter HistorySummaryFilter) (query string, args []any) {
 	where := historyExecutionsPredicate
 	args = []any{filter.ExecutionStatuses}
+	if filter.History.PlanID != "" {
+		args = append(args, filter.History.PlanID)
+		where += fmt.Sprintf(" AND plan_id = $%d", len(args))
+	}
 	if filter.ExecutionStart != nil {
 		args = append(args, *filter.ExecutionStart)
 		where += fmt.Sprintf(" AND scheduled_date >= $%d", len(args))

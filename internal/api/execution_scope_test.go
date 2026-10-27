@@ -59,12 +59,12 @@ var scopeTestBothRecs = []config.RecommendationRecord{
 
 var scopeTestKinds = []scopeTestKind{
 	// Plan-level parent: CloudAccountID nil, fans out to every plan account.
-	{name: "plan parent", planID: scopeTestPlanID, recs: scopeTestBothRecs, partialScope: []string{scopeTestProd.Name}},
+	{name: "plan parent", planID: scopeTestPlanID, recs: scopeTestBothRecs, partialScope: []string{scopeTestProd.ID}},
 	// Fan-out child of the same plan, buying only in Staging.
 	{name: "fan-out child", planID: scopeTestPlanID, cloudAccountID: &scopeTestStage.ID,
-		recs: []config.RecommendationRecord{scopeTestRec("rec-stage", &scopeTestStage.ID)}, partialScope: []string{scopeTestProd.Name}},
+		recs: []config.RecommendationRecord{scopeTestRec("rec-stage", &scopeTestStage.ID)}, partialScope: []string{scopeTestProd.ID}},
 	// Ad-hoc web purchase: plan_id NULL, one recommendation per account.
-	{name: "ad-hoc", recs: scopeTestBothRecs, partialScope: []string{scopeTestProd.Name}},
+	{name: "ad-hoc", recs: scopeTestBothRecs, partialScope: []string{scopeTestProd.ID}},
 }
 
 type scopeTestScope struct {
@@ -74,7 +74,7 @@ type scopeTestScope struct {
 }
 
 var scopeTestScopes = []scopeTestScope{
-	{name: "all in scope", allow: true, scope: func(scopeTestKind) []string { return []string{scopeTestProd.Name, scopeTestStage.Name} }},
+	{name: "all in scope", allow: true, scope: func(scopeTestKind) []string { return []string{scopeTestProd.ID, scopeTestStage.ID} }},
 	{name: "partial scope", scope: func(k scopeTestKind) []string { return k.partialScope }},
 	{name: "no scope", scope: func(scopeTestKind) []string { return []string{"Other"} }},
 }
@@ -199,8 +199,8 @@ func newScopeTestHandler(t *testing.T, exec *config.PurchaseExecution, scope []s
 		}
 		return nil, nil
 	}
-	// The registered accounts, which getAccountScope loads so that the
-	// name-scoped sessions below can match by (unique) display name (#433).
+	// The registered accounts, which getAccountScope loads to resolve
+	// display names to account IDs (#433, #1034).
 	store.ListCloudAccountsFn = func(context.Context, config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{scopeTestProd, scopeTestStage}, nil
 	}
@@ -334,7 +334,7 @@ func TestRevoke_AuthorizedNonRevocableStatusIs409(t *testing.T) {
 		scope []string
 		token string
 	}{
-		{"session", []string{scopeTestStage.Name}, ""},
+		{"session", []string{scopeTestStage.ID}, ""},
 		{"token", []string{"Other"}, "email-token"},
 	} {
 		for _, status := range []string{"pending", "notified", "failed"} {
@@ -367,7 +367,7 @@ func TestCancel_OutOfScopeSessionWithTokenUsesContactGate(t *testing.T) {
 		scopeTestRec("rec-stage", &scopeTestStage.ID),
 	}}, "pending")
 	mockPurchase := new(MockPurchaseManager)
-	h := newScopeTestHandler(t, exec, []string{scopeTestProd.Name}, new(MockConfigStore), mockPurchase)
+	h := newScopeTestHandler(t, exec, []string{scopeTestProd.ID}, new(MockConfigStore), mockPurchase)
 
 	res, err := h.cancelPurchase(context.Background(), scopeTestRequest(), scopeTestExecID, "email-token")
 
@@ -388,8 +388,8 @@ func TestApprove_OutOfScopeSessionWithTokenUsesContactGate(t *testing.T) {
 	}}, "pending")
 	store := new(MockConfigStore)
 	mockPurchase := new(MockPurchaseManager)
-	h := newScopeTestHandler(t, exec, []string{scopeTestProd.Name}, store, mockPurchase)
-	mockPurchase.On("ApproveExecution", mock.Anything, scopeTestExecID, "email-token", "operator@example.com").Return("revocation-token", nil)
+	h := newScopeTestHandler(t, exec, []string{scopeTestProd.ID}, store, mockPurchase)
+	mockPurchase.On("ApproveExecution", mock.Anything, scopeTestExecID, "email-token", "operator@example.com").Return(nil, "revocation-token", nil)
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil)
 
 	res, err := h.approvePurchase(context.Background(), scopeTestRequest(), scopeTestExecID, "email-token")
@@ -410,7 +410,7 @@ func TestExecutionAccounts_AdHocUnattributedDenied(t *testing.T) {
 			scopeTestRec("rec-prod", &scopeTestProd.ID),
 			scopeTestRec("rec-none", missing),
 		}}, "pending")
-		h := newScopeTestHandler(t, exec, []string{scopeTestProd.Name, scopeTestStage.Name}, new(MockConfigStore), new(MockPurchaseManager))
+		h := newScopeTestHandler(t, exec, []string{scopeTestProd.ID, scopeTestStage.ID}, new(MockConfigStore), new(MockPurchaseManager))
 		err := h.requireExecutionAccess(context.Background(), &Session{UserID: "operator-1"}, scopeTestExecID)
 		assert.True(t, IsNotFoundError(err), "expected 404 not-found, got %v", err)
 	}
@@ -424,8 +424,8 @@ func TestPlannedPurchases_HidesPartiallyScopedParent(t *testing.T) {
 		scope []string
 		want  int
 	}{
-		{[]string{scopeTestProd.Name}, 0},
-		{[]string{scopeTestProd.Name, scopeTestStage.Name}, 1},
+		{[]string{scopeTestProd.ID}, 0},
+		{[]string{scopeTestProd.ID, scopeTestStage.ID}, 1},
 	} {
 		exec := scopeTestExecution(scopeTestKinds[0], "pending")
 		store := new(MockConfigStore)

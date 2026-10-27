@@ -877,7 +877,7 @@ func TestHandler_HandleRequest_ApprovePurchase(t *testing.T) {
 	mockAuth.On("HasPermissionAPI", mock.Anything, "", "approve-own", "purchases").Return(false, nil).Maybe()
 
 	mockPurchase := new(MockPurchaseManager)
-	mockPurchase.On("ApproveExecution", mock.Anything, execID, "token123", approver).Return("", nil)
+	mockPurchase.On("ApproveExecution", mock.Anything, execID, "token123", approver).Return(nil, "", nil)
 
 	handler := &Handler{purchase: mockPurchase, config: mockConfig, auth: mockAuth}
 
@@ -1056,7 +1056,7 @@ func TestHandler_HandleRequest_GetHistory(t *testing.T) {
 	mockStore := new(MockConfigStore)
 
 	history := []config.PurchaseHistoryRecord{{PurchaseID: "purchase-1"}}
-	mockStore.On("GetAllPurchaseHistory", mock.Anything, 100).Return(history, nil)
+	mockStore.On("ListPurchaseHistoryPage", mock.Anything, mock.Anything, mock.Anything).Return(history, nil)
 	// getHistory now also lists pending executions to include them in the
 	// merged response — mock a no-op return so this integration-style test
 	// that only cares about the completed-row path still exercises the

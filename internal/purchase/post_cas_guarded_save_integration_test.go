@@ -19,6 +19,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,24 +92,32 @@ func TestPostCASSave_ConcurrentStatusChangeSurvives(t *testing.T) {
 			require.NoError(t, f.store.RecoverReapedExecution(ctx, late))
 		})
 
-		// safeFail's flip to failed lands before the late recovery, so it alerts
-		// as a terminal-failure writer (#1245). The rows below are what this test
-		// pins; the alert's content is pinned in failure_notify*_test.go.
-		sender, ok := f.manager.email.(*MockEmailSender)
-		require.True(t, ok)
-		failedMail := &failedEmailRecorder{}
-		failedMail.expect(sender)
-
+		// The late recovery completes the row before the guarded stamp, so the
+		// failed outcome is stale and no failure email may go out.
 		counted, err := f.manager.safeFail(ctx, rowStatusCopy(row))
 
 		require.NoError(t, err)
-		assert.LessOrEqual(t, len(failedMail.all()), 1, "the race must not alert twice for one row")
 		assert.True(t, counted, "the flip to failed landed, so the sweep still counts it")
+		f.email.AssertNumberOfCalls(t, "SendPurchaseFailedNotification", 0)
 		got := rowStatus(ctx, t, f, row.ExecutionID)
 		assert.Equal(t, config.StatusCompleted, got.Status, "the recovered purchase must not be reverted to failed")
 		assert.NotContains(t, got.Error, "failed by the recovery sweep")
 		require.Len(t, got.Recommendations, 1)
 		assert.True(t, got.Recommendations[0].Purchased)
+	})
+
+	// Without the interleaved recovery the same flip stays failed and is
+	// announced exactly once (#1195).
+	t.Run("safeFail flip without a recovery notifies once", func(t *testing.T) {
+		row := claimRaceRow(ctx, t, f, "approved")
+		f.email.On("SendPurchaseFailedNotification", mock.Anything, mock.Anything).Return(nil).Once()
+
+		counted, err := f.manager.safeFail(ctx, rowStatusCopy(row))
+
+		require.NoError(t, err)
+		assert.True(t, counted)
+		assert.Equal(t, config.StatusFailed, rowStatus(ctx, t, f, row.ExecutionID).Status)
+		f.email.AssertNumberOfCalls(t, "SendPurchaseFailedNotification", 1)
 	})
 
 	// A session revoke (revokeViaSession's CAS) lands right after the terminal

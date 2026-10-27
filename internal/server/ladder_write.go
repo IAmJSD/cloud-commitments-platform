@@ -32,8 +32,7 @@ type exchangeRunnerAdapter struct {
 }
 
 // RunAutoExchange implements providers/aws/ladder.exchangeRunner. It constructs
-// fresh AWS clients, lists convertible RIs and utilization, converts them for the
-// exchange package, then delegates to exchange.RunAutoExchange.
+// fresh AWS clients and hands them to run.
 //
 // ladderRunID is forwarded to RunAutoExchangeParams.LadderRunID so exchange scopes
 // its pending-cancellation to the ladder origin (issue #1348 / gap G10). DryRun
@@ -52,12 +51,21 @@ func (a *exchangeRunnerAdapter) RunAutoExchange(ctx context.Context, cfg exchang
 		a.region,
 		a.accountID,
 	)
-	return a.runWithClients(ctx, cfg, ladderRunID, dryRun, clients)
+	return a.run(ctx, cfg, clients, ladderRunID, dryRun)
 }
 
-// runWithClients is RunAutoExchange after client construction, split out so
-// tests can drive it with fakes.
-func (a *exchangeRunnerAdapter) runWithClients(ctx context.Context, cfg exchange.RIExchangeConfig, ladderRunID *string, dryRun bool, clients riExchangeClients) (*exchange.AutoExchangeResult, error) {
+// run applies the 4-eyes policy to cfg.Mode, lists convertible RIs and
+// utilization, converts them for the exchange package, then delegates to
+// exchange.RunAutoExchange. The ladder always asks for auto mode; under 4-eyes
+// it runs as manual, so exchanges wait for approval (issue #679). A global
+// config that cannot be read fails closed: the run stops before any AWS call.
+func (a *exchangeRunnerAdapter) run(ctx context.Context, cfg exchange.RIExchangeConfig, clients riExchangeClients, ladderRunID *string, dryRun bool) (*exchange.AutoExchangeResult, error) {
+	globalCfg, err := a.app.Config.GetGlobalConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("exchangeRunnerAdapter: 4-eyes policy check: load global config: %w", err)
+	}
+	cfg.Mode = fourEyesExchangeMode(globalCfg, cfg.Mode)
+
 	instances, err := clients.listConvertibleRIs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("exchangeRunnerAdapter: list convertible RIs: %w", err)

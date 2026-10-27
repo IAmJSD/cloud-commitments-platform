@@ -109,9 +109,14 @@ variable "database_username" {
 }
 
 variable "database_version" {
-  description = "PostgreSQL version"
+  description = "Cloud SQL PostgreSQL version. The migrations need 15 or later (UNIQUE NULLS NOT DISTINCT, #1233)."
   type        = string
   default     = "POSTGRES_16"
+
+  validation {
+    condition     = contains(["POSTGRES_15", "POSTGRES_16"], var.database_version)
+    error_message = "database_version must be POSTGRES_15 or POSTGRES_16: the migrations use PostgreSQL 15+ features (UNIQUE NULLS NOT DISTINCT)."
+  }
 }
 
 variable "database_tier" {
@@ -357,6 +362,12 @@ variable "auto_migrate" {
   description = "Auto-run database migrations on startup"
   type        = bool
   default     = true
+}
+
+variable "signing_key_destroy_scheduled_duration" {
+  description = "Cloud Run only: how long the OIDC signing key's versions stay restorable (DESTROY_SCHEDULED) before Cloud KMS destroys them, as \"<seconds>s\", 1 to 120 days. Applied only when the key is created: on a deployed key a different value plans a key replacement, which fails on the key-name collision without touching the live key. The default keeps every existing key unchanged (#324)."
+  type        = string
+  default     = "86400s"
 }
 
 # ==============================================

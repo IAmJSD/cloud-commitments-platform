@@ -358,3 +358,89 @@ func TestApplySuppressions_UnreadableRecDetailsMatchEveryRow(t *testing.T) {
 	require.Len(t, out, 1)
 	assert.Equal(t, 3, out[0].Count)
 }
+
+// TestApplySuppressions_AWSLegacySlugSpellings covers issues #1412, #1420 and #1422: AWS
+// recs and suppressions can be stored under a legacy or canonical slug, and a
+// suppression hides the rec whichever spelling each uses. Azure and GCP
+// "compute" stay distinct from "ec2".
+func TestApplySuppressions_AWSLegacySlugSpellings(t *testing.T) {
+	cases := []struct {
+		name, provider, recService, supService string
+		wantCount                              int
+	}{
+		{"aws compute sup hides ec2 rec", "aws", "ec2", "compute", 2},
+		{"aws ec2 sup hides compute rec", "aws", "compute", "ec2", 2},
+		{"aws same slug compute", "aws", "compute", "compute", 2},
+		{"aws unrelated service not hidden", "aws", "ec2", "rds", 5},
+		{"aws legacy rds sup hides relational-db rec", "aws", "relational-db", "rds", 2},
+		{"aws relational-db sup hides legacy rds rec", "aws", "rds", "relational-db", 2},
+		{"aws legacy elasticache sup hides cache rec", "aws", "cache", "elasticache", 2},
+		{"aws cache sup hides legacy elasticache rec", "aws", "elasticache", "cache", 2},
+		{"aws legacy opensearch sup hides search rec", "aws", "search", "opensearch", 2},
+		{"aws search sup hides legacy opensearch rec", "aws", "opensearch", "search", 2},
+		{"aws legacy redshift sup hides data-warehouse rec", "aws", "data-warehouse", "redshift", 2},
+		{"aws data-warehouse sup hides legacy redshift rec", "aws", "redshift", "data-warehouse", 2},
+		{"aws memorydb sup does not hide cache rec", "aws", "cache", "memorydb", 5},
+		{"aws dash-free compute SP sup hides compute SP rec", "aws", "savings-plans-compute", "savingsplans-compute", 2},
+		{"aws compute SP sup hides dash-free compute SP rec", "aws", "savingsplans-compute", "savings-plans-compute", 2},
+		{"aws dash-free database SP sup hides database SP rec", "aws", "savings-plans-database", "savingsplans-database", 2},
+		{"aws umbrella SP sup does not hide compute SP rec", "aws", "savings-plans-compute", "savingsplans", 5},
+		{"aws compute SP sup does not hide sagemaker SP rec", "aws", "savings-plans-sagemaker", "savingsplans-compute", 5},
+		{"azure legacy rds sup does not hide relational-db rec", "azure", "relational-db", "rds", 5},
+		{"azure compute sup hides compute rec", "azure", "compute", "compute", 2},
+		{"azure ec2 sup does not hide compute rec", "azure", "compute", "ec2", 5},
+		{"gcp compute sup does not hide ec2 rec", "gcp", "ec2", "compute", 5},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &mockSuppressionStore{
+				recs: []config.RecommendationRecord{{ID: "r1", Provider: tc.provider, Service: tc.recService,
+					Region: "r", ResourceType: "m5.large", Count: 5}},
+				sups: []config.PurchaseSuppression{{ExecutionID: "e1", Provider: tc.provider, Service: tc.supService,
+					Region: "r", ResourceType: "m5.large", SuppressedCount: 3, ExpiresAt: time.Now().Add(time.Hour)}},
+			}
+			s := &Scheduler{config: store}
+			recs, err := s.ListRecommendations(context.Background(), config.RecommendationFilter{})
+			require.NoError(t, err)
+			require.Len(t, recs, 1)
+			assert.Equal(t, tc.wantCount, recs[0].Count)
+		})
+	}
+}
+
+// TestApplySuppressions_LegacyEC2Shapes covers the two legacy shapes of issue
+// #1232 end to end: a suppression stored with tenancy "shared", or built from a
+// rec whose AZ lives only in Details, must still hide the modern rec.
+func TestApplySuppressions_LegacyEC2Shapes(t *testing.T) {
+	modern := ec2VariantRec("modern", "us-east-1a", "Linux/UNIX", "default")
+	azOnlyInDetails := modern
+	azOnlyInDetails.AvailabilityZone = ""
+	sharedPurchase := ec2VariantRec("p", "us-east-1a", "Linux/UNIX", "shared")
+	exp := time.Now().Add(time.Hour)
+	for name, tc := range map[string]struct {
+		rec  config.RecommendationRecord
+		sups []config.PurchaseSuppression
+		want int
+	}{
+		"stored shared row vs default rec": {modern, []config.PurchaseSuppression{{ExecutionID: "e", AccountID: "acct-1", Provider: "aws", Service: "compute", Region: "us-east-1",
+			ResourceType: "m5.large", SuppressedCount: 2, ExpiresAt: exp, Variant: &config.SuppressionVariant{AvailabilityZone: "us-east-1a", Platform: "Linux/UNIX", Tenancy: "shared"}}}, 3},
+		"built from shared rec": {modern, config.BuildSuppressions([]config.RecommendationRecord{withCount(sharedPurchase, 2)}, "e",
+			&config.GlobalConfig{GracePeriodDays: map[string]int{"aws": 7}}, time.Now()), 3},
+		"rec AZ only in details, row has AZ": {azOnlyInDetails, config.BuildSuppressions([]config.RecommendationRecord{withCount(modern, 2)}, "e",
+			&config.GlobalConfig{GracePeriodDays: map[string]int{"aws": 7}}, time.Now()), 3},
+		"purchase AZ only in details": {modern, config.BuildSuppressions([]config.RecommendationRecord{withCount(azOnlyInDetails, 2)}, "e",
+			&config.GlobalConfig{GracePeriodDays: map[string]int{"aws": 7}}, time.Now()), 3},
+	} {
+		t.Run(name, func(t *testing.T) {
+			index := aggregateSuppressions(tc.sups)
+			out := applySuppressionIndex([]config.RecommendationRecord{tc.rec}, index)
+			require.Len(t, out, 1)
+			assert.Equal(t, tc.want, out[0].Count)
+		})
+	}
+}
+
+func withCount(r config.RecommendationRecord, n int) config.RecommendationRecord {
+	r.Count = n
+	return r
+}

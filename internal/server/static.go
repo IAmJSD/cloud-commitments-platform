@@ -34,19 +34,12 @@ func (h *spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, filePath) // #nosec G703 -- filePath validated by resolveStaticFilePath: filepath.Abs + isPathContainedIn prevents directory traversal
 }
 
-// setCacheHeaders sets Cache-Control based on file type.
-// HTML files get no-cache; hashed assets (JS/CSS/images) get immutable long cache.
+// setCacheHeaders sets Cache-Control based on file type. It delegates to
+// cacheControlForExt, the single extension-to-policy table shared with the
+// Lambda static path (serveStaticForLambda), so container and Lambda
+// Function URL deployments cannot drift onto different cache policies.
 func setCacheHeaders(w http.ResponseWriter, urlPath string) {
-	ext := strings.ToLower(path.Ext(urlPath))
-	switch ext {
-	case ".html":
-		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	case ".js", ".css", ".woff", ".woff2", ".ttf", ".eot",
-		".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".webp":
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	default:
-		w.Header().Set("Cache-Control", "public, max-age=3600")
-	}
+	w.Header().Set("Cache-Control", cacheControlForExt(strings.ToLower(path.Ext(urlPath))))
 }
 
 // isPathContainedIn reports whether absFile is at or under absDir, using a
@@ -173,7 +166,10 @@ func resolveStaticFilePath(dir, urlPath string) (filePath, cleanPath string, ok 
 	return spaIndex(absDir, dir)
 }
 
-// cacheControlForExt returns the Cache-Control header value for a file extension.
+// cacheControlForExt returns the Cache-Control header value for a lower-cased
+// file extension. HTML gets no-cache; hashed assets (JS/CSS/fonts/images) get
+// an immutable long cache; everything else gets a one-hour cache. Both static
+// paths (setCacheHeaders and serveStaticForLambda) use it.
 func cacheControlForExt(ext string) string {
 	switch ext {
 	case ".html":

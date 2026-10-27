@@ -58,6 +58,7 @@ func zoneTestRI(scope ec2types.Scope, az string) ec2types.ReservedInstances {
 		InstanceTenancy:     ec2types.TenancyDefault,
 		Scope:               scope,
 		Duration:            aws.Int64(31536000),
+		FixedPrice:          aws.Float32(876),
 		OfferingClass:       ec2types.OfferingClassTypeConvertible,
 		CurrencyCode:        ec2types.CurrencyCodeValuesUsd,
 	}
@@ -180,8 +181,8 @@ func TestNewConvertibleOfferingLookup_MapsEveryField(t *testing.T) {
 
 func TestConvertForAutoExchange_CarriesAvailabilityZone(t *testing.T) {
 	_, _, meta := convertForAutoExchange([]ec2svc.ConvertibleRI{
-		{ReservedInstanceID: "ri-zonal", Scope: "Availability Zone", AvailabilityZone: "us-east-1b", Duration: 31536000},
-		{ReservedInstanceID: "ri-regional", Scope: "Region", Duration: 31536000},
+		{ReservedInstanceID: "ri-zonal", Scope: "Availability Zone", AvailabilityZone: "us-east-1b", Duration: 31536000, FixedPrice: 876},
+		{ReservedInstanceID: "ri-regional", Scope: "Region", Duration: 31536000, FixedPrice: 876},
 	}, nil)
 	assert.Equal(t, "us-east-1b", meta["ri-zonal"].AvailabilityZone)
 	assert.Empty(t, meta["ri-regional"].AvailabilityZone)

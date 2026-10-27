@@ -44,6 +44,7 @@ func (f *catalogEC2) ListConvertibleReservedInstances(context.Context) ([]ec2svc
 		ProductDescription: "Linux/UNIX",
 		InstanceTenancy:    "default",
 		Scope:              "Region",
+		FixedPrice:         876, // priced: an unpriced RI is excluded from reshape (#1188)
 		Duration:           31536000,
 		CurrencyCode:       "USD",
 	}}, nil
@@ -177,7 +178,7 @@ var reshapeEntryPoints = []struct {
 				LookbackDays:             30,
 			}
 			ladderRunID := "ladder-run-1"
-			result, err := a.runWithClients(context.Background(), cfg, &ladderRunID, true, clients)
+			result, err := a.run(context.Background(), cfg, clients, &ladderRunID, true)
 			require.NoError(t, err)
 			return result
 		},

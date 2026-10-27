@@ -169,6 +169,19 @@ test.each([false, true])('inventory unknown upfront with amortization %s', async
   }
 });
 
+// Money and count columns carry th.num/td.num (right-aligned, tabular
+// digits) in the header and in every row at the same index (issue #739).
+function numColumns(root: ParentNode): { headers: string[]; rowsMatch: boolean } {
+  const ths = Array.from(root.querySelectorAll('thead th'));
+  const numIdx = ths.flatMap((th, i) => (th.classList.contains('num') ? [i] : []));
+  const rows = Array.from(root.querySelectorAll('tbody tr'));
+  const rowsMatch = rows.length > 0 && rows.every((tr) => {
+    const tds = Array.from(tr.querySelectorAll('td'));
+    return tds.flatMap((td, i) => (td.classList.contains('num') ? [i] : [])).join() === numIdx.join();
+  });
+  return { headers: numIdx.map((i) => (ths[i]!.textContent ?? '').trim()), rowsMatch };
+}
+
 describe('Inventory & Coverage sub-section switching', () => {
   beforeEach(() => {
     buildInventoryDOM();
@@ -429,6 +442,16 @@ describe('loadActiveCommitments — fetch + render flow', () => {
     expect(accountCell?.textContent).toContain('acc-no-name');
     expect(accountCell?.querySelector('.monospace')).not.toBeNull();
   });
+
+  test('money and count columns are right-aligned with tabular digits (issue #739)', async () => {
+    (api.listActiveCommitments as jest.Mock).mockResolvedValue([
+      makeCommitment({ id: 'a:1', count: 4, monthly_cost: 240.5 }),
+      makeCommitment({ id: 'a:2', count: 1, monthly_cost: null }),
+    ]);
+    await loadActiveCommitments();
+    const list = document.getElementById('active-commitments-list')!;
+    expect(numColumns(list)).toEqual({ headers: ['Count', 'Monthly cost', 'Monthly savings'], rowsMatch: true });
+  });
 });
 
 // ──────────────────────────────────────────────
@@ -655,6 +678,17 @@ describe('loadCoverageBreakdown — fetch + render flow', () => {
     const absentCell = rows[1]!.querySelector('.coverage-bar-cell')!;
     expect(absentCell.querySelector('.coverage-bar')).toBeNull();
     expect(absentCell.querySelector('.coverage-bar-absent')!.textContent).toBe('N/A');
+  });
+
+  test('the money columns are right-aligned with tabular digits (issue #739)', async () => {
+    (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({
+      providers: [makeProviderSection('aws', [
+        { service: 'ec2', covered_monthly: 200, on_demand_monthly: 300, coverage_pct: 40 },
+      ], 40)],
+    });
+    await loadCoverageBreakdown();
+    const card = document.querySelector('#coverage-providers .coverage-provider-card')!;
+    expect(numColumns(card)).toEqual({ headers: ['Covered/mo', 'On-demand gap/mo'], rowsMatch: true });
   });
 });
 

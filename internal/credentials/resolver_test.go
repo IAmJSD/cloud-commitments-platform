@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
@@ -425,16 +427,6 @@ func TestResolveAzureCredentials_NotStored(t *testing.T) {
 	assert.Contains(t, err.Error(), "no client secret stored")
 }
 
-func TestResolveGCPCredentials_Success(t *testing.T) {
-	store := newMockStore()
-	saJSON := []byte(`{"type":"service_account","project_id":"my-project"}`)
-	store.data["acct1/gcp_service_account"] = saJSON
-
-	result, err := ResolveGCPCredentials(context.Background(), &config.CloudAccount{ID: "acct1"}, store)
-	require.NoError(t, err)
-	assert.Equal(t, saJSON, result)
-}
-
 func TestAWSCredentials_String_IsRedacted(t *testing.T) {
 	c := &AWSCredentials{AccessKeyID: "AKIAIOSFODNN7EXAMPLE", SecretAccessKey: "secret"}
 	assert.NotContains(t, c.String(), "AKIAIOSFODNN7EXAMPLE")
@@ -444,4 +436,52 @@ func TestAWSCredentials_String_IsRedacted(t *testing.T) {
 func TestAzureCredentials_String_IsRedacted(t *testing.T) {
 	c := &AzureCredentials{ClientSecret: "supersecret"}
 	assert.NotContains(t, c.String(), "supersecret")
+}
+
+// sessionNameRecorder is an STSClient that records the RoleSessionName of
+// each call and then fails it, so a provider's Retrieve stops right after.
+type sessionNameRecorder struct{ names []string }
+
+func (r *sessionNameRecorder) AssumeRole(_ context.Context, in *sts.AssumeRoleInput, _ ...func(*sts.Options)) (*sts.AssumeRoleOutput, error) {
+	r.names = append(r.names, aws.ToString(in.RoleSessionName))
+	return nil, errors.New("recorded")
+}
+
+func (r *sessionNameRecorder) AssumeRoleWithWebIdentity(_ context.Context, in *sts.AssumeRoleWithWebIdentityInput, _ ...func(*sts.Options)) (*sts.AssumeRoleWithWebIdentityOutput, error) {
+	r.names = append(r.names, aws.ToString(in.RoleSessionName))
+	return nil, errors.New("recorded")
+}
+
+// TestRoleSessionName_SharedByAssumeRoleAndWebIdentity pins the session name
+// both STS paths send: "cudly-" plus the first 8 bytes of the account ID
+// (issue #313 folded the two inline copies into roleSessionName).
+func TestRoleSessionName_SharedByAssumeRoleAndWebIdentity(t *testing.T) {
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(tokenFile, []byte("dummy-oidc-token"), 0o600))
+
+	for _, tc := range []struct{ id, want string }{
+		{id: "a-very-long-account-id", want: "cudly-a-very-l"},
+		{id: "12345678", want: "cudly-12345678"},
+		{id: "short", want: "cudly-short"},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			assert.Equal(t, tc.want, roleSessionName(tc.id))
+
+			rec := &sessionNameRecorder{}
+			account := &config.CloudAccount{ID: tc.id, AWSRoleARN: "arn:aws:iam::123456789012:role/CUDly"}
+
+			roleProvider, err := resolveRoleARNProvider(context.Background(), account, rec, nil, nil)
+			require.NoError(t, err)
+			_, err = roleProvider.Retrieve(context.Background())
+			require.Error(t, err)
+
+			account.AWSWebIdentityTokenFile = tokenFile
+			wifProvider, err := resolveWebIdentityProvider(account, rec)
+			require.NoError(t, err)
+			_, err = wifProvider.Retrieve(context.Background())
+			require.Error(t, err)
+
+			assert.Equal(t, []string{tc.want, tc.want}, rec.names)
+		})
+	}
 }

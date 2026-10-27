@@ -16,11 +16,15 @@ var riExchangeReservationIntegrationFiles = []string{
 	"store_postgres_ri_exchange_reservation_integration_test.go",
 	"store_postgres_ri_exchange_approved_reservation_integration_test.go",
 	filepath.Join("..", "server", "handler_ri_exchange_reservation_integration_test.go"),
+	"store_postgres_auto_purchase_stamps_integration_test.go",
+	"store_postgres_ladder_arming_integration_test.go",
 }
 
-// TestRIExchangeReservationIntegrationTestsAreNotEnvGated guards #724. These
+// TestRIExchangeReservationIntegrationTestsAreNotEnvGated guards #724 and #202. These
 // tests used to read RI_EXCHANGE_TEST_DATABASE_URL and t.Skip when it was
-// unset, which CI never set, so the spend-limiting path ran nowhere. They now
+// unset (the auto-purchase stamp and ladder arming tests, #202, did the same
+// with their own variables), which CI never set, so the spend-limiting path
+// ran nowhere. They now
 // get their database from testhelpers.RequirePostgresContainer, which decides
 // on its own whether Docker is missing. Any os.Getenv or direct skip in these
 // files would bring back a way to run them without running them.

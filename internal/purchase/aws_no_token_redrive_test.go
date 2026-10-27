@@ -182,7 +182,7 @@ func TestApproveAndExecuteRefusesAWSNoTokenRetrySuccessor(t *testing.T) {
 		approve        func(m *Manager, id string) error
 	}{
 		{"token", nil, rawToken, func(m *Manager, id string) error {
-			_, err := m.ApproveExecution(context.Background(), id, rawToken, "approver@example.com", nil)
+			_, _, err := m.ApproveExecution(context.Background(), id, rawToken, "approver@example.com", nil)
 			return err
 		}},
 		{"session", &sessionUser, "", func(m *Manager, id string) error {

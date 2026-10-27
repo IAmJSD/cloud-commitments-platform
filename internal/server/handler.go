@@ -62,12 +62,15 @@ const (
 	// issue #291 wave-2). Wires the "fire_scheduled_purchases" event action
 	// to purchase.Manager.FireScheduledDelayedPurchases.
 	TaskFireScheduledPurchases ScheduledTaskType = "fire_scheduled_purchases"
-	// TaskFinalizeRevocations sweeps purchase_history rows with
-	// revocation_in_flight=true and retries MarkPurchaseRevoked for each.
+	// TaskFinalizeRevocations sweeps unrevoked purchase_history rows with a
+	// recorded Azure Return and retries MarkPurchaseRevoked for each (a row
+	// that is only flagged in flight is never marked revoked, issue #1523).
 	// These rows represent partial-success cases where the Azure Return API call
 	// succeeded but the subsequent DB write failed. The sweep ensures the audit
 	// record is eventually consistent without requiring the user to retry (which
-	// would be rejected by Azure). See issue #290 Finding #6.
+	// would be rejected by Azure). See issue #290 Finding #6. The same sweep
+	// also polls RI Marketplace listings for sales, proceeds and fees (issue
+	// #27, handleFinalizeSweep).
 	TaskFinalizeRevocations ScheduledTaskType = "finalize_revocations"
 	// TaskLadderRun runs the commitment-laddering planner for every enabled
 	// ladder_config. It computes a plan (Allocate + BuildTranches), persists the
@@ -99,6 +102,13 @@ var scheduledEventActions = map[string]ScheduledTaskType{
 // It acquires a PostgreSQL advisory lock to prevent concurrent execution of the same task.
 func (app *Application) runScheduledTask(ctx context.Context, taskType ScheduledTaskType, params ScheduledTaskParams) (any, error) {
 	log.Printf("Handling scheduled task: %q", taskType) // #nosec G706 -- taskType is looked up from a known-value map; %q quotes the value to prevent CR/LF log injection
+
+	// Reject an unknown task before connecting or taking an advisory lock
+	// keyed on its name. The Lambda and HTTP transports already validate at
+	// their boundary; this covers the --task CLI and any future caller (#111).
+	if _, err := ParseScheduledTaskType(string(taskType)); err != nil {
+		return nil, err
+	}
 
 	if err := app.ensureDB(ctx); err != nil {
 		return nil, fmt.Errorf("database connection failed: %w", err)
@@ -195,7 +205,7 @@ func (app *Application) dispatchTask(ctx context.Context, taskType ScheduledTask
 		TaskFireScheduledPurchases: func(c context.Context, _ ScheduledTaskParams) (any, error) {
 			return app.handleFireScheduledPurchases(c)
 		},
-		TaskFinalizeRevocations: func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleFinalizeRevocations(c) },
+		TaskFinalizeRevocations: func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleFinalizeSweep(c) },
 		TaskLadderRun:           func(c context.Context, _ ScheduledTaskParams) (any, error) { return app.handleLadderRun(c) },
 	}
 	handler, ok := handlers[taskType]
@@ -276,8 +286,9 @@ func (app *Application) handleSendNotifications(ctx context.Context) (*purchase.
 func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[string]int64, error) {
 	log.Println("Cleaning up expired records...")
 
+	// No sessions_deleted counter: CleanupExpiredSessions reports no count,
+	// so it could only ever be a fabricated 0 (#326).
 	result := map[string]int64{
-		"sessions_deleted":   0,
 		"executions_deleted": 0,
 	}
 
@@ -305,7 +316,7 @@ func (app *Application) handleCleanupExpiredRecords(ctx context.Context) (map[st
 		}
 	}
 
-	log.Printf("Cleanup complete: %d sessions, %d executions deleted", result["sessions_deleted"], result["executions_deleted"])
+	log.Printf("Cleanup complete: %d executions deleted", result["executions_deleted"])
 	return result, nil
 }
 
@@ -348,11 +359,13 @@ func (app *Application) handleFireScheduledPurchases(ctx context.Context) (*purc
 	return result, nil
 }
 
-// handleFinalizeRevocations sweeps purchase_history rows with
-// revocation_in_flight=true and retries MarkPurchaseRevoked for each.
-// Part of the partial-success reconciliation for Azure revocations (issue #290
-// Finding #6): if the Azure Return call succeeded but the DB write failed,
-// this sweep ensures the audit row is eventually consistent.
+// handleFinalizeRevocations sweeps unrevoked purchase_history rows with a
+// recorded Azure Return and retries MarkPurchaseRevoked for each, and clears
+// the in-flight flag on rows flagged too long with no recorded Return
+// (issue #1523). Part of the partial-success reconciliation for Azure
+// revocations (issue #290 Finding #6): if the Azure Return call succeeded but
+// the DB write failed, this sweep ensures the audit row is eventually
+// consistent.
 func (app *Application) handleFinalizeRevocations(ctx context.Context) (*purchase.FinalizeResult, error) {
 	log.Println("Finalizing in-flight revocations...")
 	result, err := app.Purchase.FinalizeInFlightRevocations(ctx)
@@ -360,8 +373,8 @@ func (app *Application) handleFinalizeRevocations(ctx context.Context) (*purchas
 		log.Printf("Failed to finalize in-flight revocations: %v", err)
 		return nil, err
 	}
-	log.Printf("Finalize sweep complete: found=%d finalized=%d errored=%d",
-		result.Found, result.Finalized, result.Errored)
+	log.Printf("Finalize sweep complete: found=%d finalized=%d errored=%d released=%d",
+		result.Found, result.Finalized, result.Errored, result.Released)
 	return result, nil
 }
 
@@ -374,11 +387,11 @@ func (app *Application) handleFinalizeRevocations(ctx context.Context) (*purchas
 func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]any, error) {
 	log.Println("Refreshing analytics...")
 
+	// No partition counters: this task never creates or drops partitions
+	// (handleCollectAnalytics does), so they could only be fabricated zeros.
 	result := map[string]any{
-		"status":             "success",
-		"views_refreshed":    0,
-		"partitions_created": 0,
-		"partitions_dropped": 0,
+		"status":          "success",
+		"views_refreshed": 0,
 	}
 
 	// Refresh materialized views if analytics store is available.
@@ -395,6 +408,9 @@ func (app *Application) handleRefreshAnalytics(ctx context.Context) (map[string]
 			log.Println("Materialized views refreshed successfully")
 		}
 	} else {
+		// Nothing ran, so this is not a success; handleCollectAnalytics
+		// reports the same condition as "skipped" (#326).
+		result["status"] = "skipped"
 		log.Println("Analytics store not available, skipping materialized view refresh")
 	}
 

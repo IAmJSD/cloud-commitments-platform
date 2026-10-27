@@ -48,7 +48,6 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 		ID:           uuid.New().String(),
 		Email:        req.Email,
 		PasswordHash: passwordHash,
-		Salt:         "", // Not used anymore, but kept for backward compatibility
 		GroupIDs:     []string{DefaultAdminGroupID},
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -232,7 +231,6 @@ func (s *Service) CreateUser(ctx context.Context, actorUserID string, req Create
 		ID:           uuid.New().String(),
 		Email:        req.Email,
 		PasswordHash: passwordHash,
-		Salt:         "", // Not used anymore, but kept for backward compatibility
 		GroupIDs:     req.GroupIDs,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -301,19 +299,33 @@ func (s *Service) sendInviteEmail(ctx context.Context, user *User, inviteToken s
 }
 
 // loadUser fetches a user by ID, normalising a missing row (either pgx.ErrNoRows
-// or a nil user) into a uniform "user not found" error. Extracted so the mutating
-// service methods share one lookup-or-not-found path and stay under gocyclo's
-// complexity threshold.
+// or a nil user) into a uniform "user not found" error and wrapping any other
+// store error as "failed to get user: %w". Every service method that looks a
+// user up by ID goes through here (or loadActiveUser) so the not-found and
+// error paths cannot drift between copies (issue #313).
 func (s *Service) loadUser(ctx context.Context, userID string) (*User, error) {
 	user, err := s.store.GetUserByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("user not found")
 		}
-		return nil, err
+		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
 	if user == nil {
 		return nil, fmt.Errorf("user not found")
+	}
+	return user, nil
+}
+
+// loadActiveUser is loadUser for paths that must refuse a deactivated
+// account: minting an API key and authenticating with one.
+func (s *Service) loadActiveUser(ctx context.Context, userID string) (*User, error) {
+	user, err := s.loadUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !user.Active {
+		return nil, fmt.Errorf("user account is not active")
 	}
 	return user, nil
 }
@@ -740,12 +752,8 @@ func (s *Service) DeleteUser(ctx context.Context, userID string) error {
 	}
 
 	if containsGroup(user.GroupIDs, DefaultAdminGroupID) {
-		count, err := s.store.CountGroupMembers(ctx, DefaultAdminGroupID)
-		if err != nil {
-			return fmt.Errorf("failed to count administrators: %w", err)
-		}
-		if count <= 1 {
-			return ErrLastAdmin
+		if err := s.checkLastAdminConstraint(ctx); err != nil {
+			return err
 		}
 	}
 
@@ -767,22 +775,21 @@ func (s *Service) DeleteUser(ctx context.Context, userID string) error {
 	return nil
 }
 
-// GetUser returns user info. Returns (nil, pgx.ErrNoRows) if the user does not exist.
+// GetUser returns user info. A user that does not exist returns an error
+// matching both ErrUserNotFound and pgx.ErrNoRows (issue #312).
 func (s *Service) GetUser(ctx context.Context, userID string) (*User, error) {
-	return s.store.GetUserByID(ctx, userID)
+	user, err := s.store.GetUserByID(ctx, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %w", ErrUserNotFound, err)
+	}
+	return user, err
 }
 
 // UpdateUserProfile allows a user to update their own email and password.
 func (s *Service) UpdateUserProfile(ctx context.Context, userID, email, currentPassword, newPassword string) error {
-	user, err := s.store.GetUserByID(ctx, userID)
+	user, err := s.loadUser(ctx, userID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("user not found")
-		}
-		return fmt.Errorf("failed to get user: %w", err)
-	}
-	if user == nil {
-		return fmt.Errorf("user not found")
+		return err
 	}
 
 	if !s.verifyPassword(currentPassword, user.PasswordHash) {
@@ -860,7 +867,6 @@ func (s *Service) updateUserPassword(user *User, newPassword string) (bool, erro
 		user.PasswordHistory = addToPasswordHistory(user.PasswordHash, user.PasswordHistory)
 	}
 
-	user.Salt = ""
 	user.PasswordHash = hash
 	return true, nil
 }

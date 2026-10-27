@@ -49,6 +49,13 @@ func (f *historySummaryFixture) savePurchase(ctx context.Context, t *testing.T, 
 		Payment: "no-upfront", UpfrontCost: upfront, EstimatedSavings: savings, CloudAccountID: cloudAccountID,
 	}
 	require.NoError(t, f.store.SavePurchaseHistory(ctx, rec))
+	if cloudAccountID == nil {
+		// SavePurchaseHistory now links a row to the registered account with
+		// the same external id (#1235); clear it so nil seeds a legacy row.
+		tag, err := f.store.db.Exec(ctx, `UPDATE purchase_history SET cloud_account_id = NULL WHERE purchase_id = $1`, rec.PurchaseID)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), tag.RowsAffected())
+	}
 	if revoked {
 		_, err := f.store.db.Exec(ctx, `UPDATE purchase_history SET revoked_at = now() WHERE purchase_id = $1`, rec.PurchaseID)
 		require.NoError(t, err)

@@ -2,12 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
@@ -20,6 +20,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/api"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/ricost"
 )
 
 // riExchangeClients holds the injectable dependencies for RI exchange operations.
@@ -88,13 +89,17 @@ func (app *Application) handleRIExchangeReshape(ctx context.Context) (*exchange.
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
+	accountID, err := resolveAccountID(ctx, sts.NewFromConfig(awsCfg))
+	if err != nil {
+		return nil, fmt.Errorf("RI exchange reshape aborted: %w", err)
+	}
 
 	clients := newRIExchangeClients(
 		awsprovider.NewEC2ClientDirect(awsCfg),
 		awsprovider.NewRecommendationsClientDirect(awsCfg),
 		exchange.NewExchangeClient(awsCfg),
 		awsCfg.Region,
-		resolveAccountID(ctx, awsCfg),
+		accountID,
 	)
 
 	return app.executeRIExchangeReshape(ctx, cfg, clients)
@@ -156,6 +161,11 @@ func newConvertibleOfferingLookup(finder convertibleOfferingFinder) exchange.Loo
 // executeRIExchangeReshape contains the core exchange logic, separated from AWS
 // client construction for testability.
 func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *config.GlobalConfig, clients riExchangeClients) (*exchange.AutoExchangeResult, error) {
+	// Every record the run creates carries this account ID for the audit
+	// trail, so a run without one stops before touching AWS or the store.
+	if clients.accountID == "" {
+		return nil, errors.New("no AWS account ID resolved for the RI exchange audit trail")
+	}
 	instances, err := clients.listConvertibleRIs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list convertible RIs: %w", err)
@@ -178,7 +188,7 @@ func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *confi
 		Utilization:          utilInfos,
 		OfferedInstanceTypes: api.OfferedInstanceTypes(ctx, clients.region, clients.offeredInstanceTypes),
 		Config: exchange.RIExchangeConfig{
-			Mode:                     cfg.RIExchangeMode,
+			Mode:                     fourEyesExchangeMode(cfg, cfg.RIExchangeMode),
 			UtilizationThreshold:     cfg.RIExchangeUtilizationThreshold,
 			MaxPaymentPerExchangeUSD: cfg.RIExchangeMaxPerExchangeUSD,
 			MaxPaymentDailyUSD:       cfg.RIExchangeMaxDailyUSD,
@@ -204,19 +214,26 @@ func (app *Application) executeRIExchangeReshape(ctx context.Context, cfg *confi
 	return result, nil
 }
 
-// resolveAccountID fetches the AWS account ID via STS. Returns "unknown" on failure
-// since account_id is stored for audit trail only and is not used to scope queries.
-func resolveAccountID(ctx context.Context, awsCfg aws.Config) string {
-	stsClient := sts.NewFromConfig(awsCfg)
-	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
+// callerIdentityGetter is the slice of the STS client resolveAccountID needs.
+// Satisfied by *sts.Client.
+type callerIdentityGetter interface {
+	GetCallerIdentity(ctx context.Context, params *sts.GetCallerIdentityInput, optFns ...func(*sts.Options)) (*sts.GetCallerIdentityOutput, error)
+}
+
+// resolveAccountID fetches the caller's AWS account ID via STS and fails when
+// it cannot be determined. The ID is written onto every RI exchange record the
+// run creates, so a placeholder such as "unknown" would put a fabricated
+// account on the audit trail of a money action (#326); the run is aborted
+// instead, as defaultLadderAccountResolver does.
+func resolveAccountID(ctx context.Context, client callerIdentityGetter) (string, error) {
+	identity, err := client.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
-		log.Printf("Warning: failed to get AWS account ID via STS: %v (using 'unknown')", err)
-		return "unknown"
+		return "", fmt.Errorf("resolve caller AWS account via STS: %w", err)
 	}
-	if identity.Account != nil {
-		return *identity.Account
+	if identity == nil || identity.Account == nil || *identity.Account == "" {
+		return "", errors.New("STS GetCallerIdentity returned no account ID")
 	}
-	return "unknown"
+	return *identity.Account, nil
 }
 
 // sendExchangeNotification sends email notifications based on the exchange result.
@@ -287,6 +304,7 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 			ExchangeID:         o.ExchangeID,
 			UtilizationPct:     o.UtilizationPct,
 			Error:              o.Error,
+			OutcomeUnknown:     o.OutcomeUnknown,
 		})
 	}
 
@@ -301,28 +319,18 @@ func buildExchangeNotificationData(result *exchange.AutoExchangeResult, dashboar
 	return data
 }
 
-// monthlyCostFromConvertibleRI computes the per-instance per-month
-// effective cost from an RI's pricing fields, matching the same
-// formula the AWS effectiveMonthlyCost function uses for offerings:
-//
-//	monthly = (FixedPrice / hours_per_term + UsagePrice + recurring_hourly) × 730
-//
-// Returns an error when Duration is non-positive: a zero cost would read
-// as a free RI and skip the pricing gate, so callers must exclude the RI.
-//
-// Used to populate exchange.RIInfo.MonthlyCost so the cross-family
-// dollar-units pre-filter compares apples-to-apples against per-target
-// offering costs.
+// monthlyCostFromConvertibleRI delegates to ricost.MonthlyCostFromConvertibleRI,
+// the single implementation of the convertible RI monthly cost formula shared
+// with internal/api. It errors for a non-positive duration or no positive
+// price, and callers must exclude the RI.
 func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
-	if ri.Duration <= 0 {
-		return 0, fmt.Errorf("convertible RI %s has non-positive duration %d: monthly cost is not computable", ri.ReservedInstanceID, ri.Duration)
-	}
-	hoursPerTerm := float64(ri.Duration) / 3600
-	return ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730, nil
+	return ricost.MonthlyCostFromConvertibleRI(ri)
 }
 
 // convertForAutoExchange converts provider-specific types to exchange package types,
-// including RI metadata needed for offering lookup.
+// including RI metadata needed for offering lookup. It serves both the
+// auto-exchange run and the ladder write path (ladder_write.go); an RI whose
+// monthly cost is not computable is logged and dropped on both.
 func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recommendations.RIUtilization) ([]exchange.RIInfo, []exchange.UtilizationInfo, map[string]exchange.RIMetadataInfo) {
 	riInfos := make([]exchange.RIInfo, 0, len(instances))
 	riMetadata := make(map[string]exchange.RIMetadataInfo, len(instances))
@@ -331,7 +339,7 @@ func convertForAutoExchange(instances []ec2svc.ConvertibleRI, utilData []recomme
 		inst := instances[i]
 		monthlyCost, err := monthlyCostFromConvertibleRI(inst)
 		if err != nil {
-			logging.Warnf("convertForAutoExchange: excluding RI from auto-exchange: %v", err)
+			logging.Warnf("convertForAutoExchange: excluding RI from auto-exchange and ladder reshaping: %v", err)
 			continue
 		}
 		riInfos = append(riInfos, exchange.RIInfo{

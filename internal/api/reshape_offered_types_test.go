@@ -60,7 +60,10 @@ const reshapeCatalogRegion = "eu-west-3"
 // m5.2xlarge it must become 2x m5.xlarge.
 func newCatalogReshapeHandler(ec2 *fakeReshapeEC2Stub) *Handler {
 	ec2.instances = []ec2svc.ConvertibleRI{
-		{ReservedInstanceID: "ri-1", InstanceType: "m5.4xlarge", InstanceCount: 1, CurrencyCode: "USD", Duration: 31536000},
+		{
+			ReservedInstanceID: "ri-1", InstanceType: "m5.4xlarge", InstanceCount: 1, CurrencyCode: "USD", Duration: 31536000,
+			FixedPrice: 876, // priced: an unpriced RI is excluded from reshape (#1188)
+		},
 	}
 	mockStore := &MockConfigStore{}
 	mockStore.On("ListStoredRecommendations", mock.Anything, mock.Anything).

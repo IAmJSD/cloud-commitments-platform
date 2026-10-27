@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 	azurecompute "github.com/LeanerCloud/cloud-commitments-go/providers/azure/services/compute"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/ricost"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/smithy-go"
@@ -893,7 +895,8 @@ func TestRejectRIExchange_EmptyStoredToken(t *testing.T) {
 	ce, ok := IsClientError(err)
 	assert.True(t, ok)
 	assert.Equal(t, 403, ce.code)
-	assert.Contains(t, err.Error(), "does not support rejection")
+	// Same answer as a wrong token or a missing record (issue #601).
+	assert.Contains(t, err.Error(), "invalid rejection token")
 
 	mockStore.AssertExpectations(t)
 }
@@ -985,7 +988,7 @@ func TestGetReshapeRecommendations_EmptyRegionUsesConfigRegion(t *testing.T) {
 		reshapeEC2Factory: func(_ aws.Config) reshapeEC2Client {
 			return &fakeReshapeEC2Stub{
 				instances: []ec2svc.ConvertibleRI{
-					{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, CurrencyCode: "USD", Duration: 31536000},
+					{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, CurrencyCode: "USD", Duration: 31536000, FixedPrice: 876},
 				},
 			}
 		},
@@ -1070,8 +1073,11 @@ func TestGetReshapeRecommendations_AlternativeCurrencyFromRIs(t *testing.T) {
 				config: mockStore,
 				auth:   &mockAuthForExchange{},
 				reshapeEC2Factory: func(_ aws.Config) reshapeEC2Client {
+					// FixedPrice 100 over 1y is ~8.33/month; NF 8 x 8.33 stays
+					// under the c6i.large rec's NF 4 x 40, so the dollar-units
+					// gate keeps the alternative this test is about.
 					return &fakeReshapeEC2Stub{instances: []ec2svc.ConvertibleRI{
-						{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, CurrencyCode: tc.riCurrency, Duration: 31536000},
+						{ReservedInstanceID: "ri-1", InstanceType: "m5.xlarge", InstanceCount: 1, CurrencyCode: tc.riCurrency, Duration: 31536000, FixedPrice: 100},
 					}}
 				},
 				reshapeRecsFactory: func(_ aws.Config) reshapeRecsClient {
@@ -1433,7 +1439,7 @@ func TestListExchangeableAzureRIs_SubscriptionIDFiltersToOwnRows(t *testing.T) {
 	}
 }
 
-// --- Azure credential-resolution path tests (issue #871) ---
+// --- Azure credential-resolution path tests (issue LeanerCloud/cloud-commitments-cli#932) ---
 //
 // These tests exercise the production path of buildAzureExchangeClient, which
 // was previously hardcoded to azidentity.NewDefaultAzureCredential. The fix
@@ -1451,8 +1457,9 @@ func TestListExchangeableAzureRIs_SubscriptionIDFiltersToOwnRows(t *testing.T) {
 // TestListExchangeableAzureRIs_NoAzureAccountRegistered verifies that when no
 // Azure CloudAccount is registered for the requested subscription, the handler
 // returns an empty reservations list (graceful empty state) rather than a 500.
-// This is the fix for issue #871: Lambda has no ambient Azure identity so the
-// old DefaultAzureCredential call failed, producing an opaque 500.
+// This is the fix for issue LeanerCloud/cloud-commitments-cli#932: Lambda has no
+// ambient Azure identity so the old DefaultAzureCredential call failed,
+// producing an opaque 500.
 func TestListExchangeableAzureRIs_NoAzureAccountRegistered(t *testing.T) {
 	mockStore := &MockConfigStore{}
 	// GetCloudAccountByExternalID returns (nil, nil) — no account for this sub.
@@ -1626,19 +1633,19 @@ func (m *mockAuthForExchange) GetUser(_ context.Context, _ string) (*User, error
 func (m *mockAuthForExchange) UpdateUserProfile(_ context.Context, _, _, _, _ string) error {
 	return nil
 }
-func (m *mockAuthForExchange) CreateUserAPI(_ context.Context, _ string, _ any) (any, error) {
+func (m *mockAuthForExchange) CreateUserAPI(_ context.Context, _ string, _ auth.APICreateUserRequest) (*auth.APICreateUserResponse, error) {
 	return nil, nil
 }
-func (m *mockAuthForExchange) UpdateUserAPI(_ context.Context, _, _ string, _ any) (any, error) {
+func (m *mockAuthForExchange) UpdateUserAPI(_ context.Context, _, _ string, _ auth.APIUpdateUserRequest) (*auth.APIUser, error) {
 	return nil, nil
 }
 func (m *mockAuthForExchange) DeleteUser(_ context.Context, _ string) error              { return nil }
 func (m *mockAuthForExchange) ListUsersAPI(_ context.Context) (any, error)               { return nil, nil }
 func (m *mockAuthForExchange) ChangePasswordAPI(_ context.Context, _, _, _ string) error { return nil }
-func (m *mockAuthForExchange) CreateGroupAPI(_ context.Context, _ string, _ any) (any, error) {
+func (m *mockAuthForExchange) CreateGroupAPI(_ context.Context, _ string, _ auth.APICreateGroupRequest) (*auth.APIGroup, error) {
 	return nil, nil
 }
-func (m *mockAuthForExchange) UpdateGroupAPI(_ context.Context, _, _ string, _ any) (any, error) {
+func (m *mockAuthForExchange) UpdateGroupAPI(_ context.Context, _, _ string, _ auth.APIUpdateGroupRequest) (*auth.APIGroup, error) {
 	return nil, nil
 }
 func (m *mockAuthForExchange) DeleteGroup(_ context.Context, _ string) error        { return nil }
@@ -2597,20 +2604,34 @@ func newFourEyesExecuteExchangeHandler(t *testing.T, store *MockConfigStore) *Ha
 	}
 }
 
+// spyOnAWSExchange installs an executeExchangeFn that counts calls and
+// reports success, so a 4-eyes test asserts that no exchange was submitted.
+// The real executor would fail on missing AWS credentials, so an error alone
+// would not prove the gate held (issue #679).
+func spyOnAWSExchange(h *Handler) *int {
+	calls := 0
+	h.executeExchangeFn = func(context.Context, exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error) {
+		calls++
+		return "exch-must-not-run", &exchange.ExchangeQuoteSummary{PaymentDueUSDStr: "0"}, nil
+	}
+	return &calls
+}
+
 // TestExecuteExchange_FourEyesRefusesDirectExecute pins issue #517: with
 // RequireDifferentApprover on, the direct AWS execute endpoint must refuse
-// before any exchange is attempted. The handler has no exchange client or
-// idempotency store wired, so any code path past the gate would panic.
+// before any exchange is attempted. A spy executor records any exchange call.
 func TestExecuteExchange_FourEyesRefusesDirectExecute(t *testing.T) {
 	ctx := context.Background()
 	store := &MockConfigStore{}
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{RequireDifferentApprover: true}, nil)
 	h := newFourEyesExecuteExchangeHandler(t, store)
+	exchangeCalls := spyOnAWSExchange(h)
 
 	_, err := h.executeExchange(ctx, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer exchange-token"},
 		Body:    fourEyesExchangeBody,
 	})
+	assert.Equal(t, 0, *exchangeCalls, "no exchange may be submitted while 4-eyes is on")
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a ClientError, got: %v", err)
@@ -2625,11 +2646,13 @@ func TestExecuteExchange_FourEyesPolicyLookupErrorFailsClosed(t *testing.T) {
 	store := &MockConfigStore{}
 	store.On("GetGlobalConfig", mock.Anything).Return(nil, errors.New("db down"))
 	h := newFourEyesExecuteExchangeHandler(t, store)
+	exchangeCalls := spyOnAWSExchange(h)
 
 	_, err := h.executeExchange(ctx, &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{"authorization": "Bearer exchange-token"},
 		Body:    fourEyesExchangeBody,
 	})
+	assert.Equal(t, 0, *exchangeCalls, "an unreadable 4-eyes policy must not let the exchange run")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "4-eyes policy check")
 	_, isClient := IsClientError(err)
@@ -2807,4 +2830,102 @@ func TestMonthlyCostFromConvertibleRI_NonPositiveDurationErrors(t *testing.T) {
 	cost, err := monthlyCostFromConvertibleRI(ec2svc.ConvertibleRI{FixedPrice: 8760, Duration: 31536000})
 	require.NoError(t, err)
 	assert.InDelta(t, 730.0, cost, 1e-6)
+}
+
+// A convertible RI whose FixedPrice, UsagePrice and RecurringHourlyAmount are
+// all zero has no pricing data; it is not free. MonthlyCost=0 would make
+// reshape's pricing gate pass every alternative and score the RI as neutral,
+// so it must be excluded (issue #1188). A No Upfront RI (FixedPrice 0 with an
+// hourly charge) is real pricing and must be kept.
+func TestConvertToExchangeTypes_ExcludesRIWithoutPricing(t *testing.T) {
+	const oneYear = 31536000
+	instances := []ec2svc.ConvertibleRI{
+		{ReservedInstanceID: "ri-unpriced", InstanceType: "m5.large", InstanceCount: 1, Duration: oneYear},
+		{ReservedInstanceID: "ri-no-upfront", InstanceType: "m5.large", InstanceCount: 1, RecurringHourlyAmount: 0.05, Duration: oneYear},
+		{ReservedInstanceID: "ri-usage-only", InstanceType: "m5.large", InstanceCount: 1, UsagePrice: 0.04, Duration: oneYear},
+		{ReservedInstanceID: "ri-all-upfront", InstanceType: "m5.large", InstanceCount: 1, FixedPrice: 876, Duration: oneYear},
+		{ReservedInstanceID: "ri-negative", InstanceType: "c5.large", InstanceCount: 1, FixedPrice: -876, Duration: oneYear},
+	}
+
+	riInfos, _, excluded := convertToExchangeTypes(instances, nil)
+
+	require.Len(t, riInfos, 3)
+	want := map[string]float64{"ri-no-upfront": 0.05 * 730, "ri-usage-only": 0.04 * 730, "ri-all-upfront": 876.0 / 8760 * 730}
+	for _, ri := range riInfos {
+		cost, ok := want[ri.ID]
+		require.True(t, ok, "unexpected RI %s kept", ri.ID)
+		assert.InDelta(t, cost, ri.MonthlyCost, 1e-6, ri.ID)
+		assert.Greater(t, ri.MonthlyCost, 0.0, ri.ID)
+	}
+	require.Len(t, excluded, 2)
+	assert.Equal(t, "ri-unpriced", excluded[0].RIID)
+	assert.Equal(t, "ri-negative", excluded[1].RIID)
+	for _, e := range excluded {
+		assert.Contains(t, e.Reason, "no pricing")
+		assert.NotContains(t, e.Reason, "term length")
+	}
+}
+
+// End to end through the reshape handler: an unpriced RI is reported in
+// excluded_ris with the pricing reason and gets no recommendation, while a
+// priced RI in the same account still does.
+func TestGetReshapeRecommendations_ReportsUnpricedRIs(t *testing.T) {
+	mockStore := &MockConfigStore{}
+	mockStore.On("ListStoredRecommendations", mock.Anything, mock.Anything).
+		Return([]config.RecommendationRecord(nil), nil)
+	h := &Handler{
+		config: mockStore,
+		auth:   &mockAuthForExchange{},
+		reshapeEC2Factory: func(_ aws.Config) reshapeEC2Client {
+			return &fakeReshapeEC2Stub{instances: []ec2svc.ConvertibleRI{
+				{ReservedInstanceID: "ri-unpriced", InstanceType: "m5.xlarge", InstanceCount: 1, Duration: 31536000, CurrencyCode: "USD"},
+				{ReservedInstanceID: "ri-ok", InstanceType: "m5.xlarge", InstanceCount: 1, FixedPrice: 8760, Duration: 31536000, CurrencyCode: "USD"},
+			}}
+		},
+		reshapeRecsFactory: func(_ aws.Config) reshapeRecsClient {
+			return &fakeReshapeRecsStub{utilization: []recommendations.RIUtilization{
+				{ReservedInstanceID: "ri-unpriced", UtilizationPercent: 50.0},
+				{ReservedInstanceID: "ri-ok", UtilizationPercent: 50.0},
+			}}
+		},
+		reshapeAccountResolver: func(_ context.Context) (string, error) { return "", nil },
+	}
+	h.awsCfgOnce.Do(func() { h.awsCfg = aws.Config{Region: "us-east-1"} })
+
+	req := &events.LambdaFunctionURLRequest{
+		Headers:               map[string]string{"authorization": "Bearer test-token"},
+		QueryStringParameters: map[string]string{"lookback_days": "30", "threshold": "95.0"},
+	}
+	out, err := h.getReshapeRecommendations(context.Background(), req)
+	require.NoError(t, err)
+	resp, ok := out.(*ReshapeRecommendationsResponse)
+	require.True(t, ok)
+
+	require.Len(t, resp.ExcludedRIs, 1)
+	assert.Equal(t, "ri-unpriced", resp.ExcludedRIs[0].RIID)
+	assert.Contains(t, resp.ExcludedRIs[0].Reason, "no pricing")
+	require.NotEmpty(t, resp.Recommendations)
+	for _, r := range resp.Recommendations {
+		assert.NotEqual(t, "ri-unpriced", r.SourceRIID)
+	}
+}
+
+func TestMonthlyCostFromConvertibleRI_NoPositivePriceErrors(t *testing.T) {
+	for name, ri := range map[string]ec2svc.ConvertibleRI{
+		"all zero":     {ReservedInstanceID: "ri-x", Duration: 31536000},
+		"negative sum": {ReservedInstanceID: "ri-x", FixedPrice: -876, Duration: 31536000},
+		"NaN":          {ReservedInstanceID: "ri-x", UsagePrice: math.NaN(), Duration: 31536000},
+	} {
+		cost, err := monthlyCostFromConvertibleRI(ri)
+		require.Error(t, err, name)
+		assert.Zero(t, cost, name)
+		assert.Contains(t, err.Error(), "ri-x", name)
+		assert.ErrorIs(t, err, ricost.ErrNoPricing, name)
+		assert.NotErrorIs(t, err, ricost.ErrNonPositiveDuration, name)
+	}
+	_, err := monthlyCostFromConvertibleRI(ec2svc.ConvertibleRI{ReservedInstanceID: "ri-y"})
+	assert.ErrorIs(t, err, ricost.ErrNonPositiveDuration, "duration is checked before pricing")
+	cost, err := monthlyCostFromConvertibleRI(ec2svc.ConvertibleRI{RecurringHourlyAmount: 0.05, Duration: 31536000})
+	require.NoError(t, err)
+	assert.InDelta(t, 36.5, cost, 1e-6)
 }

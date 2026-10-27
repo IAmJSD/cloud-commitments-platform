@@ -123,9 +123,9 @@ func TestGetRIUtilization_ScopedUserDoesNotSeeLinkedMemberRIs(t *testing.T) {
 	assert.Equal(t, 1, ec2.calls, "the deployment account's own RIs are listed exactly once")
 }
 
-// The scope may name the account instead of listing its UUID; the filter
-// applies the same way.
-func TestGetRIUtilization_ScopeByAccountNameStillFiltersMembers(t *testing.T) {
+// A scope entry that names the account instead of listing its UUID is not
+// bound to that account, so it reaches none of its rows (#1034).
+func TestGetRIUtilization_ScopeByAccountNameReachesNothing(t *testing.T) {
 	ctx := context.Background()
 	auth := new(MockAuthService)
 	auth.On("ValidateSession", ctx, permsScopedToken).Return(&Session{UserID: permsScopedUserID}, nil)
@@ -138,7 +138,7 @@ func TestGetRIUtilization_ScopeByAccountNameStillFiltersMembers(t *testing.T) {
 	resp, err := h.getRIUtilization(ctx, scopedReq())
 	require.NoError(t, err)
 
-	assert.ElementsMatch(t, []string{utilOwnRI, utilStaleOwn}, utilIDs(t, resp))
+	assert.Empty(t, utilIDs(t, resp))
 }
 
 // Unrestricted users keep every row and trigger no EC2 listing.

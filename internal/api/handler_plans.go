@@ -151,6 +151,19 @@ func mapCreatePlanStorageError(err error, notFoundMsg, genericMsg, logFmt string
 	return NewClientError(http.StatusInternalServerError, genericMsg)
 }
 
+// decodePlanRequest parses a create or update body and refuses an out-of-range
+// target_coverage before any store access.
+func decodePlanRequest(body string) (*PlanRequest, error) {
+	var req PlanRequest
+	if err := json.Unmarshal([]byte(body), &req); err != nil {
+		return nil, NewClientError(400, "invalid request body")
+	}
+	if err := req.validateTargetCoverage(); err != nil {
+		return nil, err
+	}
+	return &req, nil
+}
+
 func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunctionURLRequest) (any, error) {
 	// Require create:plans permission
 	session, err := h.requirePermission(ctx, httpReq, "create", "plans")
@@ -158,9 +171,9 @@ func (h *Handler) createPlan(ctx context.Context, httpReq *events.LambdaFunction
 		return nil, err
 	}
 
-	var req PlanRequest
-	if err := json.Unmarshal([]byte(httpReq.Body), &req); err != nil {
-		return nil, NewClientError(400, "invalid request body")
+	req, err := decodePlanRequest(httpReq.Body)
+	if err != nil {
+		return nil, err
 	}
 
 	// target_accounts is required: a plan must be tied to at least one
@@ -293,10 +306,9 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 		return nil, err
 	}
 
-	var req PlanRequest
-	err = json.Unmarshal([]byte(httpReq.Body), &req)
+	req, err := decodePlanRequest(httpReq.Body)
 	if err != nil {
-		return nil, NewClientError(400, "invalid request body")
+		return nil, err
 	}
 	var capField struct {
 		MaxStepCommitment json.RawMessage `json:"max_step_commitment"`
@@ -311,7 +323,7 @@ func (h *Handler) updatePlan(ctx context.Context, httpReq *events.LambdaFunction
 		return nil, err
 	}
 
-	plan, err := mergeUpdatedPlan(existingPlan, &req, planID, capField.MaxStepCommitment != nil)
+	plan, err := mergeUpdatedPlan(existingPlan, req, planID, capField.MaxStepCommitment != nil)
 	if err != nil {
 		return nil, err
 	}

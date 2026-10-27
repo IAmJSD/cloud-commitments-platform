@@ -30,6 +30,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/ctxutil"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/ricost"
 )
 
 // reshapeEC2Client is the narrow slice of the EC2 client that
@@ -260,6 +261,18 @@ func (h *Handler) buildAzureExchangeClient(ctx context.Context, subscriptionID s
 	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
 	if err != nil {
 		return nil, fmt.Errorf("azure: look up account for subscription %q: %w", subscriptionID, err)
+	}
+	return h.azureExchangeClientForAccount(ctx, subscriptionID, account)
+}
+
+// azureExchangeClientForAccount is buildAzureExchangeClient for a caller that
+// has already resolved the CloudAccount registered for subscriptionID (nil
+// when none is), so the same row is not fetched again (issue #311). The
+// injected factory still wins, and a nil account still yields the graceful
+// (nil, nil) empty state.
+func (h *Handler) azureExchangeClientForAccount(ctx context.Context, subscriptionID string, account *config.CloudAccount) (azureExchangeClient, error) {
+	if h.azureExchangeFactory != nil {
+		return h.azureExchangeFactory(subscriptionID), nil
 	}
 	if account == nil {
 		// No Azure account registered for this subscription.
@@ -852,14 +865,44 @@ func (h *Handler) requireAzureSubscriptionScope(ctx context.Context, session *Se
 	if allowed.AllowsAll() {
 		return nil
 	}
-	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
+	account, err := h.lookupAzureAccount(ctx, subscriptionID)
 	if err != nil {
-		return fmt.Errorf("failed to resolve cloud account scope: %w", err)
+		return err
 	}
+	return azureAccountInScope(allowed, account)
+}
+
+// requireAzureAccountScope is requireAzureSubscriptionScope for a caller
+// that has already resolved the subscription's CloudAccount (nil when none
+// is registered), with the same errNotFound denials.
+func (h *Handler) requireAzureAccountScope(ctx context.Context, session *Session, account *config.CloudAccount) error {
+	allowed, err := h.getAccountScope(ctx, session)
+	if err != nil {
+		return fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	if allowed.AllowsAll() {
+		return nil
+	}
+	return azureAccountInScope(allowed, account)
+}
+
+// azureAccountInScope refuses, with errNotFound, an unregistered account and
+// one outside the session's scope alike, so the two are indistinguishable.
+func azureAccountInScope(allowed auth.AccountScope, account *config.CloudAccount) error {
 	if account == nil || !allowed.Allows(account.ID, account.Name) {
 		return errNotFound
 	}
 	return nil
+}
+
+// lookupAzureAccount returns the CloudAccount registered for subscriptionID,
+// or nil when none is.
+func (h *Handler) lookupAzureAccount(ctx context.Context, subscriptionID string) (*config.CloudAccount, error) {
+	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve cloud account scope: %w", err)
+	}
+	return account, nil
 }
 
 // requireAzureSourceOwnership refuses any source reservation that is not
@@ -1034,6 +1077,14 @@ const azureMaxPurchaseAmountCurrency = "USD"
 //     known-owned, so unknownRegionConstraint means only "owned, but Azure
 //     reported no region" rather than doubling as "not yours" or "not real".
 func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *Session, body AzureExecuteExchangeRequestBody, maxRat *big.Rat) (azureExchangeClient, []azurecompute.ExchangeableReservation, string, error) {
+	// The subscription's CloudAccount is resolved once and that one row
+	// feeds the scope check, the client's credentials and the constraint
+	// AccountIDs (issue #311), so the three cannot see different rows.
+	account, err := h.lookupAzureAccount(ctx, body.SubscriptionID)
+	if err != nil {
+		return nil, nil, "", err
+	}
+
 	// Scope check MUST precede building the client (mirrors
 	// getAzureCompatibleOfferings): otherwise an unregistered subscription
 	// (distinguishable 404: "no Azure account registered...") and a
@@ -1041,11 +1092,11 @@ func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *
 	// enumeration signal to a scoped caller about which subscriptions exist,
 	// and credentials for an out-of-scope account could be resolved before
 	// the denial.
-	if scopeErr := h.requireAzureSubscriptionScope(ctx, session, body.SubscriptionID); scopeErr != nil {
+	if scopeErr := h.requireAzureAccountScope(ctx, session, account); scopeErr != nil {
 		return nil, nil, "", scopeErr
 	}
 
-	client, err := h.buildAzureExchangeClient(ctx, body.SubscriptionID)
+	client, err := h.azureExchangeClientForAccount(ctx, body.SubscriptionID, account)
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("failed to build Azure exchange client: %w", err)
 	}
@@ -1062,32 +1113,23 @@ func (h *Handler) authorizeAzureExchangeExecution(ctx context.Context, session *
 		return nil, nil, "", ownErr
 	}
 
-	accountID, err := h.resolveAzureExchangeAccountID(ctx, body.SubscriptionID)
-	if err != nil {
-		return nil, nil, "", err
-	}
-
+	accountID := azureExchangeAccountID(account)
 	if err := h.checkAzureExecuteConstraints(ctx, session, body, accountID, maxRat, exchangeRegions(body.Targets, body.Sources, owned)); err != nil {
 		return nil, nil, "", err
 	}
 	return client, toAzureExchangeSources(body.Sources, owned), accountID, nil
 }
 
-// resolveAzureExchangeAccountID looks up the CloudAccount registered for
-// subscriptionID and returns its ID, or unattributedAccountConstraint when
-// no account is registered (so an AccountIDs-constrained permission still
-// fails closed against an unattributed request). Extracted from
-// authorizeAzureExchangeExecution to keep that function under the gocyclo
-// limit.
-func (h *Handler) resolveAzureExchangeAccountID(ctx context.Context, subscriptionID string) (string, error) {
-	account, err := h.config.GetCloudAccountByExternalID(ctx, "azure", subscriptionID)
-	if err != nil {
-		return "", fmt.Errorf("failed to resolve cloud account scope: %w", err)
-	}
+// azureExchangeAccountID returns the resolved CloudAccount's ID, or
+// unattributedAccountConstraint when no account is registered (so an
+// AccountIDs-constrained permission still fails closed against an
+// unattributed request). Only the injected azureExchangeFactory path gets
+// this far with a nil account: production refuses it with a 404 earlier.
+func azureExchangeAccountID(account *config.CloudAccount) string {
 	if account != nil {
-		return account.ID, nil
+		return account.ID
 	}
-	return unattributedAccountConstraint, nil
+	return unattributedAccountConstraint
 }
 
 // checkAzureExecuteConstraints enforces the execute:ri-exchange permission
@@ -1315,11 +1357,15 @@ func (h *Handler) executeAzureExchange(ctx context.Context, req *events.LambdaFu
 
 // mapAzureExchangeError converts an error from an Azure RI exchange
 // client-layer call to a ClientError with the appropriate HTTP status.
-// Azure 4xx client faults (via isAzureClientError) produce a 400 with the
-// Azure error message preserved; any other error produces a 500 using the
-// opMsg fallback -- the same contract mapAWSExchangeError applies to the
-// AWS exchange endpoints.
+// A cloud-commitments-go exchange refusal (exchangeRefusalError) produces a
+// 422 with its message; Azure 4xx client faults (via isAzureClientError)
+// produce a 400 with the Azure error message preserved; any other error
+// produces a 500 using the opMsg fallback -- the same contract
+// mapAWSExchangeError applies to the AWS exchange endpoints.
 func mapAzureExchangeError(opMsg string, err error) error {
+	if refusal := exchangeRefusalError(err); refusal != nil {
+		return refusal
+	}
 	if isAzureClientError(err) {
 		return NewClientError(400, err.Error())
 	}
@@ -1366,8 +1412,7 @@ func (h *Handler) reshapeCloudAccountInScope(ctx context.Context, session *Sessi
 	if aErr != nil {
 		return false, fmt.Errorf("failed to resolve cloud account scope: %w", aErr)
 	}
-	nameByID := h.resolveAccountNamesByID(ctx)
-	return allowed.Allows(cloudAccountID, nameByID[cloudAccountID]), nil
+	return allowed.Allows(cloudAccountID, ""), nil
 }
 
 // requireReshapeAccountScope enforces the session's allowed_accounts scope for
@@ -1602,25 +1647,21 @@ func parseThresholdParam(params map[string]string) (float64, error) {
 	return f, nil
 }
 
-// monthlyCostFromConvertibleRI computes the per-instance per-month
-// effective cost from an RI's pricing fields, matching the same
-// formula effectiveMonthlyCost uses for offerings:
-//
-//	monthly = (FixedPrice / hours_per_term + UsagePrice + recurring_hourly) × 730
-//
-// 730 is AWS's canonical hours-per-month constant. Returns an error when
-// Duration is non-positive: a zero cost would read as a free RI and skip
-// reshape's dollar-units pricing gate, so callers must exclude the RI.
-//
-// Used to populate exchange.RIInfo.MonthlyCost so the cross-family
-// dollar-units pre-filter can compare against per-target offering
-// costs computed with the same formula.
+// monthlyCostFromConvertibleRI delegates to ricost.MonthlyCostFromConvertibleRI,
+// the single implementation of the convertible RI monthly cost formula shared
+// with internal/server. Its error wraps ricost.ErrNonPositiveDuration or
+// ricost.ErrNoPricing, and callers must exclude the RI.
 func monthlyCostFromConvertibleRI(ri ec2svc.ConvertibleRI) (float64, error) {
-	if ri.Duration <= 0 {
-		return 0, fmt.Errorf("convertible RI %s has non-positive duration %d: monthly cost is not computable", ri.ReservedInstanceID, ri.Duration)
+	return ricost.MonthlyCostFromConvertibleRI(ri)
+}
+
+// excludedRIReason is the user-facing reason for an RI left out of reshape
+// analysis because monthlyCostFromConvertibleRI returned err.
+func excludedRIReason(err error) string {
+	if errors.Is(err, ricost.ErrNoPricing) {
+		return "AWS returned no pricing (fixed, usage and recurring charges total zero or less), so its monthly cost cannot be computed"
 	}
-	hoursPerTerm := float64(ri.Duration) / 3600
-	return ((ri.FixedPrice / hoursPerTerm) + ri.UsagePrice + ri.RecurringHourlyAmount) * 730, nil
+	return "AWS returned no term length (duration), so its monthly cost cannot be computed"
 }
 
 // convertToExchangeTypes converts provider-specific types to the exchange package types.
@@ -1634,7 +1675,7 @@ func convertToExchangeTypes(instances []ec2svc.ConvertibleRI, utilData []recomme
 		monthlyCost, err := monthlyCostFromConvertibleRI(inst)
 		if err != nil {
 			logging.Warnf("convertToExchangeTypes: excluding RI from reshape: %v", err)
-			excluded = append(excluded, ExcludedRI{RIID: inst.ReservedInstanceID, Reason: "AWS returned no term length (duration), so its monthly cost cannot be computed"})
+			excluded = append(excluded, ExcludedRI{RIID: inst.ReservedInstanceID, Reason: excludedRIReason(err)})
 			continue
 		}
 		riInfos = append(riInfos, exchange.RIInfo{
@@ -1843,6 +1884,29 @@ func validateExchangeRIIDs(riIDs []string) error {
 	return nil
 }
 
+// validateExchangeTargetsBody holds the source and target checks quote and
+// execute share, so the quote cannot accept a request the library then fails
+// with a 500. A whitespace-only target_offering_id counts as absent.
+func validateExchangeTargetsBody(riIDs []string, targets []ExchangeTargetBody, offeringID string, count int32) error {
+	if err := validateExchangeRIIDs(riIDs); err != nil {
+		return err
+	}
+	legacy := strings.TrimSpace(offeringID) != ""
+	if len(targets) == 0 && !legacy {
+		return NewClientError(400, "either targets[] or target_offering_id is required")
+	}
+	if err := validateTargets(targets); err != nil {
+		return err
+	}
+	// The legacy singleton's count, which validateTargets does not see.
+	// Refuse before the submit claim rather than inside ExecuteExchange,
+	// after it.
+	if len(targets) == 0 && count < 1 {
+		return NewClientError(400, fmt.Sprintf("target_count must be >= 1, got %d", count))
+	}
+	return nil
+}
+
 // getExchangeQuote gets a quote for an RI exchange.
 func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {
 	session, permErr := h.requirePermission(ctx, req, "view", "purchases")
@@ -1859,13 +1923,7 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 	if err := json.Unmarshal([]byte(req.Body), &body); err != nil {
 		return nil, NewClientError(400, "invalid request body")
 	}
-	if len(body.RIIDs) == 0 {
-		return nil, NewClientError(400, "ri_ids is required")
-	}
-	if len(body.Targets) == 0 && body.TargetOfferingID == "" {
-		return nil, NewClientError(400, "either targets[] or target_offering_id is required")
-	}
-	if err := validateTargets(body.Targets); err != nil {
+	if err := validateExchangeTargetsBody(body.RIIDs, body.Targets, body.TargetOfferingID, body.TargetCount); err != nil {
 		return nil, err
 	}
 
@@ -1890,12 +1948,9 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 		return nil, mapAWSExchangeError("exchange quote failed", err)
 	}
 
-	// Echo the region the SDK chain resolved back to the caller (issue
-	// #238): the frontend modal has no other way to learn it, and
-	// execute rejects a missing region outright since exchanges are
-	// financially irreversible. Carrying the same value the quote used
-	// keeps quote and execute pinned to one region instead of letting
-	// execute re-resolve (and potentially land on a different one).
+	// Return the region the quote was priced in. Execute requires a region,
+	// and callers must send this same one so the exchange runs where it was
+	// priced.
 	return ExchangeQuoteResponse{ExchangeQuoteSummary: quote, Region: region}, nil
 }
 
@@ -1905,20 +1960,8 @@ func (h *Handler) getExchangeQuote(ctx context.Context, req *events.LambdaFuncti
 // cyclomatic-complexity threshold; every branch here becomes a
 // separate test case so the logic stays inspectable.
 func validateExecuteExchangeBody(body ExchangeExecuteRequestBody) error {
-	if err := validateExchangeRIIDs(body.RIIDs); err != nil {
+	if err := validateExchangeTargetsBody(body.RIIDs, body.Targets, body.TargetOfferingID, body.TargetCount); err != nil {
 		return err
-	}
-	if len(body.Targets) == 0 && body.TargetOfferingID == "" {
-		return NewClientError(400, "either targets[] or target_offering_id is required")
-	}
-	if err := validateTargets(body.Targets); err != nil {
-		return err
-	}
-	// The legacy singleton's count, which validateTargets above does not see.
-	// Same reasoning as the targets[] count: refuse before the submit claim
-	// rather than inside ExecuteExchange, after it.
-	if len(body.Targets) == 0 && body.TargetCount < 1 {
-		return NewClientError(400, fmt.Sprintf("target_count must be >= 1, got %d", body.TargetCount))
 	}
 	if body.MaxPaymentDueUSD == "" {
 		return NewClientError(400, "max_payment_due_usd is required as a safety guardrail")
@@ -2025,10 +2068,14 @@ var awsExchangeClientFaultCodes = map[string]bool{
 
 // mapAWSExchangeError converts an AWS SDK error from an RI exchange
 // operation to a ClientError with the appropriate HTTP status code.
-// AWS 4xx client-fault errors produce a 400 with the original AWS
-// message preserved. Any other error produces a 500 (generic server
-// failure) using the provided opMsg fallback.
+// A cloud-commitments-go exchange refusal (exchangeRefusalError) produces
+// a 422 with its message. AWS 4xx client-fault errors produce a 400 with
+// the original AWS message preserved. Any other error produces a 500
+// (generic server failure) using the provided opMsg fallback.
 func mapAWSExchangeError(opMsg string, err error) error {
+	if refusal := exchangeRefusalError(err); refusal != nil {
+		return refusal
+	}
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) && awsExchangeClientFaultCodes[apiErr.ErrorCode()] {
 		return NewClientError(400, apiErr.ErrorMessage())
@@ -2156,11 +2203,9 @@ type ExchangeExecuteResponse struct {
 	ExchangeID string                         `json:"exchange_id"`
 }
 
-// ExchangeQuoteResponse wraps the library's quote summary with the
-// region the SDK chain resolved (issue #238). The embedded pointer
-// promotes the summary's own fields to the JSON top level, matching
-// the shape callers got before this type existed; Region is the only
-// addition.
+// ExchangeQuoteResponse is the library's quote summary plus the region
+// the quote was priced in, which callers must send back on execute. The embedded
+// pointer promotes the summary's fields to the JSON top level.
 type ExchangeQuoteResponse struct {
 	*exchange.ExchangeQuoteSummary
 	Region string `json:"Region"`
@@ -2205,6 +2250,9 @@ func (h *Handler) updateRIExchangeConfig(ctx context.Context, req *events.Lambda
 	if err := h.requireGlobalConfigScope(ctx, session); err != nil {
 		return nil, err
 	}
+	// Resolved before the transaction: the closure below runs while it holds a
+	// pooled connection and must not need a second one (issue #1517).
+	riExchangeGrant := h.resolveGrant(ctx, req, auth.ResourceRIExchange)
 
 	// Route through the serialized read-modify-write so this partial update
 	// (only the ri_exchange_* columns) shares the advisory lock with other
@@ -2229,7 +2277,7 @@ func (h *Handler) updateRIExchangeConfig(ctx context.Context, req *events.Lambda
 		existing.RIExchangeMaxDailyUSD = body.MaxPaymentDailyUSD
 		existing.RIExchangeLookbackDays = body.LookbackDays
 
-		return h.requireRIExchangeAutoModeGrant(ctx, req, before, riExchangeArmStateOf(existing))
+		return requireRIExchangeAutoModeGrant(before, riExchangeArmStateOf(existing), riExchangeGrant)
 	}); err != nil {
 		// A refused write is not a failed save. Surface the gate's 403 (and any
 		// other ClientError the closure raises) unwrapped, so the response says
@@ -2276,8 +2324,8 @@ const riExchangeHistoryLimit = 500
 //
 // RI exchange records carry the 12-digit AWS account id from STS, so it is
 // resolved to its single registered AWS account and the scope is matched by
-// that account's UUID or name. An unregistered or ambiguous id matches only a
-// literal entry in the allow-list. A lookup failure errors out.
+// that account's UUID. An unregistered or ambiguous id matches only a literal
+// entry in the allow-list. A lookup failure errors out.
 func (h *Handler) loadRIExchangeHistory(ctx context.Context, session *Session) ([]config.RIExchangeRecord, error) {
 	allowed, err := h.getAccountScope(ctx, session)
 	if err != nil {
@@ -2418,10 +2466,10 @@ func (h *Handler) approveRIExchangeViaToken(ctx context.Context, req *events.Lam
 
 	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "processing", resolveCreatorUserID(session))
 	if err != nil {
-		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
+		return nil, riExchangeTransitionError(err, riExchangeApproveConflictMsg)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was canceled by a newer analysis run")
+		return nil, NewClientError(409, riExchangeApproveConflictMsg)
 	}
 
 	result, execErr := h.executeApprovedExchange(ctx, id, record)
@@ -2481,10 +2529,10 @@ func (h *Handler) approveRIExchangeViaSession(ctx context.Context, req *events.L
 	// Session-authed approval: stamp the session user as the actor.
 	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", "processing", resolveCreatorUserID(session))
 	if err != nil {
-		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
+		return nil, riExchangeTransitionError(err, riExchangeApproveConflictMsg)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was canceled by a newer analysis run")
+		return nil, NewClientError(409, riExchangeApproveConflictMsg)
 	}
 
 	result, execErr := h.executeApprovedExchange(ctx, id, record)
@@ -2496,10 +2544,17 @@ func (h *Handler) approveRIExchangeViaSession(ctx context.Context, req *events.L
 	return result, execErr
 }
 
-// fetchAndAuthorizeRIExchange looks up the pending exchange record by id, checks
-// that it is in "pending" state, and then verifies that session is authorized to
-// approve it. Extracted from approveRIExchangeViaSession to keep that function
-// under the cyclomatic-complexity limit.
+// fetchAndAuthorizeRIExchange looks up the exchange record by id, verifies that
+// session is authorized to approve it, and then checks that it is in "pending"
+// state. Extracted from approveRIExchangeViaSession to keep that function under
+// the cyclomatic-complexity limit.
+//
+// Ownership is checked before existence and status (issue #1428): an
+// approve-own session gets the same 403 for a missing id and for another
+// user's exchange, pending or not, so it cannot learn which ids exist or read
+// their status. The 403 also falls through to the email token like any other
+// ownership refusal. Approve-any sessions and the admin key may approve any
+// exchange, so they keep the 404/409 distinction.
 func (h *Handler) fetchAndAuthorizeRIExchange(ctx context.Context, session *Session, id string) (*config.RIExchangeRecord, error) {
 	if err := validateUUID(id); err != nil {
 		return nil, err
@@ -2515,20 +2570,18 @@ func (h *Handler) fetchAndAuthorizeRIExchange(ctx context.Context, session *Sess
 		return nil, errNotFound
 	}
 
-	record, err := h.config.GetRIExchangeRecord(ctx, id)
+	record, err := h.getRIExchangeRecord(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to look up exchange record: %w", err)
+		return nil, err
+	}
+	if err := h.authorizeSessionApproveRIExchange(ctx, session, record); err != nil {
+		return nil, err
 	}
 	if record == nil {
 		return nil, NewClientError(404, "exchange record not found")
 	}
-
 	if record.Status != "pending" {
 		return nil, NewClientError(409, fmt.Sprintf("exchange %s cannot be approved (status=%s)", id, record.Status))
-	}
-
-	if err := h.authorizeSessionApproveRIExchange(ctx, session, record); err != nil {
-		return nil, err
 	}
 
 	return record, nil
@@ -2571,6 +2624,10 @@ func (h *Handler) sessionHasApproveRight(ctx context.Context, session *Session) 
 // The RI exchange shares ResourcePurchases because approval is conceptually
 // "approving a purchase action on a different resource type" per the issue spec,
 // which prefers reusing the existing verbs to keep the matrix small.
+//
+// record may be nil (no such exchange). An approve-own session is refused for
+// it exactly as for another user's record (issue #1428); the admin key and
+// approve-any pass, and the caller answers 404.
 func (h *Handler) authorizeSessionApproveRIExchange(ctx context.Context, session *Session, record *config.RIExchangeRecord) error {
 	// Stateless admin API key: full access, no user row. Administrators-group
 	// users pass via the approve-any check below.
@@ -2597,8 +2654,9 @@ func (h *Handler) authorizeSessionApproveRIExchange(ctx context.Context, session
 		return NewClientError(403, "permission denied: requires approve-any or approve-own on purchases")
 	}
 
-	// approve-own: only allow if the session user created this exchange.
-	if record.CreatedByUserID == nil || *record.CreatedByUserID != session.UserID {
+	// approve-own: only allow if the session user created this exchange. A
+	// missing record answers the same, so the refusal is no existence oracle.
+	if record == nil || record.CreatedByUserID == nil || *record.CreatedByUserID != session.UserID {
 		return NewClientError(403, "permission denied: cannot approve another user's pending exchange")
 	}
 
@@ -2682,6 +2740,22 @@ func (h *Handler) requireDifferentRIExchangeApprover(ctx context.Context, sessio
 	return NewClientError(500, "4-eyes approval mode is enabled but no session could be resolved; sign in before approving")
 }
 
+// getRIExchangeRecord loads an exchange record for the approve and reject
+// routes. A missing record is (nil, nil) whether the store reports it as a
+// nil record or as a wrapped config.ErrNotFound (PostgresStore), so callers
+// answer it as a client error and not a 500 (issue #601). Any other store
+// error stays a server error.
+func (h *Handler) getRIExchangeRecord(ctx context.Context, id string) (*config.RIExchangeRecord, error) {
+	record, err := h.config.GetRIExchangeRecord(ctx, id)
+	if errors.Is(err, config.ErrNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to look up exchange record: %w", err)
+	}
+	return record, nil
+}
+
 // validateExchangeApproval validates ID, token, and record state for an exchange approval.
 func (h *Handler) validateExchangeApproval(ctx context.Context, id, token string) (*config.RIExchangeRecord, error) {
 	if err := validateUUID(id); err != nil {
@@ -2691,27 +2765,69 @@ func (h *Handler) validateExchangeApproval(ctx context.Context, id, token string
 		return nil, NewClientError(400, "approval token is required")
 	}
 
-	record, err := h.config.GetRIExchangeRecord(ctx, id)
+	record, err := h.getRIExchangeRecord(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to look up exchange record: %w", err)
+		return nil, err
 	}
-	if record == nil {
-		return nil, NewClientError(404, "exchange record not found")
+	if err := checkExchangeToken(record, token, "approval"); err != nil {
+		return nil, err
 	}
-
-	if record.ApprovalToken == "" {
-		return nil, NewClientError(403, "this exchange record does not support approval")
-	}
-
-	// record.ApprovalToken is the SHA-256 hex digest stored at rest
-	// (issue #103); hash the supplied token and compare digests in
-	// constant time, matching config.ApprovalTokenMatches everywhere else
-	// in this codebase that validates one of these tokens.
-	if !config.ApprovalTokenMatches(record.ApprovalToken, token) {
-		return nil, NewClientError(403, "invalid approval token")
-	}
-
 	return record, nil
+}
+
+const (
+	riExchangeApproveConflictMsg = "exchange already processed or was canceled by a newer analysis run"
+	riExchangeRejectConflictMsg  = "exchange already processed or was canceled"
+	riExchangeExpiredMsg         = "exchange has expired"
+)
+
+// checkExchangeToken applies the emailed-token status mapping shared with the
+// purchase approve, cancel and revoke links (issue #587): a token that does
+// not match is 403, and a matching token on an exchange past its expires_at
+// is 410. The match is checked first, so only the token holder learns that
+// the exchange expired. kind is "approval" or "rejection" and only shapes the
+// 403 text.
+//
+// A missing record (nil) and a record without a token get the same 403 as a
+// wrong token (issue #601): the token alone authorizes these routes, so they
+// are open to callers with no session, and a distinct answer would tell such
+// a caller which exchange ids exist.
+//
+// record.ApprovalToken is the SHA-256 hex digest stored at rest (issue #103);
+// config.ApprovalTokenMatches hashes the supplied token and compares digests
+// in constant time, as everywhere else that validates one of these tokens,
+// and never matches an empty stored digest.
+func checkExchangeToken(record *config.RIExchangeRecord, token, kind string) error {
+	if record == nil || !config.ApprovalTokenMatches(record.ApprovalToken, token) {
+		return NewClientError(403, "invalid "+kind+" token")
+	}
+	if record.ExpiresAt != nil && time.Now().After(*record.ExpiresAt) {
+		return NewClientError(410, riExchangeExpiredMsg)
+	}
+	return nil
+}
+
+// riExchangeTransitionError maps a lost pending -> X transition: the record
+// expired (410) or another writer moved its status first (409), the same
+// codes as an expired or already-handled purchase email link (issue #587).
+// The expiry pre-check in checkExchangeToken cannot close the window alone:
+// the record can expire, or a concurrent approve or reject can win, between
+// that check and the transition. Anything else stays a server error.
+//
+// handleRequestError does not log ClientErrors, so the 409 and 410 branches
+// log the store's error themselves: it names the exchange and its current
+// status, which the response body does not.
+func riExchangeTransitionError(err error, conflictMsg string) error {
+	switch {
+	case errors.Is(err, config.ErrRIExchangeExpired):
+		logging.Infof("ri-exchange transition lost to expiry: %v", err)
+		return NewClientError(410, riExchangeExpiredMsg)
+	case errors.Is(err, config.ErrRIExchangeNotInExpectedStatus):
+		logging.Infof("ri-exchange transition lost to a concurrent writer: %v", err)
+		return NewClientError(409, conflictMsg)
+	default:
+		return fmt.Errorf("failed to transition exchange status: %w", err)
+	}
 }
 
 // failExchange marks an exchange as failed, logging if the DB write also fails.
@@ -2859,31 +2975,21 @@ func (h *Handler) rejectRIExchange(ctx context.Context, id, token string) (any, 
 		return nil, NewClientError(400, "rejection token is required")
 	}
 
-	record, err := h.config.GetRIExchangeRecord(ctx, id)
+	record, err := h.getRIExchangeRecord(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("failed to look up exchange record: %w", err)
+		return nil, err
 	}
-	if record == nil {
-		return nil, NewClientError(404, "exchange record not found")
-	}
-
-	if record.ApprovalToken == "" {
-		return nil, NewClientError(403, "this exchange record does not support rejection")
-	}
-
-	// See validateExchangeApproval: record.ApprovalToken is a SHA-256 hex
-	// digest (issue #103), not the raw secret.
-	if !config.ApprovalTokenMatches(record.ApprovalToken, token) {
-		return nil, NewClientError(403, "invalid rejection token")
+	if tokenErr := checkExchangeToken(record, token, "rejection"); tokenErr != nil {
+		return nil, tokenErr
 	}
 
 	// Token-based rejection: no session user, so transitioned_by = NULL.
 	transitioned, err := h.config.TransitionRIExchangeStatus(ctx, id, "pending", config.StatusCanceled, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to transition exchange status: %w", err)
+		return nil, riExchangeTransitionError(err, riExchangeRejectConflictMsg)
 	}
 	if transitioned == nil {
-		return nil, NewClientError(409, "exchange already processed, expired, or was canceled")
+		return nil, NewClientError(409, riExchangeRejectConflictMsg)
 	}
 
 	return map[string]string{"status": config.StatusCanceled}, nil

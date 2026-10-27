@@ -136,19 +136,20 @@ func TestAzureSPProber_NoneValid(t *testing.T) {
 }
 
 func TestAzureSPProber_EmptyBenefitsSlice(t *testing.T) {
-	// An API response with an empty benefits slice counts as "valid"
-	// (no invalid flag returned) so the combo is included.
+	// An empty benefits slice confirms nothing, so no combo is recorded as
+	// sold: the probe requires positive confirmation (audit finding A05-012).
 	p := newFakeProber(func(_ armbillingbenefits.SavingsPlanPurchaseValidateRequest) (armbillingbenefits.RPClientValidatePurchaseResponse, error) {
 		return armbillingbenefits.RPClientValidatePurchaseResponse{}, nil
 	})
 
 	got, err := p.ProbeAzure(context.Background(), nil, "USD")
 	require.NoError(t, err)
-	assert.Len(t, got, 6, "empty benefits slice treated as valid")
+	assert.Empty(t, got, "an empty benefits slice must not record a combo as sold")
 }
 
 func TestAzureSPProber_NilValidFlag(t *testing.T) {
-	// A benefit with a nil Valid pointer is not invalid — treated as valid.
+	// A benefit with a nil Valid pointer confirms nothing, so the combo is
+	// not recorded as sold (audit finding A05-012).
 	p := newFakeProber(func(_ armbillingbenefits.SavingsPlanPurchaseValidateRequest) (armbillingbenefits.RPClientValidatePurchaseResponse, error) {
 		return armbillingbenefits.RPClientValidatePurchaseResponse{
 			SavingsPlanValidateResponse: armbillingbenefits.SavingsPlanValidateResponse{
@@ -161,7 +162,31 @@ func TestAzureSPProber_NilValidFlag(t *testing.T) {
 
 	got, err := p.ProbeAzure(context.Background(), nil, "USD")
 	require.NoError(t, err)
-	assert.Len(t, got, 6, "nil Valid flag treated as valid")
+	assert.Empty(t, got, "a nil Valid flag must not record a combo as sold")
+}
+
+func TestAzureSPProber_ConfirmationRule(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name     string
+		benefits []*armbillingbenefits.SavingsPlanValidResponseProperty
+		want     int
+	}{
+		{"nil flag beside a confirmed benefit", []*armbillingbenefits.SavingsPlanValidResponseProperty{nil, {Valid: nil}, {Valid: &yes}}, 6},
+		{"any invalid benefit vetoes", []*armbillingbenefits.SavingsPlanValidResponseProperty{{Valid: &yes}, {Valid: &no}}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newFakeProber(func(armbillingbenefits.SavingsPlanPurchaseValidateRequest) (armbillingbenefits.RPClientValidatePurchaseResponse, error) {
+				return armbillingbenefits.RPClientValidatePurchaseResponse{
+					SavingsPlanValidateResponse: armbillingbenefits.SavingsPlanValidateResponse{Benefits: tc.benefits},
+				}, nil
+			})
+			got, err := p.ProbeAzure(context.Background(), nil, "USD")
+			require.NoError(t, err)
+			assert.Len(t, got, tc.want)
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

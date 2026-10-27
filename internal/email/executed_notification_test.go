@@ -152,3 +152,31 @@ func TestBuildExecutedNotificationSubject_SingleAndMulti(t *testing.T) {
 	multiSubject := buildExecutedNotificationSubject(multi)
 	assert.Equal(t, "[CUDly] Purchase executed (2 commitment(s))", multiSubject)
 }
+
+// A partially_completed run (issue #532) must not read as a full success in
+// the subject or in either body half.
+func TestRenderPurchaseExecutedNotification_Partial(t *testing.T) {
+	data := executedNotificationData()
+	data.PartialPurchase = true
+
+	assert.Equal(t, "[CUDly] Purchase partially executed: ec2 m5.large in us-east-1", buildExecutedNotificationSubject(data))
+
+	text, err := RenderPurchaseExecutedNotificationEmail(data)
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(text, "[CUDly] Purchase partially executed"))
+	assert.Contains(t, text, "Not every commitment in this purchase went through.")
+	assert.Contains(t, text, escapedToken, "the partial run stays revocable")
+
+	html, err := RenderPurchaseExecutedNotificationEmailHTML(data)
+	require.NoError(t, err)
+	assert.Contains(t, html, "Purchase Partially Executed")
+	assert.Contains(t, html, "Not every commitment in this purchase went through.")
+	assert.NotContains(t, html, "were purchased successfully")
+	assert.Contains(t, html, "Revoke this purchase")
+
+	full := executedNotificationData()
+	html, err = RenderPurchaseExecutedNotificationEmailHTML(full)
+	require.NoError(t, err)
+	assert.Contains(t, html, "were purchased successfully")
+	assert.NotContains(t, html, "Not every commitment")
+}

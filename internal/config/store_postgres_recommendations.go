@@ -72,9 +72,16 @@ func (s *PostgresStore) UpsertRecommendations(ctx context.Context, collectedAt t
 		}
 	}
 
+	// last_collected_at only moves forward (issue #111). Two collections can
+	// overlap (cron and a user refresh), and the one that started first can
+	// commit last; an unconditional SET would then move freshness backwards
+	// and make the next read kick another full collection. GREATEST ignores
+	// the NULL of a never-collected row. Under READ COMMITTED a writer that
+	// waited on the row lock re-evaluates GREATEST against the committed
+	// value, so concurrent commits keep the newest timestamp.
 	if _, err := tx.Exec(ctx, `
 		UPDATE recommendations_state
-		   SET last_collected_at       = $1,
+		   SET last_collected_at       = GREATEST(last_collected_at, $1),
 		       last_collection_error   = NULL,
 		       last_collection_partial = NULL
 		 WHERE id = 1
@@ -367,24 +374,35 @@ func (s *PostgresStore) ListStoredRecommendations(ctx context.Context, filter Re
 		if err := rows.Scan(&payload); err != nil {
 			return nil, fmt.Errorf("failed to scan payload: %w", err)
 		}
-		var rec RecommendationRecord
-		if err := json.Unmarshal(payload, &rec); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal payload: %w", err)
+		rec, keep, err := decodeStoredRecommendation(payload, filter)
+		if err != nil {
+			return nil, err
 		}
-		// Apply the in-process percentage floor. Recs where the percentage
-		// cannot be computed (missing on-demand baseline) pass through -- we
-		// only drop a rec when pct is computable AND below the threshold.
-		if filter.MinSavingsPct > 0 {
-			if pct, ok := recEffectiveSavingsPct(&rec); ok && pct < filter.MinSavingsPct {
-				continue
-			}
+		if keep {
+			out = append(out, rec)
 		}
-		out = append(out, rec)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows iteration: %w", err)
 	}
 	return out, nil
+}
+
+// decodeStoredRecommendation unmarshals one stored payload and applies the
+// in-process MinSavingsPct floor. keep is false when the floor drops the rec.
+// Recs where the percentage cannot be computed (missing on-demand baseline)
+// pass through: a rec is only dropped when pct is computable AND below the
+// threshold.
+func decodeStoredRecommendation(payload []byte, filter RecommendationFilter) (rec RecommendationRecord, keep bool, err error) {
+	if err := json.Unmarshal(payload, &rec); err != nil {
+		return RecommendationRecord{}, false, fmt.Errorf("failed to unmarshal payload: %w", err)
+	}
+	if filter.MinSavingsPct > 0 {
+		if pct, ok := recEffectiveSavingsPct(&rec); ok && pct < filter.MinSavingsPct {
+			return rec, false, nil
+		}
+	}
+	return rec, true, nil
 }
 
 // GetRecommendationsFreshness returns the singleton freshness row. The

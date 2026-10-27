@@ -30,7 +30,7 @@ func multiServicePlan() *config.PurchasePlan {
 
 func legacyEdit(service string) *PlanRequest {
 	return &PlanRequest{Name: "renamed", Provider: "aws", Service: service, Term: 3, Payment: "partial-upfront",
-		TargetCoverage: 90, RampSchedule: "immediate", NotificationDaysBefore: 3, Enabled: true}
+		TargetCoverage: ptr(90), RampSchedule: "immediate", NotificationDaysBefore: 3, Enabled: true}
 }
 
 func TestMergeUpdatedPlan_KeepsOtherServicesOnMultiServicePlan(t *testing.T) {

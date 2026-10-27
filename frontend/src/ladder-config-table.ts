@@ -23,6 +23,9 @@ export function ladderAccountLabel(config: LadderConfig, accounts: readonly Acco
   return account ? `${account.name} (${account.external_id})` : config.cloud_account_id;
 }
 
+/** Column count of the table below, so its loading skeleton matches (#186). */
+export const LADDER_CONFIG_TABLE_COLUMNS = 8;
+
 export function renderLadderConfigTable(container: HTMLElement, configs: readonly LadderConfig[], options: LadderConfigTableOptions): void {
   if (configs.length === 0) {
     container.innerHTML = '<p class="settings-help">No per-account configurations yet. Click <strong>Add Account Config</strong> to create one.</p>';

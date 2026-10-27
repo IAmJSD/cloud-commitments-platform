@@ -115,15 +115,6 @@ type HistoryDataPoint struct {
 	CumulativeSavings float64            `json:"cumulative_savings"`
 }
 
-// HistorySummaryAnalytics contains aggregated statistics for analytics.
-type HistorySummaryAnalytics struct {
-	TotalPeriodSavings      float64 `json:"total_period_savings"`
-	TotalUpfrontSpent       float64 `json:"total_upfront_spent"`
-	PurchaseCount           int     `json:"purchase_count"`
-	AverageSavingsPerPeriod float64 `json:"average_savings_per_period"`
-	PeakSavings             float64 `json:"peak_savings"`
-}
-
 // BreakdownValue represents savings breakdown by dimension.
 type BreakdownValue struct {
 	TotalSavings  float64  `json:"total_savings"`
@@ -145,7 +136,9 @@ type BreakdownValue struct {
 // ApproveExecution, ApproveAndExecute and RunPlannedPurchaseNow return the
 // raw revocation token minted on a successful execute (issue #103: only its
 // hash is stored, so callers can no longer recover a raw, emailable token by
-// re-reading the execution from the store). Empty on failure.
+// re-reading the execution from the store). Empty on failure. All three
+// also return the row with its final status, also on an execution error, and
+// a nil row when the run never started (issue #532).
 //
 // `check` (every execute entry point) re-runs the caller's permission
 // Constraints against the row the claim CAS returned, the row that is
@@ -153,7 +146,7 @@ type BreakdownValue struct {
 // pre-CAS check reads an earlier snapshot, which a repricing or a
 // recommendation attach can change before the CAS.
 type PurchaseManagerInterface interface {
-	ApproveExecution(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (string, error)
+	ApproveExecution(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	ApproveAndExecute(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	// DirectExecute is ApproveAndExecute for the direct-execute permission; it
 	// stamps the executed_* audit fields only after the claim is won.
@@ -170,6 +163,10 @@ type PurchaseManagerInterface interface {
 type SchedulerInterface interface {
 	CollectRecommendations(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error)
 	ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
+	// ScanRecommendations walks the same rows as ListRecommendations in
+	// byte-wise ID order, chunkSize store rows at a time, calling fn with
+	// each chunk's survivors (issue #981).
+	ScanRecommendations(ctx context.Context, filter config.RecommendationFilter, chunkSize int, fn func([]config.RecommendationRecord) error) error
 	// GetRecommendationByID fetches a single rec by its application-level id,
 	// bypassing account-override filtering so deep-linked URLs to override-
 	// hidden recs resolve. hiddenBy is non-nil when the rec would be dropped by
@@ -199,8 +196,8 @@ type AuthServiceInterface interface {
 	GetUser(ctx context.Context, userID string) (*User, error)
 	UpdateUserProfile(ctx context.Context, userID string, email string, currentPassword string, newPassword string) error
 	// User management - uses auth.API* types
-	CreateUserAPI(ctx context.Context, actorUserID string, req any) (any, error)
-	UpdateUserAPI(ctx context.Context, actorUserID, userID string, req any) (any, error)
+	CreateUserAPI(ctx context.Context, actorUserID string, req auth.APICreateUserRequest) (*auth.APICreateUserResponse, error)
+	UpdateUserAPI(ctx context.Context, actorUserID, userID string, req auth.APIUpdateUserRequest) (*auth.APIUser, error)
 	DeleteUser(ctx context.Context, userID string) error
 	ListUsersAPI(ctx context.Context) (any, error)
 	ChangePasswordAPI(ctx context.Context, userID, currentPassword, newPassword string) error
@@ -217,8 +214,8 @@ type AuthServiceInterface interface {
 	// permission onto a group that their own effective permissions do not
 	// hold, and the money verbs carved out of admin:* are not grantable at
 	// all (issues #1550, #1629).
-	CreateGroupAPI(ctx context.Context, actorUserID string, req any) (any, error)
-	UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, req any) (any, error)
+	CreateGroupAPI(ctx context.Context, actorUserID string, req auth.APICreateGroupRequest) (*auth.APIGroup, error)
+	UpdateGroupAPI(ctx context.Context, actorUserID, groupID string, req auth.APIUpdateGroupRequest) (*auth.APIGroup, error)
 	DeleteGroup(ctx context.Context, groupID string) error
 	GetGroupAPI(ctx context.Context, groupID string) (any, error)
 	ListGroupsAPI(ctx context.Context) (any, error)
@@ -465,6 +462,9 @@ type RecommendationsResponse struct {
 	Recommendations []config.RecommendationRecord `json:"recommendations"`
 	Regions         []string                      `json:"regions"`
 	Summary         RecommendationsSummary        `json:"summary"`
+	// NextCursor is set only on a paginated request (limit or cursor sent)
+	// that has more rows; pass it back as ?cursor= for the next page.
+	NextCursor string `json:"next_cursor,omitempty"`
 }
 
 // UsagePoint is a single sample in the per-recommendation usage time
@@ -500,7 +500,7 @@ type RecommendationDetailResponse struct {
 	ProvenanceNote   string       `json:"provenance_note"`
 	// HiddenBy is non-nil when the rec is filtered out by an account-service
 	// override (issue #214). Each element names one failing dimension:
-	// "enabled=false", "engine", "region", or "resource_type". The frontend
+	// "enabled=false", "engine", "region", "resource_type" or "min_count". The frontend
 	// renders a "hidden by your override" banner when this field is present.
 	// Absent (null) means the rec is fully visible.
 	HiddenBy []string `json:"hidden_by,omitempty"`
@@ -555,9 +555,14 @@ type PermissionEntry struct {
 // the user's groups; for a user API key, the key's permissions intersected
 // with its owner's (issue #62); for the admin API key, {admin, *}.
 // IsAdmin mirrors whether that effective set contains the {admin, *} wildcard.
+// UnrestrictedAccountAccess reports whether the caller's account scope covers
+// every account, which global actions such as POST
+// /api/recommendations/refresh require (issue #619). Like the permission
+// entries it is for UX gating only; the backend still enforces the scope.
 type UserPermissionsResponse struct {
-	Permissions []PermissionEntry `json:"permissions"`
-	IsAdmin     bool              `json:"is_admin"`
+	Permissions               []PermissionEntry `json:"permissions"`
+	IsAdmin                   bool              `json:"is_admin"`
+	UnrestrictedAccountAccess bool              `json:"unrestricted_account_access"`
 }
 
 // MFA enrollment + lifecycle DTOs (issue #497). Passwords carried by
@@ -647,9 +652,11 @@ type DashboardSummaryResponse struct {
 	TotalRecommendations    int                       `json:"total_recommendations"`
 	ActiveCommitments       int                       `json:"active_commitments"`
 	CommittedMonthly        float64                   `json:"committed_monthly"`
-	CurrentCoverage         float64                   `json:"current_coverage"`
-	TargetCoverage          float64                   `json:"target_coverage"`
-	YTDSavings              float64                   `json:"ytd_savings"`
+	// CurrentCoverage is null when there is neither committed nor potential
+	// savings to measure (0/0), instead of a fabricated 100% (issue #72).
+	CurrentCoverage *float64 `json:"current_coverage"`
+	TargetCoverage  float64  `json:"target_coverage"`
+	YTDSavings      float64  `json:"ytd_savings"`
 }
 
 // ServiceSavings holds savings data for a service.
@@ -743,15 +750,16 @@ type UpcomingPurchaseResponse struct {
 // to its parent PurchasePlan for display.
 //
 // The dashboard's Cancel button targets ExecutionID via
-// DELETE /api/purchases/planned/{id} (api.deletePlannedPurchase) so the
-// operator removes just THIS scheduled instance and leaves the plan
-// template intact — the next scheduler tick re-creates the next instance
-// for the plan. PlanID is exposed as context (e.g. for linking to the
-// plan's settings) and is NOT what destructive action endpoints should
-// target. PR #207 + #213 history: an earlier iteration routed Cancel to
-// api.deletePlan(planID) which deleted the entire plan; that was too
-// aggressive — operators usually want "skip this scheduled run", not
-// "nuke the recurring template".
+// DELETE /api/purchases/planned/{id} (api.deletePlannedPurchase). That
+// cancels THIS scheduled instance and also DISABLES its plan (issue #774;
+// DeletePlannedPurchaseResponse.PlanDisabled reports it): the plan row is
+// kept, but the scheduler creates no further instances until someone
+// re-enables it on the Plans page (issue #312 corrected this comment, which
+// used to say the plan stays active). PlanID is exposed as context (e.g. for
+// linking to the plan's settings) and is NOT what destructive action
+// endpoints should target. PR #207 + #213 history: an earlier iteration
+// routed Cancel to api.deletePlan(planID) which deleted the entire plan;
+// that was too aggressive.
 type UpcomingPurchase struct {
 	// CreatedByUserID propagates the underlying execution's
 	// created_by_user_id so the dashboard widget can apply the same
@@ -820,7 +828,7 @@ type PlanRequest struct {
 	Provider               string   `json:"provider,omitempty"`
 	Service                string   `json:"service,omitempty"`
 	TargetAccounts         []string `json:"target_accounts,omitempty"`
-	TargetCoverage         int      `json:"target_coverage,omitempty"`
+	TargetCoverage         *int     `json:"target_coverage,omitempty"`
 	Term                   int      `json:"term,omitempty"`
 	NotificationDaysBefore int      `json:"notification_days_before"`
 	CustomStepPercent      int      `json:"custom_step_percent,omitempty"`
@@ -831,6 +839,15 @@ type PlanRequest struct {
 	MaxStepCommitment *float64 `json:"max_step_commitment,omitempty"`
 	AutoPurchase      bool     `json:"auto_purchase"`
 	Enabled           bool     `json:"enabled"`
+}
+
+// validateTargetCoverage refuses an explicit target outside 1..100: the plan
+// executor rejects 0, so a stored 0% plan would fail on every tick.
+func (r *PlanRequest) validateTargetCoverage() error {
+	if r.TargetCoverage != nil && (*r.TargetCoverage < 1 || *r.TargetCoverage > 100) {
+		return NewClientError(400, "target_coverage must be between 1 and 100 for a purchase plan")
+	}
+	return nil
 }
 
 // toPurchasePlan converts a PlanRequest to a config.PurchasePlan.
@@ -912,9 +929,10 @@ func (r *PlanRequest) buildServiceConfig() map[string]config.ServiceConfig {
 		payment = "no-upfront"
 	}
 
-	coverage := float64(r.TargetCoverage)
-	if coverage == 0 {
-		coverage = 80
+	// nil is an omitted field (create defaults it to 80); an explicit value is kept as sent.
+	coverage := float64(config.DefaultCoveragePercent)
+	if r.TargetCoverage != nil {
+		coverage = float64(*r.TargetCoverage)
 	}
 
 	return map[string]config.ServiceConfig{
@@ -969,15 +987,31 @@ type HistoryResponse struct {
 	// Truncated is true when a fetch reached its row cap, so older rows (and
 	// possibly pending approvals) may be missing from Purchases. Summary still
 	// counts them while SummaryComplete is true.
-	// It also fires when the actionable execution class hits its MaxListLimit cap.
+	// It also fires when the actionable execution class hits its MaxListLimit cap,
+	// and when an execution class listing failed, so its rows are missing.
 	// It can be a false positive when exactly a cap's worth of rows exist.
 	Truncated bool `json:"truncated"`
-	// Limit is the row cap on completed purchase_history rows for this request.
+	// Limit is the page size: the most completed purchase_history rows and
+	// terminal executions (failed, expired, canceled, ...) together that one
+	// response lists (issue #674).
 	Limit int `json:"limit"`
-	// ExecutionsLimit is the row cap on terminal executions (failed, expired,
-	// canceled, ...), fixed regardless of the request's limit parameter.
-	// Actionable executions (pending, approved, ...) use config.MaxListLimit.
+	// ExecutionsLimit is the row cap on terminal executions. They share the
+	// page with completed purchases, so it equals Limit.
+	// Actionable executions (pending, approved, ...) use ActionableExecutionsLimit.
 	ExecutionsLimit int `json:"executions_limit"`
+	// ActionableExecutionsLimit is the row cap on actionable executions
+	// (pending, notified, scheduled, approved, running, paused), fixed at
+	// config.MaxListLimit regardless of the request's limit parameter.
+	// Actionable executions are not paged: the first page lists them all, up
+	// to this cap, and pages fetched with a cursor leave them out.
+	ActionableExecutionsLimit int `json:"actionable_executions_limit"`
+	// HasMore is true when more completed purchases or terminal executions the
+	// caller may see follow this page; pass NextCursor as the cursor parameter
+	// to fetch them (issue #674). Truncated is also true then.
+	HasMore bool `json:"has_more"`
+	// NextCursor is the opaque position after the last paged row of this
+	// response, set only when HasMore is true.
+	NextCursor string `json:"next_cursor,omitempty"`
 }
 
 // HistorySummary provides aggregate statistics for purchase history.

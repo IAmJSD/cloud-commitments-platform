@@ -35,6 +35,28 @@ run_case() {
   fi
 }
 
+# Like run_case, but also asserts WHICH lines are reported: exactly the
+# `role =` lines of the file, in order. One fixture can then hold many
+# variants without a variant the guard misses hiding behind another it catches.
+run_role_lines_case() {
+  local label="$1"
+  local file="$2"
+  local expected actual out actual_exit=0
+  expected=$(grep -n '^[[:space:]]*role[[:space:]]*=' "$file" | cut -d: -f1)
+  out=$("$CHECK" "$file" 2>&1 >/dev/null) || actual_exit=$?
+  actual=$(awk -v p="${file}:" 'index($0, p) == 1 {
+             s = substr($0, length(p) + 1); sub(/:.*/, "", s); print s
+           }' <<<"$out")
+  if [[ "$actual_exit" -eq 1 && -n "$expected" && "$actual" == "$expected" ]]; then
+    echo "PASS: $label"
+    (( pass++ )) || true
+  else
+    echo "FAIL: $label (exit $actual_exit; role lines: $(tr '\n' ' ' <<<"$expected")" \
+         "; reported: $(tr '\n' ' ' <<<"$actual"))"
+    (( fail++ )) || true
+  fi
+}
+
 # Negative direction: the supported shapes must not be reported. This is what
 # catches a guard so blunt it fires on every per-secret binding.
 run_case "per-secret binding and non-secret project grant exit 0" 0 \
@@ -183,6 +205,22 @@ run_case "waiver above a line with nothing to excuse exits 1" 1 \
 run_case "waiver covers only the next line, not a second role" 1 \
   "${FIXTURES}/waiver-one-line-only.tf.fixture"
 
+# Issue #505: a per-secret binding is exempt only for the two roles a workload
+# needs on one secret, secretAccessor and secretVersionAdder. Before #505 any
+# roles/secretmanager.* name passed there, so the #504 review's mutation of a
+# version-adder grant to roles/secretmanager.admin exited 0.
+run_case "allowed per-secret roles in every per-secret resource type exit 0 (#505)" 0 \
+  "${FIXTURES}/per-secret-allowed-roles.tf.fixture"
+
+run_case "per-secret roles/secretmanager.admin exits 1 (#505)" 1 \
+  "${FIXTURES}/per-secret-admin.tf.fixture"
+
+run_role_lines_case "every disallowed or lookalike per-secret role is reported (#505)" \
+  "${FIXTURES}/per-secret-role-lookalikes.tf.fixture"
+
+run_case "waived per-secret role outside the allowed pair exits 0 (#505)" 0 \
+  "${FIXTURES}/per-secret-role-waived.tf.fixture"
+
 # The regression half of issue #1614: the module that carried the over-broad
 # grant must stay free of one.
 run_case "cleanup-function module has no scope-wide Secret Manager grant" 0 \
@@ -207,6 +245,26 @@ if cmp -s "$DEPLOY_SA" "${WORK}/service_account.tf"; then
 fi
 run_case "ci-cd-permissions deploy SA grant fails without its waiver" 1 \
   "${WORK}/service_account.tf"
+
+# Issue #505 acceptance, against the real module the #504 review mutated: the
+# GKE workload SA's version-adder grant on the admin password secret passes as
+# written and fails once its role is widened to roles/secretmanager.admin.
+GKE="${REPO_ROOT}/terraform/modules/compute/gcp/gke/main.tf"
+sed 's|"roles/secretmanager.secretVersionAdder"|"roles/secretmanager.admin"|' \
+  "$GKE" > "${WORK}/gke-main.tf"
+if cmp -s "$GKE" "${WORK}/gke-main.tf"; then
+  echo "FAIL: gke module carries no secretVersionAdder grant to widen"
+  (( fail++ )) || true
+fi
+run_case "gke module per-secret grants pass as written (#505)" 0 "$GKE"
+run_case "gke module version-adder widened to secretmanager.admin exits 1 (#505)" 1 \
+  "${WORK}/gke-main.tf"
+
+# The waiver is what lets per-secret-role-waived pass; without it, it fails.
+grep -v 'gcp-secret-scope: allow' "${FIXTURES}/per-secret-role-waived.tf.fixture" \
+  > "${WORK}/per-secret-role-unwaived.tf"
+run_case "per-secret role outside the allowed pair fails without its waiver (#505)" 1 \
+  "${WORK}/per-secret-role-unwaived.tf"
 
 # policy-heredoc now exits 2 on its resource type alone, which would hide a
 # regression in how heredoc bodies are scanned. Retyped to a per-secret

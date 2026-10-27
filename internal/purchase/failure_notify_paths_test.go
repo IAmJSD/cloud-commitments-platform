@@ -3,10 +3,12 @@ package purchase
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
@@ -22,6 +24,9 @@ type writerCase struct {
 	run func(t *testing.T, m *Manager, store *MockConfigStore)
 	// alerts is whether the writer must alert (it won the row).
 	alerts bool
+	// outcomeUnknown is whether the alert is for a run a sweep failed after it
+	// was interrupted, whose commitment may already exist (issue #1415).
+	outcomeUnknown bool
 }
 
 func writerRow(status string) *config.PurchaseExecution {
@@ -40,16 +45,25 @@ func failedRowFromCAS(store *MockConfigStore, method string, args ...interface{}
 func strandedWriterCases() []writerCase {
 	transition := []interface{}{mock.Anything, "exec-w", []string{"approved"}, "failed", (*string)(nil)}
 	return []writerCase{
-		{name: "safeFail won CAS", alerts: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
+		{name: "safeFail won CAS", alerts: true, outcomeUnknown: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
 			failedRowFromCAS(store, "TransitionExecutionStatus", transition...)
 			store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(nil)
 			counted, err := m.safeFail(context.Background(), writerRow("approved"))
 			require.NoError(t, err)
 			assert.True(t, counted)
 		}},
-		{name: "safeFail won CAS, reason save failed", alerts: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
+		{name: "safeFail won CAS, reason save failed", alerts: true, outcomeUnknown: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
 			failedRowFromCAS(store, "TransitionExecutionStatus", transition...)
 			store.On("SavePurchaseExecution", mock.Anything, mock.Anything).Return(errors.New("db down"))
+			counted, err := m.safeFail(context.Background(), writerRow("approved"))
+			require.NoError(t, err)
+			assert.True(t, counted)
+		}},
+		// The row was recovered before the guarded stamp: the failed outcome
+		// is stale, so nothing alerts (#1417).
+		{name: "safeFail won CAS, row recovered before the stamp", run: func(t *testing.T, m *Manager, store *MockConfigStore) {
+			failedRowFromCAS(store, "TransitionExecutionStatus", transition...)
+			store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{failedStatus}).Return(config.ErrExecutionNotInExpectedStatus)
 			counted, err := m.safeFail(context.Background(), writerRow("approved"))
 			require.NoError(t, err)
 			assert.True(t, counted)
@@ -63,26 +77,26 @@ func strandedWriterCases() []writerCase {
 		// claimAndRedrive won the approved -> running claim but the claimed row
 		// no longer qualifies for a re-drive (#1037): the claim holder alerts,
 		// even when its terminal save fails.
-		{name: "claimed redrive row failed", alerts: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
+		{name: "claimed redrive row failed", alerts: true, outcomeUnknown: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
 			store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{"running"}).Return(nil)
 			counted, err := m.failClaimedRedrive(context.Background(), writerRow("running"))
 			require.NoError(t, err)
 			assert.True(t, counted)
 		}},
-		{name: "claimed redrive row failed, terminal save failed", alerts: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
+		{name: "claimed redrive row failed, terminal save failed", alerts: true, outcomeUnknown: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
 			store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{"running"}).Return(errors.New("db down"))
 			counted, err := m.failClaimedRedrive(context.Background(), writerRow("running"))
 			require.ErrorIs(t, err, config.ErrAuditLoss)
 			assert.False(t, counted)
 		}},
-		{name: "reaper won CAS", alerts: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
+		{name: "reaper won CAS", alerts: true, outcomeUnknown: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
 			failedRowFromCAS(store, "TransitionExecutionStatus", mock.Anything, "exec-w", []string{"running"}, failedStatus, (*string)(nil))
 			store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{failedStatus}).Return(nil)
 			result := &ReapResult{}
 			m.reapOne(context.Background(), writerRow("running"), DefaultReapAfter, time.Now(), result)
 			assert.Equal(t, 1, result.Reaped)
 		}},
-		{name: "reaper won CAS, reason save failed", alerts: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
+		{name: "reaper won CAS, reason save failed", alerts: true, outcomeUnknown: true, run: func(t *testing.T, m *Manager, store *MockConfigStore) {
 			failedRowFromCAS(store, "TransitionExecutionStatus", mock.Anything, "exec-w", []string{"running"}, failedStatus, (*string)(nil))
 			store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{failedStatus}).Return(errors.New("db down"))
 			result := &ReapResult{}
@@ -174,7 +188,47 @@ func TestTerminalFailureWritersAlertOncePerWonRow(t *testing.T) {
 			if want == 1 {
 				assert.Equal(t, "exec-w", sent[0].ExecutionID)
 				assert.Equal(t, failureNotifyRecipient, sent[0].RecipientEmail)
+				assertFailureEmailBody(t, sent[0], tc.outcomeUnknown)
 			}
 		})
 	}
+}
+
+// genuineFailureEmail is the purchase-failed email for writerRow, unchanged
+// since before issue #1415.
+const genuineFailureEmail = `CUDly - Purchase Failed
+=======================
+
+Some purchases could not be completed. Please review and retry manually.
+
+Failed Purchases:
+
+- 1x Compute in eastus
+  Service: savingsplans
+
+
+Review failed purchases:
+/history
+
+This is an automated message from CUDly.
+`
+
+// assertFailureEmailBody renders the email the writer sent. A row a sweep
+// failed after an interrupted run may already have bought its commitment, so
+// its email must name the execution, ask for a console check and never say
+// "retry" (issue #1415). A genuinely failed row keeps the old email.
+func assertFailureEmailBody(t *testing.T, data email.NotificationData, outcomeUnknown bool) {
+	t.Helper()
+	body, err := email.RenderPurchaseFailedEmail(data)
+	require.NoError(t, err)
+	if !outcomeUnknown {
+		assert.Equal(t, genuineFailureEmail, body)
+		return
+	}
+	assert.NotContains(t, strings.ToLower(body), "retry")
+	assert.NotContains(t, body, "Failed Purchases")
+	assert.Contains(t, body, "Purchase Outcome Unknown")
+	assert.Contains(t, body, "execution exec-w (plan plan-w)")
+	assert.Contains(t, body, "Verify each one in the cloud provider's console before buying it again.")
+	assert.Contains(t, body, "Outcome unknown:\n\n- 1x Compute in eastus\n  Service: savingsplans\n")
 }

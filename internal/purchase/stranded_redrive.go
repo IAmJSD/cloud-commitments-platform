@@ -45,7 +45,7 @@ func (m *Manager) failClaimedRedrive(ctx context.Context, exec *config.PurchaseE
 	cause := errors.New(strandedRecoveryError(exec))
 	logging.Errorf("Recovering stranded approved execution %s: the claimed row no longer qualifies for an in-place re-drive; failing it for visibility", exec.ExecutionID)
 	m.finalizeExecution(exec, cause)
-	defer m.notifyExecutionFailure(ctx, exec)
+	defer m.notifyOutcomeUnknown(ctx, exec) // may already have bought (#1415)
 	if err := m.saveTerminalExecution(ctx, exec, cause); err != nil {
 		return false, fmt.Errorf("%w: failed to save stranded execution %s as failed after claiming it (row stranded in running): %w",
 			config.ErrAuditLoss, exec.ExecutionID, err)

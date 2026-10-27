@@ -25,6 +25,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/execution"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/oidc"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/providerfactory"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"golang.org/x/sync/errgroup"
@@ -467,6 +468,12 @@ func joinProviderErrors(failed map[string]string) string {
 // CloudAccountID. The *sweepGap is non-nil when some account's sweep was
 // incomplete (its rows are kept; see tolerateIncompleteSweep). Provider-level
 // errors propagate unchanged.
+//
+// A name that is not one of the known providers (e.g. "AWS" or "azure " left
+// in EnabledProviders) is an error, so the merge records it as a failed
+// provider and persistCollection writes last_collection_error. Returning nil
+// here reported a provider that was never contacted as a clean, successful
+// collection of zero recommendations (issue #111).
 func (s *Scheduler) collectProviderRecommendations(ctx context.Context, providerName string, globalCfg *config.GlobalConfig) ([]config.RecommendationRecord, []string, *sweepGap, error) {
 	switch providerName {
 	case "aws":
@@ -476,8 +483,7 @@ func (s *Scheduler) collectProviderRecommendations(ctx context.Context, provider
 	case "gcp":
 		return s.collectGCPRecommendations(ctx, globalCfg)
 	default:
-		logging.Warnf("Unknown provider: %s", providerName)
-		return nil, nil, nil, nil
+		return nil, nil, nil, fmt.Errorf("unknown provider %q (valid: aws, azure, gcp)", providerName)
 	}
 }
 
@@ -541,9 +547,9 @@ func (s *Scheduler) collectAWSRecommendations(ctx context.Context, globalCfg *co
 		// in those cases.
 		if acctID := s.resolveAmbientHostAccountID(ctx); acctID != "" {
 			recs = s.tagAccount(recs, acctID)
-			return recs, ambientEvictionRoster(gap == nil, acctID), gap.forAccount(), nil
+			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount(), nil
 		}
-		return recs, ambientEvictionRoster(gap == nil, ""), gap.forAccount(), nil
+		return recs, ambientEvictionRoster(!gap.holdsEviction(), ""), gap.forAccount(), nil
 	}
 
 	recs, outcome := fanOutPerAccount(ctx, "AWS", accounts, func(ctx context.Context, acct config.CloudAccount) ([]config.RecommendationRecord, *sweepGap, error) {
@@ -647,12 +653,12 @@ func fanOutPerAccount(
 			// SucceededAccountIDs, the roster that authorizes stale-row
 			// eviction. See tolerateIncompleteSweep for why (issue #1652).
 			outcome.SucceededCount++
-			if gap == nil {
-				outcome.SucceededAccountIDs = append(outcome.SucceededAccountIDs, acct.ID)
-			} else {
+			if gap.holdsEviction() {
 				outcome.IncompleteAccountIDs = append(outcome.IncompleteAccountIDs, acct.ID)
-				outcome.Gap = mergeSweepGaps(outcome.Gap, gap.forAccount())
+			} else {
+				outcome.SucceededAccountIDs = append(outcome.SucceededAccountIDs, acct.ID)
 			}
+			outcome.Gap = mergeSweepGaps(outcome.Gap, gap.forAccount())
 			mu.Unlock()
 			return nil
 		})
@@ -780,7 +786,7 @@ func (s *Scheduler) resolveAmbientAccountID(ctx context.Context, providerName, e
 // subscriptionID is passed explicitly to avoid an unnecessary Azure API round-trip
 // to auto-discover subscriptions — the caller already resolved it from env.
 func (s *Scheduler) collectAzureAmbient(ctx context.Context, subscriptionID string) ([]config.RecommendationRecord, *sweepGap, error) {
-	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "azure", &provider.ProviderConfig{
+	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "azure", &provider.Config{
 		AzureSubscriptionID: subscriptionID,
 	})
 	if err != nil {
@@ -845,7 +851,7 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve credentials: %w", err)
 	}
-	cfg := &provider.ProviderConfig{Name: "aws", AWSCredentialsProvider: awsCreds}
+	cfg := &provider.Config{Name: "aws", AWSCredentialsProvider: awsCreds}
 	prov, err := s.providerFactory.CreateAndValidateProvider(ctx, "aws", cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create provider: %w", err)
@@ -880,9 +886,9 @@ func (s *Scheduler) collectAzureRecommendations(ctx context.Context, _ *config.G
 		}
 		if acctID := s.resolveAmbientAccountID(ctx, "azure", subscriptionID); acctID != "" {
 			recs = s.tagAccount(recs, acctID)
-			return recs, ambientEvictionRoster(gap == nil, acctID), gap.forAccount(), nil
+			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount(), nil
 		}
-		return recs, ambientEvictionRoster(gap == nil, ""), gap.forAccount(), nil
+		return recs, ambientEvictionRoster(!gap.holdsEviction(), ""), gap.forAccount(), nil
 	}
 
 	recs, outcome := fanOutPerAccount(ctx, "Azure", accounts, s.collectAzureForAccount)
@@ -911,11 +917,10 @@ func (s *Scheduler) collectAzureForAccount(ctx context.Context, acct config.Clou
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve credentials: %w", err)
 	}
-	azProv, err := azureprovider.NewAzureProvider(&provider.ProviderConfig{Profile: acct.AzureSubscriptionID})
+	azProv, err := providerfactory.NewAzure(acct.AzureSubscriptionID, azCred)
 	if err != nil {
 		return nil, nil, fmt.Errorf("create provider: %w", err)
 	}
-	azProv.SetCredential(azCred)
 
 	recClient, err := azProv.GetRecommendationsClient(ctx)
 	if err != nil {
@@ -956,9 +961,9 @@ func (s *Scheduler) collectGCPRecommendations(ctx context.Context, _ *config.Glo
 		}
 		if acctID := s.resolveAmbientAccountID(ctx, "gcp", projectID); acctID != "" {
 			recs = s.tagAccount(recs, acctID)
-			return recs, ambientEvictionRoster(gap == nil, acctID), gap.forAccount(), nil
+			return recs, ambientEvictionRoster(!gap.holdsEviction(), acctID), gap.forAccount(), nil
 		}
-		return recs, ambientEvictionRoster(gap == nil, ""), gap.forAccount(), nil
+		return recs, ambientEvictionRoster(!gap.holdsEviction(), ""), gap.forAccount(), nil
 	}
 
 	recs, outcome := fanOutPerAccount(ctx, "GCP", accounts, s.collectGCPForAccount)
@@ -979,7 +984,11 @@ func (s *Scheduler) collectGCPForAccount(ctx context.Context, acct config.CloudA
 
 	var prov provider.Provider
 	if gcpTS != nil {
-		prov = gcpprovider.NewProviderWithCredentials(ctx, acct.GCPProjectID, gcpTS)
+		created, createErr := providerfactory.NewGCP(acct.GCPProjectID, gcpTS)
+		if createErr != nil {
+			return nil, nil, fmt.Errorf("create provider: %w", createErr)
+		}
+		prov = created
 	} else {
 		// ADC mode (application_default): use ambient credentials
 		created, createErr := s.providerFactory.CreateAndValidateProvider(ctx, "gcp", nil)
@@ -1071,7 +1080,7 @@ func tolerateIncompleteSweep(providerName string, err error) (*sweepGap, error) 
 	}
 	partial := azureprovider.AsPartialSubscriptionFailure(err)
 	if partial == nil {
-		return nil, err
+		return tolerateSkippedRecommendations(providerName, err)
 	}
 	logging.Warnf(
 		"%s recommendations incomplete: %d of %d subscriptions succeeded; not queried: %s (keeping the %d that did, "+
@@ -1199,14 +1208,9 @@ func recommendationID(rec config.RecommendationRecord) (string, error) {
 func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
 	logging.Info("Reading recommendations from cache...")
 
-	freshness, err := s.config.GetRecommendationsFreshness(ctx)
+	freshness, err := s.startCacheRead(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read recommendations freshness: %w", err)
-	}
-
-	mayCollect := BackgroundCollectionAllowed(ctx)
-	if mayCollect && freshness.LastCollectedAt == nil {
-		s.kickColdStartCollection(ctx)
+		return nil, err
 	}
 
 	recs, err := s.config.ListStoredRecommendations(ctx, filter)
@@ -1231,17 +1235,38 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 		logging.Errorf("failed to apply account overrides; returning un-filtered recs: %v", err)
 	}
 
-	// Background refresh is only attempted on non-Lambda runtimes; skip
-	// the DB config read entirely on Lambda so GetGlobalConfig is not called
-	// on the hot read path (Lambda has no persistent goroutines).
-	if mayCollect && !s.isLambda {
-		ttl, disabled := s.resolveEffectiveCacheTTL(ctx)
-		if disabled {
-			return recs, nil
-		}
-		s.maybeKickBackgroundRefresh(freshness, ttl)
-	}
+	s.finishCacheRead(ctx, freshness)
 	return recs, nil
+}
+
+// startCacheRead is steps 1 and 2 of ListRecommendations (and of
+// ScanRecommendations): read freshness and, for a caller allowed to trigger
+// collection, kick the cold-start collection.
+func (s *Scheduler) startCacheRead(ctx context.Context) (*config.RecommendationsFreshness, error) {
+	freshness, err := s.config.GetRecommendationsFreshness(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read recommendations freshness: %w", err)
+	}
+	if BackgroundCollectionAllowed(ctx) && freshness.LastCollectedAt == nil {
+		s.kickColdStartCollection(ctx)
+	}
+	return freshness, nil
+}
+
+// finishCacheRead is step 4 of ListRecommendations (and of
+// ScanRecommendations): the stale-while-revalidate kick. Background refresh is
+// only attempted on non-Lambda runtimes; the DB config read is skipped
+// entirely on Lambda so GetGlobalConfig is not called on the hot read path
+// (Lambda has no persistent goroutines).
+func (s *Scheduler) finishCacheRead(ctx context.Context, freshness *config.RecommendationsFreshness) {
+	if !BackgroundCollectionAllowed(ctx) || s.isLambda {
+		return
+	}
+	ttl, disabled := s.resolveEffectiveCacheTTL(ctx)
+	if disabled {
+		return
+	}
+	s.maybeKickBackgroundRefresh(freshness, ttl)
 }
 
 // ListRecommendationsStrict is ListRecommendations for the money path: the
@@ -1277,7 +1302,8 @@ func (s *Scheduler) ListRecommendationsStrict(ctx context.Context, filter config
 // hiddenBy is non-nil (one or more reason strings) when the rec exists and
 // passes the suppression check, but would be dropped by the account-override
 // filter. Possible reasons: "enabled=false", "engine", "region",
-// "resource_type".  The caller renders a "hidden by your override" banner.
+// "resource_type", "min_count" (overrideDimensions). The caller renders a
+// "hidden by your override" banner.
 //
 // Returns (nil, nil, nil) when the rec is genuinely absent or fully suppressed.
 func (s *Scheduler) GetRecommendationByID(ctx context.Context, id string) (rec *config.RecommendationRecord, hiddenBy []string, err error) {
@@ -1320,25 +1346,6 @@ func (s *Scheduler) GetRecommendationByID(ctx context.Context, id string) (rec *
 	}
 
 	return found, hiddenBy, nil
-}
-
-// overrideHiddenReasons returns a non-empty slice when rec would be dropped by
-// the given resolved ServiceConfig, naming each failing dimension.
-func overrideHiddenReasons(rec *config.RecommendationRecord, cfg *config.ServiceConfig) []string {
-	var reasons []string
-	if !cfg.Enabled {
-		reasons = append(reasons, "enabled=false")
-	}
-	if !engineMatches(rec.Engine, cfg) {
-		reasons = append(reasons, "engine")
-	}
-	if !inListRule(rec.Region, cfg.IncludeRegions, cfg.ExcludeRegions) {
-		reasons = append(reasons, "region")
-	}
-	if !inListRule(rec.ResourceType, cfg.IncludeTypes, cfg.ExcludeTypes) {
-		reasons = append(reasons, "resource_type")
-	}
-	return reasons
 }
 
 // resolveEffectiveCacheTTL returns the effective stale-while-revalidate TTL
@@ -1425,8 +1432,9 @@ func aggregateSuppressions(sups []config.PurchaseSuppression) map[suppressionKey
 	for i := range sups {
 		sup := sups[i]
 		k := suppressionKey{
-			accountID: sup.AccountID, provider: sup.Provider, service: sup.Service,
-			region: sup.Region, resourceType: sup.ResourceType, engine: sup.Engine,
+			accountID: sup.AccountID, provider: sup.Provider,
+			service: config.CanonicalSuppressionService(sup.Provider, sup.Service),
+			region:  sup.Region, resourceType: sup.ResourceType, engine: sup.Engine,
 		}
 		index[k] = append(index[k], sup)
 	}
@@ -1470,8 +1478,9 @@ func applySuppressionIndex(recs []config.RecommendationRecord, index map[suppres
 			accountID = *rec.CloudAccountID
 		}
 		k := suppressionKey{
-			accountID: accountID, provider: rec.Provider, service: rec.Service,
-			region: rec.Region, resourceType: rec.ResourceType, engine: rec.Engine,
+			accountID: accountID, provider: rec.Provider,
+			service: config.CanonicalSuppressionService(rec.Provider, rec.Service),
+			region:  rec.Region, resourceType: rec.ResourceType, engine: rec.Engine,
 		}
 		a := matchingSuppressions(&rec, index[k])
 		if a == nil {
@@ -1750,6 +1759,11 @@ func (s *Scheduler) convertRecommendations(recs []common.Recommendation, provide
 			Selected:          true,                              // Default to selected
 			Purchased:         false,
 		}
+		// Keep the currency the provider parser proved for the commitment
+		// legs; empty stays empty (unknown), never a defaulted "USD". The
+		// purchase spend-cap check refuses a capped purchase of a rec that
+		// is not provably USD (issue #361).
+		record.CommitmentCurrency = rec.CommitmentCurrency
 		id, err := recommendationID(record)
 		if err != nil {
 			logging.Errorf("convertRecommendations: dropping %s rec (account=%s service=%s sku=%s region=%s): %v",

@@ -81,7 +81,7 @@ func claimEntryPoints() []claimEntryPoint {
 			return row, err
 		}, ""},
 		{"token approve", []string{"pending", "notified"}, func(m *Manager, id string, c ClaimedRowCheck) (*config.PurchaseExecution, error) {
-			_, err := m.ApproveExecution(ctx, id, claimCheckToken, actor, c)
+			_, _, err := m.ApproveExecution(ctx, id, claimCheckToken, actor, c)
 			return nil, err
 		}, claimCheckToken},
 	}
