@@ -259,6 +259,11 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals(t *testing.T) {
 		assert.Equal(t, "rds", s.Service)
 		assert.InDelta(t, 200.00, s.TotalSavings, 0.01)
 		assert.Equal(t, 1, s.SnapshotCount)
+		// Issue #30: committed spend and usage reach the monthly series.
+		require.NotNil(t, s.TotalCommitment)
+		assert.InDelta(t, 1000.00, *s.TotalCommitment, 0.01)
+		require.NotNil(t, s.TotalUsage)
+		assert.InDelta(t, 800.00, *s.TotalUsage, 0.01)
 	})
 
 	t.Run("query monthly totals for non-existent account", func(t *testing.T) {
@@ -266,6 +271,62 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, summaries)
 	})
+}
+
+// TestPostgresAnalyticsStore_QueryMonthlyTotals_UnknownStaysUnknown pins issue
+// #30 on real Postgres: QueryMonthlyTotals returns the view's total_commitment
+// and total_usage, a bucket with one region lacking a figure reads as unknown
+// (nil) rather than the known regions' sum, and a known 0 stays a real 0.
+func TestPostgresAnalyticsStore_QueryMonthlyTotals_UnknownStaysUnknown(t *testing.T) {
+	ctx := context.Background()
+	container := testhelpers.RequireMigratedDatabase(ctx, t, getMigrationsPath())
+	store := analytics.NewPostgresAnalyticsStore(container.DB)
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	snap := func(service, region string, commitment, usage *float64) *analytics.SavingsSnapshot {
+		return &analytics.SavingsSnapshot{
+			AccountID: "123456789012", Timestamp: now, Provider: "aws", Service: service, Region: region,
+			CommitmentType: "RI", TotalCommitment: commitment, TotalUsage: usage, TotalSavings: 10,
+		}
+	}
+	for _, s := range []*analytics.SavingsSnapshot{
+		// rds: commitment known in both regions; usage unknown in one.
+		snap("rds", "us-east-1", f64ptr(300), f64ptr(250)),
+		snap("rds", "eu-west-1", f64ptr(100), nil),
+		// ec2: commitment unknown in one region; usage known in both.
+		snap("ec2", "us-east-1", nil, f64ptr(40)),
+		snap("ec2", "eu-west-1", f64ptr(70), f64ptr(60)),
+		// elasticache: a known zero in both columns.
+		snap("elasticache", "us-east-1", f64ptr(0), f64ptr(0)),
+	} {
+		require.NoError(t, store.SaveSnapshot(ctx, s))
+	}
+	require.NoError(t, store.RefreshMaterializedViews(ctx))
+
+	// Two months so a run just after a month boundary still sees the rows.
+	summaries, err := store.QueryMonthlyTotals(ctx, nil, map[string][]string{"aws": {"123456789012"}}, 2)
+	require.NoError(t, err)
+	byService := make(map[string]analytics.MonthlySummary, len(summaries))
+	for _, s := range summaries {
+		byService[s.Service] = s
+	}
+	require.Len(t, byService, 3)
+
+	rds := byService["rds"]
+	require.NotNil(t, rds.TotalCommitment)
+	assert.InDelta(t, 400.0, *rds.TotalCommitment, 0.001, "regions at one timestamp sum")
+	assert.Nil(t, rds.TotalUsage, "one region without usage makes the bucket's usage unknown, not 250")
+
+	ec2 := byService["ec2"]
+	assert.Nil(t, ec2.TotalCommitment, "one region without a commitment makes it unknown, not 70")
+	require.NotNil(t, ec2.TotalUsage)
+	assert.InDelta(t, 100.0, *ec2.TotalUsage, 0.001)
+
+	zero := byService["elasticache"]
+	require.NotNil(t, zero.TotalCommitment, "a known 0 is not unknown")
+	require.NotNil(t, zero.TotalUsage, "a known 0 is not unknown")
+	assert.Zero(t, *zero.TotalCommitment)
+	assert.Zero(t, *zero.TotalUsage)
 }
 
 func TestPostgresAnalyticsStore_QueryByProvider(t *testing.T) {

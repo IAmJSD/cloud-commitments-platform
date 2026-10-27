@@ -8658,6 +8658,24 @@ components:
           type: number
           format: double
           description: Average coverage percentage. Omitted when coverage data is absent (not zero).
+        total_commitment:
+          type: number
+          format: double
+          description: >
+            Committed spend as a monthly run-rate: the bucket's total at each
+            collection, averaged over the month (the same averaging as
+            total_savings). Omitted when unknown, which is when any snapshot
+            in the bucket had no commitment figure; never reported as 0 in
+            that case. A known zero is returned as 0.
+        total_usage:
+          type: number
+          format: double
+          description: >
+            Covered usage (recurring cost) as a monthly run-rate, averaged
+            like total_commitment. Omitted when unknown, which is when any
+            snapshot in the bucket had no usage figure (for example an
+            all-upfront purchase); never reported as 0 in that case. A known
+            zero is returned as 0.
         snapshot_count:
           type: integer
 

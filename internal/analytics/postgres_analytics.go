@@ -297,7 +297,8 @@ func (s *PostgresAnalyticsStore) QueryMonthlyTotals(ctx context.Context, account
 	accountClause, args := accountFilterClause(accountUUIDs, accountExternalIDsByProvider, []any{months})
 
 	query := `
-		SELECT month, account_id, cloud_account_id, provider, service, total_savings, avg_coverage, snapshot_count
+		SELECT month, account_id, cloud_account_id, provider, service, total_savings, avg_coverage,
+		       total_commitment, total_usage, snapshot_count
 		FROM monthly_savings_summary
 		WHERE month >= DATE_TRUNC('month', NOW()) - make_interval(months => $1 - 1)
 		  AND ` + accountClause + `
@@ -321,6 +322,8 @@ func (s *PostgresAnalyticsStore) QueryMonthlyTotals(ctx context.Context, account
 			&summary.Service,
 			&summary.TotalSavings,
 			&summary.AvgCoverage,
+			&summary.TotalCommitment,
+			&summary.TotalUsage,
 			&summary.SnapshotCount,
 		)
 		if err != nil {
