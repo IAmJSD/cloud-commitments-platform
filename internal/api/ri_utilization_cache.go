@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
-	"github.com/LeanerCloud/cloud-commitments-go/providers/aws/recommendations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"golang.org/x/sync/singleflight"
 )
@@ -59,7 +58,7 @@ type riUtilizationCacheStore interface {
 // riUtilizationFetcher is the signature of the function that retrieves
 // fresh data from Cost Explorer. Parameterising lets tests inject a
 // fake.
-type riUtilizationFetcher func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error)
+type riUtilizationFetcher func(ctx context.Context, lookbackDays int) ([]riUtilization, error)
 
 // riUtilizationCache wraps a Postgres-backed store with stale-while-
 // revalidate semantics on non-Lambda runtimes. Lambda containers can't
@@ -97,7 +96,7 @@ func (c *riUtilizationCache) getOrFetch(
 	lookbackDays int,
 	softTTL, hardTTL time.Duration,
 	fetch riUtilizationFetcher,
-) ([]recommendations.RIUtilization, error) {
+) ([]riUtilization, error) {
 	key := fmt.Sprintf("%s#%d", region, lookbackDays)
 
 	entry, err := c.store.GetRIUtilizationCache(ctx, region, lookbackDays)
@@ -175,7 +174,7 @@ func (c *riUtilizationCache) kickBackgroundRefresh(key, region string, lookbackD
 
 // storePayload marshals and upserts the fresh data. Errors are logged
 // but not returned — callers have the data in hand either way.
-func (c *riUtilizationCache) storePayload(ctx context.Context, region string, lookbackDays int, data []recommendations.RIUtilization) {
+func (c *riUtilizationCache) storePayload(ctx context.Context, region string, lookbackDays int, data []riUtilization) {
 	payload, err := json.Marshal(data)
 	if err != nil {
 		logging.Warnf("ri_utilization_cache: failed to marshal payload for region=%q lookback=%d: %v", region, lookbackDays, err)
@@ -186,8 +185,8 @@ func (c *riUtilizationCache) storePayload(ctx context.Context, region string, lo
 	}
 }
 
-func unmarshalRIUtilization(payload []byte) ([]recommendations.RIUtilization, error) {
-	var data []recommendations.RIUtilization
+func unmarshalRIUtilization(payload []byte) ([]riUtilization, error) {
+	var data []riUtilization
 	if err := json.Unmarshal(payload, &data); err != nil {
 		return nil, err
 	}
