@@ -212,7 +212,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		// The handler must forward the email and the DECODED password.
 		mockAuth.On("Login", ctx, LoginRequest{Email: "test@example.com", Password: "pass123"}).Return(want(), nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -229,7 +229,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		// Required: a logout that skips auth.Logout leaves the session live.
 		mockAuth.On("Logout", ctx, "test-token").Return(nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -251,7 +251,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 			MFAEnabled: true,
 		}, nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -272,7 +272,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockAuth := strictAuthMock(t)
 		mockAuth.On("CheckAdminExists", ctx).Return(true, nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		result, err := router.checkAdminExistsHandler(ctx, nil, nil)
@@ -289,7 +289,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		// (issue #224) - setupAdmin decodes it before forwarding to auth.
 		mockAuth.On("SetupAdmin", ctx, SetupAdminRequest{Email: "admin@example.com", Password: "pass123"}).Return(want(), nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -308,7 +308,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		// handler actually asked for one.
 		mockAuth.On("RequestPasswordReset", ctx, "test@example.com").Return(nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -325,7 +325,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		// The token and the DECODED new password must reach the service (#356).
 		mockAuth.On("ConfirmPasswordReset", ctx, PasswordResetConfirm{Token: "reset-token", NewPassword: "newpass"}).Return(nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -342,7 +342,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
 		mockAuth.On("UpdateUserProfile", ctx, "user-1", "newemail@example.com", "", "").Return(nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -360,7 +360,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: "user-1"}, nil)
 		mockAuth.On("ChangePasswordAPI", ctx, "user-1", "oldpass", "newpass").Return(nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -380,7 +380,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		keys := func() []interface{} { return []interface{}{map[string]string{"id": "key-1", "name": "My Key"}} }
 		mockAuth.On("ListUserAPIKeysAPI", ctx, "user-1").Return(keys(), nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -399,7 +399,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		created := func() map[string]string { return map[string]string{"key_id": "key-1"} }
 		mockAuth.On("CreateAPIKeyAPI", ctx, "user-1", auth.APICreateAPIKeyRequest{Name: "My Key", Password: "pass123"}).Return(created(), nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -418,7 +418,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockAuth.grantAdmin()
 		mockAuth.On("DeleteAPIKeyAPI", ctx, "user-1", testID).Return(nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -441,7 +441,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockAuth.grantAdmin()
 		mockAuth.On("RevokeAPIKeyAPI", ctx, "user-1", testID).Return(nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -465,7 +465,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		users := func() []interface{} { return []interface{}{map[string]string{"id": "user-1"}} }
 		mockAuth.On("ListUsersAPI", ctx).Return(users(), nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -493,7 +493,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 			Groups:   []string{groupID},
 		}).Return(created(), nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -513,7 +513,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		user := func() *User { return &User{ID: testID, Email: "user@example.com"} }
 		mockAuth.On("GetUser", ctx, testID).Return(user(), nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -533,7 +533,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		updated := func() *auth.APIUser { return &auth.APIUser{ID: testID, Email: "updated@example.com"} }
 		mockAuth.On("UpdateUserAPI", ctx, "admin", testID, auth.APIUpdateUserRequest{Email: "updated@example.com"}).Return(updated(), nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -554,7 +554,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		groups := func() []interface{} { return []interface{}{map[string]string{"id": "group-1"}} }
 		mockAuth.On("ListGroupsAPI", ctx).Return(groups(), nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -573,7 +573,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		created := func() *auth.APIGroup { return &auth.APIGroup{ID: "new-group"} }
 		mockAuth.On("CreateGroupAPI", ctx, "admin", auth.APICreateGroupRequest{Name: "New Group"}).Return(created(), nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -593,7 +593,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		group := func() map[string]interface{} { return map[string]interface{}{"id": testID, "name": "Group"} }
 		mockAuth.On("GetGroupAPI", ctx, testID).Return(group(), nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -613,7 +613,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		updated := func() *auth.APIGroup { return &auth.APIGroup{ID: testID, Name: "Updated Group"} }
 		mockAuth.On("UpdateGroupAPI", ctx, "admin", testID, auth.APIUpdateGroupRequest{Name: "Updated Group"}).Return(updated(), nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -633,7 +633,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockAuth.grantAdmin()
 		mockAuth.On("DeleteGroup", ctx, testID).Return(nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{
@@ -650,7 +650,7 @@ func TestRouter_Handlers_Coverage(t *testing.T) {
 		mockAuth := strictAuthMock(t)
 		mockAuth.On("CheckAdminExists", ctx).Return(true, nil)
 
-		h := &Handler{auth: mockAuth}
+		h := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 		router := NewRouter(h)
 
 		req := &events.LambdaFunctionURLRequest{

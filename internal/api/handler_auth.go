@@ -543,6 +543,7 @@ func (h *Handler) updateProfile(ctx context.Context, req *events.LambdaFunctionU
 //     another account holds the address; prevents account enumeration via the
 //     profile-update path (issue #929).
 //   - ErrUserChanged -> 409: the account changed after it was read (issue #474).
+//   - ErrInvalidEmail -> 400: the address is not a bare addr-spec (issue #104).
 //   - All other errors pass through unchanged for handleRequestError to render
 //     as 500.
 func mapProfileUpdateError(err error) error {
@@ -553,6 +554,8 @@ func mapProfileUpdateError(err error) error {
 		return NewClientError(409, "Unable to update email")
 	case errors.Is(err, auth.ErrUserChanged):
 		return NewClientError(409, auth.ErrUserChanged.Error())
+	case errors.Is(err, auth.ErrInvalidEmail):
+		return NewClientError(400, auth.ErrInvalidEmail.Error())
 	}
 	return err
 }

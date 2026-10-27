@@ -1369,12 +1369,35 @@ func mapAzureExchangeError(opMsg string, err error) error {
 	return NewClientError(500, opMsg)
 }
 
-// getBaseAWSConfig returns the cached base AWS config, loading it once via sync.Once.
+// awsBaseConfigLoadTimeout bounds the one-time base AWS config load. The load
+// reads the environment and, where no region is configured, may ask the
+// instance metadata service; ten seconds leaves room for the SDK's own IMDS
+// retries while staying inside the server's 30s per-request cap.
+const awsBaseConfigLoadTimeout = 10 * time.Second
+
+// getBaseAWSConfig returns the cached base AWS config, loading it once via
+// sync.Once. Every request-path user of awsCfg goes through here.
+//
+// The once caches its error with the config, so the load must not run on the
+// calling request's context: a request canceled or timed out mid-load would
+// otherwise seal "context canceled" into awsCfgErr for the life of the
+// process (issue #104, audit finding A02-017). It runs detached from the
+// request's cancellation, bounded by awsBaseConfigLoadTimeout.
 func (h *Handler) getBaseAWSConfig(ctx context.Context) (aws.Config, error) {
 	h.awsCfgOnce.Do(func() {
-		h.awsCfg, h.awsCfgErr = awsconfig.LoadDefaultConfig(ctx)
+		loadCtx, cancel := ctxutil.DetachedWithTimeout(ctx, awsBaseConfigLoadTimeout)
+		defer cancel()
+		load := h.loadAWSCfg
+		if load == nil {
+			load = loadDefaultAWSConfig
+		}
+		h.awsCfg, h.awsCfgErr = load(loadCtx)
 	})
 	return h.awsCfg, h.awsCfgErr
+}
+
+func loadDefaultAWSConfig(ctx context.Context) (aws.Config, error) {
+	return awsconfig.LoadDefaultConfig(ctx)
 }
 
 // loadAWSConfigWithRegion returns the cached base config, optionally overriding the region.

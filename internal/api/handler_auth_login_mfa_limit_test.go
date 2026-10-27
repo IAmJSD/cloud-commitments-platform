@@ -114,3 +114,40 @@ func TestHandler_mfaEndpoints_InvalidSessionDoesNotSpendIPBudget(t *testing.T) {
 	_, err := h.mfaEnable(context.Background(), req)
 	require.NoError(t, err, "a valid session on the same IP must still have its budget")
 }
+
+// Issue #104: the strict, fail-closed limiter checks used to allow every
+// request when the handler had no rate limiter at all, silently dropping
+// brute-force protection on the credential endpoints. A nil limiter is now
+// refused with the same 503 as a limiter error.
+func TestHandler_credentialEndpoints_NilLimiterFailsClosed(t *testing.T) {
+	t.Run("checkRateLimitStrict", func(t *testing.T) {
+		h := &Handler{}
+		for _, endpoint := range []string{"login", "setup_admin", "reset_password", "change_password", "mfa"} {
+			err := h.checkRateLimitStrict(context.Background(), makeSourceIPReq("198.51.100.1"), endpoint)
+			requireClientCode(t, err, 503, "endpoint %s", endpoint)
+		}
+	})
+
+	t.Run("login never reaches the auth service", func(t *testing.T) {
+		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+		h := &Handler{auth: mockAuth}
+
+		_, err := h.login(context.Background(), loginReqFrom("198.51.100.1", "u@example.com", ""))
+		requireClientCode(t, err, 503)
+		mockAuth.AssertNotCalled(t, "Login", mock.Anything, mock.Anything)
+	})
+
+	t.Run("requireMFASession refuses a valid session", func(t *testing.T) {
+		mockAuth := new(MockAuthService)
+		t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+		mockAuth.On("ValidateSession", mock.Anything, "tok").Return(&Session{UserID: "user-1"}, nil).Once()
+		h := &Handler{auth: mockAuth}
+
+		req := authedReq("tok", `{"code":"000000"}`)
+		req.RequestContext.HTTP.SourceIP = "198.51.100.1"
+		_, err := h.mfaEnable(context.Background(), req)
+		requireClientCode(t, err, 503)
+		mockAuth.AssertNotCalled(t, "MFAEnableAPI", mock.Anything, mock.Anything, mock.Anything)
+	})
+}

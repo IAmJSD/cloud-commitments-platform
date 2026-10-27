@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -927,8 +928,9 @@ func TestService_RecordUsage(t *testing.T) {
 	})
 }
 
-// Regression: singleflight collapses concurrent flushes for the same key
-// into one DB write. Writing a fixed "+1" inside that flush silently dropped
+// Regression: concurrent requests for the same key share one flush (first a
+// singleflight.Group, now a single flusher per key). Writing a fixed "+1"
+// inside that flush silently dropped
 // every request that arrived while a write was in flight, undercounting the
 // busiest keys -- precisely the keys the usage stats exist to surface. The
 // pending count is accumulated first and the flush writes the whole delta.
@@ -1023,6 +1025,101 @@ func TestService_RecordUsageAsync_CountsConcurrentRequests(t *testing.T) {
 		t.Fatalf("only %d of %d requests were recorded", recorded.Load(), requests)
 	}
 	assert.Equal(t, int64(requests), recorded.Load())
+}
+
+// Issue #104: RecordUsageAsync spawned a goroutine per request before the
+// singleflight dedupe, so N concurrent requests on one key parked N goroutines
+// behind a slow write. A request whose key already has a flusher must only
+// book its count, and that flusher must still write it.
+func TestService_RecordUsageAsync_OneFlusherPerKey(t *testing.T) {
+	mockStore := new(MockStore)
+	service := &Service{store: mockStore}
+
+	const requests = 200
+	writeStarted := make(chan struct{})
+	releaseWrite := make(chan struct{})
+	var (
+		recorded atomic.Int64
+		writes   atomic.Int32
+	)
+	mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", mock.Anything).
+		Run(func(args mock.Arguments) {
+			if writes.Add(1) == 1 {
+				close(writeStarted)
+				<-releaseWrite
+			}
+			recorded.Add(args.Get(2).(int64))
+		}).
+		Return(nil)
+
+	service.RecordUsageAsync("key-1")
+	select {
+	case <-writeStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first flush never reached the store")
+	}
+
+	before := runtime.NumGoroutine()
+	for range requests {
+		service.RecordUsageAsync("key-1")
+	}
+	spawned := runtime.NumGoroutine() - before
+	close(releaseWrite)
+
+	assert.Less(t, spawned, 10, "requests booked during an in-flight flush must not each start a goroutine")
+	require.Eventually(t, func() bool { return recorded.Load() == requests+1 }, 5*time.Second, time.Millisecond,
+		"recorded %d of %d requests", recorded.Load(), requests+1)
+	assert.Equal(t, int32(2), writes.Load(), "the requests booked during the first write are carried by one more write")
+	require.Eventually(t, func() bool { return !service.pendingEntry("key-1").flushing.Load() }, 5*time.Second, time.Millisecond,
+		"the flusher must release the key once nothing is pending")
+}
+
+// A request can book its count just after the flusher's last drain and see
+// the slot still taken. Releasing the slot must notice that count and keep
+// the flusher going rather than leave it stranded until the key is used
+// again.
+func TestAPIKeyUsageEntry_ReleaseFlusher(t *testing.T) {
+	t.Run("keeps the slot when a count was booked after the drain", func(t *testing.T) {
+		var entry apiKeyUsageEntry
+		entry.flushing.Store(true)
+		entry.count.Add(1) // a request that lost the CompareAndSwap
+
+		assert.True(t, entry.releaseFlusher(), "the late request's count must be written by this flusher")
+		assert.True(t, entry.flushing.Load(), "the flusher must hold the slot again")
+	})
+
+	t.Run("frees the slot when nothing is pending", func(t *testing.T) {
+		var entry apiKeyUsageEntry
+		entry.flushing.Store(true)
+
+		assert.False(t, entry.releaseFlusher())
+		assert.False(t, entry.flushing.Load(), "the next request must be able to start a flusher")
+	})
+}
+
+// A flush that panics must release the key's flusher slot; otherwise every
+// later request on the key would see a flusher that no longer exists and its
+// usage would never be written again.
+func TestService_RecordUsageAsync_PanicReleasesFlusher(t *testing.T) {
+	mockStore := new(MockStore)
+	service := &Service{store: mockStore}
+
+	mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", int64(1)).
+		Run(func(mock.Arguments) { panic("store exploded") }).
+		Return(nil).Once()
+	service.RecordUsageAsync("key-1")
+	require.Eventually(t, func() bool { return !service.pendingEntry("key-1").flushing.Load() }, 5*time.Second, time.Millisecond)
+
+	done := make(chan struct{})
+	mockStore.On("RecordAPIKeyUsage", mock.Anything, "key-1", int64(1)).
+		Run(func(mock.Arguments) { close(done) }).
+		Return(nil).Once()
+	service.RecordUsageAsync("key-1")
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("usage after a panicked flush was never written")
+	}
 }
 
 func TestService_ComputeEffectivePermissions(t *testing.T) {

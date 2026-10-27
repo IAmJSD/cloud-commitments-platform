@@ -32,7 +32,7 @@ func TestHandler_login_Success(t *testing.T) {
 		Password: "password123",
 	}).Return(loginResp, nil)
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	// Password must be base64-encoded in the request body
 	encodedPassword := base64.StdEncoding.EncodeToString([]byte("password123"))
@@ -65,7 +65,7 @@ func TestHandler_login_NoAuthService(t *testing.T) {
 func TestHandler_login_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	req := &events.LambdaFunctionURLRequest{
 		Body: `{invalid json}`,
@@ -83,7 +83,7 @@ func TestHandler_login_AuthError(t *testing.T) {
 
 	mockAuth.On("Login", ctx, mock.Anything).Return(nil, errors.New("invalid credentials"))
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	// Password must be base64-encoded in the request body
 	encodedPassword := base64.StdEncoding.EncodeToString([]byte("wrong"))
@@ -117,7 +117,7 @@ func TestHandler_login_OpaqueError_HidesInternalMessage(t *testing.T) {
 	internalMsg := "internal: user 42 locked since 2025-01-01T00:00:00Z"
 	mockAuth.On("Login", ctx, mock.Anything).Return((*LoginResponse)(nil), errors.New(internalMsg)).Once()
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	encodedPassword := base64.StdEncoding.EncodeToString([]byte("anypassword"))
 	req := &events.LambdaFunctionURLRequest{
@@ -429,7 +429,7 @@ func TestHandler_setupAdmin_Success(t *testing.T) {
 		Password: "admin123",
 	}).Return(loginResp, nil)
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	// Password must be base64-encoded in the request body, exactly as the
 	// frontend encodes it (issue #224).
@@ -472,7 +472,7 @@ func TestHandler_setupAdmin_NoAuthService(t *testing.T) {
 func TestHandler_setupAdmin_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	req := &events.LambdaFunctionURLRequest{
 		RequestContext: events.LambdaFunctionURLRequestContext{
@@ -495,7 +495,7 @@ func TestHandler_setupAdmin_Error(t *testing.T) {
 
 	mockAuth.On("SetupAdmin", ctx, mock.Anything).Return(nil, errors.New("admin already exists"))
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	req := &events.LambdaFunctionURLRequest{
 		RequestContext: events.LambdaFunctionURLRequestContext{
@@ -577,7 +577,7 @@ func TestHandler_resetPassword_Success(t *testing.T) {
 		NewPassword: "newpassword123",
 	}).Return(nil)
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	// The handler base64-decodes new_password before forwarding to the
 	// service (issue #356), matching the frontend's submission shape. The
@@ -605,7 +605,7 @@ func TestHandler_resetPassword_NoAuthService(t *testing.T) {
 func TestHandler_resetPassword_InvalidBody(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	req := &events.LambdaFunctionURLRequest{Body: `{invalid json}`}
 	result, err := handler.resetPassword(ctx, req)
@@ -622,7 +622,7 @@ func TestHandler_resetPasswordStatus_Valid(t *testing.T) {
 
 	mockAuth.On("ResetTokenStatus", ctx, "good-token").Return("valid", "reset", nil).Once()
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 	req := &events.LambdaFunctionURLRequest{QueryStringParameters: map[string]string{"token": "good-token"}}
 	result, err := handler.resetPasswordStatus(ctx, req)
 	require.NoError(t, err)
@@ -639,7 +639,7 @@ func TestHandler_resetPasswordStatus_Invite(t *testing.T) {
 
 	mockAuth.On("ResetTokenStatus", ctx, "invite-token").Return("valid", "invite", nil).Once()
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 	req := &events.LambdaFunctionURLRequest{QueryStringParameters: map[string]string{"token": "invite-token"}}
 	result, err := handler.resetPasswordStatus(ctx, req)
 	require.NoError(t, err)
@@ -656,7 +656,7 @@ func TestHandler_resetPasswordStatus_Expired(t *testing.T) {
 
 	mockAuth.On("ResetTokenStatus", ctx, "old-token").Return("expired", "reset", nil).Once()
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 	req := &events.LambdaFunctionURLRequest{QueryStringParameters: map[string]string{"token": "old-token"}}
 	result, err := handler.resetPasswordStatus(ctx, req)
 	require.NoError(t, err)
@@ -672,7 +672,7 @@ func TestHandler_resetPasswordStatus_Used(t *testing.T) {
 
 	mockAuth.On("ResetTokenStatus", ctx, "stale-token").Return("used", "reset", nil).Once()
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 	req := &events.LambdaFunctionURLRequest{QueryStringParameters: map[string]string{"token": "stale-token"}}
 	result, err := handler.resetPasswordStatus(ctx, req)
 	require.NoError(t, err)
@@ -685,7 +685,7 @@ func TestHandler_resetPasswordStatus_Used(t *testing.T) {
 func TestHandler_resetPasswordStatus_MissingToken(t *testing.T) {
 	ctx := context.Background()
 	mockAuth := new(MockAuthService)
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	req := &events.LambdaFunctionURLRequest{QueryStringParameters: map[string]string{}}
 	_, err := handler.resetPasswordStatus(ctx, req)
@@ -716,7 +716,7 @@ func TestHandler_resetPassword_Error(t *testing.T) {
 	// classifies it as a 400 client error, not a 500 internal error.
 	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).Return(errors.New("invalid or expired reset token"))
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	// new_password must be base64-encoded — the handler now decodes before
 	// forwarding (issue #356). Encoding "newpassword123" so the decode step
@@ -743,7 +743,7 @@ func TestHandler_resetPassword_InvalidResetToken(t *testing.T) {
 
 	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).Return(auth.ErrInvalidResetToken)
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	encoded := base64.StdEncoding.EncodeToString([]byte("SecureT3st@789"))
 	req := &events.LambdaFunctionURLRequest{Body: `{"token": "valid-token", "new_password": "` + encoded + `"}`}
@@ -764,7 +764,7 @@ func TestHandler_resetPassword_UserChanged(t *testing.T) {
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).Return(auth.ErrUserChanged)
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 	encoded := base64.StdEncoding.EncodeToString([]byte("SecureT3st@789"))
 	req := &events.LambdaFunctionURLRequest{Body: `{"token": "valid-token", "new_password": "` + encoded + `"}`}
 	_, err := handler.resetPassword(ctx, req)
@@ -787,7 +787,7 @@ func TestHandler_resetPassword_ErrorIsClientError(t *testing.T) {
 	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).
 		Return(errors.New("this is your current password, choose a different one"))
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	encoded := base64.StdEncoding.EncodeToString([]byte("ReUsedPassW0rd!"))
 	req := &events.LambdaFunctionURLRequest{Body: `{"token": "valid-token", "new_password": "` + encoded + `"}`}
@@ -899,7 +899,7 @@ func TestHandler_changePassword_Success(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
 	mockAuth.On("ChangePasswordAPI", ctx, "11111111-1111-1111-1111-111111111111", "oldpass", "newpass").Return(nil)
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	// Passwords must be base64-encoded
 	currentPass := base64.StdEncoding.EncodeToString([]byte("oldpass"))
@@ -947,7 +947,7 @@ func TestHandler_changePassword_InvalidBody(t *testing.T) {
 
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	req := &events.LambdaFunctionURLRequest{
 		Headers: map[string]string{
@@ -1098,6 +1098,32 @@ func TestHandler_updateProfile_DuplicateEmail(t *testing.T) {
 	assert.NotContains(t, ce.message, "already in use", "response must not confirm another account's existence")
 }
 
+// Issue #104: the API's email check accepts RFC 5322 display-name forms the
+// auth service now refuses; that refusal must reach the caller as a 400, not
+// a 500.
+func TestHandler_updateProfile_DisplayNameEmailIs400(t *testing.T) {
+	ctx := context.Background()
+	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
+
+	session := &Session{UserID: "12345678-1234-1234-1234-123456789abc"}
+	mockAuth.On("ValidateSession", ctx, "test-token").Return(session, nil)
+	mockAuth.On("UpdateUserProfile", mock.Anything, session.UserID, "Me <me@example.com>", "mypass", "").
+		Return(auth.ErrInvalidEmail)
+
+	handler := &Handler{auth: mockAuth}
+	encoded := base64.StdEncoding.EncodeToString([]byte("mypass"))
+	req := &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"Authorization": "Bearer test-token"},
+		Body:    `{"email": "Me <me@example.com>", "current_password": "` + encoded + `"}`,
+	}
+
+	_, err := handler.updateProfile(ctx, req)
+	ce, ok := IsClientError(err)
+	require.True(t, ok, "an invalid email must be a ClientError, not a 500: %v", err)
+	assert.Equal(t, 400, ce.code)
+}
+
 func TestHandler_credentialWritesMapConcurrentChangeToConflict(t *testing.T) {
 	ctx := context.Background()
 	userID := "12345678-1234-1234-1234-123456789abc"
@@ -1106,7 +1132,7 @@ func TestHandler_credentialWritesMapConcurrentChangeToConflict(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "test-token").Return(&Session{UserID: userID}, nil)
 	mockAuth.On("UpdateUserProfile", mock.Anything, userID, "new@example.com", "oldpass", "").Return(fmt.Errorf("failed to update user: %w", auth.ErrUserChanged))
 	mockAuth.On("ChangePasswordAPI", ctx, userID, "oldpass", "newpass").Return(auth.ErrUserChanged)
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 	old, next := base64.StdEncoding.EncodeToString([]byte("oldpass")), base64.StdEncoding.EncodeToString([]byte("newpass"))
 	headers := map[string]string{"Authorization": "Bearer test-token"}
 
@@ -1140,7 +1166,7 @@ func TestHandler_resetPassword_DecodesBase64(t *testing.T) {
 		NewPassword: "PlainText#1",
 	}).Return(nil)
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	encoded := base64.StdEncoding.EncodeToString([]byte("PlainText#1"))
 	req := &events.LambdaFunctionURLRequest{
@@ -1183,7 +1209,7 @@ func TestHandler_resetPassword_ClientErrorSubstrings(t *testing.T) {
 	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).
 		Return(errors.New("password must contain a number"))
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	encoded := base64.StdEncoding.EncodeToString([]byte("weakpass"))
 	req := &events.LambdaFunctionURLRequest{Body: `{"token": "tok-xyz", "new_password": "` + encoded + `"}`}
@@ -1206,7 +1232,7 @@ func TestHandler_resetPassword_ServerSideErrorPassesThrough(t *testing.T) {
 	mockAuth.On("ConfirmPasswordReset", ctx, mock.Anything).
 		Return(errors.New("database connection lost"))
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 	encoded := base64.StdEncoding.EncodeToString([]byte("ValidPass1!"))
 	req := &events.LambdaFunctionURLRequest{Body: `{"token": "tok-xyz", "new_password": "` + encoded + `"}`}
@@ -1241,7 +1267,7 @@ func TestHandler_login_MFARequired_ReturnsMFASentinel(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("Login", ctx, mock.Anything).Return((*LoginResponse)(nil), ErrMFARequired_test()).Once()
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 	req := &events.LambdaFunctionURLRequest{
 		Body: `{"email":"u@x.com","password":"` + b64("p") + `"}`,
 	}
@@ -1259,7 +1285,7 @@ func TestHandler_login_InvalidMFACode_ReturnsCodedSentinel(t *testing.T) {
 	mockAuth := new(MockAuthService)
 	mockAuth.On("Login", ctx, mock.Anything).Return((*LoginResponse)(nil), ErrInvalidMFACode_test()).Once()
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 	req := &events.LambdaFunctionURLRequest{
 		Body: `{"email":"u@x.com","password":"` + b64("p") + `","mfa_code":"000000"}`,
 	}
@@ -1280,7 +1306,7 @@ func TestHandler_mfaSetup_HappyPath(t *testing.T) {
 	mockAuth.On("MFASetupAPI", ctx, "user-1", "pw").
 		Return("SECRET123", "otpauth://totp/CUDly:u@x.com?secret=SECRET123", nil)
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 	resp, err := handler.mfaSetup(ctx, authedReq("tok", `{"password":"`+b64("pw")+`"}`))
 	require.NoError(t, err)
 	assert.Equal(t, "SECRET123", resp.Secret)
@@ -1299,7 +1325,7 @@ func TestHandler_mfaSetup_WrongPassword(t *testing.T) {
 	mockAuth.On("MFASetupAPI", ctx, "user-1", "wrong").
 		Return("", "", fmt.Errorf("%w", auth.ErrMFAInvalidPassword))
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 	_, err := handler.mfaSetup(ctx, authedReq("tok", `{"password":"`+b64("wrong")+`"}`))
 	require.Error(t, err)
 	ce, ok := IsClientError(err)
@@ -1317,7 +1343,7 @@ func TestHandler_mfaEnable_HappyPath(t *testing.T) {
 	mockAuth.On("MFAEnableAPI", ctx, "user-1", "123456").
 		Return([]string{"AAAA-BBBB", "CCCC-DDDD"}, nil)
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 	resp, err := handler.mfaEnable(ctx, authedReq("tok", `{"code":"123456"}`))
 	require.NoError(t, err)
 	assert.Len(t, resp.RecoveryCodes, 2)
@@ -1345,7 +1371,7 @@ func TestHandler_mfaDisable_HappyPath(t *testing.T) {
 	mockAuth.On("ValidateSession", ctx, "tok").Return(session, nil)
 	mockAuth.On("MFADisableAPI", ctx, "user-1", "pw", "123456").Return(nil)
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 	_, err := handler.mfaDisable(ctx, authedReq("tok", `{"password":"`+b64("pw")+`","code":"123456"}`))
 	require.NoError(t, err)
 	mockAuth.AssertExpectations(t)
@@ -1359,7 +1385,7 @@ func TestHandler_mfaRegenerateRecoveryCodes_HappyPath(t *testing.T) {
 	mockAuth.On("MFARegenerateRecoveryCodesAPI", ctx, "user-1", "123456").
 		Return([]string{"AAAA-BBBB"}, nil)
 
-	handler := &Handler{auth: mockAuth}
+	handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 	resp, err := handler.mfaRegenerateRecoveryCodes(ctx, authedReq("tok", `{"code":"123456"}`))
 	require.NoError(t, err)
 	assert.Len(t, resp.RecoveryCodes, 1)
@@ -1601,7 +1627,7 @@ func TestHandler_login_ErrorEquivalence(t *testing.T) {
 		Return((*LoginResponse)(nil), errors.New("Check your email address and password and try again")).Once()
 	t.Cleanup(func() { mockAuthNotFound.AssertExpectations(t) })
 
-	handlerNotFound := &Handler{auth: mockAuthNotFound}
+	handlerNotFound := &Handler{auth: mockAuthNotFound, rateLimiter: NewInMemoryRateLimiter()}
 	reqNotFound := &events.LambdaFunctionURLRequest{
 		Body: `{"email":"nonexistent@example.com","password":"` + encodedPassword + `"}`,
 	}
@@ -1617,7 +1643,7 @@ func TestHandler_login_ErrorEquivalence(t *testing.T) {
 		Return((*LoginResponse)(nil), errors.New("Check your email address and password and try again")).Once()
 	t.Cleanup(func() { mockAuthWrongPass.AssertExpectations(t) })
 
-	handlerWrongPass := &Handler{auth: mockAuthWrongPass}
+	handlerWrongPass := &Handler{auth: mockAuthWrongPass, rateLimiter: NewInMemoryRateLimiter()}
 	reqWrongPass := &events.LambdaFunctionURLRequest{
 		Body: `{"email":"existing@example.com","password":"` + encodedPassword + `"}`,
 	}
@@ -1709,7 +1735,7 @@ func TestHandler_mfaSetupAndEnable_ConflictsAre409(t *testing.T) {
 		mockAuth.On("ValidateSession", ctx, "tok").Return(&Session{UserID: "user-1"}, nil)
 		mockAuth.On("MFASetupAPI", ctx, "user-1", "pw").Return("", "", fmt.Errorf("persist: %w", sentinel))
 		mockAuth.On("MFAEnableAPI", ctx, "user-1", "123456").Return(nil, fmt.Errorf("persist: %w", sentinel))
-		handler := &Handler{auth: mockAuth}
+		handler := &Handler{auth: mockAuth, rateLimiter: NewInMemoryRateLimiter()}
 
 		_, setupErr := handler.mfaSetup(ctx, authedReq("tok", `{"password":"`+b64("pw")+`"}`))
 		_, enableErr := handler.mfaEnable(ctx, authedReq("tok", `{"code":"123456"}`))

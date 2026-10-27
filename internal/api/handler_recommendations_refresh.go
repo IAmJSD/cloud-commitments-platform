@@ -13,7 +13,6 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/scheduler"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/lambda/types"
 )
@@ -260,12 +259,9 @@ func (h *Handler) getLambdaInvoker(ctx context.Context) (LambdaInvokerInterface,
 	if h.lambdaInvoker != nil {
 		return h.lambdaInvoker, nil
 	}
-	// Use the handler's cached AWS config (loaded once via awsCfgOnce in handler.go).
-	h.awsCfgOnce.Do(func() {
-		h.awsCfg, h.awsCfgErr = awsconfig.LoadDefaultConfig(ctx)
-	})
-	if h.awsCfgErr != nil {
-		return nil, fmt.Errorf("load AWS config: %w", h.awsCfgErr)
+	awsCfg, err := h.getBaseAWSConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
-	return lambda.NewFromConfig(h.awsCfg), nil
+	return lambda.NewFromConfig(awsCfg), nil
 }
