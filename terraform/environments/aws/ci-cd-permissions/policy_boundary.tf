@@ -76,6 +76,15 @@
 # is ever widened back to a form that permits one of the escape actions. A grant
 # added to a module without the matching entry here would otherwise deploy
 # cleanly and then 403 at runtime; make both edits in the same change.
+#
+# TRIVY AWS-0345 ("IAM policy allows 's3:*' action") is suppressed for this
+# one resource only, by the inline comment directly below, not repo-wide in
+# .trivyignore. The rule targets grants; this document is a ceiling that
+# grants nothing (see above), and s3:* is per-service granularity on purpose.
+# The S3 actions and buckets a workload role can actually use are scoped in
+# its identity policy in terraform/modules. Any other policy that allows s3:*
+# is still reported.
+#trivy:ignore:AWS-0345
 resource "aws_iam_policy" "workload_boundary" {
   name        = "cudly-deploy-boundary"
   description = "CUDly Terraform deploy: permissions ceiling for every role the deploy role creates or manages"
