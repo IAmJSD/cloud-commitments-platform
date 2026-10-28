@@ -139,25 +139,6 @@ func TestSender_SendPasswordResetEmail_Success(t *testing.T) {
 	mockSES.AssertExpectations(t)
 }
 
-func TestSender_SendWelcomeEmail_Success(t *testing.T) {
-	mockSES := new(MockSESClient)
-	// GetAccount is called to check sandbox mode - return production mode (not sandbox)
-	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
-		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
-	mockSES.On("SendEmail", mock.Anything, mock.AnythingOfType("*sesv2.SendEmailInput")).
-		Return(&sesv2.SendEmailOutput{MessageId: aws.String("msg-456")}, nil)
-
-	sender := NewSenderWithClients(nil, mockSES, SenderConfig{
-		FromEmail: "noreply@example.com",
-	})
-
-	ctx := context.Background()
-	err := sender.SendWelcomeEmail(ctx, "newuser@example.com", "https://dashboard.example.com", "user")
-
-	require.NoError(t, err)
-	mockSES.AssertExpectations(t)
-}
-
 // Test template success paths with no recommendations (edge case).
 func TestSender_SendNewRecommendationsNotification_EmptyRecommendations(t *testing.T) {
 	mockSNS := new(MockSNSClient)
@@ -254,18 +235,6 @@ func TestSender_SendPasswordResetEmail_NoFromEmail(t *testing.T) {
 
 	ctx := context.Background()
 	err := sender.SendPasswordResetEmail(ctx, "user@example.com", "https://example.com/reset")
-
-	// Must surface the misconfiguration rather than report a send that never happened (#270).
-	require.ErrorIs(t, err, ErrNoFromEmail)
-}
-
-func TestSender_SendWelcomeEmail_NoFromEmail(t *testing.T) {
-	sender := &Sender{
-		fromEmail: "",
-	}
-
-	ctx := context.Background()
-	err := sender.SendWelcomeEmail(ctx, "user@example.com", "https://example.com", "user")
 
 	// Must surface the misconfiguration rather than report a send that never happened (#270).
 	require.ErrorIs(t, err, ErrNoFromEmail)
@@ -382,23 +351,6 @@ func TestSender_SendPasswordResetEmail_SESError(t *testing.T) {
 
 	ctx := context.Background()
 	err := sender.SendPasswordResetEmail(ctx, "user@example.com", "https://example.com/reset")
-	require.Error(t, err)
-}
-
-func TestSender_SendWelcomeEmail_SESError(t *testing.T) {
-	mockSES := new(MockSESClient)
-	sender := &Sender{
-		sesClient: mockSES,
-		fromEmail: "noreply@example.com",
-	}
-
-	// GetAccount is called first - return production mode (not sandbox)
-	mockSES.On("GetAccount", mock.Anything, mock.AnythingOfType("*sesv2.GetAccountInput")).
-		Return(&sesv2.GetAccountOutput{ProductionAccessEnabled: true}, nil)
-	mockSES.On("SendEmail", mock.Anything, mock.Anything).Return(nil, assert.AnError)
-
-	ctx := context.Background()
-	err := sender.SendWelcomeEmail(ctx, "user@example.com", "https://example.com", "admin")
 	require.Error(t, err)
 }
 

@@ -20,20 +20,6 @@ func TestRenderPasswordResetEmail(t *testing.T) {
 	assert.Contains(t, result, "CUDly")
 }
 
-func TestRenderWelcomeEmail(t *testing.T) {
-	email := "user@example.com"
-	dashboardURL := "https://dashboard.example.com"
-	role := "admin"
-
-	result, err := RenderWelcomeEmail(email, dashboardURL, role)
-
-	require.NoError(t, err)
-	assert.Contains(t, result, dashboardURL)
-	assert.Contains(t, result, role)
-	assert.Contains(t, result, "Welcome")
-	assert.Contains(t, result, "CUDly")
-}
-
 func TestRenderNewRecommendationsEmail(t *testing.T) {
 	data := NotificationData{
 		DashboardURL: "https://dashboard.example.com",
@@ -237,18 +223,6 @@ func TestRenderPurchaseConfirmationEmail_NoUpfrontCost(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, result, "500.00")
 	// Should not contain upfront cost line when it's 0
-}
-
-func TestWelcomeUserData_Structure(t *testing.T) {
-	data := WelcomeUserData{
-		Email:        "user@example.com",
-		DashboardURL: "https://dashboard.example.com",
-		Role:         "admin",
-	}
-
-	assert.Equal(t, "user@example.com", data.Email)
-	assert.Equal(t, "https://dashboard.example.com", data.DashboardURL)
-	assert.Equal(t, "admin", data.Role)
 }
 
 // Issue #287: extended approval-request plain-text template carries
@@ -483,18 +457,6 @@ func TestRenderUserInviteEmailHTML(t *testing.T) {
 	assert.Contains(t, html, `href="https://dashboard.example/reset-password?token=xyz"`)
 	assert.Contains(t, html, ">Set your password<")
 	assert.Contains(t, html, "Hello bob@example.com,")
-}
-
-// TestRenderWelcomeEmailHTML — same assertions for the welcome flow.
-func TestRenderWelcomeEmailHTML(t *testing.T) {
-	html, err := RenderWelcomeEmailHTML("carol@example.com", "https://dashboard.example", "admin")
-	require.NoError(t, err)
-	assert.NotEmpty(t, html)
-
-	assert.Contains(t, html, `href="https://dashboard.example"`)
-	assert.Contains(t, html, ">Open dashboard<")
-	assert.Contains(t, html, "Hello carol@example.com,")
-	assert.Contains(t, html, "<strong>admin</strong>")
 }
 
 // TestPlainTextTemplates_NoHTMLEscaping asserts that special characters in data

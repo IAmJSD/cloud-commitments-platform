@@ -303,8 +303,8 @@ func (s *Sender) SendToEmailWithCCMultipart(ctx context.Context, toEmail string,
 // twice.
 func (s *Sender) SendToEmailWithCC(ctx context.Context, toEmail string, ccEmails []string, subject, body string) error {
 	// Empty or malformed FROM_EMAIL means nothing can go out. Return
-	// ErrNoFromEmail rather than nil so callers (password reset, invites,
-	// welcome mail) don't report a send that never happened (#270).
+	// ErrNoFromEmail rather than nil so callers (password reset, invites)
+	// don't report a send that never happened (#270).
 	if !isValidFromEmail(s.fromEmail) {
 		return ErrNoFromEmail
 	}
