@@ -92,8 +92,8 @@ func scopedReq() *events.LambdaFunctionURLRequest {
 }
 
 // permsAccountList returns a ListCloudAccountsFn-compatible slice containing
-// both test accounts — used so resolveAccountNamesByID can map UUID→name for
-// the account-name branch of MatchesAccount.
+// both test accounts — used so getAccountScope can register them for the
+// display-name lookup of AccountScope.Allows.
 func permsAccountList() []config.CloudAccount {
 	return []config.CloudAccount{
 		{ID: permsAccA, Name: permsAccAName, Provider: "aws"},
@@ -300,11 +300,11 @@ func TestPerAccountPerms_History_ListFilter(t *testing.T) {
 	}
 
 	mockStore := new(MockConfigStore)
-	mockStore.On("GetAllPurchaseHistory", ctx, mock.Anything).
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).
 		Return([]config.PurchaseHistoryRecord{rowA, rowB}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 		Return([]config.PurchaseExecution{}, nil)
-	// resolveAccountNamesByID needs ListCloudAccounts so MatchesAccount can
+	// getAccountScope needs ListCloudAccounts so AccountScope.Allows can
 	// resolve display names when the AccountID differs from the UUID.
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
@@ -334,10 +334,10 @@ func TestPerAccountPerms_History_ListFilter(t *testing.T) {
 
 // TestPerAccountPerms_HistoryAnalytics_CrossAccountRejected verifies that a
 // scoped user (allowed_accounts: [permsAccA]) gets 404 when they request
-// analytics for account B. resolveAnalyticsAccountFilter calls MatchesAccount
+// analytics for account B. resolveAnalyticsAccountFilter calls AccountScope.Allows
 // and returns errNotFound on mismatch.
 //
-// Regression: removing resolveAnalyticsAccountFilter (or its MatchesAccount
+// Regression: removing resolveAnalyticsAccountFilter (or its AccountScope.Allows
 // call) allows the analytics query to proceed and returns 200 to the caller.
 func TestPerAccountPerms_HistoryAnalytics_CrossAccountRejected(t *testing.T) {
 	ctx := context.Background()
@@ -593,7 +593,7 @@ func TestPerAccountPerms_DashboardSummary_CommitmentMetricsExcludeOtherAccounts(
 // recommendation tagged to account B gets 403 from validatePurchaseRecommendationScope.
 //
 // Regression: removing validatePurchaseRecommendationScope from executePurchase
-// (or its inner MatchesAccount call) allows the purchase to proceed and the
+// (or its inner AccountScope.Allows call) allows the purchase to proceed and the
 // assertions below fail.
 func TestPerAccountPerms_ExecutePurchase_CrossAccountRejected403(t *testing.T) {
 	ctx := context.Background()
@@ -1114,7 +1114,7 @@ func TestPerAccountPerms_PlannedPurchase_AllowedAccountPlanSucceeds(t *testing.T
 // permsAccB (outside their scope).
 //
 // The handler resolves the deployment CloudAccount ID via reshapeAccountResolver
-// and checks it against the session's allowed_accounts with auth.MatchesAccount.
+// and checks it against the session's allowed_accounts with auth.AccountScope.Allows.
 // When they don't match, no AWS SDK call is made and an empty list is returned.
 //
 // Regression: removing the getAllowedAccounts guard from listConvertibleRIs
@@ -1124,7 +1124,7 @@ func TestPerAccountPerms_ListConvertibleRIs_ScopedOutsideAllowedReturnsEmpty(t *
 	ctx := context.Background()
 
 	mockStore := new(MockConfigStore)
-	// resolveAccountNamesByID calls ListCloudAccounts so MatchesAccount can
+	// getAccountScope calls ListCloudAccounts so AccountScope.Allows can
 	// resolve display names. Return both accounts so the name lookup is realistic.
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return permsAccountList(), nil
@@ -1234,11 +1234,11 @@ func TestPerAccountPerms_GetRIUtilization_ScopedOutsideAllowedReturnsEmpty(t *te
 // TestPerAccountPerms_GetRIUtilization_ScopedWithinAllowedProceedsToAWS
 // confirms that a scoped user whose allowed_accounts DOES include the
 // deployment CloudAccount UUID is not blocked by the scope check. The handler
-// will then proceed to the AWS SDK (and fail without credentials), but the
-// scope filter itself must be transparent for an in-scope user.
+// then proceeds to the (stubbed) Cost Explorer and EC2 clients; the stubs keep
+// the test off the network and prove the scope filter was transparent (#855).
 //
 // Regression: an overly-broad scope check that blocks ALL scoped users
-// (not just out-of-scope ones) would cause this test to return empty prematurely.
+// (not just out-of-scope ones) would return empty before reaching the stubs.
 func TestPerAccountPerms_GetRIUtilization_ScopedWithinAllowedProceedsToAWS(t *testing.T) {
 	ctx := context.Background()
 
@@ -1247,6 +1247,8 @@ func TestPerAccountPerms_GetRIUtilization_ScopedWithinAllowedProceedsToAWS(t *te
 		return permsAccountList(), nil
 	}
 
+	recs := &countingUtilRecs{rows: []recommendations.RIUtilization{{ReservedInstanceID: "ri-own", UtilizationPercent: 40}}}
+	ec2Stub := &countingUtilEC2{instances: []ec2svc.ConvertibleRI{{ReservedInstanceID: "ri-own"}}}
 	handler := &Handler{
 		auth:   scopedAuthMock(ctx),
 		config: mockStore,
@@ -1254,18 +1256,18 @@ func TestPerAccountPerms_GetRIUtilization_ScopedWithinAllowedProceedsToAWS(t *te
 		reshapeAccountResolver: func(_ context.Context) (string, error) {
 			return permsAccA, nil
 		},
+		reshapeRecsFactory: func(_ aws.Config) reshapeRecsClient { return recs },
+		reshapeEC2Factory:  func(_ aws.Config) reshapeEC2Client { return ec2Stub },
 	}
-	// Pre-seal awsCfgOnce so the handler doesn't stall on AWS SDK load.
-	handler.awsCfgOnce.Do(func() {})
+	// Pre-seal awsCfgOnce so the handler never runs LoadDefaultConfig.
+	handler.awsCfgOnce.Do(func() { handler.awsCfg = aws.Config{Region: "us-east-1"} })
 
-	_, err := handler.getRIUtilization(ctx, scopedReq())
-	// The scope check passes; any error from here is AWS-level, not scope-level.
-	if err != nil {
-		assert.NotContains(t, err.Error(), "allowed accounts",
-			"in-scope user must not be blocked by allowed_accounts check")
-		assert.NotContains(t, err.Error(), "cloud account scope",
-			"in-scope user must not be blocked by cloud account scope check")
-	}
+	resp, err := handler.getRIUtilization(ctx, scopedReq())
+	require.NoError(t, err, "in-scope user must not be blocked by the allowed_accounts check")
+	typed, ok := resp.(*RIUtilizationResponse)
+	require.True(t, ok, "expected *RIUtilizationResponse, got %T", resp)
+	assert.Equal(t, 1, recs.calls, "in-scope user must reach the Cost Explorer utilization fetch")
+	assert.Equal(t, []recommendations.RIUtilization{{ReservedInstanceID: "ri-own", UtilizationPercent: 40}}, typed.Utilization)
 }
 
 // ─── 12. GET /ri-exchange/reshape-recommendations ────────────────────────────

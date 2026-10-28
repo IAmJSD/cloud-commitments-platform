@@ -13,7 +13,6 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/provider"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/scheduler"
 	"github.com/aws/aws-lambda-go/events"
@@ -30,7 +29,7 @@ type globalFilterProvider struct {
 	provider.RecommendationsClient
 }
 
-func (p globalFilterProvider) CreateAndValidateProvider(_ context.Context, name string, cfg *provider.ProviderConfig) (provider.Provider, error) {
+func (p globalFilterProvider) CreateAndValidateProvider(_ context.Context, name string, cfg *provider.Config) (provider.Provider, error) {
 	if name != "aws" || cfg != nil {
 		return nil, fmt.Errorf("unexpected provider request: %s", name)
 	}
@@ -55,10 +54,7 @@ func TestGlobalFiltersCollectedRecommendationsAPI(t *testing.T) {
 	for _, registered := range []bool{false, true} {
 		t.Run(fmt.Sprintf("registered=%t", registered), func(t *testing.T) {
 			ctx := t.Context()
-			pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
-			require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+			pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 			store := config.NewPostgresStore(pg.DB)
 			require.NoError(t, store.SaveGlobalConfig(ctx, &config.GlobalConfig{EnabledProviders: []string{"aws"}, DefaultTerm: 1, DefaultPayment: "all-upfront"}))
 			account := uuid.NewString()

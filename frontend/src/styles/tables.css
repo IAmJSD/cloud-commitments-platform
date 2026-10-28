@@ -1,11 +1,19 @@
-/* Tables styling */
+/* Tables styling.
+ * Issue #725: browsers ignore border-radius on a border-collapse: collapse
+ * table, so the header's square corners poked out of the rounded, shadowed
+ * card. The separate model with zero spacing looks the same (cells only draw
+ * a bottom border) and lets the radius plus overflow clip the corners.
+ * `clip`, not `hidden`: hidden would make the table a scroll container and
+ * break the sticky headers of tables inside scrolling modals. Column filter
+ * popovers live in document.body, so the clip cannot cut them off. */
 table {
     width: 100%;
     background: var(--cudly-surface);
     border-radius: var(--cudly-r-md);
-    overflow: visible;
+    overflow: clip;
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    border-collapse: collapse;
+    border-collapse: separate;
+    border-spacing: 0;
 }
 
 th, td {
@@ -15,9 +23,22 @@ th, td {
     font-size: 0.9rem;
 }
 
+/* Header labels read as labels, not as one more row of data (issue #725). */
 th {
     background: var(--cudly-surface-muted);
-    font-weight: 600;
+    color: var(--cudly-text-muted);
+    font-size: var(--cudly-fs-xs);
+    font-weight: var(--cudly-fw-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+/* Money and count columns: right-aligned with tabular digits so amounts line
+   up for comparison (issue #739). */
+th.num,
+td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
 }
 
 tr:hover {
@@ -25,12 +46,14 @@ tr:hover {
 }
 
 /* Recommendation row highlighting */
-tr.high-savings {
-    border-left: 3px solid var(--cudly-success);
+/* Row borders only paint in the collapsed border model, so the savings
+ * stripe is an inset shadow on the row's first cell. */
+tr.high-savings > :first-child {
+    box-shadow: inset 3px 0 0 var(--cudly-success);
 }
 
-tr.medium-savings {
-    border-left: 3px solid var(--cudly-warn);
+tr.medium-savings > :first-child {
+    box-shadow: inset 3px 0 0 var(--cudly-warn);
 }
 
 /* Deep-link target highlight: applied by applyExecutionDeepLink() in
@@ -55,13 +78,24 @@ tr.history-row-highlight:hover {
     100% { background: #fff8c4; }
 }
 
-/* Summary sections */
+/* Summary sections: four cards each, balanced like #summary (issue #191) */
 #recommendations-summary,
 #history-summary {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 1rem;
     margin-bottom: 1.5rem;
+}
+
+/* Load more under the Purchase History table (issue #676) */
+.history-load-more {
+    display: flex;
+    justify-content: center;
+    margin-top: 1rem;
+}
+
+.history-load-more[hidden] {
+    display: none;
 }
 
 /* Planned Purchases Section */
@@ -83,7 +117,6 @@ tr.history-row-highlight:hover {
 
 .planned-purchases-table {
     width: 100%;
-    border-collapse: collapse;
     background: var(--cudly-surface);
     border-radius: var(--cudly-r-md);
     overflow: hidden;
@@ -97,11 +130,11 @@ tr.history-row-highlight:hover {
     border-bottom: 1px solid var(--cudly-border);
 }
 
-.planned-purchases-table th {
-    background: var(--cudly-surface-muted);
-    font-weight: 600;
-    font-size: 0.85rem;
-    color: var(--cudly-text-muted);
+/* The left-align above outranks the shared th.num/td.num rule by source
+   order, so restate it for this table's money and count columns (#739). */
+.planned-purchases-table th.num,
+.planned-purchases-table td.num {
+    text-align: right;
 }
 
 .planned-purchases-table tbody tr:hover {
@@ -109,7 +142,7 @@ tr.history-row-highlight:hover {
 }
 
 .planned-purchase-row .plan-name {
-    font-weight: 500;
+    font-weight: var(--cudly-fw-medium);
     display: block;
 }
 
@@ -122,58 +155,12 @@ tr.history-row-highlight:hover {
     white-space: nowrap;
 }
 
-/* Planned purchase status badges */
-.status-pending {
-    color: #856404;
-}
-
-.status-paused {
-    color: #9e9e9e;
-}
-
-.status-running {
-    color: var(--cudly-primary);
-}
-
-.status-completed {
-    color: var(--cudly-success);
-}
-
-.status-failed {
-    color: var(--cudly-error);
-}
-
-.planned-purchases-table .status-badge {
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.8rem;
-    font-weight: 500;
-    text-transform: capitalize;
-}
-
-.planned-purchases-table .status-badge.status-pending {
-    background: #fef3cd;
-    color: #856404;
-}
-
-.planned-purchases-table .status-badge.status-paused {
-    background: #e9ecef;
-    color: #495057;
-}
-
-.planned-purchases-table .status-badge.status-running {
-    background: #cce5ff;
-    color: #004085;
-}
-
-.planned-purchases-table .status-badge.status-completed {
-    background: #d4edda;
-    color: #155724;
-}
-
-.planned-purchases-table .status-badge.status-failed {
-    background: #f8d7da;
-    color: #721c24;
+/* Planned purchase rows keep a status-<x> class as a hook (tests and column
+ * filters count rows by it). The status color lives only on the row's .badge
+ * (issue #737); tinting the whole row too gave e.g. a running row blue text
+ * next to an amber badge. A paused step is just dimmed. */
+.planned-purchase-row.status-paused {
+    color: var(--cudly-text-subtle);
 }
 
 /* Coverage breakdown bar, Inventory & Coverage -> Coverage (issue #1777).
@@ -185,17 +172,53 @@ tr.history-row-highlight:hover {
     vertical-align: middle;
 }
 
+/* Issue #726: the fill used to be success-green at every value, so 5% read
+ * as healthy as 95%. It is neutral now; lib/coverage-bar.ts adds a tone class
+ * when coverage is far below the service's target and draws a tick at the
+ * target. Not clipped (no overflow: hidden) so the tick can stand proud of
+ * the track; the fill carries the rounded ends itself. */
 .coverage-bar {
+    position: relative;
     height: 8px;
     background: var(--cudly-border);
     border-radius: var(--cudly-r-full);
-    overflow: hidden;
 }
 
 .coverage-bar-fill {
     height: 100%;
-    background: var(--cudly-success);
+    max-width: 100%;
+    background: var(--cudly-primary);
     border-radius: inherit;
+}
+
+/* The darker amber: --cudly-warn (#fbbc04) is 1.4:1 against the grey track,
+ * below the 3:1 a graphic needs; --cudly-warn-fg is 4.1:1. */
+.coverage-bar--below .coverage-bar-fill {
+    background: var(--cudly-warn-fg);
+}
+
+.coverage-bar--far-below .coverage-bar-fill {
+    background: var(--cudly-error);
+}
+
+/* Tint the track as well, so 0% (no fill at all) still reads as a problem. */
+.coverage-bar--below {
+    background: var(--cudly-warn-bg);
+}
+
+.coverage-bar--far-below {
+    background: var(--cudly-error-bg);
+}
+
+/* Target marker: a dark 2px tick centered on the target percentage. */
+.coverage-bar-target {
+    position: absolute;
+    top: -4px;
+    bottom: -4px;
+    width: 2px;
+    margin-left: -1px;
+    background: var(--cudly-text);
+    border-radius: 1px;
 }
 
 /* No coverage figure for this service. Distinguishes "unknown" from a 0%
@@ -203,4 +226,18 @@ tr.history-row-highlight:hover {
 .coverage-bar-absent {
     color: var(--cudly-text-subtle);
     font-size: var(--cudly-fs-xs);
+}
+
+/* Status + Overdue badges side by side, and the next-action hint under an
+ * overdue planned purchase's status (#181). */
+.planned-purchase-row .status-badges {
+    display: inline-flex;
+    gap: 0.25rem;
+    white-space: nowrap;
+}
+
+.planned-purchase-row .overdue-hint {
+    margin-top: 0.25rem;
+    font-size: 0.8rem;
+    color: var(--cudly-text-muted);
 }

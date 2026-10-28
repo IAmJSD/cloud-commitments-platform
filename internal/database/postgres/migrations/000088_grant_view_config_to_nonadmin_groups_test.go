@@ -38,13 +38,13 @@ func groupHasPermission(t *testing.T, ctx context.Context, pool *pgxpool.Pool, g
 // 403 for those groups. The grant must be surgical: no other permissions are
 // touched on either group, and the write-gating verb (update:config) is not added.
 func TestMigration_GrantViewConfigToNonAdminGroups(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
 	t.Run("view:config granted to Standard Users and Read-Only Users", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin at 000086, the last migration on main before this change. view:config
@@ -68,9 +68,8 @@ func TestMigration_GrantViewConfigToNonAdminGroups(t *testing.T) {
 	})
 
 	t.Run("update:config is NOT granted (write gate is unaffected)", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin to 000088 (feedback_migration_test_pin_version, #1436).
@@ -83,9 +82,8 @@ func TestMigration_GrantViewConfigToNonAdminGroups(t *testing.T) {
 	})
 
 	t.Run("sibling permissions on Standard Users are preserved", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin to 000088 (feedback_migration_test_pin_version, #1436).
@@ -108,9 +106,8 @@ func TestMigration_GrantViewConfigToNonAdminGroups(t *testing.T) {
 	})
 
 	t.Run("down migration removes view:config from both groups", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin to 000088 so a later migration on main cannot shift the head
@@ -134,9 +131,8 @@ func TestMigration_GrantViewConfigToNonAdminGroups(t *testing.T) {
 	})
 
 	t.Run("idempotent: applying to a group already holding view:config is safe", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin to 000088 (feedback_migration_test_pin_version, #1436).
@@ -144,7 +140,7 @@ func TestMigration_GrantViewConfigToNonAdminGroups(t *testing.T) {
 
 		// Count entries for view:config before the re-apply.
 		var count int
-		err = pool.QueryRow(ctx, `
+		err := pool.QueryRow(ctx, `
 			SELECT COUNT(*)
 			FROM groups g, jsonb_array_elements(g.permissions) AS elem
 			WHERE g.id = $1

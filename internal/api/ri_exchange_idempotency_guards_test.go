@@ -118,3 +118,38 @@ func TestExecuteExchange_InvalidBodyNeverClaims(t *testing.T) {
 	mockAuth.AssertNotCalled(t, "HasPermissionForConstraintsAPI",
 		mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 }
+
+// TestGetExchangeQuote_ValidatesLikeExecute pins that the quote refuses the
+// same malformed targets execute does (#1521). Without it a legacy target
+// with no count passed the handler and surfaced as a 500 from the library.
+func TestGetExchangeQuote_ValidatesLikeExecute(t *testing.T) {
+	const offeringID = "4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91"
+	cases := map[string]struct{ body, want string }{
+		"legacy form without a count": {
+			`{"ri_ids":["ri-1"],"target_offering_id":"` + offeringID + `"}`,
+			"target_count must be >= 1",
+		},
+		"a blank source id": {
+			`{"ri_ids":[""],"targets":[{"offering_id":"` + offeringID + `","count":1}]}`,
+			"ri_ids[0] is empty",
+		},
+		"a whitespace-only legacy offering id": {
+			`{"ri_ids":["ri-1"],"target_offering_id":"  ","target_count":1}`,
+			"either targets[] or target_offering_id is required",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := &Handler{auth: &mockAuthForExchange{}}
+			_, err := h.getExchangeQuote(context.Background(), &events.LambdaFunctionURLRequest{
+				Headers: map[string]string{"authorization": "Bearer test-token"},
+				Body:    tc.body,
+			})
+			require.Error(t, err)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "expected a ClientError, got: %v", err)
+			assert.Equal(t, 400, ce.code)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}

@@ -12,9 +12,11 @@ import type { LadderConfig } from '../api';
 import { waitFor } from '@testing-library/dom';
 import { listAccountsMinimal, type AccountSummary } from '../api/accounts';
 import { canAccess } from '../permissions';
+import { refreshLadderTimeline } from '../ladder-timeline';
+import { confirmDialog } from '../confirmDialog';
 
 jest.mock('../api/accounts', () => ({ listAccountsMinimal: jest.fn() }));
-jest.mock('../ladder-timeline', () => ({ initLadderTimeline: jest.fn() }));
+jest.mock('../ladder-timeline', () => ({ initLadderTimeline: jest.fn(), refreshLadderTimeline: jest.fn() }));
 
 jest.mock('../api', () => ({
   getLadderConfigs: jest.fn(),
@@ -22,6 +24,8 @@ jest.mock('../api', () => ({
   getConfig: jest.fn(),
   updateConfig: jest.fn(),
 }));
+
+jest.mock('../confirmDialog', () => ({ confirmDialog: jest.fn() }));
 
 jest.mock('../permissions', () => ({
   canAccess: jest.fn(() => true),
@@ -67,6 +71,7 @@ describe('ladder.ts', () => {
     jest.clearAllMocks();
     mockShowToast.mockReset();
     (canAccess as jest.Mock).mockReturnValue(true);
+    (confirmDialog as jest.Mock).mockResolvedValue(true);
     (listAccountsMinimal as jest.Mock).mockResolvedValue([
       { id: 'acct-1', name: 'AWS account', external_id: 'aws-external', provider: 'aws' },
       { id: 'azure-id', name: 'Azure account', external_id: 'azure-external', provider: 'azure' },
@@ -74,9 +79,65 @@ describe('ladder.ts', () => {
     ]);
   });
 
+  // Issue #186: the per-account table loads behind the shared skeleton, not a
+  // plain "Loading..." paragraph, and the skeleton gives way to the table or
+  // to the error.
+  test('per-account configs show skeleton rows while loading, then the table (issue #186)', async () => {
+    document.body.innerHTML = '<div id="commitment-laddering-settings"></div>';
+    let resolve: (c: LadderConfig[]) => void = () => undefined;
+    (api.getLadderConfigs as jest.Mock).mockReturnValue(new Promise<LadderConfig[]>((r) => { resolve = r; }));
+    const done = initLadderingSettings(false);
+
+    const container = document.getElementById('ladder-configs-table-container')!;
+    // No visible "Loading…" paragraph; the only text is the sr-only status.
+    expect(container.querySelector('p')).toBeNull();
+    const rows = container.querySelectorAll('tr.skeleton-row');
+    expect(rows).toHaveLength(3);
+    expect(rows[0]!.querySelectorAll('td')).toHaveLength(8);
+    expect(container.querySelector('.skeleton-status')).toHaveTextContent('Loading…');
+
+    resolve([baseConfig({ id: 'config-1' })]);
+    await done;
+    expect(container.querySelector('.skeleton')).toBeNull();
+    expect(container.querySelectorAll('tbody tr')).toHaveLength(1);
+  });
+
+  test('a failed per-account config load replaces the skeleton with the error (issue #186)', async () => {
+    document.body.innerHTML = '<div id="commitment-laddering-settings"></div>';
+    (api.getLadderConfigs as jest.Mock).mockRejectedValue(new Error('boom'));
+    jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    await initLadderingSettings(false);
+
+    const container = document.getElementById('ladder-configs-table-container')!;
+    expect(container.querySelector('.skeleton')).toBeNull();
+    expect(container.hasAttribute('aria-busy')).toBe(false);
+    expect(container).toHaveTextContent('Failed to load per-account configurations.');
+  });
+
+  test('config modal moves focus inside, traps Tab, closes on Escape and restores focus (#731)', async () => {
+    await renderSection([baseConfig({ id: 'config-1' })]);
+    const editBtn = document.querySelector<HTMLButtonElement>('.ladder-edit-btn')!;
+    editBtn.focus();
+    editBtn.click();
+
+    const modal = document.getElementById('ladder-config-modal')!;
+    expect(modal).not.toHaveClass('hidden');
+    expect(modal).toHaveAttribute('role', 'dialog');
+    expect(modal.contains(document.activeElement)).toBe(true);
+
+    // Shift+Tab from the first focusable wraps to the last one inside the modal.
+    modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
+    expect(modal.contains(document.activeElement)).toBe(true);
+
+    modal.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(modal).toHaveClass('hidden');
+    expect(document.activeElement).toBe(editBtn);
+  });
+
   test('lookback input advertises the 10-day baseline minimum', async () => {
     await renderSection([baseConfig({ id: 'config-1' })]);
     expect(document.getElementById('ladder-cfg-lookback-days')).toHaveAttribute('min', '10');
+    expect(document.getElementById('ladder-cfg-lookback-days')).toHaveAccessibleDescription('Minimum 10');
   });
 
   test.each([
@@ -101,6 +162,8 @@ describe('ladder.ts', () => {
     expect(api.upsertLadderConfig).toHaveBeenCalledTimes(1);
     const { updated_at: _updatedAt, ...expected } = config;
     expect(api.upsertLadderConfig).toHaveBeenCalledWith({ ...expected, target_coverage: 75 });
+    // Issue #728: the timeline picks up the saved config without a reload.
+    expect(refreshLadderTimeline).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ cloud_account_id: config.cloud_account_id })]));
   });
 
   describe('renderLadderingSection: toggle label accessibility (issue #1412 row 3.1)', () => {
@@ -158,6 +221,8 @@ describe('ladder.ts', () => {
       expect(api.updateConfig).toHaveBeenCalledWith({ laddering_enabled: !before });
       expect(toggle.checked).toBe(!before);
       await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' })));
+      // Issue #728: the timeline re-evaluates with the new kill-switch state.
+      expect(refreshLadderTimeline).toHaveBeenCalledWith(expect.any(Array), !before);
     });
 
     test('a failed PUT reverts the toggle and shows an error toast', async () => {
@@ -249,14 +314,89 @@ describe('ladder.ts', () => {
     });
   });
 
+  describe('saveLadderConfig required numeric fields (#134)', () => {
+    async function primeValidForm(): Promise<void> {
+      await renderSection();
+      document.getElementById('ladder-add-config-btn')!.click();
+      await waitFor(() => expect(document.getElementById('ladder-cfg-account')).toBeEnabled());
+      (document.getElementById('ladder-cfg-account') as HTMLSelectElement).value = 'acct-1';
+      (document.getElementById('ladder-cfg-ramp-schedule') as HTMLTextAreaElement).value =
+        '{"steps":[{"after_days":0,"fraction":1.0}]}';
+    }
+
+    test('a cleared Buffer Fraction blocks the save instead of sending 0 (no buffer)', async () => {
+      await primeValidForm();
+      const buffer = document.getElementById('ladder-cfg-buffer-fraction') as HTMLInputElement;
+      buffer.value = '';
+
+      await saveLadderConfig();
+
+      expect(api.upsertLadderConfig).not.toHaveBeenCalled();
+      expect(mockShowToast).toHaveBeenCalledWith({
+        message: 'Buffer fraction is required. Enter a number before saving.',
+        kind: 'error',
+      });
+      expect(document.activeElement).toBe(buffer);
+    });
+
+    test.each([
+      ['ladder-cfg-target-coverage', 'Target coverage'],
+      ['ladder-cfg-baseline-percentile', 'Baseline percentile'],
+      ['ladder-cfg-lookback-days', 'Lookback days'],
+      ['ladder-cfg-buf-util-threshold', 'Buffer utilization threshold'],
+      ['ladder-cfg-max-actions', 'Max actions per run'],
+    ])('a cleared %s names the field instead of a generic save failure', async (id, label) => {
+      await primeValidForm();
+      (document.getElementById(id) as HTMLInputElement).value = '  ';
+
+      await saveLadderConfig();
+
+      expect(api.upsertLadderConfig).not.toHaveBeenCalled();
+      expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining(label) }));
+    });
+
+    test('an explicit 0 Buffer Fraction is still a valid "no buffer" choice', async () => {
+      await primeValidForm();
+      (document.getElementById('ladder-cfg-buffer-fraction') as HTMLInputElement).value = '0';
+      (api.upsertLadderConfig as jest.Mock).mockResolvedValue(baseConfig({ buffer_fraction: 0 }));
+
+      await saveLadderConfig();
+
+      const sent = (api.upsertLadderConfig as jest.Mock).mock.calls[0][0] as LadderConfig;
+      expect(sent.buffer_fraction).toBe(0);
+      expect(sent.target_coverage).toBe(100);
+      expect(sent.lookback_days).toBe(30);
+      expect(sent.max_actions_per_run).toBe(10);
+    });
+  });
+
+  describe('renderConfigTable target_coverage guard (#134)', () => {
+    test('a row without target_coverage renders N/A instead of blanking the table', async () => {
+      await renderSection();
+      renderConfigTable([
+        baseConfig({ target_coverage: null as unknown as number }),
+        baseConfig({ cloud_account_id: 'second', target_coverage: 85 }),
+      ]);
+
+      const rows = document.querySelectorAll('#ladder-configs-table-container tbody tr');
+      expect(rows).toHaveLength(2);
+      expect(rows[0]!.children[5]!.textContent).toBe('N/A');
+      expect(rows[1]!.children[5]!.textContent).toBe('85.0%');
+    });
+  });
+
   describe('registered account selector', () => {
     const account = (): HTMLSelectElement => document.getElementById('ladder-cfg-account') as HTMLSelectElement;
     const provider = (): HTMLSelectElement => document.getElementById('ladder-cfg-provider') as HTMLSelectElement;
     const status = (): HTMLElement => document.getElementById('ladder-cfg-account-status')!;
     const saveButton = (): HTMLElement => document.getElementById('ladder-config-save-btn')!;
     const changeProvider = (value: string): void => { provider().value = value; provider().dispatchEvent(new Event('change')); };
-    async function open(): Promise<void> {
+    // pendingAccounts lets a test hold the modal's account request open. It is
+    // installed after the section renders because the config table also loads
+    // account names during init.
+    async function open(pendingAccounts?: (mock: jest.Mock) => void): Promise<void> {
       await renderSection();
+      pendingAccounts?.(listAccountsMinimal as jest.Mock);
       document.getElementById('ladder-add-config-btn')!.click();
     }
     async function ready(): Promise<void> { await waitFor(() => expect(account()).toBeEnabled()); }
@@ -304,8 +444,7 @@ describe('ladder.ts', () => {
 
     test('blocks save while loading and filters the provider selected before response', async () => {
       let resolve!: (accounts: AccountSummary[]) => void;
-      (listAccountsMinimal as jest.Mock).mockReturnValue(new Promise<AccountSummary[]>(done => { resolve = done; }));
-      await open();
+      await open(mock => mock.mockReturnValue(new Promise<AccountSummary[]>(done => { resolve = done; })));
       expect(account()).toBeDisabled();
       expect(saveButton()).toBeDisabled();
       expect(status()).toHaveTextContent(/loading/i);
@@ -319,8 +458,7 @@ describe('ladder.ts', () => {
 
     test('a response from a closed modal cannot replace a reopened form', async () => {
       let resolve!: (accounts: AccountSummary[]) => void;
-      (listAccountsMinimal as jest.Mock).mockReturnValueOnce(new Promise<AccountSummary[]>(done => { resolve = done; }));
-      await open();
+      await open(mock => mock.mockReturnValueOnce(new Promise<AccountSummary[]>(done => { resolve = done; })));
       document.getElementById('ladder-modal-cancel-btn')!.click();
       document.getElementById('ladder-add-config-btn')!.click();
       await ready();
@@ -368,9 +506,85 @@ describe('ladder.ts', () => {
       (canAccess as jest.Mock).mockReturnValue(false);
       await saveLadderConfig();
       expect(api.upsertLadderConfig).not.toHaveBeenCalled();
+      (listAccountsMinimal as jest.Mock).mockClear();
       await renderSection();
       expect(document.getElementById('ladder-add-config-btn')).toBeNull();
+      // Only the table's name lookup runs; no account selector is opened.
       expect(listAccountsMinimal).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Issue #742: readable account labels, auto-approve impact, server errors.
+  describe('account labels and auto-approve safeguards', () => {
+    const mode = (): HTMLSelectElement => document.getElementById('ladder-cfg-mode') as HTMLSelectElement;
+    const warning = (): HTMLElement => document.getElementById('ladder-cfg-mode-warning')!;
+    const setMode = (value: string): void => { mode().value = value; mode().dispatchEvent(new Event('change')); };
+    async function openNew(): Promise<void> {
+      await renderSection();
+      document.getElementById('ladder-add-config-btn')!.click();
+      await waitFor(() => expect(document.getElementById('ladder-cfg-account')).toBeEnabled());
+      (document.getElementById('ladder-cfg-account') as HTMLSelectElement).value = 'acct-1';
+      (api.upsertLadderConfig as jest.Mock).mockImplementation(async (cfg: LadderConfig) => cfg);
+    }
+
+    test('table shows the registered account name and keeps the ID as the title', async () => {
+      await renderSection([baseConfig({ cloud_account_id: 'acct-1' })]);
+      const cell = document.querySelector('#ladder-configs-table-container tbody td')!;
+      expect(cell).toHaveTextContent('AWS account (aws-external)');
+      expect(cell).toHaveAttribute('title', 'acct-1');
+      expect(document.querySelector('#ladder-configs-table-container th')).toHaveTextContent('Account');
+    });
+
+    test('table falls back to the stored ID when the account list fails', async () => {
+      (listAccountsMinimal as jest.Mock).mockRejectedValue(new Error('Forbidden'));
+      await renderSection([baseConfig({ cloud_account_id: 'acct-1' })]);
+      expect(document.querySelector('#ladder-configs-table-container tbody td')).toHaveTextContent('acct-1');
+    });
+
+    test('the warning follows the Approval Mode selection', async () => {
+      await openNew();
+      expect(warning()).not.toBeVisible();
+      setMode('auto_approve');
+      expect(warning()).toBeVisible();
+      expect(warning()).toHaveTextContent(/skips human approval/i);
+      setMode('email_approval');
+      expect(warning()).not.toBeVisible();
+    });
+
+    test('editing an Auto Approve config shows the warning immediately', async () => {
+      await renderSection([baseConfig({ id: 'c', cloud_account_id: 'acct-1', mode: 'auto_approve' })]);
+      document.querySelector<HTMLButtonElement>('.ladder-edit-btn')!.click();
+      expect(warning()).toBeVisible();
+    });
+
+    test.each([[true, 1], [false, 0]])('turning on Auto Approve asks first (confirmed=%s)', async (confirmed, saves) => {
+      (confirmDialog as jest.Mock).mockResolvedValue(confirmed);
+      await openNew();
+      setMode('auto_approve');
+      (document.getElementById('ladder-cfg-enabled') as HTMLInputElement).checked = true;
+      await saveLadderConfig();
+      expect(confirmDialog).toHaveBeenCalledWith(expect.objectContaining({ title: 'Enable Auto Approve?', destructive: true }));
+      expect(api.upsertLadderConfig).toHaveBeenCalledTimes(saves);
+      expect(document.getElementById('ladder-config-modal')!.classList.contains('hidden')).toBe(confirmed);
+      expect(document.getElementById('ladder-config-save-btn')).not.toBeDisabled();
+    });
+
+    test('no confirmation when Auto Approve is already active or the config stays disabled', async () => {
+      await openNew();
+      setMode('auto_approve');
+      await saveLadderConfig();
+      await renderSection([baseConfig({ id: 'c', cloud_account_id: 'acct-1', mode: 'auto_approve' })]);
+      document.querySelector<HTMLButtonElement>('.ladder-edit-btn')!.click();
+      await saveLadderConfig();
+      expect(confirmDialog).not.toHaveBeenCalled();
+      expect(api.upsertLadderConfig).toHaveBeenCalledTimes(2);
+    });
+
+    test('a failed save shows the server error text', async () => {
+      await openNew();
+      (api.upsertLadderConfig as jest.Mock).mockRejectedValue(new Error('ramp_schedule fractions must sum to 1.0'));
+      await saveLadderConfig();
+      expect(mockShowToast).toHaveBeenCalledWith({ message: 'Failed to save ladder config: ramp_schedule fractions must sum to 1.0', kind: 'error' });
     });
   });
 });

@@ -27,12 +27,11 @@ const insertRecForMigration111 = `
 // upsert still works, the 11-column index is added, and rollback removes only
 // the new column pair and index.
 func TestMigration_RecommendationsPlatformTenancy(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
-	container, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	defer container.Cleanup(ctx)
+	container := testhelpers.RequireEmptyDatabase(ctx, t)
 	pool := container.DB.Pool()
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 110))
@@ -53,7 +52,7 @@ func TestMigration_RecommendationsPlatformTenancy(t *testing.T) {
 		"top-level-ignored": {`{"platform":"Windows","tenancy":"host"}`, "", ""},
 	}
 	for resourceType, v := range vectors {
-		_, err = pool.Exec(ctx, insertRecForMigration111, resourceType, v.payload)
+		_, err := pool.Exec(ctx, insertRecForMigration111, resourceType, v.payload)
 		require.NoError(t, err)
 	}
 

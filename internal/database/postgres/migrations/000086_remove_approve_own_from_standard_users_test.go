@@ -38,13 +38,13 @@ func standardUsersHasPurchaseVerb(t *testing.T, ctx context.Context, pool *pgxpo
 // virtue of ownership. The removal must be surgical -- the sibling own-scoped
 // verbs (cancel-own, retry-own) seeded alongside it in 000057 must be retained.
 func TestMigration_RemoveApproveOwnFromStandardUsers(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
 	t.Run("approve-own removed, sibling own-verbs retained", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin at 000083, the last migration before 000086. approve-own was
@@ -77,9 +77,8 @@ func TestMigration_RemoveApproveOwnFromStandardUsers(t *testing.T) {
 	})
 
 	t.Run("down migration restores approve-own", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin at exactly 000086 before rolling back. RunMigrations would migrate

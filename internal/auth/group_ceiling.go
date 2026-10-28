@@ -226,7 +226,7 @@ func validateRequestedPermissions(requested []Permission) error {
 //
 // Blank means empty after strings.TrimSpace, matching the action/resource
 // rule above. A value that merely CONTAINS whitespace is left alone:
-// enforcement compares these exactly (containsAny), so normalizing or
+// enforcement compares these exactly (containsAll), so normalizing or
 // refusing them here would diverge from what the stored value does and
 // would break edits of data this endpoint already accepted.
 //
@@ -376,7 +376,7 @@ func (s *Service) checkAccountGrant(ctx context.Context, actorUserID string, req
 // against a restricted holder is the widening this exists to catch.
 //
 // Comparison is EXACT -- no trimming, no case folding -- because that is what
-// MatchesAccount does at enforcement (`a == accountID`). Normalising here
+// AccountScope.Allows does at enforcement (`a == accountID`). Normalising here
 // would make the ceiling MORE permissive than enforcement: an actor whose
 // stored scope is " acct-A" matches nothing when access is actually checked,
 // yet a trimming ceiling would treat them as holding "acct-A" and let them

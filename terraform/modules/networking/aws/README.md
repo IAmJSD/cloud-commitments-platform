@@ -124,7 +124,9 @@ The module creates:
 
 - **Database Security Group**: PostgreSQL access from VPC CIDR
 - **VPC Endpoints Security Group**: HTTPS access for VPC endpoints
-- **ALB Security Group** (optional): HTTP/HTTPS from internet
+- **ALB Security Group** (optional): HTTP/HTTPS from internet, or, with
+  `restrict_alb_ingress_to_cloudfront = true`, HTTP from the CloudFront
+  origin-facing managed prefix list only
 - **fck-nat Security Group** (if enabled): NAT traffic from VPC
 
 ## Outputs

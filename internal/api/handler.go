@@ -140,6 +140,13 @@ type Handler struct {
 	// can be exercised end-to-end without live AWS credentials or a real RI.
 	executeExchangeFn func(ctx context.Context, req exchange.ExchangeExecuteRequest) (string, *exchange.ExchangeQuoteSummary, error)
 
+	// exchangeQuoteFn is the RI exchange quote function injected by tests.
+	// When nil (the production default), awsExchangeQuoter returns
+	// exchange.GetExchangeQuote, which builds its own EC2/STS clients from the
+	// ambient AWS SDK chain. Tests inject a stub so getExchangeQuote never
+	// resolves credentials, probes IMDS or calls EC2 (#855).
+	exchangeQuoteFn func(ctx context.Context, req exchange.ExchangeQuoteRequest) (*exchange.ExchangeQuoteSummary, error)
+
 	// encryptionKeySource is the env var name that resolved the credential
 	// encryption key. Empty when no credStore is configured. Read only by the
 	// /health credential_store check, which keeps it out of the public body
@@ -572,14 +579,14 @@ func riExchangeArmStateOf(cfg *config.GlobalConfig) riExchangeArmState {
 // armed reports whether this state will make the scheduled TaskRIExchangeReshape
 // execute exchanges against the provider without a human approval step.
 //
-// The predicate mirrors the CONSUMER exactly. pkg/exchange/auto.go's
-// processRecommendation routes to processManualExchange only on the literal
-// "manual" and sends every other value -- including "", "Auto" and any typo --
-// to processAutoExchange. Defining "armed" as mode == "auto" would therefore
-// leave the gate below open on precisely the route that matters: PUT /api/config
+// The predicate is deliberately wider than the consumer. pkg/exchange's
+// RunAutoExchange executes without approval only for the literal "auto" and
+// refuses any other unknown mode (including "") with an error, so a typo
+// fails the scheduled run loudly instead of executing. PUT /api/config
 // unmarshals onto GlobalConfig wholesale and GlobalConfig.Validate never
-// constrains RIExchangeMode, so any non-"manual" string reaches the scheduler.
-// Both axes of the guard must see what the scheduler sees.
+// constrains RIExchangeMode, so any non-"manual" string can be stored; treating
+// every such value as armed keeps the grant check closed if the consumer's
+// mode handling ever changes.
 func (s riExchangeArmState) armed() bool {
 	return s.enabled && s.mode != "manual"
 }
@@ -597,12 +604,14 @@ func (s riExchangeArmState) armed() bool {
 // threat the carve-out closed (issue #1765).
 //
 // Authorization goes through requirePermission, taking the same request the
-// caller was authenticated from, so the verb is evaluated against THE CREDENTIAL
-// PRESENTED rather than the owning user's group permissions. That distinction is
-// load-bearing: for a user API key, requirePermission routes to authorizeAPIKey
-// and checks the KEY's effective permissions. Checking the session's user id
-// instead let a CI key that is correctly denied execute:ri-exchange arm the
-// scheduler to execute every exchange -- the same inheritance bug
+// caller was authenticated from (resolved ahead of the transaction by
+// resolveGrant and passed in as grant), so the verb is evaluated against
+// THE CREDENTIAL PRESENTED rather than the owning user's group permissions.
+// That distinction is load-bearing: for a user API key, requirePermission
+// routes to authorizeAPIKey and checks the KEY's effective permissions.
+// Checking the session's user id instead let a CI key that is correctly
+// denied execute:ri-exchange arm the scheduler to execute every exchange --
+// the same inheritance bug
 // requirePermissionConstraints already guards against one function above, and
 // the reason this does not call requireSessionPermission directly. It also
 // gives the stateless admin API key the same answer here as on the direct
@@ -626,7 +635,12 @@ func (s riExchangeArmState) armed() bool {
 // these fields exactly as effectively as the dedicated PUT /api/ri-exchange/config
 // (updateRIExchangeConfig), so a gate on one alone would look complete and
 // would not be.
-func (h *Handler) requireRIExchangeAutoModeGrant(ctx context.Context, req *events.LambdaFunctionURLRequest, before, after riExchangeArmState) error {
+//
+// It runs inside the UpdateGlobalConfigAtomic closure, so it must not touch
+// the pool (issue #1517): grant is the outcome of that requirePermission call,
+// resolved before the transaction opened, and is returned only when the write
+// escalates.
+func requireRIExchangeAutoModeGrant(before, after riExchangeArmState, grant error) error {
 	if !after.armed() {
 		return nil
 	}
@@ -634,10 +648,7 @@ func (h *Handler) requireRIExchangeAutoModeGrant(ctx context.Context, req *event
 	if before.armed() && !raisesCap {
 		return nil
 	}
-	if _, err := h.requirePermission(ctx, req, auth.ActionExecute, auth.ResourceRIExchange); err != nil {
-		return err
-	}
-	return nil
+	return grant
 }
 
 // getAccountScope returns the auth.AccountScope describing which cloud
@@ -655,9 +666,10 @@ func (h *Handler) requireRIExchangeAutoModeGrant(ctx context.Context, req *event
 // alongside a zero AccountScope, so a caller that ignores the error still
 // denies.
 //
-// A restricted scope matches an entry by display name only when exactly one
-// registered account carries that name (withRegisteredAccountNames, issue
-// #433). Every scoped handler gets its scope here, so this is the one place
+// A restricted scope matches its entries by account ID only. A caller that
+// knows an account only by display name is resolved to the one registered
+// account carrying that name (withRegisteredAccountNames, issues #433 and
+// #1034). Every scoped handler gets its scope here, so this is the one place
 // that has to load the account list.
 func (h *Handler) getAccountScope(ctx context.Context, session *Session) (auth.AccountScope, error) {
 	if session.UserID == apiKeyAdminUserID {
@@ -682,12 +694,14 @@ func (h *Handler) getAccountScope(ctx context.Context, session *Session) (auth.A
 	return h.withRegisteredAccountNames(ctx, auth.ScopeFromLegacyList(resolved)), nil
 }
 
-// withRegisteredAccountNames lets a restricted scope match entries by display
-// name, limited to names that exactly one cloud account carries. Display names
-// are not unique, so matching a shared name would grant every account that
-// uses it, including ones registered later (issue #433). When the account list
-// cannot be loaded the scope stays ID-only: that only narrows access, and ID
-// entries keep working.
+// withRegisteredAccountNames lets a restricted scope identify an account by
+// its display name, limited to names that exactly one cloud account carries.
+// The scope must still hold that account's ID: a name never matches a scope
+// entry, because a stored name is not bound to an account and would grant
+// whichever account takes the name later (issue #1034). Display names are not
+// unique either, so a shared name identifies no account (issue #433). When the
+// account list cannot be loaded the scope cannot resolve names at all: that
+// only narrows access, and callers that pass the account ID are unaffected.
 func (h *Handler) withRegisteredAccountNames(ctx context.Context, scope auth.AccountScope) auth.AccountScope {
 	if scope.AllowsAll() || len(scope.Accounts) == 0 || h.config == nil {
 		return scope
@@ -697,21 +711,29 @@ func (h *Handler) withRegisteredAccountNames(ctx context.Context, scope auth.Acc
 		logging.Warnf("account scope: cannot load cloud accounts, matching scope entries by ID only: %v", err)
 		return scope
 	}
-	names := make([]string, len(registered))
+	known := make([]auth.RegisteredAccount, len(registered))
 	for i := range registered {
-		names[i] = registered[i].Name
+		known[i] = auth.RegisteredAccount{ID: registered[i].ID, Name: registered[i].Name, ExternalID: registered[i].ExternalID}
 	}
-	return scope.WithRegisteredNames(names)
+	return scope.WithRegisteredAccounts(known)
 }
 
 // setSecurityHeaders adds comprehensive security headers to the response.
+// HSTSHeaderValue is the Strict-Transport-Security value for every response
+// path: API responses here, and the HTTP-mode static, Lambda static and
+// health responses in internal/server. One constant keeps the modes from
+// drifting apart again (issue #14: Lambda mode had dropped "preload").
+// "preload" only makes the domain eligible for the browser preload list;
+// submitting it to hstspreload.org is a separate, manual step.
+const HSTSHeaderValue = "max-age=31536000; includeSubDomains; preload"
+
 func setSecurityHeaders(headers map[string]string) map[string]string {
 	// Content Security Policy - restrictive for API responses
 	// Only allow connections to same origin, block all other resources
 	headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
 
 	// Strict Transport Security - enforce HTTPS for 1 year including subdomains
-	headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+	headers["Strict-Transport-Security"] = HSTSHeaderValue
 
 	// Permissions Policy - disable all browser features
 	headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
@@ -767,7 +789,7 @@ func (h *Handler) buildResponseHeaders() map[string]string {
 
 	if h.corsAllowedOrigin != "" {
 		corsHeaders["Access-Control-Allow-Origin"] = h.corsAllowedOrigin
-		corsHeaders["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+		corsHeaders["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
 		corsHeaders["Access-Control-Allow-Headers"] = "Content-Type, X-API-Key, Authorization, X-Authorization, X-CSRF-Token"
 		corsHeaders["Access-Control-Allow-Credentials"] = "true"
 	}
@@ -1147,25 +1169,5 @@ func (h *Handler) resolveAWSCallerIdentity(ctx context.Context) (string, string,
 // attacker-controlled tokens into a JSON snippet the operator copy-
 // pastes into IAM.
 func parseArnPartition(arn string) string {
-	const prefix = "arn:"
-	if len(arn) <= len(prefix) || arn[:len(prefix)] != prefix {
-		return ""
-	}
-	rest := arn[len(prefix):]
-	end := -1
-	for i := 0; i < len(rest); i++ {
-		if rest[i] == ':' {
-			end = i
-			break
-		}
-	}
-	if end <= 0 {
-		return ""
-	}
-	switch rest[:end] {
-	case "aws", "aws-cn", "aws-us-gov":
-		return rest[:end]
-	default:
-		return ""
-	}
+	return config.AWSPartitionFromARN(arn)
 }

@@ -44,7 +44,7 @@ type identityProviderFactory struct {
 	recs map[string][]common.Recommendation
 }
 
-func (f identityProviderFactory) CreateAndValidateProvider(ctx context.Context, name string, cfg *provider.ProviderConfig) (provider.Provider, error) {
+func (f identityProviderFactory) CreateAndValidateProvider(ctx context.Context, name string, cfg *provider.Config) (provider.Provider, error) {
 	if name != "aws" || cfg == nil || cfg.AWSCredentialsProvider == nil {
 		return nil, fmt.Errorf("expected registered AWS fixture credentials")
 	}
@@ -85,8 +85,7 @@ func (identityEmail) SendNewRecommendationsNotification(context.Context, email.N
 
 func TestRecommendationIdentity_CollectionPostgresDetailAndPricing(t *testing.T) {
 	ctx := context.Background()
-	store, cleanup := setupRICacheIntegration(ctx, t)
-	defer cleanup()
+	store := setupRICacheIntegration(ctx, t)
 	require.NoError(t, store.SaveGlobalConfig(ctx, &config.GlobalConfig{
 		EnabledProviders: []string{"aws"}, DefaultTerm: 1, DefaultPayment: "all-upfront",
 	}))

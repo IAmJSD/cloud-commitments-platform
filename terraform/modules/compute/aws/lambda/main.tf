@@ -7,7 +7,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 5.100"
     }
   }
 }
@@ -143,7 +143,7 @@ resource "aws_lambda_function_url" "main" {
   cors {
     allow_credentials = true
     allow_origins     = var.allowed_origins
-    allow_methods     = ["GET", "POST", "PUT", "DELETE"]
+    allow_methods     = ["GET", "POST", "PUT", "PATCH", "DELETE"]
     allow_headers     = ["Content-Type", "Authorization", "X-CSRF-Token", "X-Session-Token"]
     max_age           = 3600
   }
@@ -521,8 +521,6 @@ resource "aws_iam_role_policy" "org_discovery" {
         Effect = "Allow"
         Action = [
           "organizations:ListAccounts",
-          "organizations:DescribeAccount",
-          "organizations:DescribeOrganization",
         ]
         Resource = "*" # Organizations API does not support resource-level restrictions
       }

@@ -5,6 +5,7 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ func TestLadderTimelineScopedPagesAndSnapshots(t *testing.T) {
 		Plan:              []byte(`{"secret":"never-serialize-this","actions":[{"action":"Hold","layer":"compute-sp","rationale":"Baseline already covered","data_sources":["aws-ce"],"secret":"never-serialize-this"}]}`),
 	})
 	require.NoError(t, err)
-	tranches := make([]LadderTrancheDB, LadderTimelinePageSize+1)
+	tranches := make([]LadderTrancheDB, 101)
 	for i := range tranches {
 		tranches[i] = LadderTrancheDB{
 			ID: uuid.NewString(), ConfigID: &cfgID, RunID: &run.ID,
@@ -37,16 +38,18 @@ func TestLadderTimelineScopedPagesAndSnapshots(t *testing.T) {
 	require.NoError(t, store.SaveLadderTranches(ctx, tranches))
 	first, err := store.ListLadderTimeline(ctx, accountID, "aws", nil)
 	require.NoError(t, err)
-	require.Len(t, first.Events, 100)
+	require.Len(t, first.Events, 101, "one read returns the whole scope")
 	require.Equal(t, int64(101), first.TotalCount)
 	require.Equal(t, "12.469056", first.TotalUSDHr)
-	require.NotNil(t, first.NextCursor)
-	second, err := store.ListLadderTimeline(ctx, accountID, "aws", first.NextCursor)
+	// A cursor from the earlier paginated API narrows the rows, never the totals.
+	legacy, err := store.ListLadderTimeline(ctx, accountID, "aws", &LadderTimelineCursor{CreatedAt: first.Events[99].CreatedAt, ID: first.Events[99].ID})
 	require.NoError(t, err)
-	require.Len(t, second.Events, 1)
-	require.Nil(t, second.NextCursor)
+	require.Len(t, legacy.Events, 1)
+	require.Equal(t, first.Events[100].ID, legacy.Events[0].ID)
+	require.Equal(t, int64(101), legacy.TotalCount)
+	require.Equal(t, "12.469056", legacy.TotalUSDHr)
 	ids := make(map[string]bool)
-	for _, event := range append(first.Events, second.Events...) {
+	for _, event := range first.Events {
 		require.False(t, ids[event.ID], "cursor must never duplicate an event")
 		ids[event.ID] = true
 		require.Zero(t, event.Revision, "untouched tranches report revision 0")
@@ -82,13 +85,12 @@ func TestLadderTimelineScopedPagesAndSnapshots(t *testing.T) {
 	runs, err = store.ListLadderTimelineRuns(ctx, accountID, "aws", nil)
 	require.NoError(t, err)
 	require.Equal(t, int64(101), runs.TotalCount)
-	require.Len(t, runs.Runs, 100)
-	lastRunPage, err := store.ListLadderTimelineRuns(ctx, accountID, "aws", runs.NextCursor)
+	require.Len(t, runs.Runs, 101)
+	lastRunPage, err := store.ListLadderTimelineRuns(ctx, accountID, "aws", &LadderTimelineCursor{CreatedAt: runs.Runs[99].CreatedAt, ID: runs.Runs[99].ID})
 	require.NoError(t, err)
 	require.Len(t, lastRunPage.Runs, 1)
-	for _, item := range runs.Runs {
-		require.NotEqual(t, lastRunPage.Runs[0].ID, item.ID)
-	}
+	require.Equal(t, runs.Runs[100].ID, lastRunPage.Runs[0].ID)
+	require.Equal(t, int64(101), lastRunPage.TotalCount)
 	otherConfig := seedLadderConfigWithExtID(ctx, t, store, "222222222222")
 	otherRun, err := store.SaveLadderRun(ctx, &LadderRunDB{ConfigID: &otherConfig, Status: ladder.RunStatusPlanned, StartedAt: time.Now().UTC(), Plan: []byte(`{}`)})
 	require.NoError(t, err)
@@ -138,4 +140,36 @@ func TestLadderTimelineMixedBasisOnDemand(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.ListLadderTimeline(ctx, accountID, "aws", nil)
 	require.ErrorIs(t, err, ErrLadderTimelineRate)
+}
+
+// A run that could not size its gap carries the plan's reason_code to the runs
+// API; an ordinary run (here a target-met Hold) has none, so the two Holds are
+// told apart by code as well as by rationale.
+func TestLadderTimelineRuns_ProjectsPlanReasonCode(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	store := setupLadderStore(ctx, t)
+	cfgID := seedLadderConfig(ctx, t, store)
+	var accountID string
+	require.NoError(t, store.db.QueryRow(ctx, "SELECT cloud_account_id FROM ladder_configs WHERE id=$1", cfgID).Scan(&accountID))
+	start := time.Now().UTC()
+	for i, plan := range []string{
+		`{"actions":[{"action":"hold","layer":"ec2-instance-sp","rationale":"target already met: gap=0"}]}`,
+		`{"reason_code":"missing_discount_rate","actions":[{"action":"hold","layer":"compute-sp","rationale":"Can't size this yet because layer compute-sp ..."}]}`,
+	} {
+		_, err := store.SaveLadderRun(ctx, &LadderRunDB{ConfigID: &cfgID, Status: ladder.RunStatusPlanned,
+			StartedAt: start.Add(time.Duration(i) * time.Second), Plan: []byte(plan)})
+		require.NoError(t, err)
+	}
+	runs, err := store.ListLadderTimelineRuns(ctx, accountID, "aws", nil)
+	require.NoError(t, err)
+	require.Len(t, runs.Runs, 2)
+	codes := map[string]string{}
+	for _, run := range runs.Runs {
+		codes[run.Actions[0].Layer] = run.ReasonCode
+	}
+	require.Equal(t, map[string]string{"ec2-instance-sp": "", "compute-sp": "missing_discount_rate"}, codes)
+	raw, err := json.Marshal(runs)
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(string(raw), `"reason_code"`), "an ordinary run omits reason_code")
 }

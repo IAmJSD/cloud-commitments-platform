@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,8 +41,8 @@ func TestHandler_getHistory(t *testing.T) {
 
 	// account_id "123456789012" is not a known cloud_accounts UUID, so it is
 	// folded into the dual-column filter as an external account number and the
-	// request routes through GetPurchaseHistoryFiltered (issue #701/#498/#866).
-	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDsByProvider: map[string][]string{"": {"123456789012"}}, Limit: 100}).Return(history, nil)
+	// request routes through the filtered SQL predicate (issue #701/#498/#866).
+	mockStore.On("ListPurchaseHistoryPage", ctx, config.PurchaseHistoryFilter{ExternalIDsByProvider: map[string][]string{"": {"123456789012"}}, Limit: historyStreamBatch(100)}, noCursor).Return(history, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
 	mockAuth, req := adminHistoryReq(ctx)
@@ -74,7 +75,7 @@ func TestHandler_getHistory_AllAccounts(t *testing.T) {
 		{AccountID: "222222222222", PurchaseID: "purchase-2", UpfrontCost: new(float64(200.0)), EstimatedSavings: 20.0},
 	}
 
-	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return(history, nil)
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return(history, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
 	mockAuth, req := adminHistoryReq(ctx)
@@ -122,7 +123,7 @@ func TestHandler_getHistory_IncludesPending(t *testing.T) {
 	}
 
 	approverEmail := "ops@example.com"
-	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return(completed, nil)
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return(completed, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(pending, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
@@ -161,7 +162,7 @@ func TestHandler_getHistory_CustomLimit(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
 
-	mockStore.On("GetAllPurchaseHistory", ctx, 50).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
 	mockAuth, req := adminHistoryReq(ctx)
@@ -171,8 +172,10 @@ func TestHandler_getHistory_CustomLimit(t *testing.T) {
 		"limit": "50",
 	}
 
-	_, err := handler.getHistory(ctx, req, params)
+	result, err := handler.getHistory(ctx, req, params)
 	require.NoError(t, err)
+	assert.Equal(t, 50, result.(HistoryResponse).Limit)
+	mockStore.AssertCalled(t, "ListPurchaseHistoryPage", ctx, config.PurchaseHistoryFilter{Limit: historyStreamBatch(50)}, noCursor)
 }
 
 // TestHandler_getHistory_ExpireIfStale exercises the async approval-window
@@ -238,7 +241,7 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 		expired.Status = "expired"
 		done := make(chan struct{})
 
-		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 			Return([]config.PurchaseExecution{freshExec(), staleExec("pending")}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
@@ -298,7 +301,7 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 		expired.Status = "expired"
 		done := make(chan struct{})
 
-		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 			Return([]config.PurchaseExecution{staleExec("notified")}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
@@ -335,7 +338,7 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 		mockStore := new(MockConfigStore)
 		done := make(chan struct{})
 
-		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 			Return([]config.PurchaseExecution{staleExec("pending")}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
@@ -372,7 +375,7 @@ func TestHandler_getHistory_ExpireIfStale(t *testing.T) {
 		ctx := context.Background()
 		mockStore := new(MockConfigStore)
 
-		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 			Return([]config.PurchaseExecution{freshExec()}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
@@ -430,7 +433,7 @@ func TestHandler_getHistory_GetIsReadOnly(t *testing.T) {
 	// immediately and the goroutine blocks on the gate independently.
 	gate := make(chan struct{})
 	transitionCalled := make(chan struct{})
-	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{stale}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 	mockStore.On("ExpireExecutionAtomic", mock.Anything, mock.Anything, "stale-ro-exec").
@@ -505,11 +508,11 @@ func TestHandler_getHistory_ScopedUserSeesEmptyAccountRows(t *testing.T) {
 
 	mockStore := new(MockConfigStore)
 	approverEmail := "ops@example.com"
-	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{ambientExec}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
-	// resolveAccountNamesByID must not error — return an empty accounts list
-	// so MatchesAccount falls back to ID-only matching (safe for our assertions).
+	// The account scope lists the registered accounts; an empty list leaves
+	// AccountScope.Allows matching by ID only (safe for our assertions).
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return nil, nil
 	}
@@ -579,7 +582,7 @@ func TestHandler_getHistory_ScopedUserCannotSeeOtherUsersEmptyAccountRows(t *tes
 
 	mockStore := new(MockConfigStore)
 	approverEmail := "ops@example.com"
-	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{otherUsersExec}, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
@@ -626,7 +629,7 @@ func TestHandler_expireStaleExecutionsAsync_SystemActorIsNil(t *testing.T) {
 	staleID := "actor-nil-stale-exec"
 	done := make(chan struct{})
 
-	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 		Return([]config.PurchaseExecution{{
 			ExecutionID:   staleID,
@@ -670,7 +673,7 @@ func TestHandler_getHistory_PermissionDenied(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "permission denied")
 	mockStore.AssertNotCalled(t, "GetPurchaseHistory")
-	mockStore.AssertNotCalled(t, "GetAllPurchaseHistory")
+	mockStore.AssertNotCalled(t, "ListPurchaseHistoryPage")
 }
 
 // TestHandler_getHistory_IncludesInFlightApprovals is the issue #621 primary-
@@ -707,7 +710,7 @@ func TestHandler_getHistory_IncludesInFlightApprovals(t *testing.T) {
 		},
 	}
 
-	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return(completed, nil)
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return(completed, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(inFlight, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
 
@@ -779,7 +782,7 @@ func TestHandler_getHistory_InProgressRowMapsRecFields(t *testing.T) {
 				},
 			}
 			approver := "ops@example.com"
-			mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+			mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 			mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(inProgress, nil)
 			mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
 
@@ -831,8 +834,9 @@ func TestHandler_getHistory_AuditGapCompletedVisible(t *testing.T) {
 		},
 	}
 	approver := "ops@example.com"
-	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
-	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(auditGap, nil)
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+	mockStore.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(auditGap, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
 
 	mockAuth, req := adminHistoryReq(ctx)
@@ -880,8 +884,9 @@ func TestHandler_getHistory_PartiallyCompletedVisible(t *testing.T) {
 		},
 	}
 	approver := "ops@example.com"
-	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
-	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(partial, nil)
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+	mockStore.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(partial, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
 
 	mockAuth, req := adminHistoryReq(ctx)
@@ -927,7 +932,7 @@ func TestHandler_getHistory_CompletedDBRowWithDescriptionStillCounts(t *testing.
 			EstimatedSavings:  70.0,
 		},
 	}
-	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return(completed, nil)
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return(completed, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	approver := "ops@example.com"
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
@@ -981,12 +986,12 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 	t.Run("provider filter is pushed to SQL and prunes executions", func(t *testing.T) {
 		mockStore, handler, req, ctx := newHandler(t)
 
-		// SQL path: must be called via GetPurchaseHistoryFiltered with
+		// SQL path: must be called via ListPurchaseHistoryPage with
 		// provider="aws" and no other filters set. Return only the aws row.
 		filtered := []config.PurchaseHistoryRecord{
 			{AccountID: "acc-aws", PurchaseID: "p-aws", Provider: "aws", UpfrontCost: new(float64(100.0))},
 		}
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{Provider: "aws", Limit: config.DefaultListLimit}).
+		mockStore.On("ListPurchaseHistoryPage", ctx, config.PurchaseHistoryFilter{Provider: "aws", Limit: historyStreamBatch(config.DefaultListLimit)}, noCursor).
 			Return(filtered, nil).Once()
 
 		// Executions path: two execs, one aws-rec and one azure-rec. Only the
@@ -1016,18 +1021,17 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		for _, p := range resp.Purchases {
 			assert.NotEqual(t, "exec-azure", p.PurchaseID, "azure-only execution must be filtered out when provider=aws")
 		}
-		mockStore.AssertCalled(t, "GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{Provider: "aws", Limit: config.DefaultListLimit})
+		mockStore.AssertCalled(t, "ListPurchaseHistoryPage", ctx, config.PurchaseHistoryFilter{Provider: "aws", Limit: historyStreamBatch(config.DefaultListLimit)}, noCursor)
 	})
 
 	t.Run("provider=all is treated as no filter (legacy SQL path)", func(t *testing.T) {
 		mockStore, handler, req, ctx := newHandler(t)
-		mockStore.On("GetAllPurchaseHistory", ctx, config.DefaultListLimit).Return([]config.PurchaseHistoryRecord{}, nil).Once()
+		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil).Once()
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
 		_, err := handler.getHistory(ctx, req, map[string]string{"provider": "all"})
 		require.NoError(t, err)
-		mockStore.AssertCalled(t, "GetAllPurchaseHistory", ctx, config.DefaultListLimit)
-		mockStore.AssertNotCalled(t, "GetPurchaseHistoryFiltered", mock.Anything, mock.Anything)
+		mockStore.AssertCalled(t, "ListPurchaseHistoryPage", ctx, config.PurchaseHistoryFilter{Limit: historyStreamBatch(config.DefaultListLimit)}, noCursor)
 	})
 
 	t.Run("account_ids filter is pushed to SQL and prunes executions", func(t *testing.T) {
@@ -1036,7 +1040,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		uuidA := "11111111-1111-1111-1111-111111111111"
 		uuidB := "22222222-2222-2222-2222-222222222222"
 
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{AccountIDs: []string{uuidA, uuidB}, Limit: config.DefaultListLimit}).
+		mockStore.On("ListPurchaseHistoryPage", ctx, config.PurchaseHistoryFilter{AccountIDs: []string{uuidA, uuidB}, Limit: historyStreamBatch(config.DefaultListLimit)}, noCursor).
 			Return([]config.PurchaseHistoryRecord{{AccountID: "acc-A", PurchaseID: "p-A"}}, nil).Once()
 
 		execs := []config.PurchaseExecution{
@@ -1079,6 +1083,22 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		assert.False(t, ids["exec-nil-account"], "execution with NULL exec.CloudAccountID AND no rec-level CloudAccountID must still be excluded (effective account is empty)")
 	})
 
+	t.Run("uppercase and padded account_ids are canonicalised (issue #1452)", func(t *testing.T) {
+		mockStore, handler, req, ctx := newHandler(t)
+
+		uuidA := "aaaaaaaa-1111-1111-1111-111111111111"
+		uuidB := "bbbbbbbb-2222-2222-2222-222222222222"
+
+		mockStore.On("ListPurchaseHistoryPage", ctx, config.PurchaseHistoryFilter{AccountIDs: []string{uuidA, uuidB}, Limit: historyStreamBatch(config.DefaultListLimit)}, noCursor).
+			Return([]config.PurchaseHistoryRecord{{AccountID: "acc-A", PurchaseID: "p-A"}}, nil).Once()
+		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
+
+		result, err := handler.getHistory(ctx, req, map[string]string{"account_ids": " " + strings.ToUpper(uuidA) + " , " + strings.ToUpper(uuidB)})
+		require.NoError(t, err)
+		require.Len(t, result.(HistoryResponse).Purchases, 1)
+		mockStore.AssertExpectations(t)
+	})
+
 	t.Run("legacy singular account_id is folded into the dual-column filter", func(t *testing.T) {
 		// account_id (singular) is an AWS-style external account number (not a
 		// known cloud_accounts UUID in this fixture). resolveHistoryAccountFilter
@@ -1088,7 +1108,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		// dropped when combined with provider/account_ids (issue #701/#498/#866).
 		mockStore, handler, req, ctx := newHandler(t)
 
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{Provider: "aws", ExternalIDsByProvider: map[string][]string{"": {"123456789012"}}, Limit: config.DefaultListLimit}).
+		mockStore.On("ListPurchaseHistoryPage", ctx, config.PurchaseHistoryFilter{Provider: "aws", ExternalIDsByProvider: map[string][]string{"": {"123456789012"}}, Limit: historyStreamBatch(config.DefaultListLimit)}, noCursor).
 			Return([]config.PurchaseHistoryRecord{}, nil).Once()
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
@@ -1103,7 +1123,7 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		// dual-column filter rather than the single-column GetPurchaseHistory
 		// fast path, so its rows surface regardless of cloud_account_id.
 		mockStore, handler, req, ctx := newHandler(t)
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{ExternalIDsByProvider: map[string][]string{"": {"123456789012"}}, Limit: config.DefaultListLimit}).
+		mockStore.On("ListPurchaseHistoryPage", ctx, config.PurchaseHistoryFilter{ExternalIDsByProvider: map[string][]string{"": {"123456789012"}}, Limit: historyStreamBatch(config.DefaultListLimit)}, noCursor).
 			Return([]config.PurchaseHistoryRecord{{AccountID: "123456789012", PurchaseID: "p-legacy"}}, nil).Once()
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
@@ -1126,13 +1146,13 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		endDay := now.Format("2006-01-02")
 		outOfRangeDay := now.AddDate(0, 0, -10) // older than the window AND outside the requested range
 
-		mockStore.On("GetPurchaseHistoryFiltered", ctx,
+		mockStore.On("ListPurchaseHistoryPage", ctx,
 			mock.MatchedBy(func(f config.PurchaseHistoryFilter) bool {
 				return f.Provider == "" && len(f.AccountIDs) == 0 && len(f.ExternalIDsByProvider) == 0 &&
 					f.Start != nil && f.Start.Format("2006-01-02") == startDay &&
 					f.End != nil && f.End.Format("2006-01-02") == endDay &&
-					f.Limit == config.DefaultListLimit
-			}),
+					f.Limit == historyStreamBatch(config.DefaultListLimit)
+			}), noCursor,
 		).Return([]config.PurchaseHistoryRecord{{AccountID: "in-range", PurchaseID: "p-in-range"}}, nil).Once()
 
 		execs := []config.PurchaseExecution{
@@ -1165,11 +1185,11 @@ func TestHandler_getHistory_FilterParams(t *testing.T) {
 		mockStore, handler, req, ctx := newHandler(t)
 
 		uuidA := "55555555-5555-5555-5555-555555555555"
-		mockStore.On("GetPurchaseHistoryFiltered", ctx,
+		mockStore.On("ListPurchaseHistoryPage", ctx,
 			mock.MatchedBy(func(f config.PurchaseHistoryFilter) bool {
 				return f.Provider == "aws" && len(f.AccountIDs) == 1 && f.AccountIDs[0] == uuidA &&
-					f.Start != nil && f.End != nil && f.Limit == config.DefaultListLimit
-			}),
+					f.Start != nil && f.End != nil && f.Limit == historyStreamBatch(config.DefaultListLimit)
+			}), noCursor,
 		).Return([]config.PurchaseHistoryRecord{{AccountID: "match", PurchaseID: "p-match"}}, nil).Once()
 
 		now := time.Now().UTC()
@@ -1289,8 +1309,7 @@ func TestHandler_getHistory_FilterValidation(t *testing.T) {
 
 			// Sanity guards: no store calls leaked through on a 400.
 			mockStore.AssertNotCalled(t, "GetPurchaseHistory", mock.Anything, mock.Anything, mock.Anything)
-			mockStore.AssertNotCalled(t, "GetAllPurchaseHistory", mock.Anything, mock.Anything)
-			mockStore.AssertNotCalled(t, "GetPurchaseHistoryFiltered", mock.Anything, mock.Anything)
+			mockStore.AssertNotCalled(t, "ListPurchaseHistoryPage", mock.Anything, mock.Anything, mock.Anything)
 			mockStore.AssertNotCalled(t, "GetExecutionsByStatuses", mock.Anything, mock.Anything, mock.Anything)
 		})
 	}
@@ -1306,7 +1325,7 @@ func TestHandler_getHistory_DateRangeBoundary(t *testing.T) {
 		mockStore := new(MockConfigStore)
 		mockAuth, req := adminHistoryReq(ctx)
 		handler := &Handler{auth: mockAuth, config: mockStore}
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, mock.Anything).
+		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).
 			Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 
@@ -1396,7 +1415,7 @@ func TestHandler_getHistory_CreatedByUserEmailResolved(t *testing.T) {
 				{Provider: "aws", Service: "ec2", Region: "us-east-1"},
 			},
 		}
-		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{exec}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
@@ -1427,7 +1446,7 @@ func TestHandler_getHistory_CreatedByUserEmailResolved(t *testing.T) {
 				{Provider: "aws", Service: "ec2", Region: "us-east-1"},
 			},
 		}
-		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{exec}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
@@ -1494,7 +1513,7 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 				},
 			},
 		}
-		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(pending, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
@@ -1532,7 +1551,7 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 				},
 			},
 		}
-		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(pending, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
@@ -1565,7 +1584,7 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 				},
 			},
 		}
-		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(pending, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
@@ -1618,10 +1637,10 @@ func TestHandler_getHistory_ApprovalQueueColumnsPopulated(t *testing.T) {
 			},
 		}
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(pending, nil)
-		// account_ids is set, so fetchPurchaseHistory routes to GetPurchaseHistoryFiltered
-		// (not GetAllPurchaseHistory). No DB rows needed; we only care about the
+		// account_ids is set, so fetchPurchaseHistory passes it to
+		// ListPurchaseHistoryPage. No DB rows needed; we only care about the
 		// execution path.
-		mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{AccountIDs: []string{recAccountID}, Limit: 100}).
+		mockStore.On("ListPurchaseHistoryPage", ctx, config.PurchaseHistoryFilter{AccountIDs: []string{recAccountID}, Limit: historyStreamBatch(100)}, noCursor).
 			Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 
@@ -1668,11 +1687,11 @@ func TestHandler_getHistory_ExternalIDOnlyAccount(t *testing.T) {
 	bRow := []config.PurchaseHistoryRecord{
 		{AccountID: accountBExternal, PurchaseID: "p-B", Provider: "aws", Service: "ec2", UpfrontCost: new(float64(100.0)), EstimatedSavings: 25.0},
 	}
-	mockStore.On("GetPurchaseHistoryFiltered", ctx, config.PurchaseHistoryFilter{
+	mockStore.On("ListPurchaseHistoryPage", ctx, config.PurchaseHistoryFilter{
 		AccountIDs:            []string{accountBUUID},
 		ExternalIDsByProvider: map[string][]string{"aws": {accountBExternal}},
-		Limit:                 config.DefaultListLimit,
-	}).Return(bRow, nil).Once()
+		Limit:                 historyStreamBatch(config.DefaultListLimit),
+	}, noCursor).Return(bRow, nil).Once()
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseExecution{}, nil)
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
@@ -1742,8 +1761,9 @@ func TestHandler_getHistory_CompletedExecutionNotDuplicated(t *testing.T) {
 		},
 	}
 	approver := "ops@example.com"
-	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return(completed, nil)
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return(completed, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(cleanCompletedExec, nil)
+	mockStore.On("ListHistoryExecutionsPage", ctx, mock.Anything).Return(cleanCompletedExec, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approver}, nil)
 
 	mockAuth, req := adminHistoryReq(ctx)
@@ -1893,18 +1913,18 @@ func TestHandler_getHistory_LimitParsing(t *testing.T) {
 				ce, ok := IsClientError(err)
 				require.True(t, ok, "error must be a ClientError, got %T: %v", err, err)
 				assert.Equal(t, tc.wantCode, ce.code)
-				mockStore.AssertNotCalled(t, "GetAllPurchaseHistory", mock.Anything, mock.Anything)
-				mockStore.AssertNotCalled(t, "GetPurchaseHistoryFiltered", mock.Anything, mock.Anything)
+				mockStore.AssertNotCalled(t, "ListPurchaseHistoryPage", mock.Anything, mock.Anything, mock.Anything)
 			} else {
 				// Success path: store receives the clamped limit.
-				mockStore.On("GetAllPurchaseHistory", ctx, tc.wantLimit).
+				mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).
 					Return([]config.PurchaseHistoryRecord{}, nil)
 				mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 					Return([]config.PurchaseExecution{}, nil)
 
-				_, err := handler.getHistory(ctx, req, map[string]string{"limit": tc.limitParam})
+				result, err := handler.getHistory(ctx, req, map[string]string{"limit": tc.limitParam})
 				require.NoError(t, err)
-				mockStore.AssertCalled(t, "GetAllPurchaseHistory", ctx, tc.wantLimit)
+				assert.Equal(t, tc.wantLimit, result.(HistoryResponse).Limit, "page size")
+				mockStore.AssertCalled(t, "ListPurchaseHistoryPage", ctx, config.PurchaseHistoryFilter{Limit: historyStreamBatch(tc.wantLimit)}, noCursor)
 			}
 		})
 	}
@@ -1974,7 +1994,7 @@ func TestHandler_getHistory_ExpireIfStale_LambdaGuard(t *testing.T) {
 		expired := staleExec()
 		expired.Status = "expired"
 
-		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 			Return([]config.PurchaseExecution{staleExec()}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
@@ -2013,7 +2033,7 @@ func TestHandler_getHistory_ExpireIfStale_LambdaGuard(t *testing.T) {
 		// would fire.
 		release := make(chan struct{})
 		swept := make(chan struct{})
-		mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+		mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 		mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).
 			Return([]config.PurchaseExecution{staleExec()}, nil)
 		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
@@ -2176,7 +2196,7 @@ func TestHandler_getHistory_ProjectsCreatedBySystem(t *testing.T) {
 		{ExecutionID: "sys", Status: "pending", ScheduledDate: time.Now(), CreatedBySystem: true, Recommendations: recs},
 		{ExecutionID: "human", Status: "pending", ScheduledDate: time.Now(), Recommendations: recs},
 	}
-	mockStore.On("GetAllPurchaseHistory", ctx, 100).Return([]config.PurchaseHistoryRecord{}, nil)
+	mockStore.On("ListPurchaseHistoryPage", ctx, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
 	mockStore.On("GetExecutionsByStatuses", ctx, mock.Anything, mock.Anything).Return(execs, nil)
 	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{NotificationEmail: &approverEmail}, nil)
 	mockAuth, req := adminHistoryReq(ctx)

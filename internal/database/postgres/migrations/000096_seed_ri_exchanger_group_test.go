@@ -31,20 +31,18 @@ const riExchangerGroupIDTest = "00000000-0000-5000-8000-000000000008"
 // (#942), by running ON CONFLICT DO NOTHING onto an already-occupied UUID.
 // These assertions exist so that failure is loud.
 func TestMigration_SeedRIExchangerGroup(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	migrationsPath := getMigrationsPath()
 
 	t.Run("RI Exchanger seeded, system-managed, granting execute:ri-exchange", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireMigratedDatabase(ctx, t, migrationsPath)
 		pool := container.DB.Pool()
-
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
 
 		var name string
 		var systemManaged bool
-		err = pool.QueryRow(ctx,
+		err := pool.QueryRow(ctx,
 			`SELECT name, system_managed FROM groups WHERE id = $1`, riExchangerGroupIDTest).
 			Scan(&name, &systemManaged)
 		require.NoError(t, err, "RI Exchanger group must exist at UUID %s", riExchangerGroupIDTest)
@@ -74,9 +72,8 @@ func TestMigration_SeedRIExchangerGroup(t *testing.T) {
 	})
 
 	t.Run("admin-backfill: Administrators members land in RI Exchanger", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireEmptyDatabase(ctx, t)
 		pool := container.DB.Pool()
 
 		// Pin just below 000096 so the backfill is observed firing, rather
@@ -84,7 +81,7 @@ func TestMigration_SeedRIExchangerGroup(t *testing.T) {
 		require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 95))
 
 		const adminEmail = "admin-riexchanger-test@test.example"
-		_, err = pool.Exec(ctx, `
+		_, err := pool.Exec(ctx, `
 			INSERT INTO users (id, email, password_hash, salt, active, group_ids, created_at, updated_at)
 			VALUES (gen_random_uuid(), $1, '', '', true, ARRAY[$2::uuid], NOW(), NOW())
 		`, adminEmail, adminGroupIDForPurchaserTest)
@@ -104,15 +101,12 @@ func TestMigration_SeedRIExchangerGroup(t *testing.T) {
 	})
 
 	t.Run("backfill is idempotent and leaves no duplicate entry", func(t *testing.T) {
-		container, err := testhelpers.SetupPostgresContainer(ctx, t)
-		require.NoError(t, err)
-		defer container.Cleanup(ctx)
+		t.Parallel()
+		container := testhelpers.RequireMigratedDatabase(ctx, t, migrationsPath)
 		pool := container.DB.Pool()
 
-		require.NoError(t, migrations.RunMigrations(ctx, pool, migrationsPath, "", ""))
-
 		const adminEmail = "admin-riexchanger-idempotent@test.example"
-		_, err = pool.Exec(ctx, `
+		_, err := pool.Exec(ctx, `
 			INSERT INTO users (id, email, password_hash, salt, active, group_ids, created_at, updated_at)
 			VALUES (gen_random_uuid(), $1, '', '', true, ARRAY[$2::uuid, $3::uuid], NOW(), NOW())
 		`, adminEmail, adminGroupIDForPurchaserTest, riExchangerGroupIDTest)
@@ -138,5 +132,41 @@ func TestMigration_SeedRIExchangerGroup(t *testing.T) {
 			}
 		}
 		assert.Equal(t, 1, count, "RI Exchanger must appear exactly once in group_ids")
+	})
+}
+
+// TestMigration_SeedRIExchangerGroup_Down covers the 000096 half of issue #316
+// (A04-010): the rollback strips RI Exchanger from every user, and a user
+// whose only group it is would be left with none. users_min_one_group made
+// that abort with a bare CHECK violation; the rollback now refuses up front
+// and says which migration and group are in the way.
+func TestMigration_SeedRIExchangerGroup_Down(t *testing.T) {
+	ctx := context.Background()
+	below := previousMigrationVersion(t, 96)
+
+	t.Run("members with another group are detached and the group dropped", func(t *testing.T) {
+		const admin = "admin-096-down@test.example"
+		pool := pinBeforeDown(ctx, t, 96, map[string][]string{
+			admin: {adminGroupIDForPurchaserTest, riExchangerGroupIDTest},
+		})
+
+		require.NoError(t, migrations.MigrateToVersion(ctx, pool, getMigrationsPath(), below))
+
+		_, ok := groupName(ctx, t, pool, riExchangerGroupIDTest)
+		assert.False(t, ok, "RI Exchanger must be dropped")
+		assert.ElementsMatch(t, []string{adminGroupIDForPurchaserTest}, queryGroupIDsByEmail(t, ctx, pool, admin))
+	})
+
+	t.Run("an RI-Exchanger-only user stops the rollback with a clear error", func(t *testing.T) {
+		const only = "only-riexchanger-096@test.example"
+		pool := pinBeforeDown(ctx, t, 96, map[string][]string{only: {riExchangerGroupIDTest}})
+
+		err := migrations.MigrateToVersion(ctx, pool, getMigrationsPath(), below)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "migration 000096 down")
+
+		_, ok := groupName(ctx, t, pool, riExchangerGroupIDTest)
+		assert.True(t, ok, "nothing is removed when the rollback refuses")
+		assert.ElementsMatch(t, []string{riExchangerGroupIDTest}, queryGroupIDsByEmail(t, ctx, pool, only))
 	})
 }

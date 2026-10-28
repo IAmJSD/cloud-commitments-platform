@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/smtp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -198,7 +199,7 @@ func TestSMTPSender_DispatchSMTP_RefusesAuthOverCleartext(t *testing.T) {
 		useTLS:        false,
 		allowInsecure: false,
 	}
-	err := sender.dispatchSMTP([]string{"r@example.com"}, []byte("msg"))
+	err := sender.dispatchSMTP(context.Background(), []string{"r@example.com"}, []byte("msg"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "SMTP auth over non-TLS connection is refused")
 }
@@ -216,7 +217,7 @@ func TestSMTPSender_DispatchSMTP_AllowsAuthWithAllowInsecure(t *testing.T) {
 		useTLS:        false,
 		allowInsecure: true,
 	}
-	err := sender.dispatchSMTP([]string{"r@example.com"}, []byte("msg"))
+	err := sender.dispatchSMTP(context.Background(), []string{"r@example.com"}, []byte("msg"))
 	require.Error(t, err)
 	// Guard error must NOT appear; a connection error is expected instead.
 	assert.NotContains(t, err.Error(), "SMTP auth over non-TLS connection is refused")
@@ -470,7 +471,7 @@ func TestSMTPSender_SendToEmail_WithMockServer_LongContent(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// --- Direct sendMailTLS tests with flexible error behaviors ---
+// --- Direct sendMail (STARTTLS) tests with flexible error behaviors ---
 
 // startFlexSMTPServer starts a mock SMTP server with configurable failure behavior.
 func startFlexSMTPServer(t *testing.T, behavior string) (string, func()) {
@@ -596,7 +597,7 @@ func (a *testFlexAuth) Next(fromServer []byte, more bool) ([]byte, error) {
 
 func TestSendMailTLS_DialFail(t *testing.T) {
 	sender := &SMTPSender{useTLS: true}
-	err := sender.sendMailTLS("127.0.0.1:1", nil, "from@test.com", []string{"to@test.com"}, []byte("test"))
+	err := sender.sendMail(context.Background(), "127.0.0.1:1", nil, "from@test.com", []string{"to@test.com"}, []byte("test"))
 	require.Error(t, err)
 }
 
@@ -606,19 +607,19 @@ func TestSendMailTLS_StartTLSFail(t *testing.T) {
 
 	host, _, _ := net.SplitHostPort(addr)
 	sender := &SMTPSender{host: host, useTLS: true}
-	err := sender.sendMailTLS(addr, nil, "from@test.com", []string{"to@test.com"}, []byte("test"))
+	err := sender.sendMail(context.Background(), addr, nil, "from@test.com", []string{"to@test.com"}, []byte("test"))
 	require.Error(t, err)
 }
 
 func TestSendMailTLS_Auth535Error(t *testing.T) {
-	// sendMailTLS always attempts STARTTLS; mock server doesn't support it,
+	// sendMail with useTLS always attempts STARTTLS; mock server doesn't support it,
 	// so the error will be a STARTTLS failure (not an auth error)
 	addr, cleanup := startFlexSMTPServer(t, "auth_fail_535")
 	defer cleanup()
 
 	sender := &SMTPSender{useTLS: true}
 	auth := &testFlexAuth{username: "user", password: "pass"}
-	err := sender.sendMailTLS(addr, auth, "from@test.com", []string{"to@test.com"}, []byte("test"))
+	err := sender.sendMail(context.Background(), addr, auth, "from@test.com", []string{"to@test.com"}, []byte("test"))
 	require.Error(t, err)
 }
 
@@ -627,7 +628,7 @@ func TestSendMailTLS_DataFail(t *testing.T) {
 	defer cleanup()
 
 	sender := &SMTPSender{useTLS: true}
-	err := sender.sendMailTLS(addr, nil, "from@test.com", []string{"to@test.com"}, []byte("test"))
+	err := sender.sendMail(context.Background(), addr, nil, "from@test.com", []string{"to@test.com"}, []byte("test"))
 	require.Error(t, err)
 }
 
@@ -658,6 +659,96 @@ func TestSMTPSender_SendPurchaseFailedNotification_Recipient(t *testing.T) {
 			msg := server.receivedMsg
 			server.mu.Unlock()
 			assert.Contains(t, msg, "To: "+tc.wantTo)
+		})
+	}
+}
+
+// --- issue #1433: the SMTP conversation honors the caller's context ---
+
+// startStallingSMTPServer accepts connections and then stops answering. With
+// greet=false it never sends the 220 greeting; with greet=true it greets,
+// answers EHLO (offering AUTH but not STARTTLS), then goes silent. Connections stay
+// open until the test's cleanup, as a hung mail server's would.
+func startStallingSMTPServer(t *testing.T, greet bool) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				defer conn.Close()
+				if greet {
+					fmt.Fprintf(conn, "220 localhost stalling server\r\n")
+					if _, err := bufio.NewReader(conn).ReadString('\n'); err == nil {
+						fmt.Fprintf(conn, "250-localhost\r\n250 AUTH PLAIN\r\n")
+					}
+				}
+				<-release
+			}()
+		}
+	}()
+	t.Cleanup(func() {
+		close(release)
+		ln.Close()
+		wg.Wait()
+	})
+	return ln.Addr().String()
+}
+
+// TestSMTPSender_SendHonorsContext pins #1433: a send to a server that accepts
+// the connection and then stalls returns soon after the context ends, with an
+// error wrapping the context's error, on both the STARTTLS path and the plain
+// AllowInsecure path. Before the fix the call blocked until the server let go.
+func TestSMTPSender_SendHonorsContext(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		useTLS, greet bool
+		cancel        bool
+		want          error
+	}{
+		{name: "starttls, no greeting", useTLS: true, want: context.DeadlineExceeded},
+		{name: "starttls, stalls after EHLO", useTLS: true, greet: true, want: context.DeadlineExceeded},
+		{name: "plain, no greeting", want: context.DeadlineExceeded},
+		{name: "plain, stalls after EHLO", greet: true, want: context.DeadlineExceeded},
+		{name: "plain, canceled", greet: true, cancel: true, want: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			host, portStr, err := net.SplitHostPort(startStallingSMTPServer(t, tc.greet))
+			require.NoError(t, err)
+			port, err := strconv.Atoi(portStr)
+			require.NoError(t, err)
+			sender := &SMTPSender{host: host, port: port, fromEmail: "sender@test.com", useTLS: tc.useTLS}
+			if !tc.useTLS {
+				// The plain path with credentials is the AllowInsecure test path.
+				sender.username, sender.password, sender.allowInsecure = "user", "pass", true
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			if tc.cancel {
+				time.AfterFunc(50*time.Millisecond, cancel)
+			}
+			start := time.Now()
+			errCh := make(chan error, 1)
+			go func() { errCh <- sender.SendToEmail(ctx, "recipient@test.com", "Subject", "Body") }()
+
+			select {
+			case err := <-errCh:
+				require.ErrorIs(t, err, tc.want)
+				assert.Less(t, time.Since(start), 2*time.Second)
+			case <-time.After(5 * time.Second):
+				t.Fatal("SendToEmail ignored its context: still blocked 5s after a 200ms deadline")
+			}
 		})
 	}
 }

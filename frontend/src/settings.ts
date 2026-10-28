@@ -7,8 +7,11 @@ import type { ConfigResponse } from './types';
 import { fetchAndPopulateCommitmentOptions } from './commitmentOptions';
 import { initFederationPanel } from './federation';
 import { confirmDialog } from './confirmDialog';
+import { friendlyError } from './api/errors';
+import { deleteAccount } from './settings-account-delete';
 import { reflectDirtyState } from './settings-subnav';
 import { showToast } from './toast';
+import { createIcon } from './icons';
 import { isValidCombination, getValidPaymentOptions, getValidTermOptions, getPaymentLabel, getCommitmentConfig, normalizePaymentValue } from './commitmentOptions';
 import { openModal, closeModal } from './modal';
 import { loadRecommendations } from './recommendations';
@@ -20,6 +23,9 @@ import {
   isServiceFilterError,
 } from './serviceFilters';
 import { initLadderingSettings } from './ladder';
+import { showSkeletonText } from './lib/skeleton';
+import { canonicalizeServiceConfigs, legacySettingsServiceTarget } from './lib/settings-service-ids';
+import { buildLastUpdatedStamp } from './lib/last-updated';
 
 /**
  * Issue #196 — after any mutation to an `account_service_overrides` row
@@ -132,14 +138,16 @@ const SERVICE_FIELDS = [
   { provider: 'aws', service: 'savings-plans-ec2instance', termId: 'aws-savings-plans-ec2instance-term', paymentId: 'aws-savings-plans-ec2instance-payment', coverageId: 'aws-savings-plans-ec2instance-coverage', enabledId: 'aws-savings-plans-ec2instance-enabled' },
   { provider: 'aws', service: 'savings-plans-sagemaker',   termId: 'aws-savings-plans-sagemaker-term',   paymentId: 'aws-savings-plans-sagemaker-payment',   coverageId: 'aws-savings-plans-sagemaker-coverage',   enabledId: 'aws-savings-plans-sagemaker-enabled' },
   { provider: 'aws', service: 'savings-plans-database',    termId: 'aws-savings-plans-database-term',    paymentId: 'aws-savings-plans-database-payment',    coverageId: 'aws-savings-plans-database-coverage',    enabledId: 'aws-savings-plans-database-enabled' },
-  { provider: 'azure', service: 'vm',         termId: 'azure-vm-term',         paymentId: 'azure-vm-payment' },
-  { provider: 'azure', service: 'sql',        termId: 'azure-sql-term',        paymentId: 'azure-sql-payment' },
-  { provider: 'azure', service: 'cosmosdb',   termId: 'azure-cosmosdb-term',   paymentId: 'azure-cosmosdb-payment' },
-  { provider: 'azure', service: 'redis',      termId: 'azure-redis-term',      paymentId: 'azure-redis-payment' },
-  { provider: 'azure', service: 'search',     termId: 'azure-search-term',     paymentId: 'azure-search-payment' },
-  { provider: 'gcp',   service: 'compute',    termId: 'gcp-compute-term',      paymentId: null },
-  { provider: 'gcp',   service: 'sql',        termId: 'gcp-sql-term',          paymentId: null },
-  { provider: 'gcp',   service: 'memorystore',termId: 'gcp-memorystore-term',  paymentId: null },
+  // Issue #613: Azure/GCP rows use the service ids recommendations carry
+  // (lib/settings-service-ids.ts); the card DOM ids keep their old names.
+  { provider: 'azure', service: 'compute',       termId: 'azure-vm-term',         paymentId: 'azure-vm-payment' },
+  { provider: 'azure', service: 'relational-db', termId: 'azure-sql-term',        paymentId: 'azure-sql-payment' },
+  { provider: 'azure', service: 'nosql',         termId: 'azure-cosmosdb-term',   paymentId: 'azure-cosmosdb-payment' },
+  { provider: 'azure', service: 'cache',         termId: 'azure-redis-term',      paymentId: 'azure-redis-payment' },
+  { provider: 'azure', service: 'search',        termId: 'azure-search-term',     paymentId: 'azure-search-payment' },
+  { provider: 'gcp',   service: 'compute',       termId: 'gcp-compute-term',      paymentId: null },
+  { provider: 'gcp',   service: 'relational-db', termId: 'gcp-sql-term',          paymentId: null },
+  { provider: 'gcp',   service: 'cache',         termId: 'gcp-memorystore-term',  paymentId: null },
 ] as const;
 
 // Fields that are persisted to the backend via saveGlobalSettings.
@@ -190,6 +198,10 @@ const GLOBAL_CONFIG_FIELDS: ReadonlyArray<readonly [keyof api.Config, readonly s
 // non-UI fields (ramp_schedule, include_engines, etc.) that SaveServiceConfig replaces entirely.
 let loadedServiceConfigs: api.ServiceConfig[] = [];
 
+// Rows loaded from an old Settings id (#613) and not yet written under the
+// current one; keyed `provider/service`.
+let legacyRekeyedServices = new Set<string>();
+
 // saveInFlight guards saveGlobalSettings against concurrent invocations
 // (rapid Save clicks, Enter-in-form, etc.). Toggled in a try/finally and
 // mirrored on the Save button's disabled attribute so the UI reflects the
@@ -210,8 +222,8 @@ let saveInFlight = false;
  *   byId<HTMLInputElement>('foo')?.value ?? '';  // read site
  */
 // Grace-period input: 0 is a valid user choice (disables the feature
-// for that provider), so we use empty-string to signal "fall back to
-// default (7)". An explicit 0 must round-trip as 0, not get swallowed.
+// for that provider), so an explicit 0 must round-trip as 0, not get
+// swallowed. A missing server value renders as the default (7).
 function populateGraceInput(id: string, value: number | undefined): void {
   const el = document.getElementById(id) as HTMLInputElement | null;
   if (!el) return;
@@ -219,8 +231,8 @@ function populateGraceInput(id: string, value: number | undefined): void {
 }
 
 // readGraceInput parses the grace-period input, returning the numeric
-// value or an error message (out of range, not a number). Empty input
-// defaults to 7.
+// value or an error message (empty, out of range, not a number). Empty is
+// refused, not defaulted: a cleared field most likely means 0.
 //
 // The error wording mirrors what wireInlineRangeValidation renders
 // under the field on input/blur, so the inline indicator and the
@@ -231,9 +243,8 @@ function readGraceInput(id: string): { value: number; err?: undefined } | { valu
   const el = document.getElementById(id) as HTMLInputElement | null;
   if (!el) return { value: 7 };
   const raw = el.value.trim();
-  if (raw === '') return { value: 7 };
   const n = Number(raw);
-  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 30) {
+  if (raw === '' || !Number.isFinite(n) || !Number.isInteger(n) || n < 0 || n > 30) {
     return { value: 0, err: 'Must be a whole number between 0 and 30' };
   }
   return { value: n };
@@ -241,6 +252,21 @@ function readGraceInput(id: string): { value: number; err?: undefined } | { valu
 
 function byId<T extends HTMLElement>(id: string): T | null {
   return document.getElementById(id) as T | null;
+}
+
+// Setting `.value` from code fires neither 'input' nor 'blur', so the inline
+// range validators below never see a value written by loadGlobalSettings or
+// resetSettings. Without a re-run, an error from an earlier edit (e.g. an
+// emptied coverage field) stays visible, with aria-invalid, next to a valid
+// value (#642). A dedicated event re-runs only the validators, not the
+// dirty-tracking or other 'input' listeners.
+const RANGE_REVALIDATE_EVENT = 'cudly:range-revalidate';
+
+/** Re-run every wired inline range validator against the current values. */
+function revalidateInlineRanges(): void {
+  document.querySelectorAll<HTMLInputElement>('input[data-range-validated]').forEach((el) => {
+    el.dispatchEvent(new Event(RANGE_REVALIDATE_EVENT));
+  });
 }
 
 /**
@@ -337,6 +363,8 @@ function wireInlineRangeValidation(
   };
   input.addEventListener('input', check, { signal });
   input.addEventListener('blur', check, { signal });
+  input.addEventListener(RANGE_REVALIDATE_EVENT, check, { signal });
+  input.dataset['rangeValidated'] = '';
 }
 
 /**
@@ -642,7 +670,7 @@ function renderAccountsList(
     deleteBtn.className = 'btn btn-small btn-destructive';
     deleteBtn.textContent = 'Delete';
     deleteBtn.setAttribute('aria-label', `Delete ${accountLabel}`);
-    deleteBtn.addEventListener('click', () => void deleteAccount(account.id, provider, container));
+    deleteBtn.addEventListener('click', () => void deleteAccount(account, provider, loadAccountsForProvider));
     actionsTd.appendChild(deleteBtn);
 
     tr.appendChild(actionsTd);
@@ -680,18 +708,20 @@ const AWS_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
 
 // Human-readable labels for Azure and GCP services used in the override
 // service dropdown. AWS labels are carried by AWS_OVERRIDE_SERVICES above.
+// Values are the service ids recommendations carry (issue #613), the same
+// ones SERVICE_FIELDS writes.
 const AZURE_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'vm',        label: 'Virtual Machines' },
-  { value: 'sql',       label: 'SQL Database' },
-  { value: 'cosmosdb',  label: 'Cosmos DB' },
-  { value: 'redis',     label: 'Cache for Redis' },
-  { value: 'search',    label: 'AI Search' },
+  { value: 'compute',       label: 'Virtual Machines' },
+  { value: 'relational-db', label: 'SQL Database' },
+  { value: 'nosql',         label: 'Cosmos DB' },
+  { value: 'cache',         label: 'Cache for Redis' },
+  { value: 'search',        label: 'AI Search' },
 ];
 
 const GCP_OVERRIDE_SERVICES: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'compute',     label: 'Compute Engine' },
-  { value: 'sql',         label: 'Cloud SQL' },
-  { value: 'memorystore', label: 'Memorystore' },
+  { value: 'compute',       label: 'Compute Engine' },
+  { value: 'relational-db', label: 'Cloud SQL' },
+  { value: 'cache',         label: 'Memorystore' },
 ];
 
 /** Return the service list for the given provider's override modal. */
@@ -973,7 +1003,7 @@ function buildCoverageOverrideInput(
   input.className = 'override-coverage-input';
   input.setAttribute(
     'aria-label',
-    `Coverage for ${override.provider}/${override.service} override`,
+    `Dashboard coverage for ${override.provider}/${override.service} override`,
   );
 
   const initial = override.coverage !== undefined ? String(override.coverage) : '';
@@ -1154,27 +1184,45 @@ function openAccountOverridesModal(account: api.CloudAccount): void {
   }
   const body = document.getElementById('account-overrides-modal-body');
   if (!body) return;
-  modal.classList.remove('hidden');
+  // openModal moves focus inside, traps Tab and closes on Escape (#731).
+  // onClose runs on every close path, Escape included.
+  openModal(modal, { onClose: resetAccountOverridesModal });
   void loadOverridesPanel(account.id, body, account.provider);
 }
 
 function closeAccountOverridesModal(): void {
   const modal = document.getElementById('account-overrides-modal');
-  modal?.classList.add('hidden');
+  if (modal) closeModal(modal);
+  // Idempotent; covers a close of a modal that was never opened via openModal.
+  resetAccountOverridesModal();
+}
+
+function resetAccountOverridesModal(): void {
+  // Close the inner create modal too if it's still open. The user can't
+  // visually reach the outer's close affordances while the inner is up
+  // (inner backdrop covers them), but a programmatic close should leave a
+  // clean slate, not an orphaned inner modal whose Save would target a
+  // hidden parent.
+  closeOverrideModal();
   // Drop the body content so the next open doesn't briefly flash stale
   // data from a previous account before loadOverridesPanel populates it.
   const body = document.getElementById('account-overrides-modal-body');
   if (body) body.replaceChildren();
-  // Close the inner create modal too if it's still open. The user can't
-  // visually reach the outer's close affordances while the inner is up
-  // (inner backdrop covers them), but a programmatic close — or a future
-  // ESC-to-close from issue #115 — should leave a clean slate, not an
-  // orphaned inner modal whose Save would target a hidden parent.
-  closeOverrideModal();
+}
+
+// Issue #613: overrides saved under an old Azure/GCP service id never match a
+// recommendation. Say so on the row and name the id to re-create it under.
+function appendLegacyOverrideHint(cell: HTMLElement, o: api.AccountServiceOverride): void {
+  const target = legacySettingsServiceTarget(o.provider, o.service);
+  if (target === null) return;
+  const hint = document.createElement('div');
+  hint.className = 'help-text override-legacy-hint';
+  hint.textContent = `Old service id: never applied. Re-create it as ${o.provider}/${target}, then delete this row.`;
+  cell.appendChild(hint);
 }
 
 export async function loadOverridesPanel(accountId: string, panel: HTMLElement, provider: AccountProvider): Promise<void> {
-  panel.textContent = 'Loading\u2026';
+  showSkeletonText(panel, 2); // issue #186: was a plain "Loading…" line
   try {
     const overrides = await api.listAccountServiceOverrides(accountId);
     panel.textContent = '';
@@ -1224,7 +1272,7 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
     // Enabled is second-to-last (immediately before the action cell) so the
     // descriptive columns keep the layout users learned from PR #72/#23.
     // Issue #110.
-    ['Service', 'Term', 'Payment', 'Coverage', 'Enabled', ''].forEach(h => {
+    ['Service', 'Term', 'Payment', 'Dashboard coverage', 'Enabled', ''].forEach(h => {
       const th = document.createElement('th');
       th.textContent = h;
       hrow.appendChild(th);
@@ -1240,6 +1288,12 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
 
       const serviceTd = tr.insertCell();
       serviceTd.textContent = `${o.provider}/${o.service}`;
+      // When this override last changed (issue #8), under the service name so
+      // the column order users learned (#110) stays put.
+      const stamp = buildLastUpdatedStamp(o.updated_at);
+      if (stamp) serviceTd.append(stamp);
+      // Old Azure/GCP service id (#613): warn below the stamp.
+      appendLegacyOverrideHint(serviceTd, o);
 
       // Term cell: editable <select> for all providers (issue #109 extends
       // the AWS-only #110 inline editing to Azure/GCP).
@@ -1301,7 +1355,7 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
           showToast({ message: `Failed to delete override: ${(err as Error).message}`, kind: 'error' });
           return;
         }
-        // The server has confirmed the delete. Show the 5-second undo toast
+        // The server has confirmed the delete. Show the 10-second undo toast
         // IMMEDIATELY, before the panel reload + recommendations refresh below.
         // Previously the toast was awaited behind both of those calls, so a
         // slow recommendations refresh (a full page-worth of API calls) delayed
@@ -1318,7 +1372,9 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
         showToast({
           message: `Override for ${o.provider}/${o.service} deleted.`,
           kind: 'info',
-          timeout: 5_000,
+          // 10 s (was 5 s, issue #728) so there is time to read the message
+          // and reach Undo; the countdown also pauses on hover/focus.
+          timeout: 10_000,
           actions: [{
             label: 'Undo',
             onClick: () => {
@@ -1342,167 +1398,6 @@ export async function loadOverridesPanel(accountId: string, panel: HTMLElement, 
     panel.appendChild(table);
   } catch (err) {
     panel.textContent = `Failed to load overrides: ${(err as Error).message}`;
-  }
-}
-
-/**
- * Re-entrancy guard for the deleteAccount + handlePendingExecutions409
- * flow. A double-click on the Delete button (or a click during the
- * cancel-loop-then-retry-delete sequence) used to be able to start two
- * concurrent deletes for the same account, racing on the backend
- * preflight + cancel + delete sequence. Module-scoped so guards apply
- * across both helpers; keyed on account ID so different accounts can
- * still be deleted in parallel.
- */
-const inflightDeletes = new Set<string>();
-
-/**
- * Delete an account after confirmation.
- *
- * Issue #606 — when the backend preflight detects pending purchase
- * executions still referencing this account, it returns a 409 with
- * `pending_count` + `pending_execution_ids` in `error.details`. The
- * handler offers the operator a second confirmation: "Cancel All N
- * Pending + Delete" which cancels each pending execution sequentially
- * and then retries the delete. On any per-execution cancel failure we
- * surface a toast with the count of failures and stop short of the
- * delete so the operator can investigate manually instead of partially
- * cancelling and silently moving on.
- */
-async function deleteAccount(accountId: string, provider: AccountProvider, _container: HTMLElement): Promise<void> {
-  if (inflightDeletes.has(accountId)) {
-    showToast({ message: 'Delete already in progress for this account.', kind: 'info' });
-    return;
-  }
-  const ok = await confirmDialog({
-    title: 'Delete account?',
-    body: 'Delete this account? This also removes its credentials and service overrides. This action cannot be undone.',
-    confirmLabel: 'Delete account',
-    destructive: true,
-  });
-  if (!ok) return;
-  inflightDeletes.add(accountId);
-  try {
-    try {
-      await api.deleteAccount(accountId);
-      await loadAccountsForProvider(provider);
-      return;
-    } catch (err) {
-      const apiErr = err as Error & { status?: number; details?: Record<string, unknown> };
-      if (apiErr.status === 409 && apiErr.details?.['reason'] === 'pending_executions') {
-        await handlePendingExecutions409(accountId, provider, apiErr);
-        return;
-      }
-      console.error('Failed to delete account:', err);
-      showToast({ message: `Failed to delete account: ${(err as Error).message}`, kind: 'error' });
-      void loadAccountsForProvider(provider);
-    }
-  } finally {
-    inflightDeletes.delete(accountId);
-  }
-}
-
-/**
- * Issue #606 — 409 handler for the deleteAccount path. Surfaces a second
- * confirmation dialog with the pending-count and, on confirm, walks the
- * `pending_execution_ids` list cancelling each one before retrying the
- * delete. Exported (lower-case) helper so the test file can exercise it
- * without standing up the full settings page chrome.
- */
-async function handlePendingExecutions409(
-  accountId: string,
-  provider: AccountProvider,
-  apiErr: Error & { status?: number; details?: Record<string, unknown> },
-): Promise<void> {
-  // Defense-in-depth re-entrancy guard. deleteAccount already adds to the
-  // set before calling us, in which case `ownsLock` stays false and the
-  // outer try/finally owns cleanup. A direct external caller (e.g. tests
-  // or a future caller invoking this helper standalone) gets a fresh
-  // lock + a finally that releases it.
-  let ownsLock = false;
-  if (!inflightDeletes.has(accountId)) {
-    inflightDeletes.add(accountId);
-    ownsLock = true;
-  }
-  try {
-    await handlePendingExecutions409Inner(accountId, provider, apiErr);
-  } finally {
-    if (ownsLock) inflightDeletes.delete(accountId);
-  }
-}
-
-async function handlePendingExecutions409Inner(
-  accountId: string,
-  provider: AccountProvider,
-  apiErr: Error & { status?: number; details?: Record<string, unknown> },
-): Promise<void> {
-  const rawCount = apiErr.details?.['pending_count'];
-  const pendingCount = typeof rawCount === 'number' ? rawCount : Number(rawCount) || 0;
-  const rawIDs = apiErr.details?.['pending_execution_ids'];
-  const pendingIDs = Array.isArray(rawIDs) ? (rawIDs as unknown[]).filter((x): x is string => typeof x === 'string') : [];
-
-  // No IDs to cancel (the server's list-call errored — see the Go-side
-  // PendingListErr_StillReturns409 path). Skip the "Cancel All N Pending"
-  // confirm entirely, since we can't enumerate cancellations, and point
-  // the operator at the History page instead.
-  if (pendingIDs.length === 0) {
-    showToast({
-      message: `Cannot auto-cancel: pending purchase IDs unavailable. Cancel them from the History page and try again.`,
-      kind: 'error',
-      timeout: null,
-    });
-    return;
-  }
-
-  const proceed = await confirmDialog({
-    title: 'Pending purchases must be cancelled',
-    body: `This account has ${pendingCount} pending purchase${pendingCount === 1 ? '' : 's'}. They must be cancelled before the account can be deleted. Cancel all pending purchases and then delete the account?`,
-    confirmLabel: `Cancel All ${pendingCount} Pending + Delete`,
-    destructive: true,
-  });
-  if (!proceed) {
-    // Operator cancelled the second dialog. Refresh to keep the list in
-    // sync; the account is unchanged.
-    void loadAccountsForProvider(provider);
-    return;
-  }
-
-  const failures: { id: string; err: Error }[] = [];
-  for (const execID of pendingIDs) {
-    try {
-      await api.cancelPurchase(execID);
-    } catch (cancelErr) {
-      failures.push({ id: execID, err: cancelErr as Error });
-    }
-  }
-
-  if (failures.length > 0) {
-    console.error('Failed to cancel some pending executions:', failures);
-    showToast({
-      message: `Cancelled ${pendingIDs.length - failures.length} of ${pendingIDs.length} purchases; ${failures.length} failed. Account NOT deleted — review History and retry.`,
-      kind: 'error',
-      timeout: null,
-    });
-    void loadAccountsForProvider(provider);
-    return;
-  }
-
-  // All cancels succeeded — retry the delete.
-  try {
-    await api.deleteAccount(accountId);
-    showToast({
-      message: `Cancelled ${pendingIDs.length} pending purchase${pendingIDs.length === 1 ? '' : 's'} and deleted the account.`,
-      kind: 'success',
-    });
-  } catch (retryErr) {
-    console.error('Failed to delete account after cancelling pending purchases:', retryErr);
-    showToast({
-      message: `Cancelled ${pendingIDs.length} purchase${pendingIDs.length === 1 ? '' : 's'} but the account delete still failed: ${(retryErr as Error).message}`,
-      kind: 'error',
-      timeout: null,
-    });
-  } finally {
-    void loadAccountsForProvider(provider);
   }
 }
 
@@ -1675,7 +1570,9 @@ export function openOverrideModal(
     { signal: overridePaymentOptionsController.signal },
   );
 
-  modal.classList.remove('hidden');
+  // Focus moves into the dialog and Escape closes it (#731). When this opens
+  // on top of the account overrides modal, closing it hands focus back there.
+  openModal(modal, { onClose: resetOverrideModalState });
 }
 
 /**
@@ -1843,7 +1740,12 @@ function syncOverridePaymentOptions(provider: string): void {
 
 function closeOverrideModal(): void {
   const modal = document.getElementById('override-modal');
-  modal?.classList.add('hidden');
+  if (modal) closeModal(modal);
+  // Idempotent; covers a close of a modal that was never opened via openModal.
+  resetOverrideModalState();
+}
+
+function resetOverrideModalState(): void {
   overrideModalContext = null;
   overridePaymentOptionsController?.abort();
   overridePaymentOptionsController = null;
@@ -1874,7 +1776,7 @@ async function submitOverrideForm(e: Event): Promise<void> {
     const n = Number(coverageRaw);
     if (!Number.isFinite(n) || n < 0 || n > 100) {
       const errEl = document.getElementById('override-form-error');
-      if (errEl) errEl.textContent = 'Coverage must be between 0 and 100.';
+      if (errEl) errEl.textContent = 'Dashboard coverage must be between 0 and 100.';
       return;
     }
     req.coverage = n;
@@ -1885,7 +1787,7 @@ async function submitOverrideForm(e: Event): Promise<void> {
     // be a no-op semantically — no field overrides anything. Block at the
     // UI to avoid silent confusion.
     const errEl = document.getElementById('override-form-error');
-    if (errEl) errEl.textContent = 'Set at least one of Term, Payment, or Coverage.';
+    if (errEl) errEl.textContent = 'Set at least one of Term, Payment, or Dashboard coverage.';
     return;
   }
 
@@ -1995,7 +1897,10 @@ async function submitBulkOverrideForm(
   } else if (succeeded === 0) {
     if (submitBtn) submitBtn.disabled = false;
     if (errEl) {
-      errEl.textContent = `All ${failed.length} save${failed.length !== 1 ? 's' : ''} failed. Check your connection and try again.`;
+      // Show the server's reason (e.g. a validation error) instead of
+      // always blaming the connection (issue #748).
+      const firstFailure = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+      errEl.textContent = `All ${failed.length} save${failed.length !== 1 ? 's' : ''} failed: ${friendlyError(firstFailure?.reason)}`;
     }
   } else {
     // Partial success: close and reload, surface the failures in a toast.
@@ -2715,11 +2620,11 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
   // save-time-only toast contract) — so the inline-error UX is uniform
   // across Settings.
   wireInlineRangeValidation('setting-notification-days', { signal, requireInteger: true });
-  wireInlineRangeValidation('setting-recs-stale-hours', { signal, requireInteger: true });
+  wireInlineRangeValidation('setting-recs-stale-hours', { signal, requireInteger: true, required: true });
   wireInlineRangeValidation('setting-default-coverage', { signal, requireInteger: true, required: true });
-  wireInlineRangeValidation('setting-grace-aws', { signal, requireInteger: true });
-  wireInlineRangeValidation('setting-grace-azure', { signal, requireInteger: true });
-  wireInlineRangeValidation('setting-grace-gcp', { signal, requireInteger: true });
+  wireInlineRangeValidation('setting-grace-aws', { signal, requireInteger: true, required: true });
+  wireInlineRangeValidation('setting-grace-azure', { signal, requireInteger: true, required: true });
+  wireInlineRangeValidation('setting-grace-gcp', { signal, requireInteger: true, required: true });
   // Per-SP-plan coverage percentage inputs — must carry the same inline
   // validation as the global default-coverage field so users see range errors
   // on the service cards without waiting for Save. Issue #1411 row 7.13.
@@ -2728,7 +2633,7 @@ export function setupSettingsHandlers(signal?: AbortSignal): void {
     .forEach(f =>
       wireInlineRangeValidation(
         (f as { coverageId: string }).coverageId,
-        { signal, requireInteger: true },
+        { signal, requireInteger: true, required: true },
       )
     );
 
@@ -2998,16 +2903,16 @@ const SERVICE_DISPLAY_NAMES: Record<string, Record<string, string>> = {
     'savings-plans-database': 'Database Savings Plans',
   },
   azure: {
-    'vm': 'Virtual Machine Reservations',
-    'sql': 'SQL Database Reservations',
-    'cosmosdb': 'CosmosDB Reservations',
-    'redis': 'Redis Cache Reservations',
+    'compute': 'Virtual Machine Reservations',
+    'relational-db': 'SQL Database Reservations',
+    'nosql': 'CosmosDB Reservations',
+    'cache': 'Redis Cache Reservations',
     'search': 'Cognitive Search Reservations',
   },
   gcp: {
     'compute': 'Compute Engine CUDs',
-    'sql': 'Cloud SQL CUDs',
-    'memorystore': 'Memorystore CUDs',
+    'relational-db': 'Cloud SQL CUDs',
+    'cache': 'Memorystore CUDs',
   },
 };
 
@@ -3167,7 +3072,11 @@ export async function loadGlobalSettings(): Promise<void> {
   const formEl = document.getElementById('global-settings-form');
   const errorEl = document.getElementById('settings-error');
 
-  if (loadingEl) loadingEl.classList.remove('hidden');
+  if (loadingEl) {
+    loadingEl.classList.remove('hidden');
+    // Issue #186: skeleton instead of the static "Loading settings..." text.
+    showSkeletonText(loadingEl, 6);
+  }
   if (formEl) formEl.classList.add('hidden');
   if (errorEl) errorEl.classList.add('hidden');
 
@@ -3264,13 +3173,24 @@ export async function loadGlobalSettings(): Promise<void> {
       void initLadderingSettings(data.global.laddering_enabled ?? false);
     }
 
-    const services = data.services ?? [];
+    // Issue #613: rows saved under the old Azure/GCP ids (azure/vm, gcp/sql,
+    // ...) are shown on their card and re-saved under the current id, which
+    // is the only one the scheduler and purchase flow match. The card DOM ids
+    // still use the old names, so look them up through SERVICE_FIELDS rather
+    // than deriving them from the row's service id.
+    const stored = data.services ?? [];
+    const services = canonicalizeServiceConfigs(stored);
     loadedServiceConfigs = services;
+    // Re-keyed rows have no backend row under the current id yet, so the next
+    // Save writes them in full instead of as a partial change (#539).
+    const storedKeys = new Set(stored.map(r => `${r.provider}/${r.service}`));
+    legacyRekeyedServices = new Set(services.filter(r => !storedKeys.has(`${r.provider}/${r.service}`)).map(r => `${r.provider}/${r.service}`));
     for (const svc of services) {
-      const key = `${svc.provider}-${svc.service}`;
-      const termEl = document.getElementById(`${key}-term`) as HTMLSelectElement | null;
+      const field = SERVICE_FIELDS.find(f => f.provider === svc.provider && f.service === svc.service);
+      if (!field) continue;
+      const termEl = document.getElementById(field.termId) as HTMLSelectElement | null;
       if (termEl) termEl.value = String(svc.term);
-      const paymentEl = document.getElementById(`${key}-payment`) as HTMLSelectElement | null;
+      const paymentEl = field.paymentId ? document.getElementById(field.paymentId) as HTMLSelectElement | null : null;
       if (paymentEl) paymentEl.value = normalizePaymentValue(svc.payment, svc.provider);
     }
 
@@ -3307,6 +3227,7 @@ export async function loadGlobalSettings(): Promise<void> {
     // this fix) gets clamped here to the first valid payment option,
     // which will then be re-persisted on the user's next save.
     syncAllServiceCommitmentConstraints();
+    revalidateInlineRanges();
 
     if (loadingEl) loadingEl.classList.add('hidden');
     if (formEl) formEl.classList.remove('hidden');
@@ -3368,6 +3289,7 @@ export async function loadAccountsTab(): Promise<void> {
   void loadAccountsForProvider('gcp');
   void initFederationPanel(source);
   void import('./modules/registrations').then(m => m.initRegistrations());
+  void import('./modules/override-transfer').then(m => m.initOverrideTransfer());
   void renderAccountsOverview();
 }
 
@@ -3436,6 +3358,161 @@ async function renderAccountsOverview(): Promise<void> {
 }
 
 /**
+ * Names of the per-Savings-Plan coverage cards whose edited value is not a
+ * whole number between 0 and 100. Untouched cards are not checked; an edited
+ * card cleared to empty is invalid, not silently dropped.
+ */
+function invalidEditedCardCoverages(): string[] {
+  const bad: string[] = [];
+  for (const field of SERVICE_FIELDS) {
+    if (!('coverageId' in field) || !field.coverageId) continue;
+    const input = byId<HTMLInputElement>(field.coverageId);
+    if (!input) continue;
+    const raw = input.value;
+    if (getFieldValue(field.coverageId) === savedSnapshot[field.coverageId]) continue;
+    // Number('') is 0, so an edited-to-empty input must be rejected explicitly.
+    const parsed = Number(raw);
+    if (raw.trim() !== '' && Number.isInteger(parsed) && parsed >= 0 && parsed <= 100) continue;
+    const title = input?.closest('.service-default-card')?.querySelector('h5')?.textContent?.trim();
+    bad.push(title || field.service);
+  }
+  return bad;
+}
+
+const SERVICE_FILTER_KEYS = [
+  'include_engines', 'exclude_engines', 'include_types', 'exclude_types',
+  'include_regions', 'exclude_regions',
+] as const;
+
+function isDirtyField(id: string): boolean {
+  return id in savedSnapshot && getFieldValue(id) !== savedSnapshot[id];
+}
+
+/**
+ * The fields of one service row the user changed since load/save, or null when
+ * nothing changed (no PUT). A card's term, payment, coverage and enabled
+ * controls count as changed when they differ from the saved snapshot; the
+ * recommendation filters are compared with the loaded row.
+ */
+function changedServiceFields(
+  field: (typeof SERVICE_FIELDS)[number],
+  base: api.ServiceConfig | undefined,
+  filters: Exclude<ReturnType<typeof readServiceFilterControls>, { message: string }> | undefined,
+): Partial<api.ServiceConfig> | null {
+  const changes: Partial<api.ServiceConfig> = {};
+  if (isDirtyField(field.termId)) {
+    changes.term = parseInt(byId<HTMLSelectElement>(field.termId)?.value || '3', 10);
+  }
+  if (field.paymentId && isDirtyField(field.paymentId)) {
+    changes.payment = byId<HTMLSelectElement>(field.paymentId)?.value || normalizePaymentValue('no-upfront', field.provider);
+  }
+  if ('coverageId' in field && field.coverageId && isDirtyField(field.coverageId)) {
+    const rawCov = byId<HTMLInputElement>(field.coverageId)?.value ?? '';
+    if (rawCov !== '' && Number.isFinite(Number(rawCov))) changes.coverage = Number(rawCov);
+  }
+  if ('enabledId' in field && field.enabledId && isDirtyField(field.enabledId)) {
+    changes.enabled = byId<HTMLInputElement>(field.enabledId)?.checked ?? true;
+  }
+  if (filters) {
+    for (const key of SERVICE_FILTER_KEYS) {
+      if (filters[key].join(',') !== (base?.[key] ?? []).join(',')) changes[key] = filters[key];
+    }
+    if (filters.min_count !== (base?.min_count ?? 0)) changes.min_count = filters.min_count;
+  }
+  if (Object.keys(changes).length === 0) return null;
+  if (!changes.payment && base) {
+    // A stored payment the card normalises on load (#545) goes out with any
+    // PUT of the row, or the backend validates the legacy token and rejects it.
+    // GCP cards have no payment control and GCP only accepts monthly, so a row
+    // holding another token (an AWS default copied onto it) is repaired too.
+    const shown = field.paymentId ? byId<HTMLSelectElement>(field.paymentId)?.value : field.provider === 'gcp' ? 'monthly' : undefined;
+    if (shown && shown !== base.payment) changes.payment = shown;
+  }
+  return changes;
+}
+
+/**
+ * Required fields for a service row the backend has no record of yet, where a
+ * partial body would fail validation. Mirrors what a first Save always sent.
+ */
+function newServiceConfigDefaults(
+  field: (typeof SERVICE_FIELDS)[number],
+  settings: api.Config,
+): api.ServiceConfig {
+  const paymentEl = field.paymentId ? byId<HTMLSelectElement>(field.paymentId) : null;
+  return {
+    provider: field.provider,
+    service: field.service,
+    enabled: true,
+    term: parseInt(byId<HTMLSelectElement>(field.termId)?.value || '3', 10),
+    payment: paymentEl?.value || normalizePaymentValue(field.paymentId ? 'no-upfront' : settings.default_payment, field.provider),
+    coverage: settings.default_coverage,
+  };
+}
+
+/**
+ * The backend copied a changed default coverage onto every service row, so show
+ * it on the Savings Plan cards the user did not edit in this Save (an edited
+ * card keeps its value and is sent as its own change).
+ */
+function showPropagatedCoverage(coverage: number, sentFields: Record<string, string>): void {
+  for (const field of SERVICE_FIELDS) {
+    if (!('coverageId' in field) || !field.coverageId) continue;
+    const el = byId<HTMLInputElement>(field.coverageId);
+    if (!el || getFieldValue(field.coverageId) !== savedSnapshot[field.coverageId]) continue;
+    el.value = String(coverage);
+    savedSnapshot[field.coverageId] = String(coverage);
+    sentFields[field.coverageId] = String(coverage);
+  }
+}
+
+const GRACE_INPUTS = [['aws', 'setting-grace-aws'], ['azure', 'setting-grace-azure'], ['gcp', 'setting-grace-gcp']] as const;
+
+
+/**
+ * grace_period_days and enabled_providers are replaced whole by the backend, so
+ * a tab opened before another admin's save would revert that admin's providers
+ * (#539). Re-read the server's current value and overlay only the fields this
+ * user changed, judged by the values captured at Save (the form may change while
+ * the read is pending). Rejects, leaving nothing sent, if the server value is unavailable.
+ */
+async function rebaseMultiFieldKeys(
+  changedGlobal: Partial<api.Config>,
+  isFieldChanged: (id: string) => boolean,
+): Promise<void> {
+  const fresh = await api.getConfig();
+  if (!fresh?.global) throw new Error('could not load the current settings to merge into');
+  if ('grace_period_days' in changedGlobal) {
+    const merged: Record<string, number> = { ...(fresh.global.grace_period_days ?? {}) };
+    for (const [provider, id] of GRACE_INPUTS) {
+      if (isFieldChanged(id)) merged[provider] = changedGlobal.grace_period_days![provider]!;
+    }
+    changedGlobal.grace_period_days = merged;
+  }
+  if ('enabled_providers' in changedGlobal) {
+    let merged: api.Provider[] = [...((fresh.global.enabled_providers ?? []) as api.Provider[])];
+    for (const provider of ['aws', 'azure', 'gcp'] as const) {
+      if (!isFieldChanged(`provider-${provider}`)) continue;
+      const at = merged.indexOf(provider);
+      const checked = changedGlobal.enabled_providers!.includes(provider);
+      if (checked && at < 0) merged.push(provider);
+      if (!checked) merged = merged.filter(p => p !== provider);
+    }
+    changedGlobal.enabled_providers = merged;
+  }
+}
+
+/** Show the persisted grace map, keeping any input the user edited while the save ran. */
+function showSavedGrace(saved: Record<string, number>, sentFields: Record<string, string>): void {
+  for (const [provider, id] of GRACE_INPUTS) {
+    if (getFieldValue(id) !== sentFields[id]) continue;
+    populateGraceInput(id, saved[provider]);
+    savedSnapshot[id] = sentFields[id] = getFieldValue(id);
+  }
+  revalidateInlineRanges();
+}
+
+/**
  * Save global settings
  */
 export async function saveGlobalSettings(e: Event): Promise<void> {
@@ -3472,7 +3549,7 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
   // reasons.
   const gracePeriodDays: Record<string, number> = {};
   const graceErrors: string[] = [];
-  for (const [provider, id] of [['aws', 'setting-grace-aws'], ['azure', 'setting-grace-azure'], ['gcp', 'setting-grace-gcp']] as const) {
+  for (const [provider, id] of GRACE_INPUTS) {
     const v = readGraceInput(id);
     if (v.err) {
       graceErrors.push(provider.toUpperCase());
@@ -3507,14 +3584,28 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
   const rawCoverage = Number(coverageText);
   // Number('') is 0, so an empty field must be rejected explicitly.
   if (coverageText.trim() === '' || !Number.isFinite(rawCoverage) || !Number.isInteger(rawCoverage) || rawCoverage < 0 || rawCoverage > 100) {
-    showToast({ message: 'Target coverage must be a whole number between 0 and 100', kind: 'error' });
+    showToast({ message: 'Dashboard coverage target must be a whole number between 0 and 100', kind: 'error' });
     if (saveBtn) saveBtn.disabled = false;
     saveInFlight = false;
     return;
   }
-  const rawStaleHours = Number(byId<HTMLInputElement>('setting-recs-stale-hours')?.value ?? '24');
-  if (!Number.isFinite(rawStaleHours) || !Number.isInteger(rawStaleHours) || rawStaleHours < 0 || rawStaleHours > 8760) {
+  const staleHoursText = byId<HTMLInputElement>('setting-recs-stale-hours')?.value ?? '24';
+  const rawStaleHours = Number(staleHoursText);
+  // 0 is a legal value (disables auto-refresh) but Number('') is also 0, so an
+  // emptied field must be rejected explicitly rather than saved as "disable".
+  if (staleHoursText.trim() === '' || !Number.isFinite(rawStaleHours) || !Number.isInteger(rawStaleHours) || rawStaleHours < 0 || rawStaleHours > 8760) {
     showToast({ message: 'Cache stale threshold must be a whole number between 0 and 8760 hours (0 = disable)', kind: 'error' });
+    if (saveBtn) saveBtn.disabled = false;
+    saveInFlight = false;
+    return;
+  }
+  // The per-Savings-Plan coverage cards sit outside the settings <form>, so
+  // native min/max validation never runs for them and the inline hint only
+  // paints a message. Apply the global field's whole-number 0..100 rule here,
+  // before any PUT, so a fractional value like 12.7 is not persisted.
+  const badCoverageCards = invalidEditedCardCoverages();
+  if (badCoverageCards.length > 0) {
+    showToast({ message: `Dashboard coverage must be a whole number between 0 and 100 (${badCoverageCards.join(', ')})`, kind: 'error' });
     if (saveBtn) saveBtn.disabled = false;
     saveInFlight = false;
     return;
@@ -3553,24 +3644,37 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     // Save button are unreachable after a failed first load, so the snapshot is
     // always populated here. laddering_enabled is not part of Save: its toggle
     // saves itself (ladder.ts). Multi-field keys (grace map, enabled_providers)
-    // are sent whole, because the backend replaces them as a unit.
+    // are replaced whole by the backend, so rebaseMultiFieldKeys merges them first.
     const changedGlobal: Partial<api.Config> = { ...settings };
+    const isFieldChanged = (id: string): boolean => sentFields[id] !== savedSnapshot[id];
     for (const [key, ids] of GLOBAL_CONFIG_FIELDS) {
-      if (ids.every(id => getFieldValue(id) === savedSnapshot[id])) delete changedGlobal[key];
+      if (!ids.some(isFieldChanged)) delete changedGlobal[key];
     }
-    if (Object.keys(changedGlobal).length > 0) {
+    const globalSent = Object.keys(changedGlobal).length > 0;
+    if (globalSent) {
+      if ('grace_period_days' in changedGlobal || 'enabled_providers' in changedGlobal) {
+        await rebaseMultiFieldKeys(changedGlobal, isFieldChanged);
+        // The backend disagrees with itself on an empty list (filters read it as
+        // "all", the scheduler collects nothing), so never write one (#1531).
+        if (changedGlobal.enabled_providers?.length === 0) {
+          showToast({ message: 'Enable at least one provider before saving.', kind: 'error' });
+          return;
+        }
+      }
       await api.updateConfig(changedGlobal);
       // Persisted: advance the snapshot now, so a later validation failure or
       // service-save error does not leave these fields looking unsaved.
       for (const [key, ids] of GLOBAL_CONFIG_FIELDS) {
         if (key in changedGlobal) ids.forEach(id => { savedSnapshot[id] = sentFields[id]!; });
       }
+      if (changedGlobal.grace_period_days) showSavedGrace(changedGlobal.grace_period_days, sentFields);
     }
     if (defaultCoverageChanged) {
       // The default is persisted and propagated; mirror that locally so a retry
       // after a partial failure does not send the old coverage back.
       savedSnapshot['setting-default-coverage'] = sentFields['setting-default-coverage']!;
       loadedServiceConfigs = loadedServiceConfigs.map(s => ({ ...s, coverage: settings.default_coverage }));
+      showPropagatedCoverage(settings.default_coverage, sentFields);
     }
 
     // Read + validate the per-service recommendation filters up front so a bad
@@ -3590,72 +3694,31 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     }
 
     const serviceSaves = SERVICE_FIELDS.map((field) => {
-      const { provider, service, termId, paymentId } = field;
-      const term = parseInt(byId<HTMLSelectElement>(termId)?.value || '3', 10);
-      const payment = paymentId
-        ? (byId<HTMLSelectElement>(paymentId)?.value || normalizePaymentValue('no-upfront', provider))
-        : normalizePaymentValue(settings.default_payment, provider);
+      const { provider, service } = field;
       const base = loadedServiceConfigs.find(s => s.provider === provider && s.service === service);
-      // Carry forward every field the UI doesn't own (e.g. ramp_schedule).
-      // The recommendation-filter fields are now UI-owned and overwritten from
-      // the card's controls below.
-
-      // Issue #136: per-product SP cards expose their own coverage and enabled
-      // controls. Read from the DOM when the card has the controls; fall back
-      // to the base row value (or the global default) otherwise so RI and
-      // Azure/GCP cards continue to inherit the global settings.
-      let coverage = base?.coverage ?? settings.default_coverage;
-      let enabled = base?.enabled ?? true;
-      if ('coverageId' in field && field.coverageId) {
-        const rawCov = byId<HTMLInputElement>(field.coverageId)?.value ?? '';
-        const parsed = Number(rawCov);
-        // Only a value the user edited on the card overrides the propagated
-        // default; an untouched card still shows the pre-save coverage.
-        const cardEdited = getFieldValue(field.coverageId) !== savedSnapshot[field.coverageId];
-        if (cardEdited && rawCov !== '' && Number.isFinite(parsed)) coverage = parsed;
-      }
-      if ('enabledId' in field && field.enabledId) {
-        const el = byId<HTMLInputElement>(field.enabledId);
-        if (el) enabled = el.checked;
-      }
-
       const filters = filterValuesByService.get(`${provider}-${service}`);
-      const cfg: api.ServiceConfig = {
-        ...(base ?? {}),
-        provider,
-        service,
-        enabled,
-        term,
-        payment,
-        coverage,
-        // Filters: send the card's current values. isServiceFilterError was
-        // already ruled out above, so `filters` here is always the value form.
-        ...(filters && !isServiceFilterError(filters) ? {
-          include_engines: filters.include_engines,
-          exclude_engines: filters.exclude_engines,
-          include_types: filters.include_types,
-          exclude_types: filters.exclude_types,
-          include_regions: filters.include_regions,
-          exclude_regions: filters.exclude_regions,
-          min_count: filters.min_count,
-        } : {}),
-      };
+      // Only the rows (and the fields of a row) the user changed go out, so a
+      // stale tab cannot revert a service another admin edited (#539).
+      const changes = changedServiceFields(field, base, filters && !isServiceFilterError(filters) ? filters : undefined);
+      const rekeyed = base !== undefined && legacyRekeyedServices.has(`${provider}/${service}`);
+      if (!changes && !rekeyed) return null;
+      const fresh = newServiceConfigDefaults(field, settings);
+      let cfg: Partial<api.ServiceConfig>;
+      if (!base) cfg = { ...fresh, ...changes };
+      else if (rekeyed) cfg = { ...base, term: fresh.term, payment: fresh.payment, ...changes };
+      else cfg = { provider, service, ...changes };
       return api.updateServiceConfig(provider, service, cfg).then(() => {
+        legacyRekeyedServices.delete(`${provider}/${service}`);
         loadedServiceConfigs = [
           ...loadedServiceConfigs.filter(s => !(s.provider === provider && s.service === service)),
-          cfg,
+          { ...(base ?? {}), ...cfg } as api.ServiceConfig,
         ];
-        if ('coverageId' in field && field.coverageId) {
-          const el = byId<HTMLInputElement>(field.coverageId);
-          // Show the persisted (possibly propagated) value only when the card
-          // still holds what this Save read; an edit typed during the PUT stays
-          // dirty against the persisted value and goes out with the next Save.
-          if (el && getFieldValue(field.coverageId) === sentFields[field.coverageId]) el.value = String(coverage);
-          savedSnapshot[field.coverageId] = String(coverage);
-        }
       });
     });
-    const results = await Promise.allSettled(serviceSaves);
+    // Only rows with a PUT take part in the outcome; an unchanged row is neither
+    // a success nor a failure.
+    const savedFields = SERVICE_FIELDS.filter((_, i) => serviceSaves[i] !== null);
+    const results = await Promise.allSettled(serviceSaves.filter((p): p is Promise<void> => p !== null));
 
     // The global PUT and every fulfilled service PUT are persisted, so the
     // snapshot moves forward for them. A rejected service keeps its previous
@@ -3667,7 +3730,7 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     const failures: string[] = [];
     results.forEach((result, i) => {
       if (result.status === 'fulfilled') return;
-      const field = SERVICE_FIELDS[i]!;
+      const field = savedFields[i]!;
       failures.push(`${field.provider}/${field.service}: ${(result.reason as Error).message}`);
       const ids = [field.termId, field.paymentId, 'coverageId' in field ? field.coverageId : null, 'enabledId' in field ? field.enabledId : null];
       for (const id of ids) {
@@ -3678,10 +3741,7 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
 
     if (failures.length > 0) {
       console.error('Failed to save service configs:', failures);
-      showToast({
-        message: `Settings saved, but ${failures.length} service${failures.length === 1 ? '' : 's'} failed: ${failures.join('; ')}`,
-        kind: 'error',
-      });
+      showToast({ message: serviceSaveFailureMessage(results, failures, globalSent), kind: 'error' });
     } else {
       showToast({ message: 'Settings saved successfully', kind: 'success', timeout: 5_000 });
     }
@@ -3693,6 +3753,31 @@ export async function saveGlobalSettings(e: Event): Promise<void> {
     saveInFlight = false;
     if (saveBtn) saveBtn.disabled = false;
   }
+}
+
+/**
+ * Toast text for a Save where at least one service PUT failed. Only claim
+ * "Settings saved" when something was: the global PUT went out or a service
+ * PUT succeeded. When nothing saved and every service PUT was denied (a
+ * scoped admin after #614 gated service config on unrestricted account
+ * scope), show the single backend reason, matching the global PUT's
+ * "Failed to save settings: permission denied: ..." toast instead of
+ * repeating it once per service (#617).
+ */
+function serviceSaveFailureMessage(
+  results: PromiseSettledResult<void>[],
+  failures: string[],
+  globalSent: boolean,
+): string {
+  const savedSomething = globalSent || results.some(r => r.status === 'fulfilled');
+  if (savedSomething) {
+    return `Settings saved, but ${failures.length} service${failures.length === 1 ? '' : 's'} failed: ${failures.join('; ')}`;
+  }
+  const reasons = results.map(r => (r.status === 'rejected' ? r.reason : null));
+  if (reasons.every(isPermissionDeniedError)) {
+    return `Failed to save settings: ${(reasons[0] as Error).message}`;
+  }
+  return `Failed to save settings: ${failures.length} service${failures.length === 1 ? '' : 's'} failed: ${failures.join('; ')}`;
 }
 
 /**
@@ -3759,6 +3844,7 @@ export async function resetSettings(): Promise<void> {
   // clicks Reset and navigates away loses their reset silently.
   updateProviderSettingsVisibility();
   updateCollectionScheduleVisibility();
+  revalidateInlineRanges();
   updateDirtyMarkers();
 }
 
@@ -3790,7 +3876,7 @@ export function copyToClipboard(elementId: string): void {
     btn.replaceChildren();
     const tick = document.createElement('span');
     tick.className = 'copy-icon';
-    tick.textContent = '✓'; // ✓
+    tick.appendChild(createIcon('check'));
     btn.appendChild(tick);
     btn.classList.add('copied');
     setTimeout(() => {

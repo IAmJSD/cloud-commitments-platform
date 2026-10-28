@@ -52,7 +52,7 @@ func (p *pauseClaimProvider) GetServiceClient(context.Context, common.ServiceTyp
 
 type pauseClaimFactory struct{ provider *pauseClaimProvider }
 
-func (f pauseClaimFactory) CreateAndValidateProvider(context.Context, string, *provider.ProviderConfig) (provider.Provider, error) {
+func (f pauseClaimFactory) CreateAndValidateProvider(context.Context, string, *provider.Config) (provider.Provider, error) {
 	return f.provider, nil
 }
 

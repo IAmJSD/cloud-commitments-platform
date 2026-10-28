@@ -14,12 +14,19 @@ jest.mock('../riexchange', () => ({
   loadRIExchange: jest.fn(),
 }));
 
+// The Trends sub-tab's fetch/render is covered in trends.test.ts; here we
+// only check that the sub-section switch and chip reload route to it.
+jest.mock('../trends', () => ({
+  loadTrends: jest.fn(),
+}));
+
 // The active-commitments and coverage load paths hit the API. Mock the
 // entire api barrel so we don't need to stand up fetch — tests exercise
 // the render machinery, not the network shape.
 jest.mock('../api', () => ({
   listActiveCommitments: jest.fn(),
   getCoverageBreakdown: jest.fn(),
+  getConfig: jest.fn(),
 }));
 
 // Mock state so chip subscription tests can control provider/account
@@ -53,6 +60,7 @@ jest.mock('../navigation', () => {
 import { loadInventory, switchInventorySubSection, loadActiveCommitments, loadCoverageBreakdown } from '../inventory';
 import { switchInventorySubTab } from '../navigation';
 import { loadRIExchange } from '../riexchange';
+import { loadTrends } from '../trends';
 import * as api from '../api';
 import * as state from '../state';
 import type { ProviderCoverageSection } from '../api';
@@ -161,6 +169,19 @@ test.each([false, true])('inventory unknown upfront with amortization %s', async
   }
 });
 
+// Money and count columns carry th.num/td.num (right-aligned, tabular
+// digits) in the header and in every row at the same index (issue #739).
+function numColumns(root: ParentNode): { headers: string[]; rowsMatch: boolean } {
+  const ths = Array.from(root.querySelectorAll('thead th'));
+  const numIdx = ths.flatMap((th, i) => (th.classList.contains('num') ? [i] : []));
+  const rows = Array.from(root.querySelectorAll('tbody tr'));
+  const rowsMatch = rows.length > 0 && rows.every((tr) => {
+    const tds = Array.from(tr.querySelectorAll('td'));
+    return tds.flatMap((td, i) => (td.classList.contains('num') ? [i] : [])).join() === numIdx.join();
+  });
+  return { headers: numIdx.map((i) => (ths[i]!.textContent ?? '').trim()), rowsMatch };
+}
+
 describe('Inventory & Coverage sub-section switching', () => {
   beforeEach(() => {
     buildInventoryDOM();
@@ -217,6 +238,21 @@ describe('Inventory & Coverage sub-section switching', () => {
     expect(document.getElementById('inventory-active-commitments')?.classList.contains('hidden')).toBe(true);
     expect(document.getElementById('inventory-coverage')?.classList.contains('hidden')).toBe(true);
     expect(loadRIExchange).toHaveBeenCalledTimes(1);
+  });
+
+  test('switchInventorySubSection shows trends and calls loadTrends', () => {
+    const trends = document.createElement('section');
+    trends.id = 'inventory-trends';
+    trends.classList.add('hidden');
+    document.getElementById('inventory-tab')?.appendChild(trends);
+    (loadTrends as jest.Mock).mockClear();
+
+    expect(switchInventorySubSection('trends')).toBe('trends');
+
+    expect(trends.classList.contains('hidden')).toBe(false);
+    expect(document.getElementById('inventory-coverage')?.classList.contains('hidden')).toBe(true);
+    expect(document.getElementById('inventory-active-commitments')?.classList.contains('hidden')).toBe(true);
+    expect(loadTrends).toHaveBeenCalledTimes(1);
   });
 
   test('switchInventorySubSection falls back to active-commitments for unknown sub-section', () => {
@@ -406,6 +442,16 @@ describe('loadActiveCommitments — fetch + render flow', () => {
     expect(accountCell?.textContent).toContain('acc-no-name');
     expect(accountCell?.querySelector('.monospace')).not.toBeNull();
   });
+
+  test('money and count columns are right-aligned with tabular digits (issue #739)', async () => {
+    (api.listActiveCommitments as jest.Mock).mockResolvedValue([
+      makeCommitment({ id: 'a:1', count: 4, monthly_cost: 240.5 }),
+      makeCommitment({ id: 'a:2', count: 1, monthly_cost: null }),
+    ]);
+    await loadActiveCommitments();
+    const list = document.getElementById('active-commitments-list')!;
+    expect(numColumns(list)).toEqual({ headers: ['Count', 'Monthly cost', 'Monthly savings'], rowsMatch: true });
+  });
 });
 
 // ──────────────────────────────────────────────
@@ -432,6 +478,18 @@ describe('loadCoverageBreakdown — fetch + render flow', () => {
 
   afterEach(() => {
     clearDOM();
+  });
+
+  test('a provider named like an Object.prototype member renders as text, not a function (#317)', async () => {
+    (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({
+      providers: [makeProviderSection('constructor', null, null), makeProviderSection('toString', null, null)],
+    });
+
+    await loadCoverageBreakdown();
+
+    const titles = Array.from(document.querySelectorAll('#coverage-providers .coverage-provider-card h3'))
+      .map((h) => h.textContent);
+    expect(titles).toEqual(['CONSTRUCTOR', 'TOSTRING']);
   });
 
   test('renders per-provider sections with service rows', async () => {
@@ -621,6 +679,17 @@ describe('loadCoverageBreakdown — fetch + render flow', () => {
     expect(absentCell.querySelector('.coverage-bar')).toBeNull();
     expect(absentCell.querySelector('.coverage-bar-absent')!.textContent).toBe('N/A');
   });
+
+  test('the money columns are right-aligned with tabular digits (issue #739)', async () => {
+    (api.getCoverageBreakdown as jest.Mock).mockResolvedValue({
+      providers: [makeProviderSection('aws', [
+        { service: 'ec2', covered_monthly: 200, on_demand_monthly: 300, coverage_pct: 40 },
+      ], 40)],
+    });
+    await loadCoverageBreakdown();
+    const card = document.querySelector('#coverage-providers .coverage-provider-card')!;
+    expect(numColumns(card)).toEqual({ headers: ['Covered/mo', 'On-demand gap/mo'], rowsMatch: true });
+  });
 });
 
 // ──────────────────────────────────────────────
@@ -744,6 +813,19 @@ describe('chip subscriptions (issue #866)', () => {
     );
   });
 
+  test('account chip change re-fetches Trends when trends sub-tab is active', async () => {
+    activateInventoryTab();
+    loadInventory();
+    switchInventorySubSection('trends');
+    (loadTrends as jest.Mock).mockClear();
+
+    const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+    accountCb();
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(loadTrends).toHaveBeenCalledTimes(1);
+  });
+
   test('does NOT re-fetch when inventory tab is inactive (active-tab guard)', async () => {
     // First load with tab active to fix module-scoped currentSubSection
     // to 'active-commitments'. Then deactivate the tab and verify the
@@ -813,5 +895,64 @@ describe('chip subscriptions (issue #866)', () => {
     const empty = list.querySelector('.empty');
     expect(empty).not.toBeNull();
     expect(empty!.textContent).toMatch(/no active commitments found across your registered accounts/i);
+  });
+});
+
+// Issue #726: the bar was success-green at every value. It is neutral now,
+// marks the service's coverage target, and turns amber/red far below it.
+describe('loadCoverageBreakdown — coverage bar target and tone', () => {
+  beforeEach(() => {
+    buildInventoryDOM();
+    (api.getCoverageBreakdown as jest.Mock).mockReset().mockResolvedValue({
+      providers: [makeProviderSection('aws', [
+        { service: 'ec2', covered_monthly: 900, on_demand_monthly: 100, coverage_pct: 90 },
+        { service: 'rds', covered_monthly: 500, on_demand_monthly: 500, coverage_pct: 50 },
+        { service: 'lambda', covered_monthly: 5, on_demand_monthly: 95, coverage_pct: 5 },
+      ], 60)],
+    });
+    (state.subscribeProvider as jest.Mock).mockReturnValue(jest.fn());
+    (state.subscribeAccount as jest.Mock).mockReturnValue(jest.fn());
+    (state.getCurrentProvider as jest.Mock).mockReturnValue('');
+    (state.getCurrentAccountIDs as jest.Mock).mockReturnValue([]);
+  });
+
+  afterEach(() => {
+    clearDOM();
+    (api.getConfig as jest.Mock).mockReset();
+  });
+
+  const bars = () => Array.from(document.querySelectorAll<HTMLElement>('#coverage-providers .coverage-bar'));
+
+  test('uses the per-service target, else the global default, and tones by distance', async () => {
+    (api.getConfig as jest.Mock).mockResolvedValue({
+      global: { default_coverage: 80 },
+      services: [{ provider: 'aws', service: 'rds', coverage: 60, enabled: true, term: 1, payment: 'no-upfront' }],
+    });
+
+    await loadCoverageBreakdown();
+
+    const [ec2, rds, lambda] = bars();
+    // ec2: 90% vs the 80% default -> on track, tick at 80%.
+    expect(ec2!.className).toBe('coverage-bar coverage-bar--on-track');
+    expect(ec2!.querySelector<HTMLElement>('.coverage-bar-target')!.style.left).toBe('80%');
+    // rds: 50% vs its own 60% target -> 0.83 of target, still on track.
+    expect(rds!.className).toBe('coverage-bar coverage-bar--on-track');
+    expect(rds!.querySelector<HTMLElement>('.coverage-bar-target')!.style.left).toBe('60%');
+    // lambda: 5% vs 80% -> far below, and the label says so.
+    expect(lambda!.className).toBe('coverage-bar coverage-bar--far-below');
+    expect(lambda!.getAttribute('aria-label')).toBe('5.0% covered, target 80%, far below target');
+  });
+
+  test('a config that cannot be read leaves the bars neutral with no target tick', async () => {
+    (api.getConfig as jest.Mock).mockRejectedValue(new Error('403 forbidden'));
+
+    await loadCoverageBreakdown();
+
+    expect(bars()).toHaveLength(3);
+    for (const bar of bars()) {
+      expect(bar.className).toBe('coverage-bar coverage-bar--on-track');
+      expect(bar.querySelector('.coverage-bar-target')).toBeNull();
+    }
+    expect(document.querySelector('#coverage-providers .error')).toBeNull();
   });
 });

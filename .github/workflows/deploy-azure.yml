@@ -177,12 +177,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Azure Login
-        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -217,6 +217,7 @@ jobs:
           TF_VAR_admin_email: ${{ secrets.ADMIN_EMAIL }}
           TF_VAR_alert_emails: ${{ secrets.ALERT_EMAILS }}
           TF_VAR_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          TARGET_ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
         run: |
           # pipefail for the same reason as the apply step below: the default
           # shell is `bash -e`, where a pipeline takes tee's exit status and a
@@ -224,14 +225,16 @@ jobs:
           set -o pipefail
           cd terraform/environments/azure
           terraform plan \
-            -var-file="github-${{ needs.prepare.outputs.target_environment }}.tfvars" \
-            -var="location=${{ env.AZURE_LOCATION }}" \
+            -var-file="github-${TARGET_ENVIRONMENT}.tfvars" \
+            -var="location=${AZURE_LOCATION}" \
             -out=tfplan 2>&1 | tee "${RUNNER_TEMP}/tf-plan.log"
 
 
       - name: Wait for resource group deletion to complete
+        env:
+          TARGET_ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
         run: |
-          ENVIRONMENT="${{ needs.prepare.outputs.target_environment }}"
+          ENVIRONMENT="$TARGET_ENVIRONMENT"
           RG_NAME="cudly-${ENVIRONMENT}-rg"
           echo "Checking resource group ${RG_NAME} state..."
           for i in $(seq 1 30); do
@@ -250,8 +253,10 @@ jobs:
           done
 
       - name: Remove orphaned or soft-deleted Key Vault
+        env:
+          TARGET_ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
         run: |
-          ENVIRONMENT="${{ needs.prepare.outputs.target_environment }}"
+          ENVIRONMENT="$TARGET_ENVIRONMENT"
           KV_NAME="cudly-${ENVIRONMENT}-kv"
           # If the KV exists in Azure but not in Terraform state (orphaned from a failed run),
           # delete it so Terraform can re-create it cleanly
@@ -265,7 +270,7 @@ jobs:
           DELETED=$(az keyvault list-deleted --query "[?name=='${KV_NAME}'].name" -o tsv 2>/dev/null || echo "")
           if [ -n "$DELETED" ]; then
             echo "Purging soft-deleted Key Vault ${KV_NAME}..."
-            az keyvault purge --name "${KV_NAME}" --location "${{ env.AZURE_LOCATION }}" 2>/dev/null \
+            az keyvault purge --name "${KV_NAME}" --location "${AZURE_LOCATION}" 2>/dev/null \
               && echo "Purged" || echo "Purge failed (continuing)"
           fi
 
@@ -282,16 +287,13 @@ jobs:
           cd terraform/environments/azure
           terraform apply -auto-approve tfplan 2>&1 | tee "${RUNNER_TEMP}/tf-apply.log"
 
-          # Get app URL
-          APP_URL=$(terraform output -raw container_app_url 2>/dev/null | grep -v '::' || echo "")
-          echo "app_url=$APP_URL" >> "$GITHUB_OUTPUT"
-
-          # Get app name
-          APP_NAME=$(terraform output -raw container_app_name 2>/dev/null | grep -v '::' || echo "")
-          echo "app_name=$APP_NAME" >> "$GITHUB_OUTPUT"
-
-          RESOURCE_GROUP_NAME=$(terraform output -raw resource_group_name 2>/dev/null | grep -v '::' || echo "")
-          echo "resource_group_name=$RESOURCE_GROUP_NAME" >> "$GITHUB_OUTPUT"
+          # A missing or unreadable output fails this step with terraform's own
+          # error, instead of passing an empty value on to test-deployment
+          # (#438). The script still drops setup-terraform's `::debug::` lines.
+          bash "${GITHUB_WORKSPACE}/scripts/read-tf-outputs.sh" \
+            app_url=container_app_url \
+            app_name=container_app_name \
+            resource_group_name=resource_group_name
 
       # The provider fails the data read outright when the custom role is absent,
       # so a Terraform precondition can never run for this case. Issue #1794: the
@@ -413,7 +415,8 @@ jobs:
 
     steps:
       - name: Azure Login
-        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        id: azure-login
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -421,8 +424,10 @@ jobs:
 
       - name: Get Container App URL
         id: get-url
+        env:
+          DEPLOY_APP_URL: ${{ needs.build-and-deploy.outputs.app_url }}
         run: |
-          APP_URL="${{ needs.build-and-deploy.outputs.app_url }}"
+          APP_URL="$DEPLOY_APP_URL"
           if [ -z "$APP_URL" ]; then
             echo "Failed to get app URL from deploy outputs"
             exit 1
@@ -442,7 +447,7 @@ jobs:
 
       # Needs the repo for scripts/wait-for-healthy.sh, used by both gates below.
       - name: Checkout code
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           sparse-checkout: scripts/wait-for-healthy.sh
@@ -472,14 +477,21 @@ jobs:
           HEALTH_INTERVAL_SECONDS: "5"
         run: bash scripts/wait-for-healthy.sh "$APP_URL"
 
+      # Runs when an earlier step failed too (#438): a failed readiness or smoke
+      # gate is exactly when the logs are needed. It still needs a working
+      # Azure login. Missing outputs only warn here, because build-and-deploy
+      # now fails at the source when it cannot read them, so this job never
+      # starts without them; failing here would only bury the real error. An
+      # az lookup error still fails the step (#217).
       - name: Check Container App logs
+        if: always() && steps.azure-login.outcome == 'success'
         env:
           APP_NAME: ${{ needs.build-and-deploy.outputs.app_name }}
           RESOURCE_GROUP_NAME: ${{ needs.build-and-deploy.outputs.resource_group_name }}
         run: |
           if [ -z "$APP_NAME" ] || [ -z "$RESOURCE_GROUP_NAME" ]; then
-            echo "::error::Terraform outputs missing: app_name='$APP_NAME' resource_group_name='$RESOURCE_GROUP_NAME'"
-            exit 1
+            echo "::warning::No Container App to read logs from: app_name='$APP_NAME' resource_group_name='$RESOURCE_GROUP_NAME'"
+            exit 0
           fi
           echo "Recent Container App logs:"
           az containerapp logs show \
@@ -498,18 +510,22 @@ jobs:
 
     steps:
       - name: Download deployment info
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: deployment-info-azure-${{ needs.prepare.outputs.target_environment }}
         continue-on-error: true
 
       - name: Post summary
+        env:
+          TARGET_ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
+          DEPLOY_RESULT: ${{ needs.build-and-deploy.result }}
+          TEST_RESULT: ${{ needs.test-deployment.result }}
         run: |
           {
             echo "## Azure Container Apps Deployment Summary"
             echo ""
-            echo "**Environment:** ${{ needs.prepare.outputs.target_environment }}"
-            echo "**Location:** ${{ env.AZURE_LOCATION }}"
+            echo "**Environment:** $TARGET_ENVIRONMENT"
+            echo "**Location:** $AZURE_LOCATION"
             echo ""
 
             if [ -f deployment-info.json ]; then
@@ -521,10 +537,10 @@ jobs:
 
             echo ""
             echo "### Job Results"
-            echo "- Deploy: ${{ needs.build-and-deploy.result }}"
-            echo "- Test: ${{ needs.test-deployment.result }}"
+            echo "- Deploy: $DEPLOY_RESULT"
+            echo "- Test: $TEST_RESULT"
 
-            if [ "${{ needs.build-and-deploy.result }}" == "success" ] && [ "${{ needs.test-deployment.result }}" == "success" ]; then
+            if [ "$DEPLOY_RESULT" == "success" ] && [ "$TEST_RESULT" == "success" ]; then
               echo ""
               echo "✅ **Deployment successful!**"
             else

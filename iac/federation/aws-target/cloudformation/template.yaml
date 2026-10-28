@@ -9,24 +9,20 @@ Parameters:
     Type: String
     Description: >
       Full OIDC issuer URL (with https://) — used for the IAM OIDC provider Url property.
-      Must NOT contain a trailing slash; the value here must match OIDCIssuerHost
-      (minus the https:// prefix) exactly because AWS IAM condition keys are
-      case-sensitive and string-equal.
+      Must NOT contain a trailing slash. The trust policy's condition-key host
+      is derived from this value (the URL with https:// removed), so the two
+      cannot disagree; AWS IAM condition keys are case-sensitive and
+      string-equal.
       Azure AD: https://login.microsoftonline.com/<tenant_id>/v2.0
       GCP:      https://accounts.google.com
-    AllowedPattern: "^https://[^/]+(/[^/]+)*$"
-    ConstraintDescription: "OIDCIssuerURL must be https:// and must not contain a trailing slash."
-
-  OIDCIssuerHost:
-    Type: String
-    Description: >
-      OIDC issuer host and path WITHOUT the https:// prefix — used as the IAM
-      condition key. Must equal OIDCIssuerURL with the https:// stripped and no
-      trailing slash; the operator is responsible for keeping the two in sync.
-      Azure AD: login.microsoftonline.com/<tenant_id>/v2.0
-      GCP:      accounts.google.com
-    AllowedPattern: "^[^/]+(/[^/]+)*$"
-    ConstraintDescription: "OIDCIssuerHost must not start or end with a slash."
+    # Single-quoted so the regex needs no YAML escaping. Besides '/', each
+    # segment excludes whitespace, '"', '\' and control characters: the host
+    # is substituted into the trust policy's JSON text (see CUDlyRole), and
+    # any of those could end or corrupt the JSON string it lands in.
+    AllowedPattern: '^https://[^/\s"\\\x00-\x1F]+(/[^/\s"\\\x00-\x1F]+)*$'
+    ConstraintDescription: >
+      OIDCIssuerURL must be https://, must not contain a trailing slash, and
+      must not contain whitespace, '"', '\' or control characters.
 
   OIDCAudience:
     Type: String
@@ -39,16 +35,21 @@ Parameters:
       literal string sts.amazonaws.com, so only tokens carrying exactly that
       audience are accepted.
     Default: ""
-    AllowedPattern: "^$|^[^\\s*$]+$"
+    # '"', '\' and control characters are excluded because the value is
+    # substituted into the trust policy's JSON text (see CUDlyRole).
+    AllowedPattern: '^$|^[^\s*$"\\\x00-\x1F]+$'
     ConstraintDescription: >
-      OIDCAudience must be empty, or a string containing no whitespace, '$'
-      or '*' anywhere.
+      OIDCAudience must be empty, or a string containing no whitespace, '$',
+      '*', '"', '\' or control characters anywhere.
       '$' is rejected because the trust policy is an IAM policy document and
       IAM expands ${...} policy variables inside Condition values: an audience
       of ${accounts.google.com:aud} would expand to the presented token's own
       aud claim and therefore match every token.
       '*' is rejected because StringEquals compares it literally rather than
       as a wildcard, silently producing a role nobody can assume.
+      '"', '\' and control characters are rejected because the trust policy
+      is built as JSON text with this value substituted in, and they could
+      end or corrupt the JSON string it lands in.
 
   OIDCThumbprint:
     Type: String
@@ -112,10 +113,12 @@ Parameters:
       accounts.google.com.
       Mirrors the required oidc_subject_claim variable in the Terraform module.
     MinLength: 1
-    AllowedPattern: "^[^\\s*$]+$"
+    # '"', '\' and control characters are excluded because the value is
+    # substituted into the trust policy's JSON text (see CUDlyRole).
+    AllowedPattern: '^[^\s*$"\\\x00-\x1F]+$'
     ConstraintDescription: >
       OIDCSubjectClaim is required and must be a non-empty string containing
-      no whitespace, '$' or '*' anywhere.
+      no whitespace, '$', '*', '"', '\' or control characters anywhere.
       '$' is rejected because the trust policy below is an IAM policy document
       (Version 2012-10-17) and IAM expands ${...} policy variables inside
       Condition values. A subject of ${accounts.google.com:sub} would expand
@@ -125,6 +128,9 @@ Parameters:
       time rather than deployed.
       '*' is rejected because StringEquals compares it literally rather than
       as a wildcard, silently producing a role nobody can assume.
+      '"', '\' and control characters are rejected because the trust policy
+      is built as JSON text with this value substituted in, and they could
+      end or corrupt the JSON string it lands in.
 
   RoleName:
     Type: String
@@ -256,22 +262,50 @@ Resources:
     Properties:
       RoleName: !Ref RoleName
       Description: Role assumed by CUDly via workload identity federation
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          # Both :aud and :sub are always enforced. There is intentionally no
-          # subject-less variant of this statement: omitting :sub would trust
-          # every identity the issuer can mint. OIDCSubjectClaim is a required
-          # parameter, so this condition can never collapse to an empty match.
-          - Effect: Allow
-            Principal:
-              Federated: !GetAtt OIDCProvider.Arn
-            Action: sts:AssumeRoleWithWebIdentity
-            Condition:
-              StringEquals:
-                !Sub "${OIDCIssuerHost}:aud":
-                  !If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]
-                !Sub "${OIDCIssuerHost}:sub": !Ref OIDCSubjectClaim
+      # Both :aud and :sub are always enforced. There is intentionally no
+      # subject-less variant of this statement: omitting :sub would trust
+      # every identity the issuer can mint. OIDCSubjectClaim is a required
+      # parameter, so this condition can never collapse to an empty match.
+      #
+      # The condition-key host is OIDCIssuerURL minus its https:// prefix,
+      # derived here rather than taken as a second parameter so the two cannot
+      # disagree (#324). OIDCIssuerURL's AllowedPattern guarantees exactly one
+      # leading https:// and no trailing slash, so element 1 of the split is
+      # the whole host and path. This is the same value as
+      # local.oidc_condition_host in the Terraform module.
+      #
+      # The document is a single Fn::Sub JSON string, not a YAML mapping,
+      # because its two condition keys are computed and CloudFormation does
+      # not accept an intrinsic function as a map key: a mapping with a !Sub
+      # key fails to load at all (cfn-lint E0000 "Unhashable type", #1489).
+      # Fn::Sub inserts raw text with no JSON escaping, so every value that
+      # reaches this string is confined to it by its AllowedPattern:
+      # OIDCIssuerURL, OIDCAudience and OIDCSubjectClaim all reject '"', '\'
+      # and control characters. The provider ARN is the only other value, and
+      # its caller-supplied part is the same OIDCIssuerURL. No parameter value
+      # can therefore end its JSON string early and add, replace or widen a
+      # key. iac/aws_target_cfn_trust_policy_test.go renders this document and
+      # checks it parses to exactly the intended policy.
+      AssumeRolePolicyDocument: !Sub
+        - |
+          {
+            "Version": "2012-10-17",
+            "Statement": [
+              {
+                "Effect": "Allow",
+                "Principal": {"Federated": "${OIDCProvider.Arn}"},
+                "Action": "sts:AssumeRoleWithWebIdentity",
+                "Condition": {
+                  "StringEquals": {
+                    "${Host}:aud": "${Audience}",
+                    "${Host}:sub": "${OIDCSubjectClaim}"
+                  }
+                }
+              }
+            ]
+          }
+        - Host: !Select [1, !Split ["https://", !Ref OIDCIssuerURL]]
+          Audience: !If [HasAudience, !Ref OIDCAudience, sts.amazonaws.com]
       ManagedPolicyArns:
         - !Ref CUDlyPolicy
 

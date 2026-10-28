@@ -14,19 +14,24 @@ import (
 // the row still holds the email, groups and active state the caller read, so a
 // stale admin save cannot erase MFA fields or restore an old password hash
 // (issue #493).
+//
+// The write can deactivate a member or drop the Administrators group, so it
+// takes the admin-invariant lock first (see adminInvariantAdvisoryLockKey).
 func (s *PostgresStore) UpdateUserAdminFields(ctx context.Context, user *User, readEmail string, readGroupIDs []string, readActive bool) error {
-	err := s.db.QueryRow(ctx, `
-		UPDATE users SET email = $2, group_ids = $3, active = $4, deactivated_at = $5, updated_at = NOW()
-		WHERE id = $1 AND email = $6 AND group_ids = $7 AND active = $8
-		RETURNING updated_at
-	`, user.ID, user.Email, user.GroupIDs, user.Active, user.DeactivatedAt, readEmail, readGroupIDs, readActive).Scan(&user.UpdatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrUserChanged
-	}
-	if err != nil {
-		return fmt.Errorf("failed to update user: %w", err)
-	}
-	return nil
+	return s.withAdminInvariantLock(ctx, "update user", func(tx pgx.Tx) error {
+		err := tx.QueryRow(ctx, `
+			UPDATE users SET email = $2, group_ids = $3, active = $4, deactivated_at = $5, updated_at = NOW()
+			WHERE id = $1 AND email = $6 AND group_ids = $7 AND active = $8
+			RETURNING updated_at
+		`, user.ID, user.Email, user.GroupIDs, user.Active, user.DeactivatedAt, readEmail, readGroupIDs, readActive).Scan(&user.UpdatedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrUserChanged
+		}
+		if err != nil {
+			return fmt.Errorf("failed to update user: %w", err)
+		}
+		return nil
+	})
 }
 
 // UpdateUserCredentials writes only the email and password columns, and only
@@ -35,11 +40,11 @@ func (s *PostgresStore) UpdateUserAdminFields(ctx context.Context, user *User, r
 // the credentials written here (issue #526).
 func (s *PostgresStore) UpdateUserCredentials(ctx context.Context, user *User, readEmail, readPasswordHash string) error {
 	result, err := s.db.Exec(ctx, `
-		UPDATE users SET email = $4, password_hash = $5, salt = $6,
-			password_history = $7, password_reset_token = NULL, password_reset_expiry = NULL,
+		UPDATE users SET email = $4, password_hash = $5,
+			password_history = $6, password_reset_token = NULL, password_reset_expiry = NULL,
 			updated_at = NOW()
 		WHERE id = $1 AND email = $2 AND password_hash = $3
-	`, user.ID, readEmail, readPasswordHash, user.Email, user.PasswordHash, user.Salt, user.PasswordHistory)
+	`, user.ID, readEmail, readPasswordHash, user.Email, user.PasswordHash, user.PasswordHistory)
 	if err != nil {
 		return fmt.Errorf("failed to update user credentials: %w", err)
 	}
@@ -55,11 +60,11 @@ func (s *PostgresStore) UpdateUserCredentials(ctx context.Context, user *User, r
 // deactivated (issues #493, #526).
 func (s *PostgresStore) CompletePasswordReset(ctx context.Context, user *User, readResetToken, readPasswordHash string) error {
 	result, err := s.db.Exec(ctx, `
-		UPDATE users SET password_hash = $4, salt = $5, password_history = $6, active = $7,
+		UPDATE users SET password_hash = $4, password_history = $5, active = $6,
 			password_reset_token = NULL, password_reset_expiry = NULL, updated_at = NOW()
 		WHERE id = $1 AND password_reset_token = $2 AND password_hash = $3 AND deactivated_at IS NULL
 			AND password_reset_expiry > NOW()
-	`, user.ID, readResetToken, readPasswordHash, user.PasswordHash, user.Salt, user.PasswordHistory, user.Active)
+	`, user.ID, readResetToken, readPasswordHash, user.PasswordHash, user.PasswordHistory, user.Active)
 	if err != nil {
 		return fmt.Errorf("failed to complete password reset: %w", err)
 	}
@@ -135,9 +140,32 @@ func (s *PostgresStore) EnableMFA(ctx context.Context, userID, pendingSecret str
 		return fmt.Errorf("failed to enable MFA: %w", err)
 	}
 	if result.RowsAffected() == 0 {
-		return ErrUserChanged
+		return s.enableMFARefusal(ctx, userID, pendingSecret)
 	}
 	return nil
+}
+
+// enableMFARefusal names why EnableMFA's guarded write matched no row: the
+// enrollment expired if MFA is still off under the same pending secret and its
+// expiry has passed on the database clock, otherwise the row changed (issue
+// #568). Pending secrets are random and leave the row only by being cleared or
+// replaced, so a row still holding this one was refused by the expiry check.
+// If the check itself fails, the write's own verdict, ErrUserChanged, stands.
+func (s *PostgresStore) enableMFARefusal(ctx context.Context, userID, pendingSecret string) error {
+	var expired bool
+	err := s.db.QueryRow(ctx, `
+		SELECT (mfa_pending_secret_expires_at <= NOW()) IS TRUE FROM users
+		WHERE id = $1 AND mfa_enabled = false AND mfa_pending_secret = $2
+	`, userID, pendingSecret).Scan(&expired)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return ErrUserChanged
+	case err != nil:
+		return fmt.Errorf("%w (checking enrollment expiry: %w)", ErrUserChanged, err)
+	case expired:
+		return ErrMFAEnrollmentExpired
+	}
+	return ErrUserChanged
 }
 
 // ReplaceMFARecoveryCodes writes only the recovery codes, and only while MFA is

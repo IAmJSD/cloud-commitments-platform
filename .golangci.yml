@@ -40,7 +40,9 @@ linters:
         hugeParam:
           sizeThreshold: 1024
     gocyclo:
-      min-complexity: 15
+      # Same threshold as the standalone `gocyclo -over 10` gates in ci.yml and
+      # the Makefile, so `make lint` flags what CI fails (issue #349).
+      min-complexity: 10
     gosec:
       excludes:
         - G104
@@ -131,7 +133,7 @@ linters:
       # existing UK convention. Allow both spellings in the files listed below.
       - linters:
           - misspell
-        path: (internal/config/(store_postgres|store_postgres_pgxmock_test|store_postgres_ladder|types|interfaces)|pkg/ladder/(store|types_test)|internal/api/(handler_history|handler_ri_exchange(_test)?|router_handlers_test|coverage_extras_test)|internal/mocks/stores|internal/purchase/scheduled_fire_test)\.go
+        path: (internal/config/(store_postgres|store_postgres_history_page|store_postgres_pgxmock_test|store_postgres_ladder|types|interfaces)|pkg/ladder/(store|types_test)|internal/api/(handler_history|handler_ri_exchange(_test)?|router_handlers_test|coverage_extras_test)|internal/mocks/stores|internal/purchase/scheduled_fire_test)\.go
         text: "cancelled|initialised"
     paths:
       - third_party$

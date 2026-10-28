@@ -2,7 +2,8 @@
  * Cloud Accounts API functions
  */
 
-import { apiRequest } from './client';
+import { apiRequest, getApiBase, getAuthHeaders } from './client';
+import { httpStatusMessage, makeApiError } from './errors';
 import type { Provider } from './types';
 
 export interface CloudAccount {
@@ -90,6 +91,10 @@ export interface AccountServiceOverride {
   exclude_regions?: string[];
   include_types?: string[];
   exclude_types?: string[];
+  // Row timestamps from account_service_overrides; the list endpoint returns
+  // the full row. updated_at moves on every save (issue #8).
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface AccountServiceOverrideRequest {
@@ -206,6 +211,74 @@ export async function deleteAccountServiceOverride(
     `/accounts/${accountId}/service-overrides/${provider}/${service}`,
     { method: 'DELETE' }
   );
+}
+
+/** One override in an export/import file (GET/POST /api/accounts/service-overrides/*, issue #9). */
+export interface OverrideTransferRow extends AccountServiceOverrideRequest {
+  account_id?: string;
+  account_name?: string;
+  account_external_id?: string;
+  provider: string;
+  service: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface OverrideExport {
+  version: number;
+  exported_at: string;
+  overrides: OverrideTransferRow[];
+}
+
+export type OverrideImportMode = 'strict' | 'best_effort';
+
+export interface OverrideImportRequest {
+  mode: OverrideImportMode;
+  dry_run: boolean;
+  overrides?: OverrideTransferRow[];
+  csv?: string;
+}
+
+export interface OverrideImportRowResult {
+  row: number;
+  account_id?: string;
+  provider: string;
+  service: string;
+  action: 'insert' | 'update' | 'unchanged' | 'rejected';
+  error?: string;
+}
+
+export interface OverrideImportReport {
+  mode: OverrideImportMode;
+  dry_run: boolean;
+  applied: boolean;
+  summary: Record<string, number>;
+  rows: OverrideImportRowResult[];
+}
+
+export async function exportAccountServiceOverrides(): Promise<OverrideExport> {
+  return apiRequest<OverrideExport>('/accounts/service-overrides/export');
+}
+
+/** The same export as CSV text. apiRequest parses JSON only, so this fetches directly. */
+export async function exportAccountServiceOverridesCSV(): Promise<string> {
+  const endpoint = '/accounts/service-overrides/export?format=csv';
+  const response = await fetch(`${getApiBase()}${endpoint}`, { headers: getAuthHeaders() });
+  if (!response.ok) {
+    throw makeApiError(httpStatusMessage(response.status), response.status, `HTTP ${response.status} from ${endpoint}`);
+  }
+  return response.text();
+}
+
+/**
+ * Import overrides. A strict import with a rejected row answers 400 with the
+ * report under error.details.report.
+ */
+export async function importAccountServiceOverrides(req: OverrideImportRequest): Promise<OverrideImportReport> {
+  return apiRequest<OverrideImportReport>('/accounts/service-overrides/import', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  });
 }
 
 export interface OrgDiscoveryResult {

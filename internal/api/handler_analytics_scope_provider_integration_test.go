@@ -20,7 +20,6 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/analytics"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
-	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/migrations"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database/postgres/testhelpers"
 )
 
@@ -56,10 +55,7 @@ type analyticsScopeDB struct {
 func setupAnalyticsScopeDB(t *testing.T) *analyticsScopeDB {
 	t.Helper()
 	ctx := t.Context()
-	pg, err := testhelpers.SetupPostgresContainer(ctx, t)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, pg.Cleanup(context.Background())) })
-	require.NoError(t, migrations.RunMigrations(ctx, pg.DB.Pool(), "../database/postgres/migrations", "", ""))
+	pg := testhelpers.RequireMigratedDatabase(ctx, t, "../database/postgres/migrations")
 
 	store := config.NewPostgresStore(pg.DB)
 	aws := &config.CloudAccount{Name: scopeAWSAccount, Provider: "aws", ExternalID: scopeSharedID, Enabled: true}
@@ -192,9 +188,10 @@ func TestAnalyticsScopedRawExternalIDIsProviderScoped_DB(t *testing.T) {
 	db := setupAnalyticsScopeDB(t)
 	ctx := t.Context()
 
-	// A scoped user reaches the registered account by name or by its raw
-	// external id; either way only the aws row may be aggregated.
-	for _, scope := range []string{scopeAWSAccount, scopeSharedID} {
+	// A scoped user reaches the registered account by its account ID or by its
+	// raw external id; either way only the aws row may be aggregated. Scope
+	// entries match account IDs only, never display names (#1034).
+	for _, scope := range []string{db.awsUUID, scopeSharedID} {
 		t.Run("scope "+scope+", raw id request", func(t *testing.T) {
 			got := db.seen(ctx, t, db.session(t, []string{scope}), scopeSharedID)
 			assertSeen(t, got, []string{"aws"}, []string{scopeSvcAWS})
@@ -202,7 +199,7 @@ func TestAnalyticsScopedRawExternalIDIsProviderScoped_DB(t *testing.T) {
 	}
 
 	t.Run("scoped UUID request is unchanged", func(t *testing.T) {
-		got := db.seen(ctx, t, db.session(t, []string{scopeAWSAccount}), db.awsUUID)
+		got := db.seen(ctx, t, db.session(t, []string{db.awsUUID}), db.awsUUID)
 		assertSeen(t, got, []string{"aws"}, []string{scopeSvcAWS})
 	})
 
@@ -222,7 +219,7 @@ func TestAnalyticsScopedRawExternalIDIsProviderScoped_DB(t *testing.T) {
 func TestAnalyticsScopedRawExternalIDConcurrentRegistration_DB(t *testing.T) {
 	db := setupAnalyticsScopeDB(t)
 	ctx := t.Context()
-	token := db.session(t, []string{scopeAWSAccount})
+	token := db.session(t, []string{db.awsUUID})
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup

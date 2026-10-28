@@ -538,6 +538,23 @@ describe('Settings Module', () => {
 
     beforeEach(fillForm);
 
+    // Load a pristine config so the saved snapshot matches the form, as in the
+    // real page; an edit made afterwards is then the only dirty field.
+    const loadPristine = async (): Promise<void> => {
+      (api.getConfig as jest.Mock).mockResolvedValue({
+        global: {
+          enabled_providers: ['aws'], default_term: 3, default_payment: 'all-upfront',
+          default_coverage: 80, notification_days_before: 3,
+        },
+        services: [
+          { provider: 'aws', service: 'savings-plans-compute', enabled: true, term: 3, payment: 'all-upfront', coverage: 80 },
+          { provider: 'aws', service: 'savings-plans-sagemaker', enabled: true, term: 3, payment: 'all-upfront', coverage: 80 },
+          { provider: 'aws', service: 'savings-plans-database', enabled: true, term: 3, payment: 'all-upfront', coverage: 80 },
+        ],
+      });
+      await loadGlobalSettings();
+    };
+
     test('prevents default form submission', async () => {
       (api.updateConfig as jest.Mock).mockResolvedValue({});
 
@@ -638,10 +655,11 @@ describe('Settings Module', () => {
       window.alert = jest.fn();
 
       const event = { preventDefault: jest.fn() } as unknown as Event;
-      await saveGlobalSettings(event);
+      await expect(saveGlobalSettings(event)).resolves.toBeUndefined();
 
-      // Should still call updateConfig with default values
-      expect(api.updateConfig).toHaveBeenCalled();
+      // No provider checkbox exists, so the empty list is refused (#1531)
+      // instead of being written.
+      expect(api.updateConfig).not.toHaveBeenCalled();
     });
 
     // Issue #22 follow-up: AWS Savings Plans split into four per-plan-type
@@ -700,6 +718,7 @@ describe('Settings Module', () => {
     });
 
     test('saveGlobalSettings sends per-card coverage from SP coverage input (issue #136)', async () => {
+      await loadPristine();
       (api.updateConfig as jest.Mock).mockResolvedValue({});
       (api.updateServiceConfig as jest.Mock).mockClear().mockResolvedValue(undefined);
       window.alert = jest.fn();
@@ -716,12 +735,11 @@ describe('Settings Module', () => {
       expect(computeCall).toBeDefined();
       expect(computeCall![2].coverage).toBe(60);
 
-      // Other SP cards keep their default value.
+      // Other SP cards were not edited, so they are not sent (#539).
       const ec2Call = (api.updateServiceConfig as jest.Mock).mock.calls.find(
         ([provider, service]) => provider === 'aws' && service === 'savings-plans-ec2instance',
       );
-      expect(ec2Call).toBeDefined();
-      expect(ec2Call![2].coverage).toBe(80);
+      expect(ec2Call).toBeUndefined();
     });
 
     describe('global PUT carries only changed fields (issue #539)', () => {
@@ -737,6 +755,7 @@ describe('Settings Module', () => {
           },
           services: [
             { provider: 'aws', service: 'ec2', enabled: true, term: 1, payment: 'no-upfront', coverage: 50 },
+            { provider: 'aws', service: 'savings-plans-compute', enabled: true, term: 1, payment: 'no-upfront', coverage: 50 },
           ],
         });
         (api.updateConfig as jest.Mock).mockClear().mockResolvedValue({});
@@ -764,15 +783,14 @@ describe('Settings Module', () => {
         expect(api.updateConfig).toHaveBeenCalledWith({ default_term: 3 });
       });
 
-      test('changing the coverage sends only the coverage and still propagates to the services', async () => {
+      test('changing the coverage sends only the coverage and no service PUTs', async () => {
         await loadStaleTab();
         (document.getElementById('setting-default-coverage') as HTMLInputElement).value = '70';
 
         await save();
 
         expect(api.updateConfig).toHaveBeenCalledWith({ default_coverage: 70 });
-        const ec2 = (api.updateServiceConfig as jest.Mock).mock.calls.find(([p, svc]) => p === 'aws' && svc === 'ec2');
-        expect(ec2![2].coverage).toBe(70);
+        expect(api.updateServiceConfig).not.toHaveBeenCalled();
       });
 
       test('a second save does not resend a field the first save persisted', async () => {
@@ -841,13 +859,123 @@ describe('Settings Module', () => {
         expect(api.updateConfig).toHaveBeenCalledWith({ notification_email: 'second@test.com' });
       });
 
-      test('an unchanged form sends no global PUT but still saves the services', async () => {
+      test('an unchanged form sends no global PUT and no service PUTs', async () => {
         await loadStaleTab();
 
         await save();
 
         expect(api.updateConfig).not.toHaveBeenCalled();
-        expect(api.updateServiceConfig).toHaveBeenCalled();
+        expect(api.updateServiceConfig).not.toHaveBeenCalled();
+      });
+
+      test('editing one service card PUTs only that row and only the edited field', async () => {
+        await loadStaleTab();
+        (document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement).value = '65';
+
+        await save();
+
+        expect(api.updateConfig).not.toHaveBeenCalled();
+        expect(api.updateServiceConfig).toHaveBeenCalledTimes(1);
+        expect(api.updateServiceConfig).toHaveBeenCalledWith('aws', 'savings-plans-compute', expect.objectContaining({ coverage: 65 }));
+        const body = (api.updateServiceConfig as jest.Mock).mock.calls[0][2];
+        expect(Object.keys(body).sort()).toEqual(['coverage', 'provider', 'service']);
+      });
+
+      test('editing only a recommendation filter sends only that filter', async () => {
+        await loadStaleTab();
+        const regions = document.createElement('input');
+        regions.id = 'aws-ec2-include-regions';
+        regions.value = 'us-east-1, eu-west-1';
+        document.getElementById('global-settings-form')!.appendChild(regions);
+
+        await save();
+
+        expect(api.updateServiceConfig).toHaveBeenCalledTimes(1);
+        expect(api.updateServiceConfig).toHaveBeenCalledWith('aws', 'ec2', {
+          provider: 'aws', service: 'ec2', include_regions: ['us-east-1', 'eu-west-1'],
+        });
+      });
+
+      test('a filter saved by one Save is not resent by the next', async () => {
+        await loadStaleTab();
+        const regions = document.createElement('input');
+        regions.id = 'aws-ec2-include-regions';
+        regions.value = 'us-east-1';
+        document.getElementById('global-settings-form')!.appendChild(regions);
+        await save();
+        expect(api.updateServiceConfig).toHaveBeenCalledTimes(1);
+        (api.updateServiceConfig as jest.Mock).mockClear();
+
+        await save();
+
+        expect(api.updateServiceConfig).not.toHaveBeenCalled();
+      });
+
+      test('an edited SP coverage cleared to empty blocks the save and stays dirty', async () => {
+        await loadStaleTab();
+        const card = document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement;
+        card.value = '';
+        mockShowToast.mockClear();
+
+        await save();
+
+        expect(api.updateConfig).not.toHaveBeenCalled();
+        expect(api.updateServiceConfig).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+          message: expect.stringContaining('coverage must be a whole number between 0 and 100 (savings-plans-compute)'),
+          kind: 'error',
+        }));
+        expect(isUnsavedChanges()).toBe(true);
+
+        card.value = '65';
+        await save();
+        expect(api.updateServiceConfig).toHaveBeenCalledWith('aws', 'savings-plans-compute', expect.objectContaining({ coverage: 65 }));
+      });
+
+      test('an unedited SP card is never flagged, whatever its stored value', async () => {
+        await loadStaleTab();
+        (api.getConfig as jest.Mock).mockResolvedValue({
+          global: { enabled_providers: ['aws'], default_term: 1, default_payment: 'no-upfront', default_coverage: 50, notification_days_before: 3 },
+          services: [{ provider: 'aws', service: 'savings-plans-compute', enabled: true, term: 1, payment: 'no-upfront', coverage: 150 }],
+        });
+        await loadGlobalSettings();
+        (document.getElementById('setting-notification-email') as HTMLInputElement).value = 'new@test.com';
+        mockShowToast.mockClear();
+
+        await save();
+
+        expect(api.updateConfig).toHaveBeenCalledWith({ notification_email: 'new@test.com' });
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'success' }));
+      });
+
+      test('an emptied cache stale threshold is refused, an explicit 0 is saved', async () => {
+        await loadStaleTab();
+        const hours = document.getElementById('setting-recs-stale-hours') as HTMLInputElement;
+        hours.value = '';
+        mockShowToast.mockClear();
+
+        await save();
+
+        expect(api.updateConfig).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+          message: expect.stringContaining('Cache stale threshold must be a whole number'),
+          kind: 'error',
+        }));
+
+        hours.value = '0';
+        await save();
+        expect(api.updateConfig).toHaveBeenCalledWith({ recommendations_cache_stale_hours: 0 });
+      });
+
+      test('a second save after a service PUT succeeded resends nothing', async () => {
+        await loadStaleTab();
+        (document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement).value = '65';
+        await save();
+        (api.updateServiceConfig as jest.Mock).mockClear();
+
+        await save();
+
+        expect(api.updateServiceConfig).not.toHaveBeenCalled();
       });
     });
 
@@ -871,51 +999,57 @@ describe('Settings Module', () => {
         return call?.[2].coverage;
       };
 
-      test('a changed global coverage is not reverted by the per-service PUTs', async () => {
+      test('a changed global coverage sends no service PUTs and shows the propagated value on the SP cards', async () => {
         await loadWithCoverage50();
         (document.getElementById('setting-default-coverage') as HTMLInputElement).value = '0';
 
         await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
 
-        expect(coverageSentFor('ec2')).toBe(0);
-        expect(coverageSentFor('savings-plans-compute')).toBe(0);
+        expect(api.updateConfig).toHaveBeenCalledWith({ default_coverage: 0 });
+        expect(api.updateServiceConfig).not.toHaveBeenCalled();
+        expect((document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement).value).toBe('0');
+        expect(isUnsavedChanges()).toBe(false);
       });
 
-      test('an SP card coverage edited in the same save wins over the new default', async () => {
+      test('an SP card coverage edited in the same save wins over the new default and is the only service PUT', async () => {
         await loadWithCoverage50();
         (document.getElementById('setting-default-coverage') as HTMLInputElement).value = '70';
         (document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement).value = '60';
 
         await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
 
-        expect(coverageSentFor('ec2')).toBe(70);
+        expect(coverageSentFor('ec2')).toBeUndefined();
         expect(coverageSentFor('savings-plans-compute')).toBe(60);
+        expect(api.updateServiceConfig).toHaveBeenCalledTimes(1);
+        expect((document.getElementById('aws-savings-plans-ec2instance-coverage') as HTMLInputElement).value).toBe('70');
       });
 
-      test('a second save without reload does not resend the pre-save coverage', async () => {
+      test('a second save without reload resends nothing', async () => {
         await loadWithCoverage50();
         (document.getElementById('setting-default-coverage') as HTMLInputElement).value = '70';
         await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
+        (api.updateConfig as jest.Mock).mockClear();
         (api.updateServiceConfig as jest.Mock).mockClear();
 
         await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
 
-        expect(coverageSentFor('ec2')).toBe(70);
-        expect(coverageSentFor('savings-plans-compute')).toBe(70);
+        expect(api.updateConfig).not.toHaveBeenCalled();
+        expect(api.updateServiceConfig).not.toHaveBeenCalled();
       });
 
-      test('an SP card edit saved after a global change survives a further save', async () => {
+      test('an SP card edit saved after a global change is not resent by a further save', async () => {
         await loadWithCoverage50();
         (document.getElementById('setting-default-coverage') as HTMLInputElement).value = '0';
         await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
         (document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement).value = '70';
         await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
+        expect(coverageSentFor('savings-plans-compute')).toBe(70);
         (api.updateServiceConfig as jest.Mock).mockClear();
 
         await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
 
-        expect(coverageSentFor('ec2')).toBe(0);
-        expect(coverageSentFor('savings-plans-compute')).toBe(70);
+        expect(api.updateServiceConfig).not.toHaveBeenCalled();
+        expect((document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement).value).toBe('70');
       });
 
       test('a saved SP card edit does not shield the card from a later global change', async () => {
@@ -927,16 +1061,17 @@ describe('Settings Module', () => {
 
         await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
 
-        expect(coverageSentFor('ec2')).toBe(20);
-        expect(coverageSentFor('savings-plans-compute')).toBe(20);
+        expect(api.updateServiceConfig).not.toHaveBeenCalled();
+        expect((document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement).value).toBe('20');
       });
 
-      test('after a partial failure the retry keeps the saved SP card coverage', async () => {
+      test('after a partial failure the retry resends only the failed SP card coverage', async () => {
         await loadWithCoverage50();
         (document.getElementById('setting-default-coverage') as HTMLInputElement).value = '0';
         (document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement).value = '70';
+        (document.getElementById('aws-savings-plans-ec2instance-coverage') as HTMLInputElement).value = '30';
         (api.updateServiceConfig as jest.Mock).mockImplementation(async (provider: string, svc: string) => {
-          if (provider === 'aws' && svc === 'ec2') throw new Error('ec2 failed');
+          if (provider === 'aws' && svc === 'savings-plans-ec2instance') throw new Error('sp failed');
         });
 
         await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
@@ -945,15 +1080,15 @@ describe('Settings Module', () => {
         (api.updateServiceConfig as jest.Mock).mockClear().mockResolvedValue(undefined);
         await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
 
-        expect(coverageSentFor('ec2')).toBe(0);
-        expect(coverageSentFor('savings-plans-compute')).toBe(70);
+        expect(coverageSentFor('savings-plans-compute')).toBeUndefined();
+        expect(coverageSentFor('savings-plans-ec2instance')).toBe(30);
       });
 
-      test('after a partial failure a further global change still reaches the SP card', async () => {
+      test('after a failed service PUT a further global change still reaches an unedited SP card', async () => {
         await loadWithCoverage50();
-        (document.getElementById('setting-default-coverage') as HTMLInputElement).value = '0';
+        (document.getElementById('aws-savings-plans-ec2instance-coverage') as HTMLInputElement).value = '30';
         (api.updateServiceConfig as jest.Mock).mockImplementation(async (provider: string, svc: string) => {
-          if (provider === 'aws' && svc === 'ec2') throw new Error('ec2 failed');
+          if (provider === 'aws' && svc === 'savings-plans-ec2instance') throw new Error('sp failed');
         });
         await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
 
@@ -961,8 +1096,8 @@ describe('Settings Module', () => {
         (api.updateServiceConfig as jest.Mock).mockClear().mockResolvedValue(undefined);
         await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
 
-        expect(coverageSentFor('ec2')).toBe(20);
-        expect(coverageSentFor('savings-plans-compute')).toBe(20);
+        expect(coverageSentFor('savings-plans-ec2instance')).toBe(30);
+        expect((document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement).value).toBe('20');
       });
 
       test('a rejected global PUT leaves the coverage dirty and sends no service PUTs', async () => {
@@ -1020,6 +1155,31 @@ describe('Settings Module', () => {
         expect(isUnsavedChanges()).toBe(false);
       });
 
+      test.each(['12.7', '-40', '500'])('an SP card coverage of %s aborts the save before any PUT (#318)', async (value) => {
+        await loadWithCoverage50();
+        mockShowToast.mockClear();
+        (document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement).value = value;
+
+        await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
+
+        expect(api.updateConfig).not.toHaveBeenCalled();
+        expect(api.updateServiceConfig).not.toHaveBeenCalled();
+        expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+          kind: 'error',
+          message: expect.stringContaining('whole number between 0 and 100 (savings-plans-compute)'),
+        }));
+        expect(isUnsavedChanges()).toBe(true);
+      });
+
+      test.each([['0', 0], ['100', 100]])('an SP card coverage of %s is within range and saved (#318)', async (value, sent) => {
+        await loadWithCoverage50();
+        (document.getElementById('aws-savings-plans-compute-coverage') as HTMLInputElement).value = value;
+
+        await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
+
+        expect(coverageSentFor('savings-plans-compute')).toBe(sent);
+      });
+
       test('a saved service payment edit leaves nothing unsaved (#576)', async () => {
         await loadWithCoverage50();
         (document.getElementById('aws-ec2-payment') as HTMLSelectElement).value = 'partial-upfront';
@@ -1038,13 +1198,14 @@ describe('Settings Module', () => {
 
         expect(api.updateConfig).not.toHaveBeenCalled();
         expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
-          message: 'Target coverage must be a whole number between 0 and 100',
+          message: 'Dashboard coverage target must be a whole number between 0 and 100',
           kind: 'error',
         }));
       });
     });
 
     test('saveGlobalSettings sends per-card enabled=false when SP enabled checkbox unchecked (issue #136)', async () => {
+      await loadPristine();
       (api.updateConfig as jest.Mock).mockResolvedValue({});
       (api.updateServiceConfig as jest.Mock).mockClear().mockResolvedValue(undefined);
       window.alert = jest.fn();
@@ -1061,12 +1222,11 @@ describe('Settings Module', () => {
       expect(dbCall).toBeDefined();
       expect(dbCall![2].enabled).toBe(false);
 
-      // Other SP cards remain enabled.
+      // Untouched SP cards are not sent at all (#539).
       const computeCall = (api.updateServiceConfig as jest.Mock).mock.calls.find(
         ([provider, service]) => provider === 'aws' && service === 'savings-plans-compute',
       );
-      expect(computeCall).toBeDefined();
-      expect(computeCall![2].enabled).toBe(true);
+      expect(computeCall).toBeUndefined();
     });
 
     test('loadGlobalSettings populates SP coverage and enabled from service config (issue #136)', async () => {
@@ -1099,21 +1259,19 @@ describe('Settings Module', () => {
       expect(ec2Enabled.checked).toBe(true);
     });
 
-    test('calls updateServiceConfig once per service field (17 calls)', async () => {
+    test('an unedited form PUTs no service rows, an edit PUTs only its row', async () => {
+      await loadPristine();
       (api.updateConfig as jest.Mock).mockResolvedValue({});
-      (api.updateServiceConfig as jest.Mock).mockResolvedValue(undefined);
+      (api.updateServiceConfig as jest.Mock).mockClear().mockResolvedValue(undefined);
       window.alert = jest.fn();
 
       const event = { preventDefault: jest.fn() } as unknown as Event;
       await saveGlobalSettings(event);
+      expect(api.updateServiceConfig).not.toHaveBeenCalled();
 
-      // 5 AWS RIs (ec2, rds, elasticache, opensearch, redshift) + 4 AWS
-      // SP (compute, ec2instance, sagemaker, database) + 5 Azure (vm,
-      // sql, cosmosdb, redis, search) + 3 GCP (compute, sql, memorystore).
-      // Pre-rev-2 was 16 (1 umbrella SP + 1 sagemaker, plus 5
-      // RIs); the SP split replaced those two with four per-plan-type
-      // entries, net +2.
-      expect(api.updateServiceConfig).toHaveBeenCalledTimes(17);
+      (document.getElementById('aws-savings-plans-sagemaker-term') as HTMLSelectElement).value = '1';
+      await saveGlobalSettings(event);
+      expect(api.updateServiceConfig).toHaveBeenCalledTimes(1);
     });
 
     // Issue #301: configurable recommendations cache-staleness threshold + lookback
@@ -1409,7 +1567,7 @@ describe('Settings Module', () => {
       await saveGlobalSettings({ preventDefault: jest.fn() } as unknown as Event);
 
       const azureVmCall = (api.updateServiceConfig as jest.Mock).mock.calls.find(
-        ([provider, service]) => provider === 'azure' && service === 'vm',
+        ([provider, service]) => provider === 'azure' && service === 'compute',
       );
       expect(azureVmCall).toBeDefined();
       const cfg = azureVmCall![2];
@@ -1925,9 +2083,6 @@ describe('Settings Module', () => {
       credentials: {},
     });
 
-    const serviceCall = (service: string) =>
-      (api.updateServiceConfig as jest.Mock).mock.calls.find(([p, s]) => p === 'aws' && s === service);
-
     const saveUnchanged = async () => {
       (api.updateConfig as jest.Mock).mockResolvedValue({});
       (api.updateServiceConfig as jest.Mock).mockClear().mockResolvedValue(undefined);
@@ -1944,8 +2099,7 @@ describe('Settings Module', () => {
       await saveUnchanged();
 
       expect(api.updateConfig).not.toHaveBeenCalled();
-      expect(serviceCall('savings-plans-compute')![2].coverage).toBe(0);
-      expect(serviceCall('ec2')![2].coverage).toBe(0);
+      expect(api.updateServiceConfig).not.toHaveBeenCalled();
     });
 
     test('an absent default_coverage renders the 80 default and an unedited Save sends no global PUT', async () => {
@@ -1971,8 +2125,7 @@ describe('Settings Module', () => {
 
       await saveUnchanged();
 
-      expect(serviceCall('savings-plans-compute')![2].coverage).toBe(0);
-      expect(serviceCall('savings-plans-ec2instance')![2].coverage).toBe(50);
+      expect(api.updateServiceConfig).not.toHaveBeenCalled();
     });
 
     test('the override modal inherit label shows the stored 0%', async () => {
@@ -1992,7 +2145,7 @@ describe('Settings Module', () => {
   });
 
   describe('global PUT against the real index.html (issue #539)', () => {
-    const loadRealPage = async (): Promise<void> => {
+    const loadRealPage = async (providers: string[] = ['aws']): Promise<void> => {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const fs = require('fs') as typeof import('fs');
       // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -2004,7 +2157,7 @@ describe('Settings Module', () => {
         .replace(/<script[\s\S]*?<\/script>/gi, '');
       (api.getConfig as jest.Mock).mockResolvedValue({
         global: {
-          enabled_providers: ['aws'],
+          enabled_providers: providers,
           notification_email: 'old@test.com',
           auto_collect: true,
           collection_schedule: 'daily',
@@ -2063,6 +2216,58 @@ describe('Settings Module', () => {
       await save();
 
       expect(globalBody()).toEqual({ enabled_providers: ['aws', 'gcp'] });
+    });
+
+    describe('refuses a save that leaves no provider enabled (issue #1531)', () => {
+      const serverProviders = (providers: string[]): void => {
+        (api.getConfig as jest.Mock).mockResolvedValue({
+          global: { enabled_providers: providers, default_term: 3, default_payment: 'all-upfront', default_coverage: 80 },
+          services: [],
+        });
+      };
+      const uncheckAws = (): void => {
+        (document.getElementById('provider-aws') as HTMLInputElement).checked = false;
+      };
+
+      test('unchecking the only enabled provider is refused with a toast and nothing sent', async () => {
+        await loadRealPage(['aws']);
+        mockShowToast.mockClear();
+        uncheckAws();
+
+        await save();
+
+        expect(mockShowToast).toHaveBeenCalledWith({ message: 'Enable at least one provider before saving.', kind: 'error' });
+        expect(api.updateConfig).not.toHaveBeenCalled();
+        expect(api.updateServiceConfig).not.toHaveBeenCalled();
+      });
+
+      test('unchecking one of two providers saves the remaining one', async () => {
+        await loadRealPage(['aws', 'gcp']);
+        uncheckAws();
+
+        await save();
+
+        expect(globalBody()).toEqual({ enabled_providers: ['gcp'] });
+      });
+
+      test('a stored empty list does not block editing an unrelated field', async () => {
+        await loadRealPage([]);
+        (document.getElementById('setting-notification-email') as HTMLInputElement).value = 'new@test.com';
+
+        await save();
+
+        expect(globalBody()).toEqual({ notification_email: 'new@test.com' });
+      });
+
+      test('another admin enabling gcp makes the merged list non-empty, so the save is allowed', async () => {
+        await loadRealPage(['aws']);
+        serverProviders(['gcp']);
+        uncheckAws();
+
+        await save();
+
+        expect(globalBody()).toEqual({ enabled_providers: ['gcp'] });
+      });
     });
 
     test('editing only the collection schedule saves it', async () => {

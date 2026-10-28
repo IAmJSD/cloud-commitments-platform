@@ -9,8 +9,24 @@ import { availableGroups } from '../users/state';
 import { escapeHtml, showError, showSuccess } from '../users/utils';
 import { loadUsers } from '../users/userActions';
 import { openModal, closeModal } from '../modal';
-import { ALL_ACTIONS, ALL_RESOURCES } from '../permissions';
-import type { Action, Resource } from '../permissions';
+import { iconSvg } from '../icons';
+import {
+  clearGroupFieldProblems, clearGroupFormValidation, clearNoPermissionsProblem,
+  showGroupFieldProblems, validateGroupForm, type GroupFieldProblem,
+} from './groupFormValidation';
+import { buildActionOptions, buildResourceOptions } from './permissionOptions';
+
+// Messages shown under the field for the saveGroup refusals that follow the
+// blank-field checks (issue #727). The toasts keep the row-naming summary.
+const NO_PERMISSIONS_FIELD_MESSAGE = 'Add at least one permission. To remove all privileges, delete the group instead.';
+const STORED_VALUE_FIELD_MESSAGE = 'This stored value cannot be shown in this form, so saving would drop the restriction. '
+  + 'Repair it through the API or in the database, then reload this page.';
+const EMPTY_LIST_FIELD_MESSAGE = 'This list has no usable entries. Enter at least one value, or clear the box for no restriction.';
+const MAX_AMOUNT_FIELD_MESSAGE = 'Enter an amount greater than 0, or leave it blank for no limit.';
+
+function constraintInput(item: Element, dimension: string): HTMLInputElement | null {
+  return item.querySelector<HTMLInputElement>(`.perm-${dimension}`);
+}
 
 // Module-level state for the duplicate modal — holds the source group so
 // saveDuplicateGroup doesn't need another lookup.
@@ -29,6 +45,7 @@ export function openCreateGroupModal(): void {
 
   title.textContent = 'Create Group';
   form.reset();
+  clearGroupFormValidation();
   (document.getElementById('group-id') as HTMLInputElement).value = '';
 
   // Clear permissions list
@@ -55,6 +72,7 @@ export async function openEditGroupModal(groupId: string): Promise<void> {
     if (!modal || !title || !form) return;
 
     title.textContent = 'Edit Group';
+    clearGroupFormValidation();
     (document.getElementById('group-id') as HTMLInputElement).value = group.id;
     (document.getElementById('group-name') as HTMLInputElement).value = group.name;
     (document.getElementById('group-description') as HTMLTextAreaElement).value = group.description || '';
@@ -86,16 +104,24 @@ export function closeGroupModal(): void {
 export async function saveGroup(e: Event): Promise<void> {
   e.preventDefault();
 
+  // Issue #213: a blank name or a row with no action/resource is refused
+  // with a note under the field, never dropped or widened (#group-form is
+  // novalidate, so this is the only gate).
+  if (validateGroupForm()) return;
+  clearGroupFieldProblems();
+
   // Refuse rather than widen. A stored constraint value this form cannot
   // carry unchanged is flagged when the row is rendered; saving anyway would
   // re-submit a materially different permission set than the one loaded, and
   // for a constraint list that means an unintended widening (an empty list is
   // "no restriction" at enforcement). The group stays uneditable through the
   // form until the value is repaired via the API or in the database.
+  // Issue #727: each refusal below also shows under the field to fix.
   const blocked = unrepresentablePermissionErrors();
   if (blocked.length > 0) {
+    showGroupFieldProblems(blocked);
     showError(
-      `Cannot save: ${blocked.join('; ')}. ` +
+      `Cannot save: ${blocked.map(p => p.summary).filter(Boolean).join('; ')}. ` +
       'Saving would silently drop the restriction, so the edit is refused. ' +
       'Repair the value through the API or in the database, then reload this page.'
     );
@@ -104,8 +130,9 @@ export async function saveGroup(e: Event): Promise<void> {
 
   const badAmounts = maxAmountInputErrors();
   if (badAmounts.length > 0) {
+    showGroupFieldProblems(badAmounts);
     showError(
-      `Max Amount must be greater than 0; leave it blank for no limit (${badAmounts.join(', ')}).`
+      `Max Amount must be greater than 0; leave it blank for no limit (${badAmounts.map(p => p.summary).join(', ')}).`
     );
     return;
   }
@@ -114,15 +141,18 @@ export async function saveGroup(e: Event): Promise<void> {
   const description = (document.getElementById('group-description') as HTMLTextAreaElement).value;
   const permissions = collectPermissions();
 
-  // Refuse an empty permission list rather than submit it. collectPermissions
-  // silently drops any row left on the "Select Action"/"Select Resource"
-  // placeholder, so removing every real row (or leaving only a placeholder
-  // row) collects as []. The update API treats an empty list as "not sent"
+  // Refuse an empty permission list rather than submit it. Rows left on a
+  // placeholder are refused above, so this is reached by removing every
+  // row. The update API treats an empty list as "not sent"
   // and leaves the group's stored permissions untouched (issue #237), so
   // submitting would show "Group updated successfully" while silently
   // keeping the group's old privileges -- there is no way for this form to
   // express "clear all permissions".
   if (permissions.length === 0) {
+    const add = document.getElementById('add-permission-btn');
+    if (add) {
+      showGroupFieldProblems([{ control: add, message: NO_PERMISSIONS_FIELD_MESSAGE, summary: '' }]);
+    }
     showError(
       'A group must grant at least one permission. ' +
       'To remove all privileges, delete the group instead.'
@@ -158,83 +188,6 @@ export async function saveGroup(e: Event): Promise<void> {
   }
 }
 
-// Human-readable <option> labels for the action/resource vocabulary.
-// Falls back to a generic title-case of the raw value ("cancel-own" ->
-// "Cancel Own") for every entry that doesn't need a special-cased
-// override; only acronyms and the symbolic "*" need one.
-const ACTION_LABEL_OVERRIDES: Partial<Record<Action, string>> = {
-  admin: 'Admin (full)',
-};
-
-const RESOURCE_LABEL_OVERRIDES: Partial<Record<Resource, string>> = {
-  '*': 'All (*)',
-  'api-keys': 'API Keys',
-  'ri-exchange': 'RI Exchange',
-};
-
-function titleCase(value: string): string {
-  return value
-    .split('-')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ');
-}
-
-function actionOptionLabel(action: string): string {
-  return ACTION_LABEL_OVERRIDES[action as Action] ?? titleCase(action);
-}
-
-function resourceOptionLabel(resource: string): string {
-  return RESOURCE_LABEL_OVERRIDES[resource as Resource] ?? titleCase(resource);
-}
-
-// Builds the <option> list for the perm-action / perm-resource <select>
-// elements (issue #1629). This list used to be hardcoded to 7 of the 20
-// actions and 9 of the 11 resources the backend can store. A stored
-// permission carrying one of the missing values had no matching <option>,
-// so the browser fell back to the first entry in the list -- silently
-// DROPPING the permission on the action select (index 0 was the empty
-// "Select Action" placeholder; collectPermissions() skips a falsy action)
-// and silently WIDENING it to the `*` wildcard on the resource select
-// (index 0 there was "All (*)"). Editing any group that held one of those
-// permissions and clicking Save re-submitted a materially different
-// permission list than the one shown, with no error.
-//
-// Building the lists from permissions.ts's ALL_ACTIONS / ALL_RESOURCES
-// (which mirror the backend's full vocabulary, and are exhaustiveness
-// -checked against it at compile time) closes that gap for every value
-// currently known to the frontend. `currentValue` is still handled
-// defensively beyond the known list: if a stored permission's value isn't
-// one of them (a future backend verb this form hasn't been taught yet, or
-// legacy/foreign data), an extra option is appended for that *exact*
-// value, selected and visibly flagged, instead of silently falling back
-// to a different one. The select then still represents -- and
-// round-trips unchanged through collectPermissions() -- the real stored
-// permission rather than corrupting it.
-function buildActionOptions(currentValue: string | undefined): string {
-  const options = ['<option value="">Select Action</option>'];
-  for (const action of ALL_ACTIONS) {
-    const selected = currentValue === action ? ' selected' : '';
-    options.push(`<option value="${escapeHtml(action)}"${selected}>${escapeHtml(actionOptionLabel(action))}</option>`);
-  }
-  if (currentValue && !(ALL_ACTIONS as readonly string[]).includes(currentValue)) {
-    options.push(`<option value="${escapeHtml(currentValue)}" selected>⚠ ${escapeHtml(currentValue)} (not recognized by this form)</option>`);
-  }
-  return options.join('');
-}
-
-function buildResourceOptions(currentValue: string | undefined): string {
-  const options: string[] = [];
-  for (const resource of ALL_RESOURCES) {
-    const isDefault = !currentValue && resource === '*';
-    const selected = currentValue === resource || isDefault ? ' selected' : '';
-    options.push(`<option value="${escapeHtml(resource)}"${selected}>${escapeHtml(resourceOptionLabel(resource))}</option>`);
-  }
-  if (currentValue && !(ALL_RESOURCES as readonly string[]).includes(currentValue)) {
-    options.push(`<option value="${escapeHtml(currentValue)}" selected>⚠ ${escapeHtml(currentValue)} (not recognized by this form)</option>`);
-  }
-  return options.join('');
-}
-
 /**
  * Add a new permission to the form
  */
@@ -268,7 +221,7 @@ export function addPermission(permission?: Permission): void {
           ${buildResourceOptions(permission?.resource)}
         </select>
       </label>
-      <button type="button" class="btn-small btn-danger remove-permission-btn">Remove</button>
+      <button type="button" class="btn-small btn-danger icon-btn remove-permission-btn" aria-label="Remove permission" title="Remove permission">${iconSvg('trash-2')}</button>
     </div>
     <div class="constraints-section">
       <h4>Constraints (Optional)</h4>
@@ -297,6 +250,7 @@ export function addPermission(permission?: Permission): void {
   `;
 
   permissionsList.appendChild(permDiv);
+  clearNoPermissionsProblem();
 
   // Add event listener for remove button
   const removeBtn = permDiv.querySelector('.remove-permission-btn');
@@ -382,11 +336,11 @@ function unrepresentableDimensions(constraints: Permission['constraints']): stri
 // which is ordinary. Blank is measured after trimming, so a box holding only
 // spaces counts as blank -- it is indistinguishable from empty on screen, and
 // erroring on a field that looks empty would be unfixable from the UI.
-function unrepresentablePermissionErrors(): string[] {
+function unrepresentablePermissionErrors(): GroupFieldProblem[] {
   const permissionsList = document.getElementById('permissions-list');
   if (!permissionsList) return [];
 
-  const errors: string[] = [];
+  const errors: GroupFieldProblem[] = [];
   permissionsList.querySelectorAll('.permission-item').forEach((item, index) => {
     const action = (item.querySelector('.perm-action') as HTMLSelectElement | null)?.value || '';
     const resource = (item.querySelector('.perm-resource') as HTMLSelectElement | null)?.value || '';
@@ -394,15 +348,22 @@ function unrepresentablePermissionErrors(): string[] {
 
     const stored = (item.getAttribute('data-unrepresentable') || '').split(', ').filter(d => d);
     if (stored.length > 0) {
-      errors.push(`${label} has a stored "${stored.join(', ')}" constraint value this form cannot represent`);
+      const summary = `${label} has a stored "${stored.join(', ')}" constraint value this form cannot represent`;
+      // Every affected input gets the inline note; the toast names the row once.
+      stored.forEach((dimension, i) => errors.push({
+        control: constraintInput(item, dimension) ?? (item as HTMLElement),
+        message: STORED_VALUE_FIELD_MESSAGE,
+        summary: i === 0 ? summary : '',
+      }));
     }
 
     for (const dimension of LIST_CONSTRAINT_DIMENSIONS) {
       // Already refused for this row on the stored value; do not say it twice.
       if (stored.includes(dimension)) continue;
-      const raw = (item.querySelector(`.perm-${dimension}`) as HTMLInputElement | null)?.value ?? '';
-      if (raw.trim() !== '' && parseConstraintList(raw).length === 0) {
-        errors.push(`${label} has a "${dimension}" value with no usable entries`);
+      const control = constraintInput(item, dimension);
+      const raw = control?.value ?? '';
+      if (control && raw.trim() !== '' && parseConstraintList(raw).length === 0) {
+        errors.push({ control, message: EMPTY_LIST_FIELD_MESSAGE, summary: `${label} has a "${dimension}" value with no usable entries` });
       }
     }
   });
@@ -412,21 +373,23 @@ function unrepresentablePermissionErrors(): string[] {
 // Max Amount is typed by the admin, unlike the stored-value problems above, so
 // its message tells them how to fix the field instead of pointing at the API.
 // 0 would read as "no cap" at enforcement, so it is refused rather than sent.
-function maxAmountInputErrors(): string[] {
-  const errors: string[] = [];
+function maxAmountInputErrors(): GroupFieldProblem[] {
+  const errors: GroupFieldProblem[] = [];
   document.querySelectorAll('#permissions-list .permission-item').forEach((item, index) => {
     const input = item.querySelector('.perm-max-amount') as HTMLInputElement | null;
+    if (!input) return;
+    const problem = { control: input, message: MAX_AMOUNT_FIELD_MESSAGE, summary: `permission ${index}` };
     // A number input reports unparsable text ("abc", "1e") as value "", which
     // would read as blank and save with no cap; badInput is the only signal.
-    if (input?.validity?.badInput) {
-      errors.push(`permission ${index}`);
+    if (input.validity?.badInput) {
+      errors.push(problem);
       return;
     }
-    const raw = input?.value ?? '';
+    const raw = input.value;
     if (raw.trim() === '') return;
     const amount = Number(raw);
     if (!Number.isFinite(amount) || amount <= 0) {
-      errors.push(`permission ${index}`);
+      errors.push(problem);
     }
   });
   return errors;

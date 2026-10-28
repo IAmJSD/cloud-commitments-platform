@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/insurance"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
@@ -339,4 +340,107 @@ func TestMapInsuranceError_PinsEachStatusMessage(t *testing.T) {
 	assert.Equal(t, "Archera comparison failed", ce.message)
 	ce, _ = IsClientError(mapInsuranceError(&insurance.HTTPError{StatusCode: 429}))
 	assert.Equal(t, "Archera rate limit reached; retry-after not given", ce.message)
+}
+
+// ctxBlockedResolver parks GetSecret until the caller's ctx ends.
+type ctxBlockedResolver struct{ secrets.Resolver }
+
+func (ctxBlockedResolver) GetSecret(ctx context.Context, _ string) (string, error) {
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func TestInsuranceComparison_EndedKeyBuildIsTheDeadlineStatus(t *testing.T) {
+	for name, mk := range map[string]func() (context.Context, context.CancelFunc){
+		"deadline": func() (context.Context, context.CancelFunc) {
+			return context.WithTimeout(adminCtx(), 20*time.Millisecond)
+		},
+		"canceled": func() (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(adminCtx())
+			time.AfterFunc(20*time.Millisecond, cancel)
+			return ctx, cancel
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			logs := captureLogs(t)
+			s := completeEnv(t)
+			vt := &vendorTransport{t: t}
+			p := archera.NewProvider(s, ctxBlockedResolver{secrets.NewEnvResolver()}, &http.Client{Transport: vt})
+			h := NewHandler(HandlerConfig{Insurance: p})
+			ctx, cancel := mk()
+			defer cancel()
+			_, err := h.getInsuranceComparison(ctx, &events.LambdaFunctionURLRequest{})
+			ce, ok := IsClientError(err)
+			require.True(t, ok)
+			assert.Equal(t, 504, ce.code)
+			assert.Equal(t, insuranceTimeoutMessage, ce.message)
+			assert.NotContains(t, logs.String(), "credential resolution failed")
+			assert.Zero(t, vt.calls)
+		})
+	}
+}
+
+// ctxBlockedTransport parks the vendor call until the request's ctx ends. With
+// inBody it answers 200 at once and parks the body read instead, so the ctx
+// error surfaces from the decode rather than from http.Client.Do.
+type ctxBlockedTransport struct {
+	inBody bool
+	calls  int
+}
+
+type ctxBlockedBody struct{ ctx context.Context }
+
+func (b ctxBlockedBody) Read([]byte) (int, error) {
+	<-b.ctx.Done()
+	return 0, b.ctx.Err()
+}
+
+func (ctxBlockedBody) Close() error { return nil }
+
+func (c *ctxBlockedTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	c.calls++
+	if c.inBody {
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: ctxBlockedBody{r.Context()}, Request: r}, nil
+	}
+	<-r.Context().Done()
+	return nil, r.Context().Err()
+}
+
+// The key resolves and the client builds; the request's ctx then ends during
+// the comparison call itself. That is the same deadline status as an ended key
+// build (issue #1498), not a 502 vendor failure.
+func TestInsuranceComparison_EndedVendorCallIsTheDeadlineStatus(t *testing.T) {
+	ends := map[string]func() (context.Context, context.CancelFunc){
+		"deadline": func() (context.Context, context.CancelFunc) {
+			return context.WithTimeout(adminCtx(), 50*time.Millisecond)
+		},
+		"canceled": func() (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(adminCtx())
+			time.AfterFunc(50*time.Millisecond, cancel)
+			return ctx, cancel
+		},
+	}
+	for endName, mk := range ends {
+		for _, inBody := range []bool{false, true} {
+			name := endName + "/during request"
+			if inBody {
+				name = endName + "/during body read"
+			}
+			t.Run(name, func(t *testing.T) {
+				logs := captureLogs(t)
+				ct := &ctxBlockedTransport{inBody: inBody}
+				p := archera.NewProvider(completeEnv(t), secrets.NewEnvResolver(), &http.Client{Transport: ct})
+				h := NewHandler(HandlerConfig{Insurance: p})
+				ctx, cancel := mk()
+				defer cancel()
+				_, err := h.getInsuranceComparison(ctx, &events.LambdaFunctionURLRequest{})
+				ce, ok := IsClientError(err)
+				require.True(t, ok, "%v", err)
+				assert.Equal(t, 504, ce.code)
+				assert.Equal(t, insuranceTimeoutMessage, ce.message)
+				assert.Equal(t, 1, ct.calls, "the client was built and the vendor call was made")
+				assert.NotContains(t, logs.String(), "archera comparison failed")
+			})
+		}
+	}
 }

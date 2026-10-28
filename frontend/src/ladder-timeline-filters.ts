@@ -101,6 +101,35 @@ export function formatLadderDateTime(iso: string): string {
   return `${formatDate(utc.slice(0, 10))}, ${utc.slice(11, 16)} UTC`;
 }
 
+const UTC_INPUT = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?(?:\s*(?:Z|UTC))?$/i;
+
+/**
+ * Parses a typed UTC filter date ("YYYY-MM-DD", optionally with "HH:MM" or
+ * "HH:MM:SS", "T" or a space between) into the filter's "YYYY-MM-DDTHH:MM:SS"
+ * form. A date without a time covers the whole day: 00:00:00 for "from" and
+ * 23:59:59 for "to". Returns '' for blank input and null when it is not a real
+ * date, so callers never guess at an ambiguous value.
+ */
+export function parseLadderUtcInput(text: string, edge: 'from' | 'to'): string | null {
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+  const match = UTC_INPUT.exec(trimmed);
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second] = match;
+  const time = hour === undefined ? (edge === 'from' ? '00:00:00' : '23:59:59') : `${hour}:${minute}:${second ?? '00'}`;
+  const value = `${year}-${month}-${day}T${time}`;
+  const stamp = Date.parse(`${value}Z`);
+  // Date.parse rolls 2026-02-30 over to March; the round trip rejects it.
+  return Number.isFinite(stamp) && new Date(stamp).toISOString().slice(0, 19) === value ? value : null;
+}
+
+/** Shows a "YYYY-MM-DDTHH:MM:SS" filter value as "YYYY-MM-DD HH:MM", keeping seconds only when set. */
+export function formatLadderUtcInput(value: string): string {
+  if (!value) return '';
+  const [date, time = '00:00:00'] = value.split('T');
+  return `${date} ${time.endsWith(':00') ? time.slice(0, 5) : time}`;
+}
+
 /** Statuses that count toward cumulative commitment; cancelled and failed tranches were never bought. */
 export const ladderCountedStatuses: readonly string[] = ['scheduled', 'fired', 'completed'];
 export const LADDER_COUNTED_NOTE = 'Counts scheduled, fired and completed tranches; cancelled, failed and unrecognised statuses are excluded.';

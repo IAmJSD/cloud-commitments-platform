@@ -19,7 +19,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 3.0"
+      version = "~> 3.117"
     }
   }
 }
@@ -321,6 +321,32 @@ resource "azurerm_role_assignment" "reservations_purchaser" {
 resource "azurerm_role_assignment" "signing_key_crypto_user" {
   scope                = var.key_vault_id
   role_definition_name = "Key Vault Crypto User"
+  principal_id         = azurerm_user_assigned_identity.container_app.principal_id
+}
+
+# Write access to the admin-password secret ONLY (#199), for the admin-password
+# sync: when the admin changes their password the app writes the new value back
+# with azsecrets.SetSecret (buildAdminPasswordSyncCallback in
+# internal/server/app.go). The vault-wide grant in
+# terraform/environments/azure/compute.tf is "Key Vault Secrets User", which is
+# read-only, so without this the write 403s and the vault copy goes stale.
+#
+# Scope is the one secret, not the vault: Key Vault RBAC accepts a role
+# assignment on .../vaults/<vault>/secrets/<name>, so the delete/purge/backup
+# rights that come with "Key Vault Secrets Officer" (no built-in role is
+# set-only) reach this secret and nothing else. The scope is built from the
+# vault ARM ID and the secret name, both known at plan time, rather than from
+# the secret's resource_versionless_id: scope is ForceNew, and an
+# apply-time-only value would replace the grant whenever it went unknown.
+#
+# The count mirrors the app-side gate exactly: the sync callback is armed only
+# when ADMIN_PASSWORD_SECRET and ADMIN_EMAIL are both non-empty, so the write
+# grant exists only when something will use it.
+resource "azurerm_role_assignment" "admin_password_secret_writer" {
+  count = var.admin_password_secret_name != "" && var.admin_email != "" ? 1 : 0
+
+  scope                = "${var.key_vault_id}/secrets/${var.admin_password_secret_name}"
+  role_definition_name = "Key Vault Secrets Officer"
   principal_id         = azurerm_user_assigned_identity.container_app.principal_id
 }
 

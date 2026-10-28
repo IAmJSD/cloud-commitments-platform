@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/pashagolub/pgxmock/v4"
+	"github.com/pashagolub/pgxmock/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -1418,6 +1418,39 @@ func TestPGXMock_GetRIExchangeRecord_WithTimestamps(t *testing.T) {
 	assert.Equal(t, "some error", rec.Error)
 }
 
+// TestPGXMock_GetRIExchangeRecord_NotFound pins the missing-record error the
+// RI exchange approve and reject routes rely on: a wrapped ErrNotFound, which
+// they answer as a 4xx, not a bare error they would answer with 500 (#601).
+func TestPGXMock_GetRIExchangeRecord_NotFound(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectQuery("SELECT").WithArgs("ri-id").WillReturnRows(pgxmock.NewRows(riExchangeCols))
+
+	rec, err := store.GetRIExchangeRecord(ctx, "ri-id")
+	require.Error(t, err)
+	assert.Nil(t, rec)
+	assert.ErrorIs(t, err, ErrNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_GetRIExchangeRecord_QueryErrorIsNotErrNotFound keeps a failed
+// query a server error: only an empty result is ErrNotFound.
+func TestPGXMock_GetRIExchangeRecord_QueryErrorIsNotErrNotFound(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	mock.ExpectQuery("SELECT").WithArgs("ri-id").WillReturnError(errors.New("connection reset"))
+
+	rec, err := store.GetRIExchangeRecord(ctx, "ri-id")
+	require.Error(t, err)
+	assert.Nil(t, rec)
+	assert.NotErrorIs(t, err, ErrNotFound)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestPGXMock_GetRIExchangeRecordByToken_Success(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
@@ -1448,6 +1481,26 @@ func TestPGXMock_GetRIExchangeHistory_Success(t *testing.T) {
 	assert.Len(t, records, 2)
 }
 
+// The account predicate must be in the WHERE clause, ahead of the LIMIT, and
+// receive the caller's ids (issue #308).
+func TestPGXMock_GetRIExchangeHistoryForAccounts_PushesAccountPredicate(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	now := time.Now().Truncate(time.Second)
+	since := now.Add(-24 * time.Hour)
+	ids := []string{"111122223333", "222233334444"}
+	rows := pgxmock.NewRows(riExchangeCols).AddRow(riExchangeRow(now)...)
+	mock.ExpectQuery(`(?s)WHERE created_at >= \$1 AND account_id = ANY\(\$3::text\[\]\)\s+ORDER BY created_at DESC\s+LIMIT \$2`).
+		WithArgs(since, 10, ids).WillReturnRows(rows)
+
+	records, err := store.GetRIExchangeHistoryForAccounts(ctx, since, 10, ids)
+	require.NoError(t, err)
+	assert.Len(t, records, 1)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 // ─── TransitionRIExchangeStatus ───────────────────────────────────────────────
 
 func TestPGXMock_TransitionRIExchangeStatus_WrongStatus(t *testing.T) {
@@ -1466,6 +1519,8 @@ func TestPGXMock_TransitionRIExchangeStatus_WrongStatus(t *testing.T) {
 	_, err := store.TransitionRIExchangeStatus(ctx, "ri-id", "pending", "processing", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expected status")
+	assert.ErrorIs(t, err, ErrRIExchangeNotInExpectedStatus, "the API maps this to 409 (issue #587)")
+	assert.NotErrorIs(t, err, ErrRIExchangeExpired)
 }
 
 func TestPGXMock_TransitionRIExchangeStatus_RecordNotFound(t *testing.T) {
@@ -1483,6 +1538,8 @@ func TestPGXMock_TransitionRIExchangeStatus_RecordNotFound(t *testing.T) {
 	_, err := store.TransitionRIExchangeStatus(ctx, "ri-id", "pending", "processing", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
+	assert.NotErrorIs(t, err, ErrRIExchangeExpired)
+	assert.NotErrorIs(t, err, ErrRIExchangeNotInExpectedStatus)
 }
 
 func TestPGXMock_TransitionRIExchangeStatus_Expired(t *testing.T) {
@@ -1501,6 +1558,8 @@ func TestPGXMock_TransitionRIExchangeStatus_Expired(t *testing.T) {
 	_, err := store.TransitionRIExchangeStatus(ctx, "ri-id", "pending", "processing", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "expired")
+	assert.ErrorIs(t, err, ErrRIExchangeExpired, "the API maps this to 410 (issue #587)")
+	assert.NotErrorIs(t, err, ErrRIExchangeNotInExpectedStatus)
 }
 
 func TestPGXMock_TransitionRIExchangeStatus_Success(t *testing.T) {
@@ -1838,11 +1897,19 @@ func expectDetachTerminalExecutions(mock pgxmock.PgxPoolIface) {
 		WillReturnResult(pgxmock.NewResult("UPDATE", 2))
 }
 
-// expectLockDeletedAccount expects DeleteCloudAccount's first statement: the
-// account row lock taken before the plans are picked (issue #264).
+// expectLockDeletedAccount expects DeleteCloudAccount's lock sequence
+// (issue #1072): the account's plans in id order, the account row, then the
+// account's plans again for any plan that gained the account meanwhile.
 func expectLockDeletedAccount(mock pgxmock.PgxPoolIface) {
+	expectLockAccountPlans(mock)
 	mock.ExpectExec(`SELECT 1 FROM cloud_accounts WHERE id = \$1 FOR UPDATE`).WithArgs(pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("SELECT", 1))
+	expectLockAccountPlans(mock)
+}
+
+func expectLockAccountPlans(mock pgxmock.PgxPoolIface) {
+	mock.ExpectExec(`SELECT p.id FROM purchase_plans p\s+WHERE p.id IN \(SELECT pa.plan_id FROM plan_accounts pa WHERE pa.account_id = \$1\)\s+ORDER BY p.id\s+FOR UPDATE OF p`).
+		WithArgs(pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("SELECT", 1))
 }
 
 // expectDisableSoleAccountPlans expects the issue #264 disable of enabled
@@ -1858,12 +1925,35 @@ func TestPGXMock_DeleteCloudAccount_LockFailsRollsBack(t *testing.T) {
 	ctx := context.Background()
 
 	mock.ExpectBegin()
+	expectLockAccountPlans(mock)
 	mock.ExpectExec("SELECT 1 FROM cloud_accounts").WithArgs("acct-id").WillReturnError(errors.New("boom"))
 	mock.ExpectRollback()
 
 	err := store.DeleteCloudAccount(ctx, "acct-id")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to lock cloud account")
+}
+
+func TestPGXMock_DeleteCloudAccount_PlanLockFailsRollsBack(t *testing.T) {
+	for _, second := range []bool{false, true} {
+		mock := newMock(t)
+		store := storeWith(mock)
+		ctx := context.Background()
+
+		mock.ExpectBegin()
+		if second {
+			expectLockAccountPlans(mock)
+			mock.ExpectExec("SELECT 1 FROM cloud_accounts").WithArgs("acct-id").
+				WillReturnResult(pgxmock.NewResult("SELECT", 1))
+		}
+		mock.ExpectExec("SELECT p.id FROM purchase_plans").WithArgs("acct-id").WillReturnError(errors.New("boom"))
+		mock.ExpectRollback()
+
+		err := store.DeleteCloudAccount(ctx, "acct-id")
+		require.Error(t, err, "second lock: %v", second)
+		assert.Contains(t, err.Error(), "failed to lock plans of cloud account")
+		require.NoError(t, mock.ExpectationsWereMet(), "second lock: %v", second)
+	}
 }
 
 func TestPGXMock_DeleteCloudAccount_DisablePlansFailsRollsBack(t *testing.T) {
@@ -2024,8 +2114,9 @@ func TestPGXMock_GetAccountCredential_NotFound(t *testing.T) {
 	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnError(errNoRows())
 
+	// #120: a missing row is ErrNotFound, distinct from an empty stored blob.
 	blob, err := store.GetAccountCredential(ctx, "acct-1", "aws_access_keys")
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNotFound)
 	assert.Equal(t, "", blob)
 }
 
@@ -2561,9 +2652,10 @@ func TestPGXMock_SavePurchaseHistory_Success(t *testing.T) {
 	ctx := context.Background()
 
 	// 20 columns: original 18 + revocation_window_closes_at (issue #290)
-	// + offering_class (issue #292).
-	mock.ExpectExec("INSERT INTO purchase_history").WithArgs(anyArgsCfg(20)...).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// + offering_class (issue #292). The row reports whether it was stored
+	// with a cloud account (issue #1235).
+	mock.ExpectQuery("INSERT INTO purchase_history").WithArgs(anyArgsCfg(20)...).
+		WillReturnRows(pgxmock.NewRows([]string{"attached"}).AddRow(true))
 
 	err := store.SavePurchaseHistory(ctx, &PurchaseHistoryRecord{
 		AccountID:  "acc-1",
@@ -2573,6 +2665,53 @@ func TestPGXMock_SavePurchaseHistory_Success(t *testing.T) {
 		Service:    "ec2",
 	})
 	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// A nil CloudAccountID is resolved in the INSERT itself from
+// (provider, external_id), and a stored row with no account is still a
+// success: refusing it would lose a bought commitment's history (#621).
+func TestPGXMock_SavePurchaseHistory_ResolvesAccountAndKeepsUnmatchedRow(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+
+	mock.ExpectQuery(`COALESCE\(\$17::uuid, \(\s*SELECT ca\.id FROM cloud_accounts`).WithArgs(anyArgsCfg(20)...).
+		WillReturnRows(pgxmock.NewRows([]string{"attached"}).AddRow(false))
+
+	err := store.SavePurchaseHistory(context.Background(), &PurchaseHistoryRecord{
+		AccountID: "acc-unregistered", PurchaseID: "pur-2", Timestamp: time.Now(), Provider: "aws", Service: "ec2",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// No row back means the dedupe kept an existing row: not an error.
+func TestPGXMock_SavePurchaseHistory_AlreadyRecorded(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+
+	mock.ExpectQuery("INSERT INTO purchase_history").WithArgs(anyArgsCfg(20)...).
+		WillReturnRows(pgxmock.NewRows([]string{"attached"}))
+
+	err := store.SavePurchaseHistory(context.Background(), &PurchaseHistoryRecord{
+		AccountID: "acc-1", PurchaseID: "pur-1", Timestamp: time.Now(), Provider: "aws", Service: "ec2",
+	})
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestPGXMock_SavePurchaseHistory_DBError(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+
+	mock.ExpectQuery("INSERT INTO purchase_history").WithArgs(anyArgsCfg(20)...).
+		WillReturnError(errors.New("fk violation"))
+
+	err := store.SavePurchaseHistory(context.Background(), &PurchaseHistoryRecord{
+		AccountID: "acc-1", PurchaseID: "pur-1", Timestamp: time.Now(), Provider: "aws", Service: "ec2",
+	})
+	require.ErrorContains(t, err, "failed to save purchase history: fk violation")
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // ─── CountPendingExecutionsForAccount / ListPendingExecutionIDsForAccount ───
@@ -3037,12 +3176,13 @@ func TestPGXMock_CancelExecutionAtomic_WritesCanonicalStatus(t *testing.T) {
 
 	// The mock uses regexp matching. We pin on:
 	//   - "canceled_by" to confirm the new column is targeted (not cancelled_by)
-	//   - WithArgs: $1=execID, $2=&actor, $3=StatusCanceled
+	//   - WithArgs: $1=execID, $2=&actor, $3=StatusCanceled, $4=nil (no
+	//     token pin on the unpinned cancel, issue #1190)
 	// The RETURNING row also carries "canceled" so the caller's returned
 	// status is the canonical spelling end-to-end.
 	rows := pgxmock.NewRows([]string{"status"}).AddRow(StatusCanceled)
 	mock.ExpectQuery("canceled_by").
-		WithArgs("exec-1", &actor, StatusCanceled).
+		WithArgs("exec-1", &actor, StatusCanceled, (*string)(nil)).
 		WillReturnRows(rows)
 
 	// Pass mock directly as pgx.Tx (PgxPoolIface embeds pgx.Tx).

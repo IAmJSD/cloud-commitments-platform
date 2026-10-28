@@ -47,13 +47,16 @@ func (h *hookedLadderStore) PlanAndSaveLadderRun(ctx context.Context, configID s
 }
 
 // waitersOnLadderLock counts sessions blocked on the config's ladder lock key
-// (cudly:ladder-config:<id>, split across pg_locks classid/objid).
+// (cudly:ladder-config:<id>, split across pg_locks classid/objid) in this
+// test's database. pg_locks covers the whole server, which other tests'
+// databases share.
 func waitersOnLadderLock(ctx context.Context, t *testing.T, e *ladderB1Env) int {
 	t.Helper()
 	var n int
 	require.NoError(t, e.conn.QueryRow(ctx, `
 		SELECT count(*) FROM pg_locks l, (SELECT hashtextextended('cudly:ladder-config:' || $1::text, 0) AS k) h
 		WHERE l.locktype = 'advisory' AND l.objsubid = 1 AND NOT l.granted
+		  AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())
 		  AND l.classid = ((h.k >> 32) & 4294967295)::oid
 		  AND l.objid = (h.k & 4294967295)::oid`, e.cfg.ID).Scan(&n))
 	return n

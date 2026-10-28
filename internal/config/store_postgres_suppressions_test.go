@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/pashagolub/pgxmock/v4"
+	"github.com/pashagolub/pgxmock/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,7 +19,7 @@ func TestPGXMock_CreateSuppression_RoundTrip(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO purchase_suppressions`).
 		WithArgs(pgxmock.AnyArg(), "exec-1", "acct-1", "aws", "ec2", "us-east-1",
-			"t4g.nano", "", 3, pgxmock.AnyArg()).
+			"t4g.nano", "", 3, pgxmock.AnyArg(), (*string)(nil), (*string)(nil), (*string)(nil)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectCommit()
 
@@ -28,6 +28,32 @@ func TestPGXMock_CreateSuppression_RoundTrip(t *testing.T) {
 		ExecutionID: "exec-1", AccountID: "acct-1", Provider: "aws",
 		Service: "ec2", Region: "us-east-1", ResourceType: "t4g.nano",
 		SuppressedCount: 3, ExpiresAt: expires,
+	})
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestPGXMock_CreateSuppression_WritesVariant pins issue #816: a row with a
+// variant writes all three variant columns, empty strings included (a
+// regional, known-empty AZ is not NULL).
+func TestPGXMock_CreateSuppression_WritesVariant(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	ctx := context.Background()
+
+	az, platform, tenancy := "", "Linux/UNIX", "default"
+	mock.ExpectBegin()
+	mock.ExpectExec(`INSERT INTO purchase_suppressions`).
+		WithArgs(pgxmock.AnyArg(), "exec-1", "acct-1", "aws", "ec2", "us-east-1",
+			"t4g.nano", "", 3, pgxmock.AnyArg(), &az, &platform, &tenancy).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectCommit()
+
+	err := store.CreateSuppression(ctx, &PurchaseSuppression{
+		ExecutionID: "exec-1", AccountID: "acct-1", Provider: "aws",
+		Service: "ec2", Region: "us-east-1", ResourceType: "t4g.nano",
+		SuppressedCount: 3, ExpiresAt: time.Now().Add(time.Hour),
+		Variant: &SuppressionVariant{Platform: "Linux/UNIX", Tenancy: "default"},
 	})
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -94,12 +120,14 @@ func TestPGXMock_ListActiveSuppressions(t *testing.T) {
 	cols := []string{
 		"id", "execution_id", "account_id", "provider", "service", "region",
 		"resource_type", "engine", "suppressed_count", "expires_at", "created_at",
+		"availability_zone", "platform", "tenancy",
 	}
+	az, platform, tenancy := "us-east-1a", "Linux/UNIX", "default"
 	rows := pgxmock.NewRows(cols).
 		AddRow("sup-1", "exec-1", "acct-1", "aws", "ec2", "us-east-1",
-			"t4g.nano", "", 3, future, now).
+			"t4g.nano", "", 3, future, now, nil, nil, nil).
 		AddRow("sup-2", "exec-2", "acct-1", "aws", "ec2", "us-east-1",
-			"t4g.nano", "", 2, future, now)
+			"t4g.nano", "", 2, future, now, &az, &platform, &tenancy)
 	mock.ExpectQuery(`SELECT .* FROM purchase_suppressions WHERE expires_at > NOW\(\)`).
 		WillReturnRows(rows)
 
@@ -108,8 +136,10 @@ func TestPGXMock_ListActiveSuppressions(t *testing.T) {
 	assert.Len(t, sups, 2)
 	assert.Equal(t, "sup-1", sups[0].ID)
 	assert.Equal(t, 3, sups[0].SuppressedCount)
+	assert.Nil(t, sups[0].Variant, "NULL variant columns read back as a legacy, 6-tuple-wide row")
 	assert.Equal(t, "sup-2", sups[1].ID)
 	assert.Equal(t, 2, sups[1].SuppressedCount)
+	assert.Equal(t, &SuppressionVariant{AvailabilityZone: "us-east-1a", Platform: "Linux/UNIX", Tenancy: "default"}, sups[1].Variant)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

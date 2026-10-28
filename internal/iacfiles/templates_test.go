@@ -22,7 +22,6 @@ type testTemplateData struct {
 	AccountSlug         string
 	Source              string
 	OIDCIssuerURL       string
-	OIDCIssuerHost      string
 	OIDCAudience        string
 	OIDCSubjectClaim    string
 	SubscriptionID      string

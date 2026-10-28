@@ -45,27 +45,6 @@ const (
 	MaxAPIKeyLifetime = 365 * 24 * time.Hour
 )
 
-// loadActiveUserForAPIKey resolves userID and ensures the account exists and
-// is active. Pulled out of CreateAPIKey to keep its cyclomatic complexity
-// under the project's gocyclo gate as new checks (e.g. issue #61's empty-
-// permissions rejection, issue #102's password/expiry validation) are added.
-func (s *Service) loadActiveUserForAPIKey(ctx context.Context, userID string) (*User, error) {
-	user, err := s.store.GetUserByID(ctx, userID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("user not found")
-		}
-		return nil, fmt.Errorf("failed to get user: %w", err)
-	}
-	if user == nil {
-		return nil, fmt.Errorf("user not found")
-	}
-	if !user.Active {
-		return nil, fmt.Errorf("user account is not active")
-	}
-	return user, nil
-}
-
 // CreateAPIKey creates a new user API key with scoped permissions. The
 // caller's current password must be supplied and is re-verified against the
 // stored hash before minting a key: a stolen session token alone must not be
@@ -73,7 +52,7 @@ func (s *Service) loadActiveUserForAPIKey(ctx context.Context, userID string) (*
 // same defense-in-depth MFASetup/MFADisable already apply (issue #102).
 // Returns the full API key (shown only once), key info, and error.
 func (s *Service) CreateAPIKey(ctx context.Context, userID, name, password string, permissions []Permission, expiresAt *time.Time) (string, *UserAPIKey, error) {
-	user, err := s.loadActiveUserForAPIKey(ctx, userID)
+	user, err := s.loadActiveUser(ctx, userID)
 	if err != nil {
 		return "", nil, err
 	}
@@ -207,17 +186,15 @@ func (s *Service) validateAPIKeyPermissions(ctx context.Context, user *User, per
 }
 
 // ListUserAPIKeys retrieves all API keys for a user.
+//
+// A key minted before the owner's last password change is returned with
+// IsActive=false even when its row is still active: ValidateUserAPIKey
+// already rejects it, and the row only stays active when the best-effort
+// revocation scan after the password change failed (issue #534).
 func (s *Service) ListUserAPIKeys(ctx context.Context, userID string) ([]*UserAPIKey, error) {
-	// Validate user exists
-	user, err := s.store.GetUserByID(ctx, userID)
+	user, err := s.loadUser(ctx, userID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("user not found")
-		}
-		return nil, fmt.Errorf("failed to get user: %w", err)
-	}
-	if user == nil {
-		return nil, fmt.Errorf("user not found")
+		return nil, err
 	}
 
 	keys, err := s.store.ListAPIKeysByUser(ctx, userID)
@@ -225,7 +202,29 @@ func (s *Service) ListUserAPIKeys(ctx context.Context, userID string) ([]*UserAP
 		return nil, fmt.Errorf("failed to list API keys: %w", err)
 	}
 
-	return keys, nil
+	return markPasswordRotatedKeysInactive(keys, user.PasswordVersion), nil
+}
+
+// markPasswordRotatedKeysInactive returns keys with every key minted under a
+// password version older than passwordVersion replaced by an inactive copy,
+// leaving the store's structs untouched.
+//
+// It compares with < rather than the != that ValidateUserAPIKey uses because
+// the user row is read before the keys: a key minted after a rotation that
+// lands between the two reads carries a newer version than this snapshot and
+// is valid. password_version only ever increases (migration 000103's trigger),
+// so a key older than the snapshot is stale whatever happens after the read.
+func markPasswordRotatedKeysInactive(keys []*UserAPIKey, passwordVersion int64) []*UserAPIKey {
+	out := make([]*UserAPIKey, len(keys))
+	for i, key := range keys {
+		out[i] = key
+		if key.PasswordVersion < passwordVersion {
+			stale := *key
+			stale.IsActive = false
+			out[i] = &stale
+		}
+	}
+	return out
 }
 
 // GetAPIKeyByHash retrieves an API key by its hash (for authentication).
@@ -251,23 +250,16 @@ func (s *Service) authorizeAPIKeyAccess(ctx context.Context, userID, keyID, acti
 	key, err := s.store.GetAPIKeyByID(ctx, keyID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("API key not found")
+			return nil, ErrAPIKeyNotFound
 		}
 		return nil, fmt.Errorf("failed to get API key: %w", err)
 	}
 	if key == nil {
-		return nil, fmt.Errorf("API key not found")
+		return nil, ErrAPIKeyNotFound
 	}
 
-	user, err := s.store.GetUserByID(ctx, userID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("user not found")
-		}
-		return nil, fmt.Errorf("failed to get user: %w", err)
-	}
-	if user == nil {
-		return nil, fmt.Errorf("user not found")
+	if _, err := s.loadUser(ctx, userID); err != nil {
+		return nil, err
 	}
 
 	if key.UserID != userID {
@@ -276,7 +268,7 @@ func (s *Service) authorizeAPIKeyAccess(ctx context.Context, userID, keyID, acti
 			return nil, fmt.Errorf("failed to check admin capability: %w", err)
 		}
 		if !isAdmin {
-			return nil, fmt.Errorf("unauthorized: cannot %s another user's API key", action)
+			return nil, fmt.Errorf("%w: cannot %s another user's API key", ErrAPIKeyNotOwned, action)
 		}
 	}
 
@@ -355,24 +347,6 @@ func validateAPIKeyStatus(key *UserAPIKey) error {
 	return nil
 }
 
-// lookupAPIKeyUser retrieves and validates the user associated with an API key.
-func (s *Service) lookupAPIKeyUser(ctx context.Context, userID string) (*User, error) {
-	user, err := s.store.GetUserByID(ctx, userID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("user account not found")
-		}
-		return nil, fmt.Errorf("failed to get user: %w", err)
-	}
-	if user == nil {
-		return nil, fmt.Errorf("user account not found")
-	}
-	if !user.Active {
-		return nil, fmt.Errorf("user account is not active")
-	}
-	return user, nil
-}
-
 // ValidateUserAPIKey validates an API key and returns the key info and associated user.
 //
 // Validation is deliberately side-effect free: it books no usage. A single
@@ -395,9 +369,12 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 		return nil, nil, fmt.Errorf("invalid API key")
 	}
 
-	// Constant-time comparison after fetch to close the SQL-equality timing oracle.
-	// The DB lookup already found the row by hash; this redundant check ensures the
-	// hot path does not leak timing information through early return differences.
+	// Store-integrity check, not a timing defense (issue #313). The store
+	// selected this row by `WHERE key_hash = $1` on keyHash, so the two are
+	// equal unless it returned a row for a different key; refuse it if it ever
+	// does. The equality timing of that lookup is harmless: the value compared
+	// is the SHA-256 of a 256-bit random key, which an attacker can neither
+	// guess nor steer byte by byte.
 	if subtle.ConstantTimeCompare([]byte(key.KeyHash), []byte(keyHash)) != 1 {
 		return nil, nil, fmt.Errorf("invalid API key")
 	}
@@ -407,7 +384,7 @@ func (s *Service) ValidateUserAPIKey(ctx context.Context, apiKey string) (*UserA
 		return nil, nil, err
 	}
 
-	user, err := s.lookupAPIKeyUser(ctx, key.UserID)
+	user, err := s.loadActiveUser(ctx, key.UserID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -535,13 +512,6 @@ func (s *Service) peekPendingUsage(keyID string) int64 {
 		return 0
 	}
 	return counter.Load()
-}
-
-// UpdateLastUsed updates only the last used timestamp for an API key.
-// Retained for backwards compatibility; new code paths should use
-// RecordUsage so the request_count_* counters stay current.
-func (s *Service) UpdateLastUsed(ctx context.Context, keyID string) error {
-	return s.store.UpdateAPIKeyLastUsed(ctx, keyID)
 }
 
 // RecordUsage updates last_used_at and adds delta to both the lifetime

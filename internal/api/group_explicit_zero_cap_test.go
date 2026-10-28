@@ -30,11 +30,11 @@ type realGroupAuth struct {
 	svc *auth.Service
 }
 
-func (a *realGroupAuth) CreateGroupAPI(ctx context.Context, actor string, req any) (any, error) {
+func (a *realGroupAuth) CreateGroupAPI(ctx context.Context, actor string, req auth.APICreateGroupRequest) (*auth.APIGroup, error) {
 	return a.svc.CreateGroupAPI(ctx, actor, req)
 }
 
-func (a *realGroupAuth) UpdateGroupAPI(ctx context.Context, actor, id string, req any) (any, error) {
+func (a *realGroupAuth) UpdateGroupAPI(ctx context.Context, actor, id string, req auth.APIUpdateGroupRequest) (*auth.APIGroup, error) {
 	return a.svc.UpdateGroupAPI(ctx, actor, id, req)
 }
 
@@ -59,6 +59,9 @@ func TestGroupWritesHTTP_ExplicitZeroSpendCap(t *testing.T) {
 			store.On("GetGroup", mock.Anything, zeroCapGroupID).Return(&auth.Group{ID: zeroCapGroupID, Name: "Team"}, nil).Maybe()
 			store.On("CreateGroup", mock.Anything, mock.Anything).Return(nil).Maybe()
 			store.On("UpdateGroup", mock.Anything, mock.Anything).Return(nil).Maybe()
+			// The PUT gives the empty group its first permission, so the
+			// issue #1409 member check lists users; the group has none.
+			store.On("ListUsers", mock.Anything).Return([]auth.User{}, nil).Maybe()
 			mockAuth := new(MockAuthService)
 			mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{UserID: auth.AdminAPIKeyActorID}, nil)
 			mockAuth.grantAdmin()

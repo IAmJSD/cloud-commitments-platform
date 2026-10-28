@@ -5,10 +5,12 @@
 import * as api from './api';
 import * as state from './state';
 import type { CostPeriod } from './state';
-import { formatCurrency, formatTerm, escapeHtml, CURRENCY_DEFAULT_DIGITS } from './utils';
+import { formatCurrency, formatTerm, escapeHtml, CURRENCY_DEFAULT_DIGITS, NO_VALUE } from './utils';
+import { filterByEnabledProviders } from './lib/enabled-providers';
 import { getRecommendationsFreshness, refreshRecommendations as refreshRecommendationsAPI } from './api/recommendations';
 import type { RecommendationsFreshness } from './api/recommendations';
 import { showToast } from './toast';
+import { createIcon, iconSvg } from './icons';
 import {
   isPaymentSupported,
   isSavingsPlanService,
@@ -19,12 +21,15 @@ import {
   type Payment as CompatPayment,
   type Provider as CompatProvider,
 } from './lib/purchase-compatibility';
-import { executeButtonLabel } from './commitmentSummary';
+import { billsMonthly, buildCommitmentBand, commitmentLine, commitmentTotals, executeButtonLabel, formatCommitmentTotals, type CommitmentLine } from './commitmentSummary';
 import type { AccountServiceOverride } from './api/accounts';
 import type { RecommendationsResponse, LocalRecommendation, RecommendationsSummary, GlobalConfig } from './types';
 import { openModal } from './modal';
 import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
+import { renderKpiTiles } from './lib/kpi-tile';
+import { captureFocus, restoreFocus } from './lib/focus-restore';
 import { canAccess } from './permissions';
+import { buildFirstRunEmptyState, isScopeFiltered } from './first-run-empty-state';
 
 // Issue #869: true when the current session can take any action on
 // recommendations (purchase or plan). Readonly/viewer sessions have neither
@@ -34,6 +39,8 @@ function canActOnRecommendations(): boolean {
 }
 import { parseNumericFilter, applyColumnFilters as applyColumnFiltersLib } from './lib/column-filters';
 import { fetchOverridesForAccounts } from './lib/overrides';
+import { ownValue } from './lib/own-property';
+import { HOURS_PER_MONTH } from './lib/hours-per-month';
 // Re-export the shared primitives so existing consumers that import from
 // recommendations.ts keep working without import-path churn (issue #166).
 export { parseNumericFilter } from './lib/column-filters';
@@ -61,6 +68,10 @@ let checkedPurchaseModalInitialised = false;
 let purchaseModalOpenToken = 0;
 // Cache of account ID → name for column display
 let accountNamesCache: Map<string, string> = new Map();
+// Whether the last account-list fetch returned any accounts; null when it
+// failed, so the first-run empty state (issue #756) does not claim "no
+// accounts connected" on a transient error.
+let lastHasAccounts: boolean | null = null;
 
 /**
  * Returns the display name for a cloud account ID, falling back to the raw
@@ -103,6 +114,12 @@ const expandedSpGroups = new Set<string>();
 // itself is recomputed client-side from the *visible* recs (so it stays
 // in sync with the per-cell banner range under the table).
 let lastRecommendationsSummary: RecommendationsSummary | null = null;
+
+// #180: the single-value column filters the last successful fetch sent to the
+// server (#162 pushdown). The loaded list is already narrowed by these, so the
+// unfiltered total is unknown and the savings card must still say "Filtered"
+// even though the visible and loaded counts match.
+let loadedServerFilters: ReadonlyArray<{ column: state.RecommendationsColumnId; value: string }> = [];
 
 // #284 (CR follow-up): guard against concurrent stale-load refreshes. If a
 // background refresh is already in flight, any subsequent stale detection
@@ -164,6 +181,8 @@ const DEFAULT_LOOKBACK_DAYS = 7;
 const LOOKBACK_TOOLTIP =
   'Applies to AWS recommendations only (Cost Explorer lookback window); ' +
   'Azure and GCP are unaffected.';
+// Issue #191: always-visible scope hint next to the lookback select.
+export const LOOKBACK_SCOPE_HINT = 'Applies to AWS rows only';
 const LOOKBACK_NO_PERMISSION_TOOLTIP =
   'Changing the lookback window requires admin (update:config) permission. ' +
   'Ask an administrator to adjust it in Settings.';
@@ -303,6 +322,19 @@ export function setupRecommendationsHandlers(): void {
 }
 
 /**
+ * Names the recommendations a provider dropped as invalid in the last
+ * collection (issue #1472), or null when none were. The rest of that
+ * provider's recommendations are shown normally.
+ */
+export function describeSkippedRecommendations(f: RecommendationsFreshness): string | null {
+  const parts = (f.last_collection_partial?.providers ?? [])
+    .filter((p) => (p.skipped_recommendations ?? 0) > 0)
+    .map((p) => `${p.skipped_recommendations} ${p.provider.toUpperCase()}`);
+  if (parts.length === 0) return null;
+  return `${parts.join(', ')} recommendation(s) skipped as invalid (for example a non-USD price or an unrecognized term) in the last collection. The others are shown.`;
+}
+
+/**
  * Check freshness and fire a background refresh if the cache is stale or cold.
  * Fire-and-forget: does not block the table render that already happened.
  *
@@ -337,6 +369,9 @@ export async function triggerAutoRefreshIfStale(
     console.error('Failed to fetch recommendations freshness:', err);
     return;
   }
+
+  const skipNotice = describeSkippedRecommendations(freshness);
+  if (skipNotice) showToast({ message: skipNotice, kind: 'warning' });
 
   const lastCollectedMs =
     freshness.last_collected_at === null
@@ -406,7 +441,7 @@ async function pollUntilCollectionClears(): Promise<RecommendationsFreshness | n
  * actually happening, poll the freshness endpoint until the in-flight
  * marker clears, then reload -- same as if this call had started it.
  */
-function startRecommendationsRefresh(
+export function startRecommendationsRefresh(
   onReload: () => Promise<void> = loadRecommendations,
 ): Promise<void> {
   // Dedup: if a refresh is already in flight, don't start a second one.
@@ -602,7 +637,7 @@ export async function loadRecommendations(): Promise<void> {
 
     const [data, accounts, cfgResponse] = await Promise.all([
       api.getRecommendations(filters) as unknown as RecommendationsResponse,
-      api.listAccountsMinimal().catch(() => []),
+      api.listAccountsMinimal().catch(() => null),
       // issue #223: fetch GlobalConfig so per-cell variant selection and
       // bulk-toolbar defaults reflect the operator's configured preference.
       // Failure is siloed — a missing/unreachable config endpoint must not
@@ -625,7 +660,8 @@ export async function loadRecommendations(): Promise<void> {
       // (issue #282 dropped the toolbar dropdown; no longer need to seed
       // defaultBulkPurchaseState — the module-level cache is the source of truth).
     }
-    accountNamesCache = new Map(accounts.map(a => [a.id, a.name]));
+    accountNamesCache = new Map((accounts ?? []).map(a => [a.id, a.name]));
+    lastHasAccounts = accounts ? accounts.length > 0 : null;
 
     // Issue #463: gate the Opportunities list by the Settings →
     // General → Enabled Providers preference. The backend currently
@@ -641,12 +677,15 @@ export async function loadRecommendations(): Promise<void> {
     // permissive default on the checkboxes (line ~2510).
     const enabledProviders = cfgResponse?.global?.enabled_providers;
     const rawRecs = (data.recommendations || []) as unknown as api.Recommendation[];
-    const visibleByPreference: api.Recommendation[] = enabledProviders && enabledProviders.length > 0
-      ? rawRecs.filter(r => enabledProviders.includes(r.provider as api.Provider))
-      : rawRecs;
+    // Shared with Home's savings card (#180) so both screens sum the same rows.
+    const visibleByPreference = filterByEnabledProviders(rawRecs, enabledProviders);
 
     state.setRecommendations(visibleByPreference);
     state.clearSelectedRecommendations();
+    loadedServerFilters = [
+      ...(pushedService !== undefined ? [{ column: 'service' as const, value: pushedService }] : []),
+      ...(pushedRegion !== undefined ? [{ column: 'region' as const, value: pushedRegion }] : []),
+    ];
 
     // Cache the API-derived summary so renderRecommendationsList can
     // recompute the savings card from the visible (post-filter) set on
@@ -744,17 +783,26 @@ function renderLookbackToolbar(): void {
     });
   }
 
-  // Info tooltip. textContent only (static constant, never API text) so
-  // there is no innerHTML injection surface.
+  // Info tooltip. DOM-built only (static icon, tooltip via textContent,
+  // never API text) so there is no innerHTML injection surface.
   const info = document.createElement('span');
   info.className = 'info-icon';
-  info.textContent = 'ⓘ'; // circled lowercase i
+  info.appendChild(createIcon('info'));
   const tip = document.createElement('span');
   tip.className = 'tooltip-text';
   tip.textContent = canEdit ? LOOKBACK_TOOLTIP : LOOKBACK_NO_PERMISSION_TOOLTIP;
   info.appendChild(tip);
 
-  wrap.append(label, select, info);
+  // Issue #191: the tooltip above is hover-only, and the control sits over a
+  // multi-provider table, so it read as a global setting. A short visible
+  // hint states the scope for everyone; aria-describedby announces it too.
+  const scope = document.createElement('span');
+  scope.id = 'recs-lookback-scope';
+  scope.className = 'lookback-scope-hint';
+  scope.textContent = LOOKBACK_SCOPE_HINT;
+  select.setAttribute('aria-describedby', scope.id);
+
+  wrap.append(label, select, scope, info);
   container.appendChild(wrap);
 }
 
@@ -829,9 +877,31 @@ async function onLookbackChange(rawValue: string): Promise<void> {
   }
 }
 
+/**
+ * #180: the savings card's scope line, or null when the card covers every
+ * recommendation (the same scope as Home). "Filtered" is decided by whether a
+ * column filter is active or the fetch itself was narrowed server-side, not by
+ * comparing counts: a pushed-down service/region filter returns only matching
+ * rows, so the visible and loaded counts are equal. In that case the
+ * unfiltered total isn't known, so the line names the server-side filter
+ * instead of an "of Y" figure.
+ */
+function savingsScopeText(visibleCount: number, loadedCount: number): string | null {
+  const active = Object.keys(state.getRecommendationsColumnFilters());
+  if (loadedServerFilters.length > 0) {
+    const pushed = loadedServerFilters.map((f) => `${columnLabel(f.column)}: ${f.value}`);
+    const others = active.filter((col) => !loadedServerFilters.some((f) => f.column === col)).length;
+    if (others > 0) pushed.push(`+${others} more ${others === 1 ? 'filter' : 'filters'}`);
+    return `Filtered: ${visibleCount} recommendations (${pushed.join(', ')})`;
+  }
+  if (active.length === 0 && visibleCount >= loadedCount) return null;
+  return `Filtered: ${visibleCount} of ${loadedCount} recommendations`;
+}
+
 function renderRecommendationsSummary(
   _summary: RecommendationsSummary | null,
   recommendations: readonly LocalRecommendation[],
+  loadedCount: number = recommendations.length,
 ): void {
   const container = document.getElementById('recommendations-summary');
   if (!container) return;
@@ -867,7 +937,7 @@ function renderRecommendationsSummary(
   const isSelectionView = selectedVisible.length > 0 && plr.cellCount > 0;
 
   // issue #319: scale savings by the active cost period.
-  // M-1: use ?? null so absent savings propagate to '--' via formatCostForPeriod
+  // M-1: use ?? null so absent savings propagate to NO_VALUE via formatCostForPeriod
   // rather than silently collapsing to $0 (scaleCost returns null only when input
   // is null/undefined; a genuine $0 saving returns 0, not null).
   const period = state.getCostPeriod();
@@ -879,16 +949,16 @@ function renderRecommendationsSummary(
   const savingsText = hasRecs && plr.savingsMax > 0 && scaledSavingsMin !== null && scaledSavingsMax !== null
     ? formatScaledRange(scaledSavingsMin, scaledSavingsMax, period)
     : hasRecs && (plr.savingsMin === null || plr.savingsMax === null)
-      ? '--'
+      ? NO_VALUE
       : formatCostForPeriod(0, period);
   const upfrontText = hasRecs && plr.upfrontMax > 0
     ? formatSavingsRange(plr.upfrontMin, plr.upfrontMax)
     : formatCurrency(0);
-  // L-2: use '--' for absent/inapplicable payback rather than '0 months'
+  // L-2: use NO_VALUE for absent/inapplicable payback rather than '0 months'
   // which falsely implies instantaneous payback.
   const paybackText = hasRecs && plr.paybackMonthsMax > 0
     ? formatPaybackRange(plr.paybackMonthsMin, plr.paybackMonthsMax)
-    : '—';
+    : NO_VALUE;
   // issue #748: count VARIANTS (= target.length), not cells (= plr.cellCount).
   // "Showing X of X" in the filter-status bar also counts variants, so both
   // numbers now agree on the same dataset.
@@ -901,27 +971,26 @@ function renderRecommendationsSummary(
     const sfx = periodSuffix(period);
     return isSelectionView ? `Selected Savings ${sfx}` : `Potential Savings ${sfx}`;
   })();
+  // #180: Home's Potential Monthly Savings always covers every
+  // recommendation, so when column filters narrow this page the card must say
+  // so; otherwise the two same-named KPIs disagree with no visible reason.
+  const scopeText = isSelectionView ? null : savingsScopeText(variantCount, loadedCount);
   const upfrontLabel = isSelectionView ? 'Selected Upfront Cost' : 'Total Upfront Cost';
   const paybackLabel = 'Payback Period';
 
-  container.innerHTML = `
-    <div class="card">
-      <h3>${countLabel}</h3>
-      <p class="value">${variantCount}</p>
-    </div>
-    <div class="card">
-      <h3>${savingsLabel}</h3>
-      <p class="value savings">${savingsText}</p>
-    </div>
-    <div class="card">
-      <h3>${upfrontLabel}</h3>
-      <p class="value">${upfrontText}</p>
-    </div>
-    <div class="card">
-      <h3>${paybackLabel}</h3>
-      <p class="value">${paybackText}</p>
-    </div>
-  `;
+  // Issue #743: the same .kpi-tile component as Home's summary, so the two
+  // pages' KPI cards match. The #180 scope line is the savings tile's detail.
+  renderKpiTiles(container, [
+    { kpi: 'count', title: countLabel, value: String(variantCount) },
+    {
+      kpi: 'savings', title: savingsLabel, value: savingsText, valueSavings: true,
+      ...(scopeText ? { detail: scopeText } : {}),
+    },
+    { kpi: 'upfront', title: upfrontLabel, value: upfrontText },
+    { kpi: 'payback', title: paybackLabel, value: paybackText },
+  ]);
+  const scopeDetail = container.querySelector<HTMLElement>('[data-kpi="savings"] .kpi-tile-detail');
+  if (scopeDetail) scopeDetail.dataset['testid'] = 'savings-scope';
 }
 
 // Comparator extractors per column. Numeric columns return numbers
@@ -1322,8 +1391,8 @@ function sortVariantsInCell(variants: LocalRecommendation[]): LocalRecommendatio
   return variants.slice().sort((a, b) => {
     const termDiff = a.term - b.term;
     if (termDiff !== 0) return termDiff;
-    const pa = PAYMENT_ORDER[a.payment ?? ''] ?? 99;
-    const pb = PAYMENT_ORDER[b.payment ?? ''] ?? 99;
+    const pa = ownValue(PAYMENT_ORDER, a.payment ?? '') ?? 99;
+    const pb = ownValue(PAYMENT_ORDER, b.payment ?? '') ?? 99;
     return pa - pb;
   });
 }
@@ -1441,7 +1510,7 @@ function cellScoreFor(
     // canonical order. Stringified so the existing string-column comparator
     // path handles it.
     const first = sortVariantsInCell(variants)[0];
-    return String(PAYMENT_ORDER[first?.payment ?? ''] ?? 99);
+    return String(ownValue(PAYMENT_ORDER, first?.payment ?? '') ?? 99);
   }
 
   // All other numeric columns (savings, count, on_demand_monthly): preserve
@@ -1588,7 +1657,7 @@ export function effectiveSavingsPct(r: LocalRecommendation): number | null {
   // denominator (EstimatedMonthlyOnDemandCost from Cost Explorer). When it
   // is absent the reconstruction formula (monthly_cost + savings + amortized)
   // diverges from the true on-demand baseline for RI/SP recs, producing
-  // misleadingly high percentages. Return null so the UI renders "--" rather
+  // misleadingly high percentages. Return null so the UI renders NO_VALUE rather
   // than a silently-wrong value.
   if (r.provider === 'aws' && !hasOnDemand) return null;
   const monthsInTerm = r.term * 12;
@@ -1627,6 +1696,30 @@ export function displaySavingsPct(r: LocalRecommendation): number | null {
 }
 
 /**
+ * On-demand-weighted average of the per-row Eff. % the purchase modal shows
+ * (displaySavingsPct), so the Totals row can never print a figure the rows
+ * refused to: a row that renders an em-dash (e.g. AWS without on_demand_cost,
+ * #323) contributes nothing. Each row is weighted by its on-demand baseline:
+ * on_demand_cost when known, otherwise the baseline its own % implies
+ * (savings / pct). Returns null when no row contributes.
+ */
+export function weightedDisplaySavingsPct(recs: LocalRecommendation[]): number | null {
+  let num = 0;
+  let den = 0;
+  for (const r of recs) {
+    const pct = displaySavingsPct(r);
+    if (pct === null) continue;
+    const base = r.on_demand_cost != null && r.on_demand_cost > 0
+      ? r.on_demand_cost
+      : pct !== 0 ? (r.savings * 100) / pct : null;
+    if (base === null || !(base > 0)) continue;
+    num += (pct * base) / 100;
+    den += base;
+  }
+  return den > 0 ? (num / den) * 100 : null;
+}
+
+/**
  * Returns the provider-reported on-demand monthly cost (`r.on_demand_cost`)
  * directly. Issue #330 — earlier behaviour reconstructed the value from
  * `monthly_cost + savings + amortized_upfront`, which drifted from the
@@ -1650,9 +1743,12 @@ export function onDemandMonthly(r: LocalRecommendation): number | null {
 // Cost-period scaling (issue #319)
 //
 
-/** Conversion factors relative to a monthly base. */
+/**
+ * Conversion factors relative to a monthly base. Hourly uses the 730-hour
+ * month the backend uses (issues #337, #394); daily stays a 30-day month.
+ */
 const PERIOD_FACTOR: Record<CostPeriod, number> = {
-  hourly:  1 / 720,   // 24 × 30 hrs/mo
+  hourly:  1 / HOURS_PER_MONTH,
   daily:   1 / 30,
   monthly: 1,
   yearly:  12,
@@ -1676,6 +1772,14 @@ const PERIOD_DECIMALS: Record<CostPeriod, number> = {
   yearly:  0,
 };
 
+// The non-monthly periods use explicit per-period precision (PERIOD_DECIMALS);
+// monthly keeps formatCurrency's default so it matches the rest of the
+// dashboard. Both go through formatCurrency so a yearly figure prints
+// "$123,456", not "$123456" (issue #739).
+function formatScaled(scaled: number, period: CostPeriod): string {
+  return period === 'monthly' ? formatCurrency(scaled) : formatCurrency(scaled, '$', PERIOD_DECIMALS[period]);
+}
+
 /**
  * Format a monthly cost value scaled to the requested display period.
  * Returns "—" for null/undefined input.
@@ -1684,15 +1788,8 @@ const PERIOD_DECIMALS: Record<CostPeriod, number> = {
  */
 export function formatCostForPeriod(monthly: number | null | undefined, period: CostPeriod): string {
   const scaled = scaleCost(monthly, period);
-  if (scaled === null) return '—';
-  // For the non-monthly periods we want explicit per-period decimal
-  // precision (PERIOD_DECIMALS), so we side-step formatCurrency (which
-  // uses CURRENCY_DEFAULT_DIGITS for any caller that doesn't override).
-  // Monthly keeps the existing formatCurrency behaviour for backward
-  // compatibility (and to stay in lock-step with the rest of the
-  // dashboard's monthly $ formatting).
-  if (period === 'monthly') return formatCurrency(scaled);
-  return `$${scaled.toFixed(PERIOD_DECIMALS[period])}`;
+  if (scaled === null) return NO_VALUE;
+  return formatScaled(scaled, period);
 }
 
 /** Human-readable suffix label for a period (used in column headers). */
@@ -1711,8 +1808,8 @@ export function periodSuffix(period: CostPeriod): string {
  * Collapses "$X – $X" to "$X".
  */
 function formatScaledRange(min: number, max: number, period: CostPeriod): string {
-  const lo = period === 'monthly' ? formatCurrency(min) : `$${min.toFixed(PERIOD_DECIMALS[period])}`;
-  const hi = period === 'monthly' ? formatCurrency(max) : `$${max.toFixed(PERIOD_DECIMALS[period])}`;
+  const lo = formatScaled(min, period);
+  const hi = formatScaled(max, period);
   return lo === hi ? lo : `${lo} – ${hi}`;
 }
 
@@ -1888,10 +1985,10 @@ function columnLabel(column: string): string {
 }
 
 function sortIndicator(column: string, active: string, direction: 'asc' | 'desc'): string {
-  if (column !== active) return '<span class="sort-indicator" aria-hidden="true">\u2195</span>';
+  if (column !== active) return `<span class="sort-indicator" aria-hidden="true">${iconSvg('chevrons-up-down')}</span>`;
   return direction === 'asc'
-    ? '<span class="sort-indicator active" aria-hidden="true">\u25B2</span>'
-    : '<span class="sort-indicator active" aria-hidden="true">\u25BC</span>';
+    ? `<span class="sort-indicator active" aria-hidden="true">${iconSvg('chevron-up')}</span>`
+    : `<span class="sort-indicator active" aria-hidden="true">${iconSvg('chevron-down')}</span>`;
 }
 
 // sortedRecommendations was removed in issues #225/#226: group-level sorting
@@ -2433,7 +2530,8 @@ function buildPopoverContent(
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
   clearBtn.className = 'column-filter-clear';
-  clearBtn.textContent = 'Clear';
+  // Categorical: selects nothing (hides every row), so not "Clear" (#727).
+  clearBtn.textContent = input ? 'Clear' : 'Select none';
   clearBtn.addEventListener('click', () => {
     if (input) {
       // Numeric column: Clear drops the expression entirely (no filter).
@@ -2666,6 +2764,31 @@ function rebindOpenPopoverAnchor(): void {
 // renderRecommendationsList itself (against the post-filter visible set),
 // so this helper doesn't need to call renderRecommendationsSummary
 // separately — every entry to renderRecommendationsList covers it.
+/**
+ * Clears every column filter. Re-fetches when a server-pushed-down column
+ * (service/region/account) was filtered, since the loaded set itself was
+ * narrowed; otherwise a client-side rerender is enough.
+ */
+function clearAllColumnFilters(): void {
+  const active = Object.keys(state.getRecommendationsColumnFilters()) as state.RecommendationsColumnId[];
+  const refetch = active.some((c) => SERVER_PUSHDOWN_COLUMNS.has(c));
+  state.clearAllRecommendationsColumnFilters();
+  saveColumnFilters(state.getRecommendationsColumnFilters());
+  if (refetch) void loadRecommendations();
+  else rerenderRecommendations();
+}
+
+/**
+ * Hides (or restores) the summary cards, filter-status bar and bottom action
+ * box around the list. Used by the first-run empty state (issue #756), where
+ * zero counts and a disabled Purchase bar only add noise.
+ */
+function setOpportunitiesChromeHidden(hidden: boolean): void {
+  for (const id of ['recommendations-summary', 'recommendations-filter-status', 'recommendations-action-box']) {
+    document.getElementById(id)?.classList.toggle('hidden', hidden);
+  }
+}
+
 function rerenderRecommendations(): void {
   const loaded = state.getRecommendations() as unknown as LocalRecommendation[];
   renderRecommendationsList(loaded);
@@ -2894,11 +3017,7 @@ function renderFilterStatusBar(loadedCount: number, visibleCount: number): void 
       badge = document.createElement('button');
       badge.type = 'button';
       badge.className = 'clear-filters';
-      badge.addEventListener('click', () => {
-        state.clearAllRecommendationsColumnFilters();
-        saveColumnFilters(state.getRecommendationsColumnFilters());
-        rerenderRecommendations();
-      });
+      badge.addEventListener('click', clearAllColumnFilters);
       bar.insertBefore(badge, live);
     }
     badge.textContent = `Clear filters (${activeCount})`;
@@ -3062,7 +3181,7 @@ const PAYMENT_DISPLAY_LABELS: Record<string, string> = {
 
 function formatPayment(payment: string | undefined): string {
   if (!payment) return '\u2014';
-  return PAYMENT_DISPLAY_LABELS[payment] ?? payment;
+  return ownValue(PAYMENT_DISPLAY_LABELS, payment) ?? payment;
 }
 
 // renderUsageSparkline returns an inline SVG polyline representing the
@@ -3131,24 +3250,24 @@ function renderColumnCell(key: state.RecommendationsColumnId, rec: LocalRecommen
     case 'region':
       return `<td>${escapeHtml(rec.region)}</td>`;
     case 'count':
-      return `<td>${rec.count}</td>`;
+      return `<td class="num">${rec.count}</td>`;
     case 'term':
       return `<td>${formatTerm(rec.term)}</td>`;
     case 'payment':
       return `<td>${escapeHtml(formatPayment(rec.payment))}</td>`;
     case 'savings':
       // issue #319: savings display value scales with the active cost period.
-      return `<td class="savings">${formatCostForPeriod(rec.savings, ctx.period)}</td>`;
+      return `<td class="num savings">${formatCostForPeriod(rec.savings, ctx.period)}</td>`;
     case 'upfront_cost':
       // upfront_cost is one-time, not recurring \u2014 period-invariant.
-      return `<td>${formatCurrency(rec.upfront_cost)}</td>`;
+      return `<td class="num">${formatCurrency(rec.upfront_cost)}</td>`;
     case 'monthly_cost':
       // issue #319: monthly_cost display scales with period; null still renders as em-dash.
-      return `<td>${formatCostForPeriod(rec.monthly_cost, ctx.period)}</td>`;
+      return `<td class="num">${formatCostForPeriod(rec.monthly_cost, ctx.period)}</td>`;
     case 'on_demand_monthly':
       // issue #319: on-demand baseline scales with period to stay consistent
       // with the savings + monthly_cost columns.
-      return `<td>${formatCostForPeriod(onDemandMonthly(rec), ctx.period)}</td>`;
+      return `<td class="num">${formatCostForPeriod(onDemandMonthly(rec), ctx.period)}</td>`;
     case 'effective_savings_pct':
       return `<td${ctx.pctClass}>${ctx.pctText}</td>`;
     case 'usage_history':
@@ -3182,7 +3301,7 @@ function buildVariantRowMarkup(
   const badge = renderSuppressionBadge(rec);
   const recId = escapeHtml(rec.id);
   const pct = displaySavingsPct(rec);
-  const pctClass = pct !== null && pct < 0 ? ' class="effective-pct-negative"' : '';
+  const pctClass = pct !== null && pct < 0 ? ' class="num effective-pct-negative"' : ' class="num"';
   const pctText = pct === null ? '\u2014' : pct.toFixed(1) + '%';
   const nestedClass = isNested ? ' rec-variant-row' : '';
   const cellCtx = { accountName, badge, pct, pctClass, pctText, period };
@@ -3203,7 +3322,7 @@ function buildVariantRowMarkup(
       rec.region,
       accountName,
       formatTerm(rec.term),
-      PAYMENT_DISPLAY_LABELS[rec.payment ?? ''] ?? '',
+      ownValue(PAYMENT_DISPLAY_LABELS, rec.payment ?? '') ?? '',
     ].filter(part => part).join(' '),
   );
   const checkboxCell = showCheckboxes
@@ -3230,7 +3349,7 @@ function buildListMarkup(
     const active = filters[column] ? ' active' : '';
     const lbl = getColumnLabel(column, period);
     const label = filters[column] ? `Filter ${lbl} \u2014 currently active` : `Filter ${lbl}`;
-    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">\u26db</button>`;
+    return `<button type="button" class="column-filter-btn${active}" data-column="${column}" aria-haspopup="dialog" aria-expanded="false" aria-label="${label}" title="${label}">${iconSvg('filter')}</button>`;
   };
   const colHeader = (col: ColumnDef): string => {
     const lbl = getColumnLabel(col.key, period);
@@ -3239,7 +3358,16 @@ function buildListMarkup(
     if (col.sortable === false) {
       return `<th>${lbl}</th>`;
     }
-    return `<th class="sortable" data-sort="${col.key}" tabindex="0" role="button" aria-label="Sort by ${lbl}"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}${filterBtn(col.key)}</th>`;
+    // Issue #755: the <th> stays a plain column header (exposing aria-sort)
+    // and holds two sibling buttons, sort and filter. A focusable
+    // role=button <th> wrapping the filter button made Enter on the filter
+    // bubble into the sort handler, and nested the two controls.
+    // Money and count columns right-align so digits line up (issue #739).
+    const numClass = col.kind === 'numeric' ? ' num' : '';
+    const ariaSort = sort.column === col.key
+      ? ` aria-sort="${sort.direction === 'asc' ? 'ascending' : 'descending'}"`
+      : '';
+    return `<th class="sortable${numClass}" data-sort="${col.key}"${ariaSort}><button type="button" class="sort-btn"><span>${lbl}</span>${sortIndicator(col.key, sort.column, sort.direction)}</button>${filterBtn(col.key)}</th>`;
   };
 
   // issues #225 + #226: group by cell, sort groups, then render.
@@ -3296,7 +3424,7 @@ function buildListMarkup(
         ? (accountNamesCache.get(spRep.cloud_account_id) || spRep.cloud_account_id)
         : '\u2014';
       const isSpExpanded = expandedSpGroups.has(sgk);
-      const spChevron = isSpExpanded ? '\u25bc' : '\u25b6';
+      const spChevron = iconSvg(isSpExpanded ? 'chevron-down' : 'chevron-right');
       const spSlugs = childCellKeys.map((ck) => groups.get(ck)![0]!.service);
       const spLabel = savingsPlansBucketLabel(spSlugs);
       const planTypeCount = childCellKeys.length;
@@ -3355,7 +3483,7 @@ function buildListMarkup(
         const childTermDisplay = selectedChildVariant
           ? formatTerm(selectedChildVariant.term)
           : formatTermRange(childSummary.termMin, childSummary.termMax);
-        const cellChevron = isCellExpanded ? '\u25bc' : '\u25b6';
+        const cellChevron = iconSvg(isCellExpanded ? 'chevron-down' : 'chevron-right');
         const childIdentityParts = [
           `${escapeHtml(childRep.resource_type)}${childRep.engine ? ` (${escapeHtml(childRep.engine)})` : ''}`,
         ];
@@ -3425,7 +3553,7 @@ function buildListMarkup(
       ? formatTerm(selectedVariant.term)
       : formatTermRange(summary.termMin, summary.termMax);
 
-    const chevron = isExpanded ? '\u25bc' : '\u25b6';
+    const chevron = iconSvg(isExpanded ? 'chevron-down' : 'chevron-right');
     const identityParts = [
       `${escapeHtml(rep.resource_type)}${rep.engine ? ` (${escapeHtml(rep.engine)})` : ''}`,
     ];
@@ -3625,9 +3753,13 @@ function loadBulkPurchaseState(): BulkPurchaseToolbarState {
     // legacy `term` or `payment` from older localStorage values at runtime.
     // Payment is seeded from GlobalConfig only (issue #282 drops the toolbar
     // dropdown; the field is internal-only, not persisted).
+    // Integers only, like every other numeric parse here: a hand-edited
+    // 33.33 would otherwise reach Math.floor scaling and the audited
+    // capacity_percent as a value no UI control can produce (#136).
+    const capacity = Number(parsed.capacity);
     return {
       payment: cachedGlobalDefaultPayment as BulkPurchasePayment,
-      capacity: Math.max(1, Math.min(100, Number(parsed.capacity) || 100)),
+      capacity: Number.isInteger(capacity) && capacity > 0 ? Math.min(100, capacity) : 100,
     };
   } catch {
     return { ...defaultBulkPurchaseState };
@@ -3842,54 +3974,33 @@ function mountBottomActionBox(): HTMLElement | null {
   capacityLabel.appendChild(capacityInput);
   box.appendChild(capacityLabel);
 
-  // Purchase one-off (preserved ID). Issue #365: hide for sessions
-  // that lack `execute:purchases`. After issue #923, execute:purchases
-  // requires Purchaser-group membership; Administrators-group alone is
-  // no longer sufficient. The element stays in the DOM so the click
-  // handler stays wired and the existing `updateBottomActionBox`
-  // updates still flow through; `.hidden` toggles via the HTML hidden
-  // attribute which renders as `display: none`.
+  // Purchase one-off (preserved ID). Issue #365: hidden for sessions
+  // that lack `execute:purchases` (issue #923: Purchaser-group membership,
+  // not Administrators alone). The element stays in the DOM so the click
+  // handler stays wired; syncBottomActionBoxPermissions toggles `.hidden`
+  // on every render. Starts hidden so the box fails closed until then.
   const purchaseBtn = document.createElement('button');
   purchaseBtn.type = 'button';
   purchaseBtn.className = 'btn btn-primary';
   purchaseBtn.id = 'bulk-purchase-btn';
   purchaseBtn.textContent = 'Purchase';
   purchaseBtn.title = 'Buy these reservations now (one-off, processed immediately)';
-  purchaseBtn.hidden = !canAccess('execute', 'purchases');
+  purchaseBtn.hidden = true;
   box.appendChild(purchaseBtn);
 
-  // Issue #923: show an informational banner when the session can view
-  // recommendations but cannot execute purchases. The predicate MUST
-  // mirror the Purchase CTA's gate (canAccess('execute', 'purchases'))
-  // so a custom-role user who holds execute:purchases via a non-seeded
-  // group sees the live button without a contradictory "you can view
-  // but not execute" notice. Pure read-only users won't reach this
-  // page's action area anyway.
-  if (!canAccess('execute', 'purchases')) {
-    const noPurchaseBanner = document.createElement('div');
-    noPurchaseBanner.className = 'info-banner';
-    noPurchaseBanner.setAttribute('role', 'note');
-    // Scope the message to the execute-purchases capability only (row 550):
-    // Standard users CAN create plans, so the banner must not imply otherwise.
-    // The nav tab is "Admin" (renamed from Settings in #340), and Admin → Users
-    // is admin-only, so a non-admin can't self-serve there — only an admin can
-    // add them to the Purchaser group.
-    noPurchaseBanner.textContent =
-      'You can view and plan, but not execute purchases directly. ' +
-      'Ask an admin to add you to the Purchaser group (Admin → Users) to execute purchases.';
-    box.appendChild(noPurchaseBanner);
-  }
+  // The no-Purchaser banner (issue #923) is inserted after purchaseBtn by
+  // syncBottomActionBoxPermissions, not here.
 
   // Create Purchase Plan (relocated from old top bar). Issue #365:
-  // hide for sessions that lack `create:plans` (readonly loses it;
-  // admin + user keep it).
+  // hidden for sessions that lack `create:plans` (readonly loses it;
+  // admin + user keep it). Synced per render like the Purchase button.
   const planBtn = document.createElement('button');
   planBtn.type = 'button';
   planBtn.className = 'btn btn-secondary';
   planBtn.id = 'create-plan-btn';
   planBtn.textContent = 'Create Plan';
   planBtn.title = 'Schedule a recurring plan that will purchase these recommendations on a defined cadence';
-  planBtn.hidden = !canAccess('create', 'plans');
+  planBtn.hidden = true;
   box.appendChild(planBtn);
 
   // a11y hint for the disabled-button state (#273 CR follow-up).
@@ -3973,12 +4084,58 @@ export function isHomogeneousSelection(recs: readonly LocalRecommendation[]): bo
   );
 }
 
+const NO_PURCHASER_BANNER_ID = 'recommendations-no-purchaser-banner';
+
+// syncBottomActionBoxPermissions applies the permission-gated parts of the
+// action box: Purchase and Create Plan visibility and the no-Purchaser
+// banner. mountBottomActionBox builds the box once and returns early on
+// every later render, so gating evaluated there was a snapshot taken on the
+// first render; a permission change made in-session (e.g. an admin adding
+// themselves to the Purchaser group) never showed up until a reload (#20).
+// Re-evaluating here, on every render, keeps it current.
+function syncBottomActionBoxPermissions(): void {
+  const purchaseBtn = document.getElementById('bulk-purchase-btn');
+  const planBtn = document.getElementById('create-plan-btn');
+  const canPurchase = canAccess('execute', 'purchases');
+  if (purchaseBtn) purchaseBtn.hidden = !canPurchase;
+  if (planBtn) planBtn.hidden = !canAccess('create', 'plans');
+
+  // Issue #923: an informational banner for sessions that can view
+  // recommendations but cannot execute purchases. The predicate MUST mirror
+  // the Purchase CTA's gate (canAccess('execute', 'purchases')) so a
+  // custom-role user who holds execute:purchases via a non-seeded group
+  // sees the live button without a contradictory "you can view but not
+  // execute" notice.
+  const existing = document.getElementById(NO_PURCHASER_BANNER_ID);
+  if (canPurchase) {
+    existing?.remove();
+    return;
+  }
+  if (existing || !purchaseBtn) return;
+  const banner = document.createElement('div');
+  banner.id = NO_PURCHASER_BANNER_ID;
+  banner.className = 'info-banner';
+  banner.setAttribute('role', 'note');
+  // Scope the message to the execute-purchases capability only (row 550):
+  // Standard users CAN create plans, so the banner must not imply otherwise.
+  // The nav tab is "Admin" (renamed from Settings in #340), and Admin → Users
+  // is admin-only, so a non-admin can't self-serve there — only an admin can
+  // add them to the Purchaser group.
+  banner.textContent =
+    'You can view and plan, but not execute purchases directly. ' +
+    'Ask an admin to add you to the Purchaser group (Admin → Users) to execute purchases.';
+  purchaseBtn.after(banner);
+}
+
 // updateBottomActionBox refreshes labels and disabled state on every
 // renderRecommendationsList call without rebuilding the input/select DOM,
 // preserving any in-progress typing in the Capacity input.
 function updateBottomActionBox(visibleCount: number, loadedCount: number): void {
   const box = document.getElementById('recommendations-action-box');
   if (!box) return;
+
+  // Before the disabled-hint logic below, which reads planBtn.hidden.
+  syncBottomActionBoxPermissions();
 
   const selected = state.getSelectedRecommendationIDs();
   // Count only selections that are currently visible.
@@ -4113,7 +4270,7 @@ async function openCreatePlanFromBottomBox(snapshot: LocalRecommendation[]): Pro
 // Extracted from handleBulkPurchaseClick's scaling loop (issue #1903) so
 // pricedCellVariant can apply the same scaling to a sibling variant swapped
 // in on a Term/Payment change.
-function scaleRecForCapacity(r: LocalRecommendation, capacityPercent: number): LocalRecommendation | null {
+export function scaleRecForCapacity(r: LocalRecommendation, capacityPercent: number): LocalRecommendation | null {
   const newCount = Math.floor((r.count * capacityPercent) / 100);
   if (newCount <= 0) return null;
   const ratio = r.count > 0 ? newCount / r.count : 1;
@@ -4126,6 +4283,9 @@ function scaleRecForCapacity(r: LocalRecommendation, capacityPercent: number): L
     upfront_cost: r.upfront_cost * ratio,
     monthly_cost: r.monthly_cost != null ? r.monthly_cost * ratio : null,
     savings: r.savings * ratio,
+    // on_demand_cost is a per-rec total like savings, so it scales too;
+    // leaving it unscaled halved the Eff. % at 50% capacity (#136).
+    on_demand_cost: r.on_demand_cost != null ? r.on_demand_cost * ratio : r.on_demand_cost,
   };
 }
 
@@ -4256,6 +4416,13 @@ export interface FanOutBucket {
   capacityPercent: number;
   recs: LocalRecommendation[]; // scaled by capacityPercent
   paymentSource: 'override' | 'toolbar';
+  /**
+   * Identity within one modal open (issue #757), unique across opens.
+   * getFanOutBuckets() hands out copies, so the submit path needs this to
+   * map a POST result back to its bucket and section after a partial
+   * failure, and to tell whether that modal is still the open one.
+   */
+  id?: string;
 }
 
 // Fan-out modal state. app.ts's Send-for-Approval click reads these
@@ -4283,6 +4450,18 @@ export function getFanOutBuckets(): FanOutBucket[] | null {
 
 export function clearFanOutBuckets(): void {
   currentFanOutBuckets = null;
+}
+
+/**
+ * Narrows the fan-out modal to the buckets with the given ids (issue #757):
+ * after a partial failure only the failed buckets stay submittable, so a
+ * retry cannot resubmit the ones that already went through. Re-renders the
+ * modal header so the email count and totals describe the retry.
+ */
+export function retainFanOutBuckets(ids: ReadonlySet<string>): void {
+  if (!currentFanOutBuckets) return;
+  currentFanOutBuckets = currentFanOutBuckets.filter((b) => b.id !== undefined && ids.has(b.id));
+  refreshFanOutSummary();
 }
 
 // currentExecuteMode holds the mode selected by the execute-mode toggle in
@@ -4422,7 +4601,7 @@ async function openFanOutModal(
 
   const buckets: FanOutBucket[] = bucketEntries
     .filter(([_key, recs]) => recs.length > 0)
-    .map(([_key, recs]) => {
+    .map(([_key, recs], index) => {
       const r = recs[0]!;
       const seed = resolveBucketPaymentSeed(recs, toolbar, overridesByAccount);
       // SP buckets carry the canonical bucket key as `service` so the
@@ -4467,6 +4646,9 @@ async function openFanOutModal(
         paymentSource: resolvedPaymentSource,
         capacityPercent: toolbar.capacity,
         recs: resolvedRecs,
+        // Unique per open, so results that settle after this modal closed
+        // cannot match the sections of a newer one.
+        id: `bucket-${openToken}-${index}`,
       };
     });
   currentFanOutBuckets = buckets;
@@ -4540,6 +4722,12 @@ function renderFanOutSummary(summary: HTMLElement, buckets: FanOutBucket[]): voi
   const fanOutPeriod = state.getCostPeriod();
   summary.appendChild(totalLine('Total commitments', String(totals.totalCount)));
   summary.appendChild(totalLine('Total upfront', formatCurrency(totals.totalUpfront)));
+  // Issue #711: upfront alone reads $0 for no-upfront buckets that bill
+  // monthly for one or three years, so state the recurring charge and the
+  // total over the term next to it.
+  const termText = formatCommitmentTotals(submittable.flatMap(bucketCommitmentLines), CURRENCY_DEFAULT_DIGITS);
+  summary.appendChild(totalLine('Monthly recurring', termText.monthly));
+  summary.appendChild(totalLine('Total over term', termText.termTotal));
   summary.appendChild(totalLine(`Total savings ${periodSuffix(fanOutPeriod)}`, formatCostForPeriod(totals.totalSavings, fanOutPeriod), 'savings'));
 
   const executeBtn = document.getElementById('execute-purchase-btn') as HTMLButtonElement | null;
@@ -4563,6 +4751,10 @@ function refreshFanOutSummary(): void {
   renderFanOutSummary(summary, currentFanOutBuckets);
 }
 
+function bucketCommitmentLines(b: FanOutBucket): CommitmentLine[] {
+  return b.recs.map((r) => commitmentLine(r, { payment: b.payment }));
+}
+
 function computeFanOutTotals(buckets: FanOutBucket[]): { totalCount: number; totalUpfront: number; totalSavings: number } {
   let totalCount = 0;
   let totalUpfront = 0;
@@ -4580,6 +4772,7 @@ function computeFanOutTotals(buckets: FanOutBucket[]): { totalCount: number; tot
 function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   const section = document.createElement('section');
   section.className = 'fanout-bucket form-section';
+  if (b.id) section.dataset['bucketId'] = b.id;
 
   // Service label: SP bucket → "Savings Plans (Compute + SageMaker)"
   // listing only the plan types actually present in this bucket;
@@ -4703,7 +4896,9 @@ function renderFanOutBucketSection(b: FanOutBucket): HTMLElement {
   const bPeriod = state.getCostPeriod();
   const totals = document.createElement('p');
   totals.className = 'fanout-bucket-totals';
-  totals.textContent = `${bucketTotal.count} commitments · ${formatCurrency(bucketTotal.upfront)} upfront · ${formatCostForPeriod(bucketTotal.savings, bPeriod)} savings ${periodSuffix(bPeriod)}`;
+  const bucketMonthly = commitmentTotals(bucketCommitmentLines(b)).monthly;
+  const monthlyPart = bucketMonthly === null ? 'monthly cost not reported' : `${formatCurrency(bucketMonthly)}/mo recurring`;
+  totals.textContent = `${bucketTotal.count} commitments · ${formatCurrency(bucketTotal.upfront)} upfront · ${monthlyPart} · ${formatCostForPeriod(bucketTotal.savings, bPeriod)} savings ${periodSuffix(bPeriod)}`;
   section.appendChild(totals);
 
   // Issue #249: for mixed-SP buckets with 2+ distinct plan types, render
@@ -4802,10 +4997,31 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // total_upfront_cost, avg_payback_months); the savings figure itself is
   // recomputed from `recommendations` inside renderRecommendationsSummary
   // via the same pageLevelRange the banner uses.
-  renderRecommendationsSummary(lastRecommendationsSummary, recommendations);
+  renderRecommendationsSummary(lastRecommendationsSummary, recommendations, loadedRecs?.length ?? 0);
 
   // Mount once; update is per-render below.
   mountBottomActionBox();
+
+  // Issue #756: nothing loaded and no column filter narrowing the fetch is a
+  // first run (or an empty scope), not a filter miss. Show an onboarding card
+  // instead of an empty 15-column table, $0 summary cards and a Purchase bar
+  // that can never enable. The summary and action box stay rendered (disabled)
+  // but hidden, so state is coherent once rows arrive.
+  const firstRun = (loadedRecs?.length ?? 0) === 0
+    && Object.keys(state.getRecommendationsColumnFilters()).length === 0;
+  setOpportunitiesChromeHidden(firstRun);
+  if (firstRun) {
+    lastVisibleGroupKeys = [];
+    updateBottomActionBox(0, 0);
+    teardownSkeleton(container);
+    container.replaceChildren(buildFirstRunEmptyState({
+      hasAccounts: lastHasAccounts,
+      scopeFiltered: isScopeFiltered(state.getCurrentProvider(), state.getCurrentAccountIDs()),
+      onRefresh: () => startRecommendationsRefresh(loadRecommendations),
+      loadFreshness: getRecommendationsFreshness,
+    }));
+    return;
+  }
 
   const emptyResult = !recommendations || recommendations.length === 0;
   if (emptyResult) {
@@ -4829,7 +5045,11 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   // run before renderFilterStatusBar (which reads it for the Expand-All button).
   // safe: buildListMarkup escapes all API-derived values via escapeHtml.
   // nosec: innerHTML is intentional here; see security note above.
+  // Issue #191: the rebuild below drops the focused control (row checkbox,
+  // chevron, sort header); put keyboard focus back on its replacement.
+  const focusSnapshot = captureFocus(container);
   container.innerHTML = buildListMarkup(recommendations ?? [], selectedIDs, visibleCols, showCheckboxes); // nosec
+  restoreFocus(container, focusSnapshot);
 
   // Issue #700: when the filter yields zero rows, preserve the <thead> by
   // injecting a hint row into the empty <tbody> rather than replacing the
@@ -4845,6 +5065,15 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
       td.setAttribute('colspan', String(colspan));
       td.className = 'empty';
       td.textContent = 'No rows match these filters.';
+      // Issue #756: give the hint a next step right where the user looks.
+      if (Object.keys(state.getRecommendationsColumnFilters()).length > 0) {
+        const clearBtn = document.createElement('button');
+        clearBtn.type = 'button';
+        clearBtn.className = 'btn-small empty-clear-filters';
+        clearBtn.textContent = 'Clear filters';
+        clearBtn.addEventListener('click', clearAllColumnFilters);
+        td.append(' ', clearBtn);
+      }
       tr.appendChild(td);
       tbody.appendChild(tr);
     }
@@ -4882,10 +5111,17 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
   ensureRecommendationsTabObserver();
 
   // Sortable column headers. Toggle ascending/descending on repeat click.
+  // The click listener sits on the <th> so the whole header stays a mouse
+  // target; keyboard users reach it through the inner .sort-btn, whose
+  // native Enter/Space activation bubbles here as a click. The filter
+  // button stops propagation, so it never sorts (issue #755).
   container.querySelectorAll<HTMLTableCellElement>('th.sortable').forEach((th) => {
     const onActivate = (): void => {
       const col = th.dataset['sort'];
       if (!col) return;
+      // The re-render below replaces the header, so remember whether the
+      // sort button had focus and move focus to its replacement.
+      const hadFocus = th.contains(document.activeElement);
       const prev = state.getRecommendationsSort();
       // Issue #480: first click on a different column uses that column's
       // per-config default direction (asc for text/most numerics; desc for
@@ -4902,14 +5138,13 @@ function renderRecommendationsList(loadedRecs: LocalRecommendation[]): void {
       // at Savings desc".
       writeSortToUrl({ column: col as state.RecommendationsSortColumn, direction });
       renderRecommendationsList(loadedRecs);
+      if (hadFocus) {
+        document.querySelector<HTMLButtonElement>(
+          `#recommendations-list th[data-sort="${CSS.escape(col)}"] .sort-btn`,
+        )?.focus();
+      }
     };
     th.addEventListener('click', onActivate);
-    th.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        onActivate();
-      }
-    });
   });
 
   // Issue #869: selection handlers are only meaningful when the session can
@@ -5102,22 +5337,36 @@ function resolvePerRecPaymentSeed(
 // follow both a checkbox toggle (updatePurchaseModalTotals, pre-existing
 // gap) and a Term/Payment re-price, not only the radio's own change event.
 // No-ops when the callout isn't in the DOM (no direct-execute permission).
+function checkedPurchaseLines(): CommitmentLine[] {
+  const lines: CommitmentLine[] = [];
+  for (const idx of checkedPurchaseIndices) {
+    const r = currentPurchaseRecommendations[idx];
+    if (r) lines.push(commitmentLine(r));
+  }
+  return lines;
+}
+
 function renderDirectExecuteWarning(): void {
   const directWarning = document.querySelector<HTMLElement>('#purchase-details .direct-execute-warning');
   if (!directWarning) return;
   directWarning.hidden = currentExecuteMode !== 'direct';
   if (currentExecuteMode !== 'direct') return;
-  let totalUpfront = 0;
-  for (const idx of checkedPurchaseIndices) {
-    const r = currentPurchaseRecommendations[idx];
-    if (r) totalUpfront += r.upfront_cost;
+  const lines = checkedPurchaseLines();
+  const totals = commitmentTotals(lines);
+  const shown = formatCommitmentTotals(lines);
+  // Issue #711: a no-upfront purchase would otherwise read "charge $0.00".
+  let recurring = '';
+  if (totals.monthly === null) {
+    recurring = billsMonthly(lines) ? ', plus monthly fees the provider did not report' : '';
+  } else if (totals.monthly > 0) {
+    recurring = `, then ${shown.monthly} a month for the term (${shown.termTotal} in total)`;
   }
   while (directWarning.firstChild) directWarning.removeChild(directWarning.firstChild);
   const icon = document.createElement('strong');
   icon.textContent = 'Warning: ';
   directWarning.appendChild(icon);
   const text = document.createTextNode(
-    `This will charge ${formatCurrency(totalUpfront, '$', 2)} upfront immediately. ` +
+    `This will charge ${shown.upfront} upfront immediately${recurring}. ` +
     'This bypasses the approval step.',
   );
   directWarning.appendChild(text);
@@ -5335,6 +5584,11 @@ export async function openPurchaseModal(recommendations: LocalRecommendation[], 
   tfoot.appendChild(totalsRow);
 
   commitsSection.appendChild(table);
+  // Upfront / Monthly / Total over term for the checked rows (issue #711);
+  // refilled by updatePurchaseModalTotals.
+  const band = document.createElement('div');
+  band.id = 'purchase-modal-commitment-band';
+  commitsSection.appendChild(band);
   container.appendChild(commitsSection);
 
   // Wire the select-all checkbox (must happen after tbody rows are in DOM
@@ -5392,9 +5646,7 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
   let totalUpfront = 0;
   let totalMonthlyCost = 0;
   let totalEffSavings = 0;
-  // Weighted-average effective %: sum effective savings / sum on-demand monthly.
-  let weightedEffSavingsNum = 0; // numerator: sum of effectiveMonthlySavings per checked rec
-  let weightedEffSavingsDen = 0; // denominator: sum of on-demand monthly per checked rec
+  const checkedRecs: LocalRecommendation[] = [];
   let hasMonthlyCostData = false;
 
   for (const idx of checkedPurchaseIndices) {
@@ -5407,26 +5659,10 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
       totalMonthlyCost += monthlyCost;
       hasMonthlyCostData = true;
     }
-    // Weighted-average effective % denominator should match effectiveSavingsPct:
-    // prefer provider-supplied on_demand_cost when present, otherwise fall back
-    // to the reconstructed monthly_cost + savings + amortized baseline.
-    // Include rows that only have on_demand_cost so they are not skipped.
-    if (rec.term) {
-      const amortized = rec.upfront_cost / (rec.term * 12);
-      const effSav = effectiveMonthlySavings(rec);
-      const hasOnDemand = rec.on_demand_cost != null && rec.on_demand_cost > 0;
-      const onDemand = hasOnDemand
-        ? rec.on_demand_cost
-        : monthlyCost != null
-          ? monthlyCost + rec.savings + amortized
-          : null;
-      if (onDemand != null && onDemand > 0) {
-        weightedEffSavingsNum += effSav;
-        weightedEffSavingsDen += onDemand;
-      }
-    }
+    checkedRecs.push(rec);
     totalEffSavings += effectiveMonthlySavings(rec);
   }
+  const avgEffPct = weightedDisplaySavingsPct(checkedRecs);
 
   // Rebuild the totals row DOM. Clear first.
   if (totalsRow) {
@@ -5489,10 +5725,9 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
     const tdEffPct = document.createElement('td');
     tdEffPct.id = 'purchase-modal-total-eff-pct';
     const effPctStrong = document.createElement('strong');
-    if (weightedEffSavingsDen > 0) {
-      const avgPct = (weightedEffSavingsNum / weightedEffSavingsDen) * 100;
-      effPctStrong.textContent = avgPct.toFixed(1) + '%';
-      if (avgPct < 0) tdEffPct.className = 'effective-pct-negative';
+    if (avgEffPct !== null) {
+      effPctStrong.textContent = avgEffPct.toFixed(1) + '%';
+      if (avgEffPct < 0) tdEffPct.className = 'effective-pct-negative';
     } else {
       effPctStrong.textContent = '—';
     }
@@ -5530,6 +5765,9 @@ function updatePurchaseModalTotals(selectAllCb: HTMLInputElement): void {
     selectAllCb.checked = false;
     selectAllCb.indeterminate = true;
   }
+
+  const band = document.getElementById('purchase-modal-commitment-band');
+  if (band) band.replaceChildren(buildCommitmentBand(checkedPurchaseLines(), { upfrontLabel: 'Upfront' }));
 
   // Issue #1903: the direct-execute warning's dollar total is derived from
   // checkedPurchaseIndices too, so it must refresh on every checkbox toggle,

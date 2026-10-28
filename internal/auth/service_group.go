@@ -27,7 +27,18 @@ func (s *Service) CreateGroup(ctx context.Context, group *Group, createdBy strin
 }
 
 // UpdateGroup updates a permission group.
+//
+// Updating a system-managed group is refused here as well as in
+// UpdateGroupAPI, so the guard does not depend on every caller remembering
+// to check first (issue #919). The check reads the STORED row rather than
+// trusting group.SystemManaged: the caller's struct is built by the caller
+// and may not carry the flag. The stored flag cannot change at runtime (no
+// write path sets system_managed; only migrations do), so the read-then-write
+// has no window in which a concurrent request could flip it.
 func (s *Service) UpdateGroup(ctx context.Context, group *Group) error {
+	if err := s.refuseSystemManagedGroup(ctx, group.ID); err != nil {
+		return err
+	}
 	return s.store.UpdateGroup(ctx, group)
 }
 
@@ -40,6 +51,16 @@ func (s *Service) UpdateGroup(ctx context.Context, group *Group) error {
 // so the purchase path would be dead tenant-wide until someone re-ran the
 // migration by hand.
 func (s *Service) DeleteGroup(ctx context.Context, groupID string) error {
+	if err := s.refuseSystemManagedGroup(ctx, groupID); err != nil {
+		return err
+	}
+	return s.store.DeleteGroup(ctx, groupID)
+}
+
+// refuseSystemManagedGroup loads the stored group and returns
+// ErrSystemManagedGroup if it is seeded by migrations, or a not-found error
+// if it does not exist. Shared by the UpdateGroup and DeleteGroup write paths.
+func (s *Service) refuseSystemManagedGroup(ctx context.Context, groupID string) error {
 	group, err := s.store.GetGroup(ctx, groupID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("failed to load group %s: %w", groupID, err)
@@ -50,7 +71,7 @@ func (s *Service) DeleteGroup(ctx context.Context, groupID string) error {
 	if group.SystemManaged {
 		return fmt.Errorf("%w: %q is seeded and maintained by migrations", ErrSystemManagedGroup, group.Name)
 	}
-	return s.store.DeleteGroup(ctx, groupID)
+	return nil
 }
 
 // GetGroup returns a group by ID.
@@ -73,15 +94,9 @@ func (s *Service) ListGroups(ctx context.Context) ([]Group, error) {
 // permission set. A nil group (the store returns nil, nil for a deleted/
 // missing group) is skipped without error.
 func (s *Service) GetUserPermissions(ctx context.Context, userID string) ([]Permission, error) {
-	user, err := s.store.GetUserByID(ctx, userID)
+	user, err := s.loadUser(ctx, userID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("user not found")
-		}
 		return nil, err
-	}
-	if user == nil {
-		return nil, fmt.Errorf("user not found")
 	}
 
 	// Permissions come exclusively from group memberships.
@@ -171,15 +186,9 @@ func (s *Service) accountsForGroups(ctx context.Context, groupIDs []string) ([]s
 // user's group memberships; a user with no groups gets an empty context and
 // is denied everything (fail closed).
 func (s *Service) BuildAuthContext(ctx context.Context, userID string) (*AuthContext, error) {
-	user, err := s.store.GetUserByID(ctx, userID)
+	user, err := s.loadUser(ctx, userID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("user not found")
-		}
 		return nil, err
-	}
-	if user == nil {
-		return nil, fmt.Errorf("user not found")
 	}
 
 	authCtx := &AuthContext{
@@ -416,7 +425,17 @@ func matchConstraints(permConstraints, reqConstraints *PermissionConstraints) bo
 		matchPurchaseAmountConstraint(permConstraints.MaxPurchaseAmount, reqConstraints.MaxPurchaseAmount)
 }
 
-// matchStringListConstraints checks if two string lists have any overlap.
+// matchStringListConstraints is the matcher for the AccountIDs, Providers and
+// Services dimensions: EVERY requested value must be permitted, not merely
+// one of them (issue #138).
+//
+// It used to be any-match (containsAny), which was safe only because every
+// caller happens to pass a single-value request list; nothing enforced that.
+// The first caller to submit, say, AccountIDs [A, B] would have been allowed
+// by a permission scoped to A alone -- the same bypass the Regions dimension
+// had to close with matchAllRegionsConstraint. All-match is identical to
+// any-match for a single-value request, so no current caller changes
+// behavior.
 //
 // Semantics (03-L6): if either list is empty the constraint is treated as
 // satisfied ("no constraint specified = no restriction"). Concretely:
@@ -424,14 +443,15 @@ func matchConstraints(permConstraints, reqConstraints *PermissionConstraints) bo
 //   - empty reqList: the request does not specify this dimension
 //
 // Both cases return true (match). Only when both lists are non-empty is
-// containsAny used to require at least one common element.
+// containsAll used, and it requires every requested value to be in permList.
+// Comparison is exact (case-sensitive); listCovers relies on that.
 //
 // Callers that need "a constrained permission must only match an explicit
-// request value" should verify reqList is non-empty before calling, or add
-// a separate dimension-specific check.
+// request value" should verify reqList is non-empty before calling, or set
+// StrictScope so matchConstraints uses listCovers instead.
 func matchStringListConstraints(permList, reqList []string) bool {
 	if len(permList) > 0 && len(reqList) > 0 {
-		return containsAny(permList, reqList)
+		return containsAll(permList, reqList)
 	}
 	return true
 }
@@ -442,15 +462,16 @@ func matchStringListConstraints(permList, reqList []string) bool {
 // Regions is the one dimension where a single request legitimately spans
 // several values: an Azure RI exchange takes a list of targets, and
 // handler_ri_exchange.go's targetLocations feeds all of their locations in
-// at once. Under the generic containsAny rule that made the region
-// constraint bypassable -- a caller permitted only in eastus could attach a
-// westus target, containsAny would find eastus in the permitted set, return
-// true, and the exchange would execute for BOTH regions. "Regions limits to
-// specific regions" (types.go) cannot mean "limits to requests that mention
-// at least one permitted region".
+// at once. Under the any-match rule the dimensions once shared, that made the
+// region constraint bypassable -- a caller permitted only in eastus could
+// attach a westus target, any-match would find eastus in the permitted set,
+// return true, and the exchange would execute for BOTH regions. "Regions
+// limits to specific regions" (types.go) cannot mean "limits to requests that
+// mention at least one permitted region".
 //
-// Every other dimension keeps containsAny: a request names one provider,
-// one service, one account, so for them any-match and all-match coincide.
+// The other list dimensions are all-match too (matchStringListConstraints,
+// issue #138); Regions keeps its own matcher only for the case-insensitive,
+// trimmed comparison below.
 //
 // Comparison is case-insensitive so a permission stored as "EastUS" still
 // matches the canonical lower-case form callers are normalized to; the

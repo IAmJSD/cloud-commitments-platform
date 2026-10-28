@@ -273,6 +273,12 @@ func (r *Router) registerRoutes() {
 		// object stays behind view:accounts on GET /api/accounts below. Must
 		// precede the generic "/api/accounts/" GET prefix route.
 		{ExactPath: "/api/accounts/list", Method: "GET", Handler: r.listAccountsMinimalHandler, Auth: AuthUser},
+		// Override export/import (issue #9). Exact paths, so they must precede
+		// the generic "/api/accounts/" prefix routes. Gated in-handler on
+		// view:accounts (export) and update:accounts (import), scoped to the
+		// caller's allowed accounts.
+		{ExactPath: "/api/accounts/service-overrides/export", Method: "GET", Handler: r.exportAccountServiceOverridesHandler, Auth: AuthUser},
+		{ExactPath: "/api/accounts/service-overrides/import", Method: "POST", Handler: r.importAccountServiceOverridesHandler, Auth: AuthAdmin},
 		{ExactPath: "/api/accounts", Method: "GET", Handler: r.listAccountsHandler, Auth: AuthUser},
 		{ExactPath: "/api/accounts", Method: "POST", Handler: r.createAccountHandler, Auth: AuthAdmin},
 		{PathPrefix: "/api/accounts/", PathSuffix: "/credentials", Method: "POST", Handler: r.saveAccountCredentialsHandler, Auth: AuthAdmin},
@@ -321,6 +327,9 @@ func (r *Router) registerRoutes() {
 		{ExactPath: "/api/ri-exchange/history", Method: "GET", Handler: r.getRIExchangeHistoryHandler, Auth: AuthUser},
 		{PathPrefix: "/api/ri-exchange/approve/", Method: "POST", Handler: r.approveRIExchangeHandler, Auth: AuthPublic},
 		{PathPrefix: "/api/ri-exchange/reject/", Method: "POST", Handler: r.rejectRIExchangeHandler, Auth: AuthPublic},
+		// Operator resolve of a stale processing exchange (#692). AuthUser, so the
+		// outer middleware enforces the session and CSRF.
+		{PathPrefix: "/api/ri-exchange/resolve/", Method: "POST", Handler: r.resolveRIExchangeHandler, Auth: AuthUser},
 
 		// Commitment Laddering endpoints (flag-gated default-off, issue #1336).
 		// GET returns all per-account ladder configs; PUT inserts or updates one.
@@ -908,6 +917,10 @@ func (r *Router) rejectRIExchangeHandler(ctx context.Context, req *events.Lambda
 	return r.h.rejectRIExchange(ctx, params["id"], req.QueryStringParameters["token"])
 }
 
+func (r *Router) resolveRIExchangeHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
+	return r.h.resolveRIExchange(ctx, req, params["id"])
+}
+
 // Cloud Account route wrappers.
 
 func (r *Router) listAccountsHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
@@ -932,6 +945,16 @@ func (r *Router) discoverOrgAccountsHandler(ctx context.Context, req *events.Lam
 
 func (r *Router) getAccountHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getAccount(ctx, req, params["id"])
+}
+
+// exportAccountServiceOverridesHandler handles GET /api/accounts/service-overrides/export.
+func (r *Router) exportAccountServiceOverridesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	return r.h.exportAccountServiceOverrides(ctx, req)
+}
+
+// importAccountServiceOverridesHandler handles POST /api/accounts/service-overrides/import.
+func (r *Router) importAccountServiceOverridesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	return r.h.importAccountServiceOverrides(ctx, req)
 }
 
 // updateAccountOrServiceOverrideHandler handles PUT /api/accounts/:id and

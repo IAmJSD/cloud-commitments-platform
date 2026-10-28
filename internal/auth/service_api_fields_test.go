@@ -88,6 +88,9 @@ func TestAPIAdapters_CreateUser_AllFieldsReachStore(t *testing.T) {
 	svc := createTestService(store, new(MockEmailSender))
 	var got *User
 	store.On("GetUserByEmail", ctx, req.Email).Return(nil, nil).Once()
+	// The issue #78 combination check reads each group; unknown groups are
+	// skipped, so returning none keeps this test about field plumbing.
+	store.On("GetGroup", ctx, mock.Anything).Return(nil, nil).Maybe()
 	store.On("CreateUser", ctx, mock.AnythingOfType("*auth.User")).
 		Run(func(args mock.Arguments) { got = args.Get(1).(*User) }).Return(nil).Once()
 	_, err := svc.CreateUserAPI(ctx, "", req)
@@ -185,7 +188,9 @@ func TestAPIAdapters_UpdateGroup_AllFieldsReachStore(t *testing.T) {
 		store := new(MockStore)
 		svc := createTestService(store, new(MockEmailSender))
 		var got *Group
-		store.On("GetGroup", ctx, "group-123").Return(existing(), nil).Once()
+		// Twice: UpdateGroupAPI loads the group, then Service.UpdateGroup
+		// re-reads it for its own system_managed guard (issue #919).
+		store.On("GetGroup", ctx, "group-123").Return(existing(), nil).Twice()
 		store.On("UpdateGroup", ctx, mock.AnythingOfType("*auth.Group")).
 			Run(func(args mock.Arguments) { got = args.Get(1).(*Group) }).Return(nil).Once()
 		_, err := svc.UpdateGroupAPI(ctx, AdminAPIKeyActorID, "group-123", req)

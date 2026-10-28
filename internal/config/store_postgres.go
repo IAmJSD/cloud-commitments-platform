@@ -224,11 +224,16 @@ func (s *PostgresStore) UpdateGlobalConfigAtomic(ctx context.Context, apply func
 }
 
 // propagateChangedDefaults overwrites a service-config column only when its
-// global default changed, so a round-tripped or partial PUT keeps per-service
+// global default changed (the payment default only on AWS rows), so a round-tripped or partial PUT keeps per-service
 // customisations.
 func propagateChangedDefaults(ctx context.Context, tx pgx.Tx, before, after *GlobalConfig) error {
 	termChanged := after.DefaultTerm != before.DefaultTerm
-	paymentChanged := after.DefaultPayment != before.DefaultPayment
+	// The global default payment is an AWS token. Azure and GCP rows keep their
+	// own tokens (monthly/upfront): copying "all-upfront" onto them is an
+	// upfront charge nobody chose on Azure and fails GCP validation on every
+	// later save. Write it only to AWS rows, and only when AWS accepts it.
+	paymentChanged := after.DefaultPayment != before.DefaultPayment &&
+		slices.Contains(ValidPaymentOptionsByProvider["aws"], after.DefaultPayment)
 	coverageChanged := after.DefaultCoverage != before.DefaultCoverage
 	rampChanged := after.DefaultRampSchedule != before.DefaultRampSchedule
 	if !termChanged && !paymentChanged && !coverageChanged && !rampChanged {
@@ -237,7 +242,7 @@ func propagateChangedDefaults(ctx context.Context, tx pgx.Tx, before, after *Glo
 	const query = `
 		UPDATE service_configs SET
 			term = CASE WHEN $1 THEN $2 ELSE term END,
-			payment = CASE WHEN $3 THEN $4 ELSE payment END,
+			payment = CASE WHEN $3 AND provider = 'aws' THEN $4 ELSE payment END,
 			coverage = CASE WHEN $5 THEN $6 ELSE coverage END,
 			ramp_schedule = CASE WHEN $7 THEN $8 ELSE ramp_schedule END
 	`
@@ -394,20 +399,36 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 // SERVICE CONFIGURATION
 // ==========================================
 
+// serviceConfigColumns is the column list every service_configs read scans,
+// in scanServiceConfig order.
+const serviceConfigColumns = `provider, service, enabled, term, payment, coverage, ramp_schedule,
+		       include_engines, exclude_engines, include_regions, exclude_regions,
+		       include_types, exclude_types, min_count`
+
+const getServiceConfigQuery = `SELECT ` + serviceConfigColumns + `
+		FROM service_configs
+		WHERE provider = $1 AND service = $2`
+
+// serviceConfigLockPrefix namespaces the per-service advisory lock
+// UpdateServiceConfigAtomic takes. It is a distinct text input to the same
+// hashtextextended(text, 0) bigint key space as the ladder-config and
+// plan-step provider locks; a 64-bit hash collision could only cause a
+// spurious wait, never a correctness break.
+const serviceConfigLockPrefix = "cudly:service-config:"
+
 // GetServiceConfig retrieves configuration for a specific service.
 func (s *PostgresStore) GetServiceConfig(ctx context.Context, provider, service string) (*ServiceConfig, error) {
-	query := `
-		SELECT provider, service, enabled, term, payment, coverage, ramp_schedule,
-		       include_engines, exclude_engines, include_regions, exclude_regions,
-		       include_types, exclude_types, min_count
-		FROM service_configs
-		WHERE provider = $1 AND service = $2
-	`
+	return getServiceConfigFrom(ctx, s.db, getServiceConfigQuery, provider, service)
+}
 
+// getServiceConfigFrom runs query (getServiceConfigQuery, optionally with a
+// locking clause) via q (the pool or a transaction). A missing row is reported
+// as an error wrapping ErrNotFound.
+func getServiceConfigFrom(ctx context.Context, q globalConfigExecutor, query, provider, service string) (*ServiceConfig, error) {
 	var config ServiceConfig
 	var includeEngines, excludeEngines, includeRegions, excludeRegions, includeTypes, excludeTypes []string
 
-	err := s.db.QueryRow(ctx, query, provider, service).Scan(
+	err := q.QueryRow(ctx, query, provider, service).Scan(
 		&config.Provider,
 		&config.Service,
 		&config.Enabled,
@@ -444,6 +465,59 @@ func (s *PostgresStore) GetServiceConfig(ctx context.Context, provider, service 
 
 // SaveServiceConfig saves configuration for a service.
 func (s *PostgresStore) SaveServiceConfig(ctx context.Context, config *ServiceConfig) error {
+	return saveServiceConfigWith(ctx, s.db, config)
+}
+
+// UpdateServiceConfigAtomic performs a serialized read-merge-write of one
+// service_configs row (issue #1488). In one transaction it takes a
+// transaction-scoped advisory lock on (provider, service), reads the row
+// FOR UPDATE, hands it to apply and upserts the row apply returns.
+//
+// Both locks are needed. The advisory lock serializes two saves of a row that
+// does not exist yet, which a row lock cannot do because there is nothing to
+// lock: without it both would read nothing and the second insert would
+// overwrite the first. The row lock makes writers that do not take the
+// advisory lock, such as the global-defaults propagation in
+// UpdateGlobalConfigAtomic, wait for this transaction (and this transaction
+// wait for them), so the row read here is the row the write replaces.
+//
+// apply receives nil when no row exists. It must return the full row to
+// write, keyed on the same provider and service; an error it returns aborts
+// the transaction and is propagated unchanged.
+func (s *PostgresStore) UpdateServiceConfigAtomic(ctx context.Context, provider, service string, apply func(existing *ServiceConfig) (*ServiceConfig, error)) (*ServiceConfig, error) {
+	var saved *ServiceConfig
+	err := s.WithTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", serviceConfigLockPrefix+provider+"/"+service); err != nil {
+			return fmt.Errorf("failed to acquire service config lock: %w", err)
+		}
+		existing, err := getServiceConfigFrom(ctx, tx, getServiceConfigQuery+" FOR UPDATE", provider, service)
+		if errors.Is(err, ErrNotFound) {
+			existing = nil
+		} else if err != nil {
+			return err
+		}
+		next, err := apply(existing)
+		if err != nil {
+			return err
+		}
+		if next == nil || next.Provider != provider || next.Service != service {
+			return fmt.Errorf("service config update for %s/%s must return a row with the same key", provider, service)
+		}
+		if err := saveServiceConfigWith(ctx, tx, next); err != nil {
+			return err
+		}
+		saved = next
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return saved, nil
+}
+
+// saveServiceConfigWith upserts one service_configs row via q (the pool or a
+// transaction).
+func saveServiceConfigWith(ctx context.Context, q globalConfigExecutor, config *ServiceConfig) error {
 	query := `
 		INSERT INTO service_configs (
 			provider, service, enabled, term, payment, coverage, ramp_schedule,
@@ -466,7 +540,7 @@ func (s *PostgresStore) SaveServiceConfig(ctx context.Context, config *ServiceCo
 			updated_at = NOW()
 	`
 
-	_, err := s.db.Exec(ctx, query,
+	_, err := q.Exec(ctx, query,
 		config.Provider,
 		config.Service,
 		config.Enabled,
@@ -1242,7 +1316,7 @@ func (s *PostgresStore) RotatePendingApprovalToken(ctx context.Context, executio
 // and the legacy cancelled_by (issue #119), matching what the other cancel paths
 // record and what History reads.
 func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string) (*PurchaseExecution, error) {
-	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, nil, nil)
+	return s.transitionExecutionStatus(ctx, s.db, executionID, fromStatuses, toStatus, actor, nil, nil)
 }
 
 // TransitionExecutionStatusPinned is TransitionExecutionStatus that also
@@ -1251,7 +1325,15 @@ func (s *PostgresStore) TransitionExecutionStatus(ctx context.Context, execution
 // claim makes the pin fail with ErrExecutionNotInExpectedStatus, so a row is
 // never run on a snapshot different from the one that was gated.
 func (s *PostgresStore) TransitionExecutionStatusPinned(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*PurchaseExecution, error) {
-	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, &sawEmptyRecommendations, nil)
+	return s.transitionExecutionStatus(ctx, s.db, executionID, fromStatuses, toStatus, actor, &sawEmptyRecommendations, nil)
+}
+
+// TransitionExecutionStatusPinnedTx is TransitionExecutionStatusPinned inside
+// the caller's transaction. The UPDATE's row lock is held until that
+// transaction ends, so the status change commits or rolls back together with
+// the caller's other writes and no other writer can touch the row in between.
+func (s *PostgresStore) TransitionExecutionStatusPinnedTx(ctx context.Context, tx pgx.Tx, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmptyRecommendations bool) (*PurchaseExecution, error) {
+	return s.transitionExecutionStatus(ctx, tx, executionID, fromStatuses, toStatus, actor, &sawEmptyRecommendations, nil)
 }
 
 // TransitionExecutionStatusTokenPinned is TransitionExecutionStatus that also
@@ -1265,7 +1347,7 @@ func (s *PostgresStore) TransitionExecutionStatusTokenPinned(ctx context.Context
 		return nil, fmt.Errorf("%w: execution %s: no approval token supplied", ErrApprovalTokenChanged, executionID)
 	}
 	tokenHash := HashApprovalToken(rawToken)
-	return s.transitionExecutionStatus(ctx, executionID, fromStatuses, toStatus, actor, nil, &tokenHash)
+	return s.transitionExecutionStatus(ctx, s.db, executionID, fromStatuses, toStatus, actor, nil, &tokenHash)
 }
 
 // RescheduleAwaitingExecution is a conditional single-column update: the
@@ -1302,7 +1384,7 @@ func (s *PostgresStore) RescheduleAwaitingExecution(ctx context.Context, executi
 	return updated, nil
 }
 
-func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmpty *bool, tokenHash *string) (*PurchaseExecution, error) {
+func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, q executionQuerier, executionID string, fromStatuses []string, toStatus string, actor *string, sawEmpty *bool, tokenHash *string) (*PurchaseExecution, error) {
 	var cancelActor *string
 	if toStatus == StatusCanceled {
 		cancelActor = actor
@@ -1327,25 +1409,26 @@ func (s *PostgresStore) transitionExecutionStatus(ctx context.Context, execution
 		          idempotency_key, scheduled_execution_at, no_submission, created_by_system
 	`
 
-	records, err := s.queryExecutions(ctx, query, executionID, toStatus, fromStatuses, actor, cancelActor, sawEmpty, tokenHash)
+	records, err := queryExecutionsOn(ctx, q, query, executionID, toStatus, fromStatuses, actor, cancelActor, sawEmpty, tokenHash)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(records) == 0 {
-		return nil, s.transitionRejection(ctx, executionID, fromStatuses, toStatus, tokenHash != nil)
+		return nil, transitionRejection(ctx, q, executionID, fromStatuses, toStatus, tokenHash != nil)
 	}
 
 	return &records[0], nil
 }
 
 // transitionRejection explains a zero-row transitionExecutionStatus by probing
-// the row: gone (ErrNotFound), a hard DB error, a token pin lost on a row still
-// in an allowed status (ErrApprovalTokenChanged), or a status CAS lost
+// the row through q (the caller's transaction for the Tx variant): gone
+// (ErrNotFound), a hard DB error, a token pin lost on a row still in an
+// allowed status (ErrApprovalTokenChanged), or a status CAS lost
 // (ErrExecutionNotInExpectedStatus). Extracted to keep the caller under the
 // gocyclo threshold.
-func (s *PostgresStore) transitionRejection(ctx context.Context, executionID string, fromStatuses []string, toStatus string, tokenPinned bool) error {
-	existing, existErr := s.GetExecutionByID(ctx, executionID)
+func transitionRejection(ctx context.Context, q executionQuerier, executionID string, fromStatuses []string, toStatus string, tokenPinned bool) error {
+	existing, existErr := getExecutionByIDOn(ctx, q, executionID)
 	if errors.Is(existErr, ErrNotFound) {
 		// Wrap ErrNotFound so callers (e.g. the purchase reaper) can
 		// use errors.Is to distinguish "row vanished mid-flight" — a
@@ -1405,6 +1488,30 @@ func (s *PostgresStore) SetCancelledBy(ctx context.Context, executionID, cancell
 // status guard is inside the UPDATE rather than checked optimistically
 // before entering the tx.
 func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string) (canceled bool, currentStatus string, err error) {
+	return s.cancelExecutionAtomic(ctx, tx, executionID, cancelledBy, nil)
+}
+
+// CancelExecutionAtomicTokenPinned is CancelExecutionAtomic that also requires
+// approval_token_hash to equal the hash of rawToken and the token to be
+// unexpired, checked in the same UPDATE as the status change. The email-link
+// cancel validated the token against a snapshot; a re-notification that
+// rotates the token between that read and this write would otherwise still
+// let the old, revoked token cancel the row (issue #1190, the cancel side of
+// #590). A lost token pin on a row still pending/notified returns an error
+// wrapping ErrApprovalTokenChanged; a lost status CAS returns (false,
+// currentStatus, nil) as CancelExecutionAtomic does. An empty rawToken never
+// matches.
+func (s *PostgresStore) CancelExecutionAtomicTokenPinned(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy *string, rawToken string) (canceled bool, currentStatus string, err error) {
+	if rawToken == "" {
+		return false, "", fmt.Errorf("%w: execution %s: no approval token supplied", ErrApprovalTokenChanged, executionID)
+	}
+	tokenHash := HashApprovalToken(rawToken)
+	return s.cancelExecutionAtomic(ctx, tx, executionID, cancelledBy, &tokenHash)
+}
+
+// cancelExecutionAtomic is the shared body of CancelExecutionAtomic and
+// CancelExecutionAtomicTokenPinned; a nil tokenHash skips the token pin.
+func (s *PostgresStore) cancelExecutionAtomic(ctx context.Context, tx pgx.Tx, executionID string, cancelledBy, tokenHash *string) (canceled bool, currentStatus string, err error) {
 	// StatusCanceled is the canonical US-spelling value; see types.go.
 	q := `
 		UPDATE purchase_executions
@@ -1413,9 +1520,11 @@ func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, ex
 		       updated_at   = NOW()
 		 WHERE execution_id = $1
 		   AND status IN ('pending', 'notified')
+		   AND ($4::text IS NULL OR (approval_token_hash = $4
+		        AND (approval_token_expires_at IS NULL OR approval_token_expires_at > NOW())))
 		RETURNING status
 	`
-	rows, err := tx.Query(ctx, q, executionID, cancelledBy, StatusCanceled)
+	rows, err := tx.Query(ctx, q, executionID, cancelledBy, StatusCanceled, tokenHash)
 	if err != nil {
 		return false, "", fmt.Errorf("failed to cancel execution: %w", err)
 	}
@@ -1435,14 +1544,27 @@ func (s *PostgresStore) CancelExecutionAtomic(ctx context.Context, tx pgx.Tx, ex
 		return false, "", fmt.Errorf("failed to iterate cancel result: %w", rowsErr)
 	}
 
-	// Zero rows affected: execution either does not exist or has already
-	// transitioned out of pending/notified. Surface the current status so
-	// callers can return a meaningful 409 body.
+	// Zero rows affected: execution either does not exist, has already
+	// transitioned out of pending/notified, or (pinned) no longer carries the
+	// caller's token. Surface the current status so callers can return a
+	// meaningful 409 body.
+	currentStatus, err = s.cancelRejection(ctx, executionID, tokenHash != nil)
+	return false, currentStatus, err
+}
+
+// cancelRejection explains a zero-row cancelExecutionAtomic by probing the
+// row's current status. A row still pending/notified under a token pin lost
+// the pin, not the status race, so that case returns ErrApprovalTokenChanged.
+// Extracted to keep the caller under the gocyclo threshold.
+func (s *PostgresStore) cancelRejection(ctx context.Context, executionID string, tokenPinned bool) (currentStatus string, err error) {
 	existing, existErr := s.GetExecutionByID(ctx, executionID)
 	if existErr != nil {
-		return false, "", fmt.Errorf("execution not found or db error: %w", existErr)
+		return "", fmt.Errorf("execution not found or db error: %w", existErr)
 	}
-	return false, existing.Status, nil
+	if tokenPinned && (existing.Status == "pending" || existing.Status == "notified") {
+		return existing.Status, fmt.Errorf("%w: execution %s", ErrApprovalTokenChanged, executionID)
+	}
+	return existing.Status, nil
 }
 
 // CancelScheduledExecutionAtomic atomically transitions an execution from
@@ -1523,15 +1645,23 @@ func (s *PostgresStore) CancelScheduledExecutionAtomic(ctx context.Context, tx p
 // already represented by their purchase_history rows, so returning them would
 // only consume the cap (the History handler skips them anyway).
 func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []string, limit int) ([]PurchaseExecution, error) {
-	if len(statuses) == 0 {
+	return s.GetExecutionsByStatusesFiltered(ctx, ExecutionsByStatusesQuery{Statuses: statuses, Limit: limit})
+}
+
+// GetExecutionsByStatusesFiltered is GetExecutionsByStatuses with the History
+// filters and account scope in q applied in SQL, before the limit (issue
+// #632). Order and the clean-completed exclusion are GetExecutionsByStatuses'.
+func (s *PostgresStore) GetExecutionsByStatusesFiltered(ctx context.Context, q ExecutionsByStatusesQuery) ([]PurchaseExecution, error) {
+	if len(q.Statuses) == 0 {
 		return nil, nil
 	}
+	limit := q.Limit
 	if limit <= 0 {
 		limit = DefaultListLimit
 	}
-	if limit > MaxListLimit {
-		limit = MaxListLimit
-	}
+	limit = min(limit, MaxListLimit)
+	conds, args := executionsByStatusesWhere(&q)
+	args = append(args, limit)
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token_hash, recommendations,
@@ -1542,14 +1672,12 @@ func (s *PostgresStore) GetExecutionsByStatuses(ctx context.Context, statuses []
 		       executed_by_user_id, executed_at, pre_approval_skip_reason,
 		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
 		FROM purchase_executions
-		WHERE status = ANY($1)
-		  AND NOT (status = 'completed' AND COALESCE(error, '') = '')
+		WHERE ` + strings.Join(conds, "\n\t\t  AND ") + `
 		ORDER BY (status = 'pending' AND scheduled_date > now()) ASC,
 		         CASE WHEN status = 'pending' AND scheduled_date > now() THEN scheduled_date END ASC,
 		         scheduled_date DESC
-		LIMIT $2
-	`
-	return s.queryExecutions(ctx, query, statuses, limit)
+		LIMIT $` + fmt.Sprint(len(args))
+	return s.queryExecutions(ctx, query, args...)
 }
 
 // CountExecutionsByPlanAndStatus returns, keyed by plan ID, the exact number
@@ -1753,35 +1881,6 @@ func (s *PostgresStore) GetPendingExecutions(ctx context.Context) ([]PurchaseExe
 	return s.queryExecutions(ctx, query)
 }
 
-// GetPendingExecutionsTx is the tx-accepting variant of GetPendingExecutions.
-// Running the read inside the same transaction as the subsequent insert makes
-// duplicate-detection and execution creation atomic, closing the TOCTOU race
-// in executePurchase (issue #643).
-func (s *PostgresStore) GetPendingExecutionsTx(ctx context.Context, tx pgx.Tx) ([]PurchaseExecution, error) {
-	const query = `
-		SELECT plan_id, execution_id, status, step_number, scheduled_date,
-		       notification_sent, approval_token_hash, recommendations,
-		       total_upfront_cost, estimated_savings, completed_at, error, expires_at,
-		       cloud_account_id, source, approved_by, COALESCE(canceled_by, cancelled_by) AS cancelled_by, capacity_percent,
-		       created_by_user_id, retry_execution_id, retry_attempt_n,
-		       approval_token_expires_at,
-		       executed_by_user_id, executed_at, pre_approval_skip_reason,
-		       idempotency_key, scheduled_execution_at, no_submission, created_by_system
-		FROM purchase_executions
-		WHERE status IN ('pending', 'notified')
-		  AND (expires_at IS NULL OR expires_at > NOW())
-		ORDER BY scheduled_date ASC
-		LIMIT 1000
-		FOR UPDATE
-	`
-	rows, err := tx.Query(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query pending executions in tx: %w", err)
-	}
-	defer rows.Close()
-	return scanExecutionRows(rows)
-}
-
 // planStepProviderLockPrefix namespaces the per-provider plan-step advisory lock.
 const planStepProviderLockPrefix = "cudly:planstep:"
 
@@ -1875,6 +1974,11 @@ func (s *PostgresStore) ListRecentSubmitsTx(ctx context.Context, tx pgx.Tx, crea
 // from a real DB failure (any other non-nil error). A nil error guarantees
 // a non-nil execution (fail-loud contract; issues #976, #1339).
 func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string) (*PurchaseExecution, error) {
+	return getExecutionByIDOn(ctx, s.db, executionID)
+}
+
+// getExecutionByIDOn is GetExecutionByID on q, the pool or a transaction.
+func getExecutionByIDOn(ctx context.Context, q executionQuerier, executionID string) (*PurchaseExecution, error) {
 	query := `
 		SELECT plan_id, execution_id, status, step_number, scheduled_date,
 		       notification_sent, approval_token_hash, recommendations,
@@ -1888,7 +1992,7 @@ func (s *PostgresStore) GetExecutionByID(ctx context.Context, executionID string
 		WHERE execution_id = $1
 	`
 
-	executions, err := s.queryExecutions(ctx, query, executionID)
+	executions, err := queryExecutionsOn(ctx, q, query, executionID)
 	if err != nil {
 		return nil, err
 	}
@@ -2016,9 +2120,20 @@ func (s *PostgresStore) ListPendingExecutionIDsForAccount(ctx context.Context, a
 	return ids, nil
 }
 
+// executionQuerier is the query method shared by the pool (dbConn) and a
+// pgx.Tx, so the execution read and transition helpers can run on either.
+type executionQuerier interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
 // queryExecutions is a helper to query and scan purchase executions.
 func (s *PostgresStore) queryExecutions(ctx context.Context, query string, args ...any) ([]PurchaseExecution, error) {
-	rows, err := s.db.Query(ctx, query, args...)
+	return queryExecutionsOn(ctx, s.db, query, args...)
+}
+
+// queryExecutionsOn is queryExecutions on q, the pool or a transaction.
+func queryExecutionsOn(ctx context.Context, q executionQuerier, query string, args ...any) ([]PurchaseExecution, error) {
+	rows, err := q.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query executions: %w", err)
 	}
@@ -2051,7 +2166,7 @@ func applyNullTimesToExecution(exec *PurchaseExecution, notifSent, completedAt, 
 }
 
 // scanExecutionRows scans a pgx.Rows cursor into a slice of PurchaseExecution.
-// It is used by queryExecutions (pool query) and GetPendingExecutionsTx (tx
+// It is used by queryExecutions (pool query) and ListRecentSubmitsTx (tx
 // query) so the scan logic lives in one place.
 func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 	executions := make([]PurchaseExecution, 0)
@@ -2069,6 +2184,9 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 		// approval_token_hash is NULL on rows migration 000100 found with no
 		// raw token (every canceled row among them).
 		var approvalTokenHash sql.NullString
+		// error is nullable (migration 000001); one NULL row must not fail the
+		// whole list scan (issue #1465). exec.Error stays "" for those.
+		var errText sql.NullString
 
 		err := rows.Scan(
 			&planID,
@@ -2082,7 +2200,7 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 			&exec.TotalUpfrontCost,
 			&exec.EstimatedSavings,
 			&completedAt,
-			&exec.Error,
+			&errText,
 			&expiresAt,
 			&exec.CloudAccountID,
 			&exec.Source,
@@ -2112,6 +2230,7 @@ func scanExecutionRows(rows pgx.Rows) ([]PurchaseExecution, error) {
 			exec.IdempotencyKey = idempotencyKey.String
 		}
 		exec.ApprovalToken = approvalTokenHash.String
+		exec.Error = errText.String
 
 		// Unmarshal recommendations
 		if err := json.Unmarshal(recommendationsJSON, &exec.Recommendations); err != nil {
@@ -2280,82 +2399,36 @@ func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays 
 // PURCHASE HISTORY
 // ==========================================
 
-// SavePurchaseHistory saves a purchase history record. It is idempotent per
-// (provider, account_id, purchase_id): a re-drive or root retry that adopts a
-// commitment the first attempt already bought saves the same key again, and a
-// second row would double-count spend and savings (#704). The NOT EXISTS
-// covers rows that predate the unique index from migration 000108; the index
-// and ON CONFLICT cover two concurrent saves. An existing row is left as is.
-func (s *PostgresStore) SavePurchaseHistory(ctx context.Context, record *PurchaseHistoryRecord) error {
-	if err := record.Validate(); err != nil {
-		return err
-	}
-	query := `
-		INSERT INTO purchase_history (
-			account_id, purchase_id, timestamp, provider, service, region,
-			resource_type, count, term, payment, upfront_cost, monthly_cost,
-			estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-			source, revocation_window_closes_at, offering_class
-		)
-		SELECT $1::varchar, $2::varchar, $3, $4::varchar, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
-		WHERE NOT EXISTS (
-			SELECT 1 FROM purchase_history
-			WHERE provider = $4 AND account_id = $1 AND purchase_id = $2
-		)
-		ON CONFLICT DO NOTHING
-	`
-
-	tag, err := s.db.Exec(ctx, query,
-		record.AccountID,
-		record.PurchaseID,
-		record.Timestamp,
-		record.Provider,
-		record.Service,
-		record.Region,
-		record.ResourceType,
-		record.Count,
-		record.Term,
-		record.Payment,
-		record.UpfrontCost,
-		record.MonthlyCost,
-		record.EstimatedSavings,
-		nullStringFromString(record.PlanID),
-		nullStringFromString(record.PlanName),
-		record.RampStep,
-		record.CloudAccountID,
-		record.Source,
-		record.RevocationWindowClosesAt,
-		nullStringFromString(record.OfferingClass),
-	)
-
-	if err != nil {
-		return fmt.Errorf("failed to save purchase history: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		logging.Infof("purchase history for %s/%s/%s already recorded; keeping the existing row", record.Provider, record.AccountID, record.PurchaseID)
-	}
-
-	return nil
-}
-
 // UpdatePurchaseHistoryListing stamps the marketplace listing fields onto a
 // purchase_history row identified by its purchase_id (RI reservation ID).
 // Called by the marketplace-list handler after CreateReservedInstancesListing
 // succeeds (listing_id + listing_state="active") and by the status-poll path on
 // the later closed/canceled transitions.
 func (s *PostgresStore) UpdatePurchaseHistoryListing(ctx context.Context, purchaseID, listingID, listingState string) error {
+	// A listing recorded as canceled or closed is never marked live again
+	// (issue #525): a list request that lost a race with the cancel endpoint
+	// gets ErrMarketplaceListingEnded instead of reviving the canceled listing.
+	// Writing a new listing id (a relist) drops the previous listing's
+	// listed_at and settlement in the same statement (issue #27), so the new
+	// listing can be settled even if it ends before the poller sees it active.
 	query := `
 		UPDATE purchase_history
 		SET listing_id = $1, listing_state = $2,
-		    listing_client_token = NULL, listing_price_schedule = NULL
+		    listing_client_token = NULL, listing_price_schedule = NULL,
+		    listed_at = CASE WHEN COALESCE(listing_id, '') = $1 THEN listed_at END,
+		    listing_proceeds_received = CASE WHEN COALESCE(listing_id, '') = $1 THEN listing_proceeds_received END,
+		    listing_fee_paid = CASE WHEN COALESCE(listing_id, '') = $1 THEN listing_fee_paid END
 		WHERE purchase_id = $3
+		  AND NOT (COALESCE(listing_id, '') = $1
+		           AND lower(COALESCE(listing_state, '')) IN ($4, $5)
+		           AND lower($2) NOT IN ($4, $5))
 	`
-	tag, err := s.db.Exec(ctx, query, listingID, listingState, purchaseID)
+	tag, err := s.db.Exec(ctx, query, listingID, listingState, purchaseID, ListingStateCancelled, ListingStateClosed)
 	if err != nil {
 		return fmt.Errorf("failed to update listing state for purchase %s: %w", purchaseID, err)
 	}
 	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("purchase %s not found in history", purchaseID)
+		return s.listingEndedOrMissing(ctx, purchaseID)
 	}
 	return nil
 }
@@ -2383,13 +2456,24 @@ func (s *PostgresStore) StampOfferingClass(ctx context.Context, purchaseID, offe
 // token, and returns the row's values as of the claim (issue #525): the handler
 // must not trust a row read before the claim. It returns (nil, nil) when the row
 // could not be claimed (active, pending without a token, or absent).
+//
+// Rows saved before migration 000108 can share a purchase_id (#267). The claim
+// then works on the earliest row (created_at, then id), the one
+// GetPurchaseHistoryByPurchaseID returns, and refuses while any duplicate
+// records an active listing, so the returned prior state and listing id belong
+// to one row and a duplicate never reopens a listed RI.
 func (s *PostgresStore) ClaimMarketplaceListingSlot(ctx context.Context, purchaseID, clientToken string, priceSchedule []byte) (*MarketplaceListingClaim, error) {
-	// prev locks the row first, so a claim that races another one waits for it
-	// and then sees its committed token and state instead of a stale snapshot.
+	// prev locks the earliest row first, so a claim that races another one
+	// waits for it and then sees its committed token and state instead of a
+	// stale snapshot. created_at and id never change, so the row prev picks
+	// stays the earliest while it waits.
 	query := `
 		WITH prev AS (
-			SELECT purchase_id, listing_state AS prior_state
-			FROM purchase_history WHERE purchase_id = $2 FOR UPDATE
+			SELECT id, listing_state AS prior_state
+			FROM purchase_history WHERE purchase_id = $2
+			ORDER BY created_at, id
+			LIMIT 1
+			FOR UPDATE
 		)
 		UPDATE purchase_history AS p
 		SET listing_state = $1,
@@ -2397,9 +2481,14 @@ func (s *PostgresStore) ClaimMarketplaceListingSlot(ctx context.Context, purchas
 		    listing_price_schedule = CASE WHEN p.listing_client_token IS NULL
 		                                  THEN $4::jsonb ELSE p.listing_price_schedule END
 		FROM prev
-		WHERE p.purchase_id = prev.purchase_id
+		WHERE p.id = prev.id
 		  AND lower(COALESCE(p.listing_state, '')) <> $5
 		  AND (lower(COALESCE(p.listing_state, '')) <> $1 OR p.listing_client_token IS NOT NULL)
+		  AND NOT EXISTS (
+			SELECT 1 FROM purchase_history AS twin
+			WHERE twin.purchase_id = $2 AND twin.id <> p.id
+			  AND lower(COALESCE(twin.listing_state, '')) = $5
+		  )
 		RETURNING COALESCE(p.listing_id, ''), COALESCE(prev.prior_state, ''),
 		          p.listing_client_token, p.listing_price_schedule::text
 	`
@@ -2649,29 +2738,7 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 		limit = MaxListLimit
 	}
 
-	var (
-		conds []string
-		args  []any
-	)
-	add := func(cond string, val any) {
-		conds = append(conds, fmt.Sprintf(cond, len(args)+1))
-		args = append(args, val)
-	}
-	if filter.Provider != "" {
-		add("provider = $%d", filter.Provider)
-	}
-	conds, args = appendAccountPredicate(conds, args, filter.AccountIDs, filter.ExternalIDsByProvider)
-	if filter.Start != nil {
-		add("timestamp >= $%d", *filter.Start)
-	}
-	if filter.End != nil {
-		add("timestamp <= $%d", *filter.End)
-	}
-
-	where := ""
-	if len(conds) > 0 {
-		where = " WHERE " + strings.Join(conds, " AND ")
-	}
+	where, args := purchaseHistoryFilterWhere(filter)
 	args = append(args, limit)
 
 	query := fmt.Sprintf(`
@@ -2686,6 +2753,38 @@ func (s *PostgresStore) GetPurchaseHistoryFiltered(
 	`, where, len(args))
 
 	return s.queryPurchaseHistory(ctx, query, args...)
+}
+
+// purchaseHistoryFilterWhere builds the WHERE clause (with a leading space, or
+// "" for an empty filter) and its bind args for a PurchaseHistoryFilter. It is
+// the single predicate builder shared by GetPurchaseHistoryFiltered (the
+// History row fetch) and HistorySummaryAggregate (the History summary totals),
+// so the totals always count exactly the rows the fetch would return without
+// its LIMIT (issue #675). filter.Limit is not part of the predicate and is
+// ignored here; placeholders are numbered from $1.
+func purchaseHistoryFilterWhere(filter PurchaseHistoryFilter) (where string, args []any) {
+	var conds []string
+	add := func(cond string, val any) {
+		conds = append(conds, fmt.Sprintf(cond, len(args)+1))
+		args = append(args, val)
+	}
+	if filter.Provider != "" {
+		add("provider = $%d", filter.Provider)
+	}
+	if filter.PlanID != "" {
+		add("plan_id = $%d", filter.PlanID)
+	}
+	conds, args = appendAccountPredicate(conds, args, filter.AccountIDs, filter.ExternalIDsByProvider)
+	if filter.Start != nil {
+		add("timestamp >= $%d", *filter.Start)
+	}
+	if filter.End != nil {
+		add("timestamp <= $%d", *filter.End)
+	}
+	if len(conds) > 0 {
+		where = " WHERE " + strings.Join(conds, " AND ")
+	}
+	return where, args
 }
 
 // queryPurchaseHistory is a helper to query and scan purchase history.
@@ -2828,7 +2927,9 @@ func scanPurchaseHistoryRow(rows pgx.Rows) (PurchaseHistoryRecord, error) {
 // columns so the revoke endpoint can check idempotency without a second round
 // trip (issue #290). The marketplace columns (offering_class, listing_id,
 // listing_state) are read so the marketplace-list handler can validate
-// offering_class and look up the cloud account (issue #292).
+// offering_class and look up the cloud account (issue #292). Rows saved before
+// migration 000108 can share a purchase_id; the earliest one (created_at, then
+// id) is returned, the same row ClaimMarketplaceListingSlot claims (#267).
 func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purchaseID string) (*PurchaseHistoryRecord, error) {
 	query := `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
@@ -2838,6 +2939,7 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 		       revocation_in_flight, offering_class, listing_id, listing_state
 		FROM purchase_history
 		WHERE purchase_id = $1
+		ORDER BY created_at, id
 		LIMIT 1
 	`
 	rows, err := s.db.Query(ctx, query, purchaseID)
@@ -2895,9 +2997,11 @@ func (s *PostgresStore) GetPurchaseHistoryByPurchaseID(ctx context.Context, purc
 
 // MarkPurchaseRevoked stamps revoked_at / revoked_via / support_case_id and
 // the refund-quote audit columns (calc_refund_amount, calc_refund_currency) on
-// the purchase_history row identified by purchaseID. The UPDATE is a no-op
-// when revoked_at is already non-null (idempotency guard). Returns a not-found
-// error when zero rows are affected and revoked_at was previously NULL.
+// the purchase_history row identified by purchaseID, and clears
+// revocation_in_flight as migration 000072 documents: a completed revocation
+// is no longer in flight (issue #316). The UPDATE is a no-op when revoked_at
+// is already non-null (idempotency guard). Returns a not-found error when zero
+// rows are affected and revoked_at was previously NULL.
 func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID string, revokedAt time.Time, revokedVia, supportCaseID string, calcRefundAmount *float64, calcRefundCurrency string) error {
 	var supportCaseIDPtr *string
 	if supportCaseID != "" {
@@ -2913,7 +3017,8 @@ func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID stri
 		       revoked_via           = $3,
 		       support_case_id       = $4,
 		       calc_refund_amount    = $5,
-		       calc_refund_currency  = $6
+		       calc_refund_currency  = $6,
+		       revocation_in_flight  = false
 		 WHERE purchase_id = $1
 		   AND revoked_at IS NULL
 	`, purchaseID, revokedAt, revokedVia, supportCaseIDPtr, calcRefundAmount, calcCurrencyPtr)
@@ -2935,31 +3040,71 @@ func (s *PostgresStore) MarkPurchaseRevoked(ctx context.Context, purchaseID stri
 	return nil
 }
 
-// FlipPurchaseRevocationInFlight sets revocation_in_flight=true on the
-// purchase_history row for purchaseID. Called immediately before the Azure
-// Return API call to enable partial-success reconciliation (issue #290
-// Finding #6). Idempotent: already-true rows are not modified. Returns a
-// not-found error when no row matches.
+// FlipPurchaseRevocationInFlight claims the revocation of the
+// purchase_history row for purchaseID by setting revocation_in_flight=true.
+// Called immediately before the Azure Return API call to enable
+// partial-success reconciliation (issue #290 Finding #6).
+//
+// It is a compare-and-set on two predicates:
+//   - revoked_at IS NULL (issue #316): a stale request that reaches the flip
+//     after another request's MarkPurchaseRevoked committed must not flag the
+//     revoked row again, since MarkPurchaseRevoked (guarded on the same
+//     predicate) would then never clear it. That returns an error wrapping
+//     ErrPurchaseAlreadyRevoked.
+//   - revocation_in_flight = false (issue #1518): only one request may hold
+//     the claim, so two first-time revokes cannot both post a Return. The
+//     request that loses gets an error wrapping ErrRevocationInFlight.
+//
+// The row lock serializes concurrent flips and marks, and under READ
+// COMMITTED a waiting UPDATE re-checks both predicates against the committed
+// row, so exactly one flip of an unrevoked, unflagged row succeeds. A missing
+// row keeps the not-found error.
 func (s *PostgresStore) FlipPurchaseRevocationInFlight(ctx context.Context, purchaseID string) error {
+	// revocation_in_flight_at (migration 000148, issue #1523) is the database
+	// clock at the flip; the finalize_revocations sweep uses it to release a
+	// flag whose Return was never recorded.
 	tag, err := s.db.Exec(ctx, `
 		UPDATE purchase_history
-		   SET revocation_in_flight = true
+		   SET revocation_in_flight = true, revocation_in_flight_at = now()
 		 WHERE purchase_id = $1
+		   AND revoked_at IS NULL
+		   AND revocation_in_flight = false
 	`, purchaseID)
 	if err != nil {
 		return fmt.Errorf("FlipPurchaseRevocationInFlight: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+	// Nothing matched: tell a missing row from a revoked one and from one
+	// another request has claimed. A row that is unrevoked when re-read lost
+	// the claim to a concurrent request; it is reported in flight even if
+	// that request has since cleared the flag, so this caller never posts a
+	// Return it did not claim.
+	var total, unrevoked int
+	if err := s.db.QueryRow(ctx, `
+		SELECT count(*), count(*) FILTER (WHERE revoked_at IS NULL)
+		  FROM purchase_history
+		 WHERE purchase_id = $1
+	`, purchaseID).Scan(&total, &unrevoked); err != nil {
+		return fmt.Errorf("FlipPurchaseRevocationInFlight existence check: %w", err)
+	}
+	if total == 0 {
 		return fmt.Errorf("FlipPurchaseRevocationInFlight: purchase_id %q not found", purchaseID)
 	}
-	return nil
+	if unrevoked == 0 {
+		return fmt.Errorf("FlipPurchaseRevocationInFlight: purchase_id %q: %w", purchaseID, ErrPurchaseAlreadyRevoked)
+	}
+	return fmt.Errorf("FlipPurchaseRevocationInFlight: purchase_id %q: %w", purchaseID, ErrRevocationInFlight)
 }
 
 // ClearRevocationInFlight sets revocation_in_flight=false on a purchase_history
 // row. Called when the Azure Return call fails transiently (before Azure actually
 // issued a refund) so the row is not left stuck in the in-flight state, which
 // would mislead the finalize_revocations sweep into thinking Azure succeeded
-// (issue #290, second-wave CR Finding D). No-op when already false.
+// (issue #290, second-wave CR Finding D). No-op when already false. The
+// UPDATE is unconditional: only the request whose
+// FlipPurchaseRevocationInFlight claimed the row may call it (issue #1518).
 func (s *PostgresStore) ClearRevocationInFlight(ctx context.Context, purchaseID string) error {
 	tag, err := s.db.Exec(ctx, `
 		UPDATE purchase_history
@@ -2975,19 +3120,27 @@ func (s *PostgresStore) ClearRevocationInFlight(ctx context.Context, purchaseID 
 	return nil
 }
 
-// GetPurchaseHistoryInFlight returns all purchase_history rows with
-// revocation_in_flight=true and revoked_at IS NULL. Used by the
+// GetPurchaseHistoryInFlight returns the purchase_history rows whose Azure
+// Return was recorded as accepted (return_posted_at set by
+// MarkRevocationReturnPosted) but whose revoked_at is still NULL. Used by the
 // finalize_revocations scheduled sweep to retry MarkPurchaseRevoked for rows
 // where the Azure Return succeeded but the subsequent DB write failed
 // (issue #290 Finding #6).
+//
+// revocation_in_flight alone is not enough (issue #1523): a row is also left
+// flagged when a request dies between the flip and the Return, and marking
+// that row revoked would record a refund that never happened. The flag is not
+// required either: once the Return is recorded the purchase is refunded, even
+// if a concurrent request's failed Return cleared the flag.
 func (s *PostgresStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*PurchaseHistoryRecord, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT account_id, purchase_id, timestamp, provider, service, region,
 		       resource_type, count, term, payment, upfront_cost, monthly_cost,
 		       estimated_savings, plan_id, plan_name, ramp_step, cloud_account_id,
-		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id
+		       revocation_window_closes_at, revoked_at, revoked_via, support_case_id,
+		       revocation_in_flight
 		FROM purchase_history
-		WHERE revocation_in_flight = true
+		WHERE return_posted_at IS NOT NULL
 		  AND revoked_at IS NULL
 	`)
 	if err != nil {
@@ -3025,6 +3178,7 @@ func (s *PostgresStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*Purc
 			&revokedAt,
 			&revokedVia,
 			&supportCaseID,
+			&r.RevocationInFlight,
 		); err != nil {
 			return nil, fmt.Errorf("GetPurchaseHistoryInFlight scan: %w", err)
 		}
@@ -3047,7 +3201,6 @@ func (s *PostgresStore) GetPurchaseHistoryInFlight(ctx context.Context) ([]*Purc
 		if supportCaseID.Valid {
 			r.SupportCaseID = supportCaseID.String
 		}
-		r.RevocationInFlight = true
 		result = append(result, &r)
 	}
 	return result, rows.Err()
@@ -3317,7 +3470,9 @@ func riExchangeUSD(micros *big.Int) string {
 	return fmt.Sprintf("%s.%06d", whole, fractional)
 }
 
-// GetRIExchangeRecord retrieves an RI exchange record by ID.
+// GetRIExchangeRecord retrieves an RI exchange record by ID. A missing record
+// is a wrapped ErrNotFound, so callers can tell it from a failed query and
+// answer it as a client error rather than a 500 (issue #601).
 func (s *PostgresStore) GetRIExchangeRecord(ctx context.Context, id string) (*RIExchangeRecord, error) {
 	query := `
 		SELECT id, account_id, exchange_id, region, source_ri_ids,
@@ -3336,7 +3491,7 @@ func (s *PostgresStore) GetRIExchangeRecord(ctx context.Context, id string) (*RI
 	}
 
 	if len(records) == 0 {
-		return nil, fmt.Errorf("ri exchange record not found: %s", id)
+		return nil, fmt.Errorf("ri exchange record %s: %w", id, ErrNotFound)
 	}
 
 	return &records[0], nil
@@ -3387,9 +3542,33 @@ func (s *PostgresStore) GetRIExchangeHistory(ctx context.Context, since time.Tim
 	return s.queryRIExchangeRecords(ctx, query, since, limit)
 }
 
+// GetRIExchangeHistoryForAccounts retrieves RI exchange history records for
+// the given account ids only. The account predicate runs in SQL, before the
+// LIMIT, so a scoped caller gets up to limit of their own records rather
+// than whatever survives a filter applied to the newest limit records of
+// every account (issue #308). An empty or nil accountIDs matches no records:
+// "= ANY('{}')" is false and "= ANY(NULL)" is NULL for every row.
+func (s *PostgresStore) GetRIExchangeHistoryForAccounts(ctx context.Context, since time.Time, limit int, accountIDs []string) ([]RIExchangeRecord, error) {
+	query := `
+		SELECT id, account_id, exchange_id, region, source_ri_ids,
+		       source_instance_type, source_count, target_offering_id,
+		       target_instance_type, target_count, payment_due::text,
+		       status, approval_token_hash, error, mode,
+		       created_at, updated_at, completed_at, expires_at,
+		       created_by_user_id, approved_by, ladder_run_id
+		FROM ri_exchange_history
+		WHERE created_at >= $1 AND account_id = ANY($3::text[])
+		ORDER BY created_at DESC
+		LIMIT $2
+	`
+
+	return s.queryRIExchangeRecords(ctx, query, since, limit, accountIDs)
+}
+
 // TransitionRIExchangeStatus atomically transitions an RI exchange record status.
 // Uses a single UPDATE...WHERE...RETURNING for atomicity, then diagnoses failure
-// only if zero rows are returned.
+// only if zero rows are returned (ErrRIExchangeExpired or
+// ErrRIExchangeNotInExpectedStatus, wrapped, for an existing record).
 // actor is the UUID of the user performing the transition (nil for system-initiated paths).
 func (s *PostgresStore) TransitionRIExchangeStatus(ctx context.Context, id, fromStatus, toStatus string, actor *string) (*RIExchangeRecord, error) {
 	query := `
@@ -3432,9 +3611,9 @@ func (s *PostgresStore) diagnoseTransitionFailure(ctx context.Context, id, fromS
 		return fmt.Errorf("failed to diagnose transition failure: %w", err)
 	}
 	if expired {
-		return fmt.Errorf("ri exchange has expired")
+		return fmt.Errorf("%w: %s", ErrRIExchangeExpired, id)
 	}
-	return fmt.Errorf("ri exchange status transition failed: expected status %q but current status is %q", fromStatus, currentStatus)
+	return fmt.Errorf("%w: expected status %q but current status is %q", ErrRIExchangeNotInExpectedStatus, fromStatus, currentStatus)
 }
 
 // CompleteRIExchange marks an RI exchange as completed.
@@ -3932,14 +4111,8 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 	}
 	defer rollbackTx(ctx, tx, "DeleteCloudAccount")
 
-	// Lock the account row before reading which plans target it. A writer
-	// attaching the account to a plan holds a KEY SHARE lock on this row
-	// (the plan_accounts FK check) until it commits, so this waits for it and
-	// the plan disable below sees its rows. Without the lock the DELETE would
-	// still wait for that writer, but only after the plans were picked, and
-	// its cascade would leave that plan enabled with no accounts.
-	if _, err = tx.Exec(ctx, `SELECT 1 FROM cloud_accounts WHERE id = $1 FOR UPDATE`, id); err != nil {
-		return fmt.Errorf("failed to lock cloud account: %w", err)
+	if lockErr := lockAccountForDeleteTx(ctx, tx, id); lockErr != nil {
+		return lockErr
 	}
 
 	// Reset any linked approved registration first (explicit NULL so we don't
@@ -3995,6 +4168,40 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 	return nil
 }
 
+// lockAccountForDeleteTx takes DeleteCloudAccount's locks (issues #264,
+// #1072) in this order: the plans that target the account, then the account
+// row, then any plan that gained the account meanwhile. The plan locks
+// serialize the delete with a concurrent delete of another of the plan's
+// accounts and with SetPlanAccounts (which reads the plan FOR SHARE), so the
+// plan disable decides on committed plan_accounts rows. The account lock waits
+// for a writer still attaching the account to a plan (it holds KEY SHARE on
+// the row through the plan_accounts FK until it commits); the second plan lock
+// then takes the plans it attached.
+func lockAccountForDeleteTx(ctx context.Context, tx pgx.Tx, id string) error {
+	if err := lockAccountPlansTx(ctx, tx, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM cloud_accounts WHERE id = $1 FOR UPDATE`, id); err != nil {
+		return fmt.Errorf("failed to lock cloud account: %w", err)
+	}
+	return lockAccountPlansTx(ctx, tx, id)
+}
+
+// lockAccountPlansTx locks, in id order, every plan with a plan_accounts row
+// for accountID. A fixed order keeps two account deletes that share plans from
+// deadlocking on each other.
+func lockAccountPlansTx(ctx context.Context, tx pgx.Tx, accountID string) error {
+	if _, err := tx.Exec(ctx, `
+		SELECT p.id FROM purchase_plans p
+		 WHERE p.id IN (SELECT pa.plan_id FROM plan_accounts pa WHERE pa.account_id = $1)
+		 ORDER BY p.id
+		   FOR UPDATE OF p
+	`, accountID); err != nil {
+		return fmt.Errorf("failed to lock plans of cloud account: %w", err)
+	}
+	return nil
+}
+
 // disableSoleAccountPlansTx disables every enabled plan whose only
 // plan_accounts row is accountID, and returns their IDs (issue #264). The
 // account delete cascades those rows away, and a plan with no accounts is the
@@ -4002,7 +4209,10 @@ func (s *PostgresStore) DeleteCloudAccount(ctx context.Context, id string) error
 // would keep creating executions for it with no account to buy in. Disabling
 // rather than refusing the delete keeps the plan and its history for the
 // admin to re-target and re-enable. Plans already disabled are not rewritten,
-// so their updated_at (the plan edit token) does not move.
+// so their updated_at (the plan edit token) does not move. The caller holds
+// the plan rows locked (lockAccountPlansTx), so writers that lock the plan
+// before changing its plan_accounts rows (SetPlanAccounts, another account
+// delete) cannot change them under this statement's decision.
 func disableSoleAccountPlansTx(ctx context.Context, tx pgx.Tx, accountID string) ([]string, error) {
 	rows, err := tx.Query(ctx, `
 		UPDATE purchase_plans p
@@ -4122,6 +4332,9 @@ func (s *PostgresStore) SaveAccountCredential(ctx context.Context, accountID, cr
 }
 
 // GetAccountCredential returns the encrypted blob for an account credential.
+// A missing row returns ErrNotFound, never ("", nil): that is what an empty
+// stored blob returns, and a caller that read an empty result as "no
+// credential, use the ambient identity" would act in the wrong account (#120).
 func (s *PostgresStore) GetAccountCredential(ctx context.Context, accountID, credentialType string) (string, error) {
 	var blob string
 	err := s.db.QueryRow(ctx,
@@ -4130,7 +4343,7 @@ func (s *PostgresStore) GetAccountCredential(ctx context.Context, accountID, cre
 	).Scan(&blob)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", nil
+			return "", ErrNotFound
 		}
 		return "", fmt.Errorf("failed to get account credential: %w", err)
 	}
@@ -4199,6 +4412,15 @@ func (s *PostgresStore) GetAccountServiceOverride(ctx context.Context, accountID
 
 // SaveAccountServiceOverride upserts an account service override.
 func (s *PostgresStore) SaveAccountServiceOverride(ctx context.Context, o *AccountServiceOverride) error {
+	return saveAccountServiceOverride(ctx, s.db, o)
+}
+
+// overrideExecutor is satisfied by both the pool and a pgx.Tx.
+type overrideExecutor interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func saveAccountServiceOverride(ctx context.Context, db overrideExecutor, o *AccountServiceOverride) error {
 	if o.ID == "" {
 		o.ID = uuid.New().String()
 	}
@@ -4224,7 +4446,7 @@ func (s *PostgresStore) SaveAccountServiceOverride(ctx context.Context, o *Accou
 			include_types = $14, exclude_types = $15,
 			updated_at = NOW()
 	`
-	_, err := s.db.Exec(ctx, query,
+	_, err := db.Exec(ctx, query,
 		o.ID, o.AccountID, o.Provider, o.Service,
 		o.Enabled, o.Term, o.Payment, o.Coverage, o.RampSchedule,
 		o.IncludeEngines, o.ExcludeEngines, o.IncludeRegions, o.ExcludeRegions,
@@ -4323,7 +4545,10 @@ func (s *PostgresStore) validatePlanAccountProvidersTx(ctx context.Context, tx p
 	if len(accountIDs) == 0 {
 		return nil
 	}
-	expected := DerivePlanProviders(&PurchasePlan{Services: services})
+	expected, err := DerivePlanProviders(&PurchasePlan{Services: services})
+	if err != nil {
+		return fmt.Errorf("validate plan account providers: %w", err)
+	}
 	if len(expected) == 0 {
 		return nil
 	}
