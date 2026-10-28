@@ -158,6 +158,12 @@ func (app *Application) initializeUntilReady(ctx context.Context, init func(cont
 // background initializer. A variable so tests can shorten it.
 var shutdownGracePeriod = 30 * time.Second
 
+// shutdownInitWaitHook, when a test sets it, runs on the StartHTTPServer
+// goroutine after the HTTP server has shut down and scheduled tasks have
+// stopped, right before the wait for the background initializer. It lets a
+// test find that wait without a wall-clock window (#36). Nil in production.
+var shutdownInitWaitHook func()
+
 // scheduledTaskUnwindShare reserves 1/N of shutdownGracePeriod (5s of 30s) for
 // detached scheduled tasks to unwind after they are canceled at the end of
 // the drain window. The whole sequence stays inside shutdownGracePeriod, which
@@ -213,6 +219,9 @@ func StartHTTPServer(app *Application, port int) error {
 			log.Printf("Scheduled tasks did not stop within the shutdown grace period")
 		}
 		// The initializer shares app.DB with app.Close; let it exit first.
+		if shutdownInitWaitHook != nil {
+			shutdownInitWaitHook()
+		}
 		select {
 		case <-initDone:
 		case <-shutdownCtx.Done():
