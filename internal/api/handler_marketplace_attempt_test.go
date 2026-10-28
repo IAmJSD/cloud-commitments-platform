@@ -332,6 +332,31 @@ func TestMarketplaceListHTTP_ClientFaultDropsTheAttempt(t *testing.T) {
 	assert.Empty(t, f.db.row.ListingState)
 }
 
+// Issue #27: an unregistered seller gets the registration explanation and
+// reason "seller_not_registered" in the JSON body. AWS created nothing, so the
+// attempt is dropped like any other client fault.
+func TestMarketplaceListHTTP_SellerNotRegisteredExplainsRegistration(t *testing.T) {
+	f := newMarketplaceFixture(t)
+	f.h.marketplaceEC2Factory = func(aws.Config) marketplaceEC2Client {
+		return &stubMarketplaceEC2{createFn: func(context.Context, ec2svc.MarketplaceListingRequest) (ec2svc.MarketplaceListingResult, error) {
+			return ec2svc.MarketplaceListingResult{}, &marketplaceTestAPIError{code: "SellerNotRegistered", message: "raw aws text", fault: smithy.FaultClient}
+		}}
+	}
+
+	resp, err := f.h.HandleRequest(context.Background(), marketplaceListHTTPRequest())
+
+	require.NoError(t, err)
+	assert.Equal(t, 400, resp.StatusCode)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resp.Body), &body))
+	assert.Equal(t, map[string]any{
+		"error":  marketplaceSellerNotRegisteredMessage,
+		"reason": "seller_not_registered",
+	}, body)
+	assert.Empty(t, f.db.token)
+	assert.Empty(t, f.db.row.ListingState)
+}
+
 // The row was read before another request claimed, listed and canceled it, so
 // the stale copy knows nothing of the canceled listing. The token must not be
 // derived from that copy: with a persisted random token the stale request gets

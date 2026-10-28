@@ -65,21 +65,6 @@ func TestSMTPSender_SendPasswordResetEmail_RenderingSuccess(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_SendWelcomeEmail_RenderingSuccess tests rendering success path.
-func TestSMTPSender_SendWelcomeEmail_RenderingSuccess(t *testing.T) {
-	sender := &SMTPSender{
-		host:      "smtp.example.com",
-		port:      587,
-		fromEmail: "", // Empty to trigger early return
-		fromName:  "CUDly",
-		useTLS:    true,
-	}
-
-	ctx := context.Background()
-	err := sender.SendWelcomeEmail(ctx, "user@example.com", "https://dashboard.example.com", "admin")
-	require.NoError(t, err)
-}
-
 // TestSMTPSender_AllNotificationMethods_NoFromEmail tests all notification methods with empty fromEmail.
 func TestSMTPSender_AllNotificationMethods_NoFromEmail(t *testing.T) {
 	sender := &SMTPSender{
@@ -201,12 +186,6 @@ func TestRenderFunctions_EdgeCases(t *testing.T) {
 		result, err := RenderPasswordResetEmail("", "")
 		require.NoError(t, err)
 		assert.Contains(t, result, "Password Reset")
-	})
-
-	t.Run("RenderWelcomeEmail with empty fields", func(t *testing.T) {
-		result, err := RenderWelcomeEmail("", "", "")
-		require.NoError(t, err)
-		assert.Contains(t, result, "Welcome")
 	})
 
 	t.Run("RenderNewRecommendationsEmail with nil recommendations", func(t *testing.T) {
@@ -395,32 +374,6 @@ func TestPasswordResetData_AllFields(t *testing.T) {
 	assert.Equal(t, "https://example.com/reset?token=abc123", data.ResetURL)
 }
 
-// TestWelcomeUserData_AllFields tests WelcomeUserData structure.
-func TestWelcomeUserData_AllFields(t *testing.T) {
-	data := WelcomeUserData{
-		Email:        "newuser@example.com",
-		DashboardURL: "https://cudly.example.com",
-		Role:         "operator",
-	}
-
-	assert.Equal(t, "newuser@example.com", data.Email)
-	assert.Equal(t, "https://cudly.example.com", data.DashboardURL)
-	assert.Equal(t, "operator", data.Role)
-}
-
-// TestWelcomeUserData_ViewerRole tests WelcomeUserData with viewer role.
-func TestWelcomeUserData_ViewerRole(t *testing.T) {
-	data := WelcomeUserData{
-		Email:        "test@example.com",
-		DashboardURL: "https://dashboard.test.com",
-		Role:         "viewer",
-	}
-
-	assert.Equal(t, "test@example.com", data.Email)
-	assert.Equal(t, "https://dashboard.test.com", data.DashboardURL)
-	assert.Equal(t, "viewer", data.Role)
-}
-
 // TestProviderTypes tests provider type constants.
 func TestProviderTypes_Values(t *testing.T) {
 	assert.Equal(t, ProviderType("aws"), ProviderAWS)
@@ -544,12 +497,6 @@ func TestTemplateContent_HasRequiredSections(t *testing.T) {
 		assert.Contains(t, passwordResetTemplate, "1 hour")
 		assert.Contains(t, passwordResetTemplate, ".ResetURL")
 	})
-
-	t.Run("welcomeUserTemplate has role", func(t *testing.T) {
-		assert.Contains(t, welcomeUserTemplate, ".Role")
-		assert.Contains(t, welcomeUserTemplate, ".DashboardURL")
-		assert.Contains(t, welcomeUserTemplate, ".Email")
-	})
 }
 
 // TestRenderFunctions_MultipleRecommendations tests templates with multiple recommendations.
@@ -603,7 +550,6 @@ func TestSMTPSender_MethodsWithNoNetwork(t *testing.T) {
 	assert.NoError(t, sender.SendNotification(ctx, "Subject", "Body"))
 	assert.NoError(t, sender.SendToEmail(ctx, "to@example.com", "Subject", "Body"))
 	assert.NoError(t, sender.SendPasswordResetEmail(ctx, "user@example.com", "https://example.com/reset"))
-	assert.NoError(t, sender.SendWelcomeEmail(ctx, "user@example.com", "https://example.com", "user"))
 
 	data := NotificationData{DashboardURL: "https://example.com"}
 	assert.NoError(t, sender.SendNewRecommendationsNotification(ctx, data))
@@ -704,12 +650,6 @@ func TestSMTPSender_AllMethods_ConnectionFails(t *testing.T) {
 	// All these should fail with connection error
 	t.Run("SendPasswordResetEmail fails", func(t *testing.T) {
 		err := sender.SendPasswordResetEmail(ctx, "user@example.com", "https://example.com/reset")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to send email via SMTP")
-	})
-
-	t.Run("SendWelcomeEmail fails", func(t *testing.T) {
-		err := sender.SendWelcomeEmail(ctx, "user@example.com", "https://example.com", "admin")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to send email via SMTP")
 	})
@@ -1064,7 +1004,6 @@ func TestSMTPSenderInterface_Compliance(t *testing.T) {
 	_ = sender.SendPurchaseConfirmation
 	_ = sender.SendPurchaseFailedNotification
 	_ = sender.SendPasswordResetEmail
-	_ = sender.SendWelcomeEmail
 }
 
 // TestSMTPSender_SendToEmail_MultipleRecipientTypes tests various recipient formats.
@@ -1117,25 +1056,6 @@ func TestRenderAllTemplates_FullCoverage(t *testing.T) {
 	// Test RenderPasswordResetEmail with various inputs
 	t.Run("PasswordReset_simple", func(t *testing.T) {
 		result, err := RenderPasswordResetEmail("simple@test.com", "https://reset.url")
-		require.NoError(t, err)
-		assert.NotEmpty(t, result)
-	})
-
-	// Test RenderWelcomeEmail with various inputs
-	t.Run("Welcome_admin", func(t *testing.T) {
-		result, err := RenderWelcomeEmail("admin@test.com", "https://dashboard.com", "admin")
-		require.NoError(t, err)
-		assert.NotEmpty(t, result)
-	})
-
-	t.Run("Welcome_user", func(t *testing.T) {
-		result, err := RenderWelcomeEmail("user@test.com", "https://dashboard.com", "user")
-		require.NoError(t, err)
-		assert.NotEmpty(t, result)
-	})
-
-	t.Run("Welcome_operator", func(t *testing.T) {
-		result, err := RenderWelcomeEmail("op@test.com", "https://dashboard.com", "operator")
 		require.NoError(t, err)
 		assert.NotEmpty(t, result)
 	})

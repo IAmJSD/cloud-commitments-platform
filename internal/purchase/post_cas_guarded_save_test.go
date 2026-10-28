@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/stretchr/testify/assert"
@@ -105,7 +106,7 @@ func stampLostManager(t *testing.T, factory *MockProviderFactory, stampErr error
 	t.Helper()
 	store := new(MockConfigStore)
 	failOnProviderCall(factory)
-	claimed := &config.PurchaseExecution{ExecutionID: "exec-st", PlanID: "plan-st", Status: "running", StepNumber: 1, Recommendations: approvalTestRecs()}
+	claimed := &config.PurchaseExecution{ExecutionID: "exec-st", PlanID: "plan-st", Status: "running", StepNumber: 1, ScheduledDate: time.Now(), Recommendations: approvalTestRecs()}
 	store.On("GetExecutionByID", mock.Anything, "exec-st").Return(&config.PurchaseExecution{ExecutionID: "exec-st", PlanID: "plan-st", Status: "notified"}, nil).Maybe()
 	store.On("TransitionExecutionStatus", mock.Anything, "exec-st", mock.Anything, "running", (*string)(nil)).Return(claimed, nil).Once()
 	store.On("SaveExecutionIfStatus", mock.Anything, claimed, executorOwnedStatuses).Return(stampErr).Once()
@@ -139,10 +140,9 @@ func TestFireOneDue_StampFindsClaimLostBuysNothing(t *testing.T) {
 	factory := new(MockProviderFactory)
 	m, store := stampLostManager(t, factory, lostGuard())
 
-	fired, raceLost := m.fireOneDue(ctx, &config.PurchaseExecution{ExecutionID: "exec-st", Status: "scheduled"})
+	outcome := m.fireOneDue(ctx, &config.PurchaseExecution{ExecutionID: "exec-st", Status: "scheduled"})
 
-	assert.False(t, fired)
-	assert.True(t, raceLost, "a claim lost before the purchase is a race loss, not an error")
+	assert.Equal(t, fireRaceLost, outcome, "a claim lost before the purchase is a race loss, not an error")
 	factory.AssertNotCalled(t, "CreateAndValidateProvider", mock.Anything, mock.Anything, mock.Anything)
 	store.AssertExpectations(t)
 	store.AssertNumberOfCalls(t, "SaveExecutionIfStatus", 1)

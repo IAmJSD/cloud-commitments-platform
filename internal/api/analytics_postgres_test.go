@@ -328,3 +328,40 @@ func TestQueryHistory_ExternalIDFilter(t *testing.T) {
 	require.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestAccountFilterClause_PinnedSQL pins the exact clause and bind args the
+// purchase_history analytics queries get from the shared account predicate
+// (issue #120 item 5), so moving the builder cannot change the generated SQL.
+func TestAccountFilterClause_PinnedSQL(t *testing.T) {
+	tests := []struct {
+		name       string
+		uuids      []string
+		ext        map[string][]string
+		wantClause string
+		wantArgs   []any
+	}{
+		{name: "no filter", wantClause: "TRUE", wantArgs: []any{"s", "e"}},
+		{name: "providers with no ids", ext: map[string][]string{"aws": nil}, wantClause: "TRUE", wantArgs: []any{"s", "e"}},
+		{
+			name:       "uuids only",
+			uuids:      []string{"u1", "u2"},
+			wantClause: "(cloud_account_id = ANY($3))",
+			wantArgs:   []any{"s", "e", []string{"u1", "u2"}},
+		},
+		{
+			name:  "uuid, unknown provider and two providers in sorted order",
+			uuids: []string{"u1"},
+			ext:   map[string][]string{"azure": {"sub-1"}, "": {"raw"}, "aws": {"123"}},
+			wantClause: "(cloud_account_id = ANY($3) OR account_id = ANY($4) OR " +
+				"(provider = $5 AND account_id = ANY($6)) OR (provider = $7 AND account_id = ANY($8)))",
+			wantArgs: []any{"s", "e", []string{"u1"}, []string{"raw"}, "aws", []string{"123"}, "azure", []string{"sub-1"}},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			clause, args := accountFilterClause(tc.uuids, tc.ext, []any{"s", "e"})
+			assert.Equal(t, tc.wantClause, clause)
+			assert.Equal(t, tc.wantArgs, args)
+		})
+	}
+}

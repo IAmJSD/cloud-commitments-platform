@@ -273,6 +273,21 @@ func PaymentCoercionChangesSchedule(raw, canonical string) bool {
 // purchase time to preserve pre-694 behavior).
 var ValidOfferingClasses = []string{"convertible", "standard"}
 
+// RIExchangeModeManual and RIExchangeModeAuto are the only accepted
+// ri_exchange_mode values.
+const (
+	RIExchangeModeManual = "manual"
+	RIExchangeModeAuto   = "auto"
+)
+
+// IsValidRIExchangeMode reports whether mode is exactly "manual" or "auto".
+// The match is case-sensitive and does not trim, because the RI exchange
+// consumer compares the literal values: "Auto", "" or " auto" are not
+// equivalent to "auto" there.
+func IsValidRIExchangeMode(mode string) bool {
+	return mode == RIExchangeModeManual || mode == RIExchangeModeAuto
+}
+
 // ValidRampScheduleTypes lists all supported ramp schedule types.
 var ValidRampScheduleTypes = []string{"immediate", "weekly", "monthly", "custom"}
 
