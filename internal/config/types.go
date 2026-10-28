@@ -1287,6 +1287,24 @@ type MarketplaceListingSettlement struct {
 	FeePaid          *float64
 }
 
+// MarketplaceListingProceedsTotal is one RI's RI Marketplace sales summed over
+// every listing it has had (issue #1494), in one currency.
+type MarketplaceListingProceedsTotal struct {
+	// PurchaseID is the RI (reservation) id.
+	PurchaseID string
+	// Currency is the ISO code of the amounts; the poller records USD only.
+	Currency string
+	// ProceedsReceived is the seller's net proceeds and FeePaid the AWS fee,
+	// summed over the settled listings.
+	ProceedsReceived float64
+	FeePaid          float64
+	// SettledListings counts the listings whose amounts are recorded, and
+	// UnsettledListings those still without amounts (not ended yet, ended
+	// with an unknown price, or ended before the poller saw them).
+	SettledListings   int
+	UnsettledListings int
+}
+
 // AWS EC2 ReservedInstancesListing status values, mirroring the
 // ec2types.ListingStatus enum. Stored verbatim in purchase_history.listing_state
 // so the strings must match AWS exactly. ListingStatePending is additionally
