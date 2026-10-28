@@ -1031,6 +1031,21 @@ func (m *MockConfigStore) SettleMarketplaceListing(ctx context.Context, settleme
 	return args.Bool(0), args.Error(1)
 }
 
+// GetMarketplaceListingProceedsTotals mocks the per-RI marketplace proceeds totals (issue #1494).
+func (m *MockConfigStore) GetMarketplaceListingProceedsTotals(ctx context.Context, purchaseIDs []string) ([]config.MarketplaceListingProceedsTotal, error) {
+	m.record("GetMarketplaceListingProceedsTotals", ctx, purchaseIDs)
+	args := m.Called(ctx, purchaseIDs)
+	var totals []config.MarketplaceListingProceedsTotal
+	if v := args.Get(0); v != nil {
+		t, ok := v.([]config.MarketplaceListingProceedsTotal)
+		if !ok {
+			m.reporter.wrongReturnType("GetMarketplaceListingProceedsTotals", "[]config.MarketplaceListingProceedsTotal", v)
+		}
+		totals = t
+	}
+	return totals, args.Error(1)
+}
+
 // ClaimRIExchangeIdempotencyKey mocks the atomic RI exchange submit claim
 // (issue #1642). With no registered expectation it defaults to "this call won
 // the claim" so the many pre-existing execute-path tests, whose subject is a

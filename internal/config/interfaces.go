@@ -514,10 +514,12 @@ type StoreInterface interface {
 	// they are cleared because AWS created nothing reusable.
 	ReleaseMarketplaceListingClaim(ctx context.Context, purchaseID, clientToken, priorState string, keepAttempt bool) error
 
-	// ListMarketplaceListingsToPoll returns the AWS rows whose listing the
-	// marketplace status poller reads (issue #27): active listings, listings
-	// recorded as pending with no list attempt in flight (issue #1494), and
-	// closed/canceled ones it has seen whose proceeds are not recorded yet.
+	// ListMarketplaceListingsToPoll returns the AWS listings the marketplace
+	// status poller reads (issue #27): active listings, listings recorded as
+	// pending with no list attempt in flight (issue #1494), and
+	// closed/canceled ones it has seen whose proceeds are not recorded yet,
+	// both the RI's current listing and the listings it was relisted from
+	// (issue #1494).
 	ListMarketplaceListingsToPoll(ctx context.Context) ([]PurchaseHistoryRecord, error)
 
 	// RecordMarketplaceListingActive records a listing AWS reports active:
@@ -529,11 +531,17 @@ type StoreInterface interface {
 	RecordMarketplaceListingActive(ctx context.Context, purchaseID, listingID string, listedAt time.Time) (bool, error)
 
 	// SettleMarketplaceListing records a listing that closed or was canceled
-	// on AWS, with its proceeds and AWS fee when known. It applies once per
-	// listing, only while the row still holds it and is active, pending with
-	// no list attempt in flight, or already in the same terminal state.
-	// Reports whether the row was written.
+	// on AWS, with its proceeds and AWS fee when known, in the listing's own
+	// settlement row and, while the RI still holds the listing, on its
+	// purchase_history row (issue #1494). It applies once per listing, only
+	// while the listing is active, pending with no list attempt in flight, or
+	// already in the same terminal state. Reports whether a row was written.
 	SettleMarketplaceListing(ctx context.Context, settlement MarketplaceListingSettlement) (bool, error)
+
+	// GetMarketplaceListingProceedsTotals sums each RI's marketplace proceeds
+	// and fees over all of its listings (issue #1494), one total per purchase
+	// and currency. RIs with no recorded listing are left out.
+	GetMarketplaceListingProceedsTotals(ctx context.Context, purchaseIDs []string) ([]MarketplaceListingProceedsTotal, error)
 
 	// ClaimRIExchangeIdempotencyKey atomically claims key for an RI exchange
 	// submit, so a client that retries a timed-out execute request cannot

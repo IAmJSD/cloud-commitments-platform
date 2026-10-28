@@ -2429,6 +2429,9 @@ func (s *PostgresStore) UpdatePurchaseHistoryListing(ctx context.Context, purcha
 	// Writing a new listing id (a relist) drops the previous listing's
 	// listed_at and settlement in the same statement (issue #27), so the new
 	// listing can be settled even if it ends before the poller sees it active.
+	// The previous listing itself is kept in marketplace_listing_settlements
+	// by trigger purchase_history_keep_superseded_listing (migration 000153,
+	// issue #1494), where the poller still settles it.
 	query := `
 		UPDATE purchase_history
 		SET listing_id = $1, listing_state = $2,
@@ -2473,7 +2476,11 @@ func (s *PostgresStore) StampOfferingClass(ctx context.Context, purchaseID, offe
 // priceSchedule in the same statement unless an earlier attempt already stored a
 // token, and returns the row's values as of the claim (issue #525): the handler
 // must not trust a row read before the claim. It returns (nil, nil) when the row
-// could not be claimed (active, pending without a token, or absent).
+// could not be claimed (active, pending without a token, or absent). The
+// claimed row keeps the previous listing id but no longer records that
+// listing's state, so trigger purchase_history_keep_superseded_listing copies
+// the previous listing into marketplace_listing_settlements when the token is
+// first stored (migration 000153, issue #1494).
 //
 // Rows saved before migration 000108 can share a purchase_id (#267). The claim
 // then works on the earliest row (created_at, then id), the one
