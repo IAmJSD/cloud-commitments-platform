@@ -1454,6 +1454,89 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /api/purchases/{id}/settle:
+    parameters:
+      - $ref: '#/components/parameters/ResourceID'
+    post:
+      operationId: settlePurchaseExecution
+      tags: [Purchases]
+      summary: Record an operator settlement of an unknown purchase outcome
+      description: >
+        Records an audited settlement of a failed plan execution after the
+        operator checks the cloud account and acknowledges its unknown outcome.
+        Requires execute permission on purchases, execution account access and
+        matching permission constraints. The row remains failed and counts as
+        possibly bought; settlement permanently prevents retry and can unblock
+        deletion of its managed plan. A retry chain that may still buy is
+        refused. Repeating an identical settlement returns the stored result.
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason, acknowledge_unknown_outcome]
+              properties:
+                reason:
+                  type: string
+                  minLength: 10
+                  maxLength: 300
+                  description: >
+                    Trimmed explanation without control characters, at most
+                    1000 UTF-8 bytes. The entire request body is limited to 2048 bytes.
+                acknowledge_unknown_outcome:
+                  type: boolean
+                  enum: [true]
+      responses:
+        '200':
+          description: Settlement recorded or an identical settlement replayed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [execution_id, status, outcome_settled_at, outcome_settled_by, outcome_settlement, replayed]
+                properties:
+                  execution_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [failed]
+                  outcome_settled_at:
+                    type: string
+                    format: date-time
+                  outcome_settled_by:
+                    type: string
+                  outcome_settlement:
+                    type: string
+                  replayed:
+                    type: boolean
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Execution cannot be settled, or an earlier settlement differs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          description: Settlement storage is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /api/purchases/{id}/revoke:
     parameters:
       - name: id
