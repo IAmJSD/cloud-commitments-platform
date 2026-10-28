@@ -2,6 +2,13 @@ module github.com/LeanerCloud/cloud-commitments-platform
 
 go 1.26.10
 
+// Keep ./... out of frontend/node_modules (issue #177). Go's ./... skips only
+// testdata and paths starting with . or _, so after `npm ci` it picked up the
+// Go source some npm packages ship (frontend/node_modules/flatted/golang) as a
+// package of this module, and every `go vet/test/build ./...`, golangci-lint
+// and govulncheck run in that checkout checked code this repo doesn't own.
+ignore ./frontend/node_modules
+
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/config v1.33.9

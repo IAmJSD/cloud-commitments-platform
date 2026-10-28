@@ -1,8 +1,8 @@
--- Migration 000153: drop the 11-column recommendations_natural_key_az_tp_idx
+-- Migration 000155: drop the 11-column recommendations_natural_key_az_tp_idx
 -- and the 12-column recommendations_natural_key_source_idx (#408, contract step
 -- of the RDS AZ-config identity work).
 --
--- Migration 000152 added the generated az_config column, the 12-column
+-- Migration 000154 added the generated az_config column, the 12-column
 -- recommendations_natural_key_az_tp_azc_idx and the 13-column
 -- recommendations_natural_key_source_azc_idx, and kept the indexes without
 -- az_config so the previous upsert (ON CONFLICT on the 11 columns) kept

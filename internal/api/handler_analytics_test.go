@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -604,6 +605,44 @@ func TestHandler_getAnalyticsTrends_Success_ScopesByAccount(t *testing.T) {
 	assert.Len(t, resp.Monthly, 1)
 	assert.Len(t, resp.Provider, 1)
 	assert.Len(t, resp.Service, 1)
+}
+
+// TestHandler_getAnalyticsTrends_MonthlyCommitmentAndUsage pins issue #30 on
+// the wire: each monthly row carries total_commitment and total_usage, an
+// unknown value is omitted rather than sent as 0, and a known 0 is sent.
+func TestHandler_getAnalyticsTrends_MonthlyCommitmentAndUsage(t *testing.T) {
+	ctx := context.Background()
+	commitment, usage, zero := 720.0, 640.0, 0.0
+	mockSnap := new(MockAnalyticsSnapshotStore)
+	mockSnap.On("QueryMonthlyTotals", ctx, mock.Anything, mock.Anything, mock.Anything).
+		Return([]analytics.MonthlySummary{
+			{Provider: "aws", Service: "ec2", TotalSavings: 100, TotalCommitment: &commitment, TotalUsage: &usage},
+			{Provider: "aws", Service: "rds", TotalSavings: 50},
+			{Provider: "aws", Service: "elasticache", TotalCommitment: &zero, TotalUsage: &zero},
+		}, nil)
+	mockSnap.On("QueryByProvider", ctx, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return([]analytics.ProviderBreakdown{}, nil)
+	mockSnap.On("QueryByService", ctx, mock.Anything, mock.Anything, "", mock.Anything, mock.Anything).
+		Return([]analytics.ServiceBreakdown{}, nil)
+
+	mockAuth, req := adminAnalyticsReq(ctx)
+	handler := &Handler{auth: mockAuth, analyticsSnapshots: mockSnap, config: new(MockConfigStore)}
+
+	result, err := handler.getAnalyticsTrends(ctx, req, map[string]string{})
+	require.NoError(t, err)
+	raw, err := json.Marshal(result)
+	require.NoError(t, err)
+	var body struct {
+		Monthly []map[string]any `json:"monthly"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &body))
+	require.Len(t, body.Monthly, 3)
+	assert.Equal(t, 720.0, body.Monthly[0]["total_commitment"])
+	assert.Equal(t, 640.0, body.Monthly[0]["total_usage"])
+	assert.NotContains(t, body.Monthly[1], "total_commitment", "unknown is omitted, never 0")
+	assert.NotContains(t, body.Monthly[1], "total_usage", "unknown is omitted, never 0")
+	assert.Equal(t, 0.0, body.Monthly[2]["total_commitment"], "a known 0 is sent")
+	assert.Equal(t, 0.0, body.Monthly[2]["total_usage"], "a known 0 is sent")
 }
 
 // TestHandler_getAnalyticsTrends_NoStore returns 503 when the snapshot store is

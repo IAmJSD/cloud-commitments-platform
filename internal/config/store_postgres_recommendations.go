@@ -36,7 +36,7 @@ const azurePricingMigrationVersion = 106
 // so per-rec ON CONFLICT no longer collides on SQLSTATE 21000. Migration
 // 000109 added availability_zone, a GENERATED column derived from payload that
 // is never written here. Migration 000111 added the platform and tenancy
-// generated columns the same way, and migration 000152 the az_config one; the
+// generated columns the same way, and migration 000154 the az_config one; the
 // upsert arbiter is the 12-column recommendations_natural_key_az_tp_azc_idx
 // (issues #792, #806, #408).
 //

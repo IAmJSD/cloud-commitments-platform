@@ -20,7 +20,7 @@ const insertRecForMigration153 = `
 	VALUES ($1::timestamptz, 'aws', 'rds', $2, 'db.r5.large', 'mysql', $3::jsonb, 0, 0, 1, 'all-upfront')
 `
 
-// TestMigration_DropRecommendations11ColNaturalKey locks down migration 000153
+// TestMigration_DropRecommendations11ColNaturalKey locks down migration 000155
 // (issue #408, contract step): Single-AZ and Multi-AZ rows of the same class
 // coexist once the 11-column and 000120 source indexes are gone, the 12-column index still dedupes,
 // and the rollback recreates both indexes after collapsing those
@@ -51,7 +51,7 @@ func TestMigration_DropRecommendations11ColNaturalKey(t *testing.T) {
 		none   = `{"details":{"engine":"mysql"}}`
 	)
 
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 153)))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 155)))
 	require.True(t, indexExists("recommendations_natural_key_az_tp_idx"))
 	require.True(t, indexExists("recommendations_natural_key_az_tp_azc_idx"))
 	require.True(t, indexExists("recommendations_natural_key_source_idx"))
@@ -62,7 +62,7 @@ func TestMigration_DropRecommendations11ColNaturalKey(t *testing.T) {
 	_, err = pool.Exec(ctx, insertRecForMigration153, "2026-01-01T00:00:00Z", "us-west-2", single)
 	require.NoError(t, err)
 
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 153))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 155))
 	assert.False(t, indexExists("recommendations_natural_key_az_tp_idx"), "11-column index must be dropped")
 	assert.True(t, indexExists("recommendations_natural_key_az_tp_azc_idx"), "12-column index must remain")
 	assert.False(t, indexExists("recommendations_natural_key_source_idx"), "000120's source index (no az_config) must be dropped")
@@ -81,7 +81,7 @@ func TestMigration_DropRecommendations11ColNaturalKey(t *testing.T) {
 	// Rollback: az_config-only duplicates collapse to the newest, the other
 	// region's row is untouched, and the 11-column index is recreated with
 	// its original shape.
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 153)))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, previousMigrationVersion(t, 155)))
 	assert.Equal(t, 1, count("us-east-1"), "only duplicates under the 11-column key may be deleted")
 	assert.Equal(t, 1, count("us-west-2"))
 	var kept string
@@ -100,7 +100,7 @@ func TestMigration_DropRecommendations11ColNaturalKey(t *testing.T) {
 	assert.Contains(t, indexDef, "(account_key, provider, service, region, resource_type, engine, term, payment_option, availability_zone, platform, tenancy, source_account_key)")
 
 	// Re-applying the up migration after a rollback works.
-	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 153))
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, migrationsPath, 155))
 	assert.False(t, indexExists("recommendations_natural_key_az_tp_idx"))
 	assert.False(t, indexExists("recommendations_natural_key_source_idx"))
 }

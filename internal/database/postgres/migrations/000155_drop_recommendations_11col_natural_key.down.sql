@@ -1,8 +1,8 @@
--- Rollback of 000153: recreate the 11-column unique index exactly as defined
+-- Rollback of 000155: recreate the 11-column unique index exactly as defined
 -- by 000111 and the source-account index exactly as defined by 000120.
 --
 -- Only safe together with a code rollback to the 11-column upsert. The newer
--- code needs the 12-column arbiter from 000152, which this rollback keeps. The
+-- code needs the 12-column arbiter from 000154, which this rollback keeps. The
 -- recommendations table is a regenerable cache, so rows that differ only by
 -- az_config (allowed while the 11-column index is absent) are collapsed to the
 -- most recently collected one before the indexes are rebuilt; the next

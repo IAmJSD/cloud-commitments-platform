@@ -23,7 +23,7 @@ const (
 	PasswordResetExpiry = 1 * time.Hour
 
 	// PasswordSetupExpiry is how long an invited user has to set their
-	// initial password via the link in the welcome email. Longer than
+	// initial password via the link in the invite email. Longer than
 	// PasswordResetExpiry because invites typically wait in an inbox
 	// before the recipient acts on them.
 	PasswordSetupExpiry = 7 * 24 * time.Hour

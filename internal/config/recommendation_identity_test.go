@@ -46,7 +46,7 @@ func TestComputeIdentity_TopLevelKeyIgnoredAndMalformedFailsLoud(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// The vectors mirror TestMigration_RecommendationsAZConfig (migration 000152,
+// The vectors mirror TestMigration_RecommendationsAZConfig (migration 000154,
 // internal/database/postgres/migrations) so the Go reader and the generated
 // az_config column cannot diverge (issue #408). Details here is the details
 // blob itself.

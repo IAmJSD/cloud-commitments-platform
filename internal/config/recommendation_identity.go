@@ -45,7 +45,7 @@ func (r *RecommendationRecord) ComputeIdentity() (ComputeIdentity, error) {
 // "multi-az", Azure SQL "zoneRedundant" / "none") from the rec's Details
 // blob, VERBATIM. Single-AZ and Multi-AZ RDS reservations are different
 // offerings with different prices, yet share every other identity field
-// (issue #408). It mirrors the generated az_config column of migration 000152
+// (issue #408). It mirrors the generated az_config column of migration 000154
 // (COALESCE(payload->'details'->>'az_config', ”)) and is pinned to it by the
 // shared vectors in TestDetailsAZConfig_Vectors: absent Details, JSON null, a
 // missing key and a null value all yield "". Only DatabaseDetails carries the

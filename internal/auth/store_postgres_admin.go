@@ -178,25 +178,14 @@ func (s *PostgresStore) CreateAdminIfNone(ctx context.Context, user *User) (bool
 	// Administrators group would not satisfy the membership predicate, silently
 	// breaking that contract.
 	query := `
-		INSERT INTO users (
-			id, email, password_hash, group_ids, active,
-			mfa_enabled, mfa_secret, mfa_pending_secret, mfa_pending_secret_expires_at,
-			mfa_recovery_codes, password_reset_token, password_reset_expiry,
-			failed_login_attempts, locked_until, password_history,
-			created_at, updated_at, last_login_at
-		)
+		INSERT INTO users (` + userInsertColumns + `)
 		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 		WHERE NOT EXISTS (SELECT 1 FROM users WHERE group_ids @> ARRAY[$19::uuid] AND active = true)
 	`
 
-	// See CreateUser for the nil-slice substitution rationale. Force the
-	// Administrators group onto the bootstrap admin so it satisfies the
-	// membership predicate above (deduped to avoid a doubled entry if the
-	// caller already supplied it).
-	recoveryCodes := user.MFARecoveryCodes
-	if recoveryCodes == nil {
-		recoveryCodes = []string{}
-	}
+	// Force the Administrators group onto the bootstrap admin so it
+	// satisfies the membership predicate above (deduped to avoid a doubled
+	// entry if the caller already supplied it).
 	groupIDs := user.GroupIDs
 	if !containsGroup(groupIDs, DefaultAdminGroupID) {
 		groupIDs = append(append([]string(nil), groupIDs...), DefaultAdminGroupID)
@@ -221,15 +210,8 @@ func (s *PostgresStore) CreateAdminIfNone(ctx context.Context, user *User) (bool
 		return false, fmt.Errorf("failed to acquire admin bootstrap lock: %w", err)
 	}
 
-	tag, err := tx.Exec(ctx, query,
-		user.ID, user.Email, user.PasswordHash,
-		groupIDs, user.Active, user.MFAEnabled, user.MFASecret,
-		user.MFAPendingSecret, user.MFAPendingSecretExpiresAt, recoveryCodes,
-		user.PasswordResetToken, user.PasswordResetExpiry,
-		user.FailedLoginAttempts, user.LockedUntil, user.PasswordHistory,
-		user.CreatedAt, user.UpdatedAt, user.LastLoginAt,
-		DefaultAdminGroupID,
-	)
+	args := append(userInsertArgs(user, groupIDs), DefaultAdminGroupID)
+	tag, err := tx.Exec(ctx, query, args...)
 	if err != nil {
 		// Email uniqueness can still fire if the bootstrap caller reuses
 		// an email already held by a non-admin user. Surface as the same

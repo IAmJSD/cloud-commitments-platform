@@ -34,6 +34,11 @@ func (f *fakeReshapeEC2) ListConvertibleReservedInstances(_ context.Context) ([]
 	return f.instances, nil
 }
 
+// GetValidResourceTypes returns no catalog, so reshape keeps the legacy ladder.
+func (f *fakeReshapeEC2) GetValidResourceTypes(_ context.Context) ([]string, error) {
+	return nil, nil
+}
+
 // fakeReshapeRecs is a stub for reshapeRecsClient. Counts calls so the
 // test can assert cache-hit behavior on the second request.
 type fakeReshapeRecs struct {
@@ -174,8 +179,9 @@ func TestReshapeRecommendations_Integration_EndToEnd(t *testing.T) {
 			"same-family m5.* alternatives must be excluded, got %s", alt.InstanceType)
 	}
 
-	// Verify the RI utilization cache row landed in Postgres.
-	entry, err := store.GetRIUtilizationCache(ctx, "us-east-1", 30)
+	// Verify the RI utilization cache row landed in Postgres, under the
+	// unattributed account key the default resolver ("") yields.
+	entry, err := store.GetRIUtilizationCache(ctx, config.RIUtilizationCacheKey{Region: "us-east-1", LookbackDays: 30})
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	var cached []recommendations.RIUtilization

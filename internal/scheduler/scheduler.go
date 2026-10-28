@@ -1231,18 +1231,19 @@ func (s *Scheduler) ListRecommendations(ctx context.Context, filter config.Recom
 
 	recs, err = s.applySuppressions(ctx, recs)
 	if err != nil {
-		// A suppression read failure shouldn't block the recs list —
-		// the user-facing cost of that is an empty page; we'd rather
-		// over-show than under-show. Log and continue.
-		logging.Errorf("failed to apply suppressions; returning un-suppressed recs: %v", err)
+		// Fail closed (issue #111). Suppressions are the duplicate-purchase
+		// guard: without them a just-bought commitment shows at its full
+		// pre-purchase count with no "recently purchased" badge, inviting
+		// the same purchase a second time. A failed page is the safe side.
+		return nil, fmt.Errorf("apply suppressions: %w", err)
 	}
 
 	recs, err = s.applyAccountOverrides(ctx, recs)
 	if err != nil {
-		// Same over-show-vs-under-show trade-off as applySuppressions.
-		// A missing global ServiceConfig or override-table read failure
-		// should leave the user looking at un-overridden recs, not a
-		// blank page. Issue #196.
+		// Overrides are a display filter, not a spend guard, so they keep
+		// the over-show trade-off: a missing global ServiceConfig or an
+		// override-table read failure leaves the user looking at
+		// un-overridden recs, not a blank page. Issue #196.
 		logging.Errorf("failed to apply account overrides; returning un-filtered recs: %v", err)
 	}
 
@@ -1281,9 +1282,10 @@ func (s *Scheduler) finishCacheRead(ctx context.Context, freshness *config.Recom
 }
 
 // ListRecommendationsStrict is ListRecommendations for the money path: the
-// same stored rows, suppressions and account overrides, but a suppression or
-// override read failure is returned instead of logged. Over-showing is fine
-// for a page; on a purchase it would re-buy what a prior step already bought.
+// same stored rows, suppressions and account overrides, but an override read
+// failure is returned instead of logged (a suppression read failure fails
+// both). Over-showing an override-hidden rec is fine for a page; on a
+// purchase it would buy what the operator excluded.
 // It has no cold-start or background-refresh side effects: an empty cache
 // reads as empty and the caller retries on a later tick.
 func (s *Scheduler) ListRecommendationsStrict(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error) {
@@ -1309,6 +1311,8 @@ func (s *Scheduler) ListRecommendationsStrict(ctx context.Context, filter config
 // Suppressions are still applied: a rec whose remaining count has been
 // suppressed to zero is treated as gone (returns nil, nil, nil) so the caller
 // can render a 404 rather than a "hidden" banner for actively-dismissed recs.
+// A suppression read failure is returned (issue #111) rather than serving the
+// rec at its un-suppressed count.
 //
 // hiddenBy is non-nil (one or more reason strings) when the rec exists and
 // passes the suppression check, but would be dropped by the account-override
@@ -1330,8 +1334,8 @@ func (s *Scheduler) GetRecommendationByID(ctx context.Context, id string) (rec *
 	// the caller's perspective (the suppression is intentional user action).
 	recs, err = s.applySuppressions(ctx, recs)
 	if err != nil {
-		// Over-show: on suppression read failure treat the rec as un-suppressed.
-		logging.Errorf("GetRecommendationByID: suppression check failed; treating rec as un-suppressed: %v", err)
+		// Fail closed, as ListRecommendations does (issue #111).
+		return nil, nil, fmt.Errorf("GetRecommendationByID: suppression check: %w", err)
 	}
 	if len(recs) == 0 {
 		return nil, nil, nil
@@ -1423,10 +1427,14 @@ func (a *suppressionAgg) add(sup *config.PurchaseSuppression) {
 // SuppressionExpiresAt / PrimarySuppressionExecutionID fields that
 // drive the "recently purchased" badge on the frontend. Recs whose
 // remaining count hits 0 are dropped entirely.
+//
+// A read failure returns no recs alongside the error, so a caller that
+// dropped the error would still show nothing rather than the un-suppressed
+// list (issue #111).
 func (s *Scheduler) applySuppressions(ctx context.Context, recs []config.RecommendationRecord) ([]config.RecommendationRecord, error) {
 	sups, err := s.config.ListActiveSuppressions(ctx)
 	if err != nil {
-		return recs, err
+		return nil, err
 	}
 	if len(sups) == 0 {
 		return recs, nil
