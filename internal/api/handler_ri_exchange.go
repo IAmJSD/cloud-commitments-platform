@@ -3011,7 +3011,7 @@ type RIExchangeConfigUpdateRequest struct {
 }
 
 func (r *RIExchangeConfigUpdateRequest) validate() error {
-	if r.Mode != "manual" && r.Mode != "auto" {
+	if !config.IsValidRIExchangeMode(r.Mode) {
 		return NewClientError(400, "mode must be 'manual' or 'auto'")
 	}
 	if r.UtilizationThreshold < 0 || r.UtilizationThreshold > 100 {
