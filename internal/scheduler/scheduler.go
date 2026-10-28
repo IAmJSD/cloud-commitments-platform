@@ -27,6 +27,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/oidc"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/providerfactory"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/purchase"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/semaphore"
@@ -51,6 +52,13 @@ type SchedulerConfig struct { //nolint:revive // exported: doc comment style int
 	OIDCSigner      oidc.Signer
 	AssumeRoleSTS   credentials.STSClient
 	STSClient       STSClient
+	// BastionSTSFactory builds the STS client a bastion-mode account's target
+	// role is assumed with, signed with the bastion account's credentials.
+	// Without it bastion accounts fail to resolve (issue #263).
+	BastionSTSFactory credentials.STSClientFactory
+	// AmbientAWSCreds are the host credentials. Only a bastion that is the
+	// host account itself (role_arn with no role ARN) uses them.
+	AmbientAWSCreds aws.CredentialsProvider
 	DashboardURL    string
 	OIDCIssuerURL   string
 	IsLambda        bool
@@ -88,6 +96,8 @@ type Scheduler struct {
 	credStore       credentials.CredentialStore
 	oidcSigner      oidc.Signer
 	assumeRoleSTS   credentials.STSClient
+	bastionSTS      credentials.STSClientFactory
+	ambientAWSCreds aws.CredentialsProvider
 	config          config.StoreInterface
 	dashboardURL    string
 	oidcIssuerURL   string
@@ -118,6 +128,8 @@ func NewScheduler(cfg SchedulerConfig) *Scheduler {
 		oidcSigner:      cfg.OIDCSigner,
 		oidcIssuerURL:   cfg.OIDCIssuerURL,
 		assumeRoleSTS:   cfg.AssumeRoleSTS,
+		bastionSTS:      cfg.BastionSTSFactory,
+		ambientAWSCreds: cfg.AmbientAWSCreds,
 		stsClient:       cfg.STSClient,
 		isLambda:        cfg.IsLambda,
 		cacheTTL:        cacheTTLFromEnv(),
@@ -847,7 +859,7 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 		}
 		return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, acct.ExternalID, globalCfg)
 	}
-	awsCreds, err := credentials.ResolveAWSCredentialProvider(ctx, &acct, s.credStore, s.assumeRoleSTS)
+	awsCreds, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, &acct, s.credStore, s.assumeRoleSTS, s.awsResolveOptions())
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve credentials: %w", err)
 	}
@@ -857,6 +869,18 @@ func (s *Scheduler) collectAWSForAccount(ctx context.Context, globalCfg *config.
 		return nil, nil, fmt.Errorf("create provider: %w", err)
 	}
 	return s.fetchAndConvert(ctx, prov, "aws", &acct.ID, acct.ExternalID, globalCfg)
+}
+
+// awsResolveOptions returns the resolver options for per-account AWS
+// collection: the config-store bastion lookup and bastion STS factory, plus
+// the host credentials for a bastion that is the host account itself.
+func (s *Scheduler) awsResolveOptions() credentials.AWSResolveOptions {
+	return credentials.AWSResolveOptions{
+		AccountLookup:    credentials.AccountLookupFromStore(s.config),
+		STSClientFactory: s.bastionSTS,
+		AmbientProvider:  s.ambientAWSCreds,
+		AmbientSTS:       s.stsClient,
+	}
 }
 
 // collectAzureRecommendations fans out across all enabled Azure accounts,

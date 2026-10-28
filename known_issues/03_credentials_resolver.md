@@ -31,12 +31,18 @@
 
 ## ~~MEDIUM: `resolveBastionProvider` has no enforcement that the STS client carries bastion credentials~~ — RESOLVED
 
-**File**: `internal/credentials/resolver.go:145-159`
+**File**: `internal/credentials/resolver.go` (`resolveBastionProvider`)
 **Description**: `resolveBastionProvider` previously delegated straight to `resolveRoleARNProvider` with the caller-supplied `stsClient`, so it had no runtime check that the STS client actually carried bastion credentials.
 **Impact**: Silent privilege escalation or incorrect audit trail if callers passed the wrong STS client.
-**Status:** ✔️ Resolved
+**Status:** ✔️ Resolved (fully as of issue #263)
 
-**Resolved by:** Added `AccountLookupFunc`, `STSClientFactory`, and `AWSResolveOptions` types in `internal/credentials/resolver.go`. New `ResolveAWSCredentialProviderWithOpts` accepts these options; the bastion path now self-loads the bastion `CloudAccount` via `opts.AccountLookup`, recursively resolves its credentials, builds an STS client via `opts.STSClientFactory`, and only then assumes the target role. Bastion-of-bastion chaining, missing accounts, and disabled accounts are rejected with clear errors. The legacy 4-arg `ResolveAWSCredentialProvider` remains as a back-compat wrapper that falls through to the old "trust caller's STS client" behaviour when neither option is wired (so existing callers in scheduler/purchase keep working until they're migrated). Locked down by `TestResolveBastionProvider_LoadsBastionCreds`, `_RejectsBastionChain`, `_BastionNotFound`, `_BastionDisabled`, `_LegacyFallback`.
+**Resolved by (first step):** Added `AccountLookupFunc`, `STSClientFactory`, and `AWSResolveOptions` types in `internal/credentials/resolver.go`. New `ResolveAWSCredentialProviderWithOpts` accepts these options; the bastion path self-loads the bastion `CloudAccount` via `opts.AccountLookup`, recursively resolves its credentials, builds an STS client via `opts.STSClientFactory`, and only then assumes the target role. Bastion-of-bastion chaining, missing accounts, and disabled accounts are rejected with clear errors. That change kept a legacy fallback: with either option nil, the resolver still assumed the target role with the caller's STS client. No production caller set either option, so every bastion account still ran through the fallback with the CUDly host's credentials (audit finding A03-011).
+
+**Resolved by (issue #263):** The fallback is removed. `resolveBastionProvider` returns an error when `AccountLookup` or `STSClientFactory` is nil. Every AWS resolver caller now passes both: the scheduler (`collectAWSForAccount`), the purchase manager (`resolveAWSProvider`), the commitment-options probe (`newCommitmentProbeConfigBuilder` in `internal/server/app.go`), and the API's marketplace, account-test and org-discovery paths (`Handler.bastionResolveOptions`). The lookup is the config store's `GetCloudAccount` (`credentials.AccountLookupFromStore`); the factory is `credentials.NewSTSClientFactory`, which builds an STS client from the host's AWS config (region, endpoint, HTTP client) signed with the bastion's credentials. The bastion's own credentials are resolved with the caller's ambient options, so a bastion that is the CUDly host account (`role_arn` with no role ARN) still works once `VerifyHostAccount` confirms it.
+
+Behaviour change: a bastion-mode account whose target role trusts the CUDly host's role instead of the bastion account now fails at AssumeRole (`AccessDenied`). To fix it, the target role's trust policy must allow the bastion account's principal (the bastion's IAM user or role), with the same `sts:ExternalId` condition.
+
+Locked down by `TestResolveBastionProvider_LoadsBastionCreds`, `_TargetAssumedWithBastionSTS`, `_HostAccountBastion`, `_RejectsBastionChain`, `_BastionNotFound`, `_BastionDisabled`, `_LegacyFallback` (now an error assertion), and per-caller tests: `TestScheduler_CollectAWSForAccount_Bastion*`, `TestResolveAWSProvider_Bastion*`, `TestCommitmentProbeConfigBuilder_Bastion*`, `TestAPIAWSCallers_Bastion*`, and the bastion case of `TestTestAccountCredentials_AWSValidConfigsProbeCallerIdentity`.
 
 ### Original implementation plan
 
