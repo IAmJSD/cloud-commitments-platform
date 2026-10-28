@@ -22,7 +22,9 @@ const PurchaseFailedLogMarker = "purchase_execution_failed"
 
 // failureNotifyTimeout bounds the recipient lookup and the send. The context is
 // detached from the caller's, which may already be near its deadline after a
-// long purchase run.
+// long purchase run. It is the last of the three detached phases of
+// executeAndFinalize, so the Lambda timeout must cover it too (see
+// purchaseExecutionTimeout, #1434).
 const failureNotifyTimeout = 30 * time.Second
 
 // notifyExecutionFailure tells operators that an execution row did not fully
