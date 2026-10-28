@@ -77,6 +77,28 @@ if [ "$(git config --get-all secrets.patterns | wc -l)" -ne "$patterns_after" ];
     echo "setup run over a pre-#328 bare detector changed the pattern count" >&2
     exit 1
 fi
+# A clone set up before #368 has the narrower DSN detectors registered, bare or
+# word-wrapped. A re-run must drop them, leaving only the widened ones. The
+# schemes are split so this file does not match the detectors.
+LEGACY_PG='[A-Za-z0-9_]*(postgres:''//[^:]+:[^@]+@)[A-Za-z0-9_]*'
+LEGACY_MYSQL='mysql:''//[^:]+:[^@]+@'
+git config --add secrets.patterns "$LEGACY_PG"
+git config --add secrets.patterns "$LEGACY_MYSQL"
+if ! bash scripts/setup-git-secrets.sh > "$tmp/setup4.log" 2>&1; then
+    echo "scripts/setup-git-secrets.sh failed with pre-#368 DSN detectors registered:" >&2
+    cat "$tmp/setup4.log" >&2
+    exit 1
+fi
+for legacy in "$LEGACY_PG" "$LEGACY_MYSQL"; do
+    if git config --get-all secrets.patterns | grep -qxF -- "$legacy"; then
+        echo "setup run left a pre-#368 DSN detector registered: $legacy" >&2
+        exit 1
+    fi
+done
+if [ "$(git config --get-all secrets.patterns | wc -l)" -ne "$patterns_after" ]; then
+    echo "setup run over pre-#368 DSN detectors changed the pattern count" >&2
+    exit 1
+fi
 # Same HOME-isolation reason: drop the provider before any further scan.
 git config --unset-all secrets.providers
 
@@ -222,14 +244,14 @@ run_case "secret appended to an unrelated registration line stays caught" 1 \
     "$(sed "s/# GCP API Key\$/# GCP API Key ${KEY}/" "$REPO_ROOT/scripts/setup-git-secrets.sh")"
 cp "$REPO_ROOT/scripts/setup-git-secrets.sh" scripts/setup-git-secrets.sh
 
-# A secret appended to the END of one of the three self-matching lines
-# THEMSELVES must also still be caught. An entry anchored on the path and
-# pattern but missing a trailing $ would stop matching at the end of the
-# pattern it names and let anything appended after it through, which is a
-# narrower version of the same hole the entry above closes.
+# A secret appended to the END of the self-matching line ITSELF must also
+# still be caught. An entry anchored on the path and pattern but missing a
+# trailing $ would stop matching at the end of the pattern it names and let
+# anything appended after it through, which is a narrower version of the
+# same hole the entry above closes.
 run_case "secret appended to a self-matching line itself stays caught" 1 \
     scripts/setup-git-secrets.sh \
-    "$(sed "s/# PostgreSQL\$/# PostgreSQL ${KEY}/" "$REPO_ROOT/scripts/setup-git-secrets.sh")"
+    "$(sed "s/# Azure Connection String\$/# Azure Connection String ${KEY}/" "$REPO_ROOT/scripts/setup-git-secrets.sh")"
 cp "$REPO_ROOT/scripts/setup-git-secrets.sh" scripts/setup-git-secrets.sh
 
 # Must scan clean (exit 0): what the tree contains, and what the allowlist
@@ -301,6 +323,74 @@ run_case "postgres DSN with no user info" 0 ac.env \
     "DATABASE_URL=${PG}db.example.com:5432/app"
 run_case "password variable reference, no literal" 0 ad.tf \
     "db_pass""word = var.db_password"
+
+# DSN detector coverage (#368). Each case scanned clean before #368: the
+# canonical postgresql:// scheme, golang-migrate's pgx5:// (this repo's
+# migration scheme), SQLAlchemy "+driver" schemes, MariaDB, an empty user
+# name, and a password passed as a query parameter.
+PGQL="postg""resql://"
+PGX5="pg""x5://"
+MY="mys""ql"
+MONGO="mongo""db://"
+PWQ="pass""word="
+run_case "postgresql:// DSN" 1 dsn1.env \
+    "DATABASE_URL=${PGQL}app:${DSN_PW}@db.example.com:5432/app"
+run_case "pgx5:// DSN" 1 dsn2.sh \
+    "migrate -database \"${PGX5}app:${DSN_PW}@db:5432/app?sslmode=require\" up"
+run_case "postgresql+driver DSN" 1 dsn3.py \
+    "url = '${PGQL%://}+psycopg2://app:${DSN_PW}@db/app'"
+run_case "mysql+connector DSN" 1 dsn4.py \
+    "url = '${MY}+mysqlconnector://root:${DSN_PW}@localhost/app'"
+run_case "mariadb DSN" 1 dsn5.txt \
+    "maria""db://root:${DSN_PW}@localhost/app"
+run_case "postgres DSN with an empty user name" 1 dsn6.env \
+    "DATABASE_URL=${PG}:${DSN_PW}@db.example.com/app"
+run_case "mysql DSN with an empty user name" 1 dsn7.txt \
+    "${MY}://:${DSN_PW}@localhost/app"
+run_case "mongodb DSN with an empty user name" 1 dsn8.txt \
+    "${MONGO}:${DSN_PW}@mongo.example.net/app"
+run_case "password as a DSN query parameter" 1 dsn9.env \
+    "DATABASE_URL=${PG}app@db.example.com/app?sslmode=require&${PWQ}${DSN_PW}"
+run_case "password as a JDBC query parameter" 1 dsn10.properties \
+    "url=jdbc:${PGQL}db.example.com/app?user=app&${PWQ}${DSN_PW}"
+# Already covered before #368, kept as regression guards: URL-encoded
+# credentials and an IPv6 host still end the match at the "@".
+run_case "postgres DSN with a URL-encoded password" 1 dsn11.env \
+    "DATABASE_URL=${PG}app:p%40ss${DSN_PW}@db.example.com/app"
+run_case "postgres DSN with an IPv6 host" 1 dsn12.env \
+    "DATABASE_URL=${PG}app:${DSN_PW}@[2001:db8::1]:5432/app"
+# The widened detectors must leave credential-less DSNs alone.
+run_case "pgx5:// DSN with no password" 0 dsn13.sh \
+    "DB_URL=\"${PGX5}cudly@\${DB_ENDPOINT}:5432/cudly?sslmode=require\""
+run_case "postgresql:// DSN with no user info" 0 dsn14.env \
+    "DATABASE_URL=${PGQL}db.example.com:5432/app"
+run_case "sslpassword query parameter is not the password" 0 dsn15.env \
+    "DATABASE_URL=${PG}app@db.example.com/app?ssl${PWQ}${DSN_PW}"
+
+# The docs/DEVELOPMENT.md entry allows only the documented local
+# docker-compose password, not any password on the same command line.
+run_case "documented local dev DSN stays allowed" 0 docs/DEVELOPMENT.md \
+    "    -database \"${PGX5}cudly:cudly_local_dev@localhost:5432/cudly?sslmode=disable\" up"
+run_case "other password on the documented dev DSN line is caught" 1 docs/DEVELOPMENT.md \
+    "    -database \"${PGX5}cudly:${DSN_PW}@localhost:5432/cudly?sslmode=disable\" up"
+
+# Test-fixture credential placeholders (#368). The entry lists the values in
+# use; it used to allow any quoted value of up to 40 characters, so a real
+# password or a 32-character API key in a test file scanned clean.
+PWF="pass""word: "
+AKF="api""_key: "
+run_case "listed password placeholder in a Go test" 0 fixture_test.go \
+    "        ${PWF}\"test""pass\","
+run_case "listed password placeholder in a TS test" 0 fixture.test.ts \
+    "        ${PWF}'SecurePass""123!',"
+run_case "listed API key placeholder in a TS test" 0 fixture.test.ts \
+    "        ${AKF}'test-""key',"
+run_case "real-looking password in a Go test is caught" 1 fixture_test.go \
+    "        ${PWF}\"Xq7#mP2v""L8qR4wZ1\","
+run_case "real-looking API key in a TS test is caught" 1 fixture.test.ts \
+    "        ${AKF}'9f86d081884c7d65""9a2feaa0c55ad015',"
+run_case "listed placeholder outside a test file is caught" 1 fixture.go \
+    "        ${PWF}\"test""pass\","
 
 # CI-equivalent check: the pre-commit framework hands git-secrets explicit
 # file names (plain grep), unlike a no-argument scan (git grep), which

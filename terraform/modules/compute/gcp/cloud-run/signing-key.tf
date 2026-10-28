@@ -25,15 +25,33 @@ resource "google_kms_crypto_key" "signing" {
   name                       = "cudly-oidc-signing"
   key_ring                   = google_kms_key_ring.signing.id
   purpose                    = "ASYMMETRIC_SIGN"
-  destroy_scheduled_duration = "86400s" # 1 day — tests redeploy often
+  destroy_scheduled_duration = var.signing_key_destroy_scheduled_duration
 
   version_template {
     algorithm        = "EC_SIGN_P256_SHA256"
     protection_level = "SOFTWARE"
   }
 
+  # Matches the AWS twin (modules/compute/aws/lambda/signing-key.tf, cli#1480):
+  # a change that forces a new key (purpose, the algorithm, the duration
+  # above, or the key ring's location via var.region) must not destroy the
+  # live signing key first. Destroying a crypto key schedules every version
+  # for destruction, which stops AsymmetricSign at once, so the default
+  # destroy-then-create order breaks client-assertion JWT minting for every
+  # federated target cloud. Create-first either builds the new key ring and
+  # key before the old key goes (a region move), or, because Cloud KMS never
+  # frees a key name, fails on the name collision before the old key is
+  # touched (any in-place replacement). Either way the live key keeps signing
+  # until there is a working replacement (#324). Terraform also applies
+  # create_before_destroy to google_kms_key_ring.signing, which this key
+  # depends on, so a region move creates the new ring first as well. That is
+  # the intended order.
+  #
+  # There is deliberately no prevent_destroy. Terraform only accepts a literal
+  # there, so it cannot vary per environment, and cleanup-staging.yml runs
+  # `terraform destroy` on staging, which prevent_destroy = true would fail.
   lifecycle {
-    prevent_destroy = false
+    create_before_destroy = true
   }
 }
 

@@ -147,3 +147,25 @@ func TestUpdateConfig_LegacyStoredModeResentIsRejected(t *testing.T) {
 
 	assertModeRejected(t, err, store)
 }
+
+func TestUpdateConfig_RejectsCaseFoldedAndDuplicateInvalidRIExchangeMode(t *testing.T) {
+	for name, body := range map[string]string{
+		"upper key":              `{"RI_EXCHANGE_MODE":"Auto"}`,
+		"mixed key":              `{"Ri_Exchange_Mode":"automatic"}`,
+		"duplicate null":         `{"ri_exchange_mode":"Auto","ri_exchange_mode":null}`,
+		"case folded then null":  `{"RI_EXCHANGE_MODE":"bogus","ri_exchange_mode":null}`,
+		"duplicate invalid last": `{"ri_exchange_mode":"manual","ri_exchange_mode":"Auto"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, store := autoGateSessionRouter(t, autoGateAdminPlusExchange, disarmedConfig())
+			_, err := r.Route(context.Background(), "PUT", genericPath, autoGateTokenReq(body))
+			assertModeRejected(t, err, store)
+		})
+	}
+}
+
+func TestUpdateConfig_LegacyStoredModeResentWithCaseFoldedKeyIsRejected(t *testing.T) {
+	r, store := autoGateSessionRouter(t, autoGateAdminPlusExchange, legacyModeConfig("Auto"))
+	_, err := r.Route(context.Background(), "PUT", genericPath, autoGateTokenReq(`{"RI_EXCHANGE_MODE":"Auto"}`))
+	assertModeRejected(t, err, store)
+}

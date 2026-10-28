@@ -25,9 +25,12 @@ import (
 
 // marketplaceListingFinder looks up a listing created by an earlier attempt
 // through DescribeReservedInstancesListings. The ec2 service wrapper has no
-// lookup by ClientToken, so this is a separate narrow interface.
+// lookup by ClientToken, so this is a separate narrow interface. The status
+// poller reads a listing's sale details through it too (issue #27), because
+// the wrapper's DescribeMarketplaceListing returns only the state.
 type marketplaceListingFinder interface {
 	FindMarketplaceListingByToken(ctx context.Context, reservedInstancesID, clientToken string) (ec2svc.MarketplaceListingResult, bool, error)
+	DescribeMarketplaceListingStatus(ctx context.Context, listingID string) (marketplaceListingStatus, error)
 }
 
 type describeListingsAPI interface {
@@ -153,15 +156,44 @@ func (h *Handler) reconcileAttempt(ctx context.Context, purchaseID string, claim
 	if !found {
 		return ec2svc.MarketplaceListingResult{}, false, nil
 	}
+	if listing.State == "" {
+		listing.State = config.ListingStatePending
+	}
 	logging.Warnf("marketplace: purchase %s: earlier attempt already created listing %s (%s); recording it", purchaseID, listing.ListingID, listing.State)
 	if isDeadListingState(listing.State) {
 		return ec2svc.MarketplaceListingResult{}, true, h.recordDeadListing(ctx, purchaseID, claim, listing)
 	}
 	if err = h.config.UpdatePurchaseHistoryListing(ctx, purchaseID, listing.ListingID, listing.State); err != nil {
+		if isListingEndedConflict(err) {
+			return ec2svc.MarketplaceListingResult{}, true, listingCanceledConcurrently(listing.ListingID)
+		}
 		h.releaseMarketplaceClaim(ctx, purchaseID, claim, true)
 		return ec2svc.MarketplaceListingResult{}, true, fmt.Errorf("listing %s exists on AWS but could not be recorded: %w", listing.ListingID, err)
 	}
 	return listing, true, nil
+}
+
+// listingCanceledConcurrently is the error for a listing the cancel endpoint
+// canceled and recorded while this list request was creating or recording it.
+func listingCanceledConcurrently(listingID string) error {
+	return NewClientError(409, fmt.Sprintf("marketplace listing %s was canceled by another request before this one could record it; list again to create a new one", listingID))
+}
+
+// createdListingState returns the state to record for a listing AWS just
+// created. AWS has been seen to omit the status; an empty state would read as
+// "not listed" and let the next request create a second listing, so the
+// listing is read back, and recorded as pending (live, cancelable) if its
+// state is still unknown.
+func createdListingState(ctx context.Context, ec2Client marketplaceEC2Client, created ec2svc.MarketplaceListingResult) string {
+	if created.State != "" {
+		return created.State
+	}
+	described, err := ec2Client.DescribeMarketplaceListing(ctx, created.ListingID)
+	if err == nil && described.State != "" {
+		return described.State
+	}
+	logging.Warnf("marketplace: AWS reported no status for new listing %s (describe error: %v); recording it as %s", created.ListingID, err, config.ListingStatePending)
+	return config.ListingStatePending
 }
 
 func (h *Handler) createAndPersistListing(ctx context.Context, purchaseID string, claim *config.MarketplaceListingClaim, ec2Client marketplaceEC2Client, instanceCount int32, awsSchedule []ec2svc.MarketplacePriceTier) (ec2svc.MarketplaceListingResult, error) {
@@ -181,6 +213,7 @@ func (h *Handler) createAndPersistListing(ctx context.Context, purchaseID string
 		return ec2svc.MarketplaceListingResult{}, mapped
 	}
 
+	result.State = createdListingState(ctx, ec2Client, result)
 	if isDeadListingState(result.State) {
 		return ec2svc.MarketplaceListingResult{}, h.recordDeadListing(ctx, purchaseID, claim, result)
 	}
@@ -190,6 +223,11 @@ func (h *Handler) createAndPersistListing(ctx context.Context, purchaseID string
 	// user sees success but the listing is invisible in subsequent renders, then
 	// release the claim so the row does not stay stuck in the pending state.
 	if dbErr := h.config.UpdatePurchaseHistoryListing(ctx, purchaseID, result.ListingID, result.State); dbErr != nil {
+		if isListingEndedConflict(dbErr) {
+			// The cancel endpoint found this attempt's listing through its
+			// token, canceled it on AWS and recorded that first.
+			return ec2svc.MarketplaceListingResult{}, listingCanceledConcurrently(result.ListingID)
+		}
 		logging.Errorf("marketplace: listing created (%s / %s) but DB update failed: %v; attempting rollback", result.ListingID, result.State, dbErr)
 		compCtx, cancelComp := context.WithTimeout(context.WithoutCancel(ctx), marketplaceCompensationTimeout)
 		defer cancelComp()
@@ -197,7 +235,7 @@ func (h *Handler) createAndPersistListing(ctx context.Context, purchaseID string
 			return ec2svc.MarketplaceListingResult{}, h.keepUncanceledListing(compCtx, purchaseID, result, rollbackErr)
 		}
 		logging.Warnf("marketplace: listing %s rolled back (canceled) after DB failure", result.ListingID)
-		h.recordRolledBackListing(compCtx, ctx, purchaseID, claim, result.ListingID)
+		h.recordRolledBackListing(compCtx, purchaseID, claim, result.ListingID)
 		return ec2svc.MarketplaceListingResult{}, fmt.Errorf("listing created but could not be persisted; listing has been rolled back: %w", dbErr)
 	}
 
@@ -226,10 +264,13 @@ func (h *Handler) recordDeadListing(ctx context.Context, purchaseID string, clai
 
 // recordRolledBackListing records the canceled listing and with it drops the
 // attempt's token, so the next attempt does not replay the canceled listing.
-func (h *Handler) recordRolledBackListing(compCtx, ctx context.Context, purchaseID string, claim *config.MarketplaceListingClaim, listingID string) {
+// Both writes run on the detached compensation context: the listing is
+// already canceled on AWS, so a caller that went away must not leave the row
+// pending (issue #525).
+func (h *Handler) recordRolledBackListing(compCtx context.Context, purchaseID string, claim *config.MarketplaceListingClaim, listingID string) {
 	if err := h.config.UpdatePurchaseHistoryListing(compCtx, purchaseID, listingID, config.ListingStateCancelled); err != nil {
 		logging.Errorf("marketplace: failed to record rolled-back listing %s for purchase %s: %v", listingID, purchaseID, err)
-		h.releaseMarketplaceClaim(ctx, purchaseID, claim, false)
+		h.releaseMarketplaceClaim(compCtx, purchaseID, claim, false)
 	}
 }
 

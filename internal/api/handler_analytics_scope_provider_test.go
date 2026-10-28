@@ -27,6 +27,13 @@ func analyticsScopeCall(t *testing.T, scope []string, accountID string, accounts
 // trends it checks that all three snapshot queries got the same filter.
 func analyticsScopeCallPath(t *testing.T, path string, scope []string, accountID string, accounts []config.CloudAccount) (status int, uuids []string, externals map[string][]string) {
 	t.Helper()
+	return analyticsParamsCall(t, path, scope, map[string]string{"account_id": accountID}, accounts)
+}
+
+// analyticsParamsCall is analyticsScopeCallPath with arbitrary query params, so
+// callers can send account_ids as well as the legacy account_id.
+func analyticsParamsCall(t *testing.T, path string, scope []string, params map[string]string, accounts []config.CloudAccount) (status int, uuids []string, externals map[string][]string) {
+	t.Helper()
 	mockAuth := new(MockAuthService)
 	mockAuth.On("ValidateSession", mock.Anything, "tok").Return(&Session{UserID: "u-1", Email: "u@example.com"}, nil)
 	mockAuth.On("HasPermissionAPI", mock.Anything, "u-1", mock.Anything, mock.Anything).Return(true, nil)
@@ -53,7 +60,7 @@ func analyticsScopeCallPath(t *testing.T, path string, scope []string, accountID
 	h := &Handler{auth: mockAuth, analyticsClient: client, analyticsSnapshots: snaps, config: store}
 	resp, err := h.HandleRequest(context.Background(), &events.LambdaFunctionURLRequest{
 		Headers:               map[string]string{"Authorization": "Bearer tok"},
-		QueryStringParameters: map[string]string{"account_id": accountID},
+		QueryStringParameters: params,
 		RequestContext: events.LambdaFunctionURLRequestContext{
 			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{Method: "GET", Path: path},
 		},
@@ -90,7 +97,7 @@ func TestHandleRequest_Analytics_RawExternalIDSharedAcrossProviders(t *testing.T
 	}
 
 	for order, accounts := range bothOrders {
-		for _, scope := range [][]string{{"dev"}, {"prod"}, {"123"}} {
+		for _, scope := range [][]string{{"u-aws"}, {"u-az"}, {"123"}} {
 			t.Run(scope[0]+" scope, "+order, func(t *testing.T) {
 				t.Parallel()
 				status, uuids, externals := analyticsScopeCall(t, scope, "123", accounts)
@@ -102,34 +109,34 @@ func TestHandleRequest_Analytics_RawExternalIDSharedAcrossProviders(t *testing.T
 
 		t.Run("account UUID resolves to its own provider, "+order, func(t *testing.T) {
 			t.Parallel()
-			status, uuids, externals := analyticsScopeCall(t, []string{"dev"}, "u-aws", accounts)
+			status, uuids, externals := analyticsScopeCall(t, []string{"u-aws"}, "u-aws", accounts)
 			assert.Equal(t, 200, status)
 			assert.Equal(t, []string{"u-aws"}, uuids)
 			assert.Equal(t, map[string][]string{"aws": {"123"}}, externals)
 
-			status, _, _ = analyticsScopeCall(t, []string{"dev"}, "u-az", accounts)
+			status, _, _ = analyticsScopeCall(t, []string{"u-aws"}, "u-az", accounts)
 			assert.Equal(t, 404, status, "the other provider's account stays out of scope")
 		})
 	}
 }
 
 // A raw external id that exactly one account owns still works for a scoped
-// user, by name or by id, and an out-of-scope account stays hidden.
+// user, by account ID or by a raw external-id entry, and an out-of-scope
+// account stays hidden.
 func TestHandleRequest_Analytics_UniqueRawExternalID(t *testing.T) {
 	t.Parallel()
 	in := config.CloudAccount{ID: "u-in", Name: "in", Provider: "aws", ExternalID: "111"}
 	out := config.CloudAccount{ID: "u-out", Name: "out", Provider: "aws", ExternalID: "222"}
 	accounts := []config.CloudAccount{in, out}
 
-	for _, scope := range []string{"in", "111"} {
+	for _, scope := range []string{"u-in", "111"} {
 		status, uuids, externals := analyticsScopeCall(t, []string{scope}, "111", accounts)
 		assert.Equal(t, 200, status, scope)
 		assert.Nil(t, uuids, scope)
 		assert.Equal(t, map[string][]string{"aws": {"111"}}, externals, "%s: raw id is scoped to its account's provider (#624)", scope)
 	}
 
-	status, _, _ := analyticsScopeCall(t, []string{"in"}, "222", accounts)
-
+	status, _, _ := analyticsScopeCall(t, []string{"u-in"}, "222", accounts)
 	assert.Equal(t, 404, status)
 }
 
@@ -139,7 +146,7 @@ func TestHandleRequest_Analytics_SameProviderAmbiguousRawExternalID(t *testing.T
 	a := config.CloudAccount{ID: "u-a", Name: "dev", Provider: "aws", ExternalID: "123"}
 	b := config.CloudAccount{ID: "u-b", Name: "prod", Provider: "aws", ExternalID: "123"}
 	for _, accounts := range [][]config.CloudAccount{{a, b}, {b, a}} {
-		for _, scope := range []string{"dev", "prod"} {
+		for _, scope := range []string{"u-a", "u-b"} {
 			status, _, externals := analyticsScopeCall(t, []string{scope}, "123", accounts)
 			assert.Equal(t, 404, status, scope)
 			assert.Nil(t, externals)
@@ -172,7 +179,7 @@ func TestHandleRequest_Analytics_UnregisteredRawID(t *testing.T) {
 	// id, so the filter keeps the provider-unconstrained "" bucket.
 	assert.Equal(t, map[string][]string{"": {"999"}}, externals)
 
-	status, _, _ = analyticsScopeCall(t, []string{"solo"}, "999", accounts)
+	status, _, _ = analyticsScopeCall(t, []string{"u-solo"}, "999", accounts)
 	assert.Equal(t, 404, status)
 }
 
@@ -214,14 +221,14 @@ func TestHandleRequest_Analytics_RawExternalIDProviderScopedOnEveryEndpoint(t *t
 	for _, path := range analyticsPaths {
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()
-			for _, scope := range []string{"data", "424242"} {
+			for _, scope := range []string{"u-gcp", "424242"} {
 				status, uuids, externals := analyticsScopeCallPath(t, path, []string{scope}, "424242", accounts)
 				assert.Equal(t, 200, status, scope)
 				assert.Nil(t, uuids, scope)
 				assert.Equal(t, map[string][]string{"gcp": {"424242"}}, externals, scope)
 			}
 
-			status, uuids, externals := analyticsScopeCallPath(t, path, []string{"data"}, "u-gcp", accounts)
+			status, uuids, externals := analyticsScopeCallPath(t, path, []string{"u-gcp"}, "u-gcp", accounts)
 			assert.Equal(t, 200, status, "UUID request")
 			assert.Equal(t, []string{"u-gcp"}, uuids)
 			assert.Equal(t, map[string][]string{"gcp": {"424242"}}, externals)
@@ -230,7 +237,7 @@ func TestHandleRequest_Analytics_RawExternalIDProviderScopedOnEveryEndpoint(t *t
 			assert.Equal(t, 200, status, "unrestricted")
 			assert.Equal(t, map[string][]string{"": {"424242"}}, externals, "unrestricted raw id is unchanged")
 
-			status, _, externals = analyticsScopeCallPath(t, path, []string{"data"}, "777", accounts)
+			status, _, externals = analyticsScopeCallPath(t, path, []string{"u-gcp"}, "777", accounts)
 			assert.Equal(t, 404, status, "out-of-scope raw id")
 			assert.Nil(t, externals)
 		})
@@ -245,11 +252,11 @@ func TestHandleRequest_Analytics_ProviderlessAccountFailsClosed(t *testing.T) {
 	t.Parallel()
 	accounts := []config.CloudAccount{{ID: "u-x", Name: "x", ExternalID: "555"}}
 
-	status, _, externals := analyticsScopeCall(t, []string{"x"}, "555", accounts)
+	status, _, externals := analyticsScopeCall(t, []string{"u-x"}, "555", accounts)
 	assert.Equal(t, 404, status)
 	assert.Nil(t, externals)
 
-	status, uuids, externals := analyticsScopeCall(t, []string{"x"}, "u-x", accounts)
+	status, uuids, externals := analyticsScopeCall(t, []string{"u-x"}, "u-x", accounts)
 	assert.Equal(t, 200, status)
 	assert.Equal(t, []string{"u-x"}, uuids)
 	assert.Nil(t, externals)

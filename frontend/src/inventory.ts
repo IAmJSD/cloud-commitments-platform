@@ -247,9 +247,11 @@ function renderActiveCommitmentsTable(
   const amortize = state.getAmortizeUpfront();
   const monthlyLabel = amortize ? 'Monthly cost (amortized)' : 'Monthly cost';
   const headers = ['Provider', 'Account', 'Service', 'Resource type', 'Region', 'Count', 'Term', 'Payment', monthlyLabel, 'Monthly savings', 'Expires'];
+  const numericHeaders = new Set(['Count', monthlyLabel, 'Monthly savings']);
   for (const label of headers) {
     const th = document.createElement('th');
     th.textContent = label;
+    if (numericHeaders.has(label)) th.className = 'num';
     headerRow.appendChild(th);
   }
   thead.appendChild(headerRow);
@@ -275,7 +277,7 @@ function buildCommitmentRow(c: api.InventoryCommitment): HTMLTableRowElement {
   appendCell(tr, c.service);
   appendCell(tr, c.resource_type ?? '');
   appendCell(tr, c.region);
-  appendCell(tr, String(c.count));
+  appendCell(tr, String(c.count), true);
   appendCell(tr, `${c.term_years}y`);
   appendCell(tr, c.payment_option ?? '');
 
@@ -285,17 +287,20 @@ function buildCommitmentRow(c: api.InventoryCommitment): HTMLTableRowElement {
   if (displayMonthly != null && amortize) {
     displayMonthly = c.upfront_cost == null ? null : amortizedMonthly(displayMonthly, c.upfront_cost, c.term_years);
   }
-  appendCell(tr, displayMonthly != null ? formatCurrency(displayMonthly) : '—');
+  appendCell(tr, displayMonthly != null ? formatCurrency(displayMonthly) : '—', true);
 
-  appendCell(tr, formatCurrency(c.estimated_savings));
+  appendCell(tr, formatCurrency(c.estimated_savings), true);
   appendCell(tr, formatDate(c.end_date));
 
   return tr;
 }
 
-function appendCell(tr: HTMLTableRowElement, text: string): void {
+// numeric right-aligns money and count cells with tabular digits (td.num,
+// issue #739) so amounts line up for comparison.
+function appendCell(tr: HTMLTableRowElement, text: string, numeric = false): void {
   const td = document.createElement('td');
   td.textContent = text;
+  if (numeric) td.className = 'num';
   tr.appendChild(td);
 }
 
@@ -488,6 +493,7 @@ function buildServiceTable(
   for (const label of ['Service', 'Covered/mo', 'On-demand gap/mo', 'Coverage %', 'Coverage bar']) {
     const th = document.createElement('th');
     th.textContent = label;
+    if (label.endsWith('/mo')) th.className = 'num';
     if (label === 'Coverage bar') {
       th.setAttribute('aria-label', 'Coverage bar');
     }
@@ -508,8 +514,8 @@ function buildServiceRow(row: CoverageServiceRow, target: number | null): HTMLTa
   const tr = document.createElement('tr');
 
   appendCell(tr, row.service);
-  appendCell(tr, formatCurrency(row.covered_monthly));
-  appendCell(tr, formatCurrency(row.on_demand_monthly));
+  appendCell(tr, formatCurrency(row.covered_monthly), true);
+  appendCell(tr, formatCurrency(row.on_demand_monthly), true);
   appendCell(tr, row.coverage_pct !== null && row.coverage_pct !== undefined
     ? `${row.coverage_pct.toFixed(1)}%`
     : 'N/A');

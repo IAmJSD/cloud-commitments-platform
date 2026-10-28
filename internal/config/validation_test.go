@@ -331,6 +331,44 @@ func TestGlobalConfig_Validate(t *testing.T) {
 	}
 }
 
+// TestGlobalConfig_Validate_RIExchangeLimits covers #120: PUT /api/config
+// reaches the store through GlobalConfig.Validate, which used to accept a
+// negative or non-finite RI-exchange cap and an out-of-range threshold.
+func TestGlobalConfig_Validate_RIExchangeLimits(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(c *GlobalConfig)
+		errMsg string
+	}{
+		{"zero caps and threshold are valid", func(c *GlobalConfig) {}, ""},
+		{"positive caps and threshold 100 are valid", func(c *GlobalConfig) {
+			c.RIExchangeMaxPerExchangeUSD = 500
+			c.RIExchangeMaxDailyUSD = 2000
+			c.RIExchangeUtilizationThreshold = 100
+		}, ""},
+		{"negative daily cap", func(c *GlobalConfig) { c.RIExchangeMaxDailyUSD = -1 }, "ri_exchange_max_daily_usd"},
+		{"negative per-exchange cap", func(c *GlobalConfig) { c.RIExchangeMaxPerExchangeUSD = -0.01 }, "ri_exchange_max_per_exchange_usd"},
+		{"NaN daily cap", func(c *GlobalConfig) { c.RIExchangeMaxDailyUSD = math.NaN() }, "ri_exchange_max_daily_usd"},
+		{"infinite per-exchange cap", func(c *GlobalConfig) { c.RIExchangeMaxPerExchangeUSD = math.Inf(1) }, "ri_exchange_max_per_exchange_usd"},
+		{"negative threshold", func(c *GlobalConfig) { c.RIExchangeUtilizationThreshold = -5 }, "ri_exchange_utilization_threshold"},
+		{"threshold over 100", func(c *GlobalConfig) { c.RIExchangeUtilizationThreshold = 100.5 }, "ri_exchange_utilization_threshold"},
+		{"NaN threshold", func(c *GlobalConfig) { c.RIExchangeUtilizationThreshold = math.NaN() }, "ri_exchange_utilization_threshold"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := GlobalConfig{DefaultTerm: 3}
+			tt.mutate(&cfg)
+			err := cfg.Validate()
+			if tt.errMsg == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.errMsg)
+		})
+	}
+}
+
 func TestServiceConfig_Validate(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1159,4 +1197,11 @@ func TestIsValidRIExchangeMode(t *testing.T) {
 	} {
 		assert.Equal(t, want, IsValidRIExchangeMode(mode), "mode %q", mode)
 	}
+}
+
+// Only purchase plans refuse a 0% target (platform#523); service and global
+// coverage keep accepting 0.
+func TestCoverageZeroStillValidOutsidePlans(t *testing.T) {
+	require.NoError(t, (&ServiceConfig{Provider: "aws", Service: "ec2", Term: 3, Payment: "all-upfront", Coverage: 0}).Validate())
+	require.NoError(t, validateCoverage(0))
 }

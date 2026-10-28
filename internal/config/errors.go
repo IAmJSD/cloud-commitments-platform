@@ -12,6 +12,19 @@ var ErrNotFound = errors.New("not found")
 // so an empty ID would be silently dropped after the first one (#774).
 var ErrEmptyPurchaseID = errors.New("purchase history record has no purchase id")
 
+// ErrPurchaseAlreadyRevoked is returned (wrapped) by
+// FlipPurchaseRevocationInFlight when the purchase_history row exists but is
+// already revoked: a concurrent revoke finished first, so the caller must not
+// start another provider return (issue #316).
+var ErrPurchaseAlreadyRevoked = errors.New("purchase is already revoked")
+
+// ErrRevocationInFlight is returned (wrapped) by
+// FlipPurchaseRevocationInFlight when the purchase_history row is unrevoked
+// but another request already holds the in-flight claim: that request is
+// posting (or has posted) the provider return, so the caller must not post
+// another one (issue #1518).
+var ErrRevocationInFlight = errors.New("purchase revocation is already in flight")
+
 // ErrPurchasePlanConflict means a plan changed after the caller read it.
 var ErrPurchasePlanConflict = errors.New("purchase plan changed")
 
@@ -31,6 +44,18 @@ var ErrManagedPlanLiveExecutions = errors.New("managed plan still has active or 
 // between the reaper's SELECT and CAS). Callers can use errors.Is to
 // distinguish this legitimate race-loss from a hard DB error.
 var ErrExecutionNotInExpectedStatus = errors.New("execution not in expected status")
+
+// ErrRIExchangeExpired is returned (wrapped) by TransitionRIExchangeStatus
+// when the record exists but its expires_at has passed, so the approval or
+// rejection window is closed. The HTTP layer answers it with 410, like an
+// expired purchase approval token (issue #587).
+var ErrRIExchangeExpired = errors.New("ri exchange has expired")
+
+// ErrRIExchangeNotInExpectedStatus is returned (wrapped) by
+// TransitionRIExchangeStatus when the record exists and has not expired but
+// its status is not the expected one: another writer, such as a concurrent
+// approve or reject, transitioned it first. The HTTP layer answers it with 409.
+var ErrRIExchangeNotInExpectedStatus = errors.New("ri exchange status transition failed")
 
 // ErrApprovalTokenChanged is returned (wrapped) by
 // TransitionExecutionStatusTokenPinned when the execution is still in an

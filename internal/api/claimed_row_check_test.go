@@ -28,7 +28,7 @@ const (
 )
 
 func claimRecs(upfront float64) []config.RecommendationRecord {
-	return []config.RecommendationRecord{{ID: "r1", Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: upfront}}
+	return []config.RecommendationRecord{{ID: "r1", Provider: "aws", Service: "ec2", Region: "us-east-1", UpfrontCost: upfront, CommitmentCurrency: "USD"}}
 }
 
 func cappedPurchasePerm(action string) auth.Permission {
@@ -209,6 +209,7 @@ func directExecuteClaimHarness(t *testing.T, mp *MockPurchaseManager, claimedUpf
 		Status: "pending",
 		Recommendations: []config.RecommendationRecord{{
 			ID: "rec-1", Provider: "aws", Service: "ec2", Region: "us-east-1", Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: claimedUpfront,
+			CommitmentCurrency: "USD",
 		}},
 	}
 	mp.On("DirectExecute", ctx, mock.AnythingOfType("string"), session.Email, mock.Anything).Return(nil, "", nil).Maybe()

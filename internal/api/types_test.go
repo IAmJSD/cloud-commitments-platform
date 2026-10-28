@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -57,7 +58,7 @@ func TestPlanRequest_toPurchasePlan(t *testing.T) {
 			Service:        "ec2",
 			Term:           1,
 			Payment:        "all-upfront",
-			TargetCoverage: 90,
+			TargetCoverage: ptr(90),
 		}
 
 		plan := req.toPurchasePlan()
@@ -195,4 +196,58 @@ func TestPlanRequest_toPurchasePlan(t *testing.T) {
 			})
 		}
 	})
+}
+
+func planFromBody(t *testing.T, body string) *PlanRequest {
+	t.Helper()
+	var req PlanRequest
+	require.NoError(t, json.Unmarshal([]byte(body), &req))
+	return &req
+}
+
+func TestPlanRequest_TargetCoverageDefault(t *testing.T) {
+	const base = `{"name":"p","provider":"aws","service":"ec2"`
+	tests := []struct {
+		name string
+		body string
+		want float64
+	}{
+		{"explicit 1 is kept", base + `,"target_coverage":1}`, 1},
+		{"omitted defaults to 80", base + `}`, 80},
+		{"explicit value is kept", base + `,"target_coverage":55}`, 55},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := planFromBody(t, tt.body).toPurchasePlan()
+			assert.Equal(t, tt.want, plan.Services["aws/ec2"].Coverage)
+		})
+	}
+}
+
+func TestPlanRequest_validateTargetCoverage(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{"omitted is allowed", `{"name":"p"}`, false},
+		{"1 is allowed", `{"target_coverage":1}`, false},
+		{"100 is allowed", `{"target_coverage":100}`, false},
+		{"0 is refused", `{"target_coverage":0}`, true},
+		{"-1 is refused", `{"target_coverage":-1}`, true},
+		{"101 is refused", `{"target_coverage":101}`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := planFromBody(t, tt.body).validateTargetCoverage()
+			if !tt.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			ce, ok := IsClientError(err)
+			require.True(t, ok)
+			assert.Equal(t, 400, ce.code)
+			assert.Equal(t, "target_coverage must be between 1 and 100 for a purchase plan", ce.message)
+		})
+	}
 }

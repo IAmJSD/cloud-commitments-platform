@@ -114,8 +114,8 @@ func TestMFARegenerateRecoveryCodes_EmptyCode(t *testing.T) {
 	_, err := service.MFARegenerateRecoveryCodes(ctx, user.ID, "")
 	require.Error(t, err, "MFARegenerateRecoveryCodes with empty code must return an error")
 
-	// UpdateUser must NOT have been called.
-	mockStore.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.Anything)
+	// The codes must NOT have been replaced.
+	mockStore.AssertNotCalled(t, "ReplaceMFARecoveryCodes", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 
 	// The pre-existing codes must be untouched.
 	assert.Equal(t, []string{"$2a$04$preexistingstub"}, user.MFARecoveryCodes,

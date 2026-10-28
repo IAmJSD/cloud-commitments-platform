@@ -73,19 +73,46 @@ func (s *Service) checkGroupMembershipChange(ctx context.Context, prior, next []
 // contains both a view-only group and a write-capable group. It fails closed
 // on a store error other than "not found".
 func (s *Service) checkGroupCombination(ctx context.Context, groupIDs []string) error {
+	viewOnly, writeCapable, err := splitGroupCombination(ctx, groupIDs, s.combinationGroup)
+	if err != nil {
+		return err
+	}
+	if len(viewOnly) == 0 || len(writeCapable) == 0 {
+		return nil
+	}
+	return contradictoryGroupsError(viewOnly, writeCapable)
+}
+
+// groupLoader loads one group for the combination rule. It returns nil, nil
+// for a group that does not exist.
+type groupLoader func(ctx context.Context, id string) (*Group, error)
+
+// combinationGroup is the store-backed groupLoader: a missing group is nil,
+// any other store error fails closed.
+func (s *Service) combinationGroup(ctx context.Context, id string) (*Group, error) {
+	group, err := s.store.GetGroup(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to load group %s: %w", id, err)
+	}
+	return group, nil
+}
+
+// splitGroupCombination returns the names of the view-only and the
+// write-capable groups among groupIDs. Fewer than two distinct groups cannot
+// contradict, so it loads nothing for them.
+func splitGroupCombination(ctx context.Context, groupIDs []string, load groupLoader) (viewOnly, writeCapable []string, err error) {
 	ids := uniqueGroupIDs(groupIDs)
 	if len(ids) < 2 {
 		// A contradiction needs two different groups.
-		return nil
+		return nil, nil, nil
 	}
-	var viewOnly, writeCapable []string
 	for _, id := range ids {
-		group, err := s.store.GetGroup(ctx, id)
-		if errors.Is(err, pgx.ErrNoRows) {
-			continue
-		}
-		if err != nil {
-			return fmt.Errorf("failed to load group %s: %w", id, err)
+		group, loadErr := load(ctx, id)
+		if loadErr != nil {
+			return nil, nil, loadErr
 		}
 		if group == nil {
 			continue
@@ -97,10 +124,130 @@ func (s *Service) checkGroupCombination(ctx context.Context, groupIDs []string) 
 			writeCapable = append(writeCapable, group.Name)
 		}
 	}
-	if len(viewOnly) == 0 || len(writeCapable) == 0 {
+	return viewOnly, writeCapable, nil
+}
+
+// groupsContradict reports whether groupIDs hold both a view-only and a
+// write-capable group.
+func groupsContradict(ctx context.Context, groupIDs []string, load groupLoader) (bool, error) {
+	viewOnly, writeCapable, err := splitGroupCombination(ctx, groupIDs, load)
+	return len(viewOnly) > 0 && len(writeCapable) > 0, err
+}
+
+// combinationRole is the part a group plays in the combination rule.
+type combinationRole int
+
+const (
+	roleNeutral combinationRole = iota
+	roleViewOnly
+	roleWriteCapable
+)
+
+func groupCombinationRole(g *Group) combinationRole {
+	switch {
+	case groupIsViewOnly(g):
+		return roleViewOnly
+	case groupIsWriteCapable(g):
+		return roleWriteCapable
+	}
+	return roleNeutral
+}
+
+// checkGroupPermissionChange applies the combination rule to a group update
+// (issue #1409). Changing a group's permissions changes the combination of
+// every member, with no user write: adding a write permission to a group
+// whose members also hold a view-only group contradicts each of them, and so
+// does making a group view-only while its members also hold a write-capable
+// one.
+//
+// Only the group's role in the rule matters, so an update that keeps it
+// view-only, write-capable or neutral returns at once without reading any
+// user. Otherwise the update is refused when it would make at least one
+// member contradictory who was not before. A member who was already
+// contradictory (assigned before #1205, or by an earlier group edit) does not
+// block it, as an unchanged membership does not block a user edit.
+//
+// Like checkGroupCombination it is an accident guard, not a security
+// boundary, and it fails closed on a store error.
+func (s *Service) checkGroupPermissionChange(ctx context.Context, prior, next *Group) error {
+	if groupCombinationRole(prior) == groupCombinationRole(next) {
 		return nil
 	}
-	return contradictoryGroupsError(viewOnly, writeCapable)
+	users, err := s.store.ListUsers(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list users for the group combination check: %w", err)
+	}
+	stored := cachedGroupLoader(s.combinationGroup)
+	updated := func(ctx context.Context, id string) (*Group, error) {
+		if id == next.ID {
+			return next, nil
+		}
+		return stored(ctx, id)
+	}
+	affected, err := countNewlyContradictory(ctx, users, next.ID, stored, updated)
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return nil
+	}
+	return groupChangeContradictionError(next, affected)
+}
+
+// countNewlyContradictory counts the members of groupID whose groups do not
+// contradict when loaded with before but do when loaded with after.
+func countNewlyContradictory(ctx context.Context, users []User, groupID string, before, after groupLoader) (int, error) {
+	affected := 0
+	for i := range users {
+		ids := users[i].GroupIDs
+		if !containsGroup(ids, groupID) {
+			continue
+		}
+		was, err := groupsContradict(ctx, ids, before)
+		if err != nil {
+			return 0, err
+		}
+		now, err := groupsContradict(ctx, ids, after)
+		if err != nil {
+			return 0, err
+		}
+		if now && !was {
+			affected++
+		}
+	}
+	return affected, nil
+}
+
+// cachedGroupLoader loads each group at most once per check: every member of
+// the updated group shares it, and usually most of their other groups.
+func cachedGroupLoader(load groupLoader) groupLoader {
+	cache := map[string]*Group{}
+	return func(ctx context.Context, id string) (*Group, error) {
+		if g, ok := cache[id]; ok {
+			return g, nil
+		}
+		g, err := load(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		cache[id] = g
+		return g, nil
+	}
+}
+
+// groupChangeContradictionError explains a refused group update in the terms
+// of the change: what the group would become and how many members conflict.
+func groupChangeContradictionError(next *Group, affected int) error {
+	members, belong := "1 of its members", "belongs"
+	if affected > 1 {
+		members, belong = fmt.Sprintf("%d of its members", affected), "belong"
+	}
+	becomes, other := "would become view-only", "write-capable"
+	if groupCombinationRole(next) == roleWriteCapable {
+		becomes, other = "would grant write permissions", "view-only"
+	}
+	return fmt.Errorf("%w: group %q %s, but %s also %s to a %s group; remove them from one of the two groups first",
+		ErrContradictoryGroups, next.Name, becomes, members, belong, other)
 }
 
 // contradictoryGroupsError builds the same message the frontend shows, so an

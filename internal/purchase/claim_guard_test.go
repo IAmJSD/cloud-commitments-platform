@@ -107,12 +107,14 @@ func TestApprove_ClaimsRunningAndStampsGuarded(t *testing.T) {
 	stubExecuteChain(t, store, sender, "plan-g")
 	store.On("SaveExecutionIfStatus", ctx, mock.Anything, []string{"running"}).Return(nil).Once()
 	store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{"running"}).Return(nil).Once()
+	store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, []string{"completed"}).Return(nil).Once()
 
 	_, _, err := manager.ApproveAndExecute(ctx, "exec-g", "approver@example.invalid", nil, nil)
 	require.NoError(t, err)
 	store.AssertCalled(t, "TransitionExecutionStatus", ctx, "exec-g", approveFromStatuses, "running", (*string)(nil))
-	// Two guarded writes (audit stamp, terminal save); the only unguarded one is
-	// the post-execution revocation-token rotation.
-	store.AssertNumberOfCalls(t, "SaveExecutionIfStatus", 2)
-	store.AssertNumberOfCalls(t, "SavePurchaseExecution", 1)
+	// Three guarded writes: the audit stamp and the terminal save on running,
+	// and the post-execution revocation-token rotation on the terminal status
+	// it follows (issue #835). No unguarded full-row write remains.
+	store.AssertNumberOfCalls(t, "SaveExecutionIfStatus", 3)
+	store.AssertNotCalled(t, "SavePurchaseExecution", mock.Anything, mock.Anything)
 }

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -77,6 +78,86 @@ func TestSetCacheHeaders(t *testing.T) {
 			setCacheHeaders(w, tt.path)
 			got := w.Header().Get("Cache-Control")
 			testutil.AssertContains(t, got, tt.contains)
+		})
+	}
+}
+
+// ----- cache policy pins (issue #343) -----
+
+const (
+	ccNoCache   = "no-cache, no-store, must-revalidate"
+	ccImmutable = "public, max-age=31536000, immutable"
+	ccOneHour   = "public, max-age=3600"
+)
+
+// cachePolicyPins pins the exact Cache-Control value for every extension the
+// policy table names, plus case variants and unlisted extensions that fall
+// through to the default. The table must pass unchanged before and after
+// setCacheHeaders was made to delegate to cacheControlForExt (#343).
+var cachePolicyPins = []struct {
+	file string
+	want string
+}{
+	{"app.html", ccNoCache}, // not index.html: http.ServeFile 301s that to "/"
+	{"INDEX.HTML", ccNoCache},
+	{"bundle.js", ccImmutable},
+	{"style.css", ccImmutable},
+	{"font.woff", ccImmutable},
+	{"font.woff2", ccImmutable},
+	{"font.ttf", ccImmutable},
+	{"font.eot", ccImmutable},
+	{"logo.png", ccImmutable},
+	{"LOGO.PNG", ccImmutable},
+	{"photo.jpg", ccImmutable},
+	{"photo.jpeg", ccImmutable},
+	{"anim.gif", ccImmutable},
+	{"icon.svg", ccImmutable},
+	{"favicon.ico", ccImmutable},
+	{"hero.webp", ccImmutable},
+	{"Mixed.Js", ccImmutable},
+	{"data.json", ccOneHour},
+	{"hero.avif", ccOneHour},
+	{"bundle.js.map", ccOneHour},
+	{"robots.txt", ccOneHour},
+	{"LICENSE", ccOneHour},
+}
+
+// TestCachePolicyPinned asserts exact header values from both entry points:
+// setCacheHeaders (container spaHandler) and cacheControlForExt (Lambda).
+func TestCachePolicyPinned(t *testing.T) {
+	for _, tt := range cachePolicyPins {
+		t.Run(tt.file, func(t *testing.T) {
+			urlPath := "/assets.v2/" + tt.file
+			w := httptest.NewRecorder()
+			setCacheHeaders(w, urlPath)
+			testutil.AssertEqual(t, tt.want, w.Header().Get("Cache-Control"))
+			testutil.AssertEqual(t, tt.want, cacheControlForExt(strings.ToLower(path.Ext(urlPath))))
+		})
+	}
+}
+
+// TestCachePolicyParity_ContainerAndLambda serves the same files through the
+// container handler and the Lambda static path and requires an identical
+// Cache-Control header from both, so a deployment mode cannot change the
+// cache policy for an asset.
+func TestCachePolicyParity_ContainerAndLambda(t *testing.T) {
+	files := map[string]string{}
+	for _, tt := range cachePolicyPins {
+		files[tt.file] = "x"
+	}
+	dir := makeStaticDir(t, files)
+	handler := spaFileServer(dir)
+	for _, tt := range cachePolicyPins {
+		t.Run(tt.file, func(t *testing.T) {
+			_, _, lambdaCC, found := serveStaticForLambda(dir, "/"+tt.file)
+			if !found {
+				t.Fatalf("serveStaticForLambda did not find %s", tt.file)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/"+tt.file, http.NoBody))
+			testutil.AssertEqual(t, http.StatusOK, rec.Code)
+			testutil.AssertEqual(t, tt.want, lambdaCC)
+			testutil.AssertEqual(t, tt.want, rec.Header().Get("Cache-Control"))
 		})
 	}
 }

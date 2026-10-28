@@ -86,7 +86,7 @@ func (p *combinedProvider) GetServiceClient(_ context.Context, service common.Se
 
 type combinedFactory struct{ provider *combinedProvider }
 
-func (f combinedFactory) CreateAndValidateProvider(_ context.Context, name string, _ *provider.ProviderConfig) (provider.Provider, error) {
+func (f combinedFactory) CreateAndValidateProvider(_ context.Context, name string, _ *provider.Config) (provider.Provider, error) {
 	if name != "azure" {
 		return nil, fmt.Errorf("fixture refuses unexpected provider %q", name)
 	}
@@ -119,6 +119,13 @@ func combinedRoute(t *testing.T, h *Handler, method, path string, body any) even
 
 func newCombinedPlanFixture(t *testing.T, automatic bool, capAmount *float64) *combinedPlanFixture {
 	t.Helper()
+	return newCombinedPlanFixtureIn(t, automatic, capAmount, "USD")
+}
+
+// newCombinedPlanFixtureIn is newCombinedPlanFixture with the stored
+// recommendation priced in currency (issue #361).
+func newCombinedPlanFixtureIn(t *testing.T, automatic bool, capAmount *float64, currency string) *combinedPlanFixture {
+	t.Helper()
 	ctx := context.Background()
 	f := &combinedPlanFixture{createConcurrencyFixture: newCreateConcurrencyFixture(ctx, t)}
 	accounts, err := f.store.GetPlanAccounts(ctx, f.planID)
@@ -140,7 +147,7 @@ func newCombinedPlanFixture(t *testing.T, automatic bool, capAmount *float64) *c
 	require.NoError(t, f.store.SaveGlobalConfig(ctx, global))
 	response := combinedRoute(t, f.handler, "POST", "/api/plans", PlanRequest{
 		Name: "combined Azure", Provider: "azure", Service: "compute", Payment: "monthly", Term: 1,
-		TargetAccounts: []string{f.account}, TargetCoverage: 80, RampSchedule: "weekly-25pct",
+		TargetAccounts: []string{f.account}, TargetCoverage: ptr(80), RampSchedule: "weekly-25pct",
 		Enabled: true, AutoPurchase: automatic, NotificationDaysBefore: 3, MaxStepCommitment: capAmount,
 	})
 	require.Equal(t, 200, response.StatusCode, response.Body)
@@ -160,6 +167,7 @@ func newCombinedPlanFixture(t *testing.T, automatic bool, capAmount *float64) *c
 	require.NoError(t, f.store.UpsertRecommendations(ctx, time.Now().UTC(), []config.RecommendationRecord{{
 		ID: "combined-azure-rec", Provider: "azure", Service: "compute", Region: "westeurope", ResourceType: "Standard_D2s_v3",
 		Count: 100, Term: 1, Payment: "monthly", MonthlyCost: &monthly, Savings: 500, CloudAccountID: &f.account,
+		CommitmentCurrency: currency,
 	}}, nil))
 	f.service = &combinedService{store: f.store}
 	factory := combinedFactory{provider: &combinedProvider{service: f.service}}
@@ -314,6 +322,32 @@ func TestCombinedPlanPurchase_ManualOffRoutedApproval(t *testing.T) {
 	response = f.approveAs(t, approver, 2400)
 	assert.Equal(t, 409, response.StatusCode, response.Body)
 	assert.Len(t, f.service.recorded(), 1)
+	f.assertCompleted(t)
+}
+
+// TestCombinedPlanPurchase_NonUSDApprovalRefusedUnderCap (issue #361): the
+// stored recommendation is priced at 2,400 EUR. The currency must survive the
+// recommendations payload, the plan-step attach and the execution row, and a
+// USD approve-any cap of 2,400 must refuse it instead of comparing
+// 2400 <= 2400. A grant with no amount cap still approves it.
+func TestCombinedPlanPurchase_NonUSDApprovalRefusedUnderCap(t *testing.T) {
+	f := newCombinedPlanFixtureIn(t, false, nil, "EUR")
+	f.assertAttached(t)
+	stored, err := f.store.GetExecutionByID(context.Background(), f.root.ExecutionID)
+	require.NoError(t, err)
+	require.Len(t, stored.Recommendations, 1)
+	assert.Equal(t, "EUR", stored.Recommendations[0].CommitmentCurrency, "the currency must round-trip to the execution row")
+	approver := uuid.NewString()
+	_, err = f.pool.Exec(context.Background(), `INSERT INTO users (id,email,password_hash,salt,active,group_ids,created_at,updated_at) SELECT $1,'approver@example.invalid','x','y',true,ARRAY[g.id],now(),now() FROM groups g ORDER BY g.name LIMIT 1`, approver)
+	require.NoError(t, err)
+	for _, capAmount := range []float64{2400, 1_000_000} {
+		response := f.approveAs(t, approver, capAmount)
+		assert.Equal(t, 403, response.StatusCode, response.Body)
+		assert.Contains(t, response.Body, "EUR")
+	}
+	assert.Empty(t, f.service.recorded())
+	response := f.approveAs(t, approver, 0)
+	require.Equal(t, 200, response.StatusCode, response.Body)
 	f.assertCompleted(t)
 }
 

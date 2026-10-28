@@ -142,7 +142,7 @@ func TestCollectAWSAmbient_PassesHostAccount(t *testing.T) {
 	factory := new(MockProviderFactory)
 	client := new(MockRecommendationsClient)
 	client.On("GetAllRecommendations", mock.Anything).Return(mixedAccountRecs("111111111111"), nil)
-	factory.On("CreateAndValidateProvider", ctx, "aws", (*provider.ProviderConfig)(nil)).Return(newRecProvider(client), nil)
+	factory.On("CreateAndValidateProvider", ctx, "aws", (*provider.Config)(nil)).Return(newRecProvider(client), nil)
 	s := &Scheduler{providerFactory: factory, stsClient: &fakeSTSClient{accountID: "111111111111"}}
 	recs, gap, err := s.collectAWSAmbient(ctx, nil)
 	require.NoError(t, err)
@@ -155,7 +155,7 @@ func TestCollectAWSForAccount_SelfAccountPassesExternalID(t *testing.T) {
 	factory := new(MockProviderFactory)
 	client := new(MockRecommendationsClient)
 	client.On("GetAllRecommendations", mock.Anything).Return(mixedAccountRecs("111111111111"), nil)
-	factory.On("CreateAndValidateProvider", ctx, "aws", (*provider.ProviderConfig)(nil)).Return(newRecProvider(client), nil)
+	factory.On("CreateAndValidateProvider", ctx, "aws", (*provider.Config)(nil)).Return(newRecProvider(client), nil)
 	s := &Scheduler{config: new(MockConfigStore), providerFactory: factory, stsClient: &fakeSTSClient{accountID: "111111111111"}}
 	recs, gap, err := s.collectAWSForAccount(ctx, nil, config.CloudAccount{
 		ID: "self", Provider: "aws", AWSAuthMode: "role_arn", ExternalID: "111111111111", Enabled: true,
@@ -171,7 +171,7 @@ func TestCollectAWSForAccount_AssumedRolePassesExternalID(t *testing.T) {
 	factory := new(MockProviderFactory)
 	client := new(MockRecommendationsClient)
 	client.On("GetAllRecommendations", mock.Anything).Return(mixedAccountRecs("333333333333"), nil)
-	factory.On("CreateAndValidateProvider", ctx, "aws", mock.AnythingOfType("*provider.ProviderConfig")).Return(newRecProvider(client), nil)
+	factory.On("CreateAndValidateProvider", ctx, "aws", mock.AnythingOfType("*provider.Config")).Return(newRecProvider(client), nil)
 	s := &Scheduler{config: new(MockConfigStore), providerFactory: factory, stsClient: &fakeSTSClient{accountID: "111111111111"}}
 	recs, gap, err := s.collectAWSForAccount(ctx, nil, config.CloudAccount{
 		ID: "member", Provider: "aws", AWSAuthMode: "role_arn", AWSRoleARN: "arn:aws:iam::333333333333:role/cudly",
