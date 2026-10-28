@@ -908,12 +908,23 @@ func TestRejectRIExchange_EmptyStoredToken(t *testing.T) {
 // called and the region-normalization assertion would never fire
 // (silent test trap). Mirrors the integration-test fake but lives
 // here so this unit test runs without the //go:build integration tag.
+//
+// offered / offeredErr drive GetValidResourceTypes (the region's
+// instance type catalog); offeredCalls counts the catalog lookups.
 type fakeReshapeEC2Stub struct {
-	instances []ec2svc.ConvertibleRI
+	instances    []ec2svc.ConvertibleRI
+	offered      []string
+	offeredErr   error
+	offeredCalls int
 }
 
 func (f *fakeReshapeEC2Stub) ListConvertibleReservedInstances(_ context.Context) ([]ec2svc.ConvertibleRI, error) {
 	return f.instances, nil
+}
+
+func (f *fakeReshapeEC2Stub) GetValidResourceTypes(_ context.Context) ([]string, error) {
+	f.offeredCalls++
+	return f.offered, f.offeredErr
 }
 
 // fakeReshapeRecsStub returns a configurable RI utilization slice so

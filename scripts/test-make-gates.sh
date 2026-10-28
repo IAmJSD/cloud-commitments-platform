@@ -13,6 +13,12 @@
 #      loop over terraform/environments/*/dev, which does not exist.
 #   4. Makefile.terraform's clean-locks refuses to delete the provider lock
 #      files without CONFIRM_CLEAN_LOCKS=yes.
+#   5. The Go targets' ./... (vet, test-unit, test-compile-integration,
+#      test-integration, test-coverage, fmt) skips frontend/node_modules
+#      (issue #177). Go's ./... used to pick up the Go source npm packages
+#      ship there (frontend/node_modules/flatted/golang) once deps were
+#      installed. Checked with the real go command and an -overlay probe, so
+#      no npm install is needed and nothing is written into the repo.
 #
 # Tools are stubs on a PATH that holds nothing else, so the real tools are
 # never run and nothing leaves the machine. Exits 0 when all cases pass;
@@ -148,6 +154,43 @@ if [ ! -e "$lock" ]; then
   note_pass "clean-locks deleted the lock file when confirmed"
 else
   note_fail "clean-locks kept the lock file despite confirmation"
+fi
+
+# 5. ./... skips frontend/node_modules (go.mod's ignore directive). A probe
+# package overlaid under frontend/node_modules must not be listed; a control
+# probe overlaid elsewhere under frontend/ must be, which proves the overlay
+# took effect and that the ignore covers node_modules only.
+probe_src="$WORK/probe.go"
+printf 'package probe\n\nfunc Probe() {}\n' > "$probe_src"
+ignored_dir="frontend/node_modules/zz-make-gates-probe"
+control_dir="frontend/zz-make-gates-control"
+printf '{"Replace":{"%s":"%s","%s":"%s"}}\n' \
+  "$REPO_ROOT/$ignored_dir/probe.go" "$probe_src" \
+  "$REPO_ROOT/$control_dir/probe.go" "$probe_src" > "$WORK/overlay.json"
+GO_BIN="$(command -v go || true)"
+if [ -z "$GO_BIN" ]; then
+  note_fail "go not found on PATH; cannot check that ./... skips node_modules"
+else
+  for tags in "" "integration"; do
+    label="go list ./...${tags:+ -tags=$tags}"
+    if ! (cd "$REPO_ROOT" && "$GO_BIN" list -e -tags="$tags" -overlay "$WORK/overlay.json" \
+          -f '{{.Dir}}' ./...) > "$WORK/pkgs.log" 2> "$WORK/out.log"; then
+      note_fail "$label failed"
+      sed 's/^/    /' "$WORK/out.log"
+      continue
+    fi
+    if grep -qxF "$REPO_ROOT/$control_dir" "$WORK/pkgs.log"; then
+      note_pass "$label lists the control probe under frontend/"
+    else
+      note_fail "$label did not list the control probe (overlay not applied?)"
+    fi
+    if grep -qF "$REPO_ROOT/frontend/node_modules/" "$WORK/pkgs.log"; then
+      note_fail "$label walks into frontend/node_modules"
+      grep -F "$REPO_ROOT/frontend/node_modules/" "$WORK/pkgs.log" | sed 's/^/    /'
+    else
+      note_pass "$label skips frontend/node_modules"
+    fi
+  done
 fi
 
 echo ""

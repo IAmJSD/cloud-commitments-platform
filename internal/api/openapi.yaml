@@ -160,6 +160,30 @@ paths:
       operationId: getUpcomingPurchases
       tags: [Dashboard]
       summary: Get upcoming scheduled purchases
+      description: >
+        Pending purchase executions the caller's account scope can see. The
+        optional filters narrow that set and never widen it.
+      parameters:
+        - name: provider
+          in: query
+          description: >
+            Filter by the row's provider (its plan's first service). "all" or
+            no value means every provider. Any other value is a 400.
+          schema:
+            type: string
+            enum: [aws, azure, gcp, all]
+        - name: account_ids
+          in: query
+          description: >
+            Comma-separated cloud account UUIDs (at most 200). When present it
+            takes precedence over account_id. A row matches when any account
+            the execution can buy in is selected (a plan-level execution
+            covers every plan account; a per-account execution only its own).
+            The selection is narrowed to the caller's allowed accounts, so an
+            account outside them matches no rows.
+          schema:
+            type: string
+        - $ref: '#/components/parameters/AccountID'
       responses:
         '200':
           description: Upcoming purchases
@@ -167,6 +191,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UpcomingPurchaseResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -1667,11 +1693,15 @@ paths:
             floor, or no default price computable), the RI is not Standard,
             the purchase's cloud account is missing, not AWS or cannot be
             signed for, the account role could not be assumed, or AWS rejected
-            the request as a client error.
+            the request as a client error. When AWS answers
+            SellerNotRegistered, reason is seller_not_registered and error
+            explains that the account's root user must register it as an RI
+            Marketplace seller, with a bank account that has a US address,
+            linking the AWS guide; no other 400 carries a reason.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/MarketplaceClientError'
         '401':
           description: No valid bearer session.
           content:
@@ -1766,11 +1796,13 @@ paths:
           description: >
             Invalid ID, the purchase's cloud account is missing, not AWS or
             cannot be signed for, the account role could not be assumed, or
-            AWS rejected the cancel as a client error.
+            AWS rejected the cancel as a client error. AWS errors are mapped
+            as for marketplace-list, so a SellerNotRegistered answer carries
+            reason seller_not_registered here too.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/MarketplaceClientError'
         '401':
           description: No valid bearer session.
           content:
@@ -4469,9 +4501,10 @@ paths:
       summary: Replace a cloud account (admin only)
       description: >
         Replaces the account's configuration with the request body; fields
-        omitted from the body are cleared, and enabled defaults to false.
-        The provider is validated but not changed. Stored credentials are
-        not affected.
+        omitted from the body are cleared, except enabled and
+        aws_is_org_root, which keep their stored values when omitted or
+        null (send false to clear them). The provider is validated but not
+        changed. Stored credentials are not affected.
       parameters:
         - $ref: '#/components/parameters/CSRFToken'
       requestBody:
@@ -6668,6 +6701,23 @@ components:
             Minimum instance/node count a recommendation must carry to be
             surfaced (GUI/persisted equivalent of the CLI --min-count flag).
             0 (default) disables the filter.
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: |
+            When this service config row was first saved. Present on stored
+            rows (GET /api/config, GET /api/config/service/{provider}/{service});
+            omitted from a purchase plan's services entries. Ignored on write.
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: |
+            When this service config row last changed, set by the database on
+            every save of the row, including a changed global default being
+            copied onto it. Present and omitted exactly like created_at;
+            ignored on write.
 
     CommitmentOptionsResponse:
       type: object
@@ -7775,7 +7825,11 @@ components:
           format: email
         enabled:
           type: boolean
-          description: Defaults to false when omitted.
+          nullable: true
+          description: >
+            On create, defaults to false when omitted or null. On update,
+            omitted or null keeps the stored value; an explicit false
+            disables the account.
         aws_auth_mode:
           type: string
           enum: [access_keys, role_arn, bastion, workload_identity_federation]
@@ -7794,6 +7848,11 @@ components:
             contain "..".
         aws_is_org_root:
           type: boolean
+          nullable: true
+          description: >
+            On create, defaults to false when omitted or null. On update,
+            omitted or null keeps the stored value; an explicit false clears
+            the flag.
         azure_subscription_id:
           type: string
         azure_tenant_id:
@@ -8526,6 +8585,19 @@ components:
             One-time USD sale price per instance when term_months remain. Must
             be positive.
 
+    MarketplaceClientError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        reason:
+          type: string
+          enum: [seller_not_registered]
+          description: >
+            Present only when AWS reported that the account is not a
+            registered RI Marketplace seller (SellerNotRegistered).
+
     MarketplaceListRequest:
       type: object
       properties:
@@ -8702,6 +8774,28 @@ components:
           type: number
           format: double
           description: Average coverage percentage. Omitted when coverage data is absent (not zero).
+        total_commitment:
+          type: number
+          format: double
+          description: >
+            Amortized upfront cost as a monthly run-rate: each active
+            purchase's upfront payment spread evenly over its term, summed
+            per collection and averaged over the month (the same averaging as
+            total_savings). Recurring fees are not included; they are in
+            total_usage, so total committed spend is total_commitment plus
+            total_usage. Omitted when unknown, which is when any snapshot in
+            the bucket had no upfront figure; never reported as 0 in that
+            case. A known zero (for example a no-upfront portfolio) is
+            returned as 0.
+        total_usage:
+          type: number
+          format: double
+          description: >
+            Recurring commitment fees (the purchases' monthly cost) as a
+            monthly run-rate, averaged like total_commitment. Omitted when unknown, which is when any
+            snapshot in the bucket had no usage figure (for example an
+            all-upfront purchase); never reported as 0 in that case. A known
+            zero is returned as 0.
         snapshot_count:
           type: integer
 

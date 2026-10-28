@@ -1344,8 +1344,17 @@ func TestPostgresStoreDB_CleanupOldExecutions_RetainsCanceledInsideHealthWindow(
 			scheduledDays: 400,
 			updatedDays:   0,
 			expiresDays:   intPtr(-40),
+			shouldSurvive: true,
+			why:           "not settled: ExpireExecutionAtomic moves it to expired first, and only then may a lapsed TTL reap it (#120)",
+		},
+		{
+			name:          "expired-with-long-expired-token",
+			status:        StatusExpired,
+			scheduledDays: 400,
+			updatedDays:   0,
+			expiresDays:   intPtr(-40),
 			shouldSurvive: false,
-			why:           "dead approval token; the expires_at branch still reaps non-canceled rows",
+			why:           "settled and not health-scored; the expires_at branch still reaps it",
 		},
 		{
 			name:          "pending-old-scheduled-date-no-expiry",

@@ -521,3 +521,42 @@ func TestLoadMarketplaceAWSConfig_ResolverErrorNeverFallsBackToHost(t *testing.T
 		})
 	}
 }
+
+// Issue #27: AWS's SellerNotRegistered text does not say what to do, so the
+// caller gets a fixed explanation (register as a seller with a US bank account,
+// linking the AWS guide) and a stable reason to branch on. The classification
+// keys on the code alone, whatever fault AWS reports.
+func TestMapAWSMarketplaceError_SellerNotRegistered(t *testing.T) {
+	for _, fault := range []smithy.ErrorFault{smithy.FaultClient, smithy.FaultUnknown} {
+		t.Run(fault.String(), func(t *testing.T) {
+			err := &smithy.OperationError{
+				ServiceID:     "EC2",
+				OperationName: "CreateReservedInstancesListing",
+				Err:           &smithy.GenericAPIError{Code: "SellerNotRegistered", Message: "raw aws text", Fault: fault},
+			}
+
+			ce, ok := IsClientError(mapAWSMarketplaceError("create listing", err))
+
+			require.True(t, ok)
+			assert.Equal(t, 400, ce.code)
+			assert.Equal(t, marketplaceSellerNotRegisteredMessage, ce.message)
+			assert.NotContains(t, ce.message, "raw aws text")
+			assert.Contains(t, ce.message, "US")
+			assert.Contains(t, ce.message, "https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ri-market-general.html#ri-market-seller-profile")
+			assert.Equal(t, map[string]any{"reason": "seller_not_registered"}, ce.Details())
+		})
+	}
+}
+
+// Other AWS client faults keep their own text and carry no reason, so a client
+// branching on reason never mistakes them for the seller precondition.
+func TestMapAWSMarketplaceError_OtherClientFaultsHaveNoReason(t *testing.T) {
+	err := &smithy.GenericAPIError{Code: "InvalidParameterValue", Message: "bad price", Fault: smithy.FaultClient}
+
+	ce, ok := IsClientError(mapAWSMarketplaceError("create listing", err))
+
+	require.True(t, ok)
+	assert.Equal(t, 400, ce.code)
+	assert.Equal(t, "bad price", ce.message)
+	assert.Nil(t, ce.Details())
+}

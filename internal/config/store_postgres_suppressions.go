@@ -156,6 +156,11 @@ func (s *PostgresStore) DeleteSuppressionsByExecutionTx(ctx context.Context, tx 
 // matches each row's variant (availability zone, platform, tenancy;
 // issue #816) to subtract cumulative suppressed counts from its rec-list
 // output. A row with NULL variant columns comes back with a nil Variant.
+//
+// Deliberately unbounded (#120 review): every active row subtracts from a
+// rec's count, and one purchase can write up to 1000 rows that live 7-90
+// days, so normal use can exceed MaxListLimit. A capped read would either
+// under-suppress (re-offering capacity just bought) or fail every caller.
 func (s *PostgresStore) ListActiveSuppressions(ctx context.Context) ([]PurchaseSuppression, error) {
 	const q = `
 		SELECT id, execution_id, account_id, provider, service, region,
