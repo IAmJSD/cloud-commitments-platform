@@ -37,7 +37,7 @@ func TestLogin_MFATokenRoundTrip(t *testing.T) {
 		MFAEnabled: true, MFASecret: "JBSWY3DPEHPK3PXP", PasswordVersion: 4,
 		MFARecoveryCodes: []string{auth.TestPasswordHash(t, "ABCDEFGH")},
 	}
-	store.On("GetUserByEmail", ctx, email).Return(user, nil).Twice()
+	store.On("GetUserByEmail", ctx, email).Return(user, nil).Once()
 
 	var storedHash string
 	store.On("CreateMFALoginToken", ctx, mock.AnythingOfType("string"), user.ID, int64(4), auth.MFALoginTokenTTL).
@@ -63,6 +63,7 @@ func TestLogin_MFATokenRoundTrip(t *testing.T) {
 
 	store.On("ClaimMFALoginTokenAttempt", ctx, storedHash, auth.MaxMFALoginTokenAttempts).
 		Return(&auth.MFALoginToken{UserID: user.ID, PasswordVersion: 4, Attempts: 1}, nil).Once()
+	store.On("GetUserByID", ctx, user.ID).Return(user, nil).Once()
 	store.On("ConsumeMFARecoveryCode", ctx, user.ID, mock.Anything, mock.Anything).Return(nil).Once()
 	store.On("ConsumeMFALoginToken", ctx, storedHash).Return(true, nil).Once()
 	store.On("CreateSession", ctx, mock.AnythingOfType("*auth.Session")).Return(nil).Once()

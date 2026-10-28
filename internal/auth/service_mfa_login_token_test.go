@@ -43,7 +43,7 @@ func TestLoginWithMFAToken_HappyPath(t *testing.T) {
 
 	store.On("ClaimMFALoginTokenAttempt", ctx, hash, MaxMFALoginTokenAttempts).
 		Return(&MFALoginToken{UserID: user.ID, PasswordVersion: 3, Attempts: 1}, nil).Once()
-	store.On("GetUserByEmail", ctx, "test@example.com").Return(user, nil).Once()
+	store.On("GetUserByID", ctx, user.ID).Return(user, nil).Once()
 	store.On("ClaimTOTPCounter", ctx, user.ID, mock.AnythingOfType("int64")).Return(true, nil).Once()
 	store.On("ConsumeMFALoginToken", ctx, hash).Return(true, nil).Once()
 	store.On("CreateSession", ctx, mock.Anything).Return(nil).Once()
@@ -68,7 +68,7 @@ func TestLoginWithMFAToken_UnclaimableTokenRefused(t *testing.T) {
 	_, err := svc.Login(ctx, mfaTokenUnitReq(currentUnitTOTP()))
 	require.ErrorIs(t, err, ErrInvalidMFAToken)
 	store.AssertExpectations(t)
-	store.AssertNotCalled(t, "GetUserByEmail", mock.Anything, mock.Anything)
+	store.AssertNotCalled(t, "GetUserByID", mock.Anything, mock.Anything)
 	store.AssertNotCalled(t, "ClaimTOTPCounter", mock.Anything, mock.Anything, mock.Anything)
 }
 
@@ -103,14 +103,17 @@ func TestLoginWithMFAToken_MalformedFormRefused(t *testing.T) {
 }
 
 // The token is bound to its user, to that user's password version and to MFA
-// still being on. Each mismatch is refused before any code is checked.
+// still being on. Each mismatch is refused before any code is checked. The
+// user is read by the token's user ID.
 func TestLoginWithMFAToken_BindingMismatchRefused(t *testing.T) {
 	ctx := context.Background()
 	cases := map[string]struct {
 		claim  MFALoginToken
 		mutate func(u *User)
 	}{
-		"other-user":       {claim: MFALoginToken{UserID: "someone-else", PasswordVersion: 3}},
+		"other-user": {claim: MFALoginToken{UserID: "someone-else", PasswordVersion: 3}, mutate: func(u *User) {
+			u.ID, u.Email = "someone-else", "someone-else@example.com"
+		}},
 		"password-changed": {claim: MFALoginToken{UserID: "user-123", PasswordVersion: 2}},
 		"mfa-disabled":     {claim: MFALoginToken{UserID: "user-123", PasswordVersion: 3}, mutate: func(u *User) { u.MFAEnabled = false }},
 	}
@@ -124,7 +127,7 @@ func TestLoginWithMFAToken_BindingMismatchRefused(t *testing.T) {
 			}
 			claim := tc.claim
 			store.On("ClaimMFALoginTokenAttempt", ctx, mock.Anything, MaxMFALoginTokenAttempts).Return(&claim, nil).Once()
-			store.On("GetUserByEmail", ctx, "test@example.com").Return(user, nil).Once()
+			store.On("GetUserByID", ctx, user.ID).Return(user, nil).Once()
 
 			_, err := svc.Login(ctx, mfaTokenUnitReq(currentUnitTOTP()))
 			require.ErrorIs(t, err, ErrInvalidMFAToken)
@@ -135,21 +138,87 @@ func TestLoginWithMFAToken_BindingMismatchRefused(t *testing.T) {
 	}
 }
 
-// A locked or deactivated account is refused with the generic login error.
-func TestLoginWithMFAToken_LockedAccountRefused(t *testing.T) {
+// Whatever the email names (no account, an inactive account, another active
+// account) and whatever state the token's own user is in (inactive, locked),
+// a token that does not lead to a sign-in gets one answer: ErrInvalidMFAToken,
+// with no code checked. The submitted email is never looked up.
+func TestLoginWithMFAToken_EveryMismatchSameAnswer(t *testing.T) {
 	ctx := context.Background()
-	store := new(MockStore)
-	svc := createTestService(store, new(MockEmailSender))
-	user := mfaTokenUnitUser(t)
-	until := time.Now().Add(time.Minute)
-	user.LockedUntil = &until
-	store.On("ClaimMFALoginTokenAttempt", ctx, mock.Anything, MaxMFALoginTokenAttempts).
-		Return(&MFALoginToken{UserID: user.ID, PasswordVersion: 3}, nil).Once()
-	store.On("GetUserByEmail", ctx, "test@example.com").Return(user, nil).Once()
+	lockedUntil := time.Now().Add(time.Minute)
+	cases := map[string]struct {
+		email  string
+		mutate func(u *User)
+	}{
+		"non-existent email":  {email: "nobody@example.com"},
+		"inactive user email": {email: "inactive@example.com"},
+		"other user email":    {email: "other@example.com"},
+		"token user inactive": {email: "test@example.com", mutate: func(u *User) { u.Active = false }},
+		"token user locked":   {email: "test@example.com", mutate: func(u *User) { u.LockedUntil = &lockedUntil }},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := new(MockStore)
+			svc := createTestService(store, new(MockEmailSender))
+			user := mfaTokenUnitUser(t)
+			if tc.mutate != nil {
+				tc.mutate(user)
+			}
+			store.On("ClaimMFALoginTokenAttempt", ctx, mock.Anything, MaxMFALoginTokenAttempts).
+				Return(&MFALoginToken{UserID: user.ID, PasswordVersion: 3}, nil).Once()
+			store.On("GetUserByID", ctx, user.ID).Return(user, nil).Maybe()
+			// What a lookup by the submitted email would find; it must not
+			// be asked.
+			store.On("GetUserByEmail", ctx, tc.email).Return(byEmail(user, tc.email), nil).Maybe()
 
-	_, err := svc.Login(ctx, mfaTokenUnitReq(currentUnitTOTP()))
-	require.EqualError(t, err, genericLoginError)
-	store.AssertNotCalled(t, "ClaimTOTPCounter", mock.Anything, mock.Anything, mock.Anything)
+			req := mfaTokenUnitReq(currentUnitTOTP())
+			req.Email = tc.email
+			_, err := svc.Login(ctx, req)
+			require.ErrorIs(t, err, ErrInvalidMFAToken)
+			store.AssertExpectations(t)
+			store.AssertCalled(t, "GetUserByID", ctx, user.ID)
+			store.AssertNotCalled(t, "GetUserByEmail", mock.Anything, mock.Anything)
+			store.AssertNotCalled(t, "ClaimTOTPCounter", mock.Anything, mock.Anything, mock.Anything)
+			store.AssertNotCalled(t, "RecordFailedLogin", mock.Anything, mock.Anything)
+		})
+	}
+}
+
+// byEmail returns the account the unit tests' store holds under email:
+// tokenUser, an inactive or an active other user, or none.
+func byEmail(tokenUser *User, email string) *User {
+	switch email {
+	case tokenUser.Email:
+		return tokenUser
+	case "inactive@example.com":
+		return &User{ID: "user-inactive", Email: email, MFAEnabled: true, PasswordVersion: 3}
+	case "other@example.com":
+		return &User{ID: "user-other", Email: email, Active: true, MFAEnabled: true, PasswordVersion: 3}
+	}
+	return nil
+}
+
+// A failed lookup of the token's user is refused the same way.
+func TestLoginWithMFAToken_UserLookupErrorRefused(t *testing.T) {
+	ctx := context.Background()
+	for name, ret := range map[string]struct {
+		user *User
+		err  error
+	}{
+		"store error": {err: errors.New("db down")},
+		"user gone":   {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := new(MockStore)
+			svc := createTestService(store, new(MockEmailSender))
+			store.On("ClaimMFALoginTokenAttempt", ctx, mock.Anything, MaxMFALoginTokenAttempts).
+				Return(&MFALoginToken{UserID: "user-123", PasswordVersion: 3}, nil).Once()
+			store.On("GetUserByID", ctx, "user-123").Return(ret.user, ret.err).Once()
+
+			_, err := svc.Login(ctx, mfaTokenUnitReq(currentUnitTOTP()))
+			require.ErrorIs(t, err, ErrInvalidMFAToken)
+			store.AssertExpectations(t)
+		})
+	}
 }
 
 // A wrong code counts toward the account lockout, as on the password form,
@@ -161,7 +230,7 @@ func TestLoginWithMFAToken_WrongCodeRecordsFailure(t *testing.T) {
 	user := mfaTokenUnitUser(t)
 	store.On("ClaimMFALoginTokenAttempt", ctx, mock.Anything, MaxMFALoginTokenAttempts).
 		Return(&MFALoginToken{UserID: user.ID, PasswordVersion: 3}, nil).Once()
-	store.On("GetUserByEmail", ctx, "test@example.com").Return(user, nil).Once()
+	store.On("GetUserByID", ctx, user.ID).Return(user, nil).Once()
 	store.On("RecordFailedLogin", ctx, user.ID).Return(nil).Once()
 
 	_, err := svc.Login(ctx, mfaTokenUnitReq("not-a-code"))
@@ -179,7 +248,7 @@ func TestLoginWithMFAToken_LostConsumeRefused(t *testing.T) {
 	user := mfaTokenUnitUser(t)
 	store.On("ClaimMFALoginTokenAttempt", ctx, mock.Anything, MaxMFALoginTokenAttempts).
 		Return(&MFALoginToken{UserID: user.ID, PasswordVersion: 3}, nil).Once()
-	store.On("GetUserByEmail", ctx, "test@example.com").Return(user, nil).Once()
+	store.On("GetUserByID", ctx, user.ID).Return(user, nil).Once()
 	store.On("ClaimTOTPCounter", ctx, user.ID, mock.AnythingOfType("int64")).Return(true, nil).Once()
 	store.On("ConsumeMFALoginToken", ctx, mock.Anything).Return(false, nil).Once()
 
