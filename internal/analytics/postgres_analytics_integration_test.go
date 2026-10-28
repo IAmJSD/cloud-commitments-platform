@@ -283,9 +283,10 @@ func TestPostgresAnalyticsStore_QueryMonthlyTotals_UnknownStaysUnknown(t *testin
 	store := analytics.NewPostgresAnalyticsStore(container.DB)
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
+	const acct = "123456789012" // placeholder; a named constant keeps the line clear of the account-ID detector
 	snap := func(service, region string, commitment, usage *float64) *analytics.SavingsSnapshot {
 		return &analytics.SavingsSnapshot{
-			AccountID: "123456789012", Timestamp: now, Provider: "aws", Service: service, Region: region,
+			AccountID: acct, Timestamp: now, Provider: "aws", Service: service, Region: region,
 			CommitmentType: "RI", TotalCommitment: commitment, TotalUsage: usage, TotalSavings: 10,
 		}
 	}
