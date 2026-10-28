@@ -320,9 +320,11 @@ func TestRevokePurchase_AzureReturnClientError(t *testing.T) {
 	h := &Handler{config: mockStore}
 	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
 	require.Error(t, err)
-	// 500 is not a client error -- expect wrapped error, not ClientError.
-	_, isClient := IsClientError(err)
-	assert.False(t, isClient, "server-side Azure errors should not be wrapped as 4xx ClientError")
+	// A server-side failure is not a 4xx: Azure may have taken the Return, so
+	// the answer is the uncertain 500 (issue #1529).
+	ce, isClient := IsClientError(err)
+	require.True(t, isClient, "want the uncertain-outcome ClientError, got %v", err)
+	assert.Equal(t, 500, ce.code, "server-side Azure errors must not be reported as 4xx")
 }
 
 // TestRevokePurchase_UsesStampedWindow asserts the window check reads
@@ -1462,10 +1464,11 @@ func TestCallAzureReturn_RefundPolicyViolatedReturns422WindowEdge(t *testing.T) 
 
 // --- Finding D: revocation_in_flight sticky on Azure error paths (second-wave CR) ---
 
-// TestCallAzureReturn_TransientError_ClearsInFlight verifies that when the
-// Azure Return call fails with a transient (non-window-edge, non-client) error,
-// callAzureReturn calls ClearRevocationInFlight so the row is not left sticky.
-func TestCallAzureReturn_TransientError_ClearsInFlight(t *testing.T) {
+// TestCallAzureReturn_TransientError_KeepsInFlight verifies that when the
+// Azure Return call fails with a transport error, which says nothing about
+// whether Azure took the Return, the in-flight flag is kept (issue #1529) and
+// the answer is the uncertain 500. Before #1529 the flag was cleared.
+func TestCallAzureReturn_TransientError_KeepsInFlight(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
@@ -1475,14 +1478,15 @@ func TestCallAzureReturn_TransientError_ClearsInFlight(t *testing.T) {
 	returnClient := &stubReturnClient{err: errors.New("dial tcp: connection refused")}
 
 	r := armReservationRecord()
-	mockStore.On("ClearRevocationInFlight", mock.Anything, r.PurchaseID).Return(nil).Once()
 
 	h := &Handler{config: mockStore}
 	_, err := h.callAzureReturn(ctx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
 	require.Error(t, err)
-	// Must not be a ClientError -- transient errors surface as a 500 from the caller.
-	_, isClientErr := IsClientError(err)
-	assert.False(t, isClientErr, "transient Azure error must not be a ClientError")
+	ce, isClientErr := IsClientError(err)
+	require.True(t, isClientErr, "want the uncertain-outcome ClientError, got %v", err)
+	assert.Equal(t, 500, ce.code)
+	assert.Contains(t, ce.message, "verify the reservation state in the Azure portal")
+	mockStore.AssertNotCalled(t, "ClearRevocationInFlight")
 	mockStore.AssertExpectations(t)
 }
 
