@@ -85,7 +85,12 @@ func TestScheduleEnvValuesShapes(t *testing.T) {
 	}
 }
 
-var tfvarsScheduleRe = regexp.MustCompile(`(?m)^\s*recommendation_schedule\s*=\s*"([^"]*)"`)
+var (
+	tfvarsScheduleRe = regexp.MustCompile(`(?m)^\s*recommendation_schedule\s*=\s*"([^"]*)"`)
+	// Own copy rather than tfStringDefaultRe in scheduled_task_cfn_test.go,
+	// which goes away with the CloudFormation stack (#1432).
+	scheduleDefaultRe = regexp.MustCompile(`(?m)^\s*default\s*=\s*"([^"]*)"`)
+)
 
 // recommendationSchedules returns the recommendation_schedule values the
 // deployment can end up with: each listed variables.tf default and each value
@@ -99,7 +104,7 @@ func recommendationSchedules(t *testing.T, varsFiles, tfvarsGlobs []string) map[
 			t.Fatal(err)
 		}
 		body, ok := blockOnce(stripComments(string(raw)), `variable\s+"recommendation_schedule"\s*\{`)
-		m := tfStringDefaultRe.FindStringSubmatch(body)
+		m := scheduleDefaultRe.FindStringSubmatch(body)
 		if !ok || m == nil {
 			t.Fatalf("%s: no single recommendation_schedule variable with a string default", f)
 		}
