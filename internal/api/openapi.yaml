@@ -8730,6 +8730,28 @@ components:
           type: number
           format: double
           description: Average coverage percentage. Omitted when coverage data is absent (not zero).
+        total_commitment:
+          type: number
+          format: double
+          description: >
+            Amortized upfront cost as a monthly run-rate: each active
+            purchase's upfront payment spread evenly over its term, summed
+            per collection and averaged over the month (the same averaging as
+            total_savings). Recurring fees are not included; they are in
+            total_usage, so total committed spend is total_commitment plus
+            total_usage. Omitted when unknown, which is when any snapshot in
+            the bucket had no upfront figure; never reported as 0 in that
+            case. A known zero (for example a no-upfront portfolio) is
+            returned as 0.
+        total_usage:
+          type: number
+          format: double
+          description: >
+            Recurring commitment fees (the purchases' monthly cost) as a
+            monthly run-rate, averaged like total_commitment. Omitted when unknown, which is when any
+            snapshot in the bucket had no usage figure (for example an
+            all-upfront purchase); never reported as 0 in that case. A known
+            zero is returned as 0.
         snapshot_count:
           type: integer
 
