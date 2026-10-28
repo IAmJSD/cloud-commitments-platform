@@ -20,10 +20,11 @@ import { openModal, closeModal } from './modal';
 import { canAccess } from './permissions';
 import { initLadderTimeline, refreshLadderTimeline } from './ladder-timeline';
 import { initLadderAccountSelector } from './ladder-account-selector';
-import { renderLadderConfigTable } from './ladder-config-table';
+import { LADDER_CONFIG_TABLE_COLUMNS, renderLadderConfigTable } from './ladder-config-table';
 import { renderLadderConfigModal } from './ladder-config-modal';
 import { listAccountsMinimal, type AccountSummary } from './api/accounts';
 import { readLadderNumbers } from './ladder-form-numbers';
+import { showSkeletonRows, teardownSkeleton } from './lib/skeleton';
 
 // ==========================================
 // MODULE STATE
@@ -62,6 +63,10 @@ export async function initLadderingSettings(globalEnabled: boolean): Promise<voi
   if (!container) return;
 
   container.innerHTML = renderLadderingSection(globalEnabled);
+  // Issue #186: the per-account table loads behind the shared skeleton (one
+  // row shape per table column), not a plain "Loading..." paragraph.
+  const configsContainer = document.getElementById('ladder-configs-table-container');
+  if (configsContainer) showSkeletonRows(configsContainer, 3, LADDER_CONFIG_TABLE_COLUMNS);
   selectedAccount = undefined;
   wireKillSwitchToggle();
   wireModalCloseButtons();
@@ -80,6 +85,7 @@ export async function initLadderingSettings(globalEnabled: boolean): Promise<voi
     console.error('Failed to load ladder configs:', err);
     const tableContainer = document.getElementById('ladder-configs-table-container');
     if (tableContainer) {
+      teardownSkeleton(tableContainer);
       tableContainer.innerHTML = '<p class="settings-error">Failed to load per-account configurations.</p>';
     }
   }
@@ -129,9 +135,7 @@ function renderLadderingSection(globalEnabled: boolean): string {
 
   <div id="ladder-configs-section">
     <h4>Per-Account Configurations</h4>
-    <div id="ladder-configs-table-container">
-      <p class="settings-help">Loading&hellip;</p>
-    </div>
+    <div id="ladder-configs-table-container"></div>
     ${canEdit ? `
     <button type="button" id="ladder-add-config-btn" class="btn btn-secondary">
       Add Account Config

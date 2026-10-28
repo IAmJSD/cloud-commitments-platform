@@ -176,27 +176,30 @@ func TestUUIDGeneration(t *testing.T) {
 	})
 }
 
-// TestCommitmentTypeLogic verifies commitment type determination.
+// TestCommitmentTypeLogic pins the (provider, service) -> commitment_type map
+// (#339): every Savings Plans slug is a savings plan, GCP is a CUD, and the
+// rest are reserved instances.
 func TestCommitmentTypeLogic(t *testing.T) {
-	t.Run("SavingsPlans service gets SavingsPlan type", func(t *testing.T) {
-		service := "SavingsPlans"
-		commitmentType := "RI"
-		if service == "SavingsPlans" {
-			commitmentType = "SavingsPlan"
-		}
-		assert.Equal(t, "SavingsPlan", commitmentType)
-	})
-
-	t.Run("other services get RI type", func(t *testing.T) {
-		services := []string{"rds", "elasticache", "opensearch", "ec2"}
-		for _, service := range services {
-			commitmentType := "RI"
-			if service == "SavingsPlans" {
-				commitmentType = "SavingsPlan"
-			}
-			assert.Equal(t, "RI", commitmentType)
-		}
-	})
+	cases := []struct{ provider, service, want string }{
+		{"aws", "savingsplans", "savings-plan"},
+		{"aws", "savings-plans", "savings-plan"},
+		{"aws", "SavingsPlans", "savings-plan"},
+		{"aws", "savings-plans-compute", "savings-plan"},
+		{"aws", "savings-plans-ec2instance", "savings-plan"},
+		{"aws", "savings-plans-sagemaker", "savings-plan"},
+		{"aws", "savings-plans-database", "savings-plan"},
+		{"aws", "ec2", "reserved-instance"},
+		{"aws", "rds", "reserved-instance"},
+		{"aws", "elasticache", "reserved-instance"},
+		{"aws", "opensearch", "reserved-instance"},
+		{"azure", "compute", "reserved-instance"},
+		{"azure", "database", "reserved-instance"},
+		{"gcp", "compute", "committed-use"},
+		{"GCP", "cloudsql", "committed-use"},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, commitmentTypeFor(tc.provider, tc.service), "%s/%s", tc.provider, tc.service)
+	}
 }
 
 // TestBulkInsertEmptySlice verifies empty slice handling.

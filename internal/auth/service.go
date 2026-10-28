@@ -331,9 +331,12 @@ func (s *Service) ValidateSession(ctx context.Context, token string) (*Session, 
 		return nil, fmt.Errorf("session not found")
 	}
 
-	// Constant-time comparison after fetch to close the SQL-equality timing oracle.
-	// GetSession does `WHERE token = $1` which is not constant-time in PostgreSQL;
-	// align with ValidateUserAPIKey / validateResetToken (issue #392 PR #837).
+	// Store-integrity check, not a timing defense (issue #313). GetSession
+	// selected this row by `WHERE token = $1` on hashedToken, so the two are
+	// equal unless the store returned a row for a different token; refuse it
+	// if it ever does. The equality timing of that lookup is harmless: the
+	// value compared is the SHA-256 of a 256-bit random token, which an
+	// attacker can neither guess nor steer byte by byte.
 	if subtle.ConstantTimeCompare([]byte(session.Token), []byte(hashedToken)) != 1 {
 		return nil, fmt.Errorf("session not found")
 	}

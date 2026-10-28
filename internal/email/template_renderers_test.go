@@ -614,8 +614,8 @@ func TestRenderRIExchangePendingApprovalEmail_Issue296(t *testing.T) {
 	// Labeled action URLs (not bracket notation).
 	assert.Contains(t, body, "Approve: ")
 	assert.Contains(t, body, "Reject:  ")
-	assert.Contains(t, body, "/api/ri-exchange/approve/rec-001")
-	assert.Contains(t, body, "/api/ri-exchange/reject/rec-001")
+	assert.Contains(t, body, "/inventory/ri-exchange/approve/rec-001")
+	assert.Contains(t, body, "/inventory/ri-exchange/reject/rec-001")
 
 	// Custom cancellation-window note overrides the generic fallback.
 	assert.Contains(t, body, "RI exchanges are irreversible once accepted by AWS.")
@@ -671,8 +671,8 @@ func TestRenderRIExchangePendingApprovalEmailHTML_Issue296(t *testing.T) {
 	assert.NotEmpty(t, html)
 
 	// Inline-styled approve anchor with correct href.
-	assert.Contains(t, html, `href="https://dashboard.example.com/api/ri-exchange/approve/rec-001?token=tok-abc"`)
-	assert.Contains(t, html, `href="https://dashboard.example.com/api/ri-exchange/reject/rec-001?token=tok-abc"`)
+	assert.Contains(t, html, `href="https://dashboard.example.com/inventory/ri-exchange/approve/rec-001?token=tok-abc"`)
+	assert.Contains(t, html, `href="https://dashboard.example.com/inventory/ri-exchange/reject/rec-001?token=tok-abc"`)
 	assert.Contains(t, html, ">Approve<")
 	assert.Contains(t, html, ">Reject<")
 

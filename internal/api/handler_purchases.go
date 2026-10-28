@@ -69,9 +69,20 @@ func (h *Handler) getPlannedPurchases(ctx context.Context, req *events.LambdaFun
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
+	purchases, err := h.plannedPurchasesInScope(ctx, scope, executions, planMap)
+	if err != nil {
+		return nil, err
+	}
+	return &PlannedPurchasesResponse{
+		Purchases: purchases,
+	}, nil
+}
+
+// plannedPurchasesInScope builds the list rows for the executions whose plan
+// still exists and that the caller's account scope can see, in input order.
+func (h *Handler) plannedPurchasesInScope(ctx context.Context, scope auth.AccountScope, executions []config.PurchaseExecution, planMap map[string]*config.PurchasePlan) ([]PlannedPurchase, error) {
 	// Memoises GetPlanAccounts: plan-level parents of the same plan share it.
 	planAccounts := make(map[string][]config.CloudAccount)
-
 	var purchases []PlannedPurchase
 	for _rvc := range executions {
 		exec := executions[_rvc]
@@ -88,10 +99,7 @@ func (h *Handler) getPlannedPurchases(ctx context.Context, req *events.LambdaFun
 		}
 		purchases = append(purchases, buildPlannedPurchase(plan, &exec))
 	}
-
-	return &PlannedPurchasesResponse{
-		Purchases: purchases,
-	}, nil
+	return purchases, nil
 }
 
 // isExecutionInScope is requireExecutionInScope for list filtering: an
@@ -190,12 +198,9 @@ func (h *Handler) authorizeExecutionManagement(ctx context.Context, session *Ses
 		return nil
 	}
 
-	execution, err := h.config.GetExecutionByID(ctx, executionID)
-	if errors.Is(err, config.ErrNotFound) {
-		return errNotFound
-	}
+	execution, err := h.loadPlannedExecution(ctx, executionID)
 	if err != nil {
-		return fmt.Errorf("failed to get execution: %w", err)
+		return err
 	}
 
 	// Creator match: both IDs must be non-empty and equal. An empty-string
@@ -446,7 +451,7 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 	// claim returns, the row it buys (issue #415).
 	final, revocationToken, runErr := h.purchase.RunPlannedPurchaseNow(ctx, executionID, fourEyesActorIdentity(session), resolveCreatorUserID(session), h.runNowClaimCheck(session))
 	if runErr != nil {
-		return nil, executeFailureError(executionID, "started", final, runErr)
+		return nil, h.executeFailure(ctx, req, executionID, "started", final, revocationToken, session.Email, runErr)
 	}
 
 	// The shared execute funnel rotated the row's token into a revocation
@@ -461,25 +466,49 @@ func (h *Handler) runPlannedPurchase(ctx context.Context, req *events.LambdaFunc
 	}, nil
 }
 
+// executeFailure answers a failed run-now, session approve or direct execute.
+// A partially_completed run bought part of its commitments, so it gets the
+// executed email with the revocation token the funnel minted for it, as a
+// completed run does, before the 502 (issue #532). final is the row the
+// funnel returned, carrying the per-rec outcome and completed_at.
+func (h *Handler) executeFailure(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID, action string, final *config.PurchaseExecution, revocationToken, executedBy string, err error) error {
+	if purchase.IsCommittedPartialRun(final, err) {
+		h.sendPurchaseExecutedEmail(ctx, req, final, revocationToken, executedBy)
+	}
+	return executeFailureError(executionID, action, final, err)
+}
+
 // Stale Azure prices are refused before purchase, even after a successful claim.
 func executeFailureError(executionID, action string, final *config.PurchaseExecution, err error) error {
-	switch {
-	case errors.Is(err, purchase.ErrFourEyesDenied):
+	if errors.Is(err, purchase.ErrFourEyesDenied) {
 		return NewClientError(403, fmt.Sprintf("execution %s cannot be %s: %v", executionID, action, err))
-	case final == nil && (errors.Is(err, config.ErrExecutionNotInExpectedStatus) || errors.Is(err, config.ErrNotFound)):
-		return NewClientError(409, fmt.Sprintf("execution %s cannot be %s: %v", executionID, action, err))
-	case final == nil:
-		return fmt.Errorf("execution %s could not be %s: %w", executionID, action, err)
+	}
+	if final == nil {
+		return unclaimedExecuteError(executionID, action, err)
+	}
+	switch {
 	case errors.Is(err, config.ErrAuditLoss):
 		return NewClientError(500, fmt.Sprintf("execution %s ran but its final status could not be saved: %v", executionID, err))
 	case errors.Is(err, purchase.ErrClaimedRowRefused):
 		return claimedRowRefusalError(final, err)
 	case errors.Is(err, purchase.ErrStaleAzurePricing):
 		return NewClientError(409, err.Error())
+	case purchase.IsCommittedPartialRun(final, err):
+		return NewClientErrorWithDetails(502, fmt.Sprintf("execution %s partially completed: some commitments were purchased and can be revoked, others failed: %v", executionID, err),
+			map[string]any{"execution_id": executionID, "status": final.Status})
 	default:
 		return NewClientErrorWithDetails(502, fmt.Sprintf("execution %s failed: %v", executionID, err),
 			map[string]any{"execution_id": executionID, "status": final.Status})
 	}
+}
+
+// unclaimedExecuteError answers a failure where the funnel returned no row:
+// a lost claim race or a vanished row is a 409, anything else is a plain error.
+func unclaimedExecuteError(executionID, action string, err error) error {
+	if errors.Is(err, config.ErrExecutionNotInExpectedStatus) || errors.Is(err, config.ErrNotFound) {
+		return NewClientError(409, fmt.Sprintf("execution %s cannot be %s: %v", executionID, action, err))
+	}
+	return fmt.Errorf("execution %s could not be %s: %w", executionID, action, err)
 }
 
 // requireDeleteOrCancelPurchasePermission validates the request session and
@@ -737,6 +766,18 @@ func (h *Handler) disablePlanAfterCancel(ctx context.Context, session *Session, 
 	return h.disablePlan(ctx, planID)
 }
 
+// releaseCanceledSuppressions releases the suppressions of a row the cancel
+// just transitioned. A recommendation-bearing row owns suppressions (written
+// with its recommendations); release them like the other cancel paths. The
+// delete is idempotent and also runs on cancelOrRecoverExecution's recovery
+// path, so a retry heals a failure here.
+func (h *Handler) releaseCanceledSuppressions(ctx context.Context, canceled *config.PurchaseExecution, executionID string) (*config.PurchaseExecution, error) {
+	if delErr := h.config.DeleteSuppressionsByExecution(ctx, executionID); delErr != nil {
+		return nil, fmt.Errorf("cancel execution %s: failed to release suppressions: %w", executionID, delErr)
+	}
+	return canceled, nil
+}
+
 // cancelOrRecoverExecution transitions the execution to "canceled" if it is
 // still in {pending, notified, paused}. If a prior attempt already canceled it
 // (ErrExecutionNotInExpectedStatus), it fetches the row instead so the caller
@@ -746,14 +787,7 @@ func (h *Handler) disablePlanAfterCancel(ctx context.Context, session *Session, 
 func (h *Handler) cancelOrRecoverExecution(ctx context.Context, executionID string, actor *string) (*config.PurchaseExecution, error) {
 	canceled, err := h.config.TransitionExecutionStatus(ctx, executionID, []string{"pending", "notified", "paused"}, "canceled", actor)
 	if err == nil {
-		// A recommendation-bearing row owns suppressions (written with its
-		// recommendations); release them like the other cancel paths. The
-		// delete is idempotent and also runs on the recovery path below, so a
-		// retry heals a failure here.
-		if delErr := h.config.DeleteSuppressionsByExecution(ctx, executionID); delErr != nil {
-			return nil, fmt.Errorf("cancel execution %s: failed to release suppressions: %w", executionID, delErr)
-		}
-		return canceled, nil
+		return h.releaseCanceledSuppressions(ctx, canceled, executionID)
 	}
 	if !errors.Is(err, config.ErrExecutionNotInExpectedStatus) {
 		// Not a CAS conflict: a real server-side failure (DB error, transient
@@ -940,8 +974,10 @@ func concealExecutionDenial(err error) error {
 
 // tokenActionError maps the email-link approve/cancel failures that are the
 // caller's fault to a 4xx: a wrong token is 403 (as on the RI exchange
-// approve path), an expired token is 410, and an execution
-// whose status no longer allows the action is 409. Anything else stays a server error.
+// approve path), as is a token rotated or expired between the snapshot check
+// and the status CAS (config.ErrApprovalTokenChanged, issue #1190), an expired
+// token is 410, and an execution whose status no longer allows the action is
+// 409. Anything else stays a server error.
 func tokenActionError(err error) error {
 	switch {
 	case errors.Is(err, config.ErrAuditLoss):
@@ -950,7 +986,7 @@ func tokenActionError(err error) error {
 		return claimedRowRefusalError(nil, err)
 	case errors.Is(err, purchase.ErrStaleAzurePricing):
 		return NewClientError(409, err.Error())
-	case errors.Is(err, purchase.ErrInvalidApprovalToken):
+	case errors.Is(err, purchase.ErrInvalidApprovalToken), errors.Is(err, config.ErrApprovalTokenChanged):
 		return NewClientError(403, "invalid approval token")
 	case errors.Is(err, purchase.ErrApprovalTokenExpired):
 		return NewClientError(410, "approval token has expired")
@@ -998,11 +1034,11 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	// scheduled transition is recorded as system-initiated (transitioned_by = NULL).
 	// Fail closed: a config-read error must NOT silently discard the configured
 	// free-cancel window and execute immediately. Return 500 so the caller can retry.
-	globalCfg, cfgErr := h.config.GetGlobalConfig(ctx)
-	if cfgErr != nil {
-		return nil, fmt.Errorf("failed to read global config for purchase delay check: %w", cfgErr)
+	delay, delayErr := h.purchaseDelay(ctx)
+	if delayErr != nil {
+		return nil, delayErr
 	}
-	if globalCfg.GetPurchaseDelay() > 0 {
+	if delay > 0 {
 		// The delayed branch bypasses ApproveExecution, which is where the
 		// token is otherwise validated (issue #586). This check reads the
 		// snapshot loaded at the start of the request; approveWithDelay pins
@@ -1011,8 +1047,25 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 		if err := purchase.ValidateApprovalToken(execution, token); err != nil {
 			return nil, tokenActionError(err)
 		}
-		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), actor, nil, token)
+		return h.approveWithDelay(ctx, execution, delay, actor, nil, token)
 	}
+	return h.executeTokenApprove(ctx, req, execution, token, actor, tokenSession)
+}
+
+// purchaseDelay reads the configured Gmail-style pre-fire delay (issue #291).
+// Fail closed: a config-read error must not silently discard the configured
+// free-cancel window, so it is returned (a 500 the caller can retry).
+func (h *Handler) purchaseDelay(ctx context.Context) (time.Duration, error) {
+	globalCfg, err := h.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read global config for purchase delay check: %w", err)
+	}
+	return globalCfg.GetPurchaseDelay(), nil
+}
+
+// executeTokenApprove is the immediate (no pre-fire delay) tail of
+// approveViaToken. It runs only after every approveViaToken gate passed.
+func (h *Handler) executeTokenApprove(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, token, actor string, tokenSession *Session) (any, error) {
 	// ApproveExecution now runs the purchase synchronously inside the
 	// same call (issue #372). When it returns nil the AWS API call
 	// has already happened, so the response surfaces "completed"
@@ -1025,27 +1078,44 @@ func (h *Handler) approveViaToken(ctx context.Context, req *events.LambdaFunctio
 	// the hash.
 	// approveConstraintsForSession above read a snapshot; the funnel re-runs
 	// it on the row its claim returns, the row it buys (issue #415).
-	revocationToken, approveErr := h.purchase.ApproveExecution(ctx, execution.ExecutionID, token, actor, h.tokenApproveClaimCheck(tokenSession))
+	final, revocationToken, approveErr := h.purchase.ApproveExecution(ctx, execution.ExecutionID, token, actor, h.tokenApproveClaimCheck(tokenSession))
 	if approveErr != nil {
-		return nil, tokenActionError(approveErr)
+		return nil, h.tokenApproveFailure(ctx, req, execution.ExecutionID, final, revocationToken, actor, approveErr)
 	}
-	// Re-fetch the execution to pick up the FINAL state (status,
-	// completed_at, per-rec purchase results) ApproveAndExecute wrote --
-	// the pre-approve `execution` struct is stale on those fields. Falling
-	// back to the stale struct on a re-fetch failure is a cosmetic
-	// degradation of the email content only: revocationToken above is
-	// already in hand either way, so the Revoke link is always valid.
+	h.emailTokenApproveOutcome(ctx, req, execution, revocationToken, actor)
+	return map[string]string{"status": "completed"}, nil
+}
+
+// tokenApproveFailure answers a failed token approve (issue #532). Once the
+// claim was won (a row came back) it answers like the session approve: a
+// partially_completed run gets its executed email, a provider failure is a
+// 502 carrying the row's status, an audit loss a 500. A 4-eyes denial is a
+// 403 on every path. Any other refusal before the claim (bad, rotated or
+// expired token, lost claim) keeps the tokenActionError mapping.
+func (h *Handler) tokenApproveFailure(ctx context.Context, req *events.LambdaFunctionURLRequest, executionID string, final *config.PurchaseExecution, revocationToken, actor string, err error) error {
+	if final == nil && !errors.Is(err, purchase.ErrFourEyesDenied) {
+		return tokenActionError(err)
+	}
+	return h.executeFailure(ctx, req, executionID, "approved", final, revocationToken, actor, err)
+}
+
+// emailTokenApproveOutcome sends the executed email for a token approve that
+// completed (tokenApproveFailure emails a partial run from the returned row).
+// It re-fetches the execution to pick up the FINAL state (status,
+// completed_at, per-rec purchase results) ApproveAndExecute wrote -- the
+// pre-approve `execution` struct is stale on those fields. Falling back to the stale struct on a re-fetch failure is a
+// cosmetic degradation of the email content only: revocationToken is already
+// in hand either way, so the Revoke link is always valid. Best-effort (issue
+// #291): errors are logged inside sendPurchaseExecutedEmail and never
+// propagate, since the purchase is already done.
+func (h *Handler) emailTokenApproveOutcome(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, revocationToken, actor string) {
 	emailExec, fetchErr := h.config.GetExecutionByID(ctx, execution.ExecutionID)
 	if fetchErr != nil || emailExec == nil {
 		logging.Warnf("approveViaToken[%s]: re-fetch for email failed (%v); using pre-approve snapshot",
 			execution.ExecutionID, fetchErr)
 		emailExec = execution
 	}
-	// Best-effort post-execution notification email (issue #291). Mirrors
-	// the session-authed path; errors are logged inside sendPurchaseExecutedEmail
-	// and never propagate — the purchase is already done at this point.
 	h.sendPurchaseExecutedEmail(ctx, req, emailExec, revocationToken, actor)
-	return map[string]string{"status": "completed"}, nil
 }
 
 // approvePurchaseViaSession is the session-authed branch of approvePurchase.
@@ -1103,14 +1173,19 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 	// "scheduled, revoke before X" email and a window to cancel at $0.
 	// Fail closed: a config-read error must NOT silently discard the configured
 	// free-cancel window and execute immediately. Return 500 so the caller can retry.
-	globalCfg, cfgErr := h.config.GetGlobalConfig(ctx)
-	if cfgErr != nil {
-		return nil, fmt.Errorf("failed to read global config for purchase delay check: %w", cfgErr)
+	delay, delayErr := h.purchaseDelay(ctx)
+	if delayErr != nil {
+		return nil, delayErr
 	}
-	if globalCfg.GetPurchaseDelay() > 0 {
-		return h.approveWithDelay(ctx, execution, globalCfg.GetPurchaseDelay(), session.Email, actor, "")
+	if delay > 0 {
+		return h.approveWithDelay(ctx, execution, delay, session.Email, actor, "")
 	}
+	return h.executeSessionApprove(ctx, req, execution, session, actor, t0)
+}
 
+// executeSessionApprove is the immediate (no pre-fire delay) tail of
+// approvePurchaseViaSession. It runs only after every gate there passed.
+func (h *Handler) executeSessionApprove(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, session *Session, actor *string, t0 time.Time) (any, error) {
 	// revocationToken is the raw token ApproveAndExecute mints for this
 	// approval (issue #103); only the token hash is stored, so this
 	// return value is the only place a raw, emailable token exists after
@@ -1121,7 +1196,7 @@ func (h *Handler) approvePurchaseViaSession(ctx context.Context, req *events.Lam
 	if approveErr != nil {
 		logging.Errorf("purchase[%s]: approvePurchaseViaSession failed after %s: %v",
 			execution.ExecutionID, time.Since(t0), approveErr)
-		return nil, executeFailureError(execution.ExecutionID, "approved", final, approveErr)
+		return nil, h.executeFailure(ctx, req, execution.ExecutionID, "approved", final, revocationToken, session.Email, approveErr)
 	}
 
 	logging.Infof("purchase[%s]: approvePurchaseViaSession completed in %s (auth=session)",
@@ -1372,15 +1447,18 @@ func (h *Handler) scheduleApprovedExecution(ctx context.Context, execution *conf
 	}
 
 	// Stamp the scheduled time and actor onto the post-CAS row, then persist.
-	// SavePurchaseExecution is a full-row upsert, so we set all extra fields on
-	// the returned (freshly-transitioned) execution to avoid overwriting fields
-	// a concurrent writer may have set between the CAS and here.
+	// The write is a full-row upsert, so the extra fields go on the returned
+	// (freshly-transitioned) execution, and it is guarded on "scheduled": a
+	// revoke that lands between the CAS and here flips the row to canceled,
+	// and an unguarded upsert would put "scheduled" back, so the scheduler
+	// would buy a purchase the user revoked (issue #835). A lost guard returns
+	// ErrExecutionNotInExpectedStatus, which approveWithDelay maps to a 409.
 	scheduledAt := time.Now().Add(delay)
 	updated.ScheduledExecutionAt = &scheduledAt
 	if actor != "" {
 		updated.ApprovedBy = &actor
 	}
-	if err := h.config.SavePurchaseExecution(ctx, updated); err != nil {
+	if err := h.config.SaveExecutionIfStatus(ctx, updated, []string{"scheduled"}); err != nil {
 		return nil, fmt.Errorf("failed to stamp scheduled_execution_at on execution %s: %w", execution.ExecutionID, err)
 	}
 	return updated, nil
@@ -1566,7 +1644,14 @@ func (h *Handler) authorizeSessionExecuteDirect(ctx context.Context, session *Se
 	if hasAny {
 		return h.enforcePurchaseConstraints(ctx, session, auth.ActionExecuteAny, recs)
 	}
+	return h.authorizeExecuteOwnDirect(ctx, session, creatorID, recs)
+}
 
+// authorizeExecuteOwnDirect is the execute-own branch of
+// authorizeSessionExecuteDirect, reached only after the admin, nil-auth and
+// execute-any gates. Its gates keep authorizeSessionExecuteDirect's order:
+// verb held, then creator match, then the execute-own Constraints.
+func (h *Handler) authorizeExecuteOwnDirect(ctx context.Context, session *Session, creatorID string, recs []config.RecommendationRecord) error {
 	hasOwn, err := h.sessionHoldsVerb(ctx, session, auth.ActionExecuteOwn)
 	if err != nil {
 		return err
@@ -1646,17 +1731,24 @@ func (h *Handler) cancelPurchase(ctx context.Context, req *events.LambdaFunction
 	}
 
 	if token != "" {
-		actor, err := h.authorizeApprovalAction(ctx, req, execution)
-		if err != nil {
-			return nil, concealExecutionDenial(err)
-		}
-		if err := h.purchase.CancelExecution(ctx, execID, token, actor); err != nil {
-			return nil, tokenActionError(err)
-		}
-		return map[string]string{"status": "canceled"}, nil
+		return h.cancelViaToken(ctx, req, execution, execID, token)
 	}
 
 	return h.cancelPurchaseViaSession(ctx, req, execution)
+}
+
+// cancelViaToken is the email-link branch of cancelPurchase (mode 2): the
+// per-account contact_email gate first, then the purchase service validates
+// the token before it mutates state. Same gate order as before extraction.
+func (h *Handler) cancelViaToken(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, execID, token string) (any, error) {
+	actor, err := h.authorizeApprovalAction(ctx, req, execution)
+	if err != nil {
+		return nil, concealExecutionDenial(err)
+	}
+	if err := h.purchase.CancelExecution(ctx, execID, token, actor); err != nil {
+		return nil, tokenActionError(err)
+	}
+	return map[string]string{"status": "canceled"}, nil
 }
 
 // guardCancelableViaSession returns a ClientError if execution is not eligible
@@ -1724,26 +1816,34 @@ func (h *Handler) cancelPurchaseViaSession(ctx context.Context, req *events.Lamb
 		e := session.Email
 		canceledBy = &e
 	}
-	var canceled bool
-	var currentStatus string
-	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
-		var err error
-		canceled, currentStatus, err = h.config.CancelExecutionAtomic(ctx, tx, execution.ExecutionID, canceledBy)
-		if err != nil {
-			return err
-		}
-		if !canceled {
-			return nil
-		}
-		return h.config.DeleteSuppressionsByExecutionTx(ctx, tx, execution.ExecutionID)
-	}); err != nil {
-		return nil, fmt.Errorf("cancel execution %s: %w", execution.ExecutionID, err)
+	canceled, currentStatus, cancelErr := h.cancelAndReleaseSuppressions(ctx, execution.ExecutionID, canceledBy)
+	if cancelErr != nil {
+		return nil, fmt.Errorf("cancel execution %s: %w", execution.ExecutionID, cancelErr)
 	}
 	if !canceled {
 		return nil, NewClientError(409, fmt.Sprintf("execution %s cannot be canceled: a concurrent operation already transitioned it to %q", execution.ExecutionID, currentStatus))
 	}
 
 	return map[string]string{"status": "canceled"}, nil
+}
+
+// cancelAndReleaseSuppressions flips a pending/notified row to canceled and
+// drops its purchase_suppressions in one transaction. canceled is false (with
+// the row's current status) when a concurrent operation moved it first; the
+// suppressions are then left alone.
+func (h *Handler) cancelAndReleaseSuppressions(ctx context.Context, executionID string, canceledBy *string) (canceled bool, currentStatus string, err error) {
+	err = h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		var txErr error
+		canceled, currentStatus, txErr = h.config.CancelExecutionAtomic(ctx, tx, executionID, canceledBy)
+		if txErr != nil {
+			return txErr
+		}
+		if !canceled {
+			return nil
+		}
+		return h.config.DeleteSuppressionsByExecutionTx(ctx, tx, executionID)
+	})
+	return canceled, currentStatus, err
 }
 
 // revokeViaEmailToken is the one-click revocation handler embedded in the
@@ -1837,9 +1937,14 @@ func (h *Handler) revokeViaEmailToken(ctx context.Context, req *events.LambdaFun
 	// widen the authz model here. True tokenless one-click (deriving the actor
 	// from a single-use, contact-bound token) is deferred to the sibling
 	// "AWS RI/SP revocation" work, which adds a dedicated revocation token.
-	//
-	// Token-authed path: validate the token (reusing the approval token for
-	// this iteration) and confirm the caller is the authorized contact email.
+	return h.revokeViaToken(ctx, req, execution, token)
+}
+
+// revokeViaToken is the token-authed tail of revokeViaEmailToken: confirm the
+// caller is the authorized contact email, validate the token (reusing the
+// approval token for this iteration), then check the status. Same gate order
+// as before extraction.
+func (h *Handler) revokeViaToken(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, token string) (any, error) {
 	actor, err := h.authorizeApprovalAction(ctx, req, execution)
 	if err != nil {
 		return nil, concealExecutionDenial(err)
@@ -1944,33 +2049,34 @@ func checkRevokableStatus(execution *config.PurchaseExecution) error {
 	}
 }
 
-// validateRevokeToken checks that the execution carries a non-empty
-// ApprovalToken, that the token has not expired, that the revocation window
-// has not closed (config.RevocationWindow after CompletedAt), and that the
-// token matches using constant-time comparison. Pre-migration rows without an
-// ApprovalTokenExpiresAt pass the expiry check (legacy backward compat).
+// validateRevokeToken checks the revocation token with the same status
+// mapping as the approve and cancel links (tokenActionError, issue #587): a
+// missing or non-matching token is 403 and a matching but expired token is
+// 410. Pre-migration rows without an ApprovalTokenExpiresAt pass the expiry
+// check (legacy backward compat). Last, the 24-hour revocation window must
+// still be open (config.RevocationWindow after CompletedAt).
+//
+// The token is compared first, as on the approve path: it shares
+// purchase.ValidateApprovalToken, which matches the token (in constant time,
+// against the SHA-256 digest stored at rest, issue #103) before it reads the
+// expiry. A wrong token must get the same "invalid" answer whatever the row's
+// expiry or window, or the expiry/window message tells a token guesser that
+// the link exists and has lapsed (issue #1190).
 // Extracted from revokeViaEmailToken to keep that function under the cyclomatic limit.
 func validateRevokeToken(execution *config.PurchaseExecution, token string) error {
-	if execution.ApprovalToken == "" {
+	switch err := purchase.ValidateApprovalToken(execution, token); {
+	case errors.Is(err, purchase.ErrInvalidApprovalToken):
 		return NewClientError(403, "invalid revocation token")
-	}
-	if execution.ApprovalTokenExpiresAt != nil && time.Now().After(*execution.ApprovalTokenExpiresAt) {
-		return NewClientError(409, fmt.Sprintf(
+	case errors.Is(err, purchase.ErrApprovalTokenExpired):
+		return NewClientError(410, fmt.Sprintf(
 			"execution %s cannot be revoked: the revocation link has expired", execution.ExecutionID))
+	case err != nil:
+		return err
 	}
 	// Enforce the 24-hour revocation window (issue #291 Finding #6).
 	// Use CompletedAt as the reference timestamp; fall back to ExecutedAt
 	// for direct-execute rows which may not have a CompletedAt yet.
-	if windowErr := checkRevocationWindow(execution); windowErr != nil {
-		return windowErr
-	}
-	// execution.ApprovalToken is the SHA-256 hex digest stored at rest
-	// (issue #103), not the raw secret; config.ApprovalTokenMatches hashes
-	// the supplied token and compares digests in constant time.
-	if !config.ApprovalTokenMatches(execution.ApprovalToken, token) {
-		return NewClientError(403, "invalid revocation token")
-	}
-	return nil
+	return checkRevocationWindow(execution)
 }
 
 // checkRevocationWindow returns a 403 ClientError when the 24-hour revocation
@@ -2023,8 +2129,9 @@ func revocationWindowClosesAt(execution *config.PurchaseExecution) string {
 // UPDATE WHERE status IN ('completed','partially_completed'). This guards
 // against lost-update races: if the row changed between the GetExecutionByID
 // read and this write (e.g. a concurrent transition), zero rows are affected
-// and we return a 409 rather than blindly overwriting. CancelledBy is stamped
-// in a follow-up SavePurchaseExecution on the freshly-returned row.
+// and we return a 409 rather than blindly overwriting. CancelledBy is then
+// stamped by a narrow SetCancelledBy UPDATE keyed on the execution ID, so the
+// row TransitionExecutionStatus returns is not used.
 //
 // transitionedBy is the acting user's UUID (resolveCreatorUserID), or nil when
 // the caller has no user row. It must never be an email: transitioned_by is a
@@ -2033,11 +2140,17 @@ func revocationWindowClosesAt(execution *config.PurchaseExecution) string {
 // The revocation window is enforced here, not only in validateRevokeToken, so
 // the session-authed branch (tryRevokeViaSession) cannot flip an execution
 // whose window closed long ago to revocation_requested (issue #260).
+//
+// Neither revoke path (this one or the token path in revokePurchase) applies
+// the 4-eyes RequireDifferentApprover policy: that policy gates approvals
+// only, and a revocation records a request that an operator completes with
+// AWS Support. Whether revocation should also need a second person is an
+// open owner decision (issue #311).
 func (h *Handler) revokeViaSession(ctx context.Context, execution *config.PurchaseExecution, revokedBy string, transitionedBy *string) (any, error) {
 	if err := checkRevocationWindow(execution); err != nil {
 		return nil, err
 	}
-	updated, err := h.config.TransitionExecutionStatus(
+	_, err := h.config.TransitionExecutionStatus(
 		ctx, execution.ExecutionID,
 		[]string{"completed", "partially_completed"}, "revocation_requested", transitionedBy)
 	if err != nil {
@@ -2060,7 +2173,6 @@ func (h *Handler) revokeViaSession(ctx context.Context, execution *config.Purcha
 		if err := h.config.SetCancelledBy(ctx, execution.ExecutionID, revokedBy); err != nil {
 			return nil, fmt.Errorf("failed to record revocation requester for execution %s: %w", execution.ExecutionID, err)
 		}
-		_ = updated // kept for future use; CancelledBy is now persisted atomically
 	}
 	logging.Infof("Revocation requested for execution %s by %s", execution.ExecutionID, redactEmail(revokedBy))
 	return map[string]string{
@@ -2279,8 +2391,18 @@ func (h *Handler) retryPurchase(ctx context.Context, req *events.LambdaFunctionU
 	// `failed` so the user sees the reason in History; the linkage on
 	// the original row is unaffected (it points at the failed-again
 	// successor, which is exactly the audit trail we want).
+	return h.sendRetryApprovalAndFinalize(ctx, req, failedExec, newExecution, rawApprovalToken, totalUpfront, totalSavings)
+}
+
+// sendRetryApprovalAndFinalize is retryPurchase's counterpart of
+// sendApprovalAndFinalize: it sends the successor's approval email, records a
+// send failure on the row, and builds the retry response.
+func (h *Handler) sendRetryApprovalAndFinalize(ctx context.Context, req *events.LambdaFunctionURLRequest, failedExec, newExecution *config.PurchaseExecution, rawApprovalToken string, totalUpfront, totalSavings float64) (any, error) {
 	emailSent, emailReason, recipient := h.sendPurchaseApprovalEmail(ctx, req, newExecution, rawApprovalToken, failedExec.Recommendations, totalUpfront, totalSavings)
-	status := h.finalizePurchaseStatus(ctx, newExecution, emailSent, emailReason)
+	status, err := h.finalizePurchaseStatus(ctx, newExecution, emailSent, emailReason)
+	if err != nil {
+		return nil, err
+	}
 
 	resp := map[string]any{
 		"execution_id":         newExecution.ExecutionID,
@@ -2573,11 +2695,7 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 		RetryAttemptN:          failedExec.RetryAttemptN + 1,
 	}
 
-	var gracePeriodCfg *config.GlobalConfig
-	if g, err := h.config.GetGlobalConfig(ctx); err == nil {
-		gracePeriodCfg = g
-	}
-	suppressions := config.BuildSuppressions(failedExec.Recommendations, newExecutionID, gracePeriodCfg, time.Now())
+	suppressions := config.BuildSuppressions(failedExec.Recommendations, newExecutionID, h.gracePeriodConfig(ctx), time.Now())
 
 	if err := h.persistRetrySuccessorTx(ctx, failedExec, newExecution, suppressions); err != nil {
 		return nil, "", err
@@ -2604,45 +2722,100 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 // matches zero rows and the tx rolls back (issue #220) instead of both
 // persisting an approvable successor and reverting whatever the other
 // writer changed on the original row.
+//
+// The successor is a web-source pending row for the retrying user, so it
+// also goes through the submit dedupe (issue #760): see writeRetrySuccessorTx.
 func (h *Handler) persistRetrySuccessorTx(ctx context.Context, failedExec, newExecution *config.PurchaseExecution, suppressions []config.PurchaseSuppression) error {
-	var lostRace, settledTranche bool
 	err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
-		if err := h.guardLadderTrancheForRetry(ctx, tx, failedExec.IdempotencyKey); err != nil {
-			settledTranche = errors.Is(err, errRetryLadderTrancheSettled)
-			return err
-		}
-		if err := h.config.SavePurchaseExecutionTx(ctx, tx, newExecution); err != nil {
-			return err
-		}
-		linked, linkErr := h.config.LinkRetryExecutionAtomic(ctx, tx, failedExec.ExecutionID, newExecution.ExecutionID)
-		if linkErr != nil {
-			return linkErr
-		}
-		if !linked {
-			lostRace = true
-			return errRetryLinkRaceLost
-		}
-		for i := range suppressions {
-			if err := h.config.CreateSuppressionTx(ctx, tx, &suppressions[i]); err != nil {
-				return err
-			}
-		}
-		return nil
+		return h.writeRetrySuccessorTx(ctx, tx, failedExec, newExecution, suppressions)
 	})
 	if err == nil {
 		return nil
 	}
-	if settledTranche {
+	var dup *retryDuplicateSubmitError
+	switch {
+	case errors.Is(err, errRetryLadderTrancheSettled):
 		return NewClientErrorWithDetails(409,
 			fmt.Sprintf("execution %s belongs to a ladder tranche that is already settled; retrying it could buy the same commitment twice", failedExec.ExecutionID),
 			map[string]any{})
-	}
-	if lostRace {
+	case errors.Is(err, errRetryLinkRaceLost):
 		return NewClientErrorWithDetails(409,
 			fmt.Sprintf("execution %s was already retried; act on its descendant instead", failedExec.ExecutionID),
 			map[string]any{})
+	case errors.As(err, &dup):
+		return NewClientErrorWithDetails(409,
+			fmt.Sprintf("an identical purchase was submitted moments ago as execution %s; act on it instead of retrying %s", dup.existingID, failedExec.ExecutionID),
+			map[string]any{"duplicate_execution_id": dup.existingID})
 	}
 	return fmt.Errorf("failed to save retry execution: %w", err)
+}
+
+// writeRetrySuccessorTx is persistRetrySuccessorTx's transaction body.
+//
+// Its first statement takes the retrying user's per-creator submit lock
+// (ListRecentSubmitsTx), the same lock at the same point as
+// persistExecutionAndSuppressions, so a retry and an identical fresh submit
+// by that user serialize instead of both inserting a pending row. Taking it
+// before the ladder tranche lock keeps one order everywhere: the submit path
+// takes only this lock, and the reconciler never takes it. The rows read
+// under the lock are checked for a duplicate of the successor only after the
+// link CAS, so a lost retry race still reports "already retried".
+func (h *Handler) writeRetrySuccessorTx(ctx context.Context, tx pgx.Tx, failedExec, newExecution *config.PurchaseExecution, suppressions []config.PurchaseSuppression) error {
+	creatorID := derefStringOrEmpty(newExecution.CreatedByUserID)
+	now := time.Now()
+	recent, listErr := h.config.ListRecentSubmitsTx(ctx, tx, creatorID, now.Add(-purchaseIdempotencyWindow))
+	if listErr != nil {
+		return listErr
+	}
+	if err := h.guardLadderTrancheForRetry(ctx, tx, failedExec.IdempotencyKey); err != nil {
+		return err
+	}
+	if err := h.config.SavePurchaseExecutionTx(ctx, tx, newExecution); err != nil {
+		return err
+	}
+	linked, linkErr := h.config.LinkRetryExecutionAtomic(ctx, tx, failedExec.ExecutionID, newExecution.ExecutionID)
+	if linkErr != nil {
+		return linkErr
+	}
+	if !linked {
+		return errRetryLinkRaceLost
+	}
+	if err := checkRetryDuplicateSubmit(recent, creatorID, newExecution, now); err != nil {
+		return err
+	}
+	for i := range suppressions {
+		if err := h.config.CreateSuppressionTx(ctx, tx, &suppressions[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkRetryDuplicateSubmit returns a *retryDuplicateSubmitError when recent
+// (the creator's live web submits, read under the submit lock) already holds
+// an execution with the successor's submit fingerprint. The successor's own
+// row is not in recent: it was read before the successor was inserted. A
+// fingerprint that cannot be derived fails the retry rather than skipping
+// the check, since a skipped check is a possible double purchase.
+func checkRetryDuplicateSubmit(recent []config.PurchaseExecution, creatorID string, successor *config.PurchaseExecution, now time.Time) error {
+	key, err := purchaseIdempotencyKey(creatorID, successor.Recommendations, successor.CapacityPercent)
+	if err != nil {
+		return fmt.Errorf("derive retry idempotency key: %w", err)
+	}
+	if dup := matchDuplicateInList(recent, creatorID, key, now); dup != nil {
+		return &retryDuplicateSubmitError{existingID: dup.ExecutionID}
+	}
+	return nil
+}
+
+// retryDuplicateSubmitError rolls back persistRetrySuccessorTx's tx when the
+// retrying user already has an identical live submit inside the idempotency
+// window, so the retry would mint a second approvable row for the same
+// purchase. persistRetrySuccessorTx translates it into a 409.
+type retryDuplicateSubmitError struct{ existingID string }
+
+func (e *retryDuplicateSubmitError) Error() string {
+	return "identical purchase already submitted as execution " + e.existingID
 }
 
 // errRetryLinkRaceLost is returned from persistRetrySuccessorTx's tx
@@ -2654,8 +2827,9 @@ func (h *Handler) persistRetrySuccessorTx(ctx context.Context, failedExec, newEx
 var errRetryLinkRaceLost = errors.New("retry link race lost")
 
 // guardLadderTrancheForRetry locks the ladder tranche named by the execution's
-// idempotency key (if any) before anything else in the retry tx, the same order
-// the reconciler uses (tranche, then execution rows), and refuses when the
+// idempotency key (if any) before any execution row in the retry tx (only the
+// per-creator submit advisory lock comes first), the same order the reconciler
+// uses (tranche, then execution rows), and refuses when the
 // tranche is settled. A failed tranche no longer nets, so an approvable
 // successor would buy the same slice a second time.
 func (h *Handler) guardLadderTrancheForRetry(ctx context.Context, tx pgx.Tx, idempotencyKey string) error {
@@ -2873,15 +3047,20 @@ func (h *Handler) getPurchaseDetails(ctx context.Context, req *events.LambdaFunc
 		return nil, err
 	}
 
-	var planName string
-	if execution.PlanID != "" {
-		plan, err := h.config.GetPurchasePlan(ctx, execution.PlanID)
-		if err == nil && plan != nil {
-			planName = plan.Name
-		}
-	}
+	return buildPurchaseDetailsResponse(execution, h.purchasePlanName(ctx, execution.PlanID)), nil
+}
 
-	return buildPurchaseDetailsResponse(execution, planName), nil
+// purchasePlanName is the display name of the execution's plan, or "" when
+// it has no plan or the plan cannot be read (the details still render).
+func (h *Handler) purchasePlanName(ctx context.Context, planID string) string {
+	if planID == "" {
+		return ""
+	}
+	plan, err := h.config.GetPurchasePlan(ctx, planID)
+	if err == nil && plan != nil {
+		return plan.Name
+	}
+	return ""
 }
 
 // ExecutePurchaseRequest represents the request to execute purchases.
@@ -2922,18 +3101,8 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 	if err != nil {
 		return ExecutePurchaseRequest{}, nil, nil, err
 	}
-	var execReq ExecutePurchaseRequest
-	if err := json.Unmarshal([]byte(req.Body), &execReq); err != nil {
-		return ExecutePurchaseRequest{}, nil, nil, NewClientError(400, "invalid request body")
-	}
-	const maxRecommendations = 1000
-	if len(execReq.Recommendations) == 0 {
-		return ExecutePurchaseRequest{}, nil, nil, NewClientError(400, "no recommendations provided")
-	}
-	if len(execReq.Recommendations) > maxRecommendations {
-		return ExecutePurchaseRequest{}, nil, nil, NewClientError(400, fmt.Sprintf("too many recommendations: %d (max %d)", len(execReq.Recommendations), maxRecommendations))
-	}
-	if err := normalizeCapacityPercent(&execReq); err != nil {
+	execReq, err := parseExecutePurchaseBody(req.Body)
+	if err != nil {
 		return ExecutePurchaseRequest{}, nil, nil, err
 	}
 	// Scope: reject the whole request if any recommendation targets an
@@ -2978,6 +3147,27 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 	return execReq, session, adjustments, nil
 }
 
+// parseExecutePurchaseBody decodes an execute request, bounds its
+// recommendation count to 1..1000 and normalizes capacity_percent. It runs
+// after the permission check and before every scope and content check.
+func parseExecutePurchaseBody(body string) (ExecutePurchaseRequest, error) {
+	var execReq ExecutePurchaseRequest
+	if err := json.Unmarshal([]byte(body), &execReq); err != nil {
+		return ExecutePurchaseRequest{}, NewClientError(400, "invalid request body")
+	}
+	const maxRecommendations = 1000
+	if len(execReq.Recommendations) == 0 {
+		return ExecutePurchaseRequest{}, NewClientError(400, "no recommendations provided")
+	}
+	if len(execReq.Recommendations) > maxRecommendations {
+		return ExecutePurchaseRequest{}, NewClientError(400, fmt.Sprintf("too many recommendations: %d (max %d)", len(execReq.Recommendations), maxRecommendations))
+	}
+	if err := normalizeCapacityPercent(&execReq); err != nil {
+		return ExecutePurchaseRequest{}, err
+	}
+	return execReq, nil
+}
+
 // enforcePurchaseConstraints builds the per-recommendation
 // auth.PermissionConstraints sets (purchaseConstraintSets) and enforces them
 // against session's action:purchases permission, first rejecting a batch
@@ -2995,11 +3185,16 @@ func (h *Handler) validateExecutePurchaseRequest(ctx context.Context, req *event
 // runPlannedPurchase, "execute-any"/"execute-own" for direct-execute,
 // "approve-any"/"approve-own" for session approve. recs carry store-derived
 // or persisted-at-submit-time costs depending on the caller; none of these
-// call sites ever price from client-supplied numbers.
+// call sites ever price from client-supplied numbers. MaxPurchaseAmount is
+// USD, so a batch with any rec not provably priced in USD is checked by
+// requireUncappedPurchaseGrant instead of by its raw amount (issue #361).
 func (h *Handler) enforcePurchaseConstraints(ctx context.Context, session *Session, action string, recs []config.RecommendationRecord) error {
 	constraintSets := purchaseConstraintSets(recs)
 	if err := requireNonZeroCommitment(constraintSets); err != nil {
 		return err
+	}
+	if currency := nonUSDPurchaseCurrency(recs); currency != "" {
+		return h.requireUncappedPurchaseGrant(ctx, session, action, constraintSets, currency)
 	}
 	return h.requirePermissionConstraints(ctx, session, action, "purchases", constraintSets)
 }
@@ -3127,20 +3322,68 @@ func validateExecutePurchaseRecommendations(recs []config.RecommendationRecord) 
 
 // finalizePurchaseStatus flips an execution's stored status to "failed" if
 // the approval email couldn't send, and returns the status string the API
-// response should carry. Returns the original "pending" when email_sent is
-// true or when the failed-state write itself fails (best-effort — the UI
-// still gets email_sent=false and can point the user at History).
-func (h *Handler) finalizePurchaseStatus(ctx context.Context, execution *config.PurchaseExecution, emailSent bool, emailReason string) string {
+// response should carry. Returns "pending" when email_sent is true.
+//
+// The write is guarded on the row still being "pending" (issue #1232). A
+// session approve, cancel or pause can land while the email is being sent;
+// an unguarded write would then stamp "failed" over a row that was already
+// approved and bought, which makes it eligible for retry and a second
+// purchase. A lost guard is a no-op: the row keeps the status the other
+// writer gave it, and that status is what the response carries.
+//
+// Any other save error is returned as a 500 (issue #54). The row then
+// still reads "pending" with no error text and a valid approval token while
+// no approval email exists, so answering "pending" would make it look like
+// a healthy request waiting on its approver. The error names the execution
+// so the caller can cancel it.
+func (h *Handler) finalizePurchaseStatus(ctx context.Context, execution *config.PurchaseExecution, emailSent bool, emailReason string) (string, error) {
 	if emailSent {
+		return "pending", nil
+	}
+	failed := *execution
+	failed.Status = "failed"
+	failed.Error = emailReason
+	err := h.config.SaveExecutionIfStatus(ctx, &failed, []string{"pending"})
+	switch {
+	case err == nil:
+		execution.Status, execution.Error = failed.Status, failed.Error
+		return "failed", nil
+	case errors.Is(err, config.ErrExecutionNotInExpectedStatus):
+		logging.Warnf("execution %s left pending while its approval email was being sent; not marking it failed: %v", execution.ExecutionID, err)
+		return h.currentExecutionStatus(ctx, execution.ExecutionID), nil
+	default:
+		logging.Errorf("AUDIT LOSS: failed to mark execution %s as failed after email send error (%s): %v", execution.ExecutionID, emailReason, err)
+		return "", emailFailureNotRecordedError(execution.ExecutionID, emailReason, err)
+	}
+}
+
+// emailFailureNotRecordedError is the 500 finalizePurchaseStatus returns when
+// the approval email failed and the write recording that failure failed too
+// (issue #54). The body names the execution and carries the email reason so
+// the caller can find the row and cancel it. The store error stays out of
+// the body but is wrapped so it remains reachable with errors.Is.
+func emailFailureNotRecordedError(executionID, emailReason string, saveErr error) error {
+	ce := NewClientErrorWithDetails(500,
+		fmt.Sprintf("AUDIT LOSS: the approval email for execution %s could not be sent, and saving that failure on the execution also failed; "+
+			"it may still show as pending with no approval email on the way, so cancel it from History", executionID),
+		map[string]any{
+			"execution_id": executionID,
+			"email_sent":   false,
+			"email_reason": emailReason,
+		})
+	return fmt.Errorf("%w: %w", ce, saveErr)
+}
+
+// currentExecutionStatus re-reads an execution's stored status for a response
+// whose in-memory copy went stale. Falls back to "pending" (the status the row
+// was created with) when the read fails.
+func (h *Handler) currentExecutionStatus(ctx context.Context, executionID string) string {
+	row, err := h.config.GetExecutionByID(ctx, executionID)
+	if err != nil || row == nil {
+		logging.Errorf("failed to re-read execution %s status: %v", executionID, err)
 		return "pending"
 	}
-	execution.Status = "failed"
-	execution.Error = emailReason
-	if err := h.config.SavePurchaseExecution(ctx, execution); err != nil {
-		logging.Errorf("failed to mark execution %s as failed after email send error: %v", execution.ExecutionID, err)
-		return "pending"
-	}
-	return "failed"
+	return row.Status
 }
 
 // validateAndTotalRecommendations validates each recommendation and returns
@@ -3406,47 +3649,6 @@ func recDetailsAvailabilityZone(r *config.RecommendationRecord) (string, error) 
 	return "", nil
 }
 
-// findDuplicatePendingExecution returns an existing pending/notified execution
-// whose idempotency fingerprint matches key and whose creation falls inside
-// purchaseIdempotencyWindow of now, or (nil, nil) when there is no duplicate.
-// It recomputes each candidate's key from its persisted recs + creator +
-// capacity rather than relying on a stored column, so no schema change is
-// needed. Restricted to web-sourced executions to avoid colliding with
-// scheduler/CLI rows. A lookup error is non-fatal to the caller's decision
-// (returned so the caller can log and proceed with a fresh execution).
-func (h *Handler) findDuplicatePendingExecution(ctx context.Context, creatorID, key string, now time.Time) (*config.PurchaseExecution, error) {
-	pending, err := h.config.GetPendingExecutions(ctx)
-	if err != nil {
-		return nil, err
-	}
-	cutoff := now.Add(-purchaseIdempotencyWindow)
-	for i := range pending {
-		ex := &pending[i]
-		if ex.Source != common.PurchaseSourceWeb {
-			continue
-		}
-		if ex.ScheduledDate.Before(cutoff) {
-			continue
-		}
-		exCreator := ""
-		if ex.CreatedByUserID != nil {
-			exCreator = *ex.CreatedByUserID
-		}
-		if exCreator != creatorID {
-			continue
-		}
-		exKey, err := purchaseIdempotencyKey(exCreator, ex.Recommendations, ex.CapacityPercent)
-		if err != nil {
-			logging.Errorf("purchase idempotency: skipping pending execution %s, cannot derive its key: %v", ex.ExecutionID, err)
-			continue
-		}
-		if exKey == key {
-			return ex, nil
-		}
-	}
-	return nil, nil
-}
-
 // buildDuplicatePurchaseResponse returns the executePurchase response body for
 // a submit that collapsed onto an existing pending execution (#644). It points
 // at the original row so the client lands on the same approvable execution
@@ -3535,17 +3737,8 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	execution.CreatedByUserID = creator
 	executionID := execution.ExecutionID
 
-	// Load the grace-period config once before entering the tx so a
-	// GetGlobalConfig failure fails the whole request cleanly rather
-	// than leaving a half-committed tx state. Errors here don't block
-	// the purchase -- we just default the grace period per-provider.
-	var gracePeriodCfg *config.GlobalConfig
-	g, getConfigErr := h.config.GetGlobalConfig(ctx)
-	if getConfigErr == nil {
-		gracePeriodCfg = g
-	}
-
-	suppressions := config.BuildSuppressions(execReq.Recommendations, executionID, gracePeriodCfg, time.Now())
+	// Load the grace-period config once before entering the tx.
+	suppressions := config.BuildSuppressions(execReq.Recommendations, executionID, h.gracePeriodConfig(ctx), time.Now())
 	dupExec, err := h.persistExecutionAndSuppressions(ctx, execution, suppressions, creatorID, idempotencyKey)
 	if err != nil {
 		return nil, err
@@ -3574,11 +3767,35 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	// actual outcome. The DB write above is the source of truth — email is
 	// best-effort and never blocks the response body; the returned
 	// email_sent / email_reason fields let the UI tell the user whether they
-	// should wait for an inbox or cancel/retry manually.
-	emailSent, emailReason, recipient := h.sendPurchaseApprovalEmail(ctx, req, execution, rawApprovalToken, execReq.Recommendations, totalUpfront, totalSavings)
-	status := h.finalizePurchaseStatus(ctx, execution, emailSent, emailReason)
+	// should wait for an inbox or cancel/retry manually. The one exception is
+	// a send failure that cannot be recorded on the row: that answers 500
+	// (issue #54).
+	return h.sendApprovalAndFinalize(ctx, req, execution, rawApprovalToken, execReq.Recommendations, totalUpfront, totalSavings, paymentAdjustments)
+}
 
-	return withPaymentAdjustments(buildApprovalPendingResponse(executionID, status, len(execReq.Recommendations), totalUpfront, totalSavings, emailSent, emailReason, recipient), paymentAdjustments), nil
+// gracePeriodConfig loads the global config for BuildSuppressions' grace
+// periods, read before any tx opens. A read error does not block the
+// purchase: it returns nil and the grace period defaults per provider.
+func (h *Handler) gracePeriodConfig(ctx context.Context) *config.GlobalConfig {
+	g, err := h.config.GetGlobalConfig(ctx)
+	if err != nil {
+		return nil
+	}
+	return g
+}
+
+// sendApprovalAndFinalize sends the approval email for a freshly persisted
+// pending execution, records a send failure on the row through
+// finalizePurchaseStatus, and builds the approval-pending response. A failed
+// failure write comes back as an error rather than a response (issue #54).
+// Extracted from executePurchase to keep it under the gocyclo budget.
+func (h *Handler) sendApprovalAndFinalize(ctx context.Context, req *events.LambdaFunctionURLRequest, execution *config.PurchaseExecution, rawApprovalToken string, recs []config.RecommendationRecord, totalUpfront, totalSavings float64, paymentAdjustments []PaymentAdjustment) (any, error) {
+	emailSent, emailReason, recipient := h.sendPurchaseApprovalEmail(ctx, req, execution, rawApprovalToken, recs, totalUpfront, totalSavings)
+	status, err := h.finalizePurchaseStatus(ctx, execution, emailSent, emailReason)
+	if err != nil {
+		return nil, err
+	}
+	return withPaymentAdjustments(buildApprovalPendingResponse(execution.ExecutionID, status, len(recs), totalUpfront, totalSavings, emailSent, emailReason, recipient), paymentAdjustments), nil
 }
 
 // withPaymentAdjustments attaches the payment-option coercion notices to an
@@ -3667,7 +3884,7 @@ func (h *Handler) directExecutePurchase(ctx context.Context, req *events.LambdaF
 	if err != nil {
 		logging.Errorf("purchase[%s]: directExecutePurchase failed after %s: %v",
 			executionID, time.Since(t0), err)
-		return nil, executeFailureError(executionID, "direct-executed", final, err)
+		return nil, h.executeFailure(ctx, req, executionID, "direct-executed", final, revocationToken, session.Email, err)
 	}
 
 	logging.Infof("purchase[%s]: directExecutePurchase completed in %s", executionID, time.Since(t0))
@@ -3758,6 +3975,29 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.Lam
 	// globalNotify here keeps both displays consistent. When globalNotify is empty,
 	// fall back to to (the per-account contact_email). See issue #735.
 	responseRecipient := approvalResponseRecipient(globalNotify, to)
+	dashboardBase := h.resolveDashboardURL(req)
+	data := email.NotificationData{
+		DashboardURL:        dashboardBase,
+		ApprovalToken:       rawApprovalToken,
+		ExecutionID:         execution.ExecutionID,
+		TotalSavings:        totalSavings,
+		TotalUpfrontCost:    totalUpfront,
+		Recommendations:     approvalRecommendationSummaries(recs),
+		RecipientEmail:      to,
+		CCEmails:            cc,
+		AuthorizedApprovers: approvers,
+	}
+	data.ArcheraEducationURL = archeraEducationURL(dashboardBase)
+	if err := h.emailNotifier.SendPurchaseApprovalRequest(ctx, data); err != nil {
+		logging.Errorf("Failed to send purchase approval email: %v", err)
+		reason, recipient := approvalSendFailure(err, responseRecipient)
+		return false, reason, recipient
+	}
+	return true, "", responseRecipient
+}
+
+// approvalRecommendationSummaries is the per-rec table of the approval email.
+func approvalRecommendationSummaries(recs []config.RecommendationRecord) []email.RecommendationSummary {
 	summaries := make([]email.RecommendationSummary, 0, len(recs))
 	for _rvc := range recs {
 		rec := recs[_rvc]
@@ -3770,31 +4010,20 @@ func (h *Handler) sendPurchaseApprovalEmail(ctx context.Context, req *events.Lam
 			MonthlySavings: rec.Savings,
 		})
 	}
-	dashboardBase := h.resolveDashboardURL(req)
-	data := email.NotificationData{
-		DashboardURL:        dashboardBase,
-		ApprovalToken:       rawApprovalToken,
-		ExecutionID:         execution.ExecutionID,
-		TotalSavings:        totalSavings,
-		TotalUpfrontCost:    totalUpfront,
-		Recommendations:     summaries,
-		RecipientEmail:      to,
-		CCEmails:            cc,
-		AuthorizedApprovers: approvers,
+	return summaries
+}
+
+// approvalSendFailure maps a failed approval send to the response's
+// email_reason and approval_recipient (none when no recipient was found).
+func approvalSendFailure(err error, responseRecipient string) (reason, recipient string) {
+	switch {
+	case errors.Is(err, email.ErrNoRecipient):
+		return "no notification email set in Settings → General", ""
+	case errors.Is(err, email.ErrNoFromEmail):
+		return "FROM_EMAIL not configured for this deployment", responseRecipient
+	default:
+		return fmt.Sprintf("send failed: %v", err), responseRecipient
 	}
-	data.ArcheraEducationURL = archeraEducationURL(dashboardBase)
-	if err := h.emailNotifier.SendPurchaseApprovalRequest(ctx, data); err != nil {
-		logging.Errorf("Failed to send purchase approval email: %v", err)
-		switch {
-		case errors.Is(err, email.ErrNoRecipient):
-			return false, "no notification email set in Settings → General", ""
-		case errors.Is(err, email.ErrNoFromEmail):
-			return false, "FROM_EMAIL not configured for this deployment", responseRecipient
-		default:
-			return false, fmt.Sprintf("send failed: %v", err), responseRecipient
-		}
-	}
-	return true, "", responseRecipient
 }
 
 // sendPurchaseExecutedEmail sends a post-execution notification to the
@@ -3854,29 +4083,16 @@ func (h *Handler) sendPurchaseExecutedEmail(ctx context.Context, req *events.Lam
 		return
 	}
 
-	summaries := make([]email.RecommendationSummary, 0, len(execution.Recommendations))
-	for i := range execution.Recommendations {
-		rec := &execution.Recommendations[i]
-		summaries = append(summaries, email.RecommendationSummary{
-			Service:        rec.Service,
-			ResourceType:   rec.ResourceType,
-			Engine:         rec.Engine,
-			Region:         rec.Region,
-			Count:          rec.Count,
-			MonthlySavings: rec.Savings,
-			Term:           rec.Term,
-			Payment:        rec.Payment,
-			UpfrontCost:    rec.UpfrontCost,
-		})
-	}
+	summaries, totalUpfront, totalSavings := executedEmailCommitments(execution)
 
 	dashboardBase := h.resolveDashboardURL(req)
 	data := email.NotificationData{
 		DashboardURL:     dashboardBase,
 		ExecutionID:      execution.ExecutionID,
-		TotalSavings:     execution.EstimatedSavings,
-		TotalUpfrontCost: execution.TotalUpfrontCost,
+		TotalSavings:     totalSavings,
+		TotalUpfrontCost: totalUpfront,
 		Recommendations:  summaries,
+		PartialPurchase:  execution.Status == config.StatusPartiallyCompleted,
 		RecipientEmail:   to,
 		CCEmails:         cc,
 		// A fresh, dedicated revocation token minted by
@@ -3902,6 +4118,52 @@ func (h *Handler) sendPurchaseExecutedEmail(ctx context.Context, req *events.Lam
 	if sendErr := h.emailNotifier.SendPurchaseExecutedNotification(ctx, data); sendErr != nil {
 		logging.Errorf("sendPurchaseExecutedEmail: send failed for execution %s: %v", execution.ExecutionID, sendErr)
 	}
+}
+
+// executedEmailCommitments lists the commitments the executed email reports,
+// with their totals. A partially_completed row lists only the recs it bought
+// when it records them per rec (issue #532), so the email does not present a
+// failed rec as purchased. A multi-account root has no per-rec Purchased
+// flags (its per-account rows do), so it lists every rec and the template's
+// partial notice says some did not go through.
+func executedEmailCommitments(execution *config.PurchaseExecution) (summaries []email.RecommendationSummary, upfront, savings float64) {
+	onlyPurchased := execution.Status == config.StatusPartiallyCompleted && anyPurchased(execution.Recommendations)
+	if !onlyPurchased {
+		upfront, savings = execution.TotalUpfrontCost, execution.EstimatedSavings
+	}
+	summaries = make([]email.RecommendationSummary, 0, len(execution.Recommendations))
+	for i := range execution.Recommendations {
+		rec := &execution.Recommendations[i]
+		if onlyPurchased && !rec.Purchased {
+			continue
+		}
+		if onlyPurchased {
+			upfront += rec.UpfrontCost
+			savings += rec.Savings
+		}
+		summaries = append(summaries, email.RecommendationSummary{
+			Service:        rec.Service,
+			ResourceType:   rec.ResourceType,
+			Engine:         rec.Engine,
+			Region:         rec.Region,
+			Count:          rec.Count,
+			MonthlySavings: rec.Savings,
+			Term:           rec.Term,
+			Payment:        rec.Payment,
+			UpfrontCost:    rec.UpfrontCost,
+		})
+	}
+	return summaries, upfront, savings
+}
+
+// anyPurchased reports whether any rec records a committed purchase.
+func anyPurchased(recs []config.RecommendationRecord) bool {
+	for i := range recs {
+		if recs[i].Purchased {
+			return true
+		}
+	}
+	return false
 }
 
 // globalNotifyEmail returns the trimmed notification email from a GlobalConfig,

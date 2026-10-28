@@ -37,7 +37,7 @@ func newResolveRig(ctx context.Context, t *testing.T, store *PostgresStore, node
 	cfgID := seedLadderConfigWithExtID(ctx, t, store, ext)
 	r := &resolveRig{store: store, external: ext}
 	require.NoError(t, store.db.QueryRow(ctx, `SELECT cloud_account_id::text FROM ladder_configs WHERE id = $1`, cfgID).Scan(&r.accountID))
-	tr := lifecycleTranche(cfgID, 5, ladder.TrancheStatusScheduled, time.Now().Add(-time.Hour))
+	tr := claimableTranche(cfgID, 5, time.Now().Add(-time.Hour))
 	require.NoError(t, store.SaveLadderTranches(ctx, []LadderTrancheDB{tr}))
 	r.trancheID = tr.ID
 	var ids []string

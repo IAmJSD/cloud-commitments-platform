@@ -100,6 +100,13 @@ func (s *PostgresStore) TransitionLadderTrancheTx(ctx context.Context, tx pgx.Tx
 // than the planner's, a claim could otherwise fire a row the planner's netting
 // read had already excluded as expired, and the row would be bought AND
 // re-planned. A callback slower than ladderLockTimeout makes planners fail loudly.
+//
+// Only rows stored in commitment dollars (amount_basis = 'commitment', which
+// the table constraint pairs with a commitment_rate) are claimable: a buyer
+// spends amount_usd_hr as commitment dollars, and a legacy NULL-basis or
+// on_demand_equivalent row would over-buy by 1/rate (#946). Those rows stay
+// netted until the overdue sweep cancels them, and the next run re-plans
+// their gap in commitment dollars.
 func (s *PostgresStore) ClaimDueLadderTranches(
 	ctx context.Context,
 	configID string,
@@ -150,6 +157,7 @@ func selectDueLadderTranchesTx(ctx context.Context, tx pgx.Tx, configID string, 
 		WHERE config_id = $1
 		  AND status = 'scheduled'
 		  AND execution_id IS NULL
+		  AND amount_basis = 'commitment'
 		  AND scheduled_date <= $2
 		  AND scheduled_date > $3
 		ORDER BY scheduled_date, id

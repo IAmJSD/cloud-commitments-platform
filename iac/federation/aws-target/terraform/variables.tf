@@ -30,10 +30,13 @@ variable "oidc_audience" {
   # audience of ${accounts.google.com:aud} expands to the token's own aud
   # claim and matches every token. Audience is the only other control on this
   # trust policy, so it gets the same guard, including the whitespace
-  # rejection that keeps it equivalent to the CloudFormation AllowedPattern
-  # ^$|^[^\s*$]+$. An empty audience still passes (it contains none of the
-  # rejected characters) and falls back to sts.amazonaws.com, matching that
-  # pattern's ^$ branch without needing an explicit empty-string clause.
+  # rejection the CloudFormation template's OIDCAudience AllowedPattern also
+  # applies. An empty audience still passes (it contains none of the rejected
+  # characters) and falls back to sts.amazonaws.com, matching that pattern's
+  # ^$ branch without needing an explicit empty-string clause. The template
+  # additionally rejects '"', '\' and control characters, because it builds
+  # its trust policy by substituting the value into JSON text (#1489).
+  # jsonencode escapes them here, so they cannot change this policy.
   validation {
     condition     = !can(regex("[\\s*$]", var.oidc_audience))
     error_message = "oidc_audience must not contain whitespace, '$' or '*'. IAM expands $${...} policy variables inside Condition values, so a value such as $${accounts.google.com:aud} would expand to the token's own aud claim and match every token. '*' is compared literally by StringEquals."
@@ -67,11 +70,13 @@ variable "oidc_subject_claim" {
   # expands to the presented token's own sub claim, making the condition a
   # tautology that matches every identity the issuer can mint. Reject '$'
   # outright rather than emit a trust policy that only looks restricted.
-  # Whitespace is rejected in the same expression so this stays byte-for-byte
-  # equivalent to the CloudFormation AllowedPattern ^[^\s*$]+$ that the
-  # template's ConstraintDescription claims to mirror. No real OIDC subject
-  # (GCP numeric IDs, Azure GUIDs, system:serviceaccount:, GitHub, GitLab,
-  # SPIFFE, Auth0, Bitbucket) contains whitespace.
+  # Whitespace is rejected in the same expression, as the CloudFormation
+  # template's OIDCSubjectClaim AllowedPattern also does. That pattern
+  # additionally rejects '"', '\' and control characters, because the
+  # template builds its trust policy by substituting the value into JSON text
+  # (#1489); jsonencode escapes them here, so they cannot change this policy.
+  # No real OIDC subject (GCP numeric IDs, Azure GUIDs, system:serviceaccount:,
+  # GitHub, GitLab, SPIFFE, Auth0, Bitbucket) contains whitespace.
   validation {
     condition     = !can(regex("[\\s*$]", var.oidc_subject_claim))
     error_message = "oidc_subject_claim must not contain whitespace, '$' or '*'. IAM expands $${...} policy variables inside Condition values, so a value such as $${accounts.google.com:sub} would expand to the token's own sub claim and match every identity the issuer can mint. '*' is compared literally by StringEquals and would silently produce a role nobody can assume."

@@ -297,18 +297,22 @@ func insertLadderTranchesTx(ctx context.Context, tx pgx.Tx, tranches []LadderTra
 		if err != nil {
 			return fmt.Errorf("ladder_tranche %s: %w", tr.ID, err)
 		}
+		amount, err := ladderAmountText(tr.AmountUSDHr)
+		if err != nil {
+			return fmt.Errorf("ladder_tranche %s: %w", tr.ID, err)
+		}
 		_, err = tx.Exec(ctx, `
 			INSERT INTO ladder_tranches (
 				id, config_id, run_id, layer_type, amount_usd_hr,
 				term, payment_option, scheduled_date, status, execution_id,
 				settled_at, amount_basis, commitment_rate, created_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+			) VALUES ($1, $2, $3, $4, $5::numeric, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
 		`,
 			tr.ID,
 			tr.ConfigID,
 			tr.RunID,
 			string(tr.LayerType),
-			tr.AmountUSDHr,
+			amount,
 			string(tr.Term),
 			string(tr.PaymentOption),
 			tr.ScheduledDate,

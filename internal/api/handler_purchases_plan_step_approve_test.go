@@ -51,6 +51,7 @@ func planStepExecution(t *testing.T) (*config.PurchaseExecution, float64) {
 		ID: "azure|acct-step|compute|westeurope|Standard_D2s_v3||1|monthly", Provider: "azure", Service: "compute",
 		Region: "westeurope", ResourceType: "Standard_D2s_v3", Term: 1, Payment: "monthly",
 		Count: 20, UpfrontCost: 0, MonthlyCost: &monthly, CloudAccountID: &acct,
+		CommitmentCurrency: "USD",
 	}
 	plan := &config.PurchasePlan{
 		ID:           stepPlanID,
@@ -96,7 +97,7 @@ func newTokenApprove(t *testing.T, perms []auth.Permission, plan *config.Purchas
 	mp := new(MockPurchaseManager)
 	// A reached ApproveExecution proves the approval was not refused up front;
 	// it answers with a conflict so the test needs no email or re-fetch wiring.
-	mp.On("ApproveExecution", mock.Anything, stepExecID, "valid-token", stepContact).Return("", config.ErrExecutionNotInExpectedStatus).Maybe()
+	mp.On("ApproveExecution", mock.Anything, stepExecID, "valid-token", stepContact).Return(nil, "", config.ErrExecutionNotInExpectedStatus).Maybe()
 	return &tokenApproveFixture{
 		handler:  &Handler{purchase: mp, config: mockConfig, auth: mockAuth},
 		purchase: mp,

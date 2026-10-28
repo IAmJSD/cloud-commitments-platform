@@ -105,6 +105,10 @@ func (h *Handler) listActiveCommitments(ctx context.Context, req *events.LambdaF
 // `provider` filtering is applied in-memory after the store read so the
 // record set is small enough that a post-read filter has negligible cost.
 func (h *Handler) fetchCommitmentRecords(ctx context.Context, asOf time.Time, session *Session, params map[string]string) ([]config.PurchaseHistoryRecord, error) {
+	provider, err := providerFilterParam(params["provider"])
+	if err != nil {
+		return nil, err
+	}
 	filterUUIDs, filterExternalIDsByProvider := h.resolveSingleAccountFilterIDs(ctx, params["account_id"])
 	uuids, externalIDsByProvider, err := h.intersectAccountFilterScope(ctx, session, filterUUIDs, filterExternalIDsByProvider)
 	if err != nil {
@@ -118,10 +122,10 @@ func (h *Handler) fetchCommitmentRecords(ctx context.Context, asOf time.Time, se
 		return nil, err
 	}
 
-	// Apply provider filter in-memory. An absent or empty param means
-	// "all providers". Case-sensitive match — providers are always
-	// lowercase in the store (aws, azure, gcp).
-	if provider := params["provider"]; provider != "" {
+	// Apply provider filter in-memory. An absent param or "all" means
+	// "all providers"; providerFilterParam refused anything but the
+	// lowercase names the store holds (aws, azure, gcp).
+	if provider != "" {
 		filtered := rows[:0]
 		for _rvc := range rows {
 			r := rows[_rvc]
@@ -181,6 +185,10 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 	if err != nil {
 		return nil, err
 	}
+	provider, err := providerFilterParam(params["provider"])
+	if err != nil {
+		return nil, err
+	}
 
 	// --- covered: active commitments ----------------------------------------
 	now := time.Now()
@@ -219,7 +227,7 @@ func (h *Handler) getCoverageBreakdown(ctx context.Context, req *events.LambdaFu
 	if err != nil {
 		return nil, err
 	}
-	onDemandByKey := aggregateOnDemandByKey(recs, params["provider"])
+	onDemandByKey := aggregateOnDemandByKey(recs, provider)
 
 	return buildCoverageBreakdown(coveredByKey, onDemandByKey), nil
 }

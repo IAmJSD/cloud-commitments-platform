@@ -30,7 +30,7 @@ func (h *Handler) FetchRecommendationComparison(ctx context.Context, rec *archer
 		return c, items, nil
 	}
 	if cctx.Err() != nil || errors.Is(err, context.DeadlineExceeded) {
-		return nil, nil, NewClientError(504, "Archera comparison timed out")
+		return nil, nil, NewClientError(504, insuranceTimeoutMessage)
 	}
 	if ce, ok := IsClientError(err); ok {
 		return nil, nil, ce

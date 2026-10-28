@@ -3,6 +3,7 @@ package config
 import (
 	"math"
 	"math/big"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -108,4 +109,85 @@ func TestNewLadderInFlightRow_FloatFieldsFeedAllocate(t *testing.T) {
 	row, err = newLadderInFlightRow("1", &LadderTrancheDB{AmountBasis: &native, CommitmentRate: &tiny})
 	require.NoError(t, err)
 	require.Equal(t, math.SmallestNonzeroFloat64, row.Rate, "a rate below float range must not become 0")
+}
+
+// spCommitmentWire mirrors cloud-commitments-go
+// providers/aws/internal/spcommitment.Normalize at the version go.mod pins
+// (go#403, contract at pkg/ladder/capability.go): refuse an amount outside
+// [0.001, 1000000] USD/hr, else truncate its shortest decimal to five places.
+// ok=false is a refusal; the returned rat is the submitted commitment.
+func spCommitmentWire(amount float64) (*big.Rat, bool) {
+	if math.IsNaN(amount) || math.IsInf(amount, 0) || amount < 0.001 || amount > 1000000 {
+		return nil, false
+	}
+	whole, fraction, _ := strings.Cut(strconv.FormatFloat(amount, 'f', -1, 64), ".")
+	if len(fraction) > 5 {
+		fraction = fraction[:5]
+	}
+	wire, _ := new(big.Rat).SetString(whole + "." + fraction + "0")
+	return wire, true
+}
+
+// spCommitmentWireExact is the commitment the contract would submit for the
+// exact planned amount: the same range check, then a floor to five places.
+func spCommitmentWireExact(amount *big.Rat) (*big.Rat, bool) {
+	if amount.Cmp(big.NewRat(1, 1000)) < 0 || amount.Cmp(big.NewRat(1000000, 1)) > 0 {
+		return nil, false
+	}
+	scaled := new(big.Int).Mul(amount.Num(), big.NewInt(100000))
+	return new(big.Rat).SetFrac(scaled.Div(scaled, amount.Denom()), big.NewInt(100000)), true
+}
+
+func requireSameWire(t *testing.T, want *big.Rat, wantOK bool, got *big.Rat, gotOK bool, msg string) {
+	t.Helper()
+	require.Equal(t, wantOK, gotOK, "%s: provider refusal must not change", msg)
+	if wantOK {
+		require.Zero(t, want.Cmp(got), "%s: submitted commitment %s, want %s", msg, got.FloatString(6), want.FloatString(6))
+	}
+}
+
+// Issue #1182: a planned amount is floored to the six-decimal column, never
+// rounded up, so the provider submits what it would for the exact amount.
+func TestLadderAmountFloat_FloorsToStoredScaleWithoutRoundingUp(t *testing.T) {
+	for _, tc := range []struct{ planned, want string }{
+		{"1/3", "0.333333"},
+		{"12345999999999999/100000000000000000", "0.123459"}, // nearest float64 is 0.12346
+		{"1234567/10000000", "0.123456"},
+		{"9995/10000000", "0.000999"},               // half-up would reach the 0.001 minimum
+		{"9999999999999/10000000", "999999.999999"}, // half-up would reach 1000000
+		{"99999999999/100000", "999999.99999"},
+		{"1000000", "1000000"},
+		{"1/10", "0.1"},
+		{"1/1000", "0.001"},
+		{"1/10000000", "0"},
+	} {
+		planned, ok := new(big.Rat).SetString(tc.planned)
+		require.True(t, ok, tc.planned)
+		got := LadderAmountFloat(planned)
+		text, err := ladderAmountText(got)
+		require.NoError(t, err, tc.planned)
+		require.Equal(t, tc.want, text, tc.planned)
+		stored, _ := new(big.Rat).SetString(text)
+		require.LessOrEqual(t, stored.Cmp(planned), 0, "%s: stored amount must not exceed the plan", tc.planned)
+		want, wantOK := spCommitmentWireExact(planned)
+		wire, wireOK := spCommitmentWire(got)
+		requireSameWire(t, want, wantOK, wire, wireOK, tc.planned)
+	}
+}
+
+// Issue #1182: the store refuses an amount the NUMERIC(20,6) column would
+// round rather than letting Postgres round it half-up.
+func TestLadderAmountText_RefusesAmountsTheColumnWouldRound(t *testing.T) {
+	for amount, want := range map[float64]string{
+		0.001: "0.001", 1000000: "1000000", 999999.99999: "999999.99999",
+		999999.999999: "999999.999999", 0.1: "0.1", 0.29: "0.29", 12.5: "12.5",
+	} {
+		got, err := ladderAmountText(amount)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
+	for _, amount := range []float64{0.1234599, 0.30000000000000004 /* float64 0.1+0.2 */, 1.0 / 3, 0.0009995, 999999.9999999, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		_, err := ladderAmountText(amount)
+		require.Error(t, err, "%v", amount)
+	}
 }

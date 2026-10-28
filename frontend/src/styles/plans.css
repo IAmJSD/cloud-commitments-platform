@@ -261,6 +261,9 @@
 .plan-editor-layout.has-editor-draft { display: grid; grid-template-columns: minmax(360px, 440px) minmax(0, 1fr); grid-template-areas: "form panel"; grid-auto-rows: max-content; gap: 24px; align-items: start; }
 .plan-editor-layout.has-editor-draft #plan-form { grid-area: form; }
 #plan-editor-panel { grid-area: panel; position: sticky; top: 0; align-self: start; max-height: calc(100dvh - 230px); overflow: auto; }
+/* Coarse pointers get 44px buttons (responsive.css), which makes the modal
+ * footer about 10px taller and leaves less room for the sticky panel. */
+@media (pointer: coarse) and (min-width: 961px) { #plan-editor-panel { max-height: calc(100dvh - 240px); } }
 .plan-editor-settings, #plan-editor-panel { min-width: 0; }
 #plan-modal .modal-buttons { flex-shrink: 0; }
 #plan-editor-panel [data-selected] .preview-marker { fill: var(--cudly-primary); stroke: var(--cudly-text); stroke-width: 3; }

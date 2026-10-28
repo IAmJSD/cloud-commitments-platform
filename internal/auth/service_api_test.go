@@ -151,27 +151,14 @@ func TestService_CreateUserAPI(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		resp, ok := result.(*APICreateUserResponse)
-		require.True(t, ok, "CreateUserAPI should wrap the response in APICreateUserResponse")
-		require.NotNil(t, resp.APIUser)
-		assert.Equal(t, "newuser@example.com", resp.Email)
-		assert.Equal(t, []string{"group-1"}, resp.Groups)
+		require.NotNil(t, result.APIUser)
+		assert.Equal(t, "newuser@example.com", result.Email)
+		assert.Equal(t, []string{"group-1"}, result.Groups)
 		// Non-invite path: no invite-email status fields.
-		assert.Nil(t, resp.InviteEmailSent)
-		assert.Empty(t, resp.InviteEmailError)
+		assert.Nil(t, result.InviteEmailSent)
+		assert.Empty(t, result.InviteEmailError)
 
 		mockStore.AssertExpectations(t)
-	})
-
-	t.Run("invalid request type", func(t *testing.T) {
-		mockStore := new(MockStore)
-		mockEmail := new(MockEmailSender)
-		service := createTestService(mockStore, mockEmail)
-
-		result, err := service.CreateUserAPI(ctx, "", "invalid")
-		assert.Error(t, err)
-		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "invalid request type")
 	})
 }
 
@@ -201,9 +188,7 @@ func TestService_UpdateUserAPI(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, result)
 
-		apiUser, ok := result.(*APIUser)
-		assert.True(t, ok)
-		assert.Equal(t, []string{"group-2"}, apiUser.Groups)
+		assert.Equal(t, []string{"group-2"}, result.Groups)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -213,7 +198,7 @@ func TestService_UpdateUserAPI(t *testing.T) {
 	// toast would fire, but the users.email column was never touched. We
 	// assert that (a) the email-uniqueness lookup happens (proves the
 	// admin path runs the same validation as self-edit), and (b) the
-	// user persisted via store.UpdateUser carries the new email value,
+	// user persisted via store.UpdateUserAdminFields carries the new email value,
 	// NOT just that the call succeeded.
 	t.Run("successful email update persists to store", func(t *testing.T) {
 		mockStore := new(MockStore)
@@ -229,7 +214,7 @@ func TestService_UpdateUserAPI(t *testing.T) {
 		mockStore.On("GetUserByID", ctx, "user-123").Return(existingUser, nil).Once()
 		// Uniqueness check: new email not yet in use.
 		mockStore.On("GetUserByEmail", ctx, "new@example.com").Return(nil, nil).Once()
-		// Capture the User passed to UpdateUser and assert its email is
+		// Capture the User passed to UpdateUserAdminFields and assert its email is
 		// the NEW one. Without the fix, this fails because the User would
 		// still carry old@example.com.
 		mockStore.On("UpdateUserAdminFields", ctx, mock.MatchedBy(func(u *User) bool {
@@ -244,9 +229,7 @@ func TestService_UpdateUserAPI(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		apiUser, ok := result.(*APIUser)
-		require.True(t, ok)
-		assert.Equal(t, "new@example.com", apiUser.Email,
+		assert.Equal(t, "new@example.com", result.Email,
 			"returned APIUser must reflect the new email; the frontend's success toast keys off this response")
 
 		mockStore.AssertExpectations(t)
@@ -282,21 +265,10 @@ func TestService_UpdateUserAPI(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("invalid request type", func(t *testing.T) {
-		mockStore := new(MockStore)
-		mockEmail := new(MockEmailSender)
-		service := createTestService(mockStore, mockEmail)
-
-		result, err := service.UpdateUserAPI(ctx, "", "user-123", "invalid")
-		assert.Error(t, err)
-		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "invalid request type")
-	})
-
 	// Regression for issue #89: before this fix, APIUpdateUserRequest had no
 	// Active field at all, so a PUT /api/users/{id} body could never
 	// deactivate a user -- the same field-silently-dropped defect class
-	// issue #892 fixed for Email. We assert the User passed to store.UpdateUser
+	// issue #892 fixed for Email. We assert the User passed to store.UpdateUserAdminFields
 	// carries Active=false, not just that the call succeeds, so the test
 	// would have failed on the pre-fix struct (which drops the field on the
 	// floor and always persists whatever GetUserByID returned, i.e. true).
@@ -325,9 +297,7 @@ func TestService_UpdateUserAPI(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, result)
 
-		apiUser, ok := result.(*APIUser)
-		require.True(t, ok)
-		assert.False(t, apiUser.Active, "the API response must reflect the deactivation")
+		assert.False(t, result.Active, "the API response must reflect the deactivation")
 
 		mockStore.AssertExpectations(t)
 	})
@@ -355,9 +325,8 @@ func TestService_UpdateUserAPI(t *testing.T) {
 
 		result, err := service.UpdateUserAPI(ctx, "", "user-123", req)
 		require.NoError(t, err)
-		apiUser, ok := result.(*APIUser)
-		require.True(t, ok)
-		assert.True(t, apiUser.Active)
+		require.NotNil(t, result)
+		assert.True(t, result.Active)
 
 		mockStore.AssertExpectations(t)
 	})
@@ -454,24 +423,11 @@ func TestService_CreateGroupAPI(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, result)
 
-		apiGroup, ok := result.(*APIGroup)
-		assert.True(t, ok)
-		assert.Equal(t, "Test Group", apiGroup.Name)
-		assert.Equal(t, "Test description", apiGroup.Description)
-		assert.Len(t, apiGroup.Permissions, 1)
+		assert.Equal(t, "Test Group", result.Name)
+		assert.Equal(t, "Test description", result.Description)
+		assert.Len(t, result.Permissions, 1)
 
 		mockStore.AssertExpectations(t)
-	})
-
-	t.Run("invalid request type", func(t *testing.T) {
-		mockStore := new(MockStore)
-		mockEmail := new(MockEmailSender)
-		service := createTestService(mockStore, mockEmail)
-
-		result, err := service.CreateGroupAPI(ctx, AdminAPIKeyActorID, "invalid")
-		assert.Error(t, err)
-		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "invalid request type")
 	})
 }
 
@@ -528,7 +484,9 @@ func TestService_UpdateGroupAPI(t *testing.T) {
 			Description: "Old description",
 			Permissions: []Permission{{Action: ActionAdmin, Resource: ResourceAll}},
 		}
-		mockStore.On("GetGroup", ctx, "group-123").Return(existingGroup, nil).Once()
+		// Twice: UpdateGroupAPI loads the group, then Service.UpdateGroup
+		// re-reads it for its own system_managed guard (issue #919).
+		mockStore.On("GetGroup", ctx, "group-123").Return(existingGroup, nil).Twice()
 		mockStore.On("UpdateGroup", ctx, mock.AnythingOfType("*auth.Group")).Return(nil).Once()
 
 		req := APIUpdateGroupRequest{
@@ -540,9 +498,8 @@ func TestService_UpdateGroupAPI(t *testing.T) {
 		result, err := service.UpdateGroupAPI(ctx, AdminAPIKeyActorID, "group-123", req)
 
 		require.NoError(t, err)
-		apiGroup, ok := result.(*APIGroup)
-		require.True(t, ok)
-		assert.Equal(t, "New description", apiGroup.Description)
+		require.NotNil(t, result)
+		assert.Equal(t, "New description", result.Description)
 		assert.Equal(t, []Permission{{Action: ActionAdmin, Resource: ResourceAll}}, existingGroup.Permissions,
 			"omitting the field must leave permissions untouched")
 		mockStore.AssertExpectations(t)
@@ -560,7 +517,12 @@ func TestService_UpdateGroupAPI(t *testing.T) {
 			Permissions: []Permission{},
 		}
 
-		mockStore.On("GetGroup", ctx, "group-123").Return(existingGroup, nil).Once()
+		// Twice: UpdateGroupAPI loads the group, then Service.UpdateGroup
+		// re-reads it for its own system_managed guard (issue #919).
+		mockStore.On("GetGroup", ctx, "group-123").Return(existingGroup, nil).Twice()
+		// The group gains its first permission, so the issue #1409 member
+		// check runs; the group has no members.
+		mockStore.On("ListUsers", ctx).Return([]User{}, nil).Once()
 		mockStore.On("UpdateGroup", ctx, mock.AnythingOfType("*auth.Group")).Return(nil).Once()
 
 		req := APIUpdateGroupRequest{
@@ -578,24 +540,11 @@ func TestService_UpdateGroupAPI(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, result)
 
-		apiGroup, ok := result.(*APIGroup)
-		assert.True(t, ok)
-		assert.Equal(t, "New Name", apiGroup.Name)
-		assert.Equal(t, "New description", apiGroup.Description)
-		assert.Len(t, apiGroup.Permissions, 1)
+		assert.Equal(t, "New Name", result.Name)
+		assert.Equal(t, "New description", result.Description)
+		assert.Len(t, result.Permissions, 1)
 
 		mockStore.AssertExpectations(t)
-	})
-
-	t.Run("invalid request type", func(t *testing.T) {
-		mockStore := new(MockStore)
-		mockEmail := new(MockEmailSender)
-		service := createTestService(mockStore, mockEmail)
-
-		result, err := service.UpdateGroupAPI(ctx, AdminAPIKeyActorID, "group-123", "invalid")
-		assert.Error(t, err)
-		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "invalid request type")
 	})
 
 	t.Run("group not found", func(t *testing.T) {

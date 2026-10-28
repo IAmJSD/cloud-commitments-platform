@@ -19,13 +19,15 @@ import (
 
 // requireLadderExecutionSwitchGrant gates and stamps a change of
 // GlobalConfig.LadderExecutionEnabled inside the UpdateGlobalConfigAtomic
-// closure. Only off->on needs the grant; any change is stamped.
-func (h *Handler) requireLadderExecutionSwitchGrant(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session, before bool, cfg *config.GlobalConfig) error {
+// closure. Only off->on needs the grant; any change is stamped. grant is the
+// pre-resolved execute:purchases outcome (armingGrants.purchases), so nothing
+// here reads through the pool inside the transaction (issue #1517).
+func requireLadderExecutionSwitchGrant(ctx context.Context, session *Session, grant error, before bool, cfg *config.GlobalConfig) error {
 	if before == cfg.LadderExecutionEnabled {
 		return nil
 	}
 	if cfg.LadderExecutionEnabled {
-		if err := h.requireAutoPurchaseGrant(ctx, req, session); err != nil {
+		if err := prefetchedAutoPurchaseGrant(session, grant); err != nil {
 			return err
 		}
 	}

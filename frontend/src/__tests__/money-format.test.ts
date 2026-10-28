@@ -17,7 +17,7 @@ describe('money formatting (issue #739)', () => {
   it('groups thousands in every cost period', () => {
     expect(formatCostForPeriod(10288, 'yearly')).toBe('$123,456');
     expect(formatCostForPeriod(100000, 'daily')).toBe('$3,333.33');
-    expect(formatCostForPeriod(2000000, 'hourly')).toBe('$2,777.7778');
+    expect(formatCostForPeriod(2000000, 'hourly')).toBe('$2,739.7260');
     expect(formatCostForPeriod(1234.4, 'monthly')).toBe('$1,234');
   });
 });

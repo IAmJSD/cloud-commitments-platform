@@ -52,7 +52,7 @@ func TestRedriveGuardReachMatchesDispatchReach(t *testing.T) {
 		"savings-plans-database", "savingsplans-database",
 
 		// Every key of mapServiceSlug (execution.go).
-		"compute", "relational-db", "cache", "search", "data-warehouse",
+		"compute", "relational-db", "nosql", "cache", "search", "data-warehouse",
 		"ec2", "rds", "elasticache", "opensearch", "redshift", "memorydb",
 
 		// The literal value of all 20 common.ServiceType constants, so a value
