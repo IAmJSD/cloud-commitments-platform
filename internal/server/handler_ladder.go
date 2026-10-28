@@ -103,11 +103,17 @@ func (app *Application) handleLadderRun(ctx context.Context) (*LadderRunResult, 
 		return nil, fmt.Errorf("ladder_run: invalid default_payment in global config: %w", err)
 	}
 
-	// Load all ladder_config rows. GetLadderConfigs returns ALL rows; we
+	// Load the ladder_config rows. GetLadderConfigs returns at most
+	// config.MaxListLimit rows, newest first, disabled ones included; we
 	// filter Enabled=false here so the counter is visible (SkippedDisabled).
 	allConfigs, err := app.Config.GetLadderConfigs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("ladder_run: failed to load ladder configs: %w", err)
+	}
+	if len(allConfigs) >= config.MaxListLimit {
+		// Rows past the cap were not read, so their configs are not run.
+		logging.Warnf("ladder_run: GetLadderConfigs returned %d rows, its %d-row cap; ladder configs may be truncated",
+			len(allConfigs), config.MaxListLimit)
 	}
 	if len(allConfigs) == 0 {
 		log.Println("ladder_run: no ladder_config rows found, nothing to do")
