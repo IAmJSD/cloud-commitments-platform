@@ -79,32 +79,16 @@ func suppressionRows(n int) *pgxmock.Rows {
 	return rows
 }
 
-// A truncated suppression list would under-suppress, and the money path
-// would offer to re-buy what the dropped rows cover, so above the cap the
-// read fails instead. Exactly the cap is still a complete list.
-func TestPGXMock_ListActiveSuppressions_ErrorsAboveMaxListLimit(t *testing.T) {
-	for _, tc := range []struct {
-		rows    int
-		wantErr bool
-	}{
-		{MaxListLimit, false},
-		{MaxListLimit + 1, true},
-	} {
-		mock := newMock(t)
-		store := storeWith(mock)
-		mock.ExpectQuery(`(?s)FROM purchase_suppressions\s+WHERE expires_at > NOW\(\)\s+LIMIT \$1`).
-			WithArgs(MaxListLimit + 1).
-			WillReturnRows(suppressionRows(tc.rows))
+// ListActiveSuppressions stays unbounded: a large tenant can hold more than
+// MaxListLimit active rows, and every row must reach the suppression index.
+func TestPGXMock_ListActiveSuppressions_ReturnsEveryRowAboveMaxListLimit(t *testing.T) {
+	mock := newMock(t)
+	store := storeWith(mock)
+	mock.ExpectQuery(`(?s)FROM purchase_suppressions\s+WHERE expires_at > NOW\(\)\s*$`).
+		WillReturnRows(suppressionRows(MaxListLimit + 5))
 
-		sups, err := store.ListActiveSuppressions(context.Background())
-		if tc.wantErr {
-			require.Error(t, err, "%d rows", tc.rows)
-			assert.Contains(t, err.Error(), "more than 1000 active suppressions")
-			assert.Nil(t, sups, "no partial list alongside the error")
-		} else {
-			require.NoError(t, err, "%d rows", tc.rows)
-			assert.Len(t, sups, tc.rows)
-		}
-		assert.NoError(t, mock.ExpectationsWereMet())
-	}
+	sups, err := store.ListActiveSuppressions(context.Background())
+	require.NoError(t, err)
+	assert.Len(t, sups, MaxListLimit+5)
+	assert.NoError(t, mock.ExpectationsWereMet())
 }

@@ -129,7 +129,6 @@ func TestPGXMock_ListActiveSuppressions(t *testing.T) {
 		AddRow("sup-2", "exec-2", "acct-1", "aws", "ec2", "us-east-1",
 			"t4g.nano", "", 2, future, now, &az, &platform, &tenancy)
 	mock.ExpectQuery(`SELECT .* FROM purchase_suppressions WHERE expires_at > NOW\(\)`).
-		WithArgs(MaxListLimit + 1).
 		WillReturnRows(rows)
 
 	sups, err := store.ListActiveSuppressions(ctx)
