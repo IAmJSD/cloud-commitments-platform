@@ -45,11 +45,6 @@ func (m *MockStore) CreateUser(ctx context.Context, user *User) error {
 	return args.Error(0)
 }
 
-func (m *MockStore) UpdateUser(ctx context.Context, user *User) error {
-	args := m.Called(ctx, user)
-	return args.Error(0)
-}
-
 func (m *MockStore) UpdateUserAdminFields(ctx context.Context, user *User, readEmail string, readGroupIDs []string, readActive bool) error {
 	return m.Called(ctx, user, readEmail, readGroupIDs, readActive).Error(0)
 }
@@ -269,11 +264,6 @@ func (m *MockStore) UpdateAPIKey(ctx context.Context, key *UserAPIKey) error {
 	return args.Error(0)
 }
 
-func (m *MockStore) UpdateAPIKeyLastUsed(ctx context.Context, keyID string) error {
-	args := m.Called(ctx, keyID)
-	return args.Error(0)
-}
-
 func (m *MockStore) RecordAPIKeyUsage(ctx context.Context, keyID string, delta int64) error {
 	args := m.Called(ctx, keyID, delta)
 	return args.Error(0)
@@ -296,11 +286,6 @@ type MockEmailSender struct {
 
 func (m *MockEmailSender) SendPasswordResetEmail(ctx context.Context, email, resetURL string) error {
 	args := m.Called(ctx, email, resetURL)
-	return args.Error(0)
-}
-
-func (m *MockEmailSender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error {
-	args := m.Called(ctx, email, dashboardURL, role)
 	return args.Error(0)
 }
 
@@ -385,7 +370,6 @@ func createTestUser(t *testing.T, password string) *User {
 		ID:           "user-123",
 		Email:        "test@example.com",
 		PasswordHash: hash,
-		Salt:         "", // Not used anymore, bcrypt handles salting
 		GroupIDs:     []string{DefaultAdminGroupID},
 		Active:       true,
 		CreatedAt:    time.Now(),

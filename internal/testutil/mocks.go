@@ -14,6 +14,7 @@ type MockScheduler struct {
 	CollectRecommendationsFunc func(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error)
 	ListRecommendationsFunc    func(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
 	GetRecommendationByIDFunc  func(ctx context.Context, id string) (*config.RecommendationRecord, []string, error)
+	ScanRecommendationsFunc    func(ctx context.Context, filter config.RecommendationFilter, chunkSize int, fn func([]config.RecommendationRecord) error) error
 }
 
 func (m *MockScheduler) CollectRecommendations(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error) {
@@ -30,6 +31,14 @@ func (m *MockScheduler) ListRecommendations(ctx context.Context, filter config.R
 	return []config.RecommendationRecord{}, nil
 }
 
+// ScanRecommendations defaults to an empty cache: fn is never called.
+func (m *MockScheduler) ScanRecommendations(ctx context.Context, filter config.RecommendationFilter, chunkSize int, fn func([]config.RecommendationRecord) error) error {
+	if m.ScanRecommendationsFunc != nil {
+		return m.ScanRecommendationsFunc(ctx, filter, chunkSize, fn)
+	}
+	return nil
+}
+
 func (m *MockScheduler) GetRecommendationByID(ctx context.Context, id string) (*config.RecommendationRecord, []string, error) {
 	if m.GetRecommendationByIDFunc != nil {
 		return m.GetRecommendationByIDFunc(ctx, id)
@@ -42,7 +51,7 @@ type MockPurchaseManager struct {
 	ProcessScheduledPurchasesFunc         func(ctx context.Context) (*purchase.ProcessResult, error)
 	SendUpcomingPurchaseNotificationsFunc func(ctx context.Context) (*purchase.NotificationResult, error)
 	ProcessMessageFunc                    func(ctx context.Context, body string) error
-	ApproveExecutionFunc                  func(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (string, error)
+	ApproveExecutionFunc                  func(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	ApproveAndExecuteFunc                 func(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	DirectExecuteFunc                     func(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	RunPlannedPurchaseNowFunc             func(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
@@ -73,11 +82,11 @@ func (m *MockPurchaseManager) ProcessMessage(ctx context.Context, body string) e
 	return nil
 }
 
-func (m *MockPurchaseManager) ApproveExecution(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (string, error) {
+func (m *MockPurchaseManager) ApproveExecution(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
 	if m.ApproveExecutionFunc != nil {
 		return m.ApproveExecutionFunc(ctx, execID, token, actor, check)
 	}
-	return "", nil
+	return nil, "", nil
 }
 
 func (m *MockPurchaseManager) ApproveAndExecute(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error) {

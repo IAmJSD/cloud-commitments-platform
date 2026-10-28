@@ -662,6 +662,21 @@ describe('Savings History Module', () => {
       );
     });
 
+    test('forwards the full account selection when two or more are selected', async () => {
+      addPurchasesTab(true);
+      (state.getCurrentAccountIDs as jest.Mock).mockReturnValue(['acct-A', 'acct-B']);
+
+      initSavingsHistory();
+      const accountCb = (state.subscribeAccount as jest.Mock).mock.calls[0]?.[0] as () => void;
+      (getSavingsAnalytics as jest.Mock).mockClear();
+      accountCb();
+      await new Promise((r) => setTimeout(r, 0));
+
+      expect(getSavingsAnalytics).toHaveBeenCalledWith(
+        expect.objectContaining({ account_ids: ['acct-A', 'acct-B'] })
+      );
+    });
+
     test('provider chip change re-queries the chart when purchases-tab is active', async () => {
       addPurchasesTab(true);
       (state.getCurrentProvider as jest.Mock).mockReturnValue('aws');

@@ -243,7 +243,9 @@ func (s *Service) hashRecoveryCode(code string) (string, error) {
 // consumeRecoveryCode returns true and removes the matching hash from
 // user.MFARecoveryCodes if entered matches any stored hash. The
 // removal is what makes recovery codes single-use; the caller must
-// persist the user afterwards via UpdateUser.
+// persist the shortened slice through its own compare-and-swap write.
+// The removal shifts the slice in place, so a caller that still needs
+// the codes as read must clone them first.
 //
 // Fails closed on empty input: an empty string normalizes to "", which
 // bcrypt.CompareHashAndPassword would compare against every stored hash.
@@ -507,7 +509,9 @@ func (s *Service) MFADisable(ctx context.Context, userID, password, codeOrRecove
 
 	// Try TOTP first (cheap), then fall back to recovery code (bcrypt
 	// compare, ~constant-time per slot). Either path counts as a
-	// fresh proof-of-possession.
+	// fresh proof-of-possession. The codes are cloned because
+	// consumeRecoveryCode removes a matched hash in place, which would
+	// otherwise shift readCodes and fail DisableMFA's codes guard.
 	readSecret, readCodes := user.MFASecret, slices.Clone(user.MFARecoveryCodes)
 	if err := s.verifyMFAProof(ctx, user, codeOrRecovery); err != nil {
 		return err

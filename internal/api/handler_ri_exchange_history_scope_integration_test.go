@@ -57,7 +57,7 @@ func TestRIExchangeHistory_ScopedUserSeesOlderOwnRows_Integration(t *testing.T) 
 	}
 
 	for _, tc := range []struct{ by, scope string }{
-		{"uuid", acctB.ID}, {"name", acctB.Name}, {"sts account id", acctB.ExternalID},
+		{"uuid", acctB.ID}, {"sts account id", acctB.ExternalID},
 	} {
 		t.Run("scoped to B by "+tc.by, func(t *testing.T) {
 			recs := history(t, tc.scope)
@@ -70,6 +70,12 @@ func TestRIExchangeHistory_ScopedUserSeesOlderOwnRows_Integration(t *testing.T) 
 			}
 		})
 	}
+
+	// A display-name entry is not bound to an account and matches nothing
+	// (issue #1034), so it reaches none of B's exchanges.
+	t.Run("a name entry for B matches nothing", func(t *testing.T) {
+		require.Empty(t, history(t, acctB.Name))
+	})
 
 	t.Run("scoped to A and B still caps at 500 newest", func(t *testing.T) {
 		recs := history(t, acctA.ID, acctB.ID)

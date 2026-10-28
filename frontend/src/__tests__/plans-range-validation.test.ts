@@ -3,7 +3,7 @@
  * inputs (issue #702).
  *
  * Covers wireRangeInput (via wirePlanRangeInputs) for:
- *   #plan-coverage       min=0  max=100
+ *   #plan-coverage       min=1  max=100
  *   #ramp-step-percent   min=1  max=100
  *   #ramp-interval-days  min=1  max=365  (max attr was previously missing)
  *   #plan-notify-days    min=1  max=30
@@ -178,7 +178,7 @@ function buildPlanModalDOM(): void {
   ]);
 
   // The five numeric inputs under test (min/max match HTML spec + issue #702)
-  addInput(form, 'plan-coverage', 'number', '80', { min: '0', max: '100' });
+  addInput(form, 'plan-coverage', 'number', '80', { min: '1', max: '100' });
 
   const autoPurchase = document.createElement('input');
   autoPurchase.id = 'plan-auto-purchase';
@@ -247,8 +247,9 @@ describe('plan numeric inputs: live range validation (#702)', () => {
   // --- out-of-range values show inline error --------------------------------
 
   it.each([
-    ['plan-coverage', '101', 'Must be a whole number between 0 and 100'],
-    ['plan-coverage', '-1', 'Must be a whole number between 0 and 100'],
+    ['plan-coverage', '101', 'Must be a whole number between 1 and 100'],
+    ['plan-coverage', '0', 'Must be a whole number between 1 and 100'],
+    ['plan-coverage', '-1', 'Must be a whole number between 1 and 100'],
     ['ramp-step-percent', '0', 'Must be a whole number between 1 and 100'],
     ['ramp-step-percent', '101', 'Must be a whole number between 1 and 100'],
     ['ramp-interval-days', '0', 'Must be a whole number between 1 and 365'],
@@ -300,7 +301,7 @@ describe('plan numeric inputs: live range validation (#702)', () => {
 
   it.each([
     ['plan-coverage', '80'],
-    ['plan-coverage', '0'],
+    ['plan-coverage', '1'],
     ['plan-coverage', '100'],
     ['ramp-step-percent', '25'],
     ['ramp-interval-days', '7'],
@@ -339,25 +340,27 @@ describe('plan numeric inputs: live range validation (#702)', () => {
     expect(errorEl('plan-notify-days')!.classList.contains('hidden')).toBe(true);
   });
 
-  // --- blur clamps the value to [min, max] ---------------------------------
+  // --- blur leaves the typed value alone ------------------------------------
 
-  it('out-of-range value is clamped to max on blur', () => {
-    const input = document.getElementById('plan-coverage') as HTMLInputElement;
-    input.value = '150';
+  // Clicking Save blurs the field first, so a clamp would save a value the
+  // user never typed (#523, #1534).
+  it.each([
+    ['plan-coverage', '0'],
+    ['plan-coverage', '150'],
+    ['ramp-step-percent', '150'],
+    ['ramp-step-percent', '0'],
+    ['ramp-interval-days', '366'],
+    ['plan-notify-days', '0'],
+    ['plan-notify-days', '31'],
+  ])('%s=%s is not rewritten on blur and keeps its error', (inputId, value) => {
+    const input = document.getElementById(inputId) as HTMLInputElement;
+    input.value = value;
+    fire(input, 'input');
     fire(input, 'blur');
 
-    expect(input.value).toBe('100');
-    expect(input.getAttribute('aria-invalid')).toBeNull();
-    expect(errorEl('plan-coverage')!.classList.contains('hidden')).toBe(true);
-  });
-
-  it('below-min value is clamped to min on blur', () => {
-    const input = document.getElementById('plan-notify-days') as HTMLInputElement;
-    input.value = '0';
-    fire(input, 'blur');
-
-    expect(input.value).toBe('1');
-    expect(input.getAttribute('aria-invalid')).toBeNull();
+    expect(input.value).toBe(value);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(errorEl(inputId)!.classList.contains('hidden')).toBe(false);
   });
 
   it('non-integer value is NOT clamped on blur (error stays visible)', () => {
@@ -430,6 +433,68 @@ describe('plan numeric inputs: live range validation (#702)', () => {
 
     const describedBy = input.getAttribute('aria-describedby') ?? '';
     expect(describedBy).toContain('plan-coverage-range-error');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hidden custom-ramp inputs must not block Save (#1536)
+// ---------------------------------------------------------------------------
+
+describe('hidden custom ramp inputs stay out of validation (#1536)', () => {
+  let savePlan: typeof import('../plans').savePlan;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // The ramp handlers install once per module, so a rebuilt DOM needs a fresh module.
+    jest.resetModules();
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fresh = require('../plans') as typeof import('../plans');
+    savePlan = fresh.savePlan;
+    buildPlanModalDOM();
+    fresh.openNewPlanModal();
+  });
+
+  const stepInput = (): HTMLInputElement => document.getElementById('ramp-step-percent') as HTMLInputElement;
+  const intervalInput = (): HTMLInputElement => document.getElementById('ramp-interval-days') as HTMLInputElement;
+  const form = (): HTMLFormElement => document.getElementById('plan-form') as HTMLFormElement;
+
+  function pickRamp(value: string): void {
+    const radio = document.querySelector<HTMLInputElement>(`input[name="ramp-schedule"][value="${value}"]`)!;
+    radio.checked = true;
+    radio.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  it('opens with the hidden custom inputs disabled', () => {
+    expect(stepInput().disabled).toBe(true);
+    expect(intervalInput().disabled).toBe(true);
+  });
+
+  it.each([
+    [['immediate']],
+    [['weekly-25pct', 'immediate']],
+    [['custom', 'immediate']],
+  ])('after %j the hidden inputs are disabled and the form passes checkValidity', (steps) => {
+    for (const step of steps) pickRamp(step);
+    expect(document.getElementById('custom-ramp-config')!.classList.contains('hidden')).toBe(true);
+    expect(stepInput().disabled).toBe(true);
+    expect(intervalInput().disabled).toBe(true);
+    expect(form().checkValidity()).toBe(true);
+  });
+
+  it('selecting Custom re-enables the inputs and an out-of-range value is still refused', async () => {
+    pickRamp('immediate');
+    pickRamp('custom');
+    expect(stepInput().disabled).toBe(false);
+    expect(intervalInput().disabled).toBe(false);
+
+    (document.getElementById('plan-coverage') as HTMLInputElement).value = '80';
+    (document.getElementById('plan-notify-days') as HTMLInputElement).value = '3';
+    intervalInput().value = '0';
+    expect(form().checkValidity()).toBe(false);
+    await savePlan(new Event('submit'));
+    expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Ramp Interval Days must be a whole number between 1 and 365',
+    }));
   });
 });
 
@@ -580,6 +645,18 @@ describe('Add Purchases modal: inline range validation (#771)', () => {
     input.dispatchEvent(new Event('input'));
 
     expect(input.getAttribute('aria-describedby')).toContain('add-purchases-count-range-error');
+  });
+
+  it.each(['0', '53'])('count=%s is not rewritten on blur and keeps the submit button disabled', value => {
+    const input = countInput();
+    input.value = value;
+    input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new Event('blur'));
+
+    expect(input.value).toBe(value);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(errorEl()!.classList.contains('hidden')).toBe(false);
+    expect(submitBtn().disabled).toBe(true);
   });
 
   // --- save-time guard prevents API call on out-of-range value -------------

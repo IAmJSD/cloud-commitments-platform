@@ -97,6 +97,9 @@ func mapAuthError(err error) error {
 		errors.Is(err, auth.ErrLastAdmin),
 		errors.Is(err, auth.ErrUserChanged):
 		return NewClientError(409, err.Error())
+	case errors.Is(err, auth.ErrUserNotFound):
+		// Fixed text: the wrapped error carries the store's "no rows" detail.
+		return NewClientError(404, "user not found")
 	}
 	return err
 }
@@ -114,7 +117,7 @@ func (h *Handler) getUser(ctx context.Context, req *events.LambdaFunctionURLRequ
 
 	user, err := h.auth.GetUser(ctx, userID)
 	if err != nil {
-		return nil, err
+		return nil, mapAuthError(err)
 	}
 
 	return user, nil

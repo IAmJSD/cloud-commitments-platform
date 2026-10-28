@@ -152,6 +152,11 @@ func TestHandler_getRecommendationsFreshness(t *testing.T) {
 				AttemptedScopes:    10,
 				FailedScopes:       9,
 				Reasons:            map[string]int{config.PartialReasonThrottled: 9},
+			}, {
+				// GCP skipped recommendations (issue #1472): complete sweep, N dropped.
+				Provider:               "gcp",
+				SkippedRecommendations: 3,
+				Reasons:                map[string]int{},
 			}},
 		}
 		mockStore.On("GetRecommendationsFreshness", ctx).
@@ -167,7 +172,9 @@ func TestHandler_getRecommendationsFreshness(t *testing.T) {
 		body, err := json.Marshal(got)
 		require.NoError(t, err)
 		assert.JSONEq(t, `{"providers":[{"provider":"azure","incomplete_accounts":1,"attempted_scopes":10,`+
-			`"failed_scopes":9,"failed_details":0,"reasons":{"throttled":9}}]}`,
+			`"failed_scopes":9,"failed_details":0,"skipped_recommendations":0,"reasons":{"throttled":9}},`+
+			`{"provider":"gcp","incomplete_accounts":0,"attempted_scopes":0,"failed_scopes":0,"failed_details":0,`+
+			`"skipped_recommendations":3,"reasons":{}}]}`,
 			string(mustField(t, body, "last_collection_partial")))
 	})
 
@@ -807,6 +814,22 @@ func TestConfidenceBucketFor(t *testing.T) {
 		{"medium on savings alone", 60, 1, "medium"},
 		{"low when neither threshold is met", 10, 1, "low"},
 		{"count clamped to >=1 — savings still drives bucket", 60, 0, "medium"},
+		// Exact boundaries, pinned with literals so a change to the named
+		// thresholds fails here (#343). Values match pkg/exchange's
+		// ConfidenceHighSavingsUSD / ConfidenceHighMinCount /
+		// ConfidenceMediumSavingsUSD.
+		{"high at both thresholds", 200, 3, "high"},
+		{"just below high savings", 199.99, 3, "medium"},
+		{"just below high count", 200, 2, "medium"},
+		{"medium at threshold", 50, 1, "medium"},
+		{"just below medium", 49.99, 1, "low"},
+		{"zero savings", 0, 10, "low"},
+		// Count-0 handling: the badge clamps a missing count to 1 instead of
+		// going neutral like the exchange ranking does, so high savings with
+		// no count is medium (never high) and low savings stays low.
+		{"count zero with high savings is medium, not high", 10000, 0, "medium"},
+		{"count zero with low savings is low", 10, 0, "low"},
+		{"negative count is clamped like zero", 10000, -5, "medium"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

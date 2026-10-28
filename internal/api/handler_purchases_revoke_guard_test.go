@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	armreservations "github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/reservations/armreservations"
@@ -132,7 +133,7 @@ func TestRevokePurchase_AzureRefundGuard(t *testing.T) {
 			mockStore.On("GetExecutionByID", ctx, r.PurchaseID).Return(nil, fmt.Errorf("%w: execution %s", config.ErrNotFound, r.PurchaseID))
 			mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(r, nil)
 			mockStore.On("FlipPurchaseRevocationInFlight", ctx, r.PurchaseID).Return(nil).Maybe()
-			mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil).Maybe()
+			mockStore.On("MarkPurchaseRevoked", mock.Anything, r.PurchaseID, mock.AnythingOfType("time.Time"), "direct-api", "", mock.Anything, mock.Anything).Return(nil).Maybe()
 
 			calcClient := &countingCalcRefundClient{price: tc.quote}
 			returnClient := &stubReturnClient{}
@@ -176,4 +177,92 @@ func TestRevokePurchase_AzureRefundGuard(t *testing.T) {
 
 func confirmedQuote(amount float64, currency string) revokeConfirmBody {
 	return revokeConfirmBody{ExpectedRefundAmount: &amount, ExpectedRefundCurrency: currency}
+}
+
+// TestCallAzureReturn_FlipFindsRowRevoked covers issue #316: the in-flight
+// flip is now a compare-and-set on revoked_at IS NULL. When it reports the
+// row already revoked, a concurrent request finished the revocation after
+// this one loaded the row, so no second Return is posted and the answer is
+// already_revoked. Since issue #1518 the flip is also the claim that lets one
+// request post the Return: a row another request holds answers
+// RECONCILE_PENDING, and any other flip failure stops before the Return.
+func TestCallAzureReturn_FlipFindsRowRevoked(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	quote := &armreservations.Price{Amount: toPtr(10.0), CurrencyCode: toPtr("USD")}
+
+	t.Run("already revoked: no Return, already_revoked", func(t *testing.T) {
+		t.Parallel()
+		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		r := armReservationRecord()
+		revokedAt := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+		mockStore.On("FlipPurchaseRevocationInFlight", ctx, r.PurchaseID).
+			Return(fmt.Errorf("FlipPurchaseRevocationInFlight: purchase_id %q: %w", r.PurchaseID, config.ErrPurchaseAlreadyRevoked))
+		current := *r
+		current.RevokedAt = &revokedAt
+		current.RevokedVia = "direct-api"
+		mockStore.On("GetPurchaseHistoryByPurchaseID", ctx, r.PurchaseID).Return(&current, nil)
+		returnClient := &stubReturnClient{}
+
+		h := &Handler{config: mockStore}
+		result, err := h.callAzureReturn(ctx, &countingCalcRefundClient{price: quote}, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
+		require.NoError(t, err)
+		assert.Zero(t, returnClient.calls, "a revoked row must not get a second Return")
+		res, ok := result.(*revokePurchaseResult)
+		require.True(t, ok, "got %T", result)
+		assert.Equal(t, "already_revoked", res.Status)
+		assert.Equal(t, revokedAt.Format(time.RFC3339), res.RevokedAt)
+		assert.Equal(t, "direct-api", res.RevokedVia)
+		mockStore.AssertNotCalled(t, "MarkPurchaseRevoked", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	// Issue #1518: another request holds the claim. This one must neither
+	// post a Return nor touch the flag (clearing it would orphan the holder's
+	// refund from the finalize sweep), and answers RECONCILE_PENDING like the
+	// up-front in-flight check.
+	t.Run("in flight: no Return, no clear, RECONCILE_PENDING", func(t *testing.T) {
+		t.Parallel()
+		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		r := armReservationRecord()
+		mockStore.On("FlipPurchaseRevocationInFlight", ctx, r.PurchaseID).
+			Return(fmt.Errorf("FlipPurchaseRevocationInFlight: purchase_id %q: %w", r.PurchaseID, config.ErrRevocationInFlight))
+		// Registered only so a regression fails on the assertions below
+		// rather than on an unexpected-call panic.
+		mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		returnClient := &stubReturnClient{}
+
+		h := &Handler{config: mockStore}
+		result, err := h.callAzureReturn(ctx, &countingCalcRefundClient{price: quote}, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
+		require.NoError(t, err)
+		assert.Zero(t, returnClient.calls, "the request that loses the claim must not post a Return")
+		assert.Equal(t, revocationInFlightResult(), result)
+		mockStore.AssertNotCalled(t, "ClearRevocationInFlight", mock.Anything, mock.Anything)
+		mockStore.AssertNotCalled(t, "MarkPurchaseRevoked", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
+
+	// Issue #1518: a request that could not establish the claim does not know
+	// whether another request holds it, so it posts no Return (a retry is
+	// safe) and leaves the flag alone.
+	t.Run("other flip error: no Return, no clear, 500", func(t *testing.T) {
+		t.Parallel()
+		mockStore := new(MockConfigStore)
+		t.Cleanup(func() { mockStore.AssertExpectations(t) })
+		r := armReservationRecord()
+		mockStore.On("FlipPurchaseRevocationInFlight", ctx, r.PurchaseID).Return(fmt.Errorf("FlipPurchaseRevocationInFlight: connection reset"))
+		mockStore.On("MarkPurchaseRevoked", ctx, r.PurchaseID, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+		returnClient := &stubReturnClient{}
+
+		h := &Handler{config: mockStore}
+		result, err := h.callAzureReturn(ctx, &countingCalcRefundClient{price: quote}, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
+		require.Error(t, err)
+		assert.Nil(t, result)
+		assert.ErrorContains(t, err, "connection reset")
+		_, isClientErr := IsClientError(err)
+		assert.False(t, isClientErr, "a store failure is a 500, not a client error")
+		assert.Zero(t, returnClient.calls, "no Return without the claim")
+		mockStore.AssertNotCalled(t, "ClearRevocationInFlight", mock.Anything, mock.Anything)
+		mockStore.AssertNotCalled(t, "MarkPurchaseRevoked", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	})
 }

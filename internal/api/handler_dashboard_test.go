@@ -629,8 +629,8 @@ func TestHandler_getUpcomingPurchases_ScopedUser(t *testing.T) {
 			planB.ID: {{ID: "acc-stage", Name: "Staging"}},
 		},
 	}
-	// Registered accounts, loaded by getAccountScope so the unique name
-	// "Production" can match by name (#433).
+	// Registered accounts, loaded by getAccountScope to resolve display names
+	// to account IDs (#433, #1034).
 	mockStore.ListCloudAccountsFn = func(context.Context, config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		return []config.CloudAccount{{ID: "acc-prod", Name: "Production"}, {ID: "acc-stage", Name: "Staging"}}, nil
 	}
@@ -639,7 +639,7 @@ func TestHandler_getUpcomingPurchases_ScopedUser(t *testing.T) {
 		UserID: "viewer-1",
 	}, nil)
 	mockAuth.On("HasPermissionAPI", ctx, "viewer-1", "view", "purchases").Return(true, nil)
-	mockAuth.On("GetAllowedAccountsAPI", ctx, "viewer-1").Return([]string{"Production"}, nil)
+	mockAuth.On("GetAllowedAccountsAPI", ctx, "viewer-1").Return([]string{"acc-prod"}, nil)
 
 	handler := &Handler{auth: mockAuth, config: store}
 	req := &events.LambdaFunctionURLRequest{
@@ -852,7 +852,8 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
+		activeCommitments, committedMonthly, ytdSavings, savingsByService, err := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
+		require.NoError(t, err)
 
 		assert.Equal(t, 0, activeCommitments)
 		assert.Equal(t, 0.0, committedMonthly)
@@ -860,18 +861,17 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 		assert.Empty(t, savingsByService)
 	})
 
-	t.Run("purchase history error returns zeros", func(t *testing.T) {
+	// Issue #72: a store error must be returned, not reported as zeroed KPIs.
+	t.Run("purchase history error is returned, not zeroed", func(t *testing.T) {
 		mockStore := new(MockConfigStore)
-		mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string{"": {"account-123"}}).Return(nil, errors.New("db error"))
+		storeErr := errors.New("db error")
+		mockStore.On("GetActivePurchaseHistory", ctx, mock.AnythingOfType("time.Time"), []string(nil), map[string][]string{"": {"account-123"}}).Return(nil, storeErr)
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
-
-		assert.Equal(t, 0, activeCommitments)
-		assert.Equal(t, 0.0, committedMonthly)
-		assert.Equal(t, 0.0, ytdSavings)
-		assert.Nil(t, savingsByService)
+		_, _, _, _, err := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, storeErr)
 	})
 
 	t.Run("with active commitments", func(t *testing.T) {
@@ -892,7 +892,8 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
+		activeCommitments, committedMonthly, ytdSavings, savingsByService, err := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
+		require.NoError(t, err)
 
 		assert.Equal(t, 1, activeCommitments)
 		assert.Equal(t, 100.0, committedMonthly)
@@ -919,7 +920,8 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, ytdSavings, savingsByService := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
+		activeCommitments, committedMonthly, ytdSavings, savingsByService, err := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
+		require.NoError(t, err)
 
 		// Should skip expired commitments
 		assert.Equal(t, 0, activeCommitments)
@@ -946,7 +948,8 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, _, savingsByService := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
+		activeCommitments, committedMonthly, _, savingsByService, err := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
+		require.NoError(t, err)
 
 		assert.Equal(t, 1, activeCommitments)
 		assert.Equal(t, 50.0, committedMonthly)
@@ -979,7 +982,8 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, _, _ := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
+		activeCommitments, committedMonthly, _, _, err := handler.calculateCommitmentMetrics(ctx, "", nil, map[string][]string{"": {"account-123"}})
+		require.NoError(t, err)
 
 		// Only the status="" row counts; the failed row must be excluded.
 		assert.Equal(t, 1, activeCommitments,
@@ -1013,7 +1017,8 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, _, _ := handler.calculateCommitmentMetrics(ctx, "", uuids, nil)
+		activeCommitments, committedMonthly, _, _, err := handler.calculateCommitmentMetrics(ctx, "", uuids, nil)
+		require.NoError(t, err)
 
 		assert.Equal(t, 2, activeCommitments)
 		assert.Equal(t, 250.0, committedMonthly,
@@ -1040,8 +1045,9 @@ func TestHandler_calculateCommitmentMetrics(t *testing.T) {
 
 		handler := &Handler{config: mockStore}
 
-		activeCommitments, committedMonthly, _, _ := handler.calculateCommitmentMetrics(
+		activeCommitments, committedMonthly, _, _, err := handler.calculateCommitmentMetrics(
 			ctx, "", []string{"bbbbbbbb-1111-2222-3333-444444444444"}, map[string][]string{"aws": {"999988887777"}})
+		require.NoError(t, err)
 
 		assert.Equal(t, 1, activeCommitments, "external-id-only commitment must be counted")
 		assert.Equal(t, 175.0, committedMonthly)
@@ -1103,7 +1109,8 @@ func TestHandler_calculateCommitmentMetrics_NoTruncationBeyond1000(t *testing.T)
 
 	handler := &Handler{config: mockStore}
 
-	activeCommitments, committedMonthly, _, savingsByService := handler.calculateCommitmentMetrics(ctx, "", nil, nil)
+	activeCommitments, committedMonthly, _, savingsByService, err := handler.calculateCommitmentMetrics(ctx, "", nil, nil)
+	require.NoError(t, err)
 
 	assert.Equal(t, 1, activeCommitments,
 		"the still-active 3y commitment beyond the old 1000-row cap must be counted")
@@ -1327,25 +1334,92 @@ func TestHandler_getDashboardSummary_CurrentSavingsZeroWhenNoCommitments(t *test
 func TestHandler_calculateCurrentCoverage(t *testing.T) {
 	handler := &Handler{}
 
-	t.Run("no potential savings returns 100%", func(t *testing.T) {
+	t.Run("no potential savings with commitments returns 100%", func(t *testing.T) {
 		coverage := handler.calculateCurrentCoverage(0.0, 100.0)
-		assert.Equal(t, 100.0, coverage)
+		require.NotNil(t, coverage)
+		assert.Equal(t, 100.0, *coverage)
 	})
 
 	t.Run("no committed monthly", func(t *testing.T) {
 		coverage := handler.calculateCurrentCoverage(100.0, 0.0)
-		assert.Equal(t, 0.0, coverage)
+		require.NotNil(t, coverage)
+		assert.Equal(t, 0.0, *coverage)
 	})
 
 	t.Run("50% coverage", func(t *testing.T) {
 		coverage := handler.calculateCurrentCoverage(100.0, 100.0)
-		assert.Equal(t, 50.0, coverage)
+		require.NotNil(t, coverage)
+		assert.Equal(t, 50.0, *coverage)
 	})
 
-	t.Run("both zero returns 0%", func(t *testing.T) {
-		coverage := handler.calculateCurrentCoverage(0.0, 0.0)
-		assert.Equal(t, 100.0, coverage)
+	// Issue #72: with nothing committed and nothing left to buy there is no
+	// ratio to report. The old code returned a fabricated 100%.
+	t.Run("both zero returns nil, not 100%", func(t *testing.T) {
+		assert.Nil(t, handler.calculateCurrentCoverage(0.0, 0.0))
 	})
+}
+
+// TestHandleRequest_DashboardSummary_PurchaseHistoryErrorIs500 is the issue #72
+// regression test, through the router so the status code and body are pinned.
+// It uses the issue's compounding scenario: no recommendations (potential
+// savings 0) plus a purchase-history store error. Before the fix this returned
+// 200 with active_commitments 0, committed_monthly 0, ytd_savings 0 and
+// current_coverage 100: a fabricated "fully covered" dashboard.
+func TestHandleRequest_DashboardSummary_PurchaseHistoryErrorIs500(t *testing.T) {
+	ctx := context.Background()
+	mockScheduler := new(MockScheduler)
+	mockStore := new(MockConfigStore)
+
+	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
+	mockStore.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
+	mockStore.On("GetActivePurchaseHistory", mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Return(nil, errors.New("pq: connection refused to db-host-internal"))
+	t.Cleanup(func() { mockStore.AssertExpectations(t) })
+
+	handler := &Handler{
+		scheduler:         mockScheduler,
+		config:            mockStore,
+		corsAllowedOrigin: "*",
+		apiKey:            "test-key",
+	}
+
+	resp, err := handler.HandleRequest(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"X-API-Key": "test-key"},
+		RequestContext: events.LambdaFunctionURLRequestContext{
+			HTTP: events.LambdaFunctionURLRequestContextHTTPDescription{
+				Method: "GET",
+				Path:   "/api/dashboard/summary",
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 500, resp.StatusCode, "a failed purchase-history read must not ship zeroed KPIs as 200: %s", resp.Body)
+	assert.NotContains(t, resp.Body, "active_commitments", "no KPI payload on failure")
+	assert.NotContains(t, resp.Body, "db-host-internal", "store error detail must not leak to the client")
+}
+
+// TestGetDashboardSummary_NothingToMeasure_CoverageIsNull pins the JSON shape
+// of the 0/0 coverage case (issue #72): current_coverage is an explicit null,
+// which the dashboard renders as "--", never 100.
+func TestGetDashboardSummary_NothingToMeasure_CoverageIsNull(t *testing.T) {
+	ctx := context.Background()
+	mockScheduler := new(MockScheduler)
+	mockStore := new(MockConfigStore)
+
+	mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
+	mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
+	mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return([]config.PurchaseHistoryRecord{}, nil)
+
+	mockAuth, req := adminDashboardReq(ctx)
+	handler := &Handler{auth: mockAuth, scheduler: mockScheduler, config: mockStore}
+
+	result, err := handler.getDashboardSummary(ctx, req, map[string]string{})
+	require.NoError(t, err)
+	assert.Nil(t, result.CurrentCoverage)
+
+	body, err := json.Marshal(result)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"current_coverage":null`)
 }
 
 func TestHandler_getDashboardSummary_Errors(t *testing.T) {
@@ -1361,6 +1435,27 @@ func TestHandler_getDashboardSummary_Errors(t *testing.T) {
 		_, err := handler.getDashboardSummary(ctx, req, map[string]string{})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to get recommendations")
+	})
+
+	// Issue #72: purchase history is as much a hard dependency as
+	// recommendations; a store error must fail the request, not zero the KPIs.
+	t.Run("purchase history error", func(t *testing.T) {
+		mockScheduler := new(MockScheduler)
+		mockStore := new(MockConfigStore)
+		storeErr := errors.New("db error")
+
+		mockScheduler.On("ListRecommendations", mock.Anything, mock.Anything).Return([]config.RecommendationRecord{}, nil)
+		mockStore.On("GetGlobalConfig", ctx).Return(&config.GlobalConfig{DefaultCoverage: 80.0}, nil)
+		mockStore.On("GetActivePurchaseHistory", ctx, mock.Anything, mock.Anything, mock.Anything).Return(nil, storeErr)
+
+		mockAuth, req := adminDashboardReq(ctx)
+		handler := &Handler{auth: mockAuth, scheduler: mockScheduler, config: mockStore}
+
+		result, err := handler.getDashboardSummary(ctx, req, map[string]string{})
+		require.Error(t, err)
+		assert.ErrorIs(t, err, storeErr)
+		assert.Contains(t, err.Error(), "failed to get active purchase history")
+		assert.Nil(t, result)
 	})
 
 	t.Run("nil global config uses default coverage", func(t *testing.T) {
@@ -1731,7 +1826,7 @@ func TestFilterDashboardRecommendations_FreshSlice(t *testing.T) {
 	originalFirst := input[0]
 
 	mockStore := new(MockConfigStore)
-	// resolveAccountNamesByID calls ListCloudAccounts via the Fn override path.
+	// getAccountScope calls ListCloudAccounts via the Fn override path.
 	listCalled := false
 	mockStore.ListCloudAccountsFn = func(_ context.Context, _ config.CloudAccountFilter) ([]config.CloudAccount, error) {
 		listCalled = true
@@ -1748,11 +1843,11 @@ func TestFilterDashboardRecommendations_FreshSlice(t *testing.T) {
 	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 
 	handler := &Handler{auth: mockAuth, config: mockStore}
-	_ = listCalled // asserted implicitly: if not called the name map is empty and MatchesAccount uses only ID
+	_ = listCalled // asserted implicitly: if not called the scope has no registered accounts and AccountScope.Allows uses only ID
 
 	scope, err := handler.getAccountScope(ctx, session)
 	require.NoError(t, err)
-	filtered := handler.filterDashboardRecommendations(ctx, scope, input)
+	filtered := filterDashboardRecommendations(scope, input)
 
 	// Only account A's rec must pass through.
 	require.Len(t, filtered, 1)
@@ -1857,8 +1952,9 @@ func TestHandler_calculateCommitmentMetrics_RevokedExcluded(t *testing.T) {
 	t.Cleanup(func() { mockStore.AssertExpectations(t) })
 
 	handler := &Handler{config: mockStore}
-	activeCommitments, committedMonthly, _, savingsByService := handler.calculateCommitmentMetrics(
+	activeCommitments, committedMonthly, _, savingsByService, err := handler.calculateCommitmentMetrics(
 		ctx, "", nil, map[string][]string{"": {"acct-1"}})
+	require.NoError(t, err)
 
 	assert.Equal(t, 1, activeCommitments,
 		"revoked commitment must not increment activeCommitments")
@@ -1889,8 +1985,9 @@ func TestHandler_calculateCommitmentMetrics_ProviderFilter(t *testing.T) {
 	handler := &Handler{config: mockStore}
 
 	// Filter to aws only.
-	activeCommitments, committedMonthly, _, savingsByService := handler.calculateCommitmentMetrics(
+	activeCommitments, committedMonthly, _, savingsByService, err := handler.calculateCommitmentMetrics(
 		ctx, "aws", nil, nil)
+	require.NoError(t, err)
 
 	assert.Equal(t, 1, activeCommitments,
 		"provider filter must restrict activeCommitments to aws rows only")

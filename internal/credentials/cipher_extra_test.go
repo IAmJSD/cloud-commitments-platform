@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,12 +13,12 @@ import (
 )
 
 // resetKeyCacheForTest clears the LoadKey memoization cache so each test
-// gets a fresh sync.Once. Test-only — never called from production code.
+// starts from an unloaded key. Test-only — never called from production code.
 func resetKeyCacheForTest() {
+	keyMu.Lock()
+	defer keyMu.Unlock()
 	cachedKey = nil
 	cachedKeySource = ""
-	cachedKeyErr = nil
-	cachedKeyOnce = sync.Once{}
 }
 
 // fakeResolver is a test double for secrets.Resolver. It returns the

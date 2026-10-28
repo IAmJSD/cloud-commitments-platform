@@ -76,7 +76,6 @@ func benignFederationData() federationIaCData {
 		Source:              "azure",
 		SourceAccountID:     "000000000000",
 		OIDCIssuerURL:       "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000002/v2.0",
-		OIDCIssuerHost:      "login.microsoftonline.com/00000000-0000-0000-0000-000000000002/v2.0",
 		OIDCAudience:        "api://AzureADTokenExchange",
 		OIDCSubjectClaim:    "00000000-0000-0000-0000-000000000003",
 		SubscriptionID:      "00000000-0000-0000-0000-000000000001",
@@ -252,16 +251,16 @@ func TestRenderTemplate_BenignDataUnchanged(t *testing.T) {
 
 // federationHandlerWithEmail is federationHandler with a chosen session email,
 // standing in for a stored user record that predates or bypassed validation.
-func federationHandlerWithEmail(email string) *Handler {
+// Like federationHandler, the ValidateSession stub is a hard expectation.
+func federationHandlerWithEmail(t *testing.T, email string) *Handler {
+	t.Helper()
 	mockAuth := new(MockAuthService)
+	t.Cleanup(func() { mockAuth.AssertExpectations(t) })
 	mockAuth.On("ValidateSession", mock.Anything, "admin-token").Return(&Session{
 		UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
 		Email:  email,
 	}, nil)
-	mockAuth.grantAdmin()
-	h := NewHandler(HandlerConfig{ConfigStore: new(MockConfigStore), AuthService: mockAuth})
-	mockSourceIdentity(h, defaultTestSourceIdentity())
-	return h
+	return newFederationHandler(mockAuth)
 }
 
 // TestGetFederationIaC_FailsClosedOnControlChar drives the real handler for
@@ -278,14 +277,14 @@ func TestGetFederationIaC_FailsClosedOnControlChar(t *testing.T) {
 		for _, target := range clouds {
 			for _, format := range formats {
 				params := map[string]string{"target": target, "source": source, "format": format}
-				_, err := federationHandlerWithEmail("ops@example.com").getFederationIaC(
+				_, err := federationHandlerWithEmail(t, "ops@example.com").getFederationIaC(
 					context.Background(), federationReqWithDomain(params))
 				if _, isClient := IsClientError(err); isClient {
 					continue // combination not offered
 				}
 				require.NoError(t, err, "%v benign", params)
 				checked++
-				res, err := federationHandlerWithEmail("ops@example.com\ntouch PWNED").getFederationIaC(
+				res, err := federationHandlerWithEmail(t, "ops@example.com\ntouch PWNED").getFederationIaC(
 					context.Background(), federationReqWithDomain(params))
 				assert.Nil(t, res, "%v must not return content", params)
 				if assert.Error(t, err, "%v must fail closed", params) {

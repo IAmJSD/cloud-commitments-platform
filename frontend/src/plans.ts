@@ -176,10 +176,10 @@ function renderPlannedPurchasesInternal(): void {
           <th><span>Provider</span>${filterBtn('provider', 'Provider')}</th>
           <th><span>Service</span>${filterBtn('service', 'Service')}</th>
           <th><span>Resource Type</span>${filterBtn('resource_type', 'Resource Type')}</th>
-          <th><span>Count</span>${filterBtn('count', 'Count')}</th>
+          <th class="num"><span>Count</span>${filterBtn('count', 'Count')}</th>
           <th><span>Term</span>${filterBtn('term', 'Term')}${filterBtn('payment', 'Payment')}</th>
-          <th><span>Upfront</span>${filterBtn('upfront_cost', 'Upfront')}</th>
-          <th><span>Est. Savings</span>${filterBtn('estimated_savings', 'Est. Savings')}</th>
+          <th class="num"><span>Upfront</span>${filterBtn('upfront_cost', 'Upfront')}</th>
+          <th class="num"><span>Est. Savings</span>${filterBtn('estimated_savings', 'Est. Savings')}</th>
           <th><span>Status</span>${filterBtn('status', 'Status')}</th>
           <th>Actions</th>
         </tr>
@@ -456,10 +456,10 @@ function renderPlannedPurchaseRow(purchase: PlannedPurchase): string {
       <td>${providerBadgeHtml(purchase.provider)}</td>
       <td>${escapeHtml(purchase.service)}</td>
       <td>${resourceCell}</td>
-      <td>${countCell}</td>
+      <td class="num">${countCell}</td>
       <td>${termCell}</td>
-      <td>${upfrontShown}</td>
-      <td class="savings">${savingsCell}</td>
+      <td class="num">${upfrontShown}</td>
+      <td class="num savings">${savingsCell}</td>
       <td><span class="status-badges">${statusBadgeHtml(purchase.status)}${overdueBadge}</span>${overdueHintHtml}</td>
       <td class="actions">
         ${canRunPurchase ? `<button data-action="run" data-id="${escapeHtmlAttr(purchase.id)}" class="btn-small primary icon-label" title="Run now" aria-label="Run now">${iconSvg('play')}<span>Run now</span></button>` : ''}
@@ -1029,6 +1029,9 @@ async function editPlan(planId: string): Promise<boolean> {
     const titleEl = document.getElementById('plan-modal-title');
     if (titleEl) titleEl.textContent = 'Edit Purchase Plan';
 
+    // Edit can be the first modal opened. Install the handlers before any field is filled: the first install rebuilds term/payment (#1536).
+    setupRampScheduleHandlers();
+
     (document.getElementById('plan-id') as HTMLInputElement).value = backendPlan.id;
     (document.getElementById('plan-name') as HTMLInputElement).value = backendPlan.name;
     (document.getElementById('plan-description') as HTMLTextAreaElement).value = '';
@@ -1072,10 +1075,7 @@ async function editPlan(planId: string): Promise<boolean> {
     const rampRadio = document.querySelector<HTMLInputElement>(`input[name="ramp-schedule"][value="${rampValue}"]`);
     if (rampRadio) rampRadio.checked = true;
 
-    const customConfig = document.getElementById('custom-ramp-config');
-    if (customConfig) {
-      customConfig.classList.toggle('hidden', rampValue !== 'custom');
-    }
+    setCustomRampConfigVisible(rampValue === 'custom');
 
     if (rampValue === 'custom') {
       (document.getElementById('ramp-step-percent') as HTMLInputElement).value = String(rampSchedule.percent_per_step || 20);
@@ -1145,15 +1145,17 @@ export async function savePlan(e: Event): Promise<void> {
   // to 2. Mirrors the strict parse pattern from handleAddPurchases and settings.ts
   // validatePurchasingSettings (feedback_strict_int_parse, finding 11-M1).
   const rawTerm = Number((document.getElementById('plan-term') as HTMLSelectElement).value);
-  const rawCoverage = Number((document.getElementById('plan-coverage') as HTMLInputElement).value);
+  const coverageText = (document.getElementById('plan-coverage') as HTMLInputElement).value.trim();
+  // Number('') is 0, so an emptied field must not reach the range check as 0.
+  const rawCoverage = coverageText === '' ? NaN : Number(coverageText);
   const rawNotifyDays = Number((document.getElementById('plan-notify-days') as HTMLInputElement).value);
 
   if (!Number.isFinite(rawTerm) || !Number.isInteger(rawTerm) || rawTerm < 1) {
     showToast({ message: 'Term must be a valid whole number of years', kind: 'error' });
     return;
   }
-  if (!Number.isFinite(rawCoverage) || !Number.isInteger(rawCoverage) || rawCoverage < 0 || rawCoverage > 100) {
-    showToast({ message: 'Target Coverage must be a whole number between 0 and 100', kind: 'error' });
+  if (!Number.isFinite(rawCoverage) || !Number.isInteger(rawCoverage) || rawCoverage < 1 || rawCoverage > 100) {
+    showToast({ message: 'Target Coverage must be a whole number between 1 and 100', kind: 'error' });
     return;
   }
   if (!Number.isFinite(rawNotifyDays) || !Number.isInteger(rawNotifyDays) || rawNotifyDays < 1 || rawNotifyDays > 30) {
@@ -1512,6 +1514,7 @@ export function openCreatePlanModal(snapshot?: readonly api.Recommendation[]): v
 
   // Set up ramp schedule change handlers for dynamic plan name
   setupRampScheduleHandlers();
+  syncCustomRampConfigToSelection();
 
   // Wire live range validation on all five numeric inputs (#702).
   wirePlanRangeInputs();
@@ -1566,6 +1569,7 @@ export function openNewPlanModal(): void {
 
   // Set up ramp schedule change handlers for dynamic plan name
   setupRampScheduleHandlers();
+  syncCustomRampConfigToSelection();
 
   // Wire live range validation on all five numeric inputs (#702).
   wirePlanRangeInputs();
@@ -1640,12 +1644,15 @@ function updatePlanNameFromSchedule(): void {
 /**
  * Wire live range + integer-only validation on a plan numeric input.
  *
- * Registers `input` and `blur` event handlers that:
+ * Registers an `input` handler that:
  *   - reject non-integer values via the regex `^\d+$` (blocks scientific
  *     notation such as `1e+30` and decimal fractions)
  *   - show a sibling `.field-error` span when the value is out of [min, max]
  *     or non-integer, and hide it when the value is valid or the field is empty
  *   - set / clear `aria-invalid` for screen-reader accessibility
+ *
+ * It never rewrites the value: Save blurs the field first, so a clamp would
+ * save a number the user did not type (#1534). The Save handlers refuse instead.
  *
  * Idempotent: the `data-range-wired` attribute guards against re-registering
  * duplicate listeners when the modal is closed and reopened. The error span
@@ -1710,19 +1717,7 @@ function wireRangeInput(inputId: string, min: number, max: number): void {
     }
   };
 
-  const clampOnBlur = (): void => {
-    const raw = input.value.trim();
-    if (!integerPattern.test(raw) || raw === '') return;
-    const parsed = parseInt(raw, 10);
-    if (parsed < min || parsed > max) {
-      input.value = String(Math.min(max, Math.max(min, parsed)));
-      input.removeAttribute('aria-invalid');
-      error.classList.add('hidden');
-    }
-  };
-
   input.addEventListener('input', check);
-  input.addEventListener('blur', clampOnBlur);
 }
 
 /**
@@ -1731,7 +1726,7 @@ function wireRangeInput(inputId: string, min: number, max: number): void {
  * the create and edit flows.
  */
 function wirePlanRangeInputs(): void {
-  wireRangeInput('plan-coverage', 0, 100);
+  wireRangeInput('plan-coverage', 1, 100);
   wireRangeInput('ramp-step-percent', 1, 100);
   wireRangeInput('ramp-interval-days', 1, 365);
   wireRangeInput('plan-notify-days', 1, 30);
@@ -1755,10 +1750,7 @@ function setupRampScheduleHandlers(): void {
       updatePlanNameFromSchedule();
 
       // Show/hide custom config
-      const customConfig = document.getElementById('custom-ramp-config');
-      if (customConfig) {
-        customConfig.classList.toggle('hidden', radio.value !== 'custom');
-      }
+      setCustomRampConfigVisible(radio.value === 'custom');
     });
   });
 
@@ -1897,6 +1889,24 @@ function validateAndFixCombination(): void {
   if (!isValidCombination(provider, service, term, payment)) {
     // Invalid combination - update payment to first valid option
     updatePaymentOptionsForTerm();
+  }
+}
+
+function syncCustomRampConfigToSelection(): void {
+  const checked = document.querySelector<HTMLInputElement>('input[name="ramp-schedule"]:checked');
+  setCustomRampConfigVisible(checked?.value === 'custom');
+}
+
+/**
+ * Show or hide the custom ramp config. A hidden input is disabled so its value,
+ * which a preset fills with 0 days, is skipped by native validation instead of
+ * blocking Save on a control the user cannot reach (#1536).
+ */
+function setCustomRampConfigVisible(visible: boolean): void {
+  document.getElementById('custom-ramp-config')?.classList.toggle('hidden', !visible);
+  for (const id of ['ramp-step-percent', 'ramp-interval-days']) {
+    const input = document.getElementById(id) as HTMLInputElement | null;
+    if (input) input.disabled = !visible;
   }
 }
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -63,4 +64,37 @@ func TestMatchDuplicateInList(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMatchDuplicateInList_ReturnsTheMatchingRow covers what the removed
+// findDuplicatePendingExecution test pinned beyond the clause table: the scan
+// returns the matching row itself (not just "some row") from a mixed list,
+// and a candidate whose key cannot be derived is skipped without ending the
+// scan (#760).
+func TestMatchDuplicateInList_ReturnsTheMatchingRow(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	creator := "11111111-1111-1111-1111-111111111111"
+	recs := []config.RecommendationRecord{validRec()}
+	key := mustPurchaseIdempotencyKey(creator, recs, 100)
+	cand := func(id string, mut func(e *config.PurchaseExecution)) config.PurchaseExecution {
+		e := config.PurchaseExecution{
+			ExecutionID: id, Status: "pending", Source: common.PurchaseSourceWeb,
+			ScheduledDate: now.Add(-10 * time.Second), CreatedByUserID: &creator,
+			Recommendations: append([]config.RecommendationRecord(nil), recs...), CapacityPercent: 100,
+		}
+		mut(&e)
+		return e
+	}
+	list := []config.PurchaseExecution{
+		cand("other-count", func(e *config.PurchaseExecution) { e.Recommendations[0].Count = 99 }),
+		cand("undecodable", func(e *config.PurchaseExecution) { e.Recommendations[0].Details = json.RawMessage(`{"not":`) }),
+		cand("cli", func(e *config.PurchaseExecution) { e.Source = common.PurchaseSourceCLI }),
+		cand("the-dup", func(*config.PurchaseExecution) {}),
+	}
+	got := matchDuplicateInList(list, creator, key, now)
+	if assert.NotNil(t, got) {
+		assert.Equal(t, "the-dup", got.ExecutionID)
+	}
+	assert.Nil(t, matchDuplicateInList(list[:3], creator, key, now), "no candidate matches without the-dup")
 }

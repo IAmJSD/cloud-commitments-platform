@@ -172,6 +172,11 @@ func TestMarketplaceListCancelFailureRecordsEmptyAWSStateAsPending(t *testing.T)
 		cancelFn: func(_ context.Context, _ string) (ec2svc.MarketplaceListingResult, error) {
 			return ec2svc.MarketplaceListingResult{}, errors.New("RequestLimitExceeded")
 		},
+		// The read-back of the status fails too, so the listing is recorded
+		// as pending rather than with an empty state (issue #525).
+		describeFn: func(_ context.Context, _ string) (ec2svc.MarketplaceListingResult, error) {
+			return ec2svc.MarketplaceListingResult{}, errors.New("RequestLimitExceeded")
+		},
 	}
 	h := &Handler{config: &failFirstListingWriteStore{StoreInterface: store}, auth: newCompensationAuth(),
 		marketplaceEC2Factory: func(_ aws.Config) marketplaceEC2Client { return ec2 }}

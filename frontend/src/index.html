@@ -386,7 +386,19 @@
                 <section id="settings-section" class="card page-hero" role="tabpanel" aria-labelledby="admin-subtab-general">
                     <h2>Global Configuration</h2>
                     <p class="settings-description page-hero-description">Configure CUDly settings for commitment purchases across all cloud providers.</p>
-                    <div id="settings-loading" class="loading">Loading settings...</div>
+                    <!-- Issue #186: the same skeleton loadGlobalSettings shows, so the
+                         panel never flashes plain "Loading" text before the script runs. -->
+                    <div id="settings-loading" class="loading" aria-busy="true">
+                        <span class="sr-only skeleton-status" role="status">Loading…</span>
+                        <div class="skeleton-group" aria-hidden="true">
+                            <div class="skeleton skeleton-line"></div>
+                            <div class="skeleton skeleton-line"></div>
+                            <div class="skeleton skeleton-line"></div>
+                            <div class="skeleton skeleton-line"></div>
+                            <div class="skeleton skeleton-line"></div>
+                            <div class="skeleton skeleton-line skeleton-line-short"></div>
+                        </div>
+                    </div>
                     <form id="global-settings-form" class="settings-form hidden">
                         <fieldset class="settings-category">
                             <legend>General Settings</legend>
@@ -496,6 +508,7 @@
                     <fieldset class="settings-category" id="purchasing-global-defaults">
                         <legend>Global Purchase Defaults</legend>
                         <p class="settings-help">Changing these defaults will automatically update all compatible service settings below. Payment options map differently per provider: AWS uses no/partial/all upfront; Azure reservations support upfront or monthly; GCP commitments are billed monthly only.</p>
+                        <p class="settings-help" id="coverage-display-only-help">Coverage percentages in these settings (the target below, the Savings Plans cards and per-account overrides) only set the target the Dashboard measures against and scale its projected savings. They do not change how much CUDly buys: a purchase plan sizes each step by its own Target Coverage.</p>
                         <div class="setting-row">
                             <div class="setting-info">
                                 <label for="setting-default-term">Default Term</label>
@@ -521,10 +534,10 @@
                         </div>
                         <div class="setting-row">
                             <div class="setting-info">
-                                <label for="setting-default-coverage">Target Coverage (%)</label>
+                                <label for="setting-default-coverage">Dashboard Coverage Target (%)</label>
                             </div>
                             <div class="setting-input">
-                                <input type="number" id="setting-default-coverage" value="80" min="0" max="100" inputmode="decimal" autocomplete="off">
+                                <input type="number" id="setting-default-coverage" value="80" min="0" max="100" inputmode="decimal" autocomplete="off" aria-describedby="coverage-display-only-help">
                             </div>
                         </div>
                     </fieldset>
@@ -651,7 +664,7 @@
                                 <p class="service-default-hint">EC2, Fargate, Lambda — most flexible</p>
                                 <label>Term: <select id="aws-savings-plans-compute-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 <label>Payment: <select id="aws-savings-plans-compute-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                <label>Coverage %: <input type="number" id="aws-savings-plans-compute-coverage" min="0" max="100" value="80" inputmode="decimal" autocomplete="off"></label>
+                                <label>Dashboard coverage %: <input type="number" id="aws-savings-plans-compute-coverage" min="0" max="100" value="80" inputmode="decimal" autocomplete="off"></label>
                                 <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-compute-enabled" checked> Enabled</label>
                             </div>
                             <div class="service-default-card">
@@ -659,7 +672,7 @@
                                 <p class="service-default-hint">EC2 only, region-locked — deepest discount</p>
                                 <label>Term: <select id="aws-savings-plans-ec2instance-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 <label>Payment: <select id="aws-savings-plans-ec2instance-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                <label>Coverage %: <input type="number" id="aws-savings-plans-ec2instance-coverage" min="0" max="100" value="80" inputmode="decimal" autocomplete="off"></label>
+                                <label>Dashboard coverage %: <input type="number" id="aws-savings-plans-ec2instance-coverage" min="0" max="100" value="80" inputmode="decimal" autocomplete="off"></label>
                                 <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-ec2instance-enabled" checked> Enabled</label>
                             </div>
                             <div class="service-default-card">
@@ -667,7 +680,7 @@
                                 <p class="service-default-hint">SageMaker training/inference</p>
                                 <label>Term: <select id="aws-savings-plans-sagemaker-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 <label>Payment: <select id="aws-savings-plans-sagemaker-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                <label>Coverage %: <input type="number" id="aws-savings-plans-sagemaker-coverage" min="0" max="100" value="80" inputmode="decimal" autocomplete="off"></label>
+                                <label>Dashboard coverage %: <input type="number" id="aws-savings-plans-sagemaker-coverage" min="0" max="100" value="80" inputmode="decimal" autocomplete="off"></label>
                                 <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-sagemaker-enabled" checked> Enabled</label>
                             </div>
                             <div class="service-default-card">
@@ -675,7 +688,7 @@
                                 <p class="service-default-hint">Reserved for future AWS Database Savings Plans (currently not GA; defaults stored for forward-compatibility)</p>
                                 <label>Term: <select id="aws-savings-plans-database-term"><option value="1">1 Year</option><option value="3" selected>3 Years</option></select></label>
                                 <label>Payment: <select id="aws-savings-plans-database-payment"><option value="no-upfront">No Upfront</option><option value="partial-upfront">Partial</option><option value="all-upfront" selected>All Upfront</option></select></label>
-                                <label>Coverage %: <input type="number" id="aws-savings-plans-database-coverage" min="0" max="100" value="80" inputmode="decimal" autocomplete="off"></label>
+                                <label>Dashboard coverage %: <input type="number" id="aws-savings-plans-database-coverage" min="0" max="100" value="80" inputmode="decimal" autocomplete="off"></label>
                                 <label class="toggle-label"><input type="checkbox" id="aws-savings-plans-database-enabled" checked> Enabled</label>
                             </div>
                         </div>
@@ -821,6 +834,30 @@
                         </div>
                         <div id="gcp-accounts-list" class="accounts-list"></div>
                     </fieldset>
+
+                    <!-- Service override export/import (issue #9). Wired by
+                         modules/override-transfer.ts. -->
+                    <fieldset class="settings-category" id="accounts-override-transfer">
+                        <legend>Service Override Backup</legend>
+                        <p class="settings-description">Export every account's service overrides to back them up or copy them to another CUDly install, or import an export file. Rows are matched by account ID, then by provider and account number. Each row replaces that account's override for its service; overrides not in the file are not changed.</p>
+                        <div class="controls-bar override-transfer-controls">
+                            <button type="button" class="btn btn-small" id="override-export-json-btn">Export JSON</button>
+                            <button type="button" class="btn btn-small" id="override-export-csv-btn">Export CSV</button>
+                        </div>
+                        <div class="controls-bar override-transfer-controls">
+                            <label for="override-import-file">Import file:</label>
+                            <input type="file" id="override-import-file" accept=".json,.csv,application/json,text/csv">
+                            <label for="override-import-mode">Mode:</label>
+                            <select id="override-import-mode">
+                                <option value="strict" selected>All rows or none</option>
+                                <option value="best_effort">Skip rejected rows</option>
+                            </select>
+                            <button type="button" class="btn btn-small" id="override-import-preview-btn" disabled>Preview</button>
+                            <button type="button" class="btn btn-small btn-primary" id="override-import-apply-btn" disabled>Import</button>
+                        </div>
+                        <p id="override-import-status" class="help-text" role="status" aria-live="polite"></p>
+                        <div id="override-import-report" class="mt-3"></div>
+                    </fieldset>
                 </section>
 
                 <!-- User Management Section (Admin Only) -->
@@ -950,7 +987,7 @@
                                 </select>
                             </label>
                         </div>
-                        <label>Target Coverage (%): <input type="number" id="plan-coverage" value="80" min="0" max="100" inputmode="decimal" autocomplete="off"></label>
+                        <label>Target Coverage (%): <input type="number" id="plan-coverage" value="80" min="1" max="100" inputmode="decimal" autocomplete="off"></label>
                     </div>
 
                     <div class="form-section">
@@ -1277,7 +1314,7 @@
                             <option value="all-upfront">All Upfront</option>
                         </select>
                     </label>
-                    <label>Coverage (%):
+                    <label>Dashboard coverage (%):
                         <input type="number" id="override-coverage" min="0" max="100" step="1" placeholder="Inherit (use global default)" inputmode="decimal" autocomplete="off">
                     </label>
 

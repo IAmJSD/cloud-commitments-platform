@@ -710,3 +710,14 @@ tr.override-disabled {
         overflow-x: auto;
     }
 }
+
+/* Service override backup panel (issue #9): keep the export and import
+   controls grouped at the start of the row instead of the controls-bar's
+   space-between spread, and keep account IDs on one line. */
+.override-transfer-controls {
+    justify-content: flex-start;
+}
+
+.override-transfer-account {
+    white-space: nowrap;
+}

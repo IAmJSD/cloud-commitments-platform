@@ -45,7 +45,7 @@ func (r *RecommendationRecord) ComputeIdentity() (ComputeIdentity, error) {
 // "multi-az", Azure SQL "zoneRedundant" / "none") from the rec's Details
 // blob, VERBATIM. Single-AZ and Multi-AZ RDS reservations are different
 // offerings with different prices, yet share every other identity field
-// (issue #408). It mirrors the generated az_config column of migration 000140
+// (issue #408). It mirrors the generated az_config column of migration 000152
 // (COALESCE(payload->'details'->>'az_config', ”)) and is pinned to it by the
 // shared vectors in TestDetailsAZConfig_Vectors: absent Details, JSON null, a
 // missing key and a null value all yield "". Only DatabaseDetails carries the
@@ -93,14 +93,54 @@ func RecIdentityKey(rec *RecommendationRecord) (string, error) {
 }
 
 // SuppressionVariant is the rec's availability zone, platform and tenancy as
-// the purchase suppression key carries them (issue #816): the same AZ field and
-// the same Details read (ComputeIdentity) as RecIdentityKey, so the write side
-// (BuildSuppressions) and the read side (the scheduler's subtraction pass)
-// cannot drift from the identity key or from each other.
+// the purchase suppression key carries them (issue #816): the platform and
+// tenancy come from the same Details read (ComputeIdentity) as RecIdentityKey,
+// so the write side (BuildSuppressions) and the read side (the scheduler's
+// subtraction pass) cannot drift from it or from each other. For AWS EC2 only,
+// legacy tenancy "shared" is canonicalised to "default" and an AZ stored only
+// in Details is used when the AZ field is empty (issue #1232).
 func (r *RecommendationRecord) SuppressionVariant() (SuppressionVariant, error) {
 	ci, err := r.ComputeIdentity()
 	if err != nil {
 		return SuppressionVariant{}, err
 	}
-	return SuppressionVariant{AvailabilityZone: r.AvailabilityZone, Platform: ci.Platform, Tenancy: ci.Tenancy}, nil
+	v := SuppressionVariant{AvailabilityZone: r.AvailabilityZone, Platform: ci.Platform, Tenancy: ci.Tenancy}
+	if isAWSEC2(r.Provider, r.Service) {
+		v.Tenancy = canonicalSuppressionTenancy(v.Tenancy)
+		if v.AvailabilityZone == "" {
+			// Rows saved 2026-10-09..12 hold the zone only in Details (#1232).
+			v.AvailabilityZone = r.detailsAvailabilityZone()
+		}
+	}
+	return v, nil
+}
+
+// isAWSEC2 is the scope of the legacy-shape canonicalisation: only AWS EC2
+// ever stored tenancy "shared" or the zone only in Details.
+func isAWSEC2(provider, service string) bool {
+	return provider == "aws" && CanonicalSuppressionService(provider, service) == "compute"
+}
+
+// canonicalSuppressionTenancy maps the pre-2026-05-20 EC2 tenancy spelling
+// "shared" to today's "default" so old and new suppressions and recs match.
+// common.NormalizeTenancyName is not used: it also case-folds and maps every
+// unknown value to "", which would make distinct unknown tenancies match.
+func canonicalSuppressionTenancy(t string) string {
+	if strings.EqualFold(strings.TrimSpace(t), "shared") {
+		return "default"
+	}
+	return t
+}
+
+// detailsAvailabilityZone reads the zonal AZ from Details; "" when absent or
+// unreadable, trimmed like the other Details-AZ readers. A non-string zone is
+// treated as absent (regional), which can under-suppress; no producer writes one.
+func (r *RecommendationRecord) detailsAvailabilityZone() string {
+	var d struct {
+		AvailabilityZone string `json:"availability_zone"`
+	}
+	if json.Unmarshal(r.Details, &d) != nil {
+		return ""
+	}
+	return strings.TrimSpace(d.AvailabilityZone)
 }

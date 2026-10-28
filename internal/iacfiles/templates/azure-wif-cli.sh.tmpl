@@ -80,14 +80,26 @@ echo "In CUDly, set azure_auth_mode = workload_identity_federation. No key or se
 {{- if .CUDlyAPIURL}}
 echo ""
 echo "Registering account with CUDly..."
-CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-{{.ContactEmail}}}"
+# The pre-filled email is assigned on its own line, not as a ${VAR:-default},
+# so a "}" in it cannot close the expansion early (#958, #1436).
+CONTACT_EMAIL="${CUDLY_CONTACT_EMAIL:-}"
+[ -n "$CONTACT_EMAIL" ] || CONTACT_EMAIL="{{.ContactEmail}}"
 ACCOUNT_NAME="${CUDLY_ACCOUNT_NAME:-Azure ${SUBSCRIPTION_ID}}"
+# json_escape prints $1 escaped for use inside a JSON string: \ and " are
+# backslash-escaped and a tab becomes \t. CR and LF are not handled: the
+# email cannot hold them (net/mail rejects them), and CUDLY_ACCOUNT_NAME is
+# set by the operator running this script.
+json_escape() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e "s/$(printf '\t')/\\\\t/g"
+}
+CONTACT_EMAIL_JSON=$(json_escape "$CONTACT_EMAIL")
+ACCOUNT_NAME_JSON=$(json_escape "$ACCOUNT_NAME")
 read -r -d '' PAYLOAD <<JSON || true
 {
   "provider": "azure",
   "external_id": "${SUBSCRIPTION_ID}",
-  "account_name": "${ACCOUNT_NAME}",
-  "contact_email": "${CONTACT_EMAIL}",
+  "account_name": "${ACCOUNT_NAME_JSON}",
+  "contact_email": "${CONTACT_EMAIL_JSON}",
   "azure_auth_mode": "workload_identity_federation",
   "azure_subscription_id": "${SUBSCRIPTION_ID}",
   "azure_tenant_id": "${TENANT_ID}",

@@ -60,14 +60,15 @@ type aggregateData struct {
 	commitment        float64
 	commitmentUnknown bool
 	// usage accumulates the recurring (monthly) cost of the commitments in this
-	// bucket as the covered-usage proxy. usageKnown stays false until at least
-	// one contributing row carried a non-nil MonthlyCost, so a bucket made up
-	// entirely of all-upfront commitments writes NULL usage rather than 0
+	// bucket as the covered-usage proxy. usageUnknown is set as soon as one
+	// contributing row has a nil MonthlyCost, exactly like commitmentUnknown,
+	// so a bucket with any all-upfront commitment writes NULL usage rather
+	// than a partial sum marked as known (issue #1423). A known 0 stays 0
 	// (feedback_nullable_not_zero).
-	usage      float64
-	usageKnown bool
-	savings    float64
-	count      int
+	usage        float64
+	usageUnknown bool
+	savings      float64
+	count        int
 }
 
 // aggKey is the bucket identity. cloudAccountID is dereferenced (or "" when
@@ -158,7 +159,7 @@ func aggregatePurchases(ctx context.Context, purchases []config.PurchaseHistoryR
 		}
 		activePurchases++
 
-		commitmentType := commitmentTypeFor(p.Service)
+		commitmentType := commitmentTypeFor(p.Provider, p.Service)
 		key := aggKey(p, commitmentType)
 
 		agg := serviceMap[key]
@@ -185,12 +186,13 @@ func aggregatePurchases(ctx context.Context, purchases []config.PurchaseHistoryR
 		} else {
 			agg.commitment += *p.UpfrontCost / (float64(p.Term) * MonthsPerYear)
 		}
-		// H2: real covered usage from the recurring monthly cost when present.
-		// Nil MonthlyCost (e.g. AWS all-upfront) contributes nothing and leaves
-		// usage unknown rather than implicitly $0.
-		if p.MonthlyCost != nil {
+		// H2: real covered usage from the recurring monthly cost. One nil
+		// MonthlyCost (e.g. AWS all-upfront) makes the whole bucket's usage
+		// unknown, rather than implicitly $0 for that row.
+		if p.MonthlyCost == nil {
+			agg.usageUnknown = true
+		} else {
 			agg.usage += *p.MonthlyCost
-			agg.usageKnown = true
 		}
 		agg.count++
 	}
@@ -198,17 +200,8 @@ func aggregatePurchases(ctx context.Context, purchases []config.PurchaseHistoryR
 	return serviceMap, activePurchases, skippedBadTerm, nil
 }
 
-// commitmentTypeFor maps a service to its commitment_type. SavingsPlans is the
-// only Savings Plan service today; everything else is a Reserved Instance.
-func commitmentTypeFor(service string) string {
-	if service == "SavingsPlans" {
-		return "SavingsPlan"
-	}
-	return "RI"
-}
-
 // buildSnapshots converts the aggregation map into snapshot rows. total_usage is
-// nil when no contributing row carried a recurring cost; coverage_percentage is
+// nil when any contributing row lacks a recurring cost; coverage_percentage is
 // nil because purchase_history carries no on-demand baseline to derive it from
 // (writing a placeholder 0 would corrupt AVG, per feedback_nullable_not_zero).
 func buildSnapshots(serviceMap map[string]*aggregateData, now time.Time) []SavingsSnapshot {
@@ -219,7 +212,7 @@ func buildSnapshots(serviceMap map[string]*aggregateData, now time.Time) []Savin
 			commitment = &agg.commitment
 		}
 		var usage *float64
-		if agg.usageKnown {
+		if !agg.usageUnknown {
 			u := agg.usage
 			usage = &u
 		}

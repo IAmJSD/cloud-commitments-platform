@@ -37,6 +37,22 @@ Metadata:
           - LogRetentionPeriod
           - ExecutionFrequency
 
+      - Label:
+          default: Scheduled Tasks
+        Parameters:
+          - EnableFinalizeRevocationsSchedule
+          - FinalizeRevocationsSchedule
+          - EnableAnalyticsCollectSchedule
+          - AnalyticsCollectSchedule
+          - EnableReapStuckPurchasesSchedule
+          - ReapStuckPurchasesSchedule
+          - EnableFireScheduledPurchasesSchedule
+          - FireScheduledPurchasesSchedule
+          - EnableSendNotificationsSchedule
+          - SendNotificationsSchedule
+          - EnableCleanupSchedule
+          - CleanupSchedule
+
     ParameterLabels:
       EmailAddress:
         default: Notification email address
@@ -140,6 +156,103 @@ Parameters:
     Default: "rate(1 day)"
     Description: How often to check for new recommendations
 
+  # Scheduled server tasks (#712). Defaults and cadences match the Terraform
+  # Lambda module (terraform/modules/compute/aws/lambda/variables.tf) except
+  # where noted. Opt-in tasks start purchases or retry them, so each stack
+  # enables them deliberately.
+  EnableFinalizeRevocationsSchedule:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Run the finalize_revocations task on a schedule (idempotent audit repair of revoked purchases, plus the RI Marketplace listing poll, which has no schedule of its own; disabling this also stops recording listing sales and proceeds)
+
+  FinalizeRevocationsSchedule:
+    Type: String
+    Default: "rate(1 hour)"
+    Description: EventBridge schedule expression for finalize_revocations
+
+  EnableAnalyticsCollectSchedule:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Run the analytics_collect task on a schedule (savings snapshot, partition maintenance, retention and view refresh)
+
+  AnalyticsCollectSchedule:
+    Type: String
+    Default: "rate(1 day)"
+    Description: EventBridge schedule expression for analytics_collect
+
+  EnableReapStuckPurchasesSchedule:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: >-
+      Run the reap_stuck_purchases task on a schedule. It marks executions stuck
+      in running (after 10 minutes) or approved (after 1h20m) as failed. Off by
+      default on this stack, unlike the Terraform Lambda module: the
+      PurchaseCheck rule runs process_scheduled_purchases only daily, so an
+      approved execution stranded by a crash would be failed before the next
+      process run re-drives it (#894).
+
+  ReapStuckPurchasesSchedule:
+    Type: String
+    Default: "rate(5 minutes)"
+    Description: EventBridge schedule expression for reap_stuck_purchases
+
+  EnableFireScheduledPurchasesSchedule:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: >-
+      Run the fire_scheduled_purchases task on a schedule. It executes
+      purchases in status scheduled whose scheduled time has passed (the
+      delayed auto-approve path), so it makes real purchases. Opt-in.
+
+  FireScheduledPurchasesSchedule:
+    Type: String
+    Default: "rate(15 minutes)"
+    Description: EventBridge schedule expression for fire_scheduled_purchases
+
+  EnableSendNotificationsSchedule:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Run the send_notifications task on a schedule (upcoming-purchase emails). Opt-in.
+
+  SendNotificationsSchedule:
+    Type: String
+    Default: "rate(1 day)"
+    Description: EventBridge schedule expression for send_notifications
+
+  EnableCleanupSchedule:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: >-
+      Run the server cleanup task on a schedule. Opt-in. It deletes expired
+      sessions and, via CleanupOldExecutions(30), purchase executions that are
+      completed with scheduled_date older than 30 days, canceled with
+      updated_at older than 30 days, or in a status outside failed/canceled
+      with expires_at older than 30 days. The first run deletes the whole
+      backlog, so export any history you want to keep first.
+
+  CleanupSchedule:
+    Type: String
+    Default: "rate(1 day)"
+    Description: EventBridge schedule expression for cleanup
+
   CrossAccountTargetAccountIds:
     Type: CommaDelimitedList
     Default: ""
@@ -189,6 +302,36 @@ Conditions:
               - ""
               - Ref: CrossAccountTargetAccountIds
           - ""
+
+  ScheduleFinalizeRevocations:
+    Fn::Equals:
+      - Ref: EnableFinalizeRevocationsSchedule
+      - "true"
+
+  ScheduleAnalyticsCollect:
+    Fn::Equals:
+      - Ref: EnableAnalyticsCollectSchedule
+      - "true"
+
+  ScheduleReapStuckPurchases:
+    Fn::Equals:
+      - Ref: EnableReapStuckPurchasesSchedule
+      - "true"
+
+  ScheduleFireScheduledPurchases:
+    Fn::Equals:
+      - Ref: EnableFireScheduledPurchasesSchedule
+      - "true"
+
+  ScheduleSendNotifications:
+    Fn::Equals:
+      - Ref: EnableSendNotificationsSchedule
+      - "true"
+
+  ScheduleCleanup:
+    Fn::Equals:
+      - Ref: EnableCleanupSchedule
+      - "true"
 
 Resources:
   # =============================================================================
@@ -669,6 +812,7 @@ Resources:
           - GET
           - POST
           - PUT
+          - PATCH
           - DELETE
         AllowHeaders:
           - Content-Type
@@ -732,6 +876,144 @@ Resources:
       FunctionName: !Ref LambdaFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt PurchaseCheckRule.Arn
+
+  # Remaining scheduled server tasks (#712), one rule and invoke permission
+  # each, switched by the Enable*Schedule parameters. Name suffixes are at most
+  # as long as "-ScheduledExecution", so they fit EventBridge's 64-character
+  # limit for any stack name the existing rules accept. Retries stay at the
+  # EventBridge default: a re-run is safe under the server's per-task advisory
+  # lock and row compare-and-swap.
+  FinalizeRevocationsRule:
+    Type: AWS::Events::Rule
+    Condition: ScheduleFinalizeRevocations
+    Properties:
+      Name: !Sub "${AWS::StackName}-Finalize"
+      Description: Scheduled finalize_revocations task
+      ScheduleExpression: !Ref FinalizeRevocationsSchedule
+      State: ENABLED
+      Targets:
+        - Id: LambdaTarget
+          Arn: !GetAtt LambdaFunction.Arn
+          Input: '{"action": "finalize_revocations"}'
+
+  FinalizeRevocationsPermission:
+    Type: AWS::Lambda::Permission
+    Condition: ScheduleFinalizeRevocations
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LambdaFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt FinalizeRevocationsRule.Arn
+
+  AnalyticsCollectRule:
+    Type: AWS::Events::Rule
+    Condition: ScheduleAnalyticsCollect
+    Properties:
+      Name: !Sub "${AWS::StackName}-AnalyticsCollect"
+      Description: Scheduled analytics_collect task
+      ScheduleExpression: !Ref AnalyticsCollectSchedule
+      State: ENABLED
+      Targets:
+        - Id: LambdaTarget
+          Arn: !GetAtt LambdaFunction.Arn
+          Input: '{"action": "analytics_collect"}'
+
+  AnalyticsCollectPermission:
+    Type: AWS::Lambda::Permission
+    Condition: ScheduleAnalyticsCollect
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LambdaFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt AnalyticsCollectRule.Arn
+
+  ReapStuckPurchasesRule:
+    Type: AWS::Events::Rule
+    Condition: ScheduleReapStuckPurchases
+    Properties:
+      Name: !Sub "${AWS::StackName}-ReapStuck"
+      Description: Scheduled reap_stuck_purchases task
+      ScheduleExpression: !Ref ReapStuckPurchasesSchedule
+      State: ENABLED
+      Targets:
+        - Id: LambdaTarget
+          Arn: !GetAtt LambdaFunction.Arn
+          Input: '{"action": "reap_stuck_purchases"}'
+
+  ReapStuckPurchasesPermission:
+    Type: AWS::Lambda::Permission
+    Condition: ScheduleReapStuckPurchases
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LambdaFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ReapStuckPurchasesRule.Arn
+
+  FireScheduledPurchasesRule:
+    Type: AWS::Events::Rule
+    Condition: ScheduleFireScheduledPurchases
+    Properties:
+      Name: !Sub "${AWS::StackName}-FireScheduled"
+      Description: Scheduled fire_scheduled_purchases task
+      ScheduleExpression: !Ref FireScheduledPurchasesSchedule
+      State: ENABLED
+      Targets:
+        - Id: LambdaTarget
+          Arn: !GetAtt LambdaFunction.Arn
+          Input: '{"action": "fire_scheduled_purchases"}'
+
+  FireScheduledPurchasesPermission:
+    Type: AWS::Lambda::Permission
+    Condition: ScheduleFireScheduledPurchases
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LambdaFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt FireScheduledPurchasesRule.Arn
+
+  SendNotificationsRule:
+    Type: AWS::Events::Rule
+    Condition: ScheduleSendNotifications
+    Properties:
+      Name: !Sub "${AWS::StackName}-SendNotifications"
+      Description: Scheduled send_notifications task
+      ScheduleExpression: !Ref SendNotificationsSchedule
+      State: ENABLED
+      Targets:
+        - Id: LambdaTarget
+          Arn: !GetAtt LambdaFunction.Arn
+          Input: '{"action": "send_notifications"}'
+
+  SendNotificationsPermission:
+    Type: AWS::Lambda::Permission
+    Condition: ScheduleSendNotifications
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LambdaFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SendNotificationsRule.Arn
+
+  CleanupRule:
+    Type: AWS::Events::Rule
+    Condition: ScheduleCleanup
+    Properties:
+      Name: !Sub "${AWS::StackName}-Cleanup"
+      Description: Scheduled cleanup task
+      ScheduleExpression: !Ref CleanupSchedule
+      State: ENABLED
+      Targets:
+        - Id: LambdaTarget
+          Arn: !GetAtt LambdaFunction.Arn
+          Input: '{"action": "cleanup"}'
+
+  CleanupPermission:
+    Type: AWS::Lambda::Permission
+    Condition: ScheduleCleanup
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LambdaFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CleanupRule.Arn
 
   # =============================================================================
   # SNS Topic for Notifications

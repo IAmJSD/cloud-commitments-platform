@@ -53,8 +53,8 @@ export interface AnalyticsTrendsResponse {
 }
 
 export interface AnalyticsTrendsFilter {
-  /** Top-bar account chip (cloud_accounts UUID); omitted means all accessible. */
-  accountID?: string;
+  /** Selected cloud_accounts UUIDs, sent as account_ids; empty or omitted means all accessible. */
+  accountIDs?: string[];
   /** Narrows by_service server-side; omitted means every provider. */
   provider?: string;
   /** RFC 3339 window bounds. The backend caps the window at 366 days. */
@@ -68,7 +68,7 @@ export interface AnalyticsTrendsFilter {
  */
 export async function getAnalyticsTrends(filter: AnalyticsTrendsFilter = {}): Promise<AnalyticsTrendsResponse> {
   const params = new URLSearchParams();
-  if (filter.accountID) params.set('account_id', filter.accountID);
+  if (filter.accountIDs && filter.accountIDs.length > 0) params.set('account_ids', filter.accountIDs.join(','));
   if (filter.provider) params.set('provider', filter.provider);
   if (filter.start) params.set('start', filter.start);
   if (filter.end) params.set('end', filter.end);

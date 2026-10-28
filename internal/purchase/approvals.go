@@ -34,9 +34,10 @@ const directExecuteSkipReason = "direct-execute permission"
 
 // ApproveExecution is the token-authenticated approve entry point used by
 // the legacy email-link flow and the SQS approve worker. After validating
-// the approval token it hands off to ApproveAndExecute, which performs the
-// atomic status transition, runs the AWS purchase synchronously, and mints
-// the fresh revocation token returned here.
+// the approval token it hands off to the ApproveAndExecute funnel
+// (transitionApproveAndExecute), which performs the atomic status transition
+// with the token pinned inside it, runs the AWS purchase synchronously, and
+// mints the fresh revocation token returned here.
 //
 // actor carries the email of the operator who triggered the approval
 // (session-authed click on the HTTP path; verified actor_email on the SQS
@@ -47,26 +48,31 @@ const directExecuteSkipReason = "direct-execute permission"
 // check is the caller's ClaimedRowCheck, run against the claimed row before
 // any provider call (issue #415); the SQS approve worker passes nil.
 //
-// Returns the raw revocation token minted by ApproveAndExecute on success
-// (see that function's doc comment for why this must be a return value
-// rather than something the caller re-fetches from the DB). Empty on
-// failure, and best-effort empty if the mint itself failed after an
-// otherwise-successful approve.
-func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, actor string, check ClaimedRowCheck) (string, error) {
+// Returns the same row and token as ApproveAndExecute (issue #532): the row
+// carries the run's final status, also on an execution error, and is nil when
+// the run never started (bad token, orphan, 4-eyes denial, lost claim), so the
+// caller can tell a refusal from a provider failure after the claim. The raw
+// revocation token minted on success is a return value rather than something
+// the caller re-fetches from the DB (see transitionApproveAndExecute). It is
+// empty on failure, and best-effort empty if the mint itself failed after an
+// otherwise-successful approve. A partially_completed run returns its token
+// together with its error, so a non-empty token with an error means part of
+// the purchase committed and is revocable.
+func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, actor string, check ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[%s]: ApproveExecution entry (auth=token actor=%q)", executionID, maskActor(actor))
 
 	execution, err := m.config.GetExecutionByID(ctx, executionID)
 	if errors.Is(err, config.ErrNotFound) {
-		return "", fmt.Errorf("execution not found: %s", executionID)
+		return nil, "", fmt.Errorf("execution not found: %s", executionID)
 	}
 	if err != nil {
-		return "", fmt.Errorf("failed to get execution: %w", err)
+		return nil, "", fmt.Errorf("failed to get execution: %w", err)
 	}
 
 	// Validate token and TTL (Finding #4 + issue #397).
 	if tokErr := ValidateApprovalToken(execution, token); tokErr != nil {
-		return "", tokErr
+		return nil, "", tokErr
 	}
 
 	// Preflight guard (issue #609): reject non-AWS orphan executions before
@@ -74,12 +80,15 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 	if checkErr := OrphanExecutionError(execution); checkErr != nil {
 		logging.Errorf("purchase[%s]: ApproveExecution preflight rejected after %s: %v",
 			executionID, time.Since(t0), checkErr)
-		return "", checkErr
+		return nil, "", checkErr
 	}
 
 	// Token/SQS path: no authenticated session UUID is available, so the
 	// transition is recorded as system-initiated (transitioned_by = NULL).
-	_, revocationToken, err := m.ApproveAndExecute(ctx, executionID, actor, nil, check)
+	// The token check above read a snapshot; the claim pins the same token
+	// inside its status CAS so a re-notification that rotated it since cannot
+	// win the claim with the old one (issue #1190).
+	final, revocationToken, err := m.transitionApproveAndExecute(ctx, executionID, actor, nil, []string{"pending", "notified"}, "", token, check)
 	if err != nil {
 		logging.Errorf("purchase[%s]: ApproveExecution (token path) failed after %s: %v",
 			executionID, time.Since(t0), err)
@@ -87,7 +96,7 @@ func (m *Manager) ApproveExecution(ctx context.Context, executionID, token, acto
 		logging.Infof("purchase[%s]: ApproveExecution (token path) completed in %s",
 			executionID, time.Since(t0))
 	}
-	return revocationToken, err
+	return final, revocationToken, err
 }
 
 // maskActor masks an actor email/username for safe log emission.
@@ -98,12 +107,8 @@ func maskActor(actor string) string {
 	if actor == "" {
 		return "<anon>"
 	}
-	if at := len(actor) - 1; at >= 0 {
-		for i, c := range actor {
-			if c == '@' {
-				return "***" + actor[i:]
-			}
-		}
+	if at := strings.Index(actor, "@"); at >= 0 {
+		return "***" + actor[at:]
 	}
 	// Not an email address -- log only the last 4 chars (e.g. a username).
 	if len(actor) > 4 {
@@ -325,7 +330,8 @@ func (m *Manager) checkDifferentApprover(ctx context.Context, executionID string
 // synchronously. Callers MUST have already authorized the actor — this
 // method does no RBAC or token validation; it is shared between:
 //
-//   - ApproveExecution (token/SQS path: token validated by the caller)
+//   - ApproveExecution (token/SQS path: token validated by the caller and
+//     pinned inside the CAS; it calls transitionApproveAndExecute directly)
 //   - approvePurchaseViaSession (session path: RBAC validated by the caller)
 //   - directExecutePurchase (execute_mode="direct": RBAC validated by the caller)
 //
@@ -340,7 +346,7 @@ func (m *Manager) checkDifferentApprover(ctx context.Context, executionID string
 // error; it is nil when the run never started. check runs against the claimed
 // row before any provider call; see ClaimedRowCheck.
 func (m *Manager) ApproveAndExecute(ctx context.Context, executionID, actor string, transitionedBy *string, check ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
-	return m.transitionApproveAndExecute(ctx, executionID, actor, transitionedBy, []string{"pending", "notified"}, "", check)
+	return m.transitionApproveAndExecute(ctx, executionID, actor, transitionedBy, []string{"pending", "notified"}, "", "", check)
 }
 
 // DirectExecute is ApproveAndExecute for a session with the direct-execute
@@ -348,7 +354,7 @@ func (m *Manager) ApproveAndExecute(ctx context.Context, executionID, actor stri
 // executed_* audit fields once the CAS has won, so a refused or lost direct
 // execute leaves no executed_at on a row that never ran.
 func (m *Manager) DirectExecute(ctx context.Context, executionID, actor string, transitionedBy *string, check ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
-	return m.transitionApproveAndExecute(ctx, executionID, actor, transitionedBy, []string{"pending", "notified"}, directExecuteSkipReason, check)
+	return m.transitionApproveAndExecute(ctx, executionID, actor, transitionedBy, []string{"pending", "notified"}, directExecuteSkipReason, "", check)
 }
 
 // RunPlannedPurchaseNow lets an operator force a scheduled purchase (pending
@@ -372,7 +378,7 @@ func (m *Manager) DirectExecute(ctx context.Context, executionID, actor string, 
 // on an execution error; it is nil when the run never started. check runs
 // against the claimed row before any provider call; see ClaimedRowCheck.
 func (m *Manager) RunPlannedPurchaseNow(ctx context.Context, executionID, actor string, transitionedBy *string, check ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
-	return m.transitionApproveAndExecute(ctx, executionID, actor, transitionedBy, []string{"pending", "notified", "paused"}, runNowSkipReason, check)
+	return m.transitionApproveAndExecute(ctx, executionID, actor, transitionedBy, []string{"pending", "notified", "paused"}, runNowSkipReason, "", check)
 }
 
 // transitionApproveAndExecute is the shared body behind ApproveAndExecute
@@ -383,20 +389,28 @@ func (m *Manager) RunPlannedPurchaseNow(ctx context.Context, executionID, actor 
 // gate being reimplemented (or skipped) at a second call site.
 //
 // Returns the raw revocation token minted on a successful execute, or ""
-// if the (best-effort) mint failed. Every caller emails a "purchase
-// executed, revoke here" link, and since only the token's hash is stored
-// (issue #103) a DB re-read can never yield a raw, emailable value, so the
-// rotation lives here, in the one funnel all approve paths share.
+// if the (best-effort) mint failed. A partially_completed run also gets one,
+// returned alongside its error (see IsCommittedPartialRun, issue #532).
+// Every caller emails a "purchase executed, revoke here" link, and since
+// only the token's hash is stored (issue #103) a DB re-read can never yield
+// a raw, emailable value, so the rotation lives here, in the one funnel all
+// approve paths share.
 //
 // A non-empty skipReason stamps the executed_* audit fields once the CAS wins.
-// The returned row is nil when the CAS was never won.
+// The returned row is nil when the CAS was never won, or when the audit stamp
+// found the claim already lost (nothing is bought then; issue #835).
+//
+// A non-empty approvalToken (ApproveExecution only) is pinned inside the CAS:
+// a token rotated or expired since the caller validated it refuses the claim
+// with config.ErrApprovalTokenChanged and leaves the row untouched (issue
+// #1190). Every other caller passes "".
 //
 // check runs against the row the CAS returned, which is the row
 // executeAndFinalize buys, before any audit stamp or provider call (issue
 // #415). A refusal fails that row before submission (status "failed",
 // no_submission set, a plan row's suppressions released) and returns it with
 // an error satisfying errors.Is(err, ErrClaimedRowRefused).
-func (m *Manager) transitionApproveAndExecute(ctx context.Context, executionID, actor string, transitionedBy *string, fromStatuses []string, skipReason string, check ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
+func (m *Manager) transitionApproveAndExecute(ctx context.Context, executionID, actor string, transitionedBy *string, fromStatuses []string, skipReason, approvalToken string, check ClaimedRowCheck) (*config.PurchaseExecution, string, error) {
 	t0 := time.Now()
 	logging.Infof("purchase[%s]: transitionApproveAndExecute starting (actor=%q, from=%v)", executionID, maskActor(actor), fromStatuses)
 
@@ -419,7 +433,7 @@ func (m *Manager) transitionApproveAndExecute(ctx context.Context, executionID, 
 	// executor (SQS, cron, re-drive, scheduler) can run this row, and there is
 	// no window where the row sits "approved" with a stale copy in flight
 	// (issue #829). A lost CAS surfaces ErrExecutionNotInExpectedStatus.
-	updated, err := m.claimAndCheck(ctx, executionID, fromStatuses, transitionedBy, check, t0)
+	updated, err := m.claimAndCheck(ctx, executionID, fromStatuses, transitionedBy, approvalToken, check, t0)
 	if err != nil {
 		return updated, "", err
 	}
@@ -437,32 +451,54 @@ func (m *Manager) transitionApproveAndExecute(ctx context.Context, executionID, 
 		updated.ApprovedBy = &a
 	}
 	if actor != "" || skipReason != "" {
-		if saveErr := m.config.SaveExecutionIfStatus(ctx, updated, executorOwnedStatuses); saveErr != nil {
-			// Attribution is best-effort once the atomic flip has landed --
-			// dropping these audit fields must not stop the purchase from firing.
-			// Log loudly so the audit gap is visible.
-			logging.Errorf("AUDIT GAP: failed to stamp approval audit fields on %s: %v", executionID, saveErr)
+		// Guarded on "running". A store error stays best-effort, but a lost
+		// guard means the claim is gone, so nothing is bought (issue #835).
+		if stampErr := m.stampClaimedAudit(ctx, updated, "approval audit fields"); stampErr != nil {
+			return nil, "", stampErr
 		}
 	}
 
 	logging.Infof("purchase[%s]: executing purchase synchronously", executionID)
+	revocationToken, execErr := m.runClaimedAndMint(ctx, updated, t0)
+	return updated, revocationToken, execErr
+}
+
+// IsCommittedPartialRun reports whether an execute call that returned row and
+// err ended partially_completed with that status saved: some commitments were
+// bought, so the run is revocable and its executed email must go out like a
+// completed run's (issue #532). An audit loss is excluded: the stored row is
+// still "running", whatever the returned row says.
+func IsCommittedPartialRun(row *config.PurchaseExecution, err error) bool {
+	return err != nil && row != nil && row.Status == config.StatusPartiallyCompleted && !errors.Is(err, config.ErrAuditLoss)
+}
+
+// runClaimedAndMint runs the claimed row and, when the run committed anything
+// (completed, or a saved partially_completed), mints its revocation token. It
+// returns the raw token ("" when nothing committed or the best-effort mint
+// failed) and the run's error, which a partial run keeps.
+func (m *Manager) runClaimedAndMint(ctx context.Context, updated *config.PurchaseExecution, t0 time.Time) (string, error) {
+	executionID := updated.ExecutionID
 	execErr := m.executeAndFinalize(ctx, updated)
 	if execErr != nil {
 		logging.Errorf("purchase[%s]: transitionApproveAndExecute failed after %s: %v", executionID, time.Since(t0), execErr)
-		return updated, "", execErr
+		if !IsCommittedPartialRun(updated, execErr) {
+			return "", execErr
+		}
+	} else {
+		logging.Infof("purchase[%s]: transitionApproveAndExecute completed in %s", executionID, time.Since(t0))
 	}
-	logging.Infof("purchase[%s]: transitionApproveAndExecute completed in %s", executionID, time.Since(t0))
 
-	// Mint a fresh revocation token now that the purchase has committed. The
-	// pre-approve approval token must not double as the revocation token: on
-	// the token path it was just consumed to authorize this very approve
+	// Mint a fresh revocation token now that the purchase has committed, in
+	// full or in part (a partially_completed row is revocable, issue #532).
+	// The pre-approve approval token must not double as the revocation token:
+	// on the token path it was just consumed to authorize this very approve
 	// action, and on every path its raw value is no longer recoverable once
 	// hashed at rest (issue #103). See rotateApprovalToken's doc comment.
 	revocationToken, mintErr := m.rotateApprovalToken(ctx, updated, config.RevocationWindow)
 	if mintErr != nil {
 		logging.Warnf("purchase[%s]: transitionApproveAndExecute: revocation token mint failed (best-effort): %v", executionID, mintErr)
 	}
-	return updated, revocationToken, nil
+	return revocationToken, execErr
 }
 
 // CancelExecution cancels a pending execution. actor carries the email of
@@ -471,12 +507,15 @@ func (m *Manager) transitionApproveAndExecute(ctx context.Context, executionID, 
 // verifyAsyncApprovalActor) before reaching here. Same empty-actor
 // rationale as ApproveExecution.
 //
-// Concurrency: CancelExecutionAtomic uses a conditional UPDATE WHERE
-// status IN ('pending','notified') so a concurrent approve that wins
+// Concurrency: CancelExecutionAtomicTokenPinned uses a conditional UPDATE
+// WHERE status IN ('pending','notified') so a concurrent approve that wins
 // the race causes zero rows to be affected and the caller receives a
 // clean error with the current status rather than silently overwriting
-// the approved row. This is the token/email-link cancel analog of
-// the atomic guard TransitionExecutionStatus provides for ApproveAndExecute.
+// the approved row. The same UPDATE also requires the stored token hash to
+// still match token and be unexpired: loadCancelableExecution validated it
+// against a snapshot, and a re-notification that rotated the token since
+// must not let the old one cancel (issue #1190). That refusal returns an
+// error wrapping config.ErrApprovalTokenChanged.
 func (m *Manager) CancelExecution(ctx context.Context, executionID, token, actor string) error {
 	logging.Infof("Canceling execution: %s", executionID)
 
@@ -493,14 +532,15 @@ func (m *Manager) CancelExecution(ctx context.Context, executionID, token, actor
 	}
 
 	// Atomic conditional UPDATE + suppression cleanup in one transaction.
-	// CancelExecutionAtomic flips status only when status IN
-	// ('pending','notified') so a concurrent approve that has already
-	// transitioned the row causes zero rows affected and we surface a 409.
+	// CancelExecutionAtomicTokenPinned flips status only when status IN
+	// ('pending','notified') and the stored token still matches, so a
+	// concurrent approve that has already transitioned the row causes zero
+	// rows affected and we surface a 409, and a rotated token is refused.
 	var canceled bool
 	var currentStatus string
 	if err := m.config.WithTx(ctx, func(tx pgx.Tx) error {
 		var err error
-		canceled, currentStatus, err = m.config.CancelExecutionAtomic(ctx, tx, executionID, cancelledBy)
+		canceled, currentStatus, err = m.config.CancelExecutionAtomicTokenPinned(ctx, tx, executionID, cancelledBy, token)
 		if err != nil {
 			return err
 		}
@@ -568,7 +608,10 @@ func (m *Manager) rotateApprovalToken(ctx context.Context, exec *config.Purchase
 	expiry := time.Now().Add(ttl)
 	exec.ApprovalToken = config.HashApprovalToken(tok)
 	exec.ApprovalTokenExpiresAt = &expiry
-	if saveErr := m.config.SavePurchaseExecution(ctx, exec); saveErr != nil {
+	// Guarded on the terminal status the executor just wrote, so this
+	// full-row write cannot put back a status another writer set since
+	// (issue #835).
+	if saveErr := m.config.SaveExecutionIfStatus(ctx, exec, []string{exec.Status}); saveErr != nil {
 		return "", saveErr
 	}
 	return tok, nil
@@ -592,7 +635,10 @@ func (m *Manager) clearApprovalToken(ctx context.Context, executionID string) er
 	}
 	exec.ApprovalToken = ""
 	exec.ApprovalTokenExpiresAt = nil
-	return m.config.SavePurchaseExecution(ctx, exec)
+	// Guarded on "canceled": the row was read after the cancel landed, and
+	// this full-row write must not undo a status change made since (issue
+	// #835).
+	return m.config.SaveExecutionIfStatus(ctx, exec, []string{config.StatusCanceled})
 }
 
 // loadCancelableExecution fetches an execution, validates the approval

@@ -47,19 +47,28 @@
 -- re-run 000027 will incur the same PK-rebuild cost as the original
 -- apply (no new concern, but worth knowing).
 
+--
+-- PARTITIONS: `ctid` is a position within one partition's heap, so rows in
+-- different `savings_snapshots_YYYY_MM` partitions can share a ctid such as
+-- (0,1). The DELETE therefore matches on (tableoid, ctid); matching on ctid
+-- alone also deleted the unrelated rows of every other partition that sat
+-- at a duplicate's ctid (issue #316, A04-011). Duplicates of one
+-- (id, timestamp) always share a partition, so the tableoid tie-break in
+-- the ORDER BY never changes which row is kept.
+
 ALTER TABLE savings_snapshots DROP CONSTRAINT IF EXISTS savings_snapshots_pkey;
 
 WITH duplicates AS (
-    SELECT id, timestamp, ctid,
+    SELECT tableoid, ctid,
            ROW_NUMBER() OVER (
                PARTITION BY id, timestamp
-               ORDER BY created_at DESC, ctid DESC
+               ORDER BY created_at DESC, tableoid DESC, ctid DESC
            ) AS row_num
     FROM savings_snapshots
 )
 DELETE FROM savings_snapshots s
 USING duplicates d
-WHERE s.ctid = d.ctid AND d.row_num > 1;
+WHERE s.tableoid = d.tableoid AND s.ctid = d.ctid AND d.row_num > 1;
 
 ALTER TABLE savings_snapshots
     ADD CONSTRAINT savings_snapshots_pkey PRIMARY KEY (id, timestamp);

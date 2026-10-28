@@ -9,6 +9,7 @@ import { formatTrendAxisTick, upsertChart } from './chart-utils';
 import { formatCompactCurrency, formatCurrency } from '../utils';
 import { setChartSummary, renderChartTable, removeChartTable } from '../lib/chart-a11y';
 import { applyChartDefaults, chartColor, withAlpha } from '../lib/chart-theme';
+import { HOURS_PER_MONTH } from '../lib/hours-per-month';
 
 // Register Chart.js components
 Chart.register(...registerables);
@@ -26,8 +27,8 @@ const API_UNIT = 'monthly' as const;
 
 export type SavingsUnit = 'hourly' | 'monthly' | 'yearly';
 
-// Conversion factors relative to monthly as the canonical unit.
-const HOURS_PER_MONTH = 730;   // 365.25 * 24 / 12
+// Conversion factors relative to monthly as the canonical unit. Hourly uses
+// the shared 730-hour month (365 * 24 / 12), the same as the backend.
 const MONTHS_PER_YEAR = 12;
 
 /**
@@ -102,11 +103,9 @@ export async function loadSavingsHistory(): Promise<void> {
     const period = periodSelect.value;
     const { start, end, interval } = getPeriodDates(period);
 
-    // Honour the global topbar filter chips (issue #503). The account chip
-    // is single-select, and the backend's /history/analytics takes a single
-    // account_id (see handler_analytics.go), so we forward the only selected
-    // ID, mirroring dashboard.ts loadSavingsTrendChart. The provider chip is
-    // forwarded too and the backend now applies it as a provider WHERE filter
+    // Honour the global topbar filter chips (issue #503). Every selected
+    // account is forwarded as account_ids; the backend scope-checks each id
+    // and sums them. The provider chip is forwarded too and the backend now applies it as a provider WHERE filter
     // on the savings-history query (issue #498, QA 2.3).
     const currentProvider = state.getCurrentProvider();
     const currentAccountIDs = state.getCurrentAccountIDs();
@@ -122,7 +121,7 @@ export async function loadSavingsHistory(): Promise<void> {
             end: end.toISOString(),
             interval,
             ...(currentProvider ? { provider: currentProvider } : {}),
-            ...(currentAccountIDs.length === 1 ? { account_ids: currentAccountIDs } : {}),
+            ...(currentAccountIDs.length > 0 ? { account_ids: currentAccountIDs } : {}),
         });
 
         if (!data.data_points || data.data_points.length === 0) {

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -600,6 +601,59 @@ func TestExecuteAzureExchange_InScopeSubscriptionAllowed(t *testing.T) {
 	resp, ok := res.(*AzureExecuteExchangeResponse)
 	require.True(t, ok)
 	assert.Equal(t, "sess-fresh", resp.SessionID)
+}
+
+// TestExecuteAzureExchange_ResolvesAccountOnce pins issue #311: the execute
+// path looked the subscription's CloudAccount up separately for the scope
+// check, the client build and the constraint AccountIDs. Here the store
+// answers the first lookup with the caller's own account and any later one
+// with another account, as a concurrent re-registration would. The scope
+// check and the constraint check must both see the first row, from a single
+// lookup.
+func TestExecuteAzureExchange_ResolvesAccountOnce(t *testing.T) {
+	ctx := context.Background()
+	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
+	opsClient.On("CalculateExchange", ctx, mock.Anything, mock.Anything).Return(
+		&azurecompute.ExchangePreview{SessionID: "sess-once", NetPayable: toPtr(10.00), NetPayableCurrency: "USD"},
+		[]azurecompute.CompatibleOffering{}, nil,
+	)
+	opsClient.On("ExecuteExchange", mock.Anything, "sess-once").Return(
+		&azurecompute.ExchangeResult{SessionID: "sess-once", Status: "Succeeded"}, nil,
+	)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	var captured []auth.PermissionConstraints
+	mockAuth := scopedAzureAuth(t, "execute", "ri-exchange", []string{"acct-mine"})
+	mockAuth.On("HasPermissionForConstraintsAPI", ctx, "user-1", "execute", "ri-exchange",
+		mock.MatchedBy(func(sets []auth.PermissionConstraints) bool {
+			captured = sets
+			return true
+		})).Return(true, nil)
+
+	lookups := 0
+	store := &MockConfigStore{}
+	store.GetCloudAccountByExternalIDFn = func(_ context.Context, provider, externalID string) (*config.CloudAccount, error) {
+		assert.Equal(t, "azure", provider)
+		assert.Equal(t, "sub-1", externalID)
+		lookups++
+		if lookups == 1 {
+			return &config.CloudAccount{ID: "acct-mine", Name: "My Team"}, nil
+		}
+		return &config.CloudAccount{ID: "acct-other", Name: "Other Team"}, nil
+	}
+
+	h := &Handler{auth: mockAuth, config: store, azureExchangeFactory: func(_ string) azureExchangeClient { return opsClient }}
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, lookups, "the execute path must resolve the subscription's CloudAccount exactly once")
+	require.Len(t, captured, 1)
+	assert.Equal(t, []string{"acct-mine"}, captured[0].AccountIDs,
+		"the constraint check must use the same account row the scope check allowed")
 }
 
 // TestExecuteAzureExchange_ScopeCheckPrecedesClientBuild_Unregistered proves
@@ -2296,6 +2350,32 @@ func TestExecuteAzureExchange_FourEyesRefusesDirectExecute(t *testing.T) {
 	require.True(t, ok, "expected a ClientError, got: %v", err)
 	assert.Equal(t, 403, ce.code)
 	assert.Equal(t, "direct RI exchange execution is disabled while 4-eyes approval mode is on; use the approval flow", ce.Error())
+	opsClient.AssertNotCalled(t, "ExecuteExchange", mock.Anything, mock.Anything)
+	opsClient.AssertNotCalled(t, "CalculateExchange", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// TestExecuteAzureExchange_FourEyesPolicyLookupErrorFailsClosed (issue #679):
+// an unreadable global config must not be treated as "4-eyes off". The
+// handler returns a server error before any quote or exchange call.
+func TestExecuteAzureExchange_FourEyesPolicyLookupErrorFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	opsClient := new(mockAzureExchangeOpsClient)
+	ownsAzureSource(opsClient)
+	t.Cleanup(func() { opsClient.AssertExpectations(t) })
+
+	h := newAzureExecuteSourceGateHandler(t, opsClient)
+	store, ok := h.config.(*MockConfigStore)
+	require.True(t, ok)
+	store.On("GetGlobalConfig", mock.Anything).Return(nil, errors.New("db down"))
+
+	_, err := h.executeAzureExchange(ctx, &events.LambdaFunctionURLRequest{
+		Headers: map[string]string{"authorization": "Bearer tok"},
+		Body:    validAzureExecuteBody,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "4-eyes policy check")
+	_, isClient := IsClientError(err)
+	assert.False(t, isClient, "a lookup failure is a server error, not a client refusal")
 	opsClient.AssertNotCalled(t, "ExecuteExchange", mock.Anything, mock.Anything)
 	opsClient.AssertNotCalled(t, "CalculateExchange", mock.Anything, mock.Anything, mock.Anything)
 }

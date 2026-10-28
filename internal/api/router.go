@@ -273,6 +273,12 @@ func (r *Router) registerRoutes() {
 		// object stays behind view:accounts on GET /api/accounts below. Must
 		// precede the generic "/api/accounts/" GET prefix route.
 		{ExactPath: "/api/accounts/list", Method: "GET", Handler: r.listAccountsMinimalHandler, Auth: AuthUser},
+		// Override export/import (issue #9). Exact paths, so they must precede
+		// the generic "/api/accounts/" prefix routes. Gated in-handler on
+		// view:accounts (export) and update:accounts (import), scoped to the
+		// caller's allowed accounts.
+		{ExactPath: "/api/accounts/service-overrides/export", Method: "GET", Handler: r.exportAccountServiceOverridesHandler, Auth: AuthUser},
+		{ExactPath: "/api/accounts/service-overrides/import", Method: "POST", Handler: r.importAccountServiceOverridesHandler, Auth: AuthAdmin},
 		{ExactPath: "/api/accounts", Method: "GET", Handler: r.listAccountsHandler, Auth: AuthUser},
 		{ExactPath: "/api/accounts", Method: "POST", Handler: r.createAccountHandler, Auth: AuthAdmin},
 		{PathPrefix: "/api/accounts/", PathSuffix: "/credentials", Method: "POST", Handler: r.saveAccountCredentialsHandler, Auth: AuthAdmin},
@@ -939,6 +945,16 @@ func (r *Router) discoverOrgAccountsHandler(ctx context.Context, req *events.Lam
 
 func (r *Router) getAccountHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, params map[string]string) (any, error) {
 	return r.h.getAccount(ctx, req, params["id"])
+}
+
+// exportAccountServiceOverridesHandler handles GET /api/accounts/service-overrides/export.
+func (r *Router) exportAccountServiceOverridesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	return r.h.exportAccountServiceOverrides(ctx, req)
+}
+
+// importAccountServiceOverridesHandler handles POST /api/accounts/service-overrides/import.
+func (r *Router) importAccountServiceOverridesHandler(ctx context.Context, req *events.LambdaFunctionURLRequest, _ map[string]string) (any, error) {
+	return r.h.importAccountServiceOverrides(ctx, req)
 }
 
 // updateAccountOrServiceOverrideHandler handles PUT /api/accounts/:id and

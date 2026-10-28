@@ -26,7 +26,7 @@ func rdsAZConfigStoreRec(azConfig string, savings float64) config.Recommendation
 // Issue #408: Cost Explorer reports Single-AZ and Multi-AZ RDS reservations of
 // the same class, engine, term and payment as separate recommendations. Once
 // the store upserts on the 12-column index (with the generated az_config
-// column) and migration 000141 drops the 11-column index, both rows upsert in
+// column) and migration 000153 drops the 11-column index, both rows upsert in
 // ONE batch (the shape persistCollection writes) and both persist. Before,
 // the batch failed with SQLSTATE 21000 ("ON CONFLICT DO UPDATE command cannot
 // affect row a second time") and took the whole collection write down.
@@ -40,7 +40,7 @@ func TestPostgresStore_UpsertRecommendations_AZConfigBatch(t *testing.T) {
 
 	var oldIdx bool
 	require.NoError(t, pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'recommendations_natural_key_az_tp_idx')`).Scan(&oldIdx))
-	require.False(t, oldIdx, "11-column index must be gone after the full migration chain (000141)")
+	require.False(t, oldIdx, "11-column index must be gone after the full migration chain (000153)")
 
 	savingsByAZConfig := func(t *testing.T) map[string]float64 {
 		t.Helper()
