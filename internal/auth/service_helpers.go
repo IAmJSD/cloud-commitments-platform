@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/mail"
+	"strings"
 	"time"
 
 	"golang.org/x/crypto/hkdf"
@@ -149,4 +151,25 @@ func containsAll(allowed, requested []string) bool {
 		}
 	}
 	return true
+}
+
+// normalizeAccountEmail validates an email address an account is created or
+// updated with and returns the form to store. Every write of users.email
+// (CreateUser, SetupAdmin, and the email update shared by UpdateUser and
+// UpdateUserProfile) goes through it.
+//
+// Only a bare addr-spec is accepted. mail.ParseAddress also accepts RFC 5322
+// forms such as "Name <user@example.com>", "<user@example.com>" or
+// "user@example.com (comment)"; storing those verbatim let an account sit next
+// to an existing user@example.com row past the uniqueness check, and could
+// never log in, because Login looks up the parsed bare address (issue #104,
+// audit finding A03-019). Surrounding whitespace is trimmed. Case is kept as
+// given; case folding is tracked separately.
+func normalizeAccountEmail(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	parsed, err := mail.ParseAddress(trimmed)
+	if err != nil || parsed.Address != trimmed {
+		return "", ErrInvalidEmail
+	}
+	return parsed.Address, nil
 }

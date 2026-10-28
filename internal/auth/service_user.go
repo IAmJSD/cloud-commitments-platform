@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/mail"
 	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
@@ -26,8 +25,9 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 		return nil, ErrAdminExists
 	}
 
-	if _, parseErr := mail.ParseAddress(req.Email); parseErr != nil {
-		return nil, ErrInvalidEmail
+	email, parseErr := normalizeAccountEmail(req.Email)
+	if parseErr != nil {
+		return nil, parseErr
 	}
 
 	err = s.validatePassword(req.Password)
@@ -46,7 +46,7 @@ func (s *Service) SetupAdmin(ctx context.Context, req SetupAdminRequest) (*Login
 	now := time.Now()
 	user := &User{
 		ID:           uuid.New().String(),
-		Email:        req.Email,
+		Email:        email,
 		PasswordHash: passwordHash,
 		GroupIDs:     []string{DefaultAdminGroupID},
 		CreatedAt:    now,
@@ -114,36 +114,39 @@ func (s *Service) CheckAdminExists(ctx context.Context) (bool, error) {
 }
 
 // validateCreateUserRequest validates the fields of a CreateUserRequest before creating
-// the user record. Returns an error if any field is invalid.
+// the user record. Returns the email to store (see normalizeAccountEmail), or
+// an error if any field is invalid. The uniqueness check runs on that same
+// normalized email.
 //
 // When req.Password is empty the user is invited and will set their own
 // password via the invite email link, so the password validator is skipped.
-func (s *Service) validateCreateUserRequest(ctx context.Context, req CreateUserRequest) error {
-	if _, err := mail.ParseAddress(req.Email); err != nil {
-		return ErrInvalidEmail
+func (s *Service) validateCreateUserRequest(ctx context.Context, req CreateUserRequest) (string, error) {
+	email, err := normalizeAccountEmail(req.Email)
+	if err != nil {
+		return "", err
 	}
-	existing, err := s.store.GetUserByEmail(ctx, req.Email)
+	existing, err := s.store.GetUserByEmail(ctx, email)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return err
+		return "", err
 	}
 	if existing != nil {
-		return ErrEmailInUse
+		return "", ErrEmailInUse
 	}
 	// Authorization derives entirely from group membership, so a user with no
 	// groups can do nothing. Reject zero-group creation as a 400 (issue #907).
 	if len(req.GroupIDs) == 0 {
-		return ErrNoGroups
+		return "", ErrNoGroups
 	}
 	if req.Password == "" {
-		return nil
+		return email, nil
 	}
 	if err := s.validatePassword(req.Password); err != nil {
 		// validatePassword returns specific messages ("must be at least N
 		// characters", "common password", etc.); wrap so the handler can
 		// detect the category while keeping the message detail.
-		return fmt.Errorf("%w: %w", ErrPasswordPolicy, err)
+		return "", fmt.Errorf("%w: %w", ErrPasswordPolicy, err)
 	}
-	return nil
+	return email, nil
 }
 
 // CreateUserResult bundles the created user with optional invite-email
@@ -199,8 +202,9 @@ func (s *Service) checkCreateUserGroups(ctx context.Context, actorUserID string,
 // failure is reported via the result (not as an error) so the user row
 // is still surfaced and the admin can react instead of seeing a 5xx.
 func (s *Service) CreateUser(ctx context.Context, actorUserID string, req CreateUserRequest) (*CreateUserResult, error) {
-	if err := s.validateCreateUserRequest(ctx, req); err != nil {
-		return nil, err
+	email, validateErr := s.validateCreateUserRequest(ctx, req)
+	if validateErr != nil {
+		return nil, validateErr
 	}
 	if err := s.checkCreateUserGroups(ctx, actorUserID, req.GroupIDs); err != nil {
 		return nil, err
@@ -229,7 +233,7 @@ func (s *Service) CreateUser(ctx context.Context, actorUserID string, req Create
 	now := time.Now()
 	user := &User{
 		ID:           uuid.New().String(),
-		Email:        req.Email,
+		Email:        email,
 		PasswordHash: passwordHash,
 		GroupIDs:     req.GroupIDs,
 		CreatedAt:    now,
@@ -825,11 +829,20 @@ func (s *Service) UpdateUserProfile(ctx context.Context, userID, email, currentP
 	return nil
 }
 
-func (s *Service) updateUserEmail(ctx context.Context, user *User, email string) error {
-	if email != "" && email != user.Email {
-		if _, err := mail.ParseAddress(email); err != nil {
-			return fmt.Errorf("invalid email format")
-		}
+// updateUserEmail sets user.Email to raw, normalized by
+// normalizeAccountEmail, after checking no other account holds it. An empty
+// value, or one equal to the stored address, leaves the address unchanged, so
+// a form that resubmits the current email keeps working for a row stored
+// before normalization.
+func (s *Service) updateUserEmail(ctx context.Context, user *User, raw string) error {
+	if raw == "" || raw == user.Email {
+		return nil
+	}
+	email, err := normalizeAccountEmail(raw)
+	if err != nil {
+		return err
+	}
+	if email != user.Email {
 		// Check email uniqueness
 		existing, err := s.store.GetUserByEmail(ctx, email)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {

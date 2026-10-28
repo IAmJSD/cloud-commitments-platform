@@ -27,7 +27,7 @@ func TestLogin_MFATokenRoundTrip(t *testing.T) {
 		Store: store, SessionDuration: time.Hour, CSRFKey: auth.TestCSRFKey(),
 		DashboardURL: "http://localhost:3000", BcryptCost: bcrypt.MinCost,
 	})
-	router := api.NewRouter(api.NewHandler(api.HandlerConfig{AuthService: newAuthServiceAdapter(realAuth)}))
+	router := api.NewRouter(api.NewHandler(api.HandlerConfig{AuthService: newAuthServiceAdapter(realAuth), RateLimiter: api.NewInMemoryRateLimiter()}))
 
 	const email = "mfa-round-trip@example.com"
 	const rtSecret = "RoundTripPass@1" // test-only placeholder

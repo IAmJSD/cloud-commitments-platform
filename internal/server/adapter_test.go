@@ -607,7 +607,7 @@ func TestSetupAdminThenLogin_RoundTrip(t *testing.T) {
 		BcryptCost:      bcrypt.MinCost,
 	})
 	adapter := newAuthServiceAdapter(realAuth)
-	handler := api.NewHandler(api.HandlerConfig{AuthService: adapter})
+	handler := api.NewHandler(api.HandlerConfig{AuthService: adapter, RateLimiter: api.NewInMemoryRateLimiter()})
 	router := api.NewRouter(handler)
 
 	const email = "admin@example.com"

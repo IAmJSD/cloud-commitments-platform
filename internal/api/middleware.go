@@ -499,9 +499,14 @@ func (h *Handler) checkRateLimit(ctx context.Context, req *events.LambdaFunction
 // can induce DB pressure would otherwise unlock unlimited password guessing on
 // these endpoints (02-M1). A high-severity error log is emitted so monitoring
 // can detect and alert on the fail-closed window.
+//
+// A handler with no rate limiter at all is refused the same way (issue #104):
+// every production handler is built with one, so a nil limiter is a wiring
+// bug, and allowing the request would silently drop brute-force protection.
 func (h *Handler) checkRateLimitStrict(ctx context.Context, req *events.LambdaFunctionURLRequest, endpoint string) error {
 	if h.rateLimiter == nil {
-		return nil
+		logging.Errorf("ALERT: no rate limiter configured for credential endpoint %s; request denied (02-M1)", endpoint)
+		return NewClientError(503, "service temporarily unavailable, please try again later")
 	}
 
 	clientIP := req.RequestContext.HTTP.SourceIP
@@ -532,11 +537,9 @@ func (h *Handler) requireMFASession(ctx context.Context, req *events.LambdaFunct
 	if err != nil {
 		return nil, err
 	}
+	// checkRateLimitStrict refuses a nil limiter, so h.rateLimiter is set below.
 	if limitErr := h.checkRateLimitStrict(ctx, req, endpoint); limitErr != nil {
 		return nil, limitErr
-	}
-	if h.rateLimiter == nil {
-		return session, nil
 	}
 	allowed, err := h.rateLimiter.AllowWithUser(ctx, session.UserID, endpoint)
 	if err != nil {

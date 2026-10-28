@@ -32,7 +32,7 @@ func newResetTokenHarness(t *testing.T) (*api.Handler, *auth.MockStore) {
 		SessionDuration: time.Hour,
 		CSRFKey:         auth.TestCSRFKey(),
 	})
-	return api.NewHandler(api.HandlerConfig{AuthService: newAuthServiceAdapter(service)}), mockStore
+	return api.NewHandler(api.HandlerConfig{AuthService: newAuthServiceAdapter(service), RateLimiter: api.NewInMemoryRateLimiter()}), mockStore
 }
 
 func deactivatedResetUser() *auth.User {
