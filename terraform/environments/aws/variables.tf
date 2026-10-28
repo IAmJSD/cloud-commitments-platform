@@ -365,9 +365,9 @@ variable "enable_scheduled_tasks" {
 }
 
 variable "recommendation_schedule" {
-  description = "Schedule expression for recommendation collection"
+  description = "EventBridge schedule expression for recommendation collection. Default: daily at 02:00 UTC, the same time as GCP and Azure. A cron() schedule lets the API report next_collection_at; a rate() schedule leaves it null because its phase is unknown (#756)."
   type        = string
-  default     = "rate(1 day)"
+  default     = "cron(0 2 * * ? *)"
 }
 
 variable "enable_ri_exchange_schedule" {
@@ -395,9 +395,9 @@ variable "ladder_run_schedule" {
 }
 
 variable "enable_fire_scheduled_purchases_schedule" {
-  description = "Enable the scheduled fire_scheduled_purchases sweep. Default false until auto-approve (L9) is promoted to GA."
+  description = "Schedule the fire_scheduled_purchases sweep, which executes delayed auto-approved purchases once their scheduled time has passed. On by default: the server refuses, and alerts on, any purchase due more than 24h ago (SCHEDULED_PURCHASE_MAX_OVERDUE, #1549), so turning it on cannot buy a stale backlog. Set false to opt out."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "fire_scheduled_purchases_schedule" {

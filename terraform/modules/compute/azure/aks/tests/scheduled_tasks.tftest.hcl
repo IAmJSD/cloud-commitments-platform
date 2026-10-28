@@ -54,8 +54,8 @@ run "defaults" {
   }
 
   assert {
-    condition     = toset(keys(kubernetes_cron_job_v1.sweep)) == toset(["analytics_collect", "collect_recommendations", "finalize_revocations", "reap_stuck_purchases"])
-    error_message = "Default-on tasks are collect_recommendations, reap_stuck_purchases, analytics_collect and finalize_revocations; fire, process, send_notifications and cleanup are opt-in."
+    condition     = toset(keys(kubernetes_cron_job_v1.sweep)) == toset(["analytics_collect", "collect_recommendations", "finalize_revocations", "fire_scheduled_purchases", "reap_stuck_purchases"])
+    error_message = "Default-on tasks are collect_recommendations, reap_stuck_purchases, analytics_collect, finalize_revocations and fire_scheduled_purchases; process, send_notifications and cleanup are opt-in."
   }
   assert {
     condition = alltrue([
@@ -67,12 +67,12 @@ run "defaults" {
   assert {
     condition = alltrue([
       for k, j in kubernetes_cron_job_v1.sweep :
-      j.spec[0].schedule == { collect_recommendations = var.recommendation_schedule, reap_stuck_purchases = var.reap_stuck_purchases_schedule, analytics_collect = var.analytics_collect_schedule, finalize_revocations = var.finalize_revocations_schedule }[k]
+      j.spec[0].schedule == { collect_recommendations = var.recommendation_schedule, reap_stuck_purchases = var.reap_stuck_purchases_schedule, analytics_collect = var.analytics_collect_schedule, finalize_revocations = var.finalize_revocations_schedule, fire_scheduled_purchases = var.fire_scheduled_purchases_schedule }[k]
     ])
     error_message = "Each schedule must come from its variable."
   }
   assert {
-    condition     = toset([for j in kubernetes_cron_job_v1.sweep : j.metadata[0].name]) == toset(["cudly-task-collect", "cudly-task-reap", "cudly-task-analytics", "cudly-task-finalize"])
+    condition     = toset([for j in kubernetes_cron_job_v1.sweep : j.metadata[0].name]) == toset(["cudly-task-collect", "cudly-task-reap", "cudly-task-analytics", "cudly-task-finalize", "cudly-task-fire"])
     error_message = "CronJob names must be distinct <project>-task-<job> names."
   }
   assert {
@@ -191,10 +191,11 @@ run "all_off" {
   command = plan
 
   variables {
-    enable_scheduled_tasks               = false
-    enable_reap_stuck_purchases_schedule = false
-    enable_analytics_collect_schedule    = false
-    enable_finalize_revocations_schedule = false
+    enable_scheduled_tasks                   = false
+    enable_reap_stuck_purchases_schedule     = false
+    enable_analytics_collect_schedule        = false
+    enable_finalize_revocations_schedule     = false
+    enable_fire_scheduled_purchases_schedule = false
   }
 
   plan_options {

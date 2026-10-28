@@ -1,8 +1,9 @@
 # Scheduled server sweeps on Cloud Run (#712). Every provider is mocked;
 # nothing here reaches GCP. Each sweep must be a Cloud Scheduler job calling
 # /api/scheduled/<task> with an OIDC token whose audience the service's
-# SCHEDULED_TASK_OIDC_AUDIENCE allowlist accepts, and the money and retention
-# sweeps must stay off unless asked for.
+# SCHEDULED_TASK_OIDC_AUDIENCE allowlist accepts. The fire sweep is on by
+# default (#712); the process, notification and retention sweeps stay off
+# unless asked for.
 mock_provider "google" {}
 
 variables {
@@ -22,8 +23,8 @@ run "defaults_schedule_only_the_default_on_sweeps" {
   command = apply
 
   assert {
-    condition     = toset(keys(google_cloud_scheduler_job.sweep)) == toset(["analytics_collect", "finalize_revocations", "reap_stuck_purchases"])
-    error_message = "By default only reap, analytics and finalize run; fire, process, send_notifications and cleanup are opt-in."
+    condition     = toset(keys(google_cloud_scheduler_job.sweep)) == toset(["analytics_collect", "finalize_revocations", "fire_scheduled_purchases", "reap_stuck_purchases"])
+    error_message = "By default reap, analytics, finalize and fire run; process, send_notifications and cleanup are opt-in."
   }
 
   assert {
@@ -94,6 +95,24 @@ run "opt_in_sweeps_follow_their_flags" {
   assert {
     condition     = !contains(split(",", one([for e in google_cloud_run_v2_service.main.template[0].containers[0].env : e.value if e.name == "SCHEDULED_TASK_OIDC_AUDIENCE"])), "cudly-test/api/scheduled/analytics_collect")
     error_message = "A disabled sweep's audience must not be accepted."
+  }
+}
+
+run "fire_opt_out" {
+  command = apply
+
+  variables {
+    enable_fire_scheduled_purchases_schedule = false
+  }
+
+  assert {
+    condition     = toset(keys(google_cloud_scheduler_job.sweep)) == toset(["analytics_collect", "finalize_revocations", "reap_stuck_purchases"])
+    error_message = "Setting enable_fire_scheduled_purchases_schedule = false must remove the fire job."
+  }
+
+  assert {
+    condition     = !contains(split(",", one([for e in google_cloud_run_v2_service.main.template[0].containers[0].env : e.value if e.name == "SCHEDULED_TASK_OIDC_AUDIENCE"])), "cudly-test/api/scheduled/fire_scheduled_purchases")
+    error_message = "An opted-out fire sweep's audience must not be accepted."
   }
 }
 

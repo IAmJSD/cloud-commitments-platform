@@ -36,8 +36,16 @@ run "defaults" {
     error_message = "Each active sweep needs a target, and the sweeps need their invoker role and policy."
   }
   assert {
-    condition     = length(aws_cloudwatch_event_rule.fire_scheduled_purchases) == 0 && length(aws_cloudwatch_event_rule.ladder_run) == 0 && length(aws_cloudwatch_event_rule.ri_exchange) == 0
-    error_message = "fire, ladder_run and ri_exchange stay opt-in."
+    condition     = length(aws_cloudwatch_event_rule.fire_scheduled_purchases) == 1 && length(aws_cloudwatch_event_target.fire_scheduled_purchases) == 1
+    error_message = "The fire sweep is on by default (#712), with its target."
+  }
+  assert {
+    condition     = aws_cloudwatch_event_rule.fire_scheduled_purchases[0].schedule_expression == "rate(15 minutes)"
+    error_message = "The fire sweep runs every 15 minutes by default, as on Lambda."
+  }
+  assert {
+    condition     = length(aws_cloudwatch_event_rule.ladder_run) == 0 && length(aws_cloudwatch_event_rule.ri_exchange) == 0
+    error_message = "ladder_run and ri_exchange stay opt-in."
   }
   assert {
     condition = alltrue([
@@ -100,13 +108,18 @@ run "all_off" {
   command = plan
 
   variables {
-    enable_reap_stuck_purchases_schedule = false
-    enable_analytics_collect_schedule    = false
-    enable_finalize_revocations_schedule = false
+    enable_reap_stuck_purchases_schedule     = false
+    enable_analytics_collect_schedule        = false
+    enable_finalize_revocations_schedule     = false
+    enable_fire_scheduled_purchases_schedule = false
   }
 
   assert {
     condition     = length(aws_cloudwatch_event_rule.sweep) == 0 && length(aws_iam_role.eventbridge_sweeps) == 0 && length(aws_iam_role_policy.eventbridge_sweeps) == 0
     error_message = "With every sweep off, no rule and no invoker role may be created."
+  }
+  assert {
+    condition     = length(aws_cloudwatch_event_rule.fire_scheduled_purchases) == 0 && length(aws_cloudwatch_event_target.fire_scheduled_purchases) == 0
+    error_message = "Setting enable_fire_scheduled_purchases_schedule = false must remove the fire rule and target."
   }
 }

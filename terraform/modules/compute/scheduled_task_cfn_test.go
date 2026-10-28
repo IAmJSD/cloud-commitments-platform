@@ -336,7 +336,10 @@ func TestCloudFormationScheduleCheckNegatives(t *testing.T) {
 			return strings.Replace(s, `Input: '{"action": "finalize_revocations"}'`, `Input: '{"action": "analytics_collect"}'`, 1)
 		},
 		"opt-in task on by default": func(s string) string {
-			return regexp.MustCompile(`(EnableFireScheduledPurchasesSchedule:\n    Type: String\n    Default: )"false"`).ReplaceAllString(s, `$1"true"`)
+			return regexp.MustCompile(`(EnableSendNotificationsSchedule:\n    Type: String\n    Default: )"false"`).ReplaceAllString(s, `$1"true"`)
+		},
+		"fire sweep off by default": func(s string) string {
+			return regexp.MustCompile(`(EnableFireScheduledPurchasesSchedule:\n    Type: String\n    Default: )"true"`).ReplaceAllString(s, `$1"false"`)
 		},
 		"default-on task off by default": func(s string) string {
 			return regexp.MustCompile(`(EnableFinalizeRevocationsSchedule:\n    Type: String\n    Default: )"true"`).ReplaceAllString(s, `$1"false"`)

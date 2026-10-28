@@ -276,7 +276,7 @@ func envFixture(task, def string) (mod, env, compute string) {
 }
 
 func TestEnvChecksNegatives(t *testing.T) {
-	const cr, fire = "collect_recommendations", "fire_scheduled_purchases"
+	const cr, process = "collect_recommendations", "process_scheduled_purchases"
 	type fixture struct {
 		task, def  string
 		edit       func(mod, env, compute string) (string, string, string)
@@ -286,13 +286,13 @@ func TestEnvChecksNegatives(t *testing.T) {
 	same := func(m, e, c string) (string, string, string) { return m, e, c }
 	for name, f := range map[string]fixture{
 		"clean":                          {cr, "true", same, false, ""},
-		"opt-in task opt-in":             {fire, "false", same, false, ""},
-		"opt-in task defaulting true":    {fire, "true", same, true, ""},
+		"opt-in task opt-in":             {process, "false", same, false, ""},
+		"opt-in task defaulting true":    {process, "true", same, true, ""},
 		"default-on task defaulting off": {cr, "false", same, true, dimModuleDefault},
 		"default-on task off in the module only": {cr, "true", func(m, e, c string) (string, string, string) {
 			return strings.Replace(m, "default = true", "default = false", 1), e, c
 		}, false, dimModuleDefault},
-		"opt-in task on in the module only": {fire, "false", func(m, e, c string) (string, string, string) {
+		"opt-in task on in the module only": {process, "false", func(m, e, c string) (string, string, string) {
 			return strings.Replace(m, "default = false", "default = true", 1), e, c
 		}, true, ""},
 		"module enable var without a default": {cr, "true", func(m, e, c string) (string, string, string) {
@@ -340,7 +340,15 @@ func TestEnvChecksNegatives(t *testing.T) {
 		envDefaultProblem("finalize_revocations", "true") != "" || envDefaultProblem("cleanup", "false") != "" {
 		t.Error("default-on / opt-in policy not enforced")
 	}
-	if got := tfvarsProblems("a.tfvars", "enable_finalize_revocations_schedule = false\nenable_fire_scheduled_purchases_schedule = false\n# enable_scheduled_tasks = false\n"); len(got) != 1 || !strings.Contains(got[0], "finalize_revocations") {
+	if !defaultOn("fire_scheduled_purchases") || defaultOn("process_scheduled_purchases") {
+		t.Error("the fire sweep is default-on and the process sweep opt-in (owner decision on #712)")
+	}
+	if got := tfvarsProblems("a.tfvars", "enable_finalize_revocations_schedule = false\nenable_process_scheduled_purchases_schedule = false\n# enable_scheduled_tasks = false\n"); len(got) != 1 || !strings.Contains(got[0], "finalize_revocations") {
+		t.Errorf("tfvarsProblems = %v", got)
+	}
+	// The fire sweep is default-on since the owner decision on #712, so a
+	// committed tfvars file switching it off is flagged like any other.
+	if got := tfvarsProblems("a.tfvars", "enable_fire_scheduled_purchases_schedule = false\n"); len(got) != 1 || !strings.Contains(got[0], "fire_scheduled_purchases") {
 		t.Errorf("tfvarsProblems = %v", got)
 	}
 	if got := tfvarsProblems("a.tfvars", "enable_finalize_revocations_schedule = \"false\"\n"); len(got) != 1 {

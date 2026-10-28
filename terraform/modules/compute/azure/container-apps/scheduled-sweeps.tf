@@ -14,7 +14,7 @@
 
 locals {
   # Keyed by server task name. `job` is the workflow name suffix. Default-on
-  # tasks match the other platforms; fire_scheduled_purchases,
+  # tasks match the other platforms, including fire_scheduled_purchases;
   # process_scheduled_purchases and send_notifications are opt-in (default
   # off, as decided for #712). cleanup has its own workflow in
   # scheduled-tasks.tf.

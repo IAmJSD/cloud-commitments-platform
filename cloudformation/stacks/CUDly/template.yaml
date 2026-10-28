@@ -207,14 +207,16 @@ Parameters:
 
   EnableFireScheduledPurchasesSchedule:
     Type: String
-    Default: "false"
+    Default: "true"
     AllowedValues:
       - "true"
       - "false"
     Description: >-
       Run the fire_scheduled_purchases task on a schedule. It executes
       purchases in status scheduled whose scheduled time has passed (the
-      delayed auto-approve path), so it makes real purchases. Opt-in.
+      delayed auto-approve path), so it makes real purchases. On by default:
+      the server refuses, and alerts on, any purchase due more than 24h ago,
+      so turning it on cannot buy a stale backlog. Set "false" to opt out.
 
   FireScheduledPurchasesSchedule:
     Type: String

@@ -14,9 +14,10 @@
 
 locals {
   # Keyed by server task name. `job` is the Cloud Scheduler job name suffix.
-  # Default-on tasks match the other platforms; fire_scheduled_purchases,
-  # process_scheduled_purchases, send_notifications and cleanup are opt-in
-  # (default off, as decided for #712).
+  # Default-on tasks match the other platforms, including
+  # fire_scheduled_purchases; process_scheduled_purchases,
+  # send_notifications and cleanup are opt-in (default off, as decided for
+  # #712).
   sweep_tasks = {
     reap_stuck_purchases        = { job = "reap", enabled = var.enable_reap_stuck_purchases_schedule, schedule = var.reap_stuck_purchases_schedule }
     analytics_collect           = { job = "analytics", enabled = var.enable_analytics_collect_schedule, schedule = var.analytics_collect_schedule }

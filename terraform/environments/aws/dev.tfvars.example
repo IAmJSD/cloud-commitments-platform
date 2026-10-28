@@ -112,7 +112,7 @@ frontend_price_class  = "PriceClass_100"  # US, Canada, Europe
 # ==============================================
 
 enable_scheduled_tasks  = true
-recommendation_schedule = "rate(24 hours)"
+recommendation_schedule = "cron(0 2 * * ? *)" # daily at 02:00 UTC
 
 # ==============================================
 # Docker Build
