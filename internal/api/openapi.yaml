@@ -3139,7 +3139,8 @@ paths:
             which case resend password + mfa_code), `invalid_mfa_code`
             (wrong code),
             `invalid_mfa_token` (the token is unknown, expired, used, out of
-            attempts or not this account's; start again from the password),
+            attempts or not this account's, or the account can no longer
+            sign in; start again from the password),
             or `invalid credentials` for every other failure.
           content:
             application/json:

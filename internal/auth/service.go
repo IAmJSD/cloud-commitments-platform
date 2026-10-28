@@ -201,7 +201,7 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 		return nil, errors.New(genericLoginError) //nolint:staticcheck // ST1005: user-facing message; capitalization intentional and asserted by tests
 	}
 
-	if user.LockedUntil != nil && time.Now().Before(*user.LockedUntil) {
+	if accountLocked(user) {
 		remainingTime := time.Until(*user.LockedUntil).Round(time.Minute)
 		// Omit user.ID from log to avoid leaking internal identifiers to log
 		logging.Warnf("Login attempt for locked account (locked for %v more)", remainingTime)
@@ -216,6 +216,11 @@ func (s *Service) getUserAndValidateStatus(ctx context.Context, email string) (*
 	// previously-locked user, with no security benefit.
 
 	return user, nil
+}
+
+// accountLocked reports whether the user's lockout window is still open.
+func accountLocked(user *User) bool {
+	return user.LockedUntil != nil && time.Now().Before(*user.LockedUntil)
 }
 
 // verifyPasswordAndMFA verifies password and MFA code if enabled.
