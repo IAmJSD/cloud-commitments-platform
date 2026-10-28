@@ -372,11 +372,7 @@ describe('API Requests', () => {
         json: () => Promise.reject(new Error('parse error'))
       });
 
-      try {
-        await apiRequest('/test');
-      } catch (error) {
-        expect((error as { status?: number }).status).toBe(500);
-      }
+      await expect(apiRequest('/test')).rejects.toMatchObject({ status: 500 });
     });
 
     test('resolves a 204 No Content response to null', async () => {

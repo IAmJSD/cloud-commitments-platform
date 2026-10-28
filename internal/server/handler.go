@@ -255,7 +255,7 @@ func (app *Application) handleProcessScheduledPurchases(ctx context.Context) (*p
 		log.Printf("Failed to process scheduled purchases: %v", err)
 		return nil, err
 	}
-	log.Printf("Purchases processed: %d processed, %d executed, %d failed, %d stranded-approvals recovered", result.Processed, result.Executed, result.Failed, result.Recovered)
+	log.Printf("Purchases processed: %d processed, %d executed, %d failed (%d past the due-row age cap), %d stranded-approvals recovered", result.Processed, result.Executed, result.Failed, result.Stale, result.Recovered)
 	if result.Failed > 0 {
 		// A partial failure must not read as success to the scheduler (#714).
 		// The result still goes back for callers that want the counts.
@@ -354,8 +354,8 @@ func (app *Application) handleFireScheduledPurchases(ctx context.Context) (*purc
 		log.Printf("Failed to fire scheduled purchases: %v", err)
 		return nil, err
 	}
-	log.Printf("Fire sweep complete: found=%d fired=%d race_lost=%d errored=%d",
-		result.Found, result.Fired, result.RaceLost, result.Errored)
+	log.Printf("Fire sweep complete: found=%d fired=%d race_lost=%d stale=%d errored=%d",
+		result.Found, result.Fired, result.RaceLost, result.Stale, result.Errored)
 	return result, nil
 }
 

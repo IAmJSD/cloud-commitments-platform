@@ -203,55 +203,6 @@ const passwordResetHTMLTemplate = "" +
 </td></tr></table>
 </body></html>`
 
-const welcomeUserTemplate = `Welcome to CUDly
-================
-
-Hello {{.Email}},
-
-Your CUDly account has been created.
-
-You can log in at:
-{{.DashboardURL}}
-
-Your role: {{.Role}}
-
-If you have any questions, please contact your administrator.
-
-This is an automated message from CUDly.
-`
-
-// welcomeUserHTMLTemplate is the HTML half of welcomeUserTemplate.
-// Inline-styled per email-client constraints. Issue #355.
-const welcomeUserHTMLTemplate = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Welcome to CUDly</title></head>
-<body style="margin:0;padding:0;background:#f4f6f8;font-family:Arial,Helvetica,sans-serif;color:#1a202c;">
-<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f4f6f8;padding:24px 0;">
-<tr><td align="center">
-<table role="presentation" cellpadding="0" cellspacing="0" width="600" style="background:#ffffff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
-<tr><td style="padding:32px 32px 16px 32px;">
-<h1 style="margin:0;font-size:22px;color:#0f172a;">Welcome to CUDly</h1>
-<p style="margin:16px 0 0 0;color:#475569;font-size:14px;line-height:1.5;">Hello {{.Email}},</p>
-<p style="margin:12px 0 0 0;color:#475569;font-size:14px;line-height:1.5;">Your CUDly account has been created with role <strong>{{.Role}}</strong>.</p>
-</td></tr>
-
-<tr><td align="center" style="padding:8px 32px 8px 32px;">
-<a href="{{.DashboardURL}}" style="display:inline-block;padding:12px 28px;background:#16a34a;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;border-radius:6px;">Open dashboard</a>
-</td></tr>
-
-<tr><td style="padding:8px 32px 8px 32px;">
-<p style="margin:8px 0 0 0;color:#64748b;font-size:12px;line-height:1.5;">If the button doesn't work, paste this URL into your browser:</p>
-<p style="margin:4px 0 0 0;color:#475569;font-size:12px;word-break:break-all;"><a href="{{.DashboardURL}}" style="color:#2563eb;text-decoration:underline;">{{.DashboardURL}}</a></p>
-<p style="margin:16px 0 0 0;color:#64748b;font-size:12px;line-height:1.5;">If you have any questions, please contact your administrator.</p>
-</td></tr>
-
-<tr><td style="padding:16px 32px;background:#f8fafc;border-top:1px solid #e2e8f0;border-radius:0 0 8px 8px;">
-<p style="margin:0;color:#94a3b8;font-size:11px;">This is an automated message from CUDly.</p>
-</td></tr>
-
-</table>
-</td></tr></table>
-</body></html>`
-
 const userInviteTemplate = `Welcome to CUDly
 ================
 
@@ -515,23 +466,6 @@ func (s *Sender) SendPasswordResetEmail(ctx context.Context, email, resetURL str
 		ctx, s, email, "CUDly - Password Reset Request", "password-reset",
 		func() (string, error) { return RenderPasswordResetEmail(email, resetURL) },
 		func() (string, error) { return RenderPasswordResetEmailHTML(email, resetURL) },
-	)
-}
-
-// WelcomeUserData holds data for welcome emails.
-type WelcomeUserData struct {
-	Email        string
-	DashboardURL string
-	Role         string
-}
-
-// SendWelcomeEmail sends a welcome email to a new user as multipart/
-// alternative (plain text + styled HTML with a CTA button). Issue #355.
-func (s *Sender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error {
-	return sendMultipartVia(
-		ctx, s, email, "Welcome to CUDly", "welcome",
-		func() (string, error) { return RenderWelcomeEmail(email, dashboardURL, role) },
-		func() (string, error) { return RenderWelcomeEmailHTML(email, dashboardURL, role) },
 	)
 }
 
@@ -803,7 +737,7 @@ const purchaseApprovalRequestHTMLTemplate = `<!DOCTYPE html>
 </body></html>`
 
 // sendMultipartVia is the generic dual-render send helper used by the
-// invite / password-reset / welcome flows. The two render closures are
+// invite and password-reset flows. The two render closures are
 // invoked back-to-back; an HTML render failure is non-fatal and degrades
 // to text-only delivery (matching sendPurchaseApprovalRequestVia's contract).
 // kind is a short label like "user-invite" used in the warn log on degrade.
@@ -923,7 +857,7 @@ To view or manage this purchase:
 // RenderPurchaseScheduledDelayEmail renders the plain-text scheduled-delay
 // notification email.
 func RenderPurchaseScheduledDelayEmail(data NotificationData) (string, error) {
-	return renderTemplate("purchase_scheduled_delay", purchaseScheduledDelayTemplate, data)
+	return renderTextTemplate("purchase_scheduled_delay", purchaseScheduledDelayTemplate, data)
 }
 
 // SendPurchaseScheduledNotification sends the Gmail-style pre-fire delay
@@ -1062,7 +996,7 @@ const purchaseExecutedNotificationHTMLTemplate = `<!DOCTYPE html>
 // RenderPurchaseExecutedNotificationEmail renders the plain-text half of
 // the post-execution notification email (issue #291).
 func RenderPurchaseExecutedNotificationEmail(data NotificationData) (string, error) {
-	return renderTemplate("purchase-executed-notification", purchaseExecutedNotificationTemplate, data)
+	return renderTextTemplate("purchase-executed-notification", purchaseExecutedNotificationTemplate, data)
 }
 
 // RenderPurchaseExecutedNotificationEmailHTML renders the HTML half of the

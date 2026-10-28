@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/pashagolub/pgxmock/v5"
 	"github.com/stretchr/testify/assert"
@@ -13,8 +14,11 @@ import (
 var serviceConfigCols = []string{
 	"provider", "service", "enabled", "term", "payment", "coverage", "ramp_schedule",
 	"include_engines", "exclude_engines", "include_regions", "exclude_regions",
-	"include_types", "exclude_types", "min_count",
+	"include_types", "exclude_types", "min_count", "created_at", "updated_at",
 }
+
+// stampCols are the columns the service-config upsert RETURNs (issue #8).
+var stampCols = []string{"created_at", "updated_at"}
 
 // expectServiceConfigLockedRead queues the BEGIN, the per-service advisory
 // lock and the FOR UPDATE read UpdateServiceConfigAtomic issues, in order.
@@ -34,14 +38,18 @@ func TestPGXMock_UpdateServiceConfigAtomic_LockedReadMergeWrite(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
 
+	created := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	readStamp := created.Add(time.Hour)
+	writeStamp := created.Add(2 * time.Hour)
 	expectServiceConfigLockedRead(mock, pgxmock.NewRows(serviceConfigCols).AddRow(
 		"aws", "rds", true, 3, "all-upfront", 50.0, RampImmediate,
 		[]string{"mysql"}, []string{}, []string{}, []string{}, []string{}, []string{}, 4,
+		created, readStamp,
 	))
-	mock.ExpectExec("INSERT INTO service_configs").
+	mock.ExpectQuery(`INSERT INTO service_configs[\s\S]*RETURNING created_at, updated_at`).
 		WithArgs("aws", "rds", true, 3, "all-upfront", 80.0, RampImmediate,
 			[]string{"mysql"}, []string{}, []string{}, []string{}, []string{}, []string{}, 4).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+		WillReturnRows(pgxmock.NewRows(stampCols).AddRow(created, writeStamp))
 	mock.ExpectCommit()
 
 	saved, err := store.UpdateServiceConfigAtomic(context.Background(), "aws", "rds", func(existing *ServiceConfig) (*ServiceConfig, error) {
@@ -53,6 +61,11 @@ func TestPGXMock_UpdateServiceConfigAtomic_LockedReadMergeWrite(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 80.0, saved.Coverage)
 	assert.Equal(t, 4, saved.MinCount)
+	// Issue #8: the returned row carries the stamps the write produced, not
+	// the pre-write updated_at the merge copied from the locked read.
+	require.NotNil(t, saved.UpdatedAt)
+	assert.True(t, created.Equal(*saved.CreatedAt))
+	assert.True(t, writeStamp.Equal(*saved.UpdatedAt), "got %v", *saved.UpdatedAt)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -62,18 +75,24 @@ func TestPGXMock_UpdateServiceConfigAtomic_NoRowPassesNil(t *testing.T) {
 	mock := newMock(t)
 	store := storeWith(mock)
 
+	inserted := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	expectServiceConfigLockedRead(mock, pgxmock.NewRows(serviceConfigCols))
-	mock.ExpectExec("INSERT INTO service_configs").WithArgs(anyArgsCfg(14)...).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectQuery("INSERT INTO service_configs").WithArgs(anyArgsCfg(14)...).
+		WillReturnRows(pgxmock.NewRows(stampCols).AddRow(inserted, inserted))
 	mock.ExpectCommit()
 
 	sawNil := false
-	_, err := store.UpdateServiceConfigAtomic(context.Background(), "aws", "rds", func(existing *ServiceConfig) (*ServiceConfig, error) {
+	forged := time.Date(1999, 1, 1, 0, 0, 0, 0, time.UTC)
+	saved, err := store.UpdateServiceConfigAtomic(context.Background(), "aws", "rds", func(existing *ServiceConfig) (*ServiceConfig, error) {
 		sawNil = existing == nil
-		return &ServiceConfig{Provider: "aws", Service: "rds", Term: 1, Payment: "no-upfront"}, nil
+		// A caller-supplied stamp must be replaced by the database's.
+		return &ServiceConfig{Provider: "aws", Service: "rds", Term: 1, Payment: "no-upfront", CreatedAt: &forged, UpdatedAt: &forged}, nil
 	})
 	require.NoError(t, err)
 	assert.True(t, sawNil)
+	require.NotNil(t, saved.CreatedAt)
+	assert.True(t, inserted.Equal(*saved.CreatedAt))
+	assert.True(t, inserted.Equal(*saved.UpdatedAt))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -1,4 +1,4 @@
--- Migration 000150 (issue #999): an operator's audited settlement of a failed
+-- Migration 000152 (issue #999): an operator's audited settlement of a failed
 -- execution whose outcome is unknown (failed without no_submission proof).
 --
 -- Settling never changes status and never makes the row count as unbought:
