@@ -25,9 +25,11 @@ var exemptTasks = map[string]string{
 
 // optInRequired tasks must be wired but default to off (no live purchasing or
 // retention change by default). Flipping cleanup to default-on later means
-// removing it from this set.
+// removing it from this set. fire_scheduled_purchases left it when the owner
+// turned the fire sweep on by default (#712): it only executes purchases a
+// user already approved for a later time, and the server refuses any row due
+// more than 24h ago (#1549). process_scheduled_purchases stays opt-in.
 var optInRequired = map[string]bool{
-	"fire_scheduled_purchases":    true,
 	"process_scheduled_purchases": true,
 	"send_notifications":          true,
 	"cleanup":                     true,

@@ -777,8 +777,9 @@ resource "aws_lambda_permission" "eventbridge_ladder_run" {
 # scheduled_execution_at is in the past and fires each one. This
 # sweep is the runtime mechanism that makes auto-approve delayed
 # purchases actually execute; without it, scheduled tranches would
-# never fire between daily ladder runs. Default-off until the
-# auto-approve feature (L9) is promoted to GA.
+# never fire between daily ladder runs. On by default (owner decision
+# for #712): the server refuses any row due more than 24h ago (#1549),
+# so a first tick after enabling cannot buy a stale backlog.
 
 resource "aws_cloudwatch_event_rule" "fire_scheduled_purchases" {
   count = var.enable_fire_scheduled_purchases_schedule ? 1 : 0

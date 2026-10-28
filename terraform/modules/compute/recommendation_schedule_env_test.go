@@ -7,9 +7,13 @@ package compute_test
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/api"
 )
 
 const scheduleWhenEnabled = `var.enable_scheduled_tasks ? var.recommendation_schedule : ""`
@@ -78,5 +82,76 @@ func TestScheduleEnvValuesShapes(t *testing.T) {
 	}
 	if got := scheduleEnvValues("  OTHER = var.x\n"); len(got) != 0 {
 		t.Errorf("unrelated entry matched: %q", got)
+	}
+}
+
+var (
+	tfvarsScheduleRe = regexp.MustCompile(`(?m)^\s*recommendation_schedule\s*=\s*"([^"]*)"`)
+	// Own copy rather than tfStringDefaultRe in scheduled_task_cfn_test.go,
+	// which goes away with the CloudFormation stack (#1432).
+	scheduleDefaultRe = regexp.MustCompile(`(?m)^\s*default\s*=\s*"([^"]*)"`)
+)
+
+// recommendationSchedules returns the recommendation_schedule values the
+// deployment can end up with: each listed variables.tf default and each value
+// a tfvars file matched by tfvarsGlobs sets, keyed by where it came from.
+func recommendationSchedules(t *testing.T, varsFiles, tfvarsGlobs []string) map[string]string {
+	t.Helper()
+	got := map[string]string{}
+	for _, f := range varsFiles {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, ok := blockOnce(stripComments(string(raw)), `variable\s+"recommendation_schedule"\s*\{`)
+		m := scheduleDefaultRe.FindStringSubmatch(body)
+		if !ok || m == nil {
+			t.Fatalf("%s: no single recommendation_schedule variable with a string default", f)
+		}
+		got[f] = m[1]
+	}
+	for _, g := range tfvarsGlobs {
+		paths, err := filepath.Glob(g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range paths {
+			raw, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, m := range tfvarsScheduleRe.FindAllStringSubmatch(stripComments(string(raw)), -1) {
+				got[p] = m[1]
+			}
+		}
+	}
+	return got
+}
+
+// Owner decision D32 (#756): AWS collects at 02:00 UTC like GCP and Azure,
+// on a cron() schedule, so GET /api/recommendations/freshness can report
+// next_collection_at. Under the old rate(1 day) default the API could not
+// know the phase and always reported null on AWS.
+func TestRecommendationScheduleDefaultsReportNextCollection(t *testing.T) {
+	now := time.Date(2026, 10, 27, 15, 4, 5, 0, time.UTC)
+	want := time.Date(2026, 10, 28, 2, 0, 0, 0, time.UTC)
+	schedules := recommendationSchedules(t,
+		[]string{
+			awsEnvDir + "/variables.tf", "aws/lambda/variables.tf", "aws/fargate/variables.tf",
+			gcpEnvDir + "/variables.tf", azureEnvDir + "/variables.tf",
+		},
+		// Committed files only; a developer's untracked dev.tfvars may differ.
+		[]string{awsEnvDir + "/github-*.tfvars", awsEnvDir + "/*.tfvars.example", "../../profiles/aws/*.tfvars.example"},
+	)
+	for _, env := range []string{"dev", "staging", "prod"} {
+		if _, ok := schedules[awsEnvDir+"/github-"+env+".tfvars"]; !ok {
+			t.Errorf("github-%s.tfvars no longer sets recommendation_schedule; update this test", env)
+		}
+	}
+	for src, expr := range schedules {
+		next := api.NewHandler(api.HandlerConfig{RecommendationSchedule: expr}).NextCollectionAt(now)
+		if next == nil || !next.Equal(want) {
+			t.Errorf("%s: recommendation_schedule %q gives next_collection_at %v; want %s (daily at 02:00 UTC)", src, expr, next, want)
+		}
 	}
 }

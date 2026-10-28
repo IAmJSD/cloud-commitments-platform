@@ -54,4 +54,4 @@ frontend_price_class  = "PriceClass_100"
 
 # Scheduled tasks
 enable_scheduled_tasks  = true
-recommendation_schedule = "rate(1 day)"
+recommendation_schedule = "cron(0 2 * * ? *)" # daily at 02:00 UTC

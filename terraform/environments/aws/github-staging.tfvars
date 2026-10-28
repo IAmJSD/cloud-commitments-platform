@@ -78,7 +78,7 @@ create_subdomain_zone = false
 # ==============================================
 
 enable_scheduled_tasks  = true
-recommendation_schedule = "rate(1 day)"
+recommendation_schedule = "cron(0 2 * * ? *)" # daily at 02:00 UTC
 
 # ==============================================
 # Multi-Account Cross-Account Access

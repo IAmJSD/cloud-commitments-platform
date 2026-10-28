@@ -54,7 +54,8 @@ entry point. Flow:
 
 - **Scheduled cron** (AWS EventBridge / GCP Cloud Scheduler / Azure
   Logic App) — runs on all runtimes at `var.recommendation_schedule`,
-  default `rate(1 day)`.
+  default daily at 02:00 UTC (`cron(0 2 * * ? *)` on AWS, `0 2 * * *` on
+  GCP and Azure).
 - **Manual `POST /api/recommendations/refresh`** — user-driven via the
   Refresh button on the dashboard. All runtimes.
 - **In-request stale-while-revalidate** — GCP Cloud Run and Azure

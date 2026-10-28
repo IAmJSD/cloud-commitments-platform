@@ -370,9 +370,9 @@ variable "analytics_collect_schedule" {
 }
 
 variable "enable_fire_scheduled_purchases_schedule" {
-  description = "Schedule the fire_scheduled_purchases sweep, which fires delayed auto-approved purchases. Opt-in: default false."
+  description = "Schedule the fire_scheduled_purchases sweep, which executes delayed auto-approved purchases once their scheduled time has passed. On by default: the server refuses, and alerts on, any purchase due more than 24h ago (SCHEDULED_PURCHASE_MAX_OVERDUE, #1549), so turning it on cannot buy a stale backlog. Set false to opt out."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "fire_scheduled_purchases_schedule" {

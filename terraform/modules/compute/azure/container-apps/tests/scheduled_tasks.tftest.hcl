@@ -1,8 +1,9 @@
 # Scheduled server sweeps on Container Apps (#712). Every provider is mocked;
 # nothing here reaches Azure. Each sweep must be a Logic App workflow that
 # reads the scheduled-task secret with its own identity and POSTs to
-# /api/scheduled/<task>, on a recurrence equal to its cron schedule, and the
-# money sweeps must stay off unless asked for.
+# /api/scheduled/<task>, on a recurrence equal to its cron schedule. The fire
+# sweep is on by default (#712); the process and notification sweeps stay off
+# unless asked for.
 mock_provider "azurerm" {
   # Resources referenced by ID elsewhere in the module are parsed, so the mock
   # needs well-formed ARM IDs.
@@ -54,8 +55,8 @@ run "defaults_schedule_only_the_default_on_sweeps" {
   command = apply
 
   assert {
-    condition     = toset(keys(azurerm_logic_app_workflow.sweep)) == toset(["analytics_collect", "finalize_revocations", "reap_stuck_purchases"])
-    error_message = "By default only reap, analytics and finalize run; fire, process and send_notifications are opt-in."
+    condition     = toset(keys(azurerm_logic_app_workflow.sweep)) == toset(["analytics_collect", "finalize_revocations", "fire_scheduled_purchases", "reap_stuck_purchases"])
+    error_message = "By default reap, analytics, finalize and fire run; process and send_notifications are opt-in."
   }
 
   assert {
@@ -143,6 +144,19 @@ run "opt_in_sweeps_follow_their_flags" {
   assert {
     condition     = azurerm_logic_app_trigger_recurrence.sweep["fire_scheduled_purchases"].frequency == "Minute" && azurerm_logic_app_trigger_recurrence.sweep["fire_scheduled_purchases"].interval == 15
     error_message = "*/15 * * * * must become every 15 minutes."
+  }
+}
+
+run "fire_opt_out" {
+  command = plan
+
+  variables {
+    enable_fire_scheduled_purchases_schedule = false
+  }
+
+  assert {
+    condition     = toset(keys(azurerm_logic_app_workflow.sweep)) == toset(["analytics_collect", "finalize_revocations", "reap_stuck_purchases"])
+    error_message = "Setting enable_fire_scheduled_purchases_schedule = false must remove the fire workflow."
   }
 }
 

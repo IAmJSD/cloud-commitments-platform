@@ -42,6 +42,29 @@ are the full record until the next release.
   actions, `ec2:DescribeRegions`, `rds:DescribeDBInstances`, and the
   new-style `es:*ReservedInstance*` OpenSearch actions (replacing the legacy
   `es:*ReservedElasticsearch*` names).
+- **Bastion accounts whose target role trusts the CUDly host now get
+  AccessDenied.** CUDly assumes a bastion account's target role with the
+  bastion's own credentials and no longer falls back to the CUDly host's.
+  A target role whose trust policy names the CUDly host instead of the
+  bastion fails at AssumeRole until the bastion is added as the trusted
+  principal in that role's trust policy
+  ([#1556](https://github.com/LeanerCloud/cloud-commitments-platform/pull/1556)).
+
+### Changed
+
+- **The fire_scheduled_purchases sweep is now on by default on every
+  Terraform platform** (Lambda, Fargate, Cloud Run, GKE, Container Apps and
+  AKS), every 15 minutes. It executes delayed auto-approved purchases once
+  their scheduled time passes; until now they never ran unless the operator
+  turned the sweep on. The server refuses (and sends the purchase-failed
+  alert for) any purchase due more than 24h ago, so the first run cannot buy
+  a stale backlog. Set `enable_fire_scheduled_purchases_schedule = false` to
+  opt out. The process_scheduled_purchases sweep stays opt-in (#712)
+- **AWS recommendation collection moves to 02:00 UTC daily**
+  (`recommendation_schedule = "cron(0 2 * * ? *)"`, was `rate(1 day)`), the
+  same time as GCP and Azure. With a fixed time the recommendations freshness
+  endpoint can report `next_collection_at` on AWS too. Deployments that set
+  their own `recommendation_schedule` are unaffected (#756)
 
 ### Removed
 
