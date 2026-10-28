@@ -772,7 +772,7 @@ type StoreInterface interface {
 	WithTx(ctx context.Context, fn func(tx pgx.Tx) error) error
 
 	// Ladder configuration (per-account, per-provider).
-	// GetLadderConfigs returns all rows, newest first.
+	// GetLadderConfigs returns the rows newest first, capped at MaxListLimit.
 	// GetLadderConfig returns the single row for (cloudAccountID, provider),
 	// or (nil, nil) when no row exists.
 	// UpsertLadderConfig inserts or updates via the UNIQUE(cloud_account_id, provider)

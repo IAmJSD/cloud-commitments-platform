@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -458,6 +459,42 @@ func TestHandleLadderRun_AllConfigsDisabled(t *testing.T) {
 	assert.Equal(t, 0, result.Planned)
 	assert.Equal(t, 1, result.SkippedDisabled)
 	assert.Nil(t, store.savedRun)
+}
+
+// GetLadderConfigs is capped at config.MaxListLimit (#120), so a run that
+// reads exactly the cap may have missed older configs and must say so. One
+// row under the cap must not warn. The configs are disabled so the run stops
+// at the per-config gate.
+func TestHandleLadderRun_WarnsWhenConfigsHitListCap(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rows int
+		warn bool
+	}{
+		{"at the cap", config.MaxListLimit, true},
+		{"under the cap", config.MaxListLimit - 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := captureLogs(t)
+			configs := make([]config.LadderConfigDB, tc.rows)
+			for i := range configs {
+				configs[i] = validTestDBConfig(fmt.Sprintf("cfg-%d", i))
+				configs[i].Enabled = false
+			}
+			app := &Application{
+				Config: &ladderTestStore{globalCfg: validTestGlobalCfg(), ladderConfigs: configs},
+				LadderAccountResolver: func(_ context.Context) (string, string, error) {
+					return "123456789012", "us-east-1", nil
+				},
+			}
+
+			result, err := app.handleLadderRun(testutil.TestContext(t))
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.rows, result.SkippedDisabled)
+			assert.Equal(t, tc.warn, strings.Contains(logs.String(), "ladder configs may be truncated"), "logs: %.300s", logs.String())
+		})
+	}
 }
 
 // TestHandleLadderRun_MultiAccountSkip_CountedAndIsolated verifies that:
