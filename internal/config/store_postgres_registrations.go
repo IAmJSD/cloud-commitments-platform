@@ -117,7 +117,8 @@ func (s *PostgresStore) GetAccountRegistrationByToken(ctx context.Context, token
 	return s.scanRegistration(ctx, query, token)
 }
 
-// ListAccountRegistrations returns registrations matching the filter.
+// ListAccountRegistrations returns registrations matching the filter, newest
+// first, capped at MaxListLimit like the package's other list reads (#120).
 func (s *PostgresStore) ListAccountRegistrations(ctx context.Context, filter AccountRegistrationFilter) ([]AccountRegistration, error) {
 	var conditions []string
 	var args []interface{}
@@ -141,13 +142,15 @@ func (s *PostgresStore) ListAccountRegistrations(ctx context.Context, filter Acc
 			idx, idx, idx,
 		))
 		args = append(args, "%"+escaped+"%")
+		idx++
 	}
 
 	query := `SELECT ` + registrationColumns() + ` FROM account_registrations`
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
-	query += " ORDER BY created_at DESC"
+	query += fmt.Sprintf(" ORDER BY created_at DESC, id LIMIT $%d", idx)
+	args = append(args, MaxListLimit)
 
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {

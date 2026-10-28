@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2645,9 +2646,9 @@ func TestPGXMock_CleanupOldExecutions_Success(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	// Two args: retentionDays, then the health-scored status list branch 3
-	// excludes (see CleanupOldExecutions).
-	mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+	// Three args: retentionDays, then branch 3's settled-status allowlist and
+	// the health-scored statuses it excludes (see CleanupOldExecutions).
+	mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 5))
 
 	n, err := store.CleanupOldExecutions(ctx, 90)
@@ -3017,7 +3018,7 @@ func TestPGXMock_ListAccountRegistrations_SearchEscapesPercent(t *testing.T) {
 		AddRow(minimalRegRow("reg-1", "%foo Corp", "%foo@example.com")...)
 	// The query must contain ESCAPE to prove the clause was updated.
 	mock.ExpectQuery(`ESCAPE`).
-		WithArgs("%" + escapedArg + "%").
+		WithArgs("%"+escapedArg+"%", MaxListLimit).
 		WillReturnRows(rows)
 
 	filter := AccountRegistrationFilter{Search: rawSearch}
@@ -3042,7 +3043,7 @@ func TestPGXMock_ListAccountRegistrations_SearchEscapesUnderscore(t *testing.T) 
 	rows := pgxmock.NewRows(registrationCols()).
 		AddRow(minimalRegRow("reg-2", "foo_bar Inc", "foo_bar@example.com")...)
 	mock.ExpectQuery(`ESCAPE`).
-		WithArgs("%" + escapedArg + "%").
+		WithArgs("%"+escapedArg+"%", MaxListLimit).
 		WillReturnRows(rows)
 
 	filter := AccountRegistrationFilter{Search: rawSearch}
@@ -3069,7 +3070,7 @@ func TestPGXMock_ListAccountRegistrations_SearchEscapesBackslash(t *testing.T) {
 		AddRow(minimalRegRow("reg-3", `foo\bar Ltd`, `foo\bar@example.com`)...)
 	// The query must contain ESCAPE to prove the clause was updated.
 	mock.ExpectQuery(`ESCAPE`).
-		WithArgs("%" + escapedArg + "%").
+		WithArgs("%"+escapedArg+"%", MaxListLimit).
 		WillReturnRows(rows)
 
 	filter := AccountRegistrationFilter{Search: rawSearch}
@@ -3292,7 +3293,7 @@ func TestPGXMock_CleanupOldExecutions_IncludesCanonicalStatus(t *testing.T) {
 	// appearing together in the SQL. If either is missing the mock won't
 	// match, causing an "unexpected query" error from ExpectationsWereMet.
 	mock.ExpectExec(`'cancelled'.*'canceled'`).
-		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 4))
 
 	n, err := store.CleanupOldExecutions(ctx, 90)
@@ -3315,7 +3316,7 @@ func TestPGXMock_CleanupOldExecutions_RetainsCanceledOnUpdatedAt(t *testing.T) {
 	anchors := map[string]string{
 		"canceled branch retains on updated_at":      `(?s)status IN \('cancelled', 'canceled'\)\s+AND updated_at`,
 		"completed branch retains on scheduled_date": `(?s)status = 'completed'\s+AND scheduled_date`,
-		"expires_at branch skips scored statuses":    `(?s)status <> ALL\(\$2\)\s+AND expires_at IS NOT NULL`,
+		"expires_at branch allowlists settled rows":  `(?s)status = ANY\(\$2\)\s+AND status <> ALL\(\$3\)\s+AND expires_at IS NOT NULL`,
 	}
 
 	for name, pattern := range anchors {
@@ -3325,7 +3326,7 @@ func TestPGXMock_CleanupOldExecutions_RetainsCanceledOnUpdatedAt(t *testing.T) {
 			ctx := context.Background()
 
 			mock.ExpectExec(pattern).
-				WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+				WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 				WillReturnResult(pgxmock.NewResult("DELETE", 1))
 
 			n, err := store.CleanupOldExecutions(ctx, 30)
@@ -3337,7 +3338,10 @@ func TestPGXMock_CleanupOldExecutions_RetainsCanceledOnUpdatedAt(t *testing.T) {
 }
 
 // TestPGXMock_CleanupOldExecutions_ExcludesEveryHealthScoredStatus pins the
-// $2 argument itself, not just the `<> ALL($2)` spelling. The anchors above
+// $2 and $3 arguments themselves, not just the `= ANY($2)` and `<> ALL($3)`
+// spellings. $2 is the settled-status allowlist (#120): passing a wider list,
+// or none, lets a lapsed TTL delete an approved or running row the reaper
+// still needs. $3 is the health-score exclusion. The anchors above
 // would still match if someone passed a narrower list (say, the canceled
 // spellings only), which is exactly the drift the shared slice exists to
 // prevent: `failed` is scored at up to -40, so dropping it from the
@@ -3350,7 +3354,7 @@ func TestPGXMock_CleanupOldExecutions_ExcludesEveryHealthScoredStatus(t *testing
 	ctx := context.Background()
 
 	mock.ExpectExec("DELETE").
-		WithArgs(30, HealthScoredExecutionStatuses).
+		WithArgs(30, TerminalExecutionStatuses, HealthScoredExecutionStatuses).
 		WillReturnResult(pgxmock.NewResult("DELETE", 2))
 
 	n, err := store.CleanupOldExecutions(ctx, 30)
@@ -3361,6 +3365,17 @@ func TestPGXMock_CleanupOldExecutions_ExcludesEveryHealthScoredStatus(t *testing
 	assert.ElementsMatch(t,
 		[]string{StatusFailed, StatusCanceled, LegacyStatusCanceled},
 		HealthScoredExecutionStatuses)
+	// The statuses a lapsed TTL may delete: settled and not health-scored.
+	// None of them is one an executor, scheduler or reaper acts on.
+	var ttlDeletable []string
+	for _, st := range TerminalExecutionStatuses {
+		if !slices.Contains(HealthScoredExecutionStatuses, st) {
+			ttlDeletable = append(ttlDeletable, st)
+		}
+	}
+	assert.ElementsMatch(t,
+		[]string{StatusCompleted, StatusPartiallyCompleted, StatusExpired, StatusRevocationRequested},
+		ttlDeletable)
 }
 
 // ─── CountExecutionsByPlanAndStatus ──────────────────────────────────────────

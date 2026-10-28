@@ -2315,13 +2315,26 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 //     already assumed.
 //
 //  3. Expired-row cleanup: `expires_at IS NOT NULL AND expires_at < NOW() -
-//     retention`, for any status the health score does not count. This is
-//     the row's own TTL column (SavePurchaseExecution writes it from
+//     retention`, for a settled row the health score does not count. This
+//     is the row's own TTL column (SavePurchaseExecution writes it from
 //     PurchaseExecution.TTL), NOT the approval-token deadline -- that is a
 //     separate column, `approval_token_expires_at`, added by migration
 //
-//  000051. A row whose TTL lapsed longer than `retention` ago is dead, so
-//     without this branch it would accumulate indefinitely.
+//  000051. A settled row whose TTL lapsed longer than `retention` ago is
+//     dead, so without this branch it would accumulate indefinitely.
+//
+//     The status gate is an ALLOWLIST: status = ANY(TerminalExecutionStatuses)
+//     AND status <> ALL(HealthScoredExecutionStatuses), the same predicate
+//     cmd/cleanup-lambda's expiredExecutionsWhere uses (#998, #1173). A lapsed
+//     TTL says nothing about whether an executor, scheduler or reaper still
+//     needs the row: `expires_at` is set at insert and never rewritten, so an
+//     `approved` or `running` row stranded by a dead executor (the rows
+//     GetStaleApprovedExecutions and ListStuckExecutions exist to find) used
+//     to be deleted here before the reaper could resolve it (#120). Pending
+//     and notified rows are kept too: ExpireExecutionAtomic moves a lapsed
+//     approval to `expired`, which this branch then reaps. A status added to
+//     the schema later is kept until someone classifies it in
+//     TerminalExecutionStatuses, the fail-closed direction.
 //
 //     Every status in HealthScoredExecutionStatuses is excluded here, which
 //     is the whole reason that slice is exported rather than spelled out
@@ -2364,11 +2377,15 @@ func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays 
 	// follow-up to #1277). #1278 will drop 'cancelled' once all rows are
 	// normalized.
 	//
-	// Branch 3's exclusion is parameterized from
-	// HealthScoredExecutionStatuses instead of repeating a literal list, so
-	// a status added to the plan health score extends this exclusion
-	// automatically and the two cannot drift. `status` is NOT NULL
-	// (migration 000001), so `<> ALL` is not exposed to three-valued logic.
+	// Branch 3's allowlist and exclusion are parameterized from
+	// TerminalExecutionStatuses and HealthScoredExecutionStatuses instead of
+	// repeating literal lists, so this branch, cmd/cleanup-lambda and the
+	// plan health score cannot drift. `status` is NOT NULL (migration
+	// 000001), so neither array test is exposed to three-valued logic.
+	//
+	// Under READ COMMITTED a row another transaction is updating is
+	// rechecked against the whole predicate once that transaction commits,
+	// so a row that leaves the allowlist while the DELETE waits survives.
 	query := `
 		DELETE FROM purchase_executions
 		WHERE (
@@ -2380,13 +2397,14 @@ func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays 
 		    AND updated_at     < NOW() - INTERVAL '1 day' * $1
 		      )
 		   OR (
-		        status <> ALL($2)
+		        status = ANY($2)
+		    AND status <> ALL($3)
 		    AND expires_at IS NOT NULL
 		    AND expires_at     < NOW() - INTERVAL '1 day' * $1
 		      )
 	`
 
-	result, err := s.db.Exec(ctx, query, retentionDays, HealthScoredExecutionStatuses)
+	result, err := s.db.Exec(ctx, query, retentionDays, TerminalExecutionStatuses, HealthScoredExecutionStatuses)
 	if err != nil {
 		return 0, fmt.Errorf("failed to cleanup old executions: %w", err)
 	}
