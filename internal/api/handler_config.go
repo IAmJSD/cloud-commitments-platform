@@ -68,17 +68,9 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, permErr
 	}
 
-	// Reject a malformed body before any DB work so a bad request fails fast
-	// (and never opens a transaction). Keeps the nil-store fast-fail contract.
-	if !json.Valid([]byte(req.Body)) {
-		return nil, NewClientError(400, "invalid request body")
-	}
-
-	// Presence map of the top-level keys the caller actually sent, used to
-	// replace (not merge) grace_period_days when present.
-	var present map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(req.Body), &present); err != nil {
-		return nil, NewClientError(400, "invalid request body")
+	present, err := globalConfigWriteFields(req.Body)
+	if err != nil {
+		return nil, err
 	}
 	_, gracePresent := present["grace_period_days"]
 	modeSent := riExchangeModeSent(present)
@@ -137,6 +129,20 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 	logLadderExecutionSwitchChange(ctx, session, ladderBefore, merged)
 
 	return &StatusResponse{Status: "updated"}, nil
+}
+
+// globalConfigWriteFields validates the body before any DB work and returns
+// the supplied top-level fields, including explicit nulls. The write uses this
+// presence map to replace grace_period_days and validate ri_exchange_mode.
+func globalConfigWriteFields(body string) (map[string]json.RawMessage, error) {
+	if !json.Valid([]byte(body)) {
+		return nil, NewClientError(400, "invalid request body")
+	}
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(body), &present); err != nil {
+		return nil, NewClientError(400, "invalid request body")
+	}
+	return present, nil
 }
 
 // riExchangeModeSent reports whether the body writes ri_exchange_mode. A JSON
