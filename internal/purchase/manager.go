@@ -27,10 +27,14 @@ type STSClient interface {
 
 // ManagerConfig holds configuration for the purchase manager.
 type ManagerConfig struct {
-	AmbientAWSCreds        aws.CredentialsProvider
-	EmailSender            email.SenderInterface
-	STSClient              STSClient
-	AssumeRoleSTS          credentials.STSClient
+	AmbientAWSCreds aws.CredentialsProvider
+	EmailSender     email.SenderInterface
+	STSClient       STSClient
+	AssumeRoleSTS   credentials.STSClient
+	// BastionSTSFactory builds the STS client a bastion-mode account's target
+	// role is assumed with, signed with the bastion account's credentials.
+	// Without it bastion accounts fail to resolve (issue #263).
+	BastionSTSFactory      credentials.STSClientFactory
 	CredentialStore        credentials.CredentialStore
 	ProviderFactory        provider.FactoryInterface
 	ConfigStore            config.StoreInterface
@@ -54,6 +58,7 @@ type Manager struct {
 	email           email.SenderInterface
 	stsClient       STSClient
 	assumeRoleSTS   credentials.STSClient
+	bastionSTS      credentials.STSClientFactory
 	ambientAWSCreds aws.CredentialsProvider
 	credStore       credentials.CredentialStore
 	providerFactory provider.FactoryInterface
@@ -123,6 +128,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		email:           cfg.EmailSender,
 		stsClient:       cfg.STSClient,
 		assumeRoleSTS:   cfg.AssumeRoleSTS,
+		bastionSTS:      cfg.BastionSTSFactory,
 		ambientAWSCreds: cfg.AmbientAWSCreds,
 		credStore:       cfg.CredentialStore,
 		providerFactory: factory,

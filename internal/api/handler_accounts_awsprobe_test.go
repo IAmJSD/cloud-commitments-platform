@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -57,6 +58,25 @@ type probeSTS struct {
 	assumeRoles      atomic.Int32
 	webIdentityCalls atomic.Int32
 	identityCalls    atomic.Int32
+	mu               sync.Mutex
+	assumeSigners    []string // access key that signed each AssumeRole
+}
+
+// assumeRoleSigners returns the access key IDs that signed each AssumeRole.
+func (p *probeSTS) assumeRoleSigners() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.assumeSigners...)
+}
+
+// signerKey returns the access key ID in a SigV4 Authorization header.
+func signerKey(auth string) string {
+	_, rest, ok := strings.Cut(auth, "Credential=")
+	if !ok {
+		return ""
+	}
+	key, _, _ := strings.Cut(rest, "/")
+	return key
 }
 
 func probeXML(status int, body string) *http.Response {
@@ -90,6 +110,9 @@ func (p *probeSTS) Do(r *http.Request) (*http.Response, error) {
 		return probeXML(200, probeCredsXML("AssumeRoleWithWebIdentity", probeWebIdentKey, "arn:aws:sts::"+probeTenantAcct+":assumed-role/tenant/w")), nil
 	case strings.Contains(body, "Action=AssumeRole"):
 		p.assumeRoles.Add(1)
+		p.mu.Lock()
+		p.assumeSigners = append(p.assumeSigners, signerKey(r.Header.Get("Authorization")))
+		p.mu.Unlock()
 		if p.denyAssumeRole {
 			return probeError(403, "AccessDenied", "User: "+probeHostRoleARN+" is not authorized to perform: sts:AssumeRole on resource: "+probeTenantRole), nil
 		}
@@ -156,7 +179,15 @@ func runAccountTest(t *testing.T, pc probeCase) AccountTestResult {
 	acct := pc.acct
 	acct.ID = probeAccountID
 	acct.Provider = "aws"
-	store.GetCloudAccountFn = func(context.Context, string) (*config.CloudAccount, error) { return acct, nil }
+	// Any other ID is a bastion: an enabled access_keys account whose keys are
+	// the same stored payload (issue #263: bastion accounts resolve through
+	// their bastion's own credentials).
+	store.GetCloudAccountFn = func(_ context.Context, id string) (*config.CloudAccount, error) {
+		if id == probeAccountID {
+			return acct, nil
+		}
+		return &config.CloudAccount{ID: id, Provider: "aws", Enabled: true, AWSAuthMode: "access_keys"}, nil
+	}
 
 	if pc.stsFake == nil {
 		pc.stsFake = &probeSTS{}
@@ -220,7 +251,7 @@ func TestTestAccountCredentials_AWSFailuresAreClassified(t *testing.T) {
 		},
 		{
 			name:    "bastion mode without role ARN",
-			pc:      probeCase{acct: &config.CloudAccount{ExternalID: probeTenantAcct, AWSAuthMode: "bastion", AWSBastionID: "b"}},
+			pc:      probeCase{acct: &config.CloudAccount{ExternalID: probeTenantAcct, AWSAuthMode: "bastion", AWSBastionID: "b"}, payload: validAccessKeyPayload},
 			wantMsg: "credential configuration incomplete: aws_role_arn is required",
 		},
 		{
@@ -324,6 +355,7 @@ func TestTestAccountCredentials_AWSValidConfigsProbeCallerIdentity(t *testing.T)
 		wantAcct    string
 		wantAssume  int32
 		wantWebAuth int32
+		wantSigners []string
 	}{
 		{
 			name:     "access_keys",
@@ -349,10 +381,14 @@ func TestTestAccountCredentials_AWSValidConfigsProbeCallerIdentity(t *testing.T)
 			wantWebAuth: 1,
 		},
 		{
-			name:       "bastion with bastion id and role ARN",
-			acct:       &config.CloudAccount{ExternalID: probeTenantAcct, AWSAuthMode: "bastion", AWSBastionID: "bastion-1", AWSRoleARN: probeTenantRole},
-			wantAcct:   probeTenantAcct,
-			wantAssume: 1,
+			// Issue #263: the target role is assumed with the bastion's own
+			// keys (the stored payload), never the host's.
+			name:        "bastion with bastion id and role ARN",
+			acct:        &config.CloudAccount{ExternalID: probeTenantAcct, AWSAuthMode: "bastion", AWSBastionID: "bastion-1", AWSRoleARN: probeTenantRole},
+			payload:     validAccessKeyPayload,
+			wantAcct:    probeTenantAcct,
+			wantAssume:  1,
+			wantSigners: []string{probeMemberKeyID},
 		},
 	}
 	for _, tt := range tests {
@@ -364,6 +400,9 @@ func TestTestAccountCredentials_AWSValidConfigsProbeCallerIdentity(t *testing.T)
 			assert.NotContains(t, res.Message, "arn:", "success must report the target account, not the caller ARN")
 			assert.Equal(t, tt.wantAssume, fake.assumeRoles.Load())
 			assert.Equal(t, tt.wantWebAuth, fake.webIdentityCalls.Load())
+			if tt.wantSigners != nil {
+				assert.Equal(t, tt.wantSigners, fake.assumeRoleSigners(), "AssumeRole signed by the wrong credentials")
+			}
 			assert.GreaterOrEqual(t, fake.identityCalls.Load(), int32(1), "sts:GetCallerIdentity probe must run")
 		})
 	}

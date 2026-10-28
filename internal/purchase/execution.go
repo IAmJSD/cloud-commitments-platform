@@ -536,7 +536,12 @@ func (m *Manager) resolveAWSProvider(ctx context.Context, account config.CloudAc
 		return nil, fmt.Errorf("credentials: STS client not configured for non-access_keys mode (account %s)", account.ID)
 	}
 	awsCreds, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, &account, m.credStore, m.assumeRoleSTS,
-		credentials.AWSResolveOptions{AmbientProvider: m.ambientAWSCreds, AmbientSTS: m.stsClient})
+		credentials.AWSResolveOptions{
+			AccountLookup:    credentials.AccountLookupFromStore(m.config),
+			STSClientFactory: m.bastionSTS,
+			AmbientProvider:  m.ambientAWSCreds,
+			AmbientSTS:       m.stsClient,
+		})
 	if err != nil {
 		logging.Errorf("purchase[resolveAWSProvider]: failed for account=%s after %s: %v",
 			account.ID, time.Since(t0), err)
