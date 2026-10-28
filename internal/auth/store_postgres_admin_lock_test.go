@@ -9,18 +9,17 @@ package auth
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/pashagolub/pgxmock/v4"
+	"github.com/pashagolub/pgxmock/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 const (
-	updateUserSQLRegex = `(?s)UPDATE users SET\s+email = \$2,.*deactivated_at = \$19\s+WHERE id = \$1`
-
 	updateUserAdminFieldsSQLRegex = `(?s)UPDATE users SET email = \$2, group_ids = \$3, active = \$4, ` +
 		`deactivated_at = \$5, updated_at = NOW\(\)\s+` +
 		`WHERE id = \$1 AND email = \$6 AND group_ids = \$7 AND active = \$8\s+RETURNING updated_at`
@@ -74,17 +73,6 @@ func adminLockedWrites() []adminLockedWrite {
 		assert.Contains(t, err.Error(), "user not found: "+lockedWriteUserID)
 	}
 	return []adminLockedWrite{
-		{
-			name: "UpdateUser",
-			expect: func(mock pgxmock.PgxPoolIface, outcome writeOutcome) {
-				args := append([]any{lockedWriteUserID}, anyArgs(18)...)
-				expectLockedExec(mock, updateUserSQLRegex, "UPDATE", args, outcome)
-			},
-			call: func(ctx context.Context, store *PostgresStore) error {
-				return store.UpdateUser(ctx, &User{ID: lockedWriteUserID, GroupIDs: []string{DefaultPurchaserGroupID}})
-			},
-			assertNoRow: assertUserNotFound,
-		},
 		{
 			name: "UpdateUserAdminFields",
 			expect: func(mock pgxmock.PgxPoolIface, outcome writeOutcome) {
@@ -221,6 +209,22 @@ func TestPGXMock_AdminWrites_CommitTriggerViolationStaysDetectable(t *testing.T)
 			assert.True(t, isLastAdminConstraintViolation(err), "lost the trigger error: %v", err)
 			assert.Contains(t, err.Error(), "commit")
 		})
+	}
+}
+
+// TestStore_HasNoWholeRowUserWriter pins issue #583: the whole-row
+// UpdateUser(ctx, *User) is gone from the store, so adminLockedWrites above
+// lists every store write that can lower the active-admin count. A new caller
+// has to pick a column-scoped writer, and cannot bring back a stale whole-row
+// save that overwrites MFA, password or membership changes made since its
+// read.
+func TestStore_HasNoWholeRowUserWriter(t *testing.T) {
+	for _, typ := range []reflect.Type{
+		reflect.TypeFor[StoreInterface](),
+		reflect.TypeFor[*PostgresStore](),
+	} {
+		_, found := typ.MethodByName("UpdateUser")
+		assert.False(t, found, "%s still has the whole-row UpdateUser", typ)
 	}
 }
 

@@ -873,8 +873,8 @@ func TestService_ValidateUserAPIKey(t *testing.T) {
 	})
 
 	t.Run("reject when stored hash does not match derived hash", func(t *testing.T) {
-		// Simulates a DB row whose key_hash field was tampered or
-		// belongs to a different key -- the constant-time check must reject it.
+		// Simulates a store returning a row whose key_hash belongs to a
+		// different key -- the post-fetch store-integrity check must reject it.
 		mockStore := new(MockStore)
 		service := &Service{store: mockStore}
 
@@ -897,34 +897,6 @@ func TestService_ValidateUserAPIKey(t *testing.T) {
 		assert.Contains(t, err.Error(), "invalid API key")
 		assert.Nil(t, resultUser)
 		assert.Nil(t, resultKey)
-		mockStore.AssertExpectations(t)
-	})
-}
-
-func TestService_UpdateLastUsed(t *testing.T) {
-	ctx := context.Background()
-
-	t.Run("successfully update last used", func(t *testing.T) {
-		mockStore := new(MockStore)
-		service := &Service{store: mockStore}
-
-		mockStore.On("UpdateAPIKeyLastUsed", ctx, "key-1").Return(nil)
-
-		err := service.UpdateLastUsed(ctx, "key-1")
-
-		require.NoError(t, err)
-		mockStore.AssertExpectations(t)
-	})
-
-	t.Run("return error when update fails", func(t *testing.T) {
-		mockStore := new(MockStore)
-		service := &Service{store: mockStore}
-
-		mockStore.On("UpdateAPIKeyLastUsed", ctx, "key-1").Return(assert.AnError)
-
-		err := service.UpdateLastUsed(ctx, "key-1")
-
-		assert.Error(t, err)
 		mockStore.AssertExpectations(t)
 	})
 }
@@ -1308,7 +1280,7 @@ func TestService_HasAPIKeyPermissionForConstraintsAPI_OwnerCapEnforced(t *testin
 		mockStore := new(MockStore)
 		t.Cleanup(func() { mockStore.AssertExpectations(t) })
 		mockStore.On("GetAPIKeyByID", ctx, keyID).Return(key, nil)
-		// lookupAPIKeyUser + GetAuthContext both call GetUserByID.
+		// loadActiveUser + GetAuthContext both call GetUserByID.
 		mockStore.On("GetUserByID", ctx, userID).Return(owner, nil)
 		mockStore.On("GetGroup", ctx, grpID).Return(ownerGroup, nil)
 		return mockStore

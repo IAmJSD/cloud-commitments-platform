@@ -13,6 +13,9 @@ import (
 type SchedulerInterface interface {
 	CollectRecommendations(ctx context.Context, ownerToken string) (*scheduler.CollectResult, error)
 	ListRecommendations(ctx context.Context, filter config.RecommendationFilter) ([]config.RecommendationRecord, error)
+	// ScanRecommendations walks the same rows as ListRecommendations in
+	// ID-ordered chunks for the paginated list endpoint (issue #981).
+	ScanRecommendations(ctx context.Context, filter config.RecommendationFilter, chunkSize int, fn func([]config.RecommendationRecord) error) error
 	// GetRecommendationByID fetches a single rec by application-level id,
 	// bypassing account-override filtering. hiddenBy is non-nil when the rec
 	// exists but would be dropped by the override filter. Returns nil, nil,
@@ -28,9 +31,11 @@ type PurchaseManagerInterface interface {
 	// ApproveExecution, ApproveAndExecute and RunPlannedPurchaseNow return the
 	// raw revocation token minted on a successful execute (issue #103: only
 	// its hash is stored, so a re-read cannot yield an emailable token).
-	// Empty on failure. Each takes the caller's ClaimedRowCheck, run against
-	// the claimed row before any provider call (issue #415).
-	ApproveExecution(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (string, error)
+	// Empty on failure. Each also returns the row with its final status, nil
+	// when the run never started (issue #532), and takes the caller's
+	// ClaimedRowCheck, run against the claimed row before any provider call
+	// (issue #415).
+	ApproveExecution(ctx context.Context, execID, token, actor string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	ApproveAndExecute(ctx context.Context, execID, actor string, transitionedBy *string, check purchase.ClaimedRowCheck) (*config.PurchaseExecution, string, error)
 	// DirectExecute is ApproveAndExecute for the direct-execute permission; it
 	// stamps the executed_* audit fields only after the claim is won.
@@ -50,8 +55,9 @@ type PurchaseManagerInterface interface {
 	// whose scheduled_execution_at is in the past (Gmail-style pre-fire delay,
 	// issue #291 wave-2). Called on the "fire_scheduled_purchases" scheduler tick.
 	FireScheduledDelayedPurchases(ctx context.Context) (*purchase.FireResult, error)
-	// FinalizeInFlightRevocations sweeps purchase_history rows with
-	// revocation_in_flight=true and retries MarkPurchaseRevoked for each. Handles
+	// FinalizeInFlightRevocations sweeps unrevoked purchase_history rows with a
+	// recorded Azure Return and retries MarkPurchaseRevoked for each, and
+	// releases flags that stayed set with no recorded Return (issue #1523). Handles
 	// the partial-success case where Azure Return succeeded but the DB write
 	// failed (issue #290 Finding #6). Called on the "finalize_revocations" tick.
 	FinalizeInFlightRevocations(ctx context.Context) (*purchase.FinalizeResult, error)

@@ -17,7 +17,7 @@ import (
 
 func TestHandler_getFederationIaC_MissingTarget(t *testing.T) {
 	ctx := context.Background()
-	h := federationHandler()
+	h := federationHandler(t)
 	req := federationReq(map[string]string{
 		"source":     "aws",
 		"account_id": "11111111-1111-1111-1111-111111111111",
@@ -29,7 +29,7 @@ func TestHandler_getFederationIaC_MissingTarget(t *testing.T) {
 
 func TestHandler_getFederationIaC_SuccessWithoutAccountID(t *testing.T) {
 	ctx := context.Background()
-	h := federationHandler()
+	h := federationHandler(t)
 	req := federationReq(map[string]string{
 		"target": "aws",
 		"source": "gcp",

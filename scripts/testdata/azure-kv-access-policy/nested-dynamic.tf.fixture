@@ -1,0 +1,31 @@
+# Fixture: a dynamic "access_policy" block inside azurerm_key_vault. Must exit 1.
+#
+# The `dynamic` spelling generates the same nested grant from a collection, so
+# it is banned for the same reason as the static block. A dynamic block of any
+# other name inside the vault (network_acls here) must not be reported.
+
+resource "azurerm_key_vault" "main" {
+  name                      = "kv-fixture"
+  location                  = var.location
+  resource_group_name       = var.resource_group_name
+  tenant_id                 = data.azurerm_client_config.current.tenant_id
+  sku_name                  = "standard"
+  enable_rbac_authorization = true
+
+  dynamic "network_acls" {
+    for_each = var.network_acls == null ? [] : [var.network_acls]
+    content {
+      default_action = network_acls.value.default_action
+      bypass         = "AzureServices"
+    }
+  }
+
+  dynamic "access_policy" {
+    for_each = var.reader_object_ids
+    content {
+      tenant_id          = data.azurerm_client_config.current.tenant_id
+      object_id          = access_policy.value
+      secret_permissions = ["Get"]
+    }
+  }
+}

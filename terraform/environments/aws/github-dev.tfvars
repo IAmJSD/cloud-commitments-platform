@@ -25,11 +25,12 @@ lambda_log_retention_days   = 7
 # Function URL auth_type is derived from enable_cdn (local in compute.tf):
 #   enable_cdn = false -> NONE  (direct browser hits, app-layer auth)
 #   enable_cdn = true  -> AWS_IAM (CloudFront OAC signs every request)
-# Current deployed dev origin (Lambda Function URL) + local Webpack dev server.
+# Static CORS origins: the local Webpack dev server. The deployed Function
+# URL's own origin is not listed here: its host is server-assigned, so the
+# deploy workflow reads it from the previous apply and passes it as
+# TF_VAR_lambda_deployed_function_url (see variables.tf, #324).
 # Wildcard is rejected by the module (allow_credentials=true + * = any-origin CSRF).
-# Update the Lambda Function URL entry when the dev environment is redeployed.
 lambda_allowed_origins = [
-  "https://33pz7pombdqwu3bdlxp4lqxyra0bsriy.lambda-url.us-east-1.on.aws",
   "http://localhost:3000",
 ]
 

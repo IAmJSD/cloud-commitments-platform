@@ -42,8 +42,11 @@ func stubActorPermissionsMaybe(ctx context.Context, mockStore *MockStore, perms 
 		Return(&Group{ID: ceilingActorGroupID, Name: "Actor Group", Permissions: perms}, nil).Maybe()
 }
 
+// stubTargetGroup also lets the issue #1409 member check list users: the
+// target has no members here, so a permission change never conflicts.
 func stubTargetGroup(ctx context.Context, mockStore *MockStore, group *Group) {
 	mockStore.On("GetGroup", ctx, ceilingTargetID).Return(group, nil)
+	mockStore.On("ListUsers", ctx).Return([]User{}, nil).Maybe()
 }
 
 func newCeilingService(t *testing.T, mockStore *MockStore) *Service {

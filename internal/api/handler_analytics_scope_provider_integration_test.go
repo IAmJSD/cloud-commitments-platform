@@ -188,9 +188,10 @@ func TestAnalyticsScopedRawExternalIDIsProviderScoped_DB(t *testing.T) {
 	db := setupAnalyticsScopeDB(t)
 	ctx := t.Context()
 
-	// A scoped user reaches the registered account by name or by its raw
-	// external id; either way only the aws row may be aggregated.
-	for _, scope := range []string{scopeAWSAccount, scopeSharedID} {
+	// A scoped user reaches the registered account by its account ID or by its
+	// raw external id; either way only the aws row may be aggregated. Scope
+	// entries match account IDs only, never display names (#1034).
+	for _, scope := range []string{db.awsUUID, scopeSharedID} {
 		t.Run("scope "+scope+", raw id request", func(t *testing.T) {
 			got := db.seen(ctx, t, db.session(t, []string{scope}), scopeSharedID)
 			assertSeen(t, got, []string{"aws"}, []string{scopeSvcAWS})
@@ -198,7 +199,7 @@ func TestAnalyticsScopedRawExternalIDIsProviderScoped_DB(t *testing.T) {
 	}
 
 	t.Run("scoped UUID request is unchanged", func(t *testing.T) {
-		got := db.seen(ctx, t, db.session(t, []string{scopeAWSAccount}), db.awsUUID)
+		got := db.seen(ctx, t, db.session(t, []string{db.awsUUID}), db.awsUUID)
 		assertSeen(t, got, []string{"aws"}, []string{scopeSvcAWS})
 	})
 
@@ -218,7 +219,7 @@ func TestAnalyticsScopedRawExternalIDIsProviderScoped_DB(t *testing.T) {
 func TestAnalyticsScopedRawExternalIDConcurrentRegistration_DB(t *testing.T) {
 	db := setupAnalyticsScopeDB(t)
 	ctx := t.Context()
-	token := db.session(t, []string{scopeAWSAccount})
+	token := db.session(t, []string{db.awsUUID})
 
 	stop := make(chan struct{})
 	var wg sync.WaitGroup

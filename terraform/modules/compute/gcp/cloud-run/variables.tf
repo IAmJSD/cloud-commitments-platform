@@ -275,3 +275,24 @@ variable "archera_api_key_secret_id" {
   type        = string
   default     = ""
 }
+
+# Cloud KMS only accepts destroy_scheduled_duration when a key is created:
+# the provider marks it ForceNew, so changing it on a deployed key plans a
+# replacement of the OIDC signing key. With create_before_destroy that apply
+# fails on the key-name collision before the live key is touched (see
+# signing-key.tf), so set a longer window only for a project whose key does
+# not exist yet. The default keeps every deployed key unchanged (#324).
+variable "signing_key_destroy_scheduled_duration" {
+  description = "How long the OIDC signing key's versions stay in DESTROY_SCHEDULED (restorable) before Cloud KMS destroys them, as \"<seconds>s\". Between 1 day (86400s) and 120 days (10368000s). Only takes effect when the key is created; see the comment above."
+  type        = string
+  default     = "86400s"
+
+  validation {
+    condition = (
+      can(regex("^[0-9]+s$", var.signing_key_destroy_scheduled_duration)) &&
+      try(tonumber(trimsuffix(var.signing_key_destroy_scheduled_duration, "s")) >= 86400, false) &&
+      try(tonumber(trimsuffix(var.signing_key_destroy_scheduled_duration, "s")) <= 10368000, false)
+    )
+    error_message = "signing_key_destroy_scheduled_duration must be a whole number of seconds with an \"s\" suffix, between \"86400s\" (1 day) and \"10368000s\" (120 days), the range Cloud KMS accepts."
+  }
+}

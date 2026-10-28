@@ -84,8 +84,21 @@ func TestLadderTrancheProvenance_InsertClaimAndReconcile(t *testing.T) {
 		return create(ctx, tx, tr)
 	})
 	require.NoError(t, err)
-	require.Len(t, claimed, len(rows))
-	require.Equal(t, int64(3), calls.Load())
+	// Only the commitment-dollar row is claimable (#946); fire the legacy NULL
+	// and on-demand rows directly so the fired-row reader still sees every basis.
+	require.Len(t, claimed, 1)
+	require.Equal(t, rows[2].ID, claimed[0].ID)
+	require.Equal(t, int64(1), calls.Load())
+	for _, legacy := range rows[:2] {
+		require.NoError(t, store.WithTx(ctx, func(tx pgx.Tx) error {
+			execID, createErr := create(ctx, tx, legacy)
+			if createErr != nil {
+				return createErr
+			}
+			_, execErr := tx.Exec(ctx, `UPDATE ladder_tranches SET status = 'fired', execution_id = $2 WHERE id = $1`, legacy.ID, execID)
+			return execErr
+		}))
+	}
 	fired, err := store.ListFiredLadderTranches(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, fired, len(rows))

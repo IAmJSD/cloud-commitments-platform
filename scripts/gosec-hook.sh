@@ -5,14 +5,15 @@
 # files, resolved to their owning module.  Fast by design: never scans the whole
 # repo; each commit triggers at most one gosec invocation per affected module.
 #
-# Rule set, gosec version and toolchain live in scripts/run-gosec.sh, shared
-# with `make security-scan-go` and CI, so this hook enforces exactly what CI
-# enforces (issue #340). This script only maps staged files to
-# (module, package) pairs.
+# Rule set, gosec version (read from .gosec-version, issue #347) and toolchain
+# live in scripts/run-gosec.sh, shared with `make security-scan-go` and CI, so
+# this hook enforces exactly what CI enforces (issue #340). This script only
+# maps staged files to (module, package) pairs.
 #
 # Called by pre-commit with pass_filenames: true and files: \.go$.
 # Exits 0 when no staged .go files survive filtering (deleted / testdata).
-# Exits 1 on any gosec finding; exits 2 on setup failure.
+# Exits 1 on any gosec finding; exits 2 on setup failure (including a missing
+# or malformed .gosec-version).
 
 set -euo pipefail
 

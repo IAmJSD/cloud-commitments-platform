@@ -248,12 +248,12 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@d979d5b3a71173a29b74b5b88418bfda9437d885 # v6.1.1
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
@@ -272,6 +272,17 @@ jobs:
           cd terraform/environments/aws
           terraform init -backend-config=/tmp/backend.tfbackend
 
+      # The Function URL's host is server-assigned, so its origin is read from
+      # the previous apply instead of being committed to github-*.tfvars, where
+      # it went stale whenever the URL was reissued (#324). Empty on the first
+      # deploy; "Check CORS covers the Function URL" below flags that case.
+      - name: Read deployed Function URL
+        id: deployed-url
+        run: |
+          set -euo pipefail
+          url=$(scripts/read-lambda-function-url.sh terraform/environments/aws)
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+
       - name: Terraform Plan
         id: plan
         env:
@@ -286,6 +297,7 @@ jobs:
           # accepted by the var (the Terraform local then falls back to
           # frontend_domain_names[0]).
           TF_VAR_dashboard_url: ${{ secrets.DASHBOARD_URL }}
+          TF_VAR_lambda_deployed_function_url: ${{ steps.deployed-url.outputs.url }}
           ENVIRONMENT: ${{ needs.prepare.outputs.target_environment }}
         run: |
           cd terraform/environments/aws
@@ -334,6 +346,19 @@ jobs:
             echo "function_name=$(terraform output -raw lambda_function_name 2>/dev/null | grep -v '::' || echo "")"
             echo "log_group=$(terraform output -raw lambda_log_group_name 2>/dev/null | grep -v '::' || echo "")"
           } >> "$GITHUB_OUTPUT"
+
+      # The allowlist this apply wrote holds the origin read before the plan.
+      # If the apply created or reissued the Function URL, the live origin is
+      # not in it until the next deploy, which reads the new URL back.
+      - name: Check CORS covers the Function URL
+        env:
+          PLANNED_URL: ${{ steps.deployed-url.outputs.url }}
+        run: |
+          set -euo pipefail
+          live=$(scripts/read-lambda-function-url.sh terraform/environments/aws)
+          if [ -n "$live" ] && [ "$live" != "$PLANNED_URL" ]; then
+            echo "::warning::The Function URL is now ${live}, but this apply's CORS allowlist was built from '${PLANNED_URL}'. Re-run this workflow so the next apply adds the new origin."
+          fi
 
       - name: Save deployment info
         env:
@@ -397,7 +422,7 @@ jobs:
 
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@d979d5b3a71173a29b74b5b88418bfda9437d885  # v6.1.1 — pinned per SC review
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd  # v6.1.1 — pinned per SC review
         with:
           role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
@@ -481,7 +506,7 @@ jobs:
 
     steps:
       - name: Download deployment info
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: deployment-info-lambda-${{ needs.prepare.outputs.target_environment }}
         continue-on-error: true

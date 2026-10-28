@@ -77,6 +77,9 @@ func (f *fakeListingDB) UpdatePurchaseHistoryListing(_ context.Context, _, listi
 		f.failRecords--
 		return errors.New("db down")
 	}
+	if f.row.ListingID == listingID && isDeadListingState(f.row.ListingState) && !isDeadListingState(state) {
+		return config.ErrMarketplaceListingEnded
+	}
 	f.row.ListingID, f.row.ListingState = listingID, state
 	f.token, f.schedule = "", nil
 	return nil
@@ -137,6 +140,10 @@ func (a *fakeMarketplaceAWS) cancel(_ context.Context, id string) (ec2svc.Market
 	}
 	for _, l := range a.listings {
 		if l.id == id {
+			if isDeadListingState(l.state) {
+				// Like AWS, a listing that already ended cannot be canceled.
+				return ec2svc.MarketplaceListingResult{}, &marketplaceTestAPIError{code: "IncorrectState", message: "listing " + id + " is " + l.state, fault: smithy.FaultClient}
+			}
 			l.state = config.ListingStateCancelled
 		}
 	}
@@ -150,6 +157,15 @@ func (a *fakeMarketplaceAWS) FindMarketplaceListingByToken(_ context.Context, _,
 		return ec2svc.MarketplaceListingResult{}, false, nil
 	}
 	return ec2svc.MarketplaceListingResult{ListingID: l.id, State: l.state}, true, nil
+}
+
+func (a *fakeMarketplaceAWS) DescribeMarketplaceListingStatus(_ context.Context, id string) (marketplaceListingStatus, error) {
+	for _, l := range a.listings {
+		if l.id == id {
+			return marketplaceListingStatus{ListingID: l.id, State: l.state}, nil
+		}
+	}
+	return marketplaceListingStatus{}, errMarketplaceListingNotFound
 }
 
 func (a *fakeMarketplaceAWS) live() int {
@@ -183,7 +199,7 @@ func newMarketplaceFixture(t *testing.T) *marketplaceFixture {
 		require.Equal(t, toAWSPriceSchedule(stored), req.PriceSchedule)
 		return fake.create(ctx, req)
 	}
-	stub := &stubMarketplaceEC2{createFn: create, cancelFn: fake.cancel}
+	stub := &stubMarketplaceEC2{createFn: create, cancelFn: fake.cancel, describeFn: fake.describe}
 	h := newMarketplaceHandler(db.MockConfigStore, authSvc, stub)
 	h.config = db
 	h.marketplaceFinderFactory = func(aws.Config) marketplaceListingFinder { return fake }
@@ -380,6 +396,10 @@ type failingFinder struct{}
 
 func (failingFinder) FindMarketplaceListingByToken(context.Context, string, string) (ec2svc.MarketplaceListingResult, bool, error) {
 	return ec2svc.MarketplaceListingResult{}, false, errors.New("RequestLimitExceeded")
+}
+
+func (failingFinder) DescribeMarketplaceListingStatus(context.Context, string) (marketplaceListingStatus, error) {
+	return marketplaceListingStatus{}, errors.New("RequestLimitExceeded")
 }
 
 func TestMarketplaceListHTTP_CorruptStoredScheduleFailsLoud(t *testing.T) {

@@ -23,6 +23,13 @@
 #       to Function URL return 403 (no way to sign), site is unreachable.
 locals {
   lambda_function_url_auth_type = var.enable_cdn ? "AWS_IAM" : "NONE"
+
+  # Function URL CORS origins: the static list from tfvars plus the deployed
+  # Function URL's own origin, which the workflows read from state (#324).
+  lambda_cors_origins = distinct(concat(
+    var.lambda_allowed_origins,
+    var.lambda_deployed_function_url == "" ? [] : [trimsuffix(var.lambda_deployed_function_url, "/")],
+  ))
 }
 
 module "compute_lambda" {
@@ -62,7 +69,7 @@ module "compute_lambda" {
 
   # Function URL
   function_url_auth_type = local.lambda_function_url_auth_type
-  allowed_origins        = var.lambda_allowed_origins
+  allowed_origins        = local.lambda_cors_origins
 
   # Concurrency
   reserved_concurrent_executions = var.lambda_reserved_concurrency

@@ -1,0 +1,21 @@
+# Fixture: a real declaration right after a heredoc quoting the same literal.
+# Must exit 1, naming the declaration on line 15 and NOT the heredoc's line 10.
+#
+# Ignoring heredoc text is only half the requirement: a guard that skipped the
+# whole region (or the rest of the file) after a heredoc would report this file
+# clean.
+
+locals {
+  example = <<EOT
+resource "azurerm_key_vault_access_policy" "quoted" {
+}
+EOT
+}
+
+resource "azurerm_key_vault_access_policy" "real" {
+  key_vault_id = var.key_vault_id
+  tenant_id    = data.azurerm_client_config.current.tenant_id
+  object_id    = azurerm_user_assigned_identity.workload.principal_id
+
+  secret_permissions = ["Get"]
+}

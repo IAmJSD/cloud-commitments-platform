@@ -19,7 +19,6 @@ type User struct {
 	DeactivatedAt       *time.Time `json:"deactivated_at,omitempty" dynamodbav:"DeactivatedAt"`
 	MFASecret           string     `json:"-" dynamodbav:"MFASecret,omitempty"`
 	PasswordResetToken  string     `json:"-" dynamodbav:"PasswordResetToken,omitempty"`
-	Salt                string     `json:"-" dynamodbav:"Salt"`
 	ID                  string     `json:"id" dynamodbav:"PK"`
 	MFAPendingSecret    string     `json:"-" dynamodbav:"MFAPendingSecret,omitempty"`
 	PasswordHash        string     `json:"-" dynamodbav:"PasswordHash"`
@@ -220,35 +219,6 @@ func IsUnrestrictedAccess(allowed []string) bool {
 	return false
 }
 
-// MatchesAccount returns true if the allowed list matches an account by its
-// internal ID or display name. Exact string match against either field. The
-// name is optional — pass "" when unavailable; the match then falls back to
-// ID-only. Empty allowed list or a "*" entry matches any account.
-func MatchesAccount(allowed []string, accountID, accountName string) bool {
-	if IsUnrestrictedAccess(allowed) {
-		return true
-	}
-	for _, a := range allowed {
-		if a == accountID {
-			return true
-		}
-		if accountName != "" && a == accountName {
-			return true
-		}
-	}
-	return false
-}
-
-// CanAccessAccount checks if the user can access a specific account by its
-// ID or display name. Access is derived from the union of the user's groups'
-// AllowedAccounts via MatchesAccount. Administrators-group members carry the
-// "*" wildcard (seeded with allowed_accounts=['*']) and so match any account;
-// a user with no groups has an empty AllowedAccounts and, combined with the
-// permission check at the call site, is denied (fail closed).
-func (ctx *AuthContext) CanAccessAccount(accountID, accountName string) bool {
-	return MatchesAccount(ctx.AllowedAccounts, accountID, accountName)
-}
-
 // Session represents an active user session.
 type Session struct {
 	Token     string    `json:"token" dynamodbav:"PK"`
@@ -348,13 +318,6 @@ type CreateAPIKeyResponse struct {
 	KeyID  string      `json:"key_id"`
 }
 
-// Predefined roles.
-const (
-	RoleAdmin    = "admin"
-	RoleUser     = "user"
-	RoleReadOnly = "readonly"
-)
-
 // DefaultAdminGroupID is the fixed UUID of the Administrators group seeded
 // by migration 000024. SetupAdmin auto-assigns new admin users to this
 // group so the group card shows members on a fresh install.
@@ -392,14 +355,14 @@ const (
 	// button on pending Purchase History rows (issue #46).
 	//
 	// Default grants:
-	//   * RoleAdmin — implicit via {ActionAdmin, ResourceAll}; covers
+	//   * Administrators group — implicit via {ActionAdmin, ResourceAll}; covers
 	//     both verbs.
-	//   * RoleUser — DefaultUserPermissions() adds cancel-own:purchases.
+	//   * Standard Users group — DefaultUserPermissions() adds cancel-own:purchases.
 	//     Allows canceling pending executions whose created_by_user_id
 	//     matches the session user. Legacy rows with NULL creator are
 	//     out of reach for non-admins via this verb; admins still cancel
 	//     them via cancel-any.
-	//   * RoleReadOnly — neither verb. Read-only users cannot cancel.
+	//   * Read-Only Users group — neither verb. Read-only users cannot cancel.
 	//
 	// cancel-any has no default non-admin grant; the constant exists so
 	// future operator roles can be granted broad cancel rights without
@@ -414,14 +377,14 @@ const (
 	// button on failed Purchase History rows (issue #47). Mirror image
 	// of the cancel verbs above:
 	//
-	//   * RoleAdmin — implicit via {ActionAdmin, ResourceAll}; covers
+	//   * Administrators group — implicit via {ActionAdmin, ResourceAll}; covers
 	//     both verbs.
-	//   * RoleUser — DefaultUserPermissions() adds retry-own:purchases.
+	//   * Standard Users group — DefaultUserPermissions() adds retry-own:purchases.
 	//     Allows retrying failed executions whose created_by_user_id
 	//     matches the session user. Legacy rows with NULL creator are
 	//     out of reach for non-admins via this verb; admins still
 	//     retry them via retry-any.
-	//   * RoleReadOnly — neither verb. Read-only users cannot retry.
+	//   * Read-Only Users group — neither verb. Read-only users cannot retry.
 	//
 	// retry-any has no default non-admin grant; the constant exists so
 	// future operator roles can be granted broad retry rights without
@@ -442,13 +405,13 @@ const (
 	// button on pending Purchase History rows (issue #286).
 	//
 	// Default grants (four-eyes policy, issue #1407):
-	//   * RoleAdmin — implicit via {ActionAdmin, ResourceAll}; covers
+	//   * Administrators group — implicit via {ActionAdmin, ResourceAll}; covers
 	//     both verbs.
-	//   * RoleUser — NO default grant (issue #1407). Four-eyes principle:
+	//   * Standard Users group — NO default grant (issue #1407). Four-eyes principle:
 	//     the submitter of a purchase must not approve it by default.
 	//     approve-own must be explicitly added to a custom group for
 	//     organizations that deliberately permit self-approval.
-	//   * RoleReadOnly — neither verb. Read-only users cannot approve.
+	//   * Read-Only Users group — neither verb. Read-only users cannot approve.
 	//
 	// approve-any: seeded by the Purchaser group (migration 000059);
 	//   not a default non-admin grant. Add it to a custom group's
@@ -469,13 +432,13 @@ const (
 	// (executed_by_user_id, executed_at, pre_approval_skip_reason) stamped
 	// on the execution row.
 	//
-	//   * RoleAdmin — implicit via {ActionAdmin, ResourceAll}; covers
+	//   * Administrators group — implicit via {ActionAdmin, ResourceAll}; covers
 	//     both verbs.
-	//   * RoleUser — NO default grant. This is a finance-impacting permission
+	//   * Standard Users group — NO default grant. This is a finance-impacting permission
 	//     that must be explicitly granted per-user/per-role. Even trusted
 	//     users submit via the approval flow by default; only deliberately
 	//     privileged accounts should hold this verb.
-	//   * RoleReadOnly — neither verb.
+	//   * Read-Only Users group — neither verb.
 	//
 	// execute-own: allows direct-execute only for executions where
 	//   created_by_user_id == session user (the user drafted the purchase
@@ -493,9 +456,9 @@ const (
 	// (created_by_user_id == session.UserID), while update-any drops the
 	// per-record ownership check.
 	//
-	//   * RoleAdmin — implicit via {ActionAdmin, ResourceAll}; update-any is
+	//   * Administrators group — implicit via {ActionAdmin, ResourceAll}; update-any is
 	//     NOT in adminCarvedOuts, so admins manage every scheduled purchase.
-	//   * RoleUser — NO default grant. A standard user manages only the
+	//   * Standard Users group — NO default grant. A standard user manages only the
 	//     scheduled purchases they created (base update:purchases + creator
 	//     match). Legacy rows with NULL created_by_user_id are out of reach
 	//     for non-admins (they hold neither update-any nor a creator match).
@@ -512,8 +475,8 @@ const (
 	// free-cancel window (issue #290).
 	//
 	// Default grants:
-	//   * RoleAdmin   -- implicit via {ActionAdmin, ResourceAll}.
-	//   * RoleUser    -- DefaultUserPermissions() adds revoke-own:purchases.
+	//   * Administrators group   -- implicit via {ActionAdmin, ResourceAll}.
+	//   * Standard Users group   -- DefaultUserPermissions() adds revoke-own:purchases.
 	//     "Own" is currently enforced at ACCOUNT scope, not creator scope:
 	//     a user may revoke a completed purchase in any cloud account they
 	//     are allowed to access (the check in
@@ -525,7 +488,7 @@ const (
 	//     NOTE: whether revoke-own should instead be creator-scoped is a
 	//     product decision tracked in issue #950; do not tighten this to
 	//     created_by_user_id without resolving that issue first.
-	//   * RoleReadOnly -- neither verb.
+	//   * Read-Only Users group  -- neither verb.
 	//
 	// revoke-any has no default non-admin grant; the constant exists so
 	// future operator roles can be granted broad revoke rights without
@@ -536,11 +499,11 @@ const (
 	// Standard RI purchase history rows (issue #292). Mirror image of the
 	// cancel-{own,any} / retry-{own,any} / approve-{own,any} family:
 	//
-	//   * RoleAdmin — implicit via {ActionAdmin, ResourceAll}; covers
+	//   * Administrators group — implicit via {ActionAdmin, ResourceAll}; covers
 	//     both verbs.
-	//   * RoleUser — DefaultUserPermissions() adds sell-own:purchases so
+	//   * Standard Users group — DefaultUserPermissions() adds sell-own:purchases so
 	//     every user can list RIs they purchased themselves.
-	//   * RoleReadOnly — neither verb.
+	//   * Read-Only Users group — neither verb.
 	//
 	// sell-any has no default non-admin grant; the constant exists so a
 	// custom operator group can list any Standard RI without admin escalation.

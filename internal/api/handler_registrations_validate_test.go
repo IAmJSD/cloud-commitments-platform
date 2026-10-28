@@ -64,3 +64,51 @@ func TestValidateRegistrationRequest_AccountNameSanitized(t *testing.T) {
 		assert.Contains(t, err.Error(), "account_name is required")
 	})
 }
+
+// TestValidateRegistrationRequest_ContactEmail pins issue #311: the public
+// registration endpoint used to accept any 5+ character string containing
+// "@" as contact_email, so a value carrying a line break and a Bcc header,
+// a second address, or a host with no TLD was stored as-is. It now applies
+// validateEmailFormat and stores the bare address.
+func TestValidateRegistrationRequest_ContactEmail(t *testing.T) {
+	valid := map[string]string{
+		"plain address":     "user@example.com",
+		"display-name form": "Jane Doe <jane@example.com>",
+		"surrounding space": "  user@example.com ",
+		"trailing comment":  "user@example.com (ops)",
+	}
+	wantStored := map[string]string{
+		"plain address":     "user@example.com",
+		"display-name form": "jane@example.com",
+		"surrounding space": "user@example.com",
+		"trailing comment":  "user@example.com",
+	}
+	for name, raw := range valid {
+		t.Run("accepts "+name, func(t *testing.T) {
+			req := RegistrationRequest{Provider: "aws", ExternalID: "ext-123", AccountName: "Acme", ContactEmail: raw}
+			require.NoError(t, validateRegistrationRequest(&req))
+			assert.Equal(t, wantStored[name], req.ContactEmail, "the bare address must be stored")
+		})
+	}
+
+	invalid := map[string]string{
+		"CRLF header injection": "a@b\r\nBcc: x@y",
+		"CRLF after valid addr": "user@example.com\r\nBcc: attacker@evil.example.com",
+		"two addresses":         "user@example.com, other@example.com",
+		"no TLD":                "user@hostonly",
+		"no local part":         "@example.com",
+		"no at sign":            "user.example.com",
+		"quoted local part":     `"a b"@example.com`,
+		"display name only":     "Jane Doe",
+	}
+	for name, raw := range invalid {
+		t.Run("rejects "+name, func(t *testing.T) {
+			req := RegistrationRequest{Provider: "aws", ExternalID: "ext-123", AccountName: "Acme", ContactEmail: raw}
+			err := validateRegistrationRequest(&req)
+			ce, ok := IsClientError(err)
+			require.True(t, ok, "want a 400 client error, got %v", err)
+			assert.Equal(t, 400, ce.code)
+			assert.Equal(t, "contact_email must be a valid email address", ce.message)
+		})
+	}
+}

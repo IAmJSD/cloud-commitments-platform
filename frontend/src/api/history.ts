@@ -37,14 +37,9 @@ export async function getSavingsAnalytics(filters: SavingsAnalyticsFilters = {})
   if (filters.interval) params.set('interval', filters.interval);
   if (filters.provider) params.set('provider', filters.provider);
   if (filters.service) params.set('service', filters.service);
-  if (filters.account_ids && filters.account_ids.length > 0) {
-    params.set('account_ids', filters.account_ids.join(','));
-    // The /history/analytics handler currently accepts a single
-    // `account_id` (Athena limitation). Always include the first ID as
-    // `account_id` too so single-account filtering works against the
-    // existing backend; the plural form stays for forward-compatibility.
-    if (filters.account_ids[0]) params.set('account_id', filters.account_ids[0]);
-  }
+  // The analytics routes read account_ids (comma-separated) and apply the
+  // same per-id scope check as /history, so every selected account is summed.
+  if (filters.account_ids && filters.account_ids.length > 0) params.set('account_ids', filters.account_ids.join(','));
 
   const queryString = params.toString();
   return apiRequest<SavingsAnalyticsResponse>(`/history/analytics${queryString ? '?' + queryString : ''}`);

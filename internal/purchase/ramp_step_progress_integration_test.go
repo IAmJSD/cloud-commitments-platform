@@ -55,6 +55,7 @@ func rampStepStore(ctx context.Context, t *testing.T) (*config.PostgresStore, *p
 type rampStepFixture struct {
 	store    *config.PostgresStore
 	manager  *Manager
+	email    *MockEmailSender
 	plan     *config.PurchasePlan
 	accounts []config.CloudAccount
 
@@ -133,6 +134,7 @@ func newRampStepFixture(ctx context.Context, t *testing.T) *rampStepFixture {
 	f := &rampStepFixture{store: store, plan: plan, accounts: accounts}
 
 	mockEmail := new(MockEmailSender)
+	f.email = mockEmail
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
