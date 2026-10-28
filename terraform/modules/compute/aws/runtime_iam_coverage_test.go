@@ -1,5 +1,5 @@
 // Detects CE/EC2 action names missing from runtime IaC, including gaps shared
-// by all three flavors that check-aws-iam-parity.sh cannot detect (#1967/#1968).
+// by both runtime flavors that check-aws-iam-parity.sh cannot detect (#1967/#1968).
 // This is source/action-presence coverage, not IAM evaluation: Effect, resource
 // scope, role attachment, and inline comments require separate review. Unused
 // grants (#1322) and other service namespaces are outside this guard's scope.
@@ -41,12 +41,11 @@ var requiredDerivedActions = []string{
 }
 
 // runtimeIAMFiles are the IaC files that grant the runtime role's IAM
-// actions, relative to this package's directory (the three flavors compared
+// actions, relative to this package's directory (the two flavors compared
 // by check-aws-iam-parity.sh comparison 1).
 var runtimeIAMFiles = []string{
 	filepath.Join("lambda", "main.tf"),
 	filepath.Join("fargate", "main.tf"),
-	filepath.Join("..", "..", "..", "..", "cloudformation", "stacks", "CUDly", "template.yaml"),
 }
 
 // calledAction records where a derived action was first seen, so a failure
@@ -237,7 +236,7 @@ func sdkImportAliases(file *ast.File) map[string]string {
 var grantedActionPattern = regexp.MustCompile(`(?:^|[^A-Za-z])((?:ce|ec2):[A-Z][A-Za-z]+)`)
 
 // hashCommentLinePattern matches a whole line whose first non-blank byte is
-// #, the comment style both Terraform and CloudFormation YAML use here.
+// #, the comment style Terraform uses here.
 var hashCommentLinePattern = regexp.MustCompile(`(?m)^[ \t]*#.*$`)
 
 // grantedActions extracts action names from path after stripping whole-line

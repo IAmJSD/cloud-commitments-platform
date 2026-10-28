@@ -163,9 +163,9 @@ repos:
   # with the version pinned in additional_dependencies, like zizmor above.
   #
   # --non-zero-exit-code error: errors (templates CloudFormation rejects)
-  # fail the hook. Warnings do not fail it, because the
-  # cloudformation/stacks/CUDly and aws-cross-account templates carry a W3005
-  # (redundant DependsOn) that is not a load or deploy failure.
+  # fail the hook. Warnings do not fail it, because the aws-cross-account
+  # template carries a W3005 (redundant DependsOn) that is not a load or
+  # deploy failure.
   - repo: local
     hooks:
       - id: cfn-lint

@@ -3,14 +3,15 @@
 #
 # Asserts that the AWS IAM action lists granted to the CUDly runtime and to the
 # customer-deployed federation roles are identical across every IaC flavor that
-# encodes them, so CloudFormation and Terraform deployments of the same code
+# encodes them, so deployments of the same code through different flavors
 # cannot silently drift apart (the AWS sibling of check-azure-role-parity.sh).
 #
 # Three comparisons:
 #
-#   1. runtime    : cloudformation/stacks/CUDly/template.yaml
-#                   == terraform/modules/compute/aws/lambda/main.tf
+#   1. runtime    : terraform/modules/compute/aws/lambda/main.tf
 #                   == terraform/modules/compute/aws/fargate/main.tf
+#      (the CloudFormation install stack that used to be a third runtime copy
+#      was retired in #1432)
 #   2. federation cross-account pair (incl. the optional org-discovery
 #      statement, which exists in both as an opt-in):
 #                   iac/federation/aws-cross-account/cloudformation/template.yaml
@@ -202,17 +203,14 @@ compare_pair() {
   fi
 }
 
-# --- 1. runtime: CFN stack vs TF lambda vs TF fargate --------------------------
+# --- 1. runtime: TF lambda vs TF fargate ---------------------------------------
 
-CFN_STACK="$REPO_ROOT/cloudformation/stacks/CUDly/template.yaml"
 TF_LAMBDA="$REPO_ROOT/terraform/modules/compute/aws/lambda/main.tf"
 TF_FARGATE="$REPO_ROOT/terraform/modules/compute/aws/fargate/main.tf"
 
-cfn_stack_actions=$(extract_actions "$CFN_STACK")
 tf_lambda_actions=$(extract_actions "$TF_LAMBDA")
 tf_fargate_actions=$(extract_actions "$TF_FARGATE")
 
-compare_pair "runtime" "$CFN_STACK" "$cfn_stack_actions" "$TF_LAMBDA" "$tf_lambda_actions"
 compare_pair "runtime" "$TF_LAMBDA" "$tf_lambda_actions" "$TF_FARGATE" "$tf_fargate_actions"
 
 # --- 2. federation cross-account pair (all namespaces) -------------------------
@@ -253,7 +251,7 @@ REQUIRED_CUSTOMER_ACTIONS=(
 
 for f in "$FED_XACC_CFN" "$FED_XACC_TF" "$FED_WIF_CFN" "$FED_WIF_TF" "$FED_XACC_CLI" "$FED_WIF_CLI" \
   "$REPO_ROOT/cloudformation/stacks/CUDly-CrossAccount/template.yaml" \
-  "$CFN_STACK" "$TF_LAMBDA" "$TF_FARGATE"; do
+  "$TF_LAMBDA" "$TF_FARGATE"; do
   granted=$(extract_actions "$f")
   for a in "${REQUIRED_CUSTOMER_ACTIONS[@]}"; do
     if ! grep -qxF "$a" <<<"$granted"; then
@@ -264,15 +262,15 @@ for f in "$FED_XACC_CFN" "$FED_XACC_TF" "$FED_WIF_CFN" "$FED_WIF_TF" "$FED_XACC_
 done
 
 # --- 5. runtime organizations grants -------------------------------------------
-# Parity only proves the runtime trio agree, so an unused organizations action
-# added to all three (#69: DescribeAccount, DescribeOrganization) passes it.
+# Parity only proves the runtime copies agree, so an unused organizations action
+# added to all of them (#69: DescribeAccount, DescribeOrganization) passes it.
 # The runtime calls only ListAccounts (internal/accounts/org_discovery.go and
 # the cloud-commitments-go AWS provider), so that is the only organizations
 # action it may grant. Wire up a new call before adding its action here.
 
 ALLOWED_RUNTIME_ORG_ACTIONS=(organizations:ListAccounts)
 
-for f in "$CFN_STACK" "$TF_LAMBDA" "$TF_FARGATE"; do
+for f in "$TF_LAMBDA" "$TF_FARGATE"; do
   while IFS= read -r a; do
     if [[ " ${ALLOWED_RUNTIME_ORG_ACTIONS[*]} " != *" $a "* ]]; then
       echo "ERROR [runtime organizations actions]: $f grants $a, which the runtime never calls" >&2

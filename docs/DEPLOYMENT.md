@@ -2,6 +2,8 @@
 
 CUDly supports deployment via Terraform across three cloud providers (AWS, Azure, GCP). A helper script (`scripts/tf-deploy.sh`) simplifies common operations.
 
+There is no CloudFormation install. The CloudFormation install stack was removed (#1432): it still provisioned DynamoDB tables and set no `DB_HOST`, so it could not start the Postgres-only server. Install on AWS with the Terraform root in `terraform/environments/aws` (Lambda or Fargate). The CloudFormation templates under `iac/federation/` and `cloudformation/stacks/CUDly-CrossAccount` are not installs: they create the IAM role CUDly uses in each target account.
+
 ## Table of Contents
 
 - [Quick Start](#quick-start)
@@ -599,11 +601,10 @@ Each cloud provider has lifecycle policies configured via Terraform (`terraform/
 
 ### Database Cleanup Jobs
 
-The server's `cleanup` task deletes expired sessions and, via `CleanupOldExecutions(30)`, purchase executions that are completed with `scheduled_date` older than 30 days, canceled with `updated_at` older than 30 days, or in any status other than failed or canceled with `expires_at` older than 30 days. Failed executions are kept. Azure Container Apps schedules it by default; AWS Lambda, AWS Fargate, CloudFormation, GCP Cloud Run, GKE and AKS can schedule it on request:
+The server's `cleanup` task deletes expired sessions and, via `CleanupOldExecutions(30)`, purchase executions that are completed with `scheduled_date` older than 30 days, canceled with `updated_at` older than 30 days, or in any status other than failed or canceled with `expires_at` older than 30 days. Failed executions are kept. Azure Container Apps schedules it by default; AWS Lambda, AWS Fargate, GCP Cloud Run, GKE and AKS can schedule it on request:
 
 - **Azure Container Apps (when `enable_scheduled_tasks` is true):** a Logic App calls `/api/scheduled/cleanup` daily (`terraform/modules/compute/azure/container-apps/scheduled-tasks.tf`)
 - **AWS Lambda (opt-in):** set `enable_cleanup_schedule = true` (default false; `cleanup_schedule` defaults to `rate(1 day)`) in `terraform/environments/aws`. The first run deletes the whole backlog older than 30 days, so export any history you want to keep first.
-- **CloudFormation (opt-in):** set the `EnableCleanupSchedule` stack parameter to `true` (default `false`; `CleanupSchedule` defaults to `rate(1 day)`) on `cloudformation/stacks/CUDly`. The same backlog warning applies.
 - **AWS Fargate (opt-in):** the same `enable_cleanup_schedule` / `cleanup_schedule` variables in `terraform/environments/aws` add a `<stack>-fargate-sweep-cleanup` EventBridge rule that runs `./cudly --task cleanup` as a one-off ECS task (`terraform/modules/compute/aws/fargate/sweeps.tf`). The same backlog warning applies. (The `terraform/modules/compute/aws/cleanup-lambda/` module is not consumed by any environment.)
 - **GCP Cloud Run and GKE (opt-in):** set `enable_cleanup_schedule = true` (default false; `cleanup_schedule` defaults to `0 3 * * *`) in `terraform/environments/gcp`. It runs as a Cloud Scheduler job (`scheduled-tasks.tf` in each module) only when the module's `enable_scheduled_tasks` is true; that environment passes it to Cloud Run but not to GKE. The same backlog warning applies. The `terraform/modules/compute/gcp/cleanup-function/` module is not consumed by any environment.
 - **AKS (opt-in):** set `enable_cleanup_schedule = true` (default false; `cleanup_schedule` defaults to `0 3 * * *`) on the AKS module. Like the module's other scheduled tasks, it runs as a Kubernetes CronJob (`terraform/modules/compute/azure/aks/scheduled-tasks.tf`) only when `deploy_kubernetes_resources` is true.
@@ -615,7 +616,6 @@ Alternatively, use pg_cron for database-native scheduling.
 CUDly learns that an RI listed on the AWS Reserved Instance Marketplace sold, closed or was canceled on AWS, and records its estimated proceeds and AWS fee, only through the marketplace listing poll. The poll has no schedule of its own: it runs inside the server's `finalize_revocations` task, after the revocation repair. It therefore runs only where `finalize_revocations` is scheduled, and turning that schedule off also stops the poll:
 
 - **AWS Lambda:** hourly by default. `enable_finalize_revocations_schedule` (default `true`) and `finalize_revocations_schedule` (default `rate(1 hour)`) in `terraform/environments/aws`.
-- **CloudFormation:** hourly by default. The `EnableFinalizeRevocationsSchedule` (default `true`) and `FinalizeRevocationsSchedule` (default `rate(1 hour)`) stack parameters on `cloudformation/stacks/CUDly`.
 - **AWS Fargate:** hourly by default, as a one-off ECS task. The same `enable_finalize_revocations_schedule` (default `true`) and `finalize_revocations_schedule` (default `rate(1 hour)`) variables in `terraform/environments/aws`.
 - **AKS:** hourly by default, as a Kubernetes CronJob, when `deploy_kubernetes_resources` is true. `enable_finalize_revocations_schedule` (default `true`) and `finalize_revocations_schedule` (default `30 * * * *`) on the AKS module.
 - **GCP Cloud Run, GKE and Azure Container Apps:** hourly by default, as a Cloud Scheduler job (GCP) or a Logic App (Container Apps), when the module's `enable_scheduled_tasks` is true. `enable_finalize_revocations_schedule` (default `true`) and `finalize_revocations_schedule` (default `30 * * * *`) in `terraform/environments/gcp` and `terraform/environments/azure`. `terraform/environments/gcp` does not pass `enable_scheduled_tasks` or `app_url` to GKE, so a GKE deployment from there has no Cloud Scheduler jobs.
@@ -661,9 +661,8 @@ cross-account until you do.
 | Deployment shape | Setting |
 | ---------------- | ------- |
 | Terraform (`terraform/environments/aws`) | `cross_account_target_account_ids = ["111111111111", ...]` in your tfvars |
-| CloudFormation (`cloudformation/stacks/CUDly`) | `CrossAccountTargetAccountIds` stack parameter, comma-separated |
 
-Both render an `aws:ResourceAccount` condition onto the grant. An account that is not listed is
+It renders an `aws:ResourceAccount` condition onto the grant. An account that is not listed is
 denied by IAM, not merely by the app's account selection. Leaving the setting empty creates **no
 cross-account grant at all**, which is the intended fail-closed default rather than an oversight.
 
@@ -673,10 +672,9 @@ own identity policy, which this setting does not govern.
 
 > **Upgrading an existing multi-account deployment**: the grant used to be scoped by role name only
 > (`arn:aws:iam::*:role/CUDly*`), which matched a CUDly role in *every* AWS account rather than in
-> yours (#1636). List your linked accounts **in the same change that picks up this version**. On
-> Terraform the apply removes `aws_iam_role_policy.cross_account_sts` and exits 0; on CloudFormation
-> the stack update drops the statement. Either way the first symptom otherwise is a runtime
-> `AccessDenied` during collection, not a failed deploy.
+> yours (#1636). List your linked accounts **in the same change that picks up this version**. The
+> Terraform apply removes `aws_iam_role_policy.cross_account_sts` and exits 0, so the first symptom
+> otherwise is a runtime `AccessDenied` during collection, not a failed deploy.
 
 ### Multi-Account Credential Encryption
 
