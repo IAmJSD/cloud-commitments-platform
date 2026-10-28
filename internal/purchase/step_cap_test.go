@@ -86,11 +86,12 @@ func gateHarness(t *testing.T, plan *config.PurchasePlan, exec config.PurchaseEx
 }
 
 // expectKillSwitchRead registers the gate's global-config read. The gate reads
-// the plan first and refuses a missing one before the kill switch is consulted,
-// so that read is only required when the plan exists.
+// the plan first and refuses a missing one, or skips a manual (AutoPurchase
+// off) one, before the kill switch is consulted, so that read is only required
+// when the plan exists and is armed.
 func expectKillSwitchRead(ctx context.Context, store *MockConfigStore, plan *config.PurchasePlan, cfg *config.GlobalConfig, cfgErr error) {
 	call := store.On("GetGlobalConfig", ctx).Return(cfg, cfgErr)
-	if plan == nil {
+	if plan == nil || !plan.AutoPurchase {
 		call.Maybe()
 	}
 }
