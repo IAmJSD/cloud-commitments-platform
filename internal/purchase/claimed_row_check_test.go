@@ -194,6 +194,7 @@ func TestClaimedRowCheck_CheckErrorFailsClosed(t *testing.T) {
 func TestClaimedRowCheck_TerminalSaveFailureIsAuditLoss(t *testing.T) {
 	ep := claimEntryPoints()[0]
 	mgr, store, rec, snapshot, _ := claimCheckHarness(t, ep, claimCheckRepriced)
+	assertMocksOnCleanup(t, store)
 	store.On("SaveExecutionIfStatus", mock.Anything, mock.Anything, executorOwnedStatuses).Return(errors.New("db down"))
 	cc := &capCheck{max: claimCheckCap}
 
@@ -209,6 +210,7 @@ func TestClaimedRowCheck_TerminalSaveFailureIsAuditLoss(t *testing.T) {
 func TestClaimedRowCheck_PlanRowReleasesSuppressions(t *testing.T) {
 	ep := claimEntryPoints()[0]
 	mgr, store, rec, snapshot, saved := claimCheckHarness(t, ep, claimCheckRepriced)
+	assertMocksOnCleanup(t, store)
 	// Re-register the claim for a plan row: same row, PlanID set.
 	planRow := *snapshot
 	planRow.PlanID = armedPlanID

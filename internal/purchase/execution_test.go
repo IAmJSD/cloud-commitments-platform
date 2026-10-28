@@ -60,6 +60,7 @@ func TestManager_ExecutePurchase(t *testing.T) {
 			mockFactory := new(MockProviderFactory)
 			mockProviderInst := new(MockProvider)
 			mockServiceClient := new(MockServiceClient)
+			assertMocksOnCleanup(t, mockProviderInst, mockServiceClient)
 
 			plan := &config.PurchasePlan{
 				ID:   "plan-123",
@@ -150,6 +151,7 @@ func TestManager_ExecutePurchase_WebSourcePropagates(t *testing.T) {
 	mockSTS := new(MockSTSClient)
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
+	assertMocksOnCleanup(t, mockStore, mockEmail, mockSTS, mockFactory, mockProviderInst)
 	mockServiceClient := new(MockServiceClient)
 
 	plan := &config.PurchasePlan{ID: "plan-web", Name: "Web Plan"}
@@ -206,6 +208,7 @@ func TestManager_ExecutePurchase_InvalidSourceFallsBackUntagged(t *testing.T) {
 	mockSTS := new(MockSTSClient)
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
+	assertMocksOnCleanup(t, mockStore, mockEmail, mockSTS, mockFactory, mockProviderInst)
 	mockServiceClient := new(MockServiceClient)
 
 	plan := &config.PurchasePlan{ID: "plan-bad", Name: "Bad Plan"}
@@ -717,6 +720,7 @@ func TestManager_ExecutePurchase_MultiAccount(t *testing.T) {
 	mockFactory := new(MockProviderFactory)
 	mockProvider := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
+	assertMocksOnCleanup(t, mockProvider, mockServiceClient)
 	credStore := &MockCredentialStore{
 		LoadRawFn: func(_ context.Context, _, _ string) ([]byte, error) {
 			return []byte(`{"access_key_id":"AKIAIOSFODNN7EXAMPLE","secret_access_key":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}`), nil
@@ -856,6 +860,7 @@ func TestExecuteForAccount_CredentialFailure_MarksFailed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			mockStore := new(MockConfigStore)
+			assertMocksOnCleanup(t, mockStore)
 			mockEmail := allowFailedNotification(new(MockEmailSender))
 			mockFactory := new(MockProviderFactory)
 			// Credential store returns nothing for every load — this triggers
@@ -1332,6 +1337,7 @@ func TestExecutePurchase_SingleAccount_AzureUsesResolvedCreds(t *testing.T) {
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
+	assertMocksOnCleanup(t, mockEmail, mockSTS, mockProviderInst, mockServiceClient)
 
 	acctID := "azure-acct-1"
 	// Direct-execute: no PlanID, no exec-level CloudAccountID.
@@ -1467,6 +1473,7 @@ func TestExecutePurchase_AzureCanonicalServiceTypes(t *testing.T) {
 			mockFactory := new(MockProviderFactory)
 			mockProviderInst := new(MockProvider)
 			mockServiceClient := new(MockServiceClient)
+			assertMocksOnCleanup(t, mockEmail, mockSTS, mockServiceClient)
 			mockCredStore := &MockCredentialStore{}
 
 			acctID := "azure-acct-" + tc.name
@@ -1798,6 +1805,7 @@ func TestManager_ExecuteAndFinalize_HistorySaveFailure_StaysVisible(t *testing.T
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
+	assertMocksOnCleanup(t, mockEmail, mockSTS, mockProviderInst, mockServiceClient)
 
 	// Direct purchase (no plan) → single-account path, no updatePlanProgress.
 	exec := &config.PurchaseExecution{
@@ -1874,6 +1882,7 @@ func TestManager_ExecuteAndFinalize_EmptyCommitmentID_CompletesWithAuditGap(t *t
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
+	assertMocksOnCleanup(t, mockStore, mockEmail, mockSTS, mockFactory, mockProviderInst, mockServiceClient)
 
 	exec := &config.PurchaseExecution{
 		ExecutionID: "exec-empty-id",
@@ -1927,6 +1936,7 @@ func TestManager_ExecuteAndFinalize_SingleAccount_PartialSuccess(t *testing.T) {
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
+	assertMocksOnCleanup(t, mockFactory, mockProviderInst, mockServiceClient)
 
 	exec := &config.PurchaseExecution{
 		ExecutionID: "exec-partial-single",
@@ -2001,6 +2011,7 @@ func TestExecuteForAccount_PartialSuccess(t *testing.T) {
 	mockFactory := new(MockProviderFactory)
 	mockProviderInst := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
+	assertMocksOnCleanup(t, mockFactory, mockProviderInst, mockServiceClient)
 
 	const acctID = "aaaaaaaa-0000-0000-0000-000000000001"
 	account := config.CloudAccount{ID: acctID, Name: "Prod", Provider: "aws", ExternalID: "111111111111", AWSAuthMode: "access_keys"}
@@ -2114,6 +2125,7 @@ func TestManager_ExecutePurchase_SingleAccount_StampsTargetAccount(t *testing.T)
 			mockFactory := new(MockProviderFactory)
 			mockProviderInst := new(MockProvider)
 			mockServiceClient := new(MockServiceClient)
+			assertMocksOnCleanup(t, mockEmail, mockFactory, mockProviderInst, mockServiceClient)
 			mockCredStore := &MockCredentialStore{
 				LoadRawFn: func(_ context.Context, _, _ string) ([]byte, error) {
 					// AWS access_keys path reads stored key JSON; Azure

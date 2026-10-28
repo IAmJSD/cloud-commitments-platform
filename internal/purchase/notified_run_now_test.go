@@ -65,11 +65,16 @@ func TestScheduler_NotifiedRowRespectsPushedScheduledDate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			store, factory := new(MockConfigStore), new(MockProviderFactory)
+			assertMocksOnCleanup(t, store, factory)
 			exec := dueRecExec("notified", upfrontRec(10))
 			exec.ScheduledDate = tc.date
 			manager := newPinManager(ctx, store, factory, exec, autoPlan(f64(1000)), autoPlan(f64(1000)))
 			store.On("TransitionExecutionStatusPinned", ctx, "exec-gate", mock.Anything, "running", (*string)(nil), false).
 				Return(nil, config.ErrExecutionNotInExpectedStatus).Maybe()
+			if !tc.wantClaim {
+				// A row not yet due never reaches the gate's plan and kill-switch reads.
+				optionalCalls(&store.Mock, "GetPurchasePlan", "GetGlobalConfig")
+			}
 
 			_, err := manager.ProcessScheduledPurchases(ctx)
 			require.NoError(t, err)

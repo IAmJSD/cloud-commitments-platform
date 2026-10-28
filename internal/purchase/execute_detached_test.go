@@ -70,6 +70,7 @@ func newDetachFixture(t *testing.T) *detachFixture {
 		}
 	}).Return(nil)
 	email := allowFailedNotification(new(MockEmailSender))
+	assertMocksOnCleanup(t, f.svc, store, factory, prov, stsMock, email)
 	email.On("SendPurchaseConfirmation", mock.Anything, mock.Anything).Return(nil)
 	stsMock.On("GetCallerIdentity", mock.Anything, mock.Anything).Return(&stsOut, nil)
 	factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(prov, nil)
@@ -185,6 +186,9 @@ func TestExecuteAndFinalize_ProviderErrorWithCanceledCaller_PersistsFailed(t *te
 	f.svc.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.Anything).
 		Run(func(mock.Arguments) { cancel() }).
 		Return(common.PurchaseResult{}, errors.New("provider rejected")).Once()
+	// Nothing bought: the fixture's history and confirmation stubs stay unused.
+	optionalCalls(&f.manager.config.(*MockConfigStore).Mock, "SavePurchaseHistory")
+	optionalCalls(&f.manager.email.(*MockEmailSender).Mock, "SendPurchaseConfirmation")
 
 	err := f.manager.executeAndFinalize(ctx, f.exec)
 

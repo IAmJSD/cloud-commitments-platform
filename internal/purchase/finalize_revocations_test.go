@@ -69,6 +69,7 @@ func TestFinalizeInFlightRevocations_Accounting(t *testing.T) {
 func TestFinalizeInFlightRevocations_ListErrorIsReturned(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	store.On("GetPurchaseHistoryInFlight", ctx).Return(nil, errors.New("list failed"))
 	m := &Manager{config: store}
 
@@ -86,6 +87,7 @@ func TestFinalizeInFlightRevocations_CanceledDuringBackoffStopsSweep(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	store.On("GetPurchaseHistoryInFlight", ctx).Return(inFlightRows("ok", "stuck", "later"), nil)
 	expectMark(store, "ok", nil)
 	expectMark(store, "stuck", errors.New("db down")).Run(func(mock.Arguments) { cancel() })
@@ -143,6 +145,7 @@ func TestFinalizeInFlightRevocations_ReleaseErrorStillFinalizes(t *testing.T) {
 func TestFinalizeInFlightRevocations_ReleaseAndListErrorsJoined(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	store.On("ReleaseStaleRevocationsInFlight", ctx, staleRevocationInFlightAfter).
 		Return(nil, errors.New("release failed")).Once()
 	store.On("GetPurchaseHistoryInFlight", ctx).Return(nil, errors.New("list failed")).Once()

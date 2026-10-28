@@ -26,6 +26,7 @@ func listedThresholds(t *testing.T, reapAfter time.Duration) map[string]time.Dur
 	t.Helper()
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	got := map[string]time.Duration{}
 	store.On("ListStuckExecutions", ctx, mock.Anything, mock.Anything).
 		Run(func(args mock.Arguments) {
@@ -129,13 +130,16 @@ func expectStuckLists(ctx context.Context, store *MockConfigStore, reapAfter tim
 func TestReapStuckExecutions_ApprovedRowClaimedBeforeCASIsNotFailed(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	row := stuckExec("exec-claimed", "approved")
 	flipped := row
 	flipped.Status = failedStatus
 	expectStuckLists(ctx, store, DefaultReapAfter, row)
+	// The bug path: a CAS that also matches "running" fails the in-flight row.
+	// Must not fire (Reaped 0 below), hence .Maybe().
 	store.On("TransitionExecutionStatus", ctx, row.ExecutionID,
 		mock.MatchedBy(func(from []string) bool { return slices.Contains(from, "running") }),
-		failedStatus, (*string)(nil)).Return(&flipped, nil)
+		failedStatus, (*string)(nil)).Return(&flipped, nil).Maybe()
 	store.On("TransitionExecutionStatus", ctx, row.ExecutionID,
 		mock.MatchedBy(func(from []string) bool { return !slices.Contains(from, "running") }),
 		failedStatus, (*string)(nil)).
