@@ -35,6 +35,10 @@ func (f *countingUtilEC2) ListConvertibleReservedInstances(_ context.Context) ([
 	return f.instances, f.err
 }
 
+func (f *countingUtilEC2) GetValidResourceTypes(_ context.Context) ([]string, error) {
+	return nil, nil
+}
+
 type countingUtilRecs struct {
 	rows  []recommendations.RIUtilization
 	calls int
