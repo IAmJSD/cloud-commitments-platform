@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
@@ -18,7 +19,8 @@ import (
 // is returned.
 //
 // It has the same cold-start and stale-while-revalidate side effects as
-// ListRecommendations, and the same over-show trade-off: a suppression or
+// ListRecommendations, and the same failure directions: a suppression read
+// failure fails the scan before any chunk reaches fn (issue #111), while an
 // override read failure is logged and the affected rows pass through.
 //
 // Each chunk is one consistent read; the walk as a whole is not one snapshot.
@@ -36,7 +38,22 @@ func (s *Scheduler) ScanRecommendations(ctx context.Context, filter config.Recom
 		return err
 	}
 
-	suppressions := s.loadSuppressionIndex(ctx)
+	suppressions, err := s.loadSuppressionIndex(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.scanChunks(ctx, filter, chunkSize, suppressions, fn); err != nil {
+		return err
+	}
+
+	s.finishCacheRead(ctx, freshness)
+	return nil
+}
+
+// scanChunks is ScanRecommendations' walk: it reads the cache chunk by chunk,
+// applies the suppression index and account overrides to each chunk, and
+// hands the non-empty survivors to fn.
+func (s *Scheduler) scanChunks(ctx context.Context, filter config.RecommendationFilter, chunkSize int, suppressions map[suppressionKey][]config.PurchaseSuppression, fn func([]config.RecommendationRecord) error) error {
 	overrides := newOverrideScanFilter(s.config)
 	var after *config.RecommendationScanKey
 	for {
@@ -55,31 +72,27 @@ func (s *Scheduler) ScanRecommendations(ctx context.Context, filter config.Recom
 			}
 		}
 		if chunk.Done || chunk.Last == nil {
-			break
+			return nil
 		}
 		after = chunk.Last
 	}
-
-	s.finishCacheRead(ctx, freshness)
-	return nil
 }
 
 // loadSuppressionIndex reads the active suppressions once for a whole scan and
 // groups them by 6-tuple, as applySuppressions does. Which rows of a group
 // apply to a rec depends only on that rec's variant (issue #816), so applying
 // the index chunk by chunk suppresses exactly what ListRecommendations does.
-// A read failure is logged and yields no index, so the scan over-shows like
-// ListRecommendations does.
-func (s *Scheduler) loadSuppressionIndex(ctx context.Context) map[suppressionKey][]config.PurchaseSuppression {
+// A read failure is returned, so the scan fails closed like
+// ListRecommendations does (issue #111).
+func (s *Scheduler) loadSuppressionIndex(ctx context.Context) (map[suppressionKey][]config.PurchaseSuppression, error) {
 	sups, err := s.config.ListActiveSuppressions(ctx)
 	if err != nil {
-		logging.Errorf("failed to apply suppressions; returning un-suppressed recs: %v", err)
-		return nil
+		return nil, fmt.Errorf("apply suppressions: %w", err)
 	}
 	if len(sups) == 0 {
-		return nil
+		return nil, nil
 	}
-	return aggregateSuppressions(sups)
+	return aggregateSuppressions(sups), nil
 }
 
 // overrideScanFilter applies account overrides chunk by chunk, resolving each

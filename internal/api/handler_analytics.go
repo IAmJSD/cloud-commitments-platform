@@ -131,9 +131,9 @@ func (h *Handler) getHistoryAnalytics(ctx context.Context, req *events.LambdaFun
 	}
 
 	// Parse parameters
-	interval := params["interval"]
-	if interval == "" {
-		interval = "hourly"
+	interval, err := analyticsInterval(params["interval"])
+	if err != nil {
+		return nil, err
 	}
 
 	// Normalise + validate the global-filter provider chip, mirroring
@@ -198,9 +198,9 @@ func (h *Handler) getHistoryBreakdown(ctx context.Context, req *events.LambdaFun
 		return nil, NewClientError(503, "analytics not configured")
 	}
 
-	dimension := params["dimension"]
-	if dimension == "" {
-		dimension = "service"
+	dimension, err := analyticsDimension(params["dimension"])
+	if err != nil {
+		return nil, err
 	}
 
 	// Scope check plus account -> dual-column inputs; see getHistoryAnalytics.
@@ -230,6 +230,32 @@ func (h *Handler) getHistoryBreakdown(ctx context.Context, req *events.LambdaFun
 		End:       end.Format(time.RFC3339),
 		Data:      data,
 	}, nil
+}
+
+// analyticsInterval returns the requested bucket interval, defaulting to
+// hourly. A value the store cannot bucket by is a 400 here; without this check
+// it reached intervalToTruncUnit inside QueryHistory and came back as a 500.
+func analyticsInterval(raw string) (string, error) {
+	if raw == "" {
+		return "hourly", nil
+	}
+	if _, err := intervalToTruncUnit(raw); err != nil {
+		return "", NewClientError(400, "invalid interval: must be one of hourly, daily, weekly, monthly")
+	}
+	return raw, nil
+}
+
+// analyticsDimension returns the requested breakdown dimension, defaulting to
+// service. A value the store cannot group by is a 400 here; without this check
+// it reached dimensionToColumn inside QueryBreakdown and came back as a 500.
+func analyticsDimension(raw string) (string, error) {
+	if raw == "" {
+		return "service", nil
+	}
+	if _, err := dimensionToColumn(raw); err != nil {
+		return "", NewClientError(400, "invalid dimension: must be one of service, provider, region, account")
+	}
+	return raw, nil
 }
 
 // requestedAnalyticsAccounts returns the accounts an analytics request names.

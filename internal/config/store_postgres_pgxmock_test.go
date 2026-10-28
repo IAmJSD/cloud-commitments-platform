@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -400,16 +401,15 @@ func TestPGXMock_GetServiceConfig_Success(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	cols := []string{
-		"provider", "service", "enabled", "term", "payment", "coverage", "ramp_schedule",
-		"include_engines", "exclude_engines", "include_regions", "exclude_regions",
-		"include_types", "exclude_types", "min_count",
-	}
-	rows := pgxmock.NewRows(cols).AddRow(
+	created := time.Date(2026, 4, 27, 12, 34, 0, 0, time.UTC)
+	updated := created.Add(48 * time.Hour)
+	rows := pgxmock.NewRows(serviceConfigCols).AddRow(
 		"aws", "ec2", true, 1, "no-upfront", 80.0, RampImmediate,
 		[]string{"mysql"}, []string{}, []string{"us-east-1"}, []string{}, []string{}, []string{}, 2,
+		created, updated,
 	)
-	mock.ExpectQuery("SELECT").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
+	mock.ExpectQuery(`SELECT .*created_at, updated_at\s+FROM service_configs`).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).WillReturnRows(rows)
 
 	cfg, err := store.GetServiceConfig(ctx, "aws", "ec2")
 	require.NoError(t, err)
@@ -417,6 +417,11 @@ func TestPGXMock_GetServiceConfig_Success(t *testing.T) {
 	assert.Equal(t, "ec2", cfg.Service)
 	assert.Equal(t, []string{"mysql"}, cfg.IncludeEngines)
 	assert.Equal(t, 2, cfg.MinCount)
+	// Issue #8: the row's stamps reach the caller.
+	require.NotNil(t, cfg.CreatedAt)
+	require.NotNil(t, cfg.UpdatedAt)
+	assert.True(t, created.Equal(*cfg.CreatedAt))
+	assert.True(t, updated.Equal(*cfg.UpdatedAt))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -427,21 +432,28 @@ func TestPGXMock_ListServiceConfigs_Success(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	cols := []string{
-		"provider", "service", "enabled", "term", "payment", "coverage", "ramp_schedule",
-		"include_engines", "exclude_engines", "include_regions", "exclude_regions",
-		"include_types", "exclude_types", "min_count",
-	}
-	rows := pgxmock.NewRows(cols).
+	ec2Stamp := time.Date(2026, 4, 27, 12, 34, 0, 0, time.UTC)
+	rdsStamp := ec2Stamp.Add(time.Hour)
+	rows := pgxmock.NewRows(serviceConfigCols).
 		AddRow("aws", "ec2", true, 1, "no-upfront", 80.0, RampImmediate,
-			[]string{}, []string{}, []string{}, []string{}, []string{}, []string{}, 0).
+			[]string{}, []string{}, []string{}, []string{}, []string{}, []string{}, 0,
+			ec2Stamp, ec2Stamp.Add(time.Minute)).
 		AddRow("aws", "rds", true, 3, "all-upfront", 70.0, RampImmediate,
-			[]string{}, []string{}, []string{}, []string{}, []string{}, []string{}, 0)
-	mock.ExpectQuery("SELECT").WillReturnRows(rows)
+			[]string{}, []string{}, []string{}, []string{}, []string{}, []string{}, 0,
+			rdsStamp, rdsStamp.Add(time.Minute))
+	mock.ExpectQuery(`SELECT .*created_at, updated_at\s+FROM service_configs`).WillReturnRows(rows)
 
 	cfgs, err := store.ListServiceConfigs(ctx)
 	require.NoError(t, err)
-	assert.Len(t, cfgs, 2)
+	require.Len(t, cfgs, 2)
+	// Issue #8: each row keeps its own stamps; scanning into a reused
+	// variable must not leave every entry pointing at the last row's time.
+	require.NotNil(t, cfgs[0].UpdatedAt)
+	require.NotNil(t, cfgs[1].UpdatedAt)
+	assert.True(t, ec2Stamp.Equal(*cfgs[0].CreatedAt))
+	assert.True(t, ec2Stamp.Add(time.Minute).Equal(*cfgs[0].UpdatedAt))
+	assert.True(t, rdsStamp.Equal(*cfgs[1].CreatedAt))
+	assert.True(t, rdsStamp.Add(time.Minute).Equal(*cfgs[1].UpdatedAt))
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -2661,9 +2673,9 @@ func TestPGXMock_CleanupOldExecutions_Success(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	// Two args: retentionDays, then the health-scored status list branch 3
-	// excludes (see CleanupOldExecutions).
-	mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+	// Three args: retentionDays, then branch 3's settled-status allowlist and
+	// the health-scored statuses it excludes (see CleanupOldExecutions).
+	mock.ExpectExec("DELETE").WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 5))
 
 	n, err := store.CleanupOldExecutions(ctx, 90)
@@ -3033,7 +3045,7 @@ func TestPGXMock_ListAccountRegistrations_SearchEscapesPercent(t *testing.T) {
 		AddRow(minimalRegRow("reg-1", "%foo Corp", "%foo@example.com")...)
 	// The query must contain ESCAPE to prove the clause was updated.
 	mock.ExpectQuery(`ESCAPE`).
-		WithArgs("%" + escapedArg + "%").
+		WithArgs("%"+escapedArg+"%", MaxListLimit).
 		WillReturnRows(rows)
 
 	filter := AccountRegistrationFilter{Search: rawSearch}
@@ -3058,7 +3070,7 @@ func TestPGXMock_ListAccountRegistrations_SearchEscapesUnderscore(t *testing.T) 
 	rows := pgxmock.NewRows(registrationCols()).
 		AddRow(minimalRegRow("reg-2", "foo_bar Inc", "foo_bar@example.com")...)
 	mock.ExpectQuery(`ESCAPE`).
-		WithArgs("%" + escapedArg + "%").
+		WithArgs("%"+escapedArg+"%", MaxListLimit).
 		WillReturnRows(rows)
 
 	filter := AccountRegistrationFilter{Search: rawSearch}
@@ -3085,7 +3097,7 @@ func TestPGXMock_ListAccountRegistrations_SearchEscapesBackslash(t *testing.T) {
 		AddRow(minimalRegRow("reg-3", `foo\bar Ltd`, `foo\bar@example.com`)...)
 	// The query must contain ESCAPE to prove the clause was updated.
 	mock.ExpectQuery(`ESCAPE`).
-		WithArgs("%" + escapedArg + "%").
+		WithArgs("%"+escapedArg+"%", MaxListLimit).
 		WillReturnRows(rows)
 
 	filter := AccountRegistrationFilter{Search: rawSearch}
@@ -3304,10 +3316,9 @@ func TestPGXMock_CleanupOldExecutions_IncludesCanonicalStatus(t *testing.T) {
 	store := storeWith(mock)
 	ctx := context.Background()
 
-	// If 'canceled' is missing the mock won't match, causing an
-	// "unexpected query" error from ExpectationsWereMet.
+	// The regex pins the canonical spelling after the contract migration.
 	mock.ExpectExec(`status = 'canceled'`).
-		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+		WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("DELETE", 4))
 
 	n, err := store.CleanupOldExecutions(ctx, 90)
@@ -3330,7 +3341,7 @@ func TestPGXMock_CleanupOldExecutions_RetainsCanceledOnUpdatedAt(t *testing.T) {
 	anchors := map[string]string{
 		"canceled branch retains on updated_at":      `(?s)status = 'canceled'\s+AND updated_at`,
 		"completed branch retains on scheduled_date": `(?s)status = 'completed'\s+AND scheduled_date`,
-		"expires_at branch skips scored statuses":    `(?s)status <> ALL\(\$2\)\s+AND expires_at IS NOT NULL`,
+		"expires_at branch allowlists settled rows":  `(?s)status = ANY\(\$2\)\s+AND status <> ALL\(\$3\)\s+AND expires_at IS NOT NULL`,
 	}
 
 	for name, pattern := range anchors {
@@ -3340,7 +3351,7 @@ func TestPGXMock_CleanupOldExecutions_RetainsCanceledOnUpdatedAt(t *testing.T) {
 			ctx := context.Background()
 
 			mock.ExpectExec(pattern).
-				WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg()).
+				WithArgs(pgxmock.AnyArg(), pgxmock.AnyArg(), pgxmock.AnyArg()).
 				WillReturnResult(pgxmock.NewResult("DELETE", 1))
 
 			n, err := store.CleanupOldExecutions(ctx, 30)
@@ -3352,7 +3363,10 @@ func TestPGXMock_CleanupOldExecutions_RetainsCanceledOnUpdatedAt(t *testing.T) {
 }
 
 // TestPGXMock_CleanupOldExecutions_ExcludesEveryHealthScoredStatus pins the
-// $2 argument itself, not just the `<> ALL($2)` spelling. The anchors above
+// $2 and $3 arguments themselves, not just the `= ANY($2)` and `<> ALL($3)`
+// spellings. $2 is the settled-status allowlist (#120): passing a wider list,
+// or none, lets a lapsed TTL delete an approved or running row the reaper
+// still needs. $3 is the health-score exclusion. The anchors above
 // would still match if someone passed a narrower list (say, the canceled
 // spellings only), which is exactly the drift the shared slice exists to
 // prevent: `failed` is scored at up to -40, so dropping it from the
@@ -3365,7 +3379,7 @@ func TestPGXMock_CleanupOldExecutions_ExcludesEveryHealthScoredStatus(t *testing
 	ctx := context.Background()
 
 	mock.ExpectExec("DELETE").
-		WithArgs(30, HealthScoredExecutionStatuses).
+		WithArgs(30, TerminalExecutionStatuses, HealthScoredExecutionStatuses).
 		WillReturnResult(pgxmock.NewResult("DELETE", 2))
 
 	n, err := store.CleanupOldExecutions(ctx, 30)
@@ -3376,6 +3390,17 @@ func TestPGXMock_CleanupOldExecutions_ExcludesEveryHealthScoredStatus(t *testing
 	assert.ElementsMatch(t,
 		[]string{StatusFailed, StatusCanceled},
 		HealthScoredExecutionStatuses)
+	// The statuses a lapsed TTL may delete: settled and not health-scored.
+	// None of them is one an executor, scheduler or reaper acts on.
+	var ttlDeletable []string
+	for _, st := range TerminalExecutionStatuses {
+		if !slices.Contains(HealthScoredExecutionStatuses, st) {
+			ttlDeletable = append(ttlDeletable, st)
+		}
+	}
+	assert.ElementsMatch(t,
+		[]string{StatusCompleted, StatusPartiallyCompleted, StatusExpired, StatusRevocationRequested},
+		ttlDeletable)
 }
 
 // ─── CountExecutionsByPlanAndStatus ──────────────────────────────────────────

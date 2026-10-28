@@ -16,6 +16,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/common"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/accountpredicate"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -403,7 +404,7 @@ func saveGlobalConfigWith(ctx context.Context, q globalConfigExecutor, config *G
 // in scanServiceConfig order.
 const serviceConfigColumns = `provider, service, enabled, term, payment, coverage, ramp_schedule,
 		       include_engines, exclude_engines, include_regions, exclude_regions,
-		       include_types, exclude_types, min_count`
+		       include_types, exclude_types, min_count, created_at, updated_at`
 
 const getServiceConfigQuery = `SELECT ` + serviceConfigColumns + `
 		FROM service_configs
@@ -425,10 +426,22 @@ func (s *PostgresStore) GetServiceConfig(ctx context.Context, provider, service 
 // locking clause) via q (the pool or a transaction). A missing row is reported
 // as an error wrapping ErrNotFound.
 func getServiceConfigFrom(ctx context.Context, q globalConfigExecutor, query, provider, service string) (*ServiceConfig, error) {
-	var config ServiceConfig
-	var includeEngines, excludeEngines, includeRegions, excludeRegions, includeTypes, excludeTypes []string
+	config, err := scanServiceConfig(q.QueryRow(ctx, query, provider, service))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("service config not found for %s:%s: %w", provider, service, ErrNotFound)
+		}
+		return nil, fmt.Errorf("failed to get service config: %w", err)
+	}
+	return config, nil
+}
 
-	err := q.QueryRow(ctx, query, provider, service).Scan(
+// scanServiceConfig scans one row selected with serviceConfigColumns,
+// including the row's created_at and updated_at stamps (issue #8).
+func scanServiceConfig(row pgx.Row) (*ServiceConfig, error) {
+	var config ServiceConfig
+	var createdAt, updatedAt time.Time
+	err := row.Scan(
 		&config.Provider,
 		&config.Service,
 		&config.Enabled,
@@ -436,30 +449,21 @@ func getServiceConfigFrom(ctx context.Context, q globalConfigExecutor, query, pr
 		&config.Payment,
 		&config.Coverage,
 		&config.RampSchedule,
-		&includeEngines,
-		&excludeEngines,
-		&includeRegions,
-		&excludeRegions,
-		&includeTypes,
-		&excludeTypes,
+		&config.IncludeEngines,
+		&config.ExcludeEngines,
+		&config.IncludeRegions,
+		&config.ExcludeRegions,
+		&config.IncludeTypes,
+		&config.ExcludeTypes,
 		&config.MinCount,
+		&createdAt,
+		&updatedAt,
 	)
-
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("service config not found for %s:%s: %w", provider, service, ErrNotFound)
-		}
-		return nil, fmt.Errorf("failed to get service config: %w", err)
+		return nil, err
 	}
-
-	// Map arrays (handle nil)
-	config.IncludeEngines = includeEngines
-	config.ExcludeEngines = excludeEngines
-	config.IncludeRegions = includeRegions
-	config.ExcludeRegions = excludeRegions
-	config.IncludeTypes = includeTypes
-	config.ExcludeTypes = excludeTypes
-
+	config.CreatedAt = &createdAt
+	config.UpdatedAt = &updatedAt
 	return &config, nil
 }
 
@@ -538,9 +542,11 @@ func saveServiceConfigWith(ctx context.Context, q globalConfigExecutor, config *
 			exclude_types = $13,
 			min_count = $14,
 			updated_at = NOW()
+		RETURNING created_at, updated_at
 	`
 
-	_, err := q.Exec(ctx, query,
+	var createdAt, updatedAt time.Time
+	err := q.QueryRow(ctx, query,
 		config.Provider,
 		config.Service,
 		config.Enabled,
@@ -555,12 +561,16 @@ func saveServiceConfigWith(ctx context.Context, q globalConfigExecutor, config *
 		config.IncludeTypes,
 		config.ExcludeTypes,
 		config.MinCount,
-	)
+	).Scan(&createdAt, &updatedAt)
 
 	if err != nil {
 		return fmt.Errorf("failed to save service config: %w", err)
 	}
 
+	// The stamps always come from the row as written, so a caller-supplied
+	// value (a PUT body carrying created_at) never survives the save.
+	config.CreatedAt = &createdAt
+	config.UpdatedAt = &updatedAt
 	return nil
 }
 
@@ -573,10 +583,7 @@ func saveServiceConfigWith(ctx context.Context, q globalConfigExecutor, config *
 // defense-in-depth against a compromised admin inserting millions of rows
 // and matches the sibling GetPendingExecutions limit.
 func (s *PostgresStore) ListServiceConfigs(ctx context.Context) ([]ServiceConfig, error) {
-	query := `
-		SELECT provider, service, enabled, term, payment, coverage, ramp_schedule,
-		       include_engines, exclude_engines, include_regions, exclude_regions,
-		       include_types, exclude_types, min_count
+	query := `SELECT ` + serviceConfigColumns + `
 		FROM service_configs
 		ORDER BY provider, service
 		LIMIT 1000
@@ -590,37 +597,11 @@ func (s *PostgresStore) ListServiceConfigs(ctx context.Context) ([]ServiceConfig
 
 	configs := make([]ServiceConfig, 0)
 	for rows.Next() {
-		var config ServiceConfig
-		var includeEngines, excludeEngines, includeRegions, excludeRegions, includeTypes, excludeTypes []string
-
-		err := rows.Scan(
-			&config.Provider,
-			&config.Service,
-			&config.Enabled,
-			&config.Term,
-			&config.Payment,
-			&config.Coverage,
-			&config.RampSchedule,
-			&includeEngines,
-			&excludeEngines,
-			&includeRegions,
-			&excludeRegions,
-			&includeTypes,
-			&excludeTypes,
-			&config.MinCount,
-		)
+		config, err := scanServiceConfig(rows)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan service config: %w", err)
 		}
-
-		config.IncludeEngines = includeEngines
-		config.ExcludeEngines = excludeEngines
-		config.IncludeRegions = includeRegions
-		config.ExcludeRegions = excludeRegions
-		config.IncludeTypes = includeTypes
-		config.ExcludeTypes = excludeTypes
-
-		configs = append(configs, config)
+		configs = append(configs, *config)
 	}
 
 	return configs, rows.Err()
@@ -868,9 +849,9 @@ func (s *PostgresStore) updatePurchasePlanGuardedTx(ctx context.Context, tx pgx.
 		return err
 	}
 	// Marshal services and ramp_schedule to JSONB
-	servicesJSON, err := json.Marshal(plan.Services)
+	servicesJSON, err := marshalPlanServices(plan.Services)
 	if err != nil {
-		return fmt.Errorf("failed to marshal services: %w", err)
+		return err
 	}
 
 	rampScheduleJSON, err := json.Marshal(plan.RampSchedule)
@@ -1159,7 +1140,7 @@ func (s *PostgresStore) SavePurchaseExecutionTx(ctx context.Context, tx pgx.Tx, 
 
 	// canceled_by keeps an actor already on the row: a save from a copy read
 	// before a concurrent cancel must not erase that cancel's attribution.
-	// This is the value reads saw before migration 000151, when the save wrote
+	// This is the value reads saw before migration 000153, when the save wrote
 	// the legacy column and reads took COALESCE(canceled_by, cancelled_by).
 	query := `
 		INSERT INTO purchase_executions (
@@ -1993,6 +1974,13 @@ func getExecutionByIDOn(ctx context.Context, q executionQuerier, executionID str
 	`
 
 	executions, err := queryExecutionsOn(ctx, q, query, executionID)
+	if isInvalidTextRepresentation(err) {
+		// execution_id is a UUID column, and Postgres rejects an ID it cannot
+		// cast instead of matching no row. No execution can have such an ID,
+		// so it is not found. Callers such as the purchase revoke route look up
+		// IDs that may be an Azure ARM path and fall through on ErrNotFound.
+		return nil, fmt.Errorf("%w: execution %s", ErrNotFound, executionID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -2002,6 +1990,18 @@ func getExecutionByIDOn(ctx context.Context, q executionQuerier, executionID str
 	}
 
 	return &executions[0], nil
+}
+
+// pgInvalidTextRepresentation is the SQLSTATE Postgres raises when a text
+// value cannot be cast to the column type, for example a non-UUID string
+// compared with a uuid column.
+const pgInvalidTextRepresentation = "22P02"
+
+// isInvalidTextRepresentation reports whether err is Postgres refusing a text value
+// for a typed column (SQLSTATE 22P02).
+func isInvalidTextRepresentation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgInvalidTextRepresentation
 }
 
 // GetExecutionByPlanAndDate retrieves execution for a specific plan and date.
@@ -2314,13 +2314,26 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 //     already assumed.
 //
 //  3. Expired-row cleanup: `expires_at IS NOT NULL AND expires_at < NOW() -
-//     retention`, for any status the health score does not count. This is
-//     the row's own TTL column (SavePurchaseExecution writes it from
+//     retention`, for a settled row the health score does not count. This
+//     is the row's own TTL column (SavePurchaseExecution writes it from
 //     PurchaseExecution.TTL), NOT the approval-token deadline -- that is a
 //     separate column, `approval_token_expires_at`, added by migration
 //
-//  000051. A row whose TTL lapsed longer than `retention` ago is dead, so
-//     without this branch it would accumulate indefinitely.
+//  000051. A settled row whose TTL lapsed longer than `retention` ago is
+//     dead, so without this branch it would accumulate indefinitely.
+//
+//     The status gate is an ALLOWLIST: status = ANY(TerminalExecutionStatuses)
+//     AND status <> ALL(HealthScoredExecutionStatuses), the same predicate
+//     cmd/cleanup-lambda's expiredExecutionsWhere uses (#998, #1173). A lapsed
+//     TTL says nothing about whether an executor, scheduler or reaper still
+//     needs the row: `expires_at` is set at insert and never rewritten, so an
+//     `approved` or `running` row stranded by a dead executor (the rows
+//     GetStaleApprovedExecutions and ListStuckExecutions exist to find) used
+//     to be deleted here before the reaper could resolve it (#120). Pending
+//     and notified rows are kept too: ExpireExecutionAtomic moves a lapsed
+//     approval to `expired`, which this branch then reaps. A status added to
+//     the schema later is kept until someone classifies it in
+//     TerminalExecutionStatuses, the fail-closed direction.
 //
 //     Every status in HealthScoredExecutionStatuses is excluded here, which
 //     is the whole reason that slice is exported rather than spelled out
@@ -2358,11 +2371,15 @@ func (s *PostgresStore) GetScheduledExecutionsDue(ctx context.Context) ([]Purcha
 // are safe from expiry-based cleanup -- which, per the reachability note
 // above, is every row current code writes.
 func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays int) (int64, error) {
-	// Branch 3's exclusion is parameterized from
-	// HealthScoredExecutionStatuses instead of repeating a literal list, so
-	// a status added to the plan health score extends this exclusion
-	// automatically and the two cannot drift. `status` is NOT NULL
-	// (migration 000001), so `<> ALL` is not exposed to three-valued logic.
+	// Branch 3's allowlist and exclusion are parameterized from
+	// TerminalExecutionStatuses and HealthScoredExecutionStatuses instead of
+	// repeating literal lists, so this branch, cmd/cleanup-lambda and the
+	// plan health score cannot drift. `status` is NOT NULL (migration
+	// 000001), so neither array test is exposed to three-valued logic.
+	//
+	// Under READ COMMITTED a row another transaction is updating is
+	// rechecked against the whole predicate once that transaction commits,
+	// so a row that leaves the allowlist while the DELETE waits survives.
 	query := `
 		DELETE FROM purchase_executions
 		WHERE (
@@ -2374,13 +2391,14 @@ func (s *PostgresStore) CleanupOldExecutions(ctx context.Context, retentionDays 
 		    AND updated_at     < NOW() - INTERVAL '1 day' * $1
 		      )
 		   OR (
-		        status <> ALL($2)
+		        status = ANY($2)
+		    AND status <> ALL($3)
 		    AND expires_at IS NOT NULL
 		    AND expires_at     < NOW() - INTERVAL '1 day' * $1
 		      )
 	`
 
-	result, err := s.db.Exec(ctx, query, retentionDays, HealthScoredExecutionStatuses)
+	result, err := s.db.Exec(ctx, query, retentionDays, TerminalExecutionStatuses, HealthScoredExecutionStatuses)
 	if err != nil {
 		return 0, fmt.Errorf("failed to cleanup old executions: %w", err)
 	}
@@ -2624,74 +2642,27 @@ func activePurchaseHistoryQuery(asOf time.Time, accountIDs []string, externalIDs
 	return query, args
 }
 
-// appendAccountPredicate pulls the dual-column account-predicate arg-building
-// branch out of GetPurchaseHistoryFiltered to keep it under the cyclomatic limit.
+// appendAccountPredicate appends the dual-column account predicate to the
+// GetPurchaseHistoryFiltered / GetActivePurchaseHistory AND chain.
 //
 // Either input alone is sufficient: a UUID-only filter still matches
 // NULL-cloud_account_id rows via the resolved external IDs, and an
 // external-only filter matches UUID-only rows once the caller resolves them.
 // Both empty returns conds/args unchanged (no account clause -> all accounts).
 //
-// The external-id half is grouped per provider so each external number is only
-// compared against rows of its own provider:
-//
-//	(cloud_account_id = ANY($u)
-//	   OR ((provider = '' OR LOWER(provider) = LOWER($p1)) AND account_id = ANY($e1))
-//	   OR ((provider = '' OR LOWER(provider) = LOWER($p2)) AND account_id = ANY($e2)))
-//
-// This preserves the (provider, external_id) pairing so a filter for aws/123
-// never matches azure/123 rows. The "" provider key (legacy raw external
-// number, unknown provider) matches account_id with no provider gate. Providers
-// are sorted for deterministic SQL. The OR is wrapped in parentheses so it
-// composes with the surrounding AND chain.
-//
-// The provider gate is case-insensitive, and a row whose stored provider is
-// empty (unknown) matches on account_id alone, the same way the "" filter key
-// does. Without this, a NULL-cloud_account_id row stored as "AWS" or "" was
-// silently dropped even though its account_id matched (issue #24). A row
-// stored under a different, non-empty provider is still excluded.
+// The predicate is built by internal/accountpredicate, shared with the
+// analytics reads in internal/analytics and internal/api (issue #120). This
+// path uses the case-insensitive provider gate, where a row whose stored
+// provider is empty (unknown) matches on account_id alone; without it a
+// NULL-cloud_account_id row stored as "AWS" or "" was silently dropped even
+// though its account_id matched (issue #24). A row stored under a different,
+// non-empty provider is still excluded.
 func appendAccountPredicate(conds []string, args []any, accountIDs []string, externalIDsByProvider map[string][]string) (outConds []string, outArgs []any) {
-	if len(accountIDs) == 0 && len(externalIDsByProvider) == 0 {
+	clause, args := accountpredicate.Build(args, accountIDs, externalIDsByProvider, accountpredicate.ProviderCaseInsensitiveOrUnknown)
+	if clause == "" {
 		return conds, args
 	}
-	var ors []string
-	if len(accountIDs) > 0 {
-		args = append(args, accountIDs)
-		ors = append(ors, fmt.Sprintf("cloud_account_id = ANY($%d)", len(args)))
-	}
-	for _, provider := range sortedProviderKeys(externalIDsByProvider) {
-		exts := externalIDsByProvider[provider]
-		if len(exts) == 0 {
-			continue
-		}
-		if provider == "" {
-			args = append(args, exts)
-			ors = append(ors, fmt.Sprintf("account_id = ANY($%d)", len(args)))
-			continue
-		}
-		args = append(args, provider)
-		providerArg := len(args)
-		args = append(args, exts)
-		ors = append(ors, fmt.Sprintf(
-			"((provider = '' OR LOWER(provider) = LOWER($%d)) AND account_id = ANY($%d))",
-			providerArg, len(args)))
-	}
-	if len(ors) == 0 {
-		return conds, args
-	}
-	conds = append(conds, "("+strings.Join(ors, " OR ")+")")
-	return conds, args
-}
-
-// sortedProviderKeys returns the map keys in ascending order so the generated
-// SQL (and its bind-arg ordering) is deterministic across calls and testable.
-func sortedProviderKeys(m map[string][]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	return append(conds, clause), args
 }
 
 // GetPurchaseHistoryFiltered reads purchase_history rows matching the

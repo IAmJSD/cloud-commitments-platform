@@ -83,9 +83,10 @@ func TestRIExchangeAutoWorkers_ConcreteStoreAndFixtureClient(t *testing.T) {
 	standaloneCfg := &config.GlobalConfig{RIExchangeEnabled: true, RIExchangeMode: "auto", RIExchangeUtilizationThreshold: 95,
 		RIExchangeMaxPerExchangeUSD: 1000, RIExchangeMaxDailyUSD: baselineWholeDollars + 1500, RIExchangeLookbackDays: 30}
 	standalone, err := app.executeRIExchangeReshape(ctx, standaloneCfg, riExchangeClients{
-		listConvertibleRIs: func(context.Context) ([]ec2svc.ConvertibleRI, error) { return ri(standaloneRIID), nil },
-		getRIUtilization:   func(context.Context, int) ([]recommendations.RIUtilization, error) { return util(standaloneRIID), nil },
-		exchangeClient:     quoteClient(standaloneRIID, &standaloneExecutions),
+		offeredInstanceTypes: noOfferedCatalog,
+		listConvertibleRIs:   func(context.Context) ([]ec2svc.ConvertibleRI, error) { return ri(standaloneRIID), nil },
+		getRIUtilization:     func(context.Context, int) ([]recommendations.RIUtilization, error) { return util(standaloneRIID), nil },
+		exchangeClient:       quoteClient(standaloneRIID, &standaloneExecutions),
 		lookupOffering: func(context.Context, exchange.LookupOfferingParams) (string, error) {
 			return "offering-test", nil
 		},

@@ -90,9 +90,6 @@ func (m *inviteMailSink) SendPasswordResetEmail(_ context.Context, _, resetURL s
 	m.resetURLs = append(m.resetURLs, resetURL)
 	return nil
 }
-func (m *inviteMailSink) SendWelcomeEmail(context.Context, string, string, string) error {
-	return nil
-}
 func (m *inviteMailSink) SendUserInviteEmail(context.Context, string, string) error {
 	return errors.New("smtp unavailable")
 }

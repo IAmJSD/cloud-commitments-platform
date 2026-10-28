@@ -1,0 +1,16 @@
+-- Intentionally a no-op.
+--
+-- What it cannot restore:
+--   * A re-keyed row keeps its id, settings and created_at, but nothing in the
+--     row says it was re-keyed: it looks the same as a row saved under the
+--     canonical id. Moving rows back would also make them match no
+--     recommendation again, which is the bug 000151 fixes.
+--   * A legacy service_configs row that lost to its canonical twin is gone;
+--     no copy of it is kept anywhere.
+--   * A legacy override that lost to its canonical twin is gone from the
+--     table, but its settings are in the account_service_override.delete
+--     event 000151 recorded for it (actor 'migration 000151', before
+--     column), so it can be recreated by hand if needed.
+--
+-- The config_audit_events rows 000151 wrote stay: they record what happened.
+SELECT 1;

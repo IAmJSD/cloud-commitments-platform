@@ -1,4 +1,4 @@
--- Rollback 000151: back to the 000089 EXPAND state.
+-- Rollback 000153: back to the 000089 EXPAND state.
 --
 -- Widen both status CHECKs again first, so nothing the data steps below touch
 -- can violate them. Rows stay 'canceled': the widened CHECKs accept both

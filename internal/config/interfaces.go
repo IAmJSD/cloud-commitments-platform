@@ -711,10 +711,10 @@ type StoreInterface interface {
 	// dashboard loads don't each fan out to a paid CE API call. A
 	// per-process in-memory cache effectively never hits because each
 	// cold container starts empty. GetRIUtilizationCache returns nil
-	// when the (region, lookback_days) key is absent — callers treat
-	// that as a miss and re-fetch.
-	GetRIUtilizationCache(ctx context.Context, region string, lookbackDays int) (*RIUtilizationCacheEntry, error)
-	UpsertRIUtilizationCache(ctx context.Context, region string, lookbackDays int, payload []byte, fetchedAt time.Time) error
+	// when the (cloud_account_id, region, lookback_days) key is absent —
+	// callers treat that as a miss and re-fetch.
+	GetRIUtilizationCache(ctx context.Context, key RIUtilizationCacheKey) (*RIUtilizationCacheEntry, error)
+	UpsertRIUtilizationCache(ctx context.Context, key RIUtilizationCacheKey, payload []byte, fetchedAt time.Time) error
 
 	// Account registrations (self-service enrollment via federation IaC)
 	CreateAccountRegistration(ctx context.Context, reg *AccountRegistration) error
@@ -725,6 +725,10 @@ type StoreInterface interface {
 	// TransitionRegistrationStatus atomically updates a registration's workflow fields.
 	// actor is the UUID of the reviewer (nil for system-initiated transitions).
 	TransitionRegistrationStatus(ctx context.Context, reg *AccountRegistration, fromStatus string, actor *string) error
+	// ApproveAccountRegistration atomically approves a pending registration,
+	// creates its cloud account and links them. Returns ErrRegistrationConflict
+	// when the registration is no longer pending; on any error nothing is saved.
+	ApproveAccountRegistration(ctx context.Context, reg *AccountRegistration, account *CloudAccount, actor *string) error
 	DeleteAccountRegistration(ctx context.Context, id string) error
 
 	// Purchase suppressions. Written inside a WithTx block during bulk

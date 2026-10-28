@@ -17,7 +17,10 @@ import (
 // LADDER CONFIG STORE METHODS
 // ==========================================
 
-// GetLadderConfigs returns all ladder_configs rows, newest first.
+// GetLadderConfigs returns the ladder_configs rows, newest first, capped at
+// MaxListLimit like the package's other list reads (#120). There is one row
+// per (cloud_account_id, provider), so the cap is only reached with more
+// than a thousand account/provider pairs.
 // Returns an empty slice (not nil) when no rows exist.
 func (s *PostgresStore) GetLadderConfigs(ctx context.Context) ([]LadderConfigDB, error) {
 	query := `
@@ -27,9 +30,10 @@ func (s *PostgresStore) GetLadderConfigs(ctx context.Context) ([]LadderConfigDB,
 		       max_hourly_commit_per_run, max_actions_per_run,
 		       ramp_schedule, created_at, updated_at
 		FROM ladder_configs
-		ORDER BY created_at DESC
+		ORDER BY created_at DESC, id
+		LIMIT $1
 	`
-	rows, err := s.db.Query(ctx, query)
+	rows, err := s.db.Query(ctx, query, MaxListLimit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query ladder_configs: %w", err)
 	}

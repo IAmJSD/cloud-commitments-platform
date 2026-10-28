@@ -1,4 +1,4 @@
--- Migration 000151: CONTRACT half of the 000089 'cancelled' -> 'canceled'
+-- Migration 000153: CONTRACT half of the 000089 'cancelled' -> 'canceled'
 -- rename (issue #47), part 1 of 2.
 --
 -- 000089 (EXPAND) widened both status CHECKs to accept both spellings, added

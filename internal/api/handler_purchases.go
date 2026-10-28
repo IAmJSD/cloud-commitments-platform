@@ -2695,7 +2695,11 @@ func (h *Handler) persistRetryExecution(ctx context.Context, failedExec *config.
 		RetryAttemptN:          failedExec.RetryAttemptN + 1,
 	}
 
-	suppressions := config.BuildSuppressions(failedExec.Recommendations, newExecutionID, h.gracePeriodConfig(ctx), time.Now())
+	graceCfg, err := h.gracePeriodConfig(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	suppressions := config.BuildSuppressions(failedExec.Recommendations, newExecutionID, graceCfg, time.Now())
 
 	if err := h.persistRetrySuccessorTx(ctx, failedExec, newExecution, suppressions); err != nil {
 		return nil, "", err
@@ -3738,7 +3742,11 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 	executionID := execution.ExecutionID
 
 	// Load the grace-period config once before entering the tx.
-	suppressions := config.BuildSuppressions(execReq.Recommendations, executionID, h.gracePeriodConfig(ctx), time.Now())
+	graceCfg, err := h.gracePeriodConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	suppressions := config.BuildSuppressions(execReq.Recommendations, executionID, graceCfg, time.Now())
 	dupExec, err := h.persistExecutionAndSuppressions(ctx, execution, suppressions, creatorID, idempotencyKey)
 	if err != nil {
 		return nil, err
@@ -3774,14 +3782,18 @@ func (h *Handler) executePurchase(ctx context.Context, req *events.LambdaFunctio
 }
 
 // gracePeriodConfig loads the global config for BuildSuppressions' grace
-// periods, read before any tx opens. A read error does not block the
-// purchase: it returns nil and the grace period defaults per provider.
-func (h *Handler) gracePeriodConfig(ctx context.Context) *config.GlobalConfig {
+// periods, read before any tx opens. A read error is returned and fails the
+// purchase before anything is persisted (audit A01-016, issue #111): falling
+// back to the default grace period would write suppressions for a provider
+// the operator switched off (grace 0) or with the wrong expiry. This matches
+// internal/purchase (AttachResolvedRecommendations) and the other config
+// reads on these paths.
+func (h *Handler) gracePeriodConfig(ctx context.Context) (*config.GlobalConfig, error) {
 	g, err := h.config.GetGlobalConfig(ctx)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("failed to read grace periods for suppressions: %w", err)
 	}
-	return g
+	return g, nil
 }
 
 // sendApprovalAndFinalize sends the approval email for a freshly persisted
