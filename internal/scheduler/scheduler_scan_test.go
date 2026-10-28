@@ -278,16 +278,31 @@ func TestScanRecommendations_StoreErrorFails(t *testing.T) {
 	require.ErrorContains(t, err, "db down")
 }
 
-// TestScanRecommendations_ReadFailuresOverShow mirrors ListRecommendations'
-// trade-off: a suppression or override read failure is logged and the rows
-// pass through rather than failing the page.
-func TestScanRecommendations_ReadFailuresOverShow(t *testing.T) {
+// TestScanRecommendations_OverrideReadFailureOverShows mirrors
+// ListRecommendations' trade-off for overrides: an override read failure is
+// logged and the rows pass through rather than failing the page.
+func TestScanRecommendations_OverrideReadFailureOverShows(t *testing.T) {
 	store := scanFixture()
-	store.supsErr = errors.New("sups down")
+	store.sups = nil
 	store.getOverrideErr = errors.New("overrides down")
 	s := &Scheduler{config: store}
 	got, _ := collectScan(t, s, 4)
-	assert.Len(t, got, 30, "nothing suppressed or overridden away")
+	assert.Len(t, got, 30, "nothing overridden away")
+}
+
+// TestScanRecommendations_SuppressionReadFailureFailsClosed (issue #111): a
+// suppression read failure fails the scan before any chunk is read or handed
+// to fn, so no covered rec reaches the page at its full pre-purchase count.
+func TestScanRecommendations_SuppressionReadFailureFailsClosed(t *testing.T) {
+	store := scanFixture()
+	store.supsErr = errors.New("sups down")
+	s := &Scheduler{config: store}
+	err := s.ScanRecommendations(context.Background(), config.RecommendationFilter{}, 4, func([]config.RecommendationRecord) error {
+		t.Fatal("fn must not run when the suppression read fails")
+		return nil
+	})
+	require.ErrorContains(t, err, "sups down")
+	assert.Zero(t, store.chunkReads, "no chunk is read once the suppression read has failed")
 }
 
 // TestScanRecommendations_RejectsBadChunkSize guards the loop bound.

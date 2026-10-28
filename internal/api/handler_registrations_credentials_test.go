@@ -162,6 +162,7 @@ func approveWithCredential(t *testing.T, credType, payload, approvalBody string)
 		ID: regCredRegID, Status: "pending", Provider: "gcp", ExternalID: "test-project",
 		RegCredentialType: credType, RegCredentialPayload: payload,
 	}, nil)
+	store.On("ApproveAccountRegistration", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	store.On("TransitionRegistrationStatus", mock.Anything, mock.Anything, "pending", mock.Anything).Return(nil).Maybe()
 	store.On("UpdateAccountRegistration", mock.Anything, mock.Anything).Return(nil).Maybe()
 	mockAuth := new(MockAuthService)
@@ -179,7 +180,9 @@ func TestApproveRegistration_SavesCheckedCredential(t *testing.T) {
 	account, ok := result.(*config.CloudAccount)
 	require.True(t, ok)
 	assert.True(t, account.Enabled)
-	store.AssertCalled(t, "CreateCloudAccount", mock.Anything, mock.Anything)
+	store.AssertCalled(t, "ApproveAccountRegistration", mock.Anything, mock.Anything,
+		mock.MatchedBy(func(a *config.CloudAccount) bool { return a.ID == account.ID }), mock.Anything)
+	assertNoPiecemealApproval(t, store)
 	require.Contains(t, creds.saved, account.ID+"/gcp_workload_identity_config")
 	assert.JSONEq(t, payload, string(creds.saved[account.ID+"/gcp_workload_identity_config"]))
 }
@@ -214,6 +217,7 @@ func TestApproveRegistration_RefusesInvalidStoredCredential(t *testing.T) {
 			assert.Nil(t, result)
 			require400(t, err, "the credentials submitted with this registration are not valid")
 			require400(t, err, tc.msg)
+			store.AssertNotCalled(t, "ApproveAccountRegistration", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 			store.AssertNotCalled(t, "TransitionRegistrationStatus", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 			store.AssertNotCalled(t, "CreateCloudAccount", mock.Anything, mock.Anything)
 			assert.Empty(t, creds.saved)
