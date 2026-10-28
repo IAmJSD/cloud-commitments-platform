@@ -119,7 +119,7 @@ func (s *Service) CheckAdminExists(ctx context.Context) (bool, error) {
 // normalized email.
 //
 // When req.Password is empty the user is invited and will set their own
-// password via the welcome email link, so the password validator is skipped.
+// password via the invite email link, so the password validator is skipped.
 func (s *Service) validateCreateUserRequest(ctx context.Context, req CreateUserRequest) (string, error) {
 	email, err := normalizeAccountEmail(req.Email)
 	if err != nil {

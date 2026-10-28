@@ -31,8 +31,10 @@ func toLadderMicros(v float64) int64 { return int64(math.Round(v * ladderMicros)
 // is netted per row in on-demand-equivalent dollars, the unit of the ceiling;
 // the amended row's old and new amounts convert by its own basis and rate.
 // Ceiling C = min(target, baseline * current coverage%) - existing, from the
-// run's snapshot (existing is gross, so C errs low) and the config's current
-// coverage. A run without a full snapshot refuses a raise. Must run inside
+// run's snapshot and the config's current coverage. New runs store existing net
+// of commitments expiring during the plan; older snapshots retain their gross
+// value and therefore impose a stricter ceiling until the next run. A run
+// without a full snapshot refuses a raise. Must run inside
 // withLadderConfigLock so the sums cannot move under it.
 func checkLadderConfigCeiling(ctx context.Context, tx pgx.Tx, configID string, amended lockedLadderTranche, newAmount string) error {
 	var raise bool

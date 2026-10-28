@@ -43,9 +43,12 @@ import (
 // Cross-family alternatives no longer flow through here — they're
 // sourced from the cached AWS Cost Explorer purchase recommendations
 // in Postgres via purchaseRecLookupFromStore (see exchange_lookup.go),
-// so the EC2 client only needs to enumerate convertible RIs.
+// so the EC2 client only needs to enumerate convertible RIs and the
+// region's offered instance types (DescribeInstanceTypeOfferings), which
+// limit reshape targets to sizes the region actually sells.
 type reshapeEC2Client interface {
 	ListConvertibleReservedInstances(ctx context.Context) ([]ec2svc.ConvertibleRI, error)
+	GetValidResourceTypes(ctx context.Context) ([]string, error)
 }
 
 // reshapeRecsClient is the narrow slice of the recommendations
@@ -1435,6 +1438,23 @@ func (h *Handler) reshapeCloudAccountInScope(ctx context.Context, session *Sessi
 	return allowed.Allows(cloudAccountID, ""), nil
 }
 
+// resolveReshapeAccountScope resolves the deployment's cloud account once and
+// reports whether the session's allowed_accounts permit it. Unlike
+// reshapeCloudAccountInScope it always resolves, even for unrestricted
+// sessions, because the RI utilization reads need the account to key their
+// cache (issue #120). Returns ("", false, err) on any lookup failure.
+func (h *Handler) resolveReshapeAccountScope(ctx context.Context, session *Session) (cloudAccountID string, inScope bool, err error) {
+	allowed, err := h.getAccountScope(ctx, session)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to get allowed accounts: %w", err)
+	}
+	cloudAccountID, err = h.resolveReshapeCloudAccountID(ctx)
+	if err != nil {
+		return "", false, fmt.Errorf("failed to resolve cloud account scope: %w", err)
+	}
+	return cloudAccountID, allowed.AllowsAll() || allowed.Allows(cloudAccountID, ""), nil
+}
+
 // requireReshapeAccountScope enforces the session's allowed_accounts scope for
 // executeExchange (issue #93), returning 403 instead of an empty response
 // since exchange execution is a mutating, financially irreversible action.
@@ -1565,16 +1585,20 @@ func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFuncti
 		return nil, err
 	}
 
-	// Apply the session's allowed_accounts scope.
-	if inScope, sErr := h.reshapeCloudAccountInScope(ctx, session); sErr != nil {
-		return nil, sErr
-	} else if !inScope {
-		return &RIUtilizationResponse{Utilization: []recommendations.RIUtilization{}}, nil
-	}
-
+	// Validate input before resolving the account, so a malformed request
+	// makes no STS or account lookup.
 	lookbackDays, err := parseLookbackDaysParam(req.QueryStringParameters)
 	if err != nil {
 		return nil, err
+	}
+
+	// Apply the session's allowed_accounts scope. The resolved account also
+	// keys the utilization cache, so two accounts never share a cached row.
+	cloudAccountID, inScope, sErr := h.resolveReshapeAccountScope(ctx, session)
+	if sErr != nil {
+		return nil, sErr
+	} else if !inScope {
+		return &RIUtilizationResponse{Utilization: []recommendations.RIUtilization{}}, nil
 	}
 
 	region := req.QueryStringParameters["region"]
@@ -1593,7 +1617,8 @@ func (h *Handler) getRIUtilization(ctx context.Context, req *events.LambdaFuncti
 	fetch := func(fetchCtx context.Context, days int) ([]recommendations.RIUtilization, error) {
 		return recsAdapter.GetRIUtilization(fetchCtx, days, region)
 	}
-	utilization, err := h.getRIUtilizationCache().getOrFetch(ctx, region, lookbackDays, riUtilizationCacheTTL, riUtilizationCacheStaleTTL, fetch)
+	cacheKey := config.RIUtilizationCacheKey{CloudAccountID: cloudAccountID, Region: region, LookbackDays: lookbackDays}
+	utilization, err := h.getRIUtilizationCache().getOrFetch(ctx, cacheKey, riUtilizationCacheTTL, riUtilizationCacheStaleTTL, fetch)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get RI utilization: %w", err)
 	}
@@ -1760,16 +1785,20 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 		return nil, err
 	}
 
-	// Apply the session's allowed_accounts scope.
-	if inScope, sErr := h.reshapeCloudAccountInScope(ctx, session); sErr != nil {
-		return nil, sErr
-	} else if !inScope {
-		return &ReshapeRecommendationsResponse{Recommendations: []exchange.ReshapeRecommendation{}}, nil
-	}
-
+	// Validate input before resolving the account, so a malformed request
+	// makes no STS or account lookup.
 	p, err := parseReshapeParams(req.QueryStringParameters)
 	if err != nil {
 		return nil, err
+	}
+
+	// Apply the session's allowed_accounts scope. The resolved account also
+	// keys the utilization cache and scopes the recs lookup below.
+	cloudAccountID, inScope, sErr := h.resolveReshapeAccountScope(ctx, session)
+	if sErr != nil {
+		return nil, sErr
+	} else if !inScope {
+		return &ReshapeRecommendationsResponse{Recommendations: []exchange.ReshapeRecommendation{}}, nil
 	}
 
 	cfg, err := h.loadAWSConfigWithRegion(ctx, p.region)
@@ -1796,7 +1825,8 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	fetch := func(fetchCtx context.Context, days int) ([]recommendations.RIUtilization, error) {
 		return recsAdapter.GetRIUtilization(fetchCtx, days, p.region)
 	}
-	utilData, err := h.getRIUtilizationCache().getOrFetch(ctx, p.region, p.lookbackDays, riUtilizationCacheTTL, riUtilizationCacheStaleTTL, fetch)
+	cacheKey := config.RIUtilizationCacheKey{CloudAccountID: cloudAccountID, Region: p.region, LookbackDays: p.lookbackDays}
+	utilData, err := h.getRIUtilizationCache().getOrFetch(ctx, cacheKey, riUtilizationCacheTTL, riUtilizationCacheStaleTTL, fetch)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get RI utilization: %w", err)
 	}
@@ -1810,15 +1840,14 @@ func (h *Handler) getReshapeRecommendations(ctx context.Context, req *events.Lam
 	// surface another tenant's recs. Empty resolved account ID means
 	// "no scope filter" for ambient-credentials deployments where
 	// CloudAccount registration hasn't happened yet; a real ListCloudAccounts
-	// error aborts the request instead of silently falling through to an
-	// unscoped query that could match the wrong tenant's recs.
-	cloudAccountID, err := h.resolveReshapeCloudAccountID(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve cloud account scope for reshape: %w", err)
-	}
+	// error aborted the request at the scope check above instead of silently
+	// falling through to an unscoped query that could match the wrong
+	// tenant's recs.
 	currencyCode := firstNonEmptyCurrency(instances)
 	lookup := purchaseRecLookupFromStore(h.config, cloudAccountID)
-	recs := exchange.AnalyzeReshapingWithRecs(ctx, riInfos, utilInfos, p.threshold, p.region, currencyCode, lookup)
+	offered := OfferedInstanceTypes(ctx, p.region, ec2Client.GetValidResourceTypes)
+	recs := exchange.AnalyzeReshapingWithRecs(ctx, riInfos, utilInfos, p.threshold, p.region, currencyCode, lookup,
+		exchange.WithOfferedInstanceTypes(offered))
 
 	resp := &ReshapeRecommendationsResponse{Recommendations: recs, ExcludedRIs: excluded}
 	h.attachReshapeStaleness(ctx, resp)
@@ -3034,7 +3063,7 @@ type RIExchangeConfigUpdateRequest struct {
 }
 
 func (r *RIExchangeConfigUpdateRequest) validate() error {
-	if r.Mode != "manual" && r.Mode != "auto" {
+	if !config.IsValidRIExchangeMode(r.Mode) {
 		return NewClientError(400, "mode must be 'manual' or 'auto'")
 	}
 	if r.UtilizationThreshold < 0 || r.UtilizationThreshold > 100 {

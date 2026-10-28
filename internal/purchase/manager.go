@@ -42,6 +42,10 @@ type ManagerConfig struct {
 	NotificationDaysBefore int
 	DefaultCoverage        float64
 	DefaultTerm            int
+	// MaxDueRowAge caps how long after its due time the fire and process
+	// sweeps may still buy a row (issue #712); an older row is failed
+	// unbought instead. Zero means DefaultMaxDueRowAge.
+	MaxDueRowAge time.Duration
 }
 
 // Manager handles purchase workflow.
@@ -59,6 +63,8 @@ type Manager struct {
 	oidcIssuerURL   string
 	notifyDays      int
 	resolver        stepResolver
+	// maxDueRowAge is ManagerConfig.MaxDueRowAge; read it via dueRowMaxAge.
+	maxDueRowAge time.Duration
 	// budgets lets tests shorten purchase deadlines. Production leaves it
 	// zero, which means the default durations below.
 	budgets purchaseBudgets
@@ -79,6 +85,10 @@ type ProcessResult struct {
 	Executed  int      `json:"executed"`
 	Failed    int      `json:"failed"`
 	Recovered int      `json:"recovered,omitempty"`
+	// Stale counts the Failed rows refused because they were due more than
+	// the due-row age cap ago (ErrDueRowTooOld, issue #712). Each one is
+	// also in Failed and Errors.
+	Stale int `json:"stale,omitempty"`
 }
 
 // staleApprovedThreshold is how long an execution may sit in the "approved"
@@ -126,6 +136,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		dashboardURL:  cfg.DashboardURL,
 		oidcSigner:    cfg.OIDCSigner,
 		oidcIssuerURL: cfg.OIDCIssuerURL,
+		maxDueRowAge:  cfg.MaxDueRowAge,
 	}
 }
 
@@ -189,6 +200,16 @@ func (m *Manager) finalizeExecution(exec *config.PurchaseExecution, execErr erro
 //
 // On a won claim it runs executeAndFinalize and returns (true, execErr).
 func (m *Manager) claimAndExecute(ctx context.Context, exec *config.PurchaseExecution) (claimed bool, err error) {
+	return m.claimAndExecuteWithin(ctx, exec, 0)
+}
+
+// claimAndExecuteWithin is claimAndExecute with a due-row age cap: when maxAge
+// is positive, a claimed row that was due more than maxAge ago is refused
+// before submission (ErrDueRowTooOld) instead of bought (issue #712). The
+// check runs on the claimed row, so a concurrent sweep that lost the claim
+// never reaches it and the row is failed and reported exactly once. Only the
+// process sweep passes a cap; the SQS execute_purchase path passes 0.
+func (m *Manager) claimAndExecuteWithin(ctx context.Context, exec *config.PurchaseExecution, maxAge time.Duration) (claimed bool, err error) {
 	gated := exec.Status == "pending" || exec.Status == "notified"
 	gateSawEmpty := len(exec.Recommendations) == 0
 	// System-initiated: SQS/cron executor passes nil so transitioned_by = NULL.
@@ -207,12 +228,25 @@ func (m *Manager) claimAndExecute(ctx context.Context, exec *config.PurchaseExec
 	// the RETURNING clause) onto the caller's struct so the rest of the run
 	// starts from the claimed row rather than the pre-claim snapshot.
 	*exec = *updated
-	if gated && len(exec.Recommendations) > 0 {
-		if capErr := m.recheckStepCap(ctx, exec); capErr != nil {
-			return true, m.failClaimedBeforeSubmission(ctx, exec, capErr)
-		}
+	if refusal := m.claimedRowRefusal(ctx, exec, gated, maxAge); refusal != nil {
+		return true, m.failClaimedBeforeSubmission(ctx, exec, refusal)
 	}
 	return true, m.executeAndFinalize(ctx, exec)
+}
+
+// claimedRowRefusal runs claimAndExecuteWithin's checks on the row its claim
+// returned: the due-row age cap when maxAge is positive, then the step cap for
+// a gated row with recommendations.
+func (m *Manager) claimedRowRefusal(ctx context.Context, exec *config.PurchaseExecution, gated bool, maxAge time.Duration) error {
+	if maxAge > 0 {
+		if refusal := dueRowAgeRefusal(exec, maxAge, time.Now()); refusal != nil {
+			return refusal
+		}
+	}
+	if gated && len(exec.Recommendations) > 0 {
+		return m.recheckStepCap(ctx, exec)
+	}
+	return nil
 }
 
 // isMultiAccountAckable reports whether a multi-account execErr should be ACKed
@@ -938,7 +972,7 @@ func (m *Manager) processOneExecution(ctx context.Context, exec config.PurchaseE
 	// otherwise both execute the same due row. claimAndExecute CASes the row
 	// to "running" and only the winner runs; a lost claim is skipped without
 	// re-executing.
-	claimed, execErr := m.claimAndExecute(ctx, &exec)
+	claimed, execErr := m.claimAndExecuteWithin(ctx, &exec, m.dueRowMaxAge())
 	if !claimed {
 		// execErr != nil here is a real DB error during the claim (count as
 		// failed); execErr == nil is a benign CAS race-loss (skip silently).
@@ -956,6 +990,9 @@ func (m *Manager) processOneExecution(ctx context.Context, exec config.PurchaseE
 	if isMultiAccountAckable(execErr) {
 		result.Executed++
 		return
+	}
+	if errors.Is(execErr, ErrDueRowTooOld) {
+		result.Stale++
 	}
 	result.Failed++
 	result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", exec.ExecutionID, execErr))

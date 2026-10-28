@@ -55,7 +55,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 	//
 	// The resolver is best-effort: a lookup error logs and falls through
 	// to the un-scaled total, mirroring the over-show-vs-under-show
-	// trade-off baked into Scheduler.applySuppressions / applyAccountOverrides.
+	// trade-off ListRecommendations makes for account overrides.
 	coverageByKey := h.resolveCoverageByAccountKey(ctx, recommendations)
 
 	totalSavings, byService := summarizeRecommendationsWithCoverage(recommendations, coverageByKey)
@@ -421,8 +421,17 @@ func (h *Handler) resolveTargetCoverage(ctx context.Context) float64 {
 // aggressive for "skip this scheduled run". This version emits actual
 // execution rows so Cancel can target just the planned purchase via
 // DELETE /api/purchases/planned/{id}.
+//
+// The optional provider, account_ids and legacy account_id query parameters
+// narrow the rows like the summary route does (issue #713, see
+// parseUpcomingFilter); they never widen the session's allowed_accounts.
 func (h *Handler) getUpcomingPurchases(ctx context.Context, req *events.LambdaFunctionURLRequest) (*UpcomingPurchaseResponse, error) {
 	session, err := h.requirePermission(ctx, req, "view", "purchases")
+	if err != nil {
+		return nil, err
+	}
+	// Issue #713: the topbar provider/account chips, validated before any read.
+	filter, err := h.parseUpcomingFilter(ctx, session, req.QueryStringParameters)
 	if err != nil {
 		return nil, err
 	}
@@ -445,6 +454,17 @@ func (h *Handler) getUpcomingPurchases(ctx context.Context, req *events.LambdaFu
 	if err != nil {
 		return nil, fmt.Errorf("failed to get allowed accounts: %w", err)
 	}
+	upcoming, err := h.upcomingInScope(ctx, scope, filter, executions, planMap)
+	if err != nil {
+		return nil, err
+	}
+	return &UpcomingPurchaseResponse{Purchases: upcoming}, nil
+}
+
+// upcomingInScope builds the upcoming rows for the executions whose plan still
+// exists, that the session scope can see, and that pass the caller's filter,
+// in input order.
+func (h *Handler) upcomingInScope(ctx context.Context, scope auth.AccountScope, filter upcomingFilter, executions []config.PurchaseExecution, planMap map[string]*config.PurchasePlan) ([]UpcomingPurchase, error) {
 	// Memoises GetPlanAccounts, mirroring getPlannedPurchases.
 	planAccounts := make(map[string][]config.CloudAccount)
 
@@ -464,10 +484,16 @@ func (h *Handler) getUpcomingPurchases(ctx context.Context, req *events.LambdaFu
 		if !ok {
 			continue
 		}
-		upcoming = append(upcoming, upcomingFromExecution(plan, &exec))
+		row := upcomingFromExecution(plan, &exec)
+		ok, err = filter.matches(ctx, h, &row, &exec, planAccounts)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			upcoming = append(upcoming, row)
+		}
 	}
-
-	return &UpcomingPurchaseResponse{Purchases: upcoming}, nil
+	return upcoming, nil
 }
 
 // firstServiceConfig returns the ServiceConfig for the lexicographically first

@@ -86,9 +86,10 @@ func TestExecuteRIExchangeReshape_RefusesEmptyAccountID(t *testing.T) {
 		getRIUtilization: func(context.Context, int) ([]recommendations.RIUtilization, error) {
 			return nil, nil
 		},
-		exchangeClient: &mockExchangeClient{},
-		accountID:      "",
-		region:         "us-east-1",
+		offeredInstanceTypes: noOfferedCatalog,
+		exchangeClient:       &mockExchangeClient{},
+		accountID:            "",
+		region:               "us-east-1",
 	}
 
 	result, err := app.executeRIExchangeReshape(ctx, cfg, clients)

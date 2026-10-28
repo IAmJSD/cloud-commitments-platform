@@ -53,16 +53,17 @@ func TestRIUtilizationCache_Integration_ColdReadFetchesAndPersists(t *testing.T)
 		return fetched, nil
 	}
 
-	got, err := cache.getOrFetch(ctx, "us-east-1", 30, time.Hour, 2*time.Hour, fetch)
+	got, err := cache.getOrFetch(ctx, usEast30, time.Hour, 2*time.Hour, fetch)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), calls.Load())
 	require.Len(t, got, 1)
 	require.Equal(t, "ri-integration-1", got[0].ReservedInstanceID)
 
 	// Postgres row must be present with the correct payload.
-	entry, err := store.GetRIUtilizationCache(ctx, "us-east-1", 30)
+	entry, err := store.GetRIUtilizationCache(ctx, usEast30)
 	require.NoError(t, err)
 	require.NotNil(t, entry)
+	require.Equal(t, riUtilAccountA, entry.CloudAccountID)
 	require.Equal(t, "us-east-1", entry.Region)
 	require.Equal(t, 30, entry.LookbackDays)
 	var round []recommendations.RIUtilization
@@ -86,12 +87,12 @@ func TestRIUtilizationCache_Integration_FreshHitNoFetch(t *testing.T) {
 	}
 
 	// Prime the cache.
-	_, err := cache.getOrFetch(ctx, "us-east-1", 30, time.Hour, 2*time.Hour, fetch)
+	_, err := cache.getOrFetch(ctx, usEast30, time.Hour, 2*time.Hour, fetch)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), calls.Load())
 
 	// Second read: well within soft TTL.
-	_, err = cache.getOrFetch(ctx, "us-east-1", 30, time.Hour, 2*time.Hour, fetch)
+	_, err = cache.getOrFetch(ctx, usEast30, time.Hour, 2*time.Hour, fetch)
 	require.NoError(t, err)
 	require.Equal(t, int32(1), calls.Load(), "fresh hit must not trigger a fetch")
 }
@@ -111,7 +112,7 @@ func TestRIUtilizationCache_Integration_StaleNonLambdaServesStaleAndRefreshes(t 
 	// Seed a row whose age is between soft (50ms) and hard (1h).
 	stalePayload, err := json.Marshal(staleData)
 	require.NoError(t, err)
-	require.NoError(t, store.UpsertRIUtilizationCache(ctx, "us-east-1", 30, stalePayload, time.Now().Add(-200*time.Millisecond)))
+	require.NoError(t, store.UpsertRIUtilizationCache(ctx, usEast30, stalePayload, time.Now().Add(-200*time.Millisecond)))
 
 	cache := newRIUtilizationCache(store, false) // non-Lambda
 	release := make(chan struct{})
@@ -125,7 +126,7 @@ func TestRIUtilizationCache_Integration_StaleNonLambdaServesStaleAndRefreshes(t 
 	}
 
 	got := getOrFetchWithin(t, 10*time.Second, func() ([]recommendations.RIUtilization, error) {
-		return cache.getOrFetch(ctx, "us-east-1", 30, 50*time.Millisecond, time.Hour, fetch)
+		return cache.getOrFetch(ctx, usEast30, 50*time.Millisecond, time.Hour, fetch)
 	}, "stale-read must return synchronously, not wait for background fetch")
 	require.Len(t, got, 1)
 	require.Equal(t, "ri-stale", got[0].ReservedInstanceID, "first call must return the stale copy")
@@ -133,7 +134,7 @@ func TestRIUtilizationCache_Integration_StaleNonLambdaServesStaleAndRefreshes(t 
 	// Let the background refresh finish and wait for it to land the fresh data.
 	releaseFetch()
 	require.Eventually(t, func() bool {
-		entry, err := store.GetRIUtilizationCache(ctx, "us-east-1", 30)
+		entry, err := store.GetRIUtilizationCache(ctx, usEast30)
 		if err != nil || entry == nil {
 			return false
 		}
@@ -156,21 +157,82 @@ func TestRIUtilizationCache_Integration_HardExpiredSyncRefetch(t *testing.T) {
 	stalePayload, err := json.Marshal(staleData)
 	require.NoError(t, err)
 	// Age 2h exceeds both soft (15m) and hard (1h).
-	require.NoError(t, store.UpsertRIUtilizationCache(ctx, "us-east-1", 30, stalePayload, time.Now().Add(-2*time.Hour)))
+	require.NoError(t, store.UpsertRIUtilizationCache(ctx, usEast30, stalePayload, time.Now().Add(-2*time.Hour)))
 
 	cache := newRIUtilizationCache(store, false)
 	fetch := func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
 		return freshData, nil
 	}
 
-	got, err := cache.getOrFetch(ctx, "us-east-1", 30, 15*time.Minute, time.Hour, fetch)
+	got, err := cache.getOrFetch(ctx, usEast30, 15*time.Minute, time.Hour, fetch)
 	require.NoError(t, err)
 	require.Equal(t, "ri-fresh", got[0].ReservedInstanceID, "hard-expired entry must force sync refetch")
 
 	// Postgres row should have the fresh fetched_at timestamp, not
 	// the 2h-old one we seeded.
-	entry, err := store.GetRIUtilizationCache(ctx, "us-east-1", 30)
+	entry, err := store.GetRIUtilizationCache(ctx, usEast30)
 	require.NoError(t, err)
 	require.NotNil(t, entry)
 	require.Less(t, time.Since(entry.FetchedAt), 5*time.Second, "fetched_at must be updated after sync refetch")
+}
+
+// TestRIUtilizationCache_Integration_AccountsInSameRegionKeepOwnRows pins
+// issue #120 on real Postgres: two accounts write the same region and lookback
+// concurrently and each reads back only its own payload. Before migration
+// 000150 the table's key was (region, lookback_days), so the writers
+// overwrote one another and both accounts read whichever row landed last.
+func TestRIUtilizationCache_Integration_AccountsInSameRegionKeepOwnRows(t *testing.T) {
+	ctx := context.Background()
+	store := setupRICacheIntegration(ctx, t)
+
+	keyA := usEast30
+	keyB := config.RIUtilizationCacheKey{CloudAccountID: riUtilAccountB, Region: "us-east-1", LookbackDays: 30}
+	unattributed := config.RIUtilizationCacheKey{Region: "us-east-1", LookbackDays: 30}
+	payloadOf := func(id string) []byte {
+		b, err := json.Marshal([]recommendations.RIUtilization{{ReservedInstanceID: id}})
+		require.NoError(t, err)
+		return b
+	}
+	writers := map[config.RIUtilizationCacheKey][]byte{
+		keyA:         payloadOf("ri-account-a"),
+		keyB:         payloadOf("ri-account-b"),
+		unattributed: payloadOf("ri-ambient"),
+	}
+
+	// Several concurrent upserts per key, interleaved across keys, exercise
+	// the ON CONFLICT path on the new three-column key.
+	const perKey = 8
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	errs := make(chan error, perKey*len(writers))
+	for key, payload := range writers {
+		for range perKey {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				errs <- store.UpsertRIUtilizationCache(ctx, key, payload, time.Now())
+			}()
+		}
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	for key, payload := range writers {
+		entry, err := store.GetRIUtilizationCache(ctx, key)
+		require.NoError(t, err)
+		require.NotNil(t, entry, "no row for %+v", key)
+		require.Equal(t, key.CloudAccountID, entry.CloudAccountID)
+		require.JSONEq(t, string(payload), string(entry.Payload), "row for %+v holds another account's payload", key)
+	}
+
+	missing, err := store.GetRIUtilizationCache(ctx, config.RIUtilizationCacheKey{
+		CloudAccountID: "12000000-0000-4000-8000-00000000000c", Region: "us-east-1", LookbackDays: 30,
+	})
+	require.NoError(t, err)
+	require.Nil(t, missing, "an account with no row of its own must miss, not read another account's row")
 }

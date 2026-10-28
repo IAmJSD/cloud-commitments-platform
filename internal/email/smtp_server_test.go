@@ -273,28 +273,6 @@ func TestSMTPSender_SendPasswordResetEmail_WithMockServer(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestSMTPSender_SendWelcomeEmail_WithMockServer tests welcome email.
-func TestSMTPSender_SendWelcomeEmail_WithMockServer(t *testing.T) {
-	server := newMockSMTPServer(t, false)
-	server.start(t)
-	defer server.stop()
-
-	sender := &SMTPSender{
-		host:      "127.0.0.1",
-		port:      server.port,
-		username:  "",
-		password:  "",
-		fromEmail: "noreply@cudly.io",
-		fromName:  "CUDly",
-		useTLS:    false,
-	}
-
-	ctx := context.Background()
-	err := sender.SendWelcomeEmail(ctx, "newuser@example.com", "https://dashboard.example.com", "admin")
-
-	require.NoError(t, err)
-}
-
 // TestSMTPSender_SendNewRecommendationsNotification_WithMockServer tests recommendations email.
 func TestSMTPSender_SendNewRecommendationsNotification_WithMockServer(t *testing.T) {
 	server := newMockSMTPServer(t, false)

@@ -587,8 +587,8 @@ func riExchangeArmStateOf(cfg *config.GlobalConfig) riExchangeArmState {
 // RunAutoExchange executes without approval only for the literal "auto" and
 // refuses any other unknown mode (including "") with an error, so a typo
 // fails the scheduled run loudly instead of executing. PUT /api/config
-// unmarshals onto GlobalConfig wholesale and GlobalConfig.Validate never
-// constrains RIExchangeMode, so any non-"manual" string can be stored; treating
+// validates newly assigned modes, but preserves legacy unknown modes during
+// unrelated partial writes. Treating
 // every such value as armed keeps the grant check closed if the consumer's
 // mode handling ever changes.
 func (s riExchangeArmState) armed() bool {
