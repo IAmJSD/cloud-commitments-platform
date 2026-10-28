@@ -37,43 +37,56 @@ const (
 	dimTask    = "missingTask"
 	dimPass    = "missingEnvPassThrough"
 	dimDefault = "missingEnvDefault"
+	// dimModuleDefault: a default-on task whose module enable var defaults
+	// to false.
+	dimModuleDefault = "moduleDefaultOff"
 )
 
-var (
-	validDims = []string{dimTask, dimPass, dimDefault}
-	sevenGCP  = []string{"analytics_collect", "cleanup", "finalize_revocations", "fire_scheduled_purchases",
-		"process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}
-)
+var validDims = []string{dimTask, dimPass, dimDefault, dimModuleDefault}
 
 // knownGaps documents what is not wired yet, per platform and dimension. Each
 // PR that wires a task removes it here; the test fails when actual != documented.
-// gcp/cleanup-function runs cleanup outside the server task and is not
-// scanned, so cleanup shows as a gap on GCP.
+// terraform/environments/gcp passes neither enable_scheduled_tasks nor app_url
+// to the GKE module, so its Cloud Scheduler (and with it every GKE sweep)
+// stays off when deployed from there. The GKE module also defaults
+// enable_scheduled_tasks to false, because it gates every Cloud Scheduler job
+// and those need app_url.
 var knownGaps = map[string]map[string][]string{
-	"gcp-cloud-run": {dimTask: sevenGCP},
-	"gcp-gke":       {dimTask: sevenGCP},
-	"azure-container-apps": {dimTask: {"analytics_collect", "finalize_revocations", "fire_scheduled_purchases",
-		"process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}},
+	"gcp-gke": {dimPass: {"collect_recommendations"}, dimModuleDefault: {"collect_recommendations"}},
 }
 
-// aws platforms are also checked against terraform/environments/aws: envBlock
-// is the module block in compute.tf, lambda whether sweeps.tf targets a
-// Lambda (action key plus aws_lambda_permission) rather than ECS RunTask.
-// cronJob platforms schedule their sweep_tasks through a Kubernetes CronJob
-// in scheduled-tasks.tf.
-type platform struct {
-	name, dir, envBlock  string
-	aws, lambda, cronJob bool
+// legacyWiring lists tasks a platform schedules under variables other than
+// their taskVars entry, with the reason. The env check skips them; each must
+// still be wired.
+var legacyWiring = map[string]map[string]string{
+	"azure-container-apps": {"cleanup": "scheduled by enable_scheduled_tasks since before #712; " +
+		"making it opt-in would stop retention on deployments that rely on it"},
 }
+
+// Platforms with an envBlock are checked against the module block of that
+// name in envDir/compute.tf. aws platforms also have sweeps.tf checked;
+// lambda says whether it targets a Lambda (action key plus
+// aws_lambda_permission) rather than ECS RunTask. cronJob platforms schedule their sweep_tasks through a Kubernetes
+// CronJob in scheduled-tasks.tf; httpSweep platforms through a "sweep"
+// resource of that type calling /api/scheduled/<task>.
+type platform struct {
+	name, dir, envDir, envBlock, httpSweep string
+	aws, lambda, cronJob                   bool
+}
+
+const (
+	gcpEnvDir   = "../../environments/gcp"
+	azureEnvDir = "../../environments/azure"
+)
 
 var platforms = []platform{
-	{name: "aws-lambda", dir: "aws/lambda", aws: true, envBlock: "compute_lambda", lambda: true},
-	{name: "aws-fargate", dir: "aws/fargate", aws: true, envBlock: "compute_fargate"},
+	{name: "aws-lambda", dir: "aws/lambda", aws: true, envDir: awsEnvDir, envBlock: "compute_lambda", lambda: true},
+	{name: "aws-fargate", dir: "aws/fargate", aws: true, envDir: awsEnvDir, envBlock: "compute_fargate"},
 	{name: "cloudformation", dir: "../../../cloudformation/stacks/CUDly"},
-	{name: "gcp-cloud-run", dir: "gcp/cloud-run"},
-	{name: "gcp-gke", dir: "gcp/gke"},
-	{name: "azure-container-apps", dir: "azure/container-apps"},
-	{name: "azure-aks", dir: "azure/aks", cronJob: true},
+	{name: "gcp-cloud-run", dir: "gcp/cloud-run", envDir: gcpEnvDir, envBlock: "compute_cloud_run", httpSweep: "google_cloud_scheduler_job"},
+	{name: "gcp-gke", dir: "gcp/gke", envDir: gcpEnvDir, envBlock: "compute_gke", httpSweep: "google_cloud_scheduler_job"},
+	{name: "azure-container-apps", dir: "azure/container-apps", envDir: azureEnvDir, envBlock: "compute_container_apps", httpSweep: "azurerm_logic_app_action_custom"},
+	{name: "azure-aks", dir: "azure/aks", cronJob: true, envDir: azureEnvDir, envBlock: "compute_aks"},
 }
 
 // Copied from aws/cross_account_sts_discovery_test.go (commentLinePattern):
@@ -336,6 +349,11 @@ func TestRequiredTasksWiredPerPlatform(t *testing.T) {
 			}
 			for _, prob := range probs {
 				t.Errorf("%s: %s: %s", p.name, cronJobFile, prob)
+			}
+		}
+		if p.httpSweep != "" {
+			for _, prob := range httpSweepProblems(files, p.httpSweep) {
+				t.Errorf("%s: %s", p.name, prob)
 			}
 		}
 	}

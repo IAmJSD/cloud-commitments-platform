@@ -1,7 +1,7 @@
-// AWS env-layer checks for issue #712: the Lambda and Fargate modules' task
-// variables must be declared, passed name-identically by
-// terraform/environments/aws/compute.tf and defaulted per the opt-in policy,
-// and no tfvars file may switch off a default-on task.
+// Env-layer checks for issue #712: each module's task variables must be
+// declared, passed name-identically by its terraform/environments/<cloud>/
+// compute.tf and defaulted per the opt-in policy, and no AWS tfvars file may
+// switch off a default-on task.
 package compute_test
 
 import (
@@ -19,7 +19,7 @@ import (
 type taskVar struct{ enable, schedule string }
 
 // taskVars names the module/env variables that switch each task and set its
-// cadence; the AWS env checks use it instead of inferring names.
+// cadence; the env checks use it instead of inferring names.
 var taskVars = map[string]taskVar{
 	"collect_recommendations":     {"enable_scheduled_tasks", "recommendation_schedule"},
 	"reap_stuck_purchases":        {"enable_reap_stuck_purchases_schedule", "reap_stuck_purchases_schedule"},
@@ -56,22 +56,26 @@ func envDefaultProblem(task, def string) string {
 
 // moduleDefaultProblem checks the module's own enable default against the
 // opt-in policy, so the module cannot switch an opt-in task on for a caller
-// that does not pass the variable. An undeclared variable is reported by the
-// declaration check instead.
-func moduleDefaultProblem(modVars, task string) string {
+// that does not pass the variable. A default-on task the module defaults off
+// is returned as a gap (gap true) instead, to be listed in knownGaps. An
+// undeclared variable is reported by the declaration check instead.
+func moduleDefaultProblem(modVars, task string) (prob string, gap bool) {
 	enable := taskVars[task].enable
 	body, ok := blockOnce(modVars, `variable\s+"`+enable+`"\s*\{`)
 	if !ok {
-		return ""
+		return "", false
 	}
 	m := defaultRe.FindStringSubmatch(body)
 	if m == nil {
-		return "module variable " + enable + " has no default"
+		return "module variable " + enable + " has no default", false
+	}
+	if defaultOn(task) && m[1] == "false" {
+		return "", true
 	}
 	if prob := envDefaultProblem(task, m[1]); prob != "" {
-		return "module variables.tf: " + prob
+		return "module variables.tf: " + prob, false
 	}
-	return ""
+	return "", false
 }
 
 // blockOnce returns the body of the single block matching header; zero or
@@ -103,7 +107,9 @@ func envProblems(modVars, envVars, compute, blockName string, wired map[string]b
 			continue
 		}
 		tv := taskVars[task]
-		if prob := moduleDefaultProblem(modVars, task); prob != "" {
+		if prob, gap := moduleDefaultProblem(modVars, task); gap {
+			gaps[dimModuleDefault] = append(gaps[dimModuleDefault], task)
+		} else if prob != "" {
 			problems = append(problems, prob)
 		}
 		for _, v := range []string{tv.enable, tv.schedule} {
@@ -198,25 +204,26 @@ func sweepProblems(dir string, lambda bool) ([]string, error) {
 	return problems, nil
 }
 
-func TestAWSEnvWiring(t *testing.T) {
-	envVars, err := os.ReadFile(awsEnvDir + "/variables.tf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	compute, err := os.ReadFile(awsEnvDir + "/compute.tf")
-	if err != nil {
-		t.Fatal(err)
-	}
+// TestEnvWiring runs envProblems for every platform an environment root
+// deploys, against that root's variables.tf and compute.tf.
+func TestEnvWiring(t *testing.T) {
 	for _, p := range platforms {
 		if p.aws != strings.HasPrefix(p.name, "aws-") {
 			t.Errorf("%s: aws flag does not match the platform name", p.name)
 		}
-		if !p.aws {
-			continue
+		if p.aws && p.envBlock == "" {
+			t.Errorf("%s: aws platform has no envBlock", p.name)
 		}
 		if p.envBlock == "" {
-			t.Errorf("%s: aws platform has no envBlock", p.name)
 			continue
+		}
+		envVars, err := os.ReadFile(p.envDir + "/variables.tf")
+		if err != nil {
+			t.Fatal(err)
+		}
+		compute, err := os.ReadFile(p.envDir + "/compute.tf")
+		if err != nil {
+			t.Fatal(err)
 		}
 		files, err := scanDir(p.dir)
 		if err != nil {
@@ -224,11 +231,17 @@ func TestAWSEnvWiring(t *testing.T) {
 			continue
 		}
 		wired, _ := wiredFrom(files)
+		for task := range legacyWiring[p.name] {
+			if !wired[task] {
+				t.Errorf("%s: legacyWiring lists %s but it is not wired", p.name, task)
+			}
+			delete(wired, task)
+		}
 		problems, gaps := envProblems(files["variables.tf"], string(envVars), string(compute), p.envBlock, wired)
 		for _, prob := range problems {
 			t.Errorf("%s: %s", p.name, prob)
 		}
-		for _, dim := range []string{dimPass, dimDefault} {
+		for _, dim := range []string{dimPass, dimDefault, dimModuleDefault} {
 			for _, prob := range checkGaps(gaps[dim], knownGaps[p.name][dim]) {
 				t.Errorf("%s %s: %s", p.name, dim, prob)
 			}
@@ -275,7 +288,10 @@ func TestEnvChecksNegatives(t *testing.T) {
 		"clean":                          {cr, "true", same, false, ""},
 		"opt-in task opt-in":             {fire, "false", same, false, ""},
 		"opt-in task defaulting true":    {fire, "true", same, true, ""},
-		"default-on task defaulting off": {cr, "false", same, true, ""},
+		"default-on task defaulting off": {cr, "false", same, true, dimModuleDefault},
+		"default-on task off in the module only": {cr, "true", func(m, e, c string) (string, string, string) {
+			return strings.Replace(m, "default = true", "default = false", 1), e, c
+		}, false, dimModuleDefault},
 		"opt-in task on in the module only": {fire, "false", func(m, e, c string) (string, string, string) {
 			return strings.Replace(m, "default = false", "default = true", 1), e, c
 		}, true, ""},

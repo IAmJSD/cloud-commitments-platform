@@ -69,10 +69,13 @@ locals {
   scheduled_task_recommendations_audience = "${var.service_name}/api/scheduled/collect_recommendations"
   scheduled_task_ri_exchange_audience     = "${var.service_name}/api/scheduled/ri_exchange_reshape"
 
-  scheduled_task_oidc_audiences = join(",", compact([
+  # The sweep jobs in scheduled-tasks.tf add one audience per enabled sweep
+  # (local.sweep_audiences); they sign with the recommendations scheduler SA,
+  # so the subject list below needs no new entry.
+  scheduled_task_oidc_audiences = join(",", compact(concat([
     var.enable_scheduled_tasks ? local.scheduled_task_recommendations_audience : "",
     var.enable_ri_exchange_schedule ? local.scheduled_task_ri_exchange_audience : "",
-  ]))
+  ], values(local.sweep_audiences))))
   scheduled_task_oidc_subjects = join(",", compact([
     var.enable_scheduled_tasks ? try(google_service_account.scheduler[0].unique_id, "") : "",
     var.enable_ri_exchange_schedule ? try(google_service_account.scheduler_ri_exchange[0].unique_id, "") : "",
