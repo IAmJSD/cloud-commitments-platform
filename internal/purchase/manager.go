@@ -269,12 +269,14 @@ func isMultiAccountAckable(execErr error) bool {
 }
 
 const (
-	// The two budgets run back to back (270s), and on AWS Lambda the function
-	// timeout ends the invocation whatever these deadlines say, so the Lambda
-	// timeout must cover their sum plus a 30s margin (lambda_timeout >= 300,
-	// enforced by Terraform validation and TestLambdaTimeoutCoversPurchaseBudget,
-	// #913).
-	purchaseExecutionTimeout = 4 * time.Minute
+	// The two budgets run back to back, and for a failed or partial row the
+	// failure alert follows them with its own failureNotifyTimeout (30s), so a
+	// run can take 3m30s + 30s + 30s = 270s. On AWS Lambda the function timeout
+	// ends the invocation whatever these deadlines say, so the Lambda timeout
+	// must cover that sum plus a 30s margin (lambda_timeout >= 300, enforced by
+	// Terraform validation and TestLambdaTimeoutCoversPurchaseBudget, #913,
+	// #1434).
+	purchaseExecutionTimeout = 3*time.Minute + 30*time.Second
 	terminalSaveTimeout      = 30 * time.Second
 	// perRecPurchaseTimeout caps one recommendation's provider calls; see
 	// executeSinglePurchase.

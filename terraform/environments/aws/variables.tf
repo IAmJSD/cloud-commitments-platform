@@ -297,7 +297,7 @@ variable "lambda_timeout" {
 
   validation {
     condition     = var.lambda_timeout >= 300 && var.lambda_timeout <= 900
-    error_message = "lambda_timeout must be between 300 and 900 seconds: RI exchanges and purchases run up to 270s (4m execution + 30s terminal save) after the request, and Lambda cuts the invocation off at this timeout (#913)."
+    error_message = "lambda_timeout must be between 300 and 900 seconds: RI exchanges run up to 270s (4m execution + 30s terminal save) and purchases up to 270s (3m30s execution + 30s terminal save + 30s failure alert) after the request, and Lambda cuts the invocation off at this timeout (#913)."
   }
 }
 
