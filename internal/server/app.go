@@ -1142,6 +1142,7 @@ func (a *authServiceAdapter) Login(ctx context.Context, req api.LoginRequest) (*
 		Email:    req.Email,
 		Password: req.Password,
 		MFACode:  req.MFACode,
+		MFAToken: req.MFAToken,
 	}
 	resp, err := a.service.Login(ctx, authReq)
 	if err != nil {

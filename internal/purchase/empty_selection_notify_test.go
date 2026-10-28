@@ -27,6 +27,7 @@ func unselectedRecs() []config.RecommendationRecord {
 func TestExecutePurchase_SingleAccount_NothingSelected_SendsNoConfirmation(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	assertMocksOnCleanup(t, mockStore)
 	mockEmail := new(MockEmailSender)
 	mockFactory := new(MockProviderFactory)
 

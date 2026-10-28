@@ -25,6 +25,17 @@ type StoreInterface interface {
 	// ClaimTOTPCounter records counter as the user's last accepted TOTP step and
 	// reports whether it was above the previous one; false means a replay.
 	ClaimTOTPCounter(ctx context.Context, userID string, counter int64) (bool, error)
+	// CreateMFALoginToken stores the hash of a new MFA login token for
+	// userID, valid for ttl from the database clock, and returns its expiry.
+	// It also deletes expired tokens.
+	CreateMFALoginToken(ctx context.Context, tokenHash, userID string, passwordVersion int64, ttl time.Duration) (time.Time, error)
+	// ClaimMFALoginTokenAttempt atomically spends one code attempt on an
+	// unexpired token that has fewer than maxAttempts spent, and returns it.
+	// It returns (nil, nil) when no such token exists.
+	ClaimMFALoginTokenAttempt(ctx context.Context, tokenHash string, maxAttempts int) (*MFALoginToken, error)
+	// ConsumeMFALoginToken deletes an unexpired token and reports whether
+	// this call was the one that deleted it.
+	ConsumeMFALoginToken(ctx context.Context, tokenHash string) (bool, error)
 	RecordFailedLogin(ctx context.Context, userID string) error
 	RecordSuccessfulLogin(ctx context.Context, userID string) error
 	DeleteUser(ctx context.Context, userID string) error

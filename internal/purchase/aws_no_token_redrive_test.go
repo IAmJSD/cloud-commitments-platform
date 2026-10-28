@@ -130,6 +130,7 @@ func TestAWSNoTokenRetrySuccessorIsRefusedAndFirstBuyStillExecutes(t *testing.T)
 func TestRecoverStrandedApprovals_EC2RowIsFailedNotRedriven(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	assertMocksOnCleanup(t, mockStore)
 	mockFactory := new(MockProviderFactory) // any CreateAndValidateProvider call would panic: no expectation set
 
 	stranded := config.PurchaseExecution{

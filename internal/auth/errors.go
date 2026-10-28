@@ -124,6 +124,11 @@ var (
 	ErrMFARequired    = errors.New("mfa_required")
 	ErrInvalidMFACode = errors.New("invalid_mfa_code")
 
+	// ErrInvalidMFAToken: the mfa_token on an MFA login step is unknown,
+	// expired, already used, out of attempts, or no longer matches the
+	// account (issue #134). The caller has to start again from the password.
+	ErrInvalidMFAToken = errors.New("invalid_mfa_token")
+
 	// MFA service-operation sentinels — returned (wrapped via fmt.Errorf
 	// "%w") by the MFA lifecycle methods in service_mfa.go so the API
 	// handler can map each error class to the right HTTP status code via

@@ -97,6 +97,7 @@ func purchaseThroughPinnedAzureClient(t *testing.T, exec *config.PurchaseExecuti
 	client.SetOrderAliasClient(recorder)
 
 	store, sender, factory, prov := new(MockConfigStore), new(MockEmailSender), new(MockProviderFactory), new(MockProvider)
+	assertMocksOnCleanup(t, store, sender, factory, prov)
 	store.SavePurchaseExecutionFn = func(context.Context, *config.PurchaseExecution) error { return nil }
 	store.On("SavePurchaseHistory", ctx, mock.Anything).Return(nil)
 	factory.On("CreateAndValidateProvider", mock.Anything, "azure", mock.Anything).Return(prov, nil)
