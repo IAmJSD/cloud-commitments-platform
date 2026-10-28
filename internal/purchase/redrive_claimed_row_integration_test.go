@@ -137,6 +137,10 @@ func TestRecoverStrandedApprovals_ClaimedRowTurnedUnsafeIsFailedNotBought(t *tes
 		})
 	})
 	f.manager.config = store
+	sender, ok := f.manager.email.(*MockEmailSender)
+	require.True(t, ok)
+	failedMail := &failedEmailRecorder{}
+	failedMail.expect(sender)
 
 	recovered, err := f.manager.RecoverStrandedApprovals(ctx)
 	require.NoError(t, store.editErr)
@@ -150,4 +154,7 @@ func TestRecoverStrandedApprovals_ClaimedRowTurnedUnsafeIsFailedNotBought(t *tes
 	assert.Contains(t, got.Error, "start a new purchase")
 	require.Len(t, got.Recommendations, 1)
 	assert.Equal(t, "ec2", got.Recommendations[0].Service, "the failed row keeps the claimed recommendations")
+	sent := failedMail.all()
+	require.Len(t, sent, 1, "the claim holder reports the failed row once (issue #1195)")
+	assert.Equal(t, row.ExecutionID, sent[0].ExecutionID)
 }

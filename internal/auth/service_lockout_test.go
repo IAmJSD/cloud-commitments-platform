@@ -61,7 +61,6 @@ func TestLogin_AccountLockout_Bookkeeping(t *testing.T) {
 					assert.EqualError(t, err, genericLoginError)
 				}
 			}
-			store.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.Anything)
 			store.AssertExpectations(t)
 		})
 	}
@@ -109,7 +108,6 @@ func TestLogin_BookkeepingErrors(t *testing.T) {
 					assert.EqualError(t, err, genericLoginError)
 				}
 			}
-			store.AssertNotCalled(t, "UpdateUser", mock.Anything, mock.Anything)
 			store.AssertExpectations(t)
 		})
 	}

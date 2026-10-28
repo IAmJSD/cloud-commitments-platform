@@ -188,7 +188,9 @@ func TestAPIAdapters_UpdateGroup_AllFieldsReachStore(t *testing.T) {
 		store := new(MockStore)
 		svc := createTestService(store, new(MockEmailSender))
 		var got *Group
-		store.On("GetGroup", ctx, "group-123").Return(existing(), nil).Once()
+		// Twice: UpdateGroupAPI loads the group, then Service.UpdateGroup
+		// re-reads it for its own system_managed guard (issue #919).
+		store.On("GetGroup", ctx, "group-123").Return(existing(), nil).Twice()
 		store.On("UpdateGroup", ctx, mock.AnythingOfType("*auth.Group")).
 			Run(func(args mock.Arguments) { got = args.Get(1).(*Group) }).Return(nil).Once()
 		_, err := svc.UpdateGroupAPI(ctx, AdminAPIKeyActorID, "group-123", req)

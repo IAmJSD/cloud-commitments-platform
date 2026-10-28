@@ -112,7 +112,9 @@ func TestNullablePurchaseCostPostgres(t *testing.T) {
 			require.Len(t, points, 2)
 		}
 	}
-	_, err = pool.Exec(ctx, `UPDATE purchase_history SET revocation_in_flight=true WHERE purchase_id='unknown-0'`)
+	// The finalize queue reads return_posted_at (000148, issue #1523).
+	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, 148))
+	_, err = pool.Exec(ctx, `UPDATE purchase_history SET revocation_in_flight=true, return_posted_at=now() WHERE purchase_id='unknown-0'`)
 	require.NoError(t, err)
 	inFlight, err := store.GetPurchaseHistoryInFlight(ctx)
 	require.NoError(t, err)

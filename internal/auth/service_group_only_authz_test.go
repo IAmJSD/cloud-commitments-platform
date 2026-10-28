@@ -248,7 +248,7 @@ func TestUpdateUser_SelfEscalationDenied(t *testing.T) {
 	mockStore.On("GetGroup", ctx, viewerGroup().ID).Return(viewerGroup(), nil)
 	// Permissive write stub, deliberately: without it, removing the
 	// self-escalation guard kills this test by panicking on an unstubbed
-	// UpdateUser -- a kill that disappears the moment someone adds a stub
+	// UpdateUserAdminFields -- a kill that disappears the moment someone adds a stub
 	// while tidying fixtures. With it, the removal is caught by the
 	// AssertNotCalled below, which is the actual security property.
 	mockStore.On("UpdateUserAdminFields", ctx, mock.AnythingOfType("*auth.User"), mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()

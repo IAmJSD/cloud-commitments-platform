@@ -180,6 +180,25 @@ describe('API History Module', () => {
       );
     });
 
+    test('sends every selected account in account_ids and no singular account_id (#1429)', async () => {
+      (apiRequest as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await getSavingsAnalytics({ account_ids: ['id-a', 'id-b', 'id-c'] });
+
+      const url = (apiRequest as jest.Mock).mock.calls[0][0] as string;
+      const params = new URLSearchParams(url.split('?')[1]);
+      expect(params.get('account_ids')).toBe('id-a,id-b,id-c');
+      expect(params.has('account_id')).toBe(false);
+    });
+
+    test('omits account_ids when none are selected', async () => {
+      (apiRequest as jest.Mock).mockResolvedValue({ data_points: [] });
+
+      await getSavingsAnalytics({ account_ids: [] });
+
+      expect(apiRequest).toHaveBeenCalledWith('/history/analytics');
+    });
+
     test('handles empty filters object', async () => {
       (apiRequest as jest.Mock).mockResolvedValue({ data_points: [] });
 

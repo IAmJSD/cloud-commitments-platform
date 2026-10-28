@@ -46,11 +46,6 @@ func adminDemotingWrites() []adminDemotingWrite {
 			next.GroupIDs = []string{DefaultPurchaserGroupID}
 			return store.UpdateUserAdminFields(ctx, &next, target.Email, target.GroupIDs, target.Active)
 		}},
-		{"UpdateUser deactivate", func(ctx context.Context, store *PostgresStore, target *User) error {
-			next := *target
-			next.Active = false
-			return store.UpdateUser(ctx, &next)
-		}},
 		{"DeleteUser", func(ctx context.Context, store *PostgresStore, target *User) error {
 			return store.DeleteUser(ctx, target.ID)
 		}},

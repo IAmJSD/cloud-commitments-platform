@@ -1167,9 +1167,8 @@ export async function loadSavingsTrendChart(): Promise<void> {
   try {
     // Always forward account_ids AND provider to the chart so its data scope
     // matches the KPI tiles above it. The backend /history/analytics handler
-    // accepts a single `account_id`; api.getSavingsAnalytics also sets the
-    // singular param for single-account requests (see api/history.ts). The
-    // backend now applies the provider chip as a provider WHERE filter on the
+    // reads the plural `account_ids` and sums every selected account. The
+    // backend applies the provider chip as a provider WHERE filter on the
     // savings-history query, so forward it to scope the chart (issue #498,
     // QA 2.3).
     const accountIDs = state.getCurrentAccountIDs();

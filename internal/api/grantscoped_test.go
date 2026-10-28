@@ -96,20 +96,21 @@ func TestGrantAdmin_UnrestrictedReachesAnyAccount(t *testing.T) {
 	require.NotNil(t, got)
 }
 
-// The allow-list matches on display name as well as ID (auth.MatchesAccount),
-// so a scoped principal named by account NAME resolves too. Pinned because a
-// regression here silently widens or narrows every scoped handler at once.
-func TestGrantScoped_MatchesByAccountName(t *testing.T) {
+// The allow-list matches by account ID only. A display-name entry is not bound
+// to an account, so after a delete or rename it would grant whichever account
+// took the name next (issue #1034). It must match nothing, even when the name
+// is currently unique. Pinned because a regression here silently widens every
+// scoped handler at once.
+func TestGrantScoped_NameEntryDoesNotMatch(t *testing.T) {
 	ctx := context.Background()
 	h, mockStore := scopedHandler(t, "prod-account")
 
-	mine := &config.CloudAccount{ID: scopedInAccount, Name: "prod-account"}
-	mockStore.On("GetCloudAccount", ctx, scopedInAccount).Return(mine, nil)
-	// The name is unique among the registered accounts, so it may match (#433).
-	mockStore.On("ListCloudAccounts", ctx, config.CloudAccountFilter{}).Return([]config.CloudAccount{*mine}, nil)
+	later := &config.CloudAccount{ID: scopedInAccount, Name: "prod-account"}
+	mockStore.On("GetCloudAccount", ctx, scopedInAccount).Return(later, nil)
+	mockStore.On("ListCloudAccounts", ctx, config.CloudAccountFilter{}).Return([]config.CloudAccount{*later}, nil)
 
 	got, err := h.requireAccountAccess(ctx, &Session{UserID: scopedUserID}, scopedInAccount)
 
-	require.NoError(t, err)
-	require.NotNil(t, got)
+	require.ErrorIs(t, err, errNotFound)
+	require.Nil(t, got)
 }

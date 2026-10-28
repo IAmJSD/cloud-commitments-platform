@@ -100,7 +100,7 @@ RUN echo "Building for ${TARGETOS}/${TARGETARCH}" && \
 # Image pinned to a SHA256 digest for reproducible builds. Refresh via
 # the Docker Hub API tags endpoint and update the digest below when the
 # `node:24-alpine` tag is bumped.
-FROM --platform=$BUILDPLATFORM node:24-alpine@sha256:d1b3b4da11eefd5941e7f0b9cf17783fc99d9c6fc34884a665f40a06dbdfc94f AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:25-alpine@sha256:bdf2cca6fe3dabd014ea60163eca3f0f7015fbd5c7ee1b0e9ccb4ced6eb02ef4 AS frontend-builder
 
 WORKDIR /frontend
 COPY frontend/package*.json ./
@@ -128,10 +128,10 @@ RUN npm run build
 # Runtime stage - multi-arch base image
 # ==============================================
 # Image pinned to a SHA256 digest for reproducible builds.
-# To refresh: `docker buildx imagetools inspect alpine:3.24.1` and update the
+# To refresh: `docker buildx imagetools inspect alpine:3.24.2` and update the
 # digest below. This is the multi-arch index digest, not a per-platform one, so
 # it stays correct for every TARGETARCH this image is built for.
-FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
 # Re-declare args for use in this stage
 ARG TARGETARCH

@@ -37,9 +37,10 @@ const defaultAdminGroupID = "00000000-0000-5000-8000-000000000001"
 // ctx bounds the schema work itself: connection setup, advisory-lock wait and
 // the running migration SQL. When ctx ends, the migrator's connections are
 // canceled server-side and RunMigrations returns an error matching
-// errors.Is(err, ctx.Err()). An interrupted migration rolls back (every
-// migration is transactional) but leaves schema_migrations dirty, which the
-// next run reports through maybeAutoHealDirty.
+// errors.Is(err, ctx.Err()). An interrupted migration file rolls back as a
+// whole (PostgreSQL runs each file as one implicit transaction; see
+// TestMigrationsAreTransactional) but leaves schema_migrations dirty, which
+// the next run reports through maybeAutoHealDirty without clearing it.
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error {
 	tracker := &connTracker{ctx: ctx}
 	stopWatch := tracker.watch()
@@ -50,7 +51,7 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool, migrationsPath, admi
 
 func runMigrations(ctx context.Context, tracker *connTracker, pool *pgxpool.Pool, migrationsPath, adminEmail, adminPassword string) error {
 	// Create the migrator and run the pre-Up recovery hooks (operator force,
-	// then default-on dirty auto-heal). Kept in a helper so RunMigrations stays
+	// then the default-on dirty check). Kept in a helper so RunMigrations stays
 	// under the cyclomatic-complexity budget as recovery paths grow.
 	m, err := newMigratorWithRecovery(tracker, pool, migrationsPath)
 	if err != nil {
@@ -93,16 +94,17 @@ func runMigrations(ctx context.Context, tracker *connTracker, pool *pgxpool.Pool
 
 // newMigratorWithRecovery builds the golang-migrate migrator for migrationsPath
 // and runs the pre-Up recovery hooks in order: the one-shot operator force
-// (CUDLY_FORCE_MIGRATION_VERSION) first, then the default-on dirty auto-heal.
+// (CUDLY_FORCE_MIGRATION_VERSION) first, then the default-on dirty check
+// (maybeAutoHealDirty, which fails loud and never clears the flag).
 // On success it returns a migrator the caller must Close(); on any error it
 // closes the migrator itself and returns the error so the caller never sees a
 // half-initialized migrator.
 //
 // Ordering note: maybeAutoHealDirty runs AFTER maybeForceMigrationVersion so an
 // explicit force always takes precedence (it pins+cleans first, leaving nothing
-// dirty for auto-heal to act on). The auto-heal error propagates so a heal
-// failure is recorded (and the app fail-opens in ensureDB) rather than being
-// masked by the later dirty check.
+// dirty for the check to report). The dirty-check error propagates so it is
+// recorded with its recovery instructions (and the app fail-opens in ensureDB)
+// instead of surfacing as golang-migrate's bare ErrDirty from Up().
 func newMigratorWithRecovery(tracker *connTracker, pool *pgxpool.Pool, migrationsPath string) (*migrate.Migrate, error) {
 	// Get database connection string from pool config (without admin email parameter - RDS Proxy doesn't support options)
 	dsn := buildMigrateDSN(pool.Config())
@@ -114,9 +116,9 @@ func newMigratorWithRecovery(tracker *connTracker, pool *pgxpool.Pool, migration
 
 	// One-shot operator recovery: if CUDLY_FORCE_MIGRATION_VERSION is set,
 	// call Force(N) before Up(). Clears the dirty flag and pins state to
-	// the given version. Used to recover from a partially-applied
-	// migration without direct DB access. Remove the env var after the
-	// next successful deploy.
+	// the given version. Used to recover from a dirty schema_migrations row
+	// without direct DB access. Remove the env var after the next
+	// successful deploy.
 	if err := maybeForceMigrationVersion(m); err != nil {
 		if srcErr, dbErr := m.Close(); srcErr != nil || dbErr != nil {
 			log.Printf("migrate: close after force-version error: source=%v db=%v", srcErr, dbErr)
@@ -124,10 +126,10 @@ func newMigratorWithRecovery(tracker *connTracker, pool *pgxpool.Pool, migration
 		return nil, err
 	}
 
-	// Default-on dirty auto-heal: when the schema_migrations row is dirty,
-	// clear the dirty flag at the CURRENT recorded version so the subsequent
-	// Up() re-applies any pending migrations, letting a cold start self-recover
-	// instead of staying broken until a manual force.
+	// Default-on dirty check: when the schema_migrations row is dirty, return
+	// an error with recovery instructions and leave the flag set. It does NOT
+	// clear the flag: whether the dirty migration's effects landed is unknown,
+	// so recovery stays a manual CUDLY_FORCE_MIGRATION_VERSION decision.
 	if err := maybeAutoHealDirty(m); err != nil {
 		if srcErr, dbErr := m.Close(); srcErr != nil || dbErr != nil {
 			log.Printf("migrate: close after auto-heal error: source=%v db=%v", srcErr, dbErr)
@@ -165,9 +167,9 @@ func ensureAdminUser(ctx context.Context, pool *pgxpool.Pool, email, password st
 	// The `role` column was removed by migration 000057 (issue #945).
 	result, err := pool.Exec(ctx, `
 		INSERT INTO users (
-			id, email, password_hash, salt, active, group_ids, created_at, updated_at
+			id, email, password_hash, active, group_ids, created_at, updated_at
 		) VALUES (
-			gen_random_uuid(), $1, '', '', false, ARRAY[$2]::UUID[], NOW(), NOW()
+			gen_random_uuid(), $1, '', false, ARRAY[$2]::UUID[], NOW(), NOW()
 		)
 		ON CONFLICT (email) DO NOTHING
 	`, email, defaultAdminGroupID)
@@ -218,9 +220,9 @@ func ensureAdminUserWithPassword(ctx context.Context, pool *pgxpool.Pool, email,
 	// The `role` column was removed by migration 000057 (issue #945).
 	result, err := pool.Exec(ctx, `
 		INSERT INTO users (
-			id, email, password_hash, salt, active, group_ids, created_at, updated_at
+			id, email, password_hash, active, group_ids, created_at, updated_at
 		) VALUES (
-			gen_random_uuid(), $1, $2, '', true, ARRAY[$3]::UUID[], NOW(), NOW()
+			gen_random_uuid(), $1, $2, true, ARRAY[$3]::UUID[], NOW(), NOW()
 		)
 		ON CONFLICT (email) DO UPDATE
 			SET password_hash = $2, active = true, updated_at = NOW()
@@ -311,17 +313,24 @@ func assignAdminGroupAndWarn(ctx context.Context, pool *pgxpool.Pool, groupID, a
 // maybeForceMigrationVersion inspects CUDLY_FORCE_MIGRATION_VERSION and,
 // when set to a non-negative integer, calls m.Force(N) which clears the
 // dirty flag and pins the migration version. Used as a one-shot recovery
-// path after a partially-applied migration leaves schema_migrations in a
-// dirty state.
+// path after a failed or interrupted migration leaves schema_migrations in a
+// dirty state. The file itself rolled back as a whole (see
+// TestMigrationsAreTransactional), so its effects are either all present or
+// all absent; the operator decides which.
 //
 // Operator flow:
 //  1. Check the current DB state (e.g. by inspecting actual schema via
 //     logs or a one-off job).
 //  2. If the dirty migration's SQL effects landed (e.g. the PK exists),
 //     set CUDLY_FORCE_MIGRATION_VERSION=N where N is the dirty version —
-//     this marks it clean and subsequent Up() picks up from N+1.
+//     this marks it clean and subsequent Up() picks up from the next
+//     migration after N.
 //  3. If the dirty migration's effects did NOT land, set
-//     CUDLY_FORCE_MIGRATION_VERSION=N-1 — subsequent Up() re-runs N.
+//     CUDLY_FORCE_MIGRATION_VERSION to the highest migration version below
+//     N that has a file — subsequent Up() re-runs N. That is N-1 unless the
+//     numbering has a gap (e.g. there is no 000061 or 000062): Up() fails
+//     with "no migration found for version" when the forced version has no
+//     file.
 //  4. Redeploy / restart so the env var is visible.
 //  5. After the first successful run, remove the env var.
 //
@@ -350,9 +359,11 @@ func maybeForceMigrationVersion(m *migrate.Migrate) error {
 // recovery instructions rather than silently clearing the dirty flag.
 //
 // WHY NOT AUTO-CLEAR: golang-migrate records version=N, dirty=true BEFORE
-// running N's SQL. Every migration in this repository is transactional
-// (TestMigrationsAreTransactional). When a migration is interrupted (Lambda
-// timeout, connection drop, context cancellation), the SQL transaction is
+// running N's SQL, in a separate transaction. Every migration file then runs
+// as one PostgreSQL transaction (the implicit transaction of a multi-statement
+// query; TestMigrationsAreTransactional explains the mechanics and keeps
+// non-transactional statements out). When a migration fails or is interrupted
+// (Lambda timeout, connection drop, context cancellation), the SQL transaction is
 // rolled back completely -- N's effects are ABSENT from the schema -- but the
 // dirty flag persists. The previous Force(N)+Up() auto-heal treated such a
 // rolled-back migration as fully applied and silently continued at N+1,
@@ -371,19 +382,21 @@ func maybeForceMigrationVersion(m *migrate.Migrate) error {
 // RECOVERY (via CUDLY_FORCE_MIGRATION_VERSION -- see maybeForceMigrationVersion):
 //   - If migration N's SQL effects ARE confirmed present in the schema: set
 //     CUDLY_FORCE_MIGRATION_VERSION=N. Force(N) clears the dirty flag and
-//     the subsequent Up() continues at N+1.
+//     the subsequent Up() continues with the next migration after N.
 //   - If migration N's SQL effects are NOT present (rolled back): set
-//     CUDLY_FORCE_MIGRATION_VERSION=N-1. Force(N-1) resets state to N-1 and
-//     the subsequent Up() re-applies N then continues.
+//     CUDLY_FORCE_MIGRATION_VERSION to the previous migration version that has
+//     a file (N-1 unless the numbering has a gap; the error below always
+//     prints N-1). Force resets state to it and the subsequent Up()
+//     re-applies N then continues.
 //
 // FAIL-OPEN: the app still starts on this error. ensureDB (app.go) swallows
 // migration failures and the broken schema surfaces via /health + the
 // CloudWatch alarm, never via a crash-loop.
 //
-// Set CUDLY_MIGRATION_AUTOHEAL=false to bypass this check entirely; the dirty
-// state then surfaces as the generic "failed to run migrations: migration: N is
-// dirty" error from the post-Up() check in RunMigrations, without recovery
-// guidance.
+// Set CUDLY_MIGRATION_AUTOHEAL=false to bypass this check entirely; Up() then
+// refuses to start and the dirty state surfaces as golang-migrate's ErrDirty,
+// wrapped by RunMigrations as "failed to run migrations: Dirty database version
+// N. Fix and force version.", without recovery guidance.
 //
 // CUDLY_FORCE_MIGRATION_VERSION takes precedence: it runs before this function
 // and leaves the row clean, so this function is a no-op when both are set.

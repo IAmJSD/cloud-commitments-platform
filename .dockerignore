@@ -23,9 +23,12 @@ vendor/
 # Temporary files
 tmp/
 
-# Docker compose dev files
+# Docker compose dev and test files. Excluding a Dockerfile from the context
+# does not stop `docker build -f` from using it.
 docker-compose.yml
 Dockerfile.dev
+docker-compose.test.yml
+Dockerfile.test
 
 # Secrets and credentials
 .env

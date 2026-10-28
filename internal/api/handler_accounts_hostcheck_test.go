@@ -65,27 +65,34 @@ type hostCheckCase struct {
 	externalID string
 	fake       aws.HTTPClient
 	cfgErr     error
+	wantMsg    string
 }
 
 // rejectedHostCheckCases are the shapes every save path must refuse: a
 // non-host account, plus the fail-closed STS and host-config failures for
-// what would otherwise be the host account.
+// what would otherwise be the host account. Only the non-host account is told
+// to set aws_role_arn; the platform-side failures are not (#559).
 func rejectedHostCheckCases() []hostCheckCase {
 	return []hostCheckCase{
-		{name: "non-host account", externalID: probeTenantAcct, fake: &probeSTS{}},
-		{name: "STS unreachable", externalID: probeHostAcct, fake: &probeSTS{transportErr: true}},
-		{name: "STS rejects the host credentials", externalID: probeHostAcct, fake: hostRejectedSTS},
-		{name: "host AWS config unavailable", externalID: probeHostAcct, fake: &probeSTS{}, cfgErr: errors.New(probeProfileText)},
+		{name: "non-host account", externalID: probeTenantAcct, fake: &probeSTS{}, wantMsg: roleARNNotHostMessage},
+		{name: "STS unreachable", externalID: probeHostAcct, fake: &probeSTS{transportErr: true}, wantMsg: hostIdentityUnavailableMessage},
+		{name: "STS rejects the host credentials", externalID: probeHostAcct, fake: hostRejectedSTS, wantMsg: hostIdentityUnavailableMessage},
+		{name: "host AWS config unavailable", externalID: probeHostAcct, fake: &probeSTS{}, cfgErr: errors.New(probeProfileText), wantMsg: hostIdentityUnavailableMessage},
 	}
 }
 
-func requireNotHost400(t *testing.T, err error) {
+func requireNotHost400(t *testing.T, err error, wantMsg string) {
 	t.Helper()
 	ce, ok := IsClientError(err)
 	require.True(t, ok, "expected a client error, got %v", err)
 	assert.Equal(t, 400, ce.code)
-	assert.Equal(t, roleARNNotHostMessage, ce.message)
+	assert.Equal(t, wantMsg, ce.message)
 	assertNoLeak(t, ce.message, "")
+}
+
+func TestHostCheckMessages_OnlyMismatchSuggestsSettingRoleARN(t *testing.T) {
+	assert.Contains(t, roleARNNotHostMessage, "set aws_role_arn")
+	assert.NotContains(t, hostIdentityUnavailableMessage, "set aws_role_arn")
 }
 
 func TestCreateAccount_EmptyRoleARNRequiresHostAccount(t *testing.T) {
@@ -96,7 +103,7 @@ func TestCreateAccount_EmptyRoleARNRequiresHostAccount(t *testing.T) {
 			h := hostCheckHandler(store, tc.fake, tc.cfgErr)
 			result, err := h.createAccount(ctx, adminRequest(roleARNBody(tc.externalID, "")))
 			assert.Nil(t, result)
-			requireNotHost400(t, err)
+			requireNotHost400(t, err, tc.wantMsg)
 			store.AssertNotCalled(t, "CreateCloudAccount")
 		})
 	}
@@ -140,7 +147,7 @@ func TestUpdateAccount_EmptyRoleARNRequiresHostAccount(t *testing.T) {
 			h := hostCheckHandler(store, tc.fake, tc.cfgErr)
 			result, err := h.updateAccount(ctx, adminRequest(roleARNBody(tc.externalID, "")), probeAccountID)
 			assert.Nil(t, result)
-			requireNotHost400(t, err)
+			requireNotHost400(t, err, tc.wantMsg)
 			store.AssertNotCalled(t, "UpdateCloudAccount")
 		})
 	}
@@ -179,8 +186,10 @@ func TestApproveRegistration_EmptyRoleARNRequiresHostAccount(t *testing.T) {
 			req := &events.LambdaFunctionURLRequest{Body: roleARNBody(tc.externalID, "")}
 			result, err := h.approveRegistration(ctx, req, hostCheckRegID)
 			assert.Nil(t, result)
-			requireNotHost400(t, err)
+			requireNotHost400(t, err, tc.wantMsg)
 			store.AssertNotCalled(t, "ApproveAccountRegistration")
+			store.AssertNotCalled(t, "TransitionRegistrationStatus")
+			store.AssertNotCalled(t, "CreateCloudAccount")
 		})
 	}
 

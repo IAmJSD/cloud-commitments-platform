@@ -226,12 +226,11 @@ func TestService_ValidateSession(t *testing.T) {
 		mockStore.AssertExpectations(t)
 	})
 
-	t.Run("constant-time mismatch rejects session even when DB row exists", func(t *testing.T) {
-		// The DB returned a session row but its stored token hash does not
-		// match the hash we derived from the supplied token string. The
-		// constant-time guard (added alongside the API-key and reset-token
-		// equivalents in PR #837) must reject the request to avoid leaking
-		// timing information through the SQL equality oracle.
+	t.Run("stored hash mismatch rejects session even when DB row exists", func(t *testing.T) {
+		// The store returned a session row whose token hash does not match
+		// the hash we derived from the supplied token string, which a correct
+		// store never does (it selects by that hash). The post-fetch
+		// store-integrity check must still reject it (issue #313).
 		mockStore := new(MockStore)
 		mockEmail := new(MockEmailSender)
 		service := createTestService(mockStore, mockEmail)
@@ -415,7 +414,6 @@ func TestLogin_WithMFA(t *testing.T) {
 		ID:           "user-123",
 		Email:        "mfa@example.com",
 		PasswordHash: hash,
-		Salt:         "", // Not used anymore
 		Active:       true,
 		MFAEnabled:   true,
 		MFASecret:    mfaSecret,
@@ -473,7 +471,6 @@ func TestLogin_WithMFA_InvalidCode(t *testing.T) {
 		ID:           "user-123",
 		Email:        "mfa@example.com",
 		PasswordHash: hash,
-		Salt:         "", // Not used anymore
 		Active:       true,
 		MFAEnabled:   true,
 		MFASecret:    "JBSWY3DPEHPK3PXP",
@@ -508,7 +505,6 @@ func TestLogin_WithMFA_MissingCode(t *testing.T) {
 		ID:           "user-123",
 		Email:        "mfa@example.com",
 		PasswordHash: hash,
-		Salt:         "", // Not used anymore
 		Active:       true,
 		MFAEnabled:   true,
 		MFASecret:    "JBSWY3DPEHPK3PXP",
@@ -542,7 +538,6 @@ func TestLogin_WithMFA_NoSecret(t *testing.T) {
 		ID:           "user-123",
 		Email:        "mfa@example.com",
 		PasswordHash: hash,
-		Salt:         "",
 		Active:       true,
 		MFAEnabled:   true,
 		MFASecret:    "", // Data-integrity anomaly: MFA enabled but no secret stored

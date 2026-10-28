@@ -28,11 +28,6 @@ jest.mock('../toast', () => ({ showToast: jest.fn(() => ({ dismiss: jest.fn() })
 
 import * as api from '../api';
 
-// Cosmos DB recommendations carry common.ServiceNoSQL ("nosql"), which
-// mapServiceSlug does not list yet (no Cosmos purchase path). Settings must
-// still use that id so its config and overrides match those recommendations.
-const NOT_IN_PURCHASE_SLUGS = ['azure/nosql'];
-
 function backendServiceSlugs(): string[] {
   const src = fs.readFileSync(path.join(__dirname, '..', '..', '..', 'internal', 'purchase', 'execution.go'), 'utf-8');
   const block = /func mapServiceSlug\(service string\)[\s\S]*?slugs := map\[string\]common\.ServiceType\{([\s\S]*?)\n\t\}/.exec(src);
@@ -113,6 +108,9 @@ describe('Settings Azure/GCP service ids (issue #613)', () => {
 
   it('every Azure/GCP id the cards save and the override list offers is a backend service slug', async () => {
     await loadGlobalSettings();
+    // Only edited rows are saved (#539): edit each Azure/GCP term.
+    document.querySelectorAll<HTMLSelectElement>('select[id^="azure-"][id$="-term"], select[id^="gcp-"][id$="-term"]')
+      .forEach(sel => { sel.value = sel.value === '1' ? '3' : '1'; });
     await saveGlobalSettings(new Event('submit'));
     const slugs = backendServiceSlugs();
     const offered: string[] = [];
@@ -122,7 +120,7 @@ describe('Settings Azure/GCP service ids (issue #613)', () => {
       expect(await overrideOptions(provider)).toEqual(SETTINGS_SERVICE_IDS[provider]);
       offered.push(...saved.map(s => `${provider}/${s}`));
     }
-    expect(offered.filter(id => !slugs.includes(id.split('/')[1]!))).toEqual(NOT_IN_PURCHASE_SLUGS);
+    expect(offered.filter(id => !slugs.includes(id.split('/')[1]!))).toEqual([]);
   });
 
   it('shows rows stored under the old ids on their cards and saves them under the current ids', async () => {
@@ -146,6 +144,27 @@ describe('Settings Azure/GCP service ids (issue #613)', () => {
     expect(compute).toEqual(expect.objectContaining({ term: 1, payment: 'monthly', ramp_schedule: 'r1', include_regions: ['eastus'] }));
     expect(puts.find(c => c.provider === 'azure' && c.service === 'nosql')!.cfg['term']).toBe(1);
     expect(puts.find(c => c.provider === 'gcp' && c.service === 'cache')!.cfg['term']).toBe(1);
+  });
+
+  it('writes a re-keyed row in full once, then only its changed fields', async () => {
+    mockConfig([
+      { provider: 'azure', service: 'vm', term: 1, payment: 'monthly', enabled: true, coverage: 80, ramp_schedule: 'r1' },
+    ]);
+    await loadGlobalSettings();
+    await saveGlobalSettings(new Event('submit'));
+    const first = servicePuts().filter(c => c.provider === 'azure' && c.service === 'compute');
+    expect(first).toHaveLength(1);
+    expect(first[0]!.cfg).toEqual(expect.objectContaining({ ramp_schedule: 'r1', coverage: 80 }));
+    (api.updateServiceConfig as jest.Mock).mockClear();
+
+    await saveGlobalSettings(new Event('submit'));
+    expect(servicePuts()).toEqual([]);
+
+    (document.getElementById('azure-vm-term') as HTMLSelectElement).value = '3';
+    await saveGlobalSettings(new Event('submit'));
+    const second = servicePuts();
+    expect(second).toHaveLength(1);
+    expect(Object.keys(second[0]!.cfg).sort()).toEqual(['provider', 'service', 'term']);
   });
 
   it('prefers a row already stored under the current id over its legacy twin', async () => {

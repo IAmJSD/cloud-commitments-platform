@@ -1,6 +1,7 @@
 # Fixture: an authoritative project policy built from a `google_iam_policy` data
 # source whose bindings come from a `dynamic` block over a local list. Neither
-# the data block nor the policy resource carries the literal. Must exit 1.
+# the data block nor the policy resource carries the literal. Since issue #150
+# the guard refuses the authoritative-policy shape outright. Must exit 2.
 
 locals {
   policy_roles = ["roles/viewer", "roles/secretmanager.secretAccessor"]

@@ -9,17 +9,21 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pashagolub/pgxmock/v4"
+	"github.com/pashagolub/pgxmock/v5"
 	"github.com/stretchr/testify/require"
 )
 
-func TestLadderTimelinePagination(t *testing.T) {
+// ladderTimelineWholeScope is more rows than the 100-row pages the timeline
+// used to return, so a read that still paged would truncate it.
+const ladderTimelineWholeScope = 250
+
+func TestLadderTimelineReturnsWholeScopeFromOneStatement(t *testing.T) {
 	pool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer pool.Close()
 	store := &PostgresStore{db: pool}
 	stamp := time.Now().UTC()
-	events := make([]LadderTimelineEvent, LadderTimelinePageSize+1)
+	events := make([]LadderTimelineEvent, ladderTimelineWholeScope)
 	for i := range events {
 		events[i] = LadderTimelineEvent{ID: uuid.NewString(), CreatedAt: stamp, AmountUSDHr: "0.123456", Revision: int64(i)}
 	}
@@ -27,17 +31,19 @@ func TestLadderTimelinePagination(t *testing.T) {
 	require.NoError(t, err)
 	scope := []byte(`[["0.123456",null,null]]`)
 	pool.ExpectQuery(regexp.QuoteMeta(ladderTimelineQuery)).
-		WithArgs("account", "aws", nil, nil, LadderTimelinePageSize+1).
-		WillReturnRows(pgxmock.NewRows([]string{"count", "sum", "page", "scope"}).AddRow(int64(101), "12.469056", raw, scope))
+		WithArgs("account", "aws", nil, nil).
+		WillReturnRows(pgxmock.NewRows([]string{"count", "sum", "page", "scope"}).AddRow(int64(ladderTimelineWholeScope), "30.864000", raw, scope))
 	page, err := store.ListLadderTimeline(context.Background(), "account", "aws", nil)
 	require.NoError(t, err)
-	require.Len(t, page.Events, LadderTimelinePageSize)
-	require.Equal(t, int64(101), page.TotalCount)
-	require.Equal(t, "12.469056", page.TotalUSDHr)
-	require.Equal(t, "0.123456", page.Events[0].AmountUSDHr)
+	require.Len(t, page.Events, ladderTimelineWholeScope, "every scoped row comes back from the one statement")
+	require.Equal(t, int64(ladderTimelineWholeScope), page.TotalCount)
+	require.Equal(t, "30.864000", page.TotalUSDHr)
+	require.Equal(t, events[ladderTimelineWholeScope-1].ID, page.Events[ladderTimelineWholeScope-1].ID)
 	require.Equal(t, int64(1), page.Events[1].Revision)
-	require.Equal(t, events[99].ID, page.NextCursor.ID)
-	require.NoError(t, pool.ExpectationsWereMet())
+	wire, err := json.Marshal(page)
+	require.NoError(t, err)
+	require.NotContains(t, string(wire), "next_cursor", "the client must never be told to fetch a second page")
+	require.NoError(t, pool.ExpectationsWereMet(), "exactly one statement")
 }
 
 func TestLadderTimelineQueryFailureIsNotEmpty(t *testing.T) {
@@ -46,7 +52,7 @@ func TestLadderTimelineQueryFailureIsNotEmpty(t *testing.T) {
 	defer pool.Close()
 	store := &PostgresStore{db: pool}
 	pool.ExpectQuery(regexp.QuoteMeta(ladderTimelineQuery)).
-		WithArgs("account", "aws", nil, nil, LadderTimelinePageSize+1).
+		WithArgs("account", "aws", nil, nil).
 		WillReturnError(errors.New("database unavailable"))
 	page, err := store.ListLadderTimeline(context.Background(), "account", "aws", nil)
 	require.ErrorContains(t, err, "database unavailable")
@@ -54,29 +60,33 @@ func TestLadderTimelineQueryFailureIsNotEmpty(t *testing.T) {
 	require.NoError(t, pool.ExpectationsWereMet())
 }
 
-func TestLadderTimelineRunsPaginationAndFailure(t *testing.T) {
+func TestLadderTimelineRunsWholeScopeCursorAndFailure(t *testing.T) {
 	pool, err := pgxmock.NewPool()
 	require.NoError(t, err)
 	defer pool.Close()
 	store := &PostgresStore{db: pool}
 	stamp := time.Now().UTC()
-	runs := make([]LadderTimelineRun, LadderTimelinePageSize+1)
+	runs := make([]LadderTimelineRun, ladderTimelineWholeScope)
 	for i := range runs {
 		runs[i] = LadderTimelineRun{ID: uuid.NewString(), CreatedAt: stamp}
 	}
 	raw, err := json.Marshal(runs)
 	require.NoError(t, err)
 	pool.ExpectQuery(regexp.QuoteMeta(ladderTimelineRunsQuery)).
-		WithArgs("account", "aws", nil, nil, LadderTimelinePageSize+1).
-		WillReturnRows(pgxmock.NewRows([]string{"count", "page"}).AddRow(int64(101), raw))
+		WithArgs("account", "aws", nil, nil).
+		WillReturnRows(pgxmock.NewRows([]string{"count", "page"}).AddRow(int64(ladderTimelineWholeScope), raw))
 	page, err := store.ListLadderTimelineRuns(context.Background(), "account", "aws", nil)
 	require.NoError(t, err)
-	require.Len(t, page.Runs, 100)
-	require.Equal(t, runs[99].ID, page.NextCursor.ID)
+	require.Len(t, page.Runs, ladderTimelineWholeScope)
+	wire, err := json.Marshal(page)
+	require.NoError(t, err)
+	require.NotContains(t, string(wire), "next_cursor")
+	// A cursor from the earlier paginated API is still passed through as the bound.
+	cursor := &LadderTimelineCursor{CreatedAt: stamp, ID: runs[99].ID}
 	pool.ExpectQuery(regexp.QuoteMeta(ladderTimelineRunsQuery)).
-		WithArgs("account", "aws", stamp, runs[99].ID, LadderTimelinePageSize+1).
+		WithArgs("account", "aws", stamp, runs[99].ID).
 		WillReturnError(errors.New("database unavailable"))
-	page, err = store.ListLadderTimelineRuns(context.Background(), "account", "aws", page.NextCursor)
+	page, err = store.ListLadderTimelineRuns(context.Background(), "account", "aws", cursor)
 	require.ErrorContains(t, err, "database unavailable")
 	require.Nil(t, page)
 	require.NoError(t, pool.ExpectationsWereMet())
@@ -98,7 +108,7 @@ func TestLadderTimelineOnDemandFromOneStatement(t *testing.T) {
 	// Two rows of exactly 1.5000015 on-demand: per-row ceilings sum to 3.000004, not the rounded exact sum 3.000003.
 	scope := []byte(`[["1.000001","commitment","2/3"],["1.000001","commitment","2/3"],["4.000000",null,null]]`)
 	pool.ExpectQuery(regexp.QuoteMeta(ladderTimelineQuery)).
-		WithArgs("account", "aws", nil, nil, LadderTimelinePageSize+1).
+		WithArgs("account", "aws", nil, nil).
 		WillReturnRows(pgxmock.NewRows([]string{"count", "sum", "page", "scope"}).AddRow(int64(3), "6.000002", raw, scope))
 	got, err := store.ListLadderTimeline(context.Background(), "account", "aws", nil)
 	require.NoError(t, err)
@@ -123,7 +133,7 @@ func TestLadderTimelineMalformedRateFailsLoud(t *testing.T) {
 			defer pool.Close()
 			store := &PostgresStore{db: pool}
 			pool.ExpectQuery(regexp.QuoteMeta(ladderTimelineQuery)).
-				WithArgs("account", "aws", nil, nil, LadderTimelinePageSize+1).
+				WithArgs("account", "aws", nil, nil).
 				WillReturnRows(pgxmock.NewRows([]string{"count", "sum", "page", "scope"}).AddRow(int64(1), "1.000000", []byte(`[]`), []byte(scope)))
 			got, err := store.ListLadderTimeline(context.Background(), "account", "aws", nil)
 			require.ErrorIs(t, err, ErrLadderTimelineRate)

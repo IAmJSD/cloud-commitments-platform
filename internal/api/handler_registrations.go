@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strings"
 	"time"
 
@@ -93,14 +94,17 @@ func (h *Handler) submitRegistration(ctx context.Context, req *events.LambdaFunc
 		GCPClientEmail:      body.GCPClientEmail,
 		GCPAuthMode:         body.GCPAuthMode,
 		GCPWIFAudience:      body.GCPWIFAudience,
-		RegCredentialType:   body.CredentialType,
 	}
 
 	encrypted, encErr := h.encryptRegistrationCredential(body.CredentialPayload)
 	if encErr != nil {
 		return nil, fmt.Errorf("registrations: encrypt credential: %w", encErr)
 	}
-	reg.RegCredentialPayload = encrypted
+	if encrypted != "" {
+		// Without a credential store nothing is kept, so record no type either.
+		reg.RegCredentialType = body.CredentialType
+		reg.RegCredentialPayload = encrypted
+	}
 
 	if err := h.insertRegistration(ctx, reg); err != nil {
 		return nil, err
@@ -221,6 +225,11 @@ func (h *Handler) getPendingRegistration(ctx context.Context, id string) (*confi
 }
 
 // setReviewMetadata populates reviewer info from the current admin session.
+// reviewed_by is a UUID foreign key to users, so only a real user ID is
+// stored. The admin API key session carries the non-UUID sentinel
+// apiKeyAdminUserID; writing it would fail the UPDATE with SQLSTATE 22P02
+// (issue #1234), so reviewed_by stays NULL and the log line below keeps
+// the audit trail.
 func (h *Handler) setReviewMetadata(ctx context.Context, reg *config.AccountRegistration, httpReq *events.LambdaFunctionURLRequest) {
 	reviewedAt := time.Now()
 	reg.ReviewedAt = &reviewedAt
@@ -228,24 +237,12 @@ func (h *Handler) setReviewMetadata(ctx context.Context, reg *config.AccountRegi
 	if err != nil {
 		logging.Warnf("setReviewMetadata: could not resolve admin session, reviewer ID will be unset: %v", err)
 	}
-	if session != nil {
-		reg.ReviewedBy = &session.UserID
-	}
-}
-
-// storeRegistrationCredentials decrypts and stores credentials from the registration
-// record into the account_credentials table. Errors are logged, not propagated.
-func (h *Handler) storeRegistrationCredentials(ctx context.Context, reg *config.AccountRegistration, accountID string) {
-	if reg.RegCredentialPayload == "" || reg.RegCredentialType == "" || h.credStore == nil {
+	if session == nil {
 		return
 	}
-	plaintext, err := h.credStore.DecryptPayload(reg.RegCredentialPayload)
-	if err != nil {
-		logging.Warnf("registration %s: failed to decrypt credential payload: %v", reg.ID, err)
-		return
-	}
-	if err := h.credStore.SaveCredential(ctx, accountID, reg.RegCredentialType, plaintext); err != nil {
-		logging.Warnf("registration %s: failed to store credential: %v", reg.ID, err)
+	reg.ReviewedBy = validUUIDPtrOrNil(&session.UserID)
+	if reg.ReviewedBy == nil {
+		logging.Infof("registration %s: %s by non-user principal %q; reviewed_by left NULL", reg.ID, reg.Status, session.UserID)
 	}
 }
 
@@ -278,15 +275,9 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 		return nil, err
 	}
 
-	var acctReq CloudAccountRequest
-	if err := json.Unmarshal([]byte(httpReq.Body), &acctReq); err != nil {
-		return nil, NewClientError(400, "invalid account request body")
-	}
-	if err := validateCloudAccountRequest(acctReq); err != nil {
-		return nil, err
-	}
-	// Before the transition, so a rejected config leaves the registration pending.
-	if err := h.requireHostForEmptyRoleARN(ctx, "(registration "+reg.ID+")", &acctReq); err != nil {
+	// Before the transition, so a rejected request leaves the registration pending.
+	acctReq, regCred, err := h.parseApprovalRequest(ctx, reg, httpReq)
+	if err != nil {
 		return nil, err
 	}
 
@@ -302,7 +293,7 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	// KMS-backed federated. Without this, every federated-path
 	// approval leaves the account disabled and the operator has to
 	// follow up with a manual PUT enabled=true.
-	account.Enabled = reg.RegCredentialPayload != "" || accountHasCredentialFreePath(account)
+	account.Enabled = regCred != nil || accountHasCredentialFreePath(account)
 	account.CreatedAt = now
 	account.UpdatedAt = now
 
@@ -316,7 +307,7 @@ func (h *Handler) approveRegistration(ctx context.Context, httpReq *events.Lambd
 	}
 
 	// Auto-store credentials if the registration included them.
-	h.storeRegistrationCredentials(ctx, reg, account.ID)
+	h.storeRegistrationCredentials(ctx, reg, account.ID, regCred)
 
 	h.notifyRegistrant(reg, email.RegistrationDecisionData{
 		AccountName: reg.AccountName, Provider: reg.Provider,
@@ -337,6 +328,25 @@ func classifyApproveRegistrationError(err error, acctReq CloudAccountRequest) er
 		return NewClientError(409, fmt.Sprintf("an account with external ID %q already exists for %s", acctReq.ExternalID, acctReq.Provider))
 	}
 	return fmt.Errorf("registrations: approve: %w", err)
+}
+
+// parseApprovalRequest reads and checks an approval body for reg: the
+// CloudAccountRequest itself, the host-account rule for an empty role ARN, and
+// the credential stored with the registration (see registrationCredential).
+// It returns the request and the checked credential, nil when there is none.
+func (h *Handler) parseApprovalRequest(ctx context.Context, reg *config.AccountRegistration, httpReq *events.LambdaFunctionURLRequest) (CloudAccountRequest, []byte, error) {
+	var acctReq CloudAccountRequest
+	if err := json.Unmarshal([]byte(httpReq.Body), &acctReq); err != nil {
+		return acctReq, nil, NewClientError(400, "invalid account request body")
+	}
+	if err := validateCloudAccountRequest(acctReq); err != nil {
+		return acctReq, nil, err
+	}
+	if err := h.requireHostForEmptyRoleARN(ctx, "(registration "+reg.ID+")", &acctReq); err != nil {
+		return acctReq, nil, err
+	}
+	regCred, err := h.registrationCredential(reg, acctReq.Provider)
+	return acctReq, regCred, err
 }
 
 // accountHasCredentialFreePath returns true when the account's auth
@@ -433,7 +443,9 @@ func (h *Handler) deleteRegistration(ctx context.Context, id string) (any, error
 const maxAccountNameLen = 256
 
 // validateRegistrationRequest checks required fields for a registration
-// submission. It also normalizes account_name in place: CR/LF characters are
+// submission, and the optional credential with parseRegistrationCredential,
+// replacing credential_payload in place with the checked encoding. It also
+// normalizes account_name in place: CR/LF characters are
 // stripped (defense-in-depth against email header injection at the data
 // source, complementing sanitizeHeader on the email subject path) and the
 // result is length-capped.
@@ -462,10 +474,38 @@ func validateRegistrationRequest(req *RegistrationRequest) error {
 	if req.ContactEmail == "" {
 		return NewClientError(400, "contact_email is required")
 	}
-	if !strings.Contains(req.ContactEmail, "@") || len(req.ContactEmail) < 5 {
-		return NewClientError(400, "contact_email must be a valid email address")
+	contactEmail, err := registrationContactEmail(req.ContactEmail)
+	if err != nil {
+		return err
 	}
+	req.ContactEmail = contactEmail
+	credential, err := parseRegistrationCredential(req.Provider, req.CredentialType, req.CredentialPayload)
+	if err != nil {
+		return err
+	}
+	req.CredentialPayload = string(credential)
 	return nil
+}
+
+// registrationContactEmail returns the bare address in a registrant's
+// contact_email, the form that is stored and later handed to the notifier,
+// or a 400. It applies validateEmailFormat, the check the rest of the
+// package uses (issue #311), so a value with a line break or a second
+// address after it, or a host with no TLD, is refused rather than stored.
+// A display-name form ("Jane <jane@example.com>") is accepted and reduced
+// to its address. The check runs on that bare address, so one that would
+// not parse again on its own (a quoted local part such as "a b"@example.com
+// unquotes to a b@example.com) is refused too.
+func registrationContactEmail(raw string) (string, error) {
+	invalid := NewClientError(400, "contact_email must be a valid email address")
+	addr, err := mail.ParseAddress(raw)
+	if err != nil {
+		return "", invalid
+	}
+	if validateEmailFormat(addr.Address) != nil {
+		return "", invalid
+	}
+	return addr.Address, nil
 }
 
 func buildRegistrationFilter(params map[string]string) config.AccountRegistrationFilter {

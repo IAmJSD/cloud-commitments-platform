@@ -7,7 +7,7 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.0"
+      version = "~> 5.100"
     }
     random = {
       source  = "hashicorp/random"
@@ -371,7 +371,12 @@ resource "aws_iam_role_policy" "rotation_secrets" {
   })
 }
 
-# RDS permissions for rotation (to update password)
+# Account segment of the rotation RDS ARN below.
+data "aws_caller_identity" "current" {}
+
+# RDS permissions for rotation (to update password), scoped to the one
+# instance this rotation serves in this account. A ":*:db:*" ARN would let the
+# role modify every DB instance in the account (issue #323).
 resource "aws_iam_role_policy" "rotation_rds" {
   count = var.enable_secret_rotation && var.rds_cluster_id != null ? 1 : 0
 
@@ -387,7 +392,7 @@ resource "aws_iam_role_policy" "rotation_rds" {
           "rds:ModifyDBInstance",
           "rds:DescribeDBInstances"
         ]
-        Resource = "arn:aws:rds:${var.region}:*:db:*"
+        Resource = "arn:aws:rds:${var.region}:${data.aws_caller_identity.current.account_id}:db:${var.rds_cluster_id}"
       }
     ]
   })
