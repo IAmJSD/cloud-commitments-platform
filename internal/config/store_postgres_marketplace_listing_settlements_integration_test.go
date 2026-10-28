@@ -135,7 +135,8 @@ func TestMarketplaceListingSettlements_Postgres(t *testing.T) {
 	t.Run("RepollIsIdempotent", func(t *testing.T) { checkRepollIdempotent(ctx, t, store, pool) })
 	t.Run("UnpricedSupersededListingIsPolledUntilPriced", func(t *testing.T) { checkUnpricedSuperseded(ctx, t, store, pool) })
 	t.Run("ReleasedClaimCountsListingOnce", func(t *testing.T) { checkReleasedClaimCountsOnce(ctx, t, store, pool) })
-	t.Run("SettleWaitingOnClaimSettlesKeptListing", func(t *testing.T) { checkSettleWaitingOnClaim(ctx, t, store, pool) })
+	t.Run("SettleWaitingOnClaimLeavesListingForLater", func(t *testing.T) { checkSettleWaitingOnClaim(ctx, t, store, pool) })
+	t.Run("ResumedClaimKeepsListing", func(t *testing.T) { checkResumedClaimKeepsListing(ctx, t, store, pool) })
 	t.Run("ConcurrentPollsSettleSupersededOnce", func(t *testing.T) { checkConcurrentSupersededSettles(ctx, t, store, pool) })
 	t.Run("ConcurrentRelistAndPollKeepProceedsOnce", func(t *testing.T) { checkConcurrentRelistAndPoll(ctx, t, store, pool) })
 	t.Run("TotalsOfUnknownPurchases", func(t *testing.T) { checkTotalsOfUnknownPurchases(ctx, t, store) })
@@ -252,6 +253,7 @@ func checkReleasedClaimCountsOnce(ctx context.Context, t *testing.T, store *Post
 	require.NoError(t, err)
 	require.NotNil(t, claim)
 	require.NotNil(t, readListingSettlement(ctx, t, pool, "ril-mrl-a"), "the claim keeps the listing it replaces")
+	requireMidClaimLeftAlone(ctx, t, store, pool, id, "ril-mrl-a")
 	require.NoError(t, store.ReleaseMarketplaceListingClaim(ctx, id, "tok-mrl", claim.PriorState, false))
 
 	due := pollListings(ctx, t, store, id)
@@ -271,9 +273,25 @@ func checkReleasedClaimCountsOnce(ctx context.Context, t *testing.T, store *Post
 	requireTotal(ctx, t, store, id, 88, 12, 1, 0)
 }
 
+// requireMidClaimLeftAlone asserts that while purchase id's row holds listingID
+// as a list claim in flight, the listing is not polled and a poll's settle of
+// it writes neither the row nor the listing's settlement row (#1508).
+func requireMidClaimLeftAlone(ctx context.Context, t *testing.T, store *PostgresStore, pool *pgxpool.Pool, id, listingID string) {
+	t.Helper()
+	assert.NotContains(t, pollListings(ctx, t, store, id), listingID, "a listing held by a claim in flight is not polled")
+	applied, err := store.SettleMarketplaceListing(ctx, canceledSettlement(id, listingID, 88, 12))
+	require.NoError(t, err)
+	assert.False(t, applied, "a claim in flight is left alone")
+	assert.Nil(t, readSettlement(ctx, t, pool, id).proceeds)
+	if row := readListingSettlement(ctx, t, pool, listingID); row != nil {
+		assert.Nil(t, row.proceeds, "the kept listing is not settled while the claim is in flight")
+	}
+}
+
 // A poll of listing A that queues behind a relist claim committing on the
-// same RI re-checks the row, finds the claim, and records A's sale in the row
-// the claim kept for it instead of dropping it.
+// same RI re-checks the row, finds the claim, and writes nothing. A is not
+// lost: once the claim resolves to the new listing, A is polled from the row
+// the claim kept for it and its sale is recorded once.
 func checkSettleWaitingOnClaim(ctx context.Context, t *testing.T, store *PostgresStore, pool *pgxpool.Pool) {
 	const id = "mls-held-claim"
 	seedCanceledSeenListing(ctx, t, store, id, "ril-mhc-a")
@@ -294,11 +312,58 @@ func checkSettleWaitingOnClaim(ctx context.Context, t *testing.T, store *Postgre
 
 	got := testhelpers.Await(t, done)
 	require.NoError(t, got.err)
-	assert.True(t, got.applied)
+	assert.False(t, got.applied, "a claim in flight is left alone")
 	ph := readSettlement(ctx, t, pool, id)
-	assert.Equal(t, ListingStatePending, ph.state, "the claim is left alone")
+	assert.Equal(t, ListingStatePending, ph.state)
 	assert.Nil(t, ph.proceeds)
+	kept := readListingSettlement(ctx, t, pool, "ril-mhc-a")
+	require.NotNil(t, kept, "the claim keeps the listing")
+	assert.Nil(t, kept.proceeds)
+	requireMidClaimLeftAlone(ctx, t, store, pool, id, "ril-mhc-a")
+
+	require.NoError(t, store.UpdatePurchaseHistoryListing(ctx, id, "ril-mhc-b", ListingStateActive))
+	require.Contains(t, pollListings(ctx, t, store, id), "ril-mhc-a", "the listing is polled once the claim resolves")
+	applied, err := store.SettleMarketplaceListing(ctx, canceledSettlement(id, "ril-mhc-a", 88, 12))
+	require.NoError(t, err)
+	assert.True(t, applied)
 	requireListingProceeds(ctx, t, pool, "ril-mhc-a", 88)
+	requireTotal(ctx, t, store, id, 88, 12, 1, 0)
+}
+
+// A list attempt released with its token kept (an ambiguous AWS outcome) puts
+// the row back in listing A's own state; if A's first claim left no row in
+// the settlement table (it predates migration 000153), the retry's claim keeps
+// A, so a relist does not lose it.
+func checkResumedClaimKeepsListing(ctx context.Context, t *testing.T, store *PostgresStore, pool *pgxpool.Pool) {
+	const id = "mls-resume"
+	seedCanceledSeenListing(ctx, t, store, id, "ril-mrs-a")
+	// The state ReleaseMarketplaceListingClaim(keepAttempt=true) leaves: A's
+	// own state with the attempt's token and price schedule kept. Written with
+	// triggers off, as by a claim and release that ran before migration 000153.
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	_, err = tx.Exec(ctx, `SET LOCAL session_replication_role = replica`)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `UPDATE purchase_history SET listing_client_token = 'tok-mrs',
+		listing_price_schedule = '[{"term_months":6,"price":40}]'::jsonb WHERE purchase_id = $1`, id)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+	require.Nil(t, readListingSettlement(ctx, t, pool, "ril-mrs-a"), "fixture: no row kept yet")
+
+	claim, err := store.ClaimMarketplaceListingSlot(ctx, id, "tok-ignored", []byte(`[{"term_months":6,"price":40}]`))
+	require.NoError(t, err)
+	require.NotNil(t, claim)
+	require.True(t, claim.Resumed)
+	kept := readListingSettlement(ctx, t, pool, "ril-mrs-a")
+	require.NotNil(t, kept, "the resumed claim keeps the listing")
+	assert.Equal(t, ListingStateCancelled, kept.status)
+	requireMidClaimLeftAlone(ctx, t, store, pool, id, "ril-mrs-a")
+
+	require.NoError(t, store.UpdatePurchaseHistoryListing(ctx, id, "ril-mrs-b", ListingStateActive))
+	applied, err := store.SettleMarketplaceListing(ctx, canceledSettlement(id, "ril-mrs-a", 88, 12))
+	require.NoError(t, err)
+	assert.True(t, applied)
 	requireTotal(ctx, t, store, id, 88, 12, 1, 0)
 }
 
@@ -343,10 +408,12 @@ func checkConcurrentSupersededSettles(ctx context.Context, t *testing.T, store *
 // that listing's sale recorded exactly once, and no deadlock. In even rounds
 // all three start together; in odd rounds the polls start once the relist's
 // claim has committed (so the claim has kept the listing) and race the write
-// of the new listing id. Both ways the listing's row can be created are hit:
-// by a poll that settles it while the RI still holds it, and by the claim.
+// of the new listing id. A poll that runs while the claim is in flight writes
+// nothing (#1508); the listing must then still be due, and the next poll
+// records it. Both ways the listing's row can be created are hit: by a poll
+// that settles it while the RI still holds it, and by the claim.
 func checkConcurrentRelistAndPoll(ctx context.Context, t *testing.T, store *PostgresStore, pool *pgxpool.Pool) {
-	keptByClaim := 0
+	keptByClaim, deferred := 0, 0
 	for round := range 20 {
 		id := fmt.Sprintf("mls-race-%d", round)
 		listingA := fmt.Sprintf("ril-mrr-a-%d", round)
@@ -381,7 +448,18 @@ func checkConcurrentRelistAndPoll(ctx context.Context, t *testing.T, store *Post
 		require.NoError(t, relistErr, "round %d", round)
 		require.NoError(t, results[0].err, "round %d", round)
 		require.NoError(t, results[1].err, "round %d", round)
-		assert.True(t, results[0].applied != results[1].applied, "round %d: exactly one poll records the sale", round)
+		require.False(t, results[0].applied && results[1].applied, "round %d: the sale is recorded at most once", round)
+
+		// The next poll run: due exactly when no poll recorded the sale.
+		_, due := pollListings(ctx, t, store, id)[listingA]
+		recorded := results[0].applied || results[1].applied
+		assert.Equal(t, !recorded, due, "round %d: an unrecorded sale is still due", round)
+		applied, err := store.SettleMarketplaceListing(ctx, canceledSettlement(id, listingA, 88, 12))
+		require.NoError(t, err)
+		assert.Equal(t, !recorded, applied, "round %d: the next poll records it only if no earlier poll did", round)
+		if !recorded {
+			deferred++
+		}
 
 		row := readListingSettlement(ctx, t, pool, listingA)
 		require.NotNil(t, row, "round %d", round)
@@ -395,7 +473,7 @@ func checkConcurrentRelistAndPoll(ctx context.Context, t *testing.T, store *Post
 			keptByClaim++
 		}
 	}
-	t.Logf("listing row created by the relist claim in %d of 20 rounds", keptByClaim)
+	t.Logf("listing row created by the relist claim in %d of 20 rounds; sale deferred past the claim in %d", keptByClaim, deferred)
 	assert.GreaterOrEqual(t, keptByClaim, 10, "every odd round settles a listing the claim kept")
 }
 

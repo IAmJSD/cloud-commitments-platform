@@ -28,9 +28,12 @@ import (
 // The first branch is the RI's current listing on purchase_history. The
 // second is a listing the RI has since moved on from (marketplace_listing_settlements,
 // issue #1494), selected by the same rules; its account, region and cloud
-// account come from the purchase_history row it was made from. When both
-// branches name a listing the purchase_history one is returned (src 0), so the
-// poller sees the row's live state.
+// account come from the purchase_history row it was made from. A listing a
+// purchase_history row holds as a claim in flight (pending with a token) is
+// left out of both branches until the claim resolves or is released, as
+// #1508 leaves such a row alone. When both branches name a listing the
+// purchase_history one is returned (src 0), so the poller sees the row's live
+// state.
 const marketplaceListingsToPollSQL = `
 	SELECT DISTINCT ON (purchase_id, listing_id)
 	       account_id, purchase_id, provider, region, cloud_account_id::text,
@@ -56,6 +59,11 @@ const marketplaceListingsToPollSQL = `
 		  AND s.proceeds_received IS NULL
 		  AND (lower(s.status) IN ($1, $4)
 		       OR (lower(s.status) IN ($2, $3) AND s.listed_at IS NOT NULL))
+		  AND NOT EXISTS (
+			SELECT 1 FROM purchase_history c
+			WHERE c.purchase_id = s.purchase_id AND c.listing_id = s.listing_id
+			  AND lower(COALESCE(c.listing_state, '')) = $4
+			  AND c.listing_client_token IS NOT NULL)
 	) due
 	ORDER BY purchase_id, listing_id, src, created_at, id
 `
@@ -68,7 +76,8 @@ const marketplaceListingsToPollSQL = `
 // on purchase_history and the listings the RI was relisted from, which
 // marketplace_listing_settlements keeps (issue #1494). A pending row that
 // holds a list attempt's token is a claim in flight, whose listing_id is the
-// RI's previous listing; that listing is polled from the settlement table. The
+// RI's previous listing; that listing is not polled until the claim resolves
+// (it is then polled from the settlement table) or is released. The
 // terminal set covers a cancel recorded by the cancel handler before the
 // poller saw the listing end, and a terminal listing whose sale price could
 // not be determined on an earlier poll. Only the fields the poller uses are
@@ -179,6 +188,19 @@ const upsertListingSettlementSQL = `
 	  AND lower(s.status) IN ($7, $8, $3)
 `
 
+// listingHeldByClaimSQL share-locks the purchase_history rows that hold the
+// listing and reports whether any of them is a list claim in flight (pending
+// with a token). The lock makes a claim that starts now wait for this
+// transaction, so no settlement is written while a row is mid-claim.
+const listingHeldByClaimSQL = `
+	SELECT COALESCE(bool_or(lower(COALESCE(listing_state, '')) = $3
+	                        AND listing_client_token IS NOT NULL), false)
+	FROM (SELECT listing_state, listing_client_token
+	      FROM purchase_history
+	      WHERE purchase_id = $1 AND listing_id = $2
+	      FOR SHARE) held
+`
+
 // settleSupersededListingSQL records the settlement of a listing the RI no
 // longer holds on purchase_history, in the row the relist kept for it, under
 // the same guards as upsertListingSettlementSQL.
@@ -202,9 +224,11 @@ const settleSupersededListingSQL = `
 // marketplace_listing_settlements row (issue #1494), which is what per-RI
 // totals read. Each write applies only while that row has no proceeds
 // recorded and is active, pending with no list attempt in flight, or already
-// in the same terminal state. So proceeds are recorded once however many polls
-// race, a recorded cancel is never turned into a sale (or the reverse), and a
-// listing the RI was relisted from is still settled, in its own row. The
+// in the same terminal state, and never while a purchase_history row holds the
+// listing as a list claim in flight. So proceeds are recorded once however
+// many polls race, a recorded cancel is never turned into a sale (or the
+// reverse), a mid-claim row is left alone (#1508), and a listing the RI was
+// relisted from is still settled, in its own row. The
 // purchase_history row is written first, so a poll and a relist of the same
 // RI take their locks in the same order. It reports whether either row was
 // written.
@@ -249,13 +273,23 @@ func settleListingArgs(st MarketplaceListingSettlement) ([]any, error) {
 // settleMarketplaceListingTx runs SettleMarketplaceListing's writes in tx. A
 // listing the purchase_history row still holds gets its settlement row
 // created or filled; one the row no longer holds can only be filled in the
-// settlement row its relist kept.
+// settlement row its relist kept. Neither is written while a purchase_history
+// row holds the listing as a claim in flight (#1508): the listing is settled
+// once the claim resolves or is released. purchase_history is locked before
+// the settlement table, the order a relist and its trigger take them in.
 func settleMarketplaceListingTx(ctx context.Context, tx pgx.Tx, args []any) (bool, error) {
 	tag, err := tx.Exec(ctx, settleCurrentListingSQL, args...)
 	if err != nil {
 		return false, err
 	}
 	rowApplied := tag.RowsAffected() > 0
+	var midClaim bool
+	if err := tx.QueryRow(ctx, listingHeldByClaimSQL, args[0], args[1], ListingStatePending).Scan(&midClaim); err != nil {
+		return false, err
+	}
+	if midClaim {
+		return rowApplied, nil
+	}
 	listingSQL := settleSupersededListingSQL
 	if rowApplied {
 		listingSQL = upsertListingSettlementSQL

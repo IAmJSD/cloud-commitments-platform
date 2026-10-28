@@ -37,11 +37,15 @@
 --   * Trigger purchase_history_keep_superseded_listing copies a listing into
 --     this table, as purchase_history last recorded it, at the moment the row
 --     stops describing it: when listing_id changes, or when a list attempt's
---     claim sets listing_client_token (the claimed row keeps the previous
---     listing id but its state becomes the attempt's). ON CONFLICT DO NOTHING
+--     claim makes the row pending with a token (the claimed row keeps the
+--     previous listing id but its state becomes the attempt's). A row that is
+--     already pending with a token describes the attempt, not its listing id,
+--     so it is never copied; a row whose attempt was released with its token
+--     kept is back in the listing's own state and is. ON CONFLICT DO NOTHING
 --     keeps a row the poller already wrote. The poller keeps polling such a
 --     listing from here until it is settled, with the same rules it uses for
---     purchase_history rows.
+--     purchase_history rows, and like them leaves it alone while a row holds
+--     it as a claim in flight (issue #1508).
 --
 -- purchase_history's settlement columns keep their meaning: the latest
 -- listing's settlement, which the poller still writes in the same transaction.
@@ -122,11 +126,12 @@ $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS purchase_history_keep_superseded_listing ON purchase_history;
 CREATE TRIGGER purchase_history_keep_superseded_listing
-    AFTER UPDATE OF listing_id, listing_client_token ON purchase_history
+    AFTER UPDATE OF listing_id, listing_state, listing_client_token ON purchase_history
     FOR EACH ROW
     WHEN (COALESCE(OLD.listing_id, '') <> ''
           AND COALESCE(OLD.listing_state, '') <> ''
-          AND OLD.listing_client_token IS NULL
+          AND NOT (lower(OLD.listing_state) = 'pending' AND OLD.listing_client_token IS NOT NULL)
           AND (NEW.listing_id IS DISTINCT FROM OLD.listing_id
-               OR NEW.listing_client_token IS NOT NULL))
+               OR (lower(COALESCE(NEW.listing_state, '')) = 'pending'
+                   AND NEW.listing_client_token IS NOT NULL)))
     EXECUTE FUNCTION keep_superseded_marketplace_listing();
