@@ -130,6 +130,7 @@ import * as api from '../api';
 import * as state from '../state';
 import { viewPlanHistory } from '../history';
 import { populateTermSelect, populatePaymentSelect, isValidCombination } from '../commitmentOptions';
+import { flushPromises } from './flush-promises';
 
 describe('Plans Module', () => {
   beforeEach(() => {
@@ -996,7 +997,7 @@ describe('Plans Module', () => {
       const runBtn = document.querySelector('[data-action="run"]') as HTMLButtonElement;
       runBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(mockConfirmDialog).toHaveBeenCalled();
       expect(api.runPlannedPurchase).toHaveBeenCalledWith('purchase-1');
@@ -1010,7 +1011,7 @@ describe('Plans Module', () => {
       const runBtn = document.querySelector('[data-action="run"]') as HTMLButtonElement;
       runBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(api.runPlannedPurchase).not.toHaveBeenCalled();
     });
@@ -1020,7 +1021,7 @@ describe('Plans Module', () => {
       mockConfirmDialog.mockResolvedValue(false);
 
       (document.querySelector('[data-action="run"]') as HTMLButtonElement).click();
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       const opts = mockConfirmDialog.mock.calls[0]![0] as { title: string; body: HTMLElement };
       expect(opts.title).toBe('Run step 1/4 of "Test Plan" now?');
@@ -1036,11 +1037,11 @@ describe('Plans Module', () => {
       const runBtn = document.querySelector('[data-action="run"]') as HTMLButtonElement;
       runBtn.click();
       runBtn.click();
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await flushPromises();
       expect(mockConfirmDialog).toHaveBeenCalledTimes(1);
 
       resolveDialog(false);
-      await new Promise(resolve => setTimeout(resolve, 20));
+      await flushPromises();
     });
 
     test('pause action pauses purchase', async () => {
@@ -1050,7 +1051,7 @@ describe('Plans Module', () => {
       const pauseBtn = document.querySelector('[data-action="pause"]') as HTMLButtonElement;
       pauseBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(api.pausePlannedPurchase).toHaveBeenCalledWith('purchase-1');
       // Pause must give visible feedback via a success toast.
@@ -1072,7 +1073,7 @@ describe('Plans Module', () => {
       const disableBtn = document.querySelector('[data-action="disable"]') as HTMLButtonElement;
       disableBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       // The action cancels this scheduled purchase AND disables its plan
       // (backend deletePlannedPurchase), so the dialog must say both.
@@ -1094,7 +1095,7 @@ describe('Plans Module', () => {
       const disableBtn = document.querySelector('[data-action="disable"]') as HTMLButtonElement;
       disableBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(api.deletePlannedPurchase).not.toHaveBeenCalled();
     });
@@ -1106,7 +1107,7 @@ describe('Plans Module', () => {
       const pauseBtn = document.querySelector('[data-action="pause"]') as HTMLButtonElement;
       pauseBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Failed to pause purchase: API Error' }));
     });
@@ -1125,7 +1126,7 @@ describe('Plans Module', () => {
       });
 
       (document.querySelector('[data-action="edit"]') as HTMLButtonElement)?.click();
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect((document.getElementById('plan-coverage') as HTMLInputElement).value).toBe('55');
     });
@@ -1149,7 +1150,7 @@ describe('Plans Module', () => {
       const editBtn = document.querySelector('[data-action="edit"]') as HTMLButtonElement;
       editBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       // Must use the plan FK, not the purchase PK.
       expect(api.getPlan).toHaveBeenCalledWith('plan-1');
@@ -1171,7 +1172,7 @@ describe('Plans Module', () => {
       container?.appendChild(btn);
       btn.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       // getPlan must NOT be called when planId is empty.
       expect(api.getPlan).not.toHaveBeenCalled();
@@ -1193,7 +1194,7 @@ describe('Plans Module', () => {
       const editBtn = document.querySelector('[data-action="edit"]') as HTMLButtonElement;
       editBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       // The right plan FK was used (guards against a #773-class regression).
       expect(api.getPlan).toHaveBeenCalledWith('plan-1');
@@ -1239,7 +1240,7 @@ describe('Plans Module', () => {
       const resumeBtn = document.querySelector('[data-action="resume"]') as HTMLButtonElement;
       resumeBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(api.resumePlannedPurchase).toHaveBeenCalledWith('purchase-1');
       // Resume must give visible feedback via a success toast.
@@ -2074,7 +2075,7 @@ describe('Plans Module', () => {
       const toggleInput = document.querySelector('[data-action="toggle-plan"]') as HTMLInputElement;
       toggleInput?.dispatchEvent(new Event('change'));
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(api.patchPlan).toHaveBeenCalledWith('plan-1', expect.objectContaining({ enabled: true }));
       expect(api.getPlans).toHaveBeenCalled();
@@ -2110,7 +2111,7 @@ describe('Plans Module', () => {
       const toggleInput = document.querySelector('[data-action="toggle-plan"]') as HTMLInputElement;
       toggleInput?.dispatchEvent(new Event('change'));
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Failed to update plan' }));
     });
@@ -2165,7 +2166,7 @@ describe('Plans Module', () => {
       const editBtn = document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement;
       editBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(api.getPlan).toHaveBeenCalledWith('plan-1');
       const modal = document.getElementById('plan-modal');
@@ -2213,7 +2214,7 @@ describe('Plans Module', () => {
       const editBtn = document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement;
       editBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       const weeklyRadio = document.querySelector('input[value="weekly-25pct"]') as HTMLInputElement;
       expect(weeklyRadio.checked).toBe(true);
@@ -2259,7 +2260,7 @@ describe('Plans Module', () => {
       const editBtn = document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement;
       editBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       const monthlyRadio = document.querySelector('input[value="monthly-10pct"]') as HTMLInputElement;
       expect(monthlyRadio.checked).toBe(true);
@@ -2315,7 +2316,7 @@ describe('Plans Module', () => {
       const editBtn = document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement;
       editBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect((document.getElementById('ramp-step-percent') as HTMLInputElement).value).toBe('25');
       expect((document.getElementById('ramp-interval-days') as HTMLInputElement).value).toBe('14');
@@ -2351,7 +2352,7 @@ describe('Plans Module', () => {
       const editBtn = document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement;
       editBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Failed to load plan details' }));
     });
@@ -2375,7 +2376,7 @@ describe('Plans Module', () => {
       const historyBtn = document.querySelector('[data-action="view-history"]') as HTMLButtonElement;
       historyBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(viewPlanHistory).toHaveBeenCalledWith('plan-1');
     });
@@ -2415,7 +2416,7 @@ describe('Plans Module', () => {
       const deleteBtn = document.querySelector('[data-action="delete-plan"]') as HTMLButtonElement;
       deleteBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(api.deletePlan).toHaveBeenCalledWith('plan-1');
       expect(api.getPlans).toHaveBeenCalled();
@@ -2450,7 +2451,7 @@ describe('Plans Module', () => {
       const deleteBtn = document.querySelector('[data-action="delete-plan"]') as HTMLButtonElement;
       deleteBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(api.deletePlan).not.toHaveBeenCalled();
     });
@@ -2487,7 +2488,7 @@ describe('Plans Module', () => {
       const deleteBtn = document.querySelector('[data-action="delete-plan"]') as HTMLButtonElement;
       deleteBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Failed to delete plan' }));
     });
@@ -2511,7 +2512,7 @@ describe('Plans Module', () => {
       const addBtn = document.querySelector('[data-action="add-purchases"]') as HTMLButtonElement;
       addBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       const modal = document.getElementById('add-purchases-modal');
       expect(modal).toBeTruthy();
@@ -2540,7 +2541,7 @@ describe('Plans Module', () => {
       const addBtn = document.querySelector('[data-action="add-purchases"]') as HTMLButtonElement;
       addBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
     });
 
     test('default date leaves the displayed plan notification window intact', () => {
@@ -2554,7 +2555,7 @@ describe('Plans Module', () => {
       const cancelBtn = document.getElementById('add-purchases-cancel') as HTMLButtonElement;
       cancelBtn?.click();
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       const modal = document.getElementById('add-purchases-modal');
       expect(modal).toBeNull();
@@ -2570,7 +2571,7 @@ describe('Plans Module', () => {
       const form = document.getElementById('add-purchases-form') as HTMLFormElement;
       form.dispatchEvent(new Event('submit'));
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(api.createPlannedPurchases).toHaveBeenCalledWith('plan-1', 3, expect.any(String));
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Successfully scheduled 3 purchases' }));
@@ -2586,7 +2587,7 @@ describe('Plans Module', () => {
       const form = document.getElementById('add-purchases-form') as HTMLFormElement;
       form.dispatchEvent(new Event('submit'));
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       expect(mockShowToast).toHaveBeenCalledWith(expect.objectContaining({ message: 'Successfully scheduled 1 purchase' }));
     });
@@ -2597,7 +2598,7 @@ describe('Plans Module', () => {
       const form = document.getElementById('add-purchases-form') as HTMLFormElement;
       form.dispatchEvent(new Event('submit'));
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       const errorDiv = document.getElementById('add-purchases-error');
       expect(errorDiv?.textContent).toBe('API Error');
@@ -2611,7 +2612,7 @@ describe('Plans Module', () => {
       const form = document.getElementById('add-purchases-form') as HTMLFormElement;
       form.dispatchEvent(new Event('submit'));
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       const errorDiv = document.getElementById('add-purchases-error');
       expect(errorDiv?.textContent).toBe(refusal);
@@ -3252,7 +3253,7 @@ describe('Plans Module', () => {
       await loadPlans();
       const editBtn = document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement;
       editBtn?.click();
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       const termSelect = document.getElementById('plan-term') as HTMLSelectElement;
       // Pre-fix: termSelect.value === '3' (hardcoded fallback)
@@ -3301,7 +3302,7 @@ describe('Plans Module', () => {
       await loadPlans();
       const editBtn = document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement;
       editBtn?.click();
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       const paymentSelect = document.getElementById('plan-payment') as HTMLSelectElement;
       // Pre-fix: paymentSelect.value === 'no-upfront' (hardcoded default)
@@ -3329,7 +3330,7 @@ describe('Plans Module', () => {
       await loadPlans();
       const editBtn = document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement;
       editBtn?.click();
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await flushPromises();
 
       const paymentSelect = document.getElementById('plan-payment') as HTMLSelectElement;
       // When payment IS present, it should be correctly pre-selected

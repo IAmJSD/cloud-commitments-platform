@@ -82,6 +82,7 @@ import { confirmDialog } from '../confirmDialog';
 import { showToast } from '../toast';
 import { getCurrentUser, subscribeAmortizeUpfront } from '../state';
 import { ADMINISTRATORS_GROUP_ID, PURCHASER_GROUP_ID } from '../permissions';
+import { flushPromises } from './flush-promises';
 
 // Admin user includes Purchaser membership (mirrors the auto-migration for
 // existing admins on first deploy of issue #923). approve-any:purchases is
@@ -457,7 +458,7 @@ describe('History inline Approve button (issue #286)', () => {
 
     const btn = document.querySelector<HTMLButtonElement>('.history-approve-btn');
     btn?.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     expect(api.approvePurchase).toHaveBeenCalledWith('exec-1');
     // Reload was triggered → second getHistory call.
@@ -478,7 +479,7 @@ describe('History inline Approve button (issue #286)', () => {
     await loadHistory();
     const btn = document.querySelector<HTMLButtonElement>('.history-approve-btn');
     btn?.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }));
     expect(btn?.disabled).toBe(false);
@@ -525,7 +526,7 @@ describe('History inline Approve button (issue #286)', () => {
 
     // Resolve the in-flight promise + let the success path complete.
     resolveApprove?.();
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
   });
 
   test('approve API failure re-enables BOTH Approve and Cancel for the row (CR pass)', async () => {
@@ -542,7 +543,7 @@ describe('History inline Approve button (issue #286)', () => {
     const approveBtn = document.querySelector<HTMLButtonElement>('.history-approve-btn');
     const cancelBtn = document.querySelector<HTMLButtonElement>('.history-cancel-btn');
     approveBtn?.click();
-    await new Promise((r) => setTimeout(r, 10));
+    await flushPromises();
 
     // After the API rejects, BOTH buttons must be re-enabled.
     expect(approveBtn?.disabled).toBe(false);
