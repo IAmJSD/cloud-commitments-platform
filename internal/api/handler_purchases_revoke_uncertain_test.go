@@ -302,6 +302,10 @@ func TestCallAzureReturn_LambdaTooLittleTime_RefusesBeforeClaim(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), left)
 			defer cancel()
 			mockStore := new(MockConfigStore)
+			// Registered so a regression fails the assertions below instead
+			// of panicking the test binary on an unexpected call.
+			mockStore.On("MarkPurchaseRevoked", mock.Anything, mock.Anything, mock.Anything,
+				mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 			calcClient := &stubCalcRefundClientWithAmount{amount: 10.0, currency: "USD", sessID: "s-late"}
 			returnClient := &stubReturnClient{}
 			h := &Handler{config: mockStore, isLambda: true}
