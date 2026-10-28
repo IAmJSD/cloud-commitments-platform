@@ -14,24 +14,43 @@ import (
 // List-Unsubscribe headers; keeping the logic here (instead of duplicating it
 // per transport) prevents the two paths from diverging.
 
-// isRecipientMuted returns true when (email, scope) is muted. A nil checker or a
-// store error is treated as "not muted" (fail-open) so a transient DB outage
-// does not silently block approval emails.
+// isRecipientMuted returns true when (email, scope) is muted. A nil checker
+// means muting is not configured, so nothing is muted.
+//
+// When the mute store errors, the answer depends on the scope (see
+// muteCheckFailsOpen): approval scopes fail open (send), so a transient DB
+// outage does not strand a purchase or exchange waiting on its approval email;
+// every other scope is informational and fails closed (don't send), so the
+// outage does not re-mail someone who used the one-click unsubscribe link.
 func isRecipientMuted(ctx context.Context, mc MuteChecker, email, scope string) bool {
 	if mc == nil {
 		return false
 	}
 	muted, err := mc.IsNotificationMuted(ctx, email, scope)
 	if err != nil {
-		logging.Warnf("email: mute check failed for scope=%s: %v", scope, err)
-		return false
+		failOpen := muteCheckFailsOpen(scope)
+		logging.Warnf("email: mute check failed for scope=%s (sending anyway: %t): %v", scope, failOpen, err)
+		return !failOpen
 	}
 	return muted
 }
 
+// muteCheckFailsOpen reports whether a mute-store error should let an email
+// through for scope. Only the approval scopes do: their emails carry the links
+// a pending purchase or RI exchange is waiting on. Any other scope, including
+// one added later, is treated as informational and fails closed.
+func muteCheckFailsOpen(scope string) bool {
+	switch common.MuteNotifScope(scope) {
+	case common.ScopePurchaseApprovals, common.ScopeRIExchangeApprovals:
+		return true
+	default:
+		return false
+	}
+}
+
 // filterMutedRecipients returns a copy of addrs with any address muted for scope
-// removed. The original slice is not modified. Errors from the mute store are
-// treated as "not muted" (fail-open).
+// removed. The original slice is not modified. A mute-store error follows the
+// per-scope direction of isRecipientMuted.
 func filterMutedRecipients(ctx context.Context, mc MuteChecker, addrs []string, scope string) []string {
 	if mc == nil || len(addrs) == 0 {
 		return addrs

@@ -159,7 +159,9 @@ jobs:
 
       - name: Run Makefile gate self-tests
         # The local lint, scanner and terraform-validate targets must fail
-        # when their tool is missing or fails (#349). Stub tools only.
+        # when their tool is missing or fails (#349); stub tools only. Also
+        # checks with the real go command that the Go targets' ./... skips
+        # frontend/node_modules (#177).
         run: bash scripts/test-make-gates.sh
 
   # GitHub Actions workflow linting

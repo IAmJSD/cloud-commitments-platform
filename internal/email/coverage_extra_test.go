@@ -393,16 +393,16 @@ func TestSMTPSender_SendPurchaseApprovalRequest_NoRecipient(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoRecipient)
 }
 
-// Tests for SMTPSender using notifyEmail (not fromEmail).
-func TestSMTPSender_SendRIExchangePendingApproval_WithNotifyEmail(t *testing.T) {
+// The static SMTP notify address is not a fallback recipient for the RI
+// exchange approval email: its body carries live approval tokens, so an empty
+// data.RecipientEmail is ErrNoRecipient even when notifyEmail is configured,
+// matching the SES sender (issue #111). No connection is attempted.
+func TestSMTPSender_SendRIExchangePendingApproval_NotifyEmailIsNotAFallback(t *testing.T) {
 	sender := &SMTPSender{
-		host:        "smtp.example.com",
-		port:        587,
+		host:        "127.0.0.1",
+		port:        1, // never dialed
 		fromEmail:   "from@example.com",
 		notifyEmail: "notify@example.com",
-		// useTLS is false so STARTTLS is not required; a plain send will be attempted
-		// but fail — we just verify the method reaches the send path (not a no-op)
-		useTLS: false,
 	}
 
 	data := RIExchangeNotificationData{
@@ -414,12 +414,8 @@ func TestSMTPSender_SendRIExchangePendingApproval_WithNotifyEmail(t *testing.T) 
 		},
 	}
 
-	// Will fail with a network error — just verify it's not the "no from email" no-op.
 	err := sender.SendRIExchangePendingApproval(context.Background(), data)
-	// The error will be a connection refused / network error (not nil, not "no from email")
-	if err != nil {
-		assert.NotContains(t, err.Error(), "no from email")
-	}
+	require.ErrorIs(t, err, ErrNoRecipient)
 }
 
 // Tests for Sender.SendRIExchangePendingApproval, SendRIExchangeCompleted, SendPurchaseApprovalRequest
