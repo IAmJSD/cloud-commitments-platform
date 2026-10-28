@@ -150,9 +150,9 @@ func (s *SMTPSender) SendToEmailWithCCMultipart(ctx context.Context, toEmail str
 	}
 
 	if len(sanitizedCC) > 0 {
-		logging.Debugf("Sent multipart email via SMTP to %s (cc %d): %s", toEmail, len(sanitizedCC), subject)
+		logging.Debugf("Sent multipart email via SMTP to %s (cc %d): %s", redactEmail(toEmail), len(sanitizedCC), subject)
 	} else {
-		logging.Debugf("Sent multipart email via SMTP to %s: %s", toEmail, subject)
+		logging.Debugf("Sent multipart email via SMTP to %s: %s", redactEmail(toEmail), subject)
 	}
 	return nil
 }
@@ -181,9 +181,9 @@ func (s *SMTPSender) SendToEmailWithCC(ctx context.Context, toEmail string, ccEm
 	}
 
 	if len(sanitizedCC) > 0 {
-		logging.Debugf("Sent email via SMTP to %s (cc %d): %s", toEmail, len(sanitizedCC), subject)
+		logging.Debugf("Sent email via SMTP to %s (cc %d): %s", redactEmail(toEmail), len(sanitizedCC), subject)
 	} else {
-		logging.Debugf("Sent email via SMTP to %s: %s", toEmail, subject)
+		logging.Debugf("Sent email via SMTP to %s: %s", redactEmail(toEmail), subject)
 	}
 	return nil
 }
@@ -519,15 +519,12 @@ func (s *SMTPSender) SendPurchaseFailedNotification(ctx context.Context, data No
 
 // SendRIExchangePendingApproval sends an RI exchange approval email via SMTP
 // as multipart/alternative (plain-text + styled HTML). The body carries live
-// approval tokens, so it is sent only to the resolved recipient (the
-// submitter's notification email, falling back to the static SMTP notify
-// address) plus the deduplicated CC list; it never broadcasts. Returns
-// ErrNoRecipient when neither address is configured. Issue #296.
+// approval tokens, so it is sent only to data.RecipientEmail plus the
+// deduplicated CC list; it never broadcasts. Returns ErrNoRecipient when
+// data.RecipientEmail is empty, matching the SES sender: the static notify
+// inbox is not a fallback for token-bearing mail (issue #111). Issue #296.
 func (s *SMTPSender) SendRIExchangePendingApproval(ctx context.Context, data RIExchangeNotificationData) error {
 	recipient := data.RecipientEmail
-	if recipient == "" {
-		recipient = s.notifyEmail
-	}
 	if recipient == "" {
 		return ErrNoRecipient
 	}
@@ -557,10 +554,11 @@ func (s *SMTPSender) SendRIExchangeCompleted(ctx context.Context, data RIExchang
 	return s.SendToEmail(ctx, s.notifyEmail, subject, body)
 }
 
-// SendPurchaseApprovalRequest sends a purchase approval request email via SMTP.
-// Prefers data.RecipientEmail (the submitter's notification email from app
-// settings) over the static SMTP-configured s.notifyEmail so the approval token
-// lands in the right inbox per submitter.
+// SendPurchaseApprovalRequest sends a purchase approval request email via SMTP
+// to data.RecipientEmail (the submitter's notification email from app
+// settings). Returns ErrNoRecipient when it is empty, matching the SES sender:
+// the one-time approval token must not fall back to the static notify inbox
+// (issue #111).
 //
 // Mute check + List-Unsubscribe mirror the SES (*Sender) path: if the recipient
 // has opted out of purchase_approvals the email is silently skipped, muted CC
@@ -568,9 +566,6 @@ func (s *SMTPSender) SendRIExchangeCompleted(ctx context.Context, data RIExchang
 // when an unsubscribe base URL is configured.
 func (s *SMTPSender) SendPurchaseApprovalRequest(ctx context.Context, data NotificationData) error {
 	recipient := data.RecipientEmail
-	if recipient == "" {
-		recipient = s.notifyEmail
-	}
 	if recipient == "" {
 		return ErrNoRecipient
 	}
@@ -653,36 +648,32 @@ func buildListUnsubscribeHeaderLines(headerValue, postValue string) string {
 }
 
 // SendPurchaseScheduledNotification sends the Gmail-style pre-fire delay
-// notification email via SMTP. Mirrors the Sender implementation's behavior.
+// notification email via SMTP. Mirrors the Sender implementation: the body
+// carries a live, execution-scoped revoke link, so an empty
+// data.RecipientEmail returns ErrNoRecipient instead of falling back to the
+// static notify inbox (issue #111).
 func (s *SMTPSender) SendPurchaseScheduledNotification(ctx context.Context, data NotificationData) error {
+	if data.RecipientEmail == "" {
+		return ErrNoRecipient
+	}
 	body, err := RenderPurchaseScheduledDelayEmail(data)
 	if err != nil {
 		return fmt.Errorf("failed to render purchase scheduled delay email: %w", err)
 	}
 	subject := fmt.Sprintf("CUDly - Purchase Scheduled for %s", data.RevocationWindowClosesAt)
-	recipient := data.RecipientEmail
-	if recipient == "" {
-		recipient = s.notifyEmail
-	}
-	if recipient == "" {
-		return ErrNoRecipient
-	}
-	return s.SendToEmailWithCC(ctx, recipient, data.CCEmails, subject, body)
+	return s.SendToEmailWithCC(ctx, data.RecipientEmail, data.CCEmails, subject, body)
 }
 
 // SendPurchaseExecutedNotification sends the post-execution notification email
-// via SMTP. Mirrors SendPurchaseApprovalRequest: prefers data.RecipientEmail
-// over the static s.notifyEmail. Issue #291.
+// via SMTP to data.RecipientEmail. The body can carry a revocation token, so an
+// empty recipient returns ErrNoRecipient, matching the SES sender, instead of
+// falling back to the static notify inbox (issue #111). Issue #291.
 func (s *SMTPSender) SendPurchaseExecutedNotification(ctx context.Context, data NotificationData) error {
-	recipient := data.RecipientEmail
-	if recipient == "" {
-		recipient = s.notifyEmail
-	}
-	if recipient == "" {
+	if data.RecipientEmail == "" {
 		return ErrNoRecipient
 	}
 	subject := buildExecutedNotificationSubject(data)
-	return sendPurchaseExecutedNotificationVia(ctx, s, recipient, subject, data)
+	return sendPurchaseExecutedNotificationVia(ctx, s, data.RecipientEmail, subject, data)
 }
 
 // SendRegistrationReceivedNotification sends an email to CUDly administrators

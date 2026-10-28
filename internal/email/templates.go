@@ -923,7 +923,7 @@ To view or manage this purchase:
 // RenderPurchaseScheduledDelayEmail renders the plain-text scheduled-delay
 // notification email.
 func RenderPurchaseScheduledDelayEmail(data NotificationData) (string, error) {
-	return renderTemplate("purchase_scheduled_delay", purchaseScheduledDelayTemplate, data)
+	return renderTextTemplate("purchase_scheduled_delay", purchaseScheduledDelayTemplate, data)
 }
 
 // SendPurchaseScheduledNotification sends the Gmail-style pre-fire delay
@@ -1062,7 +1062,7 @@ const purchaseExecutedNotificationHTMLTemplate = `<!DOCTYPE html>
 // RenderPurchaseExecutedNotificationEmail renders the plain-text half of
 // the post-execution notification email (issue #291).
 func RenderPurchaseExecutedNotificationEmail(data NotificationData) (string, error) {
-	return renderTemplate("purchase-executed-notification", purchaseExecutedNotificationTemplate, data)
+	return renderTextTemplate("purchase-executed-notification", purchaseExecutedNotificationTemplate, data)
 }
 
 // RenderPurchaseExecutedNotificationEmailHTML renders the HTML half of the
