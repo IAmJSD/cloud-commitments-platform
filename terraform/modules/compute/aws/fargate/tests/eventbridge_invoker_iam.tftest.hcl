@@ -1,4 +1,4 @@
-# The four EventBridge invoker roles (#292). Each may run exactly the module's
+# The five EventBridge invoker roles (#292, plus the shared sweeps role of #712). Each may run exactly the module's
 # task definition, only in the module's cluster, and may pass the task and
 # task-execution roles only to ECS tasks. Without the two conditions an actor
 # who can create EventBridge targets in the account can run the task definition
@@ -10,7 +10,7 @@
 # overrides give those resources distinct, well-formed ARNs: the provider
 # validates ARN-typed arguments, and two roles sharing one mock ARN would let
 # a PassRole statement naming only one of them pass. Roles not overridden
-# (the four invoker roles) share the default, which nothing asserts on.
+# (the five invoker roles) share the default, which nothing asserts on.
 mock_provider "aws" {
   mock_resource "aws_iam_role" {
     defaults = { arn = "arn:aws:iam::123456789012:role/cudly-prod-abcd1234-fargate-mock" }
@@ -135,5 +135,22 @@ run "invoker_roles_are_scoped" {
       [toset(s.Resource), try(s.Condition.StringEquals["iam:PassedToService"], null)] if contains(s.Action, "iam:PassRole")
     ] == [[toset([aws_iam_role.task_execution.arn, aws_iam_role.task.arn]), "ecs-tasks.amazonaws.com"]]
     error_message = "eventbridge_fire_scheduled_purchases: iam:PassRole must be one statement on the task and task-execution roles, conditioned on StringEquals iam:PassedToService = ecs-tasks.amazonaws.com."
+  }
+
+  # sweeps (one role for every sweep in sweeps.tf; reap, analytics_collect
+  # and finalize_revocations are on by default, so the role exists here)
+  assert {
+    condition = [
+      for s in jsondecode(aws_iam_role_policy.eventbridge_sweeps[0].policy).Statement :
+      [s.Resource, try(s.Condition.ArnEquals["ecs:cluster"], null)] if contains(s.Action, "ecs:RunTask")
+    ] == [[aws_ecs_task_definition.main.arn, aws_ecs_cluster.main.arn]]
+    error_message = "eventbridge_sweeps: ecs:RunTask must be one statement on the module's task definition, conditioned on ArnEquals ecs:cluster = the module's cluster."
+  }
+  assert {
+    condition = [
+      for s in jsondecode(aws_iam_role_policy.eventbridge_sweeps[0].policy).Statement :
+      [toset(s.Resource), try(s.Condition.StringEquals["iam:PassedToService"], null)] if contains(s.Action, "iam:PassRole")
+    ] == [[toset([aws_iam_role.task_execution.arn, aws_iam_role.task.arn]), "ecs-tasks.amazonaws.com"]]
+    error_message = "eventbridge_sweeps: iam:PassRole must be one statement on the task and task-execution roles, conditioned on StringEquals iam:PassedToService = ecs-tasks.amazonaws.com."
   }
 }
