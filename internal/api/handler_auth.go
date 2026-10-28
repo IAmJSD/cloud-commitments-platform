@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/auth"
@@ -36,6 +37,9 @@ func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLReques
 		return nil, err
 	}
 	loginReq.Password = decoded
+	if formErr := validateLoginForm(&loginReq); formErr != nil {
+		return nil, formErr
+	}
 
 	if limitErr := h.checkLoginMFARateLimit(ctx, loginReq.Email, loginReq.MFACode); limitErr != nil {
 		return nil, limitErr
@@ -43,24 +47,54 @@ func (h *Handler) login(ctx context.Context, req *events.LambdaFunctionURLReques
 
 	response, err := h.auth.Login(ctx, loginReq)
 	if err != nil {
-		// Map MFA sentinels to machine-readable error codes so the
-		// frontend can detect "MFA required" / "invalid MFA code"
-		// without substring-matching the human message (issue #497).
-		// Both keep the 401 status — the password leg passed, but
-		// the request is not authorized until the MFA leg is too.
-		if errors.Is(err, auth.ErrMFARequired) {
-			return nil, NewClientError(401, "mfa_required")
-		}
-		if errors.Is(err, auth.ErrInvalidMFACode) {
-			return nil, NewClientError(401, "invalid_mfa_code")
-		}
-		// All other auth failures (wrong password, account not found, locked, etc.)
-		// collapse to a single opaque 401. Never forward err.Error() verbatim - it
-		// may reveal internal account state.
-		return nil, NewClientError(401, "invalid credentials")
+		return nil, mapLoginError(err)
 	}
 
 	return response, nil
+}
+
+// validateLoginForm rejects a login body that mixes the two MFA forms: the
+// mfa_token form (issue #134) carries email, mfa_token and mfa_code and no
+// password; every other body is the password form.
+func validateLoginForm(req *LoginRequest) error {
+	if req.MFAToken == "" {
+		return nil
+	}
+	if req.Password != "" {
+		return NewClientError(400, "send either password or mfa_token, not both")
+	}
+	if req.Email == "" || req.MFACode == "" {
+		return NewClientError(400, "mfa_token requires email and mfa_code")
+	}
+	return nil
+}
+
+// mapLoginError maps a Login failure to its client response. The MFA
+// sentinels become machine-readable error codes so the frontend can detect
+// "MFA required" / "invalid MFA code" / "start again" without
+// substring-matching the human message (issues #497, #134). They keep the
+// 401 status: the request is not authorized until the MFA leg passes too.
+func mapLoginError(err error) error {
+	var challenge *auth.MFARequiredError
+	if errors.As(err, &challenge) {
+		return NewClientErrorWithDetails(401, "mfa_required", map[string]any{
+			"mfa_token":            challenge.Token,
+			"mfa_token_expires_at": challenge.ExpiresAt.UTC().Format(time.RFC3339),
+		})
+	}
+	if errors.Is(err, auth.ErrMFARequired) {
+		return NewClientError(401, "mfa_required")
+	}
+	if errors.Is(err, auth.ErrInvalidMFACode) {
+		return NewClientError(401, "invalid_mfa_code")
+	}
+	if errors.Is(err, auth.ErrInvalidMFAToken) {
+		return NewClientError(401, "invalid_mfa_token")
+	}
+	// All other auth failures (wrong password, account not found, locked, etc.)
+	// collapse to a single opaque 401. Never forward err.Error() verbatim - it
+	// may reveal internal account state.
+	return NewClientError(401, "invalid credentials")
 }
 
 func (h *Handler) logout(ctx context.Context, req *events.LambdaFunctionURLRequest) (any, error) {

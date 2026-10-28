@@ -377,7 +377,14 @@ func TestService_Login_MFA(t *testing.T) {
 		testUser := createTestUser(t, "SecurePass@123")
 		testUser.MFAEnabled = true
 
+		testUser.PasswordVersion = 7
+
 		mockStore.On("GetUserByEmail", ctx, "test@example.com").Return(testUser, nil).Once()
+		var storedHash string
+		expiresAt := time.Now().Add(MFALoginTokenTTL)
+		mockStore.On("CreateMFALoginToken", ctx, mock.AnythingOfType("string"), testUser.ID, int64(7), MFALoginTokenTTL).
+			Run(func(args mock.Arguments) { storedHash = args.String(1) }).
+			Return(expiresAt, nil).Once()
 
 		req := LoginRequest{
 			Email:    "test@example.com",
@@ -390,6 +397,35 @@ func TestService_Login_MFA(t *testing.T) {
 		assert.Nil(t, resp)
 		assert.ErrorIs(t, err, ErrMFARequired)
 
+		// Issue #134: the answer carries a continuation token; only its
+		// hash reaches the store.
+		var challenge *MFARequiredError
+		require.ErrorAs(t, err, &challenge)
+		require.NotEmpty(t, challenge.Token)
+		assert.Equal(t, hashSessionToken(challenge.Token), storedHash)
+		assert.NotEqual(t, challenge.Token, storedHash)
+		assert.Equal(t, expiresAt, challenge.ExpiresAt)
+
+		mockStore.AssertExpectations(t)
+	})
+
+	// The token is an addition: if it cannot be stored, the answer is the
+	// bare mfa_required and the password + code form still signs in.
+	t.Run("MFA required without token when the store fails", func(t *testing.T) {
+		mockStore := new(MockStore)
+		service := createTestService(mockStore, new(MockEmailSender))
+
+		testUser := createTestUser(t, "SecurePass@123")
+		testUser.MFAEnabled = true
+
+		mockStore.On("GetUserByEmail", ctx, "test@example.com").Return(testUser, nil).Once()
+		mockStore.On("CreateMFALoginToken", ctx, mock.Anything, testUser.ID, mock.Anything, MFALoginTokenTTL).
+			Return(time.Time{}, errors.New("db down")).Once()
+
+		_, err := service.Login(ctx, LoginRequest{Email: "test@example.com", Password: "SecurePass@123"})
+		require.ErrorIs(t, err, ErrMFARequired)
+		var challenge *MFARequiredError
+		assert.False(t, errors.As(err, &challenge), "no token when none was stored")
 		mockStore.AssertExpectations(t)
 	})
 }
@@ -511,6 +547,8 @@ func TestLogin_WithMFA_MissingCode(t *testing.T) {
 	}
 
 	mockStore.On("GetUserByEmail", ctx, "mfa@example.com").Return(user, nil)
+	mockStore.On("CreateMFALoginToken", ctx, mock.Anything, "user-123", mock.Anything, MFALoginTokenTTL).
+		Return(time.Now().Add(MFALoginTokenTTL), nil).Once()
 
 	req := LoginRequest{
 		Email:    "mfa@example.com",
