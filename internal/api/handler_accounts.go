@@ -614,6 +614,15 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 		return nil, err
 	}
 
+	// The provider is fixed when the account is created: UpdateCloudAccount
+	// does not write it, and credentials, service overrides and plan
+	// memberships all depend on it. Refuse a change rather than echo back a
+	// provider that was never saved.
+	if req.Provider != existing.Provider {
+		return nil, NewClientError(400, fmt.Sprintf(
+			"provider cannot be changed (this account is %s); delete the account and add it again under the new provider", existing.Provider))
+	}
+
 	account := cloudAccountFromRequest(req)
 	account.ID = id
 	account.CreatedAt = existing.CreatedAt

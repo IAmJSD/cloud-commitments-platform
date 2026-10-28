@@ -726,6 +726,10 @@ type StoreInterface interface {
 	// TransitionRegistrationStatus atomically updates a registration's workflow fields.
 	// actor is the UUID of the reviewer (nil for system-initiated transitions).
 	TransitionRegistrationStatus(ctx context.Context, reg *AccountRegistration, fromStatus string, actor *string) error
+	// ApproveAccountRegistration atomically approves a pending registration,
+	// creates its cloud account and links them. Returns ErrRegistrationConflict
+	// when the registration is no longer pending; on any error nothing is saved.
+	ApproveAccountRegistration(ctx context.Context, reg *AccountRegistration, account *CloudAccount, actor *string) error
 	DeleteAccountRegistration(ctx context.Context, id string) error
 
 	// Purchase suppressions. Written inside a WithTx block during bulk

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -243,6 +244,34 @@ func (s *PostgresStore) TransitionRegistrationStatus(ctx context.Context, reg *A
 		return ErrRegistrationConflict
 	}
 	return nil
+}
+
+// ApproveAccountRegistration moves a pending registration to approved, creates
+// its cloud account and links the two, all in one transaction. If any step
+// fails nothing is written, so a registration is never left approved with no
+// account (issue #1102).
+//
+// The status change runs first and is conditional on status = 'pending'. Its
+// row lock makes a concurrent approve or reject of the same registration wait
+// for this transaction: after a commit the other request matches no row and
+// gets ErrRegistrationConflict; after a rollback it proceeds as if this one
+// never ran. A failed account insert (for example the provider + external_id
+// already being registered) returns the driver error and leaves the
+// registration pending.
+func (s *PostgresStore) ApproveAccountRegistration(ctx context.Context, reg *AccountRegistration, account *CloudAccount, actor *string) error {
+	return s.WithTx(ctx, func(tx pgx.Tx) error {
+		txStore := &PostgresStore{db: tx}
+		reg.Status = "approved"
+		reg.CloudAccountID = nil
+		if err := txStore.TransitionRegistrationStatus(ctx, reg, "pending", actor); err != nil {
+			return err
+		}
+		if err := txStore.CreateCloudAccount(ctx, account); err != nil {
+			return err
+		}
+		reg.CloudAccountID = &account.ID
+		return txStore.UpdateAccountRegistration(ctx, reg)
+	})
 }
 
 // DeleteAccountRegistration removes a registration record by ID.
