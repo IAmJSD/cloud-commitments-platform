@@ -42,12 +42,16 @@ func executedNotificationData() NotificationData {
 	}
 }
 
-// escapedToken is the exact rendered form of the test token after
+// escapedToken is the exact rendered form of the test token in the HTML half:
 // url.QueryEscape (the {{urlquery}} func) followed by html/template's
 // contextual auto-escaping: space -> '+' -> '&#43;', '/' -> %2F, '+' -> %2B,
-// '=' -> %3D. Both the text and HTML halves use html/template, so both render
-// the token identically.
+// '=' -> %3D. A mail client decodes the &#43; entity back to '+'.
 const escapedToken = "tok&#43;en%2Fwith%2Bspecial%3Dchars"
+
+// textToken is the rendered form of the test token in the plain-text half,
+// which uses text/template: url.QueryEscape only, no HTML entities, so the
+// link a recipient copies is the working one (issue #111).
+const textToken = "tok+en%2Fwith%2Bspecial%3Dchars"
 
 // rawTokenFragment is a substring of the un-escaped token that MUST NOT appear
 // verbatim in a correctly-escaped render (it contains a raw '/').
@@ -66,7 +70,8 @@ func TestRenderPurchaseExecutedNotificationEmail_RevokeURLPresent(t *testing.T) 
 	assert.Contains(t, body, "%2F", "'/' must be percent-encoded")
 	assert.Contains(t, body, "%2B", "'+' must be percent-encoded")
 	assert.Contains(t, body, "%3D", "'=' must be percent-encoded")
-	assert.Contains(t, body, escapedToken)
+	assert.Contains(t, body, "?token="+textToken+"\n", "plain-text revoke link must be the working URL, without HTML entities")
+	assert.NotContains(t, body, "&#43;")
 	// ...and the raw token never leaks verbatim into the URL.
 	assert.NotContains(t, body, rawTokenFragment)
 
@@ -165,7 +170,7 @@ func TestRenderPurchaseExecutedNotification_Partial(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(text, "[CUDly] Purchase partially executed"))
 	assert.Contains(t, text, "Not every commitment in this purchase went through.")
-	assert.Contains(t, text, escapedToken, "the partial run stays revocable")
+	assert.Contains(t, text, textToken, "the partial run stays revocable")
 
 	html, err := RenderPurchaseExecutedNotificationEmailHTML(data)
 	require.NoError(t, err)

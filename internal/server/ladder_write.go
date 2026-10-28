@@ -11,7 +11,7 @@ import (
 	pkgladder "github.com/LeanerCloud/cloud-commitments-go/pkg/ladder"
 	awsprovider "github.com/LeanerCloud/cloud-commitments-go/providers/aws"
 	awsladder "github.com/LeanerCloud/cloud-commitments-go/providers/aws/ladder"
-	"github.com/LeanerCloud/cloud-commitments-go/providers/aws/recommendations"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/api"
 )
 
 // exchangeRunnerAdapter bridges internal/server wiring (exchange store, EC2 exchange
@@ -44,18 +44,13 @@ func (a *exchangeRunnerAdapter) RunAutoExchange(ctx context.Context, cfg exchang
 		return nil, fmt.Errorf("exchangeRunnerAdapter: load AWS config: %w", err)
 	}
 
-	ec2Client := awsprovider.NewEC2ClientDirect(awsCfg)
-	recsClient := awsprovider.NewRecommendationsClientDirect(awsCfg)
-	clients := riExchangeClients{
-		listConvertibleRIs: ec2Client.ListConvertibleReservedInstances,
-		getRIUtilization: func(ctx context.Context, lookbackDays int) ([]recommendations.RIUtilization, error) {
-			return recsClient.GetRIUtilization(ctx, lookbackDays, a.region)
-		},
-		exchangeClient: exchange.NewExchangeClient(awsCfg),
-		lookupOffering: newConvertibleOfferingLookup(ec2Client),
-		accountID:      a.accountID,
-		region:         a.region,
-	}
+	clients := newRIExchangeClients(
+		awsprovider.NewEC2ClientDirect(awsCfg),
+		awsprovider.NewRecommendationsClientDirect(awsCfg),
+		exchange.NewExchangeClient(awsCfg),
+		a.region,
+		a.accountID,
+	)
 	return a.run(ctx, cfg, clients, ladderRunID, dryRun)
 }
 
@@ -84,18 +79,19 @@ func (a *exchangeRunnerAdapter) run(ctx context.Context, cfg exchange.RIExchange
 	store := newConfigExchangeStoreAdapter(a.app.Config)
 
 	return exchange.RunAutoExchange(ctx, exchange.RunAutoExchangeParams{
-		Store:          store,
-		ExchangeClient: clients.exchangeClient,
-		LookupOffering: clients.lookupOffering,
-		RIs:            riInfos,
-		Utilization:    utilInfos,
-		Config:         cfg,
-		AccountID:      clients.accountID,
-		Region:         clients.region,
-		DashboardURL:   a.app.appConfig.DashboardURL,
-		RIMetadata:     riMetadata,
-		LadderRunID:    ladderRunID,
-		DryRun:         dryRun,
+		Store:                store,
+		ExchangeClient:       clients.exchangeClient,
+		LookupOffering:       clients.lookupOffering,
+		RIs:                  riInfos,
+		Utilization:          utilInfos,
+		OfferedInstanceTypes: api.OfferedInstanceTypes(ctx, clients.region, clients.offeredInstanceTypes),
+		Config:               cfg,
+		AccountID:            clients.accountID,
+		Region:               clients.region,
+		DashboardURL:         a.app.appConfig.DashboardURL,
+		RIMetadata:           riMetadata,
+		LadderRunID:          ladderRunID,
+		DryRun:               dryRun,
 	})
 }
 
