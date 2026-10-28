@@ -44,6 +44,7 @@ jest.mock('../confirmDialog', () => ({ confirmDialog: jest.fn(() => Promise.reso
 import * as api from '../api';
 import { showToast } from '../toast';
 import { CANONICAL_PLAN_SERVICES } from '../lib/plan-service-ids';
+import { flushPromises } from './flush-promises';
 
 function loadRealIndexBody(): string {
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
@@ -114,7 +115,7 @@ describe('plan modal service ids (#608)', () => {
 
     await loadPlans();
     (document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement).click();
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await flushPromises();
 
     const select = document.getElementById('plan-service') as HTMLSelectElement;
     expect((document.getElementById('plan-provider') as HTMLSelectElement).value).toBe('azure');
@@ -132,7 +133,7 @@ describe('plan modal service ids (#608)', () => {
     (api.getPlan as jest.Mock).mockResolvedValue(plan);
     await loadPlans();
     (document.querySelector('[data-action="edit-plan"]') as HTMLButtonElement).click();
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await flushPromises();
   }
 
   test.each([

@@ -11,14 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestMigration_PurchaseExecutionsOutcomeSettlement covers 000152 up, down and
+// TestMigration_PurchaseExecutionsOutcomeSettlement covers 000156 up, down and
 // the all-or-nothing CHECK (#999).
 func TestMigration_PurchaseExecutionsOutcomeSettlement(t *testing.T) {
 	ctx := context.Background()
 	container := testhelpers.RequirePostgresContainer(ctx, t)
 	t.Cleanup(func() { require.NoError(t, container.Cleanup(context.Background())) })
 	pool, path := container.DB.Pool(), getMigrationsPath()
-	const version = 152
+	const version = 156
 	prev := previousMigrationVersion(t, version)
 
 	columns := func() int {
@@ -31,7 +31,7 @@ func TestMigration_PurchaseExecutionsOutcomeSettlement(t *testing.T) {
 	}
 
 	require.NoError(t, migrations.MigrateToVersion(ctx, pool, path, prev))
-	require.Zero(t, columns(), "before 000152 the columns must not exist")
+	require.Zero(t, columns(), "before 000156 the columns must not exist")
 	_, err := pool.Exec(ctx, `
 		INSERT INTO purchase_executions (execution_id, status, step_number, scheduled_date, recommendations)
 		VALUES ('00000000-0000-0000-0000-0000000009a1', 'failed', 1, now(), '[]')`)

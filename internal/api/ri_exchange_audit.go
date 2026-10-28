@@ -10,7 +10,6 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/exchange"
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/logging"
-	azurecompute "github.com/LeanerCloud/cloud-commitments-go/providers/azure/services/compute"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/config"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/ctxutil"
 	"github.com/google/uuid"
@@ -200,7 +199,7 @@ func awsDirectExchangeOutcome(exchangeID string, quote *exchange.ExchangeQuoteSu
 
 // azureDirectExchangeAudit builds the audit row for a direct Azure execute
 // from the request and the fresh re-quote that cleared the guardrails.
-func azureDirectExchangeAudit(session *Session, accountID string, body AzureExecuteExchangeRequestBody, maxRat *big.Rat, preview *azurecompute.ExchangePreview) *config.RIExchangeDirectExecution {
+func azureDirectExchangeAudit(session *Session, accountID string, body AzureExecuteExchangeRequestBody, maxRat *big.Rat, preview *azureExchangePreview) *config.RIExchangeDirectExecution {
 	sourceIDs := make([]string, 0, len(body.Sources))
 	for _, s := range body.Sources {
 		sourceIDs = append(sourceIDs, s.ReservationID)
@@ -223,7 +222,7 @@ func azureDirectExchangeAudit(session *Session, accountID string, body AzureExec
 }
 
 // azureDirectExchangeOutcome builds the outcome of a direct Azure execute.
-func azureDirectExchangeOutcome(result *azurecompute.ExchangeResult, providerErr, mapped error) config.RIExchangeDirectOutcome {
+func azureDirectExchangeOutcome(result *azureExchangeResult, providerErr, mapped error) config.RIExchangeDirectOutcome {
 	if providerErr != nil {
 		return config.RIExchangeDirectOutcome{
 			Status: directExchangeFailureStatus(mapped),

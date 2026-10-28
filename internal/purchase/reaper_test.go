@@ -98,6 +98,7 @@ func TestReapStuckExecutions_StaleApprovedFlippedToFailed(t *testing.T) {
 func TestReapStuckExecutions_EC2RowIsNotAdvertisedAsSafeToRetry(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
+	assertMocksOnCleanup(t, store)
 	reapAfter := 10 * time.Minute
 
 	row := stuckExecWithAWSEC2Rec("exec-ec2", "running")

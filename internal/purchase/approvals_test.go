@@ -33,6 +33,7 @@ func newApproveManager(t *testing.T) (*Manager, *MockConfigStore, *MockEmailSend
 	prov := new(MockProvider)
 	svc := new(MockServiceClient)
 	factory := new(MockProviderFactory)
+	assertMocksOnCleanup(t, store, sender, prov, svc, factory)
 	factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(prov, nil).Maybe()
 	prov.On("GetServiceClient", mock.Anything, common.ServiceEC2, "us-east-1").Return(svc, nil).Maybe()
 	svc.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.Anything).
@@ -454,6 +455,7 @@ func TestManager_ApproveAndExecute_ReturnsRowOnExecutionFailure(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
 	factory := new(MockProviderFactory)
+	assertMocksOnCleanup(t, store, factory)
 	factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(nil, errors.New("credentials rejected"))
 	manager := &Manager{config: store, email: allowFailedNotification(new(MockEmailSender)), providerFactory: factory}
 
@@ -479,6 +481,7 @@ func TestManager_ApproveExecution_ReturnsRowOnExecutionFailure(t *testing.T) {
 	ctx := context.Background()
 	store := new(MockConfigStore)
 	factory := new(MockProviderFactory)
+	assertMocksOnCleanup(t, store, factory)
 	factory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(nil, errors.New("credentials rejected"))
 	manager := &Manager{config: store, email: allowFailedNotification(new(MockEmailSender)), providerFactory: factory}
 

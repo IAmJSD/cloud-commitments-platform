@@ -17,6 +17,7 @@ import (
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/credentials"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/email"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/oidc"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/schedexpr"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -157,6 +158,11 @@ type Handler struct {
 	// revoke handlers use the production Azure credential and client
 	// constructors.
 	azureRevokeFactory *azureRevokeClientFactory
+
+	// collectionSchedule is HandlerConfig.RecommendationSchedule parsed once
+	// at construction. Nil when the schedule is unset or unparsable, which
+	// makes next_collection_at null.
+	collectionSchedule schedexpr.Schedule
 }
 
 // getRIUtilizationCache returns the Postgres-backed TTL cache for Cost
@@ -210,6 +216,7 @@ func NewHandler(cfg HandlerConfig) *Handler {
 		commitmentOpts:      cfg.CommitmentOpts,
 		encryptionKeySource: cfg.EncryptionKeySource,
 		isLambda:            cfg.IsLambda,
+		collectionSchedule:  parseCollectionSchedule(cfg.RecommendationSchedule),
 	}
 
 	// Pre-load API key (with a 5s timeout to avoid stalling cold-start indefinitely)

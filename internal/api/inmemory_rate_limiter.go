@@ -21,7 +21,11 @@ const inMemoryRateLimitMaxEntries = 500
 type InMemoryRateLimiter struct {
 	attempts map[string]*inMemoryRateLimitEntry
 	limits   map[string]RateLimitConfig
-	mu       sync.Mutex
+	// now is the limiter's clock. Nil (the production default) means
+	// time.Now; tests inject a fake clock so window expiry and eviction are
+	// driven by advancing it, not by sleeping. Read it through rl.clock().
+	now func() time.Time
+	mu  sync.Mutex
 }
 
 type inMemoryRateLimitEntry struct {
@@ -46,6 +50,15 @@ func (rl *InMemoryRateLimiter) SetLimit(endpoint string, config RateLimitConfig)
 		rl.limits = make(map[string]RateLimitConfig)
 	}
 	rl.limits[endpoint] = config
+}
+
+// clock returns the limiter's current time: the injected now func when a
+// test set one, time.Now otherwise.
+func (rl *InMemoryRateLimiter) clock() time.Time {
+	if rl.now != nil {
+		return rl.now()
+	}
+	return time.Now()
 }
 
 // configFor returns the rate limit configuration for an endpoint, falling back
@@ -113,7 +126,7 @@ func (rl *InMemoryRateLimiter) Allow(ctx context.Context, key, endpoint string) 
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
-	now := time.Now()
+	now := rl.clock()
 	rl.evictIfAtCap(now)
 
 	entry, exists := rl.attempts[id]

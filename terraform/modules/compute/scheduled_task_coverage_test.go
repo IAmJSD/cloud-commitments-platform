@@ -47,11 +47,9 @@ var (
 
 // knownGaps documents what is not wired yet, per platform and dimension. Each
 // PR that wires a task removes it here; the test fails when actual != documented.
-// aws/cleanup-lambda and gcp/cleanup-function run cleanup outside the server
-// task and are not scanned, so cleanup shows as a gap on AWS and GCP.
+// gcp/cleanup-function runs cleanup outside the server task and is not
+// scanned, so cleanup shows as a gap on GCP.
 var knownGaps = map[string]map[string][]string{
-	"aws-fargate": {dimTask: {"analytics_collect", "cleanup", "finalize_revocations",
-		"process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}},
 	"gcp-cloud-run": {dimTask: sevenGCP},
 	"gcp-gke":       {dimTask: sevenGCP},
 	"azure-container-apps": {dimTask: {"analytics_collect", "finalize_revocations", "fire_scheduled_purchases",
@@ -59,16 +57,17 @@ var knownGaps = map[string]map[string][]string{
 }
 
 // aws platforms are also checked against terraform/environments/aws: envBlock
-// is the module block in compute.tf, needsPermission whether sweeps.tf must
-// hold an aws_lambda_permission (Lambda only). cronJob platforms schedule
-// their sweep_tasks through a Kubernetes CronJob in scheduled-tasks.tf.
+// is the module block in compute.tf, lambda whether sweeps.tf targets a
+// Lambda (action key plus aws_lambda_permission) rather than ECS RunTask.
+// cronJob platforms schedule their sweep_tasks through a Kubernetes CronJob
+// in scheduled-tasks.tf.
 type platform struct {
-	name, dir, envBlock           string
-	aws, needsPermission, cronJob bool
+	name, dir, envBlock  string
+	aws, lambda, cronJob bool
 }
 
 var platforms = []platform{
-	{name: "aws-lambda", dir: "aws/lambda", aws: true, envBlock: "compute_lambda", needsPermission: true},
+	{name: "aws-lambda", dir: "aws/lambda", aws: true, envBlock: "compute_lambda", lambda: true},
 	{name: "aws-fargate", dir: "aws/fargate", aws: true, envBlock: "compute_fargate"},
 	{name: "cloudformation", dir: "../../../cloudformation/stacks/CUDly"},
 	{name: "gcp-cloud-run", dir: "gcp/cloud-run"},
@@ -322,7 +321,7 @@ func TestRequiredTasksWiredPerPlatform(t *testing.T) {
 			t.Errorf("%s: %s (missing now: %v)", p.name, prob, missing)
 		}
 		if p.aws {
-			sweeps, err := sweepProblems(p.dir, p.needsPermission)
+			sweeps, err := sweepProblems(p.dir, p.lambda)
 			if err != nil {
 				t.Errorf("%s: %v", p.name, err)
 			}

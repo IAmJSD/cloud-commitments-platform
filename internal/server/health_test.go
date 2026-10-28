@@ -76,6 +76,18 @@ func (m *mockAuthStoreForHealth) ClaimTOTPCounter(context.Context, string, int64
 	return true, nil
 }
 
+func (m *mockAuthStoreForHealth) CreateMFALoginToken(context.Context, string, string, int64, time.Duration) (time.Time, error) {
+	return time.Time{}, nil
+}
+
+func (m *mockAuthStoreForHealth) ClaimMFALoginTokenAttempt(context.Context, string, int) (*auth.MFALoginToken, error) {
+	return nil, nil
+}
+
+func (m *mockAuthStoreForHealth) ConsumeMFALoginToken(context.Context, string) (bool, error) {
+	return false, nil
+}
+
 func (m *mockAuthStoreForHealth) RecordFailedLogin(context.Context, string) error {
 	return nil
 }

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/database"
 	"github.com/LeanerCloud/cloud-commitments-platform/internal/secrets"
+	"github.com/LeanerCloud/cloud-commitments-platform/internal/testutil/goroutines"
 )
 
 // blockingResolver holds ensureDB inside secret resolution, the one step with no
@@ -97,28 +100,41 @@ func sendSIGTERM(t *testing.T) {
 // is still inside ensureDB, because both touch app.DB. It also pins the order:
 // the listener is closed (Shutdown ran) while the initializer is still parked,
 // so the wait comes after draining, not before.
+//
+// No wall-clock window decides the result (#36): shutdownInitWaitHook marks
+// the wait, and the goroutine dump shows StartHTTPServer blocked in it. Once
+// it is blocked there it cannot return until initDone closes, which needs the
+// test to release the resolver, or the 30s grace period runs out.
 func TestStartHTTPServerWaitsForBackgroundInitOnShutdown(t *testing.T) {
+	atWait := make(chan int64, 1)
+	shutdownInitWaitHook = func() { atWait <- goroutines.CurrentID() }
+	t.Cleanup(func() { shutdownInitWaitHook = nil })
+
 	port, resolver, returned := startServerWithBlockedInit(t)
 	sendSIGTERM(t)
 
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-		if err != nil {
-			break
-		}
-		_ = conn.Close()
-		if time.Now().After(deadline) {
-			t.Fatal("listener still accepting connections while shutdown should have started")
-		}
-		time.Sleep(10 * time.Millisecond)
+	var serverGoroutine int64
+	select {
+	case serverGoroutine = <-atWait:
+	case err := <-returned:
+		t.Fatalf("StartHTTPServer returned (%v) without reaching the wait for the background initializer", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("StartHTTPServer never reached the wait for the background initializer")
 	}
 
+	// The hook runs after Shutdown, so the listener is closed while the
+	// initializer is still parked.
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	if conn, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
+		_ = conn.Close()
+		t.Fatal("listener still accepting connections when StartHTTPServer reached the initializer wait")
+	}
+
+	waitUntilBlockedInStartHTTPServerSelect(t, serverGoroutine, returned)
 	select {
-	case <-returned:
-		t.Fatal("StartHTTPServer returned while background initialization was still running")
-	case <-time.After(300 * time.Millisecond):
+	case err := <-returned:
+		t.Fatalf("StartHTTPServer returned (%v) while background initialization was still running", err)
+	default:
 	}
 
 	resolver.unblock()
@@ -130,6 +146,45 @@ func TestStartHTTPServerWaitsForBackgroundInitOnShutdown(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("StartHTTPServer did not return after the initializer exited")
 	}
+}
+
+// waitUntilBlockedInStartHTTPServerSelect waits until goroutine id is parked
+// in a select directly inside StartHTTPServer. Called after
+// shutdownInitWaitHook fired, the only such select left is the wait for the
+// background initializer. It fails if StartHTTPServer returns first.
+func waitUntilBlockedInStartHTTPServerSelect(t *testing.T, id int64, returned <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if blockedInStartHTTPServerSelect(id) {
+			return
+		}
+		select {
+		case err := <-returned:
+			t.Fatalf("StartHTTPServer returned (%v) instead of waiting for the background initializer", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("StartHTTPServer never blocked waiting for the background initializer")
+		}
+		runtime.Gosched()
+	}
+}
+
+// blockedInStartHTTPServerSelect reports whether goroutine id is parked in a
+// select ("goroutine N [select]:" or "[select, M minutes]:") with
+// StartHTTPServer as its innermost frame.
+func blockedInStartHTTPServerSelect(id int64) bool {
+	for _, g := range goroutines.Snapshot() {
+		if g.ID != id {
+			continue
+		}
+		header, frames, _ := strings.Cut(g.Stack, "\n")
+		topFrame, _, _ := strings.Cut(frames, "\n")
+		return strings.Contains(header, "[select") &&
+			strings.Contains(topFrame, "internal/server.StartHTTPServer(")
+	}
+	return false
 }
 
 // TestStartHTTPServerShutdownWaitIsBounded pins the grace-period bound: an

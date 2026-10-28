@@ -106,6 +106,7 @@ func TestAttachIntegration_EmailFailureLeavesPendingAndNextTickDoesNotResolveAga
 	plan := attachPlanInDB(ctx, t, store, "attach-crash", time.Now().Add(24*time.Hour))
 	res := &fakeResolver{recs: []config.RecommendationRecord{attachRec("rec-a", 2)}}
 	sender := new(MockEmailSender)
+	assertMocksOnCleanup(t, sender)
 	sender.On("SendScheduledPurchaseNotification", ctx, mock.Anything).Return(fmt.Errorf("ses down")).Once()
 	sender.On("SendScheduledPurchaseNotification", ctx, mock.Anything).Return(nil).Once()
 	m := &Manager{config: store, email: sender, resolver: res}

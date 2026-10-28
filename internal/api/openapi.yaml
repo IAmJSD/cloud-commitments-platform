@@ -465,7 +465,8 @@ paths:
         collection error, whether a collection is in flight, and whether the
         last collection was partial (some subscriptions, projects or scopes
         could not be queried, so the stored recommendations under-state the
-        real opportunity).
+        real opportunity). It also reports when the deployment's schedule
+        next triggers a collection, or null when that is unknown.
       responses:
         '200':
           description: Freshness state
@@ -3190,6 +3191,14 @@ paths:
       operationId: login
       tags: [Auth]
       summary: Authenticate and obtain a session token
+      description: >
+        Two request forms. The password form sends email and password, plus
+        mfa_code for an MFA-enrolled account. When the password is right but
+        the account needs a code and none was sent, the 401 body is
+        `mfa_required` with an `mfa_token`: a single-use continuation token
+        valid for 5 minutes and for at most 3 code attempts. The code step
+        then sends email, mfa_token and mfa_code with no password. The
+        password + mfa_code form keeps working.
       security: []
       requestBody:
         required: true
@@ -3207,7 +3216,18 @@ paths:
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
-          $ref: '#/components/responses/Unauthorized'
+          description: >
+            Not signed in. `error` is `mfa_required` (password right, code
+            needed; carries mfa_token unless one could not be stored, in
+            which case resend password + mfa_code), `invalid_mfa_code`
+            (wrong code),
+            `invalid_mfa_token` (the token is unknown, expired, used, out of
+            attempts or not this account's; start again from the password),
+            or `invalid credentials` for every other failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginError'
         '429':
           $ref: '#/components/responses/RateLimited'
         '503':
@@ -6208,16 +6228,41 @@ components:
     # -- Auth ---------------------------------------------------------------
     LoginRequest:
       type: object
-      required: [email, password]
+      description: >
+        Either the password form (email, password, optional mfa_code) or the
+        MFA token form (email, mfa_token, mfa_code). A body with both password
+        and mfa_token is a 400.
+      required: [email]
       properties:
         email:
           type: string
           format: email
         password:
           type: string
-          description: Base64-encoded password
+          description: Base64-encoded password. Required unless mfa_token is sent.
         mfa_code:
           type: string
+          description: TOTP or recovery code. Required with mfa_token.
+        mfa_token:
+          type: string
+          description: >
+            The token from an mfa_required answer. Sent with email and
+            mfa_code in place of password.
+
+    LoginError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          enum: [mfa_required, invalid_mfa_code, invalid_mfa_token, invalid credentials]
+        mfa_token:
+          type: string
+          description: Set with mfa_required. Single use; valid for 5 minutes and 3 code attempts.
+        mfa_token_expires_at:
+          type: string
+          format: date-time
+          description: Set with mfa_required.
 
     LoginResponse:
       type: object
@@ -6982,7 +7027,7 @@ components:
 
     RecommendationsFreshness:
       type: object
-      required: [last_collected_at, last_collection_error, last_collection_started_at, last_collection_partial]
+      required: [last_collected_at, last_collection_error, last_collection_started_at, last_collection_partial, next_collection_at]
       properties:
         last_collected_at:
           type: string
@@ -7000,6 +7045,21 @@ components:
           description: Set while a collection is in flight.
         last_collection_partial:
           $ref: '#/components/schemas/RecommendationsCollectionPartial'
+        next_collection_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            When the deployment's scheduler next triggers a recommendation
+            collection (UTC), computed from the schedule the deployment was
+            given (RECOMMENDATION_SCHEDULE) rather than stored. Null when
+            scheduled collection is off, the schedule is not set or not
+            understood, or the next run cannot be known: an EventBridge
+            rate() schedule counts from when its rule was created, which the
+            server cannot see, so rate() schedules always report null; a
+            cron() schedule gives an exact time. Manual refreshes and
+            on-read background refreshes are not included.
+          example: "2026-10-28T02:00:00Z"
 
     RecommendationsCollectionPartial:
       type: object

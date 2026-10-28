@@ -332,7 +332,10 @@ func stampComputeCapacity(rec *config.RecommendationRecord) {
 // getRecommendationsFreshness returns the cache-freshness state (last
 // successful collection timestamp + most recent collection error) so the
 // frontend can render a "Data from <N> min ago" indicator and surface a
-// warning banner when the last collect was partial or failed.
+// warning banner when the last collect was partial or failed. It also
+// reports when the deployment's schedule fires next (next_collection_at,
+// null when unknown; issue #756), computed from the schedule rather than
+// stored.
 //
 // Gated by view:recommendations permission inside the handler. The route
 // itself inherits AuthAdmin (the router default) so the permission check
@@ -345,6 +348,9 @@ func (h *Handler) getRecommendationsFreshness(ctx context.Context, req *events.L
 	freshness, err := h.config.GetRecommendationsFreshness(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get recommendations freshness: %w", err)
+	}
+	if freshness != nil {
+		freshness.NextCollectionAt = h.NextCollectionAt(h.clock())
 	}
 	return freshness, nil
 }

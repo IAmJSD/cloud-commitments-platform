@@ -143,6 +143,7 @@ func TestResolveAWSProvider_NoSTS(t *testing.T) {
 func TestResolveAWSProvider_RoleARNWithoutARNOnNonHostFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	hostSTS := new(MockSTSClient)
+	assertMocksOnCleanup(t, hostSTS)
 	hostSTS.On("GetCallerIdentity", mock.Anything, mock.Anything).Return(&sts.GetCallerIdentityOutput{Account: aws.String("111111111111")}, nil)
 	m := &Manager{
 		assumeRoleSTS:   new(MockAssumeRoleSTS),
@@ -250,6 +251,7 @@ func TestHandleExecutePurchase_ApprovedStatus(t *testing.T) {
 	mockSTS.On("GetCallerIdentity", mock.Anything, mock.Anything).Return(nil, errors.New("sts error"))
 	mockProv := new(MockProvider)
 	mockSvc := new(MockServiceClient)
+	assertMocksOnCleanup(t, mockEmail, mockFactory, mockSTS, mockProv, mockSvc)
 	mockFactory.On("CreateAndValidateProvider", mock.Anything, "aws", mock.Anything).Return(mockProv, nil)
 	mockProv.On("GetServiceClient", mock.Anything, common.ServiceEC2, "us-east-1").Return(mockSvc, nil)
 	mockSvc.On("PurchaseCommitment", mock.Anything, mock.Anything, mock.Anything).
@@ -277,6 +279,7 @@ func TestHandleExecutePurchase_ApprovedStatus(t *testing.T) {
 func TestHandleExecutePurchase_GetError(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	assertMocksOnCleanup(t, mockStore)
 	mockEmail := new(MockEmailSender)
 
 	mockStore.On("GetExecutionByID", ctx, "exec-err").Return(nil, errors.New("db error"))
@@ -303,6 +306,7 @@ func TestHandleExecutePurchase_SaveError(t *testing.T) {
 	mockEmail := allowFailedNotification(new(MockEmailSender))
 	mockFactory := new(MockProviderFactory)
 	mockSTS := new(MockSTSClient)
+	assertMocksOnCleanup(t, mockStore, mockFactory, mockSTS)
 
 	plan := &config.PurchasePlan{
 		ID:                "plan-save-err",
@@ -699,6 +703,7 @@ func TestProcessMessage_CancelRejectsMissingActor(t *testing.T) {
 func TestProcessMessage_ApproveRejectsNonMatchingActor(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	assertMocksOnCleanup(t, mockStore)
 	mockEmail := new(MockEmailSender)
 
 	accountID := "acct-1"
@@ -735,6 +740,7 @@ func TestProcessMessage_ApproveRejectsNonMatchingActor(t *testing.T) {
 func TestProcessMessage_ApproveRejectsTokenMismatch(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	assertMocksOnCleanup(t, mockStore)
 	mockEmail := new(MockEmailSender)
 
 	// The recommendation carries a CloudAccountID so that approver resolution,
@@ -775,6 +781,7 @@ func TestProcessMessage_ApproveRejectsTokenMismatch(t *testing.T) {
 func TestProcessMessage_ApproveRejectsNoApprovers(t *testing.T) {
 	ctx := context.Background()
 	mockStore := new(MockConfigStore)
+	assertMocksOnCleanup(t, mockStore)
 	mockEmail := new(MockEmailSender)
 
 	exec := &config.PurchaseExecution{
@@ -806,6 +813,7 @@ func TestManager_ExecuteSinglePurchase_ProviderError(t *testing.T) {
 	mockEmail := new(MockEmailSender)
 	mockFactory := new(MockProviderFactory)
 	mockSTS := new(MockSTSClient)
+	assertMocksOnCleanup(t, mockStore, mockFactory, mockSTS)
 
 	plan := &config.PurchasePlan{
 		ID:   "plan-prov-err",
@@ -854,6 +862,7 @@ func TestManager_ExecuteSinglePurchase_ServiceClientError(t *testing.T) {
 	mockFactory := new(MockProviderFactory)
 	mockProvider := new(MockProvider)
 	mockSTS := new(MockSTSClient)
+	assertMocksOnCleanup(t, mockStore, mockFactory, mockProvider, mockSTS)
 
 	plan := &config.PurchasePlan{
 		ID:   "plan-svc-err",
@@ -904,6 +913,7 @@ func TestManager_ExecuteSinglePurchase_PurchaseNotSuccessful(t *testing.T) {
 	mockProvider := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
 	mockSTS := new(MockSTSClient)
+	assertMocksOnCleanup(t, mockStore, mockFactory, mockProvider, mockServiceClient, mockSTS)
 
 	plan := &config.PurchasePlan{
 		ID:   "plan-not-success",
@@ -956,6 +966,7 @@ func TestManager_ExecuteSinglePurchase_PurchaseNotSuccessful_WithError(t *testin
 	mockProvider := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
 	mockSTS := new(MockSTSClient)
+	assertMocksOnCleanup(t, mockStore, mockFactory, mockProvider, mockServiceClient, mockSTS)
 
 	plan := &config.PurchasePlan{
 		ID:   "plan-err-result",
@@ -1009,6 +1020,7 @@ func TestManager_ExecuteSinglePurchase_WithEngine(t *testing.T) {
 	mockProvider := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
 	mockSTS := new(MockSTSClient)
+	assertMocksOnCleanup(t, mockStore, mockEmail, mockFactory, mockProvider, mockServiceClient, mockSTS)
 
 	plan := &config.PurchasePlan{
 		ID:   "plan-engine",
@@ -1066,6 +1078,7 @@ func TestManager_SavePurchaseHistory_Error(t *testing.T) {
 	mockProvider := new(MockProvider)
 	mockServiceClient := new(MockServiceClient)
 	mockSTS := new(MockSTSClient)
+	assertMocksOnCleanup(t, mockStore, mockEmail, mockFactory, mockProvider, mockServiceClient, mockSTS)
 
 	plan := &config.PurchasePlan{
 		ID:   "plan-hist-err",
@@ -1354,6 +1367,7 @@ func TestManager_ExecuteSinglePurchase_DetailsByService(t *testing.T) {
 			mockProvider := new(MockProvider)
 			mockServiceClient := new(MockServiceClient)
 			mockSTS := new(MockSTSClient)
+			assertMocksOnCleanup(t, mockStore, mockEmail, mockFactory, mockProvider, mockServiceClient, mockSTS)
 
 			// Marshal the canonical Details into the RecommendationRecord
 			// — this is exactly what the scheduler does at collection
@@ -1501,6 +1515,7 @@ func TestManager_ExecuteSinglePurchase_LegacyEmptyDetails(t *testing.T) {
 			mockProvider := new(MockProvider)
 			mockServiceClient := new(MockServiceClient)
 			mockSTS := new(MockSTSClient)
+			assertMocksOnCleanup(t, mockStore, mockEmail, mockFactory, mockProvider, mockServiceClient, mockSTS)
 
 			plan := &config.PurchasePlan{ID: "plan-" + tc.name, Name: "Plan"}
 			exec := &config.PurchaseExecution{
@@ -1598,6 +1613,7 @@ func TestExecuteForAccount_NonHostRoleARN_StoredErrorOmitsHostIdentity(t *testin
 	ctx := context.Background()
 	const hostID = "111111111111"
 	hostSTS := new(MockSTSClient)
+	assertMocksOnCleanup(t, hostSTS)
 	hostSTS.On("GetCallerIdentity", mock.Anything, mock.Anything).Return(&sts.GetCallerIdentityOutput{Account: aws.String(hostID)}, nil)
 
 	var saved []*config.PurchaseExecution
