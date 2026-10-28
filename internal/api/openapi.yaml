@@ -465,7 +465,8 @@ paths:
         collection error, whether a collection is in flight, and whether the
         last collection was partial (some subscriptions, projects or scopes
         could not be queried, so the stored recommendations under-state the
-        real opportunity).
+        real opportunity). It also reports when the deployment's schedule
+        next triggers a collection, or null when that is unknown.
       responses:
         '200':
           description: Freshness state
@@ -6899,7 +6900,7 @@ components:
 
     RecommendationsFreshness:
       type: object
-      required: [last_collected_at, last_collection_error, last_collection_started_at, last_collection_partial]
+      required: [last_collected_at, last_collection_error, last_collection_started_at, last_collection_partial, next_collection_at]
       properties:
         last_collected_at:
           type: string
@@ -6917,6 +6918,21 @@ components:
           description: Set while a collection is in flight.
         last_collection_partial:
           $ref: '#/components/schemas/RecommendationsCollectionPartial'
+        next_collection_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: >
+            When the deployment's scheduler next triggers a recommendation
+            collection (UTC), computed from the schedule the deployment was
+            given (RECOMMENDATION_SCHEDULE) rather than stored. Null when
+            scheduled collection is off, the schedule is not set or not
+            understood, or the next run cannot be known: an EventBridge
+            rate() schedule counts from when its rule was created, which the
+            server cannot see, so rate() schedules always report null; a
+            cron() schedule gives an exact time. Manual refreshes and
+            on-read background refreshes are not included.
+          example: "2026-10-28T02:00:00Z"
 
     RecommendationsCollectionPartial:
       type: object

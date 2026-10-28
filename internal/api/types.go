@@ -60,6 +60,11 @@ type HandlerConfig struct {
 	// refresh, stale-execution sweep) that would freeze mid-flight on Lambda.
 	// The handler never re-reads the environment itself (issue #110).
 	IsLambda bool
+	// RecommendationSchedule is the deployment's recommendation-collection
+	// schedule (RECOMMENDATION_SCHEDULE, set by Terraform). Empty means
+	// scheduled collection is off or the deployment predates the variable.
+	// It feeds next_collection_at on GET /api/recommendations/freshness.
+	RecommendationSchedule string
 }
 
 // CommitmentOptsInterface lets us swap the real *commitmentopts.Service for

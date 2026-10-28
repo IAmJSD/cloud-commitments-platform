@@ -82,6 +82,10 @@ resource "aws_lambda_function" "main" {
         # function_name + account_id ARN avoids the self-reference cycle
         # that aws_lambda_function.main.arn would create here.
         SCHEDULER_LAMBDA_ARN = "arn:${data.aws_partition.current.partition}:lambda:${var.region}:${data.aws_caller_identity.current.account_id}:function:${var.stack_name}-api"
+        # The EventBridge schedule of scheduled_recommendations below, so
+        # GET /api/recommendations/freshness can report the next run
+        # (next_collection_at, #756). Empty when the rule is not created.
+        RECOMMENDATION_SCHEDULE = var.enable_scheduled_tasks ? var.recommendation_schedule : ""
       },
       # Stuck-purchase reaper threshold (#678). Only set when the
       # operator overrides the default — empty string means "use the
