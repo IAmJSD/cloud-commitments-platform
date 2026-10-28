@@ -42,6 +42,13 @@ are the full record until the next release.
   actions, `ec2:DescribeRegions`, `rds:DescribeDBInstances`, and the
   new-style `es:*ReservedInstance*` OpenSearch actions (replacing the legacy
   `es:*ReservedElasticsearch*` names).
+- **Bastion accounts whose target role trusts the CUDly host now get
+  AccessDenied.** CUDly assumes a bastion account's target role with the
+  bastion's own credentials and no longer falls back to the CUDly host's.
+  A target role whose trust policy names the CUDly host instead of the
+  bastion fails at AssumeRole until the bastion is added as the trusted
+  principal in that role's trust policy
+  ([#1556](https://github.com/LeanerCloud/cloud-commitments-platform/pull/1556)).
 
 ### Changed
 
