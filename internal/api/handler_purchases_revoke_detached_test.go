@@ -37,10 +37,11 @@ func TestRevokePersistScheduleFitsBudget(t *testing.T) {
 	assert.LessOrEqual(t, schedule, revokePersistTimeout)
 }
 
-// A Return that fails after the request was canceled under it must still
+// A Return Azure refuses after the request was canceled under it must still
 // clear this request's in-flight flag, on a live context: before the fix the
 // clear ran on the dead request context, failed, and left the row flagged
-// until the sweep released it 2h later.
+// until the sweep released it 2h later. The refusal is a definite 4xx: since
+// issue #1529 an ambiguous failure (a 5xx, say) keeps the flag on purpose.
 func TestCallAzureReturn_RequestCanceledDuringFailedReturn_ClearsInFlight(t *testing.T) {
 	t.Parallel()
 	reqCtx, cancel := context.WithCancel(context.Background())
@@ -53,13 +54,14 @@ func TestCallAzureReturn_RequestCanceledDuringFailedReturn_ClearsInFlight(t *tes
 	mockStore.On("ClearRevocationInFlight", mock.Anything, r.PurchaseID).Return(nil).Once()
 
 	calcClient := &stubCalcRefundClientWithAmount{amount: 10.0, currency: "USD", sessID: "s-cancel-fail"}
-	returnClient := &cancelAfterReturnClient{cancel: cancel, err: &azcore.ResponseError{StatusCode: 503}}
+	returnClient := &cancelAfterReturnClient{cancel: cancel, err: &azcore.ResponseError{StatusCode: 400, ErrorCode: "InvalidReservationID"}}
 	h := &Handler{config: store}
 	start := time.Now()
 	_, err := h.callAzureReturn(reqCtx, calcClient, returnClient, r, "order-abc", "res-xyz", confirmedQuote(10, "USD"))
 	require.Error(t, err)
-	_, isClientErr := IsClientError(err)
-	assert.False(t, isClientErr, "a 503 from Azure is a server-side failure")
+	ce, isClientErr := IsClientError(err)
+	require.True(t, isClientErr, "a 400 from Azure is a client error")
+	assert.Equal(t, 400, ce.code)
 
 	returnClient.assertDetached(t, start)
 	require.ErrorIs(t, reqCtx.Err(), context.Canceled)

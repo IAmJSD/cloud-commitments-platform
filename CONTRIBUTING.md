@@ -201,7 +201,8 @@ cloud-commitments-platform/
 ├── internal/                 # application code (API, auth, purchase, scheduler, ...)
 ├── iac/                      # infrastructure-as-code helpers
 ├── frontend/                 # web dashboard (TypeScript)
-├── terraform/, cloudformation/, arm/   # deployment definitions
+├── terraform/                # deployment definitions (the only install path)
+├── cloudformation/, arm/     # target-account role templates
 ├── tests/e2e/                # black-box suite (separate stdlib-only module)
 ├── known_issues/             # tracked tech debt and deferred fixes
 ├── scripts/                  # Repository hook and helper scripts

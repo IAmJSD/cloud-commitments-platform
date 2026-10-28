@@ -249,7 +249,8 @@ func TestRevokeAzure_RequestCanceledAfterReturn_RecordsAndRevokes(t *testing.T) 
 
 // TestRevokeAzure_RequestCanceledDuringFailedReturn_ClearsFlag covers issue
 // #1527's error path on real Postgres: the request is canceled while the
-// Return is in flight and the Return then fails (Azure answered 503). The
+// Return is in flight and Azure then refuses the Return (a definite 400; since
+// issue #1529 an ambiguous failure keeps the flag on purpose). The
 // in-flight clear must still land, or the row stays flagged and unrevocable
 // until the sweep releases it 2h later. Before the fix the clear ran on the
 // canceled request context and pgx refused it.
@@ -271,7 +272,7 @@ func TestRevokeAzure_RequestCanceledDuringFailedReturn_ClearsFlag(t *testing.T) 
 		parties: 1,
 		ready:   make(chan struct{}),
 	}
-	ret := &cancelAfterReturnClient{cancel: cancelReq, err: &azcore.ResponseError{StatusCode: 503}}
+	ret := &cancelAfterReturnClient{cancel: cancelReq, err: &azcore.ResponseError{StatusCode: 400, ErrorCode: "InvalidReservationID"}}
 	h := &Handler{config: store, azureRevokeFactory: &azureRevokeClientFactory{
 		newCredential:            func() (azcore.TokenCredential, error) { return nil, nil },
 		newCalculateRefundClient: func(azcore.TokenCredential) (azureCalculateRefundClient, error) { return calc, nil },
