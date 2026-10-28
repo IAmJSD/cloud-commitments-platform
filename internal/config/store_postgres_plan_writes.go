@@ -19,9 +19,9 @@ func (s *PostgresStore) createPurchasePlan(ctx context.Context, executor globalC
 	plan.CreatedAt = now
 	plan.UpdatedAt = now
 
-	servicesJSON, err := json.Marshal(plan.Services)
+	servicesJSON, err := marshalPlanServices(plan.Services)
 	if err != nil {
-		return fmt.Errorf("failed to marshal services: %w", err)
+		return err
 	}
 
 	rampScheduleJSON, err := json.Marshal(plan.RampSchedule)
@@ -79,4 +79,27 @@ func (s *PostgresStore) setPlanAccountsTx(ctx context.Context, tx pgx.Tx, planID
 		}
 	}
 	return nil
+}
+
+// marshalPlanServices encodes a plan's services map for the JSONB column
+// without the read-only service_configs stamps (issue #8). A plan's services
+// map is a copy of settings, not a service_configs row, so a created_at or
+// updated_at on an entry would be a caller-supplied value the database never
+// wrote; it is dropped instead of stored.
+func marshalPlanServices(services map[string]ServiceConfig) ([]byte, error) {
+	var stripped map[string]ServiceConfig
+	if services != nil {
+		stripped = make(map[string]ServiceConfig, len(services))
+		for key := range services {
+			svc := services[key]
+			svc.CreatedAt = nil
+			svc.UpdatedAt = nil
+			stripped[key] = svc
+		}
+	}
+	servicesJSON, err := json.Marshal(stripped)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal services: %w", err)
+	}
+	return servicesJSON, nil
 }

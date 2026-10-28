@@ -316,3 +316,58 @@ func TestVerifyMuteToken_Forged(t *testing.T) {
 	key := []byte("test-secret")
 	assert.False(t, common.VerifyMuteToken(key, "user@example.com", "purchase_approvals", "forgedtoken"))
 }
+
+// TestIsRecipientMuted_StoreErrorDirectionPerScope pins the per-scope failure
+// direction of a mute-store error (issue #111). The approval scopes fail open
+// (send), because dropping an approval email strands a purchase or exchange.
+// Every other scope is informational and fails closed (don't send), so a DB
+// blip cannot re-mail someone who used the one-click unsubscribe link.
+func TestIsRecipientMuted_StoreErrorDirectionPerScope(t *testing.T) {
+	const addr = "ops@example.com"
+	cases := []struct {
+		scope     string
+		wantMuted bool
+	}{
+		{scope: string(common.ScopePurchaseApprovals), wantMuted: false},
+		{scope: string(common.ScopeRIExchangeApprovals), wantMuted: false},
+		// No informational scope is defined yet; any scope outside the
+		// approval set is treated as informational.
+		{scope: "purchase_executed", wantMuted: true},
+		{scope: "new_recommendations", wantMuted: true},
+		{scope: "", wantMuted: true},
+	}
+	for _, tc := range cases {
+		t.Run("scope="+tc.scope, func(t *testing.T) {
+			mc := new(mockMuteChecker)
+			mc.On("IsNotificationMuted", mock.Anything, addr, tc.scope).
+				Return(false, errors.New("db error"))
+
+			assert.Equal(t, tc.wantMuted, isRecipientMuted(context.Background(), mc, addr, tc.scope))
+
+			// The CC filter and the primary-recipient check follow the same direction.
+			kept := filterMutedRecipients(context.Background(), mc, []string{addr}, tc.scope)
+			if tc.wantMuted {
+				assert.Empty(t, kept, "informational scope must drop a CC whose mute state is unknown")
+			} else {
+				assert.Equal(t, []string{addr}, kept, "approval scope must keep a CC whose mute state is unknown")
+			}
+			_, _, _, muted := prepareMuteAwareDelivery(context.Background(), mc, "", addr, nil, tc.scope)
+			assert.Equal(t, tc.wantMuted, muted)
+			mc.AssertExpectations(t)
+		})
+	}
+}
+
+// TestIsRecipientMuted_NoErrorFollowsStore checks that the per-scope error
+// policy does not change the answer when the store responds normally.
+func TestIsRecipientMuted_NoErrorFollowsStore(t *testing.T) {
+	for _, scope := range []string{string(common.ScopePurchaseApprovals), "new_recommendations"} {
+		for _, stored := range []bool{true, false} {
+			mc := new(mockMuteChecker)
+			mc.On("IsNotificationMuted", mock.Anything, "a@example.com", scope).Return(stored, nil)
+			assert.Equal(t, stored, isRecipientMuted(context.Background(), mc, "a@example.com", scope), "scope=%s stored=%v", scope, stored)
+		}
+	}
+	// A nil checker means muting is not configured, so nothing is muted.
+	assert.False(t, isRecipientMuted(context.Background(), nil, "a@example.com", "new_recommendations"))
+}
