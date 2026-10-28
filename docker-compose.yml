@@ -102,7 +102,11 @@ services:
 
   # Frontend (nginx with reverse proxy to backend)
   frontend:
-    image: nginx:alpine
+    # Pinned by tag and digest (issue #349): plain nginx:alpine floated a whole
+    # major, and scripts/nginx.conf depends on the reverse-proxy behaviour.
+    # The digest is the multi-arch index of 1.31.8-alpine, the mainline that
+    # nginx:alpine resolved to when pinned. Bump the tag and digest together.
+    image: nginx:1.31.8-alpine@sha256:1ef7ca94d7879df82421428ce13bd1eaa412404953859cf7a5b6512c25e67a60
     container_name: cudly-frontend
     depends_on:
       - app
@@ -116,7 +120,8 @@ services:
 
   # pgAdmin for database management (local development only — do not expose in production)
   pgadmin:
-    image: dpage/pgadmin4:9.2
+    # Tag and digest (multi-arch index) bumped together, like the images above.
+    image: dpage/pgadmin4:9.2@sha256:52cb72a9e3da275324ca0b9bb3891021366d501aad375db34584a7bca8ce02ff
     container_name: cudly-pgadmin
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}

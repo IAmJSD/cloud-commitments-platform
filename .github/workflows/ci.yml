@@ -211,6 +211,13 @@ jobs:
           fi
           echo "Linting $count workflow files"
 
+      - name: Assert Terraform is installed only at the version in .terraform-version
+        # Issue #349: deploy workflows applied on 1.10.0 while ci.yml and
+        # pre-commit.yml validated on 1.10.5. Fast (grep only).
+        run: |
+          bash scripts/check-terraform-pin.sh
+          bash scripts/test-check-terraform-pin.sh
+
       - name: Assert shellcheck is available to actionlint
         # actionlint does not fail when shellcheck is missing from PATH: it
         # silently skips every run: block and still exits 0. That silent skip is
@@ -969,15 +976,22 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Read Terraform version
+        # The one pin lives in .terraform-version (issue #349); the script
+        # validates it, because an empty terraform_version means `latest`.
+        id: terraform-version
+        run: bash scripts/terraform-version.sh
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
-          # Must satisfy `required_version = ">= 1.10.0"` declared by every
-          # terraform/environments/*/main.tf -- pinning below 1.10 makes
+          # .terraform-version must satisfy `required_version = ">= 1.10.0"`
+          # declared by every terraform/environments/*/main.tf -- below 1.10
           # `terraform init`/`validate` abort with "Unsupported Terraform
-          # Core version". Matches the pin in pre-commit.yml so both
-          # workflows resolve to the same binary.
-          terraform_version: 1.10.5
+          # Core version". Every workflow that installs Terraform reads the
+          # same file, so validate here and apply in the deploy workflows
+          # run the same binary.
+          terraform_version: ${{ steps.terraform-version.outputs.version }}
 
       - name: Terraform Format Check
         # Must cover every SCAN_ROOTS entry in scripts/check-gcp-secret-scope.sh,

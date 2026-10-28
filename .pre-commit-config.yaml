@@ -231,7 +231,15 @@ repos:
         # (which checks out from git), so findings there are local-only
         # false positives on third-party provider cache, not on our source.
         # The actual terraform module source files are still fully scanned.
-        entry: bash -c 'trivy config --severity HIGH,CRITICAL --exit-code 1 --skip-dirs terraform/environments/aws --skip-dirs "**/.terraform" --skip-dirs .claude .'
+        #
+        # terraform/environments/aws is scanned too (it used to be skipped,
+        # issue #349). TF_VAR_stack_name only feeds Trivy's evaluation, not
+        # any deploy: var.stack_name defaults to null and is used as the
+        # provider's `default_tags` Stack value, and trivy v0.69.3 (the CI
+        # pin) panics on a null default_tags value ("panic: value is null"
+        # in adaptDefaultTags) and aborts the whole scan. v0.76.1 does not
+        # panic, so drop the variable once the pin is past that bug.
+        entry: bash -c 'TF_VAR_stack_name=trivy-config-scan trivy config --severity HIGH,CRITICAL --exit-code 1 --skip-dirs "**/.terraform" --skip-dirs .claude .'
         language: system
         pass_filenames: false
 

@@ -37,7 +37,7 @@ CUDly supports deployment via Terraform across three cloud providers (AWS, Azure
 ./scripts/tf-deploy.sh aws prod
 ```
 
-The script uses profile-based tfvars from `terraform/profiles/<provider>/<profile>.tfvars`.
+The script runs in the provider's single root, `terraform/environments/<provider>`, with the profile's variables from `terraform/profiles/<provider>/<profile>.tfvars` and its backend from `terraform/environments/<provider>/backends/<profile>.tfbackend` (copy both from the `.example` files next to them).
 
 ### Manual Terraform
 
