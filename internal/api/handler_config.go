@@ -68,9 +68,9 @@ func (h *Handler) updateConfig(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, permErr
 	}
 
-	present, err := globalConfigWriteFields(req.Body)
-	if err != nil {
-		return nil, err
+	present, parseErr := globalConfigWriteFields(req.Body)
+	if parseErr != nil {
+		return nil, parseErr
 	}
 	_, gracePresent := present["grace_period_days"]
 	modeSent := riExchangeModeSent(present)
