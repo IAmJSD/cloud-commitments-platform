@@ -369,21 +369,23 @@ func TestRIExchangeAutoModeGate_UserAPIKeyUsesKeyPermissions(t *testing.T) {
 //
 // pkg/exchange/auto.go's processRecommendation routes to processManualExchange
 // only on the literal "manual" and sends EVERY other value to
-// processAutoExchange. GlobalConfig.Validate never constrains RIExchangeMode,
-// and PUT /api/config unmarshals onto the struct wholesale -- so a mode of
-// "Auto", "automatic" or "" arms unattended execution just as effectively as
+// processAutoExchange. Both routes now refuse to WRITE such a mode (issue
+// #1196), but a row stored before that check can still hold "Auto",
+// "automatic" or "", and a partial PUT /api/config preserves it. Enabling
+// exchange on such a row arms unattended execution just as effectively as
 // "auto", while a gate written as `mode == "auto"` would wave it through.
 //
-// Only the generic route is exercised: the dedicated one's validate() restricts
-// mode to manual|auto, so this shape cannot reach it. That asymmetry is exactly
-// why the gate reads the field the scheduler reads.
+// The body therefore flips only ri_exchange_enabled and leaves the legacy mode
+// in place. That is exactly why the gate reads the field the scheduler reads.
 func TestRIExchangeAutoModeGate_NonManualModeIsArmed(t *testing.T) {
 	for _, mode := range []string{"Auto", "AUTO", "automatic", "", "enabled"} {
 		t.Run("mode="+mode, func(t *testing.T) {
-			r, store := autoGateSessionRouter(t, autoGateAdminOnly, disarmedConfig())
+			stored := disarmedConfig()
+			stored.RIExchangeMode = mode
+			r, store := autoGateSessionRouter(t, autoGateAdminOnly, stored)
 
 			_, err := r.Route(context.Background(), "PUT", genericPath,
-				autoGateTokenReq(genericBody(mode, true, 100, 500)))
+				autoGateTokenReq(`{"ri_exchange_enabled":true}`))
 
 			require.Error(t, err,
 				"mode %q is not \"manual\", so the scheduler runs it as auto; the gate must see the same", mode)

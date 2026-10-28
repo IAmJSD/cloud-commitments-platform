@@ -131,18 +131,6 @@ func TestPasswordResetData(t *testing.T) {
 	assert.Equal(t, "https://dashboard.example.com/reset?token=abc123", data.ResetURL)
 }
 
-func TestWelcomeUserData(t *testing.T) {
-	data := WelcomeUserData{
-		Email:        "newuser@example.com",
-		DashboardURL: "https://dashboard.example.com",
-		Role:         "user",
-	}
-
-	assert.Equal(t, "newuser@example.com", data.Email)
-	assert.Equal(t, "https://dashboard.example.com", data.DashboardURL)
-	assert.Equal(t, "user", data.Role)
-}
-
 func TestSender_SendNotification_NoTopic(t *testing.T) {
 	sender := &Sender{
 		topicARN: "",
@@ -325,19 +313,6 @@ func TestTemplates_PasswordReset(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestTemplates_WelcomeEmail(t *testing.T) {
-	sender := &Sender{
-		sesClient: nil,
-		fromEmail: "noreply@example.com",
-	}
-
-	ctx := context.Background()
-	err := sender.SendWelcomeEmail(ctx, "newuser@example.com", "https://dashboard.example.com", "user")
-
-	// Will fail because sesClient is nil
-	require.Error(t, err)
-}
-
 func TestTemplateContents(t *testing.T) {
 	// Verify template constants are not empty
 	assert.NotEmpty(t, newRecommendationsTemplate)
@@ -345,7 +320,6 @@ func TestTemplateContents(t *testing.T) {
 	assert.NotEmpty(t, purchaseConfirmationTemplate)
 	assert.NotEmpty(t, purchaseFailedTemplate)
 	assert.NotEmpty(t, passwordResetTemplate)
-	assert.NotEmpty(t, welcomeUserTemplate)
 
 	// Verify templates contain expected placeholders
 	assert.Contains(t, newRecommendationsTemplate, "{{.DashboardURL}}")
@@ -364,10 +338,6 @@ func TestTemplateContents(t *testing.T) {
 
 	assert.Contains(t, passwordResetTemplate, "{{.ResetURL}}")
 	assert.Contains(t, passwordResetTemplate, "Password Reset")
-
-	assert.Contains(t, welcomeUserTemplate, "{{.Email}}")
-	assert.Contains(t, welcomeUserTemplate, "{{.Role}}")
-	assert.Contains(t, welcomeUserTemplate, "Welcome")
 }
 
 func TestSender_SendNotification_Success(t *testing.T) {
