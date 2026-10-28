@@ -226,6 +226,13 @@ type ServiceConfig struct {
 	// RecommendationRecord.Count. 0 (the default) disables the filter,
 	// matching the CLI flag's 0-no-floor semantics.
 	MinCount int `json:"min_count,omitempty" dynamodbav:"min_count,omitempty"`
+	// CreatedAt and UpdatedAt are the service_configs row's own timestamps
+	// (issue #8), read-only. The store fills them on every read and from the
+	// upsert's RETURNING clause; no write path stores a caller's value. Nil
+	// (omitted from JSON) on a config that is not a stored row, such as an
+	// entry of a purchase plan's services map.
+	CreatedAt *time.Time `json:"created_at,omitempty" dynamodbav:"created_at,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty" dynamodbav:"updated_at,omitempty"`
 }
 
 // PurchasePlan represents a saved purchase plan for automated execution.
@@ -985,17 +992,30 @@ type SuccessfulCollect struct {
 	CloudAccountID *string
 }
 
+// RIUtilizationCacheKey identifies one cached Cost Explorer
+// GetReservationUtilization result. CloudAccountID is the cloud_accounts
+// UUID of the account whose credentials made the call, or "" when the
+// deployment's ambient identity is not registered in cloud_accounts. It is
+// part of the key so two accounts reading the same region never share a
+// row (issue #120).
+type RIUtilizationCacheKey struct {
+	CloudAccountID string
+	Region         string
+	LookbackDays   int
+}
+
 // RIUtilizationCacheEntry is a single cached Cost Explorer
-// GetReservationUtilization result keyed by (region, lookback_days).
+// GetReservationUtilization result keyed by RIUtilizationCacheKey.
 // Payload is the JSON encoding of the caller's utilization slice — kept
 // opaque here so the config package stays free of AWS-provider types.
 // TTL freshness is evaluated in the caller (api-layer cache wrapper)
 // based on FetchedAt vs. a caller-supplied TTL.
 type RIUtilizationCacheEntry struct {
-	Region       string
-	LookbackDays int
-	Payload      []byte
-	FetchedAt    time.Time
+	CloudAccountID string
+	Region         string
+	LookbackDays   int
+	Payload        []byte
+	FetchedAt      time.Time
 }
 
 // PurchaseHistoryFilter is the filter set consumed by

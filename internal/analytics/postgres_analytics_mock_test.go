@@ -66,6 +66,26 @@ func TestAccountFilterClause(t *testing.T) {
 		assert.Equal(t, "(account_id = ANY($3))", clause)
 		assert.Len(t, args, 3)
 	})
+
+	// Pins the exact bind args too (issue #120 item 5), so moving the builder
+	// into the shared package cannot reorder or drop a bind.
+	t.Run("bind args are pinned in clause order", func(t *testing.T) {
+		clause, args := accountFilterClause(
+			[]string{"u1"},
+			map[string][]string{"azure": {"sub-1"}, "": {"raw"}, "aws": {"123"}, "gcp": nil},
+			base(),
+		)
+		assert.Equal(t,
+			"(cloud_account_id = ANY($3) OR account_id = ANY($4) OR (provider = $5 AND account_id = ANY($6)) OR (provider = $7 AND account_id = ANY($8)))",
+			clause)
+		assert.Equal(t, []any{"start", "end", []string{"u1"}, []string{"raw"}, "aws", []string{"123"}, "azure", []string{"sub-1"}}, args)
+	})
+
+	t.Run("providers with no ids yield TRUE", func(t *testing.T) {
+		clause, args := accountFilterClause(nil, map[string][]string{"aws": {}}, base())
+		assert.Equal(t, "TRUE", clause)
+		assert.Equal(t, []any{"start", "end"}, args)
+	})
 }
 
 // TestPartitionDateCalculation verifies partition date calculation logic.

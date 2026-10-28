@@ -281,9 +281,6 @@ func (n *noopEmailSender) SendPurchaseFailedNotification(ctx context.Context, da
 func (n *noopEmailSender) SendPasswordResetEmail(ctx context.Context, emailAddr, resetURL string) error {
 	return nil
 }
-func (n *noopEmailSender) SendWelcomeEmail(ctx context.Context, emailAddr, dashboardURL, role string) error {
-	return nil
-}
 func (n *noopEmailSender) SendUserInviteEmail(ctx context.Context, emailAddr, setupURL string) error {
 	return nil
 }
@@ -318,6 +315,7 @@ func TestLoadApplicationConfig(t *testing.T) {
 			"API_KEY_SECRET_ARN", "ENABLE_DASHBOARD", "DASHBOARD_BUCKET",
 			"DASHBOARD_URL", "CORS_ALLOWED_ORIGIN", "AWS_LAMBDA_RUNTIME_API",
 			"RECOMMENDATION_SCHEDULE",
+			"SCHEDULED_PURCHASE_MAX_OVERDUE",
 		}
 		for _, key := range envVars {
 			testutil.SetEnv(t, key, "")
@@ -328,6 +326,8 @@ func TestLoadApplicationConfig(t *testing.T) {
 
 		testutil.AssertEqual(t, "dev", cfg.Version)
 		testutil.AssertEqual(t, 3, cfg.NotificationDaysBefore)
+		// Zero is read by the purchase manager as its 24h default cap.
+		testutil.AssertEqual(t, time.Duration(0), cfg.ScheduledPurchaseMaxOverdue)
 		testutil.AssertEqual(t, 3, cfg.DefaultTerm)
 		testutil.AssertEqual(t, "", cfg.DefaultPaymentOption)
 		testutil.AssertEqual(t, 80.0, cfg.DefaultCoverage)
@@ -351,6 +351,7 @@ func TestLoadApplicationConfig(t *testing.T) {
 		testutil.SetEnv(t, "CORS_ALLOWED_ORIGIN", "https://example.com")
 		testutil.SetEnv(t, "AWS_LAMBDA_RUNTIME_API", "localhost:9001")
 		testutil.SetEnv(t, "RECOMMENDATION_SCHEDULE", "cron(0 2 * * ? *)")
+		testutil.SetEnv(t, "SCHEDULED_PURCHASE_MAX_OVERDUE", "36h")
 
 		cfg, err := LoadApplicationConfig()
 		testutil.AssertNoError(t, err)
@@ -368,11 +369,12 @@ func TestLoadApplicationConfig(t *testing.T) {
 		testutil.AssertEqual(t, "https://example.com", cfg.CORSAllowedOrigin)
 		testutil.AssertEqual(t, true, cfg.IsLambda)
 		testutil.AssertEqual(t, "cron(0 2 * * ? *)", cfg.RecommendationSchedule)
+		testutil.AssertEqual(t, 36*time.Hour, cfg.ScheduledPurchaseMaxOverdue)
 	})
 }
 
 func TestNewApplicationRejectsMalformedEnvDefaults(t *testing.T) {
-	for _, key := range []string{"DEFAULT_TERM", "DEFAULT_COVERAGE", "ANALYTICS_COLLECTION_ENABLED", "ANALYTICS_RETENTION_MONTHS", "ANALYTICS_PARTITIONS_AHEAD", "SQS_REPORT_BATCH_ITEM_FAILURES", "DB_HOST"} {
+	for _, key := range []string{"DEFAULT_TERM", "DEFAULT_COVERAGE", "SCHEDULED_PURCHASE_MAX_OVERDUE", "ANALYTICS_COLLECTION_ENABLED", "ANALYTICS_RETENTION_MONTHS", "ANALYTICS_PARTITIONS_AHEAD", "SQS_REPORT_BATCH_ITEM_FAILURES", "DB_HOST"} {
 		t.Setenv(key, "")
 	}
 	for _, tc := range []struct{ key, value string }{
@@ -380,6 +382,10 @@ func TestNewApplicationRejectsMalformedEnvDefaults(t *testing.T) {
 		{"DEFAULT_TERM", "999999999999999999999999999"},
 		{"DEFAULT_COVERAGE", "80%"},
 		{"DEFAULT_COVERAGE", "1e999"},
+		{"SCHEDULED_PURCHASE_MAX_OVERDUE", "24"},
+		{"SCHEDULED_PURCHASE_MAX_OVERDUE", "1d"},
+		{"SCHEDULED_PURCHASE_MAX_OVERDUE", "0s"},
+		{"SCHEDULED_PURCHASE_MAX_OVERDUE", "-1h"},
 		{"ANALYTICS_COLLECTION_ENABLED", "no"},
 		{"ANALYTICS_COLLECTION_ENABLED", "off"},
 		{"ANALYTICS_COLLECTION_ENABLED", "False "},

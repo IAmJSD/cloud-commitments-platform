@@ -89,11 +89,6 @@ func (m *MockEmailSender) SendPasswordResetEmail(ctx context.Context, email, res
 	return args.Error(0)
 }
 
-func (m *MockEmailSender) SendWelcomeEmail(ctx context.Context, email, dashboardURL, role string) error {
-	args := m.Called(ctx, email, dashboardURL, role)
-	return args.Error(0)
-}
-
 func (m *MockEmailSender) SendUserInviteEmail(ctx context.Context, email, setupURL string) error {
 	args := m.Called(ctx, email, setupURL)
 	return args.Error(0)

@@ -117,7 +117,7 @@ func (s *Service) CheckAdminExists(ctx context.Context) (bool, error) {
 // the user record. Returns an error if any field is invalid.
 //
 // When req.Password is empty the user is invited and will set their own
-// password via the welcome email link, so the password validator is skipped.
+// password via the invite email link, so the password validator is skipped.
 func (s *Service) validateCreateUserRequest(ctx context.Context, req CreateUserRequest) error {
 	if _, err := mail.ParseAddress(req.Email); err != nil {
 		return ErrInvalidEmail

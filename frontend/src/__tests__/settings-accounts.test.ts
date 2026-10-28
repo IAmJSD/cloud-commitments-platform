@@ -1281,7 +1281,7 @@ describe('Account overrides modal', () => {
   test('switching accounts swaps the modal title; only one account context is active at a time', async () => {
     (api.listAccounts as jest.Mock).mockResolvedValue([
       { id: 'acc-a', name: 'AWS Prod',  provider: 'aws', external_id: '123456789012', enabled: true },
-      { id: 'acc-b', name: 'CUDly host', provider: 'aws', external_id: '909626172446', enabled: true },
+      { id: 'acc-b', name: 'CUDly host', provider: 'aws', external_id: '444444444444', enabled: true },
     ]);
     (api.listAccountServiceOverrides as jest.Mock).mockResolvedValue([]);
 
@@ -1297,7 +1297,7 @@ describe('Account overrides modal', () => {
 
     // Click Overrides on Account B without closing the modal first.
     (document.querySelector(
-      `button[aria-label="Service overrides for CUDly host (909626172446)"]`,
+      `button[aria-label="Service overrides for CUDly host (444444444444)"]`,
     ) as HTMLButtonElement).click();
     await new Promise(r => setTimeout(r, 0));
 

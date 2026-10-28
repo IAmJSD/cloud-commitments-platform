@@ -959,7 +959,7 @@ func (m *MockConfigStore) GetMarketplaceListingAttempt(ctx context.Context, purc
 	if v := args.Get(0); v != nil {
 		a, ok := v.(*config.MarketplaceListingAttempt)
 		if !ok {
-			panic(fmt.Sprintf("mock: expected *config.MarketplaceListingAttempt, got %T", v))
+			m.reporter.wrongReturnType("GetMarketplaceListingAttempt", "*config.MarketplaceListingAttempt", v)
 		}
 		attempt = a
 	}
@@ -1010,7 +1010,7 @@ func (m *MockConfigStore) ListMarketplaceListingsToPoll(ctx context.Context) ([]
 	if v := args.Get(0); v != nil {
 		r, ok := v.([]config.PurchaseHistoryRecord)
 		if !ok {
-			panic(fmt.Sprintf("mock: expected []config.PurchaseHistoryRecord, got %T", v))
+			m.reporter.wrongReturnType("ListMarketplaceListingsToPoll", "[]config.PurchaseHistoryRecord", v)
 		}
 		rows = r
 	}
@@ -1813,7 +1813,7 @@ func (m *MockConfigStore) ListStoredRecommendationsChunk(ctx context.Context, fi
 	args := m.Called(ctx, filter, after, limit)
 	v, ok := args.Get(0).(config.RecommendationChunk)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected config.RecommendationChunk, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListStoredRecommendationsChunk", "config.RecommendationChunk", args.Get(0))
 	}
 	return v, args.Error(1)
 }
@@ -1852,12 +1852,12 @@ func (m *MockConfigStore) SetRecommendationsCollectionPartial(ctx context.Contex
 	return args.Error(0)
 }
 
-func (m *MockConfigStore) GetRIUtilizationCache(ctx context.Context, region string, lookbackDays int) (*config.RIUtilizationCacheEntry, error) {
-	m.record("GetRIUtilizationCache", ctx, region, lookbackDays)
+func (m *MockConfigStore) GetRIUtilizationCache(ctx context.Context, key config.RIUtilizationCacheKey) (*config.RIUtilizationCacheEntry, error) {
+	m.record("GetRIUtilizationCache", ctx, key)
 	if !isExpected(&m.Mock, "GetRIUtilizationCache") {
 		return nil, nil
 	}
-	args := m.Called(ctx, region, lookbackDays)
+	args := m.Called(ctx, key)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
@@ -1868,12 +1868,12 @@ func (m *MockConfigStore) GetRIUtilizationCache(ctx context.Context, region stri
 	return v, args.Error(1)
 }
 
-func (m *MockConfigStore) UpsertRIUtilizationCache(ctx context.Context, region string, lookbackDays int, payload []byte, fetchedAt time.Time) error {
-	m.record("UpsertRIUtilizationCache", ctx, region, lookbackDays, payload, fetchedAt)
+func (m *MockConfigStore) UpsertRIUtilizationCache(ctx context.Context, key config.RIUtilizationCacheKey, payload []byte, fetchedAt time.Time) error {
+	m.record("UpsertRIUtilizationCache", ctx, key, payload, fetchedAt)
 	if !isExpected(&m.Mock, "UpsertRIUtilizationCache") {
 		return nil
 	}
-	args := m.Called(ctx, region, lookbackDays, payload, fetchedAt)
+	args := m.Called(ctx, key, payload, fetchedAt)
 	return args.Error(0)
 }
 
@@ -1931,6 +1931,12 @@ func (m *MockConfigStore) UpdateAccountRegistration(ctx context.Context, reg *co
 func (m *MockConfigStore) TransitionRegistrationStatus(ctx context.Context, reg *config.AccountRegistration, fromStatus string, actor *string) error {
 	m.record("TransitionRegistrationStatus", ctx, reg, fromStatus, actor)
 	args := m.Called(ctx, reg, fromStatus, actor)
+	return args.Error(0)
+}
+
+func (m *MockConfigStore) ApproveAccountRegistration(ctx context.Context, reg *config.AccountRegistration, account *config.CloudAccount, actor *string) error {
+	m.record("ApproveAccountRegistration", ctx, reg, account, actor)
+	args := m.Called(ctx, reg, account, actor)
 	return args.Error(0)
 }
 
@@ -2094,7 +2100,7 @@ func (m *MockConfigStore) ListHistoryExecutionsPage(ctx context.Context, q confi
 	}
 	v, ok := args.Get(0).([]config.PurchaseExecution)
 	if !ok {
-		panic(fmt.Sprintf("mock: expected []config.PurchaseExecution, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListHistoryExecutionsPage", "[]config.PurchaseExecution", args.Get(0))
 	}
 	return pageExecutionsLikeStore(v, &q), args.Error(1)
 }
@@ -2125,7 +2131,7 @@ func (m *MockConfigStore) ListPurchaseHistoryPage(ctx context.Context, filter co
 			v[i] = config.PurchaseHistoryPageRow{PurchaseHistoryRecord: rows[i], RowID: PurchaseHistoryFixtureRowID(i)}
 		}
 	default:
-		panic(fmt.Sprintf("mock: expected []config.PurchaseHistoryPageRow or []config.PurchaseHistoryRecord, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ListPurchaseHistoryPage", "[]config.PurchaseHistoryPageRow or []config.PurchaseHistoryRecord", args.Get(0))
 	}
 	out := make([]config.PurchaseHistoryPageRow, 0, len(v))
 	for i := range v {

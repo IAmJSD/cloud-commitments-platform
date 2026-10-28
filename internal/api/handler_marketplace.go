@@ -423,7 +423,8 @@ const awsMarketplaceMinPriceFloorFraction = 0.05
 // awsMarketplaceClientFaultCodes is the set of AWS error codes that represent
 // client-side faults for Marketplace listing operations. These map to 4xx
 // responses so the caller receives an actionable message. Server-side AWS
-// errors remain 5xx.
+// errors remain 5xx. SellerNotRegistered is a client fault too, but
+// mapAWSMarketplaceError answers it before consulting this set.
 var awsMarketplaceClientFaultCodes = map[string]bool{
 	"InvalidReservedInstancesId":            true,
 	"InvalidReservedInstancesId.NotFound":   true,
@@ -432,12 +433,20 @@ var awsMarketplaceClientFaultCodes = map[string]bool{
 	"IncorrectState":                        true,
 	"InvalidReservedInstancesListingId":     true,
 	"ReservedInstancesListingAlreadyExists": true,
-	"SellerNotRegistered":                   true,
 	"AuthFailure":                           true,
 	"UnauthorizedOperation":                 true,
 }
 
 const marketplaceRoleAssumptionMessage = "could not assume the role configured for this account"
+
+// marketplaceSellerNotRegisteredMessage replaces AWS's SellerNotRegistered text
+// (issue #27), which says only that the account is not a registered seller.
+// Registration is a one-time step in the AWS console that this app cannot do:
+// the account's root user registers it with a bank account that has a US
+// address and completes a tax interview.
+const marketplaceSellerNotRegisteredMessage = "this AWS account is not registered as a Reserved Instance Marketplace seller. " +
+	"Its root user must register it as a seller, with a bank account that has a US address, before it can list Reserved Instances: " +
+	"https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ri-market-general.html#ri-market-seller-profile"
 
 // isRoleAssumptionFailure reports whether err came from the STS AssumeRole call
 // that the credential provider makes lazily inside an EC2 request. Its text
@@ -458,10 +467,17 @@ func roleAssumptionOperationError(err error) *smithy.OperationError {
 	return nil
 }
 
+// marketplaceSellerNotRegisteredReason is the stable details.reason (flattened
+// into the JSON body as "reason") that marks the SellerNotRegistered 400, so a
+// client can branch on it instead of matching the message.
+const marketplaceSellerNotRegisteredReason = "seller_not_registered"
+
 // mapAWSMarketplaceError maps an AWS SDK error to an appropriate ClientError.
 // AWS client-fault errors (4xx-category codes) produce a 4xx response with the
-// original AWS message so the caller gets actionable feedback. All other errors
-// produce a 502 (AWS-side failure). STS AssumeRole failures are classified by
+// original AWS message so the caller gets actionable feedback. SellerNotRegistered
+// is the exception: its 400 carries marketplaceSellerNotRegisteredMessage and
+// reason seller_not_registered instead. All other errors produce a 502
+// (AWS-side failure). STS AssumeRole failures are classified by
 // roleAssumptionClientError and never echo the AWS text.
 func mapAWSMarketplaceError(opMsg string, err error) error {
 	if opErr := roleAssumptionOperationError(err); opErr != nil {
@@ -469,6 +485,10 @@ func mapAWSMarketplaceError(opMsg string, err error) error {
 	}
 	var apiErr smithy.APIError
 	if errors.As(err, &apiErr) {
+		if apiErr.ErrorCode() == "SellerNotRegistered" {
+			return NewClientErrorWithDetails(400, marketplaceSellerNotRegisteredMessage,
+				map[string]any{"reason": marketplaceSellerNotRegisteredReason})
+		}
 		if awsMarketplaceClientFaultCodes[apiErr.ErrorCode()] || apiErr.ErrorFault() == smithy.FaultClient {
 			return NewClientError(400, apiErr.ErrorMessage())
 		}

@@ -139,10 +139,14 @@ type ApplicationConfig struct {
 	APIKeySecretARN         string
 	Analytics               AnalyticsConfig
 	NotificationDaysBefore  int
-	DefaultCoverage         float64
-	DefaultTerm             int
-	EnableDashboard         bool
-	IsLambda                bool
+	// ScheduledPurchaseMaxOverdue is SCHEDULED_PURCHASE_MAX_OVERDUE, the
+	// fire and process sweeps' due-row age cap (issue #712). Zero means
+	// purchase.DefaultMaxDueRowAge.
+	ScheduledPurchaseMaxOverdue time.Duration
+	DefaultCoverage             float64
+	DefaultTerm                 int
+	EnableDashboard             bool
+	IsLambda                    bool
 	// ReportSQSBatchItemFailures gates whether handleLambdaSQSEvent returns
 	// the partial events.SQSEventResponse{BatchItemFailures} shape (true) or
 	// the old whole-batch aggregate error (false, default). See
@@ -312,24 +316,29 @@ func LoadApplicationConfig() (ApplicationConfig, error) {
 		}
 		coverage = value
 	}
+	maxOverdue, err := loadScheduledPurchaseMaxOverdue()
+	if err != nil {
+		return ApplicationConfig{}, err
+	}
 	analyticsConfig, err := LoadAnalyticsConfig()
 	if err != nil {
 		return ApplicationConfig{}, err
 	}
 
 	return ApplicationConfig{
-		Version:                version,
-		NotificationDaysBefore: getEnvInt("NOTIFICATION_DAYS_BEFORE", 3),
-		DefaultTerm:            term,
-		DefaultPaymentOption:   os.Getenv("DEFAULT_PAYMENT_OPTION"),
-		DefaultCoverage:        coverage,
-		DefaultRampSchedule:    os.Getenv("DEFAULT_RAMP_SCHEDULE"),
-		APIKeySecretARN:        os.Getenv("API_KEY_SECRET_ARN"),
-		EnableDashboard:        os.Getenv("ENABLE_DASHBOARD") == "true",
-		DashboardBucket:        os.Getenv("DASHBOARD_BUCKET"),
-		DashboardURL:           os.Getenv("DASHBOARD_URL"),
-		IssuerURL:              os.Getenv("CUDLY_ISSUER_URL"),
-		CORSAllowedOrigin:      os.Getenv("CORS_ALLOWED_ORIGIN"),
+		Version:                     version,
+		NotificationDaysBefore:      getEnvInt("NOTIFICATION_DAYS_BEFORE", 3),
+		ScheduledPurchaseMaxOverdue: maxOverdue,
+		DefaultTerm:                 term,
+		DefaultPaymentOption:        os.Getenv("DEFAULT_PAYMENT_OPTION"),
+		DefaultCoverage:             coverage,
+		DefaultRampSchedule:         os.Getenv("DEFAULT_RAMP_SCHEDULE"),
+		APIKeySecretARN:             os.Getenv("API_KEY_SECRET_ARN"),
+		EnableDashboard:             os.Getenv("ENABLE_DASHBOARD") == "true",
+		DashboardBucket:             os.Getenv("DASHBOARD_BUCKET"),
+		DashboardURL:                os.Getenv("DASHBOARD_URL"),
+		IssuerURL:                   os.Getenv("CUDLY_ISSUER_URL"),
+		CORSAllowedOrigin:           os.Getenv("CORS_ALLOWED_ORIGIN"),
 		// SCHEDULED_TASK_SECRET (plaintext) is the legacy dev-only path.
 		// SCHEDULED_TASK_SECRET_NAME (secret-store name) is preferred in prod;
 		// NewApplicationFromDeps resolves it via the SecretResolver at init.
@@ -339,6 +348,27 @@ func LoadApplicationConfig() (ApplicationConfig, error) {
 		Analytics:               analyticsConfig,
 		RecommendationSchedule:  os.Getenv("RECOMMENDATION_SCHEDULE"),
 	}, nil
+}
+
+// loadScheduledPurchaseMaxOverdue parses SCHEDULED_PURCHASE_MAX_OVERDUE, a Go
+// duration such as "24h" or "36h": how long after its due time the fire and
+// process sweeps may still buy a row (issue #712). Unset returns 0, which the
+// purchase manager reads as purchase.DefaultMaxDueRowAge. A malformed or
+// non-positive value fails startup rather than silently changing which overdue
+// purchases get bought.
+func loadScheduledPurchaseMaxOverdue() (time.Duration, error) {
+	raw := os.Getenv("SCHEDULED_PURCHASE_MAX_OVERDUE")
+	if raw == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid SCHEDULED_PURCHASE_MAX_OVERDUE: %w", err)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("invalid SCHEDULED_PURCHASE_MAX_OVERDUE: %q must be a positive duration", raw)
+	}
+	return d, nil
 }
 
 // validateAppConfigEnvDefaults validates the money-moving env-sourced defaults
@@ -499,6 +529,7 @@ func NewApplicationFromDeps(ctx context.Context, cfg ApplicationConfig, deps Ext
 		EmailSender:            deps.EmailSender,
 		STSClient:              deps.STSClient,
 		NotificationDaysBefore: cfg.NotificationDaysBefore,
+		MaxDueRowAge:           cfg.ScheduledPurchaseMaxOverdue,
 		DefaultTerm:            cfg.DefaultTerm,
 		DefaultPaymentOption:   cfg.DefaultPaymentOption,
 		DefaultCoverage:        cfg.DefaultCoverage,
@@ -884,6 +915,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		AmbientAWSCreds:        awsCfg.Credentials,
 		CredentialStore:        credStore,
 		NotificationDaysBefore: app.appConfig.NotificationDaysBefore,
+		MaxDueRowAge:           app.appConfig.ScheduledPurchaseMaxOverdue,
 		DefaultTerm:            app.appConfig.DefaultTerm,
 		DefaultPaymentOption:   app.appConfig.DefaultPaymentOption,
 		DefaultCoverage:        app.appConfig.DefaultCoverage,
