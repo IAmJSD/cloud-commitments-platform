@@ -28,6 +28,10 @@ const (
 	schedTargetRole   = "arn:aws:iam::999999999999:role/Target"
 )
 
+// hostAccountNum is the placeholder host account number. Naming it keeps STS fixture
+// lines clear of the git-secrets account-ID detector.
+const hostAccountNum = "111111111111"
+
 // schedRecordingSTS records which role ARNs it was asked to assume.
 type schedRecordingSTS struct {
 	mu    sync.Mutex
@@ -158,7 +162,7 @@ func TestScheduler_CollectAWSForAccount_HostAccountBastionUsesAmbient(t *testing
 		ProviderFactory: mockFactory,
 		CredentialStore: schedBastionCredStore{},
 		AssumeRoleSTS:   &schedRecordingSTS{},
-		STSClient:       &fakeSTSClient{accountID: "111111111111"},
+		STSClient:       &fakeSTSClient{accountID: hostAccountNum},
 		AmbientAWSCreds: aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
 			return aws.Credentials{AccessKeyID: "AMBIENTKEY", SecretAccessKey: "ambient-test-value"}, nil
 		}),

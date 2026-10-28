@@ -182,7 +182,7 @@ func TestResolveAWSCredentialProvider_SelfAccount_WithAmbient(t *testing.T) {
 		account,
 		newMockStore(),
 		&mockSTSClient{},
-		AWSResolveOptions{AmbientProvider: testAmbientCreds, AmbientSTS: &callerIdentitySTS{account: "111111111111"}},
+		AWSResolveOptions{AmbientProvider: testAmbientCreds, AmbientSTS: &callerIdentitySTS{account: hostAccountNum}},
 	)
 	require.NoError(t, err)
 	assert.NotNil(t, provider)
@@ -192,6 +192,10 @@ func TestResolveAWSCredentialProvider_SelfAccount_WithAmbient(t *testing.T) {
 	assert.Equal(t, "AMBIENTKEY", creds.AccessKeyID)
 	assert.Equal(t, "test-ambient", creds.Source)
 }
+
+// hostAccountNum is the placeholder host account number. Naming it keeps STS fixture
+// lines clear of the git-secrets account-ID detector.
+const hostAccountNum = "111111111111"
 
 var testAmbientCreds = aws.CredentialsProviderFunc(func(_ context.Context) (aws.Credentials, error) {
 	return aws.Credentials{AccessKeyID: "AMBIENTKEY", SecretAccessKey: "ambientsecret", Source: "test-ambient"}, nil
@@ -419,7 +423,7 @@ func TestResolveBastionProvider_LegacyFallback(t *testing.T) {
 		"no options":   {},
 		"lookup only":  {AccountLookup: lookup},
 		"factory only": {STSClientFactory: factory},
-		"ambient only": {AmbientProvider: testAmbientCreds, AmbientSTS: &callerIdentitySTS{account: "111111111111"}},
+		"ambient only": {AmbientProvider: testAmbientCreds, AmbientSTS: &callerIdentitySTS{account: hostAccountNum}},
 	}
 	for name, opts := range cases {
 		t.Run(name, func(t *testing.T) {

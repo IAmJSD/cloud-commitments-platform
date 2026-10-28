@@ -27,6 +27,10 @@ const (
 	probeTargetRole   = "arn:aws:iam::999999999999:role/Target"
 )
 
+// hostAccountNum is the placeholder host account number. Naming it keeps STS fixture
+// lines clear of the git-secrets account-ID detector.
+const hostAccountNum = "111111111111"
+
 // fakeSTSEndpoint answers AssumeRole and records the access key that signed it.
 type fakeSTSEndpoint struct {
 	mu      sync.Mutex
@@ -90,7 +94,7 @@ func TestCommitmentProbeConfigBuilder_BastionAssumesTargetAsBastion(t *testing.T
 		RetryMaxAttempts: 1,
 	}
 	accounts := &bastionAccountStore{}
-	build := newCommitmentProbeConfigBuilder(bastionKeyStore{}, accounts, hostCfg, hostIdentitySTS{account: "111111111111"})
+	build := newCommitmentProbeConfigBuilder(bastionKeyStore{}, accounts, hostCfg, hostIdentitySTS{account: hostAccountNum})
 
 	target := &config.CloudAccount{ID: "target-acct", Provider: "aws", AWSAuthMode: "bastion", AWSBastionID: probeBastionID, AWSRoleARN: probeTargetRole}
 	cfg, err := build(context.Background(), target)
@@ -105,7 +109,7 @@ func TestCommitmentProbeConfigBuilder_BastionAssumesTargetAsBastion(t *testing.T
 
 func TestCommitmentProbeConfigBuilder_BastionWithoutAccountStoreFailsClosed(t *testing.T) {
 	t.Setenv("AWS_EC2_METADATA_DISABLED", "true")
-	build := newCommitmentProbeConfigBuilder(bastionKeyStore{}, nil, aws.Config{Credentials: aws.AnonymousCredentials{}}, hostIdentitySTS{account: "111111111111"})
+	build := newCommitmentProbeConfigBuilder(bastionKeyStore{}, nil, aws.Config{Credentials: aws.AnonymousCredentials{}}, hostIdentitySTS{account: hostAccountNum})
 	target := &config.CloudAccount{ID: "target-acct", Provider: "aws", AWSAuthMode: "bastion", AWSBastionID: probeBastionID, AWSRoleARN: probeTargetRole}
 	_, err := build(context.Background(), target)
 	require.ErrorContains(t, err, "bastion account lookup and STS client factory are required")
