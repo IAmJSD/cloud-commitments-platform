@@ -30,10 +30,10 @@ func TestLogin_MFATokenRoundTrip(t *testing.T) {
 	router := api.NewRouter(api.NewHandler(api.HandlerConfig{AuthService: newAuthServiceAdapter(realAuth)}))
 
 	const email = "mfa-round-trip@example.com"
-	const password = "RoundTripPass@1"
+	const rtSecret = "RoundTripPass@1" // test-only placeholder
 	const recoveryCode = "ABCD-EFGH"
 	user := &auth.User{
-		ID: "user-rt", Email: email, Active: true, PasswordHash: auth.TestPasswordHash(t, password),
+		ID: "user-rt", Email: email, Active: true, PasswordHash: auth.TestPasswordHash(t, rtSecret),
 		MFAEnabled: true, MFASecret: "JBSWY3DPEHPK3PXP", PasswordVersion: 4,
 		MFARecoveryCodes: []string{auth.TestPasswordHash(t, "ABCDEFGH")},
 	}
@@ -50,7 +50,7 @@ func TestLogin_MFATokenRoundTrip(t *testing.T) {
 		return router.Route(ctx, "POST", "/api/auth/login", req)
 	}
 
-	pw := base64.StdEncoding.EncodeToString([]byte(password))
+	pw := base64.StdEncoding.EncodeToString([]byte(rtSecret))
 	_, err := post(`{"email":"` + email + `","password":"` + pw + `"}`)
 	ce, ok := api.IsClientError(err)
 	require.True(t, ok, "expected a client error, got %v", err)
