@@ -72,10 +72,10 @@ func (r *ladderRig) link(from, to string) {
 
 // firedTranche claims a real scheduled tranche with a real execution row.
 func (r *ladderRig) firedTranche(headStatus string, headProof bool, age time.Duration) (trancheID, headExec string) {
-	basis := config.LadderAmountOnDemand
+	basis, rate := config.LadderAmountCommitment, "1" // only commitment-dollar rows are claimable
 	tr := config.LadderTrancheDB{ID: uuid.New().String(), ConfigID: &r.cfgID, LayerType: ladder.LayerComputeSP,
 		Term: ladder.Term1Year, PaymentOption: ladder.PaymentNoUpfront, Status: ladder.TrancheStatusScheduled,
-		AmountUSDHr: 5, ScheduledDate: time.Now().Add(-time.Hour), AmountBasis: &basis}
+		AmountUSDHr: 5, ScheduledDate: time.Now().Add(-time.Hour), AmountBasis: &basis, CommitmentRate: &rate}
 	require.NoError(r.t, r.store.SaveLadderTranches(r.ctx, []config.LadderTrancheDB{tr}))
 	claimed, err := r.store.ClaimDueLadderTranches(r.ctx, r.cfgID, time.Now(), 10,
 		func(ctx context.Context, tx pgx.Tx, _ config.LadderTrancheDB) (string, error) {

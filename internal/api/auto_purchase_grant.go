@@ -72,10 +72,55 @@ func credentialKind(ctx context.Context, session *Session) string {
 // requireAutoPurchaseGrant refuses the admin API key and otherwise requires
 // execute:purchases, evaluated against the credential presented.
 func (h *Handler) requireAutoPurchaseGrant(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session) error {
+	if err := refuseAutoPurchaseCredential(session); err != nil {
+		return err
+	}
+	_, err := h.requirePermission(ctx, req, auth.ActionExecute, auth.ResourcePurchases)
+	return err
+}
+
+// refuseAutoPurchaseCredential is the credential half of the auto-purchase
+// grant: no session, or the stateless admin API key, can never arm.
+func refuseAutoPurchaseCredential(session *Session) error {
 	if session == nil || session.UserID == apiKeyAdminUserID {
 		return NewClientError(403, autoPurchaseGrantDenied)
 	}
-	_, err := h.requirePermission(ctx, req, auth.ActionExecute, auth.ResourcePurchases)
+	return nil
+}
+
+// armingGrants holds the outcome (nil = granted) of the two requirePermission
+// checks a global_config write may need to arm unattended spend:
+// execute:purchases (auto-purchase and ladder execution switches) and
+// execute:ri-exchange (RI exchange auto mode and its caps).
+//
+// They are resolved by resolveArmingGrants BEFORE UpdateGlobalConfigAtomic
+// opens its transaction, and the gates inside the closure read them from here.
+// The closure runs while the transaction holds a pooled connection; a
+// requirePermission call there needs a second one from the same pool, so as
+// many concurrent arming saves as the pool has connections deadlocked the
+// instance (issue #1517). Whether a write escalates still depends on the
+// advisory-locked row, so it is still decided inside the closure; only the
+// permission lookup moved out. A lookup error is kept, not raised, so a write
+// that escalates nothing is unaffected by it, exactly as when the lookup ran
+// only on escalation.
+type armingGrants struct {
+	purchases  error
+	riExchange error
+}
+
+// resolveArmingGrants evaluates both execute verbs against the credential
+// presented, through requirePermission, so a user API key is held to its own
+// effective permissions just as the in-transaction checks did.
+func (h *Handler) resolveArmingGrants(ctx context.Context, req *events.LambdaFunctionURLRequest) armingGrants {
+	return armingGrants{
+		purchases:  h.resolveGrant(ctx, req, auth.ResourcePurchases),
+		riExchange: h.resolveGrant(ctx, req, auth.ResourceRIExchange),
+	}
+}
+
+// resolveGrant returns the requirePermission outcome for execute on resource.
+func (h *Handler) resolveGrant(ctx context.Context, req *events.LambdaFunctionURLRequest, resource string) error {
+	_, err := h.requirePermission(ctx, req, auth.ActionExecute, resource)
 	return err
 }
 
@@ -114,19 +159,31 @@ func formatCap(v *float64) string {
 
 // requireAutoPurchaseSwitchGrant gates and stamps a change of the global kill
 // switch inside the UpdateGlobalConfigAtomic closure. Only off->on needs the
-// grant; any change is stamped so the last actor is always recorded.
-func (h *Handler) requireAutoPurchaseSwitchGrant(ctx context.Context, req *events.LambdaFunctionURLRequest, session *Session, before bool, cfg *config.GlobalConfig) error {
+// grant; any change is stamped so the last actor is always recorded. grant is
+// the pre-resolved execute:purchases outcome (armingGrants.purchases): nothing
+// here may read through the pool while the transaction holds a connection.
+func requireAutoPurchaseSwitchGrant(ctx context.Context, session *Session, grant error, before bool, cfg *config.GlobalConfig) error {
 	if before == cfg.AutoPurchaseEnabled {
 		return nil
 	}
 	if cfg.AutoPurchaseEnabled {
-		if err := h.requireAutoPurchaseGrant(ctx, req, session); err != nil {
+		if err := prefetchedAutoPurchaseGrant(session, grant); err != nil {
 			return err
 		}
 	}
 	by, via, at := session.UserID, credentialKind(ctx, session), time.Now().UTC()
 	cfg.AutoPurchaseChangedBy, cfg.AutoPurchaseChangedVia, cfg.AutoPurchaseChangedAt = &by, &via, &at
 	return nil
+}
+
+// prefetchedAutoPurchaseGrant is requireAutoPurchaseGrant with the
+// execute:purchases lookup already done: the credential refusal first, then the
+// pre-resolved permission outcome.
+func prefetchedAutoPurchaseGrant(session *Session, grant error) error {
+	if err := refuseAutoPurchaseCredential(session); err != nil {
+		return err
+	}
+	return grant
 }
 
 // logAutoPurchaseSwitchChange records a committed change of the kill switch.

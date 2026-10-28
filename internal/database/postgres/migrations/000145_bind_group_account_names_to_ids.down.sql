@@ -1,0 +1,11 @@
+-- 000145 down: intentional no-op.
+--
+-- The up migration replaced display-name entries in groups.allowed_accounts
+-- with the IDs of the accounts they named. Writing the names back would
+-- restore the unbound entries issue #1034 removes, and the original spelling
+-- of a rewritten entry is not recorded anyway.
+--
+-- Leaving the IDs in place is safe for a rollback: pre-#1034 code matches an
+-- allowed_accounts entry against the account ID as well as the name, so every
+-- rewritten entry keeps granting the same account under the old code.
+SELECT 1; -- no-op: rewritten entries keep working by ID

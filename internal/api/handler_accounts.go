@@ -21,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -90,7 +91,10 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 		return nil, err
 	}
 
-	filter := buildAccountFilter(req.QueryStringParameters)
+	filter, err := buildAccountFilter(req.QueryStringParameters)
+	if err != nil {
+		return nil, err
+	}
 
 	accts, err := h.config.ListCloudAccounts(ctx, filter)
 	if err != nil {
@@ -121,6 +125,7 @@ func (h *Handler) listAccounts(ctx context.Context, req *events.LambdaFunctionUR
 	}
 
 	// Mark the self-account (the account matching CUDly's own host identity)
+	// and attach the derived notices (issue #1194).
 	h.markSelfAccount(ctx, accts)
 
 	return accts, nil
@@ -155,7 +160,10 @@ func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFun
 		return nil, err
 	}
 
-	filter := buildAccountFilter(req.QueryStringParameters)
+	filter, err := buildAccountFilter(req.QueryStringParameters)
+	if err != nil {
+		return nil, err
+	}
 
 	accts, err := h.config.ListCloudAccounts(ctx, filter)
 	if err != nil {
@@ -187,43 +195,65 @@ func (h *Handler) listAccountsMinimal(ctx context.Context, req *events.LambdaFun
 	return summaries, nil
 }
 
-// markSelfAccount sets IsSelf=true on the account matching the source identity.
+// markSelfAccount sets IsSelf=true on the account matching the source
+// identity, then attaches each account's derived notices. The self-account
+// has no role ARN, so its notices use CUDly's own partition from STS.
 func (h *Handler) markSelfAccount(ctx context.Context, accts []config.CloudAccount) {
 	si := h.resolveSourceIdentity(ctx)
-	if si == nil || si.ExternalID() == "" {
-		return
+	var hostPartition string
+	if si != nil {
+		hostPartition = si.Partition
 	}
 	for i := range accts {
-		if accts[i].Provider == si.Provider && accts[i].ExternalID == si.ExternalID() {
+		if si != nil && si.ExternalID() != "" && accts[i].Provider == si.Provider && accts[i].ExternalID == si.ExternalID() {
 			accts[i].IsSelf = true
 		}
+		annotateAccountNotices(&accts[i], hostPartition)
 	}
 }
 
+// annotateAccountNotices sets the derived notices on acct, such as the aws-cn
+// Savings Plans limitation (issue #1194). The partition comes from the
+// account's role ARN; a self-account with no role ARN falls back to
+// hostPartition, CUDly's own partition ("" when unknown).
+func annotateAccountNotices(acct *config.CloudAccount, hostPartition string) {
+	partition := acct.AWSPartition()
+	if partition == "" && acct.IsSelf && acct.Provider == "aws" {
+		partition = hostPartition
+	}
+	acct.Notices = config.AWSPartitionNotices(partition)
+}
+
 // buildAccountFilter constructs a CloudAccountFilter from query parameters.
-func buildAccountFilter(params map[string]string) config.CloudAccountFilter {
+// An unknown provider or an enabled value other than "true"/"false" is a 400
+// instead of being silently ignored (issue #312); an empty value or
+// provider "all" means no filter.
+func buildAccountFilter(params map[string]string) (config.CloudAccountFilter, error) {
 	var filter config.CloudAccountFilter
 
-	if p, ok := params["provider"]; ok && p != "" {
-		filter.Provider = &p
+	provider, err := providerFilterParam(params["provider"])
+	if err != nil {
+		return filter, err
+	}
+	if provider != "" {
+		filter.Provider = &provider
 	}
 
-	if e, ok := params["enabled"]; ok {
-		switch e {
-		case "true":
-			t := true
-			filter.Enabled = &t
-		case "false":
-			f := false
-			filter.Enabled = &f
-		}
+	switch params["enabled"] {
+	case "":
+	case "true":
+		t := true
+		filter.Enabled = &t
+	case "false":
+		f := false
+		filter.Enabled = &f
+	default:
+		return filter, NewClientError(400, "invalid enabled: must be true or false")
 	}
 
-	if s, ok := params["search"]; ok {
-		filter.Search = s
-	}
+	filter.Search = params["search"]
 
-	return filter
+	return filter, nil
 }
 
 // createSelfAccount handles POST /api/accounts/self.
@@ -255,6 +285,7 @@ func (h *Handler) createSelfAccount(ctx context.Context, httpReq *events.LambdaF
 	}
 
 	account.IsSelf = true
+	annotateAccountNotices(account, si.Partition)
 	return account, nil
 }
 
@@ -331,6 +362,7 @@ func (h *Handler) createAccount(ctx context.Context, httpReq *events.LambdaFunct
 		return nil, classifyStoreError(err, fmt.Sprintf("an account with external ID %q already exists for %s", req.ExternalID, req.Provider))
 	}
 
+	annotateAccountNotices(account, "")
 	return account, nil
 }
 
@@ -546,6 +578,7 @@ func (h *Handler) getAccount(ctx context.Context, req *events.LambdaFunctionURLR
 		return nil, err
 	}
 
+	annotateAccountNotices(account, "")
 	return account, nil
 }
 
@@ -591,6 +624,7 @@ func (h *Handler) updateAccount(ctx context.Context, httpReq *events.LambdaFunct
 		return nil, classifyStoreError(err, fmt.Sprintf("an account with external ID %q already exists for %s", req.ExternalID, req.Provider))
 	}
 
+	annotateAccountNotices(account, "")
 	return account, nil
 }
 
@@ -1140,7 +1174,11 @@ func (h *Handler) saveAccountServiceOverride(ctx context.Context, httpReq *event
 		return nil, err
 	}
 
-	if err := h.config.SaveAccountServiceOverride(ctx, override); err != nil {
+	// The write and its config_audit_events row commit together (issue #1493).
+	audit := config.AuditContext{Actor: configAuditActor(session)}
+	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		return h.config.SaveAccountServiceOverrideAuditedTx(ctx, tx, override, audit)
+	}); err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 
@@ -1246,7 +1284,10 @@ func (h *Handler) deleteAccountServiceOverride(ctx context.Context, req *events.
 		return nil, err
 	}
 
-	if err := h.config.DeleteAccountServiceOverride(ctx, accountID, provider, service); err != nil {
+	audit := config.AuditContext{Actor: configAuditActor(session)}
+	if err := h.config.WithTx(ctx, func(tx pgx.Tx) error {
+		return h.config.DeleteAccountServiceOverrideAuditedTx(ctx, tx, accountID, provider, service, audit)
+	}); err != nil {
 		return nil, fmt.Errorf("accounts: %w", err)
 	}
 
@@ -1262,9 +1303,12 @@ func (h *Handler) deleteAccountServiceOverride(ctx context.Context, req *events.
 //   - 400 ClientError listing every provider mismatch in one message
 //     (so clients fix everything in one round-trip rather than
 //     resubmitting to discover the next)
-//   - nil when all accounts match (or when the plan has no parseable
-//     services — defensive skip; production plans always carry at least
-//     one service, frontend enforces this)
+//   - 500 ClientError when a stored service key names no provider (fail
+//     closed: skipping the key could leave the provider set empty, which
+//     would accept an account of any provider, issue #316)
+//   - nil when all accounts match (or when the plan has no services at
+//     all — production plans always carry at least one service, frontend
+//     enforces this)
 //
 // Pulled out of setPlanAccounts to keep that function under the gocyclo
 // budget (limit 10). No business logic lives here that isn't otherwise
@@ -1275,7 +1319,13 @@ func (h *Handler) validatePlanAccountProviders(ctx context.Context, planID strin
 		return err
 	}
 
-	expected := config.DerivePlanProviders(plan)
+	expected, err := config.DerivePlanProviders(plan)
+	if err != nil {
+		// The key is stored data, not the caller's input; log it and keep
+		// the plan UUID out of the response, as the 500s above do.
+		logging.Errorf("validatePlanAccountProviders: %v", err)
+		return NewClientError(500, "failed to validate plan accounts")
+	}
 	if len(expected) == 0 {
 		return nil
 	}

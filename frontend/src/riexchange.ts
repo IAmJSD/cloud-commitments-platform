@@ -37,6 +37,7 @@ import { createIcon, iconSvg } from './icons';
 import { applyReadOnlySettings, isPermissionDeniedError } from './settings';
 import { showToast } from './toast';
 import { getCurrentUser } from './state';
+import { attachAzureExchangeToolbar, buildAzureSelectCell, buildAzureSelectHeader, canPreviewAzureExchange } from './riexchange-azure';
 
 // Module state
 let currentRIs: ConvertibleRI[] = [];
@@ -421,7 +422,7 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
           <th>RI ID</th>
           <th>Instance Type${filterBtn('instance_type')}</th>
           <th>AZ${filterBtn('availability_zone')}</th>
-          <th>Count${filterBtn('instance_count')}</th>
+          <th class="num">Count${filterBtn('instance_count')}</th>
           <th>Offering${filterBtn('offering_type')}</th>
           <th>Expiry</th>
           <th>Utilization${filterBtn('utilization_pct')}</th>
@@ -439,7 +440,7 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
             <td class="monospace">${escapeHtml(ri.reserved_instance_id)}</td>
             <td>${escapeHtml(ri.instance_type)}</td>
             <td>${escapeHtml(ri.availability_zone)}</td>
-            <td>${ri.instance_count}</td>
+            <td class="num">${ri.instance_count}</td>
             <td>${escapeHtml(ri.offering_type)}</td>
             <td>${formatDate(ri.end)}</td>
             <td class="${utilClass}">${utilText}</td>
@@ -478,8 +479,9 @@ function renderRIsTable(container: HTMLElement, accountID?: string): void {
  * entirely via DOM construction / textContent — never innerHTML — so any
  * Azure-derived field (SKU, display name, region) cannot inject markup.
  *
- * Azure reservations are listed read-only here; the quote/execute modal is
- * AWS-specific (offering-UUID flow), so no per-row Exchange button is shown.
+ * Users who can preview an exchange get a selection column and an
+ * "Exchange selected" action that opens the Azure exchange modal
+ * (riexchange-azure.ts, issue #81).
  */
 function renderAzureRIsTable(
   container: HTMLElement,
@@ -496,23 +498,30 @@ function renderAzureRIsTable(
 
   container.textContent = '';
   const table = document.createElement('table');
+  const canExchange = canPreviewAzureExchange();
 
   const thead = document.createElement('thead');
   const headerRow = document.createElement('tr');
-  for (const label of ['Reservation', 'SKU', 'Quantity', 'Region', 'Term', 'Expiry']) {
+  const labels = ['Reservation', 'SKU', 'Quantity', 'Region', 'Term', 'Expiry'];
+  if (canExchange) headerRow.appendChild(buildAzureSelectHeader());
+  for (const label of labels) {
     const th = document.createElement('th');
     th.textContent = label;
+    if (label === 'Quantity') th.className = 'num';
     headerRow.appendChild(th);
   }
   thead.appendChild(headerRow);
   table.appendChild(thead);
 
   const tbody = document.createElement('tbody');
-  for (const r of reservations) {
-    tbody.appendChild(buildAzureRIRow(r));
-  }
+  reservations.forEach((r, i) => {
+    const tr = buildAzureRIRow(r);
+    if (canExchange) tr.prepend(buildAzureSelectCell(r, i));
+    tbody.appendChild(tr);
+  });
   table.appendChild(tbody);
   container.appendChild(table);
+  if (canExchange) attachAzureExchangeToolbar(container, table, reservations, () => { void loadRIExchange(); });
 }
 
 function buildAzureRIRow(r: ExchangeableAzureRI): HTMLTableRowElement {
@@ -520,7 +529,7 @@ function buildAzureRIRow(r: ExchangeableAzureRI): HTMLTableRowElement {
 
   appendAzureCell(tr, r.display_name || r.reservation_id);
   appendAzureCell(tr, r.sku);
-  appendAzureCell(tr, String(r.quantity));
+  appendAzureCell(tr, String(r.quantity), true);
   appendAzureCell(tr, r.region || '—');
   appendAzureCell(tr, r.term || '—');
   appendAzureCell(tr, r.expiry_date ? formatDate(r.expiry_date) : '—');
@@ -528,9 +537,11 @@ function buildAzureRIRow(r: ExchangeableAzureRI): HTMLTableRowElement {
   return tr;
 }
 
-function appendAzureCell(tr: HTMLTableRowElement, text: string): void {
+// numeric right-aligns the cell with tabular digits (td.num, issue #739).
+function appendAzureCell(tr: HTMLTableRowElement, text: string, numeric = false): void {
   const td = document.createElement('td');
   td.textContent = text;
+  if (numeric) td.className = 'num';
   tr.appendChild(td);
 }
 
@@ -588,9 +599,18 @@ export function renderExcludedRIsNotice(excluded: ExcludedRI[] | undefined): voi
     notice.className = '';
     return;
   }
-  const n = excluded.length;
+  const byReason = new Map<string, string[]>();
+  for (const e of excluded) {
+    const reason = e.reason || 'AWS returned no term length';
+    const ids = byReason.get(reason);
+    if (ids) ids.push(e.ri_id);
+    else byReason.set(reason, [e.ri_id]);
+  }
   notice.className = 'freshness-banner warning';
-  notice.textContent = `${n} convertible RI${n === 1 ? ' was' : 's were'} left out because AWS returned no term length: ${excluded.map((e) => e.ri_id).join(', ')}`;
+  // textContent keeps server-provided reasons and ids inert.
+  notice.textContent = [...byReason]
+    .map(([reason, ids]) => `${ids.length} convertible RI${ids.length === 1 ? ' was' : 's were'} left out because ${reason}: ${ids.join(', ')}`)
+    .join('; ');
 }
 
 /**
@@ -982,14 +1002,12 @@ function renderRecommendations(container: HTMLElement): void {
           <tr>
             <td class="monospace">${escapeHtml(rec.source_ri_id)}</td>
             <td>${rec.source_count}x ${escapeHtml(rec.source_instance_type)}</td>
-            <td>${rec.target_count}x ${escapeHtml(rec.target_instance_type)}</td>
+            <td>${renderSuggestedCell(rec)}</td>
             <td>${altCell}</td>
             <td class="${utilClass}">${utilPct === null ? '—' : `${utilPct.toFixed(1)}%`}</td>
             <td>${rec.normalized_used.toFixed(1)} / ${rec.normalized_purchased.toFixed(1)}</td>
             <td>${escapeHtml(rec.reason)}</td>
-            ${canExchange ? `<td>
-              <button class="btn-small" data-action="fill-quote" data-index="${idx}">Exchange</button>
-            </td>` : ''}
+            ${canExchange ? `<td>${renderReshapeExchangeButton(rec, idx)}</td>` : ''}
           </tr>`;
         }).join('')}
       </tbody>
@@ -1051,8 +1069,44 @@ function renderAlternativesCell(alternatives: OfferingOption[] | undefined): str
     .join(' ');
 }
 
+// hasReshapeTarget reports whether a reshape recommendation names a primary
+// exchange target. The analyzer emits target_instance_type "" and
+// target_count 0 when it has none, for example for a completely unused RI
+// or one whose target would exceed the units the account owns (#1410).
+function hasReshapeTarget(rec: ReshapeRecommendation): boolean {
+  return Boolean(rec.target_instance_type) && rec.target_count > 0;
+}
+
+// canExchangeReshape reports whether the row's Exchange button has anything
+// to offer: a primary target, or cross-family alternatives the modal's picker
+// can preselect from.
+function canExchangeReshape(rec: ReshapeRecommendation): boolean {
+  return hasReshapeTarget(rec) || (rec.alternative_targets?.length ?? 0) > 0;
+}
+
+function renderSuggestedCell(rec: ReshapeRecommendation): string {
+  if (!hasReshapeTarget(rec)) {
+    return '<span class="text-muted">No exchange target</span>';
+  }
+  return `${rec.target_count}x ${escapeHtml(rec.target_instance_type)}`;
+}
+
+// renderReshapeExchangeButton renders the row's Exchange action. A row with
+// nothing to exchange into gets a disabled button with no data-action, so no
+// click handler is attached and the reason is still discoverable on hover.
+function renderReshapeExchangeButton(rec: ReshapeRecommendation, idx: number): string {
+  if (!canExchangeReshape(rec)) {
+    const why = 'No exchange target available for this RI';
+    return `<button type="button" class="btn-small" disabled title="${why}" aria-label="Exchange: ${why}">Exchange</button>`;
+  }
+  return `<button type="button" class="btn-small" data-action="fill-quote" data-index="${idx}">Exchange</button>`;
+}
+
 function fillQuoteFromRecommendation(rec: ReshapeRecommendation): void {
-  openExchangeModal(rec.source_ri_id, rec.target_count, rec.target_instance_type, rec.alternative_targets);
+  // With no primary target the modal opens on an empty target row for the
+  // alternatives; a count of 0 would only fail validation.
+  const count = hasReshapeTarget(rec) ? rec.target_count : 1;
+  openExchangeModal(rec.source_ri_id, count, rec.target_instance_type, rec.alternative_targets);
 }
 
 export function fillQuoteFromRI(riId: string, count: number): void {
@@ -2024,7 +2078,7 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
       + '<td>' + escapeHtml(String(rec.target_count)) + 'x ' + escapeHtml(rec.target_instance_type) + '</td>'
       // payment_due is USD (the execute cap is max_payment_due_usd); an
       // empty amount renders as a dash, not a lone "$" (issue #284).
-      + '<td>' + (rec.payment_due ? '$' + escapeHtml(rec.payment_due) : '&mdash;') + '</td>'
+      + '<td class="num">' + (rec.payment_due ? '$' + escapeHtml(rec.payment_due) : '&mdash;') + '</td>'
       + '<td>' + statusBadgeHtml(rec.status) + errorLine + '</td>'
       + '<td>' + exchangeIdCell + '</td>'
       + '<td>' + approveBtn + '</td>'
@@ -2033,7 +2087,7 @@ function renderExchangeHistory(container: HTMLElement, records: RIExchangeHistor
 
   const tableHTML = '<table>'
     + '<thead><tr>'
-    + '<th>Date</th><th>Source Type</th><th>Target Type</th><th>Payment</th><th>Status</th><th>Exchange ID</th><th>Actions</th>'
+    + '<th>Date</th><th>Source Type</th><th>Target Type</th><th class="num">Payment</th><th>Status</th><th>Exchange ID</th><th>Actions</th>'
     + '</tr></thead>'
     + '<tbody>' + rowsHTML + '</tbody>'
     + '</table>';

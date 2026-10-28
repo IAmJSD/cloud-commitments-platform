@@ -105,7 +105,7 @@ func TestHandler_executePurchase_StoredPriceUnderCapProceeds(t *testing.T) {
 	expectStoredRecs(mockStore, config.RecommendationRecord{
 		ID:       "aws|123456789012|ec2|us-east-1|m5.24xlarge||3|all-upfront",
 		Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.24xlarge",
-		Count: 1, Term: 3, Payment: "all-upfront", UpfrontCost: 900, Savings: 30,
+		Count: 1, Term: 3, Payment: "all-upfront", UpfrontCost: 900, Savings: 30, CommitmentCurrency: "USD",
 	})
 	mockStore.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil)
 	mockStore.On("GetPendingExecutions", mock.Anything).Return([]config.PurchaseExecution{}, nil)
@@ -419,12 +419,12 @@ func TestHandler_executePurchase_PaymentChangePricedFromStoredVariant(t *testing
 		config.RecommendationRecord{
 			ID:       "aws|acct|ec2|us-east-1|m5.large||1|all-upfront",
 			Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large",
-			Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 3000, Savings: 10,
+			Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 3000, Savings: 10, CommitmentCurrency: "USD",
 		},
 		config.RecommendationRecord{
 			ID:       "aws|acct|ec2|us-east-1|m5.large||1|no-upfront",
 			Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large",
-			Count: 1, Term: 1, Payment: "no-upfront", UpfrontCost: 0, MonthlyCost: float64Ptr(100), Savings: 10,
+			Count: 1, Term: 1, Payment: "no-upfront", UpfrontCost: 0, MonthlyCost: float64Ptr(100), Savings: 10, CommitmentCurrency: "USD",
 		},
 	)
 
@@ -878,13 +878,13 @@ func TestHandler_executePurchase_MatchingTenancyTermChangeSucceeds(t *testing.T)
 		config.RecommendationRecord{
 			ID:       "aws|acct|ec2|us-east-1|m5.large||3|all-upfront",
 			Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large",
-			Count: 1, Term: 3, Payment: "all-upfront", UpfrontCost: 3000, Savings: 300,
+			Count: 1, Term: 3, Payment: "all-upfront", UpfrontCost: 3000, Savings: 300, CommitmentCurrency: "USD",
 			Details: json.RawMessage(`{"instance_type":"m5.large","platform":"Linux/UNIX","tenancy":"default","scope":"regional"}`),
 		},
 		config.RecommendationRecord{
 			ID:       "aws|acct|ec2|us-east-1|m5.large||1|all-upfront",
 			Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large",
-			Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 1200, Savings: 100,
+			Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 1200, Savings: 100, CommitmentCurrency: "USD",
 			Details: json.RawMessage(`{"instance_type":"m5.large","platform":"Linux/UNIX","tenancy":"default","scope":"regional"}`),
 		},
 	)
@@ -904,8 +904,8 @@ func TestHandler_executePurchase_MatchingTenancyTermChangeSucceeds(t *testing.T)
 // TestHandler_executePurchase_StaleOriginIDRefused is the fail-open
 // regression guard from the independent review of PR #406: the request
 // names an origin recommendation id that used to be real but has since been
-// wiped from the current stored set (e.g. a collection refresh --
-// ReplaceRecommendations -- ran between page load and purchase), while the
+// evicted from the current stored set (e.g. a collection refresh's stale-row
+// eviction ran between page load and purchase), while the
 // NEWLY requested term still resolves to a current row via config.RecIdentityKey.
 // Pre-fix, an unresolvable id was silently SKIPPED (treated the same as an
 // honest caller who never made an origin claim at all), so the purchase
@@ -977,7 +977,7 @@ func emptyIDExecuteHarness(t *testing.T, details string) (*config.PurchaseExecut
 	expectStoredRecs(mockStore, config.RecommendationRecord{
 		ID:       "aws|acct|ec2|us-east-1|m5.large||1|all-upfront",
 		Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large",
-		Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 1200, Savings: 100,
+		Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 1200, Savings: 100, CommitmentCurrency: "USD",
 		Details: json.RawMessage(`{"instance_type":"m5.large","platform":"Linux/UNIX","tenancy":"dedicated","scope":"regional"}`),
 	})
 
@@ -1117,7 +1117,7 @@ func TestHandler_executePurchase_EmptyIDIgnoresNonDiscriminatorDetails(t *testin
 	const stored = `{"instance_type":"m5.large","platform":"Linux/UNIX","tenancy":"dedicated","scope":"regional"}`
 	row := config.RecommendationRecord{
 		ID: "ec2-row", Provider: "aws", Service: "ec2", Region: "us-east-1", ResourceType: "m5.large",
-		Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 1200, Savings: 100,
+		Count: 1, Term: 1, Payment: "all-upfront", UpfrontCost: 1200, Savings: 100, CommitmentCurrency: "USD",
 		Details: json.RawMessage(stored),
 	}
 	saved, err := emptyIDExecuteAgainst(t, row,
@@ -1186,7 +1186,7 @@ func TestAzureCorrectedPriceExceedsOldUnitsCap(t *testing.T) {
 	authService.grantPermissions([]auth.Permission{{Action: auth.ActionExecute, Resource: auth.ResourcePurchases, Constraints: &auth.PermissionConstraints{MaxPurchaseAmount: 1000}}})
 	store.On("GetGlobalConfig", mock.Anything).Return(&config.GlobalConfig{}, nil).Maybe()
 	store.On("GetPendingExecutions", mock.Anything).Return([]config.PurchaseExecution{}, nil).Maybe()
-	expectStoredRecs(store, config.RecommendationRecord{ID: "azure-corrected", Provider: "azure", Service: "compute", Region: "westeurope", ResourceType: "Standard_D2s_v3", Count: 1, Term: 3, Payment: "upfront", UpfrontCost: 3600, Savings: 50})
+	expectStoredRecs(store, config.RecommendationRecord{ID: "azure-corrected", Provider: "azure", Service: "compute", Region: "westeurope", ResourceType: "Standard_D2s_v3", Count: 1, Term: 3, Payment: "upfront", UpfrontCost: 3600, Savings: 50, CommitmentCurrency: "USD"})
 	h := &Handler{config: store, auth: authService}
 	_, err := h.executePurchase(ctx, &events.LambdaFunctionURLRequest{Headers: map[string]string{"Authorization": "Bearer azure-cap"}, Body: `{"recommendations":[{"id":"azure-corrected","provider":"azure","service":"compute","region":"westeurope","resource_type":"Standard_D2s_v3","count":1,"term":3,"payment":"all-upfront","upfront_cost":70,"savings":50}]}`})
 	ce, ok := IsClientError(err)

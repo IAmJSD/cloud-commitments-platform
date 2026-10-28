@@ -20,9 +20,9 @@ describe('getAnalyticsTrends', () => {
     expect(apiRequest).toHaveBeenCalledWith('/analytics/trends');
   });
 
-  test('forwards account_id, provider and the window, URL-encoded', async () => {
+  test('forwards account_ids, provider and the window, URL-encoded', async () => {
     await getAnalyticsTrends({
-      accountID: 'acc/1 x',
+      accountIDs: ['acc/1 x', 'acc2'],
       provider: 'aws',
       start: '2026-05-01T00:00:00.000Z',
       end: '2026-10-23T12:00:00.000Z',
@@ -30,14 +30,15 @@ describe('getAnalyticsTrends', () => {
     const url = (apiRequest as jest.Mock).mock.calls[0][0] as string;
     const qs = new URLSearchParams(url.split('?')[1]);
     expect(url.startsWith('/analytics/trends?')).toBe(true);
-    expect(qs.get('account_id')).toBe('acc/1 x');
+    expect(qs.get('account_ids')).toBe('acc/1 x,acc2');
+    expect(qs.has('account_id')).toBe(false);
     expect(qs.get('provider')).toBe('aws');
     expect(qs.get('start')).toBe('2026-05-01T00:00:00.000Z');
     expect(qs.get('end')).toBe('2026-10-23T12:00:00.000Z');
   });
 
   test('omits empty filter values', async () => {
-    await getAnalyticsTrends({ accountID: '', provider: '' });
+    await getAnalyticsTrends({ accountIDs: [], provider: '' });
     expect(apiRequest).toHaveBeenCalledWith('/analytics/trends');
   });
 });

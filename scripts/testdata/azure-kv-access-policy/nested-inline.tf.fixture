@@ -1,0 +1,27 @@
+# Fixture: an access_policy block nested inside azurerm_key_vault. Must exit 1.
+#
+# The same inert grant as the standalone resource, written as the vault's own
+# argument. It is deliberately not at the indentation `terraform fmt` would
+# give it: the guard must find it at any depth of whitespace. The vault's
+# other blocks (network_acls) and prefix-named attributes must not be reported.
+
+resource "azurerm_key_vault" "main" {
+  name                      = "kv-fixture"
+  location                  = var.location
+  resource_group_name       = var.resource_group_name
+  tenant_id                 = data.azurerm_client_config.current.tenant_id
+  sku_name                  = "standard"
+  enable_rbac_authorization = true
+
+      access_policy {
+    tenant_id = data.azurerm_client_config.current.tenant_id
+    object_id = azurerm_user_assigned_identity.workload.principal_id
+
+    secret_permissions = ["Get", "List"]
+  }
+
+  network_acls {
+    default_action = "Deny"
+    bypass         = "AzureServices"
+  }
+}

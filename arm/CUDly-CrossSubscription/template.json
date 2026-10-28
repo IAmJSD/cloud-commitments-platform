@@ -13,13 +13,6 @@
       "metadata": {
         "description": "Object ID of the CUDly Azure AD service principal. Obtain with: az ad sp show --id <appId> --query id -o tsv"
       }
-    },
-    "roleAssignmentGuidPrefix": {
-      "type": "string",
-      "defaultValue": "[newGuid()]",
-      "metadata": {
-        "description": "Base GUID used to derive deterministic role assignment names. Leave at default to auto-generate."
-      }
     }
   },
 
