@@ -55,10 +55,10 @@ are the full record until the next release.
 - **The fire_scheduled_purchases sweep is now on by default on every
   Terraform platform** (Lambda, Fargate, Cloud Run, GKE, Container Apps and
   AKS), every 15 minutes. It carries out every purchase a person approves
-  while a purchase delay is set (`purchase_delay_hours`, 48 by default) once
-  the delay ends; until now those approvals never executed unless the
-  operator turned the sweep on. Keep it on unless `purchase_delay_hours` is
-  0. GKE deployed from `terraform/environments/gcp` still gets no Cloud
+  while a purchase delay is set (`purchase_delay_hours` > 0; the migrated
+  default is 0, which executes approvals immediately) once the delay ends;
+  until now those approvals never executed unless the operator turned the
+  sweep on. Keep it on unless `purchase_delay_hours` stays 0. GKE deployed from `terraform/environments/gcp` still gets no Cloud
   Scheduler jobs, this one included (that environment doesn't pass
   `enable_scheduled_tasks` to GKE). The server refuses (and sends the purchase-failed
   alert for) any purchase due more than 24h ago, so the first run cannot buy

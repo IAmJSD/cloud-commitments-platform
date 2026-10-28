@@ -776,8 +776,8 @@ resource "aws_lambda_permission" "eventbridge_ladder_run" {
 # scans purchase_executions in status=scheduled whose
 # scheduled_execution_at is in the past and fires each one. This
 # sweep is what carries out a purchase a person approved while a
-# purchase delay is set (purchase_delay_hours, 48 by default); without
-# it those approvals never execute. On by default (owner decision
+# purchase delay is set (purchase_delay_hours > 0); without it those
+# approvals never execute. On by default (owner decision
 # for #712): the server refuses any row due more than 24h ago (#1549),
 # so a first tick after enabling cannot buy a stale backlog.
 
