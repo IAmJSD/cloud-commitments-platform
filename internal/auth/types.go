@@ -239,6 +239,9 @@ type LoginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"` //nolint:gosec // G117: intentional credential field in request/response struct -- value is supplied by the authenticated caller or returned once at creation; it is not re-stored or re-serialized downstream
 	MFACode  string `json:"mfa_code,omitempty"`
+	// MFAToken is the continuation token an mfa_required answer issued
+	// (issue #134). Sent with Email and MFACode instead of Password.
+	MFAToken string `json:"mfa_token,omitempty"`
 }
 
 // LoginResponse is returned after successful login.
