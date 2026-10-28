@@ -37,20 +37,22 @@ const (
 	dimTask    = "missingTask"
 	dimPass    = "missingEnvPassThrough"
 	dimDefault = "missingEnvDefault"
+	// dimModuleDefault: a default-on task whose module enable var defaults
+	// to false.
+	dimModuleDefault = "moduleDefaultOff"
 )
 
-var validDims = []string{dimTask, dimPass, dimDefault}
+var validDims = []string{dimTask, dimPass, dimDefault, dimModuleDefault}
 
 // knownGaps documents what is not wired yet, per platform and dimension. Each
 // PR that wires a task removes it here; the test fails when actual != documented.
-// aws/cleanup-lambda runs cleanup outside the server task and is not scanned,
-// so cleanup shows as a gap on Fargate. terraform/environments/gcp passes
-// neither enable_scheduled_tasks nor app_url to the GKE module, so its Cloud
-// Scheduler (and with it every GKE sweep) stays off when deployed from there.
+// terraform/environments/gcp passes neither enable_scheduled_tasks nor app_url
+// to the GKE module, so its Cloud Scheduler (and with it every GKE sweep)
+// stays off when deployed from there. The GKE module also defaults
+// enable_scheduled_tasks to false, because it gates every Cloud Scheduler job
+// and those need app_url.
 var knownGaps = map[string]map[string][]string{
-	"aws-fargate": {dimTask: {"analytics_collect", "cleanup", "finalize_revocations",
-		"process_scheduled_purchases", "reap_stuck_purchases", "send_notifications"}},
-	"gcp-gke": {dimPass: {"collect_recommendations"}},
+	"gcp-gke": {dimPass: {"collect_recommendations"}, dimModuleDefault: {"collect_recommendations"}},
 }
 
 // legacyWiring lists tasks a platform schedules under variables other than
@@ -63,13 +65,13 @@ var legacyWiring = map[string]map[string]string{
 
 // Platforms with an envBlock are checked against the module block of that
 // name in envDir/compute.tf. aws platforms also have sweeps.tf checked;
-// needsPermission says whether it must hold an aws_lambda_permission (Lambda
-// only). cronJob platforms schedule their sweep_tasks through a Kubernetes
+// lambda says whether it targets a Lambda (action key plus
+// aws_lambda_permission) rather than ECS RunTask. cronJob platforms schedule their sweep_tasks through a Kubernetes
 // CronJob in scheduled-tasks.tf; httpSweep platforms through a "sweep"
 // resource of that type calling /api/scheduled/<task>.
 type platform struct {
 	name, dir, envDir, envBlock, httpSweep string
-	aws, needsPermission, cronJob          bool
+	aws, lambda, cronJob                   bool
 }
 
 const (
@@ -78,7 +80,7 @@ const (
 )
 
 var platforms = []platform{
-	{name: "aws-lambda", dir: "aws/lambda", aws: true, envDir: awsEnvDir, envBlock: "compute_lambda", needsPermission: true},
+	{name: "aws-lambda", dir: "aws/lambda", aws: true, envDir: awsEnvDir, envBlock: "compute_lambda", lambda: true},
 	{name: "aws-fargate", dir: "aws/fargate", aws: true, envDir: awsEnvDir, envBlock: "compute_fargate"},
 	{name: "cloudformation", dir: "../../../cloudformation/stacks/CUDly"},
 	{name: "gcp-cloud-run", dir: "gcp/cloud-run", envDir: gcpEnvDir, envBlock: "compute_cloud_run", httpSweep: "google_cloud_scheduler_job"},
@@ -332,7 +334,7 @@ func TestRequiredTasksWiredPerPlatform(t *testing.T) {
 			t.Errorf("%s: %s (missing now: %v)", p.name, prob, missing)
 		}
 		if p.aws {
-			sweeps, err := sweepProblems(p.dir, p.needsPermission)
+			sweeps, err := sweepProblems(p.dir, p.lambda)
 			if err != nil {
 				t.Errorf("%s: %v", p.name, err)
 			}

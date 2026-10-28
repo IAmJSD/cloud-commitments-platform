@@ -129,23 +129,30 @@ lint:
 vet:
 	go vet ./...
 
-# Check cyclomatic complexity
+# Check cyclomatic complexity. Same file set as CI's Lint Code job: _test.go
+# files are excluded there and in .golangci.yml, so they are here too (#349).
+# Only stdout is read as findings. gocyclo exits 1 both for findings and for a
+# fatal error such as a Go parse error, so exit 1 with nothing on stdout is a
+# tool failure, reported as one; its stderr is left on the terminal.
 complexity:
 	@echo "Checking cyclomatic complexity (threshold: 10)..."
-	@if command -v gocyclo > /dev/null; then \
-		COMPLEXITY_ISSUES=$$(gocyclo -over 10 -ignore '(^|/)(node_modules|vendor)/' . 2>&1 || true); \
-		if [ -n "$$COMPLEXITY_ISSUES" ]; then \
-			echo "❌ Found functions with cyclomatic complexity over 10:"; \
-			echo "$$COMPLEXITY_ISSUES"; \
-			echo ""; \
-			echo "⚠️  Please refactor these functions to reduce complexity."; \
-			echo "📖 Tip: Extract helper functions, use early returns, or simplify logic."; \
-			exit 1; \
-		else \
-			echo "✅ All functions have acceptable cyclomatic complexity (≤10)"; \
-		fi \
-	else \
+	@if ! command -v gocyclo > /dev/null; then \
 		echo "gocyclo not installed. Install: make install-dev-tools"; \
+		exit 1; \
+	fi; \
+	status=0; \
+	COMPLEXITY_ISSUES=$$(gocyclo -over 10 -ignore '_test\.go|(^|/)(node_modules|vendor)/' .) || status=$$?; \
+	if [ "$$status" -eq 0 ] && [ -z "$$COMPLEXITY_ISSUES" ]; then \
+		echo "✅ All functions have acceptable cyclomatic complexity (≤10)"; \
+	elif [ "$$status" -eq 1 ] && [ -n "$$COMPLEXITY_ISSUES" ]; then \
+		echo "❌ Found functions with cyclomatic complexity over 10:"; \
+		echo "$$COMPLEXITY_ISSUES"; \
+		echo ""; \
+		echo "⚠️  Please refactor these functions to reduce complexity."; \
+		echo "📖 Tip: Extract helper functions, use early returns, or simplify logic."; \
+		exit 1; \
+	else \
+		echo "❌ gocyclo failed (exit $$status) without reporting any function; see its error above."; \
 		exit 1; \
 	fi
 

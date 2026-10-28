@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/LeanerCloud/cloud-commitments-go/pkg/exchange"
-	azurecompute "github.com/LeanerCloud/cloud-commitments-go/providers/azure/services/compute"
 )
 
 // exchangeRefusals are the exported sentinels cloud-commitments-go wraps when
@@ -14,15 +13,16 @@ import (
 //     currency), so the USD max_payment_due_usd cap cannot be enforced
 //     against it. Returned by ExecuteExchange before
 //     AcceptReservedInstancesExchangeQuote.
-//   - azurecompute.ErrUnsupportedAppliedScope: a source reservation's applied
-//     scope cannot be carried onto the purchased reservation, or the sources
-//     mix scopes. Returned by CalculateExchange before any Azure call.
+//   - errAzureUnsupportedAppliedScope (azurecompute.ErrUnsupportedAppliedScope,
+//     aliased in provider_wiring.go): a source reservation's applied scope
+//     cannot be carried onto the purchased reservation, or the sources mix
+//     scopes. Returned by CalculateExchange before any Azure call.
 //
 // Both describe the request or the account it targets, not a server fault,
 // and both prove the exchange did not happen.
 var exchangeRefusals = []error{
 	exchange.ErrQuoteNotUSD,
-	azurecompute.ErrUnsupportedAppliedScope,
+	errAzureUnsupportedAppliedScope,
 }
 
 // exchangeRefusalError returns a 422 carrying err's message when err wraps

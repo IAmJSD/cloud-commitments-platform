@@ -37,7 +37,7 @@ CUDly supports deployment via Terraform across three cloud providers (AWS, Azure
 ./scripts/tf-deploy.sh aws prod
 ```
 
-The script uses profile-based tfvars from `terraform/profiles/<provider>/<profile>.tfvars`.
+The script runs in the provider's single root, `terraform/environments/<provider>`, with the profile's variables from `terraform/profiles/<provider>/<profile>.tfvars` and its backend from `terraform/environments/<provider>/backends/<profile>.tfbackend` (copy both from the `.example` files next to them).
 
 ### Manual Terraform
 
@@ -599,16 +599,14 @@ Each cloud provider has lifecycle policies configured via Terraform (`terraform/
 
 ### Database Cleanup Jobs
 
-The server's `cleanup` task deletes expired sessions and, via `CleanupOldExecutions(30)`, purchase executions that are completed with `scheduled_date` older than 30 days, canceled with `updated_at` older than 30 days, or in any status other than failed or canceled with `expires_at` older than 30 days. Failed executions are kept. Azure Container Apps schedules it by default; AWS Lambda, CloudFormation, GCP Cloud Run, GKE and AKS can schedule it on request:
+The server's `cleanup` task deletes expired sessions and, via `CleanupOldExecutions(30)`, purchase executions that are completed with `scheduled_date` older than 30 days, canceled with `updated_at` older than 30 days, or in any status other than failed or canceled with `expires_at` older than 30 days. Failed executions are kept. Azure Container Apps schedules it by default; AWS Lambda, AWS Fargate, CloudFormation, GCP Cloud Run, GKE and AKS can schedule it on request:
 
 - **Azure Container Apps (when `enable_scheduled_tasks` is true):** a Logic App calls `/api/scheduled/cleanup` daily (`terraform/modules/compute/azure/container-apps/scheduled-tasks.tf`)
 - **AWS Lambda (opt-in):** set `enable_cleanup_schedule = true` (default false; `cleanup_schedule` defaults to `rate(1 day)`) in `terraform/environments/aws`. The first run deletes the whole backlog older than 30 days, so export any history you want to keep first.
 - **CloudFormation (opt-in):** set the `EnableCleanupSchedule` stack parameter to `true` (default `false`; `CleanupSchedule` defaults to `rate(1 day)`) on `cloudformation/stacks/CUDly`. The same backlog warning applies.
-- **AWS Fargate:** nothing schedules it yet. The `terraform/modules/compute/aws/cleanup-lambda/` module is not consumed by any environment.
+- **AWS Fargate (opt-in):** the same `enable_cleanup_schedule` / `cleanup_schedule` variables in `terraform/environments/aws` add a `<stack>-fargate-sweep-cleanup` EventBridge rule that runs `./cudly --task cleanup` as a one-off ECS task (`terraform/modules/compute/aws/fargate/sweeps.tf`). The same backlog warning applies. (The `terraform/modules/compute/aws/cleanup-lambda/` module is not consumed by any environment.)
 - **GCP Cloud Run and GKE (opt-in):** set `enable_cleanup_schedule = true` (default false; `cleanup_schedule` defaults to `0 3 * * *`) in `terraform/environments/gcp`. It runs as a Cloud Scheduler job (`scheduled-tasks.tf` in each module) only when the module's `enable_scheduled_tasks` is true; that environment passes it to Cloud Run but not to GKE. The same backlog warning applies. The `terraform/modules/compute/gcp/cleanup-function/` module is not consumed by any environment.
 - **AKS (opt-in):** set `enable_cleanup_schedule = true` (default false; `cleanup_schedule` defaults to `0 3 * * *`) on the AKS module. Like the module's other scheduled tasks, it runs as a Kubernetes CronJob (`terraform/modules/compute/azure/aks/scheduled-tasks.tf`) only when `deploy_kubernetes_resources` is true.
-
-Scheduling for AWS Fargate is tracked by #712.
 
 Alternatively, use pg_cron for database-native scheduling.
 
@@ -618,9 +616,9 @@ CUDly learns that an RI listed on the AWS Reserved Instance Marketplace sold, cl
 
 - **AWS Lambda:** hourly by default. `enable_finalize_revocations_schedule` (default `true`) and `finalize_revocations_schedule` (default `rate(1 hour)`) in `terraform/environments/aws`.
 - **CloudFormation:** hourly by default. The `EnableFinalizeRevocationsSchedule` (default `true`) and `FinalizeRevocationsSchedule` (default `rate(1 hour)`) stack parameters on `cloudformation/stacks/CUDly`.
+- **AWS Fargate:** hourly by default, as a one-off ECS task. The same `enable_finalize_revocations_schedule` (default `true`) and `finalize_revocations_schedule` (default `rate(1 hour)`) variables in `terraform/environments/aws`.
 - **AKS:** hourly by default, as a Kubernetes CronJob, when `deploy_kubernetes_resources` is true. `enable_finalize_revocations_schedule` (default `true`) and `finalize_revocations_schedule` (default `30 * * * *`) on the AKS module.
 - **GCP Cloud Run, GKE and Azure Container Apps:** hourly by default, as a Cloud Scheduler job (GCP) or a Logic App (Container Apps), when the module's `enable_scheduled_tasks` is true. `enable_finalize_revocations_schedule` (default `true`) and `finalize_revocations_schedule` (default `30 * * * *`) in `terraform/environments/gcp` and `terraform/environments/azure`. `terraform/environments/gcp` does not pass `enable_scheduled_tasks` or `app_url` to GKE, so a GKE deployment from there has no Cloud Scheduler jobs.
-- **AWS Fargate:** nothing schedules `finalize_revocations`, so the poll does not run and listings stay as the list and cancel endpoints recorded them. Until #712 wires the task there, call `POST /api/scheduled/finalize_revocations` (authenticated like the other `/api/scheduled/` tasks) from your own scheduler, about hourly.
 
 ---
 

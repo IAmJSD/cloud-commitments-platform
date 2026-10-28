@@ -73,13 +73,6 @@ on:
         required: false
         type: string
 
-env:
-  # Must satisfy `required_version = ">= 1.10.0"` declared by every
-  # terraform/environments/*/main.tf -- pinning below 1.10 makes
-  # terraform init/validate abort with "Unsupported Terraform Core version"
-  # before touching any state. Keep in sync with ci.yml and pre-commit.yml.
-  TF_VERSION: '1.10.5'
-
 jobs:
   # Validate rollback request
   validate:
@@ -289,10 +282,16 @@ jobs:
             exit 1
           fi
 
+      - name: Read Terraform version
+        # The one pin lives in .terraform-version (issue #349); the script
+        # validates it, because an empty terraform_version means `latest`.
+        id: terraform-version
+        run: bash scripts/terraform-version.sh
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
-          terraform_version: ${{ env.TF_VERSION }}
+          terraform_version: ${{ steps.terraform-version.outputs.version }}
 
       - name: Rollback with Terraform
         env:
@@ -429,10 +428,16 @@ jobs:
             exit 1
           fi
 
+      - name: Read Terraform version
+        # The one pin lives in .terraform-version (issue #349); the script
+        # validates it, because an empty terraform_version means `latest`.
+        id: terraform-version
+        run: bash scripts/terraform-version.sh
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
-          terraform_version: ${{ env.TF_VERSION }}
+          terraform_version: ${{ steps.terraform-version.outputs.version }}
 
       - name: Rollback with Terraform
         env:
@@ -500,10 +505,16 @@ jobs:
             exit 1
           fi
 
+      - name: Read Terraform version
+        # The one pin lives in .terraform-version (issue #349); the script
+        # validates it, because an empty terraform_version means `latest`.
+        id: terraform-version
+        run: bash scripts/terraform-version.sh
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
-          terraform_version: ${{ env.TF_VERSION }}
+          terraform_version: ${{ steps.terraform-version.outputs.version }}
 
       - name: Rollback with Terraform
         env:
@@ -594,10 +605,16 @@ jobs:
             exit 1
           fi
 
+      - name: Read Terraform version
+        # The one pin lives in .terraform-version (issue #349); the script
+        # validates it, because an empty terraform_version means `latest`.
+        id: terraform-version
+        run: bash scripts/terraform-version.sh
+
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
-          terraform_version: ${{ env.TF_VERSION }}
+          terraform_version: ${{ steps.terraform-version.outputs.version }}
 
       - name: Rollback with Terraform
         env:

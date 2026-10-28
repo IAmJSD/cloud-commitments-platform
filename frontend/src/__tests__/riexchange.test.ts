@@ -70,6 +70,7 @@ import {
 } from '../riexchange';
 import * as api from '../api';
 import * as navigation from '../navigation';
+import { flushPromises } from './flush-promises';
 
 function createModal(): HTMLDivElement {
   const modal = document.createElement('div');
@@ -606,7 +607,7 @@ describe('openExchangeModal', () => {
     ]);
     openExchangeModal('ri-abc', 2);
     // Let the async populateAwsOfferings() settle.
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await flushPromises();
 
     const picker = modal.querySelector<HTMLSelectElement>('.modal-exchange-target-select');
     const options = picker ? Array.from(picker.querySelectorAll('option')) : [];
@@ -619,7 +620,7 @@ describe('openExchangeModal', () => {
     const mockListOfferings = api.listTargetOfferings as jest.Mock;
     mockListOfferings.mockRejectedValueOnce(new Error('throttled'));
     openExchangeModal('ri-abc', 2);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await flushPromises();
 
     const picker = modal.querySelector<HTMLSelectElement>('.modal-exchange-target-select');
     expect(picker?.options[0]?.textContent).toBe('Could not load offerings');
@@ -635,7 +636,7 @@ describe('openExchangeModal', () => {
     }]);
     Array.from(errorRow?.querySelectorAll('button') ?? []).find((b) => b.textContent === 'Retry')?.click();
     expect(picker?.options[0]?.textContent).toBe('Loading offerings...');
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await flushPromises();
 
     expect(mockListOfferings).toHaveBeenCalledTimes(2);
     expect(errorRow?.classList.contains('hidden')).toBe(true);
@@ -647,7 +648,7 @@ describe('openExchangeModal', () => {
     openExchangeModal('ri-abc', 2, undefined, [
       { instance_type: 'm5.large', offering_id: '4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91', effective_monthly_cost: 42.5 },
     ]);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await flushPromises();
     const picker = modal.querySelector<HTMLSelectElement>('.modal-exchange-target-select');
     expect(picker?.options[0]?.textContent).toBe('AWS offerings unavailable -- pick a recommendation or retry');
     expect(Array.from(picker?.options ?? []).map((o) => o.value)).toContain('4b2293b4-5fbc-4017-9c75-d5a9d3aa8c91');
@@ -723,8 +724,19 @@ describe('openExchangeModal', () => {
     });
 
     it('keeps the exchange ID on screen until the user closes the modal', async () => {
-      await executeExchange();
-      await new Promise((resolve) => setTimeout(resolve, 2100));
+      // Fake timers so every timer the exchange schedules (the old bug was a
+      // 2s auto-close) runs to completion without a real wall-clock wait.
+      // runAllTimersAsync also fires executeExchange's zero-delay flushes
+      // and lets the promise callbacks between them settle.
+      jest.useFakeTimers();
+      try {
+        const done = executeExchange();
+        await jest.runAllTimersAsync();
+        await done;
+        await jest.runAllTimersAsync();
+      } finally {
+        jest.useRealTimers();
+      }
       expect(modal.classList.contains('hidden')).toBe(false);
       expect(modal.querySelector('#modal-exchange-result')?.textContent).toBe('Exchange completed. ID: exch-42');
       // The form is frozen so an edit cannot wipe the receipt, and only Close remains.
