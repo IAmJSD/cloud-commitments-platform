@@ -5,8 +5,10 @@
 mock_provider "aws" {}
 
 variables {
-  # A long production-style name; rule names are asserted against the 64-char limit.
-  stack_name                   = "cudly-production-abcd1234"
+  # Stay within the module's existing 32-character ALB name limit.
+  # Sweep rule names are checked separately against their 64-character limit.
+  stack_name                   = "cudly-prod-abcd1234"
+  enable_cross_account_sts     = false
   permissions_boundary_arn     = "arn:aws:iam::123456789012:policy/cudly-boundary"
   environment                  = "production"
   region                       = "us-east-1"
