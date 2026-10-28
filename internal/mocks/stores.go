@@ -1302,7 +1302,7 @@ func (m *MockAuthStore) CreateMFALoginToken(ctx context.Context, tokenHash, user
 	args := m.Called(ctx, tokenHash, userID, passwordVersion, ttl)
 	expiresAt, ok := args.Get(0).(time.Time)
 	if !ok {
-		panic(fmt.Sprintf("MockAuthStore.CreateMFALoginToken: expected time.Time, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("CreateMFALoginToken", "time.Time", args.Get(0))
 	}
 	return expiresAt, args.Error(1)
 }
@@ -1314,7 +1314,7 @@ func (m *MockAuthStore) ClaimMFALoginTokenAttempt(ctx context.Context, tokenHash
 	}
 	tok, ok := args.Get(0).(*auth.MFALoginToken)
 	if !ok {
-		panic(fmt.Sprintf("MockAuthStore.ClaimMFALoginTokenAttempt: expected *auth.MFALoginToken, got %T", args.Get(0)))
+		m.reporter.wrongReturnType("ClaimMFALoginTokenAttempt", "*auth.MFALoginToken", args.Get(0))
 	}
 	return tok, args.Error(1)
 }
