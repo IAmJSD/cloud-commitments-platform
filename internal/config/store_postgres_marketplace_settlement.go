@@ -283,8 +283,8 @@ func settleMarketplaceListingTx(ctx context.Context, tx pgx.Tx, args []any) (boo
 		return false, err
 	}
 	rowApplied := tag.RowsAffected() > 0
-	var midClaim bool
-	if err := tx.QueryRow(ctx, listingHeldByClaimSQL, args[0], args[1], ListingStatePending).Scan(&midClaim); err != nil {
+	midClaim, err := listingHeldByClaim(ctx, tx, args[0], args[1])
+	if err != nil {
 		return false, err
 	}
 	if midClaim {
@@ -299,6 +299,14 @@ func settleMarketplaceListingTx(ctx context.Context, tx pgx.Tx, args []any) (boo
 		return false, err
 	}
 	return rowApplied || tag.RowsAffected() > 0, nil
+}
+
+// listingHeldByClaim runs listingHeldByClaimSQL in tx for the purchase and
+// listing ids.
+func listingHeldByClaim(ctx context.Context, tx pgx.Tx, purchaseID, listingID any) (bool, error) {
+	var midClaim bool
+	err := tx.QueryRow(ctx, listingHeldByClaimSQL, purchaseID, listingID, ListingStatePending).Scan(&midClaim)
+	return midClaim, err
 }
 
 // GetMarketplaceListingProceedsTotals returns, for each of purchaseIDs that
