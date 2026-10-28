@@ -92,10 +92,9 @@ type AccountLookupFunc func(ctx context.Context, id string) (*config.CloudAccoun
 type STSClientFactory func(provider aws.CredentialsProvider) STSClient
 
 // AWSResolveOptions holds optional dependencies for the AWS credential
-// resolver. The bastion path needs both AccountLookup and STSClientFactory to
-// self-resolve correctly; without them, bastion mode falls back to the
-// pre-self-loading behavior (trusts the caller-supplied STS client) for
-// backward compatibility.
+// resolver. The bastion path requires both AccountLookup and STSClientFactory
+// and fails closed when either is nil: it never trusts the caller-supplied
+// STS client to carry bastion credentials (issue #263).
 //
 // AmbientProvider, when set, is returned for role_arn accounts whose
 // AWSRoleARN is empty (the "Self" account shape: auth_mode=role_arn with no
@@ -112,9 +111,10 @@ type AWSResolveOptions struct {
 	AmbientSTS CallerIdentityClient
 }
 
-// ResolveAWSCredentialProvider is a back-compat wrapper that calls
-// ResolveAWSCredentialProviderWithOpts with empty options. New callers should
-// use the WithOpts variant so bastion mode can self-resolve.
+// ResolveAWSCredentialProvider calls ResolveAWSCredentialProviderWithOpts
+// with empty options. It cannot resolve bastion accounts (those need
+// AccountLookup and STSClientFactory), so production callers use the WithOpts
+// variant.
 func ResolveAWSCredentialProvider(
 	ctx context.Context,
 	account *config.CloudAccount,
@@ -231,16 +231,15 @@ func roleSessionName(accountID string) string {
 // resolveBastionProvider implements the bastion auth mode: target account is
 // reached via STS AssumeRole using credentials from a separate bastion account.
 //
-// Self-resolving path (preferred): when opts.AccountLookup and
-// opts.STSClientFactory are both set, the resolver loads the bastion account,
-// recursively resolves its credentials, builds a bastion-scoped STS client, and
-// uses that to assume the target role. Bastion-of-bastion chaining is rejected
-// at depth 1 to prevent loops.
+// The resolver loads the bastion account via opts.AccountLookup, recursively
+// resolves its credentials, builds a bastion-scoped STS client via
+// opts.STSClientFactory, and uses that to assume the target role, so the
+// target is always assumed as the bastion. Bastion-of-bastion chaining is
+// rejected at depth 1 to prevent loops.
 //
-// Legacy path: when either option is nil, the resolver falls back to the old
-// behavior and trusts that the caller-supplied stsClient already carries
-// bastion credentials. This preserves backward compatibility with callers that
-// have not yet been updated to wire the lookup/factory.
+// When either option is nil the resolver returns an error. It used to fall
+// back to assuming the target role with the caller-supplied stsClient (the
+// CUDly host's credentials), which silently skipped the bastion (issue #263).
 func resolveBastionProvider(
 	ctx context.Context,
 	account *config.CloudAccount,
@@ -252,8 +251,7 @@ func resolveBastionProvider(
 		return nil, awsConfigErrorf("aws_bastion_id", "is required", "credentials: aws_bastion_id is required for bastion auth mode (account %s)", account.ID)
 	}
 	if opts.AccountLookup == nil || opts.STSClientFactory == nil {
-		// Legacy fallback: trust caller's stsClient. Tracked in known_issues/03.
-		return resolveRoleARNProvider(ctx, account, stsClient, nil, nil)
+		return nil, fmt.Errorf("credentials: bastion account lookup and STS client factory are required for bastion auth mode (account %s)", account.ID)
 	}
 	bastion, err := opts.AccountLookup(ctx, account.AWSBastionID)
 	if err != nil {
@@ -268,10 +266,14 @@ func resolveBastionProvider(
 	if bastion.AWSAuthMode == "bastion" {
 		return nil, fmt.Errorf("credentials: bastion chaining not allowed (account %s references bastion %s which is itself a bastion)", account.ID, bastion.ID)
 	}
-	// Recursively resolve the bastion's own credentials. Pass empty opts to
-	// guarantee the recursive call cannot trigger bastion mode (already
-	// guarded above by the AWSAuthMode check, but defense in depth).
-	bastionCreds, err := ResolveAWSCredentialProviderWithOpts(ctx, bastion, store, stsClient, AWSResolveOptions{})
+	// Recursively resolve the bastion's own credentials. Drop AccountLookup
+	// and STSClientFactory so the recursive call cannot resolve a bastion
+	// (already guarded above by the AWSAuthMode check, but defense in depth).
+	// Keep the ambient options: a bastion that is the CUDly host account
+	// (role_arn with no role ARN) resolves to the host credentials once
+	// VerifyHostAccount confirms it, exactly as it does when used directly.
+	bastionOpts := AWSResolveOptions{AmbientProvider: opts.AmbientProvider, AmbientSTS: opts.AmbientSTS}
+	bastionCreds, err := ResolveAWSCredentialProviderWithOpts(ctx, bastion, store, stsClient, bastionOpts)
 	if err != nil {
 		return nil, fmt.Errorf("credentials: resolve bastion %s creds: %w", bastion.ID, err)
 	}

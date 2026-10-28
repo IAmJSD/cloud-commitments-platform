@@ -912,6 +912,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 		EmailSender:            app.Email,
 		STSClient:              sts.NewFromConfig(awsCfg),
 		AssumeRoleSTS:          sts.NewFromConfig(awsCfg),
+		BastionSTSFactory:      credentials.NewSTSClientFactory(awsCfg),
 		AmbientAWSCreds:        awsCfg.Credentials,
 		CredentialStore:        credStore,
 		NotificationDaysBefore: app.appConfig.NotificationDaysBefore,
@@ -929,15 +930,17 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 
 	// Re-initialize scheduler with per-account credential resolution.
 	reinitScheduler := scheduler.NewScheduler(scheduler.SchedulerConfig{
-		ConfigStore:     app.Config,
-		PurchaseManager: app.Purchase,
-		EmailSender:     app.Email,
-		CredentialStore: credStore,
-		OIDCSigner:      app.signer,
-		OIDCIssuerURL:   resolveOIDCIssuerURL(app.appConfig),
-		AssumeRoleSTS:   sts.NewFromConfig(awsCfg),
-		STSClient:       sts.NewFromConfig(awsCfg),
-		IsLambda:        app.appConfig.IsLambda,
+		ConfigStore:       app.Config,
+		PurchaseManager:   app.Purchase,
+		EmailSender:       app.Email,
+		CredentialStore:   credStore,
+		OIDCSigner:        app.signer,
+		OIDCIssuerURL:     resolveOIDCIssuerURL(app.appConfig),
+		AssumeRoleSTS:     sts.NewFromConfig(awsCfg),
+		BastionSTSFactory: credentials.NewSTSClientFactory(awsCfg),
+		AmbientAWSCreds:   awsCfg.Credentials,
+		STSClient:         sts.NewFromConfig(awsCfg),
+		IsLambda:          app.appConfig.IsLambda,
 	})
 	app.Scheduler = reinitScheduler
 	reinitPurchase.SetRecommendationSource(reinitScheduler)
@@ -951,7 +954,7 @@ func (app *Application) reinitializeAfterConnect(ctx context.Context, dbConn *da
 	commitmentOpts := commitmentopts.New(
 		commitmentopts.NewPostgresStore(dbConn),
 		app.Config,
-		newCommitmentProbeConfigBuilder(credStore, awsCfg.Credentials, sts.NewFromConfig(awsCfg)),
+		newCommitmentProbeConfigBuilder(credStore, app.Config, awsCfg, sts.NewFromConfig(awsCfg)),
 		commitmentopts.DefaultProbers(),
 	)
 
@@ -1005,12 +1008,19 @@ type hostAndAssumeRoleSTS interface {
 }
 
 // newCommitmentProbeConfigBuilder resolves the aws.Config the commitment-options
-// probe uses for an account. ambient and stsClient let a role_arn account with
-// no role ARN use the host credentials only when it is the host account.
-func newCommitmentProbeConfigBuilder(credStore credentials.CredentialStore, ambient aws.CredentialsProvider, stsClient hostAndAssumeRoleSTS) commitmentopts.BuildConfigFn {
+// probe uses for an account. hostCfg's credentials and stsClient let a role_arn
+// account with no role ARN use the host credentials only when it is the host
+// account. accounts and hostCfg let a bastion account be reached through its
+// bastion's own credentials (issue #263).
+func newCommitmentProbeConfigBuilder(credStore credentials.CredentialStore, accounts credentials.CloudAccountGetter, hostCfg aws.Config, stsClient hostAndAssumeRoleSTS) commitmentopts.BuildConfigFn {
+	opts := credentials.AWSResolveOptions{
+		AccountLookup:    credentials.AccountLookupFromStore(accounts),
+		STSClientFactory: credentials.NewSTSClientFactory(hostCfg),
+		AmbientProvider:  hostCfg.Credentials,
+		AmbientSTS:       stsClient,
+	}
 	return func(ctx context.Context, acct *config.CloudAccount) (aws.Config, error) {
-		prov, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, acct, credStore, stsClient,
-			credentials.AWSResolveOptions{AmbientProvider: ambient, AmbientSTS: stsClient})
+		prov, err := credentials.ResolveAWSCredentialProviderWithOpts(ctx, acct, credStore, stsClient, opts)
 		if err != nil {
 			return aws.Config{}, err
 		}
