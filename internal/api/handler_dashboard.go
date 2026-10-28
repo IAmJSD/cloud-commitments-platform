@@ -55,7 +55,7 @@ func (h *Handler) getDashboardSummary(ctx context.Context, req *events.LambdaFun
 	//
 	// The resolver is best-effort: a lookup error logs and falls through
 	// to the un-scaled total, mirroring the over-show-vs-under-show
-	// trade-off baked into Scheduler.applySuppressions / applyAccountOverrides.
+	// trade-off ListRecommendations makes for account overrides.
 	coverageByKey := h.resolveCoverageByAccountKey(ctx, recommendations)
 
 	totalSavings, byService := summarizeRecommendationsWithCoverage(recommendations, coverageByKey)
