@@ -43,6 +43,16 @@ are the full record until the next release.
   new-style `es:*ReservedInstance*` OpenSearch actions (replacing the legacy
   `es:*ReservedElasticsearch*` names).
 
+### Removed
+
+- The CloudFormation install stack (`cloudformation/stacks/CUDly`). It still
+  created DynamoDB tables and set no `DB_HOST`, so the Postgres-only server it
+  deployed failed at startup and the stack could not serve any request or
+  scheduled task. Install on AWS with Terraform (`terraform/environments/aws`,
+  Lambda or Fargate) instead; see `docs/DEPLOYMENT.md`. The target-account role
+  templates (`cloudformation/stacks/CUDly-CrossAccount` and the federation
+  CloudFormation templates under `iac/federation/`) are unchanged (#1432)
+
 ### Fixed
 
 - Account scopes match `allowed_accounts` entries by account ID only. A
